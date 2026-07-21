@@ -86,6 +86,30 @@ RUBRIC_KEYS: frozenset[str] = frozenset({
 # unset falls back to the service → local_landing → location priority.
 WEBSITE_PAGE_TYPES: frozenset[str] = frozenset({"service", "local_landing", "location"})
 
+# URL rubrics whose page lives on an EXTERNAL site (a guest-post blog, a PR
+# wire, a directory listing, a maps page) — so the URL's own domain can never
+# identify the client, and every check they run needs the client (link-back to
+# the client site, NAP matches the client card, the "client provides service"
+# assertion). Without a client these produce only "could not verify", so the
+# bot asks which client up front instead of running a meaningless check. The
+# website page is deliberately NOT here: it lives on the client's own domain,
+# so it auto-resolves and its meta/keyword checks are useful even client-less.
+CLIENT_REQUIRED_URL_RUBRICS: frozenset[str] = frozenset({
+    RUBRIC_GUEST_POST, RUBRIC_NICHE_EDIT, RUBRIC_PRESS_RELEASE,
+    RUBRIC_CITATIONS, RUBRIC_MAP_EMBEDS,
+})
+
+# The one-line, VA-plain name of the check each URL rubric performs — used to
+# tell an untrained VA what a bare-URL review actually looked at.
+URL_RUBRIC_WHAT: dict[str, str] = {
+    RUBRIC_PAGE: "the page's title, keyword placement, business name, internal links, and images",
+    RUBRIC_GUEST_POST: "whether the post links back to the client's website",
+    RUBRIC_NICHE_EDIT: "whether the edit links back to the client's website",
+    RUBRIC_PRESS_RELEASE: "the keyword, a non-exact-match link, and the client's name/address/phone",
+    RUBRIC_CITATIONS: "whether the listing's name, address, and phone match the client",
+    RUBRIC_MAP_EMBEDS: "the client's name/address/phone, a map embed, and a plain 'we provide this service' line",
+}
+
 
 def rubric_for(task: dict[str, Any]) -> str:
     """Route a task to its QA rubric. Precedence: an EXPLICIT ``qa_rubric``

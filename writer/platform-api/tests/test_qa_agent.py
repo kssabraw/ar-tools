@@ -202,3 +202,61 @@ def test_resolve_client_by_url_no_match_returns_none():
     # A URL with no parseable domain never matches.
     with patch.object(qa_agent, "get_supabase", lambda: _FakeSupabase(rows)):
         assert qa_agent.resolve_client_by_url("not a url") is None
+
+
+# ---------------------------------------------------------------------------
+# maybe_handle_web: external-page rubrics ask for the client up front
+# ---------------------------------------------------------------------------
+from services.pace_auth import ActionContext  # noqa: E402
+
+
+def _handle(message, *, page_kind, scope_client=None, url_client=None, sticky_client=None):
+    """Drive one maybe_handle_web turn with the LLM + DB reads mocked, returning
+    (reply_dict, review_url_called)."""
+    called = {"review": False}
+
+    async def fake_interpret(*_a, **_k):
+        return "url", {"url": "https://someblog.com/guest/post", "page_kind": page_kind}
+
+    def fake_resolve_scope(_msg, _sticky):
+        return ("client" if scope_client else "global"), (scope_client or {}), {}
+
+    async def fake_review_url(*_a, **_k):
+        called["review"] = True
+        return {"verdict": sig.NEEDS_HUMAN, "rubric": sig.RUBRIC_GUEST_POST,
+                "composite": None, "checks": [], "issues": [], "urls": [], "narrative": ""}
+
+    actor = ActionContext(profile_id="p1", role="admin")
+    with patch.object(qa_agent, "interpret_qa", fake_interpret), \
+         patch.object(qa_agent, "_resolve_scope", fake_resolve_scope), \
+         patch.object(qa_agent, "resolve_client_by_url", lambda _u: url_client), \
+         patch.object(qa_agent, "_client_row", lambda _c: sticky_client), \
+         patch.object(qa_service, "review_url", fake_review_url):
+        out = _run(qa_agent.maybe_handle_web(message, [], None, None, actor))
+    return out, called["review"]
+
+
+def test_guest_post_with_no_client_asks_first():
+    # No conversation client, URL is a third-party blog, no sticky client →
+    # the bot asks which client and never runs the (meaningless) check.
+    out, review_called = _handle("QA this guest post https://someblog.com/guest/post",
+                                 page_kind="guest post")
+    assert review_called is False
+    assert "which client" in out["reply"].lower()
+
+
+def test_guest_post_with_sticky_client_runs():
+    # A known (sticky) client → the link-back check runs; no up-front question.
+    sticky = {"id": "9", "name": "Acme", "website_url": "https://acme.com", "gbp": {}}
+    out, review_called = _handle("QA this guest post https://someblog.com/guest/post",
+                                 page_kind="guest post", sticky_client=sticky)
+    assert review_called is True
+
+
+def test_website_page_with_no_client_still_runs():
+    # The website-page rubric is NOT client-required: it still runs client-less
+    # (meta/keyword checks are useful) and appends the "which client" nudge.
+    out, review_called = _handle("QA https://someblog.com/guest/post",
+                                 page_kind="page")
+    assert review_called is True
+    assert "which client" in out["reply"].lower()

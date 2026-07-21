@@ -250,8 +250,17 @@ _QA_SYSTEM = (
     "• Ask ONE focused question at a time — never a checklist of questions. If you "
     "have enough to run a useful check, RUN IT, then ask for anything that would "
     "make it more complete (e.g. the keyword) as a friendly follow-up.\n"
-    "• You do NOT need them to name the client for a URL — the system auto-detects "
-    "it from the web address. Only if it can't will you be told to ask.\n\n"
+    "• For a page ON THE CLIENT'S OWN SITE you do NOT need them to name the client "
+    "— the system auto-detects it from the web address.\n"
+    "• But a guest post, niche edit, press release, citation, or map embed lives on "
+    "ANOTHER site (a blog, a PR wire, a directory), so the link can't reveal the "
+    "client and the whole check (link back to the client, name/address/phone "
+    "matches the client) needs one. If you don't already know the client for those, "
+    "the system will ask which client — that's expected, not an error.\n"
+    "• Pick the right page kind when you call qa_url: 'guest post', 'niche edit', "
+    "'press release', 'citation', or 'map embed' when they say so or the link is "
+    "clearly on a third-party site; otherwise a website page. If it's genuinely "
+    "unclear what kind of deliverable it is, ask.\n\n"
     "EXPLAIN RESULTS FOR A BEGINNER: after the verdict, say in plain words what (if "
     "anything) needs fixing and the exact next step (\"add the business name to the "
     "page, then repost and send me the link again\"). A 'needs a human' verdict "
@@ -469,32 +478,50 @@ async def maybe_handle_web(message: str, history: list[dict], sticky_client_id: 
                 return {**base, "reply": "Paste the link to the page (starting with http) and I'll check it."}
             rubric = qa_service.resolve_url_rubric(payload.get("page_kind"))
             keyword = (payload.get("keyword") or "").strip() or None
-            if on_event:
-                await on_event({"type": "status", "label": "Fetching and checking the page"})
             # Figure out the client for a bare URL so the business-name / NAP /
-            # internal-link checks can run: the conversation's client → the
-            # URL's own domain → the sticky client. If none matches, we still QA
-            # the page and then ask which client it's for.
+            # link-back checks can run: the conversation's client → the URL's own
+            # domain (only works when the page is on the client's own site) → the
+            # sticky client.
             client_row = (
                 client
                 or await run_in_threadpool(resolve_client_by_url, url)
                 or await run_in_threadpool(_client_row, sticky_client_id)
             )
+            # External-page rubrics (guest post, niche edit, press release,
+            # citation, map embed) live on someone else's site, so the URL can't
+            # name the client and EVERY check they run needs one. Ask which
+            # client first rather than returning a useless "could not verify".
+            if not client_row and rubric in sig.CLIENT_REQUIRED_URL_RUBRICS:
+                what = sig.URL_RUBRIC_WHAT.get(rubric, "the client's details")
+                label = qa_service.RUBRIC_LABELS.get(rubric, "this")
+                return {**base, "reply": (
+                    f"Happy to check that {label.lower()} — but it's on another "
+                    "website, so I can't tell which client it's for from the link "
+                    f"alone. To check {what}, I need to know the client.\n\n"
+                    "**Which client is this for?** Just reply with the name."
+                )}
+            if on_event:
+                await on_event({"type": "status", "label": "Fetching and checking the page"})
             review = await qa_service.review_url(url, client_row, rubric, keyword)
             reply = format_review(review, url)
             if client_row and not client:
                 reply = f"_QA'd for **{client_row.get('name')}** (matched from the web address)._\n\n" + reply
             extras: list[str] = []
-            if not client_row:
+            if not client_row:  # only reachable for the website-page rubric now
                 extras.append(
                     "I couldn't tell which client this page belongs to, so the "
                     "business-name, phone/address, and internal-link checks were skipped. "
                     "**Which client is this for?** Reply with the name and I'll re-run the full check."
                 )
-            if rubric == sig.RUBRIC_PAGE and not keyword:
+            if not keyword and rubric == sig.RUBRIC_PAGE:
                 extras.append(
                     "Want me to also check the keyword? Tell me the phrase this page "
                     "should rank for and I'll re-check it's in the title, address, and heading."
+                )
+            elif not keyword and rubric == sig.RUBRIC_PRESS_RELEASE:
+                extras.append(
+                    "Want me to also check the keyword? Tell me the phrase this "
+                    "release targets and I'll re-check it's in the title and body."
                 )
             if extras:
                 reply += "\n\n" + "\n\n".join(extras)

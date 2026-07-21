@@ -789,6 +789,8 @@ _READINESS_LABELS = {
     sig.RUBRIC_SKIP: "Not QA-checked", sig.RUBRIC_HANDOFF: "SerMaStr territory",
     sig.RUBRIC_GENERIC: "No checklist for this type",
 }
+# Public alias — the plain-English name of a rubric, reused by the /qa persona.
+RUBRIC_LABELS = _READINESS_LABELS
 _URL_RUBRICS = {
     sig.RUBRIC_PAGE, sig.RUBRIC_CITATIONS, sig.RUBRIC_GUEST_POST,
     sig.RUBRIC_NICHE_EDIT, sig.RUBRIC_PRESS_RELEASE, sig.RUBRIC_MAP_EMBEDS,
