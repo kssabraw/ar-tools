@@ -42,6 +42,7 @@ const RUBRIC_CHOICES: string[] = [
 ]
 
 const label: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }
+const fieldInput: React.CSSProperties = { width: '100%', padding: '6px 9px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12.5, fontFamily: 'inherit', background: '#fff', color: '#0f172a', boxSizing: 'border-box' }
 
 function CheckRow({ c }: { c: QaCheck }) {
   const icon =
@@ -104,7 +105,23 @@ const PAGE_TYPE_CHOICES: { value: string; label: string }[] = [
   { value: 'location', label: 'Location page' },
 ]
 
-export function QaPanel({ taskId, rubric, onRubricChange, pageType, onPageTypeChange }: {
+type QaReadiness = {
+  rubric: string | null
+  rubric_label: string
+  ready: boolean
+  have: string[]
+  missing: string[]
+  autodetected: { url?: string; keyword?: string }
+  notes: string[]
+}
+
+// Rubrics that review an external URL (so the 'Page URL to review' field applies).
+const URL_RUBRICS = new Set(['website_page', 'citations', 'guest_posts', 'niche_edits', 'press_release', 'map_embeds'])
+
+export function QaPanel({
+  taskId, rubric, onRubricChange, pageType, onPageTypeChange,
+  deliverableUrl, onDeliverableUrlChange, keyword, onKeywordChange,
+}: {
   taskId: string
   // The task's explicit QA rubric (null/undefined = auto-detect from name).
   rubric?: string | null
@@ -113,8 +130,29 @@ export function QaPanel({ taskId, rubric, onRubricChange, pageType, onPageTypeCh
   // design-fit reference selection.
   pageType?: string | null
   onPageTypeChange?: (pageType: string | null) => void
+  // First-class QA inputs (the guided panel): page URL + target keyword.
+  deliverableUrl?: string | null
+  onDeliverableUrlChange?: (url: string | null) => void
+  keyword?: string | null
+  onKeywordChange?: (keyword: string | null) => void
 }) {
   const queryClient = useQueryClient()
+  const [urlDraft, setUrlDraft] = useState<string | null>(null)
+  const [kwDraft, setKwDraft] = useState<string | null>(null)
+
+  // "Can QA run yet, and what's missing" — plain English for the VA.
+  const { data: readiness } = useQuery<QaReadiness>({
+    queryKey: ['task-qa-readiness', taskId],
+    queryFn: () => api.get<QaReadiness>(`/tasks/${taskId}/qa-readiness`),
+  })
+  // After a field PATCH round-trips (props change), re-check readiness.
+  useEffect(() => {
+    queryClient.invalidateQueries({ queryKey: ['task-qa-readiness', taskId] })
+  }, [queryClient, taskId, rubric, pageType, deliverableUrl, keyword])
+
+  const rubricKey = readiness?.rubric ?? rubric ?? ''
+  const showUrl = !!onDeliverableUrlChange && (URL_RUBRICS.has(rubricKey) || rubricKey === '')
+  const showKeyword = !!onKeywordChange && (rubricKey === 'website_page' || rubricKey === '')
   // Set when a run was enqueued; polling stops once a newer review lands
   // (or after POLL_MAX_MS so a stuck job can't poll forever).
   const [pendingSince, setPendingSince] = useState<number | null>(null)
@@ -132,6 +170,8 @@ export function QaPanel({ taskId, rubric, onRubricChange, pageType, onPageTypeCh
   useEffect(() => {
     setPendingSince(null)
     setShowHistory(false)
+    setUrlDraft(null)
+    setKwDraft(null)
   }, [taskId])
 
   // A review newer than the enqueue moment (or a timeout) ends the run state.
@@ -163,6 +203,31 @@ export function QaPanel({ taskId, rubric, onRubricChange, pageType, onPageTypeCh
           <ShieldCheck size={13} /> {running ? 'Reviewing…' : 'Run QA'}
         </button>
       </div>
+      {readiness && (
+        <div
+          style={{
+            marginTop: 8, borderRadius: 8, padding: '8px 10px', fontSize: 12.5, lineHeight: 1.45,
+            ...(readiness.ready
+              ? { background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#15803d' }
+              : { background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }),
+          }}
+        >
+          {readiness.ready
+            ? <span style={{ fontWeight: 600 }}>✓ Ready to QA{readiness.rubric_label ? ` · ${readiness.rubric_label}` : ''}</span>
+            : readiness.missing.length
+              ? <span><b>Before QA can run, add:</b> {readiness.missing.join(', ')}.</span>
+              : <span>Not QA-ready.</span>}
+          {(readiness.autodetected?.url || readiness.autodetected?.keyword) && (
+            <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+              Auto-detected{readiness.autodetected.keyword ? ` keyword “${readiness.autodetected.keyword}”` : ''}
+              {readiness.autodetected.url ? ` · page ${readiness.autodetected.url}` : ''} — nothing to set.
+            </div>
+          )}
+          {(readiness.notes ?? []).map((n, i) => (
+            <div key={i} style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>{n}</div>
+          ))}
+        </div>
+      )}
       {onRubricChange && (
         <div style={{ marginTop: 8 }}>
           <div style={{ ...label, marginBottom: 3 }}>Rubric</div>
@@ -196,6 +261,42 @@ export function QaPanel({ taskId, rubric, onRubricChange, pageType, onPageTypeCh
           </select>
           <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 3 }}>
             Which reference-page structure the design-fit check compares this page against.
+          </div>
+        </div>
+      )}
+      {showUrl && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ ...label, marginBottom: 3 }}>Page URL to review</div>
+          <input
+            value={urlDraft ?? deliverableUrl ?? ''}
+            onChange={(e) => setUrlDraft(e.target.value)}
+            onBlur={() => {
+              if (urlDraft !== null && urlDraft !== (deliverableUrl ?? '')) onDeliverableUrlChange!(urlDraft.trim() || null)
+              setUrlDraft(null)
+            }}
+            placeholder="https://client.com/the-page-you-posted/"
+            style={fieldInput}
+          />
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 3 }}>
+            Paste the live page you posted — this is exactly what QA opens and checks.
+          </div>
+        </div>
+      )}
+      {showKeyword && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ ...label, marginBottom: 3 }}>Target keyword</div>
+          <input
+            value={kwDraft ?? keyword ?? ''}
+            onChange={(e) => setKwDraft(e.target.value)}
+            onBlur={() => {
+              if (kwDraft !== null && kwDraft !== (keyword ?? '')) onKeywordChange!(kwDraft.trim() || null)
+              setKwDraft(null)
+            }}
+            placeholder="e.g. practice management coral springs"
+            style={fieldInput}
+          />
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 3 }}>
+            The phrase the page should rank for — QA checks it's in the title, URL and H1.
           </div>
         </div>
       )}

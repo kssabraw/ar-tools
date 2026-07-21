@@ -388,6 +388,28 @@ async def _run_page_structure_scrape(job: dict) -> None:
 
         analysis = await analyze_page_structure(html, page_type)
 
+        # If the cheap datacenter fetch captured nothing, the site likely
+        # bot-blocked it (a WordPress/CDN wall served an empty shell). Retry
+        # ONCE with JS rendering + premium residential proxies — the thing that
+        # gets past those walls — and keep the retry only if it actually found
+        # content. Bounded cost: only fires on an empty first pass.
+        if settings.page_structure_premium_fallback and not (analysis.get("outline") or []):
+            logger.info(
+                "page_structure_scrape_premium_retry",
+                extra={"job_id": job_id, "client_id": client_id, "page_type": page_type},
+            )
+            try:
+                html2 = await scrapeowl_fetch(url, timeout=60, render_js=True, premium=True)
+                if html2:
+                    analysis2 = await analyze_page_structure(html2, page_type)
+                    if analysis2.get("outline"):
+                        analysis = analysis2
+            except Exception as exc:
+                logger.warning(
+                    "page_structure_scrape_premium_retry_failed",
+                    extra={"job_id": job_id, "error": str(exc)},
+                )
+
         # A capture that yielded zero sections isn't a usable reference (QA and
         # the writers treat it as "no reference"). Flag it explicitly so it's
         # visible WHY — a silent complete-but-empty entry looks like success but

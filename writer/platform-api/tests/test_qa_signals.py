@@ -444,6 +444,17 @@ def test_keyword_from_task_description_override_still_wins():
     assert sig.keyword_from_task({"description": "keywords - emergency plumber"}) == "emergency plumber"
 
 
+def test_keyword_from_task_field_wins():
+    # The first-class 'Target keyword' field beats markers AND the name.
+    assert sig.keyword_from_task({
+        "qa_keyword": "roof repair miami",
+        "name": "KW: something else",
+        "description": "Keyword: another thing",
+    }) == "roof repair miami"
+    # Empty field falls through to the marker/name conventions.
+    assert sig.keyword_from_task({"qa_keyword": "  ", "description": "KW: burst pipe"}) == "burst pipe"
+
+
 def test_keyword_from_task_kw_marker_in_description_or_title():
     # Short 'KW:' form is accepted (description).
     assert sig.keyword_from_task({"description": "KW: practice management coral springs"}) \

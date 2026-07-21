@@ -34,6 +34,15 @@ def test_qa_service_first_url_prefers_tool_then_message():
 # ---------------------------------------------------------------------------
 # resolve_url_rubric
 # ---------------------------------------------------------------------------
+def test_deliverable_urls_prepends_explicit_field():
+    # The first-class 'Page URL to review' field wins over a description URL.
+    task = {"deliverable_url": "https://client.com/posted-page/",
+            "description": "old link https://other.com/x"}
+    urls = qa_service._deliverable_urls(task, [], "")
+    assert urls[0] == "https://client.com/posted-page/"
+    assert "https://other.com/x" in urls
+
+
 def test_resolve_url_rubric_defaults_and_words():
     assert qa_service.resolve_url_rubric(None) == sig.RUBRIC_PAGE  # config default
     assert qa_service.resolve_url_rubric("QA this page") == sig.RUBRIC_PAGE

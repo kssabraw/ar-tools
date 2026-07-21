@@ -185,9 +185,13 @@ def _client_fields(client: Optional[dict]) -> dict[str, Any]:
 
 
 def _deliverable_urls(task: dict, subtasks: list[dict], attachments_text: str) -> list[str]:
-    """URLs from the 'Deliverable links' subtask(s) (name + description), any
-    .txt attachment content, then the task description — deduped, capped."""
+    """URLs from the first-class 'Page URL to review' field, then the
+    'Deliverable links' subtask(s) (name + description), any .txt attachment
+    content, then the task description — deduped, capped. The explicit field is
+    first so it wins for single-URL rubrics."""
     chunks: list[str] = []
+    if (task.get("deliverable_url") or "").strip():
+        chunks.append(task["deliverable_url"])
     for s in subtasks:
         if sig.is_deliverable_subtask(s.get("name")):
             chunks.extend([s.get("name") or "", s.get("description") or ""])
@@ -772,6 +776,141 @@ def list_reviews(task_id: str, limit: int = 20) -> list[dict]:
         get_supabase().table("qa_reviews").select("*")
         .eq("task_id", task_id).order("created_at", desc=True).limit(limit).execute()
     ).data or []
+
+
+# ---------------------------------------------------------------------------
+# Readiness — plain-English "can QA run yet?" for the task drawer (no LLM)
+# ---------------------------------------------------------------------------
+_READINESS_LABELS = {
+    sig.RUBRIC_PAGE: "Website page", sig.RUBRIC_BLOG: "Blog article",
+    sig.RUBRIC_GBP_POSTS: "GBP post", sig.RUBRIC_CITATIONS: "Citations",
+    sig.RUBRIC_GUEST_POST: "Guest post", sig.RUBRIC_NICHE_EDIT: "Niche edit",
+    sig.RUBRIC_PRESS_RELEASE: "Press release", sig.RUBRIC_MAP_EMBEDS: "Map embeds",
+    sig.RUBRIC_SKIP: "Not QA-checked", sig.RUBRIC_HANDOFF: "SerMaStr territory",
+    sig.RUBRIC_GENERIC: "No checklist for this type",
+}
+_URL_RUBRICS = {
+    sig.RUBRIC_PAGE, sig.RUBRIC_CITATIONS, sig.RUBRIC_GUEST_POST,
+    sig.RUBRIC_NICHE_EDIT, sig.RUBRIC_PRESS_RELEASE, sig.RUBRIC_MAP_EMBEDS,
+}
+
+
+def assess_readiness(task_id: str) -> dict:
+    """Can QA actually run on this task yet, and if not, what's missing — in
+    plain English for an untrained VA. Resolves the rubric + inputs exactly as
+    the review does (explicit fields → conventions → source auto-detect) and
+    returns {rubric, rubric_label, ready, have, missing, autodetected, notes}."""
+    supabase = get_supabase()
+    rows = supabase.table("tasks").select("*").eq("id", task_id).limit(1).execute().data
+    if not rows:
+        return {"ready": False, "rubric": None, "rubric_label": "", "have": [],
+                "missing": ["task not found"], "autodetected": {}, "notes": []}
+    task = rows[0]
+    rubric = sig.rubric_for(task)
+    out = {"rubric": rubric, "rubric_label": _READINESS_LABELS.get(rubric, rubric),
+           "ready": True, "have": [], "missing": [], "autodetected": {}, "notes": []}
+
+    if rubric == sig.RUBRIC_SKIP:
+        out["notes"].append("This deliverable type isn't QA-checked — nothing to set up.")
+        return out
+    if rubric == sig.RUBRIC_HANDOFF:
+        out["ready"] = False
+        out["notes"].append("This is a strategy judgement — ask SerMaStr, not QA.")
+        return out
+    if rubric == sig.RUBRIC_GENERIC:
+        out["ready"] = False
+        out["missing"].append("a rubric — pick one from the Rubric dropdown")
+        out["notes"].append("No checklist matches this task yet. Pick a rubric so QA knows what to check.")
+        return out
+
+    if rubric in _URL_RUBRICS:
+        url, src = _readiness_deliverable(task)
+        if url:
+            out["have"].append("page URL")
+            if src == "auto":
+                out["autodetected"]["url"] = url
+        else:
+            out["missing"].append("the page URL to review")
+
+    if rubric == sig.RUBRIC_PAGE:
+        kw, src = _readiness_keyword(task)
+        if kw:
+            out["have"].append("target keyword")
+            if src == "auto":
+                out["autodetected"]["keyword"] = kw
+        else:
+            out["missing"].append("the target keyword")
+        # Client prerequisites (admin-set, once): flag rather than block.
+        fields = _client_fields(_readiness_client(task))
+        if not fields.get("business_name"):
+            out["notes"].append(
+                "No business name on file for this client — the name check can't run "
+                "(an admin can set it on the client form)."
+            )
+
+    if rubric == sig.RUBRIC_BLOG:
+        if task.get("source") == "content_run" and task.get("source_ref"):
+            out["have"].append("the finished article")
+        else:
+            out["missing"].append("a linked content run (blog QA runs on a generated article)")
+
+    if rubric == sig.RUBRIC_GBP_POSTS:
+        subtasks = _readiness_subtasks(task["id"])
+        copy = "\n".join(
+            s.get("description") or "" for s in subtasks if sig.is_deliverable_subtask(s.get("name"))
+        ).strip() or (task.get("description") or "").strip()
+        if copy:
+            out["have"].append("post copy")
+        else:
+            out["missing"].append("the post copy (in the task description or a 'Deliverable' subtask)")
+
+    out["ready"] = not out["missing"]
+    return out
+
+
+def _readiness_subtasks(task_id: str) -> list[dict]:
+    return (
+        get_supabase().table("tasks").select("name, description")
+        .eq("parent_task_id", task_id).is_("deleted_at", "null").execute()
+    ).data or []
+
+
+def _readiness_deliverable(task: dict) -> tuple[Optional[str], str]:
+    """Resolve the deliverable URL + where it came from ('field' | 'scan' |
+    'auto'). Explicit field → conventions (subtask/desc/attachments)."""
+    if (task.get("deliverable_url") or "").strip():
+        urls = sig.extract_urls(task["deliverable_url"])
+        if urls:
+            return urls[0], "field"
+    subtasks = _readiness_subtasks(task["id"])
+    urls = _deliverable_urls(task, subtasks, _txt_attachments_text(task["id"]))
+    if urls:
+        return urls[0], "scan"
+    return None, ""
+
+
+def _readiness_keyword(task: dict) -> tuple[Optional[str], str]:
+    """Resolve the target keyword + where it came from ('set' via field/marker/
+    name, or 'auto' from a linked content run)."""
+    kw = sig.keyword_from_task(task)
+    if kw:
+        return kw, "set"
+    if task.get("source") == "content_run" and task.get("source_ref"):
+        run_kw = _run_keyword(task["source_ref"])
+        if run_kw:
+            return run_kw, "auto"
+    return None, ""
+
+
+def _readiness_client(task: dict) -> Optional[dict]:
+    cid = task.get("client_id")
+    if not cid:
+        return None
+    rows = (
+        get_supabase().table("clients").select("id, name, website_url, gbp")
+        .eq("id", cid).limit(1).execute()
+    ).data
+    return rows[0] if rows else None
 
 
 # ---------------------------------------------------------------------------
