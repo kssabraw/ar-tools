@@ -1760,6 +1760,9 @@ export interface TaskItem {
   library_task_name: string | null
   // Client-facing note (Weekly Pulse) — distinct from the internal description.
   client_note?: string | null
+  // Explicit QA rubric override (qa_signals RUBRIC_* key); null = auto-detect
+  // from the task name.
+  qa_rubric?: string | null
   created_at: string
   // Board rollup (top-level tasks only)
   subtask_total?: number

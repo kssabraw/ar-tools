@@ -4,7 +4,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { NotificationBell } from './NotificationBell'
-import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, ListTodo, Menu, X, Radar, Loader2 } from 'lucide-react'
+import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, ListTodo, Menu, X, Radar, Loader2, ShieldCheck } from 'lucide-react'
 
 interface NavItem {
   label: string
@@ -79,6 +79,15 @@ export function Layout({ children }: { children: React.ReactNode }) {
     staleTime: 5 * 60_000,
   })
 
+  // QA (quality-reviewer chat) is gated behind the server-side qa_chat_enabled
+  // flag — same pattern as PACE, so the sidebar entry only appears once an admin
+  // turns it on.
+  const { data: qaStatus } = useQuery<{ enabled: boolean }>({
+    queryKey: ['qa-status'],
+    queryFn: () => api.get<{ enabled: boolean }>('/qa/status'),
+    staleTime: 5 * 60_000,
+  })
+
   // Live count of the user's in-flight content generation (ecommerce / Local
   // SEO pages, blog runs), so a long batch they navigated away from stays
   // visible everywhere. Polls in the background; the Activity page polls faster.
@@ -97,6 +106,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
     { label: 'SerMaStr', to: '/assistant', icon: <Sparkles size={18} /> },
     ...(paceStatus?.enabled
       ? [{ label: 'PACE', to: '/pace', icon: <ListTodo size={18} /> }]
+      : []),
+    ...(qaStatus?.enabled
+      ? [{ label: 'QA', to: '/qa', icon: <ShieldCheck size={18} /> }]
       : []),
     ...(clientId
       ? [{ label: 'Dashboard', to: `/clients/${clientId}`, icon: <LayoutDashboard size={18} /> }]

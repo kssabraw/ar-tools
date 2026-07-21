@@ -7,6 +7,7 @@ import { Login } from './pages/Login'
 import { Home } from './pages/Home'
 import { Assistant } from './pages/Assistant'
 import { Pace } from './pages/Pace'
+import { Qa } from './pages/Qa'
 import { Runs } from './pages/Runs'
 import { RunDetail } from './pages/RunDetail'
 import { Clients } from './pages/Clients'
@@ -76,6 +77,7 @@ export default function App() {
                       <Route path="/" element={<Home />} />
                       <Route path="/assistant" element={<Assistant />} />
                       <Route path="/pace" element={<Pace />} />
+                      <Route path="/qa" element={<Qa />} />
                       <Route path="/backlinks" element={<Backlinks />} />
                       <Route path="/activity" element={<Activity />} />
                       {/* Topic Fan-out, merged in (Option C) — a native route

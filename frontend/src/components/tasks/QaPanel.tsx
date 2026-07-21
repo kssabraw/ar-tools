@@ -33,6 +33,14 @@ const RUBRIC_LABELS: Record<string, string> = {
   generic: 'No checklist for this type',
 }
 
+// The rubrics a user can explicitly pick on a task (the checkable ones + the
+// two "don't check / hand off" outcomes). "" = auto-detect from the task name.
+// Order chosen for the dropdown; labels reuse RUBRIC_LABELS above.
+const RUBRIC_CHOICES: string[] = [
+  'website_page', 'blog_article', 'gbp_posts', 'citations',
+  'guest_posts', 'niche_edits', 'press_release', 'map_embeds', 'skip',
+]
+
 const label: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }
 
 function CheckRow({ c }: { c: QaCheck }) {
@@ -88,7 +96,12 @@ function ReviewCard({ review }: { review: QaReview }) {
   )
 }
 
-export function QaPanel({ taskId }: { taskId: string }) {
+export function QaPanel({ taskId, rubric, onRubricChange }: {
+  taskId: string
+  // The task's explicit QA rubric (null/undefined = auto-detect from name).
+  rubric?: string | null
+  onRubricChange?: (rubric: string | null) => void
+}) {
   const queryClient = useQueryClient()
   // Set when a run was enqueued; polling stops once a newer review lands
   // (or after POLL_MAX_MS so a stuck job can't poll forever).
@@ -138,6 +151,24 @@ export function QaPanel({ taskId }: { taskId: string }) {
           <ShieldCheck size={13} /> {running ? 'Reviewing…' : 'Run QA'}
         </button>
       </div>
+      {onRubricChange && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ ...label, marginBottom: 3 }}>Rubric</div>
+          <select
+            value={rubric ?? ''}
+            onChange={(e) => onRubricChange(e.target.value || null)}
+            style={{ width: '100%', padding: '6px 9px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12.5, fontFamily: 'inherit', background: '#fff', color: '#0f172a', boxSizing: 'border-box' }}
+          >
+            <option value="">Auto-detect from task name</option>
+            {RUBRIC_CHOICES.map((r) => (
+              <option key={r} value={r}>{RUBRIC_LABELS[r] ?? r}</option>
+            ))}
+          </select>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 3 }}>
+            Which checklist QA grades this task against — pick one so the title can be anything.
+          </div>
+        </div>
+      )}
       {runMut.isError && (
         <div style={{ fontSize: 12, color: '#dc2626', marginTop: 6 }}>
           Could not start QA — {String((runMut.error as Error)?.message ?? 'try again')}

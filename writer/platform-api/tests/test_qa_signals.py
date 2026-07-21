@@ -37,6 +37,26 @@ def test_rubric_routing_checkable_types():
     assert sig.rubric_for(_task("Website Pages Posted")) == sig.RUBRIC_PAGE
 
 
+def test_rubric_explicit_override_wins():
+    # An explicit qa_rubric (the dropdown) beats name-matching AND the
+    # content_run producer, so the title can be anything.
+    t = _task("Coral Springs practice-management page")
+    t["qa_rubric"] = sig.RUBRIC_PAGE
+    assert sig.rubric_for(t) == sig.RUBRIC_PAGE
+    t2 = _task("Review & publish: roof repair", source="content_run")
+    t2["qa_rubric"] = sig.RUBRIC_SKIP
+    assert sig.rubric_for(t2) == sig.RUBRIC_SKIP
+    # An empty / unknown explicit value falls back to the name rules.
+    t3 = _task("Website Pages Posted")
+    t3["qa_rubric"] = ""
+    assert sig.rubric_for(t3) == sig.RUBRIC_PAGE
+    t4 = _task("Website Pages Posted")
+    t4["qa_rubric"] = "not_a_real_rubric"
+    assert sig.rubric_for(t4) == sig.RUBRIC_PAGE
+    # RUBRIC_KEYS covers every rubric constant.
+    assert sig.RUBRIC_PAGE in sig.RUBRIC_KEYS and sig.RUBRIC_SKIP in sig.RUBRIC_KEYS
+
+
 def test_rubric_routing_producer_and_library_precedence():
     # A content_run producer task is a blog article no matter its name.
     assert sig.rubric_for(_task("Review & publish: roof repair", source="content_run")) == sig.RUBRIC_BLOG

@@ -73,6 +73,36 @@ default False except the on-demand Run QA button — see the build notes below).
 > `GET /tasks/{id}/qa-reviews`, and the `qa_*` config block. On-demand QA works
 > with the flag off; `qa_enabled` gates only the automatic status trigger.
 
+> **BUILD NOTE (2026-07-20) — dedicated QA chat surface (owner request).** A
+> conversational QA persona now lives in the sidebar as its own `/qa` page, the
+> reviewer sibling of SerMaStr's `/assistant` and PACE's `/pace`. This is an
+> *addition on top of* §5's decision (which folded QA's `run_qa_review` into
+> PACE rather than spinning up a persona) — it does **not** disturb that:
+> - **Scoped to the `/qa` surface only.** Unlike PACE, QA is NOT wired into the
+>   shared Slack `handle_message` / `/assistant/chat` first-refusal chain (that
+>   would create a three-way routing contest). `routers/qa.py` calls
+>   `services/qa_agent.py::maybe_handle_web(..., force=True)` directly, so
+>   SerMaStr + PACE routing are byte-for-byte unchanged.
+> - **New bare-URL QA capability** (resolves open decision #6's "QA this page"
+>   gap): `qa_service.review_url(url, client, rubric)` runs the real
+>   deterministic checks against any live URL with **no task and nothing
+>   persisted** (read-only), reusing the same page/citation/link/press/map-embed
+>   checks as the task rubrics via the shared `_website_page_checks` helper.
+> - **Two chat tools:** `qa_url` (runs inline, read-only) and `run_qa_review`
+>   (the existing task-review job — confirm-gated + actor-bound, reusing
+>   `pace_auth`). Recent-verdict questions answer from the same `_ctx_qa` /
+>   `qa_reviews` data the strategist reads.
+> - **Gated on its own flag** `qa_chat_enabled` (default False, separate from
+>   `qa_enabled`) so the chat ships dark; `GET /qa/status` hides the sidebar
+>   entry until it's on. Model `qa_chat_model` (Sonnet, PACE-parity for
+>   enumeration) / `qa_chat_max_tokens`. Pure helpers unit-tested
+>   (`tests/test_qa_agent.py`).
+> **What shipped:** `services/qa_agent.py` (persona), `routers/qa.py`
+> (`/qa/status` `/qa/chat` `/qa/chat/stream` `/qa/brief`), `qa_service.review_url`
+> + `resolve_url_rubric`, the `qa_chat_*` config block, and the frontend
+> `pages/Qa.tsx` + `components/QaChat.tsx` + sidebar entry. No migration (bare-URL
+> reviews are inline-only; `qa_reviews.task_id` stays NOT NULL).
+
 > **Positioning (the three-agent picture).**
 > **SerMaStr** determines *what should be done*. **PACE** keeps it *moving*.
 > **QA** decides whether *what got done is actually good* — before it reaches the client.

@@ -1020,6 +1020,19 @@ class Settings(BaseSettings):
     qa_visual_model: str = "claude-haiku-4-5-20251001"
     qa_visual_max_tokens: int = 400
     qa_asset_check_cap: int = 12                 # HEAD checks per page review
+    # QA chat persona (the dedicated /qa sidebar surface — the reviewer sibling
+    # of SerMaStr's /assistant and PACE's /pace). Its own master gate so the
+    # chat can ship dark independently of the automatic in_qa trigger
+    # (qa_enabled). Sonnet + a wide budget for the same reason PACE is: a real
+    # reviewer that enumerates recent verdicts and reasons about the board, not
+    # a cheap model that collapses lists into counts. Reuses ANTHROPIC_API_KEY.
+    qa_chat_enabled: bool = False                # QA_CHAT_ENABLED — sidebar gate
+    qa_chat_model: str = "claude-sonnet-4-6"
+    qa_chat_max_tokens: int = 2400
+    # Default rubric for a bare-URL QA (no task on the board) — the "QA this
+    # page" case. website_page is the common ask; the chat lets the user name
+    # another URL rubric (guest post / press release / citation / map embed).
+    qa_url_default_rubric: str = "website_page"
 
     # PACE — Project Assignment, Coordination & Execution agent
     # (docs/modules/project-manager-agent-plan-v1_0.md). Phase 0A ships only the
