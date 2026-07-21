@@ -412,6 +412,36 @@ def resolve_client_by_url(url: str) -> Optional[dict]:
     return None
 
 
+_ASK_CLIENT_MARKER = "which client is this for"
+
+
+def _just_asked_for_client(history: list[dict]) -> bool:
+    """True when the last thing QA said was the "which client is this for?"
+    question — so a short reply now is the VA answering it. Pure."""
+    for turn in reversed(history or []):
+        if turn.get("role") == "assistant":
+            return _ASK_CLIENT_MARKER in (turn.get("content") or "").casefold()
+        if turn.get("role") == "user":
+            return False
+    return False
+
+
+def _client_suggestions(message: str, names: list[str], limit: int = 3) -> list[str]:
+    """Closest client names to what the VA typed (a mistyped/unknown name),
+    combining substring hits and fuzzy ratio. Pure — for the 'did you mean' hint."""
+    import difflib
+
+    q = (message or "").strip().casefold()
+    if not q:
+        return []
+    hits: list[str] = [n for n in names if q in n.casefold() or n.casefold() in q]
+    for n in difflib.get_close_matches(q, [n.casefold() for n in names], n=limit, cutoff=0.5):
+        real = next((x for x in names if x.casefold() == n), None)
+        if real and real not in hits:
+            hits.append(real)
+    return hits[:limit]
+
+
 # ---------------------------------------------------------------------------
 # Web entry (the /qa surface — force=True, never returns None)
 # ---------------------------------------------------------------------------
@@ -494,6 +524,22 @@ async def maybe_handle_web(message: str, history: list[dict], sticky_client_id: 
             if not client_row and rubric in sig.CLIENT_REQUIRED_URL_RUBRICS:
                 what = sig.URL_RUBRIC_WHAT.get(rubric, "the client's details")
                 label = qa_service.RUBRIC_LABELS.get(rubric, "this")
+                # If we JUST asked "which client?" and they answered with a name
+                # that didn't resolve, don't re-ask the same question — tell them
+                # it wasn't found and show the real client list (with close
+                # matches), so they can't get stuck in a loop.
+                if _just_asked_for_client(history) and not first_url(message):
+                    names = [c["name"] for c in await run_in_threadpool(_all_clients)
+                             if c.get("name")]
+                    sugg = _client_suggestions(message, names)
+                    hint = f" Did you mean **{sugg[0]}**?" if sugg else ""
+                    listing = ", ".join(sorted(names))
+                    return {**base, "reply": (
+                        f"I don't have a client called “{message.strip()}” on file.{hint}\n\n"
+                        f"Here are the clients I track: {listing}.\n\n"
+                        f"Which one is this {label.lower()} for? (Or if it's a new "
+                        "client, it needs to be added first.)"
+                    )}
                 return {**base, "reply": (
                     f"Happy to check that {label.lower()} — but it's on another "
                     "website, so I can't tell which client it's for from the link "
