@@ -684,6 +684,12 @@ class Settings(BaseSettings):
     # deficiency (no extra reopt beyond the existing content-score budget).
     service_page_structure_gate_enabled: bool = True
     service_page_structure_min_composite: float = 85.0
+    # Reference-page scrape: when the cheap (datacenter, no-JS) ScrapeOwl fetch
+    # captures 0 content sections — the usual sign a WordPress/CDN bot-wall
+    # served an empty shell — retry ONCE with JS rendering + premium residential
+    # proxies. Bounded cost (only on an empty first pass); flip off if credits
+    # get tight.
+    page_structure_premium_fallback: bool = True
     # Bulk background jobs (bulk-create / bulk-reoptimize) enqueue one async_jobs
     # row per item. The single worker claims the OLDEST pending scheduled_at and
     # has no <=now gate, so staggering each bulk item's scheduled_at this many

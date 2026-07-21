@@ -32,13 +32,22 @@ _SYSTEM_PROMPT = (
 )
 
 
-async def scrapeowl_fetch(url: str, timeout: int = 45) -> str:
-    """Fetch raw HTML via ScrapeOwl."""
-    payload = {
+async def scrapeowl_fetch(
+    url: str, timeout: int = 45, *, render_js: bool = False, premium: bool = False
+) -> str:
+    """Fetch raw HTML via ScrapeOwl.
+
+    ``render_js`` runs the page's JavaScript before returning HTML; ``premium``
+    routes through ScrapeOwl's premium residential proxies. Both default off
+    (the cheap datacenter path); callers opt in — e.g. a reference-page scrape
+    retries with both when a plain fetch comes back empty (bot-blocked)."""
+    payload: dict[str, Any] = {
         "api_key": settings.scrapeowl_api_key,
         "url": url,
-        "render_js": False,
+        "render_js": render_js,
     }
+    if premium:
+        payload["premium_proxies"] = True
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(_SCRAPEOWL_URL, json=payload)
         response.raise_for_status()
