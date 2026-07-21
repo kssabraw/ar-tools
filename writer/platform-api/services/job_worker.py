@@ -393,27 +393,32 @@ async def _run_page_structure_scrape(job: dict) -> None:
         # ONCE with JS rendering + premium residential proxies — the thing that
         # gets past those walls — and keep the retry only if it actually found
         # content. Bounded cost: only fires on an empty first pass.
+        retry_error = None
+        retry_html_len = None
         if settings.page_structure_premium_fallback and not (analysis.get("outline") or []):
             logger.info(
                 "page_structure_scrape_premium_retry",
                 extra={"job_id": job_id, "client_id": client_id, "page_type": page_type},
             )
             try:
-                html2 = await scrapeowl_fetch(url, timeout=60, render_js=True, premium=True)
+                html2 = await scrapeowl_fetch(url, timeout=90, render_js=True, premium=True)
+                retry_html_len = len(html2 or "")
                 if html2:
                     analysis2 = await analyze_page_structure(html2, page_type)
                     if analysis2.get("outline"):
                         analysis = analysis2
             except Exception as exc:
+                retry_error = str(exc)[:500]
                 logger.warning(
-                    "page_structure_scrape_premium_retry_failed",
+                    "page_structure_scrape_premium_retry_failed error=%s", str(exc)[:500],
                     extra={"job_id": job_id, "error": str(exc)},
                 )
 
         # A capture that yielded zero sections isn't a usable reference (QA and
         # the writers treat it as "no reference"). Flag it explicitly so it's
         # visible WHY — a silent complete-but-empty entry looks like success but
-        # enables nothing.
+        # enables nothing. The premium-retry diagnostics (its error / how much
+        # HTML it fetched) are stored too so a failure is inspectable.
         empty = not (analysis.get("outline") or [])
         _store(
             {
@@ -421,6 +426,8 @@ async def _run_page_structure_scrape(job: dict) -> None:
                 "status": "complete",
                 "error": None,
                 "empty": empty,
+                "retry_error": retry_error,
+                "retry_html_len": retry_html_len,
                 "note": (
                     "Captured 0 content sections — the page may be blocking our "
                     "scraper or use non-semantic markup. Try a different, "
