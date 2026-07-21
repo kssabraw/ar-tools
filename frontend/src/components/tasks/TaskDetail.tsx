@@ -48,6 +48,7 @@ const ACTIVITY_LABELS: Record<string, string> = {
   auto_ticked: 'auto-ticked checklist items',
   qa_result: 'QA reviewed the deliverable',
   qa_rubric_changed: 'changed the QA rubric',
+  qa_page_type_changed: 'changed the QA page type',
 }
 
 function formatBytes(n: number | null): string {
@@ -383,6 +384,8 @@ export function TaskDetail({ taskId, statuses, categories, members, onClose, inv
               taskId={taskId}
               rubric={task.qa_rubric}
               onRubricChange={(r) => patchField('qa_rubric', r)}
+              pageType={task.qa_page_type}
+              onPageTypeChange={(p) => patchField('qa_page_type', p)}
             />
           )}
 

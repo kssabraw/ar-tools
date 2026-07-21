@@ -83,45 +83,69 @@ def _hint_match(value: Any) -> bool:
     return any(hint in text for hint in _DROP_HINTS)
 
 
-def strip_chrome(html: str) -> str:
-    """Return the page's main content HTML with site chrome removed.
+# The aggressive strip is trusted unless it yields NO visible text at all — only
+# then is the gentler fallback tried. Kept at "essentially empty" (not a larger
+# floor) so a legitimately short main-content strip is never second-guessed.
+_MIN_CONTENT_CHARS = 1
 
-    Heuristic, deterministic pass: drops chrome tags, ARIA-landmark chrome,
-    and elements whose id/class hint at nav/popups/overlays. If the page
-    exposes a clear main-content landmark (<main>, role=main, or <article>),
-    that subtree is preferred. Best-effort — the LLM is also instructed to
-    ignore any chrome that slips through.
-    """
-    soup = BeautifulSoup(html or "", "html.parser")
 
-    # Drop comments (often wrap hidden widgets / tracking).
+def _text_len(fragment: str) -> int:
+    return len(BeautifulSoup(fragment or "", "html.parser").get_text(" ", strip=True))
+
+
+def _strip_soup(soup: BeautifulSoup, *, hints: bool) -> None:
+    """Remove chrome from ``soup`` in place. Always drops hard chrome tags,
+    ARIA-landmark chrome, and aria-hidden elements. When ``hints`` is True, ALSO
+    decomposes elements whose id/class substring-matches a chrome hint — the
+    aggressive pass."""
     for comment in soup.find_all(string=lambda t: isinstance(t, Comment)):
         comment.extract()
-
     for tag in soup.find_all(_DROP_TAGS):
         tag.decompose()
-
-    # ARIA-landmark chrome + hidden elements.
     for tag in soup.find_all(attrs={"role": True}):
         if str(tag.get("role", "")).lower() in _DROP_ROLES:
             tag.decompose()
     for tag in soup.find_all(attrs={"aria-hidden": "true"}):
         tag.decompose()
+    if hints:
+        for tag in soup.find_all(attrs={"class": _hint_match}):
+            tag.decompose()
+        for tag in soup.find_all(attrs={"id": _hint_match}):
+            tag.decompose()
 
-    # id/class-hinted chrome, popups, overlays.
-    for tag in soup.find_all(attrs={"class": _hint_match}):
-        tag.decompose()
-    for tag in soup.find_all(attrs={"id": _hint_match}):
-        tag.decompose()
 
-    # Prefer an explicit main-content landmark when present.
-    main = (
-        soup.find("main")
-        or soup.find(attrs={"role": "main"})
-        or soup.find("article")
-    )
-    root = main if main is not None else (soup.body or soup)
-    return str(root)
+def strip_chrome(html: str) -> str:
+    """Return the page's main content HTML with site chrome removed.
+
+    Aggressive pass: drop chrome tags, ARIA-landmark chrome, and elements whose
+    id/class hint at nav/popups/overlays, then prefer a <main>/role=main/
+    <article> landmark. BUT the id/class hint-matching is a substring test, so
+    on builder-heavy sites (WordPress + Divi/Elementor, Squarespace…) it can
+    wrongly nuke real content — a hero wrapper classed 'hero-banner', a section
+    titled '…header', etc. — leaving nothing. So if the aggressive pass strips
+    the page to (near) nothing, fall back to a GENTLE pass that keeps the
+    id/class-hinted elements (dropping only hard chrome tags + ARIA landmarks)
+    and doesn't force a main/article landmark. Last resort: the raw body.
+    Best-effort — the LLM is also told to ignore any chrome that slips through.
+    """
+    # Aggressive pass.
+    soup = BeautifulSoup(html or "", "html.parser")
+    _strip_soup(soup, hints=True)
+    main = soup.find("main") or soup.find(attrs={"role": "main"}) or soup.find("article")
+    aggressive = str(main if main is not None else (soup.body or soup))
+    if _text_len(aggressive) >= _MIN_CONTENT_CHARS:
+        return aggressive
+
+    # Gentle fallback — real content survived the hard-chrome removal but was
+    # over-matched by the hint pass; keep the hinted elements this time.
+    soup2 = BeautifulSoup(html or "", "html.parser")
+    _strip_soup(soup2, hints=False)
+    gentle = str(soup2.body or soup2)
+    if _text_len(gentle) >= _MIN_CONTENT_CHARS:
+        return gentle
+
+    # Nothing usable either way — return whatever body we have.
+    return gentle or aggressive
 
 
 _SYSTEM_PROMPT = (

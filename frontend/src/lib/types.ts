@@ -108,6 +108,10 @@ export interface PageStructureEntry {
   url: string
   status: 'pending' | 'complete' | 'failed'
   error: string | null
+  // True when the scrape completed but captured 0 content sections (not a
+  // usable reference); `note` explains why.
+  empty?: boolean
+  note?: string | null
   analysis: Record<string, unknown> | null
   analyzed_at: string | null
 }
@@ -1763,6 +1767,9 @@ export interface TaskItem {
   // Explicit QA rubric override (qa_signals RUBRIC_* key); null = auto-detect
   // from the task name.
   qa_rubric?: string | null
+  // Website-page sub-type for QA structural-fit reference selection
+  // (service / local_landing / location); null = auto.
+  qa_page_type?: string | null
   created_at: string
   // Board rollup (top-level tasks only)
   subtask_total?: number

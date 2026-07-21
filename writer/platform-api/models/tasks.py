@@ -79,6 +79,9 @@ class TaskUpdateRequest(BaseModel):
     # Explicit QA rubric override (qa_signals RUBRIC_*); "" / null = auto-detect
     # from the task name. Validated against qa_signals.RUBRIC_KEYS at the router.
     qa_rubric: Optional[str] = None
+    # Website-page sub-type for QA's structural design-fit reference selection
+    # (service / local_landing / location); "" / null = auto (priority order).
+    qa_page_type: Optional[str] = None
 
 
 class TaskSectionCreateRequest(BaseModel):
