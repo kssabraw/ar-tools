@@ -47,6 +47,7 @@ const ACTIVITY_LABELS: Record<string, string> = {
   restored: 'restored from trash',
   auto_ticked: 'auto-ticked checklist items',
   qa_result: 'QA reviewed the deliverable',
+  qa_rubric_changed: 'changed the QA rubric',
 }
 
 function formatBytes(n: number | null): string {
@@ -377,7 +378,13 @@ export function TaskDetail({ taskId, statuses, categories, members, onClose, inv
           </div>
 
           {/* QA (top-level tasks only — subtasks aren't deliverables) */}
-          {!task.parent_task_id && <QaPanel taskId={taskId} />}
+          {!task.parent_task_id && (
+            <QaPanel
+              taskId={taskId}
+              rubric={task.qa_rubric}
+              onRubricChange={(r) => patchField('qa_rubric', r)}
+            />
+          )}
 
           {/* Attachments */}
           <div style={{ marginTop: 18 }}>

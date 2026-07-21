@@ -76,6 +76,9 @@ class TaskUpdateRequest(BaseModel):
     sort_order: Optional[int] = None
     # Client-facing note (Weekly Pulse) — NOT the internal description.
     client_note: Optional[str] = None
+    # Explicit QA rubric override (qa_signals RUBRIC_*); "" / null = auto-detect
+    # from the task name. Validated against qa_signals.RUBRIC_KEYS at the router.
+    qa_rubric: Optional[str] = None
 
 
 class TaskSectionCreateRequest(BaseModel):

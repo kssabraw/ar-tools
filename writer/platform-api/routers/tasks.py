@@ -639,6 +639,16 @@ async def update_task(
     changes = body.model_dump(exclude_unset=True)
     if "name" in changes and not (changes["name"] or "").strip():
         raise HTTPException(status_code=400, detail="missing_name")
+    if "qa_rubric" in changes:
+        from services import qa_signals
+
+        rubric = (changes["qa_rubric"] or "").strip()
+        if not rubric:
+            changes["qa_rubric"] = None          # "" = auto-detect from name
+        elif rubric not in qa_signals.RUBRIC_KEYS:
+            raise HTTPException(status_code=400, detail="invalid_qa_rubric")
+        else:
+            changes["qa_rubric"] = rubric
     if not changes:
         raise HTTPException(status_code=400, detail="no_changes")
     try:

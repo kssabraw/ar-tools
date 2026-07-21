@@ -71,10 +71,25 @@ _NAME_RULES: list[tuple[str, str]] = [
 ]
 
 
+# Every rubric key a task may carry — the allowed set for an EXPLICIT
+# ``tasks.qa_rubric`` override (validated at the API; drives rubric_for's
+# precedence). Kept in sync with the RUBRIC_* constants above.
+RUBRIC_KEYS: frozenset[str] = frozenset({
+    RUBRIC_BLOG, RUBRIC_PAGE, RUBRIC_GBP_POSTS, RUBRIC_CITATIONS,
+    RUBRIC_GUEST_POST, RUBRIC_NICHE_EDIT, RUBRIC_PRESS_RELEASE,
+    RUBRIC_MAP_EMBEDS, RUBRIC_SKIP, RUBRIC_HANDOFF, RUBRIC_GENERIC,
+})
+
+
 def rubric_for(task: dict[str, Any]) -> str:
-    """Route a task to its QA rubric. Producer source wins (a content_run task
-    is a blog article regardless of its name); then the library/task name;
-    unknown → generic (needs_human — QA never guesses a standard). Pure."""
+    """Route a task to its QA rubric. Precedence: an EXPLICIT ``qa_rubric``
+    chosen on the task wins (the dropdown — so the title can be anything); then
+    the producer source (a content_run task is a blog article regardless of its
+    name); then the library/task name; unknown → generic (needs_human — QA
+    never guesses a standard). Pure."""
+    explicit = (task.get("qa_rubric") or "").strip()
+    if explicit in RUBRIC_KEYS:
+        return explicit
     if (task.get("source") or "") == "content_run":
         return RUBRIC_BLOG
     name = " ".join(

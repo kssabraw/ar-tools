@@ -95,6 +95,7 @@ _ACTIVITY_FIELDS = {
     "start_date": "due_changed",
     "est_hours": "estimate_changed",
     "section_id": "moved",
+    "qa_rubric": "qa_rubric_changed",
 }
 
 
