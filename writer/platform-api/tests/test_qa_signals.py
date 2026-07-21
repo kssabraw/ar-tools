@@ -291,13 +291,45 @@ def test_website_page_meta_description_optional():
     # Everything present except the meta description → still passes (advisory).
     html = """<html><head><title>Practice Management Coral Springs</title></head>
     <body><h1>Practice Management Coral Springs</h1>
-    <img src="x.jpg" alt="x"><a href="https://myihbs.com/contact">contact</a></body></html>"""
+    <img src="x.jpg" alt="x"><a href="https://myihbs.com/contact">contact</a>
+    <p>IHBS provides practice management in Coral Springs.</p></body></html>"""
     checks = sig.check_website_page(
-        html, "myihbs.com", None,
+        html, "myihbs.com", "IHBS",
         keyword="practice management coral springs",
         url="https://www.myihbs.com/coral-springs/practice-management-coral-springs/",
     )
     assert sig.build_verdict(checks)["verdict"] == sig.PASS
+
+
+def test_website_page_client_name_blocking_and_exact():
+    base = ("<html><head><title>Practice Management Coral Springs</title></head>"
+            "<body><h1>Practice Management Coral Springs</h1>"
+            "<img src='x.jpg' alt='x'><a href='https://myihbs.com/contact'>contact</a>"
+            "{body}</body></html>")
+    kw, url = "practice management coral springs", "https://myihbs.com/practice-management-coral-springs/"
+    # Correct exact name present → passes.
+    ok = sig.check_website_page(base.format(body="<p>IHBS serves Coral Springs.</p>"),
+                                "myihbs.com", "IHBS", keyword=kw, url=url)
+    assert sig.build_verdict(ok)["verdict"] == sig.PASS
+    # Name absent → the client_name check is blocking now → FAIL.
+    missing = sig.check_website_page(base.format(body="<p>We serve Coral Springs.</p>"),
+                                     "myihbs.com", "IHBS", keyword=kw, url=url)
+    v = sig.build_verdict(missing)
+    assert v["verdict"] == sig.FAIL
+    assert any("business name" in f.lower() for f in v["failed"])
+    # No name on file → could-not-verify (needs_human), never an auto-fail.
+    unknown = sig.check_website_page(base.format(body="<p>hi</p>"),
+                                     "myihbs.com", None, keyword=kw, url=url)
+    assert next(c for c in unknown if c["key"] == "client_name")["ok"] is None
+
+
+def test_name_present_is_bounded():
+    # Whole-name presence, case/space-insensitive.
+    assert sig._name_present("Welcome to IHBS Marketing", "IHBS") is True
+    assert sig._name_present("Acme  Roofing  Co", "acme roofing co") is True
+    # Must not match inside a larger word.
+    assert sig._name_present("These are exhibits and inhibits", "IHBS") is False
+    assert sig._name_present("anything", None) is None
 
 
 def test_website_page_keyword_placement_blocking():
@@ -410,6 +442,29 @@ def test_keyword_from_task_description_override_still_wins():
          "description": "Keyword: roof repair\nNotes: x"}
     ) == "roof repair"
     assert sig.keyword_from_task({"description": "keywords - emergency plumber"}) == "emergency plumber"
+
+
+def test_keyword_from_task_kw_marker_in_description_or_title():
+    # Short 'KW:' form is accepted (description).
+    assert sig.keyword_from_task({"description": "KW: practice management coral springs"}) \
+        == "practice management coral springs"
+    assert sig.keyword_from_task({"description": "kw - blocked drain sydney"}) == "blocked drain sydney"
+    # The marker is also honoured anywhere in the TASK NAME/title.
+    assert sig.keyword_from_task({"name": "Coral Springs page  KW: practice management services"}) \
+        == "practice management services"
+    assert sig.keyword_from_task({"name": "Keyword: emergency plumber brisbane"}) \
+        == "emergency plumber brisbane"
+    # Description marker still wins over a name marker.
+    assert sig.keyword_from_task(
+        {"description": "KW: roof restoration", "name": "KW: wrong keyword"}
+    ) == "roof restoration"
+    # A name with a plain separator (no marker) still uses the template split —
+    # 'kw'/'keyword' must be present to trigger the marker path, so this is
+    # unaffected.
+    assert sig.keyword_from_task({"name": "Review & publish: roof repair"}) == "roof repair"
+    assert sig.keyword_from_task(
+        {"name": "GBP Posts — emergency roof repair", "library_task_name": "GBP Posts"}
+    ) == "emergency roof repair"
 
 
 def test_deliverable_subtask_name_matches_and_is_not_work_item():

@@ -787,8 +787,20 @@ function PageStructureStatus({ entry, url }: { entry?: PageStructureEntry; url: 
   }
   if (entry.status === 'pending')
     return <span style={{ ...psBadge, color: '#92400e', background: '#fef3c7', border: '1px solid #fde68a' }}>Analyzing…</span>
-  if (entry.status === 'complete')
+  if (entry.status === 'complete') {
+    // Completed, but the scrape captured no content sections (e.g. the page
+    // blocks scraping or uses non-semantic markup) — not a usable reference.
+    if (entry.empty)
+      return (
+        <span
+          style={{ ...psBadge, color: '#92400e', background: '#fef3c7', border: '1px solid #fde68a' }}
+          title={entry.note ?? 'Captured 0 content sections — try a different, content-rich reference URL.'}
+        >
+          Empty — try another URL
+        </span>
+      )
     return <span style={{ ...psBadge, color: '#166534', background: '#dcfce7', border: '1px solid #bbf7d0' }}>Analyzed</span>
+  }
   return (
     <span
       style={{ ...psBadge, color: '#dc2626', background: '#fef2f2', border: '1px solid #fecaca' }}

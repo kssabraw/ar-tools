@@ -46,6 +46,30 @@ def test_strip_chrome_handles_empty():
     assert strip_chrome("") == "" or strip_chrome("") is not None
 
 
+def test_strip_chrome_falls_back_when_aggressive_strip_nukes_content():
+    # A WordPress/builder-style page: the only content is inside a div whose
+    # class ('hero-banner') substring-matches a chrome hint ('banner'), and
+    # there's no <main>/<article> landmark. The aggressive pass decomposes it
+    # → empty → the gentle fallback must recover the content while still
+    # dropping the hard-chrome <nav>/<footer>.
+    html = """
+    <html><body>
+      <nav class="navbar">Home About</nav>
+      <div class="hero-banner">
+        <h1>Roof Restoration Sydney</h1>
+        <p>We restore tile and metal roofs across Sydney.</p>
+      </div>
+      <footer>Copyright 2026</footer>
+    </body></html>
+    """
+    cleaned = strip_chrome(html)
+    assert "Roof Restoration Sydney" in cleaned
+    assert "We restore tile and metal roofs across Sydney." in cleaned
+    # Hard chrome is still gone even in the fallback.
+    assert "Home About" not in cleaned
+    assert "Copyright 2026" not in cleaned
+
+
 # ── render_reference_structure ──────────────────────────────────────────────
 
 def _complete_entry():

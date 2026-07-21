@@ -649,6 +649,16 @@ async def update_task(
             raise HTTPException(status_code=400, detail="invalid_qa_rubric")
         else:
             changes["qa_rubric"] = rubric
+    if "qa_page_type" in changes:
+        from services import qa_signals
+
+        page_type = (changes["qa_page_type"] or "").strip()
+        if not page_type:
+            changes["qa_page_type"] = None       # "" = auto (priority order)
+        elif page_type not in qa_signals.WEBSITE_PAGE_TYPES:
+            raise HTTPException(status_code=400, detail="invalid_qa_page_type")
+        else:
+            changes["qa_page_type"] = page_type
     if not changes:
         raise HTTPException(status_code=400, detail="no_changes")
     try:

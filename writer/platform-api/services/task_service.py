@@ -96,6 +96,7 @@ _ACTIVITY_FIELDS = {
     "est_hours": "estimate_changed",
     "section_id": "moved",
     "qa_rubric": "qa_rubric_changed",
+    "qa_page_type": "qa_page_type_changed",
 }
 
 

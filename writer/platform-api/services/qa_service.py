@@ -587,7 +587,9 @@ async def _run_rubric(
         if html is None:
             return ([sig._check("page", "Posted page reachable", None,
                                 note="page unreachable/blocked")], examined, None)
-        checks, composite = await _website_page_checks(html, url, fields, client, keyword=keyword)
+        checks, composite = await _website_page_checks(
+            html, url, fields, client, keyword=keyword, page_type=task.get("qa_page_type"),
+        )
         return (checks, examined, composite)
 
     return ([], [], None)
@@ -595,19 +597,21 @@ async def _run_rubric(
 
 async def _website_page_checks(
     html: str, url: str, fields: dict, client: Optional[dict],
-    keyword: Optional[str] = None,
+    keyword: Optional[str] = None, page_type: Optional[str] = None,
 ) -> tuple[list[dict], Optional[float]]:
     """The website-page QA checks (QA_Checklists §Website Pages Posted) for a
     fetched page — shared by the ``website_page`` rubric (task deliverable, which
-    supplies ``keyword``) and the bare-URL ``review_url`` path (no keyword).
-    Returns (checks, composite_or_none)."""
+    supplies ``keyword`` + an optional ``page_type``) and the bare-URL
+    ``review_url`` path. Returns (checks, composite_or_none)."""
     checks = sig.check_website_page(
         html, fields["domain"], fields["business_name"], keyword=keyword, url=url,
     )
     composite: Optional[float] = None
-    # Structural design fit vs the stored reference. Page-type attribution is
-    # heuristic, so a low score reads needs_human, never an auto-bounce.
-    structural = _structural_fit(html, client)
+    # Structural design fit vs the stored reference. ``page_type`` (the task's
+    # 'Page type' dropdown) picks the matching reference; unset falls back to
+    # the service → local_landing → location priority. Attribution is heuristic,
+    # so a low score reads needs_human, never an auto-bounce.
+    structural = _structural_fit(html, client, page_type)
     if structural is not None:
         composite, note = structural
         ok: Optional[bool] = True if composite >= settings.qa_structural_threshold else None
@@ -649,15 +653,22 @@ async def _website_page_checks(
     return checks, composite
 
 
-def _structural_fit(html: str, client: Optional[dict]) -> Optional[tuple[float, str]]:
-    """Structural fidelity vs the client's stored reference page structure
-    (service reference first — the most common posted type). None when no
-    reference is stored."""
+def _structural_fit(
+    html: str, client: Optional[dict], page_type: Optional[str] = None
+) -> Optional[tuple[float, str]]:
+    """Structural fidelity vs the client's stored reference page structure.
+
+    ``page_type`` (the task's 'Page type' dropdown) selects which reference to
+    compare against; when unset/invalid it falls back to service →
+    local_landing → location priority. None when no usable reference is stored."""
     try:
         from services import page_structure_eval as pse
 
         structures = (client or {}).get("page_structures") or {}
-        ref = structures.get("service") or structures.get("local_landing") or structures.get("location")
+        if page_type and page_type in sig.WEBSITE_PAGE_TYPES:
+            ref = structures.get(page_type)
+        else:
+            ref = structures.get("service") or structures.get("local_landing") or structures.get("location")
         if not ref:
             return None
         # A reference with zero captured sections is not a usable baseline:

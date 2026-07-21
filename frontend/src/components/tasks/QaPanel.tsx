@@ -96,11 +96,23 @@ function ReviewCard({ review }: { review: QaReview }) {
   )
 }
 
-export function QaPanel({ taskId, rubric, onRubricChange }: {
+// Website-page sub-types QA can compare structure against (must match the
+// client's stored reference-structure keys). "" = auto (priority order).
+const PAGE_TYPE_CHOICES: { value: string; label: string }[] = [
+  { value: 'service', label: 'Service page' },
+  { value: 'local_landing', label: 'Local landing page' },
+  { value: 'location', label: 'Location page' },
+]
+
+export function QaPanel({ taskId, rubric, onRubricChange, pageType, onPageTypeChange }: {
   taskId: string
   // The task's explicit QA rubric (null/undefined = auto-detect from name).
   rubric?: string | null
   onRubricChange?: (rubric: string | null) => void
+  // The task's website-page sub-type (null = auto); drives the structural
+  // design-fit reference selection.
+  pageType?: string | null
+  onPageTypeChange?: (pageType: string | null) => void
 }) {
   const queryClient = useQueryClient()
   // Set when a run was enqueued; polling stops once a newer review lands
@@ -166,6 +178,24 @@ export function QaPanel({ taskId, rubric, onRubricChange }: {
           </select>
           <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 3 }}>
             Which checklist QA grades this task against — pick one so the title can be anything.
+          </div>
+        </div>
+      )}
+      {onPageTypeChange && (!rubric || rubric === 'website_page') && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ ...label, marginBottom: 3 }}>Page type</div>
+          <select
+            value={pageType ?? ''}
+            onChange={(e) => onPageTypeChange(e.target.value || null)}
+            style={{ width: '100%', padding: '6px 9px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12.5, fontFamily: 'inherit', background: '#fff', color: '#0f172a', boxSizing: 'border-box' }}
+          >
+            <option value="">Auto (Service → Local landing → Location)</option>
+            {PAGE_TYPE_CHOICES.map((p) => (
+              <option key={p.value} value={p.value}>{p.label}</option>
+            ))}
+          </select>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 3 }}>
+            Which reference-page structure the design-fit check compares this page against.
           </div>
         </div>
       )}

@@ -80,6 +80,12 @@ RUBRIC_KEYS: frozenset[str] = frozenset({
     RUBRIC_MAP_EMBEDS, RUBRIC_SKIP, RUBRIC_HANDOFF, RUBRIC_GENERIC,
 })
 
+# Website-page sub-types that map to a stored reference-structure key on
+# clients.page_structures. An explicit per-task pick (the 'Page type' dropdown)
+# tells the structural design-fit check WHICH reference to compare against;
+# unset falls back to the service → local_landing → location priority.
+WEBSITE_PAGE_TYPES: frozenset[str] = frozenset({"service", "local_landing", "location"})
+
 
 def rubric_for(task: dict[str, Any]) -> str:
     """Route a task to its QA rubric. Precedence: an EXPLICIT ``qa_rubric``
@@ -578,11 +584,12 @@ def check_website_page(html: str, client_domain: str,
 
     Blocking: meta title present; the target keyword in the <title> tag, the
     URL slug and the H1 (on-page keyword placement — owner ruling 2026-07-20);
-    an internal link back to the client site; images have alt text. Advisory:
-    meta description present (owner ruling 2026-07-20 — recommended, no longer
-    required); client name present (service pages legitimately vary).
-    Structural fidelity + the visual layers are attached by qa_service where
-    available."""
+    an internal link back to the client site; images have alt text; the
+    client's exact business name present (owner ruling 2026-07-21 — a page must
+    carry the RIGHT business name, so a missing/wrong name fails the review).
+    Advisory: meta description present (owner ruling 2026-07-20 — recommended,
+    no longer required). Structural fidelity + the visual layers are attached
+    by qa_service where available."""
     soup = BeautifulSoup(html or "", "html.parser")
     title = (soup.title.string or "").strip() if soup.title and soup.title.string else ""
     desc_tag = soup.find("meta", attrs={"name": "description"})
@@ -592,9 +599,18 @@ def check_website_page(html: str, client_domain: str,
     imgs = soup.find_all("img")
     missing_alt = [i for i in imgs if not (i.get("alt") or "").strip()]
     internal = links_to_domain(extract_anchors(html), client_domain) if client_domain else []
+    # The client's EXACT business name must appear on the page (blocking). None
+    # (no name on file) reads 'could not verify' → needs_human, never an
+    # auto-fail. The name is matched whole-word (bounded) so a short name can't
+    # match inside a larger word.
+    name = normalize_ws(business_name)
     name_ok: Optional[bool] = None
-    if normalize_ws(business_name):
-        name_ok = normalize_ws(business_name).casefold() in visible_text_of(html).casefold()
+    name_note = ""
+    if name:
+        name_ok = _name_present(visible_text_of(html), name)
+        name_note = f'expected business name: “{name}”' + ("" if name_ok else " — not found on the page")
+    else:
+        name_note = "no business name on file to check against"
     kw_note = f'keyword: “{keyword}”' if keyword else "no target keyword found on the task"
     return [
         _check("meta_title", "Meta title present", bool(title)),
@@ -613,8 +629,19 @@ def check_website_page(html: str, client_domain: str,
         _check("images_alt", "Images have alt text",
                (not missing_alt) if imgs else True,
                note=f"{len(missing_alt)} of {len(imgs)} image(s) missing alt" if missing_alt else ""),
-        _check("client_name", "Client name on the page", name_ok, blocking=False),
+        _check("client_name", "Client's business name on the page", name_ok, note=name_note),
     ]
+
+
+def _name_present(text: Optional[str], name: Optional[str]) -> Optional[bool]:
+    """Whether the exact business ``name`` appears in ``text`` as a bounded
+    token sequence (case/whitespace-insensitive). None when the name is unknown.
+    Bounded so a short name ('IHBS') can't match inside a longer word. Pure."""
+    n = normalize_ws(name).casefold()
+    if not n:
+        return None
+    hay = normalize_ws(text).casefold()
+    return re.search(rf"(?<![0-9a-z]){re.escape(n)}(?![0-9a-z])", hay) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -646,7 +673,10 @@ def build_verdict(checks: list[dict]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Task-side conventions (keyword + deliverable-links extraction)
 # ---------------------------------------------------------------------------
-_KEYWORD_LINE_RE = re.compile(r"\bkeywords?\s*[:\-]\s*(.+)", re.IGNORECASE)
+# Explicit keyword marker: 'Keyword:', 'Keywords:', or the short form 'KW:'
+# (also accepts a dash separator). Matched in BOTH the description and the task
+# name, so the keyword can be tagged in either place.
+_KEYWORD_LINE_RE = re.compile(r"\b(?:keywords?|kw)\s*[:\-]\s*(.+)", re.IGNORECASE)
 _NAME_SEPS = ("—", "–", ":", "|", " - ")
 _SEP_STRIP = " \t-—–:|·,"
 
@@ -655,7 +685,9 @@ def keyword_from_task(task: dict[str, Any]) -> Optional[str]:
     """The target keyword 'on the task' (owner convention 2026-07-12: the
     keyword is entered into the TASK NAME). Resolution order, pure:
 
-    1. An explicit 'Keyword: …' line in the description (unambiguous override).
+    1. An explicit 'Keyword: …' / 'KW: …' marker anywhere in the description OR
+       the task name (unambiguous override — checked in the description first,
+       then the name).
     2. The task name minus its template name — handles both shapes:
        'GBP Posts — emergency roof repair' (template + separator + keyword)
        and a fully renamed task ('emergency roof repair' whose
@@ -664,11 +696,13 @@ def keyword_from_task(task: dict[str, Any]) -> Optional[str]:
 
     A bare template name ('GBP Posts') yields None → the keyword checks read
     'could not verify' → needs_human, never a guess."""
-    m = _KEYWORD_LINE_RE.search(task.get("description") or "")
-    if m:
-        kw = normalize_ws(m.group(1).split("\n")[0])
-        if kw:
-            return kw
+    # 1. An explicit 'Keyword:' / 'KW:' marker, in the description or the name.
+    for source in (task.get("description"), task.get("name")):
+        m = _KEYWORD_LINE_RE.search(source or "")
+        if m:
+            kw = normalize_ws(m.group(1).split("\n")[0])
+            if kw:
+                return kw
     name = normalize_ws(task.get("name"))
     lib = normalize_ws(task.get("library_task_name"))
     if not name:

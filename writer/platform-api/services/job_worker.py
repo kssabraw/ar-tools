@@ -388,11 +388,23 @@ async def _run_page_structure_scrape(job: dict) -> None:
 
         analysis = await analyze_page_structure(html, page_type)
 
+        # A capture that yielded zero sections isn't a usable reference (QA and
+        # the writers treat it as "no reference"). Flag it explicitly so it's
+        # visible WHY — a silent complete-but-empty entry looks like success but
+        # enables nothing.
+        empty = not (analysis.get("outline") or [])
         _store(
             {
                 "url": url,
                 "status": "complete",
                 "error": None,
+                "empty": empty,
+                "note": (
+                    "Captured 0 content sections — the page may be blocking our "
+                    "scraper or use non-semantic markup. Try a different, "
+                    "content-rich reference URL."
+                    if empty else None
+                ),
                 "analysis": analysis,
                 "analyzed_at": datetime.now(timezone.utc).isoformat(),
             }
