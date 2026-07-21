@@ -127,3 +127,78 @@ def test_review_url_website_page_runs_checks():
     labels = {c["key"] for c in review["checks"]}
     assert "meta_title" in labels and "internal_link" in labels
     assert review["verdict"] in (sig.PASS, sig.NEEDS_HUMAN, sig.FAIL)
+
+
+def test_review_url_threads_keyword_to_page_checks():
+    # keyword present in <title> + an <h1> → the keyword-placement checks pass;
+    # this proves review_url wires the keyword through to the website-page rubric.
+    html = (
+        "<html><head><title>Emergency Plumber Coral Springs</title>"
+        "<meta name='description' content='24/7 emergency plumbing.'></head>"
+        "<body><h1>Emergency Plumber Coral Springs</h1>"
+        "<a href='https://client.com/contact'>Contact</a>"
+        "<img src='/a.jpg' alt='plumber'></body></html>"
+    )
+
+    async def fake_fetch(url):
+        return html
+
+    async def no_broken(urls):
+        return []
+
+    client = {"website_url": "https://client.com", "name": "Client Co", "gbp": {}}
+    with patch.object(qa_service, "_fetch", fake_fetch), \
+         patch.object(qa_service, "_broken_assets", no_broken), \
+         patch.object(qa_service.settings, "qa_visual_enabled", False):
+        review = _run(qa_service.review_url(
+            "https://client.com/plumber", client, sig.RUBRIC_PAGE,
+            keyword="emergency plumber coral springs",
+        ))
+    kw_checks = [c for c in review["checks"] if "keyword" in c["key"]]
+    assert kw_checks, "keyword was not threaded into the page checks"
+    assert any(c["ok"] for c in kw_checks)
+
+
+# ---------------------------------------------------------------------------
+# resolve_client_by_url (mocked DB)
+# ---------------------------------------------------------------------------
+class _FakeTable:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def select(self, *_a, **_k):
+        return self
+
+    def execute(self):
+        class _R:
+            pass
+        r = _R()
+        r.data = self._rows
+        return r
+
+
+class _FakeSupabase:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def table(self, _name):
+        return _FakeTable(self._rows)
+
+
+def test_resolve_client_by_url_matches_domain():
+    rows = [
+        {"id": "1", "name": "Other Co", "website_url": "https://other.com"},
+        {"id": "2", "name": "Client Co", "website_url": "https://www.client.com"},
+    ]
+    with patch.object(qa_agent, "get_supabase", lambda: _FakeSupabase(rows)):
+        got = qa_agent.resolve_client_by_url("https://client.com/some/posted-page/")
+    assert got is not None and got["id"] == "2"
+
+
+def test_resolve_client_by_url_no_match_returns_none():
+    rows = [{"id": "1", "name": "Other Co", "website_url": "https://other.com"}]
+    with patch.object(qa_agent, "get_supabase", lambda: _FakeSupabase(rows)):
+        assert qa_agent.resolve_client_by_url("https://unknown.example/x") is None
+    # A URL with no parseable domain never matches.
+    with patch.object(qa_agent, "get_supabase", lambda: _FakeSupabase(rows)):
+        assert qa_agent.resolve_client_by_url("not a url") is None
