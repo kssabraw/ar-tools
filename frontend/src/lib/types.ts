@@ -1770,6 +1770,10 @@ export interface TaskItem {
   // Website-page sub-type for QA structural-fit reference selection
   // (service / local_landing / location); null = auto.
   qa_page_type?: string | null
+  // First-class QA inputs (the guided panel): the live page URL QA reviews and
+  // the target keyword. null = fall back to subtask/marker conventions.
+  deliverable_url?: string | null
+  qa_keyword?: string | null
   created_at: string
   // Board rollup (top-level tasks only)
   subtask_total?: number

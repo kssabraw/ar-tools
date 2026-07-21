@@ -696,6 +696,11 @@ def keyword_from_task(task: dict[str, Any]) -> Optional[str]:
 
     A bare template name ('GBP Posts') yields None → the keyword checks read
     'could not verify' → needs_human, never a guess."""
+    # 0. The first-class 'Target keyword' field (the QA panel input) wins — the
+    #    obvious box for an untrained user, no marker/name convention needed.
+    field_kw = normalize_ws(task.get("qa_keyword"))
+    if field_kw:
+        return field_kw
     # 1. An explicit 'Keyword:' / 'KW:' marker, in the description or the name.
     for source in (task.get("description"), task.get("name")):
         m = _KEYWORD_LINE_RE.search(source or "")

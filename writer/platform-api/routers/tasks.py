@@ -659,6 +659,10 @@ async def update_task(
             raise HTTPException(status_code=400, detail="invalid_qa_page_type")
         else:
             changes["qa_page_type"] = page_type
+    # First-class QA inputs — trim; empty clears (falls back to conventions).
+    for _f in ("deliverable_url", "qa_keyword"):
+        if _f in changes:
+            changes[_f] = (changes[_f] or "").strip() or None
     if not changes:
         raise HTTPException(status_code=400, detail="no_changes")
     try:
@@ -873,6 +877,20 @@ async def get_task_qa_reviews(task_id: UUID, auth: dict = Depends(require_auth))
         return qa_service.list_reviews(str(task_id))
     except Exception as exc:
         logger.error("task_qa_reviews_failed", extra={"task_id": str(task_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.get("/tasks/{task_id}/qa-readiness")
+async def get_task_qa_readiness(task_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Plain-English 'can QA run yet, and what's missing' for the task drawer —
+    so an untrained VA never runs QA before it can actually work."""
+    _load_task_or_404(task_id)
+    try:
+        from services import qa_service
+
+        return qa_service.assess_readiness(str(task_id))
+    except Exception as exc:
+        logger.error("task_qa_readiness_failed", extra={"task_id": str(task_id), "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
 
 

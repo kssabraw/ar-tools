@@ -82,6 +82,11 @@ class TaskUpdateRequest(BaseModel):
     # Website-page sub-type for QA's structural design-fit reference selection
     # (service / local_landing / location); "" / null = auto (priority order).
     qa_page_type: Optional[str] = None
+    # First-class QA inputs (the guided panel) — the live page URL QA reviews
+    # and the target keyword; "" / null clears. Both are optional; the old
+    # subtask/marker conventions still work as fallbacks.
+    deliverable_url: Optional[str] = None
+    qa_keyword: Optional[str] = None
 
 
 class TaskSectionCreateRequest(BaseModel):
