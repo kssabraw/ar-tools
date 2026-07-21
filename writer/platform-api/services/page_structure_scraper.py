@@ -93,6 +93,18 @@ def _text_len(fragment: str) -> int:
     return len(BeautifulSoup(fragment or "", "html.parser").get_text(" ", strip=True))
 
 
+def _has_headings(fragment: str) -> bool:
+    """Whether a fragment contains a section heading (h1/h2/h3) — the thing the
+    outline extractor segments on. Pure."""
+    return BeautifulSoup(fragment or "", "html.parser").find(["h1", "h2", "h3"]) is not None
+
+
+def count_headings(html: str) -> int:
+    """Number of h1/h2/h3 in the raw HTML — a scrape diagnostic (0 ⇒ the page
+    uses non-semantic headings, which the outline extractor can't segment)."""
+    return len(BeautifulSoup(html or "", "html.parser").find_all(["h1", "h2", "h3"]))
+
+
 def _strip_soup(soup: BeautifulSoup, *, hints: bool) -> None:
     """Remove chrome from ``soup`` in place. Always drops hard chrome tags,
     ARIA-landmark chrome, and aria-hidden elements. When ``hints`` is True, ALSO
@@ -121,31 +133,37 @@ def strip_chrome(html: str) -> str:
     id/class hint at nav/popups/overlays, then prefer a <main>/role=main/
     <article> landmark. BUT the id/class hint-matching is a substring test, so
     on builder-heavy sites (WordPress + Divi/Elementor, Squarespace…) it can
-    wrongly nuke real content — a hero wrapper classed 'hero-banner', a section
-    titled '…header', etc. — leaving nothing. So if the aggressive pass strips
-    the page to (near) nothing, fall back to a GENTLE pass that keeps the
-    id/class-hinted elements (dropping only hard chrome tags + ARIA landmarks)
-    and doesn't force a main/article landmark. Last resort: the raw body.
-    Best-effort — the LLM is also told to ignore any chrome that slips through.
+    wrongly nuke real content — a hero wrapper classed 'hero-banner', a heading
+    wrapped in a '…header' div (entry-header / section-header), etc. The outline
+    extractor segments the page by HEADINGS, so losing them yields 0 sections
+    even when text survives. So fall back to a GENTLE pass (drop only hard
+    chrome tags + ARIA landmarks, keep the id/class-hinted elements, no
+    main/article requirement) whenever the aggressive pass leaves (near) no text
+    OR strips away the headings the page actually has. Last resort: the raw
+    body. Best-effort — the LLM is also told to ignore any chrome that remains.
     """
+    raw_has_headings = _has_headings(html)
+
     # Aggressive pass.
     soup = BeautifulSoup(html or "", "html.parser")
     _strip_soup(soup, hints=True)
     main = soup.find("main") or soup.find(attrs={"role": "main"}) or soup.find("article")
     aggressive = str(main if main is not None else (soup.body or soup))
-    if _text_len(aggressive) >= _MIN_CONTENT_CHARS:
+    # Trust the aggressive result only if it kept real text AND didn't drop the
+    # page's headings (if it had any).
+    if _text_len(aggressive) >= _MIN_CONTENT_CHARS and (_has_headings(aggressive) or not raw_has_headings):
         return aggressive
 
-    # Gentle fallback — real content survived the hard-chrome removal but was
-    # over-matched by the hint pass; keep the hinted elements this time.
+    # Gentle fallback — content/headings survived the hard-chrome removal but
+    # were over-matched by the hint pass; keep the hinted elements this time.
     soup2 = BeautifulSoup(html or "", "html.parser")
     _strip_soup(soup2, hints=False)
     gentle = str(soup2.body or soup2)
-    if _text_len(gentle) >= _MIN_CONTENT_CHARS:
+    if _text_len(gentle) >= _MIN_CONTENT_CHARS and (_has_headings(gentle) or not raw_has_headings):
         return gentle
 
-    # Nothing usable either way — return whatever body we have.
-    return gentle or aggressive
+    # Nothing clean either way — return whichever retained the most text.
+    return gentle if _text_len(gentle) >= _text_len(aggressive) else aggressive
 
 
 _SYSTEM_PROMPT = (

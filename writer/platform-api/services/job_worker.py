@@ -395,6 +395,7 @@ async def _run_page_structure_scrape(job: dict) -> None:
         # content. Bounded cost: only fires on an empty first pass.
         retry_error = None
         retry_html_len = None
+        retry_raw_headings = None
         if settings.page_structure_premium_fallback and not (analysis.get("outline") or []):
             logger.info(
                 "page_structure_scrape_premium_retry",
@@ -404,6 +405,8 @@ async def _run_page_structure_scrape(job: dict) -> None:
                 html2 = await scrapeowl_fetch(url, timeout=90, render_js=True, premium=True)
                 retry_html_len = len(html2 or "")
                 if html2:
+                    from services.page_structure_scraper import count_headings
+                    retry_raw_headings = count_headings(html2)
                     analysis2 = await analyze_page_structure(html2, page_type)
                     if analysis2.get("outline"):
                         analysis = analysis2
@@ -428,6 +431,7 @@ async def _run_page_structure_scrape(job: dict) -> None:
                 "empty": empty,
                 "retry_error": retry_error,
                 "retry_html_len": retry_html_len,
+                "retry_raw_headings": retry_raw_headings,
                 "note": (
                     "Captured 0 content sections — the page may be blocking our "
                     "scraper or use non-semantic markup. Try a different, "

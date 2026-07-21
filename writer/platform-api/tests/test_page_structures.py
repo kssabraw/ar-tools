@@ -70,6 +70,25 @@ def test_strip_chrome_falls_back_when_aggressive_strip_nukes_content():
     assert "Copyright 2026" not in cleaned
 
 
+def test_strip_chrome_falls_back_when_aggressive_strip_loses_headings():
+    # WordPress pattern: the heading sits in a div whose class substring-matches
+    # 'header' (entry-header / section-header), so the aggressive hint pass
+    # decomposes it — but OTHER text survives, so the old "only fall back when
+    # empty" rule kept a heading-less result (→ 0 sections). The heading-aware
+    # fallback must recover the heading.
+    html = """
+    <html><body>
+      <div class="section-header"><h2>Our Services</h2></div>
+      <div class="content-body"><p>We offer full roof restoration and repair across the region with a fast response.</p></div>
+    </body></html>
+    """
+    cleaned = strip_chrome(html)
+    assert "Our Services" in cleaned                      # the heading survived
+    assert "roof restoration and repair" in cleaned
+    from bs4 import BeautifulSoup
+    assert BeautifulSoup(cleaned, "html.parser").find("h2") is not None
+
+
 # ── render_reference_structure ──────────────────────────────────────────────
 
 def _complete_entry():
