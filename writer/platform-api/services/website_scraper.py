@@ -50,7 +50,15 @@ async def scrapeowl_fetch(
         payload["premium_proxies"] = True
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(_SCRAPEOWL_URL, json=payload)
-        response.raise_for_status()
+        # Surface ScrapeOwl's own error message (it lives in the response body,
+        # which raise_for_status() drops) so callers can log WHY a request was
+        # rejected — e.g. an unsupported option or a rendering failure.
+        if response.status_code >= 400:
+            try:
+                body = response.text[:400]
+            except Exception:
+                body = ""
+            raise RuntimeError(f"scrapeowl HTTP {response.status_code}: {body}")
         data = response.json()
         return data.get("html") or data.get("content") or ""
 
