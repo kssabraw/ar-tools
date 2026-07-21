@@ -646,7 +646,10 @@ def build_verdict(checks: list[dict]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Task-side conventions (keyword + deliverable-links extraction)
 # ---------------------------------------------------------------------------
-_KEYWORD_LINE_RE = re.compile(r"\bkeywords?\s*[:\-]\s*(.+)", re.IGNORECASE)
+# Explicit keyword marker: 'Keyword:', 'Keywords:', or the short form 'KW:'
+# (also accepts a dash separator). Matched in BOTH the description and the task
+# name, so the keyword can be tagged in either place.
+_KEYWORD_LINE_RE = re.compile(r"\b(?:keywords?|kw)\s*[:\-]\s*(.+)", re.IGNORECASE)
 _NAME_SEPS = ("—", "–", ":", "|", " - ")
 _SEP_STRIP = " \t-—–:|·,"
 
@@ -655,7 +658,9 @@ def keyword_from_task(task: dict[str, Any]) -> Optional[str]:
     """The target keyword 'on the task' (owner convention 2026-07-12: the
     keyword is entered into the TASK NAME). Resolution order, pure:
 
-    1. An explicit 'Keyword: …' line in the description (unambiguous override).
+    1. An explicit 'Keyword: …' / 'KW: …' marker anywhere in the description OR
+       the task name (unambiguous override — checked in the description first,
+       then the name).
     2. The task name minus its template name — handles both shapes:
        'GBP Posts — emergency roof repair' (template + separator + keyword)
        and a fully renamed task ('emergency roof repair' whose
@@ -664,11 +669,13 @@ def keyword_from_task(task: dict[str, Any]) -> Optional[str]:
 
     A bare template name ('GBP Posts') yields None → the keyword checks read
     'could not verify' → needs_human, never a guess."""
-    m = _KEYWORD_LINE_RE.search(task.get("description") or "")
-    if m:
-        kw = normalize_ws(m.group(1).split("\n")[0])
-        if kw:
-            return kw
+    # 1. An explicit 'Keyword:' / 'KW:' marker, in the description or the name.
+    for source in (task.get("description"), task.get("name")):
+        m = _KEYWORD_LINE_RE.search(source or "")
+        if m:
+            kw = normalize_ws(m.group(1).split("\n")[0])
+            if kw:
+                return kw
     name = normalize_ws(task.get("name"))
     lib = normalize_ws(task.get("library_task_name"))
     if not name:

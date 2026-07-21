@@ -412,6 +412,29 @@ def test_keyword_from_task_description_override_still_wins():
     assert sig.keyword_from_task({"description": "keywords - emergency plumber"}) == "emergency plumber"
 
 
+def test_keyword_from_task_kw_marker_in_description_or_title():
+    # Short 'KW:' form is accepted (description).
+    assert sig.keyword_from_task({"description": "KW: practice management coral springs"}) \
+        == "practice management coral springs"
+    assert sig.keyword_from_task({"description": "kw - blocked drain sydney"}) == "blocked drain sydney"
+    # The marker is also honoured anywhere in the TASK NAME/title.
+    assert sig.keyword_from_task({"name": "Coral Springs page  KW: practice management services"}) \
+        == "practice management services"
+    assert sig.keyword_from_task({"name": "Keyword: emergency plumber brisbane"}) \
+        == "emergency plumber brisbane"
+    # Description marker still wins over a name marker.
+    assert sig.keyword_from_task(
+        {"description": "KW: roof restoration", "name": "KW: wrong keyword"}
+    ) == "roof restoration"
+    # A name with a plain separator (no marker) still uses the template split —
+    # 'kw'/'keyword' must be present to trigger the marker path, so this is
+    # unaffected.
+    assert sig.keyword_from_task({"name": "Review & publish: roof repair"}) == "roof repair"
+    assert sig.keyword_from_task(
+        {"name": "GBP Posts — emergency roof repair", "library_task_name": "GBP Posts"}
+    ) == "emergency roof repair"
+
+
 def test_deliverable_subtask_name_matches_and_is_not_work_item():
     from services.task_service import is_work_item
 
