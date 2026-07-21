@@ -587,19 +587,23 @@ async def _run_rubric(
         if html is None:
             return ([sig._check("page", "Posted page reachable", None,
                                 note="page unreachable/blocked")], examined, None)
-        checks, composite = await _website_page_checks(html, url, fields, client)
+        checks, composite = await _website_page_checks(html, url, fields, client, keyword=keyword)
         return (checks, examined, composite)
 
     return ([], [], None)
 
 
 async def _website_page_checks(
-    html: str, url: str, fields: dict, client: Optional[dict]
+    html: str, url: str, fields: dict, client: Optional[dict],
+    keyword: Optional[str] = None,
 ) -> tuple[list[dict], Optional[float]]:
     """The website-page QA checks (QA_Checklists §Website Pages Posted) for a
-    fetched page — shared by the ``website_page`` rubric (task deliverable) and
-    the bare-URL ``review_url`` path. Returns (checks, composite_or_none)."""
-    checks = sig.check_website_page(html, fields["domain"], fields["business_name"])
+    fetched page — shared by the ``website_page`` rubric (task deliverable, which
+    supplies ``keyword``) and the bare-URL ``review_url`` path (no keyword).
+    Returns (checks, composite_or_none)."""
+    checks = sig.check_website_page(
+        html, fields["domain"], fields["business_name"], keyword=keyword, url=url,
+    )
     composite: Optional[float] = None
     # Structural design fit vs the stored reference. Page-type attribution is
     # heuristic, so a low score reads needs_human, never an auto-bounce.
@@ -610,6 +614,18 @@ async def _website_page_checks(
         checks.append(sig._check(
             "structural_fit", "Design fit (structural) vs reference page", ok,
             note=f"fidelity {composite:.0f}/100 — {note}",
+        ))
+    else:
+        # No usable reference page structure on file (none stored, or a thin one
+        # with zero captured sections — scoring against which yields a
+        # meaningless ~50/100 artifact). Report the real situation + the fix, as
+        # an ADVISORY so it never bounces the page. Capturing a reference page
+        # URL for this page type on the client form enables the check.
+        checks.append(sig._check(
+            "structural_fit", "Design fit (structural) vs reference page", None,
+            blocking=False,
+            note="no reference page structure on file for this page type — add a "
+                 "reference page URL on the client form to enable this check",
         ))
     # Design fit — VISUAL. Two layers:
     # 1. Asset integrity (free, deterministic): a 404'd stylesheet or image
@@ -643,6 +659,13 @@ def _structural_fit(html: str, client: Optional[dict]) -> Optional[tuple[float, 
         structures = (client or {}).get("page_structures") or {}
         ref = structures.get("service") or structures.get("local_landing") or structures.get("location")
         if not ref:
+            return None
+        # A reference with zero captured sections is not a usable baseline:
+        # scoring against it produces a meaningless ~50/100 (the section &
+        # heading-order dimensions score 0 for lack of anything to compare, the
+        # rest default to full credit). Treat it as "no reference" so QA reports
+        # the real situation (capture a reference) rather than a phantom score.
+        if pse._section_count(pse._analysis_of(ref)) <= 0:
             return None
         outline = pse.extract_outline_from_html(html)
         result = pse.score_structural_fidelity(ref, outline)
