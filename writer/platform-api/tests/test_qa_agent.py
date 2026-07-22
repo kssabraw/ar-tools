@@ -136,6 +136,65 @@ def test_review_url_website_page_runs_checks():
     assert review["verdict"] in (sig.PASS, sig.NEEDS_HUMAN, sig.FAIL)
 
 
+def test_confirmed_task_review_returns_detailed_failure_inline():
+    # After the actor confirms, the review runs inline and the FULL failure
+    # detail (each blocking issue + note + narrative) comes back IN the chat —
+    # not just "it landed on the panel".
+    review = {
+        "verdict": sig.FAIL, "rubric": sig.RUBRIC_PAGE, "composite": None,
+        "checks": [
+            {"key": "client_name", "label": "Client's business name on the page",
+             "ok": False, "blocking": True,
+             "note": "expected business name: “Acme” — not found on the page"},
+            {"key": "keyword_in_h1", "label": "Target keyword in the H1",
+             "ok": False, "blocking": True, "note": "keyword: “roof repair”"},
+            {"key": "internal_link", "label": "Internal link to the client's site",
+             "ok": True, "blocking": True},
+        ],
+        "issues": ["Client's business name on the page", "Target keyword in the H1"],
+        "urls": ["https://acme.com/p"],
+        "narrative": "Add the business name and put the keyword in the H1, then repost.",
+    }
+
+    async def fake_review_task(task_id, *, trigger="manual"):
+        assert task_id == "t1"
+        return review
+
+    token = "tok-detailed-1"
+    actor = ActionContext(profile_id="p1", role="admin")
+    qa_agent._web_pending[token] = {
+        "task_id": "t1", "task_name": "Inner West page", "client_id": "c1",
+        "requester": "p1", "created": 0.0,
+    }
+    with patch.object(qa_service, "review_task", fake_review_task), \
+         patch.object(qa_agent.pace_auth, "confirm_actor_ok", lambda req, a: True):
+        out = _run(qa_agent.maybe_handle_web("yes", [], "c1", token, actor))
+    r = out["reply"].lower()
+    assert "fail" in r
+    assert "business name" in r and "keyword in the h1" in r  # each blocking issue named
+    assert "not found on the page" in r                       # the specific note/reason
+    assert "add the business name" in r                       # the narrative
+    assert "rework" in r                                      # the bounce explanation
+    # A non-failing check isn't listed as a blocking issue.
+    assert "internal link to the client's site" not in r
+
+
+def test_confirmed_task_review_closed_task_message():
+    async def fake_review_task(task_id, *, trigger="manual"):
+        return None  # completed/removed before the review ran
+
+    token = "tok-detailed-2"
+    actor = ActionContext(profile_id="p1", role="admin")
+    qa_agent._web_pending[token] = {
+        "task_id": "t2", "task_name": "Gone task", "client_id": None,
+        "requester": "p1", "created": 0.0,
+    }
+    with patch.object(qa_service, "review_task", fake_review_task), \
+         patch.object(qa_agent.pace_auth, "confirm_actor_ok", lambda req, a: True):
+        out = _run(qa_agent.maybe_handle_web("yes", [], None, token, actor))
+    assert "completed or removed" in out["reply"].lower()
+
+
 def test_dead_image_is_advisory_dead_stylesheet_is_blocking():
     # A page with a 404'd IMAGE and a 404'd STYLESHEET: the image failure is
     # advisory (won't bounce), the stylesheet failure is blocking (does).

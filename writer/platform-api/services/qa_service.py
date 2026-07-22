@@ -452,17 +452,26 @@ def _run_keyword(run_id: str) -> Optional[str]:
 # The review itself
 # ---------------------------------------------------------------------------
 async def run_qa_review_job(job: dict) -> None:
+    """Async-job wrapper: run the review and discard the row (the panel +
+    notifications carry the result)."""
     payload = job.get("payload") or {}
     task_id = payload.get("task_id")
-    trigger = payload.get("trigger") or "status"
     if not task_id:
         raise ValueError("qa_review: missing task_id")
+    await review_task(str(task_id), trigger=payload.get("trigger") or "status")
 
+
+async def review_task(task_id: str, *, trigger: str = "manual") -> Optional[dict]:
+    """Run one task's QA review end-to-end (rubric → verdict → persist → board
+    outcome) and RETURN the persisted ``qa_reviews`` row (verdict / checks /
+    issues / narrative / composite), or None when the task is gone or already
+    closed. Shared by the async job AND the /qa chat's confirm path, which
+    formats the returned detail inline so a failure explains itself in chat."""
     supabase = get_supabase()
     rows = supabase.table("tasks").select("*").eq("id", task_id).limit(1).execute().data
     if not rows:
         logger.warning("qa_review_task_gone", extra={"task_id": task_id})
-        return
+        return None
     task = rows[0]
     # The enqueue guard ran at transition time; the task may have been
     # completed or trashed while the job sat in the queue. Reviewing it then
@@ -470,7 +479,7 @@ async def run_qa_review_job(job: dict) -> None:
     # the board) or grow subtasks under a trashed one — skip instead.
     if task.get("completed") or task.get("deleted_at"):
         logger.info("qa_review_task_closed_before_run", extra={"task_id": task_id})
-        return
+        return None
     client = None
     if task.get("client_id"):
         crows = (
@@ -538,6 +547,7 @@ async def run_qa_review_job(job: dict) -> None:
     logger.info("qa_review_done", extra={
         "task_id": task_id, "rubric": rubric, "verdict": verdict["verdict"],
     })
+    return review
 
 
 async def _run_rubric(
