@@ -417,6 +417,110 @@ def _run_leadoff_find(args: dict) -> str:
         return f"LeadOff board lookup failed: {exc}"
 
 
+# ---------------------------------------------------------------------------
+# Maps geo-grid history — the full dated scan series for the local pack. The
+# stored context carries only the latest scan (+ a compact trend); this tool
+# pulls the whole series per keyword on demand. Deterministic read over stored
+# scans — free, no confirmation.
+# ---------------------------------------------------------------------------
+_MAPS_HISTORY_SCANS = 10       # completed scans read per call
+_MAPS_HISTORY_RESULT_CHARS = 4500
+
+_MAPS_HISTORY_TOOL = {
+    "name": "maps_history",
+    "description": (
+        "Trend history for this client's Google Maps geo-grid (local pack) scans "
+        "over time — the stored context only carries the latest scan plus a short "
+        "trend, so use this for any past-geogrid / 'how has the map ranking "
+        "changed' question. FREE — no confirmation. Optionally give a keyword to "
+        "focus one; omit it for every geo-grid keyword. Returns, per keyword, the "
+        "scan series oldest→newest (date, average_rank, found/total pins, top-3 "
+        "pins, pack_presence_pct) with latest-vs-previous deltas, plus recent "
+        "local-pack alerts. Reading rules: pack_presence_pct (top-3 pins / total) "
+        "is the honest coverage number — read it first; average_rank is over FOUND "
+        "pins only, so 3/25 pins at average 2.0 is barely present, not 'ranking "
+        "#2' — check found_pins before comparing average_rank across scans; ±1 "
+        "rank wobble on a few pins is noise, the alerts encode the real drops."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "keyword": {
+                "type": "string",
+                "description": "Optional geo-grid keyword (exact text) to focus one; omit for all.",
+            },
+        },
+    },
+}
+
+
+async def _run_maps_history(client_id: str, args: dict) -> str:
+    """Deterministic geo-grid trend read: per-keyword scan series + recent alerts.
+
+    Returns a JSON summary string; errors/empties return an explanatory string
+    (never raises) so Claude can explain the gap."""
+    from services.slack_assistant.helpers import build_maps_trend, group_maps_series
+
+    supabase = get_supabase()
+    scans = (
+        supabase.table("maps_scans")
+        .select("id, completed_at, trigger")
+        .eq("client_id", client_id)
+        .eq("status", "complete")
+        .order("completed_at", desc=True)
+        .limit(_MAPS_HISTORY_SCANS)
+        .execute()
+    ).data or []
+    if not scans:
+        return "No completed geo-grid scans recorded for this client yet."
+    keyword = (args.get("keyword") or "").strip()
+    q = (
+        supabase.table("maps_scan_results")
+        .select("scan_id, keyword, average_rank, found_pins, total_pins, top3_pins, top10_pins")
+        .in_("scan_id", [s["id"] for s in scans])
+    )
+    if keyword:
+        q = q.ilike("keyword", keyword)
+    rows = q.execute().data or []
+    if not rows:
+        return (
+            f"No geo-grid results for '{keyword}' in the last {len(scans)} scans."
+            if keyword
+            else "No geo-grid results recorded in the recent scans."
+        )
+    series = group_maps_series(scans, rows)
+    keywords = [
+        {
+            "keyword": kw,
+            "summary": build_maps_trend(kw, series[kw]),
+            "series_oldest_first": series[kw],
+        }
+        for kw in sorted(series)
+    ]
+    alerts_q = (
+        supabase.table("maps_alerts")
+        .select("keyword, alert_type, message, created_at, resolved_at")
+        .eq("client_id", client_id)
+        .order("created_at", desc=True)
+        .limit(10)
+    )
+    if keyword:
+        alerts_q = alerts_q.ilike("keyword", keyword)
+    alerts = alerts_q.execute().data or []
+    payload = {
+        "scans_analyzed": len(scans),
+        "keywords": keywords,
+        "recent_alerts": alerts or None,
+        "note": (
+            "pack_presence_pct (top-3 pins / total) is the honest coverage number — read it "
+            "first. average_rank is over FOUND pins only; check found_pins/total_pins before "
+            "comparing average_rank across scans. Negative average_rank_delta / positive "
+            "pack_presence_delta = improvement."
+        ),
+    }
+    return json.dumps(payload, default=str)[:_MAPS_HISTORY_RESULT_CHARS]
+
+
 def build_llm_tools() -> list[dict]:
     """The tool list for the assistant's Claude call.
 
@@ -548,7 +652,7 @@ async def interpret(
     messages: list[dict] = [{"role": "user", "content": user}]
     tools = build_llm_tools() + [_read_sop_tool(), _LIVE_GSC_TOOL,
                                  _LIST_NONINDEXED_TOOL, _MEMORY_TOOL,
-                                 _LEADOFF_FIND_TOOL]
+                                 _LEADOFF_FIND_TOOL, _MAPS_HISTORY_TOOL]
     # Bounded tool loop: read_sop / fetch_live_gsc calls are answered
     # in-conversation; an action call returns immediately (actions never mix
     # with in-answer tool reads — first wins).
@@ -583,7 +687,8 @@ async def interpret(
             b for b in resp.content
             if getattr(b, "type", None) == "tool_use"
             and b.name in ("read_sop", _LIVE_GSC_TOOL["name"], _LIST_NONINDEXED_TOOL["name"],
-                           _MEMORY_TOOL["name"], _LEADOFF_FIND_TOOL["name"])
+                           _MEMORY_TOOL["name"], _LEADOFF_FIND_TOOL["name"],
+                           _MAPS_HISTORY_TOOL["name"])
         ]
         if not tool_calls or final_round:
             break
@@ -598,6 +703,7 @@ async def interpret(
                     _LIST_NONINDEXED_TOOL["name"]: "Checking Search Console for non-indexed pages",
                     _MEMORY_TOOL["name"]: "Saving a note to memory",
                     _LEADOFF_FIND_TOOL["name"]: "Looking up the LeadOff market board",
+                    _MAPS_HISTORY_TOOL["name"]: "Reading the Maps geo-grid scan history",
                 }.get(b.name, "Working")
                 await on_event({"type": "status", "label": label})
             if b.name == "read_sop":
@@ -611,6 +717,8 @@ async def interpret(
                 text = await _run_list_nonindexed(client["id"], args)
             elif b.name == _LEADOFF_FIND_TOOL["name"]:
                 text = await asyncio.to_thread(_run_leadoff_find, args)
+            elif b.name == _MAPS_HISTORY_TOOL["name"]:
+                text = await _run_maps_history(client["id"], args)
             else:
                 text = await _run_live_gsc(client["id"], args)
             results.append({"type": "tool_result", "tool_use_id": b.id, "content": text})
