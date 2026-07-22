@@ -2830,6 +2830,20 @@ async def analyze_brand_voice_with_anthropic(page_contents: List[str], business_
     }
 
 
+def _as_str_list(value) -> List[str]:
+    """Coerce a brand-voice/ICP field that should be a list of strings into one,
+    tolerating malformed scan output. A bare string becomes a single-item list;
+    non-string items are stringified; None/other → []. Keeps a bad scan from
+    crashing the `', '.join(...)` calls that render the prompt block."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        return [v if isinstance(v, str) else str(v) for v in value]
+    return [str(value)]
+
+
 def _build_brand_voice_text(brand_voice: Optional[dict]) -> str:
     """Render brand voice + writer guide as a plain-text block for the system prompt.
 
@@ -2861,7 +2875,7 @@ def _build_brand_voice_text(brand_voice: Optional[dict]) -> str:
     if voice.get("tone"):
         lines.append(f"  Tone: {voice['tone']}")
     if voice.get("personality"):
-        lines.append(f"  Personality: {', '.join(voice['personality'])}")
+        lines.append(f"  Personality: {', '.join(_as_str_list(voice['personality']))}")
 
     ws = voice.get("writing_style") or {}
     style_parts: List[str] = []
@@ -2872,15 +2886,27 @@ def _build_brand_voice_text(brand_voice: Optional[dict]) -> str:
     if style_parts:
         lines.append(f"  Writing style: {', '.join(style_parts)}")
 
+    # Some brand-voice scans stored `vocabulary` as a JSON string (occasionally a
+    # malformed one — e.g. an inline annotation inside a JSON array) instead of an
+    # object. Coerce to a dict best-effort so a bad scan degrades to "no vocab"
+    # rather than crashing the whole page generation (`str` has no `.get`).
     vocab = voice.get("vocabulary") or {}
+    if isinstance(vocab, str):
+        try:
+            _parsed = json.loads(vocab)
+        except Exception:
+            _parsed = None
+        vocab = _parsed if isinstance(_parsed, dict) else {}
+    elif not isinstance(vocab, dict):
+        vocab = {}
     if vocab.get("use"):
-        lines.append(f"  Words/phrases to use: {', '.join(vocab['use'])}")
+        lines.append(f"  Words/phrases to use: {', '.join(_as_str_list(vocab['use']))}")
     if vocab.get("avoid"):
-        lines.append(f"  Words/phrases to avoid: {', '.join(vocab['avoid'])}")
+        lines.append(f"  Words/phrases to avoid: {', '.join(_as_str_list(vocab['avoid']))}")
     if voice.get("messaging_themes"):
-        lines.append(f"  Messaging themes: {'; '.join(voice['messaging_themes'])}")
+        lines.append(f"  Messaging themes: {'; '.join(_as_str_list(voice['messaging_themes']))}")
     if voice.get("sample_phrases"):
-        lines.append(f"  Sample phrases (mirror this style): {'; '.join(voice['sample_phrases'])}")
+        lines.append(f"  Sample phrases (mirror this style): {'; '.join(_as_str_list(voice['sample_phrases']))}")
     if voice.get("content_generation_instructions"):
         lines.append(f"  Writer instructions: {voice['content_generation_instructions']}")
 
