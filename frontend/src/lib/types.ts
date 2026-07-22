@@ -96,6 +96,7 @@ export interface Client extends ClientListItem {
   // Recipe Engine budget inputs (66% margin target → 34% deployable).
   retainer_monthly: number | null
   is_sab: boolean
+  illustrate_content?: boolean
   client_type: 'local' | 'enterprise'
   // Per-client SerMaStr review day (0=Mon..6=Sun); null → global default.
   strategist_weekday: number | null

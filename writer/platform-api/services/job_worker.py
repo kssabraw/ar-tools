@@ -626,6 +626,10 @@ async def _process_job(job: dict) -> None:
         await run_qa_review_job(job)
     elif job_type == "github_infer_patterns":
         await run_github_infer_job(job)
+    elif job_type == "illustrate_run":
+        from services.illustration import run_illustrate_job
+
+        await run_illustrate_job(job)
     elif job_type == "blog_github_publish":
         await run_blog_media_publish_job(job)
     else:

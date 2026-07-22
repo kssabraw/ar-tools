@@ -274,6 +274,8 @@ async def create_client(
         row["retainer_monthly"] = body.retainer_monthly
     if body.is_sab is not None:
         row["is_sab"] = body.is_sab
+    if body.illustrate_content is not None:
+        row["illustrate_content"] = body.illustrate_content
     if body.client_type is not None:
         row["client_type"] = body.client_type
     if body.strategist_weekday is not None:
@@ -417,6 +419,8 @@ async def update_client(
         updates["retainer_monthly"] = body.retainer_monthly
     if body.is_sab is not None:
         updates["is_sab"] = body.is_sab
+    if body.illustrate_content is not None:
+        updates["illustrate_content"] = body.illustrate_content
     if body.client_type is not None:
         updates["client_type"] = body.client_type
     # Explicit-set semantics: an explicit null clears the per-client review day

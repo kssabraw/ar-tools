@@ -21,6 +21,7 @@ from services.blog_jsonld import (
     inline_jsonld_script,
 )
 from services.github_publish import GitHubPublishError, publish_to_github
+from services.illustration import interleave_figures
 from services.google_docs import GoogleDocError, create_google_doc, resolve_drive_folder
 from services.markdown_html import markdown_to_gutenberg, markdown_to_html
 from services.wordpress_publish import WordPressPublishError, publish_to_wordpress
@@ -59,6 +60,26 @@ async def set_run_featured_image(
     if not result.data:
         raise HTTPException(status_code=404, detail="run_not_found")
     return {"featured_image_url": body.url or None}
+
+
+@router.post("/runs/{run_id}/illustrate", response_model=dict)
+async def illustrate_run(run_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Queue on-demand illustration for a completed run (hero + inline body
+    images/charts). Ignores the per-client toggle — an explicit request always
+    runs. Poll the run's `illustrations` field for the result."""
+    from services.illustration import enqueue_illustrate_run
+
+    supabase = get_supabase()
+    run = (
+        supabase.table("runs").select("id, status").eq("id", str(run_id)).single().execute()
+    ).data
+    if not run:
+        raise HTTPException(status_code=404, detail="run_not_found")
+    if run.get("status") != "complete":
+        raise HTTPException(status_code=409, detail="run_not_complete")
+    if not enqueue_illustrate_run(str(run_id), force=True):
+        raise HTTPException(status_code=502, detail="illustrate_enqueue_failed")
+    return {"queued": True, "run_id": str(run_id)}
 
 
 @router.get("/runs/{run_id}/github-publish/status", response_model=dict)
@@ -167,7 +188,9 @@ async def list_run_images(run_id: UUID, auth: dict = Depends(require_auth)) -> d
 
 
 def _sections_to_markdown(article: list[dict]) -> str:
-    """Reconstruct markdown from the sources_cited enriched_article sections."""
+    """Reconstruct markdown from the sources_cited enriched_article sections.
+    Interleaved figure sections (type='figure') emit their raw HTML block verbatim
+    — valid inside Astro markdown and passed through by markdown_to_html."""
     if not isinstance(article, list):
         return ""
     sections = sorted(
@@ -176,6 +199,11 @@ def _sections_to_markdown(article: list[dict]) -> str:
     )
     parts = []
     for s in sections:
+        if s.get("type") == "figure":
+            html = (s.get("html") or "").strip()
+            if html:
+                parts.append(html)
+            continue
         heading = s.get("heading") or ""
         body = s.get("body") or ""
         if heading:
@@ -183,6 +211,19 @@ def _sections_to_markdown(article: list[dict]) -> str:
         else:
             parts.append(body)
     return "\n\n".join(parts)
+
+
+def _load_illustrations(supabase, run_id: UUID) -> dict | None:
+    """The run's generated illustration layer (hero rides featured_image_url; the
+    body items are interleaved into the article at render). None when unset."""
+    try:
+        row = (
+            supabase.table("runs").select("illustrations").eq("id", str(run_id)).single().execute()
+        ).data
+    except Exception:  # noqa: BLE001 — non-fatal; publish without inline figures
+        return None
+    illus = (row or {}).get("illustrations")
+    return illus if isinstance(illus, dict) else None
 
 
 def _resolve_content(supabase, run_id: UUID, content_type: str) -> tuple[str, str, str | None]:
@@ -234,6 +275,7 @@ def _resolve_content(supabase, run_id: UUID, content_type: str) -> tuple[str, st
         raise HTTPException(status_code=422, detail="article_not_available")
     payload = rows[0].get("output_payload") or {}
     article = (payload.get("enriched_article") or {}).get("article") or []
+    article = interleave_figures(article, _load_illustrations(supabase, run_id))
     markdown = _sections_to_markdown(article)
     if not markdown.strip():
         raise HTTPException(status_code=422, detail="article_is_empty")
@@ -287,6 +329,7 @@ def _resolve_markdown(supabase, run_id: UUID, content_type: str) -> str:
     if not rows:
         return ""
     article = ((rows[0].get("output_payload") or {}).get("enriched_article") or {}).get("article") or []
+    article = interleave_figures(article, _load_illustrations(supabase, run_id))
     return _sections_to_markdown(article)
 
 
