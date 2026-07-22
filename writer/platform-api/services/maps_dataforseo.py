@@ -293,13 +293,28 @@ def timeout_completes(done: int, total: int) -> bool:
     return bool(total) and (done / total) >= 0.9
 
 
+def next_scan_state(total: int, non_terminal: int, done: int, past_timeout: bool) -> str:
+    """Given a scan's pin status counts, the next state of the scan:
+    'complete' (every pin terminal), 'timeout_complete' (timed out with ≥90%
+    done → keep partial data), 'failed' (timed out below that), or 'polling'.
+    Pure — the DB read + finalize/fail side effects live in poll_scan_dfs."""
+    if total and non_terminal == 0:
+        return "complete"
+    if past_timeout:
+        return "timeout_complete" if timeout_completes(done, total) else "failed"
+    return "polling"
+
+
 def build_competitors_above_dfs(
     pin_rows: list[dict], grid_size: int, our_place_id: Optional[str],
 ) -> dict:
     """Per-pin who-outranks-the-client grid — the DataForSEO port of
     `local_dominator.build_competitors_above` (§4 target shape). Per in-circle
     pin, the businesses ranked strictly above the client (client absent from the
-    pin's pack → the whole visible pack outranks). Out-of-circle pins → null."""
+    pin's pack → the whole visible pack outranks). Out-of-circle pins → null;
+    an in-circle pin that was never fetched (partial/timeout scan → pin_data is
+    None) → null too, so the overlay never falsely reads as "client ranks 1st"
+    where `rank_grid` shows a hole."""
     n = grid_size
     center = (n - 1) / 2
     radius_sq = (n / 2) ** 2
@@ -314,6 +329,9 @@ def build_competitors_above_dfs(
                 row_out.append(None)  # outside the circle — not shown
                 continue
             pr = by_cell.get((ri, ci))
+            if pr is not None and pr.get("pin_data") is None:
+                row_out.append(None)  # in-circle pin never fetched → no data (not [])
+                continue
             ordered = [_biz(rec) for rec in ((pr.get("pin_data") if pr else None) or [])]
             our_pos = next(
                 (p for p, b in enumerate(ordered) if our_place_id and b.get("place_id") == our_place_id),
@@ -586,7 +604,13 @@ async def poll_scan_dfs(scan_row: dict) -> str:
     if writes:
         supabase.table("maps_scan_pins").upsert(writes, on_conflict="scan_id,keyword,row_idx,col_idx").execute()
 
-    # 3) Completion check over ALL pins (not just this tick's batch).
+    # 3) Completion check. During bulk collection the tick's batch is capped —
+    # more non-terminal pins certainly remain, so the scan can't be complete and
+    # we skip the scan-wide status read entirely (only the timeout still matters).
+    past_timeout = _past_poll_timeout(scan_row)
+    if len(batch) >= settings.maps_dfs_poll_tasks_per_tick and not past_timeout:
+        return "polling"
+
     all_pins = (
         supabase.table("maps_scan_pins").select("status").eq("scan_id", scan_id).execute()
     ).data or []
@@ -595,11 +619,12 @@ async def poll_scan_dfs(scan_row: dict) -> str:
     done = sum(1 for p in all_pins if p["status"] == "done")
     failed = sum(1 for p in all_pins if p["status"] == "failed")
 
-    if total and non_terminal == 0:
+    state = next_scan_state(total, non_terminal, done, past_timeout)
+    if state == "complete":
         return await _finalize_scan(supabase, scan_row, our_place_id, failed)
-    if _past_poll_timeout(scan_row):
-        if timeout_completes(done, total):
-            return await _finalize_scan(supabase, scan_row, our_place_id, total - done)
+    if state == "timeout_complete":
+        return await _finalize_scan(supabase, scan_row, our_place_id, total - done)
+    if state == "failed":
         supabase.table("maps_scans").update(
             {"status": "failed", "error": f"poll_timeout ({done}/{total} pins done)"}
         ).eq("id", scan_id).execute()

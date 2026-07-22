@@ -213,6 +213,37 @@ def test_competitors_above_parity_with_local_dominator():
     assert dfs_out == ld_out
 
 
+def test_competitors_above_never_fetched_pin_is_null_not_client_wins():
+    # A partial/timeout scan: an in-circle pin exists but was never fetched
+    # (pin_data=None) → its cell must be null (no data), not [] ("client ranks
+    # 1st"), so the overlay stays consistent with rank_grid's hole.
+    pin_rows = [
+        {"row_idx": 1, "col_idx": 1, "pin_data": [_compact(_BIZ["A"]), _compact(_BIZ["US"])]},
+        {"row_idx": 0, "col_idx": 1, "pin_data": None},  # created, never fetched
+    ]
+    grid = m.build_competitors_above_dfs(pin_rows, grid_size=3, our_place_id="US")["grid"]
+    assert grid[0][1] is None            # never-fetched in-circle pin → null
+    assert grid[1][1] == [["A", 1]]      # fetched pin → real overlay
+    # A genuinely fetched-empty pin (pin_data=[]) stays [] (client ranks 1st), not null.
+    fetched_empty = [{"row_idx": 1, "col_idx": 1, "pin_data": []}]
+    assert m.build_competitors_above_dfs(fetched_empty, 3, "US")["grid"][1][1] == []
+
+
+def test_next_scan_state_decisions():
+    # every pin terminal → complete (regardless of timeout)
+    assert m.next_scan_state(100, 0, 95, past_timeout=False) == "complete"
+    assert m.next_scan_state(100, 0, 100, past_timeout=True) == "complete"
+    # still work remaining, not timed out → keep polling
+    assert m.next_scan_state(100, 10, 90, past_timeout=False) == "polling"
+    # timed out with ≥90% done → keep the partial data
+    assert m.next_scan_state(100, 10, 90, past_timeout=True) == "timeout_complete"
+    # timed out below 90% done → fail
+    assert m.next_scan_state(100, 50, 50, past_timeout=True) == "failed"
+    # degenerate zero-pin scan: polling until timeout, then failed (never complete)
+    assert m.next_scan_state(0, 0, 0, past_timeout=False) == "polling"
+    assert m.next_scan_state(0, 0, 0, past_timeout=True) == "failed"
+
+
 def test_competitor_summary_excludes_client_and_orders():
     out = m.build_competitor_summary_dfs(_dfs_pin_rows(), our_place_id="US")
     # A: positions across the 5 pins → ranks 1,2,2,1,3 (found 5, top3 5, avg 1.8)
