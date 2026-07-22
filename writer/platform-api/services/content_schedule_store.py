@@ -214,6 +214,7 @@ def create_batch(
     weekdays: Optional[list[int]] = None, day_of_month: Optional[int] = None,
     week_of_month: Optional[int] = None, auto_publish: bool = False,
     wp_publish: bool = False, wp_status: str = "draft",
+    github_publish: bool = False,
     now_utc: Optional[datetime] = None,
 ) -> dict:
     """Insert the parent batch + one scheduled item per input (release times from
@@ -241,6 +242,7 @@ def create_batch(
         "start_date": start_date.isoformat() if start_date else None,
         "time_of_day": (time_of_day or time(9, 0)).isoformat(), "timezone": tz_name,
         "auto_publish": auto_publish, "wp_publish": wp_publish, "wp_status": wp_status,
+        "github_publish": github_publish,
         "status": "active", "total_count": len(items),
     }).execute().data[0]
 

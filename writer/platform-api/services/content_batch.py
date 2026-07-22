@@ -58,8 +58,19 @@ def _job_payload(batch: dict, item: dict) -> dict:
         "auto_publish": bool(batch.get("auto_publish")),
         "wp_publish": bool(batch.get("wp_publish")),
         "wp_status": batch.get("wp_status") or "draft",
+        "github_publish": bool(batch.get("github_publish")),
         "user_id": batch.get("created_by"),
     }
+
+
+def _should_github_publish(
+    content_type: str | None, result_kind: str | None, github_publish: bool
+) -> bool:
+    """Auto-publish gate for a just-generated item. Only blog-post *runs* publish
+    to GitHub (via the media SOP), and only when the batch opted in. Other content
+    types generate as drafts regardless — GitHub auto-publish for them is a
+    follow-up (the manual publish path still covers them)."""
+    return bool(github_publish) and content_type == "blog_post" and result_kind == "run"
 
 
 def _enqueue_one(batch: dict, item: dict, index: int) -> Optional[str]:
@@ -249,6 +260,22 @@ async def run_content_batch_item_job(job: dict) -> None:
             logger.info("content_batch.item_complete",
                         extra={"job_id": job_id, "item_id": item_id,
                                "content_type": content_type, "result_ref": ref})
+            # Auto-publish (per-batch opt-in): a finished blog post commits to the
+            # client's GitHub repo through the media SOP (hero + inline images,
+            # atomic commit) — so a scheduled post is generated AND made live in one
+            # flow. Best-effort: the item is already 'complete', so a publish-enqueue
+            # failure is logged, never un-does the generation.
+            if _should_github_publish(content_type, kind, payload.get("github_publish", False)):
+                try:
+                    from services.blog_media.pipeline import enqueue_blog_media_publish
+
+                    publish_job = enqueue_blog_media_publish(ref, payload.get("user_id"))
+                    logger.info("content_batch.github_publish_enqueued",
+                                extra={"item_id": item_id, "run_id": ref,
+                                       "publish_job_id": publish_job})
+                except Exception as exc:  # noqa: BLE001 — publish is best-effort
+                    logger.warning("content_batch.github_publish_enqueue_failed",
+                                   extra={"item_id": item_id, "run_id": ref, "error": str(exc)})
         else:
             store.finish_item(item_id, "failed", error="content generation failed")
             supabase.table("async_jobs").update(

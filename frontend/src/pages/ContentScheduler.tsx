@@ -38,7 +38,7 @@ export function ContentScheduler() {
         per line. Create now, or drip them out on a schedule.
       </p>
 
-      <ScheduleBatch clientId={id} />
+      <ScheduleBatch clientId={id} githubReady={Boolean(client?.github_repo)} />
 
       <h2 style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', margin: '28px 0 12px' }}>
         Scheduled content
