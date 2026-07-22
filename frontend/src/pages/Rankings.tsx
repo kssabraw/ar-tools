@@ -55,7 +55,7 @@ export function Rankings() {
   const effectiveTab: Tab = tab === 'overview' && !showOverview ? 'keywords' : tab
 
   return (
-    <div style={{ padding: 32, maxWidth: 980 }}>
+    <div style={{ padding: 32, maxWidth: 1400 }}>
       <button style={backLink} onClick={() => navigate(`/clients/${clientId}`)}>
         <ArrowLeft size={14} /> Back to Workspace
       </button>
