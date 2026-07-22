@@ -289,7 +289,15 @@ async def get_scan_results(scan_uuid: str) -> Optional[list[dict]]:
 # Orchestration
 # ----------------------------------------------------------------------------
 async def start_client_scan(client_id: str, trigger: str = "scheduled") -> dict:
-    """Validate a client's grid config, POST a scan, and record it as 'polling'."""
+    """Validate a client's grid config, POST a scan, and record it as 'polling'.
+
+    The single provider branch point: when maps_scan_provider is 'dataforseo',
+    new scans go through the DataForSEO grid builder instead of Local Dominator.
+    (In-flight/historic scans keep finishing on their own provider — the poller
+    routes by the stored maps_scans.provider column, not this flag.)"""
+    if settings.maps_scan_provider == "dataforseo":
+        from services import maps_dataforseo
+        return await maps_dataforseo.start_client_scan_dfs(client_id, trigger)
     supabase = get_supabase()
     config = (
         supabase.table("maps_scan_configs").select("*").eq("client_id", client_id).limit(1).execute()
@@ -476,20 +484,32 @@ async def poll_scan(scan_row: dict) -> str:
     supabase.table("maps_scan_configs").update({"last_scanned_at": "now()"}).eq(
         "client_id", scan_row["client_id"]
     ).execute()
-    # Kick off the Local Rank Analysis report (per-keyword) for this scan.
+    # Shared completion hooks: Local Rank Analysis report + scan-over-scan
+    # analyzer/alerting (both best-effort). Factored out so the DataForSEO poller
+    # runs the identical block (see maps_dataforseo._finalize_scan).
+    enqueue_completion_hooks(scan_id, scan_row.get("trigger"))
+    logger.info("maps_scan_complete", extra={"scan_id": scan_id, "keywords": n})
+    return "complete"
+
+
+def enqueue_completion_hooks(scan_id: str, trigger: Optional[str] = None) -> None:
+    """Enqueue the per-scan completion jobs (Local Rank Analysis report +
+    scan-over-scan analyzer). Provider-agnostic; both best-effort so a failure
+    never fails the scan. Test scans (trigger='parallel_test', §7 quarantine)
+    skip both hooks — no LLM report spend, no alerts / Action Plan rebuilds from
+    throwaway comparison data."""
+    if trigger == "parallel_test":
+        return
     try:
         from services.maps_report import enqueue_maps_report
         enqueue_maps_report(scan_id)
     except Exception as exc:  # reporting is best-effort — never fail the scan
         logger.warning("maps_report_enqueue_failed", extra={"scan_id": scan_id, "error": str(exc)})
-    # Kick off the scan-over-scan analyzer + alerting (independent of the report).
     try:
         from services.maps_analyzer import enqueue_maps_analyze
         enqueue_maps_analyze(scan_id)
     except Exception as exc:  # analysis is best-effort — never fail the scan
         logger.warning("maps_analyze_enqueue_failed", extra={"scan_id": scan_id, "error": str(exc)})
-    logger.info("maps_scan_complete", extra={"scan_id": scan_id, "keywords": n})
-    return "complete"
 
 
 async def _poll_rows(rows: list[dict]) -> int:
@@ -499,7 +519,14 @@ async def _poll_rows(rows: list[dict]) -> int:
         if not _poll_allowed(scan_row.get("id")):
             continue
         try:
-            await poll_scan(scan_row)
+            # Route by the scan's OWN provider (not the config flag), so LD scans
+            # in flight during the cutover finish on LD and DataForSEO scans on
+            # DataForSEO — mixed-provider history is fully supported.
+            if scan_row.get("provider") == "dataforseo":
+                from services import maps_dataforseo
+                await maps_dataforseo.poll_scan_dfs(scan_row)
+            else:
+                await poll_scan(scan_row)
             advanced += 1
         except Exception as exc:
             logger.warning("maps_scan_poll_failed", extra={"scan_id": scan_row.get("id"), "error": str(exc)})

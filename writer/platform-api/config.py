@@ -275,6 +275,26 @@ class Settings(BaseSettings):
     maps_scan_weekday: int = 1
     # How long (minutes) to keep polling a scan before marking it failed.
     maps_scan_poll_timeout_minutes: int = 30
+    # ── Maps geo-grid provider switch (Local Dominator → DataForSEO) ──────────
+    # Which provider a NEW scan uses. In-flight/historic scans are routed by
+    # their stored maps_scans.provider column, so both coexist across the flip;
+    # rollback is flipping this env var back. 'local_dominator' (default —
+    # DataForSEO dormant) | 'dataforseo'.
+    maps_scan_provider: str = "local_dominator"
+    # DataForSEO Maps SERP per-pin params. The zoom in location_coordinate
+    # ("lat,lng,<zoom>"): 15z ≈ a 1–2-mile viewport matching our 1-mile pin
+    # spacing (14z ≈ ~3 mi) — calibrated during the parallel-run (§7). depth 20
+    # mirrors LD's top-20/pin and fits DataForSEO's base price.
+    maps_dfs_zoom: str = "15z"
+    maps_dfs_depth: int = 20
+    # Per polling tick, per DataForSEO scan: cap on task_get calls (oldest pins
+    # first) and how many run concurrently. task_get is free — this just paces
+    # the collection so one big scan doesn't hog a tick.
+    maps_dfs_poll_tasks_per_tick: int = 200
+    maps_dfs_poll_concurrency: int = 10
+    # A pin task that comes back a DataForSEO error is reposted (fresh task) up
+    # to this many attempts, then marked failed (a null hole in the grid).
+    maps_dfs_pin_max_attempts: int = 3
     # Local Rank Analysis report (auto-generated per keyword when a scan completes).
     # Sonnet writes the client-facing narrative from the deterministic geo-grid
     # rollups + competitor data; Top-5 competitors are those rated >= this with
