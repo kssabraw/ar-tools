@@ -550,7 +550,10 @@ async def _run_rubric(
         supabase.table("tasks").select("name, description")
         .eq("parent_task_id", task["id"]).is_("deleted_at", "null").execute()
     ).data or []
-    keyword = sig.keyword_from_task(task)
+    # A website page's descriptive title is NOT its keyword — a renamed page must
+    # supply the keyword via the field / a KW: marker, or the checks read
+    # 'could not verify' (needs_human), never a false FAIL against the title.
+    keyword = sig.keyword_from_task(task, allow_full_name=rubric != sig.RUBRIC_PAGE)
     composite: Optional[float] = None
 
     if rubric == sig.RUBRIC_BLOG:
@@ -964,8 +967,10 @@ def _readiness_deliverable(task: dict) -> tuple[Optional[str], str]:
 
 def _readiness_keyword(task: dict) -> tuple[Optional[str], str]:
     """Resolve the target keyword + where it came from ('set' via field/marker/
-    name, or 'auto' from a linked content run)."""
-    kw = sig.keyword_from_task(task)
+    name, or 'auto' from a linked content run). Called only for the website-page
+    rubric, so the renamed-name fallback is OFF — readiness must not claim a
+    keyword is present just because the page task has a descriptive title."""
+    kw = sig.keyword_from_task(task, allow_full_name=False)
     if kw:
         return kw, "set"
     if task.get("source") == "content_run" and task.get("source_ref"):

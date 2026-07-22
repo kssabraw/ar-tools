@@ -487,6 +487,26 @@ def test_keyword_from_task_name_convention():
     assert sig.keyword_from_task({}) is None
 
 
+def test_keyword_from_task_full_name_gate_for_website_pages():
+    # A fully-renamed page task: the descriptive title must NOT become the
+    # keyword when the caller disallows it (website pages) — else the title
+    # would be checked against title/URL/H1 and guarantee a false FAIL.
+    task = {"name": "Fix the homepage hero", "library_task_name": "Website Pages Posted"}
+    assert sig.keyword_from_task(task, allow_full_name=True) == "Fix the homepage hero"
+    assert sig.keyword_from_task(task, allow_full_name=False) is None
+    # An explicit field / marker still wins even with the fallback off.
+    assert sig.keyword_from_task(
+        {**task, "qa_keyword": "practice management coral springs"},
+        allow_full_name=False,
+    ) == "practice management coral springs"
+    # 'Template — keyword' extraction is unaffected by the gate.
+    assert sig.keyword_from_task(
+        {"name": "Website Pages Posted — coral springs plumber",
+         "library_task_name": "Website Pages Posted"},
+        allow_full_name=False,
+    ) == "coral springs plumber"
+
+
 def test_keyword_from_task_description_override_still_wins():
     assert sig.keyword_from_task(
         {"name": "GBP Posts — wrong thing", "library_task_name": "GBP Posts",

@@ -803,7 +803,7 @@ _NAME_SEPS = ("—", "–", ":", "|", " - ")
 _SEP_STRIP = " \t-—–:|·,"
 
 
-def keyword_from_task(task: dict[str, Any]) -> Optional[str]:
+def keyword_from_task(task: dict[str, Any], allow_full_name: bool = True) -> Optional[str]:
     """The target keyword 'on the task' (owner convention 2026-07-12: the
     keyword is entered into the TASK NAME). Resolution order, pure:
 
@@ -817,7 +817,15 @@ def keyword_from_task(task: dict[str, Any]) -> Optional[str]:
     3. A bare 'Template — keyword' name split when no library link exists.
 
     A bare template name ('GBP Posts') yields None → the keyword checks read
-    'could not verify' → needs_human, never a guess."""
+    'could not verify' → needs_human, never a guess.
+
+    ``allow_full_name=False`` disables (2)'s FULLY-RENAMED branch (returning the
+    whole task name as the keyword). That guess is right for a post-type task
+    renamed to its keyword ('emergency roof repair'), but WRONG for a website
+    page whose name is a descriptive title ('Fix the homepage hero') — there the
+    title would be mis-read as the keyword and guarantee a false FAIL. Website-
+    page callers pass False so a renamed page needs its keyword typed into the
+    'Target keyword' field / a KW: marker instead."""
     # 0. The first-class 'Target keyword' field (the QA panel input) wins — the
     #    obvious box for an untrained user, no marker/name convention needed.
     field_kw = normalize_ws(task.get("qa_keyword"))
@@ -839,7 +847,10 @@ def keyword_from_task(task: dict[str, Any]) -> Optional[str]:
             remainder = re.sub(re.escape(lib), "", name, count=1, flags=re.IGNORECASE)
             remainder = normalize_ws(remainder.strip(_SEP_STRIP))
             return remainder or None
-        return name  # fully renamed: the whole name IS the keyword
+        # Fully renamed: the whole name IS the keyword — but only when the caller
+        # allows it (post-type tasks). A website page's descriptive title is not
+        # its keyword, so that caller passes allow_full_name=False → None here.
+        return name if allow_full_name else None
     # No library link: the name must carry a recognizable template prefix for
     # the rubric to have matched at all — take what follows the separator.
     for sep in _NAME_SEPS:
