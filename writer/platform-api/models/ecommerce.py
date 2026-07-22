@@ -141,6 +141,9 @@ class EcommercePageDetail(BaseModel):
     composite_score: Optional[float] = None
     composite_status: Optional[str] = None
     engine_scores: Optional[dict[str, Any]] = None
+    # Structural-fidelity verdict from the product generation gate ({composite,
+    # dimensions, notes}). None for collections / house-template products.
+    structure_fidelity: Optional[dict[str, Any]] = None
     mode: str
     token_usage: Optional[dict[str, Any]] = None
     cost_breakdown: Optional[dict[str, Any]] = None

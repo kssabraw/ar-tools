@@ -133,6 +133,33 @@ export const listAllSessions = (includeArchived = false) =>
     `/sessions${includeArchived ? "?include_archived=true" : ""}`,
   );
 
+// ---- Copy a content plan onto another client ------------------------------
+// Active AR Tools clients, for the "copy plan to another client" picker.
+export interface ClientOption {
+  id: string;
+  name: string;
+  website_url: string | null;
+}
+export const listClients = () =>
+  request<{ clients: ClientOption[] }>("/clients").then((r) => r.clients);
+
+export interface CopyPlanResult {
+  status: string;
+  client_name: string;
+  new_session_id: string;
+  topics: number;
+  clusters: number;
+  keywords: number;
+}
+// Clone this session's plan (topics + clusters + primary keywords) into a fresh,
+// unscheduled session linked to the target client. Cadence / start date /
+// publishing are chosen later via the normal Schedule flow.
+export const copyPlanToClient = (sessionId: string, targetClientId: string) =>
+  request<CopyPlanResult>(`/sessions/${sessionId}/copy-to-client`, {
+    method: "POST",
+    body: JSON.stringify({ target_client_id: targetClientId }),
+  });
+
 // Supported English-market countries (E1, 2026-06-17). The code is the
 // DataForSEO location_code (2000 + ISO-3166 numeric); language stays "en". Must
 // mirror the backend allow-list (storage/silo.SUPPORTED_LOCATION_CODES) + the DB

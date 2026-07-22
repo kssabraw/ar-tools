@@ -68,13 +68,19 @@ function segStyle(active: boolean): React.CSSProperties {
 
 const TODAY_ISO = new Date().toISOString().slice(0, 10)
 
-export function ScheduleBatch({ clientId, fixedType, onCreated }: {
+export function ScheduleBatch({ clientId, fixedType, githubReady, onCreated }: {
   clientId: string
   fixedType?: ContentType
+  // The client has a GitHub repo configured — unlocks the "auto-publish to
+  // GitHub" toggle for blog posts (so scheduled posts go live automatically).
+  githubReady?: boolean
   onCreated?: () => void
 }) {
   const queryClient = useQueryClient()
   const [contentType, setContentType] = useState<ContentType>(fixedType ?? 'blog_post')
+  // Auto-publish finished blog posts to GitHub (per the image SOP). Default ON
+  // when the client is GitHub-ready — the common case is "generate AND publish".
+  const [githubPublish, setGithubPublish] = useState(true)
   const [rows, setRows] = useState<DraftRow[]>([])
   const [bulk, setBulk] = useState('')
   const [when, setWhen] = useState<'now' | 'schedule'>('now')
@@ -176,9 +182,12 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
     setRows([]); setBulk(''); setAllNotes(''); setAllService(''); setAllDate('')
   }
 
+  const canGithubPublish = contentType === 'blog_post' && Boolean(githubReady)
+
   const createMut = useMutation({
     mutationFn: () => {
       const body: CreateBody = { ...estimateBody() }
+      if (canGithubPublish) body.github_publish = githubPublish
       return schedulerApi.create(clientId, body)
     },
     onSuccess: (res) => {
@@ -368,6 +377,21 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
           </button>
         </div>
       </div>
+
+      {canGithubPublish && (
+        <label style={{
+          display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer',
+          padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: 8, background: '#f8fafc',
+        }}>
+          <input type="checkbox" checked={githubPublish}
+            onChange={e => setGithubPublish(e.target.checked)} style={{ marginTop: 3 }} />
+          <span style={{ fontSize: 13, color: '#334155', lineHeight: 1.4 }}>
+            <strong>Auto-publish to GitHub</strong> — each finished post commits to the client's
+            repo with generated images (per the image SOP), so it goes live automatically with
+            nothing to reconcile. Uncheck to generate drafts for manual review.
+          </span>
+        </label>
+      )}
 
       {when === 'schedule' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>

@@ -47,6 +47,10 @@ const ACTIVITY_LABELS: Record<string, string> = {
   restored: 'restored from trash',
   auto_ticked: 'auto-ticked checklist items',
   qa_result: 'QA reviewed the deliverable',
+  qa_rubric_changed: 'changed the QA rubric',
+  qa_page_type_changed: 'changed the QA page type',
+  deliverable_url_changed: 'set the page URL to review',
+  qa_keyword_changed: 'set the target keyword',
 }
 
 function formatBytes(n: number | null): string {
@@ -377,7 +381,19 @@ export function TaskDetail({ taskId, statuses, categories, members, onClose, inv
           </div>
 
           {/* QA (top-level tasks only — subtasks aren't deliverables) */}
-          {!task.parent_task_id && <QaPanel taskId={taskId} />}
+          {!task.parent_task_id && (
+            <QaPanel
+              taskId={taskId}
+              rubric={task.qa_rubric}
+              onRubricChange={(r) => patchField('qa_rubric', r)}
+              pageType={task.qa_page_type}
+              onPageTypeChange={(p) => patchField('qa_page_type', p)}
+              deliverableUrl={task.deliverable_url}
+              onDeliverableUrlChange={(u) => patchField('deliverable_url', u)}
+              keyword={task.qa_keyword}
+              onKeywordChange={(k) => patchField('qa_keyword', k)}
+            />
+          )}
 
           {/* Attachments */}
           <div style={{ marginTop: 18 }}>

@@ -763,13 +763,21 @@ async def _orchestrate_service_page(
         raise CancellationError()
     if completed.get("service_score") is None:
         try:
-            from services.service_page_score import reoptimize_run, score_run
+            from services.service_page_score import reoptimize_run, score_run, structural_deficiency
 
             await _set_run_status(run_id, "service_scoring_running")
             score = await score_run(run_id)
-            if (score.get("composite_score") or 0) < settings.service_page_score_threshold:
+            deficiencies = list(score.get("deficiencies") or [])
+            # Structural-fidelity gate: if the writer drifted from the client's
+            # reference layout, fold the corrections into the SAME reopt pass as a
+            # synthetic deficiency (no extra reopt beyond the content-score budget).
+            struct_def = structural_deficiency(run, snapshot)
+            if struct_def:
+                deficiencies.append(struct_def)
+            below_threshold = (score.get("composite_score") or 0) < settings.service_page_score_threshold
+            if below_threshold or struct_def:
                 await _set_run_status(run_id, "service_reopt_running")
-                await reoptimize_run(run_id, score.get("deficiencies") or [])
+                await reoptimize_run(run_id, deficiencies)
         except Exception as exc:
             logger.warning(
                 "service_page_autoscore_failed",

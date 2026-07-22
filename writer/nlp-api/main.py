@@ -587,7 +587,7 @@ Section 12 — FAQ (min 4, max 7 entries — 40–80 words each)
 
 Section 13 — Schema (delivered AFTER </article> as a separate <script> block)
 Generate 3 schema blocks as a single JSON-LD array inside one <script type="application/ld+json"> tag:
-1. LocalBusiness (subtype from category: Plumber/HVACBusiness/Electrician etc.)
+1. Organization (@type "Organization" — the business entity. Do NOT use LocalBusiness or any LocalBusiness subtype such as Plumber/HVACBusiness/Electrician on these pages; represent the business as an Organization only. You may still include name, url, logo, telephone, and address when that data is provided.)
 2. Service
 3. FAQPage (auto-extracted from Section 12)
 
@@ -5451,6 +5451,12 @@ class GeneratePageRequest(BaseModel):
     # the client's own local-landing / location page layout WITHOUT re-scraping a
     # template URL here. Lower precedence than page_template_url/html.
     reference_page_structure: Optional[str] = None
+    # Corrective directives from platform-api's structural-fidelity gate: when a
+    # first pass drifted from the reference layout (wrong section count/order,
+    # dropped FAQ/CTA/table/list blocks), platform-api scores it deterministically
+    # and re-calls generate with the specific misses to fix. Injected as the
+    # highest-priority, last block of the prompt so the retry converges.
+    structure_corrections: Optional[str] = None
     # Whether to run competitor SERP analysis when no cached analysis is
     # supplied. Defaults to True — the suite always runs analysis first.
     # platform-api only passes False as a degraded fallback (its own analysis
@@ -5764,6 +5770,18 @@ async def generate_page(request: Request, body: GeneratePageRequest):
                 "\"which is right for you\" / condition->option choice treatment for this page."
             )
 
+        # Structural corrections from platform-api's fidelity gate (retry passes
+        # only). Placed LAST in the prompt (highest recency) so the model treats
+        # the concrete layout fixes as non-negotiable on the re-generation.
+        corrections_text = ""
+        if (body.structure_corrections or "").strip():
+            corrections_text = (
+                "\nSTRUCTURE CORRECTIONS — HIGHEST PRIORITY. Your previous attempt drifted from the "
+                "required section structure above. Fix EXACTLY the following, keeping everything else "
+                "and STILL applying every AEO writing rule + the JSON-LD schema block:\n"
+                f"{body.structure_corrections.strip()}\n"
+            )
+
         notes_text = ""
         if (body.notes or "").strip():
             notes_text = (
@@ -5800,7 +5818,8 @@ Full location: {body.location}
 {notes_text}
 {seo_checklist}
 
-{template_text}"""
+{template_text}
+{corrections_text}"""
 
         await q.put({"step": "progress", "progress": 65, "message": "Generating your page…"})
 
@@ -7652,6 +7671,13 @@ class GenerateEcommerceRequest(BaseModel):
     # wins if supplied. Ignored for collections.
     page_template_url: Optional[str] = None
     page_template_html: Optional[str] = None
+    # Pre-analyzed product reference structure (from clients.page_structures['product'])
+    # the suite renders + mirrors when no house template URL is set. Products only.
+    reference_page_structure: Optional[str] = None
+    # Corrective directives from platform-api's structural-fidelity gate (retry
+    # passes only), injected as the highest-priority last block so the retry
+    # converges on the reference layout.
+    structure_corrections: Optional[str] = None
     # Free-text writing notes from the user — high-priority editorial guidance the
     # writer must follow (e.g. "remove the Research Use Only designation",
     # "emphasize fast shipping", "write for clinics not individuals").
@@ -7806,6 +7832,32 @@ async def generate_ecommerce_page(request: Request, body: GenerateEcommerceReque
                     f"{_outline}"
                 )
                 logger.info(f"generate-ecommerce: mirroring house template ({_outline.count(chr(10)) + 1} headings)")
+        elif page_type == "product" and (body.reference_page_structure or "").strip():
+            # No house template, but the suite supplied the client's pre-analyzed
+            # product reference structure — mirror it (and it's the gate's target).
+            template_text = (
+                "STRUCTURE TO MIRROR — OVERRIDES THE DEFAULT PRODUCT-PAGE STRUCTURE:\n"
+                "Match the section layout, order, heading hierarchy, and per-section SIZE of the "
+                "client's reference product page below — adapt ALL wording to THIS product (do NOT "
+                "copy the reference's wording or its specific facts). STILL apply every ecommerce "
+                "writing rule (answer-first, features→benefits, an FAQ with 4–7 entries, a "
+                "specs/variants table where comparative, a clear CTA, trust signals) and STILL emit "
+                "the Product/Offer JSON-LD block. Client reference product structure:\n"
+                f"{body.reference_page_structure.strip()}"
+            )
+            logger.info("generate-ecommerce: mirroring client reference product structure")
+
+        # Structural corrections from platform-api's fidelity gate (retry passes
+        # only). Placed LAST (highest recency) so the concrete layout fixes are
+        # treated as non-negotiable on the re-generation.
+        corrections_text = ""
+        if (body.structure_corrections or "").strip():
+            corrections_text = (
+                "\nSTRUCTURE CORRECTIONS — HIGHEST PRIORITY. Your previous attempt drifted from the "
+                "required product-page structure above. Fix EXACTLY the following, keeping everything "
+                "else and STILL applying every ecommerce writing rule + the JSON-LD schema block:\n"
+                f"{body.structure_corrections.strip()}\n"
+            )
 
         notes_text = _ecommerce_notes_block(body.notes)
 
@@ -7825,7 +7877,8 @@ Primary keyword: {body.keyword}
 {mcs_block}
 {serp_ctx}
 
-{template_text}"""
+{template_text}
+{corrections_text}"""
 
         await q.put({"step": "progress", "progress": 65, "message": "Writing your page…"})
         try:

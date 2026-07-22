@@ -40,6 +40,7 @@ from services.deliverables_sheet import (
 )
 from services.domain_intel import run_domain_overview_job, run_keyword_gap_job, run_link_gap_job
 from services.github_infer import run_github_infer_job
+from services.blog_media.pipeline import run_blog_media_publish_job
 from services.keyword_research import run_keyword_research_job
 from services.freeze import FREEZE_GATED_JOB_TYPES, is_frozen, job_client_id, run_freeze_check_job
 from services.page_backlink_intel import run_page_backlink_job
@@ -387,11 +388,56 @@ async def _run_page_structure_scrape(job: dict) -> None:
 
         analysis = await analyze_page_structure(html, page_type)
 
+        # If the cheap datacenter fetch captured nothing, the site likely
+        # bot-blocked it (a WordPress/CDN wall served an empty shell). Retry
+        # ONCE with JS rendering + premium residential proxies — the thing that
+        # gets past those walls — and keep the retry only if it actually found
+        # content. Bounded cost: only fires on an empty first pass.
+        retry_error = None
+        retry_html_len = None
+        retry_raw_headings = None
+        if settings.page_structure_premium_fallback and not (analysis.get("outline") or []):
+            logger.info(
+                "page_structure_scrape_premium_retry",
+                extra={"job_id": job_id, "client_id": client_id, "page_type": page_type},
+            )
+            try:
+                html2 = await scrapeowl_fetch(url, timeout=90, render_js=True, premium=True)
+                retry_html_len = len(html2 or "")
+                if html2:
+                    from services.page_structure_scraper import count_headings
+                    retry_raw_headings = count_headings(html2)
+                    analysis2 = await analyze_page_structure(html2, page_type)
+                    if analysis2.get("outline"):
+                        analysis = analysis2
+            except Exception as exc:
+                retry_error = str(exc)[:500]
+                logger.warning(
+                    "page_structure_scrape_premium_retry_failed error=%s", str(exc)[:500],
+                    extra={"job_id": job_id, "error": str(exc)},
+                )
+
+        # A capture that yielded zero sections isn't a usable reference (QA and
+        # the writers treat it as "no reference"). Flag it explicitly so it's
+        # visible WHY — a silent complete-but-empty entry looks like success but
+        # enables nothing. The premium-retry diagnostics (its error / how much
+        # HTML it fetched) are stored too so a failure is inspectable.
+        empty = not (analysis.get("outline") or [])
         _store(
             {
                 "url": url,
                 "status": "complete",
                 "error": None,
+                "empty": empty,
+                "retry_error": retry_error,
+                "retry_html_len": retry_html_len,
+                "retry_raw_headings": retry_raw_headings,
+                "note": (
+                    "Captured 0 content sections — the page may be blocking our "
+                    "scraper or use non-semantic markup. Try a different, "
+                    "content-rich reference URL."
+                    if empty else None
+                ),
                 "analysis": analysis,
                 "analyzed_at": datetime.now(timezone.utc).isoformat(),
             }
@@ -584,6 +630,8 @@ async def _process_job(job: dict) -> None:
         from services.illustration import run_illustrate_job
 
         await run_illustrate_job(job)
+    elif job_type == "blog_github_publish":
+        await run_blog_media_publish_job(job)
     else:
         logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
 

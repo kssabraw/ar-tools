@@ -95,6 +95,10 @@ _ACTIVITY_FIELDS = {
     "start_date": "due_changed",
     "est_hours": "estimate_changed",
     "section_id": "moved",
+    "qa_rubric": "qa_rubric_changed",
+    "qa_page_type": "qa_page_type_changed",
+    "deliverable_url": "deliverable_url_changed",
+    "qa_keyword": "qa_keyword_changed",
 }
 
 

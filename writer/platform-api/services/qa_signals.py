@@ -71,10 +71,55 @@ _NAME_RULES: list[tuple[str, str]] = [
 ]
 
 
+# Every rubric key a task may carry — the allowed set for an EXPLICIT
+# ``tasks.qa_rubric`` override (validated at the API; drives rubric_for's
+# precedence). Kept in sync with the RUBRIC_* constants above.
+RUBRIC_KEYS: frozenset[str] = frozenset({
+    RUBRIC_BLOG, RUBRIC_PAGE, RUBRIC_GBP_POSTS, RUBRIC_CITATIONS,
+    RUBRIC_GUEST_POST, RUBRIC_NICHE_EDIT, RUBRIC_PRESS_RELEASE,
+    RUBRIC_MAP_EMBEDS, RUBRIC_SKIP, RUBRIC_HANDOFF, RUBRIC_GENERIC,
+})
+
+# Website-page sub-types that map to a stored reference-structure key on
+# clients.page_structures. An explicit per-task pick (the 'Page type' dropdown)
+# tells the structural design-fit check WHICH reference to compare against;
+# unset falls back to the service → local_landing → location priority.
+WEBSITE_PAGE_TYPES: frozenset[str] = frozenset({"service", "local_landing", "location"})
+
+# URL rubrics whose page lives on an EXTERNAL site (a guest-post blog, a PR
+# wire, a directory listing, a maps page) — so the URL's own domain can never
+# identify the client, and every check they run needs the client (link-back to
+# the client site, NAP matches the client card, the "client provides service"
+# assertion). Without a client these produce only "could not verify", so the
+# bot asks which client up front instead of running a meaningless check. The
+# website page is deliberately NOT here: it lives on the client's own domain,
+# so it auto-resolves and its meta/keyword checks are useful even client-less.
+CLIENT_REQUIRED_URL_RUBRICS: frozenset[str] = frozenset({
+    RUBRIC_GUEST_POST, RUBRIC_NICHE_EDIT, RUBRIC_PRESS_RELEASE,
+    RUBRIC_CITATIONS, RUBRIC_MAP_EMBEDS,
+})
+
+# The one-line, VA-plain name of the check each URL rubric performs — used to
+# tell an untrained VA what a bare-URL review actually looked at.
+URL_RUBRIC_WHAT: dict[str, str] = {
+    RUBRIC_PAGE: "the page's title, keyword placement, business name, internal links, and images",
+    RUBRIC_GUEST_POST: "whether the post links back to the client's website",
+    RUBRIC_NICHE_EDIT: "whether the edit links back to the client's website",
+    RUBRIC_PRESS_RELEASE: "the keyword, a non-exact-match link, and the client's name/address/phone",
+    RUBRIC_CITATIONS: "whether the listing's name, address, and phone match the client",
+    RUBRIC_MAP_EMBEDS: "the client's name/address/phone, a map embed, and a plain 'we provide this service' line",
+}
+
+
 def rubric_for(task: dict[str, Any]) -> str:
-    """Route a task to its QA rubric. Producer source wins (a content_run task
-    is a blog article regardless of its name); then the library/task name;
-    unknown → generic (needs_human — QA never guesses a standard). Pure."""
+    """Route a task to its QA rubric. Precedence: an EXPLICIT ``qa_rubric``
+    chosen on the task wins (the dropdown — so the title can be anything); then
+    the producer source (a content_run task is a blog article regardless of its
+    name); then the library/task name; unknown → generic (needs_human — QA
+    never guesses a standard). Pure."""
+    explicit = (task.get("qa_rubric") or "").strip()
+    if explicit in RUBRIC_KEYS:
+        return explicit
     if (task.get("source") or "") == "content_run":
         return RUBRIC_BLOG
     name = " ".join(
@@ -130,6 +175,49 @@ def keyword_present(text: Optional[str], keyword: Optional[str]) -> Optional[boo
     if not kw:
         return None
     return kw in normalize_ws(text).casefold()
+
+
+# Stop-words dropped from keyword token-coverage: a title/H1 rarely carries the
+# keyword's connectives verbatim ("... services in coral springs" → "Services |
+# Coral Springs"), so requiring them false-failed good pages.
+_KW_STOPWORDS = frozenset({
+    "in", "on", "of", "the", "a", "an", "and", "or", "for", "to", "near",
+    "at", "by", "with", "your", "our", "from", "into", "over",
+})
+
+
+def keyword_tokens_present(text: Optional[str], keyword: Optional[str]) -> Optional[bool]:
+    """True when every SIGNIFICANT word of the keyword appears in ``text`` as a
+    whole word, in any order — tolerant of reordered / separator titles where
+    the exact phrase won't appear verbatim ('Practice Management Services |
+    Coral Springs' satisfies 'practice management services in coral springs').
+    Stop-words are dropped (unless the keyword is all stop-words). None when the
+    keyword is unknown → the check reads 'could not verify'. Pure."""
+    tokens = [t for t in re.split(r"[^0-9a-z]+", (keyword or "").casefold()) if t]
+    if not tokens:
+        return None
+    significant = [t for t in tokens if t not in _KW_STOPWORDS] or tokens
+    hay = normalize_ws(text).casefold()
+    return all(
+        re.search(rf"(?<![0-9a-z]){re.escape(t)}(?![0-9a-z])", hay) is not None
+        for t in significant
+    )
+
+
+def keyword_in_url(url: Optional[str], keyword: Optional[str]) -> Optional[bool]:
+    """Whether the target keyword appears in the URL's path slug, with hyphens
+    and other separators normalized to spaces (so a slug like
+    'practice-management-services-in-coral-springs' matches the keyword
+    'practice management services'). Case-insensitive. None when the keyword or
+    URL is unknown → the check reads 'could not verify'. Pure."""
+    from urllib.parse import unquote, urlparse
+
+    kw = normalize_ws(re.sub(r"[^0-9a-z]+", " ", (keyword or "").casefold()))
+    if not kw or not (url or "").strip():
+        return None
+    path = unquote(urlparse(url).path or "")
+    slug = normalize_ws(re.sub(r"[^0-9a-z]+", " ", path.casefold()))
+    return kw in slug
 
 
 def has_emoji(text: Optional[str]) -> bool:
@@ -261,14 +349,85 @@ def domain_of(url: Optional[str]) -> str:
     return (m.group(1) if m else "").casefold()
 
 
+def is_safe_fetch_url(url: Optional[str]) -> bool:
+    """SSRF guard for server-side fetches (qa_service._fetch / _broken_assets):
+    only http(s), and never an internal target — an internal hostname
+    (localhost / *.internal / *.local / *.lan) or a private / loopback /
+    link-local / reserved / multicast IP literal (blocks the cloud-metadata
+    169.254.169.254 too). Hostnames that RESOLVE to such IPs are additionally
+    blocked at fetch time by the DNS check in qa_service. Pure."""
+    from urllib.parse import urlparse
+    import ipaddress
+
+    try:
+        parts = urlparse((url or "").strip())
+    except Exception:
+        return False
+    if parts.scheme.lower() not in ("http", "https"):
+        return False
+    host = (parts.hostname or "").casefold()
+    if not host:
+        return False
+    if host == "localhost" or any(
+        host.endswith(sfx) for sfx in (".localhost", ".internal", ".local", ".lan")
+    ):
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return True  # a real hostname; the fetch-time DNS check covers rebinding
+    return not (
+        ip.is_private or ip.is_loopback or ip.is_link_local
+        or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+    )
+
+
+def _href_host(href: Optional[str]) -> str:
+    """The registrable host of an href, www-stripped, lowercased — '' for a
+    relative/empty href. Protocol-relative ('//x.com/…') is understood. Pure."""
+    from urllib.parse import urlparse
+
+    h = (href or "").strip()
+    if not h:
+        return ""
+    if h.startswith("//"):
+        h = "http:" + h
+    try:
+        netloc = urlparse(h).netloc.casefold()
+    except Exception:
+        return ""
+    netloc = netloc.rsplit("@", 1)[-1].split(":", 1)[0]  # drop userinfo + port
+    return re.sub(r"^www\.", "", netloc)
+
+
 def links_to_domain(anchors: list[dict[str, str]], domain: str) -> list[dict[str, str]]:
-    # Strip a leading "www." PREFIX (re.sub) — not lstrip("www."), which is a
-    # character-set strip that would eat leading w/. chars from a domain like
-    # "westroofing.com".
+    """Anchors whose absolute href points at ``domain`` (or a subdomain of it) —
+    matched on the HOST BOUNDARY, not a bare substring. So a link to
+    'bestroofing.com' does NOT count for client 'roofing.com', and a link to
+    'notclient.com' does NOT count for 'client.com' — the substring form let
+    look-alike / super-string domains false-pass the link-back check. Pure."""
     d = re.sub(r"^www\.", "", (domain or "").casefold())
     if not d:
         return []
-    return [a for a in anchors if d in (a.get("href") or "").casefold()]
+    return [a for a in anchors
+            if (h := _href_host(a.get("href"))) and (h == d or h.endswith("." + d))]
+
+
+def internal_anchors(anchors: list[dict[str, str]], domain: str) -> list[dict[str, str]]:
+    """Anchors internal to the client's own site: an absolute link whose host
+    matches the client domain (or a subdomain), OR a ROOT-RELATIVE link
+    ('/contact') — which is internal by definition on the client's own page.
+    Counting only absolute-domain links false-failed the internal-link check on
+    the many pages that link internally with relative hrefs. Pure."""
+    d = re.sub(r"^www\.", "", (domain or "").casefold())
+    out: list[dict[str, str]] = []
+    for a in anchors:
+        href = (a.get("href") or "").strip()
+        root_relative = href.startswith("/") and not href.startswith("//")
+        host = _href_host(href)
+        if root_relative or (d and host and (host == d or host.endswith("." + d))):
+            out.append(a)
+    return out
 
 
 def has_map_embed(html: str) -> bool:
@@ -540,32 +699,71 @@ def asset_urls_of(html: str, base_url: str, cap: int = 12) -> dict[str, list[str
 
 # --- Website page checks (the extras the 8-engine scorer can't see) ---------
 def check_website_page(html: str, client_domain: str,
-                       business_name: Optional[str]) -> list[dict]:
-    """QA_Checklists §Website Pages Posted, deterministic subset: meta title +
-    description, internal link, images-with-alt (blocking); client name present
-    (advisory — service pages legitimately vary). Structural fidelity + the
-    8-engine score are attached by qa_service where available."""
+                       business_name: Optional[str],
+                       keyword: Optional[str] = None,
+                       url: Optional[str] = None) -> list[dict]:
+    """QA_Checklists §Website Pages Posted, deterministic subset.
+
+    Blocking: meta title present; the target keyword in the <title> tag, the
+    URL slug and the H1 (on-page keyword placement — owner ruling 2026-07-20);
+    an internal link back to the client site; images have alt text; the
+    client's exact business name present (owner ruling 2026-07-21 — a page must
+    carry the RIGHT business name, so a missing/wrong name fails the review).
+    Advisory: meta description present (owner ruling 2026-07-20 — recommended,
+    no longer required). Structural fidelity + the visual layers are attached
+    by qa_service where available."""
     soup = BeautifulSoup(html or "", "html.parser")
     title = (soup.title.string or "").strip() if soup.title and soup.title.string else ""
     desc_tag = soup.find("meta", attrs={"name": "description"})
     desc = (desc_tag.get("content") or "").strip() if desc_tag else ""
+    h1_tag = soup.find("h1")
+    h1_text = h1_tag.get_text(" ", strip=True) if h1_tag else ""
     imgs = soup.find_all("img")
     missing_alt = [i for i in imgs if not (i.get("alt") or "").strip()]
-    internal = links_to_domain(extract_anchors(html), client_domain) if client_domain else []
+    internal = internal_anchors(extract_anchors(html), client_domain) if client_domain else []
+    # The client's EXACT business name must appear on the page (blocking). None
+    # (no name on file) reads 'could not verify' → needs_human, never an
+    # auto-fail. The name is matched whole-word (bounded) so a short name can't
+    # match inside a larger word.
+    name = normalize_ws(business_name)
     name_ok: Optional[bool] = None
-    if normalize_ws(business_name):
-        name_ok = normalize_ws(business_name).casefold() in visible_text_of(html).casefold()
+    name_note = ""
+    if name:
+        name_ok = _name_present(visible_text_of(html), name)
+        name_note = f'expected business name: “{name}”' + ("" if name_ok else " — not found on the page")
+    else:
+        name_note = "no business name on file to check against"
+    kw_note = f'keyword: “{keyword}”' if keyword else "no target keyword found on the task"
     return [
         _check("meta_title", "Meta title present", bool(title)),
-        _check("meta_description", "Meta description present", bool(desc)),
+        _check("meta_description", "Meta description present", bool(desc), blocking=False),
+        _check("keyword_in_title", "Target keyword in the title tag",
+               keyword_tokens_present(title, keyword), note=kw_note),
+        _check("keyword_in_url", "Target keyword in the URL",
+               keyword_in_url(url, keyword),
+               note=kw_note if keyword else "no target keyword found on the task"),
+        _check("keyword_in_h1", "Target keyword in the H1",
+               keyword_tokens_present(h1_text, keyword),
+               note=("no H1 found on the page" if not h1_text else kw_note)),
         _check("internal_link", "Internal link to the client's site",
                bool(internal) if client_domain else None,
                note="" if client_domain else "client has no website on file"),
         _check("images_alt", "Images have alt text",
                (not missing_alt) if imgs else True,
                note=f"{len(missing_alt)} of {len(imgs)} image(s) missing alt" if missing_alt else ""),
-        _check("client_name", "Client name on the page", name_ok, blocking=False),
+        _check("client_name", "Client's business name on the page", name_ok, note=name_note),
     ]
+
+
+def _name_present(text: Optional[str], name: Optional[str]) -> Optional[bool]:
+    """Whether the exact business ``name`` appears in ``text`` as a bounded
+    token sequence (case/whitespace-insensitive). None when the name is unknown.
+    Bounded so a short name ('IHBS') can't match inside a longer word. Pure."""
+    n = normalize_ws(name).casefold()
+    if not n:
+        return None
+    hay = normalize_ws(text).casefold()
+    return re.search(rf"(?<![0-9a-z]){re.escape(n)}(?![0-9a-z])", hay) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -597,16 +795,21 @@ def build_verdict(checks: list[dict]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Task-side conventions (keyword + deliverable-links extraction)
 # ---------------------------------------------------------------------------
-_KEYWORD_LINE_RE = re.compile(r"\bkeywords?\s*[:\-]\s*(.+)", re.IGNORECASE)
+# Explicit keyword marker: 'Keyword:', 'Keywords:', or the short form 'KW:'
+# (also accepts a dash separator). Matched in BOTH the description and the task
+# name, so the keyword can be tagged in either place.
+_KEYWORD_LINE_RE = re.compile(r"\b(?:keywords?|kw)\s*[:\-]\s*(.+)", re.IGNORECASE)
 _NAME_SEPS = ("—", "–", ":", "|", " - ")
 _SEP_STRIP = " \t-—–:|·,"
 
 
-def keyword_from_task(task: dict[str, Any]) -> Optional[str]:
+def keyword_from_task(task: dict[str, Any], allow_full_name: bool = True) -> Optional[str]:
     """The target keyword 'on the task' (owner convention 2026-07-12: the
     keyword is entered into the TASK NAME). Resolution order, pure:
 
-    1. An explicit 'Keyword: …' line in the description (unambiguous override).
+    1. An explicit 'Keyword: …' / 'KW: …' marker anywhere in the description OR
+       the task name (unambiguous override — checked in the description first,
+       then the name).
     2. The task name minus its template name — handles both shapes:
        'GBP Posts — emergency roof repair' (template + separator + keyword)
        and a fully renamed task ('emergency roof repair' whose
@@ -614,12 +817,27 @@ def keyword_from_task(task: dict[str, Any]) -> Optional[str]:
     3. A bare 'Template — keyword' name split when no library link exists.
 
     A bare template name ('GBP Posts') yields None → the keyword checks read
-    'could not verify' → needs_human, never a guess."""
-    m = _KEYWORD_LINE_RE.search(task.get("description") or "")
-    if m:
-        kw = normalize_ws(m.group(1).split("\n")[0])
-        if kw:
-            return kw
+    'could not verify' → needs_human, never a guess.
+
+    ``allow_full_name=False`` disables (2)'s FULLY-RENAMED branch (returning the
+    whole task name as the keyword). That guess is right for a post-type task
+    renamed to its keyword ('emergency roof repair'), but WRONG for a website
+    page whose name is a descriptive title ('Fix the homepage hero') — there the
+    title would be mis-read as the keyword and guarantee a false FAIL. Website-
+    page callers pass False so a renamed page needs its keyword typed into the
+    'Target keyword' field / a KW: marker instead."""
+    # 0. The first-class 'Target keyword' field (the QA panel input) wins — the
+    #    obvious box for an untrained user, no marker/name convention needed.
+    field_kw = normalize_ws(task.get("qa_keyword"))
+    if field_kw:
+        return field_kw
+    # 1. An explicit 'Keyword:' / 'KW:' marker, in the description or the name.
+    for source in (task.get("description"), task.get("name")):
+        m = _KEYWORD_LINE_RE.search(source or "")
+        if m:
+            kw = normalize_ws(m.group(1).split("\n")[0])
+            if kw:
+                return kw
     name = normalize_ws(task.get("name"))
     lib = normalize_ws(task.get("library_task_name"))
     if not name:
@@ -629,7 +847,10 @@ def keyword_from_task(task: dict[str, Any]) -> Optional[str]:
             remainder = re.sub(re.escape(lib), "", name, count=1, flags=re.IGNORECASE)
             remainder = normalize_ws(remainder.strip(_SEP_STRIP))
             return remainder or None
-        return name  # fully renamed: the whole name IS the keyword
+        # Fully renamed: the whole name IS the keyword — but only when the caller
+        # allows it (post-type tasks). A website page's descriptive title is not
+        # its keyword, so that caller passes allow_full_name=False → None here.
+        return name if allow_full_name else None
     # No library link: the name must carry a recognizable template prefix for
     # the rubric to have matched at all — take what follows the separator.
     for sep in _NAME_SEPS:

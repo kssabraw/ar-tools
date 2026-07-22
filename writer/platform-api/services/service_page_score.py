@@ -184,6 +184,42 @@ async def score_external_page(
     return result
 
 
+def structural_deficiency(run: dict, snapshot: dict) -> Optional[dict]:
+    """A synthetic scorer-deficiency describing structural drift of the run's latest
+    service_writer page vs the client's reference structure, or None when the gate
+    is off / there's no reference / the layout already matches.
+
+    Folded into the single auto-reoptimize pass (see orchestrator Stage C) so the
+    writer fixes the drift through its existing deficiency channel — no extra
+    reopt, no pipeline-api change. Reads the reference from the frozen snapshot
+    (`page_structures['service'|'location']`). Best-effort: returns None on any
+    failure so it never blocks the run."""
+    if not settings.service_page_structure_gate_enabled:
+        return None
+    from services.page_structure_eval import (
+        extract_outline_from_html,
+        structure_deficiency as _deficiency,
+    )
+    from services.page_structure_render import usable_analysis
+
+    structures = snapshot.get("page_structures") or {}
+    key = "location" if run.get("content_type") == "location_page" else "service"
+    reference = usable_analysis(structures.get(key))
+    if not reference:
+        return None
+    sw = _latest_output(run["id"], "service_writer")
+    if not sw:
+        return None
+    try:
+        generated = extract_outline_from_html(build_scoring_html(sw.get("output_payload") or {}))
+    except Exception:  # noqa: BLE001 — structural scoring must never block the run
+        logger.warning("service_page.structure_extract_failed", extra={"run_id": run.get("id")})
+        return None
+    return _deficiency(
+        reference, generated, label=key, min_composite=settings.service_page_structure_min_composite
+    )
+
+
 async def _post_pipeline(path: str, payload: dict) -> dict:
     url = f"{settings.pipeline_api_url}{path}"
     async with httpx.AsyncClient(timeout=_PIPELINE_TIMEOUT) as client:

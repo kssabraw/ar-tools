@@ -37,6 +37,26 @@ def test_rubric_routing_checkable_types():
     assert sig.rubric_for(_task("Website Pages Posted")) == sig.RUBRIC_PAGE
 
 
+def test_rubric_explicit_override_wins():
+    # An explicit qa_rubric (the dropdown) beats name-matching AND the
+    # content_run producer, so the title can be anything.
+    t = _task("Coral Springs practice-management page")
+    t["qa_rubric"] = sig.RUBRIC_PAGE
+    assert sig.rubric_for(t) == sig.RUBRIC_PAGE
+    t2 = _task("Review & publish: roof repair", source="content_run")
+    t2["qa_rubric"] = sig.RUBRIC_SKIP
+    assert sig.rubric_for(t2) == sig.RUBRIC_SKIP
+    # An empty / unknown explicit value falls back to the name rules.
+    t3 = _task("Website Pages Posted")
+    t3["qa_rubric"] = ""
+    assert sig.rubric_for(t3) == sig.RUBRIC_PAGE
+    t4 = _task("Website Pages Posted")
+    t4["qa_rubric"] = "not_a_real_rubric"
+    assert sig.rubric_for(t4) == sig.RUBRIC_PAGE
+    # RUBRIC_KEYS covers every rubric constant.
+    assert sig.RUBRIC_PAGE in sig.RUBRIC_KEYS and sig.RUBRIC_SKIP in sig.RUBRIC_KEYS
+
+
 def test_rubric_routing_producer_and_library_precedence():
     # A content_run producer task is a blog article no matter its name.
     assert sig.rubric_for(_task("Review & publish: roof repair", source="content_run")) == sig.RUBRIC_BLOG
@@ -120,6 +140,18 @@ def test_link_back_present_and_absent():
 
 def test_link_back_no_domain_on_file_is_unverifiable():
     assert sig.check_link_back("<p>hi</p>", "")[0]["ok"] is None
+
+
+def test_link_back_rejects_lookalike_and_superstring_domains():
+    # Host-boundary match: a link to a domain that merely CONTAINS the client
+    # domain as a substring must NOT count as a link back (was a false PASS).
+    look = '<p><a href="https://bestroofing.com/x">x</a></p>'
+    assert sig.build_verdict(sig.check_link_back(look, "roofing.com"))["verdict"] == sig.FAIL
+    sup = '<p><a href="https://notclient.com/x">x</a></p>'
+    assert sig.build_verdict(sig.check_link_back(sup, "client.com"))["verdict"] == sig.FAIL
+    # A genuine subdomain of the client still counts.
+    sub = '<p><a href="https://blog.client.com/x">x</a></p>'
+    assert sig.build_verdict(sig.check_link_back(sub, "client.com"))["verdict"] == sig.PASS
 
 
 # ---------------------------------------------------------------------------
@@ -240,18 +272,154 @@ def test_blog_markdown_long_paragraph_is_advisory_not_blocking():
 def test_website_page_checks():
     html = """<html><head><title>Roof Repair Springfield | Acme</title>
     <meta name="description" content="Expert roof repair."></head>
-    <body><img src="x.jpg" alt="roof"><a href="https://acme.com/contact">contact</a>
+    <body><h1>Roof Repair Springfield</h1>
+    <img src="x.jpg" alt="roof"><a href="https://acme.com/contact">contact</a>
     <p>Acme Roofing serves Springfield.</p></body></html>"""
-    v = sig.build_verdict(sig.check_website_page(html, "acme.com", "Acme Roofing"))
+    v = sig.build_verdict(sig.check_website_page(
+        html, "acme.com", "Acme Roofing",
+        keyword="roof repair springfield",
+        url="https://acme.com/roof-repair-springfield/",
+    ))
     assert v["verdict"] == sig.PASS
 
 
-def test_website_page_missing_meta_fails():
+def test_website_page_missing_meta_title_fails_but_description_is_advisory():
+    # No title, no meta description, no H1. Meta title is still blocking (fails);
+    # meta description is now advisory (owner ruling) — it must NOT appear as a
+    # blocking failure.
     html = "<html><body><a href='https://acme.com/x'>x</a><img src='a.jpg' alt='a'></body></html>"
-    v = sig.build_verdict(sig.check_website_page(html, "acme.com", "Acme"))
+    checks = sig.check_website_page(html, "acme.com", "Acme",
+                                    keyword="roofing", url="https://acme.com/x")
+    v = sig.build_verdict(checks)
     assert v["verdict"] == sig.FAIL
     labels = " ".join(v["failed"]).lower()
-    assert "meta title" in labels and "meta description" in labels
+    assert "meta title" in labels
+    assert "meta description" not in labels
+    md = next(c for c in checks if c["key"] == "meta_description")
+    assert md["blocking"] is False and md["ok"] is False
+
+
+def test_website_page_meta_description_optional():
+    # Everything present except the meta description → still passes (advisory).
+    html = """<html><head><title>Practice Management Coral Springs</title></head>
+    <body><h1>Practice Management Coral Springs</h1>
+    <img src="x.jpg" alt="x"><a href="https://myihbs.com/contact">contact</a>
+    <p>IHBS provides practice management in Coral Springs.</p></body></html>"""
+    checks = sig.check_website_page(
+        html, "myihbs.com", "IHBS",
+        keyword="practice management coral springs",
+        url="https://www.myihbs.com/coral-springs/practice-management-coral-springs/",
+    )
+    assert sig.build_verdict(checks)["verdict"] == sig.PASS
+
+
+def test_website_page_client_name_blocking_and_exact():
+    base = ("<html><head><title>Practice Management Coral Springs</title></head>"
+            "<body><h1>Practice Management Coral Springs</h1>"
+            "<img src='x.jpg' alt='x'><a href='https://myihbs.com/contact'>contact</a>"
+            "{body}</body></html>")
+    kw, url = "practice management coral springs", "https://myihbs.com/practice-management-coral-springs/"
+    # Correct exact name present → passes.
+    ok = sig.check_website_page(base.format(body="<p>IHBS serves Coral Springs.</p>"),
+                                "myihbs.com", "IHBS", keyword=kw, url=url)
+    assert sig.build_verdict(ok)["verdict"] == sig.PASS
+    # Name absent → the client_name check is blocking now → FAIL.
+    missing = sig.check_website_page(base.format(body="<p>We serve Coral Springs.</p>"),
+                                     "myihbs.com", "IHBS", keyword=kw, url=url)
+    v = sig.build_verdict(missing)
+    assert v["verdict"] == sig.FAIL
+    assert any("business name" in f.lower() for f in v["failed"])
+    # No name on file → could-not-verify (needs_human), never an auto-fail.
+    unknown = sig.check_website_page(base.format(body="<p>hi</p>"),
+                                     "myihbs.com", None, keyword=kw, url=url)
+    assert next(c for c in unknown if c["key"] == "client_name")["ok"] is None
+
+
+def test_name_present_is_bounded():
+    # Whole-name presence, case/space-insensitive.
+    assert sig._name_present("Welcome to IHBS Marketing", "IHBS") is True
+    assert sig._name_present("Acme  Roofing  Co", "acme roofing co") is True
+    # Must not match inside a larger word.
+    assert sig._name_present("These are exhibits and inhibits", "IHBS") is False
+    assert sig._name_present("anything", None) is None
+
+
+def test_website_page_keyword_placement_blocking():
+    # Keyword in title + H1 but NOT in the URL slug → blocking fail on the URL.
+    html = """<html><head><title>Emergency Plumber Miami</title></head>
+    <body><h1>Emergency Plumber Miami</h1><a href="https://acme.com/x">x</a>
+    <img src="a.jpg" alt="a"></body></html>"""
+    checks = sig.check_website_page(
+        html, "acme.com", None,
+        keyword="emergency plumber miami", url="https://acme.com/services/plumbing/",
+    )
+    by = {c["key"]: c for c in checks}
+    assert by["keyword_in_title"]["ok"] is True
+    assert by["keyword_in_h1"]["ok"] is True
+    assert by["keyword_in_url"]["ok"] is False
+    assert sig.build_verdict(checks)["verdict"] == sig.FAIL
+
+
+def test_website_page_keyword_token_coverage_tolerates_reordered_title():
+    # A separator/reordered title + H1 (the keyword's words are all present but
+    # not as one verbatim phrase) must PASS — the exact-substring form used to
+    # false-fail these. Root-relative internal link + business name present.
+    html = """<html><head><title>Practice Management Services | Coral Springs FL</title></head>
+    <body><h1>Practice Management Services | Coral Springs</h1>
+    <p>Client Co serves Coral Springs.</p>
+    <a href="/contact">Contact</a><img src="a.jpg" alt="a"></body></html>"""
+    checks = sig.check_website_page(
+        html, "client.com", "Client Co",
+        keyword="practice management services in coral springs",
+        url="https://client.com/practice-management-services-in-coral-springs/",
+    )
+    by = {c["key"]: c for c in checks}
+    assert by["keyword_in_title"]["ok"] is True
+    assert by["keyword_in_h1"]["ok"] is True
+    assert by["internal_link"]["ok"] is True  # root-relative link counts
+    assert sig.build_verdict(checks)["verdict"] == sig.PASS
+
+
+def test_keyword_tokens_present_requires_every_significant_word():
+    kw = "practice management services in coral springs"
+    assert sig.keyword_tokens_present("Coral Springs Practice Management Services", kw) is True
+    assert sig.keyword_tokens_present("Practice Services Coral Springs", kw) is False  # missing 'management'
+    assert sig.keyword_tokens_present("anything", None) is None
+
+
+def test_internal_anchors_counts_root_relative_and_domain():
+    anchors = [
+        {"href": "/contact", "text": "a"},           # root-relative → internal
+        {"href": "//cdn.other.com/x", "text": "b"},  # protocol-relative other → not
+        {"href": "https://client.com/about", "text": "c"},  # absolute same → internal
+        {"href": "https://elsewhere.com", "text": "d"},     # external → not
+    ]
+    got = sig.internal_anchors(anchors, "client.com")
+    hrefs = {a["href"] for a in got}
+    assert hrefs == {"/contact", "https://client.com/about"}
+
+
+def test_website_page_keyword_unknown_needs_human():
+    # No keyword on the task → the three placement checks read 'could not verify'
+    # → needs_human (never a guess), everything else being fine.
+    html = """<html><head><title>Some Page</title></head>
+    <body><h1>Some Page</h1><a href="https://acme.com/x">x</a>
+    <img src="a.jpg" alt="a"></body></html>"""
+    checks = sig.check_website_page(html, "acme.com", None, keyword=None, url="https://acme.com/x")
+    by = {c["key"]: c for c in checks}
+    assert by["keyword_in_title"]["ok"] is None
+    assert by["keyword_in_url"]["ok"] is None
+    assert by["keyword_in_h1"]["ok"] is None
+    assert sig.build_verdict(checks)["verdict"] == sig.NEEDS_HUMAN
+
+
+def test_keyword_in_url():
+    assert sig.keyword_in_url(
+        "https://x.com/practice-management-services-in-coral-springs/",
+        "practice management services") is True
+    assert sig.keyword_in_url("https://x.com/about/", "roof repair") is False
+    assert sig.keyword_in_url("https://x.com/x", None) is None
+    assert sig.keyword_in_url(None, "roofing") is None
 
 
 # ---------------------------------------------------------------------------
@@ -319,12 +487,66 @@ def test_keyword_from_task_name_convention():
     assert sig.keyword_from_task({}) is None
 
 
+def test_keyword_from_task_full_name_gate_for_website_pages():
+    # A fully-renamed page task: the descriptive title must NOT become the
+    # keyword when the caller disallows it (website pages) — else the title
+    # would be checked against title/URL/H1 and guarantee a false FAIL.
+    task = {"name": "Fix the homepage hero", "library_task_name": "Website Pages Posted"}
+    assert sig.keyword_from_task(task, allow_full_name=True) == "Fix the homepage hero"
+    assert sig.keyword_from_task(task, allow_full_name=False) is None
+    # An explicit field / marker still wins even with the fallback off.
+    assert sig.keyword_from_task(
+        {**task, "qa_keyword": "practice management coral springs"},
+        allow_full_name=False,
+    ) == "practice management coral springs"
+    # 'Template — keyword' extraction is unaffected by the gate.
+    assert sig.keyword_from_task(
+        {"name": "Website Pages Posted — coral springs plumber",
+         "library_task_name": "Website Pages Posted"},
+        allow_full_name=False,
+    ) == "coral springs plumber"
+
+
 def test_keyword_from_task_description_override_still_wins():
     assert sig.keyword_from_task(
         {"name": "GBP Posts — wrong thing", "library_task_name": "GBP Posts",
          "description": "Keyword: roof repair\nNotes: x"}
     ) == "roof repair"
     assert sig.keyword_from_task({"description": "keywords - emergency plumber"}) == "emergency plumber"
+
+
+def test_keyword_from_task_field_wins():
+    # The first-class 'Target keyword' field beats markers AND the name.
+    assert sig.keyword_from_task({
+        "qa_keyword": "roof repair miami",
+        "name": "KW: something else",
+        "description": "Keyword: another thing",
+    }) == "roof repair miami"
+    # Empty field falls through to the marker/name conventions.
+    assert sig.keyword_from_task({"qa_keyword": "  ", "description": "KW: burst pipe"}) == "burst pipe"
+
+
+def test_keyword_from_task_kw_marker_in_description_or_title():
+    # Short 'KW:' form is accepted (description).
+    assert sig.keyword_from_task({"description": "KW: practice management coral springs"}) \
+        == "practice management coral springs"
+    assert sig.keyword_from_task({"description": "kw - blocked drain sydney"}) == "blocked drain sydney"
+    # The marker is also honoured anywhere in the TASK NAME/title.
+    assert sig.keyword_from_task({"name": "Coral Springs page  KW: practice management services"}) \
+        == "practice management services"
+    assert sig.keyword_from_task({"name": "Keyword: emergency plumber brisbane"}) \
+        == "emergency plumber brisbane"
+    # Description marker still wins over a name marker.
+    assert sig.keyword_from_task(
+        {"description": "KW: roof restoration", "name": "KW: wrong keyword"}
+    ) == "roof restoration"
+    # A name with a plain separator (no marker) still uses the template split —
+    # 'kw'/'keyword' must be present to trigger the marker path, so this is
+    # unaffected.
+    assert sig.keyword_from_task({"name": "Review & publish: roof repair"}) == "roof repair"
+    assert sig.keyword_from_task(
+        {"name": "GBP Posts — emergency roof repair", "library_task_name": "GBP Posts"}
+    ) == "emergency roof repair"
 
 
 def test_deliverable_subtask_name_matches_and_is_not_work_item():
@@ -401,6 +623,21 @@ def test_links_to_domain_www_prefix_only():
     assert sig.links_to_domain(anchors, "www.westroofing.com") == [anchors[0]]
     # No spurious match against an unrelated domain.
     assert sig.links_to_domain([{"href": "https://estroofing.com", "text": "z"}], "westroofing.com") == []
+
+
+def test_is_safe_fetch_url_blocks_internal_targets():
+    blocked = [
+        "http://169.254.169.254/latest/meta-data/",  # cloud metadata (link-local)
+        "http://localhost:8080/x",
+        "http://10.0.0.5/x", "http://192.168.1.1/", "http://127.0.0.1/",
+        "http://foo.railway.internal/x", "http://db.local/",
+        "file:///etc/passwd", "ftp://host/x", "http://[::1]/",
+        "", None,
+    ]
+    for u in blocked:
+        assert sig.is_safe_fetch_url(u) is False, u
+    for u in ("https://myihbs.com/coral-springs/", "http://example.com/page", "https://8.8.8.8/"):
+        assert sig.is_safe_fetch_url(u) is True, u
 
 
 def test_has_map_embed_precedence():

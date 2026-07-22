@@ -32,16 +32,33 @@ _SYSTEM_PROMPT = (
 )
 
 
-async def scrapeowl_fetch(url: str, timeout: int = 45) -> str:
-    """Fetch raw HTML via ScrapeOwl."""
-    payload = {
+async def scrapeowl_fetch(
+    url: str, timeout: int = 45, *, render_js: bool = False, premium: bool = False
+) -> str:
+    """Fetch raw HTML via ScrapeOwl.
+
+    ``render_js`` runs the page's JavaScript before returning HTML; ``premium``
+    routes through ScrapeOwl's premium residential proxies. Both default off
+    (the cheap datacenter path); callers opt in — e.g. a reference-page scrape
+    retries with both when a plain fetch comes back empty (bot-blocked)."""
+    payload: dict[str, Any] = {
         "api_key": settings.scrapeowl_api_key,
         "url": url,
-        "render_js": False,
+        "render_js": render_js,
     }
+    if premium:
+        payload["premium_proxies"] = True
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(_SCRAPEOWL_URL, json=payload)
-        response.raise_for_status()
+        # Surface ScrapeOwl's own error message (it lives in the response body,
+        # which raise_for_status() drops) so callers can log WHY a request was
+        # rejected — e.g. an unsupported option or a rendering failure.
+        if response.status_code >= 400:
+            try:
+                body = response.text[:400]
+            except Exception:
+                body = ""
+            raise RuntimeError(f"scrapeowl HTTP {response.status_code}: {body}")
         data = response.json()
         return data.get("html") or data.get("content") or ""
 

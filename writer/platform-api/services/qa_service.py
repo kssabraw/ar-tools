@@ -29,9 +29,13 @@ hosts it. Not freeze-gated: QA is observation, not content creation.
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import logging
 import re
+import socket
 from typing import Any, Optional
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -43,6 +47,36 @@ from services import task_service
 logger = logging.getLogger(__name__)
 
 _UA = "Mozilla/5.0 (compatible; ARTools-QA/1.0)"
+_MAX_FETCH_REDIRECTS = 5
+_MAX_FETCH_BYTES = 8_000_000  # cap a page/CSV body so a huge response can't OOM
+
+
+def _host_resolves_public(host: str) -> bool:
+    """True when EVERY IP ``host`` resolves to is public — the DNS half of the
+    SSRF guard (a hostname pointing at a private/loopback/link-local address is
+    blocked). Blocking DNS; call via a thread. Unresolvable → False (fail-closed
+    on the fetch → the page reads needs_human, never a blind internal request)."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return False
+    return True
+
+
+async def _safe_target(url: str) -> bool:
+    """SSRF gate: syntax/IP-literal guard (pure) + a DNS-resolution check."""
+    if not sig.is_safe_fetch_url(url):
+        return False
+    host = (urlparse(url).hostname or "")
+    return await asyncio.to_thread(_host_resolves_public, host)
 
 
 # ---------------------------------------------------------------------------
@@ -131,17 +165,40 @@ def enqueue_qa_review(task_id: str, *, trigger: str = "manual") -> Optional[str]
 # Gathering helpers (IO)
 # ---------------------------------------------------------------------------
 async def _fetch(url: str) -> Optional[str]:
-    """Fetch a page/CSV; None on any failure (fail-open → needs_human)."""
+    """Fetch a page/CSV; None on any failure (fail-open → needs_human).
+
+    SSRF-guarded: redirects are followed MANUALLY so every hop (not just the
+    first) is re-validated against the private-network blocklist + DNS check,
+    and the body is capped at ``_MAX_FETCH_BYTES`` so a huge response can't OOM
+    the worker."""
     try:
         async with httpx.AsyncClient(
             timeout=settings.qa_fetch_timeout_seconds,
-            follow_redirects=True,
+            follow_redirects=False,
             headers={"User-Agent": _UA},
         ) as client:
-            resp = await client.get(url)
-            if resp.status_code >= 400:
-                return None
-            return resp.text
+            current = url
+            for _ in range(_MAX_FETCH_REDIRECTS + 1):
+                if not await _safe_target(current):
+                    return None
+                async with client.stream("GET", current) as resp:
+                    if resp.is_redirect:
+                        loc = resp.headers.get("location")
+                        if not loc:
+                            return None
+                        current = urljoin(current, loc)
+                        continue
+                    if resp.status_code >= 400:
+                        return None
+                    chunks: list[bytes] = []
+                    total = 0
+                    async for chunk in resp.aiter_bytes():
+                        chunks.append(chunk)
+                        total += len(chunk)
+                        if total > _MAX_FETCH_BYTES:
+                            break
+                    return b"".join(chunks).decode(resp.encoding or "utf-8", errors="replace")
+            return None  # too many redirects
     except Exception:
         return None
 
@@ -161,6 +218,8 @@ async def _broken_assets(asset_urls: list[str]) -> list[str]:
         ) as client:
             for url in asset_urls:
                 try:
+                    if not await _safe_target(url):
+                        continue  # never probe an internal/unsafe target
                     resp = await client.head(url)
                     if resp.status_code in (405, 501):
                         resp = await client.get(url)
@@ -185,9 +244,13 @@ def _client_fields(client: Optional[dict]) -> dict[str, Any]:
 
 
 def _deliverable_urls(task: dict, subtasks: list[dict], attachments_text: str) -> list[str]:
-    """URLs from the 'Deliverable links' subtask(s) (name + description), any
-    .txt attachment content, then the task description — deduped, capped."""
+    """URLs from the first-class 'Page URL to review' field, then the
+    'Deliverable links' subtask(s) (name + description), any .txt attachment
+    content, then the task description — deduped, capped. The explicit field is
+    first so it wins for single-URL rubrics."""
     chunks: list[str] = []
+    if (task.get("deliverable_url") or "").strip():
+        chunks.append(task["deliverable_url"])
     for s in subtasks:
         if sig.is_deliverable_subtask(s.get("name")):
             chunks.extend([s.get("name") or "", s.get("description") or ""])
@@ -389,17 +452,26 @@ def _run_keyword(run_id: str) -> Optional[str]:
 # The review itself
 # ---------------------------------------------------------------------------
 async def run_qa_review_job(job: dict) -> None:
+    """Async-job wrapper: run the review and discard the row (the panel +
+    notifications carry the result)."""
     payload = job.get("payload") or {}
     task_id = payload.get("task_id")
-    trigger = payload.get("trigger") or "status"
     if not task_id:
         raise ValueError("qa_review: missing task_id")
+    await review_task(str(task_id), trigger=payload.get("trigger") or "status")
 
+
+async def review_task(task_id: str, *, trigger: str = "manual") -> Optional[dict]:
+    """Run one task's QA review end-to-end (rubric → verdict → persist → board
+    outcome) and RETURN the persisted ``qa_reviews`` row (verdict / checks /
+    issues / narrative / composite), or None when the task is gone or already
+    closed. Shared by the async job AND the /qa chat's confirm path, which
+    formats the returned detail inline so a failure explains itself in chat."""
     supabase = get_supabase()
     rows = supabase.table("tasks").select("*").eq("id", task_id).limit(1).execute().data
     if not rows:
         logger.warning("qa_review_task_gone", extra={"task_id": task_id})
-        return
+        return None
     task = rows[0]
     # The enqueue guard ran at transition time; the task may have been
     # completed or trashed while the job sat in the queue. Reviewing it then
@@ -407,7 +479,7 @@ async def run_qa_review_job(job: dict) -> None:
     # the board) or grow subtasks under a trashed one — skip instead.
     if task.get("completed") or task.get("deleted_at"):
         logger.info("qa_review_task_closed_before_run", extra={"task_id": task_id})
-        return
+        return None
     client = None
     if task.get("client_id"):
         crows = (
@@ -475,6 +547,7 @@ async def run_qa_review_job(job: dict) -> None:
     logger.info("qa_review_done", extra={
         "task_id": task_id, "rubric": rubric, "verdict": verdict["verdict"],
     })
+    return review
 
 
 async def _run_rubric(
@@ -487,7 +560,10 @@ async def _run_rubric(
         supabase.table("tasks").select("name, description")
         .eq("parent_task_id", task["id"]).is_("deleted_at", "null").execute()
     ).data or []
-    keyword = sig.keyword_from_task(task)
+    # A website page's descriptive title is NOT its keyword — a renamed page must
+    # supply the keyword via the field / a KW: marker, or the checks read
+    # 'could not verify' (needs_human), never a false FAIL against the title.
+    keyword = sig.keyword_from_task(task, allow_full_name=rubric != sig.RUBRIC_PAGE)
     composite: Optional[float] = None
 
     if rubric == sig.RUBRIC_BLOG:
@@ -587,53 +663,108 @@ async def _run_rubric(
         if html is None:
             return ([sig._check("page", "Posted page reachable", None,
                                 note="page unreachable/blocked")], examined, None)
-        checks = sig.check_website_page(html, fields["domain"], fields["business_name"])
-        # Structural design fit vs the stored reference (QA_Checklists §Website
-        # Pages Posted, "design fit — structural"). Page-type attribution is
-        # heuristic, so a low score reads needs_human, never an auto-bounce.
-        structural = _structural_fit(html, client)
-        if structural is not None:
-            composite, note = structural
-            ok: Optional[bool] = True if composite >= settings.qa_structural_threshold else None
-            checks.append(sig._check(
-                "structural_fit", "Design fit (structural) vs reference page", ok,
-                note=f"fidelity {composite:.0f}/100 — {note}",
-            ))
-        # Design fit — VISUAL (QA_Checklists §Website Pages Posted, the "later
-        # phase" now built). Two layers:
-        # 1. Asset integrity (free, deterministic): a 404'd stylesheet or
-        #    image breaks the render without needing a screenshot to prove it.
-        assets = sig.asset_urls_of(html, url, cap=settings.qa_asset_check_cap)
-        asset_list = assets["stylesheets"] + assets["images"]
-        if asset_list:
-            dead = await _broken_assets(asset_list)
-            checks.append(sig._check(
-                "asset_integrity", "Page assets load (CSS + images)", not dead,
-                note=("dead: " + ", ".join(dead[:3]) + (" …" if len(dead) > 3 else ""))
-                if dead else f"{len(asset_list)} asset(s) OK",
-            ))
-        # 2. Rendered screenshot judged by vision (DataForSEO capture — no
-        #    Chromium in the image; only HIGH-confidence breakage bounces,
-        #    everything uncertain is fail-open needs_human).
-        if settings.qa_visual_enabled:
-            from services import qa_visual
-
-            checks.append(await qa_visual.visual_check(url))
+        checks, composite = await _website_page_checks(
+            html, url, fields, client, keyword=keyword, page_type=task.get("qa_page_type"),
+        )
         return (checks, examined, composite)
 
     return ([], [], None)
 
 
-def _structural_fit(html: str, client: Optional[dict]) -> Optional[tuple[float, str]]:
-    """Structural fidelity vs the client's stored reference page structure
-    (service reference first — the most common posted type). None when no
-    reference is stored."""
+async def _website_page_checks(
+    html: str, url: str, fields: dict, client: Optional[dict],
+    keyword: Optional[str] = None, page_type: Optional[str] = None,
+) -> tuple[list[dict], Optional[float]]:
+    """The website-page QA checks (QA_Checklists §Website Pages Posted) for a
+    fetched page — shared by the ``website_page`` rubric (task deliverable, which
+    supplies ``keyword`` + an optional ``page_type``) and the bare-URL
+    ``review_url`` path. Returns (checks, composite_or_none)."""
+    checks = sig.check_website_page(
+        html, fields["domain"], fields["business_name"], keyword=keyword, url=url,
+    )
+    composite: Optional[float] = None
+    # Structural design fit vs the stored reference. ``page_type`` (the task's
+    # 'Page type' dropdown) picks the matching reference; unset falls back to
+    # the service → local_landing → location priority. Attribution is heuristic,
+    # so a low score reads needs_human, never an auto-bounce.
+    structural = _structural_fit(html, client, page_type)
+    if structural is not None:
+        composite, note = structural
+        ok: Optional[bool] = True if composite >= settings.qa_structural_threshold else None
+        checks.append(sig._check(
+            "structural_fit", "Design fit (structural) vs reference page", ok,
+            note=f"fidelity {composite:.0f}/100 — {note}",
+        ))
+    else:
+        # No usable reference page structure on file (none stored, or a thin one
+        # with zero captured sections — scoring against which yields a
+        # meaningless ~50/100 artifact). Report the real situation + the fix, as
+        # an ADVISORY so it never bounces the page. Capturing a reference page
+        # URL for this page type on the client form enables the check.
+        checks.append(sig._check(
+            "structural_fit", "Design fit (structural) vs reference page", None,
+            blocking=False,
+            note="no reference page structure on file for this page type — add a "
+                 "reference page URL on the client form to enable this check",
+        ))
+    # Design fit — VISUAL. Two layers:
+    # 1. Asset integrity (free, deterministic): a 404'd stylesheet or image
+    #    breaks the render without needing a screenshot to prove it.
+    assets = sig.asset_urls_of(html, url, cap=settings.qa_asset_check_cap)
+    asset_list = assets["stylesheets"] + assets["images"]
+    if asset_list:
+        dead = set(await _broken_assets(asset_list))
+        # A dead STYLESHEET breaks the render → blocking. A dead IMAGE is a
+        # broken-image slot on an otherwise-fine page → advisory (owner ruling
+        # 2026-07-22: don't bounce a page over one 404'd image).
+        dead_css = [u for u in assets["stylesheets"] if u in dead]
+        dead_img = [u for u in assets["images"] if u in dead]
+        if assets["stylesheets"]:
+            checks.append(sig._check(
+                "asset_integrity", "Stylesheets load", not dead_css,
+                note=("dead CSS: " + ", ".join(dead_css[:3]) + (" …" if len(dead_css) > 3 else ""))
+                if dead_css else f"{len(assets['stylesheets'])} stylesheet(s) OK",
+            ))
+        if assets["images"]:
+            checks.append(sig._check(
+                "image_assets", "Images load", not dead_img, blocking=False,
+                note=("dead images: " + ", ".join(dead_img[:3]) + (" …" if len(dead_img) > 3 else ""))
+                if dead_img else f"{len(assets['images'])} image(s) OK",
+            ))
+    # 2. Rendered screenshot judged by vision (DataForSEO capture — no Chromium
+    #    in the image; only HIGH-confidence breakage bounces, everything
+    #    uncertain is fail-open needs_human).
+    if settings.qa_visual_enabled:
+        from services import qa_visual
+
+        checks.append(await qa_visual.visual_check(url))
+    return checks, composite
+
+
+def _structural_fit(
+    html: str, client: Optional[dict], page_type: Optional[str] = None
+) -> Optional[tuple[float, str]]:
+    """Structural fidelity vs the client's stored reference page structure.
+
+    ``page_type`` (the task's 'Page type' dropdown) selects which reference to
+    compare against; when unset/invalid it falls back to service →
+    local_landing → location priority. None when no usable reference is stored."""
     try:
         from services import page_structure_eval as pse
 
         structures = (client or {}).get("page_structures") or {}
-        ref = structures.get("service") or structures.get("local_landing") or structures.get("location")
+        if page_type and page_type in sig.WEBSITE_PAGE_TYPES:
+            ref = structures.get(page_type)
+        else:
+            ref = structures.get("service") or structures.get("local_landing") or structures.get("location")
         if not ref:
+            return None
+        # A reference with zero captured sections is not a usable baseline:
+        # scoring against it produces a meaningless ~50/100 (the section &
+        # heading-order dimensions score 0 for lack of anything to compare, the
+        # rest default to full credit). Treat it as "no reference" so QA reports
+        # the real situation (capture a reference) rather than a phantom score.
+        if pse._section_count(pse._analysis_of(ref)) <= 0:
             return None
         outline = pse.extract_outline_from_html(html)
         result = pse.score_structural_fidelity(ref, outline)
@@ -729,3 +860,250 @@ def list_reviews(task_id: str, limit: int = 20) -> list[dict]:
         get_supabase().table("qa_reviews").select("*")
         .eq("task_id", task_id).order("created_at", desc=True).limit(limit).execute()
     ).data or []
+
+
+# ---------------------------------------------------------------------------
+# Readiness — plain-English "can QA run yet?" for the task drawer (no LLM)
+# ---------------------------------------------------------------------------
+_READINESS_LABELS = {
+    sig.RUBRIC_PAGE: "Website page", sig.RUBRIC_BLOG: "Blog article",
+    sig.RUBRIC_GBP_POSTS: "GBP post", sig.RUBRIC_CITATIONS: "Citations",
+    sig.RUBRIC_GUEST_POST: "Guest post", sig.RUBRIC_NICHE_EDIT: "Niche edit",
+    sig.RUBRIC_PRESS_RELEASE: "Press release", sig.RUBRIC_MAP_EMBEDS: "Map embeds",
+    sig.RUBRIC_SKIP: "Not QA-checked", sig.RUBRIC_HANDOFF: "SerMaStr territory",
+    sig.RUBRIC_GENERIC: "No checklist for this type",
+}
+# Public alias — the plain-English name of a rubric, reused by the /qa persona.
+RUBRIC_LABELS = _READINESS_LABELS
+_URL_RUBRICS = {
+    sig.RUBRIC_PAGE, sig.RUBRIC_CITATIONS, sig.RUBRIC_GUEST_POST,
+    sig.RUBRIC_NICHE_EDIT, sig.RUBRIC_PRESS_RELEASE, sig.RUBRIC_MAP_EMBEDS,
+}
+
+
+def assess_readiness(task_id: str) -> dict:
+    """Can QA actually run on this task yet, and if not, what's missing — in
+    plain English for an untrained VA. Resolves the rubric + inputs exactly as
+    the review does (explicit fields → conventions → source auto-detect) and
+    returns {rubric, rubric_label, ready, have, missing, autodetected, notes}."""
+    supabase = get_supabase()
+    rows = supabase.table("tasks").select("*").eq("id", task_id).limit(1).execute().data
+    if not rows:
+        return {"ready": False, "rubric": None, "rubric_label": "", "have": [],
+                "missing": ["task not found"], "autodetected": {}, "notes": []}
+    task = rows[0]
+    rubric = sig.rubric_for(task)
+    out = {"rubric": rubric, "rubric_label": _READINESS_LABELS.get(rubric, rubric),
+           "ready": True, "have": [], "missing": [], "autodetected": {}, "notes": []}
+
+    if rubric == sig.RUBRIC_SKIP:
+        out["notes"].append("This deliverable type isn't QA-checked — nothing to set up.")
+        return out
+    if rubric == sig.RUBRIC_HANDOFF:
+        out["ready"] = False
+        out["notes"].append("This is a strategy judgement — ask SerMaStr, not QA.")
+        return out
+    if rubric == sig.RUBRIC_GENERIC:
+        out["ready"] = False
+        out["missing"].append("a rubric — pick one from the Rubric dropdown")
+        out["notes"].append("No checklist matches this task yet. Pick a rubric so QA knows what to check.")
+        return out
+
+    if rubric in _URL_RUBRICS:
+        url, src = _readiness_deliverable(task)
+        if url:
+            out["have"].append("page URL")
+            if src == "auto":
+                out["autodetected"]["url"] = url
+        else:
+            out["missing"].append("the page URL to review")
+
+    if rubric == sig.RUBRIC_PAGE:
+        kw, src = _readiness_keyword(task)
+        if kw:
+            out["have"].append("target keyword")
+            if src == "auto":
+                out["autodetected"]["keyword"] = kw
+        else:
+            out["missing"].append("the target keyword")
+        # Client prerequisites (admin-set, once): flag rather than block.
+        fields = _client_fields(_readiness_client(task))
+        if not fields.get("business_name"):
+            out["notes"].append(
+                "No business name on file for this client — the name check can't run "
+                "(an admin can set it on the client form)."
+            )
+
+    if rubric == sig.RUBRIC_BLOG:
+        if task.get("source") == "content_run" and task.get("source_ref"):
+            out["have"].append("the finished article")
+        else:
+            out["missing"].append("a linked content run (blog QA runs on a generated article)")
+
+    if rubric == sig.RUBRIC_GBP_POSTS:
+        subtasks = _readiness_subtasks(task["id"])
+        copy = "\n".join(
+            s.get("description") or "" for s in subtasks if sig.is_deliverable_subtask(s.get("name"))
+        ).strip() or (task.get("description") or "").strip()
+        if copy:
+            out["have"].append("post copy")
+        else:
+            out["missing"].append("the post copy (in the task description or a 'Deliverable' subtask)")
+
+    out["ready"] = not out["missing"]
+    return out
+
+
+def _readiness_subtasks(task_id: str) -> list[dict]:
+    return (
+        get_supabase().table("tasks").select("name, description")
+        .eq("parent_task_id", task_id).is_("deleted_at", "null").execute()
+    ).data or []
+
+
+def _readiness_deliverable(task: dict) -> tuple[Optional[str], str]:
+    """Resolve the deliverable URL + where it came from ('field' | 'scan' |
+    'auto'). Explicit field → conventions (subtask/desc/attachments)."""
+    if (task.get("deliverable_url") or "").strip():
+        urls = sig.extract_urls(task["deliverable_url"])
+        if urls:
+            return urls[0], "field"
+    subtasks = _readiness_subtasks(task["id"])
+    urls = _deliverable_urls(task, subtasks, _txt_attachments_text(task["id"]))
+    if urls:
+        return urls[0], "scan"
+    return None, ""
+
+
+def _readiness_keyword(task: dict) -> tuple[Optional[str], str]:
+    """Resolve the target keyword + where it came from ('set' via field/marker/
+    name, or 'auto' from a linked content run). Called only for the website-page
+    rubric, so the renamed-name fallback is OFF — readiness must not claim a
+    keyword is present just because the page task has a descriptive title."""
+    kw = sig.keyword_from_task(task, allow_full_name=False)
+    if kw:
+        return kw, "set"
+    if task.get("source") == "content_run" and task.get("source_ref"):
+        run_kw = _run_keyword(task["source_ref"])
+        if run_kw:
+            return run_kw, "auto"
+    return None, ""
+
+
+def _readiness_client(task: dict) -> Optional[dict]:
+    cid = task.get("client_id")
+    if not cid:
+        return None
+    rows = (
+        get_supabase().table("clients").select("id, name, website_url, gbp")
+        .eq("id", cid).limit(1).execute()
+    ).data
+    return rows[0] if rows else None
+
+
+# ---------------------------------------------------------------------------
+# Bare-URL QA (no task) — the "QA this page" path for the /qa chat surface
+# ---------------------------------------------------------------------------
+# The URL rubrics: a bare live URL can only be graded by a rubric that examines
+# an external page (the blog/GBP-post rubrics read task/run content, not a URL).
+# Ordered longest-phrase-first so "niche edit" beats "edit"-style partials.
+_URL_RUBRIC_WORDS: list[tuple[str, str]] = [
+    ("press release", sig.RUBRIC_PRESS_RELEASE),
+    ("guest post", sig.RUBRIC_GUEST_POST),
+    ("niche edit", sig.RUBRIC_NICHE_EDIT),
+    ("map embed", sig.RUBRIC_MAP_EMBEDS),
+    ("citation", sig.RUBRIC_CITATIONS),
+    ("landing page", sig.RUBRIC_PAGE),
+    ("service page", sig.RUBRIC_PAGE),
+    ("location page", sig.RUBRIC_PAGE),
+    ("website page", sig.RUBRIC_PAGE),
+    ("web page", sig.RUBRIC_PAGE),
+    ("page", sig.RUBRIC_PAGE),
+]
+_URL_RUBRICS = {
+    sig.RUBRIC_PAGE, sig.RUBRIC_GUEST_POST, sig.RUBRIC_NICHE_EDIT,
+    sig.RUBRIC_PRESS_RELEASE, sig.RUBRIC_CITATIONS, sig.RUBRIC_MAP_EMBEDS,
+}
+
+
+def resolve_url_rubric(text: Optional[str]) -> str:
+    """Pick a URL rubric from free text ("QA this page", "check the guest post").
+    Falls back to the configured default (``website_page``). Pure — accepts an
+    explicit rubric key verbatim when the caller already resolved one."""
+    t = (text or "").strip().casefold()
+    if t in _URL_RUBRICS:
+        return t
+    for needle, rubric in _URL_RUBRIC_WORDS:
+        if needle in t:
+            return rubric
+    return settings.qa_url_default_rubric
+
+
+async def review_url(
+    url: str, client: Optional[dict] = None, rubric: Optional[str] = None,
+    keyword: Optional[str] = None,
+) -> dict:
+    """Run a QA review against a bare URL — no task, nothing persisted, no board
+    effects. The "QA this page" path for the /qa chat. Returns the same shape a
+    persisted ``qa_reviews`` row carries (rubric/verdict/composite/checks/issues/
+    urls/narrative) so callers format it identically.
+
+    ``client`` (optional) supplies NAP/domain/business-name for the NAP,
+    link-back, and assertion checks; without it those read "could not verify"
+    (needs_human), never a false pass. ``keyword`` (optional) enables the
+    keyword-placement checks on the website-page/press-release rubrics.
+    Unreachable page → needs_human."""
+    rub = rubric if rubric in _URL_RUBRICS else resolve_url_rubric(rubric)
+    fields = _client_fields(client)
+    html = await _fetch(url)
+    if html is None:
+        checks = [sig._check("page", "Page reachable", None, note="page unreachable/blocked")]
+        verdict = sig.build_verdict(checks)
+        return _url_review_payload(rub, verdict, checks, [url], None,
+                                   "The page couldn't be fetched (unreachable or bot-blocked) — "
+                                   "a human should open it directly.")
+
+    composite: Optional[float] = None
+    if rub == sig.RUBRIC_PAGE:
+        checks, composite = await _website_page_checks(html, url, fields, client, keyword=keyword)
+    elif rub in (sig.RUBRIC_GUEST_POST, sig.RUBRIC_NICHE_EDIT):
+        checks = sig.check_link_back(html, fields["domain"])
+    elif rub == sig.RUBRIC_PRESS_RELEASE:
+        checks = sig.check_press_release(
+            html, keyword, fields["business_name"], fields["address"],
+            fields["phone"], client_domain=fields["domain"],
+        )
+    elif rub == sig.RUBRIC_CITATIONS:
+        checks = [sig.check_citation_page(
+            sig.visible_text_of(html), fields["business_name"],
+            fields["address"], fields["phone"], url=url,
+        )]
+    elif rub == sig.RUBRIC_MAP_EMBEDS:
+        assertion_ok, assertion_note = await _judge_assertion(
+            sig.visible_text_of(html), fields["business_name"] or "", fields["service"],
+        )
+        checks = sig.check_map_embed_page(
+            html, fields["business_name"], fields["address"], fields["phone"],
+            assertion_ok=assertion_ok, assertion_note=assertion_note,
+        )
+    else:  # defensive — resolve_url_rubric only yields URL rubrics
+        checks, composite = await _website_page_checks(html, url, fields, client)
+
+    verdict = sig.build_verdict(checks)
+    narrative = sig.narrative_of(rub, verdict, [url])
+    return _url_review_payload(rub, verdict, checks, [url], composite, narrative)
+
+
+def _url_review_payload(rubric: str, verdict: dict, checks: list[dict],
+                        urls: list[str], composite: Optional[float],
+                        narrative: str) -> dict:
+    return {
+        "task_id": None,
+        "rubric": rubric,
+        "verdict": verdict["verdict"],
+        "composite": composite,
+        "checks": checks,
+        "issues": verdict["failed"],
+        "urls": urls,
+        "narrative": narrative,
+    }

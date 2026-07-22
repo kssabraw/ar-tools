@@ -76,6 +76,17 @@ class TaskUpdateRequest(BaseModel):
     sort_order: Optional[int] = None
     # Client-facing note (Weekly Pulse) — NOT the internal description.
     client_note: Optional[str] = None
+    # Explicit QA rubric override (qa_signals RUBRIC_*); "" / null = auto-detect
+    # from the task name. Validated against qa_signals.RUBRIC_KEYS at the router.
+    qa_rubric: Optional[str] = None
+    # Website-page sub-type for QA's structural design-fit reference selection
+    # (service / local_landing / location); "" / null = auto (priority order).
+    qa_page_type: Optional[str] = None
+    # First-class QA inputs (the guided panel) — the live page URL QA reviews
+    # and the target keyword; "" / null clears. Both are optional; the old
+    # subtask/marker conventions still work as fallbacks.
+    deliverable_url: Optional[str] = None
+    qa_keyword: Optional[str] = None
 
 
 class TaskSectionCreateRequest(BaseModel):

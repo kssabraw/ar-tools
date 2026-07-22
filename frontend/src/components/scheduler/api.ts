@@ -44,6 +44,9 @@ export interface CreateBody extends EstimateBody {
   auto_publish?: boolean
   wp_publish?: boolean
   wp_status?: 'draft' | 'publish'
+  // Blog posts only: auto-publish each finished post to the client's GitHub repo
+  // (via the image-generation SOP) right after it generates.
+  github_publish?: boolean
 }
 
 export interface EstimateResponse {
@@ -88,11 +91,35 @@ export interface ContentBatch {
   auto_publish: boolean
   wp_publish: boolean
   wp_status: 'draft' | 'publish'
+  github_publish?: boolean
   per_day?: number | null
   start_date?: string | null
   time_of_day?: string | null
   timezone?: string
   progress?: BatchProgress
+}
+
+export type ItemStatus =
+  | 'scheduled' | 'queued' | 'running' | 'complete' | 'failed' | 'cancelled'
+
+export interface ContentBatchItem {
+  id: string
+  keyword: string
+  location?: string | null
+  status: ItemStatus
+  scheduled_at?: string | null
+  result_kind?: string | null
+  result_ref?: string | null
+  error?: string | null
+  // Attached server-side for run-backed items: the live publish URL (GitHub /
+  // WordPress / Doc) and when it went live, or null when generated-but-not-published.
+  published_at?: string | null
+  published_url?: string | null
+}
+
+export interface ContentBatchDetail extends ContentBatch {
+  github_publish?: boolean
+  items: ContentBatchItem[]
 }
 
 export interface ScheduledContentItem {
@@ -103,6 +130,7 @@ export interface ScheduledContentItem {
   mode?: string | null
   status?: string | null
   created_at?: string | null
+  github_publish?: boolean
   progress: BatchProgress
 }
 
@@ -113,6 +141,8 @@ export const schedulerApi = {
     api.post<CreateResponse>(`/clients/${clientId}/content-batches`, body),
   listBatches: (clientId: string) =>
     api.get<{ batches: ContentBatch[] }>(`/clients/${clientId}/content-batches`),
+  batchDetail: (clientId: string, batchId: string) =>
+    api.get<ContentBatchDetail>(`/clients/${clientId}/content-batches/${batchId}`),
   scheduledContent: (clientId: string) =>
     api.get<{ items: ScheduledContentItem[] }>(`/clients/${clientId}/scheduled-content`),
   pauseBatch: (clientId: string, batchId: string) =>

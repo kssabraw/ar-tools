@@ -15,6 +15,11 @@ from typing import Literal, Optional
 from config import settings
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
+from services.blog_jsonld import (
+    build_blog_jsonld,
+    faqs_from_article,
+    inline_jsonld_script,
+)
 from services.github_publish import GitHubPublishError, publish_to_github
 from services.illustration import interleave_figures
 from services.google_docs import GoogleDocError, create_google_doc, resolve_drive_folder
@@ -75,6 +80,111 @@ async def illustrate_run(run_id: UUID, auth: dict = Depends(require_auth)) -> di
     if not enqueue_illustrate_run(str(run_id), force=True):
         raise HTTPException(status_code=502, detail="illustrate_enqueue_failed")
     return {"queued": True, "run_id": str(run_id)}
+
+
+@router.get("/runs/{run_id}/github-publish/status", response_model=dict)
+async def github_publish_status(
+    run_id: UUID,
+    job_id: str,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Poll a blog GitHub-publish job (image generation + atomic commit)."""
+    supabase = get_supabase()
+    try:
+        rows = (
+            supabase.table("async_jobs")
+            .select("id, status, result, error")
+            .eq("id", job_id)
+            .eq("entity_id", str(run_id))
+            .limit(1)
+            .execute()
+        ).data or []
+    except Exception as exc:  # noqa: BLE001 — a bad job_id must 404, not 500
+        logger.warning("github_publish_status_failed", extra={"run_id": str(run_id), "error": str(exc)})
+        rows = []
+    if not rows:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    row = rows[0]
+    out = {
+        "job_id": job_id,
+        "status": row.get("status"),
+        "result": row.get("result"),
+        "error": row.get("error"),
+    }
+    # Queue visibility: while pending, how many jobs are ahead on the
+    # interactive lane (pending earlier-scheduled + currently running).
+    # Approximate — lanes race — but enough for an honest "Queued (N ahead)".
+    if row.get("status") == "pending":
+        try:
+            job_row = (
+                supabase.table("async_jobs").select("scheduled_at").eq("id", job_id).limit(1).execute()
+            ).data or [{}]
+            sched = job_row[0].get("scheduled_at")
+            lane_types = list(settings.interactive_job_types)
+            ahead = 0
+            if sched:
+                ahead += (
+                    supabase.table("async_jobs").select("id", count="exact")
+                    .eq("status", "pending").in_("job_type", lane_types)
+                    .lt("scheduled_at", sched).execute()
+                ).count or 0
+            ahead += (
+                supabase.table("async_jobs").select("id", count="exact")
+                .eq("status", "running").in_("job_type", lane_types).execute()
+            ).count or 0
+            out["queue_ahead"] = ahead
+        except Exception:  # noqa: BLE001 — queue info is advisory
+            pass
+    return out
+
+
+@router.get("/runs/{run_id}/images", response_model=dict)
+async def list_run_images(run_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """The media assets generated for a run (for the review UI)."""
+    supabase = get_supabase()
+    try:
+        rows = (
+            supabase.table("blog_media_assets")
+            .select("id, asset_id, role, asset_type, alt_text, caption, preview_url, "
+                    "repo_path, status, used_fallback, error, skip_reason, plan")
+            .eq("run_id", str(run_id))
+            .order("asset_id")
+            .execute()
+        ).data or []
+    except Exception as exc:  # noqa: BLE001 — degrade to empty (e.g. pre-migration)
+        logger.warning("run_images_read_failed", extra={"run_id": str(run_id), "error": str(exc)})
+        rows = []
+    images = [
+        {
+            "id": r.get("id"),
+            "role": r.get("role"),
+            "kind": r.get("asset_type"),
+            "alt": r.get("alt_text"),
+            "preview_url": r.get("preview_url"),
+            "status": r.get("status"),
+            "used_fallback": r.get("used_fallback"),
+        }
+        for r in rows
+        # Only surface assets that actually produced a preview/committed image.
+        if r.get("preview_url") or r.get("status") in ("inserted", "uploaded")
+    ]
+    # Auditability: assets the pipeline dropped (a chart with an unsupported
+    # value, an unplaceable image, a render failure) with the reason + the raw
+    # chart spec, so "why is there no chart?" is answerable without a DB dig.
+    issues = [
+        {
+            "id": r.get("id"),
+            "asset_id": r.get("asset_id"),
+            "kind": r.get("asset_type"),
+            "status": r.get("status"),
+            "reason": r.get("skip_reason") or r.get("error"),
+            "alt": r.get("alt_text"),
+            "spec": r.get("plan"),
+        }
+        for r in rows
+        if r.get("status") in ("skipped", "failed")
+    ]
+    return {"images": images, "issues": issues}
 
 
 def _sections_to_markdown(article: list[dict]) -> str:
@@ -224,9 +334,9 @@ def _resolve_markdown(supabase, run_id: UUID, content_type: str) -> str:
 
 
 def _resolve_schema(supabase, run_id: UUID, content_type: str) -> str:
-    """The run's JSON-LD (@graph string) for the GitHub frontmatter. Service /
-    location pages carry `schema_jsonld` in the service_writer output; blog posts
-    have none today (a BlogPosting/FAQ graph is a follow-up)."""
+    """The run's JSON-LD (@graph string) for service / location pages, read from
+    the `schema_jsonld` the service_writer output carries. Blog posts build their
+    BlogPosting + FAQPage graph at publish time via `_resolve_blog_schema`."""
     if content_type not in ("service_page", "location_page"):
         return ""
     rows = (
@@ -240,6 +350,65 @@ def _resolve_schema(supabase, run_id: UUID, content_type: str) -> str:
     return (rows[0].get("output_payload") or {}).get("schema_jsonld") or ""
 
 
+def _resolve_blog_faqs(supabase, run_id: UUID) -> list[dict[str, str]]:
+    """The blog post's FAQ question/answer pairs (for the FAQPage node), read
+    from the sources_cited enriched article — the same source `_resolve_content`
+    reads for the body."""
+    rows = (
+        supabase.table("module_outputs")
+        .select("output_payload").eq("run_id", str(run_id))
+        .eq("module", "sources_cited").eq("status", "complete").execute()
+    ).data or []
+    if not rows:
+        return []
+    article = ((rows[0].get("output_payload") or {}).get("enriched_article") or {}).get("article") or []
+    return faqs_from_article(article)
+
+
+def _iso_date(value: str | None) -> str | None:
+    """The date portion (YYYY-MM-DD) of a Supabase ISO timestamp, or None."""
+    if not isinstance(value, str) or len(value) < 10:
+        return None
+    return value[:10]
+
+
+def _resolve_blog_schema(
+    supabase,
+    run_id: UUID,
+    *,
+    client: dict,
+    run: dict,
+    title: str,
+    image_url: str | None,
+) -> str:
+    """Build the blog post's BlogPosting + FAQPage JSON-LD @graph.
+
+    Deterministic, publish-time: title/FAQs come from the run's module outputs,
+    publisher/site from the client, dates from the run (published_at falls back to
+    created_at; dateModified is today)."""
+    from datetime import datetime, timezone
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    date_published = _iso_date(run.get("published_at")) or _iso_date(run.get("created_at")) or today
+    gbp = client.get("gbp") if isinstance(client.get("gbp"), dict) else {}
+    # sameAs: link the brand to its known profiles (the Google Business Profile).
+    same_as = [u for u in [gbp.get("google_maps_uri")] if u and str(u).strip()]
+    return build_blog_jsonld(
+        title=title,
+        faqs=_resolve_blog_faqs(supabase, run_id),
+        brand_name=client.get("name") or "",
+        # Prefer the client's canonical website; the WP site is only a fallback, so
+        # a post published to Astro/GitHub (no WP URL) still gets a brand URL/@id.
+        site_url=client.get("website_url") or client.get("wordpress_site_url") or "",
+        logo_url=client.get("logo_url") or gbp.get("logo") or None,
+        same_as=same_as or None,
+        telephone=gbp.get("phone") or None,
+        image_url=image_url,
+        date_published=date_published,
+        date_modified=today,
+    )
+
+
 @router.post("/runs/{run_id}/publish", response_model=dict)
 async def publish_run(
     run_id: UUID,
@@ -250,7 +419,7 @@ async def publish_run(
 
     run_result = (
         supabase.table("runs")
-        .select("id, client_id, keyword, status, content_type, featured_image_url")
+        .select("id, client_id, keyword, status, content_type, featured_image_url, created_at, published_at")
         .eq("id", str(run_id))
         .single()
         .execute()
@@ -266,7 +435,7 @@ async def publish_run(
     client_result = (
         supabase.table("clients")
         .select(
-            "name, google_drive_folder_id, drive_folders, "
+            "name, google_drive_folder_id, drive_folders, website_url, logo_url, "
             "wordpress_site_url, wordpress_username, wordpress_app_password, "
             "github_repo, github_branch, github_content_path, github_content_paths, "
             "github_inferred_patterns, business_location, target_cities, gbp"
@@ -306,7 +475,26 @@ async def publish_run(
             doc_html = f"<h1>{escape(h1)}</h1>\n{doc_html}"
     featured_image_url = run.get("featured_image_url")
 
+    # Structured data (JSON-LD @graph). Service/location pages carry their own in
+    # the service_writer output; blog posts get a BlogPosting + FAQPage graph built
+    # here at publish time. Threaded to GitHub (frontmatter) and WordPress (an
+    # inline <script>); the Google Docs path omits it (Docs strips <script>).
+    if content_type == "blog_post":
+        schema_jsonld = _resolve_blog_schema(
+            supabase, run_id,
+            client=client, run=run, title=title, image_url=featured_image_url,
+        )
+    else:
+        schema_jsonld = _resolve_schema(supabase, run_id, content_type)
+
     if body.destination == "wordpress":
+        # Append the JSON-LD as an inline <script> at the end of the body. Note:
+        # WordPress keeps <script> in post content only for users with the
+        # `unfiltered_html` capability (administrators on single-site); on a
+        # locked-down/multisite install KSES may strip it, in which case the
+        # site's SEO plugin schema still applies.
+        if schema_jsonld:
+            wp_html = f"{wp_html}\n{inline_jsonld_script(schema_jsonld)}"
         try:
             result = await publish_to_wordpress(
                 client=client,
@@ -367,6 +555,33 @@ async def publish_run(
         }
 
     if body.destination == "github":
+        # Blog posts publish through an async job that generates a hero + body
+        # images with gpt-image-1 and commits the markdown + image bytes to the
+        # repo in one commit — too slow to hang the request. Service/location
+        # pages (no generated images) keep the synchronous single-file commit.
+        use_async_images = (
+            content_type == "blog_post"
+            and settings.blog_media_enabled
+            and bool(settings.openai_api_key)
+            and bool(settings.github_publish_token)
+        )
+        if use_async_images:
+            if not (client.get("github_repo") or "").strip():
+                raise HTTPException(status_code=422, detail="github_repo_not_set")
+            from services.blog_media.pipeline import enqueue_blog_media_publish
+
+            job_id = enqueue_blog_media_publish(str(run_id), auth["user_id"])
+            logger.info(
+                "github_publish_enqueued",
+                extra={"run_id": str(run_id), "job_id": job_id, "user_id": auth["user_id"]},
+            )
+            return {
+                "success": True,
+                "destination": "github",
+                "status": "generating",
+                "job_id": job_id,
+            }
+
         markdown = _resolve_markdown(supabase, run_id, content_type)
         if not markdown.strip():
             raise HTTPException(status_code=422, detail="content_is_empty")
@@ -374,7 +589,7 @@ async def publish_run(
             result = await publish_to_github(
                 client=client, title=title, body=markdown, slug=run["keyword"],
                 content_type=content_type, hero_image=featured_image_url,
-                schema=_resolve_schema(supabase, run_id, content_type),
+                schema=schema_jsonld,
             )
         except GitHubPublishError as exc:
             client_errors = {"github_not_configured", "github_repo_not_set", "content_is_empty"}

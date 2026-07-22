@@ -89,6 +89,15 @@ class Settings(BaseSettings):
         "keyword_market", "maps_scan", "maps_analyze", "client_report",
         "notification_dispatch", "local_seo_generate",
         "local_seo_reoptimize_url", "local_seo_silo", "asana_push",
+        # Interactive local-SEO actions the user awaits on-screen (precheck /
+        # analyze / score / find_page / related_pages / social_posts). Sibling of
+        # local_seo_generate above — must not queue behind the daily scheduler
+        # burst on the MAIN lane (ops fix: the "Create new page" precheck crawl
+        # stalled 10–30 min behind reopt_plan/gsc_page_ingest/strategy_review).
+        "local_seo_action",
+        # User-awaited GitHub publish with image generation (minutes-long, like
+        # local_seo_generate) — must not queue behind the daily scheduler burst.
+        "blog_github_publish",
     ]
     # Freeze Protocol: daily homepage-indexation check (GSC URL Inspection with a
     # DataForSEO site: warn-only fallback) that can auto-open a deindexing freeze.
@@ -161,6 +170,46 @@ class Settings(BaseSettings):
     # reconcile only).
     github_infer_max_frontmatter_reads: int = 300
     github_infer_frontmatter_concurrency: int = 8
+    # ── Media pipeline (planner-driven, GitHub/Astro) ────────────────────────
+    # The production media pipeline: an LLM media plan (hero + ≤2 inline
+    # images/charts) validated + placed + committed by the app. Supersedes the
+    # simple blog_image_* path above as it lands. Gated: off unless enabled AND
+    # OPENAI_API_KEY set.
+    blog_media_enabled: bool = True
+    # The media-planning model (proposes the plan; the app validates + owns
+    # counts/IDs/placement). Anthropic with the shared fallback.
+    blog_media_planner_model: str = "claude-sonnet-4-6"
+    blog_media_planner_max_tokens: int = 8000
+    # Image rendering — gpt-image-2 (reasoning image model; reads the article),
+    # WebP output at configured dimensions.
+    blog_media_image_model: str = "gpt-image-2"
+    blog_media_image_quality: str = "medium"          # low | medium | high
+    blog_media_hero_width: int = 2048
+    blog_media_hero_height: int = 1152
+    # 1536x1024 — a gpt-image-2-native size. (1200x900 was rejected with 400
+    # Bad Request on the first live run; the render ladder's auto-size rung
+    # recovered, but a supported default avoids burning retry attempts.)
+    blog_media_inline_width: int = 1536
+    blog_media_inline_height: int = 1024
+    # Allow transparent arithmetic derivations of chart values from explicit
+    # article values (Phase 2 charts); false → only values stated verbatim.
+    blog_media_allow_derived_values: bool = True
+    # When a chart is dropped ONLY because the planner left a value's
+    # source_quote blank (missing_source_quote — the data may still be in the
+    # article, e.g. inside a table), attempt one targeted re-grounding call that
+    # asks the model to supply a verbatim quote per value. The result is
+    # re-validated the same way, so this recovers real charts without weakening
+    # the no-fabrication rule.
+    blog_media_chart_reground_enabled: bool = True
+    # When a chart is ultimately rejected, fill its (already-budgeted) inline
+    # slot with a section-specific editorial image instead of leaving it empty.
+    blog_media_chart_replace_enabled: bool = True
+    # Confidence gates (the app drops optional assets below threshold).
+    blog_media_hero_min_confidence: float = 0.75
+    blog_media_inline_min_confidence: float = 0.75
+    blog_media_chart_min_confidence: float = 0.90
+    # Repo path the committed media lives under (post slug appended).
+    blog_media_repo_path: str = "public/images/blog"
     outscraper_api_key: str = ""
     # Google Search Console — Organic Rank Tracker (Module #4).
     # The service-account key JSON (the entire downloaded key file, as a single
@@ -240,6 +289,26 @@ class Settings(BaseSettings):
     maps_scan_weekday: int = 1
     # How long (minutes) to keep polling a scan before marking it failed.
     maps_scan_poll_timeout_minutes: int = 30
+    # ── Maps geo-grid provider switch (Local Dominator → DataForSEO) ──────────
+    # Which provider a NEW scan uses. In-flight/historic scans are routed by
+    # their stored maps_scans.provider column, so both coexist across the flip;
+    # rollback is flipping this env var back. 'local_dominator' (default —
+    # DataForSEO dormant) | 'dataforseo'.
+    maps_scan_provider: str = "local_dominator"
+    # DataForSEO Maps SERP per-pin params. The zoom in location_coordinate
+    # ("lat,lng,<zoom>"): 15z ≈ a 1–2-mile viewport matching our 1-mile pin
+    # spacing (14z ≈ ~3 mi) — calibrated during the parallel-run (§7). depth 20
+    # mirrors LD's top-20/pin and fits DataForSEO's base price.
+    maps_dfs_zoom: str = "15z"
+    maps_dfs_depth: int = 20
+    # Per polling tick, per DataForSEO scan: cap on task_get calls (oldest pins
+    # first) and how many run concurrently. task_get is free — this just paces
+    # the collection so one big scan doesn't hog a tick.
+    maps_dfs_poll_tasks_per_tick: int = 200
+    maps_dfs_poll_concurrency: int = 10
+    # A pin task that comes back a DataForSEO error is reposted (fresh task) up
+    # to this many attempts, then marked failed (a null hole in the grid).
+    maps_dfs_pin_max_attempts: int = 3
     # Local Rank Analysis report (auto-generated per keyword when a scan completes).
     # Sonnet writes the client-facing narrative from the deterministic geo-grid
     # rollups + competitor data; Top-5 competitors are those rated >= this with
@@ -622,6 +691,39 @@ class Settings(BaseSettings):
     local_seo_sitemap_max_urls: int = 5000
     local_seo_sitemap_max_files: int = 30
     local_seo_site_index_dataforseo_depth: int = 100
+    # Structural-fidelity gate on Local SEO page generation. The client's stored
+    # reference page structure is injected into the nlp prompt as a "mirror this
+    # layout" block, but nothing measured whether the output actually matched it —
+    # so the writer drifted on section count/order and dropped blocks (FAQ/table/
+    # CTA). When enabled, each generated page is scored against the reference
+    # outline with the deterministic structural eval (page_structure_eval); if it
+    # drifts on layout below `min_composite`, generation is retried with the
+    # specific corrections fed back — keep-best by structural composite, capped at
+    # `max_passes`. Only fires when a reference structure actually drove the page;
+    # fully best-effort (a scoring/regen failure keeps the best page so far).
+    local_seo_structure_gate_enabled: bool = True
+    local_seo_structure_min_composite: float = 85.0
+    local_seo_structure_max_passes: int = 2
+    # Same structural-fidelity gate on Ecommerce PRODUCT generation, scored against
+    # the client's scraped page_structures['product'] reference (only when a house
+    # template URL is NOT set — the house template is its own explicit mirror).
+    # Collections are excluded (no reference structure). Keep-best, capped.
+    ecommerce_structure_gate_enabled: bool = True
+    ecommerce_structure_min_composite: float = 85.0
+    ecommerce_structure_max_passes: int = 2
+    # Structural-fidelity gate on SERVICE / LOCATION pages (the runs pipeline). The
+    # reference (page_structures['service'|'location']) is already injected into the
+    # brief; this scores the writer's output against it and, when it drifts, folds
+    # the corrections into the single auto-reoptimize pass as a synthetic
+    # deficiency (no extra reopt beyond the existing content-score budget).
+    service_page_structure_gate_enabled: bool = True
+    service_page_structure_min_composite: float = 85.0
+    # Reference-page scrape: when the cheap (datacenter, no-JS) ScrapeOwl fetch
+    # captures 0 content sections — the usual sign a WordPress/CDN bot-wall
+    # served an empty shell — retry ONCE with JS rendering + premium residential
+    # proxies. Bounded cost (only on an empty first pass); flip off if credits
+    # get tight.
+    page_structure_premium_fallback: bool = True
     # Bulk background jobs (bulk-create / bulk-reoptimize) enqueue one async_jobs
     # row per item. The single worker claims the OLDEST pending scheduled_at and
     # has no <=now gate, so staggering each bulk item's scheduled_at this many
@@ -958,6 +1060,19 @@ class Settings(BaseSettings):
     qa_visual_model: str = "claude-haiku-4-5-20251001"
     qa_visual_max_tokens: int = 400
     qa_asset_check_cap: int = 12                 # HEAD checks per page review
+    # QA chat persona (the dedicated /qa sidebar surface — the reviewer sibling
+    # of SerMaStr's /assistant and PACE's /pace). Its own master gate so the
+    # chat can ship dark independently of the automatic in_qa trigger
+    # (qa_enabled). Sonnet + a wide budget for the same reason PACE is: a real
+    # reviewer that enumerates recent verdicts and reasons about the board, not
+    # a cheap model that collapses lists into counts. Reuses ANTHROPIC_API_KEY.
+    qa_chat_enabled: bool = False                # QA_CHAT_ENABLED — sidebar gate
+    qa_chat_model: str = "claude-sonnet-4-6"
+    qa_chat_max_tokens: int = 2400
+    # Default rubric for a bare-URL QA (no task on the board) — the "QA this
+    # page" case. website_page is the common ask; the chat lets the user name
+    # another URL rubric (guest post / press release / citation / map embed).
+    qa_url_default_rubric: str = "website_page"
 
     # PACE — Project Assignment, Coordination & Execution agent
     # (docs/modules/project-manager-agent-plan-v1_0.md). Phase 0A ships only the
