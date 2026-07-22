@@ -260,3 +260,61 @@ def test_website_page_with_no_client_still_runs():
                                  page_kind="page")
     assert review_called is True
     assert "which client" in out["reply"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Graceful no-match when the VA answers "which client?" with an unknown name
+# ---------------------------------------------------------------------------
+def test_just_asked_for_client_detects_the_prior_ask():
+    asked = [
+        {"role": "user", "content": "QA this niche edit https://x.com/p"},
+        {"role": "assistant", "content": "Which client is this for? Just reply with the name."},
+    ]
+    assert qa_agent._just_asked_for_client(asked) is True
+    # Last assistant turn was something else → not an answer-to-a-question turn.
+    other = [{"role": "assistant", "content": "Pass — looks good."}]
+    assert qa_agent._just_asked_for_client(other) is False
+    assert qa_agent._just_asked_for_client([]) is False
+
+
+def test_client_suggestions_finds_close_names():
+    names = ["IHBS", "WheelHouse IT Fort Lauderdale", "First Class Roofing"]
+    assert "WheelHouse IT Fort Lauderdale" in qa_agent._client_suggestions("wheelhouse", names)
+    assert qa_agent._client_suggestions("", names) == []
+
+
+def test_unknown_client_reply_lists_clients_instead_of_relooping():
+    # The VA answered the which-client question with a name we don't have.
+    # The bot must say so + show the real list, and NOT run the check or repeat
+    # the identical "it's on another website" question.
+    called = {"review": False}
+
+    async def fake_interpret(*_a, **_k):
+        return "url", {"url": "https://homoper.com/post", "page_kind": "niche edit"}
+
+    def fake_resolve_scope(_msg, _sticky):
+        return "global", {}, {}
+
+    async def fake_review_url(*_a, **_k):
+        called["review"] = True
+        return {"verdict": sig.NEEDS_HUMAN, "rubric": sig.RUBRIC_NICHE_EDIT,
+                "composite": None, "checks": [], "issues": [], "urls": [], "narrative": ""}
+
+    history = [
+        {"role": "user", "content": "Please QA this niche edit https://homoper.com/post"},
+        {"role": "assistant", "content": "Which client is this for? Just reply with the name."},
+    ]
+    clients = [{"id": "1", "name": "IHBS"}, {"id": "2", "name": "First Class Roofing"}]
+    actor = ActionContext(profile_id="p1", role="admin")
+    with patch.object(qa_agent, "interpret_qa", fake_interpret), \
+         patch.object(qa_agent, "_resolve_scope", fake_resolve_scope), \
+         patch.object(qa_agent, "resolve_client_by_url", lambda _u: None), \
+         patch.object(qa_agent, "_client_row", lambda _c: None), \
+         patch.object(qa_agent, "_all_clients", lambda: clients), \
+         patch.object(qa_service, "review_url", fake_review_url):
+        out = _run(qa_agent.maybe_handle_web("UMH", history, None, None, actor))
+    assert called["review"] is False
+    low = out["reply"].lower()
+    assert "umh" in low and "don't have" in low
+    assert "IHBS" in out["reply"]  # the real client list is shown
+    assert "on another website" not in low  # not the identical re-ask
