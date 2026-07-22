@@ -90,7 +90,14 @@ def test_format_review_pass_summarizes():
 # review_url routing (mocked fetch)
 # ---------------------------------------------------------------------------
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # A FRESH loop per call — asyncio.get_event_loop() can hand back a loop an
+    # earlier async test in the full suite already closed (no pytest-asyncio in
+    # this env), which would spuriously fail these otherwise-isolated tests.
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 def test_review_url_unreachable_is_needs_human():
@@ -127,6 +134,34 @@ def test_review_url_website_page_runs_checks():
     labels = {c["key"] for c in review["checks"]}
     assert "meta_title" in labels and "internal_link" in labels
     assert review["verdict"] in (sig.PASS, sig.NEEDS_HUMAN, sig.FAIL)
+
+
+def test_dead_image_is_advisory_dead_stylesheet_is_blocking():
+    # A page with a 404'd IMAGE and a 404'd STYLESHEET: the image failure is
+    # advisory (won't bounce), the stylesheet failure is blocking (does).
+    html_img = (
+        "<html><head><title>Roof Repair</title>"
+        "<meta name='description' content='x'></head>"
+        "<body><h1>Roof Repair</h1><a href='https://client.com/contact'>C</a>"
+        "<p>Client Co here.</p><img src='https://client.com/dead.jpg' alt='r'></body></html>"
+    )
+
+    async def fake_fetch(url):
+        return html_img
+
+    async def dead_all(urls):
+        return list(urls)  # everything 404s
+
+    client = {"website_url": "https://client.com", "name": "Client Co", "gbp": {}}
+    with patch.object(qa_service, "_fetch", fake_fetch), \
+         patch.object(qa_service, "_broken_assets", dead_all), \
+         patch.object(qa_service.settings, "qa_visual_enabled", False):
+        review = _run(qa_service.review_url("https://client.com/roof", client, sig.RUBRIC_PAGE))
+    by = {c["key"]: c for c in review["checks"]}
+    assert "image_assets" in by and by["image_assets"]["blocking"] is False
+    assert by["image_assets"]["ok"] is False  # flagged, but advisory
+    # The dead image alone must not FAIL the page (no stylesheet in this HTML).
+    assert review["verdict"] != sig.FAIL
 
 
 def test_review_url_threads_keyword_to_page_checks():
