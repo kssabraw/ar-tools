@@ -11,7 +11,9 @@ voice is never clobbered by an auto-scan unless the caller passes `force=True`.
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
@@ -27,6 +29,51 @@ logger = logging.getLogger(__name__)
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# The brand-voice scan LLM occasionally emits `vocabulary` as a stringified JSON
+# blob instead of an object — and sometimes an invalid one, with an inline
+# annotation injected into a JSON array (e.g. `"innovative" (used once)`). Stored
+# verbatim, that string later crashes every consumer that does `vocabulary.get(...)`
+# (nlp page generation, run snapshots). Normalize at the persist boundary so the
+# canonical client asset is always well-formed, whatever the model returned.
+_VOCAB_ANNOTATION_RE = re.compile(r'"\s*\([^)]*\)')
+
+
+def _coerce_vocabulary(vocab):
+    """Coerce a voice's `vocabulary` field to a dict (or None). Parses a JSON
+    string; if that fails, strips the inline `( … )` annotations the scan LLM
+    sometimes injects after array items and retries; drops to None when still
+    unrecoverable, so a bad scan degrades to 'no vocab' rather than a poison value."""
+    if isinstance(vocab, dict):
+        return vocab
+    if isinstance(vocab, str):
+        s = vocab.strip()
+        if not s:
+            return None
+        for candidate in (s, _VOCAB_ANNOTATION_RE.sub('"', s)):
+            try:
+                parsed = json.loads(candidate)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+            break
+        return None
+    return None  # unknown type → drop rather than persist a poison value
+
+
+def _normalize_voice(voice):
+    """Normalize a single voice object (current/recommended) before persistence.
+    Currently guarantees `vocabulary` is an object (or absent); passes everything
+    else through untouched. None / non-dict inputs are returned unchanged."""
+    if not isinstance(voice, dict):
+        return voice
+    if "vocabulary" not in voice:
+        return voice
+    normalized = dict(voice)
+    normalized["vocabulary"] = _coerce_vocabulary(voice.get("vocabulary"))
+    return normalized
 
 
 def _empty_blob() -> dict:
@@ -215,8 +262,8 @@ async def scan(client_id: str, force: bool, user_id: str) -> dict:
         {
             "source": "app",
             "raw_text": preserved_raw,
-            "current_voice": engine.get("current_voice"),
-            "recommended_voice": engine.get("recommended_voice"),
+            "current_voice": _normalize_voice(engine.get("current_voice")),
+            "recommended_voice": _normalize_voice(engine.get("recommended_voice")),
             "recommended_accepted": engine.get("recommended_accepted"),
             "writer_execution_guide": engine.get("writer_execution_guide"),
             "generated_at": _now_iso(),

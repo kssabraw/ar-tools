@@ -84,6 +84,71 @@ def test_scan_payload_falls_back_to_client_row_without_gbp():
     assert captured["payload"]["gbp_category"] == ""
 
 
+# ── vocabulary normalization at the persist boundary ─────────────────────────
+# The scan LLM sometimes emits `vocabulary` as a stringified (occasionally
+# malformed) JSON blob. It must never reach the DB as a string — consumers do
+# `vocabulary.get(...)` and would crash (this is what silently failed a whole
+# Local SEO batch). Normalize at the single persist choke point.
+
+def test_coerce_vocabulary_passes_through_dict():
+    v = {"use": ["a"], "avoid": ["b"]}
+    assert brand_voice_service._coerce_vocabulary(v) is v
+
+
+def test_coerce_vocabulary_parses_json_string():
+    s = '{"use": ["strategic advantage", "proactive"], "avoid": ["best-in-class"]}'
+    assert brand_voice_service._coerce_vocabulary(s) == {
+        "use": ["strategic advantage", "proactive"], "avoid": ["best-in-class"]
+    }
+
+
+def test_coerce_vocabulary_salvages_inline_annotations():
+    # The exact failure shape: an inline `( … )` note injected into a JSON array
+    # makes the string invalid JSON. Strip the annotation and recover use/avoid.
+    s = ('{"use": ["seasoned", "disciplined"], '
+         '"avoid": ["innovative" (appears once but not emphasized), "cutting-edge"]}')
+    assert brand_voice_service._coerce_vocabulary(s) == {
+        "use": ["seasoned", "disciplined"], "avoid": ["innovative", "cutting-edge"]
+    }
+
+
+def test_coerce_vocabulary_drops_unrecoverable_and_empty():
+    assert brand_voice_service._coerce_vocabulary("not json at all {{{") is None
+    assert brand_voice_service._coerce_vocabulary("   ") is None
+    assert brand_voice_service._coerce_vocabulary(None) is None
+    assert brand_voice_service._coerce_vocabulary(["a", "b"]) is None  # non-dict JSON → drop
+
+
+def test_normalize_voice_coerces_vocabulary_only():
+    voice = {"tone": "bold", "personality": ["x"], "vocabulary": '{"use": ["a"]}'}
+    out = brand_voice_service._normalize_voice(voice)
+    assert out["vocabulary"] == {"use": ["a"]}
+    assert out["tone"] == "bold" and out["personality"] == ["x"]  # untouched
+    # None / missing-vocab / non-dict inputs pass through unchanged
+    assert brand_voice_service._normalize_voice(None) is None
+    assert brand_voice_service._normalize_voice({"tone": "x"}) == {"tone": "x"}
+
+
+def test_scan_normalizes_string_vocabulary_before_persist():
+    engine = {
+        "current_voice": {"tone": "friendly",
+                          "vocabulary": '{"use": ["a"], "avoid": ["b" (note), "c"]}'},
+        "recommended_voice": {"tone": "bold", "vocabulary": {"use": ["x"], "avoid": ["y"]}},
+    }
+    supabase = _supabase()
+    with patch.object(brand_voice_service, "_get_client", return_value=_client_row()), \
+         patch.object(brand_voice_service, "_post_nlp",
+                      new=AsyncMock(return_value={"brand_voice": engine, "pages_sampled": 3})), \
+         patch.object(brand_voice_service, "get_supabase", return_value=supabase):
+        import asyncio
+        result = asyncio.run(brand_voice_service.scan("client-1", force=False, user_id="u1"))
+    cur = result["brand_voice"]["current_voice"]["vocabulary"]
+    rec = result["brand_voice"]["recommended_voice"]["vocabulary"]
+    assert cur == {"use": ["a"], "avoid": ["b", "c"]}   # string salvaged → object
+    assert rec == {"use": ["x"], "avoid": ["y"]}          # dict passthrough
+    assert isinstance(cur, dict)
+
+
 # ── supersede guard: user-authored voice is not clobbered ────────────────────
 
 def test_scan_refuses_to_overwrite_user_structured_voice_without_force():
