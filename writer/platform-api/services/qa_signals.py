@@ -177,6 +177,33 @@ def keyword_present(text: Optional[str], keyword: Optional[str]) -> Optional[boo
     return kw in normalize_ws(text).casefold()
 
 
+# Stop-words dropped from keyword token-coverage: a title/H1 rarely carries the
+# keyword's connectives verbatim ("... services in coral springs" → "Services |
+# Coral Springs"), so requiring them false-failed good pages.
+_KW_STOPWORDS = frozenset({
+    "in", "on", "of", "the", "a", "an", "and", "or", "for", "to", "near",
+    "at", "by", "with", "your", "our", "from", "into", "over",
+})
+
+
+def keyword_tokens_present(text: Optional[str], keyword: Optional[str]) -> Optional[bool]:
+    """True when every SIGNIFICANT word of the keyword appears in ``text`` as a
+    whole word, in any order — tolerant of reordered / separator titles where
+    the exact phrase won't appear verbatim ('Practice Management Services |
+    Coral Springs' satisfies 'practice management services in coral springs').
+    Stop-words are dropped (unless the keyword is all stop-words). None when the
+    keyword is unknown → the check reads 'could not verify'. Pure."""
+    tokens = [t for t in re.split(r"[^0-9a-z]+", (keyword or "").casefold()) if t]
+    if not tokens:
+        return None
+    significant = [t for t in tokens if t not in _KW_STOPWORDS] or tokens
+    hay = normalize_ws(text).casefold()
+    return all(
+        re.search(rf"(?<![0-9a-z]){re.escape(t)}(?![0-9a-z])", hay) is not None
+        for t in significant
+    )
+
+
 def keyword_in_url(url: Optional[str], keyword: Optional[str]) -> Optional[bool]:
     """Whether the target keyword appears in the URL's path slug, with hyphens
     and other separators normalized to spaces (so a slug like
@@ -322,14 +349,85 @@ def domain_of(url: Optional[str]) -> str:
     return (m.group(1) if m else "").casefold()
 
 
+def is_safe_fetch_url(url: Optional[str]) -> bool:
+    """SSRF guard for server-side fetches (qa_service._fetch / _broken_assets):
+    only http(s), and never an internal target — an internal hostname
+    (localhost / *.internal / *.local / *.lan) or a private / loopback /
+    link-local / reserved / multicast IP literal (blocks the cloud-metadata
+    169.254.169.254 too). Hostnames that RESOLVE to such IPs are additionally
+    blocked at fetch time by the DNS check in qa_service. Pure."""
+    from urllib.parse import urlparse
+    import ipaddress
+
+    try:
+        parts = urlparse((url or "").strip())
+    except Exception:
+        return False
+    if parts.scheme.lower() not in ("http", "https"):
+        return False
+    host = (parts.hostname or "").casefold()
+    if not host:
+        return False
+    if host == "localhost" or any(
+        host.endswith(sfx) for sfx in (".localhost", ".internal", ".local", ".lan")
+    ):
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return True  # a real hostname; the fetch-time DNS check covers rebinding
+    return not (
+        ip.is_private or ip.is_loopback or ip.is_link_local
+        or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+    )
+
+
+def _href_host(href: Optional[str]) -> str:
+    """The registrable host of an href, www-stripped, lowercased — '' for a
+    relative/empty href. Protocol-relative ('//x.com/…') is understood. Pure."""
+    from urllib.parse import urlparse
+
+    h = (href or "").strip()
+    if not h:
+        return ""
+    if h.startswith("//"):
+        h = "http:" + h
+    try:
+        netloc = urlparse(h).netloc.casefold()
+    except Exception:
+        return ""
+    netloc = netloc.rsplit("@", 1)[-1].split(":", 1)[0]  # drop userinfo + port
+    return re.sub(r"^www\.", "", netloc)
+
+
 def links_to_domain(anchors: list[dict[str, str]], domain: str) -> list[dict[str, str]]:
-    # Strip a leading "www." PREFIX (re.sub) — not lstrip("www."), which is a
-    # character-set strip that would eat leading w/. chars from a domain like
-    # "westroofing.com".
+    """Anchors whose absolute href points at ``domain`` (or a subdomain of it) —
+    matched on the HOST BOUNDARY, not a bare substring. So a link to
+    'bestroofing.com' does NOT count for client 'roofing.com', and a link to
+    'notclient.com' does NOT count for 'client.com' — the substring form let
+    look-alike / super-string domains false-pass the link-back check. Pure."""
     d = re.sub(r"^www\.", "", (domain or "").casefold())
     if not d:
         return []
-    return [a for a in anchors if d in (a.get("href") or "").casefold()]
+    return [a for a in anchors
+            if (h := _href_host(a.get("href"))) and (h == d or h.endswith("." + d))]
+
+
+def internal_anchors(anchors: list[dict[str, str]], domain: str) -> list[dict[str, str]]:
+    """Anchors internal to the client's own site: an absolute link whose host
+    matches the client domain (or a subdomain), OR a ROOT-RELATIVE link
+    ('/contact') — which is internal by definition on the client's own page.
+    Counting only absolute-domain links false-failed the internal-link check on
+    the many pages that link internally with relative hrefs. Pure."""
+    d = re.sub(r"^www\.", "", (domain or "").casefold())
+    out: list[dict[str, str]] = []
+    for a in anchors:
+        href = (a.get("href") or "").strip()
+        root_relative = href.startswith("/") and not href.startswith("//")
+        host = _href_host(href)
+        if root_relative or (d and host and (host == d or host.endswith("." + d))):
+            out.append(a)
+    return out
 
 
 def has_map_embed(html: str) -> bool:
@@ -622,7 +720,7 @@ def check_website_page(html: str, client_domain: str,
     h1_text = h1_tag.get_text(" ", strip=True) if h1_tag else ""
     imgs = soup.find_all("img")
     missing_alt = [i for i in imgs if not (i.get("alt") or "").strip()]
-    internal = links_to_domain(extract_anchors(html), client_domain) if client_domain else []
+    internal = internal_anchors(extract_anchors(html), client_domain) if client_domain else []
     # The client's EXACT business name must appear on the page (blocking). None
     # (no name on file) reads 'could not verify' → needs_human, never an
     # auto-fail. The name is matched whole-word (bounded) so a short name can't
@@ -640,12 +738,12 @@ def check_website_page(html: str, client_domain: str,
         _check("meta_title", "Meta title present", bool(title)),
         _check("meta_description", "Meta description present", bool(desc), blocking=False),
         _check("keyword_in_title", "Target keyword in the title tag",
-               keyword_present(title, keyword), note=kw_note),
+               keyword_tokens_present(title, keyword), note=kw_note),
         _check("keyword_in_url", "Target keyword in the URL",
                keyword_in_url(url, keyword),
                note=kw_note if keyword else "no target keyword found on the task"),
         _check("keyword_in_h1", "Target keyword in the H1",
-               keyword_present(h1_text, keyword),
+               keyword_tokens_present(h1_text, keyword),
                note=("no H1 found on the page" if not h1_text else kw_note)),
         _check("internal_link", "Internal link to the client's site",
                bool(internal) if client_domain else None,
@@ -705,7 +803,7 @@ _NAME_SEPS = ("—", "–", ":", "|", " - ")
 _SEP_STRIP = " \t-—–:|·,"
 
 
-def keyword_from_task(task: dict[str, Any]) -> Optional[str]:
+def keyword_from_task(task: dict[str, Any], allow_full_name: bool = True) -> Optional[str]:
     """The target keyword 'on the task' (owner convention 2026-07-12: the
     keyword is entered into the TASK NAME). Resolution order, pure:
 
@@ -719,7 +817,15 @@ def keyword_from_task(task: dict[str, Any]) -> Optional[str]:
     3. A bare 'Template — keyword' name split when no library link exists.
 
     A bare template name ('GBP Posts') yields None → the keyword checks read
-    'could not verify' → needs_human, never a guess."""
+    'could not verify' → needs_human, never a guess.
+
+    ``allow_full_name=False`` disables (2)'s FULLY-RENAMED branch (returning the
+    whole task name as the keyword). That guess is right for a post-type task
+    renamed to its keyword ('emergency roof repair'), but WRONG for a website
+    page whose name is a descriptive title ('Fix the homepage hero') — there the
+    title would be mis-read as the keyword and guarantee a false FAIL. Website-
+    page callers pass False so a renamed page needs its keyword typed into the
+    'Target keyword' field / a KW: marker instead."""
     # 0. The first-class 'Target keyword' field (the QA panel input) wins — the
     #    obvious box for an untrained user, no marker/name convention needed.
     field_kw = normalize_ws(task.get("qa_keyword"))
@@ -741,7 +847,10 @@ def keyword_from_task(task: dict[str, Any]) -> Optional[str]:
             remainder = re.sub(re.escape(lib), "", name, count=1, flags=re.IGNORECASE)
             remainder = normalize_ws(remainder.strip(_SEP_STRIP))
             return remainder or None
-        return name  # fully renamed: the whole name IS the keyword
+        # Fully renamed: the whole name IS the keyword — but only when the caller
+        # allows it (post-type tasks). A website page's descriptive title is not
+        # its keyword, so that caller passes allow_full_name=False → None here.
+        return name if allow_full_name else None
     # No library link: the name must carry a recognizable template prefix for
     # the rubric to have matched at all — take what follows the separator.
     for sep in _NAME_SEPS:

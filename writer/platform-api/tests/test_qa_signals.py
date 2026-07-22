@@ -142,6 +142,18 @@ def test_link_back_no_domain_on_file_is_unverifiable():
     assert sig.check_link_back("<p>hi</p>", "")[0]["ok"] is None
 
 
+def test_link_back_rejects_lookalike_and_superstring_domains():
+    # Host-boundary match: a link to a domain that merely CONTAINS the client
+    # domain as a substring must NOT count as a link back (was a false PASS).
+    look = '<p><a href="https://bestroofing.com/x">x</a></p>'
+    assert sig.build_verdict(sig.check_link_back(look, "roofing.com"))["verdict"] == sig.FAIL
+    sup = '<p><a href="https://notclient.com/x">x</a></p>'
+    assert sig.build_verdict(sig.check_link_back(sup, "client.com"))["verdict"] == sig.FAIL
+    # A genuine subdomain of the client still counts.
+    sub = '<p><a href="https://blog.client.com/x">x</a></p>'
+    assert sig.build_verdict(sig.check_link_back(sub, "client.com"))["verdict"] == sig.PASS
+
+
 # ---------------------------------------------------------------------------
 # Press release (corrected logic: bounce if ANY of the four fail)
 # ---------------------------------------------------------------------------
@@ -348,6 +360,45 @@ def test_website_page_keyword_placement_blocking():
     assert sig.build_verdict(checks)["verdict"] == sig.FAIL
 
 
+def test_website_page_keyword_token_coverage_tolerates_reordered_title():
+    # A separator/reordered title + H1 (the keyword's words are all present but
+    # not as one verbatim phrase) must PASS — the exact-substring form used to
+    # false-fail these. Root-relative internal link + business name present.
+    html = """<html><head><title>Practice Management Services | Coral Springs FL</title></head>
+    <body><h1>Practice Management Services | Coral Springs</h1>
+    <p>Client Co serves Coral Springs.</p>
+    <a href="/contact">Contact</a><img src="a.jpg" alt="a"></body></html>"""
+    checks = sig.check_website_page(
+        html, "client.com", "Client Co",
+        keyword="practice management services in coral springs",
+        url="https://client.com/practice-management-services-in-coral-springs/",
+    )
+    by = {c["key"]: c for c in checks}
+    assert by["keyword_in_title"]["ok"] is True
+    assert by["keyword_in_h1"]["ok"] is True
+    assert by["internal_link"]["ok"] is True  # root-relative link counts
+    assert sig.build_verdict(checks)["verdict"] == sig.PASS
+
+
+def test_keyword_tokens_present_requires_every_significant_word():
+    kw = "practice management services in coral springs"
+    assert sig.keyword_tokens_present("Coral Springs Practice Management Services", kw) is True
+    assert sig.keyword_tokens_present("Practice Services Coral Springs", kw) is False  # missing 'management'
+    assert sig.keyword_tokens_present("anything", None) is None
+
+
+def test_internal_anchors_counts_root_relative_and_domain():
+    anchors = [
+        {"href": "/contact", "text": "a"},           # root-relative → internal
+        {"href": "//cdn.other.com/x", "text": "b"},  # protocol-relative other → not
+        {"href": "https://client.com/about", "text": "c"},  # absolute same → internal
+        {"href": "https://elsewhere.com", "text": "d"},     # external → not
+    ]
+    got = sig.internal_anchors(anchors, "client.com")
+    hrefs = {a["href"] for a in got}
+    assert hrefs == {"/contact", "https://client.com/about"}
+
+
 def test_website_page_keyword_unknown_needs_human():
     # No keyword on the task → the three placement checks read 'could not verify'
     # → needs_human (never a guess), everything else being fine.
@@ -434,6 +485,26 @@ def test_keyword_from_task_name_convention():
     assert sig.keyword_from_task({"name": "Review & publish: roof repair"}) == "roof repair"
     assert sig.keyword_from_task({"name": "GBP Posts"}) is None
     assert sig.keyword_from_task({}) is None
+
+
+def test_keyword_from_task_full_name_gate_for_website_pages():
+    # A fully-renamed page task: the descriptive title must NOT become the
+    # keyword when the caller disallows it (website pages) — else the title
+    # would be checked against title/URL/H1 and guarantee a false FAIL.
+    task = {"name": "Fix the homepage hero", "library_task_name": "Website Pages Posted"}
+    assert sig.keyword_from_task(task, allow_full_name=True) == "Fix the homepage hero"
+    assert sig.keyword_from_task(task, allow_full_name=False) is None
+    # An explicit field / marker still wins even with the fallback off.
+    assert sig.keyword_from_task(
+        {**task, "qa_keyword": "practice management coral springs"},
+        allow_full_name=False,
+    ) == "practice management coral springs"
+    # 'Template — keyword' extraction is unaffected by the gate.
+    assert sig.keyword_from_task(
+        {"name": "Website Pages Posted — coral springs plumber",
+         "library_task_name": "Website Pages Posted"},
+        allow_full_name=False,
+    ) == "coral springs plumber"
 
 
 def test_keyword_from_task_description_override_still_wins():
@@ -552,6 +623,21 @@ def test_links_to_domain_www_prefix_only():
     assert sig.links_to_domain(anchors, "www.westroofing.com") == [anchors[0]]
     # No spurious match against an unrelated domain.
     assert sig.links_to_domain([{"href": "https://estroofing.com", "text": "z"}], "westroofing.com") == []
+
+
+def test_is_safe_fetch_url_blocks_internal_targets():
+    blocked = [
+        "http://169.254.169.254/latest/meta-data/",  # cloud metadata (link-local)
+        "http://localhost:8080/x",
+        "http://10.0.0.5/x", "http://192.168.1.1/", "http://127.0.0.1/",
+        "http://foo.railway.internal/x", "http://db.local/",
+        "file:///etc/passwd", "ftp://host/x", "http://[::1]/",
+        "", None,
+    ]
+    for u in blocked:
+        assert sig.is_safe_fetch_url(u) is False, u
+    for u in ("https://myihbs.com/coral-springs/", "http://example.com/page", "https://8.8.8.8/"):
+        assert sig.is_safe_fetch_url(u) is True, u
 
 
 def test_has_map_embed_precedence():

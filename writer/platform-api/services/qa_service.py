@@ -29,9 +29,13 @@ hosts it. Not freeze-gated: QA is observation, not content creation.
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import logging
 import re
+import socket
 from typing import Any, Optional
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -43,6 +47,36 @@ from services import task_service
 logger = logging.getLogger(__name__)
 
 _UA = "Mozilla/5.0 (compatible; ARTools-QA/1.0)"
+_MAX_FETCH_REDIRECTS = 5
+_MAX_FETCH_BYTES = 8_000_000  # cap a page/CSV body so a huge response can't OOM
+
+
+def _host_resolves_public(host: str) -> bool:
+    """True when EVERY IP ``host`` resolves to is public — the DNS half of the
+    SSRF guard (a hostname pointing at a private/loopback/link-local address is
+    blocked). Blocking DNS; call via a thread. Unresolvable → False (fail-closed
+    on the fetch → the page reads needs_human, never a blind internal request)."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return False
+    return True
+
+
+async def _safe_target(url: str) -> bool:
+    """SSRF gate: syntax/IP-literal guard (pure) + a DNS-resolution check."""
+    if not sig.is_safe_fetch_url(url):
+        return False
+    host = (urlparse(url).hostname or "")
+    return await asyncio.to_thread(_host_resolves_public, host)
 
 
 # ---------------------------------------------------------------------------
@@ -131,17 +165,40 @@ def enqueue_qa_review(task_id: str, *, trigger: str = "manual") -> Optional[str]
 # Gathering helpers (IO)
 # ---------------------------------------------------------------------------
 async def _fetch(url: str) -> Optional[str]:
-    """Fetch a page/CSV; None on any failure (fail-open → needs_human)."""
+    """Fetch a page/CSV; None on any failure (fail-open → needs_human).
+
+    SSRF-guarded: redirects are followed MANUALLY so every hop (not just the
+    first) is re-validated against the private-network blocklist + DNS check,
+    and the body is capped at ``_MAX_FETCH_BYTES`` so a huge response can't OOM
+    the worker."""
     try:
         async with httpx.AsyncClient(
             timeout=settings.qa_fetch_timeout_seconds,
-            follow_redirects=True,
+            follow_redirects=False,
             headers={"User-Agent": _UA},
         ) as client:
-            resp = await client.get(url)
-            if resp.status_code >= 400:
-                return None
-            return resp.text
+            current = url
+            for _ in range(_MAX_FETCH_REDIRECTS + 1):
+                if not await _safe_target(current):
+                    return None
+                async with client.stream("GET", current) as resp:
+                    if resp.is_redirect:
+                        loc = resp.headers.get("location")
+                        if not loc:
+                            return None
+                        current = urljoin(current, loc)
+                        continue
+                    if resp.status_code >= 400:
+                        return None
+                    chunks: list[bytes] = []
+                    total = 0
+                    async for chunk in resp.aiter_bytes():
+                        chunks.append(chunk)
+                        total += len(chunk)
+                        if total > _MAX_FETCH_BYTES:
+                            break
+                    return b"".join(chunks).decode(resp.encoding or "utf-8", errors="replace")
+            return None  # too many redirects
     except Exception:
         return None
 
@@ -161,6 +218,8 @@ async def _broken_assets(asset_urls: list[str]) -> list[str]:
         ) as client:
             for url in asset_urls:
                 try:
+                    if not await _safe_target(url):
+                        continue  # never probe an internal/unsafe target
                     resp = await client.head(url)
                     if resp.status_code in (405, 501):
                         resp = await client.get(url)
@@ -393,17 +452,26 @@ def _run_keyword(run_id: str) -> Optional[str]:
 # The review itself
 # ---------------------------------------------------------------------------
 async def run_qa_review_job(job: dict) -> None:
+    """Async-job wrapper: run the review and discard the row (the panel +
+    notifications carry the result)."""
     payload = job.get("payload") or {}
     task_id = payload.get("task_id")
-    trigger = payload.get("trigger") or "status"
     if not task_id:
         raise ValueError("qa_review: missing task_id")
+    await review_task(str(task_id), trigger=payload.get("trigger") or "status")
 
+
+async def review_task(task_id: str, *, trigger: str = "manual") -> Optional[dict]:
+    """Run one task's QA review end-to-end (rubric → verdict → persist → board
+    outcome) and RETURN the persisted ``qa_reviews`` row (verdict / checks /
+    issues / narrative / composite), or None when the task is gone or already
+    closed. Shared by the async job AND the /qa chat's confirm path, which
+    formats the returned detail inline so a failure explains itself in chat."""
     supabase = get_supabase()
     rows = supabase.table("tasks").select("*").eq("id", task_id).limit(1).execute().data
     if not rows:
         logger.warning("qa_review_task_gone", extra={"task_id": task_id})
-        return
+        return None
     task = rows[0]
     # The enqueue guard ran at transition time; the task may have been
     # completed or trashed while the job sat in the queue. Reviewing it then
@@ -411,7 +479,7 @@ async def run_qa_review_job(job: dict) -> None:
     # the board) or grow subtasks under a trashed one — skip instead.
     if task.get("completed") or task.get("deleted_at"):
         logger.info("qa_review_task_closed_before_run", extra={"task_id": task_id})
-        return
+        return None
     client = None
     if task.get("client_id"):
         crows = (
@@ -479,6 +547,7 @@ async def run_qa_review_job(job: dict) -> None:
     logger.info("qa_review_done", extra={
         "task_id": task_id, "rubric": rubric, "verdict": verdict["verdict"],
     })
+    return review
 
 
 async def _run_rubric(
@@ -491,7 +560,10 @@ async def _run_rubric(
         supabase.table("tasks").select("name, description")
         .eq("parent_task_id", task["id"]).is_("deleted_at", "null").execute()
     ).data or []
-    keyword = sig.keyword_from_task(task)
+    # A website page's descriptive title is NOT its keyword — a renamed page must
+    # supply the keyword via the field / a KW: marker, or the checks read
+    # 'could not verify' (needs_human), never a false FAIL against the title.
+    keyword = sig.keyword_from_task(task, allow_full_name=rubric != sig.RUBRIC_PAGE)
     composite: Optional[float] = None
 
     if rubric == sig.RUBRIC_BLOG:
@@ -641,12 +713,24 @@ async def _website_page_checks(
     assets = sig.asset_urls_of(html, url, cap=settings.qa_asset_check_cap)
     asset_list = assets["stylesheets"] + assets["images"]
     if asset_list:
-        dead = await _broken_assets(asset_list)
-        checks.append(sig._check(
-            "asset_integrity", "Page assets load (CSS + images)", not dead,
-            note=("dead: " + ", ".join(dead[:3]) + (" …" if len(dead) > 3 else ""))
-            if dead else f"{len(asset_list)} asset(s) OK",
-        ))
+        dead = set(await _broken_assets(asset_list))
+        # A dead STYLESHEET breaks the render → blocking. A dead IMAGE is a
+        # broken-image slot on an otherwise-fine page → advisory (owner ruling
+        # 2026-07-22: don't bounce a page over one 404'd image).
+        dead_css = [u for u in assets["stylesheets"] if u in dead]
+        dead_img = [u for u in assets["images"] if u in dead]
+        if assets["stylesheets"]:
+            checks.append(sig._check(
+                "asset_integrity", "Stylesheets load", not dead_css,
+                note=("dead CSS: " + ", ".join(dead_css[:3]) + (" …" if len(dead_css) > 3 else ""))
+                if dead_css else f"{len(assets['stylesheets'])} stylesheet(s) OK",
+            ))
+        if assets["images"]:
+            checks.append(sig._check(
+                "image_assets", "Images load", not dead_img, blocking=False,
+                note=("dead images: " + ", ".join(dead_img[:3]) + (" …" if len(dead_img) > 3 else ""))
+                if dead_img else f"{len(assets['images'])} image(s) OK",
+            ))
     # 2. Rendered screenshot judged by vision (DataForSEO capture — no Chromium
     #    in the image; only HIGH-confidence breakage bounces, everything
     #    uncertain is fail-open needs_human).
@@ -893,8 +977,10 @@ def _readiness_deliverable(task: dict) -> tuple[Optional[str], str]:
 
 def _readiness_keyword(task: dict) -> tuple[Optional[str], str]:
     """Resolve the target keyword + where it came from ('set' via field/marker/
-    name, or 'auto' from a linked content run)."""
-    kw = sig.keyword_from_task(task)
+    name, or 'auto' from a linked content run). Called only for the website-page
+    rubric, so the renamed-name fallback is OFF — readiness must not claim a
+    keyword is present just because the page task has a descriptive title."""
+    kw = sig.keyword_from_task(task, allow_full_name=False)
     if kw:
         return kw, "set"
     if task.get("source") == "content_run" and task.get("source_ref"):

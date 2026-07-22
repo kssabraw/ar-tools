@@ -476,16 +476,31 @@ async def maybe_handle_web(message: str, history: list[dict], sticky_client_id: 
         if is_affirmative(message):
             if not pace_auth.confirm_actor_ok(entry.get("requester"), actor):
                 return {"reply": "Only the person who requested this can confirm it."}
+            # Run the review INLINE and return the full result, so a failure
+            # explains itself here in chat (every blocking issue + why) instead
+            # of only landing on the task panel. The board outcome (bounce +
+            # rework) still applies inside review_task.
+            if on_event:
+                await on_event({"type": "status", "label": f"Running the full QA review on {entry.get('task_name')}"})
+            tname = entry.get("task_name") or "the task"
             try:
-                job_id = await run_in_threadpool(
-                    qa_service.enqueue_qa_review, entry["task_id"], trigger="manual"
-                )
+                review = await qa_service.review_task(entry["task_id"], trigger="manual")
             except Exception as exc:
-                logger.warning("qa_enqueue_failed", extra={"task_id": entry["task_id"], "error": str(exc)})
-                job_id = None
-            reply = (f"Running QA on *{entry.get('task_name')}* now — the verdict lands on the task's "
-                     "QA panel, and I'll flag it here if it fails."
-                     if job_id else "Sorry — I couldn't start that review. Try again.")
+                logger.warning("qa_review_task_failed", extra={"task_id": entry["task_id"], "error": str(exc)})
+                review = None
+                errored = True
+            else:
+                errored = False
+            if review is not None:
+                reply = format_review(review, tname)
+                if review.get("verdict") == sig.FAIL:
+                    reply += ("\n\n_The task's been moved back and a rework item opened for each "
+                              "issue above — fix those, then move it to In QA to re-check._")
+            elif errored:
+                reply = f"Sorry — I hit an error running QA on *{tname}*. Try again in a moment."
+            else:
+                reply = (f"*{tname}* was completed or removed before I could review it — "
+                         "nothing to QA.")
             base = {"reply": reply}
             if entry.get("client_id"):
                 base["client_id"] = entry["client_id"]

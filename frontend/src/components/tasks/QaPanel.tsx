@@ -190,6 +190,11 @@ export function QaPanel({
   })
 
   const running = pendingSince !== null
+  // Block the run until QA can actually work (missing URL/keyword/rubric) — the
+  // banner already says what's missing, so don't let a click produce a
+  // confusing needs-human. `undefined` readiness (still loading) never blocks.
+  const notReady = readiness ? readiness.ready === false : false
+  const runDisabled = running || runMut.isPending || notReady
 
   return (
     <div style={{ marginTop: 18 }}>
@@ -197,8 +202,9 @@ export function QaPanel({
         <div style={{ ...label, marginBottom: 0, flex: 1 }}>QA</div>
         <button
           onClick={() => runMut.mutate()}
-          disabled={running || runMut.isPending}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 11px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#fff', color: '#334155', fontSize: 12, fontWeight: 600, cursor: running ? 'default' : 'pointer', opacity: running ? 0.6 : 1 }}
+          disabled={runDisabled}
+          title={notReady ? 'Add what the panel lists below before running QA' : undefined}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 11px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#fff', color: '#334155', fontSize: 12, fontWeight: 600, cursor: runDisabled ? 'default' : 'pointer', opacity: runDisabled ? 0.6 : 1 }}
         >
           <ShieldCheck size={13} /> {running ? 'Reviewing…' : 'Run QA'}
         </button>
@@ -246,7 +252,7 @@ export function QaPanel({
           </div>
         </div>
       )}
-      {onPageTypeChange && (!rubric || rubric === 'website_page') && (
+      {onPageTypeChange && rubricKey === 'website_page' && (
         <div style={{ marginTop: 8 }}>
           <div style={{ ...label, marginBottom: 3 }}>Page type</div>
           <select
