@@ -362,16 +362,19 @@ async def post_pin_tasks(bodies: list[dict]) -> list[Optional[str]]:
                 logger.warning("maps_dfs_task_post_failed", extra={"error": str(exc), "batch": len(batch)})
                 continue
             for offset, task in enumerate(data.get("tasks") or []):
+                # DataForSEO returns tasks in request order, so alignment is by
+                # position. We only VERIFY against the echoed tag (a mismatch is
+                # logged, not acted on) — reassigning by tag would be unsound
+                # because repost tags collide across keywords (no kw index).
                 idx = start + offset
+                if idx >= len(ids):
+                    break  # more tasks echoed than sent (shouldn't happen)
                 tag = (task.get("data") or {}).get("tag")
-                if tag and 0 <= idx < len(batch) + start and batch[offset].get("tag") != tag:
-                    # Order mismatch (shouldn't happen) — realign by tag.
-                    for j, b in enumerate(bodies):
-                        if b.get("tag") == tag:
-                            idx = j
-                            break
+                if tag and offset < len(batch) and batch[offset].get("tag") != tag:
+                    logger.warning("maps_dfs_task_order_mismatch",
+                                   extra={"expected": batch[offset].get("tag"), "got": tag})
                 tid = task.get("id")
-                if tid and 0 <= idx < len(ids):
+                if tid:
                     ids[idx] = tid
     return ids
 
@@ -430,21 +433,32 @@ async def start_client_scan_dfs(client_id: str, trigger: str = "scheduled") -> d
     n = params["grid_size"]
     points = maps_grid.generate_grid_points(config["center_lat"], config["center_lng"], radius)
 
-    scan = supabase.table("maps_scans").insert({
-        "client_id": client_id, "provider": "dataforseo", "status": "polling", "trigger": trigger,
-        "grid_size": n, "distance": params["distance"], "shape": "square", "radius_miles": radius,
-        "center_lat": config["center_lat"], "center_lng": config["center_lng"],
-        "resource_category": config.get("resource_category") or "googleMaps",
-        "serp_device": config.get("serp_device") or "desktop", "search_terms": keywords,
-    }).execute().data[0]
+    try:
+        scan = supabase.table("maps_scans").insert({
+            "client_id": client_id, "provider": "dataforseo", "status": "polling", "trigger": trigger,
+            "grid_size": n, "distance": params["distance"], "shape": "square", "radius_miles": radius,
+            "center_lat": config["center_lat"], "center_lng": config["center_lng"],
+            "resource_category": config.get("resource_category") or "googleMaps",
+            "serp_device": config.get("serp_device") or "desktop", "search_terms": keywords,
+        }).execute().data[0]
+    except Exception as exc:  # nothing created — surface as a failed job, like LD
+        logger.warning("maps_dfs_scan_insert_failed", extra={"client_id": client_id, "error": str(exc)})
+        return {"status": "failed", "error": str(exc)}
     scan_id = scan["id"]
 
     specs = incircle_pin_specs(keywords, points, n)
-    supabase.table("maps_scan_pins").insert([
-        {"scan_id": scan_id, "keyword": s["keyword"], "row_idx": s["row_idx"],
-         "col_idx": s["col_idx"], "lat": s["lat"], "lng": s["lng"]}
-        for s in specs
-    ]).execute()
+    try:
+        supabase.table("maps_scan_pins").insert([
+            {"scan_id": scan_id, "keyword": s["keyword"], "row_idx": s["row_idx"],
+             "col_idx": s["col_idx"], "lat": s["lat"], "lng": s["lng"]}
+            for s in specs
+        ]).execute()
+    except Exception as exc:  # mark the just-created scan failed rather than orphan it 'polling'
+        logger.warning("maps_dfs_pins_insert_failed", extra={"scan_id": scan_id, "error": str(exc)})
+        supabase.table("maps_scans").update(
+            {"status": "failed", "error": str(exc)[:500]}
+        ).eq("id", scan_id).execute()
+        return {"status": "failed", "error": str(exc)}
 
     device = _device(config)
     zoom, depth = settings.maps_dfs_zoom, settings.maps_dfs_depth
