@@ -15,7 +15,14 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
-from services.slack_assistant.helpers import is_local_client, weak_cities
+from services.slack_assistant.helpers import (
+    build_maps_trend,
+    group_maps_series,
+    is_local_client,
+    weak_cities,
+)
+
+_MAPS_TREND_SCANS = 4  # completed scans folded into the per-keyword trend summary
 
 logger = logging.getLogger(__name__)
 
@@ -244,6 +251,35 @@ def _ctx_maps(supabase, client_id: str, today: date) -> Optional[dict]:
                     weak.append(city)
         if weak:
             out["weak_coverage_areas"] = weak[:10]
+    # Trend: last few COMPLETED scans → per-keyword pack-presence direction, so
+    # the assistant can see movement, not just the latest snapshot. The full
+    # series lives behind the maps_history tool; this is the at-a-glance read.
+    completed = (
+        supabase.table("maps_scans")
+        .select("id, completed_at")
+        .eq("client_id", client_id)
+        .eq("status", "complete")
+        .order("completed_at", desc=True)
+        .limit(_MAPS_TREND_SCANS)
+        .execute()
+    ).data or []
+    if len(completed) >= 2:
+        rows = (
+            supabase.table("maps_scan_results")
+            .select("scan_id, keyword, average_rank, found_pins, total_pins, top3_pins")
+            .in_("scan_id", [c["id"] for c in completed])
+            .execute()
+        ).data or []
+        series = group_maps_series(completed, rows)
+        trend = [build_maps_trend(kw, series[kw]) for kw in sorted(series) if len(series[kw]) >= 2]
+        if trend:
+            out["trend"] = trend[:15]
+            out["trend_note"] = (
+                "pack_presence_pct (top-3 pins / total) is the honest coverage number — read "
+                "it first; average_rank is over FOUND pins only. Negative average_rank_delta / "
+                "positive pack_presence_delta = improvement. Call the maps_history tool for the "
+                "full dated series and older scans."
+            )
     alerts = (
         supabase.table("maps_alerts")
         .select("keyword, alert_type, message, triggered_on")

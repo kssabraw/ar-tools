@@ -325,6 +325,167 @@ def test_list_nonindexed_collects_reasons_and_skips_indexed(monkeypatch):
     assert payload["inspection_errors"] and payload["inspection_errors"][0]["url"] == "https://ex.com/d"
 
 
+# ---------------------------------------------------------------------------
+# Maps geo-grid trend helpers (pure) + the maps_history tool + _ctx_maps trend
+# ---------------------------------------------------------------------------
+class _FakeExec:
+    def __init__(self, data):
+        self.data = data
+
+
+class _FakeQuery:
+    """A chainable no-op query; each execute() pops the next canned result for
+    its table (FIFO, so multiple same-table queries return in call order)."""
+
+    def __init__(self, queue):
+        self._queue = queue
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def in_(self, *a, **k):
+        return self
+
+    def ilike(self, *a, **k):
+        return self
+
+    def is_(self, *a, **k):
+        return self
+
+    def order(self, *a, **k):
+        return self
+
+    def limit(self, *a, **k):
+        return self
+
+    def execute(self):
+        return _FakeExec(self._queue.pop(0) if self._queue else [])
+
+
+class _FakeSupabase:
+    def __init__(self, by_table):
+        self._by_table = {t: list(v) for t, v in by_table.items()}
+
+    def table(self, name):
+        return _FakeQuery(self._by_table.setdefault(name, []))
+
+
+def test_maps_series_point_pack_presence():
+    pt = slack_assistant.maps_series_point(
+        {"average_rank": 2.0, "found_pins": 10, "total_pins": 25, "top3_pins": 5}, "2026-07-01"
+    )
+    assert pt["pack_presence_pct"] == 20.0  # 5/25
+    assert pt["scanned_at"] == "2026-07-01"
+    z = slack_assistant.maps_series_point({"total_pins": 0, "top3_pins": 0}, None)
+    assert z["pack_presence_pct"] is None  # zero total never divides
+
+
+def test_group_maps_series_orders_oldest_first_and_drops_orphans():
+    scans = [
+        {"id": "s2", "completed_at": "2026-07-08"},
+        {"id": "s1", "completed_at": "2026-07-01"},
+    ]
+    results = [
+        {"scan_id": "s1", "keyword": "roofing", "total_pins": 25, "top3_pins": 5},
+        {"scan_id": "s2", "keyword": "roofing", "total_pins": 25, "top3_pins": 10},
+        {"scan_id": "sX", "keyword": "roofing", "total_pins": 25, "top3_pins": 99},  # orphan
+    ]
+    series = slack_assistant.group_maps_series(scans, results)
+    assert [p["pack_presence_pct"] for p in series["roofing"]] == [20.0, 40.0]
+
+
+def test_build_maps_trend_direction_and_deltas():
+    series = [
+        {"pack_presence_pct": 20.0, "average_rank": 4.0, "found_pins": 10, "total_pins": 25, "top3_pins": 5},
+        {"pack_presence_pct": 40.0, "average_rank": 2.5, "found_pins": 18, "total_pins": 25, "top3_pins": 10},
+    ]
+    out = slack_assistant.build_maps_trend("roofing", series)
+    assert out["pack_presence_delta"] == 20.0
+    assert out["average_rank_delta"] == -1.5  # lower rank = improved
+    assert out["direction"] == "improving"
+    assert out["pack_presence_series"] == [20.0, 40.0]
+    solo = slack_assistant.build_maps_trend("roofing", series[:1])
+    assert "direction" not in solo and solo["scans"] == 1  # single scan → no deltas
+
+
+def test_build_maps_trend_flat_when_movement_is_noise():
+    series = [
+        {"pack_presence_pct": 40.0, "average_rank": 2.0, "found_pins": 18, "total_pins": 25, "top3_pins": 10},
+        {"pack_presence_pct": 41.0, "average_rank": 2.1, "found_pins": 18, "total_pins": 25, "top3_pins": 10},
+    ]
+    assert slack_assistant.build_maps_trend("x", series)["direction"] == "flat"
+
+
+def test_run_maps_history_builds_series(monkeypatch):
+    import asyncio
+    import json
+
+    scans = [
+        {"id": "s2", "completed_at": "2026-07-08", "trigger": "scheduled"},
+        {"id": "s1", "completed_at": "2026-07-01", "trigger": "manual"},
+    ]
+    results = [
+        {"scan_id": "s1", "keyword": "roofing wooster", "average_rank": 4.0,
+         "found_pins": 10, "total_pins": 25, "top3_pins": 5, "top10_pins": 9},
+        {"scan_id": "s2", "keyword": "roofing wooster", "average_rank": 2.5,
+         "found_pins": 18, "total_pins": 25, "top3_pins": 12, "top10_pins": 20},
+    ]
+    alerts = [{"keyword": "roofing wooster", "alert_type": "maps_decline",
+               "message": "drop", "created_at": "2026-07-08", "resolved_at": None}]
+    fake = _FakeSupabase(
+        {"maps_scans": [scans], "maps_scan_results": [results], "maps_alerts": [alerts]}
+    )
+    monkeypatch.setattr(slack_assistant.llm, "get_supabase", lambda: fake)
+    out = asyncio.run(slack_assistant._run_maps_history("c1", {}))
+    payload = json.loads(out)
+    assert payload["scans_analyzed"] == 2
+    kw = payload["keywords"][0]
+    assert kw["keyword"] == "roofing wooster"
+    assert kw["summary"]["direction"] == "improving"
+    assert [p["pack_presence_pct"] for p in kw["series_oldest_first"]] == [20.0, 48.0]
+    assert payload["recent_alerts"]
+
+
+def test_run_maps_history_no_scans(monkeypatch):
+    import asyncio
+
+    fake = _FakeSupabase({"maps_scans": [[]]})
+    monkeypatch.setattr(slack_assistant.llm, "get_supabase", lambda: fake)
+    out = asyncio.run(slack_assistant._run_maps_history("c1", {}))
+    assert "No completed geo-grid scans" in out
+
+
+def test_ctx_maps_includes_trend_over_completed_scans():
+    from datetime import date
+
+    latest_scan = [{"id": "s2", "status": "complete", "created_at": "2026-07-08"}]
+    latest_results = [{"keyword": "roofing", "average_rank": 2.5, "top3_pins": 12,
+                       "top10_pins": 20, "report_weak_locations": None}]
+    completed = [
+        {"id": "s2", "completed_at": "2026-07-08"},
+        {"id": "s1", "completed_at": "2026-07-01"},
+    ]
+    trend_results = [
+        {"scan_id": "s1", "keyword": "roofing", "average_rank": 4.0,
+         "found_pins": 10, "total_pins": 25, "top3_pins": 5},
+        {"scan_id": "s2", "keyword": "roofing", "average_rank": 2.5,
+         "found_pins": 18, "total_pins": 25, "top3_pins": 12},
+    ]
+    fake = _FakeSupabase({
+        "maps_scans": [latest_scan, completed],
+        "maps_scan_results": [latest_results, trend_results],
+        "maps_alerts": [[]],
+    })
+    out = slack_assistant._ctx_maps(fake, "c1", date(2026, 7, 8))
+    assert out["latest_scan_status"] == "complete"
+    assert "trend" in out and "trend_note" in out
+    t = out["trend"][0]
+    assert t["keyword"] == "roofing" and t["direction"] == "improving"
+
+
 def test_context_providers_cover_all_modules():
     keys = [k for k, _ in slack_assistant._CONTEXT_PROVIDERS]
     for expected in (

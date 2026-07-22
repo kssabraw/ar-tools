@@ -108,6 +108,87 @@ def weak_cities(report_weak_locations) -> list[str]:
     return out
 
 
+# ── Maps geo-grid trend series (shared by the context provider + maps_history) ──
+def maps_series_point(result_row: dict, scanned_at) -> dict:
+    """One geo-grid scan's coverage numbers for a keyword. Pure, shape-tolerant.
+
+    pack_presence_pct (top-3 pins / total) is the honest coverage number;
+    average_rank is over FOUND pins only, so it must be read against
+    found_pins/total_pins, never on its own."""
+    total = result_row.get("total_pins") or 0
+    top3 = result_row.get("top3_pins") or 0
+    return {
+        "scanned_at": scanned_at,
+        "average_rank": result_row.get("average_rank"),
+        "found_pins": result_row.get("found_pins"),
+        "total_pins": total,
+        "top3_pins": top3,
+        "pack_presence_pct": round(100.0 * top3 / total, 1) if total else None,
+    }
+
+
+def group_maps_series(scans: list[dict], results: list[dict]) -> dict[str, list[dict]]:
+    """Group per-keyword scan results into a series oldest→newest. Pure.
+
+    ``scans`` are maps_scans rows ({id, completed_at, …}); ``results`` are
+    maps_scan_results rows ({scan_id, keyword, …}). Results whose scan isn't in
+    ``scans`` are dropped. Returns {keyword: [point, …]} (points from
+    ``maps_series_point``), each list sorted oldest→newest by scan date."""
+    meta = {s["id"]: s for s in scans}
+    by_kw: dict[str, list[tuple]] = {}
+    for r in results:
+        s = meta.get(r.get("scan_id"))
+        if not s:
+            continue
+        when = s.get("completed_at") or ""
+        by_kw.setdefault(r.get("keyword"), []).append((when, maps_series_point(r, when or None)))
+    return {
+        kw: [pt for _, pt in sorted(pts, key=lambda t: t[0])]
+        for kw, pts in by_kw.items()
+    }
+
+
+def _maps_direction(presence_delta, rank_delta) -> str:
+    """Trajectory from a keyword's latest-vs-previous deltas. Pure.
+
+    Coverage first: a ≥3-point pack-presence move decides it; else a ≥0.3
+    average-rank move (lower rank = better); else flat."""
+    if presence_delta is not None and abs(presence_delta) >= 3:
+        return "improving" if presence_delta > 0 else "declining"
+    if rank_delta is not None and abs(rank_delta) >= 0.3:
+        return "improving" if rank_delta < 0 else "declining"
+    return "flat"
+
+
+def build_maps_trend(keyword: str, series: list[dict]) -> dict:
+    """Compact latest-vs-previous trend summary for one keyword. Pure.
+
+    ``series`` is oldest→newest ``maps_series_point`` dicts (≥1). Emits the
+    latest coverage numbers, latest-vs-previous deltas (negative average_rank_delta
+    = improved), a direction, and the pack-presence spark over the window."""
+    latest = series[-1]
+    prev = series[-2] if len(series) >= 2 else None
+    out: dict = {
+        "keyword": keyword,
+        "scans": len(series),
+        "pack_presence_pct": latest["pack_presence_pct"],
+        "average_rank": latest["average_rank"],
+        "found_pins": latest["found_pins"],
+        "total_pins": latest["total_pins"],
+        "pack_presence_series": [p["pack_presence_pct"] for p in series],
+    }
+    if prev is not None:
+        pd = rd = None
+        if latest["pack_presence_pct"] is not None and prev["pack_presence_pct"] is not None:
+            pd = round(latest["pack_presence_pct"] - prev["pack_presence_pct"], 1)
+            out["pack_presence_delta"] = pd
+        if latest["average_rank"] is not None and prev["average_rank"] is not None:
+            rd = round(latest["average_rank"] - prev["average_rank"], 2)
+            out["average_rank_delta"] = rd
+        out["direction"] = _maps_direction(pd, rd)
+    return out
+
+
 def format_history(history: list[dict]) -> str:
     """Render prior thread turns as a plain transcript for the prompt. Pure.
 
