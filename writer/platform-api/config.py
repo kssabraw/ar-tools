@@ -81,6 +81,12 @@ class Settings(BaseSettings):
         "keyword_market", "maps_scan", "maps_analyze", "client_report",
         "notification_dispatch", "local_seo_generate",
         "local_seo_reoptimize_url", "local_seo_silo", "asana_push",
+        # Interactive local-SEO actions the user awaits on-screen (precheck /
+        # analyze / score / find_page / related_pages / social_posts). Sibling of
+        # local_seo_generate above — must not queue behind the daily scheduler
+        # burst on the MAIN lane (ops fix: the "Create new page" precheck crawl
+        # stalled 10–30 min behind reopt_plan/gsc_page_ingest/strategy_review).
+        "local_seo_action",
         # User-awaited GitHub publish with image generation (minutes-long, like
         # local_seo_generate) — must not queue behind the daily scheduler burst.
         "blog_github_publish",
