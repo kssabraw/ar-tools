@@ -42,6 +42,7 @@ def _suite_rows(client_id: str) -> list[dict]:
             "mode": b["mode"],
             "status": b["status"],
             "created_at": b["created_at"],
+            "github_publish": bool(b.get("github_publish")),
             "progress": _norm_progress(progress.get(b["id"])),
         })
     return rows

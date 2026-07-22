@@ -155,6 +155,7 @@ async def create_batch(
             weekdays=body.weekdays, day_of_month=body.day_of_month,
             week_of_month=body.week_of_month, auto_publish=body.auto_publish,
             wp_publish=body.wp_publish, wp_status=body.wp_status,
+            github_publish=body.github_publish,
         )
     except ValueError as exc:                       # bad cadence params from the planner
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -193,15 +194,43 @@ async def list_batches(client_id: UUID, auth: dict = Depends(require_auth)) -> d
     return {"batches": batches}
 
 
+def _attach_publish_status(items: list[dict]) -> None:
+    """Enrich run-backed items with their run's publish state (`published_at` +
+    `published_url`), so the Scheduled Content card can show generated-vs-live per
+    item without an N+1. Non-run items (local SEO / ecommerce pages) get null
+    publish fields for now — the card treats them as generated-only."""
+    run_ids = [
+        it["result_ref"] for it in items
+        if it.get("result_kind") == "run" and it.get("result_ref")
+    ]
+    pub: dict[str, dict] = {}
+    if run_ids:
+        try:
+            rows = (
+                get_supabase().table("runs")
+                .select("id, published_at, published_url, published_doc_url")
+                .in_("id", run_ids).execute()
+            ).data or []
+            pub = {r["id"]: r for r in rows}
+        except Exception as exc:  # noqa: BLE001 — degrade to no publish info
+            logger.warning("content_batch.publish_status_failed", extra={"error": str(exc)})
+    for it in items:
+        r = pub.get(it.get("result_ref") or "")
+        it["published_at"] = (r or {}).get("published_at")
+        it["published_url"] = (r or {}).get("published_url") or (r or {}).get("published_doc_url")
+
+
 @router.get("/clients/{client_id}/content-batches/{batch_id}")
 async def get_batch(
     client_id: UUID, batch_id: UUID, auth: dict = Depends(require_auth)
 ) -> dict:
-    """A single batch + its items."""
+    """A single batch + its items (each item enriched with its live publish URL)."""
     batch = store.get_batch(str(batch_id))
     if not batch or batch["client_id"] != str(client_id):
         raise HTTPException(status_code=404, detail="batch_not_found")
-    batch["items"] = store.list_items(str(batch_id))
+    items = store.list_items(str(batch_id))
+    _attach_publish_status(items)
+    batch["items"] = items
     return batch
 
 
