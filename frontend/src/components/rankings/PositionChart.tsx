@@ -45,7 +45,7 @@ export function PositionChart({ points, height = 220 }: { points: Pt[]; height?:
   return (
     <div style={{ position: 'relative' }}>
       <svg
-        width="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none"
+        width="100%" height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none"
         style={{ display: 'block' }}
         onMouseLeave={() => setHover(null)}
         onMouseMove={(e) => {

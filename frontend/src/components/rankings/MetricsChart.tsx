@@ -27,7 +27,7 @@ export function MetricsChart({ points, height = 160 }: { points: Pt[]; height?: 
     points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${scale(sel(p)).toFixed(1)}`).join(' ')
 
   return (
-    <svg width="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{ display: 'block' }}>
+    <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{ display: 'block' }}>
       <text x={2} y={padT + 4} fontSize={10} fill="#6366f1">clicks</text>
       <text x={width - 2} y={padT + 4} textAnchor="end" fontSize={10} fill="#0ea5e9">impr.</text>
       <path d={line(p => p.clicks, yC)} fill="none" stroke="#6366f1" strokeWidth={2} strokeLinejoin="round" />
