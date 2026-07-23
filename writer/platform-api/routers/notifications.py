@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
 from models.notifications import (
+    DismissRequest,
     MyNotificationsResponse,
     Notification,
     OkResponse,
@@ -147,4 +148,28 @@ async def mark_all_read(client_id: UUID, auth: dict = Depends(require_auth)) -> 
     supabase.table("notifications").update({"status": "read", "read_at": "now()"}).eq(
         "client_id", str(client_id)
     ).eq("status", "unread").execute()
+    return OkResponse()
+
+
+@router.post("/clients/{client_id}/notifications/dismiss", response_model=OkResponse)
+async def dismiss_many(
+    client_id: UUID,
+    body: DismissRequest | None = None,
+    auth: dict = Depends(require_auth),
+) -> OkResponse:
+    """Dismiss a set of a client's notifications in one call — the bulk
+    "select all → delete" action. With `ids`, only those (scoped to the client)
+    are dismissed; without them, every non-dismissed notification for the client
+    is dismissed."""
+    supabase = get_supabase()
+    query = (
+        supabase.table("notifications")
+        .update({"status": "dismissed"})
+        .eq("client_id", str(client_id))
+    )
+    if body and body.ids:
+        query = query.in_("id", [str(i) for i in body.ids])
+    else:
+        query = query.neq("status", "dismissed")
+    query.execute()
     return OkResponse()
