@@ -47,6 +47,14 @@ def compute_status(series: Sequence[DatePoint]) -> str:
     """Classify a keyword's trend into the §7 taxonomy.
 
     Lower position is better (1 = top). Improving = position decreasing.
+
+    The trend band tracks the *net movement* over the window — the first ranked
+    position vs. the latest — so the label always agrees with the UI trend arrow
+    (computed from the same series): climbed more than TREND_THRESHOLD positions
+    → "climbing", fell more than TREND_THRESHOLD → "dropping", any net move within
+    ±TREND_THRESHOLD → "stable". This deliberately does NOT require a minimum
+    number of checks: two checks are enough to measure a real move (a single
+    check has no movement yet and stays "stable").
     """
     points = _sorted_points(series)
     non_null = [p for _, p in points if p is not None]
@@ -62,26 +70,23 @@ def compute_status(series: Sequence[DatePoint]) -> str:
     ):
         return "deindex_risk"
 
-    # Too little history to judge a trend — present but inconclusive.
-    if len(non_null) < 4:
+    # A single ranked check — present, but no movement to measure yet.
+    if len(non_null) < 2:
         return "stable"
 
-    # Trend = second half vs first half (non-overlapping, so a transient spike
-    # in the middle doesn't dominate either side). Positive delta = worse.
-    mid = len(non_null) // 2
-    first_half = non_null[:mid]
-    second_half = non_null[mid:]
-    delta = mean(second_half) - mean(first_half)
+    # Net movement over the window: first vs. latest ranked position. Positive =
+    # climbed (position decreased). Mirrors the UI trend arrow's magnitude.
+    improvement = non_null[0] - non_null[-1]
 
     swing = non_null[-VOLATILITY_WINDOW:]
     swing_range = max(swing) - min(swing)
 
     # Swung hard but landed back near baseline → drop-and-recover.
-    if swing_range >= VOLATILE_RANGE_THRESHOLD and abs(delta) < TREND_THRESHOLD:
+    if swing_range >= VOLATILE_RANGE_THRESHOLD and abs(improvement) < TREND_THRESHOLD:
         return "volatile"
-    if delta <= -TREND_THRESHOLD:
+    if improvement > TREND_THRESHOLD:
         return "climbing"
-    if delta >= TREND_THRESHOLD:
+    if improvement < -TREND_THRESHOLD:
         return "dropping"
     return "stable"
 
