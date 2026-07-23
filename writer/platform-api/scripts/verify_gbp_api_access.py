@@ -10,7 +10,11 @@ The preflight check for the GBP Posts module (docs/modules/gbp-posts-module-prd-
      account actually added as a Manager somewhere).
   4. The **v4 Google My Business API** answers ``localPosts.list`` — the surface
      posts actually publish through (a separate enableable API from the v1 pair).
-  5. Optionally (``--post-test accounts/X/locations/Y``) creates a minimal
+  5. The **Business Profile Performance API** answers
+     ``fetchMultiDailyMetricsTimeSeries`` — the surface the (dormant) GBP
+     reporting/metrics layer reads. Enabled + quota'd SEPARATELY from both the v1
+     pair and v4 Posts, so it can be dark even when Posts is green.
+  6. Optionally (``--post-test accounts/X/locations/Y``) creates a minimal
      STANDARD post and immediately deletes it — proving write access. Only point
      this at a listing you own (the agency's own, not a client's).
 
@@ -21,7 +25,9 @@ Run it wherever the key lives:
     python scripts/verify_gbp_api_access.py [--post-test accounts/X/locations/Y]
 
 Every failure prints the classified cause + the fix (API not enabled vs quota
-not granted vs SA not a Manager). Exit code 0 = read path fully green.
+not granted vs SA not a Manager). Exit code 0 = both read surfaces (Posts v4 +
+Performance) green; a dark Performance API alone exits non-zero (5) so flipping
+on ``gbp_metrics_enabled`` waits for a clean run.
 
 No app imports — standalone on purpose, so it runs from a bare shell with only
 the platform-api requirements (google-auth, httpx) installed.
@@ -30,6 +36,7 @@ the platform-api requirements (google-auth, httpx) installed.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import sys
@@ -40,6 +47,7 @@ SCOPE = "https://www.googleapis.com/auth/business.manage"
 V1_ACCOUNTS = "https://mybusinessaccountmanagement.googleapis.com/v1/accounts"
 V1_INFO = "https://mybusinessbusinessinformation.googleapis.com/v1"
 V4 = "https://mybusiness.googleapis.com/v4"
+PERF = "https://businessprofileperformance.googleapis.com/v1"
 TIMEOUT = 30
 
 
@@ -199,6 +207,47 @@ def main() -> int:
     _print("4. v4 Google My Business API (localPosts.list)", True, f"{n_posts} existing post(s) on {loc_name}")
 
     # ------------------------------------------------------------------ step 5
+    # Business Profile Performance API — the surface the GBP reporting/metrics
+    # layer reads (impressions, calls, website clicks, directions, messages). A
+    # SEPARATELY enableable + quota'd API: it can be dark (0 QPM) even when v4
+    # Posts is already approved, so it gets its own probe. Prove read access with
+    # a tiny 1-day window (data lags ~3–5 days, so ask for a recent-but-settled
+    # day). Non-fatal: Posts may be green while this is not — reported at the end.
+    probe_day = datetime.date.today() - datetime.timedelta(days=5)
+    perf_url = f"{PERF}/{loc_name}:fetchMultiDailyMetricsTimeSeries"
+    perf_params = [
+        ("dailyMetrics", "CALL_CLICKS"),
+        ("dailyMetrics", "WEBSITE_CLICKS"),
+        ("dailyRange.startDate.year", probe_day.year),
+        ("dailyRange.startDate.month", probe_day.month),
+        ("dailyRange.startDate.day", probe_day.day),
+        ("dailyRange.endDate.year", probe_day.year),
+        ("dailyRange.endDate.month", probe_day.month),
+        ("dailyRange.endDate.day", probe_day.day),
+    ]
+    resp = client.get(perf_url, params=perf_params)
+    perf_ok = resp.status_code == 200
+    if perf_ok:
+        n_series = len(resp.json().get("multiDailyMetricTimeSeries", []))
+        _print(
+            "5. Business Profile Performance API (fetchMultiDailyMetricsTimeSeries)",
+            True,
+            f"{n_series} metric series on {loc_name} for {probe_day.isoformat()}",
+        )
+    else:
+        _print(
+            "5. Business Profile Performance API (fetchMultiDailyMetricsTimeSeries)",
+            False,
+            diagnose(resp, "Business Profile Performance API"),
+        )
+        print(
+            "    !! This is the API the GBP REPORTING/metrics tool reads. It is enabled and\n"
+            "       quota'd SEPARATELY from v4 Posts — look for 'Business Profile Performance\n"
+            "       API' in the GCP API library, and note its quota can be 0 even when Posts is\n"
+            "       approved. Keep gbp_metrics_enabled off until this line is PASS."
+        )
+
+    # ------------------------------------------------------------------ step 6
     if args.post_test:
         parent = f"{V4}/{args.post_test.strip('/')}"
         body = {
@@ -208,18 +257,22 @@ def main() -> int:
         }
         resp = client.post(f"{parent}/localPosts", json=body)
         if resp.status_code != 200:
-            _print("5. write test (localPosts.create)", False, diagnose(resp, "Google My Business API (v4)"))
-            return 5
+            _print("6. write test (localPosts.create)", False, diagnose(resp, "Google My Business API (v4)"))
+            return 6
         created = resp.json()
         post_name = created.get("name", "")
-        _print("5. write test (localPosts.create)", True, f"state={created.get('state')} name={post_name}")
+        _print("6. write test (localPosts.create)", True, f"state={created.get('state')} name={post_name}")
         d = client.delete(f"{V4}/{post_name}")
-        _print("5. write test cleanup (localPosts.delete)", d.status_code == 200, f"HTTP {d.status_code}")
+        _print("6. write test cleanup (localPosts.delete)", d.status_code == 200, f"HTTP {d.status_code}")
 
-    print("\nRead path fully green — the service account can reach the Posts API surface.")
+    print("\nPosts (v4) read path green — the account can reach the Posts API surface.")
+    if perf_ok:
+        print("Performance API read path green — the GBP reporting/metrics layer can go live.")
+    else:
+        print("Performance API NOT ready — GBP reporting stays dark until the step-5 fix lands.")
     if not args.post_test:
         print("Re-run with --post-test accounts/X/locations/Y (a listing you own) to prove write access.")
-    return 0
+    return 0 if perf_ok else 5
 
 
 if __name__ == "__main__":
