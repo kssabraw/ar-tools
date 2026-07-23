@@ -19,12 +19,13 @@ from config import settings
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from db.supabase_client import get_supabase
-from middleware.auth import require_auth
+from middleware.auth import require_admin, require_auth
 from models.gbp_metrics import (
     GbpBackfillResponse,
     GbpIngestResponse,
     GbpLocation,
     GbpLocationCreateRequest,
+    GbpPerformanceDiagnostic,
     GbpServiceAccountInfo,
     GbpSyncRun,
     GbpVerifyResponse,
@@ -46,6 +47,20 @@ async def get_service_account_email(auth: dict = Depends(require_auth)) -> GbpSe
         return GbpServiceAccountInfo(email=gbp.get_service_account_email())
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.get("/gbp/diagnose-performance", response_model=GbpPerformanceDiagnostic)
+async def diagnose_performance(
+    auth: dict = Depends(require_admin),
+) -> GbpPerformanceDiagnostic:
+    """Admin-only: prove (or diagnose) live Business Profile Performance API access.
+
+    Runs OUTSIDE the ``gbp_metrics_enabled`` gate on purpose — it's the check you
+    run to decide whether that flag can be turned on. Uses the OAuth-preferred
+    credential path the reporting tool will use, then walks accounts → locations →
+    a 1-day metric fetch, classifying any failure (API not enabled / quota 0 / not
+    a Manager) into per-step detail. No data is written."""
+    return GbpPerformanceDiagnostic(**gbp.diagnose_performance())
 
 
 @router.get("/gbp/resolve-locations", response_model=ResolveLocationsResponse)

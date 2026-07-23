@@ -195,10 +195,12 @@ def _credentials():
     )
 
 
-def _build(service_name: str, version: str = "v1"):
+def _build(service_name: str, version: str = "v1", creds=None):
     from googleapiclient.discovery import build  # noqa: PLC0415
 
-    return build(service_name, version, credentials=_credentials(), cache_discovery=False)
+    return build(
+        service_name, version, credentials=creds or _credentials(), cache_discovery=False
+    )
 
 
 def build_performance_client():
@@ -286,15 +288,21 @@ def _google_date(d: date) -> dict:
 
 
 def fetch_daily_metrics(
-    location_id: str, start: date, end: date, metrics: Optional[list[str]] = None
+    location_id: str,
+    start: date,
+    end: date,
+    metrics: Optional[list[str]] = None,
+    client=None,
 ) -> list[dict]:
     """Fetch a daily metric time-series window for one location.
 
     ``location_id`` must be normalized (``locations/{id}``). Returns the flat
     parsed records (see ``parse_time_series``). Raises on API error so the
-    caller can classify it (e.g. a 403 → no_access).
+    caller can classify it (e.g. a 403 → no_access). ``client`` lets a caller
+    inject a pre-built Performance client (e.g. one authed via the agency OAuth
+    path); defaults to the service-account client.
     """
-    client = build_performance_client()
+    client = client or build_performance_client()
     metrics = metrics or DEFAULT_METRICS
     request = (
         client.locations().fetchMultiDailyMetricsTimeSeries(
@@ -338,3 +346,152 @@ def verify_location_access(location_id: str) -> VerifyResult:
         code = gsc_service._extract_status_code(exc)
         logger.info("gbp_verify_failed", extra={"location_id": normalized, "status_code": code})
         return classify_access_error(code)
+
+
+def diagnose_performance() -> dict:
+    """Prove (or diagnose) live Business Profile Performance API access, server-side.
+
+    The preflight the team runs to decide whether ``gbp_metrics_enabled`` can be
+    flipped on — so it deliberately does NOT check that flag. It walks the same
+    layers as scripts/verify_gbp_api_access.py, but uses the **OAuth-preferred**
+    credential path (``gbp_auth.credentials()``: the agency OAuth account when
+    connected, else the service account) — i.e. the exact auth the reporting tool
+    will ship with. Never raises: every failure is classified into the returned
+    ``steps`` so an admin endpoint can render it.
+
+    Returns a dict shaped for ``models.gbp_metrics.GbpPerformanceDiagnostic``.
+    """
+    from datetime import timedelta
+
+    steps: list[dict] = []
+
+    # --- credentials (OAuth-preferred) ------------------------------------
+    try:
+        from services import gbp_auth  # lazy: gbp_auth lazily imports us back
+
+        mode = gbp_auth.auth_mode()
+        if not gbp_auth.is_configured():
+            steps.append(
+                {"step": "credentials", "ok": False, "detail": "no GBP credentials configured"}
+            )
+            return {
+                "ok": False,
+                "auth_mode": mode,
+                "detail": "no_gbp_credentials",
+                "steps": steps,
+            }
+        creds = gbp_auth.credentials()
+    except Exception as exc:  # pragma: no cover - credential build failure
+        logger.error("gbp_diagnose_credential_failed", extra={"error": str(exc)})
+        steps.append({"step": "credentials", "ok": False, "detail": str(exc)})
+        return {"ok": False, "auth_mode": None, "detail": "credential_build_failed", "steps": steps}
+    steps.append({"step": "credentials", "ok": True, "detail": f"auth mode: {mode}"})
+
+    # --- build discovery clients on those creds ---------------------------
+    try:
+        accounts_client = _build("mybusinessaccountmanagement", "v1", creds)
+        info_client = _build("mybusinessbusinessinformation", "v1", creds)
+        perf_client = _build("businessprofileperformance", "v1", creds)
+    except Exception as exc:  # pragma: no cover - client build failure
+        steps.append({"step": "client_build", "ok": False, "detail": str(exc)})
+        return {"ok": False, "auth_mode": mode, "detail": "client_build_failed", "steps": steps}
+
+    # --- accounts.list (Account Management API enabled + reachable) --------
+    try:
+        acct_resp = accounts_client.accounts().list().execute()
+    except Exception as exc:
+        code = gsc_service._extract_status_code(exc)
+        verdict = classify_access_error(code)
+        steps.append(
+            {"step": "accounts.list", "ok": False, "detail": f"{verdict.detail} (http_{code})"}
+        )
+        return {
+            "ok": False,
+            "auth_mode": mode,
+            "detail": verdict.detail,
+            "steps": steps,
+        }
+    accounts = acct_resp.get("accounts", []) or []
+    steps.append(
+        {"step": "accounts.list", "ok": True, "detail": f"{len(accounts)} account(s) visible"}
+    )
+
+    # --- locations.list → first visible location --------------------------
+    location: Optional[str] = None
+    title: Optional[str] = None
+    total_locs = 0
+    for acct in accounts:
+        name = acct.get("name")
+        if not name:
+            continue
+        try:
+            loc_resp = (
+                info_client.accounts()
+                .locations()
+                .list(parent=name, readMask="name,title")
+                .execute()
+            )
+        except Exception as exc:
+            steps.append(
+                {
+                    "step": f"locations.list({name})",
+                    "ok": False,
+                    "detail": f"http_{gsc_service._extract_status_code(exc)}",
+                }
+            )
+            continue
+        locs = loc_resp.get("locations", []) or []
+        total_locs += len(locs)
+        if location is None and locs:
+            location = locs[0].get("name")
+            title = locs[0].get("title")
+    steps.append(
+        {"step": "locations.list", "ok": total_locs > 0, "detail": f"{total_locs} location(s) visible"}
+    )
+    if not location:
+        return {
+            "ok": False,
+            "auth_mode": mode,
+            "accounts_visible": len(accounts),
+            "locations_visible": 0,
+            "detail": "no_visible_location",
+            "steps": steps,
+        }
+
+    # --- the actual Performance API probe (1-day window) ------------------
+    probe_day = date.today() - timedelta(days=5)  # data lags ~3–5 days
+    base = {
+        "auth_mode": mode,
+        "accounts_visible": len(accounts),
+        "locations_visible": total_locs,
+        "location": location,
+        "location_title": title,
+    }
+    try:
+        records = fetch_daily_metrics(
+            normalize_location_id(location),
+            probe_day,
+            probe_day,
+            metrics=["CALL_CLICKS", "WEBSITE_CLICKS"],
+            client=perf_client,
+        )
+        steps.append(
+            {
+                "step": "performance.fetch",
+                "ok": True,
+                "detail": f"{len(records)} record(s) for {probe_day.isoformat()}",
+            }
+        )
+        logger.info("gbp_diagnose_performance_ok", extra={"location": location, "auth_mode": mode})
+        return {**base, "ok": True, "performance_status": 200, "detail": "performance_api_reachable", "steps": steps}
+    except Exception as exc:
+        code = gsc_service._extract_status_code(exc)
+        verdict = classify_access_error(code)
+        steps.append(
+            {"step": "performance.fetch", "ok": False, "detail": f"{verdict.detail} (http_{code})"}
+        )
+        logger.info(
+            "gbp_diagnose_performance_failed",
+            extra={"location": location, "status_code": code, "detail": verdict.detail},
+        )
+        return {**base, "ok": False, "performance_status": code, "detail": verdict.detail, "steps": steps}
