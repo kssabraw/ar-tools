@@ -53,6 +53,7 @@ FREEZE_GATED_JOB_TYPES = {
     "ecommerce_reoptimize_url",
     "syndication_item",
     "content_batch_item",
+    "gbp_post_publish",
 }
 
 _REASON_TITLES = {

@@ -455,6 +455,11 @@ async def gsc_scheduler() -> None:
     from services.task_workload import run_workload_alert as run_native_workload_alert
     from services.pace_digest import run_daily_digest as run_pace_digest
     from services.brand_schedule import enqueue_due_brand_scans
+    from services.gbp_posts_service import (
+        enqueue_due_gbp_post_schedules,
+        enqueue_due_gbp_post_syncs,
+        enqueue_due_gbp_scheduled_posts,
+    )
     from services.client_report_schedule import enqueue_due_report_schedules
     from services.content_batch import enqueue_due_content_items
     from services.freeze import enqueue_due_freeze_checks
@@ -508,6 +513,11 @@ async def gsc_scheduler() -> None:
                 enqueue_due_ingests()
                 # Daily GBP performance-metrics ingest (no-op until enabled).
                 enqueue_due_gbp_metrics()
+                # GBP Posts — daily live-state reconciliation (catches async
+                # REJECTED + imports external posts). The recurring-draft tick +
+                # one-off scheduled publishes are evaluated PER-CYCLE below so
+                # they fire near their local time, not once a day.
+                enqueue_due_gbp_post_syncs()
                 enqueue_due_market()
                 enqueue_due_reports()
                 enqueue_due_gsc_research()
@@ -660,6 +670,11 @@ async def gsc_scheduler() -> None:
             # AI Visibility scheduled scans are self-clocked via each schedule's
             # next_run_at, so they're evaluated every tick (cheap due-query).
             enqueue_due_brand_scans()
+            # GBP Posts — recurring drafts (self-clocked next_run_at) + one-off
+            # scheduled publishes (per-post scheduled_at). Evaluated every tick so
+            # they fire near their local time. No-op until the module is enabled.
+            enqueue_due_gbp_post_schedules()
+            enqueue_due_gbp_scheduled_posts()
             # Client Reporting scheduled reports (Phase 5) — same self-clocked
             # next_run_at pattern; delivery runs after each scheduled render.
             enqueue_due_report_schedules()
