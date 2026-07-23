@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import RedirectResponse
 
 from middleware.auth import require_auth, require_staff
-from services import gbp_auth, gbp_oauth
+from services import gbp_auth, gbp_invitations, gbp_oauth
 
 logger = logging.getLogger(__name__)
 
@@ -78,3 +78,16 @@ async def oauth_disconnect(auth: dict = Depends(require_staff)):
     """Forget the stored refresh token (falls back to service account / env)."""
     gbp_oauth.clear()
     return {"ok": True}
+
+
+@router.get("/gbp/oauth/invitations")
+async def list_invitations(auth: dict = Depends(require_staff)):
+    """Pending GBP manager invitations the connected account has received
+    (i.e. clients who added it as a Manager but not yet accepted)."""
+    return {"invitations": gbp_invitations.list_pending()}
+
+
+@router.post("/gbp/oauth/accept-invitations")
+async def accept_invitations(auth: dict = Depends(require_staff)):
+    """Accept all pending manager invitations so the listings become postable."""
+    return gbp_invitations.accept_all()

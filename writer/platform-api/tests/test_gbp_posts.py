@@ -354,6 +354,30 @@ def test_oauth_safe_return_to_blocks_open_redirect(monkeypatch):
     assert gbp_oauth.safe_return_to(None) == "https://app.example"
 
 
+# ── manager-invitation parsing ───────────────────────────────────────────────
+def test_parse_invitation_location_name():
+    from services import gbp_invitations
+    inv = gbp_invitations.parse_invitation({
+        "name": "accounts/1/invitations/9", "role": "MANAGER",
+        "targetLocation": {"locationName": "Acme Roofing", "address": "123 St"},
+    })
+    assert inv == {"name": "accounts/1/invitations/9", "role": "MANAGER", "business": "Acme Roofing"}
+
+
+def test_parse_invitation_account_fallback():
+    from services import gbp_invitations
+    inv = gbp_invitations.parse_invitation({
+        "name": "accounts/1/invitations/9", "role": "MANAGER",
+        "targetAccount": {"accountName": "Acme Group"},
+    })
+    assert inv["business"] == "Acme Group"
+
+
+def test_parse_invitation_unknown_business():
+    from services import gbp_invitations
+    assert gbp_invitations.parse_invitation({"name": "n", "role": "MANAGER"})["business"] == "a business"
+
+
 # ── client context builder ───────────────────────────────────────────────────
 def test_build_client_context_includes_key_fields():
     ctx = svc.build_client_context({

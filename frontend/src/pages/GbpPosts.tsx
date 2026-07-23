@@ -188,6 +188,11 @@ function ConnectionBar() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['gbp-oauth-status'] }),
     onError: (e: Error) => setNotice({ ok: false, msg: e.message === 'forbidden' ? 'Only an admin/staff user can disconnect.' : e.message }),
   })
+  const acceptMut = useMutation({
+    mutationFn: () => api.post<{ accepted: number; pending: number }>('/gbp/oauth/accept-invitations', {}),
+    onSuccess: (r) => setNotice({ ok: true, msg: r.accepted > 0 ? `Accepted ${r.accepted} access invitation${r.accepted === 1 ? '' : 's'}.` : 'No pending access invitations.' }),
+    onError: (e: Error) => setNotice({ ok: false, msg: e.message === 'forbidden' ? 'Only an admin/staff user can do this.' : e.message }),
+  })
 
   if (!data) return null
   const bar: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 10, fontSize: 13, marginBottom: 16 }
@@ -202,7 +207,10 @@ function ConnectionBar() {
         <div style={{ ...bar, background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#15803d' }}>
           <CheckCircle2 size={15} />
           <span>Connected to Google Business Profile{data.account_email ? ` as ${data.account_email}` : ''}.</span>
-          <button onClick={() => disconnectMut.mutate()} disabled={disconnectMut.isPending} style={{ ...btn('#fff', '#334155'), marginLeft: 'auto' }}>
+          <button onClick={() => acceptMut.mutate()} disabled={acceptMut.isPending} title="Accept manager invitations clients have sent to the connected account" style={{ ...btn('#fff', '#334155'), marginLeft: 'auto' }}>
+            {acceptMut.isPending ? 'Checking…' : 'Accept access invitations'}
+          </button>
+          <button onClick={() => disconnectMut.mutate()} disabled={disconnectMut.isPending} style={btn('#fff', '#334155')}>
             {disconnectMut.isPending ? 'Disconnecting…' : 'Disconnect'}
           </button>
         </div>
