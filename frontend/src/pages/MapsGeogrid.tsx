@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Gauge, Map, Play, Trash2, MapPin, Download, Printer, Square, ToggleLeft, ToggleRight, Bell, Check, X } from 'lucide-react'
+import { ArrowLeft, Gauge, Map, Play, Trash2, MapPin, Download, Printer, Square, ToggleLeft, ToggleRight, Bell, Check, X, ChevronDown, ChevronRight } from 'lucide-react'
 import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
 import type {
@@ -292,6 +292,9 @@ function AtAGlance({ r }: { r: MapsScanResultRow }) {
 // suggested hyper-local pins for the weak zones, with a Regenerate control.
 function LocalRankAnalysis({ r, clientId, scanId }: { r: MapsScanResultRow; clientId: string; scanId: string }) {
   const queryClient = useQueryClient()
+  // Collapsed by default — the report is long, so hide it behind an accordion
+  // and let the user expand the ones they want to read.
+  const [open, setOpen] = useState(false)
   const regenMut = useMutation({
     // Target the scan being viewed (not just the client's latest).
     mutationFn: () => api.post(`/clients/${clientId}/maps/report?scan_id=${scanId}`, {}),
@@ -314,10 +317,26 @@ function LocalRankAnalysis({ r, clientId, scanId }: { r: MapsScanResultRow; clie
     return <span style={{ display: 'inline-block', padding: '1px 7px', borderRadius: 10, fontSize: 10.5, fontWeight: 700, background: t.bg, color: t.fg }}>{t.label}</span>
   }
 
+  // A short status hint shown next to the title while the accordion is collapsed.
+  const statusHint =
+    r.report_status === 'complete' && r.report_md ? 'Ready'
+    : r.report_status === 'pending' ? 'Generating…'
+    : r.report_status === 'failed' ? 'Failed'
+    : 'No report yet'
+
   return (
     <div style={{ marginTop: 16, borderTop: '1px solid #f1f5f9', paddingTop: 14 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
-        <h4 style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', margin: 0 }}>Local Rank Analysis</h4>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: open ? 10 : 0 }}>
+        <button
+          type="button"
+          onClick={() => setOpen(o => !o)}
+          aria-expanded={open}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', padding: 0, margin: 0, cursor: 'pointer' }}
+        >
+          {open ? <ChevronDown size={16} color="#64748b" /> : <ChevronRight size={16} color="#64748b" />}
+          <h4 style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', margin: 0 }}>Local Rank Analysis</h4>
+          {!open && <span style={{ fontSize: 12, color: '#94a3b8', fontWeight: 500 }}>{statusHint}</span>}
+        </button>
         <div style={{ display: 'flex', gap: 8 }}>
           {r.report_status === 'complete' && r.report_md && (
             <Link
@@ -339,7 +358,7 @@ function LocalRankAnalysis({ r, clientId, scanId }: { r: MapsScanResultRow; clie
         </div>
       </div>
 
-      {r.report_status === 'complete' && r.report_md ? (
+      {open && (r.report_status === 'complete' && r.report_md ? (
         <div>
           <Markdown>{r.report_md}</Markdown>
           {weakAreas.length > 0 && (
@@ -430,7 +449,7 @@ function LocalRankAnalysis({ r, clientId, scanId }: { r: MapsScanResultRow; clie
         <p style={muted}>Report generation failed.</p>
       ) : (
         <p style={muted}>No report yet.</p>
-      )}
+      ))}
 
       {regenMut.error && <div style={{ ...errorBox, marginTop: 10 }}>{(regenMut.error as Error).message}</div>}
     </div>
