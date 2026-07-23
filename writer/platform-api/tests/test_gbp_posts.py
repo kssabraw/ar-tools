@@ -258,6 +258,55 @@ def test_ensure_future_utc_rejects_equal_now():
         svc.ensure_future_utc(now, now)
 
 
+# ── timezone-aware scheduling: the hour is client-LOCAL, stored as UTC ────────
+def test_weekly_hour_is_client_local_winter():
+    from zoneinfo import ZoneInfo
+    la = ZoneInfo("America/Los_Angeles")
+    now = datetime(2026, 1, 5, 12, 0, tzinfo=timezone.utc)  # Monday, winter (PST = UTC-8)
+    nxt = svc.compute_next_run_at(now, "weekly", 0, None, 9, tz="America/Los_Angeles")
+    assert nxt.utcoffset().total_seconds() == 0            # returned in UTC
+    assert nxt.astimezone(la).hour == 9                    # 9am *client-local*
+    assert nxt.hour == 17                                  # 09:00 PST == 17:00 UTC
+
+
+def test_weekly_hour_is_client_local_dst_summer():
+    from zoneinfo import ZoneInfo
+    la = ZoneInfo("America/Los_Angeles")
+    now = datetime(2026, 7, 6, 12, 0, tzinfo=timezone.utc)  # summer (PDT = UTC-7)
+    nxt = svc.compute_next_run_at(now, "weekly", 0, None, 9, tz="America/Los_Angeles")
+    assert nxt.astimezone(la).hour == 9                    # still 9am local across DST…
+    assert nxt.hour == 16                                  # …but 16:00 UTC now, not 17:00
+
+
+def test_monthly_hour_is_client_local():
+    from zoneinfo import ZoneInfo
+    la = ZoneInfo("America/Los_Angeles")
+    now = datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+    nxt = svc.compute_next_run_at(now, "monthly", None, 1, 9, tz="America/Los_Angeles")
+    assert nxt.astimezone(la).day == 1 and nxt.astimezone(la).hour == 9
+    assert nxt > now
+
+
+def test_unknown_tz_falls_back_to_utc():
+    now = _now()
+    nxt = svc.compute_next_run_at(now, "weekly", 0, None, 9, tz="Not/AZone")
+    assert nxt.hour == 9  # bad tz name → UTC hour, same as tz=None
+
+
+def test_none_tz_matches_legacy_utc_behavior():
+    now = _now()
+    assert svc.compute_next_run_at(now, "weekly", 0, None, 9, tz=None) == svc.compute_next_run_at(
+        now, "weekly", 0, None, 9
+    )
+
+
+def test_ensure_future_utc_localizes_naive_to_client_tz():
+    now = datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc)
+    naive = datetime(2026, 7, 6, 9, 0)  # 9am wall-clock, meant as client-local
+    out = svc.ensure_future_utc(naive, now, tz="America/Los_Angeles")
+    assert out == "2026-07-06T16:00:00+00:00"  # 09:00 PDT == 16:00 UTC
+
+
 # ── image validation (Google's local-post floor) ─────────────────────────────
 def test_image_ok():
     assert svc.image_rejection_reason("image/jpeg", 400, 300, 50_000) is None
