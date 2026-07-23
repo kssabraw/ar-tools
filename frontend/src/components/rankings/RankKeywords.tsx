@@ -6,7 +6,6 @@ import type { KeywordStatus, KeywordSummary, KeywordTrendline, KeywordPagesRespo
 import { toCsv, downloadCsv, parseKeywordsFromCsv } from '../../lib/csv'
 import { card, errorBox, outlineBtn, primaryBtn } from '../localseo/shared'
 import { STATUS_META, statusRank } from './status'
-import { Sparkline } from './Sparkline'
 import { PositionChart } from './PositionChart'
 import { SerpSnapshots } from './SerpSnapshots'
 import { OrganicRankReport } from './OrganicRankReport'
@@ -452,7 +451,7 @@ function KeywordRow({ k, clientId, showGsc }: {
             </div>
           </div>
         </td>
-        <td style={td}><Sparkline values={k.sparkline} color={meta.color} /></td>
+        <td style={td}><TrendCell k={k} /></td>
         <td style={td}><span style={{ ...badge, color: meta.color, background: meta.bg }}>{meta.label}</span></td>
         <td style={td}>
           {k.today_rank != null ? (
@@ -716,6 +715,33 @@ function WeekDelta({ prev, now, date }: { prev: number; now: number; date: strin
   )
 }
 
+// Overall trend for the tracked window, as a color-coded arrow + positions
+// moved. `direction` is computed server-side (avg_7 vs avg_90 for GSC, sparkline
+// endpoints for DataForSEO); the magnitude mirrors that same comparison so the
+// arrow and the number never disagree. Lower position = better, so "up" (green)
+// = improved.
+function trendPositions(k: KeywordSummary): number | null {
+  if (k.avg_7 != null && k.avg_90 != null) return k.avg_90 - k.avg_7 // GSC: +ve = improved
+  const pts = k.sparkline.filter((v): v is number => v != null)      // DataForSEO fallback
+  if (pts.length >= 2) return pts[0] - pts[pts.length - 1]           // earliest − latest
+  return null
+}
+function TrendCell({ k }: { k: KeywordSummary }) {
+  if (k.direction == null) return <Dash />
+  const delta = trendPositions(k)
+  const flat = k.direction === 'flat'
+  const improved = k.direction === 'up'
+  const color = flat ? '#94a3b8' : improved ? '#15803d' : '#c2410c'
+  const Icon = flat ? Minus : improved ? TrendingUp : TrendingDown
+  const mag = delta == null ? 0 : Math.round(Math.abs(delta))
+  const title = flat ? 'Holding steady over the tracked window'
+    : `${improved ? 'Improved' : 'Dropped'} ${mag >= 1 ? `~${mag} position${mag === 1 ? '' : 's'}` : 'slightly'} over the tracked window`
+  return (
+    <span title={title} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 12, fontWeight: 700, color }}>
+      <Icon size={14} /> {!flat && mag >= 1 ? mag : ''}
+    </span>
+  )
+}
 function Pos({ value }: { value: number | null }) {
   return value == null ? <Dash /> : <span style={{ color: '#334155' }}>{value.toFixed(1)}</span>
 }
