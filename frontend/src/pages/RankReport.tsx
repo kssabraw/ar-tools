@@ -4,7 +4,7 @@ import { ArrowLeft, Printer, TrendingUp, AlertTriangle } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client, GeneratedReport, KeywordSummary, RankLocation, RankOverview as Overview } from '../lib/types'
 import { STATUS_META, statusRank } from '../components/rankings/status'
-import { Sparkline } from '../components/rankings/Sparkline'
+import { TrendCell } from '../components/rankings/TrendCell'
 import { PositionChart } from '../components/rankings/PositionChart'
 import { MetricsChart } from '../components/rankings/MetricsChart'
 
@@ -179,7 +179,7 @@ export function RankReport() {
                 <tr key={k.id} style={trStyle}>
                   <Td left>{k.keyword}</Td>
                   <Td><span style={{ color: meta.color, background: meta.bg, borderRadius: 999, padding: '1px 8px', fontSize: 11, fontWeight: 600 }}>{meta.label}</span></Td>
-                  <Td><Sparkline values={k.sparkline} color={meta.color} width={72} height={20} /></Td>
+                  <Td><TrendCell k={k} /></Td>
                   <Td>{k.today_rank ?? '—'}</Td>
                   {gsc && <><Td>{k.avg_30 != null ? k.avg_30.toFixed(1) : '—'}</Td>
                     <Td>{k.avg_90 != null ? k.avg_90.toFixed(1) : '—'}</Td>
@@ -212,7 +212,7 @@ function Movers({ title, icon, rows, empty }: { title: string; icon: React.React
         return (
           <div key={k.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
             <span style={{ flex: 1, fontSize: 12, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.keyword}</span>
-            <Sparkline values={k.sparkline} color={meta.color} width={64} height={18} />
+            <TrendCell k={k} />
             <span style={{ fontSize: 11, color: meta.color, fontWeight: 600, width: 64, textAlign: 'right' }}>{meta.label}</span>
           </div>
         )
