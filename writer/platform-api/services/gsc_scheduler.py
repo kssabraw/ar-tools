@@ -455,6 +455,10 @@ async def gsc_scheduler() -> None:
     from services.task_workload import run_workload_alert as run_native_workload_alert
     from services.pace_digest import run_daily_digest as run_pace_digest
     from services.brand_schedule import enqueue_due_brand_scans
+    from services.gbp_posts_service import (
+        enqueue_due_gbp_post_schedules,
+        enqueue_due_gbp_post_syncs,
+    )
     from services.client_report_schedule import enqueue_due_report_schedules
     from services.content_batch import enqueue_due_content_items
     from services.freeze import enqueue_due_freeze_checks
@@ -508,6 +512,10 @@ async def gsc_scheduler() -> None:
                 enqueue_due_ingests()
                 # Daily GBP performance-metrics ingest (no-op until enabled).
                 enqueue_due_gbp_metrics()
+                # GBP Posts — recurring post drafts + daily live-state sync
+                # (both no-op until gbp_api_enabled + gbp_posts_enabled).
+                enqueue_due_gbp_post_schedules()
+                enqueue_due_gbp_post_syncs()
                 enqueue_due_market()
                 enqueue_due_reports()
                 enqueue_due_gsc_research()

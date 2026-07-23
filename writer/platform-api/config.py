@@ -233,6 +233,31 @@ class Settings(BaseSettings):
     gbp_metrics_hour_utc: int = 8
     # One-time historical pull window. The Performance API serves ~18 months.
     gbp_metrics_backfill_days: int = 540
+    # ------------------------------------------------------------------
+    # Google Business Profile (GBP) Posts module.
+    # Publishes GBP posts ("What's New" / Event / Offer) to a client's Business
+    # Profile via Google's v4 localPosts API, reusing the agency service account
+    # (business.manage scope) added as a Manager on the client's profile.
+    # `gbp_api_enabled` is the shared gate for the GBP *connection* layer (account
+    # /location resolution + verify) — flip it on once the verify script is green.
+    # `gbp_posts_enabled` gates the Posts feature on top of it. Both default off so
+    # the routes + scheduler pass no-op until access lands. GBP-metrics keeps its
+    # own `gbp_metrics_enabled` flag independently. See
+    # docs/modules/gbp-posts-module-prd-v1_0.md.
+    gbp_api_enabled: bool = False
+    gbp_posts_enabled: bool = False
+    # Anthropic model for AI-drafted post copy (client-facing tone — same family
+    # as the other client copy; Haiku rejected for brand-voice fidelity).
+    gbp_post_model: str = "claude-sonnet-4-6"
+    gbp_post_max_tokens: int = 1024
+    # Google caps a localPost summary at 1500 chars; enforce app-side.
+    gbp_post_max_chars: int = 1500
+    # Append utm_source=gbp&utm_medium=post&utm_campaign=<slug> to CTA links so
+    # post→site clicks are attributable (GA4, once connected).
+    gbp_post_default_utm: bool = True
+    # Daily live-state reconciliation (catches async REJECTED + imports external
+    # posts). One sync job per client with an ok location, after this hour (UTC).
+    gbp_posts_sync_hour_utc: int = 9
     # Striking-distance discovery: queries averaging in this position band (and
     # not already tracked) are page-2 opportunities.
     striking_distance_min: float = 8.0

@@ -1,6 +1,8 @@
 # GBP Posts Module — PRD v1.0
 
 **Status:** Approved for build (owner, 2026-07-20). The first build ships **Phases 0–2** (connection activation + manual compose/publish/history + AI drafting/scheduling); Phase 3 (insights + suite integration) is a follow-up. Authoritative for the GBP Posts module.
+
+**Build status (2026-07-23): backend built + unit-tested; frontend pending.** Landed: migration `20260723090000_gbp_posts.sql` (`gbp_posts` / `gbp_post_schedules` / `gbp_post_insights`, async_jobs CHECK widened — applied live); config gates `gbp_api_enabled` + `gbp_posts_enabled` (both default off, so the whole surface no-ops until access lands); the v4 REST wrapper `services/gbp_posts_api.py`; `services/gbp_posts_service.py` (CRUD + soft-delete/trash, publish/generate/sync async jobs, AI drafting, self-clocked schedule tick); `models/gbp_posts.py`; `routers/gbp_posts.py`; worker + freeze (`gbp_post_publish` gated) + scheduler wiring; `tests/test_gbp_posts.py` (28 pure-helper tests green). **Remaining:** the frontend (`pages/GbpPosts.tsx` + workspace card), the image picker/upload UI, and the live smoke-test once the verify script is green and the service account is a Manager on a pilot listing.
 **Owner ask (2026-07-20):** "I have access to the Google Business Profile API. I want to add the ability to post GBP posts via this API."
 **Access state:** GCP quota confirmed at **300 QPM** in the console (2026-07-20) — the project is approved. The §3 verify script still gates Phase 0 (proves API enablement incl. the v4 API specifically, SA-as-Manager grants, and the posts surface end-to-end).
 
