@@ -219,26 +219,19 @@ def classify_post_error(status_code: Optional[int], message: str = "") -> str:
 # Live calls (synchronous; run via asyncio.to_thread from async runners).
 # ---------------------------------------------------------------------------
 def is_configured() -> bool:
-    """Whether the GBP API layer + Posts feature are both enabled and the
-    service-account key is present. Every live call no-ops-with-error otherwise."""
-    from services import gbp_performance_service as gbp  # lazy: no google import at module load
+    """Whether the GBP API layer + Posts feature are both enabled and a usable
+    credential (OAuth or service account) is present. No-ops-with-error else."""
+    from services import gbp_auth  # lazy: no google import at module load
 
-    return bool(
-        settings.gbp_api_enabled
-        and settings.gbp_posts_enabled
-        and gbp.gsc_service.is_configured()
-    )
+    return bool(settings.gbp_api_enabled and settings.gbp_posts_enabled and gbp_auth.is_configured())
 
 
 def _access_token() -> str:
-    """Mint a bearer token from the shared service-account creds (business.manage)."""
-    from google.auth.transport.requests import Request  # lazy Google import
+    """Mint a bearer token for the v4 API — OAuth user token when configured,
+    else the agency service account (business.manage scope). See services.gbp_auth."""
+    from services import gbp_auth  # lazy Google import inside
 
-    from services import gbp_performance_service as gbp
-
-    creds = gbp._credentials()
-    creds.refresh(Request())
-    return creds.token
+    return gbp_auth.access_token()
 
 
 def _headers() -> dict:

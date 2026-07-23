@@ -97,6 +97,20 @@ def get_token(key_json: str) -> tuple[str, str, str]:
     return creds.token, email, project
 
 
+def oauth_token(client_id: str, client_secret: str, refresh_token: str) -> str:
+    """Mint an access token from an agency OAuth refresh token (Posts path)."""
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
+
+    creds = Credentials(
+        token=None, refresh_token=refresh_token, client_id=client_id,
+        client_secret=client_secret, token_uri="https://oauth2.googleapis.com/token",
+        scopes=[SCOPE],
+    )
+    creds.refresh(Request())
+    return creds.token
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -106,17 +120,32 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    key = os.environ.get("GOOGLE_SERVICE_ACCOUNT_KEY", "")
-    if not key.strip():
-        _print("1. service-account key", False, "GOOGLE_SERVICE_ACCOUNT_KEY is not set in this environment")
-        return 1
-    try:
-        token, email, project = get_token(key)
-    except Exception as exc:  # noqa: BLE001 — report anything, this is a diagnostic
-        _print("1. service-account key / token mint", False, f"{type(exc).__name__}: {exc}")
-        return 1
-    _print("1. service-account key / token mint", True, f"{email} (GCP project: {project})")
-    print(f"    -> approval + API enablement are checked against project '{project}'.")
+    # Auth: prefer OAuth (agency account) when configured, else the service account.
+    oauth_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
+    oauth_secret = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
+    oauth_refresh = os.environ.get("GBP_OAUTH_REFRESH_TOKEN", "")
+    if oauth_id and oauth_secret and oauth_refresh:
+        try:
+            token = oauth_token(oauth_id, oauth_secret, oauth_refresh)
+        except Exception as exc:  # noqa: BLE001
+            _print("1. OAuth token mint", False, f"{type(exc).__name__}: {exc}")
+            return 1
+        _print("1. OAuth token mint", True, "agency OAuth account (business.manage)")
+        print("    -> checks run as the OAuth user that manages the listings (no Manager-add needed).")
+    else:
+        key = os.environ.get("GOOGLE_SERVICE_ACCOUNT_KEY", "")
+        if not key.strip():
+            _print("1. credentials", False,
+                   "set GBP OAuth (GOOGLE_OAUTH_CLIENT_ID/_SECRET + GBP_OAUTH_REFRESH_TOKEN) "
+                   "or GOOGLE_SERVICE_ACCOUNT_KEY")
+            return 1
+        try:
+            token, email, project = get_token(key)
+        except Exception as exc:  # noqa: BLE001 — report anything, this is a diagnostic
+            _print("1. service-account key / token mint", False, f"{type(exc).__name__}: {exc}")
+            return 1
+        _print("1. service-account key / token mint", True, f"{email} (GCP project: {project})")
+        print(f"    -> approval + API enablement are checked against project '{project}'.")
 
     client = httpx.Client(headers={"Authorization": f"Bearer {token}"}, timeout=TIMEOUT)
 

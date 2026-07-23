@@ -294,6 +294,36 @@ def test_is_live_on_google_false_cases():
     assert svc.is_live_on_google({"status": "failed", "google_name": None}) is False
 
 
+# ── auth mode selection (OAuth vs service account) ───────────────────────────
+def test_auth_mode_service_account_by_default(monkeypatch):
+    from config import settings
+    from services import gbp_auth
+    monkeypatch.setattr(settings, "google_oauth_client_id", "")
+    monkeypatch.setattr(settings, "google_oauth_client_secret", "")
+    monkeypatch.setattr(settings, "gbp_oauth_refresh_token", "")
+    assert gbp_auth.oauth_configured() is False
+    assert gbp_auth.auth_mode() == "service_account"
+
+
+def test_auth_mode_oauth_when_fully_configured(monkeypatch):
+    from config import settings
+    from services import gbp_auth
+    monkeypatch.setattr(settings, "google_oauth_client_id", "cid")
+    monkeypatch.setattr(settings, "google_oauth_client_secret", "secret")
+    monkeypatch.setattr(settings, "gbp_oauth_refresh_token", "refresh")
+    assert gbp_auth.oauth_configured() is True
+    assert gbp_auth.auth_mode() == "oauth"
+
+
+def test_auth_mode_partial_oauth_is_not_configured(monkeypatch):
+    from config import settings
+    from services import gbp_auth
+    monkeypatch.setattr(settings, "google_oauth_client_id", "cid")
+    monkeypatch.setattr(settings, "google_oauth_client_secret", "")  # missing
+    monkeypatch.setattr(settings, "gbp_oauth_refresh_token", "refresh")
+    assert gbp_auth.oauth_configured() is False
+
+
 # ── client context builder ───────────────────────────────────────────────────
 def test_build_client_context_includes_key_fields():
     ctx = svc.build_client_context({

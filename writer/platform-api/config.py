@@ -272,6 +272,20 @@ class Settings(BaseSettings):
     # Daily live-state reconciliation (catches async REJECTED + imports external
     # posts). One sync job per client with an ok location, after this hour (UTC).
     gbp_posts_sync_hour_utc: int = 9
+    # ------------------------------------------------------------------
+    # GBP OAuth (alternative to the service account for the Posts/GBP APIs).
+    # Google's Business Profile API is OAuth-first; a bare service account may
+    # not be accepted as a listing Manager (unlike GSC). With a Google Workspace
+    # agency account we publish an **Internal** OAuth app (no verification, tokens
+    # don't expire) and authorize ONCE as the agency account that already manages
+    # the client listings — no per-client OAuth, no "add the SA as Manager" step.
+    # When these are set, services/gbp_auth mints the API token from the refresh
+    # token instead of the service account (service account stays the fallback,
+    # and GSC is unaffected). Obtain the refresh token via
+    # scripts/get_gbp_refresh_token.py (run once, locally). See the module PRD.
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    gbp_oauth_refresh_token: str = ""
     # Striking-distance discovery: queries averaging in this position band (and
     # not already tracked) are page-2 opportunities.
     striking_distance_min: float = 8.0
