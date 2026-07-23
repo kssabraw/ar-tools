@@ -84,3 +84,24 @@ class GbpSyncRun(BaseModel):
     rows: int
     status: Literal["ok", "failed"]
     error: Optional[str] = None
+
+
+class GbpDiagnosticStep(BaseModel):
+    step: str
+    ok: bool
+    detail: Optional[str] = None
+
+
+class GbpPerformanceDiagnostic(BaseModel):
+    """Result of the admin GBP Performance API access probe (ungated by the
+    ``gbp_metrics_enabled`` flag — it's what you run to decide whether to set it)."""
+
+    ok: bool
+    auth_mode: Optional[str] = None
+    accounts_visible: Optional[int] = None
+    locations_visible: Optional[int] = None
+    location: Optional[str] = None
+    location_title: Optional[str] = None
+    performance_status: Optional[int] = None
+    detail: Optional[str] = None
+    steps: list[GbpDiagnosticStep] = []
