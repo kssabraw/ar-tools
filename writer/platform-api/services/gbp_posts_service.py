@@ -214,6 +214,32 @@ def purge_post(post_id: str) -> None:
         raise HTTPException(status_code=404, detail="gbp_post_not_found")
 
 
+def is_live_on_google(post: dict) -> bool:
+    """True if a post is currently published + live on Google. Pure (unit-tested).
+    Purging such a row would orphan a live post, so empty-trash skips these."""
+    return post.get("status") == "live" and bool(post.get("google_name"))
+
+
+def purge_trash(client_id: str) -> dict:
+    """Empty the trash: permanently delete all a client's trashed posts. Posts
+    still LIVE on Google are skipped (remove-from-google them first, else the row
+    is gone but the post stays up). Returns {purged, skipped_live}."""
+    _assert_enabled()
+    supabase = get_supabase()
+    trashed = (
+        supabase.table("gbp_posts").select("id, status, google_name")
+        .eq("client_id", client_id).not_.is_("deleted_at", "null")
+        .execute().data or []
+    )
+    purge_ids = [r["id"] for r in trashed if not is_live_on_google(r)]
+    skipped = len(trashed) - len(purge_ids)
+    if purge_ids:
+        supabase.table("gbp_posts").delete().in_("id", purge_ids).execute()
+    logger.info("gbp_posts.trash_purged",
+                extra={"client_id": client_id, "purged": len(purge_ids), "skipped_live": skipped})
+    return {"purged": len(purge_ids), "skipped_live": skipped}
+
+
 async def remove_from_google(post_id: str) -> dict:
     """Delete the live post from Google (if published) and mark the row deleted."""
     _assert_enabled()

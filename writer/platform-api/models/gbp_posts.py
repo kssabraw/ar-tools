@@ -86,6 +86,11 @@ class GbpReusableImage(BaseModel):
     label: Optional[str] = None
 
 
+class GbpTrashPurgeResponse(BaseModel):
+    purged: int
+    skipped_live: int  # trashed posts left in place because they're still live on Google
+
+
 class GbpJob(BaseModel):
     job_id: UUID
 

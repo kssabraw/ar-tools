@@ -282,6 +282,18 @@ def test_image_rejects_small_dimensions():
     assert svc.image_rejection_reason("image/png", 400, 100, 50_000) == "image_dimensions_too_small"
 
 
+# ── empty-trash live-post guard ──────────────────────────────────────────────
+def test_is_live_on_google_true_only_when_live_and_named():
+    assert svc.is_live_on_google({"status": "live", "google_name": "accounts/1/.../3"}) is True
+
+
+def test_is_live_on_google_false_cases():
+    assert svc.is_live_on_google({"status": "live", "google_name": None}) is False   # live but never got a name
+    assert svc.is_live_on_google({"status": "draft", "google_name": None}) is False
+    assert svc.is_live_on_google({"status": "rejected", "google_name": "n"}) is False
+    assert svc.is_live_on_google({"status": "failed", "google_name": None}) is False
+
+
 # ── client context builder ───────────────────────────────────────────────────
 def test_build_client_context_includes_key_fields():
     ctx = svc.build_client_context({

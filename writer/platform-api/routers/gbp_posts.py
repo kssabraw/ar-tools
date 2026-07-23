@@ -32,6 +32,7 @@ from models.gbp_posts import (
     GbpReusableImage,
     GbpSchedule,
     GbpScheduleUpsertRequest,
+    GbpTrashPurgeResponse,
 )
 from services import gbp_posts_service as svc
 from services.freeze import assert_not_frozen
@@ -83,6 +84,13 @@ async def create_post(
     client_id: UUID, body: GbpPostCreateRequest, auth: dict = Depends(require_auth)
 ):
     return svc.create_post(str(client_id), body.model_dump(mode="json"), auth["user_id"])
+
+
+@router.delete("/clients/{client_id}/gbp/posts/trash", response_model=GbpTrashPurgeResponse)
+async def empty_trash(client_id: UUID, auth: dict = Depends(require_auth)):
+    """Permanently delete all trashed posts. Posts still live on Google are
+    skipped (remove-from-google them first) and reported as skipped_live."""
+    return svc.purge_trash(str(client_id))
 
 
 @router.get("/gbp/posts/{post_id}", response_model=GbpPost)
