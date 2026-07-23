@@ -60,6 +60,24 @@ def test_status_volatile_swing_and_return():
     assert rank_status.compute_status(series) == "volatile"
 
 
+def test_status_trend_called_on_two_checks():
+    # Only two ranked checks, but a real 24-position climb — must not default to
+    # "stable" just for lack of history (the DataForSEO sparse-data case).
+    assert rank_status.compute_status(_series([53, 29])) == "climbing"
+    assert rank_status.compute_status(_series([29, 53])) == "dropping"
+
+
+def test_status_small_move_within_threshold_is_stable():
+    # Net move within ±TREND_THRESHOLD stays stable even though the arrow shows
+    # a (small) direction — the ±3 band is the label's source of truth.
+    assert rank_status.compute_status(_series([41, 40])) == "stable"   # +1
+    assert rank_status.compute_status(_series([40, 43])) == "stable"   # -3 (boundary)
+
+
+def test_status_single_check_is_stable():
+    assert rank_status.compute_status(_series([12])) == "stable"
+
+
 # ---------------------------------------------------------------------------
 # rolling_average / compute_keyword_summary
 # ---------------------------------------------------------------------------
