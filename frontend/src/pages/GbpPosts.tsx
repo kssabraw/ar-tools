@@ -32,9 +32,34 @@ interface GbpPost {
 interface JobStatus { job_id: string; status: string; post_id: string | null; error: string | null }
 interface GbpSchedule {
   location_row_id: string | null; cadence: string; day_of_week: number | null
-  day_of_month: number | null; hour_utc: number; topic_type: TopicType
+  day_of_month: number | null; hour_local: number; topic_type: TopicType
   theme_notes: string | null; cta_type: CtaType | null; cta_url: string | null
   auto_publish: boolean; is_active: boolean; next_run_at: string | null; last_run_at: string | null
+  timezone: string | null
+}
+
+// The client's local timezone GBP scheduling is expressed in (derived from the
+// GBP location server-side). null → fall back to the viewer's browser timezone.
+function useClientTz(clientId: string): string | null {
+  const { data } = useQuery<{ timezone: string | null }>({
+    queryKey: ['gbp-tz', clientId],
+    queryFn: () => api.get<{ timezone: string | null }>(`/clients/${clientId}/gbp/timezone`),
+  })
+  return data?.timezone ?? null
+}
+
+// Format a UTC ISO instant in the client's timezone (or the browser's if unknown).
+function fmtInTz(iso: string, tz: string | null): string {
+  const d = new Date(iso)
+  return tz
+    ? d.toLocaleString('en-US', { timeZone: tz, dateStyle: 'medium', timeStyle: 'short' })
+    : d.toLocaleString()
+}
+
+// Short label for a timezone (e.g. "America/Los_Angeles" → "client local time
+// · America/Los_Angeles"); a plain UTC note when unknown.
+function tzLabel(tz: string | null): string {
+  return tz ? `client local time · ${tz}` : 'UTC'
 }
 
 const TYPE_OPTIONS: { value: TopicType; label: string; hint: string }[] = [
@@ -321,6 +346,7 @@ function ComposeTab({ clientId, locations, onDone }: { clientId: string; locatio
   const [scheduleAt, setScheduleAt] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const tz = useClientTz(clientId)
 
   const needsEvent = type === 'offer' || type === 'event'
 
@@ -358,7 +384,11 @@ function ComposeTab({ clientId, locations, onDone }: { clientId: string; locatio
         const { job_id } = await api.post<{ job_id: string }>(`/clients/${clientId}/gbp/posts/${post.id}/publish`, {})
         await pollJob(clientId, job_id)
       } else if (action === 'schedule') {
-        await api.post(`/clients/${clientId}/gbp/posts/${post.id}/schedule`, { scheduled_at: new Date(scheduleAt).toISOString() })
+        // tz known → send the raw wall-clock; the backend interprets it in the
+        // client's timezone. tz unknown → resolve in the browser tz to a UTC ISO
+        // (graceful fallback, matches the backend's naive-as-UTC path).
+        const scheduled_at = tz ? scheduleAt : new Date(scheduleAt).toISOString()
+        await api.post(`/clients/${clientId}/gbp/posts/${post.id}/schedule`, { scheduled_at })
       }
       onDone()
     } catch (e) {
@@ -483,8 +513,11 @@ function ComposeTab({ clientId, locations, onDone }: { clientId: string; locatio
         <button onClick={() => submit('publish')} disabled={!valid || busy !== null || okLocations.length === 0} style={{ ...btn('#16a34a'), opacity: valid && okLocations.length ? 1 : 0.5 }}>
           <Send size={13} /> {busy === 'publish' ? 'Publishing…' : 'Publish now'}
         </button>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto' }}>
-          <input type="datetime-local" value={scheduleAt} onChange={(e) => setScheduleAt(e.target.value)} style={{ ...input, width: 200 }} />
+        <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginLeft: 'auto' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <input type="datetime-local" value={scheduleAt} onChange={(e) => setScheduleAt(e.target.value)} style={{ ...input, width: 200 }} title={`Publish time — ${tzLabel(tz)}`} />
+            <span style={{ fontSize: 10, color: '#94a3b8' }}>{tzLabel(tz)}</span>
+          </div>
           <button onClick={() => submit('schedule')} disabled={!valid || !scheduleAt || busy !== null} style={{ ...btn(ACCENT), opacity: valid && scheduleAt ? 1 : 0.5 }}>
             <CalendarClock size={13} /> {busy === 'schedule' ? 'Scheduling…' : 'Schedule'}
           </button>
@@ -502,6 +535,7 @@ function PostsTab({ clientId }: { clientId: string }) {
   })
   const invalidate = () => qc.invalidateQueries({ queryKey: ['gbp-posts', clientId] })
   const [pending, setPending] = useState<string | null>(null)
+  const tz = useClientTz(clientId)
 
   async function run(fn: () => Promise<unknown>, key: string) {
     setPending(key)
@@ -533,7 +567,7 @@ function PostsTab({ clientId }: { clientId: string }) {
                     <span style={{ padding: '3px 9px', borderRadius: 999, background: meta.bg, color: meta.color, fontSize: 11, fontWeight: 700 }}>{meta.label}</span>
                     <span style={{ fontSize: 11, color: '#94a3b8', textTransform: 'capitalize' }}>{p.topic_type === 'standard' ? 'update' : p.topic_type}</span>
                     {p.scheduled_at && p.status === 'scheduled' && (
-                      <span style={{ fontSize: 11, color: '#7c3aed', display: 'inline-flex', alignItems: 'center', gap: 3 }}><Clock size={11} /> {new Date(p.scheduled_at).toLocaleString()}</span>
+                      <span style={{ fontSize: 11, color: '#7c3aed', display: 'inline-flex', alignItems: 'center', gap: 3 }} title={tzLabel(tz)}><Clock size={11} /> {fmtInTz(p.scheduled_at, tz)}</span>
                     )}
                     {p.search_url && (
                       <a href={p.search_url} target="_blank" rel="noreferrer" style={{ marginLeft: 'auto', fontSize: 12, color: ACCENT, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
@@ -632,7 +666,7 @@ function ScheduleTab({ clientId, locations }: { clientId: string; locations: Gbp
   const saveMut = useMutation({
     mutationFn: () => api.put<GbpSchedule>(`/clients/${clientId}/gbp/post-schedule`, {
       location_row_id: s!.location_row_id ?? locations.find((l) => l.access_status === 'ok')?.id ?? locations[0]?.id,
-      cadence: s!.cadence, day_of_week: s!.day_of_week, day_of_month: s!.day_of_month, hour_utc: s!.hour_utc,
+      cadence: s!.cadence, day_of_week: s!.day_of_week, day_of_month: s!.day_of_month, hour_local: s!.hour_local,
       topic_type: s!.topic_type, theme_notes: s!.theme_notes, cta_type: s!.cta_type, cta_url: s!.cta_url,
       auto_publish: s!.auto_publish, is_active: s!.is_active,
     }),
@@ -668,8 +702,8 @@ function ScheduleTab({ clientId, locations }: { clientId: string; locations: Gbp
       )}
       {s.cadence !== 'disabled' && (
         <>
-          <div><label style={label}>Hour (UTC)</label>
-            <input type="number" min={0} max={23} value={s.hour_utc} onChange={(e) => set({ hour_utc: Number(e.target.value) })} style={input} />
+          <div><label style={label}>Hour of day <span style={{ color: '#94a3b8', fontWeight: 400 }}>({tzLabel(s.timezone)})</span></label>
+            <input type="number" min={0} max={23} value={s.hour_local} onChange={(e) => set({ hour_local: Number(e.target.value) })} style={input} />
           </div>
           <div><label style={label}>Post type</label>
             <select value={s.topic_type} onChange={(e) => set({ topic_type: e.target.value as TopicType })} style={input}>
@@ -691,7 +725,7 @@ function ScheduleTab({ clientId, locations }: { clientId: string; locations: Gbp
           {saveMut.isPending ? 'Saving…' : 'Save schedule'}
         </button>
         {form && <button onClick={() => setForm(null)} style={btn('#fff', '#334155')}>Cancel</button>}
-        {data?.next_run_at && data.is_active && <span style={{ fontSize: 12, color: '#15803d', display: 'inline-flex', alignItems: 'center', gap: 4 }}><CheckCircle2 size={12} /> Next: {new Date(data.next_run_at).toLocaleString()}</span>}
+        {data?.next_run_at && data.is_active && <span style={{ fontSize: 12, color: '#15803d', display: 'inline-flex', alignItems: 'center', gap: 4 }} title={tzLabel(data.timezone)}><CheckCircle2 size={12} /> Next: {fmtInTz(data.next_run_at, data.timezone)}</span>}
       </div>
     </div>
   )

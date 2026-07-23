@@ -32,9 +32,11 @@ from models.gbp_posts import (
     GbpReusableImage,
     GbpSchedule,
     GbpScheduleUpsertRequest,
+    GbpTimezoneResponse,
     GbpTrashPurgeResponse,
 )
 from services import gbp_posts_service as svc
+from services import gbp_timezone
 from services.freeze import assert_not_frozen
 
 logger = logging.getLogger(__name__)
@@ -179,6 +181,14 @@ async def sync_posts(client_id: UUID, auth: dict = Depends(require_auth)):
 
 
 # ── schedule ─────────────────────────────────────────────────────────────────
+@router.get("/clients/{client_id}/gbp/timezone", response_model=GbpTimezoneResponse)
+async def get_client_timezone(client_id: UUID, auth: dict = Depends(require_auth)):
+    """The client's local timezone GBP scheduling is expressed in (derived from
+    the GBP location, cached on the client). None → the UI falls back to UTC.
+    Ungated: harmless read the compose + schedule tabs use to label times."""
+    return GbpTimezoneResponse(timezone=gbp_timezone.resolve_client_timezone(str(client_id)))
+
+
 @router.get("/clients/{client_id}/gbp/post-schedule", response_model=GbpSchedule)
 async def get_schedule(client_id: UUID, auth: dict = Depends(require_auth)):
     svc._assert_enabled()

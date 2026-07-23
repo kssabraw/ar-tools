@@ -56,7 +56,7 @@ class GbpScheduleUpsertRequest(BaseModel):
     cadence: Cadence = "disabled"
     day_of_week: Optional[int] = Field(None, ge=0, le=6)
     day_of_month: Optional[int] = Field(None, ge=1, le=28)
-    hour_utc: int = Field(9, ge=0, le=23)
+    hour_local: int = Field(9, ge=0, le=23)  # hour in the client's local timezone
     topic_type: TopicType = "standard"
     theme_notes: Optional[str] = None
     cta_type: Optional[CtaType] = None
@@ -66,7 +66,12 @@ class GbpScheduleUpsertRequest(BaseModel):
 
 
 class GbpPostScheduleAtRequest(BaseModel):
-    """Schedule a specific post to publish at a future time (UTC if naive)."""
+    """Schedule a specific post to publish at a future time.
+
+    A naive datetime (no offset) is interpreted as a wall-clock in the client's
+    local timezone and converted to UTC server-side; an offset-aware value is
+    taken as-is. The frontend sends the raw picker value when the client's
+    timezone is known, else a UTC ISO string."""
 
     scheduled_at: datetime
 
@@ -141,7 +146,7 @@ class GbpSchedule(BaseModel):
     cadence: str
     day_of_week: Optional[int] = None
     day_of_month: Optional[int] = None
-    hour_utc: int
+    hour_local: int  # hour in the client's local timezone (see `timezone`)
     topic_type: str
     theme_notes: Optional[str] = None
     cta_type: Optional[str] = None
@@ -150,3 +155,10 @@ class GbpSchedule(BaseModel):
     is_active: bool
     next_run_at: Optional[str] = None
     last_run_at: Optional[str] = None
+    timezone: Optional[str] = None  # IANA name the hour is expressed in (None → UTC)
+
+
+class GbpTimezoneResponse(BaseModel):
+    """The client's local timezone for GBP scheduling (None → UTC fallback)."""
+
+    timezone: Optional[str] = None

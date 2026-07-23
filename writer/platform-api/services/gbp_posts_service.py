@@ -28,6 +28,7 @@ from fastapi import HTTPException
 from config import settings
 from db.supabase_client import get_supabase
 from services import gbp_posts_api as api
+from services import gbp_timezone
 from services import notifications
 
 logger = logging.getLogger(__name__)
@@ -368,11 +369,15 @@ def _has_active_publish_job(client_id: str, post_id: str) -> bool:
     return any((r.get("payload") or {}).get("post_id") == post_id for r in rows)
 
 
-def ensure_future_utc(when: datetime, now: datetime) -> str:
+def ensure_future_utc(when: datetime, now: datetime, tz: Optional[str] = None) -> str:
     """Normalize a scheduled time to a UTC ISO string, or raise if not future.
-    Pure (unit-tested): naive datetimes are treated as UTC."""
-    w = when if when.tzinfo else when.replace(tzinfo=timezone.utc)
-    w = w.astimezone(timezone.utc)
+
+    Pure (unit-tested). A **naive** ``when`` is interpreted as a wall-clock in
+    ``tz`` (the client's IANA timezone) and converted to UTC — so the operator
+    picks the time in the client's local time. ``tz=None`` treats naive as UTC
+    (back-compat). An **aware** ``when`` is just converted to UTC (the frontend
+    already resolved it)."""
+    w = when.astimezone(timezone.utc) if when.tzinfo else when.replace(tzinfo=_zone(tz)).astimezone(timezone.utc)
     if w <= now:
         raise HTTPException(status_code=400, detail="scheduled_at_must_be_future")
     return w.isoformat()
@@ -406,7 +411,8 @@ def schedule_post(post_id: str, client_id: str, scheduled_at: datetime) -> dict:
     if post["status"] not in _PUBLISHABLE:
         raise HTTPException(status_code=409, detail=f"post_not_publishable:{post['status']}")
     _validate_body_fields(post)
-    when_iso = ensure_future_utc(scheduled_at, datetime.now(timezone.utc))
+    tz = gbp_timezone.resolve_client_timezone(client_id)
+    when_iso = ensure_future_utc(scheduled_at, datetime.now(timezone.utc), tz=tz)
     get_supabase().table("gbp_posts").update(
         {"status": "scheduled", "scheduled_at": when_iso, "error": None, "updated_at": "now()"}
     ).eq("id", post_id).execute()
@@ -805,11 +811,29 @@ def get_jobs_status(client_id: str, job_ids: list[str]) -> list[dict]:
 # ───────────────────────────────────────────────────────────────────────────
 # Schedules (self-clocked on the shared scheduler)
 # ───────────────────────────────────────────────────────────────────────────
+def _zone(tz: Optional[str]):
+    """The tzinfo for an IANA name; UTC when unset or unknown (never raises)."""
+    if not tz:
+        return timezone.utc
+    try:
+        from zoneinfo import ZoneInfo  # noqa: PLC0415
+
+        return ZoneInfo(tz)
+    except Exception:  # noqa: BLE001 — a bad name degrades to UTC, never breaks
+        return timezone.utc
+
+
 def compute_next_run_at(
     now: datetime, cadence: str, day_of_week: Optional[int],
-    day_of_month: Optional[int], hour_utc: int, prev: Optional[datetime] = None,
+    day_of_month: Optional[int], hour_local: int, prev: Optional[datetime] = None,
+    tz: Optional[str] = None,
 ) -> Optional[datetime]:
-    """Next fire time strictly after ``now`` (UTC). None when disabled. Pure.
+    """Next fire time (UTC-aware) strictly after ``now`` (UTC). None when disabled.
+
+    ``hour_local`` is the hour in ``tz`` (an IANA name); ``tz=None`` means UTC
+    (back-compat). The wall-clock is built in-zone and then converted to UTC, so
+    it is **DST-correct** — e.g. 9am client-local stays 9am across a DST boundary
+    (the UTC offset shifts, the local hour doesn't). Pure.
 
     weekly/monthly recompute from ``now`` (robust to missed ticks). biweekly
     steps 14 days from ``prev`` (the prior next_run) to preserve its phase; with
@@ -817,35 +841,38 @@ def compute_next_run_at(
     """
     if cadence == "disabled":
         return None
+    zone = _zone(tz)
+    now_local = now.astimezone(zone)
     if cadence in ("weekly", "biweekly"):
         dow = day_of_week if day_of_week is not None else 0
         if cadence == "biweekly" and prev is not None:
-            candidate = prev
-            while candidate <= now:
+            candidate = prev.astimezone(zone)
+            while candidate <= now_local:
                 candidate += timedelta(days=14)
-            return candidate.replace(hour=hour_utc, minute=0, second=0, microsecond=0)
-        days_ahead = (dow - now.weekday()) % 7
-        candidate = (now + timedelta(days=days_ahead)).replace(
-            hour=hour_utc, minute=0, second=0, microsecond=0
+            candidate = candidate.replace(hour=hour_local, minute=0, second=0, microsecond=0)
+            return candidate.astimezone(timezone.utc)
+        days_ahead = (dow - now_local.weekday()) % 7
+        candidate = (now_local + timedelta(days=days_ahead)).replace(
+            hour=hour_local, minute=0, second=0, microsecond=0
         )
-        if candidate <= now:
+        if candidate <= now_local:
             candidate += timedelta(days=7)
-        return candidate
+        return candidate.astimezone(timezone.utc)
     if cadence == "monthly":
         dom = day_of_month if day_of_month is not None else 1
-        candidate = now.replace(day=dom, hour=hour_utc, minute=0, second=0, microsecond=0)
-        if candidate <= now:
-            year = now.year + (1 if now.month == 12 else 0)
-            month = 1 if now.month == 12 else now.month + 1
+        candidate = now_local.replace(day=dom, hour=hour_local, minute=0, second=0, microsecond=0)
+        if candidate <= now_local:
+            year = now_local.year + (1 if now_local.month == 12 else 0)
+            month = 1 if now_local.month == 12 else now_local.month + 1
             candidate = candidate.replace(year=year, month=month)
-        return candidate
+        return candidate.astimezone(timezone.utc)
     raise HTTPException(status_code=400, detail="invalid_cadence")
 
 
 def _default_schedule(location_row_id: Optional[str] = None) -> dict:
     return {
         "location_row_id": location_row_id, "cadence": "disabled", "day_of_week": None,
-        "day_of_month": None, "hour_utc": 9, "topic_type": "standard", "theme_notes": None,
+        "day_of_month": None, "hour_local": 9, "topic_type": "standard", "theme_notes": None,
         "cta_type": None, "cta_url": None, "auto_publish": False, "is_active": False,
         "next_run_at": None, "last_run_at": None,
     }
@@ -854,11 +881,14 @@ def _default_schedule(location_row_id: Optional[str] = None) -> dict:
 def get_schedule(client_id: str) -> dict:
     res = (
         get_supabase().table("gbp_post_schedules")
-        .select("location_row_id, cadence, day_of_week, day_of_month, hour_utc, topic_type, "
+        .select("location_row_id, cadence, day_of_week, day_of_month, hour_local, topic_type, "
                 "theme_notes, cta_type, cta_url, auto_publish, is_active, next_run_at, last_run_at")
         .eq("client_id", client_id).limit(1).execute().data
     )
-    return res[0] if res else _default_schedule()
+    sched = res[0] if res else _default_schedule()
+    # The client's local timezone the hour + next_run are expressed in (None → UTC).
+    sched["timezone"] = gbp_timezone.resolve_client_timezone(client_id)
+    return sched
 
 
 def upsert_schedule(client_id: str, req: dict, user_id: str) -> dict:
@@ -867,7 +897,7 @@ def upsert_schedule(client_id: str, req: dict, user_id: str) -> dict:
     if cadence not in _VALID_CADENCES:
         raise HTTPException(status_code=400, detail="invalid_cadence")
     location = _location(str(req["location_row_id"]), client_id)
-    hour_utc = int(req.get("hour_utc", 9))
+    hour_local = int(req.get("hour_local", 9))
     day_of_week = req.get("day_of_week")
     day_of_month = req.get("day_of_month")
     if cadence in ("weekly", "biweekly") and day_of_week is None:
@@ -876,11 +906,12 @@ def upsert_schedule(client_id: str, req: dict, user_id: str) -> dict:
         day_of_month = 1
     is_active = bool(req.get("is_active", True))
     now = datetime.now(timezone.utc)
-    next_run = compute_next_run_at(now, cadence, day_of_week, day_of_month, hour_utc)
+    tz = gbp_timezone.resolve_client_timezone(client_id)
+    next_run = compute_next_run_at(now, cadence, day_of_week, day_of_month, hour_local, tz=tz)
     next_run_iso = next_run.isoformat() if (next_run and is_active and cadence != "disabled") else None
     row = {
         "client_id": client_id, "location_row_id": location["id"], "cadence": cadence,
-        "day_of_week": day_of_week, "day_of_month": day_of_month, "hour_utc": hour_utc,
+        "day_of_week": day_of_week, "day_of_month": day_of_month, "hour_local": hour_local,
         "topic_type": req.get("topic_type") or "standard", "theme_notes": req.get("theme_notes"),
         "cta_type": req.get("cta_type"), "cta_url": req.get("cta_url"),
         "auto_publish": bool(req.get("auto_publish", False)), "is_active": is_active,
@@ -901,7 +932,7 @@ def enqueue_due_gbp_post_schedules() -> int:
     now = datetime.now(timezone.utc)
     due = (
         supabase.table("gbp_post_schedules")
-        .select("client_id, location_row_id, cadence, day_of_week, day_of_month, hour_utc, "
+        .select("client_id, location_row_id, cadence, day_of_week, day_of_month, hour_local, "
                 "topic_type, theme_notes, cta_type, cta_url, auto_publish, next_run_at")
         .eq("is_active", True).neq("cadence", "disabled")
         .lte("next_run_at", now.isoformat()).execute().data or []
@@ -914,9 +945,10 @@ def enqueue_due_gbp_post_schedules() -> int:
                 prev = datetime.fromisoformat(sched["next_run_at"].replace("Z", "+00:00"))
             except ValueError:
                 prev = None
+        tz = gbp_timezone.resolve_client_timezone(sched["client_id"])
         next_run = compute_next_run_at(
             now, sched["cadence"], sched.get("day_of_week"),
-            sched.get("day_of_month"), sched["hour_utc"], prev=prev,
+            sched.get("day_of_month"), sched["hour_local"], prev=prev, tz=tz,
         )
         supabase.table("gbp_post_schedules").update({
             "last_run_at": now.isoformat(),
