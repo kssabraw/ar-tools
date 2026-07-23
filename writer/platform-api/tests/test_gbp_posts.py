@@ -147,6 +147,37 @@ def test_parse_local_post():
     assert parsed["topic_type"] == "standard"
 
 
+# ── sync reconcile predicate (search_url backfill) ───────────────────────────
+def test_needs_update_on_status_change():
+    assert svc.post_needs_update({"status": "publishing"}, {"status": "live"}) is True
+
+
+def test_needs_update_when_search_url_arrives_after_live():
+    # Google fills searchUrl a bit after the post is already LIVE — must still save.
+    row = {"status": "live", "search_url": None}
+    live = {"status": "live", "search_url": "https://g.co/p/1"}
+    assert svc.post_needs_update(row, live) is True
+
+
+def test_needs_update_on_google_state_change():
+    row = {"status": "live", "search_url": "u", "google_state": "PROCESSING"}
+    live = {"status": "live", "search_url": "u", "google_state": "LIVE"}
+    assert svc.post_needs_update(row, live) is True
+
+
+def test_no_update_when_identical():
+    row = {"status": "live", "search_url": "u", "google_state": "LIVE"}
+    live = {"status": "live", "search_url": "u", "google_state": "LIVE"}
+    assert svc.post_needs_update(row, live) is False
+
+
+def test_no_update_when_live_url_empty():
+    # Never clobber a stored URL with an empty one from a partial read.
+    row = {"status": "live", "search_url": "https://g.co/p/1"}
+    live = {"status": "live", "search_url": None}
+    assert svc.post_needs_update(row, live) is False
+
+
 # ── error classification ─────────────────────────────────────────────────────
 def test_classify_api_not_enabled():
     assert api.classify_post_error(403, "My Business API has not been used in project") == "gbp_api_not_enabled"

@@ -574,6 +574,22 @@ def enqueue_sync(client_id: str) -> Optional[str]:
     return _enqueue_sync(client_id)
 
 
+def post_needs_update(row: dict, live: dict) -> bool:
+    """True if a synced live post differs from our stored row. Pure (unit-tested).
+
+    Catches not just a status change but a newly-arrived ``search_url`` (Google
+    populates the public post URL a short while AFTER the post goes live, often
+    with the status unchanged at 'live') or a google_state change — otherwise a
+    URL that lands post-publish would never be saved."""
+    if row.get("status") != live.get("status"):
+        return True
+    if live.get("search_url") and row.get("search_url") != live.get("search_url"):
+        return True
+    if live.get("google_state") and row.get("google_state") != live.get("google_state"):
+        return True
+    return False
+
+
 async def run_sync_job(job: dict) -> None:
     """Handler for job_type='gbp_posts_sync'. Reconciles each ok location's live
     posts into our rows (catches async REJECTED) and imports external posts."""
@@ -594,7 +610,7 @@ async def run_sync_job(job: dict) -> None:
                 continue
             existing = {
                 r["google_name"]: r for r in (
-                    supabase.table("gbp_posts").select("id, google_name, status")
+                    supabase.table("gbp_posts").select("id, google_name, status, search_url, google_state")
                     .eq("location_row_id", location["id"]).not_.is_("google_name", "null")
                     .execute().data or []
                 )
@@ -605,13 +621,16 @@ async def run_sync_job(job: dict) -> None:
                     continue
                 row = existing.get(name)
                 if row:
-                    if row.get("status") != lp["status"]:
+                    if post_needs_update(row, lp):
+                        newly_rejected = (
+                            row.get("status") != "rejected" and lp["status"] == "rejected"
+                        )
                         supabase.table("gbp_posts").update({
                             "status": lp["status"], "google_state": lp.get("google_state"),
                             "search_url": lp.get("search_url"), "updated_at": "now()",
                         }).eq("id", row["id"]).execute()
                         reconciled += 1
-                        if lp["status"] == "rejected":
+                        if newly_rejected:
                             notifications.emit(
                                 client_id, "gbp_post_rejected", "GBP post rejected by Google",
                                 summary="A published post was rejected (likely a content-policy issue).",
