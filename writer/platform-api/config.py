@@ -285,7 +285,13 @@ class Settings(BaseSettings):
     # scripts/get_gbp_refresh_token.py (run once, locally). See the module PRD.
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""
+    # Optional env fallback for the refresh token (the in-app Connect flow stores
+    # it in gbp_oauth_credentials instead; DB wins, env is the fallback).
     gbp_oauth_refresh_token: str = ""
+    # Redirect URI for the in-app "Connect Google Business Profile" flow. Must
+    # EXACTLY match an authorized redirect URI on the GCP **Web application**
+    # OAuth client, e.g. https://<platform-domain>/gbp/oauth/callback.
+    google_oauth_redirect_uri: str = ""
     # Striking-distance discovery: queries averaging in this position band (and
     # not already tracked) are page-2 opportunities.
     striking_distance_min: float = 8.0

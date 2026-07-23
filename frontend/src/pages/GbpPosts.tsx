@@ -1,9 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Megaphone, Trash2, RotateCcw, ExternalLink, RefreshCw, Sparkles,
-  CalendarClock, Send, Save, X, Upload, ImageIcon, CheckCircle2, XCircle, Clock,
+  CalendarClock, Send, Save, X, Upload, ImageIcon, CheckCircle2, XCircle, Clock, Link2,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client } from '../lib/types'
@@ -122,6 +122,8 @@ export function GbpPosts() {
         Compose and publish Google Business Profile posts — Updates, Offers, Events & Products — to this client's listing.
       </p>
 
+      <ConnectionBar />
+
       {disabled ? (
         <EnablementNotice />
       ) : (
@@ -154,14 +156,79 @@ export function GbpPosts() {
   )
 }
 
+// ── Connect Google Business Profile (agency-account OAuth) ───────────────────
+interface OauthStatus { client_configured: boolean; connected: boolean; account_email: string | null; auth_mode: string }
+function ConnectionBar() {
+  const qc = useQueryClient()
+  const [notice, setNotice] = useState<{ ok: boolean; msg: string } | null>(null)
+  const { data } = useQuery<OauthStatus>({
+    queryKey: ['gbp-oauth-status'], queryFn: () => api.get<OauthStatus>('/gbp/oauth/status'),
+  })
+  // Handle the redirect back from Google (?gbp_connected / ?gbp_error), then
+  // strip the params from the URL so a refresh doesn't re-show the banner.
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search)
+    if (p.get('gbp_connected')) { setNotice({ ok: true, msg: 'Connected to Google Business Profile.' }); qc.invalidateQueries({ queryKey: ['gbp-oauth-status'] }) }
+    else if (p.get('gbp_error')) setNotice({ ok: false, msg: `Connection failed: ${p.get('gbp_error')}` })
+    if (p.get('gbp_connected') || p.get('gbp_error')) {
+      p.delete('gbp_connected'); p.delete('gbp_error')
+      window.history.replaceState({}, '', window.location.pathname + (p.toString() ? `?${p}` : ''))
+    }
+  }, [qc])
+
+  const connect = async () => {
+    try {
+      const r = await api.get<{ auth_url?: string; error?: string }>(`/gbp/oauth/start?return_to=${encodeURIComponent(window.location.href)}`)
+      if (r.auth_url) window.location.href = r.auth_url
+      else setNotice({ ok: false, msg: r.error === 'oauth_client_not_configured' ? 'The Google OAuth client isn’t configured on the server yet.' : (r.error || 'Could not start Connect.') })
+    } catch (e) { setNotice({ ok: false, msg: (e as Error).message === 'forbidden' ? 'Only an admin/staff user can connect.' : (e as Error).message }) }
+  }
+  const disconnectMut = useMutation({
+    mutationFn: () => api.post('/gbp/oauth/disconnect', {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['gbp-oauth-status'] }),
+    onError: (e: Error) => setNotice({ ok: false, msg: e.message === 'forbidden' ? 'Only an admin/staff user can disconnect.' : e.message }),
+  })
+
+  if (!data) return null
+  const bar: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 10, fontSize: 13, marginBottom: 16 }
+  return (
+    <div>
+      {notice && (
+        <div style={{ ...bar, background: notice.ok ? '#f0fdf4' : '#fef2f2', border: `1px solid ${notice.ok ? '#bbf7d0' : '#fecaca'}`, color: notice.ok ? '#15803d' : '#b91c1c' }}>
+          {notice.ok ? <CheckCircle2 size={15} /> : <XCircle size={15} />} {notice.msg}
+        </div>
+      )}
+      {data.connected ? (
+        <div style={{ ...bar, background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#15803d' }}>
+          <CheckCircle2 size={15} />
+          <span>Connected to Google Business Profile{data.account_email ? ` as ${data.account_email}` : ''}.</span>
+          <button onClick={() => disconnectMut.mutate()} disabled={disconnectMut.isPending} style={{ ...btn('#fff', '#334155'), marginLeft: 'auto' }}>
+            {disconnectMut.isPending ? 'Disconnecting…' : 'Disconnect'}
+          </button>
+        </div>
+      ) : data.client_configured ? (
+        <div style={{ ...bar, background: '#eef2ff', border: '1px solid #c7d2fe', color: '#3730a3' }}>
+          <Link2 size={15} />
+          <span>Connect the agency Google account that manages these listings — one click, no per-client setup.</span>
+          <button onClick={connect} style={{ ...btn(ACCENT), marginLeft: 'auto' }}>Connect Google Business Profile</button>
+        </div>
+      ) : (
+        <div style={{ ...bar, background: '#f8fafc', border: '1px solid #e2e8f0', color: '#64748b' }}>
+          <Link2 size={15} />
+          <span>One-click Connect isn't available yet — an admin needs to configure the Google OAuth client (server env: client id / secret / redirect URI).</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function EnablementNotice() {
   return (
     <div style={{ padding: 20, borderRadius: 12, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13, color: '#92400e', lineHeight: 1.6 }}>
       <strong>GBP Posts isn't turned on yet.</strong>
       <p style={{ margin: '8px 0 0' }}>
-        This tool is built but gated off. To activate it: run the API verify script, add the agency service account
-        as a <em>Manager</em> on this client's Business Profile, then set <code>GBP_API_ENABLED</code> and{' '}
-        <code>GBP_POSTS_ENABLED</code> on the platform service.
+        This tool is built but gated off. To activate it: connect the agency Google account (the Connect button above),
+        then set <code>GBP_API_ENABLED</code> and <code>GBP_POSTS_ENABLED</code> on the platform service.
       </p>
     </div>
   )

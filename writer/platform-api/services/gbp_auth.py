@@ -25,6 +25,7 @@ Pure selectors (``oauth_configured``, ``auth_mode``) are unit-tested.
 from __future__ import annotations
 
 import logging
+from typing import Optional
 
 from config import settings
 
@@ -34,12 +35,26 @@ SCOPES = ["https://www.googleapis.com/auth/business.manage"]
 _TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 
+def stored_refresh_token() -> Optional[str]:
+    """The agency refresh token: the ``GBP_OAUTH_REFRESH_TOKEN`` env override
+    first, else the one captured by the in-app Connect flow (DB). None if neither.
+
+    Only consulted when the OAuth client id/secret are set (see ``oauth_configured``),
+    so the DB read never runs in the service-account-only path."""
+    if settings.gbp_oauth_refresh_token:
+        return settings.gbp_oauth_refresh_token
+    from services import gbp_oauth  # lazy; None-safe pre-connect
+
+    return gbp_oauth.get_refresh_token()
+
+
 def oauth_configured() -> bool:
-    """Whether a complete OAuth credential set is configured. Pure."""
+    """Whether a complete OAuth credential set is available (client id + secret,
+    plus a refresh token from env or the in-app Connect flow)."""
     return bool(
         settings.google_oauth_client_id
         and settings.google_oauth_client_secret
-        and settings.gbp_oauth_refresh_token
+        and stored_refresh_token()
     )
 
 
@@ -65,7 +80,7 @@ def credentials():
 
         return Credentials(
             token=None,
-            refresh_token=settings.gbp_oauth_refresh_token,
+            refresh_token=stored_refresh_token(),
             client_id=settings.google_oauth_client_id,
             client_secret=settings.google_oauth_client_secret,
             token_uri=_TOKEN_URI,

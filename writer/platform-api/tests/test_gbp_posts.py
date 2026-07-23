@@ -324,6 +324,36 @@ def test_auth_mode_partial_oauth_is_not_configured(monkeypatch):
     assert gbp_auth.oauth_configured() is False
 
 
+# ── OAuth Connect flow — signed state (pure) ─────────────────────────────────
+def test_oauth_state_roundtrip():
+    from services import gbp_oauth
+    s = gbp_oauth.sign_state("https://app/x", "nonce", 1000)
+    assert gbp_oauth.parse_state(s, 1100) == {"r": "https://app/x", "n": "nonce", "t": 1000}
+
+
+def test_oauth_state_rejects_tamper():
+    from services import gbp_oauth
+    s = gbp_oauth.sign_state("https://app/x", "n", 1000)
+    payload, sig = s.split(".", 1)
+    tampered = payload + "." + ("0" * len(sig))
+    assert gbp_oauth.parse_state(tampered, 1100) is None
+
+
+def test_oauth_state_rejects_expired():
+    from services import gbp_oauth
+    s = gbp_oauth.sign_state("https://app/x", "n", 1000)
+    assert gbp_oauth.parse_state(s, 1000 + 601) is None  # past the 600s window
+
+
+def test_oauth_safe_return_to_blocks_open_redirect(monkeypatch):
+    from config import settings
+    from services import gbp_oauth
+    monkeypatch.setattr(settings, "app_base_url", "https://app.example")
+    assert gbp_oauth.safe_return_to("https://app.example/clients/1/gbp-posts") == "https://app.example/clients/1/gbp-posts"
+    assert gbp_oauth.safe_return_to("https://evil.com/x") == "https://app.example"  # off-origin rejected
+    assert gbp_oauth.safe_return_to(None) == "https://app.example"
+
+
 # ── client context builder ───────────────────────────────────────────────────
 def test_build_client_context_includes_key_fields():
     ctx = svc.build_client_context({
