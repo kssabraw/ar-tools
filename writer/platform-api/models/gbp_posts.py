@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal, Optional
 from uuid import UUID
 
@@ -60,6 +61,12 @@ class GbpScheduleUpsertRequest(BaseModel):
     cta_url: Optional[str] = None
     auto_publish: bool = False
     is_active: bool = True
+
+
+class GbpPostScheduleAtRequest(BaseModel):
+    """Schedule a specific post to publish at a future time (UTC if naive)."""
+
+    scheduled_at: datetime
 
 
 class GbpJobsStatusRequest(BaseModel):

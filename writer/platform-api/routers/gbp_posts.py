@@ -26,6 +26,7 @@ from models.gbp_posts import (
     GbpPost,
     GbpPostCreateRequest,
     GbpPostGenerateRequest,
+    GbpPostScheduleAtRequest,
     GbpPostUpdateRequest,
     GbpSchedule,
     GbpScheduleUpsertRequest,
@@ -105,6 +106,22 @@ async def publish_post(client_id: UUID, post_id: UUID, auth: dict = Depends(requ
     assert_not_frozen(str(client_id))  # Freeze Protocol: content output paused
     job_id = svc.enqueue_publish(str(post_id), str(client_id))
     return GbpJob(job_id=job_id)
+
+
+@router.post("/clients/{client_id}/gbp/posts/{post_id}/schedule", response_model=GbpPost)
+async def schedule_post(
+    client_id: UUID, post_id: UUID, body: GbpPostScheduleAtRequest,
+    auth: dict = Depends(require_auth),
+):
+    """Schedule a specific post to publish at a future time. The per-tick due
+    sweep publishes it when due (and honours the Freeze Protocol then)."""
+    return svc.schedule_post(str(post_id), str(client_id), body.scheduled_at)
+
+
+@router.post("/clients/{client_id}/gbp/posts/{post_id}/unschedule", response_model=GbpPost)
+async def unschedule_post(client_id: UUID, post_id: UUID, auth: dict = Depends(require_auth)):
+    """Cancel a future schedule — the post reverts to a plain draft."""
+    return svc.unschedule_post(str(post_id), str(client_id))
 
 
 @router.post("/clients/{client_id}/gbp/posts/generate", response_model=GbpJob)

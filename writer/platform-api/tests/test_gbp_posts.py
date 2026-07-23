@@ -183,6 +183,34 @@ def test_biweekly_without_prev_seeds_like_weekly():
     assert nxt > _now() and nxt.weekday() == 0
 
 
+# ── scheduled-publish time validation ────────────────────────────────────────
+def test_ensure_future_utc_accepts_future_and_normalizes():
+    now = _now()
+    future = datetime(2026, 7, 24, 9, 0, tzinfo=timezone.utc)
+    assert svc.ensure_future_utc(future, now) == future.isoformat()
+
+
+def test_ensure_future_utc_treats_naive_as_utc():
+    now = _now()
+    naive = datetime(2026, 7, 24, 9, 0)  # no tzinfo → assume UTC
+    out = svc.ensure_future_utc(naive, now)
+    assert out == "2026-07-24T09:00:00+00:00"
+
+
+def test_ensure_future_utc_rejects_past():
+    from fastapi import HTTPException
+    now = _now()
+    with pytest.raises(HTTPException):
+        svc.ensure_future_utc(datetime(2026, 7, 22, 9, 0, tzinfo=timezone.utc), now)
+
+
+def test_ensure_future_utc_rejects_equal_now():
+    from fastapi import HTTPException
+    now = _now()
+    with pytest.raises(HTTPException):
+        svc.ensure_future_utc(now, now)
+
+
 # ── client context builder ───────────────────────────────────────────────────
 def test_build_client_context_includes_key_fields():
     ctx = svc.build_client_context({

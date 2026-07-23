@@ -221,8 +221,42 @@ async def remove_from_google(post_id: str) -> dict:
 # ───────────────────────────────────────────────────────────────────────────
 # Publish (async job; freeze-gated)
 # ───────────────────────────────────────────────────────────────────────────
+def _insert_publish_job(client_id: str, post_id: str) -> str:
+    """Insert a ``gbp_post_publish`` async job (no status/validation side effects).
+    Shared by the interactive publish-now path and the due-scheduled sweep."""
+    res = (
+        get_supabase().table("async_jobs")
+        .insert({"job_type": "gbp_post_publish", "entity_id": client_id,
+                 "payload": {"client_id": client_id, "post_id": post_id}})
+        .execute()
+    )
+    return res.data[0]["id"]
+
+
+def _has_active_publish_job(client_id: str, post_id: str) -> bool:
+    """True if a pending/running publish job already exists for this post — the
+    idempotency guard that stops the due sweep re-enqueuing every tick."""
+    rows = (
+        get_supabase().table("async_jobs").select("id, payload")
+        .eq("job_type", "gbp_post_publish").eq("entity_id", client_id)
+        .in_("status", ["pending", "running"]).execute().data or []
+    )
+    return any((r.get("payload") or {}).get("post_id") == post_id for r in rows)
+
+
+def ensure_future_utc(when: datetime, now: datetime) -> str:
+    """Normalize a scheduled time to a UTC ISO string, or raise if not future.
+    Pure (unit-tested): naive datetimes are treated as UTC."""
+    w = when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+    w = w.astimezone(timezone.utc)
+    if w <= now:
+        raise HTTPException(status_code=400, detail="scheduled_at_must_be_future")
+    return w.isoformat()
+
+
 def enqueue_publish(post_id: str, client_id: str) -> str:
-    """Enqueue a ``gbp_post_publish`` job for a draft post. Returns the job id."""
+    """Publish a post NOW: mark it scheduled (no future time) + enqueue the job.
+    Returns the job id."""
     _assert_enabled()
     post = get_post(post_id)
     if post.get("client_id") != client_id:
@@ -231,15 +265,74 @@ def enqueue_publish(post_id: str, client_id: str) -> str:
         raise HTTPException(status_code=409, detail=f"post_not_publishable:{post['status']}")
     _validate_body_fields(post)
     get_supabase().table("gbp_posts").update(
-        {"status": "scheduled", "error": None, "updated_at": "now()"}
+        {"status": "scheduled", "scheduled_at": None, "error": None, "updated_at": "now()"}
     ).eq("id", post_id).execute()
-    res = (
-        get_supabase().table("async_jobs")
-        .insert({"job_type": "gbp_post_publish", "entity_id": client_id,
-                 "payload": {"client_id": client_id, "post_id": post_id}})
-        .execute()
+    return _insert_publish_job(client_id, post_id)
+
+
+def schedule_post(post_id: str, client_id: str, scheduled_at: datetime) -> dict:
+    """Schedule a specific post to publish at a future time. It stays 'scheduled'
+    with a `scheduled_at`; the per-tick due sweep publishes it when the time comes
+    (a future-dated async job would be claimed immediately, so we can't defer via
+    the job queue). Validates content + a future time up front."""
+    _assert_enabled()
+    post = get_post(post_id)
+    if post.get("client_id") != client_id:
+        raise HTTPException(status_code=404, detail="gbp_post_not_found")
+    if post["status"] not in _PUBLISHABLE:
+        raise HTTPException(status_code=409, detail=f"post_not_publishable:{post['status']}")
+    _validate_body_fields(post)
+    when_iso = ensure_future_utc(scheduled_at, datetime.now(timezone.utc))
+    get_supabase().table("gbp_posts").update(
+        {"status": "scheduled", "scheduled_at": when_iso, "error": None, "updated_at": "now()"}
+    ).eq("id", post_id).execute()
+    return get_post(post_id)
+
+
+def unschedule_post(post_id: str, client_id: str) -> dict:
+    """Cancel a future schedule — back to a plain draft."""
+    _assert_enabled()
+    post = get_post(post_id)
+    if post.get("client_id") != client_id:
+        raise HTTPException(status_code=404, detail="gbp_post_not_found")
+    if post.get("scheduled_at") is None:
+        return post
+    get_supabase().table("gbp_posts").update(
+        {"status": "draft", "scheduled_at": None, "updated_at": "now()"}
+    ).eq("id", post_id).execute()
+    return get_post(post_id)
+
+
+def enqueue_due_gbp_scheduled_posts() -> int:
+    """Per-tick sweep: publish any post whose scheduled_at has come due. Skips
+    frozen clients (publish is paused — it fires once the freeze lifts) and posts
+    that already have an active publish job. No-op until the module is enabled."""
+    if not (settings.gbp_api_enabled and settings.gbp_posts_enabled):
+        return 0
+    from services.freeze import is_frozen
+
+    supabase = get_supabase()
+    now = datetime.now(timezone.utc)
+    due = (
+        supabase.table("gbp_posts").select("id, client_id")
+        .eq("status", "scheduled").not_.is_("scheduled_at", "null")
+        .lte("scheduled_at", now.isoformat()).is_("deleted_at", "null")
+        .execute().data or []
     )
-    return res.data[0]["id"]
+    count = 0
+    for post in due:
+        cid, pid = post["client_id"], post["id"]
+        if is_frozen(cid) or _has_active_publish_job(cid, pid):
+            continue
+        try:
+            _insert_publish_job(cid, pid)
+            count += 1
+        except Exception as exc:  # noqa: BLE001 — defensive
+            logger.warning("gbp_posts.scheduled_enqueue_failed",
+                           extra={"post_id": pid, "error": str(getattr(exc, "detail", exc))})
+    if count:
+        logger.info("gbp_posts.scheduled_published", extra={"posts": count})
+    return count
 
 
 async def run_publish_job(job: dict) -> None:
@@ -269,7 +362,7 @@ async def run_publish_job(job: dict) -> None:
         supabase.table("gbp_posts").update({
             "status": created["status"], "google_name": created.get("google_name"),
             "google_state": created.get("google_state"), "search_url": created.get("search_url"),
-            "published_at": "now()", "error": None, "updated_at": "now()",
+            "published_at": "now()", "scheduled_at": None, "error": None, "updated_at": "now()",
         }).eq("id", post_id).execute()
         supabase.table("async_jobs").update(
             {"status": "complete", "result": {"post_id": post_id, "state": created.get("google_state")},
