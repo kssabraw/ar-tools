@@ -294,6 +294,90 @@ def test_is_live_on_google_false_cases():
     assert svc.is_live_on_google({"status": "failed", "google_name": None}) is False
 
 
+# ── auth mode selection (OAuth vs service account) ───────────────────────────
+def test_auth_mode_service_account_by_default(monkeypatch):
+    from config import settings
+    from services import gbp_auth
+    monkeypatch.setattr(settings, "google_oauth_client_id", "")
+    monkeypatch.setattr(settings, "google_oauth_client_secret", "")
+    monkeypatch.setattr(settings, "gbp_oauth_refresh_token", "")
+    assert gbp_auth.oauth_configured() is False
+    assert gbp_auth.auth_mode() == "service_account"
+
+
+def test_auth_mode_oauth_when_fully_configured(monkeypatch):
+    from config import settings
+    from services import gbp_auth
+    monkeypatch.setattr(settings, "google_oauth_client_id", "cid")
+    monkeypatch.setattr(settings, "google_oauth_client_secret", "secret")
+    monkeypatch.setattr(settings, "gbp_oauth_refresh_token", "refresh")
+    assert gbp_auth.oauth_configured() is True
+    assert gbp_auth.auth_mode() == "oauth"
+
+
+def test_auth_mode_partial_oauth_is_not_configured(monkeypatch):
+    from config import settings
+    from services import gbp_auth
+    monkeypatch.setattr(settings, "google_oauth_client_id", "cid")
+    monkeypatch.setattr(settings, "google_oauth_client_secret", "")  # missing
+    monkeypatch.setattr(settings, "gbp_oauth_refresh_token", "refresh")
+    assert gbp_auth.oauth_configured() is False
+
+
+# ── OAuth Connect flow — signed state (pure) ─────────────────────────────────
+def test_oauth_state_roundtrip():
+    from services import gbp_oauth
+    s = gbp_oauth.sign_state("https://app/x", "nonce", 1000)
+    assert gbp_oauth.parse_state(s, 1100) == {"r": "https://app/x", "n": "nonce", "t": 1000}
+
+
+def test_oauth_state_rejects_tamper():
+    from services import gbp_oauth
+    s = gbp_oauth.sign_state("https://app/x", "n", 1000)
+    payload, sig = s.split(".", 1)
+    tampered = payload + "." + ("0" * len(sig))
+    assert gbp_oauth.parse_state(tampered, 1100) is None
+
+
+def test_oauth_state_rejects_expired():
+    from services import gbp_oauth
+    s = gbp_oauth.sign_state("https://app/x", "n", 1000)
+    assert gbp_oauth.parse_state(s, 1000 + 601) is None  # past the 600s window
+
+
+def test_oauth_safe_return_to_blocks_open_redirect(monkeypatch):
+    from config import settings
+    from services import gbp_oauth
+    monkeypatch.setattr(settings, "app_base_url", "https://app.example")
+    assert gbp_oauth.safe_return_to("https://app.example/clients/1/gbp-posts") == "https://app.example/clients/1/gbp-posts"
+    assert gbp_oauth.safe_return_to("https://evil.com/x") == "https://app.example"  # off-origin rejected
+    assert gbp_oauth.safe_return_to(None) == "https://app.example"
+
+
+# ── manager-invitation parsing ───────────────────────────────────────────────
+def test_parse_invitation_location_name():
+    from services import gbp_invitations
+    inv = gbp_invitations.parse_invitation({
+        "name": "accounts/1/invitations/9", "role": "MANAGER",
+        "targetLocation": {"locationName": "Acme Roofing", "address": "123 St"},
+    })
+    assert inv == {"name": "accounts/1/invitations/9", "role": "MANAGER", "business": "Acme Roofing"}
+
+
+def test_parse_invitation_account_fallback():
+    from services import gbp_invitations
+    inv = gbp_invitations.parse_invitation({
+        "name": "accounts/1/invitations/9", "role": "MANAGER",
+        "targetAccount": {"accountName": "Acme Group"},
+    })
+    assert inv["business"] == "Acme Group"
+
+
+def test_parse_invitation_unknown_business():
+    from services import gbp_invitations
+    assert gbp_invitations.parse_invitation({"name": "n", "role": "MANAGER"})["business"] == "a business"
+
+
 # ── client context builder ───────────────────────────────────────────────────
 def test_build_client_context_includes_key_fields():
     ctx = svc.build_client_context({

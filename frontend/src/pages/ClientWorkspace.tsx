@@ -5,7 +5,7 @@ import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, CalendarClock, CalendarPlus,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
-  ClipboardList, BookOpen, Share2, Target, Swords, Link2, KanbanSquare, Radar, ShoppingBag,
+  ClipboardList, BookOpen, Share2, Target, Swords, Link2, KanbanSquare, Radar, ShoppingBag, Megaphone,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 import { FreezeBanner } from '../components/FreezeBanner'
@@ -262,6 +262,13 @@ export function ClientWorkspace() {
               : "Auto-rewrites this client's new blog posts, pages & products into unique, search-discoverable Google Docs + Sheets that link back to the site."
           }
           to={id ? `/clients/${id}/syndication` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<Megaphone size={22} />}
+          label="GBP Posts"
+          description="Compose & publish Google Business Profile posts — Updates, Offers, Events & Products — with AI drafting, scheduling, and image upload."
+          to={id ? `/clients/${id}/gbp-posts` : undefined}
           cta="Open"
         />
         <ActionCard
