@@ -12,9 +12,12 @@ const h3: CSSProperties = { fontSize: 14, fontWeight: 600, color: '#0f172a', mar
 const pStyle: CSSProperties = { fontSize: 13, color: '#334155', lineHeight: 1.6, margin: '0 0 10px' }
 const ulStyle: CSSProperties = { fontSize: 13, color: '#334155', lineHeight: 1.6, margin: '0 0 10px', paddingLeft: 20 }
 const hrStyle: CSSProperties = { border: 'none', borderTop: '1px solid #e2e8f0', margin: '16px 0' }
-const tableStyle: CSSProperties = { borderCollapse: 'collapse', width: '100%', margin: '0 0 12px', fontSize: 12.5 }
-const thBase: CSSProperties = { border: '1px solid #e2e8f0', padding: '6px 10px', fontWeight: 600, color: '#0f172a', background: '#f8fafc' }
-const tdBase: CSSProperties = { border: '1px solid #e2e8f0', padding: '6px 10px', color: '#334155' }
+// The table scrolls horizontally inside its own container rather than bleeding
+// past it, so a wide (e.g. 8-column) table can never overlap adjacent content.
+const tableWrapStyle: CSSProperties = { overflowX: 'auto', margin: '0 0 12px', maxWidth: '100%' }
+const tableStyle: CSSProperties = { borderCollapse: 'collapse', width: '100%', fontSize: 12.5 }
+const thBase: CSSProperties = { border: '1px solid #e2e8f0', padding: '6px 10px', fontWeight: 600, color: '#0f172a', background: '#f8fafc', overflowWrap: 'break-word' }
+const tdBase: CSSProperties = { border: '1px solid #e2e8f0', padding: '6px 10px', color: '#334155', overflowWrap: 'break-word' }
 
 // Inline: split a string on **bold** spans into <strong> + text nodes.
 function inline(text: string): ReactNode[] {
@@ -104,24 +107,26 @@ export function Markdown({ children }: { children: string }): React.ReactElement
       }
       const alignOf = (idx: number) => aligns[idx] ?? 'left'
       blocks.push(
-        <table key={`t${key++}`} style={tableStyle}>
-          <thead>
-            <tr>
-              {headerCells.map((c, ci) => (
-                <th key={ci} style={{ ...thBase, textAlign: alignOf(ci) }}>{inline(c)}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {bodyRows.map((row, ri) => (
-              <tr key={ri}>
-                {row.map((c, ci) => (
-                  <td key={ci} style={{ ...tdBase, textAlign: alignOf(ci) }}>{inline(c)}</td>
+        <div key={`t${key++}`} style={tableWrapStyle}>
+          <table style={tableStyle}>
+            <thead>
+              <tr>
+                {headerCells.map((c, ci) => (
+                  <th key={ci} style={{ ...thBase, textAlign: alignOf(ci) }}>{inline(c)}</th>
                 ))}
               </tr>
-            ))}
-          </tbody>
-        </table>,
+            </thead>
+            <tbody>
+              {bodyRows.map((row, ri) => (
+                <tr key={ri}>
+                  {row.map((c, ci) => (
+                    <td key={ci} style={{ ...tdBase, textAlign: alignOf(ci) }}>{inline(c)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
       )
       continue
     }
