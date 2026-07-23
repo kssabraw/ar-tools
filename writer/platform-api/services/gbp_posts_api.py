@@ -36,8 +36,19 @@ logger = logging.getLogger(__name__)
 _V4_BASE = "https://mybusiness.googleapis.com/v4"
 _TIMEOUT = 45
 
-# The post topic types we offer (ALERT is Google-initiated only, so excluded).
-TOPIC_TYPES = ("standard", "event", "offer")
+# The post topic types we offer in the composer. ALERT is Google-initiated only
+# (excluded). 'product' is OUR type, not a Google one: Google's localPosts API
+# has no PRODUCT topicType and no public product-post API (products live in the
+# GBP Product Editor), so a 'product' post publishes as a product-framed STANDARD
+# ("What's New") post — see _TOPIC_TO_API and the module PRD.
+TOPIC_TYPES = ("standard", "event", "offer", "product")
+# Our topic_type → the v4 API's topicType enum.
+_TOPIC_TO_API = {
+    "standard": "STANDARD",
+    "product": "STANDARD",  # product-framed Update (no PRODUCT topicType exists)
+    "event": "EVENT",
+    "offer": "OFFER",
+}
 # Call-to-action action types the v4 API accepts. CALL uses the listing's
 # phone number and carries no URL.
 CTA_TYPES = ("book", "order", "shop", "learn_more", "sign_up", "call")
@@ -135,7 +146,7 @@ def build_local_post_body(
     body: dict = {
         "languageCode": language_code or "en-US",
         "summary": body_summary,
-        "topicType": kind.upper(),
+        "topicType": _TOPIC_TO_API[kind],
     }
     cta = build_call_to_action(cta_type, cta_url)
     if cta:

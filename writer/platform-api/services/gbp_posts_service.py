@@ -423,6 +423,25 @@ _DRAFT_SYSTEM = (
     "Return ONLY the post text — no preamble, no quotes, no markdown."
 )
 
+# Per-type drafting guidance. 'product' is a product-framed Update (Google has no
+# product-post API), so it spotlights one product without inventing price/specs.
+_TYPE_GUIDE = {
+    "standard": "This is a general update or piece of news about the business.",
+    "product": (
+        "Spotlight ONE product or service: what it is, who it's for, and its main "
+        "benefit. Do NOT invent a price, discount, or specs. Nudge the reader to "
+        "shop or browse."
+    ),
+    "offer": (
+        "Describe the offer plainly. Do NOT invent a discount amount, coupon code, "
+        "or dates — use only what's provided in the topic/angle."
+    ),
+    "event": (
+        "Describe the event and why it's worth attending. Do NOT invent a date or "
+        "time — use only what's provided in the topic/angle."
+    ),
+}
+
 
 async def draft_summary(
     client: dict, topic_type: str, theme: Optional[str], source_url: Optional[str]
@@ -432,11 +451,15 @@ async def draft_summary(
 
     from services.report_llm import retry_transient
 
-    ask = [f"Write a {topic_type} Google Business Profile post."]
+    type_label = {"product": "product spotlight", "offer": "offer", "event": "event"}.get(
+        topic_type, "update"
+    )
+    ask = [f"Write a Google Business Profile {type_label} post."]
+    ask.append(_TYPE_GUIDE.get(topic_type, _TYPE_GUIDE["standard"]))
     if theme:
         ask.append(f"Topic / angle: {theme}")
     if source_url:
-        ask.append(f"Announce this page and point the call-to-action at it: {source_url}")
+        ask.append(f"Feature this page and point the call-to-action at it: {source_url}")
     user = build_client_context(client) + "\n\n" + "\n".join(ask)
 
     api_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=60)

@@ -8,7 +8,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-TopicType = Literal["standard", "event", "offer"]
+# 'product' publishes as a product-framed STANDARD post (Google has no
+# product-post API); the others map 1:1 to the v4 topicType enum.
+TopicType = Literal["standard", "event", "offer", "product"]
 CtaType = Literal["book", "order", "shop", "learn_more", "sign_up", "call"]
 Cadence = Literal["weekly", "biweekly", "monthly", "disabled"]
 

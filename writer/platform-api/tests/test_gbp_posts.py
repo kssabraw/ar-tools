@@ -102,6 +102,22 @@ def test_build_body_event_requires_title_and_schedule():
     assert body["event"]["title"] == "Opening"
 
 
+def test_build_product_body_maps_to_standard_no_event_required():
+    # 'product' is our type — Google has no PRODUCT topicType, so it publishes as
+    # a STANDARD post and must NOT require an event block.
+    body = api.build_local_post_body(
+        summary="Our new winter roof coating keeps homes warmer.",
+        topic_type="product", cta_type="shop", cta_url="https://acme.com/coating",
+    )
+    assert body["topicType"] == "STANDARD"
+    assert body["callToAction"]["actionType"] == "SHOP"
+    assert "event" not in body
+
+
+def test_product_is_a_known_topic_type():
+    assert "product" in api.TOPIC_TYPES
+
+
 def test_build_body_offer_includes_offer_block():
     body = api.build_local_post_body(
         summary="10% off", topic_type="offer",
