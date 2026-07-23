@@ -76,6 +76,16 @@ class GbpJobsStatusRequest(BaseModel):
 
 
 # ── responses ───────────────────────────────────────────────────────────────
+class GbpImageUploadResponse(BaseModel):
+    url: str
+
+
+class GbpReusableImage(BaseModel):
+    url: str
+    source: str
+    label: Optional[str] = None
+
+
 class GbpJob(BaseModel):
     job_id: UUID
 

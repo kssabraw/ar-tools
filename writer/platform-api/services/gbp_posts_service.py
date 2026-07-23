@@ -21,6 +21,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from uuid import uuid4
 
 from fastapi import HTTPException
 
@@ -39,6 +40,16 @@ _POST_COLUMNS = (
 _VALID_CADENCES = {"weekly", "biweekly", "monthly", "disabled"}
 # Statuses a post can be published from (a draft, a scheduled row, or a retry).
 _PUBLISHABLE = {"draft", "scheduled", "failed"}
+
+# Post images go to the public wordpress_images bucket (reused — Google fetches
+# the sourceUrl at publish, so it must be public), under a gbp-posts/ key prefix.
+# Google's local-post media floor: JPG/PNG only, >=250x250 px, 10 KB-25 MB. We
+# validate up front so a bad image fails at upload, not as a rejected post.
+_IMAGE_BUCKET = "wordpress_images"
+GBP_IMAGE_TYPES = {"image/jpeg": "jpg", "image/png": "png"}
+GBP_IMAGE_MIN_PX = 250
+GBP_IMAGE_MIN_BYTES = 10 * 1024
+GBP_IMAGE_MAX_BYTES = 25 * 1024 * 1024
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -216,6 +227,93 @@ async def remove_from_google(post_id: str) -> dict:
         {"status": "deleted", "deleted_at": "now()", "updated_at": "now()"}
     ).eq("id", post_id).execute()
     return {"ok": True}
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Images — validated upload to the public bucket + reuse of existing assets
+# ───────────────────────────────────────────────────────────────────────────
+def image_rejection_reason(
+    content_type: str, width: int, height: int, size_bytes: int
+) -> Optional[str]:
+    """Why an image would be rejected as GBP post media, or None if it's fine.
+    Pure (unit-tested) — enforces Google's local-post floor so a bad image fails
+    at upload instead of getting the whole post rejected."""
+    if (content_type or "").lower() not in GBP_IMAGE_TYPES:
+        return "unsupported_image_type"  # JPG/PNG only for GBP local posts
+    if size_bytes < GBP_IMAGE_MIN_BYTES:
+        return "image_too_small_bytes"
+    if size_bytes > GBP_IMAGE_MAX_BYTES:
+        return "image_too_large"
+    if width < GBP_IMAGE_MIN_PX or height < GBP_IMAGE_MIN_PX:
+        return "image_dimensions_too_small"
+    return None
+
+
+def upload_post_image(data: bytes, content_type: str) -> str:
+    """Validate an uploaded image against Google's floor and store it in the
+    public bucket. Returns the public sourceUrl to drop into a post's media."""
+    _assert_enabled()
+    ct = (content_type or "").lower()
+    if not data:
+        raise HTTPException(status_code=422, detail="empty_file")
+    if ct not in GBP_IMAGE_TYPES:
+        raise HTTPException(status_code=422, detail="unsupported_image_type")
+    try:
+        import io  # lazy
+
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as im:
+            width, height = im.size
+    except Exception:  # noqa: BLE001 — a non-decodable upload is a bad image
+        raise HTTPException(status_code=422, detail="invalid_image")
+    reason = image_rejection_reason(ct, width, height, len(data))
+    if reason:
+        raise HTTPException(status_code=413 if reason == "image_too_large" else 422, detail=reason)
+
+    path = f"gbp-posts/{uuid4()}.{GBP_IMAGE_TYPES[ct]}"
+    supabase = get_supabase()
+    try:
+        supabase.storage.from_(_IMAGE_BUCKET).upload(
+            path, data, {"content-type": ct, "upsert": "true"}
+        )
+        return supabase.storage.from_(_IMAGE_BUCKET).get_public_url(path).rstrip("?")
+    except Exception as exc:  # noqa: BLE001
+        logger.error("gbp_posts.image_upload_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=502, detail="image_upload_failed")
+
+
+def list_reusable_images(client_id: str) -> list[dict]:
+    """The client's existing public images (blog featured images + Local SEO page
+    images) so a post can reuse an asset already generated for the client — the
+    'reuse suite images' half of the media picker (locked decision 3)."""
+    supabase = get_supabase()
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def _collect(table: str, source: str, extra_filter=None) -> None:
+        query = (
+            supabase.table(table).select("featured_image_url, keyword, created_at")
+            .eq("client_id", client_id).not_.is_("featured_image_url", "null")
+        )
+        if extra_filter:
+            query = extra_filter(query)
+        rows = query.order("created_at", desc=True).limit(50).execute().data or []
+        for r in rows:
+            url = r.get("featured_image_url")
+            if url and url not in seen:
+                seen.add(url)
+                out.append({"url": url, "source": source, "label": r.get("keyword")})
+
+    try:
+        _collect("runs", "blog")
+    except Exception as exc:  # noqa: BLE001 — a missing column / table never breaks the picker
+        logger.info("gbp_posts.reusable_runs_failed", extra={"error": str(exc)})
+    try:
+        _collect("local_seo_pages", "local_seo", lambda q: q.is_("deleted_at", "null"))
+    except Exception as exc:  # noqa: BLE001
+        logger.info("gbp_posts.reusable_localseo_failed", extra={"error": str(exc)})
+    return out
 
 
 # ───────────────────────────────────────────────────────────────────────────

@@ -15,10 +15,11 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 
 from middleware.auth import require_auth
 from models.gbp_posts import (
+    GbpImageUploadResponse,
     GbpJob,
     GbpJobsStatusRequest,
     GbpJobStatus,
@@ -28,6 +29,7 @@ from models.gbp_posts import (
     GbpPostGenerateRequest,
     GbpPostScheduleAtRequest,
     GbpPostUpdateRequest,
+    GbpReusableImage,
     GbpSchedule,
     GbpScheduleUpsertRequest,
 )
@@ -45,6 +47,26 @@ async def list_post_locations(client_id: UUID, auth: dict = Depends(require_auth
     """Registered GBP locations for this client (only 'ok' ones can be posted to)."""
     svc._assert_enabled()
     return svc.list_ok_locations(str(client_id))
+
+
+# ── images (validated upload + reuse existing client assets) ─────────────────
+@router.post("/clients/{client_id}/gbp/posts/image", response_model=GbpImageUploadResponse)
+async def upload_post_image(
+    client_id: UUID, file: UploadFile = File(...), auth: dict = Depends(require_auth)
+):
+    """Upload a JPG/PNG (>=250x250, 10 KB-25 MB) to the public bucket and return
+    its URL to drop into a post's media. Validated against Google's floor so a
+    bad image fails here, not as a rejected post."""
+    data = await file.read()
+    url = svc.upload_post_image(data, file.content_type or "")
+    return GbpImageUploadResponse(url=url)
+
+
+@router.get("/clients/{client_id}/gbp/posts/reusable-images", response_model=list[GbpReusableImage])
+async def reusable_images(client_id: UUID, auth: dict = Depends(require_auth)):
+    """Existing public client images (blog + Local SEO featured images) to reuse."""
+    svc._assert_enabled()
+    return svc.list_reusable_images(str(client_id))
 
 
 # ── posts CRUD ───────────────────────────────────────────────────────────────

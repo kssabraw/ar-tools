@@ -258,6 +258,30 @@ def test_ensure_future_utc_rejects_equal_now():
         svc.ensure_future_utc(now, now)
 
 
+# ── image validation (Google's local-post floor) ─────────────────────────────
+def test_image_ok():
+    assert svc.image_rejection_reason("image/jpeg", 400, 300, 50_000) is None
+    assert svc.image_rejection_reason("image/png", 250, 250, 10_240) is None
+
+
+def test_image_rejects_type():
+    assert svc.image_rejection_reason("image/webp", 400, 400, 50_000) == "unsupported_image_type"
+    assert svc.image_rejection_reason("image/gif", 400, 400, 50_000) == "unsupported_image_type"
+
+
+def test_image_rejects_too_small_bytes():
+    assert svc.image_rejection_reason("image/jpeg", 400, 400, 5_000) == "image_too_small_bytes"
+
+
+def test_image_rejects_too_large_bytes():
+    assert svc.image_rejection_reason("image/jpeg", 400, 400, 30 * 1024 * 1024) == "image_too_large"
+
+
+def test_image_rejects_small_dimensions():
+    assert svc.image_rejection_reason("image/jpeg", 249, 400, 50_000) == "image_dimensions_too_small"
+    assert svc.image_rejection_reason("image/png", 400, 100, 50_000) == "image_dimensions_too_small"
+
+
 # ── client context builder ───────────────────────────────────────────────────
 def test_build_client_context_includes_key_fields():
     ctx = svc.build_client_context({
