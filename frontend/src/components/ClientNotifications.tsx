@@ -24,9 +24,9 @@ export function ClientNotifications({ clientId }: { clientId: string }) {
   const readMut = useMutation({ mutationFn: (id: string) => api.post(`/notifications/${id}/read`, {}), onSuccess: invalidate })
   const dismissMut = useMutation({ mutationFn: (id: string) => api.post(`/notifications/${id}/dismiss`, {}), onSuccess: invalidate })
   const readAllMut = useMutation({ mutationFn: () => api.post(`/clients/${clientId}/notifications/read-all`, {}), onSuccess: invalidate })
-  const dismissManyMut = useMutation({
+  const deleteManyMut = useMutation({
     mutationFn: (ids: string[] | null) =>
-      api.post(`/clients/${clientId}/notifications/dismiss`, ids ? { ids } : {}),
+      api.post(`/clients/${clientId}/notifications/delete`, ids ? { ids } : {}),
     onSuccess: () => { setSelected(new Set()); invalidate() },
   })
 
@@ -75,10 +75,10 @@ export function ClientNotifications({ clientId }: { clientId: string }) {
         {selected.size > 0 && (
           <button
             style={dangerBtn}
-            onClick={() => dismissManyMut.mutate([...selected])}
-            disabled={dismissManyMut.isPending}
+            onClick={() => deleteManyMut.mutate([...selected])}
+            disabled={deleteManyMut.isPending}
           >
-            <Trash2 size={13} /> Dismiss {selected.size}
+            <Trash2 size={13} /> Delete {selected.size}
           </button>
         )}
         {unread > 0 && (

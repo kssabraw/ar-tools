@@ -40,9 +40,9 @@ class UnreadCountsResponse(BaseModel):
     total: int = 0
 
 
-class DismissRequest(BaseModel):
-    """Bulk-dismiss body. When `ids` is omitted (or empty), every non-dismissed
-    notification for the client is dismissed (the "select all → delete" path)."""
+class DeleteRequest(BaseModel):
+    """Bulk-delete body. When `ids` is omitted (or empty), every notification for
+    the client is deleted (the "select all → delete" path)."""
     ids: Optional[list[UUID]] = None
 
 
