@@ -188,23 +188,29 @@ export function MapsReport() {
             </div>
           )}
 
-          {/* Per-keyword detail */}
+          {/* Per-keyword detail — each keyword is a full-width row so the
+              narrative (which carries wide competitor tables) has the whole
+              page width; the map + stats sit compactly at the top. */}
           <SectionTitle>Per-keyword coverage</SectionTitle>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 18 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 18 }}>
             {results.map(r => (
-              <div key={r.keyword} className="avoid-break" style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 8 }}>
+              <div key={r.keyword} className="avoid-break" style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 15, fontWeight: 700, color: '#0f172a', marginBottom: 12 }}>
                   <MapPin size={14} color="#6366f1" /> {r.keyword}
                 </div>
-                <GeoGridMap grid={r.rank_grid} centerLat={latest.center_lat} centerLng={latest.center_lng} size={320} />
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
-                  <Stat label="Top 3" value={fmtPct(kpct(r.top3_pins, r.total_pins))} color="#16a34a" />
-                  <Stat label="Top 10" value={fmtPct(kpct(r.top10_pins, r.total_pins))} color="#ca8a04" />
-                  <Stat label="Found" value={`${r.found_pins}/${r.total_pins}`} />
-                  <Stat label="Avg rank" value={r.average_rank != null ? r.average_rank.toFixed(1) : '—'} />
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start', marginBottom: r.report_md ? 14 : 0 }}>
+                  <div style={{ flex: '0 0 auto', width: 320, maxWidth: '100%' }}>
+                    <GeoGridMap grid={r.rank_grid} centerLat={latest.center_lat} centerLng={latest.center_lng} size={320} />
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, flex: '1 1 200px' }}>
+                    <Stat label="Top 3" value={fmtPct(kpct(r.top3_pins, r.total_pins))} color="#16a34a" />
+                    <Stat label="Top 10" value={fmtPct(kpct(r.top10_pins, r.total_pins))} color="#ca8a04" />
+                    <Stat label="Found" value={`${r.found_pins}/${r.total_pins}`} />
+                    <Stat label="Avg rank" value={r.average_rank != null ? r.average_rank.toFixed(1) : '—'} />
+                  </div>
                 </div>
                 {r.report_md && (
-                  <div style={{ marginTop: 12, borderTop: '1px solid #f1f5f9', paddingTop: 10 }}>
+                  <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: 12, minWidth: 0 }}>
                     <Markdown>{r.report_md}</Markdown>
                   </div>
                 )}
