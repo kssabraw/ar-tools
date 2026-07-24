@@ -72,6 +72,45 @@ def build_nudge_mention(slack_user_id: Optional[str]) -> Optional[str]:
     return f"<@{slack_user_id}>" if slack_user_id else None
 
 
+def _norm_status(text: Optional[str]) -> str:
+    """Normalize a status token for matching: casefold, underscores→spaces,
+    collapse whitespace ('In_QA' / 'in qa' → 'in qa'). Pure."""
+    return " ".join((text or "").replace("_", " ").casefold().split())
+
+
+def resolve_status(query: str, statuses: list[dict]) -> Optional[dict]:
+    """The workflow status a free-text ``query`` names, or None. Pure — matches in
+    order of confidence: exact key/label, then a *unique* category match ('done',
+    'blocked'), then a *unique* substring of a label/key ('qa' → 'In QA'). Returns
+    None on no match OR ambiguity (two statuses matched) so the caller lists the
+    real options rather than guessing wrong — the confirm step is the final
+    catch, but an ambiguous guess shouldn't reach it."""
+    q = _norm_status(query)
+    if not q:
+        return None
+    active = [s for s in statuses if s.get("active", True)]
+    for s in active:  # 1) exact key or label
+        if _norm_status(s.get("key")) == q or _norm_status(s.get("label")) == q:
+            return s
+    cat = [s for s in active if _norm_status(s.get("category")) == q]  # 2) unique category
+    if len(cat) == 1:
+        return cat[0]
+    subs = [s for s in active  # 3) unique substring of label/key
+            if q in _norm_status(s.get("label")) or q in _norm_status(s.get("key"))]
+    return subs[0] if len(subs) == 1 else None
+
+
+def move_direction(statuses: list[dict], from_key: Optional[str], to_key: Optional[str]) -> str:
+    """A phrase for the confirm line describing a status move along the workflow's
+    sort order: 'forward to' / 'back to' / 'to' (unknown position or same). Pure —
+    the workflow order is the ``statuses`` list order (get_statuses sorts it)."""
+    order = {s.get("key"): i for i, s in enumerate(statuses)}
+    a, b = order.get(from_key), order.get(to_key)
+    if a is None or b is None or a == b:
+        return "to"
+    return "forward to" if b > a else "back to"
+
+
 # ---------------------------------------------------------------------------
 # Small DB reads
 # ---------------------------------------------------------------------------
@@ -263,6 +302,92 @@ def stage_unblock(context: ActionContext, client_id: str, args: dict) -> tuple[s
 def run_unblock(context: ActionContext, client_id: str, args: dict) -> str:
     task_service.update_task(args["task_id"], {"status_key": args["status_key"]}, actor_id=context.profile_id)
     return f"✅ Unblocked *“{args['task_name']}”* → {args['status_key']}."
+
+
+# ---------------------------------------------------------------------------
+# set_task_status — move a task forward OR backward through the workflow
+# (Not Started → In Progress → In QA → Sent to Client → … ; or back for rework).
+# Completion semantics: a move INTO a done status routes through
+# task_service.complete_task (so the completed flag, marker auto-tick, and the
+# Deliverables Sheet sync all fire); a move OUT of a completed status clears the
+# done flag; every other move is a plain status write (which itself auto-ticks
+# markers + fires the QA-on-In-QA hook).
+# ---------------------------------------------------------------------------
+def stage_set_status(context: ActionContext, client_id: str, args: dict) -> tuple[str, dict | str]:
+    task, reply = _resolve_one_task(client_id, args.get("task_name", ""), "move")
+    if reply:
+        return "reply", reply
+    statuses = task_service.get_statuses()
+    target = resolve_status(args.get("status", ""), statuses)
+    if not target:
+        opts = ", ".join(s.get("label") or s.get("key") for s in statuses if s.get("active", True))
+        return "reply", f"Which status should “{task['name']}” move to? Options: {opts}."
+    label = target.get("label") or target["key"]
+    if target.get("key") == task.get("status_key"):
+        return "reply", f"“{task['name']}” is already *{label}*."
+    # Own-vs-other permission split — a VA may move their OWN task's status, but
+    # moving someone else's needs staff (mirrors set_task_due).
+    own = task.get("assignee_gid") and task.get("assignee_gid") == _actor_member_gid(context)
+    ok, reason = pace_auth.require(context, "update_own_status" if own else "set_task_status_other")
+    if not ok:
+        return "reply", reason
+    direction = move_direction(statuses, task.get("status_key"), target["key"])
+    is_done = bool(target.get("is_done") or target.get("category") == "done")
+    return _staged(
+        {"task_id": task["id"], "task_name": task["name"], "status_key": target["key"],
+         "status_label": label, "is_done": is_done, "was_completed": bool(task.get("completed"))},
+        context, f"move *“{task['name']}”* {direction} *{label}*",
+    )
+
+
+def run_set_status(context: ActionContext, client_id: str, args: dict) -> str:
+    task_id, target = args["task_id"], args["status_key"]
+    if args.get("is_done") and not args.get("was_completed"):
+        # Canonical completion path: sets completed, ticks markers, syncs the
+        # Deliverables Sheet. Honour the exact done status if the board has more
+        # than one (complete_task uses the first).
+        task_service.complete_task(task_id, actor_id=context.profile_id)
+        if target and target != task_service.done_status_key(task_service.get_statuses()):
+            task_service.update_task(task_id, {"status_key": target}, actor_id=context.profile_id)
+    elif args.get("was_completed") and not args.get("is_done"):
+        # Reopening: a completed task moving back into the workflow — clear the
+        # done flag alongside the status so it stops reading as finished.
+        task_service.update_task(
+            task_id, {"status_key": target, "completed": False, "completed_at": None},
+            actor_id=context.profile_id,
+        )
+    else:
+        task_service.update_task(task_id, {"status_key": target}, actor_id=context.profile_id)
+    return f"✅ Moved *“{args['task_name']}”* to {args.get('status_label') or target}."
+
+
+# ---------------------------------------------------------------------------
+# write_client_pulse — generate this week's copy-paste client update email
+# (the existing Weekly Pulse; staff paste + personalize, nothing is auto-sent).
+# ---------------------------------------------------------------------------
+def stage_write_pulse(context: ActionContext, client_id: str, args: dict) -> tuple[str, dict | str]:
+    ok, reason = pace_auth.require(context, "write_client_pulse")
+    if not ok:
+        return "reply", reason
+    return _staged(
+        {}, context,
+        "write this week's client pulse — a copy-paste update email you can send the client",
+    )
+
+
+async def run_write_pulse(context: ActionContext, client_id: str, args: dict) -> str:
+    # Heavy (a small LLM pass) — run off the request event loop.
+    import asyncio
+
+    from services import client_pulse
+
+    body = await asyncio.to_thread(client_pulse.build_pulse, client_id)
+    if not body:
+        return "I couldn't build a pulse for this client just now — try again in a moment."
+    return (
+        "Here's this week's client pulse — copy/paste it, personalize the greeting, and send:\n\n"
+        f"{body}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -481,7 +606,9 @@ PACE_ACTIONS: dict[str, dict] = {
     "reassign_task": {"label": "reassign a task", "stage": stage_reassign, "run": run_reassign},
     "assign_task": {"label": "auto-assign a task to the best-fit member", "stage": stage_assign, "run": run_assign},
     "set_task_due": {"label": "set a task's due date", "stage": stage_set_due, "run": run_set_due},
+    "set_task_status": {"label": "move a task forward or back through the workflow", "stage": stage_set_status, "run": run_set_status},
     "unblock_task": {"label": "unblock a task", "stage": stage_unblock, "run": run_unblock},
+    "write_client_pulse": {"label": "write the weekly client pulse (a copy-paste client update email)", "stage": stage_write_pulse, "run": run_write_pulse},
     "generate_client_month": {"label": "generate this month's tasks", "stage": stage_generate_month, "run": run_generate_month},
     "nudge_assignee": {"label": "nudge an assignee", "stage": stage_nudge, "run": run_nudge},
     "generate_pace_report": {"label": "generate a delivery report", "stage": stage_generate_report, "run": run_generate_report},
