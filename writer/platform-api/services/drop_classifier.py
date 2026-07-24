@@ -332,8 +332,8 @@ def classify_client_drops(client_id: str, drops: list[dict]) -> dict:
             .eq("client_id", client_id)
             .execute()
         ).count or 0
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("drop_classifier.tracked_count_failed", extra={"client_id": client_id, "error": str(exc)})
 
     scope = detect_scope(len(drops), tracked_count)
     cannibalized = _cannibalized_queries(supabase, client_id)

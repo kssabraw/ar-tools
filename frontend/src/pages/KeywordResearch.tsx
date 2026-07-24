@@ -77,6 +77,7 @@ export function KeywordResearch() {
   const [runId, setRunId] = useState<string | null>(null)
   const [job, setJob] = useState<string | null>(null)
   const [activeCluster, setActiveCluster] = useState<string | null>(null)
+  const [downloadErr, setDownloadErr] = useState<string | null>(null)
   const [onlyQuestions, setOnlyQuestions] = useState(false)
 
   // Open the newest run by default once history loads.
@@ -143,10 +144,15 @@ export function KeywordResearch() {
     [reportsData, runId],
   )
   const downloadReport = async (reportId: string) => {
+    setDownloadErr(null)
     try {
       const { download_url } = await api.get<{ download_url: string }>(`/clients/${id}/keyword-research/reports/${reportId}/download`)
       if (download_url) window.open(download_url, '_blank')
-    } catch { /* ignore */ }
+      else setDownloadErr('No download link was returned for that report.')
+    } catch (e) {
+      console.error('keyword-research report download failed', e)
+      setDownloadErr((e as Error)?.message ?? 'Report download failed — please try again.')
+    }
   }
 
   const submit = () => { if (seeds.trim()) research.mutate(seeds) }
@@ -272,6 +278,7 @@ export function KeywordResearch() {
             </div>
           </div>
           {genReport.isError && <div style={errBox}>{(genReport.error as Error)?.message ?? 'Report failed.'}</div>}
+          {downloadErr && <div style={errBox}>{downloadErr}</div>}
           {runReports.length > 0 && (
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
               {runReports.map((r) => (

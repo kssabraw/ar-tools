@@ -294,8 +294,9 @@ export function LeadOff() {
         setFilters(next)
         setApplied(next)
       }
-    } catch {
-      setSearchResult({ matched: false, category: null, label: 'No Data Provided', confidence: 0 })
+    } catch (e) {
+      console.error('leadoff category search failed', e)
+      setSearchResult({ matched: false, category: null, label: 'Search failed — please try again', confidence: 0 })
     } finally {
       setSearching(false)
     }

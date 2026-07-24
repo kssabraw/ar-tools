@@ -404,8 +404,8 @@ def build_profiles(client_id: str, today: Optional[date] = None) -> dict:
                     maps_by_place[c["place_id"]] = c
             if c.get("name"):
                 maps_by_name.setdefault(c["name"].casefold(), c)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("competitor_intel.maps_leaderboard_read_failed", extra={"client_id": client_id, "error": str(exc)})
 
     # Latest GBP capture per place_id.
     gbp_by_place: dict[str, dict] = {}
@@ -416,8 +416,8 @@ def build_profiles(client_id: str, today: Optional[date] = None) -> dict:
             .eq("client_id", client_id).order("captured_at", desc=True).limit(400).execute()
         ).data or []:
             gbp_by_place.setdefault(r["place_id"], r)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("competitor_intel.gbp_profiles_read_failed", extra={"client_id": client_id, "error": str(exc)})
 
     # Organic top-10 appearances per domain (latest snapshot per keyword).
     organic_by_domain: dict[str, dict] = {}
@@ -432,8 +432,8 @@ def build_profiles(client_id: str, today: Optional[date] = None) -> dict:
             pos = r.get("position")
             if pos is not None and (entry["best_position"] is None or pos < entry["best_position"]):
                 entry["best_position"] = pos
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("competitor_intel.organic_serp_read_failed", extra={"client_id": client_id, "error": str(exc)})
 
     # Review velocity per place_id (trailing 90d, incl. the client's own).
     velocity_by_place: dict[str, float] = {}
@@ -453,8 +453,8 @@ def build_profiles(client_id: str, today: Optional[date] = None) -> dict:
             )
         velocity_by_place = {p: review_velocity(d, today) for p, d in dates_by_place.items()}
         client_velocity = review_velocity(client_dates, today) if client_dates else None
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("competitor_intel.review_velocity_read_failed", extra={"client_id": client_id, "error": str(exc)})
     client_ctx["review_velocity_30d"] = client_velocity
 
     # New content (non-baseline pages, trailing window) per competitor.
@@ -469,8 +469,8 @@ def build_profiles(client_id: str, today: Optional[date] = None) -> dict:
             new_pages_by_comp.setdefault(r["competitor_id"], []).append(
                 {"url": r["url"], "first_seen": r["first_seen"]}
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("competitor_intel.new_pages_read_failed", extra={"client_id": client_id, "error": str(exc)})
 
     profiles: list[dict] = []
     for comp in competitors:

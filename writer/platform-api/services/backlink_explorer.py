@@ -752,8 +752,10 @@ def enqueue_due_backlink_snapshots() -> int:
                     when = when.replace(tzinfo=timezone.utc)
                 if when > cutoff:
                     continue
-            except ValueError:
-                pass
+            except ValueError as exc:
+                # Unparseable timestamp — fall through and re-enqueue a fresh snapshot.
+                logger.debug("backlink_explorer.refresh_ts_parse_failed",
+                             extra={"target_id": t.get("id"), "value": str(lr), "error": str(exc)})
         if enqueue_snapshot(t["id"]):
             enqueued += 1
     return enqueued

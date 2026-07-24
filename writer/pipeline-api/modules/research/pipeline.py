@@ -287,7 +287,8 @@ async def _select_and_extract(
         heading_vec = vectors[0]
         for c, v in zip(candidates, vectors[1:]):
             c.meta_snippet_match = cosine(heading_vec, v)
-    except Exception:
+    except Exception as exc:
+        logger.warning("meta snippet embedding failed; zeroing pre-LLM relevance: %s", exc)
         for c in candidates:
             c.meta_snippet_match = 0.0
 

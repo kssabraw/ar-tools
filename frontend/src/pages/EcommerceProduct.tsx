@@ -760,12 +760,13 @@ function HouseTemplatePanel({ clientId }: { clientId: string }) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [open, setOpen] = useState(false)
+  const [loadErr, setLoadErr] = useState(false)
 
   useEffect(() => {
     let alive = true
     ecommerceApi.getPageTemplate(clientId)
-      .then(r => { if (alive) { setSaved(r.ecommerce_page_template_url); setUrl(r.ecommerce_page_template_url ?? '') } })
-      .catch(() => {})
+      .then(r => { if (alive) { setSaved(r.ecommerce_page_template_url); setUrl(r.ecommerce_page_template_url ?? ''); setLoadErr(false) } })
+      .catch((e) => { console.error('load ecommerce house template failed', e); if (alive) setLoadErr(true) })
       .finally(() => { if (alive) setLoading(false) })
     return () => { alive = false }
   }, [clientId])
@@ -791,7 +792,9 @@ function HouseTemplatePanel({ clientId }: { clientId: string }) {
       >
         <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>
           House template{' '}
-          {saved
+          {loadErr
+            ? <span style={{ color: '#dc2626', fontWeight: 500 }}>· couldn’t load — reopen to retry</span>
+            : saved
             ? <span style={{ color: '#16a34a', fontWeight: 500 }}>· product pages mirror your reference layout</span>
             : <span style={{ color: '#94a3b8', fontWeight: 400 }}>· not set (using the default structure)</span>}
         </div>

@@ -334,16 +334,16 @@ def build_pulse(client_id: str, today: Optional[date] = None) -> Optional[str]:
     try:
         for c in (sb.table("task_categories").select("key, label").execute()).data or []:
             cat_labels[c["key"]] = c.get("label") or c["key"]
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("pulse_category_labels_read_failed", extra={"client_id": client_id, "error": str(exc)})
     # Task Library blurbs — the team's own "why this work matters" per task type.
     blurbs: dict = {}
     try:
         for r in (sb.table("asana_task_library").select("name, client_blurb").execute()).data or []:
             if r.get("client_blurb"):
                 blurbs[(r.get("name") or "").strip().casefold()] = r["client_blurb"].strip()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("pulse_task_blurbs_read_failed", extra={"client_id": client_id, "error": str(exc)})
 
     prev_start_iso = (ws - timedelta(days=7)).isoformat()
     week_end_iso = (ws + timedelta(days=7)).isoformat()
@@ -378,8 +378,8 @@ def build_pulse(client_id: str, today: Optional[date] = None) -> Optional[str]:
             f"“{r.get('keyword')}” ({_CONTENT_TYPE_LABELS.get(r.get('content_type'), 'content')})"
             for r in runs if r.get("keyword")
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("pulse_published_runs_read_failed", extra={"client_id": client_id, "error": str(exc)})
     try:
         pages = (
             sb.table("local_seo_pages").select("page_title, keyword")
@@ -390,8 +390,8 @@ def build_pulse(client_id: str, today: Optional[date] = None) -> Optional[str]:
         published.extend(
             f"“{p.get('page_title') or p.get('keyword')}” (local page)" for p in pages
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("pulse_published_pages_read_failed", extra={"client_id": client_id, "error": str(exc)})
 
     # On tap this week: open tasks due this week + work already in progress.
     upcoming_items: list[str] = []

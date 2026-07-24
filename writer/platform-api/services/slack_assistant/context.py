@@ -502,16 +502,16 @@ def _ctx_setup(supabase, client_id: str, today: date) -> Optional[dict]:
         icp = icp_service.resolve_icp_text(c) or ""
         if icp:
             out["icp_summary"] = icp[:1500]
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("slack_assistant.icp_text_failed", extra={"error": str(exc)})
     try:
         from services.brand_voice_service import render_brand_voice_text
 
         bv = render_brand_voice_text(c.get("brand_voice")) or ""
         if bv:
             out["brand_voice_summary"] = bv[:800]
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("slack_assistant.brand_voice_text_failed", extra={"error": str(exc)})
     if gbp:
         out["gbp"] = {
             "business_name": gbp.get("business_name"),
@@ -673,8 +673,8 @@ def _ctx_trends(supabase, client_id: str, today: date) -> Optional[dict]:
     outlook = None
     try:
         outlook = trend_watch.build_demand_outlook(client_id, today=today)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("slack_assistant.demand_outlook_failed", extra={"client_id": client_id, "error": str(exc)})
     if not events and not outlook:
         return None
     return {

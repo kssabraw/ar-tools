@@ -126,7 +126,8 @@ def parse_sitemap_xml(xml: str) -> tuple[list[str], list[str]]:
     malformed XML rather than raising."""
     try:
         root = ElementTree.fromstring(xml)
-    except ElementTree.ParseError:
+    except ElementTree.ParseError as exc:
+        logger.warning("site_page_index.sitemap_parse_failed", extra={"error": str(exc)})
         return [], []
 
     def _localname(tag: str) -> str:

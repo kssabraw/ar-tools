@@ -16,6 +16,7 @@ tested; the DB helpers use the service-role client like the rest of platform-api
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timezone
 from typing import Optional
@@ -23,6 +24,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from db.supabase_client import get_supabase
 from fanout.writer.schedule_planner import ScheduleError, plan_runs
+
+logger = logging.getLogger(__name__)
 
 CONTENT_TYPES = ("blog_post", "service_page", "location_page", "local_seo_page",
                  "ecommerce")
@@ -194,8 +197,8 @@ def estimate_batch(
             )
             if dts:
                 finish = dts[-1].date()
-        except ScheduleError:
-            pass
+        except ScheduleError as exc:
+            logger.warning("content_schedule.finish_date_plan_failed", extra={"mode": mode, "error": str(exc)})
     if explicit_finish and (finish is None or explicit_finish > finish):
         finish = explicit_finish
     if finish:

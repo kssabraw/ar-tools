@@ -4,10 +4,13 @@ session. The worker (slice 4) claims due rows via the `claim_scheduled_runs` RPC
 
 from __future__ import annotations
 
+import logging
 from datetime import date, time
 
 from fanout.storage.supabase_client import get_service_client
 from fanout.writer.schedule_planner import PlannedRun
+
+logger = logging.getLogger(__name__)
 
 
 def create_schedule(
@@ -308,8 +311,11 @@ def reflow_queued(schedule_id: str) -> int:
         try:
             last = datetime.fromisoformat(consumed[0]["scheduled_at"]).astimezone(tz).date()
             floor = max(floor, last + timedelta(days=1))
-        except Exception:  # noqa: BLE001
-            pass
+        except (ValueError, TypeError, KeyError) as exc:
+            # Unparseable consumed-slot timestamp: leave floor at today rather than
+            # risk scheduling before an already-consumed date.
+            logger.warning("fanout.schedule_repack_floor_parse_failed",
+                           extra={"schedule_id": schedule_id, "error": str(exc)})
     tod = _time_from(sched.get("time_of_day"))
     try:
         planned = plan_runs(
