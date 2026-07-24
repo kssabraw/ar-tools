@@ -185,15 +185,23 @@ export function DomainIntel() {
   const { id } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
 
+  // Standalone mode: reached from the sidebar at /domain-intel with no client.
+  // The core Domain lookup needs no client — snapshots live under the shared
+  // client-less scope. The client-relative modes (Keyword Gap, Discover) are
+  // only offered inside a client workspace.
+  const standalone = !id
+  const base = id ? `/clients/${id}/domain-intel` : '/domain-intel'
+  const scope = id ?? 'global'
+
   const { data: client } = useQuery<Client>({
     queryKey: ['client', id],
     queryFn: () => api.get<Client>(`/clients/${id}`),
     enabled: Boolean(id),
   })
   const { data: history } = useQuery<HistoryResponse>({
-    queryKey: ['domain-intel', id],
-    queryFn: () => api.get<HistoryResponse>(`/clients/${id}/domain-intel`),
-    enabled: Boolean(id),
+    queryKey: ['domain-intel', scope],
+    queryFn: () => api.get<HistoryResponse>(base),
+    enabled: standalone || Boolean(id),
   })
 
   const [mode, setMode] = useState<'lookup' | 'gap' | 'discover'>('lookup')
@@ -220,22 +228,22 @@ export function DomainIntel() {
   }
 
   const { data: overview, isFetching: loadingOverview } = useQuery<OverviewResponse>({
-    queryKey: ['domain-intel-overview', id, selected],
-    queryFn: () => api.get<OverviewResponse>(`/clients/${id}/domain-intel/overview/${encodeURIComponent(selected!)}`),
-    enabled: Boolean(id && selected),
+    queryKey: ['domain-intel-overview', scope, selected],
+    queryFn: () => api.get<OverviewResponse>(`${base}/overview/${encodeURIComponent(selected!)}`),
+    enabled: Boolean(selected),
   })
 
   const analyze = useMutation({
     mutationFn: (domain: string) =>
-      api.post<{ job_id: string; target_domain: string }>(`/clients/${id}/domain-intel/overview`, {
+      api.post<{ job_id: string; target_domain: string }>(`${base}/overview`, {
         target_domain: domain, role,
       }),
     onSuccess: (r) => { setJob(r.job_id); setSelected(r.target_domain) },
   })
 
   const { data: jobStatus } = useQuery<{ status: string; error?: string }>({
-    queryKey: ['domain-intel-job', id, job],
-    queryFn: () => api.get(`/clients/${id}/domain-intel/jobs/${job}`),
+    queryKey: ['domain-intel-job', scope, job],
+    queryFn: () => api.get(`${base}/jobs/${job}`),
     enabled: Boolean(job),
     refetchInterval: (q) => (['complete', 'failed'].includes(q.state.data?.status ?? '') ? false : 2500),
   })
@@ -245,8 +253,8 @@ export function DomainIntel() {
   // already stops via refetchInterval; a new run replaces the id.
   useEffect(() => {
     if (jobStatus?.status === 'complete') {
-      queryClient.invalidateQueries({ queryKey: ['domain-intel', id] })
-      queryClient.invalidateQueries({ queryKey: ['domain-intel-overview', id, selected] })
+      queryClient.invalidateQueries({ queryKey: ['domain-intel', scope] })
+      queryClient.invalidateQueries({ queryKey: ['domain-intel-overview', scope, selected] })
     }
   }, [jobStatus?.status]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -360,7 +368,7 @@ export function DomainIntel() {
   return (
     <div style={{ padding: 32, maxWidth: 1040 }}>
       <Link to={id ? `/clients/${id}` : '/'} style={backLink}>
-        <ArrowLeft size={14} /> Back to {client?.name ?? 'Client'}
+        <ArrowLeft size={14} /> {id ? `Back to ${client?.name ?? 'Client'}` : 'Back to dashboard'}
       </Link>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '0 0 4px' }}>
@@ -372,12 +380,16 @@ export function DomainIntel() {
         {' '}<span style={{ color: budget > 0 ? '#64748b' : '#dc2626' }}>Budget left today: {num(budget)} calls.</span>
       </p>
 
-      {/* Mode toggle */}
-      <div style={{ display: 'inline-flex', gap: 4, background: '#f1f5f9', padding: 3, borderRadius: 8, marginBottom: 20 }}>
-        <button style={mode === 'lookup' ? segActive : segBtn} onClick={() => setMode('lookup')}>Domain lookup</button>
-        <button style={mode === 'gap' ? segActive : segBtn} onClick={() => setMode('gap')}>Keyword gap</button>
-        <button style={mode === 'discover' ? segActive : segBtn} onClick={() => setMode('discover')}>Discover</button>
-      </div>
+      {/* Mode toggle — Keyword Gap and Discover compare against a client's
+          competitor set, so they only appear inside a client workspace. The
+          standalone module (sidebar) offers the client-free Domain lookup. */}
+      {!standalone && (
+        <div style={{ display: 'inline-flex', gap: 4, background: '#f1f5f9', padding: 3, borderRadius: 8, marginBottom: 20 }}>
+          <button style={mode === 'lookup' ? segActive : segBtn} onClick={() => setMode('lookup')}>Domain lookup</button>
+          <button style={mode === 'gap' ? segActive : segBtn} onClick={() => setMode('gap')}>Keyword gap</button>
+          <button style={mode === 'discover' ? segActive : segBtn} onClick={() => setMode('discover')}>Discover</button>
+        </div>
+      )}
 
       {mode === 'gap' && (
         <div>
