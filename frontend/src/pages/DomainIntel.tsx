@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Download, Radar, RefreshCw, Search, TrendingUp } from 'lucide-react'
@@ -75,6 +75,112 @@ const num = (n: number | null | undefined, digits = 0) =>
 const money = (n: number | null | undefined) =>
   n === null || n === undefined ? '—' : `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
 
+// Estimated organic CTR by SERP position — mirrors the backend curve
+// (services/keyword_market.py) so the per-page estimated traffic below stays
+// consistent with the est_value the server already computed.
+const CTR_BY_POSITION: Record<number, number> = {
+  1: 0.281, 2: 0.152, 3: 0.106, 4: 0.073, 5: 0.053,
+  6: 0.040, 7: 0.030, 8: 0.024, 9: 0.020, 10: 0.017,
+}
+function ctrForPosition(position: number | null): number {
+  if (position === null || position === undefined) return 0
+  const p = Math.round(position)
+  if (CTR_BY_POSITION[p] !== undefined) return CTR_BY_POSITION[p]
+  if (p <= 20) return 0.015
+  if (p <= 50) return 0.005
+  if (p <= 100) return 0.001
+  return 0
+}
+// Estimated monthly organic clicks a keyword sends to its ranking page.
+function estTraffic(volume: number | null, position: number | null): number {
+  if (!volume) return 0
+  return volume * ctrForPosition(position)
+}
+
+// DataForSEO's four main_intent buckets, plus "unknown" for missing intent.
+const INTENTS = ['informational', 'commercial', 'transactional', 'navigational', 'unknown'] as const
+type Intent = (typeof INTENTS)[number]
+const INTENT_COLOR: Record<Intent, string> = {
+  informational: '#2563eb', commercial: '#d97706', transactional: '#16a34a',
+  navigational: '#7c3aed', unknown: '#94a3b8',
+}
+const INTENT_LABEL: Record<Intent, string> = {
+  informational: 'Informational', commercial: 'Commercial', transactional: 'Transactional',
+  navigational: 'Navigational', unknown: 'Unknown',
+}
+function normIntent(s: string | null | undefined): Intent {
+  const v = (s ?? '').toLowerCase()
+  return (INTENTS as readonly string[]).includes(v) ? (v as Intent) : 'unknown'
+}
+
+interface PageRow {
+  url: string
+  keywordCount: number
+  estTraffic: number
+  estValue: number
+  bestPosition: number | null
+  dominantIntent: Intent
+  keywords: RankedKeyword[]
+}
+
+// Group ranked keywords by the page that ranks for them, summing estimated
+// traffic/value and assigning each page a traffic-weighted dominant intent
+// (keyword count breaks ties). Sorted most-traffic-first. Pure.
+function buildPageBreakdown(keywords: RankedKeyword[]): PageRow[] {
+  const byUrl = new Map<string, RankedKeyword[]>()
+  for (const k of keywords) {
+    const url = k.url || '(unknown URL)'
+    const arr = byUrl.get(url)
+    if (arr) arr.push(k)
+    else byUrl.set(url, [k])
+  }
+  const pages: PageRow[] = []
+  for (const [url, kws] of byUrl) {
+    const trafficByIntent = new Map<Intent, number>()
+    const countByIntent = new Map<Intent, number>()
+    let estTrafficSum = 0
+    let estValueSum = 0
+    let bestPosition: number | null = null
+    for (const k of kws) {
+      const intent = normIntent(k.search_intent)
+      const t = estTraffic(k.volume, k.position)
+      estTrafficSum += t
+      estValueSum += k.est_value ?? 0
+      trafficByIntent.set(intent, (trafficByIntent.get(intent) ?? 0) + t)
+      countByIntent.set(intent, (countByIntent.get(intent) ?? 0) + 1)
+      if (k.position !== null && (bestPosition === null || k.position < bestPosition)) bestPosition = k.position
+    }
+    let dominantIntent: Intent = 'unknown'
+    let bestT = -1
+    let bestC = -1
+    for (const intent of INTENTS) {
+      const c = countByIntent.get(intent) ?? 0
+      if (c === 0) continue
+      const t = trafficByIntent.get(intent) ?? 0
+      if (t > bestT || (t === bestT && c > bestC)) { bestT = t; bestC = c; dominantIntent = intent }
+    }
+    pages.push({
+      url, keywordCount: kws.length, estTraffic: estTrafficSum, estValue: estValueSum,
+      bestPosition, dominantIntent, keywords: kws,
+    })
+  }
+  pages.sort((a, b) =>
+    b.estTraffic - a.estTraffic || b.estValue - a.estValue || b.keywordCount - a.keywordCount)
+  return pages
+}
+
+// Distribution of pages (by dominant intent) and keywords (by intent). Pure.
+function buildIntentDist(keywords: RankedKeyword[], pages: PageRow[]) {
+  const pageByIntent = new Map<Intent, number>()
+  const kwByIntent = new Map<Intent, number>()
+  for (const p of pages) pageByIntent.set(p.dominantIntent, (pageByIntent.get(p.dominantIntent) ?? 0) + 1)
+  for (const k of keywords) {
+    const i = normIntent(k.search_intent)
+    kwByIntent.set(i, (kwByIntent.get(i) ?? 0) + 1)
+  }
+  return { pageByIntent, kwByIntent }
+}
+
 export function DomainIntel() {
   const { id } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
@@ -95,7 +201,8 @@ export function DomainIntel() {
   const [role, setRole] = useState('competitor')
   const [selected, setSelected] = useState<string | null>(null)
   const [job, setJob] = useState<string | null>(null)
-  const [tab, setTab] = useState<'overview' | 'keywords'>('overview')
+  const [tab, setTab] = useState<'overview' | 'keywords' | 'pages'>('overview')
+  const [expandedPages, setExpandedPages] = useState<Set<string>>(new Set())
   const [gapJob, setGapJob] = useState<string | null>(null)
   const [discovered, setDiscovered] = useState<DiscoverResponse | null>(null)
   const [added, setAdded] = useState<Record<string, boolean>>({})
@@ -225,6 +332,30 @@ export function DomainIntel() {
     () => [...keywords].sort((a, b) => (b.est_value ?? -1) - (a.est_value ?? -1)),
     [keywords],
   )
+  const pageBreakdown = useMemo(() => buildPageBreakdown(keywords), [keywords])
+  const intentDist = useMemo(() => buildIntentDist(keywords, pageBreakdown), [keywords, pageBreakdown])
+  const togglePage = (url: string) =>
+    setExpandedPages((prev) => {
+      const next = new Set(prev)
+      if (next.has(url)) next.delete(url)
+      else next.add(url)
+      return next
+    })
+
+  const exportPagesCsv = () => {
+    if (!pageBreakdown.length || !snap) return
+    const header = ['url', 'keywords', 'est_monthly_traffic', 'est_traffic_value_usd', 'best_position', 'dominant_intent']
+    const rows = pageBreakdown.map((p) => [
+      p.url, p.keywordCount, Math.round(p.estTraffic), Math.round(p.estValue),
+      p.bestPosition ?? '', p.dominantIntent,
+    ])
+    const csv = [header, ...rows]
+      .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+    const a = document.createElement('a')
+    a.href = url; a.download = `${snap.target_domain}-pages.csv`; a.click()
+    URL.revokeObjectURL(url)
+  }
 
   return (
     <div style={{ padding: 32, maxWidth: 1040 }}>
@@ -405,6 +536,9 @@ export function DomainIntel() {
             <button style={tab === 'keywords' ? tabActive : tabBtn} onClick={() => setTab('keywords')}>
               Ranked Keywords ({num(keywords.length)})
             </button>
+            <button style={tab === 'pages' ? tabActive : tabBtn} onClick={() => setTab('pages')}>
+              Pages ({num(pageBreakdown.length)})
+            </button>
           </div>
 
           {tab === 'overview' && (
@@ -420,6 +554,95 @@ export function DomainIntel() {
                 Snapshot {new Date(snap.captured_at).toLocaleString()} · role: {snap.role}
                 {snap.cost_usd ? ` · cost $${snap.cost_usd.toFixed(2)}` : ''}
               </p>
+
+              {/* Content mix — pages classified by their dominant search intent
+                  (traffic-weighted), plus the keyword-level intent split. */}
+              {keywords.length > 0 && (
+                <div style={{ marginTop: 24 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: '#0f172a', marginBottom: 4 }}>Content mix</div>
+                  <p style={{ color: '#64748b', fontSize: 12, margin: '0 0 12px', maxWidth: 620 }}>
+                    Pages grouped by their dominant search intent (weighted by estimated traffic). Shows whether the
+                    site is built for informational, commercial, transactional or navigational queries.
+                  </p>
+                  <IntentBar title={`Pages (${pageBreakdown.length})`} counts={intentDist.pageByIntent} total={pageBreakdown.length} />
+                  <div style={{ height: 12 }} />
+                  <IntentBar title={`Keywords (${keywords.length})`} counts={intentDist.kwByIntent} total={keywords.length} />
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === 'pages' && (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                <p style={{ color: '#64748b', fontSize: 13, margin: 0, maxWidth: 640 }}>
+                  Which pages pull the traffic — ranked keywords grouped by the page that ranks, with estimated monthly
+                  clicks (volume × CTR-at-position). Expand a page to see the keywords it ranks for.
+                </p>
+                <button style={ghostBtn} onClick={exportPagesCsv} disabled={!pageBreakdown.length}>
+                  <Download size={14} /> Export CSV
+                </button>
+              </div>
+              {!pageBreakdown.length ? (
+                <div style={emptyBox}>No pages captured.</div>
+              ) : (
+                <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr>
+                        {['Page', 'Keywords', 'Est. traffic/mo', 'Est. value', 'Best pos', 'Dominant intent'].map((h) => (
+                          <th key={h} style={th}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pageBreakdown.map((p) => {
+                        const open = expandedPages.has(p.url)
+                        const hasUrl = p.url !== '(unknown URL)'
+                        return (
+                          <Fragment key={p.url}>
+                            <tr style={{ borderTop: '1px solid #f1f5f9', cursor: 'pointer' }} onClick={() => togglePage(p.url)}>
+                              <td style={{ ...td, fontWeight: 500, color: '#0f172a', maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                <span style={{ color: '#94a3b8', marginRight: 6 }}>{open ? '▾' : '▸'}</span>
+                                {hasUrl
+                                  ? <a href={p.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: '#2563eb' }}>{p.url.replace(/^https?:\/\//, '')}</a>
+                                  : <span style={{ color: '#94a3b8' }}>{p.url}</span>}
+                              </td>
+                              <td style={td}>{num(p.keywordCount)}</td>
+                              <td style={{ ...td, fontWeight: 600, color: '#0f172a' }}>{num(Math.round(p.estTraffic))}</td>
+                              <td style={td}>{money(p.estValue)}</td>
+                              <td style={td}>{p.bestPosition ?? '—'}</td>
+                              <td style={td}><IntentBadge intent={p.dominantIntent} /></td>
+                            </tr>
+                            {open && (
+                              <tr>
+                                <td colSpan={6} style={{ padding: 0, background: '#f8fafc', borderTop: '1px solid #f1f5f9' }}>
+                                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                                    <thead>
+                                      <tr>{['Keyword', 'Pos', 'Volume', 'Est. traffic/mo', 'Intent'].map((h) => <th key={h} style={{ ...th, background: '#eef2f7' }}>{h}</th>)}</tr>
+                                    </thead>
+                                    <tbody>
+                                      {[...p.keywords].sort((a, b) => estTraffic(b.volume, b.position) - estTraffic(a.volume, a.position)).map((k, i) => (
+                                        <tr key={`${k.keyword}-${i}`} style={{ borderTop: '1px solid #e2e8f0' }}>
+                                          <td style={{ ...td, color: '#0f172a' }}>{k.keyword}</td>
+                                          <td style={td}>{k.position ?? '—'}</td>
+                                          <td style={td}>{num(k.volume)}</td>
+                                          <td style={td}>{num(Math.round(estTraffic(k.volume, k.position)))}</td>
+                                          <td style={td}><IntentBadge intent={normIntent(k.search_intent)} /></td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
 
@@ -474,6 +697,47 @@ function Kpi({ label, value, icon }: { label: string; value: string; icon?: Reac
     <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: '12px 14px', background: '#fff' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#64748b', fontSize: 12 }}>{icon}{label}</div>
       <div style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', marginTop: 4 }}>{value}</div>
+    </div>
+  )
+}
+
+function IntentBadge({ intent }: { intent: Intent }) {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#334155',
+    }}>
+      <span style={{ width: 8, height: 8, borderRadius: 2, background: INTENT_COLOR[intent], display: 'inline-block' }} />
+      {INTENT_LABEL[intent]}
+    </span>
+  )
+}
+
+// A horizontal stacked bar of intent proportions + a legend with counts.
+function IntentBar({ title, counts, total }: { title: string; counts: Map<Intent, number>; total: number }) {
+  const present = INTENTS.filter((i) => (counts.get(i) ?? 0) > 0)
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6 }}>{title}</div>
+      <div style={{ display: 'flex', width: '100%', height: 14, borderRadius: 7, overflow: 'hidden', background: '#f1f5f9' }}>
+        {present.map((i) => {
+          const c = counts.get(i) ?? 0
+          const pct = total > 0 ? (c / total) * 100 : 0
+          return <div key={i} title={`${INTENT_LABEL[i]}: ${c} (${pct.toFixed(0)}%)`} style={{ width: `${pct}%`, background: INTENT_COLOR[i] }} />
+        })}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, marginTop: 8 }}>
+        {present.map((i) => {
+          const c = counts.get(i) ?? 0
+          const pct = total > 0 ? (c / total) * 100 : 0
+          return (
+            <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#334155' }}>
+              <span style={{ width: 10, height: 10, borderRadius: 3, background: INTENT_COLOR[i] }} />
+              {INTENT_LABEL[i]} <strong style={{ color: '#0f172a' }}>{c}</strong>
+              <span style={{ color: '#94a3b8' }}>({pct.toFixed(0)}%)</span>
+            </span>
+          )
+        })}
+      </div>
     </div>
   )
 }
