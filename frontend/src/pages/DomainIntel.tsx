@@ -56,17 +56,6 @@ interface KeywordGapResponse {
   captured_at: string | null
   count: number
 }
-interface LinkGap {
-  referring_domain: string
-  linking_to: string[]
-  referring_domain_rank: number | null
-  backlink_count: number | null
-}
-interface LinkGapResponse {
-  gaps: LinkGap[]
-  captured_at: string | null
-  count: number
-}
 interface CompetitorSuggestion {
   domain: string
   avg_position: number | null
@@ -101,14 +90,13 @@ export function DomainIntel() {
     enabled: Boolean(id),
   })
 
-  const [mode, setMode] = useState<'lookup' | 'gap' | 'links' | 'discover'>('lookup')
+  const [mode, setMode] = useState<'lookup' | 'gap' | 'discover'>('lookup')
   const [input, setInput] = useState('')
   const [role, setRole] = useState('competitor')
   const [selected, setSelected] = useState<string | null>(null)
   const [job, setJob] = useState<string | null>(null)
   const [tab, setTab] = useState<'overview' | 'keywords'>('overview')
   const [gapJob, setGapJob] = useState<string | null>(null)
-  const [linkJob, setLinkJob] = useState<string | null>(null)
   const [discovered, setDiscovered] = useState<DiscoverResponse | null>(null)
   const [added, setAdded] = useState<Record<string, boolean>>({})
 
@@ -193,30 +181,6 @@ export function DomainIntel() {
     URL.revokeObjectURL(url)
   }
 
-  // --- Backlink Gap (referring domains competitors have, client lacks) ---
-  const { data: linkData } = useQuery<LinkGapResponse>({
-    queryKey: ['domain-intel-links', id],
-    queryFn: () => api.get<LinkGapResponse>(`/clients/${id}/domain-intel/link-gap`),
-    enabled: Boolean(id && mode === 'links'),
-  })
-  const runLinks = useMutation({
-    mutationFn: () => api.post<{ job_id: string }>(`/clients/${id}/domain-intel/link-gap`, {}),
-    onSuccess: (r) => setLinkJob(r.job_id),
-  })
-  const { data: linkJobStatus } = useQuery<{ status: string; error?: string; result?: { note?: string } }>({
-    queryKey: ['domain-intel-links-job', id, linkJob],
-    queryFn: () => api.get(`/clients/${id}/domain-intel/jobs/${linkJob}`),
-    enabled: Boolean(linkJob),
-    refetchInterval: (q) => (['complete', 'failed'].includes(q.state.data?.status ?? '') ? false : 2500),
-  })
-  useEffect(() => {
-    if (linkJobStatus?.status === 'complete') {
-      queryClient.invalidateQueries({ queryKey: ['domain-intel-links', id] })
-    }
-  }, [linkJobStatus?.status]) // eslint-disable-line react-hooks/exhaustive-deps
-  const linksRunning = Boolean(linkJob) && !['complete', 'failed'].includes(linkJobStatus?.status ?? '')
-  const linkGaps = linkData?.gaps ?? []
-
   // --- Discover competitors (SERP overlap) ---
   const discover = useMutation({
     // POST — it's a paid call with side effects (budget), not an idempotent read.
@@ -281,7 +245,6 @@ export function DomainIntel() {
       <div style={{ display: 'inline-flex', gap: 4, background: '#f1f5f9', padding: 3, borderRadius: 8, marginBottom: 20 }}>
         <button style={mode === 'lookup' ? segActive : segBtn} onClick={() => setMode('lookup')}>Domain lookup</button>
         <button style={mode === 'gap' ? segActive : segBtn} onClick={() => setMode('gap')}>Keyword gap</button>
-        <button style={mode === 'links' ? segActive : segBtn} onClick={() => setMode('links')}>Backlink gap</button>
         <button style={mode === 'discover' ? segActive : segBtn} onClick={() => setMode('discover')}>Discover</button>
       </div>
 
@@ -326,46 +289,6 @@ export function DomainIntel() {
                       <td style={td}>{g.cpc_usd === null ? '—' : `$${g.cpc_usd.toFixed(2)}`}</td>
                       <td style={td}>{g.keyword_difficulty === null ? '—' : num(g.keyword_difficulty)}</td>
                       <td style={{ ...td, fontWeight: 600, color: '#0f172a' }}>{num(g.opportunity_score, 0)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
-
-      {mode === 'links' && (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-            <p style={{ color: '#64748b', fontSize: 13, margin: 0, maxWidth: 620 }}>
-              Referring domains linking to your registered competitors but not to {client?.name ?? 'this client'} — link-building targets.
-              {linkData?.captured_at ? ` Last run ${new Date(linkData.captured_at).toLocaleString()}.` : ''}
-            </p>
-            <button style={primaryBtn} disabled={linksRunning || runLinks.isPending || budget <= 0} onClick={() => runLinks.mutate()}>
-              <RefreshCw size={14} style={linksRunning ? { animation: 'spin 1s linear infinite' } : undefined} />
-              {linksRunning ? 'Analyzing…' : 'Run backlink gap'}
-            </button>
-          </div>
-          {linkJobStatus?.status === 'failed' && <div style={errBox}>Backlink gap failed{linkJobStatus.error ? `: ${linkJobStatus.error}` : ''}.</div>}
-          {linkJobStatus?.result?.note === 'no_competitors' && <div style={errBox}>No competitors registered — add some in Competitive Intel, then re-run.</div>}
-          {!linkGaps.length && !linksRunning ? (
-            <div style={emptyBox}>No backlink gaps yet — click Run backlink gap.</div>
-          ) : (
-            <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                <thead>
-                  <tr>{['Referring domain', 'DR', 'Backlinks', 'Links to'].map((h) => <th key={h} style={th}>{h}</th>)}</tr>
-                </thead>
-                <tbody>
-                  {linkGaps.map((g, i) => (
-                    <tr key={`${g.referring_domain}-${i}`} style={{ borderTop: '1px solid #f1f5f9' }}>
-                      <td style={{ ...td, fontWeight: 500, color: '#0f172a' }}>
-                        <a href={`https://${g.referring_domain}`} target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>{g.referring_domain}</a>
-                      </td>
-                      <td style={td}>{g.referring_domain_rank === null ? '—' : num(g.referring_domain_rank, 1)}</td>
-                      <td style={td}>{num(g.backlink_count)}</td>
-                      <td style={{ ...td, color: '#64748b' }}>{(g.linking_to ?? []).join(', ') || '—'}</td>
                     </tr>
                   ))}
                 </tbody>
