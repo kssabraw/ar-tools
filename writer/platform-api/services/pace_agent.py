@@ -50,7 +50,9 @@ _WEB_PENDING_MAX = 500
 _PACE_RE = re.compile(
     r"\b(task|tasks|assign|reassign|assigned|due date|overdue|stuck|blocked|unblock|"
     r"workload|overloaded|my plate|work on today|to-?do|to do|board|reprioriti|"
-    r"nudge|generate (this|the) month|month'?s tasks|behind (on )?(pace|schedule)|checklist)\b",
+    r"nudge|generate (this|the) month|month'?s tasks|behind (on )?(pace|schedule)|checklist|"
+    r"client pulse|weekly pulse|client update|reopen|in qa|sent to client|client approved|"
+    r"mark .{0,60}(completed?|done))\b",
     re.IGNORECASE,
 )
 _BRIEF_RE = re.compile(
@@ -86,7 +88,12 @@ _TOOL_PARAMS = {
         "task_name": {"type": "string", "description": "The task to set a due date on."},
         "due_date": {"type": "string", "description": "Due date, YYYY-MM-DD."},
     },
+    "set_task_status": {
+        "task_name": {"type": "string", "description": "The task to move (part of its name)."},
+        "status": {"type": "string", "description": "The workflow status to move it to — e.g. 'In Progress', 'In QA', 'Sent to Client', 'Blocked', 'Completed'. Works forward (work advanced) or backward (needs rework / moved too far)."},
+    },
     "unblock_task": {"task_name": {"type": "string", "description": "The blocked task to unblock."}},
+    "write_client_pulse": {},
     "generate_client_month": {},
     "generate_pace_report": {},
     "nudge_assignee": {"task_name": {"type": "string", "description": "The task whose assignee to nudge."}},
@@ -104,7 +111,9 @@ _TOOL_REQUIRED = {
     "reassign_task": ["task_name", "assignee"],
     "assign_task": ["task_name"],
     "set_task_due": ["task_name", "due_date"],
+    "set_task_status": ["task_name", "status"],
     "unblock_task": ["task_name"],
+    "write_client_pulse": [],
     "generate_client_month": [],
     "generate_pace_report": [],
     "triage_task": ["task_name"],
@@ -141,9 +150,19 @@ _PACE_SYSTEM = (
     "the board data genuinely contains no matching rows.\n\n"
     "BE A PM, NOT A REPORT. After you list the problems, say what you'd do about "
     "them and offer to do it — name the specific lever per item (reassign, nudge the "
-    "assignee, set or bump a due date, unblock, triage, generate the month, run a QA "
-    "review). Take initiative: propose the next action. Example: \"Ivy has 3 overdue "
-    "— the GBP audit is 6 days late; want me to nudge her or bump the date?\"\n\n"
+    "assignee, set or bump a due date, unblock, triage, move it forward or back "
+    "through the workflow, generate the month, run a QA review). Take initiative: "
+    "propose the next action. Example: \"Ivy has 3 overdue — the GBP audit is 6 days "
+    "late; want me to nudge her or bump the date?\"\n\n"
+    "WORKFLOW MOVES. You can move a task through the delivery workflow in EITHER "
+    "direction with set_task_status — forward when work advances (→ In QA, Sent to "
+    "Client, Client Approved, Completed) and BACK when it needs rework or was moved "
+    "too far (→ In Progress, In Review). Marking a task Completed and reopening a "
+    "finished one are just status moves.\n\n"
+    "CLIENT PULSE. When someone asks for the weekly client update / pulse / \"what do "
+    "we tell the client\" / a summary to send the client, call write_client_pulse — "
+    "it generates a warm, copy-paste client update email for that client (staff paste "
+    "and personalize it; nothing is auto-sent).\n\n"
     "ACTIONS. When the teammate asks you to DO something operational, call the "
     "matching tool with your best-guess arguments — the system resolves the exact "
     "task/member and asks for a confirmation. Don't ask permission before calling "
@@ -184,7 +203,7 @@ def build_pace_context(client_id: str) -> dict:
 
 # Actions that name a whole client rather than a single task — they can't be
 # resolved from a task name in member/portfolio scope, so they need a named client.
-_TASKLESS_ACTIONS = {"generate_client_month", "generate_pace_report"}
+_TASKLESS_ACTIONS = {"generate_client_month", "generate_pace_report", "write_client_pulse"}
 # How many rows per bucket to hand the LLM (keeps the portfolio JSON bounded on a
 # big agency; the prompt still says "and N more").
 _PORTFOLIO_ROW_CAP = 12

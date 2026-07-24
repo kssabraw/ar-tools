@@ -33,7 +33,7 @@ from middleware.auth import role_rank
 # live in ``min_role_for`` so they honour policy overrides / test monkeypatches.
 _MATRIX: dict[str, str] = {
     "read_own_tasks": "team_member",
-    "update_own_status": "team_member",
+    "update_own_status": "team_member",  # move your OWN task through the workflow
     "nudge_self": "team_member",
     "set_task_due_own": "team_member",
     "nudge_other": "staff",
@@ -42,6 +42,8 @@ _MATRIX: dict[str, str] = {
     "generate_pace_report": "staff",  # v1.3 delivery report (§4.7) — read-only
     "triage_task": "staff",           # v1.4 gap-fill triage (§4.10)
     "set_task_due_other": "staff",
+    "set_task_status_other": "staff",  # move ANOTHER person's task through the workflow
+    "write_client_pulse": "staff",     # generate the copy-paste client update email
     "unblock_task": "staff",
     # QA Agent trigger (qa-agent-plan Phase 3): enqueues a deliverable review.
     # team_member — a VA QA-ing their own finished work is the intended flow,

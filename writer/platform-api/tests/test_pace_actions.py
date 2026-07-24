@@ -21,6 +21,20 @@ STATUSES = [
     {"key": "complete", "category": "done", "is_done": True, "active": True},
 ]
 
+# The real seeded workflow for the status-move tests (order == sort order after
+# migration 20260712230000: the linear pipeline, then Completed, then the two
+# off-workflow exception statuses parked at the end).
+WORKFLOW = [
+    {"key": "not_started", "label": "Not Started", "category": "not_started", "active": True, "is_initial": True},
+    {"key": "in_progress", "label": "In Progress", "category": "in_progress", "active": True},
+    {"key": "in_qa", "label": "In QA", "category": "in_progress", "active": True},
+    {"key": "sent_to_client", "label": "Sent to Client", "category": "in_progress", "active": True},
+    {"key": "client_approved", "label": "Client Approved", "category": "in_progress", "active": True},
+    {"key": "complete", "label": "Completed", "category": "done", "is_done": True, "active": True},
+    {"key": "blocked", "label": "Blocked", "category": "blocked", "active": True},
+    {"key": "in_review", "label": "In Review", "category": "in_progress", "active": True},
+]
+
 
 def _staff():
     return ActionContext(profile_id="p_staff", role="staff", source="web")
@@ -49,6 +63,33 @@ def test_previous_status_from_activity():
 def test_build_nudge_mention():
     assert A.build_nudge_mention("U123") == "<@U123>"
     assert A.build_nudge_mention(None) is None
+
+
+def test_resolve_status():
+    assert A.resolve_status("In Progress", WORKFLOW)["key"] == "in_progress"   # exact label
+    assert A.resolve_status("in_qa", WORKFLOW)["key"] == "in_qa"               # exact key
+    assert A.resolve_status("qa", WORKFLOW)["key"] == "in_qa"                  # unique substring
+    assert A.resolve_status("done", WORKFLOW)["key"] == "complete"            # unique category
+    assert A.resolve_status("Completed", WORKFLOW)["key"] == "complete"        # exact label
+    assert A.resolve_status("review", WORKFLOW)["key"] == "in_review"          # unique substring
+    assert A.resolve_status("client", WORKFLOW) is None      # Sent to Client vs Client Approved
+    assert A.resolve_status("in", WORKFLOW) is None                           # ambiguous → None
+    assert A.resolve_status("nonsense", WORKFLOW) is None                     # no match → None
+    assert A.resolve_status("", WORKFLOW) is None
+
+
+def test_move_direction():
+    assert A.move_direction(WORKFLOW, "in_progress", "in_qa") == "forward to"
+    assert A.move_direction(WORKFLOW, "in_qa", "in_progress") == "back to"
+    assert A.move_direction(WORKFLOW, "sent_to_client", "complete") == "forward to"  # into done
+    assert A.move_direction(WORKFLOW, "complete", "in_progress") == "back to"        # reopen
+    assert A.move_direction(WORKFLOW, "in_progress", "in_progress") == "to"
+    assert A.move_direction(WORKFLOW, "in_progress", "unknown") == "to"
+    # Exception statuses parked after Completed aren't workflow positions —
+    # never "forward to Blocked" / "forward to In Review".
+    assert A.move_direction(WORKFLOW, "in_progress", "blocked") == "to"
+    assert A.move_direction(WORKFLOW, "in_qa", "in_review") == "to"
+    assert A.move_direction(WORKFLOW, "in_review", "in_progress") == "to"
 
 
 # ---------------------------------------------------------------------------
@@ -200,3 +241,167 @@ def test_run_reassign_threads_actor(monkeypatch):
     msg = A.run_reassign(_staff(), "c1", {"task_id": "t1", "task_name": "X", "assignee_gid": "g_ivy", "assignee_name": "Ivy"})
     assert calls["tid"] == "t1" and calls["changes"]["assignee_gid"] == "g_ivy" and calls["actor"] == "p_staff"
     assert "Ivy" in msg
+
+
+# ---------------------------------------------------------------------------
+# set_task_status — forward/backward moves, resolution, own-vs-other permission
+# ---------------------------------------------------------------------------
+def _status_env(monkeypatch, task):
+    monkeypatch.setattr(A, "_open_tasks", lambda cid: [task])
+    monkeypatch.setattr(task_service, "get_statuses", lambda active_only=True: WORKFLOW)
+
+
+def test_set_status_forward_staged_for_staff(monkeypatch):
+    _status_env(monkeypatch, {"id": "t1", "name": "GBP audit", "status_key": "in_progress",
+                              "assignee_gid": "g_minda", "completed": False})
+    monkeypatch.setattr(A, "_actor_member_gid", lambda ctx: None)
+    kind, payload = A.stage_set_status(_staff(), "c1", {"task_name": "GBP audit", "status": "In QA"})
+    assert kind == "confirm"
+    assert payload["status_key"] == "in_qa" and payload["is_done"] is False
+    assert payload["was_completed"] is False and payload["_requester"] == "p_staff"
+    assert "forward to *In QA*" in payload["_confirm"]
+
+
+def test_set_status_backward(monkeypatch):
+    _status_env(monkeypatch, {"id": "t1", "name": "GBP audit", "status_key": "in_qa",
+                              "assignee_gid": "g_minda", "completed": False})
+    monkeypatch.setattr(A, "_actor_member_gid", lambda ctx: None)
+    kind, payload = A.stage_set_status(_staff(), "c1", {"task_name": "GBP audit", "status": "In Progress"})
+    assert kind == "confirm" and payload["status_key"] == "in_progress"
+    assert "back to *In Progress*" in payload["_confirm"]
+
+
+def test_set_status_to_done_flags_completion(monkeypatch):
+    _status_env(monkeypatch, {"id": "t1", "name": "GBP audit", "status_key": "sent_to_client",
+                              "assignee_gid": "g_minda", "completed": False})
+    monkeypatch.setattr(A, "_actor_member_gid", lambda ctx: None)
+    kind, payload = A.stage_set_status(_staff(), "c1", {"task_name": "GBP audit", "status": "Completed"})
+    assert kind == "confirm" and payload["is_done"] is True
+
+
+def test_set_status_already_there(monkeypatch):
+    _status_env(monkeypatch, {"id": "t1", "name": "GBP audit", "status_key": "in_progress",
+                              "assignee_gid": "g_minda", "completed": False})
+    kind, payload = A.stage_set_status(_staff(), "c1", {"task_name": "GBP audit", "status": "In Progress"})
+    assert kind == "reply" and "already" in payload
+
+
+def test_set_status_unknown_lists_options(monkeypatch):
+    _status_env(monkeypatch, {"id": "t1", "name": "GBP audit", "status_key": "in_progress",
+                              "assignee_gid": "g_minda", "completed": False})
+    kind, payload = A.stage_set_status(_staff(), "c1", {"task_name": "GBP audit", "status": "Purple"})
+    assert kind == "reply" and "Options:" in payload and "In QA" in payload
+
+
+def test_set_status_va_can_move_own(monkeypatch):
+    _status_env(monkeypatch, {"id": "t1", "name": "My task", "status_key": "in_progress",
+                              "assignee_gid": "g_va", "completed": False})
+    monkeypatch.setattr(A, "_actor_member_gid", lambda ctx: "g_va")   # actor owns the task
+    kind, payload = A.stage_set_status(_va(), "c1", {"task_name": "My task", "status": "In QA"})
+    assert kind == "confirm" and payload["status_key"] == "in_qa"
+
+
+def test_set_status_va_refused_on_others(monkeypatch):
+    _status_env(monkeypatch, {"id": "t1", "name": "Her task", "status_key": "in_progress",
+                              "assignee_gid": "g_minda", "completed": False})
+    monkeypatch.setattr(A, "_actor_member_gid", lambda ctx: "g_va")   # not the owner
+    kind, payload = A.stage_set_status(_va(), "c1", {"task_name": "Her task", "status": "In QA"})
+    assert kind == "reply" and "staff" in payload
+
+
+def test_set_status_resolves_completed_task_for_reopen(monkeypatch):
+    # "Move the finished audit back to In Progress" — no OPEN task matches, the
+    # completed fallback finds it, and the staged payload carries was_completed
+    # so run takes the reopen branch.
+    _status_env(monkeypatch, {"id": "t9", "name": "Other task", "status_key": "in_progress",
+                              "assignee_gid": "g_minda", "completed": False})
+    monkeypatch.setattr(A, "_completed_tasks", lambda cid: [
+        {"id": "t1", "name": "GBP audit", "status_key": "complete",
+         "assignee_gid": "g_minda", "completed": True},
+    ])
+    monkeypatch.setattr(A, "_actor_member_gid", lambda ctx: None)
+    kind, payload = A.stage_set_status(_staff(), "c1", {"task_name": "GBP audit", "status": "In Progress"})
+    assert kind == "confirm"
+    assert payload["was_completed"] is True and payload["is_done"] is False
+    assert payload["status_key"] == "in_progress"
+    assert "back to *In Progress*" in payload["_confirm"]
+
+
+def test_set_status_open_ambiguity_never_falls_to_completed(monkeypatch):
+    # Two open matches → ask which one; the completed fallback must NOT silently
+    # redirect to a completed task of the same name.
+    monkeypatch.setattr(A, "_open_tasks", lambda cid: [
+        {"id": "t1", "name": "GBP audit — categories", "status_key": "in_progress", "completed": False},
+        {"id": "t2", "name": "GBP audit — reviews", "status_key": "in_progress", "completed": False},
+    ])
+    monkeypatch.setattr(task_service, "get_statuses", lambda active_only=True: WORKFLOW)
+    monkeypatch.setattr(A, "_completed_tasks",
+                        lambda cid: (_ for _ in ()).throw(AssertionError("fallback must not run")))
+    kind, payload = A.stage_set_status(_staff(), "c1", {"task_name": "GBP audit", "status": "In QA"})
+    assert kind == "reply" and "matches 2 tasks" in payload
+
+
+def test_set_status_no_match_anywhere(monkeypatch):
+    _status_env(monkeypatch, {"id": "t1", "name": "GBP audit", "status_key": "in_progress",
+                              "assignee_gid": "g_minda", "completed": False})
+    monkeypatch.setattr(A, "_completed_tasks", lambda cid: [])
+    kind, payload = A.stage_set_status(_staff(), "c1", {"task_name": "Nonexistent", "status": "In QA"})
+    assert kind == "reply" and "No task matches" in payload
+
+
+def test_run_set_status_done_completes(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(task_service, "complete_task",
+                        lambda tid, actor_id=None: calls.update({"completed": tid, "actor": actor_id}))
+    monkeypatch.setattr(task_service, "get_statuses", lambda active_only=True: WORKFLOW)
+    monkeypatch.setattr(task_service, "done_status_key", lambda statuses: "complete")
+    monkeypatch.setattr(task_service, "update_task", lambda *a, **k: calls.setdefault("update", (a, k)))
+    msg = A.run_set_status(_staff(), "c1", {"task_id": "t1", "task_name": "X", "status_key": "complete",
+                                            "status_label": "Completed", "is_done": True, "was_completed": False})
+    assert calls["completed"] == "t1" and calls["actor"] == "p_staff"
+    assert "update" not in calls          # exact done status == default → no extra write
+    assert "Completed" in msg
+
+
+def test_run_set_status_reopen_clears_completed(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(task_service, "update_task",
+                        lambda tid, changes, actor_id=None: calls.update({"tid": tid, "changes": changes}))
+    A.run_set_status(_staff(), "c1", {"task_id": "t1", "task_name": "X", "status_key": "in_progress",
+                                      "status_label": "In Progress", "is_done": False, "was_completed": True})
+    assert calls["changes"]["completed"] is False and calls["changes"]["status_key"] == "in_progress"
+
+
+def test_run_set_status_plain_move(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(task_service, "update_task",
+                        lambda tid, changes, actor_id=None: calls.update({"tid": tid, "changes": changes}))
+    A.run_set_status(_staff(), "c1", {"task_id": "t1", "task_name": "X", "status_key": "in_qa",
+                                      "status_label": "In QA", "is_done": False, "was_completed": False})
+    assert calls["changes"] == {"status_key": "in_qa"}
+
+
+# ---------------------------------------------------------------------------
+# write_client_pulse — staff-gated; run returns the generated body
+# ---------------------------------------------------------------------------
+def test_write_pulse_refused_for_va():
+    kind, payload = A.stage_write_pulse(_va(), "c1", {})
+    assert kind == "reply" and "staff" in payload
+
+
+def test_write_pulse_staged_for_staff():
+    kind, payload = A.stage_write_pulse(_staff(), "c1", {})
+    assert kind == "confirm" and payload["_requester"] == "p_staff"
+    assert "client pulse" in payload["_confirm"]
+
+
+async def test_run_write_pulse_returns_body(monkeypatch):
+    monkeypatch.setattr("services.client_pulse.build_pulse", lambda cid: "Hi [First name], great week!")
+    msg = await A.run_write_pulse(_staff(), "c1", {})
+    assert "Hi [First name], great week!" in msg
+
+
+async def test_run_write_pulse_handles_empty(monkeypatch):
+    monkeypatch.setattr("services.client_pulse.build_pulse", lambda cid: None)
+    msg = await A.run_write_pulse(_staff(), "c1", {})
+    assert "couldn't build a pulse" in msg
