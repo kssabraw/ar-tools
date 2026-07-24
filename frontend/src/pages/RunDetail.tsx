@@ -588,9 +588,17 @@ export function RunDetail() {
         </div>
 
         {run.error_message && (
-          <div style={{ marginTop: 14, padding: '12px 14px', background: '#fef2f2', borderRadius: 8, color: '#dc2626', fontSize: 13 }}>
-            <strong>Error{run.error_stage ? ` (${run.error_stage})` : ''}:</strong> {run.error_message}
-          </div>
+          run.status === 'retry_scheduled' ? (
+            // Parked on a transient upstream failure — the message carries the
+            // auto-retry schedule, so render it as a wait-state, not an error.
+            <div style={{ marginTop: 14, padding: '12px 14px', background: '#fffbeb', borderRadius: 8, color: '#92400e', fontSize: 13 }}>
+              <strong>Auto-retry{run.error_stage ? ` (${run.error_stage})` : ''}:</strong> {run.error_message}
+            </div>
+          ) : (
+            <div style={{ marginTop: 14, padding: '12px 14px', background: '#fef2f2', borderRadius: 8, color: '#dc2626', fontSize: 13 }}>
+              <strong>Error{run.error_stage ? ` (${run.error_stage})` : ''}:</strong> {run.error_message}
+            </div>
+          )
         )}
       </div>
 

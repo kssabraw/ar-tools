@@ -985,16 +985,34 @@ async def _schedule_retry(run_id: str, stage: str, cause: str, attempt: int) -> 
         f"{attempt}/{settings.run_transient_retry_max} scheduled for "
         f"{next_at.strftime('%Y-%m-%d %H:%M UTC')} (run_id: {run_id})"
     )
-    _sb().table("runs").update(
-        {
-            "status": "retry_scheduled",
-            "retry_count": attempt,
-            "next_retry_at": next_at.isoformat(),
-            "error_stage": stage,
-            "error_message": message[:2000],
-            "updated_at": "now()",
-        }
-    ).eq("id", run_id).execute()
+    # Conditional park: a user may have cancelled while the failing stage was
+    # in flight (cancellation is only checked between stages, so the StageError
+    # still fires). An unconditional update would overwrite `cancelled` and
+    # resurrect a run the user killed — guard on not-cancelled and treat an
+    # empty result (cancelled, or row deleted) as "leave it be".
+    claimed = (
+        _sb()
+        .table("runs")
+        .update(
+            {
+                "status": "retry_scheduled",
+                "retry_count": attempt,
+                "next_retry_at": next_at.isoformat(),
+                "error_stage": stage,
+                "error_message": message[:2000],
+                "updated_at": "now()",
+            }
+        )
+        .eq("id", run_id)
+        .neq("status", "cancelled")
+        .execute()
+    )
+    if not (claimed.data or []):
+        logger.info(
+            "run_retry_skipped",
+            extra={"run_id": run_id, "reason": "cancelled_or_missing"},
+        )
+        return
     logger.warning(
         "run_retry_scheduled",
         extra={
@@ -1018,6 +1036,10 @@ def _notify_run_failed(run: dict, stage: str, cause: str) -> None:
         label = run.get("keyword") or run.get("service") or "content run"
         retries = int(run.get("retry_count") or 0)
         retry_note = f" after {retries} auto-retry attempt(s)" if retries else ""
+        # No dedupe_key: this sits in a code path that executes exactly once per
+        # terminal StageError (single-process orchestrator), and a permanent key
+        # like f"run_failed:{run_id}" would suppress the notification forever if
+        # the run is manually resumed and fails again later.
         notifications.emit(
             client_id=run.get("client_id"),
             kind="run_failed",
@@ -1025,10 +1047,43 @@ def _notify_run_failed(run: dict, stage: str, cause: str) -> None:
             summary=f"The {stage} stage failed{retry_note}. {cause}",
             severity="warning",
             payload={"link": f"runs/{run_id}"},
-            dedupe_key=f"run_failed:{run_id}",
         )
     except Exception as exc:  # never let notification wiring break the run path
         logger.warning("run_failed_notify_error", extra={"error": str(exc)})
+
+
+def disarm_scheduled_retry(run_id: str) -> bool:
+    """Flip a run parked in `retry_scheduled` to terminal `failed` (CAS).
+
+    For synchronous drivers that own their own retry machinery (the fanout
+    content scheduler, content batches): they read the run's status right after
+    `orchestrate_run` returns and treat non-complete as failure — without this,
+    the parked run would ALSO self-heal in the background while the driver's own
+    retry spawns a second run for the same keyword, publishing duplicate
+    articles. Exactly one retry system may own recovery. Returns True if the
+    run was reclaimed (False = it wasn't parked, or the CAS lost)."""
+    try:
+        claimed = (
+            _sb()
+            .table("runs")
+            .update(
+                {
+                    "status": "failed",
+                    "next_retry_at": None,
+                    "completed_at": "now()",
+                    "updated_at": "now()",
+                }
+            )
+            .eq("id", run_id)
+            .eq("status", "retry_scheduled")
+            .execute()
+        )
+        return bool(claimed.data)
+    except Exception as exc:
+        logger.warning(
+            "disarm_retry_failed", extra={"run_id": run_id, "error": str(exc)}
+        )
+        return False
 
 
 async def redispatch_due_retries() -> None:

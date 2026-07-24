@@ -566,6 +566,11 @@ async def resume_run(
             "error_stage": None,
             "error_message": None,
             "completed_at": None,
+            # Manual resume grants a fresh transient-auto-retry budget — a run
+            # that exhausted its retries during an outage shouldn't fail
+            # instantly on the next blip after a human explicitly restarts it.
+            "retry_count": 0,
+            "next_retry_at": None,
             "updated_at": "now()",
         }
     ).eq("id", str(run_id)).execute()
