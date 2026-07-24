@@ -79,6 +79,61 @@ def test_status_single_check_is_stable():
 
 
 # ---------------------------------------------------------------------------
+# compute_trend — the single source of truth shared by the arrow + the status
+# band. It windows to 90 days and is source-aware, so arrow and label agree.
+# ---------------------------------------------------------------------------
+from datetime import date, timedelta  # noqa: E402
+
+_TODAY = date(2026, 7, 24)
+
+
+def _df_rows(points):
+    """DataForSEO metric rows: points = [(days_ago, tracked_rank)]."""
+    return [
+        {"date": (_TODAY - timedelta(days=da)).isoformat(),
+         "gsc_position": None, "tracked_rank": rk}
+        for da, rk in points
+    ]
+
+
+def test_compute_trend_dataforseo_climb():
+    direction, improvement, band = rank_status.compute_trend(
+        _df_rows([(40, 35), (5, 29)]), _TODAY, 14
+    )
+    assert (direction, band) == ("up", "climbing")
+    assert improvement == 6
+
+
+def test_compute_trend_small_move_is_stable_but_arrow_tilts():
+    # +1 net: label stays Stable (within ±3) but the arrow still reads "up".
+    direction, _, band = rank_status.compute_trend(_df_rows([(40, 30), (5, 29)]), _TODAY, 14)
+    assert direction == "up"
+    assert band == "stable"
+
+
+def test_compute_trend_ignores_points_older_than_window():
+    # A check 100 days ago must NOT count — only one ranked point sits inside the
+    # 90-day window, so there's no movement to measure (regression: the old
+    # 120-day materialize window said "climbing" while the 90-day arrow was flat).
+    direction, improvement, band = rank_status.compute_trend(
+        _df_rows([(100, 53), (5, 29)]), _TODAY, 14
+    )
+    assert direction is None
+    assert improvement is None
+    assert band == "stable"
+
+
+def test_compute_trend_matches_summary_direction():
+    # The arrow (summary["direction"]) is derived from compute_trend, so they
+    # must never disagree.
+    rows = _df_rows([(40, 20), (5, 30)])  # dropped 10
+    direction, _, band = rank_status.compute_trend(rows, _TODAY, 14)
+    summary = rank_status.compute_keyword_summary(rows, _TODAY, 14)
+    assert summary["direction"] == direction == "down"
+    assert band == "dropping"
+
+
+# ---------------------------------------------------------------------------
 # rolling_average / compute_keyword_summary
 # ---------------------------------------------------------------------------
 def test_rolling_average_ignores_nulls_and_old():

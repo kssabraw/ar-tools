@@ -274,11 +274,11 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
             merged = [{**r, "tracked_rank": kw_df.get(r["date"])} for r in records]
             source = classify_source(merged)
             primary = rank_status.determine_primary_source(merged, today, coverage)
-            if primary == "dataforseo":
-                series = [(r["date"], r.get("tracked_rank")) for r in merged]
-            else:
-                series = [(r["date"], r.get("gsc_position")) for r in merged]
-            status = resolve_status(rank_status.compute_status(series), fallback_has_run)
+            # Status band from the shared trend computation — same 90-day,
+            # source-aware window as the UI trend arrow, so the label and the
+            # arrow always agree (see rank_status.compute_trend).
+            _, _, band = rank_status.compute_trend(merged, today, coverage)
+            status = resolve_status(band, fallback_has_run)
 
             # Collect rank-drop alert signals for this keyword (reconciled below).
             alert_inputs.append(

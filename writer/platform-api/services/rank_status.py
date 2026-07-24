@@ -43,52 +43,71 @@ def _trailing_null_count(points: Sequence[tuple[date, Optional[float]]]) -> int:
     return count
 
 
-def compute_status(series: Sequence[DatePoint]) -> str:
-    """Classify a keyword's trend into the §7 taxonomy.
+DIRECTION_THRESHOLD = 0.5  # min net move (positions) before the arrow tilts up/down
 
-    Lower position is better (1 = top). Improving = position decreasing.
 
-    The trend band tracks the *net movement* over the window — the first ranked
-    position vs. the latest — so the label always agrees with the UI trend arrow
-    (computed from the same series): climbed more than TREND_THRESHOLD positions
-    → "climbing", fell more than TREND_THRESHOLD → "dropping", any net move within
-    ±TREND_THRESHOLD → "stable". This deliberately does NOT require a minimum
-    number of checks: two checks are enough to measure a real move (a single
-    check has no movement yet and stays "stable").
+def trend_from_positions(
+    improvement: Optional[float], swing: Sequence[float] = ()
+) -> tuple[Optional[str], str]:
+    """Single source of truth mapping a net movement → (direction, band).
+
+    `improvement` = baseline position − latest position (positive = climbed,
+    since lower position is better). `swing` is the recent position points, used
+    only for the volatile (swung-hard-but-net-flat) test. The UI trend arrow and
+    the status label are BOTH derived from this, so they can never disagree:
+    a >TREND_THRESHOLD climb is "climbing", a >TREND_THRESHOLD fall is "dropping",
+    and any net move within ±TREND_THRESHOLD is "stable" (the arrow may still show
+    a small ▲/▼ for a sub-threshold move — that's the ±3 band, by design).
     """
+    if improvement is None:
+        return None, "stable"  # not enough ranked data to measure movement
+    direction = (
+        "up" if improvement > DIRECTION_THRESHOLD
+        else "down" if improvement < -DIRECTION_THRESHOLD
+        else "flat"
+    )
+    swing_range = (max(swing) - min(swing)) if swing else 0.0
+    if swing_range >= VOLATILE_RANGE_THRESHOLD and abs(improvement) < TREND_THRESHOLD:
+        return direction, "volatile"
+    if improvement > TREND_THRESHOLD:
+        return direction, "climbing"
+    if improvement < -TREND_THRESHOLD:
+        return direction, "dropping"
+    return direction, "stable"
+
+
+def _special_status(series: Sequence[DatePoint]) -> Optional[str]:
+    """Presence-based states independent of movement: no_data / deindex_risk."""
     points = _sorted_points(series)
     non_null = [p for _, p in points if p is not None]
-
-    # Never established presence → awaiting first data (aspirational keyword).
     if not non_null:
         return "no_data"
-
     # Sustained disappearance after an established baseline = deindex signature.
     if (
         len(non_null) >= BASELINE_MIN_DAYS
         and _trailing_null_count(points) >= DEINDEX_CONSECUTIVE_DAYS
     ):
         return "deindex_risk"
+    return None
 
-    # A single ranked check — present, but no movement to measure yet.
+
+def compute_status(series: Sequence[DatePoint]) -> str:
+    """Classify a raw (date, position) series into the §7 taxonomy.
+
+    Trend = net movement (first vs. latest ranked position) with the ±3 band.
+    Prefer compute_trend() for the live read/materialize paths — it windows and
+    source-selects the series the same way the UI arrow does. This bare-series
+    form is retained for callers/tests that already hold the right series.
+    """
+    special = _special_status(series)
+    if special:
+        return special
+    non_null = [p for _, p in _sorted_points(series) if p is not None]
     if len(non_null) < 2:
-        return "stable"
-
-    # Net movement over the window: first vs. latest ranked position. Positive =
-    # climbed (position decreased). Mirrors the UI trend arrow's magnitude.
+        return "stable"  # a single ranked check — no movement to measure yet
     improvement = non_null[0] - non_null[-1]
-
-    swing = non_null[-VOLATILITY_WINDOW:]
-    swing_range = max(swing) - min(swing)
-
-    # Swung hard but landed back near baseline → drop-and-recover.
-    if swing_range >= VOLATILE_RANGE_THRESHOLD and abs(improvement) < TREND_THRESHOLD:
-        return "volatile"
-    if improvement > TREND_THRESHOLD:
-        return "climbing"
-    if improvement < -TREND_THRESHOLD:
-        return "dropping"
-    return "stable"
+    _, band = trend_from_positions(improvement, non_null[-VOLATILITY_WINDOW:])
+    return band
 
 
 def rolling_average(
@@ -128,6 +147,48 @@ def determine_primary_source(rows: Sequence[dict], today: date, coverage_days: i
     return "none"
 
 
+TREND_WINDOW_DAYS = 90  # window the arrow + status band both measure movement over
+
+
+def compute_trend(
+    rows: Sequence[dict], today: date, coverage_days: int
+) -> tuple[Optional[str], Optional[float], str]:
+    """Return (direction, improvement, band) for a keyword's metric rows.
+
+    THE single source of truth for both the UI trend arrow and the stored status
+    band, so they measure the same thing over the same window and can't disagree.
+    Source-aware and windowed exactly like the read summary:
+      - GSC:        improvement = avg_90 − avg_7 (rolling averages)
+      - DataForSEO: improvement = first − latest ranked position over 90 days
+    Positive improvement = climbed (position decreased). Presence states
+    (no_data / deindex_risk) take precedence over movement.
+    """
+    source = determine_primary_source(rows, today, coverage_days)
+    if source == "gsc":
+        series: list[DatePoint] = [(r["date"], r.get("gsc_position")) for r in rows]
+    elif source == "dataforseo":
+        series = [(r["date"], r.get("tracked_rank")) for r in rows]
+    else:
+        return None, None, "no_data"
+
+    special = _special_status(series)
+    if special:
+        return None, None, special
+
+    cutoff = today.toordinal() - TREND_WINDOW_DAYS + 1
+    window = [p for d, p in _sorted_points(series)
+              if p is not None and _to_date(d).toordinal() >= cutoff]
+    if source == "gsc":
+        avg_recent = rolling_average(series, 7, today)
+        avg_base = rolling_average(series, TREND_WINDOW_DAYS, today)
+        improvement = (avg_base - avg_recent) if (avg_recent is not None and avg_base is not None) else None
+    else:  # dataforseo — sparse weekly points; net move across the window
+        improvement = (window[0] - window[-1]) if len(window) >= 2 else None
+
+    direction, band = trend_from_positions(improvement, window)
+    return direction, improvement, band
+
+
 def _latest_tracked_rank(rows: Sequence[dict]) -> Optional[int]:
     for row in sorted(rows, key=lambda r: r["date"], reverse=True):
         if row.get("tracked_rank") is not None:
@@ -152,6 +213,10 @@ def compute_keyword_summary(rows: Sequence[dict], today: date, coverage_days: in
         "prev_rank": None, "prev_rank_date": None,
     }
 
+    # Trend arrow direction from the shared computation, so the arrow always
+    # agrees with the stored status band (both come from compute_trend).
+    base["direction"], _, _ = compute_trend(rows, today, coverage_days)
+
     if source == "gsc":
         series = [(row["date"], row.get("gsc_position")) for row in rows]
         base["avg_7"] = rolling_average(series, 7, today)
@@ -163,9 +228,6 @@ def compute_keyword_summary(rows: Sequence[dict], today: date, coverage_days: in
         base["ctr_30d"] = round(base["clicks_30d"] / base["impressions_30d"], 4) if base["impressions_30d"] else 0.0
         cutoff = today.toordinal() - 30 + 1
         base["sparkline"] = [p for d, p in _sorted_points(series) if _to_date(d).toordinal() >= cutoff]
-        if base["avg_7"] is not None and base["avg_90"] is not None:
-            diff = base["avg_7"] - base["avg_90"]
-            base["direction"] = "up" if diff < -0.1 else "down" if diff > 0.1 else "flat"
 
     elif source == "dataforseo":
         # Sparse weekly rank series; sparkline = the live-rank points over 90 days.
@@ -173,10 +235,6 @@ def compute_keyword_summary(rows: Sequence[dict], today: date, coverage_days: in
         cutoff = today.toordinal() - 90 + 1
         vals = [(d, v) for d, v in _sorted_points(series) if _to_date(d).toordinal() >= cutoff]
         base["sparkline"] = [v for _, v in vals]
-        non_null = [v for _, v in vals if v is not None]
-        if len(non_null) >= 2:
-            diff = non_null[-1] - non_null[0]  # later − earlier; negative = improved
-            base["direction"] = "up" if diff < -0.5 else "down" if diff > 0.5 else "flat"
         # Previous check (the prior weekly pull) for the row's week-over-week delta.
         nn_dated = [(d, v) for d, v in vals if v is not None]
         if len(nn_dated) >= 2:
