@@ -364,6 +364,37 @@ def test_parse_keyword_ideas_skips_blank_keywords():
     assert [r["keyword"] for r in rows] == ["good"]
 
 
+def test_parse_related_keywords_harvests_enriched_nodes():
+    # related_keywords nests metrics under keyword_data and lists bare neighbour
+    # strings under related_keywords; we harvest the enriched keyword_data nodes.
+    body = {
+        "tasks": [{
+            "status_code": 20000,
+            "result": [{
+                "items": [
+                    {
+                        "keyword_data": {
+                            "keyword": "adaptive reuse",
+                            "keyword_info": {"search_volume": 3600, "cpc": 4.2, "competition_index": 30},
+                            "keyword_properties": {"keyword_difficulty": 28},
+                            "search_intent_info": {"main_intent": "informational"},
+                        },
+                        "related_keywords": ["adaptive reuse architecture", "adaptive reuse examples"],
+                    },
+                    {"depth": 1},  # malformed node without keyword_data → skipped
+                ],
+            }],
+        }],
+    }
+    rows = dataforseo_labs.parse_related_keywords(body)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["keyword"] == "adaptive reuse"
+    assert r["volume"] == 3600
+    assert r["keyword_difficulty"] == 28
+    assert r["search_intent"] == "informational"
+
+
 def test_parse_keyword_suggestions_shares_item_shape():
     # keyword_suggestions returns the same nested metric objects as ideas.
     body = {

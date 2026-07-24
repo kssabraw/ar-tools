@@ -715,6 +715,15 @@ class Settings(BaseSettings):
     # set. Turn on for extra cross-topic reach at the cost of some noise. When
     # suggestions are off, ideas run regardless (there must be at least one source).
     keyword_research_broaden_with_ideas: bool = False
+    # Broaden with related_keywords (Google's "searches related to" graph). ON by
+    # default: unlike keyword_ideas it surfaces adjacent terms that don't contain
+    # the seed phrase ("historic preservation" → "adaptive reuse") while staying
+    # on Google's related graph, so it broadens without the category drift.
+    keyword_research_broaden_with_related: bool = True
+    # related_keywords expansion hops (0 = seed only, 1 = its related searches,
+    # 2 = related-of-related; higher = broader but more wander) + per-seed cap.
+    keyword_research_related_depth: int = 2
+    keyword_research_related_limit: int = 500
     # Max phrase-containment suggestions fetched per seed (Labs caps at 1000).
     keyword_research_suggestion_limit: int = 500
     # Client-facing keyword research PDF report: the exec-summary LLM (best-effort,

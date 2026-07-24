@@ -7,13 +7,17 @@ keyword_overview batch):
 
   * ``keyword_suggestions`` (PRIMARY, one call per seed) — phrase-containment:
     every returned keyword contains the seed phrase, so the set stays tightly
-    on-topic. This is the trustworthy core.
+    on-topic. The trustworthy core.
+  * ``related_keywords`` (BROADENER, one call per seed, ON by default) — Google's
+    "searches related to" graph. Surfaces adjacent terms that DON'T contain the
+    seed phrase ("historic preservation" → "adaptive reuse") while staying on
+    Google's related graph, so it broadens without keyword_ideas' category drift.
+    Also trusted (no relevance gate).
   * ``keyword_ideas`` (BROADENER, OPT-IN — off by default) — category-based
-    semantic expansion that reaches keywords not containing the seed phrase, but
-    reliably drifts on branded/entity seeds (a category like "historic" pulls in
-    "mesopotamia important facts"). Off by default because suggestions alone give
-    a rich on-topic set; when enabled it's passed through the relevance gate
-    (brand-homonym + drift-anchor coherence) before merging.
+    expansion that reliably drifts on branded/entity seeds (a category like
+    "historic" pulls in "mesopotamia important facts"). Off by default; when
+    enabled it's passed through the relevance gate (brand-homonym + drift-anchor
+    coherence) before merging.
 
 The merged, deduped set is auto-clustered into topic groups and persisted as a
 research run so the view is a cheap re-read and the CSV export is deterministic.
@@ -505,37 +509,61 @@ async def run_keyword_research(
         location_code = ctx.get("rank_tracking_location_code")
 
     use_suggestions = settings.keyword_research_use_suggestions
-    # Always run at least one source: fall back to ideas if suggestions are off.
-    broaden = settings.keyword_research_broaden_with_ideas or not use_suggestions
-    n_calls = (len(seed_list) if use_suggestions else 0) + (1 if broaden else 0)
+    use_related = settings.keyword_research_broaden_with_related
+    # keyword_ideas stays available but off by default (category drift). Fall back
+    # to it only if it's the sole enabled source, so a run always has one.
+    use_ideas = settings.keyword_research_broaden_with_ideas or not (use_suggestions or use_related)
+    n_calls = (
+        (len(seed_list) if use_suggestions else 0)
+        + (len(seed_list) if use_related else 0)
+        + (1 if use_ideas else 0)
+    )
     reserve_budget(max(1, n_calls))
 
     cost = 0.0
-    # PRIMARY — phrase-containment suggestions, one call per seed (fanned out).
-    # These contain the seed phrase, so they're trusted on-topic and skip the gate.
-    suggestion_rows: list[dict] = []
-    if use_suggestions:
-        results = await asyncio.gather(*[
-            dataforseo_labs.fetch_keyword_suggestions(
-                s, location_code, language_code,
-                limit=settings.keyword_research_suggestion_limit,
-            ) for s in seed_list
-        ], return_exceptions=True)
+
+    async def _gather_per_seed(fetch, label):
+        """Run a per-seed fetch across all seeds concurrently; collect rows + cost."""
+        nonlocal cost
+        out: list[dict] = []
+        results = await asyncio.gather(
+            *[fetch(s) for s in seed_list], return_exceptions=True
+        )
         for res in results:
             if isinstance(res, Exception):
-                logger.warning("keyword_research.suggestions_failed",
+                logger.warning(f"keyword_research.{label}_failed",
                                extra={"client_id": client_id, "error": str(res)})
                 continue
             rows_i, cost_i = res
-            suggestion_rows.extend(rows_i)
+            out.extend(rows_i)
             cost += cost_i or 0.0
+        return out
 
-    # BROADENER — category-based ideas, passed through the relevance gate to drop
-    # brand-homonym / off-topic drift before merging.
+    # PRIMARY — phrase-containment suggestions (contain the seed phrase → trusted
+    # on-topic, no gate). BROADENER — related_keywords (Google's related-searches
+    # graph → adjacent terms without keyword_ideas' category drift, so also
+    # trusted, no gate). Both are per-seed, fanned out.
+    trusted_rows: list[dict] = []
+    if use_suggestions:
+        trusted_rows += await _gather_per_seed(
+            lambda s: dataforseo_labs.fetch_keyword_suggestions(
+                s, location_code, language_code,
+                limit=settings.keyword_research_suggestion_limit,
+            ), "suggestions")
+    if use_related:
+        trusted_rows += await _gather_per_seed(
+            lambda s: dataforseo_labs.fetch_related_keywords(
+                s, location_code, language_code,
+                depth=settings.keyword_research_related_depth,
+                limit=settings.keyword_research_related_limit,
+            ), "related")
+
+    # OPT-IN BROADENER — category-based ideas, passed through the relevance gate to
+    # drop brand-homonym / generic-token drift before merging.
     idea_rows: list[dict] = []
     filter_report = {"gate": "off", "input": 0, "kept": 0,
                      "dropped_off_topic": 0, "dropped_brand_only": 0}
-    if broaden:
+    if use_ideas:
         idea_rows, cost_ideas = await dataforseo_labs.fetch_keyword_ideas(
             seed_list, location_code, language_code,
             limit=settings.keyword_research_idea_limit,
@@ -547,8 +575,8 @@ async def run_keyword_research(
         )
 
     # Merge + dedupe (build_research_rows keeps the highest-volume instance per
-    # normalized keyword, so a keyword in both sources collapses to one row).
-    rows = build_research_rows(suggestion_rows + idea_rows)
+    # normalized keyword, so a keyword in several sources collapses to one row).
+    rows = build_research_rows(trusted_rows + idea_rows)
     warnings = seed_warnings(
         seed_list, client_name, filter_report,
         ratio_threshold=settings.keyword_research_brand_seed_ratio,
