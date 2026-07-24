@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -53,6 +53,16 @@ interface TrackedTarget {
   id: string; target: string; label: string | null
   latest: { referring_domains: number | null; domain_rating: number | null; new_domains: number | null; lost_domains: number | null; pages_count: number | null; captured_at: string | null } | null
 }
+interface PageProfile {
+  url: string; is_homepage: boolean; url_rating: number | null
+  referring_domains: number | null; backlinks: number | null; captured_at: string
+}
+interface PageHistoryPoint { captured_at: string; referring_domains: number | null; backlinks: number | null; url_rating: number | null }
+interface PageMonitorResponse {
+  latest_captured_at: string | null
+  pages: PageProfile[]
+  history: Record<string, PageHistoryPoint[]>
+}
 
 const LINK_FILTERS = ['all', 'dofollow', 'nofollow', 'new', 'lost', 'broken'] as const
 type LinkFilter = (typeof LINK_FILTERS)[number]
@@ -89,6 +99,7 @@ export function Backlinks() {
   const [submitted, setSubmitted] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('overview')
   const [linksScope, setLinksScope] = useState<string | null>(null) // page-scoped links view
+  const [mode, setMode] = useState<'explorer' | 'monitor'>('explorer') // client-scoped per-page monitor
 
   // Tracked targets (client-scoped only) — scheduled re-snapshots + alerts.
   const { data: trackedResp } = useQuery<{ tracked: TrackedTarget[] }>({
@@ -156,6 +167,17 @@ export function Backlinks() {
         and which pages hold the links. Referring domains and anchors load on demand.
       </p>
 
+      {/* Explorer ↔ per-page monitor switch (client context only) */}
+      {id && (
+        <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid #e2e8f0', margin: '0 0 18px' }}>
+          <TabBtn active={mode === 'explorer'} onClick={() => setMode('explorer')}>Explorer</TabBtn>
+          <TabBtn active={mode === 'monitor'} onClick={() => setMode('monitor')}>My Pages</TabBtn>
+        </div>
+      )}
+
+      {id && mode === 'monitor' && <PageMonitor clientId={id} />}
+
+      {mode === 'explorer' && (<>
       {/* Tracked domains (client mode) */}
       {id && tracked.length > 0 && (
         <div style={{ marginBottom: 18 }}>
@@ -273,6 +295,7 @@ export function Backlinks() {
           )}
         </>
       )}
+      </>)}
     </div>
   )
 }
@@ -281,6 +304,130 @@ function dofollowPct(ov: Overview): string {
   if (ov.dofollow == null || !ov.backlinks) return fmt(ov.dofollow)
   const pct = Math.round((ov.dofollow / ov.backlinks) * 100)
   return `${fmt(ov.dofollow)} (${pct}%)`
+}
+
+// ---------------------------------------------------------------------------
+// Per-page monitor (client-scoped) — the homepage + money pages captured
+// monthly into page_backlink_profiles, with RD/UR/backlinks + per-page history
+// and an on-demand refresh. Reads a pure DB view (no paid calls); Refresh
+// enqueues the background capture job.
+// ---------------------------------------------------------------------------
+const IMBALANCE_RATIO = 1.5  // mirrors page_backlink_intel.IMBALANCE_RATIO
+const IMBALANCE_MIN_RD = 20  // mirrors page_backlink_intel.IMBALANCE_MIN_RD
+
+function PageMonitor({ clientId }: { clientId: string }) {
+  const qc = useQueryClient()
+  const [expanded, setExpanded] = useState<string | null>(null)
+  const { data, isLoading } = useQuery<PageMonitorResponse>({
+    queryKey: ['backlink-pages', clientId],
+    queryFn: () => api.get<PageMonitorResponse>(`/clients/${clientId}/backlinks/pages`),
+  })
+  const refresh = useMutation({
+    mutationFn: () => api.post<{ enqueued: boolean }>(`/clients/${clientId}/backlinks/pages/refresh`, {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['backlink-pages', clientId] }),
+  })
+
+  const pages = data?.pages ?? []
+  const homepageRd = pages.find((p) => p.is_homepage)?.referring_domains ?? null
+  const isImbalanced = (p: PageProfile) =>
+    !p.is_homepage && homepageRd != null && p.referring_domains != null &&
+    p.referring_domains >= IMBALANCE_MIN_RD && p.referring_domains > homepageRd * IMBALANCE_RATIO
+
+  const RefreshBtn = (
+    <button style={ghostBtn} disabled={refresh.isPending} onClick={() => refresh.mutate()}
+      title="Capture the homepage + money pages now (runs in the background — 1–2 min)">
+      <RefreshCw size={14} style={refresh.isPending ? { animation: 'spin 1s linear infinite' } : undefined} /> Refresh
+    </button>
+  )
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+        <SectionTitle icon={<FileText size={14} />}>Per-page backlinks</SectionTitle>
+        <div style={{ marginLeft: 'auto' }}>{RefreshBtn}</div>
+      </div>
+      <p style={{ fontSize: 12.5, color: '#64748b', margin: '0 0 14px' }}>
+        The referring-domain &amp; authority profile of this site's homepage and money pages, captured
+        monthly. Watch that no inner page carries far more referring domains than the home page.
+      </p>
+
+      {refresh.data?.enqueued && (
+        <div style={{ ...noticeBox, borderColor: '#bfdbfe', background: '#eff6ff', color: '#1d4ed8' }}>
+          Capture queued — it runs in the background; refresh this view in a minute or two.
+        </div>
+      )}
+      {refresh.data && !refresh.data.enqueued && (
+        <div style={{ ...noticeBox, borderColor: '#e2e8f0', color: '#64748b' }}>
+          A capture is already running for this client.
+        </div>
+      )}
+
+      {isLoading ? (
+        <div style={emptyBox}>Loading per-page data…</div>
+      ) : pages.length === 0 ? (
+        <div style={emptyBox}>
+          No per-page captures yet. Click <strong>Refresh</strong> to capture the homepage and money
+          pages now, or wait for the monthly run.
+        </div>
+      ) : (
+        <>
+          <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8 }}>
+            Latest capture · {shortDate(data?.latest_captured_at ?? null)}
+          </div>
+          <table style={table}>
+            <thead>
+              <tr style={{ background: '#f8fafc' }}>
+                <Th>Page</Th>
+                <Th right>UR</Th>
+                <Th right>Referring domains</Th>
+                <Th right>Backlinks</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {pages.map((p) => {
+                const hist = data?.history?.[p.url] ?? []
+                const canExpand = hist.length > 1
+                const open = expanded === p.url
+                return (
+                  <Fragment key={p.url}>
+                    <tr style={{ borderTop: '1px solid #f1f5f9', cursor: canExpand ? 'pointer' : 'default' }}
+                      onClick={() => canExpand && setExpanded(open ? null : p.url)}>
+                      <td style={td}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          {canExpand
+                            ? (open ? <ChevronDown size={13} color="#94a3b8" /> : <ChevronRight size={13} color="#94a3b8" />)
+                            : <span style={{ width: 13 }} />}
+                          <a href={p.url} target="_blank" rel="noreferrer" style={linkCell} title={p.url}
+                            onClick={(e) => e.stopPropagation()}>
+                            {pathOf(p.url)} <ExternalLink size={11} />
+                          </a>
+                          {p.is_homepage && <span style={homeChip}>home</span>}
+                          {isImbalanced(p) && <span style={imbalanceChip} title="More referring domains than the home page">imbalance</span>}
+                        </div>
+                      </td>
+                      <td style={tdRight}>{p.url_rating != null ? p.url_rating.toFixed(1) : '—'}</td>
+                      <td style={tdRight}>{fmt(p.referring_domains)}</td>
+                      <td style={tdRight}>{fmt(p.backlinks)}</td>
+                    </tr>
+                    {open && (
+                      <tr>
+                        <td style={{ ...td, background: '#f8fafc' }} colSpan={4}>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 6 }}>
+                            Referring domains over time
+                          </div>
+                          <Sparkline points={hist.map((h) => ({ date: h.captured_at, referring_domains: h.referring_domains, backlinks: h.backlinks }))} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                )
+              })}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -767,6 +914,14 @@ const typeChip: React.CSSProperties = {
   padding: '2px 8px', borderRadius: 999, textTransform: 'uppercase', letterSpacing: 0.3,
 }
 const flagChip: React.CSSProperties = { fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 999, marginLeft: 6 }
+const homeChip: React.CSSProperties = {
+  fontSize: 10, fontWeight: 700, color: '#475569', background: '#f1f5f9',
+  padding: '1px 7px', borderRadius: 999, textTransform: 'uppercase', letterSpacing: 0.3,
+}
+const imbalanceChip: React.CSSProperties = {
+  fontSize: 10, fontWeight: 700, color: '#b45309', background: '#fef3c7',
+  padding: '1px 7px', borderRadius: 999, textTransform: 'uppercase', letterSpacing: 0.3,
+}
 const filterChip: React.CSSProperties = {
   fontSize: 12, fontWeight: 600, color: '#64748b', background: '#f1f5f9', border: '1px solid transparent',
   padding: '5px 12px', borderRadius: 999, cursor: 'pointer', textTransform: 'capitalize',

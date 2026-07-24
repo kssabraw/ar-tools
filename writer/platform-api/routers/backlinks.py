@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from config import settings
 from middleware.auth import require_auth
-from services import authority_report, backlink_explorer
+from services import authority_report, backlink_explorer, page_backlink_intel
 
 router = APIRouter(tags=["backlinks"])
 logger = logging.getLogger(__name__)
@@ -197,4 +197,31 @@ async def untrack(client_id: UUID, target_id: UUID, auth: dict = Depends(require
         return {"ok": True}
     except Exception as exc:
         logger.error("backlink_untrack_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+# ----------------------------------------------------------------------------
+# Per-page monitor (client-scoped) — the homepage + money pages captured monthly
+# into page_backlink_profiles (RD/UR/backlinks + history), with an on-demand
+# refresh. A pure DB read; the paid pull happens in the background job.
+# ----------------------------------------------------------------------------
+@router.get("/clients/{client_id}/backlinks/pages")
+async def client_page_backlinks(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """The client's per-page backlink monitor: latest capture + per-page history."""
+    try:
+        return page_backlink_intel.get_page_backlinks(str(client_id))
+    except Exception as exc:
+        logger.error("client_page_backlinks_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.post("/clients/{client_id}/backlinks/pages/refresh")
+async def refresh_page_backlinks(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Enqueue an on-demand per-page capture (homepage + money pages) for a client."""
+    if not (settings.dataforseo_login and settings.dataforseo_password):
+        raise HTTPException(status_code=503, detail="dataforseo_not_configured")
+    try:
+        return {"enqueued": page_backlink_intel.enqueue_page_backlinks(str(client_id))}
+    except Exception as exc:
+        logger.error("refresh_page_backlinks_failed", extra={"client_id": str(client_id), "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
