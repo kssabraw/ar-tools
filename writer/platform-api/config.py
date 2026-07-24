@@ -724,6 +724,10 @@ class Settings(BaseSettings):
     # 2 = related-of-related; higher = broader but more wander) + per-seed cap.
     keyword_research_related_depth: int = 2
     keyword_research_related_limit: int = 500
+    # Max related-search NEIGHBOUR terms (Google's adjacency layer) enriched +
+    # merged per run. Bounds the follow-up keyword_overview enrichment to one
+    # billed call (≤700 keywords/call). Set 0 to skip neighbour harvesting.
+    keyword_research_related_neighbor_cap: int = 700
     # Max phrase-containment suggestions fetched per seed (Labs caps at 1000).
     keyword_research_suggestion_limit: int = 500
     # Client-facing keyword research PDF report: the exec-summary LLM (best-effort,
