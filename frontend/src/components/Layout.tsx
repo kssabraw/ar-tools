@@ -4,7 +4,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { NotificationBell } from './NotificationBell'
-import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, ListTodo, Menu, X, Radar, Loader2, ShieldCheck } from 'lucide-react'
+import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, ListTodo, Menu, X, Radar, Loader2, ShieldCheck, Globe } from 'lucide-react'
 
 interface NavItem {
   label: string
@@ -20,6 +20,7 @@ const nav: NavItem[] = [
   { label: 'Clients', to: '/clients', icon: <Users size={18} /> },
   { label: 'LeadOff', to: '/leadoff', icon: <Radar size={18} /> },
   { label: 'Backlinks', to: '/backlinks', icon: <Link2 size={18} /> },
+  { label: 'Domain Intel', to: '/domain-intel', icon: <Globe size={18} /> },
   { label: 'Workload', to: '/workload', icon: <Gauge size={18} /> },
   { label: 'Task Library', to: '/asana/task-library', icon: <LibraryBig size={18} /> },
   { label: 'Playbook', to: '/playbook', icon: <Library size={18} /> },
