@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     run_transient_retry_max: int = 3
     run_transient_retry_base_minutes: float = 5.0
     run_transient_retry_factor: float = 3.0
+    # Google Apps Script webhook (the Docs/Sheets/PDF publish leg) is a single
+    # HTTP hop to a notoriously cold-start-prone Apps Script web app: sporadic
+    # 5xx / timeouts are common and clear on a quick retry. Retry the transient
+    # band only (5xx + timeouts/transport); a config error or an app-level
+    # success=false (e.g. a bad folder id) fails fast. In-process backoff, small
+    # budget (each attempt already has a 60s transport timeout).
+    google_docs_max_retries: int = 2
+    google_docs_retry_base_seconds: float = 1.5
     scrapeowl_api_key: str = ""
     openai_api_key: str = ""
     anthropic_api_key: str = ""
@@ -93,6 +101,12 @@ class Settings(BaseSettings):
         "rank_keyword_report": 60,
         "gsc_page_ingest": 60,
         "task_import_asana": 60,
+        # A content_batch_item drives a full run (writer alone is 600s) and waits
+        # unbounded on the shared 3-slot run gate, so it can pass the 30-min
+        # default while genuinely live. Reaping it mid-run requeues the job and
+        # (before the source_ref dedupe) spawned a duplicate article; 90 min
+        # keeps the reaper as a real backstop without firing on healthy runs.
+        "content_batch_item": 90,
     }
     # Interactive worker lane: a second in-process claim loop dedicated to
     # short, user-awaited job types so a just-clicked action never queues

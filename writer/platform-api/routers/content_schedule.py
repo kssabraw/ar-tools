@@ -154,7 +154,6 @@ async def create_batch(
             time_of_day=body.time_of_day, tz_name=body.timezone, weekday=body.weekday,
             weekdays=body.weekdays, day_of_month=body.day_of_month,
             week_of_month=body.week_of_month, auto_publish=body.auto_publish,
-            wp_publish=body.wp_publish, wp_status=body.wp_status,
             github_publish=body.github_publish,
         )
     except ValueError as exc:                       # bad cadence params from the planner

@@ -23,6 +23,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from fastapi import HTTPException
+
 from config import settings
 from db.supabase_client import get_supabase
 from services import content_schedule_store as store
@@ -63,8 +65,6 @@ def _job_payload(batch: dict, item: dict) -> dict:
         "page_template_url": item.get("page_template_url"),
         "notes": item.get("notes"),
         "auto_publish": bool(batch.get("auto_publish")),
-        "wp_publish": bool(batch.get("wp_publish")),
-        "wp_status": batch.get("wp_status") or "draft",
         "github_publish": bool(batch.get("github_publish")),
         "user_id": batch.get("created_by"),
     }
@@ -157,6 +157,14 @@ def enqueue_due_content_items(limit: int = 200) -> int:
     return released
 
 
+def _run_status(run_id: str) -> Optional[str]:
+    """Current status of a run, or None if the row is gone."""
+    row = (
+        get_supabase().table("runs").select("status").eq("id", run_id).single().execute()
+    ).data or {}
+    return row.get("status")
+
+
 async def _generate_run(payload: dict) -> Optional[str]:
     """Blog / service / location page: create a suite run + drive the orchestrator
     to completion. Returns the run id on success, None on failure."""
@@ -165,6 +173,9 @@ async def _generate_run(payload: dict) -> Optional[str]:
     from services.run_dispatch import create_run_and_snapshot
 
     client = _get_client(payload["client_id"])
+    # source_ref makes run creation idempotent per batch item: a redeploy/reap
+    # that re-runs this job adopts the in-flight run instead of creating a second
+    # one (which, alongside recover_stuck_runs, produced duplicate articles).
     run_id = create_run_and_snapshot(
         client=client,
         keyword=payload["keyword"],
@@ -174,12 +185,12 @@ async def _generate_run(payload: dict) -> Optional[str]:
         services=payload.get("services") or [],
         writer_notes=(payload.get("notes") or "").strip() or None,
         created_by=payload.get("user_id"),
+        source_ref=f"batch_item:{payload['batch_item_id']}",
     )
-    await orchestrate_run(run_id)
-    status = (
-        (get_supabase().table("runs").select("status").eq("id", run_id).single().execute()).data
-        or {}
-    ).get("status")
+    status = _run_status(run_id)
+    if status != "complete":  # drive a fresh run, or resume an adopted in-flight one
+        await orchestrate_run(run_id)
+        status = _run_status(run_id)
     if status == "retry_scheduled":
         # The orchestrator parked a transient failure for its background retry —
         # but content-batch owns recovery here (via item re-scheduling), so disarm
@@ -192,42 +203,61 @@ async def _generate_run(payload: dict) -> Optional[str]:
     return run_id if status == "complete" else None
 
 
+def _raise_if_transient_nlp(exc: HTTPException, label: str) -> None:
+    """The nlp generators map a provider/transport failure to HTTP >= 500 and a
+    client-actionable problem (bad URL, empty site) to a 4xx. Re-raise the former
+    as TransientContentError so the item retries with backoff; let the 4xx
+    propagate as a permanent failure (retrying can't fix it)."""
+    if (exc.status_code or 0) >= 500:
+        raise TransientContentError(f"{label} provider error: {exc.detail}") from exc
+
+
 async def _generate_local_seo(payload: dict) -> Optional[str]:
     """Local SEO page: the nlp-api generator (competitor analysis + Claude + 8-engine
-    scoring). Returns the new page id on success, None on failure."""
+    scoring). Returns the new page id on success, None on failure. A transient nlp
+    provider outage raises TransientContentError so the item is re-scheduled."""
     from services.local_seo_service import generate_page
 
     if not (payload.get("location") or "").strip():
         raise ValueError("local_seo_page item has no location")
-    page = await generate_page(
-        client_id=payload["client_id"],
-        keyword=payload["keyword"],
-        location=payload["location"],
-        location_code=payload.get("location_code"),
-        user_id=payload.get("user_id") or "",
-        force_refresh=False,
-        page_template_url=payload.get("page_template_url"),
-        notes=(payload.get("notes") or "").strip() or None,
-    )
+    try:
+        page = await generate_page(
+            client_id=payload["client_id"],
+            keyword=payload["keyword"],
+            location=payload["location"],
+            location_code=payload.get("location_code"),
+            user_id=payload.get("user_id") or "",
+            force_refresh=False,
+            page_template_url=payload.get("page_template_url"),
+            notes=(payload.get("notes") or "").strip() or None,
+        )
+    except HTTPException as exc:
+        _raise_if_transient_nlp(exc, "local_seo")
+        raise
     return (page or {}).get("id")
 
 
 async def _generate_ecommerce(payload: dict) -> Optional[str]:
     """Ecommerce product page: the suite ecommerce writer (competitor analysis +
     Claude + 8-engine scoring). The CSV "Product" column is the head term. Returns
-    the new page id on success, None on failure."""
+    the new page id on success, None on failure. A transient nlp provider outage
+    raises TransientContentError so the item is re-scheduled."""
     from services.ecommerce_service import generate_page
 
-    page = await generate_page(
-        client_id=payload["client_id"],
-        keyword=payload["keyword"],
-        page_type="product",
-        source_url=None,
-        product_input=None,
-        user_id=payload.get("user_id") or "",
-        page_template_url=payload.get("page_template_url"),
-        notes=(payload.get("notes") or "").strip() or None,
-    )
+    try:
+        page = await generate_page(
+            client_id=payload["client_id"],
+            keyword=payload["keyword"],
+            page_type="product",
+            source_url=None,
+            product_input=None,
+            user_id=payload.get("user_id") or "",
+            page_template_url=payload.get("page_template_url"),
+            notes=(payload.get("notes") or "").strip() or None,
+        )
+    except HTTPException as exc:
+        _raise_if_transient_nlp(exc, "ecommerce")
+        raise
     return (page or {}).get("id")
 
 

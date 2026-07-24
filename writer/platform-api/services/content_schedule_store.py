@@ -213,7 +213,6 @@ def create_batch(
     tz_name: str = "UTC", weekday: Optional[int] = None,
     weekdays: Optional[list[int]] = None, day_of_month: Optional[int] = None,
     week_of_month: Optional[int] = None, auto_publish: bool = False,
-    wp_publish: bool = False, wp_status: str = "draft",
     github_publish: bool = False,
     now_utc: Optional[datetime] = None,
 ) -> dict:
@@ -241,7 +240,11 @@ def create_batch(
         "week_of_month": week_of_month,
         "start_date": start_date.isoformat() if start_date else None,
         "time_of_day": (time_of_day or time(9, 0)).isoformat(), "timezone": tz_name,
-        "auto_publish": auto_publish, "wp_publish": wp_publish, "wp_status": wp_status,
+        # wp_publish/wp_status columns keep their DB defaults (false/'draft'):
+        # scheduled WordPress auto-publish was never wired (the handler only acts
+        # on auto_publish→GitHub), so the flag is no longer accepted rather than
+        # silently ignored. Publish batch drafts from the content lists on demand.
+        "auto_publish": auto_publish,
         "github_publish": github_publish,
         "status": "active", "total_count": len(items),
     }).execute().data[0]

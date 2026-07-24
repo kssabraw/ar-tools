@@ -8,11 +8,34 @@ call sites can't drift.
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from db.supabase_client import get_supabase
 from services import brand_voice_service, icp_service
 from services.file_parser import detect_format
+
+logger = logging.getLogger(__name__)
+
+# A run is "still owns the work" (adopt it instead of creating a duplicate) unless
+# it reached a terminal FAILED/CANCELLED state — a transient-retry attempt
+# deliberately supersedes a failed run with a fresh one.
+_ADOPTABLE_STATUSES_EXCLUDED = {"failed", "cancelled"}
+
+
+def find_run_by_source_ref(source_ref: str) -> Optional[dict]:
+    """The latest run created for a work-item key, or None. Pure read."""
+    res = (
+        get_supabase()
+        .table("runs")
+        .select("id, status")
+        .eq("source_ref", source_ref)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    rows = res.data or []
+    return rows[0] if rows else None
 
 
 def create_run_and_snapshot(
@@ -31,15 +54,34 @@ def create_run_and_snapshot(
     reoptimize_source_url: Optional[str] = None,
     writer_notes: Optional[str] = None,
     created_by: Optional[str] = None,
+    source_ref: Optional[str] = None,
 ) -> str:
     """Insert a `runs` row + its frozen `client_context_snapshots` row.
 
     Returns the new run id. Does NOT enforce the API concurrency cap or
     dispatch orchestration — callers own pacing + dispatch (the router uses
     BackgroundTasks; Fanout drives `orchestrate_run` synchronously).
+
+    `source_ref` (optional) makes creation IDEMPOTENT per work-item: an
+    externally-driven caller (a content-batch item, a fanout scheduled run) that
+    re-enters after a redeploy/reap passes the same key, and any run for that key
+    still in progress (or already complete) is returned instead of a duplicate
+    being created. Only a terminal failed/cancelled run is superseded (a
+    transient-retry attempt). Interactive callers omit it (always create).
     """
     supabase = get_supabase()
     client_id = str(client["id"])
+
+    if source_ref:
+        existing = find_run_by_source_ref(source_ref)
+        if existing and existing.get("status") not in _ADOPTABLE_STATUSES_EXCLUDED:
+            # Adopt the in-progress/complete run — its snapshot already exists.
+            logger.info(
+                "run_dispatch.adopted_existing_run",
+                extra={"run_id": existing["id"], "source_ref": source_ref,
+                       "status": existing.get("status")},
+            )
+            return existing["id"]
 
     run_result = supabase.table("runs").insert(
         {
@@ -58,6 +100,7 @@ def create_run_and_snapshot(
             "writer_notes": writer_notes,
             "status": "queued",
             "created_by": created_by,
+            "source_ref": source_ref,
         }
     ).execute()
     run_id = run_result.data[0]["id"]

@@ -5,9 +5,31 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+from fastapi import HTTPException
+
 import services.content_batch as cb
 from config import settings
-from services.content_batch import _job_payload, _reschedule_or_fail, _should_github_publish
+from services.content_batch import (
+    TransientContentError,
+    _job_payload,
+    _raise_if_transient_nlp,
+    _reschedule_or_fail,
+    _should_github_publish,
+)
+
+
+class TestRaiseIfTransientNlp:
+    """The nlp generators map a provider/transport failure to HTTP >= 500 and a
+    client-actionable problem to a 4xx; only the former should retry."""
+
+    def test_5xx_becomes_transient(self):
+        with pytest.raises(TransientContentError):
+            _raise_if_transient_nlp(HTTPException(status_code=502, detail="ecommerce_provider_error"), "ecommerce")
+
+    def test_4xx_is_left_permanent(self):
+        # Returns without raising → caller re-raises the original 4xx (permanent).
+        assert _raise_if_transient_nlp(HTTPException(status_code=422, detail="bad url"), "local_seo") is None
 
 
 class TestShouldGithubPublish:
