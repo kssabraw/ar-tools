@@ -96,45 +96,69 @@ logger = logging.getLogger(__name__)
 _inflight_jobs: set[str] = set()
 
 
+# How many of the oldest pending rows the claim scans past exhausted/raced rows.
+_CLAIM_SCAN_LIMIT = 10
+
+
 async def _claim_next_job(job_types: list[str] | None = None) -> dict | None:
-    """Claim the oldest pending job (optionally restricted to `job_types` — the
-    interactive lane's filter) and atomically mark it running."""
+    """Claim the oldest claimable pending job (optionally restricted to
+    `job_types` — the interactive lane's filter) and atomically mark it running.
+
+    Scans a small window of the oldest rows rather than just the single oldest:
+    an exhausted (`attempts >= max_attempts`) pending row would otherwise sit at
+    the queue head forever — nothing settles a *pending* row, so it freezes the
+    whole lane. Such rows are failed and skipped, and a row lost to the sibling
+    lane's race is stepped over instead of ending the tick empty-handed."""
     supabase = get_supabase()
     try:
-        # supabase-py doesn't support FOR UPDATE SKIP LOCKED directly, so we
-        # fetch the oldest pending job and immediately mark it running.
+        # supabase-py doesn't support FOR UPDATE SKIP LOCKED directly, so we fetch
+        # the oldest pending rows and immediately mark one running.
         query = supabase.table("async_jobs").select("*").eq("status", "pending")
         if job_types:
             query = query.in_("job_type", job_types)
-        result = query.order("scheduled_at").limit(1).execute()
+        result = query.order("scheduled_at").limit(_CLAIM_SCAN_LIMIT).execute()
         jobs = result.data or []
-        if not jobs:
-            return None
 
-        job = jobs[0]
-        # Only process if attempts < max_attempts
-        if job.get("attempts", 0) >= job.get("max_attempts", 2):
-            return None
+        for job in jobs:
+            if job.get("attempts", 0) >= job.get("max_attempts", 2):
+                # Exhausted but never settled to a terminal state (e.g. a failed
+                # attempt-refund during shutdown, or a manual requeue). The reaper
+                # only touches 'running' rows, so this would starve the lane. Fail
+                # it (guarded on pending so a real claim isn't stomped) and move on.
+                failed = (
+                    supabase.table("async_jobs")
+                    .update({"status": "failed",
+                             "error": "max_attempts_exhausted_without_settle",
+                             "completed_at": "now()"})
+                    .eq("id", job["id"]).eq("status", "pending").execute()
+                )
+                if failed.data:
+                    logger.warning(
+                        "job_worker.exhausted_pending_failed",
+                        extra={"job_id": job["id"], "job_type": job.get("job_type"),
+                               "attempts": job.get("attempts", 0)},
+                    )
+                continue
 
-        # Atomic claim: the status='pending' guard means when the two in-process
-        # lanes race for the same row, exactly one PATCH matches — the loser gets
-        # an empty result and simply polls again.
-        update_result = (
-            supabase.table("async_jobs")
-            .update(
-                {
-                    "status": "running",
-                    "attempts": job.get("attempts", 0) + 1,
-                    "started_at": "now()",
-                }
+            # Atomic claim: the status='pending' guard means when the two in-process
+            # lanes race for the same row, exactly one PATCH matches — the loser
+            # gets an empty result and steps to the next candidate.
+            update_result = (
+                supabase.table("async_jobs")
+                .update(
+                    {
+                        "status": "running",
+                        "attempts": job.get("attempts", 0) + 1,
+                        "started_at": "now()",
+                    }
+                )
+                .eq("id", job["id"])
+                .eq("status", "pending")  # guard against double-claim
+                .execute()
             )
-            .eq("id", job["id"])
-            .eq("status", "pending")  # guard against double-claim
-            .execute()
-        )
-        if not update_result.data:
-            return None  # Another instance claimed it first
-        return update_result.data[0]
+            if update_result.data:
+                return update_result.data[0]
+        return None
     except Exception as exc:
         logger.error("job_worker.claim_failed", extra={"error": str(exc)})
         return None

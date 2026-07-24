@@ -57,8 +57,6 @@ class ContentBatchCreateRequest(_CadenceBody):
     content_type: ContentType
     items: list[ContentBatchItemInput] = Field(..., min_length=1)
     auto_publish: bool = False
-    wp_publish: bool = False
-    wp_status: Literal["draft", "publish"] = "draft"
     # When true, each finished blog_post item auto-publishes to the client's GitHub
     # repo via the blog media SOP (hero + inline images, atomic commit), so a
     # scheduled post is generated AND made live in one flow. Only honoured for

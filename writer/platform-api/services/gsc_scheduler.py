@@ -88,6 +88,23 @@ def save_marker(key: str, value: str) -> None:
         )
 
 
+def _safe(label: str, fn, *args) -> None:
+    """Run a sync scheduler step, swallowing+logging any error so one broken
+    enqueue can't abort the rest of the tick (esp. the per-cycle content release)."""
+    try:
+        fn(*args)
+    except Exception as exc:  # noqa: BLE001 — one bad step must not break the loop
+        logger.error("gsc_scheduler.step_failed", extra={"step": label, "error": str(exc)})
+
+
+async def _safe_async(label: str, fn, *args) -> None:
+    """Async sibling of `_safe`."""
+    try:
+        await fn(*args)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("gsc_scheduler.step_failed", extra={"step": label, "error": str(exc)})
+
+
 def _has_pending_ingest(supabase, property_id: str) -> bool:
     """Avoid stacking duplicate jobs for the same property."""
     existing = (
@@ -666,32 +683,43 @@ async def gsc_scheduler() -> None:
                     await run_workload_alert()
                 last_asana_workload_date = now.date()
                 save_marker("workload_daily", last_asana_workload_date.isoformat())
+        except Exception as exc:
+            # A failure in the daily/weekly/monthly block must NOT skip the
+            # per-cycle content release below (previously one big try starved
+            # scheduled publishing whenever any daily enqueue threw).
+            logger.error("gsc_scheduler.periodic_block_failed", extra={"error": str(exc)})
+
+        # ---- Per-cycle work (every tick) ---------------------------------
+        # Each step is individually guarded so one broken enqueue can't block the
+        # others — in particular scheduled-content release + the transient-retry
+        # re-dispatch must always run.
+        try:
             # Advance any in-flight Maps scans every tick (non-blocking GETs).
-            await poll_pending_maps_scans()
+            await _safe_async("poll_maps_scans", poll_pending_maps_scans)
             # AI Visibility scheduled scans are self-clocked via each schedule's
             # next_run_at, so they're evaluated every tick (cheap due-query).
-            enqueue_due_brand_scans()
+            _safe("brand_scans", enqueue_due_brand_scans)
             # GBP Posts — recurring drafts (self-clocked next_run_at) + one-off
             # scheduled publishes (per-post scheduled_at). Evaluated every tick so
             # they fire near their local time. No-op until the module is enabled.
-            enqueue_due_gbp_post_schedules()
-            enqueue_due_gbp_scheduled_posts()
+            _safe("gbp_post_schedules", enqueue_due_gbp_post_schedules)
+            _safe("gbp_scheduled_posts", enqueue_due_gbp_scheduled_posts)
             # Client Reporting scheduled reports (Phase 5) — same self-clocked
             # next_run_at pattern; delivery runs after each scheduled render.
-            enqueue_due_report_schedules()
+            _safe("report_schedules", enqueue_due_report_schedules)
             # Content Scheduler: release any scheduled bulk-page items that have
             # come due (per-item scheduled_at; evaluated every tick so drip/weekly
             # slots fire near their local time-of-day).
-            enqueue_due_content_items()
+            _safe("content_items", enqueue_due_content_items)
             # Resilience: re-dispatch runs parked in `retry_scheduled` whose
             # transient-failure backoff has elapsed (per-run next_retry_at). Runs
             # every tick so a recovered upstream (e.g. DataForSEO) picks the run
             # back up within one poll interval of its due time.
-            await redispatch_due_retries()
+            await _safe_async("redispatch_retries", redispatch_due_retries)
             # Deliverables Sheet Sync — the client-Notes poller (~15-min per-
             # client interval, self-gated via deliverables_notes_state.scanned_at
             # + in-flight job guard; no-ops while deliverables_sheet_enabled is
             # false or no client has a sheet configured).
-            enqueue_due_deliverable_notes()
+            _safe("deliverable_notes", enqueue_due_deliverable_notes)
         except Exception as exc:
-            logger.error("gsc_scheduler.unhandled", extra={"error": str(exc)})
+            logger.error("gsc_scheduler.per_cycle_block_failed", extra={"error": str(exc)})

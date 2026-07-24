@@ -213,7 +213,6 @@ def create_batch(
     tz_name: str = "UTC", weekday: Optional[int] = None,
     weekdays: Optional[list[int]] = None, day_of_month: Optional[int] = None,
     week_of_month: Optional[int] = None, auto_publish: bool = False,
-    wp_publish: bool = False, wp_status: str = "draft",
     github_publish: bool = False,
     now_utc: Optional[datetime] = None,
 ) -> dict:
@@ -241,7 +240,11 @@ def create_batch(
         "week_of_month": week_of_month,
         "start_date": start_date.isoformat() if start_date else None,
         "time_of_day": (time_of_day or time(9, 0)).isoformat(), "timezone": tz_name,
-        "auto_publish": auto_publish, "wp_publish": wp_publish, "wp_status": wp_status,
+        # wp_publish/wp_status columns keep their DB defaults (false/'draft'):
+        # scheduled WordPress auto-publish was never wired (the handler only acts
+        # on auto_publish→GitHub), so the flag is no longer accepted rather than
+        # silently ignored. Publish batch drafts from the content lists on demand.
+        "auto_publish": auto_publish,
         "github_publish": github_publish,
         "status": "active", "total_count": len(items),
     }).execute().data[0]
@@ -350,6 +353,18 @@ def finish_item(
     get_supabase().table("content_batch_items").update({
         "status": status, "result_ref": result_ref, "result_kind": result_kind,
         "error": (error or None) and str(error)[:500], "completed_at": "now()",
+    }).eq("id", item_id).execute()
+
+
+def reschedule_item_for_retry(item_id: str, scheduled_at: str, attempt: int) -> None:
+    """Return a transiently-failed item to 'scheduled' with a future release time
+    so the shared scheduler's due-check re-releases it (a fresh content_batch_item
+    job) when the backoff elapses. Clears the prior run's job/error/timestamps and
+    bumps retry_attempt. The parent batch stays active (a scheduled item is not
+    terminal), so `complete_if_drained` won't settle it mid-retry."""
+    get_supabase().table("content_batch_items").update({
+        "status": "scheduled", "scheduled_at": scheduled_at, "retry_attempt": attempt,
+        "job_id": None, "started_at": None, "completed_at": None, "error": None,
     }).eq("id", item_id).execute()
 
 

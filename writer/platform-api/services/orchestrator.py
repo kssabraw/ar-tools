@@ -1144,13 +1144,22 @@ async def recover_stuck_runs() -> None:
         result = (
             _sb()
             .table("runs")
-            .select("id, status, resume_count")
+            .select("id, status, resume_count, source_ref")
             .in_("status", list(NON_TERMINAL_STATUSES))
             .execute()
         )
         stuck = result.data or []
-        resumed = failed = 0
+        resumed = failed = skipped = 0
         for run in stuck:
+            # Externally-driven runs (content-batch items, fanout scheduled runs)
+            # carry a source_ref and have their OWN restart recovery (the job's
+            # drain+reclaim / stale reaper, or the fanout scheduler sweep). Their
+            # re-drive adopts the same run via create_run_and_snapshot's source_ref
+            # dedupe. Resuming them here TOO would drive one run from two owners
+            # concurrently (double module calls, racing module_outputs) — skip.
+            if run.get("source_ref"):
+                skipped += 1
+                continue
             if should_resume(run, settings.run_auto_resume_max):
                 attempt = int(run.get("resume_count") or 0) + 1
                 logger.warning(
@@ -1178,7 +1187,7 @@ async def recover_stuck_runs() -> None:
         if stuck:
             logger.info(
                 "startup_recovery_complete",
-                extra={"resumed": resumed, "failed": failed},
+                extra={"resumed": resumed, "failed": failed, "skipped": skipped},
             )
     except Exception as exc:
         logger.error("startup_recovery_failed", extra={"error": str(exc)})

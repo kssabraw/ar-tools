@@ -1210,7 +1210,7 @@ def generate_local_seo_page_core(
 
 def generate_service_page_core(
     *, session: dict, keyword: str, user_id: str | None,
-    error_sink: list[str] | None = None,
+    error_sink: list[str] | None = None, scheduled_run_id: str | None = None,
 ) -> str | None:
     """Generate one Service Page for a cluster's keyword by creating a suite
     `runs` row (content_type='service_page') and driving the orchestrator
@@ -1246,11 +1246,21 @@ def generate_service_page_core(
         from services.run_dispatch import create_run_and_snapshot
 
         client = _get_client(client_id)
+        # source_ref makes run creation idempotent per fanout scheduled run: the
+        # fanout scheduler's restart sweep re-drives the SAME row, so this adopts
+        # the in-flight run instead of creating a duplicate suite run (which,
+        # alongside recover_stuck_runs, produced duplicate service pages).
+        source_ref = f"fanout_run:{scheduled_run_id}" if scheduled_run_id else None
         run_id = create_run_and_snapshot(
             client=client, keyword=keyword, content_type="service_page",
-            created_by=user_id,
+            created_by=user_id, source_ref=source_ref,
         )
-        asyncio.run(orchestrate_run(run_id))
+        current = (
+            (get_supabase().table("runs").select("status").eq("id", run_id).single().execute()).data
+            or {}
+        ).get("status")
+        if current != "complete":  # drive a fresh run, or resume an adopted in-flight one
+            asyncio.run(orchestrate_run(run_id))
         status = (
             (get_supabase().table("runs").select("status").eq("id", run_id).single().execute()).data
             or {}

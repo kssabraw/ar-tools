@@ -15,7 +15,9 @@ older Apps Script deployments that ignore `format` stay unaffected.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import secrets
 
 import httpx
 
@@ -56,32 +58,54 @@ def resolve_drive_folder(client: dict, content_type: str | None) -> str | None:
 SHARE_MODES = ("private", "link", "public")
 
 
-async def _call_apps_script(body: dict) -> dict:
-    """POST `body` to the Apps Script webhook and return the parsed result dict.
+async def _apps_script_request_once(body: dict) -> dict:
+    """One POST to the Apps Script webhook. Raises httpx errors on transport /
+    HTTP failure and GoogleDocError on an app-level success=false / odd body."""
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as http:
+        response = await http.post(settings.google_apps_script_url, json=body)
+        response.raise_for_status()
+        result = response.json()
+    # Validate here so a non-dict/odd body can't AttributeError out uncaught; a
+    # legit success=false surfaces as a (non-retryable) app-level error.
+    if not isinstance(result, dict) or not result.get("success"):
+        err = result.get("error", "unknown") if isinstance(result, dict) else "non_object_response"
+        raise GoogleDocError(f"apps_script_returned_error: {err}")
+    return result
 
-    Raises GoogleDocError on missing config or a webhook/transport failure so
-    callers can map it to their own error envelope (HTTP route vs. async job)."""
+
+async def _call_apps_script(body: dict) -> dict:
+    """POST `body` to the Apps Script webhook and return the parsed result dict,
+    retrying the transient band (5xx + timeouts/transport drops) with backoff.
+
+    Raises GoogleDocError on missing config, an app-level error (success=false —
+    not retried, a bad folder won't self-heal), or an exhausted transient failure,
+    so callers can map it to their own error envelope (HTTP route vs. async job)."""
     if not settings.google_apps_script_url:
         raise GoogleDocError("publish_not_configured: GOOGLE_APPS_SCRIPT_URL is not set")
-    try:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as http:
-            response = await http.post(settings.google_apps_script_url, json=body)
-            response.raise_for_status()
-            result = response.json()
-        # Validate inside the try so a non-dict/odd body can't AttributeError out
-        # uncaught; a legit success=false is re-raised below without re-wrapping.
-        if not isinstance(result, dict) or not result.get("success"):
-            err = result.get("error", "unknown") if isinstance(result, dict) else "non_object_response"
-            raise GoogleDocError(f"apps_script_returned_error: {err}")
-    except GoogleDocError:
-        raise
-    except httpx.HTTPStatusError as exc:
-        logger.error("apps_script_http_error", extra={"status": exc.response.status_code, "body": exc.response.text[:300]})
-        raise GoogleDocError("apps_script_http_error") from exc
-    except Exception as exc:
-        logger.error("apps_script_call_failed", extra={"error": str(exc)})
-        raise GoogleDocError(f"apps_script_call_failed: {exc}") from exc
-    return result
+    attempt = 0
+    while True:
+        try:
+            return await _apps_script_request_once(body)
+        except GoogleDocError:
+            raise  # config / success=false / non-object body — not transient
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code < 500 or attempt >= settings.google_docs_max_retries:
+                logger.error("apps_script_http_error",
+                             extra={"status": exc.response.status_code, "body": exc.response.text[:300]})
+                raise GoogleDocError("apps_script_http_error") from exc
+            last: Exception = exc
+        except Exception as exc:  # timeout / transport / decode
+            if attempt >= settings.google_docs_max_retries:
+                logger.error("apps_script_call_failed", extra={"error": str(exc)})
+                raise GoogleDocError(f"apps_script_call_failed: {exc}") from exc
+            last = exc
+        attempt += 1
+        delay = settings.google_docs_retry_base_seconds * (2 ** (attempt - 1)) * (
+            0.5 + secrets.randbelow(1000) / 1000.0
+        )
+        logger.warning("apps_script_transient_retry",
+                       extra={"attempt": attempt, "delay_s": round(delay, 1), "error": str(last)[:200]})
+        await asyncio.sleep(delay)
 
 
 async def create_google_doc(

@@ -42,8 +42,6 @@ export interface EstimateBody extends CadenceBody {
 
 export interface CreateBody extends EstimateBody {
   auto_publish?: boolean
-  wp_publish?: boolean
-  wp_status?: 'draft' | 'publish'
   // Blog posts only: auto-publish each finished post to the client's GitHub repo
   // (via the image-generation SOP) right after it generates.
   github_publish?: boolean

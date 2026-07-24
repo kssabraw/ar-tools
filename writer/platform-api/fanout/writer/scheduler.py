@@ -192,7 +192,8 @@ def _process_run(row: dict) -> None:
             elif content_type == "service_page":
                 ok = jobs.generate_service_page_core(
                     session=session, keyword=keyword,
-                    user_id=row.get("user_id"), error_sink=gen_errors)
+                    user_id=row.get("user_id"), error_sink=gen_errors,
+                    scheduled_run_id=run_id)
             else:
                 ok = jobs.generate_article_core(
                     session_id, cluster_id, keyword, location_code,

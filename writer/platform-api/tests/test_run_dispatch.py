@@ -64,6 +64,81 @@ def test_create_run_and_snapshot_writes_run_and_snapshot():
     assert snap["icp_text"] == "ICP"
 
 
+def test_source_ref_adopts_in_progress_run():
+    """A redeploy/reap that re-enters with the same source_ref adopts the existing
+    in-flight run — no second run (and no second snapshot) is created."""
+    inserts: dict = {}
+    client = _supabase_recording(inserts)
+    with patch.object(rd, "get_supabase", return_value=client), \
+         patch.object(rd, "find_run_by_source_ref",
+                      return_value={"id": "existing-run", "status": "writer_running"}):
+        run_id = rd.create_run_and_snapshot(
+            client={"id": "c1"}, keyword="kw", source_ref="batch_item:i1",
+        )
+    assert run_id == "existing-run"
+    assert "runs" not in inserts  # nothing created
+    assert "client_context_snapshots" not in inserts
+
+
+def test_source_ref_adopts_complete_run():
+    inserts: dict = {}
+    client = _supabase_recording(inserts)
+    with patch.object(rd, "get_supabase", return_value=client), \
+         patch.object(rd, "find_run_by_source_ref",
+                      return_value={"id": "done-run", "status": "complete"}):
+        run_id = rd.create_run_and_snapshot(
+            client={"id": "c1"}, keyword="kw", source_ref="batch_item:i1",
+        )
+    assert run_id == "done-run"
+    assert "runs" not in inserts
+
+
+def test_source_ref_creates_new_when_prior_failed():
+    """A terminal failed/cancelled prior run is superseded (a transient-retry
+    attempt): a fresh run is created, carrying the source_ref."""
+    inserts: dict = {}
+    client = _supabase_recording(inserts)
+    with patch.object(rd, "get_supabase", return_value=client), \
+         patch.object(rd, "find_run_by_source_ref",
+                      return_value={"id": "old-failed", "status": "failed"}), \
+         patch.object(rd.brand_voice_service, "resolve_brand_guide_text", return_value="B"), \
+         patch.object(rd.icp_service, "resolve_icp_text", return_value="I"), \
+         patch.object(rd, "detect_format", return_value="text"):
+        run_id = rd.create_run_and_snapshot(
+            client={"id": "c1"}, keyword="kw", source_ref="batch_item:i1",
+        )
+    assert run_id == "run-1"
+    assert inserts["runs"][0]["source_ref"] == "batch_item:i1"
+
+
+def test_source_ref_creates_when_none_exists():
+    inserts: dict = {}
+    client = _supabase_recording(inserts)
+    with patch.object(rd, "get_supabase", return_value=client), \
+         patch.object(rd, "find_run_by_source_ref", return_value=None), \
+         patch.object(rd.brand_voice_service, "resolve_brand_guide_text", return_value="B"), \
+         patch.object(rd.icp_service, "resolve_icp_text", return_value="I"), \
+         patch.object(rd, "detect_format", return_value="text"):
+        rd.create_run_and_snapshot(
+            client={"id": "c1"}, keyword="kw", source_ref="fanout_run:r9",
+        )
+    assert inserts["runs"][0]["source_ref"] == "fanout_run:r9"
+
+
+def test_no_source_ref_never_dedupes():
+    """Interactive callers (no source_ref) always create — dedupe is skipped."""
+    inserts: dict = {}
+    client = _supabase_recording(inserts)
+    with patch.object(rd, "get_supabase", return_value=client), \
+         patch.object(rd, "find_run_by_source_ref") as finder, \
+         patch.object(rd.brand_voice_service, "resolve_brand_guide_text", return_value="B"), \
+         patch.object(rd.icp_service, "resolve_icp_text", return_value="I"), \
+         patch.object(rd, "detect_format", return_value="text"):
+        rd.create_run_and_snapshot(client={"id": "c1"}, keyword="kw")
+    finder.assert_not_called()
+    assert inserts["runs"][0]["source_ref"] is None
+
+
 def test_create_run_and_snapshot_blog_service_is_none():
     inserts: dict = {}
     client = _supabase_recording(inserts)

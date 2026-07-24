@@ -53,6 +53,16 @@ class _Query:
         self.filters[(col, "lt")] = val
         return self
 
+    def in_(self, col, vals):
+        self.filters[(col, "in")] = vals
+        return self
+
+    def order(self, *_a, **_k):
+        return self
+
+    def limit(self, *_a, **_k):
+        return self
+
     def execute(self):
         # Read path returns the seeded rows; update path echoes a non-empty result
         # (a row was changed) unless the table chose to report a no-op.
@@ -116,6 +126,49 @@ def test_reap_noop_when_nothing_stale(monkeypatch):
     _patch(monkeypatch, sb)
     _run(job_worker._reap_stale_jobs())
     assert sb._table.updates == []
+
+
+# ── _claim_next_job (queue-head-freeze fix) ───────────────────────────────────
+def _exhausted_error(updates):
+    return [u for u in updates if u.get("error") == "max_attempts_exhausted_without_settle"]
+
+
+def test_claim_skips_exhausted_and_claims_next(monkeypatch):
+    """An exhausted (attempts>=max) pending row at the head would freeze the lane
+    (nothing settles a pending row). It's failed and skipped, and the next
+    claimable row is claimed."""
+    rows = [
+        {"id": "exhausted", "job_type": "content_batch_item", "attempts": 2, "max_attempts": 2},
+        {"id": "claimable", "job_type": "content_batch_item", "attempts": 0, "max_attempts": 2},
+    ]
+    sb = _FakeSupabase(rows, update_hits=True)
+    monkeypatch.setattr(job_worker, "get_supabase", lambda: sb)
+    claimed = _run(job_worker._claim_next_job())
+    assert claimed == {"id": "x"}  # a row was claimed (mock's echoed row)
+    assert len(_exhausted_error(sb._table.updates)) == 1
+    assert any(u.get("status") == "running" for u in sb._table.updates)
+
+
+def test_claim_all_exhausted_returns_none(monkeypatch):
+    rows = [
+        {"id": "e1", "job_type": "x", "attempts": 2, "max_attempts": 2},
+        {"id": "e2", "job_type": "x", "attempts": 5, "max_attempts": 2},
+    ]
+    sb = _FakeSupabase(rows, update_hits=True)
+    monkeypatch.setattr(job_worker, "get_supabase", lambda: sb)
+    claimed = _run(job_worker._claim_next_job())
+    assert claimed is None
+    assert len(_exhausted_error(sb._table.updates)) == 2  # both failed, none claimed
+    assert not any(u.get("status") == "running" for u in sb._table.updates)
+
+
+def test_claim_returns_first_claimable_no_fails(monkeypatch):
+    rows = [{"id": "ok", "job_type": "x", "attempts": 0, "max_attempts": 2}]
+    sb = _FakeSupabase(rows, update_hits=True)
+    monkeypatch.setattr(job_worker, "get_supabase", lambda: sb)
+    claimed = _run(job_worker._claim_next_job())
+    assert claimed == {"id": "x"}
+    assert _exhausted_error(sb._table.updates) == []
 
 
 def test_reap_disabled_when_timeout_zero(monkeypatch):
