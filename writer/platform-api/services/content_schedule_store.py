@@ -353,6 +353,18 @@ def finish_item(
     }).eq("id", item_id).execute()
 
 
+def reschedule_item_for_retry(item_id: str, scheduled_at: str, attempt: int) -> None:
+    """Return a transiently-failed item to 'scheduled' with a future release time
+    so the shared scheduler's due-check re-releases it (a fresh content_batch_item
+    job) when the backoff elapses. Clears the prior run's job/error/timestamps and
+    bumps retry_attempt. The parent batch stays active (a scheduled item is not
+    terminal), so `complete_if_drained` won't settle it mid-retry."""
+    get_supabase().table("content_batch_items").update({
+        "status": "scheduled", "scheduled_at": scheduled_at, "retry_attempt": attempt,
+        "job_id": None, "started_at": None, "completed_at": None, "error": None,
+    }).eq("id", item_id).execute()
+
+
 def set_batch_status(batch_id: str, status: str) -> None:
     get_supabase().table("content_batches").update({"status": status}).eq(
         "id", batch_id).execute()

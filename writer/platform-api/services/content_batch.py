@@ -26,8 +26,15 @@ from typing import Optional
 from config import settings
 from db.supabase_client import get_supabase
 from services import content_schedule_store as store
+from services import run_retry
 
 logger = logging.getLogger(__name__)
+
+
+class TransientContentError(Exception):
+    """A content-batch item failed on a transient upstream outage (the orchestrator
+    parked the run as retry_scheduled). Signals the handler to re-schedule the item
+    with backoff rather than mark it terminally failed."""
 
 
 def _spacing_seconds() -> int:
@@ -175,12 +182,13 @@ async def _generate_run(payload: dict) -> Optional[str]:
     ).get("status")
     if status == "retry_scheduled":
         # The orchestrator parked a transient failure for its background retry —
-        # but the batch's job-level retry owns recovery here. Reclaim the run to
-        # failed so both retry systems can't regenerate the same keyword.
+        # but content-batch owns recovery here (via item re-scheduling), so disarm
+        # the orchestrator's parallel retry (else both would regenerate the
+        # keyword) and signal the handler to re-schedule this item with backoff.
         from services.orchestrator import disarm_scheduled_retry
 
         disarm_scheduled_retry(run_id)
-        status = "failed"
+        raise TransientContentError(f"transient upstream failure on run {run_id}")
     return run_id if status == "complete" else None
 
 
@@ -221,6 +229,47 @@ async def _generate_ecommerce(payload: dict) -> Optional[str]:
         notes=(payload.get("notes") or "").strip() or None,
     )
     return (page or {}).get("id")
+
+
+def _reschedule_or_fail(supabase, item: dict, job_id: str, reason: str) -> None:
+    """Handle a transient content-batch failure: re-schedule the item with backoff
+    (5/15/45-min, mirroring the orchestrator's run-level policy) so the shared
+    scheduler re-releases it when due, or — once run_transient_retry_max attempts
+    are used — mark it terminally failed. The current async_jobs row is settled
+    either way (it did its work: spawned the retry, or recorded the final failure).
+    Batch settlement is left to the caller's `complete_if_drained` — a re-scheduled
+    item is non-terminal so the batch stays active; an exhausted one is terminal."""
+    item_id = item["id"]
+    attempt = int(item.get("retry_attempt") or 0)
+    max_attempts = settings.run_transient_retry_max
+    if attempt >= max_attempts:
+        store.finish_item(
+            item_id, "failed",
+            error=f"transient upstream failure, retries exhausted ({max_attempts}): {reason}",
+        )
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": f"transient_retries_exhausted: {reason}"[:500],
+             "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+        logger.warning("content_batch.item_retries_exhausted",
+                       extra={"item_id": item_id, "attempts": attempt, "reason": reason[:200]})
+        return
+    next_attempt = attempt + 1
+    delay_min = run_retry.retry_delay_minutes(
+        next_attempt,
+        settings.run_transient_retry_base_minutes,
+        settings.run_transient_retry_factor,
+    )
+    next_at = (datetime.now(timezone.utc) + timedelta(minutes=delay_min)).isoformat()
+    store.reschedule_item_for_retry(item_id, next_at, next_attempt)
+    supabase.table("async_jobs").update(
+        {"status": "complete",
+         "result": {"requeued_for_retry": next_attempt, "scheduled_at": next_at},
+         "completed_at": "now()"}
+    ).eq("id", job_id).execute()
+    logger.info("content_batch.item_retry_scheduled",
+                extra={"item_id": item_id, "attempt": next_attempt,
+                       "max_attempts": max_attempts, "delay_minutes": round(delay_min, 1)})
 
 
 async def run_content_batch_item_job(job: dict) -> None:
@@ -290,6 +339,11 @@ async def run_content_batch_item_job(job: dict) -> None:
                 {"status": "failed", "error": "content generation failed",
                  "completed_at": "now()"}
             ).eq("id", job_id).execute()
+    except TransientContentError as exc:
+        # Transient upstream outage (e.g. a DataForSEO SERP outage). Re-schedule
+        # the item with backoff instead of failing it — the shared scheduler
+        # re-releases it when due, up to run_transient_retry_max attempts.
+        _reschedule_or_fail(supabase, item, job_id, str(exc))
     except Exception as exc:  # noqa: BLE001 — one bad item must not stop the worker
         detail = getattr(exc, "detail", None) or str(exc)
         logger.warning("content_batch.item_failed",
