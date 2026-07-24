@@ -22,6 +22,9 @@ export function ArticlesView() {
   const { sessionId } = useSession();
   const [openCluster, setOpenCluster] = useState<{ id: string; name: string } | null>(null);
   const [showGh, setShowGh] = useState(false);
+  // WordPress publish status for both the single "Website" button and the bulk
+  // action: draft (default, safe) or publish (live).
+  const [wpStatus, setWpStatus] = useState<"draft" | "publish">("draft");
 
   const session = useQuery({ queryKey: ["session", sessionId], queryFn: () => getSession(sessionId) });
   const q = useQuery({
@@ -49,10 +52,11 @@ export function ArticlesView() {
     onSuccess: (res) => res.url && window.open(res.url, "_blank", "noopener"),
     onError: (e: Error) => alert(e.message),
   });
-  // Publish straight to the linked client's WordPress site as a draft (reuses the
-  // suite's WordPress publish); opens the WP editor on success.
+  // Publish straight to the linked client's WordPress site (reuses the suite's
+  // WordPress publish); opens the WP editor/post on success. `wpStatus` picks
+  // draft (default) vs live.
   const publishWp = useMutation({
-    mutationFn: (clusterId: string) => publishClusterWordpress(sessionId, clusterId, "draft"),
+    mutationFn: (clusterId: string) => publishClusterWordpress(sessionId, clusterId, wpStatus),
     onSuccess: (res) => {
       const link = res.edit_url || res.url;
       if (link) window.open(link, "_blank", "noopener");
@@ -69,6 +73,9 @@ export function ArticlesView() {
   const [driveResults, setDriveResults] = useState<
     Record<string, { status: "done" | "failed"; url?: string | null; error?: string }>
   >({});
+  const [wpResults, setWpResults] = useState<
+    Record<string, { status: "done" | "failed"; url?: string | null; edit_url?: string | null; error?: string }>
+  >({});
 
   if (q.isLoading) return <p className="muted">Loading articles…</p>;
   if (q.isError) return <p className="form-error">Couldn’t load articles.</p>;
@@ -78,6 +85,9 @@ export function ArticlesView() {
   const repoConfigured = !!gh.repo;
   const driveAvailable = !!session.data?.publish_available?.drive;
   const wordpressAvailable = !!session.data?.publish_available?.wordpress;
+  // The tick-boxes drive both bulk actions (Drive + WordPress), so show them when
+  // either destination is available.
+  const bulkSelectable = driveAvailable || wordpressAvailable;
 
   const allIds = articles.map((a: ArticleListItem) => a.cluster_id);
   const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
@@ -111,6 +121,48 @@ export function ArticlesView() {
           setDriveResults((r) => ({ ...r, [id]: { status: "done", url: res.url } }));
         } catch (e) {
           setDriveResults((r) => ({
+            ...r,
+            [id]: { status: "failed", error: e instanceof Error ? e.message : "Failed" },
+          }));
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
+    setBulkBusy(false);
+    // Drop the ones that published cleanly; leave failures ticked for retry.
+    setSelected((prev) => {
+      const n = new Set(prev);
+      for (const id of succeeded) n.delete(id);
+      return n;
+    });
+  };
+
+  // Bulk "Publish to Website": tick articles, then publish them all to the
+  // client's WordPress site in one action (draft or live per `wpStatus`).
+  // Client-side fan-out over the per-article endpoint at a small concurrency so
+  // the freshly-whitelisted site isn't hit with a burst; per-row outcomes in
+  // `wpResults`.
+  const bulkPublishWp = async () => {
+    const queue = articles
+      .filter((a: ArticleListItem) => selected.has(a.cluster_id))
+      .map((a: ArticleListItem) => a.cluster_id);
+    if (!queue.length || bulkBusy) return;
+    setBulkBusy(true);
+    setWpResults({});
+    const CONCURRENCY = 2;
+    let next = 0;
+    const succeeded: string[] = [];
+    const worker = async () => {
+      for (;;) {
+        const cur = next++;
+        if (cur >= queue.length) return;
+        const id = queue[cur];
+        try {
+          const res = await publishClusterWordpress(sessionId, id, wpStatus);
+          succeeded.push(id);
+          setWpResults((r) => ({ ...r, [id]: { status: "done", url: res.url, edit_url: res.edit_url } }));
+        } catch (e) {
+          setWpResults((r) => ({
             ...r,
             [id]: { status: "failed", error: e instanceof Error ? e.message : "Failed" },
           }));
@@ -162,6 +214,34 @@ export function ArticlesView() {
             {bulkBusy ? "Saving…" : selectedCount ? `Save ${selectedCount} to Drive` : "Save to Drive"}
           </button>
         )}
+        {wordpressAvailable && (
+          <>
+            <select
+              className="input"
+              style={{ width: "auto" }}
+              value={wpStatus}
+              disabled={bulkBusy}
+              title="Publish WordPress posts as drafts (review before going live) or live"
+              onChange={(e) => setWpStatus(e.target.value as "draft" | "publish")}
+            >
+              <option value="draft">WordPress: Draft</option>
+              <option value="publish">WordPress: Live</option>
+            </select>
+            <button
+              className="btn btn-primary"
+              style={{ width: "auto" }}
+              disabled={selectedCount === 0 || bulkBusy}
+              title={`Publish the ticked articles to the client's WordPress site as ${wpStatus === "publish" ? "live posts" : "drafts"}`}
+              onClick={() => void bulkPublishWp()}
+            >
+              {bulkBusy
+                ? "Publishing…"
+                : selectedCount
+                  ? `Publish ${selectedCount} to Website`
+                  : "Publish to Website"}
+            </button>
+          </>
+        )}
         <span className="muted">
           {articles.length} written article{articles.length === 1 ? "" : "s"} · stored in the app.
         </span>
@@ -183,7 +263,7 @@ export function ArticlesView() {
         <table className="kw-table">
           <thead>
             <tr>
-              {driveAvailable && (
+              {bulkSelectable && (
                 <th style={{ width: 28 }}>
                   <input
                     type="checkbox"
@@ -200,9 +280,10 @@ export function ArticlesView() {
           <tbody>
             {articles.map((a: ArticleListItem) => {
               const dr = driveResults[a.cluster_id];
+              const wr = wpResults[a.cluster_id];
               return (
               <tr key={a.cluster_id}>
-                {driveAvailable && (
+                {bulkSelectable && (
                   <td>
                     <input
                       type="checkbox"
@@ -249,8 +330,8 @@ export function ArticlesView() {
                     <button
                       className="link-btn"
                       style={{ marginLeft: 10 }}
-                      disabled={publishWp.isPending}
-                      title="Publish this article to the client's WordPress site as a draft"
+                      disabled={publishWp.isPending || bulkBusy}
+                      title={`Publish this article to the client's WordPress site as ${wpStatus === "publish" ? "a live post" : "a draft"}`}
                       onClick={() => publishWp.mutate(a.cluster_id)}
                     >
                       Website
@@ -263,6 +344,14 @@ export function ArticlesView() {
                   )}
                   {dr?.status === "failed" && (
                     <span style={{ marginLeft: 10, color: "#dc2626" }} title={dr.error}>Failed</span>
+                  )}
+                  {wr?.status === "done" && (
+                    (wr.edit_url || wr.url)
+                      ? <a href={wr.edit_url || wr.url || undefined} target="_blank" rel="noopener noreferrer" className="link-btn" style={{ marginLeft: 10, color: "#16a34a" }}>Open post ↗</a>
+                      : <span style={{ marginLeft: 10, color: "#16a34a", fontWeight: 600 }}>Published</span>
+                  )}
+                  {wr?.status === "failed" && (
+                    <span style={{ marginLeft: 10, color: "#dc2626" }} title={wr.error}>WP failed</span>
                   )}
                 </td>
               </tr>

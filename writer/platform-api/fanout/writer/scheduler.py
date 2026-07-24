@@ -211,19 +211,31 @@ def _process_run(row: dict) -> None:
             _retry_or_fail(row, reason, client_id=client_id)
             return
         _finish_run(run_id, "complete", error=None)
+        # An opt-in publish (Drive / WordPress) runs AFTER generation and is
+        # best-effort — a publish miss must not fail the (successful) generation.
+        # But it must not vanish silently either: collect each channel's failure
+        # reason so a generated-but-unpublished piece is recorded + alerted below
+        # instead of reading as a clean `complete`.
+        publish_failures: list[tuple[str, str]] = []
         # Opt-in auto-publish: push the finished piece to the client's Drive folder.
         if success and (schedule or {}).get("auto_publish"):
-            _auto_publish_to_client_drive(
+            drive_err = _auto_publish_to_client_drive(
                 content_type, session=session, cluster_id=cluster_id,
                 keyword=keyword, artifact=ok, user_id=row.get("user_id"))
+            if drive_err:
+                publish_failures.append(("Google Drive", drive_err))
         # Opt-in direct-to-WordPress: blog posts land at the slug their internal
         # links were computed against; local SEO / service pages reuse their own
         # publish paths (as WP pages).
         if success and (schedule or {}).get("wp_publish"):
-            _auto_publish_to_wordpress(
+            wp_err = _auto_publish_to_wordpress(
                 content_type, session=session, cluster_id=cluster_id, keyword=keyword,
                 artifact=ok, user_id=row.get("user_id"),
                 wp_status=(schedule or {}).get("wp_status") or "draft")
+            if wp_err:
+                publish_failures.append(("WordPress", wp_err))
+        if publish_failures:
+            _record_publish_failure(run_id, row, client_id, publish_failures)
     except Exception as exc:  # noqa: BLE001 — one bad run must not stop the worker
         logger.error("scheduled_run_failed",
                      extra={"event": "scheduled_run_failed", "run_id": run_id,
@@ -239,11 +251,12 @@ def _process_run(row: dict) -> None:
 def _auto_publish_to_client_drive(
     content_type: str, *, session: dict, cluster_id: str, keyword: str,
     artifact, user_id: str | None,
-) -> None:
+) -> str | None:
     """Publish a just-generated piece to the linked client's Google Drive folder
     (a Google Doc via the suite's Apps Script webhook). Best-effort — any failure
-    is logged and swallowed so it never affects the generation run's status.
-    Requires a client-linked session; no-ops otherwise."""
+    is logged and never affects the generation run's status; the caller records +
+    alerts on the returned reason. Returns None on success or when there's nothing
+    to publish (no client-linked session), or the failure reason string on error."""
     import asyncio
 
     client_id = session.get("client_id")
@@ -251,7 +264,7 @@ def _auto_publish_to_client_drive(
         logger.info("auto_publish_skipped",
                     extra={"event": "auto_publish_skipped", "content_type": content_type,
                            "reason": "session not client-linked"})
-        return
+        return None
     try:
         if content_type == "local_seo_page":
             # First-class suite artifact — reuse its own publish path (which also
@@ -284,21 +297,25 @@ def _auto_publish_to_client_drive(
         logger.info("auto_published",
                     extra={"event": "auto_published", "content_type": content_type,
                            "client_id": client_id})
+        return None
     except Exception as exc:  # noqa: BLE001 — auto-publish is best-effort
         logger.warning("auto_publish_failed",
                        extra={"event": "auto_publish_failed", "content_type": content_type,
                               "client_id": client_id, "reason": repr(exc)})
+        return repr(exc)[:500]
 
 
 def _auto_publish_to_wordpress(
     content_type: str, *, session: dict, cluster_id: str, keyword: str,
     artifact, user_id: str | None, wp_status: str,
-) -> None:
+) -> str | None:
     """Publish a just-generated piece to the linked client's WordPress site.
     Blog posts pin the cluster's slug so the live URL matches the internal links
     the writer injected; local SEO / service pages reuse their own publish paths
-    (as WP pages). Best-effort — a publish failure is logged and swallowed, never
-    failing the generation run. Requires a client-linked session; no-ops otherwise."""
+    (as WP pages). Best-effort — a publish failure is logged and never fails the
+    generation run; the caller records + alerts on the returned reason. Returns
+    None on success or when there's nothing to publish (no client-linked session),
+    or the failure reason string on error."""
     import asyncio
 
     status = wp_status if wp_status in ("draft", "publish") else "draft"
@@ -307,7 +324,7 @@ def _auto_publish_to_wordpress(
         logger.info("wp_auto_publish_skipped",
                     extra={"event": "wp_auto_publish_skipped",
                            "reason": "session not client-linked"})
-        return
+        return None
     try:
         if content_type == "local_seo_page":
             # First-class suite artifact — reuse its own WP publish path (which
@@ -338,6 +355,7 @@ def _auto_publish_to_wordpress(
         logger.info("wp_auto_published",
                     extra={"event": "wp_auto_published", "content_type": content_type,
                            "cluster_id": cluster_id, "client_id": client_id})
+        return None
     except Exception as exc:  # noqa: BLE001 — WP auto-publish is best-effort
         # Reason in the message so it survives the plain stdout formatter.
         logger.warning("wp_auto_publish_failed content_type=%s cluster=%s client=%s reason=%s",
@@ -345,6 +363,7 @@ def _auto_publish_to_wordpress(
                        extra={"event": "wp_auto_publish_failed", "content_type": content_type,
                               "cluster_id": cluster_id, "client_id": client_id,
                               "reason": repr(exc)})
+        return repr(exc)[:500]
 
 
 def _wp_publish_blog(session: dict, cluster_id: str, keyword: str, status: str) -> None:
@@ -482,6 +501,57 @@ def _notify_dead_letter(row: dict, client_id: str | None, attempts: int, reason:
     except Exception as exc:  # noqa: BLE001 — notification is best-effort
         logger.warning("dead_letter_notify_failed",
                        extra={"event": "dead_letter_notify_failed",
+                              "run_id": row.get("id"), "reason": repr(exc)})
+
+
+def _record_publish_failure(
+    run_id: str, row: dict, client_id: str | None, failures: list[tuple[str, str]],
+) -> None:
+    """A scheduled article generated fine but one or more requested publish
+    channels failed. Record the reason on the run (so a generated-but-unpublished
+    piece doesn't read as a clean `complete`) and surface it via the notifications
+    service. Best-effort — a bookkeeping/notification blip must never affect the
+    run, which is already marked `complete` (generation genuinely succeeded)."""
+    reason = "; ".join(f"{channel}: {detail}" for channel, detail in failures)[:500]
+    try:
+        (get_service_client().table("scheduled_article_runs")
+         .update({"publish_error": reason}).eq("id", run_id).execute())
+    except Exception as exc:  # noqa: BLE001 — annotation is best-effort
+        logger.warning("publish_error_persist_failed",
+                       extra={"event": "publish_error_persist_failed",
+                              "run_id": run_id, "reason": repr(exc)})
+    _notify_publish_failure(row, client_id, failures)
+
+
+def _notify_publish_failure(
+    row: dict, client_id: str | None, failures: list[tuple[str, str]],
+) -> None:
+    """Best-effort in-app/email/Slack alert when a scheduled article generated but
+    failed to publish. Never raises into the worker. Resolves the client from the
+    session when not supplied so the alert lands on the right client card."""
+    try:
+        from services import notifications
+
+        if not client_id and row.get("session_id"):
+            from fanout.storage import silo as store
+            client_id = (store.get_session(row["session_id"]) or {}).get("client_id")
+        channels = ", ".join(sorted({channel for channel, _ in failures}))
+        detail = failures[0][1] if failures else "unknown error"
+        notifications.emit(
+            client_id,
+            kind="content_publish_failed",
+            title="Scheduled article generated but failed to publish",
+            summary=(f"The article was generated successfully but publishing to "
+                     f"{channels} failed: {detail}. The draft is saved — re-publish "
+                     f"it from the Articles tab once the issue is resolved."),
+            severity="warning",
+            payload={"run_id": row.get("id"), "cluster_id": row.get("cluster_id"),
+                     "schedule_id": row.get("content_schedule_id"),
+                     "session_id": row.get("session_id")},
+        )
+    except Exception as exc:  # noqa: BLE001 — notification is best-effort
+        logger.warning("publish_failure_notify_failed",
+                       extra={"event": "publish_failure_notify_failed",
                               "run_id": row.get("id"), "reason": repr(exc)})
 
 
