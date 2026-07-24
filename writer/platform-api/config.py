@@ -696,6 +696,23 @@ class Settings(BaseSettings):
     keyword_research_idea_limit: int = 700
     # Max seed keywords accepted per run (Labs caps the ideas seed set at 200).
     keyword_research_max_seeds: int = 20
+    # Relevance gate: drop brand-homonym / off-topic drift from the Labs ideas
+    # before scoring (only engages for brand+topic seeds; pure-service seeds pass
+    # through untouched). Set False to keep every idea Labs returns.
+    keyword_research_relevance_filter: bool = True
+    # A seed is flagged as "essentially the business name" (advisory warning) when
+    # at least this fraction of its tokens are the client's brand tokens.
+    keyword_research_brand_seed_ratio: float = 0.6
+    # Primary expansion source: keyword_suggestions (phrase-containment — every
+    # result contains the seed phrase, so it stays tightly on-topic). One billed
+    # call per seed. Set False to use keyword_ideas alone (the old behaviour).
+    keyword_research_use_suggestions: bool = True
+    # Also fetch keyword_ideas (category-based) as a broadener alongside
+    # suggestions, cleaned by the relevance gate before merging. When suggestions
+    # are off, ideas run regardless (there must be at least one source).
+    keyword_research_broaden_with_ideas: bool = True
+    # Max phrase-containment suggestions fetched per seed (Labs caps at 1000).
+    keyword_research_suggestion_limit: int = 500
     # Client-facing keyword research PDF report: the exec-summary LLM (best-effort,
     # Anthropic with OpenAI→Gemini fallback via report_llm; deterministic fallback
     # summary when no key is set).

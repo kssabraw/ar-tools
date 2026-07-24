@@ -45,6 +45,7 @@ _BULK_TRAFFIC_PATH = "/v3/dataforseo_labs/google/bulk_traffic_estimation/live"
 _COMPETITORS_DOMAIN_PATH = "/v3/dataforseo_labs/google/competitors_domain/live"
 _KEYWORD_OVERVIEW_PATH = "/v3/dataforseo_labs/google/keyword_overview/live"
 _KEYWORD_IDEAS_PATH = "/v3/dataforseo_labs/google/keyword_ideas/live"
+_KEYWORD_SUGGESTIONS_PATH = "/v3/dataforseo_labs/google/keyword_suggestions/live"
 
 _DEFAULT_LOCATION_CODE = 2840  # US
 _DEFAULT_LANGUAGE_CODE = "en"
@@ -226,19 +227,14 @@ def parse_keyword_overview(body: dict) -> dict[str, dict]:
     return out
 
 
-def parse_keyword_ideas(body: dict) -> list[dict]:
-    """Rows for the keyword ideas a seed set expands into. One row per item:
-    {keyword, volume, cpc_usd, competition_index, competition_level,
-    keyword_difficulty, search_intent, monthly_searches}.
-
-    Keyword-ideas items carry the same nested metric objects as
-    keyword_overview (``keyword_info`` / ``keyword_properties`` /
-    ``search_intent_info``), so an idea arrives fully enriched in the one billed
-    call — no follow-up keyword_overview batch is needed. Missing sub-objects
-    degrade the row (fields → None) rather than dropping it."""
-    result = _first_result(body, "labs_keyword_ideas_error")
+def _parse_metric_items(items) -> list[dict]:
+    """Rows for a Labs items array whose members carry the standard nested metric
+    objects (``keyword_info`` / ``keyword_properties`` / ``search_intent_info``).
+    Shared by keyword_ideas and keyword_suggestions — both return this shape, so
+    a row arrives fully enriched in one billed call. Missing sub-objects degrade
+    the row (fields → None) rather than dropping it. Pure."""
     out: list[dict] = []
-    for item in result.get("items") or []:
+    for item in items or []:
         if not isinstance(item, dict):
             continue
         kw = item.get("keyword")
@@ -260,6 +256,21 @@ def parse_keyword_ideas(body: dict) -> list[dict]:
             "monthly_searches": ki.get("monthly_searches") if isinstance(ki, dict) else None,
         })
     return out
+
+
+def parse_keyword_ideas(body: dict) -> list[dict]:
+    """Rows for the keyword ideas a seed set expands into (category-based
+    expansion). See _parse_metric_items for the row shape."""
+    result = _first_result(body, "labs_keyword_ideas_error")
+    return _parse_metric_items(result.get("items"))
+
+
+def parse_keyword_suggestions(body: dict) -> list[dict]:
+    """Rows for the keyword suggestions a single seed expands into (full-search /
+    phrase-containment: every returned keyword contains the seed phrase, so the
+    set stays tightly on-topic). Same row shape as keyword_ideas."""
+    result = _first_result(body, "labs_keyword_suggestions_error")
+    return _parse_metric_items(result.get("items"))
 
 
 def chunk(items: list, size: int) -> list[list]:
@@ -405,6 +416,33 @@ async def fetch_keyword_ideas(
     }]
     body = await _post(_KEYWORD_IDEAS_PATH, payload)
     return parse_keyword_ideas(body), cost_of(body)
+
+
+async def fetch_keyword_suggestions(
+    seed: str,
+    location_code: Optional[int] = None,
+    language_code: Optional[str] = None,
+    limit: int = 500,
+    include_seed: bool = True,
+) -> tuple[list[dict], Optional[float]]:
+    """Phrase-containment suggestions for a SINGLE seed — every returned keyword
+    contains the seed phrase, so the set stays tightly on-topic (unlike the
+    category-based keyword_ideas). Each row already enriched with volume / CPC /
+    competition / KD / intent. Ordered by search volume desc. One billed call.
+
+    Labs accepts only one ``keyword`` per suggestions call, so a multi-seed run
+    fans out one call per seed."""
+    kw = (seed or "").strip()
+    if not kw:
+        return [], None
+    payload = [{
+        "keyword": kw, **_loc(location_code, language_code),
+        "include_seed_keyword": include_seed,
+        "limit": max(1, min(limit, 1000)),
+        "order_by": ["keyword_info.search_volume,desc"],
+    }]
+    body = await _post(_KEYWORD_SUGGESTIONS_PATH, payload)
+    return parse_keyword_suggestions(body), cost_of(body)
 
 
 async def fetch_keyword_overview(
