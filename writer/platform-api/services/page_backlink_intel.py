@@ -79,11 +79,33 @@ def detect_imbalance(homepage_rd: Optional[int], pages: list[dict]) -> list[dict
     return offenders
 
 
+def build_page_view(rows: list[dict]) -> dict:
+    """Shape stored ``page_backlink_profiles`` rows into the read payload for the
+    Backlink Explorer's per-page monitor. Pure.
+
+    Returns the latest capture's pages (homepage first, then referring-domains
+    desc) plus a per-URL history series (ascending by capture) for a trend line.
+    ``latest_captured_at`` is None when there are no rows yet."""
+    rows = [r for r in rows if r.get("captured_at")]
+    if not rows:
+        return {"latest_captured_at": None, "pages": [], "history": {}}
+    latest = max(r["captured_at"] for r in rows)
+    latest_pages = [r for r in rows if r["captured_at"] == latest]
+    latest_pages.sort(key=lambda r: (not r.get("is_homepage"), -(r.get("referring_domains") or 0)))
+    history: dict[str, list[dict]] = {}
+    for r in sorted(rows, key=lambda r: r["captured_at"]):
+        history.setdefault(r.get("url"), []).append(
+            {k: r.get(k) for k in ("captured_at", "referring_domains", "backlinks", "url_rating")}
+        )
+    return {"latest_captured_at": latest, "pages": latest_pages, "history": history}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # The capture job (monthly, interval-gated)
 # ─────────────────────────────────────────────────────────────────────────────
 async def run_page_backlink_job(job: dict) -> None:
-    from services import serp_snapshot
+    from services import backlinks_api, serp_snapshot
+    from services.dataforseo_rank import extract_domain
 
     supabase = get_supabase()
     job_id = job["id"]
@@ -99,6 +121,12 @@ async def run_page_backlink_job(job: dict) -> None:
             ).eq("id", job_id).execute()
             return
 
+        # Money pages: the team's canonical money pages FIRST, then the site's
+        # highest-RD inner pages from the domain_pages breakdown. domain_pages is
+        # a single call that already CARRIES per-page RD/backlinks/UR, so pages it
+        # covers need no extra per-page summary call — and it makes the capture
+        # populate for every client, not just the few with canonical_urls set on
+        # their tracked keywords (which is why this table used to be homepage-only).
         kw_rows = (
             supabase.table("tracked_keywords")
             .select("canonical_url")
@@ -106,29 +134,53 @@ async def run_page_backlink_job(job: dict) -> None:
             .not_.is_("canonical_url", "null")
             .execute()
         ).data or []
-        inner = money_page_urls(website, [r["canonical_url"] for r in kw_rows])
+        canonical = [r["canonical_url"] for r in kw_rows]
+
+        domain = extract_domain(website) or website
+        try:
+            dp = await backlinks_api.fetch_domain_pages(domain, "domain", limit=settings.backlink_pages_limit)
+        except Exception as exc:  # best-effort — fall back to canonical-only
+            logger.warning("page_backlinks.domain_pages_failed",
+                           extra={"client_id": client_id, "domain": domain, "error": str(exc)})
+            dp = []
+        dp_sorted = sorted(dp, key=lambda p: (p.get("referring_domains") or 0), reverse=True)
+        dp_map = {_norm(p["url"]): p for p in dp if p.get("url")}
+        inner = money_page_urls(website, canonical + [p["url"] for p in dp_sorted if p.get("url")])
 
         captured_at = datetime.now(timezone.utc).isoformat()
         rows: list[dict] = []
         homepage_rd: Optional[int] = None
         page_reads: list[dict] = []
-        for url, is_home in [(website, True)] + [(u, False) for u in inner]:
+
+        # Homepage — an authoritative summary call (the imbalance baseline).
+        try:
+            hs = await serp_snapshot.fetch_backlinks_summary(website)
+            rows.append({
+                "client_id": client_id, "url": website, "is_homepage": True,
+                "url_rating": hs.get("url_rating"), "referring_domains": hs.get("referring_domains"),
+                "backlinks": hs.get("backlinks"), "captured_at": captured_at,
+            })
+            homepage_rd = hs.get("referring_domains")
+        except Exception as exc:
+            logger.warning("page_backlinks.fetch_failed",
+                           extra={"client_id": client_id, "url": website, "error": str(exc)})
+
+        # Inner pages — reuse the domain_pages numbers when present (no extra call),
+        # else one summary call for a canonical money page outside the top pages.
+        for url in inner:
             try:
-                s = await serp_snapshot.fetch_backlinks_summary(url)
+                dpp = dp_map.get(_norm(url))
+                if dpp is not None:
+                    ur, rd, bl = dpp.get("page_rating"), dpp.get("referring_domains"), dpp.get("backlinks")
+                else:
+                    s = await serp_snapshot.fetch_backlinks_summary(url)
+                    ur, rd, bl = s.get("url_rating"), s.get("referring_domains"), s.get("backlinks")
                 row = {
-                    "client_id": client_id,
-                    "url": url,
-                    "is_homepage": is_home,
-                    "url_rating": s.get("url_rating"),
-                    "referring_domains": s.get("referring_domains"),
-                    "backlinks": s.get("backlinks"),
-                    "captured_at": captured_at,
+                    "client_id": client_id, "url": url, "is_homepage": False,
+                    "url_rating": ur, "referring_domains": rd, "backlinks": bl, "captured_at": captured_at,
                 }
                 rows.append(row)
-                if is_home:
-                    homepage_rd = s.get("referring_domains")
-                else:
-                    page_reads.append(row)
+                page_reads.append(row)
             except Exception as exc:  # one bad target must not abort the capture
                 logger.warning("page_backlinks.fetch_failed",
                                extra={"client_id": client_id, "url": url, "error": str(exc)})
@@ -204,6 +256,35 @@ def _sync_imbalance_alert(supabase, client_id: str, offenders: list[dict]) -> No
         severity="info",
         payload={"link": f"clients/{client_id}/action-plan"},
     )
+
+
+def get_page_backlinks(client_id: str) -> dict:
+    """The per-page backlink monitor read for a client — the latest capture's
+    pages + each page's history. Pure DB read, no paid calls."""
+    rows = (
+        get_supabase().table("page_backlink_profiles").select("*")
+        .eq("client_id", client_id).order("captured_at", desc=True).execute()
+    ).data or []
+    return build_page_view(rows)
+
+
+def enqueue_page_backlinks(client_id: str) -> bool:
+    """Enqueue a one-off per-page capture for a client (dedup against in-flight).
+    On-demand: NOT gated on the scheduled-enabled flag, so a user can populate
+    the monitor now instead of waiting for the monthly tick. Returns True if a
+    job was enqueued, False if one was already pending/running."""
+    supabase = get_supabase()
+    existing = (
+        supabase.table("async_jobs").select("id")
+        .eq("job_type", "page_backlink_intel").eq("entity_id", client_id)
+        .in_("status", ["pending", "running"]).limit(1).execute()
+    ).data
+    if existing:
+        return False
+    supabase.table("async_jobs").insert(
+        {"job_type": "page_backlink_intel", "entity_id": client_id, "payload": {"client_id": client_id}}
+    ).execute()
+    return True
 
 
 def enqueue_due_page_backlinks() -> int:
