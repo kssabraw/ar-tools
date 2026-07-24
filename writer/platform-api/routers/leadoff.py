@@ -333,7 +333,9 @@ async def create_client_from_market(
     from services.leadoff_proximity import market_proximity
     try:
         proximity = await market_proximity(body.city_id, body.category_id)
-    except Exception:
+    except Exception as exc:
+        logger.warning("leadoff_proximity_lookup_failed", extra={
+            "client_id": client_id, "error": str(exc)})
         proximity = None
 
     goal_created = False

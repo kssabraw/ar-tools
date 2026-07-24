@@ -5885,7 +5885,8 @@ Full location: {body.location}
                 content_gaps = json.loads(gaps_json_str)
                 if not isinstance(content_gaps, list):
                     content_gaps = []
-            except Exception:
+            except Exception as e:
+                logger.warning("generate-page content_gaps parse failed: %s", e)
                 content_gaps = []
 
         # Split content_html from schema_json
@@ -7527,7 +7528,8 @@ def _parse_generated_ecommerce(raw: str) -> tuple:
             content_gaps = json.loads(gaps_json_str)
             if not isinstance(content_gaps, list):
                 content_gaps = []
-        except Exception:
+        except Exception as e:
+            logger.warning("generate-ecommerce content_gaps parse failed: %s", e)
             content_gaps = []
 
     schema_split = raw.find('<script type="application/ld+json">')

@@ -263,7 +263,8 @@ def _client_location_code(client_id: str) -> Optional[int]:
             get_supabase().table("clients").select("rank_tracking_location_code")
             .eq("id", client_id).limit(1).execute()
         ).data
-    except Exception:
+    except Exception as exc:
+        logger.warning("keyword_research.location_lookup_failed", extra={"client_id": client_id, "error": str(exc)})
         return None
     return (rows or [{}])[0].get("rank_tracking_location_code")
 

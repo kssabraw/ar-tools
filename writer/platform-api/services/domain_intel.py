@@ -311,7 +311,8 @@ def _client_location_code(client_id: str) -> Optional[int]:
             get_supabase().table("clients").select("rank_tracking_location_code")
             .eq("id", client_id).limit(1).execute()
         ).data
-    except Exception:
+    except Exception as exc:
+        logger.warning("domain_intel.location_lookup_failed", extra={"client_id": client_id, "error": str(exc)})
         return None
     return (rows or [{}])[0].get("rank_tracking_location_code")
 
@@ -513,7 +514,8 @@ def _client_domain(client_id: str) -> Optional[str]:
             get_supabase().table("clients").select("website_url")
             .eq("id", client_id).limit(1).execute()
         ).data
-    except Exception:
+    except Exception as exc:
+        logger.warning("domain_intel.client_domain_lookup_failed", extra={"client_id": client_id, "error": str(exc)})
         return None
     return normalize_domain((rows or [{}])[0].get("website_url"))
 

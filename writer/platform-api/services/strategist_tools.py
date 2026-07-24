@@ -204,7 +204,8 @@ async def _run_audit_page(client_id: str, args: dict) -> str:
                 ((c.get("gbp") or {}).get("address") or "")
                 or ((c.get("target_cities") or [None])[0] or "")
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("strategist_tools.location_lookup_failed", extra={"client_id": client_id, "error": str(exc)})
             location = ""
     try:
         result = await local_seo_service.score_page(
@@ -258,8 +259,8 @@ async def _run_serp_deep_dive(client_id: str, args: dict) -> str:
     try:
         items = rankability.get_client_rankability(client_id).get("items", [])
         rb_item = next((i for i in items if (i.get("keyword") or "").lower() == keyword.lower()), None)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("strategist_tools.rankability_lookup_failed", extra={"client_id": client_id, "error": str(exc)})
 
     payload = {
         "keyword": keyword,

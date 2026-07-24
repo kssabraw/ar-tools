@@ -461,7 +461,8 @@ def build_keyword_analysis(
     location_code = location_code_for(client)
     try:
         market = fetch_cached_market(supabase, [keyword], location_code)
-    except Exception:
+    except Exception as exc:
+        logger.warning("rank_analysis.market_fetch_failed", extra={"keyword": keyword, "error": str(exc)})
         market = {}
     m = market.get(keyword.lower(), {})
     volume, cpc = m.get("search_volume"), m.get("cpc")

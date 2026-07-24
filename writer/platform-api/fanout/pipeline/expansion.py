@@ -95,7 +95,10 @@ def run_expansion(
                 break
             try:
                 tier2.extend(dfs.people_also_ask(q))
-            except Exception:
+            except Exception as exc:
+                # Tier-2 PAA for this one query failed — skip it; the rest of the
+                # tier-1 anchors still expand.
+                logger.warning("fanout.paa_tier2_failed", extra={"query": q, "error": repr(exc)})
                 continue
         return tier1, tier2[:paa_tier2_cap]
 

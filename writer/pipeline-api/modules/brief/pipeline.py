@@ -430,7 +430,8 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     for llm_id, task in extraction_tasks:
         try:
             subtopics = await task
-        except Exception:
+        except Exception as exc:
+            logger.warning("subtopic extraction failed for llm_id=%s: %s", llm_id, exc)
             subtopics = []
         src_response = f"llm_response_{llm_id}"
         response_by_source[src_response] = subtopics

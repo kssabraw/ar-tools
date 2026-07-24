@@ -267,7 +267,11 @@ export function Tasks() {
       reopenMut
         .mutateAsync(taskId)
         .then(() => patchMut.mutate({ taskId, changes: { status_key: status.key } }))
-        .catch(() => {})
+        .catch((e) => {
+          console.error('reopen task failed', e)
+          setGenResult('Could not move that task — please try again.')
+          setTimeout(() => setGenResult(null), 6000)
+        })
     } else {
       patchMut.mutate({ taskId, changes: { status_key: status.key } })
     }
@@ -292,7 +296,11 @@ export function Tasks() {
       .then((created) => {
         if (status.is_done && created?.id) completeMut.mutate(created.id)
       })
-      .catch(() => {})
+      .catch((e) => {
+        console.error('create task failed', e)
+        setGenResult('Could not add that task — please try again.')
+        setTimeout(() => setGenResult(null), 6000)
+      })
     setBoardAdd((prev) => ({ ...prev, [status.key]: '' }))
   }
 

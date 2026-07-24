@@ -22,12 +22,15 @@ Pure logic is unit-tested; the one DB read (`resolve_slack_actor`) is mockable.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
 from middleware.auth import role_rank
+
+logger = logging.getLogger(__name__)
 
 # Static role→action matrix (min role). The two config-driven cells are resolved
 # live in ``min_role_for`` so they honour policy overrides / test monkeypatches.
@@ -148,7 +151,8 @@ def resolve_slack_actor(slack_user_id: Optional[str], channel: Optional[str] = N
             .limit(1)
             .execute()
         ).data
-    except Exception:
+    except Exception as exc:
+        logger.warning("pace_auth.profile_lookup_failed", extra={"slack_user_id": slack_user_id, "error": str(exc)})
         rows = None
     if rows:
         return ActionContext(profile_id=rows[0]["id"], role=rows[0].get("role"),
