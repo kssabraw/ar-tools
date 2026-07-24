@@ -35,7 +35,7 @@ export function DomainIntelHome() {
       </div>
       <p style={{ color: '#64748b', fontSize: 14, margin: '0 0 24px', lineHeight: 1.5 }}>
         Point at any domain — a competitor, a prospect, or a client's own site — and see its
-        estimated organic traffic, authority, keyword gaps and backlink gaps. The SEMrush-style
+        estimated organic traffic, authority, and keyword gaps. The SEMrush-style
         research view. Pick a client to open its Domain Intelligence workspace.
       </p>
 
