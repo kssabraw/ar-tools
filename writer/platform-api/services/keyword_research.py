@@ -550,13 +550,55 @@ async def run_keyword_research(
                 s, location_code, language_code,
                 limit=settings.keyword_research_suggestion_limit,
             ), "suggestions")
+
+    # related_keywords returns enriched graph nodes PLUS bare "searches related to"
+    # neighbour strings (Google's adjacency layer). Collect both across seeds.
+    related_neighbors: list[str] = []
     if use_related:
-        trusted_rows += await _gather_per_seed(
-            lambda s: dataforseo_labs.fetch_related_keywords(
+        results = await asyncio.gather(*[
+            dataforseo_labs.fetch_related_keywords(
                 s, location_code, language_code,
                 depth=settings.keyword_research_related_depth,
                 limit=settings.keyword_research_related_limit,
-            ), "related")
+            ) for s in seed_list
+        ], return_exceptions=True)
+        for res in results:
+            if isinstance(res, Exception):
+                logger.warning("keyword_research.related_failed",
+                               extra={"client_id": client_id, "error": str(res)})
+                continue
+            node_rows, neighbors, cost_i = res
+            trusted_rows += node_rows
+            related_neighbors += neighbors
+            cost += cost_i or 0.0
+
+    # Enrich the adjacency neighbours (bare strings) that aren't already present,
+    # then merge them as trusted rows — this is where cross-topic terms like
+    # "adaptive reuse" enter. One keyword_overview call per ≤700, capped.
+    if related_neighbors:
+        have = {normalize_keyword(r.get("keyword")) for r in trusted_rows}
+        fresh, seen_fresh = [], set()
+        for k in related_neighbors:
+            nk = normalize_keyword(k)
+            if nk and nk not in have and nk not in seen_fresh:
+                seen_fresh.add(nk)
+                fresh.append(k)
+        fresh = fresh[: settings.keyword_research_related_neighbor_cap]
+        if fresh:
+            import math
+            reserve_budget(max(1, math.ceil(len(fresh) / 700)))
+            overview, cost_ov = await dataforseo_labs.fetch_keyword_overview(
+                fresh, location_code, language_code)
+            cost += cost_ov or 0.0
+            ov_lower = {kw.lower(): m for kw, m in overview.items()}
+            for k in fresh:
+                m = ov_lower.get(k.lower()) or {}
+                trusted_rows.append({
+                    "keyword": k, "volume": m.get("volume"), "cpc_usd": m.get("cpc_usd"),
+                    "competition_index": m.get("competition_index"),
+                    "keyword_difficulty": m.get("keyword_difficulty"),
+                    "search_intent": m.get("search_intent"),
+                })
 
     # OPT-IN BROADENER — category-based ideas, passed through the relevance gate to
     # drop brand-homonym / generic-token drift before merging.

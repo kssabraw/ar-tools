@@ -293,6 +293,26 @@ def parse_related_keywords(body: dict) -> list[dict]:
     return _parse_metric_items(containers)
 
 
+def parse_related_neighbors(body: dict) -> list[str]:
+    """The bare "searches related to" neighbour strings from a related_keywords
+    response — Google's adjacency layer (terms that need NOT contain the seed
+    phrase, e.g. "adaptive reuse"). These carry no metrics, so enrich them
+    separately (keyword_overview). Deduped, order-preserving. Pure."""
+    result = _first_result(body, "labs_related_keywords_error")
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in result.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        for rk in item.get("related_keywords") or []:
+            if isinstance(rk, str) and rk.strip():
+                low = rk.strip().lower()
+                if low not in seen:
+                    seen.add(low)
+                    out.append(rk.strip())
+    return out
+
+
 def chunk(items: list, size: int) -> list[list]:
     """Split a list into chunks of at most ``size``. Pure."""
     return [items[i : i + size] for i in range(0, len(items), size)]
@@ -471,22 +491,25 @@ async def fetch_related_keywords(
     language_code: Optional[str] = None,
     depth: int = 2,
     limit: int = 500,
-) -> tuple[list[dict], Optional[float]]:
-    """Keywords from Google's "searches related to" graph for a SINGLE seed, each
-    enriched with volume / CPC / competition / KD / intent. ``depth`` is how many
-    related-search hops to expand (0 = seed only, 1 = its related searches, 2 =
-    related-of-related). Stays on Google's related graph, so it broadens to
-    adjacent terms without keyword_ideas' category drift. One billed call."""
+) -> tuple[list[dict], list[str], Optional[float]]:
+    """Keywords from Google's "searches related to" graph for a SINGLE seed. One
+    billed call; returns (node_rows, neighbour_strings, cost):
+      * node_rows — the graph-node keywords, already enriched (volume / CPC / KD /
+        intent). For a tight entity seed these are mostly phrase-variants.
+      * neighbour_strings — the bare "related searches" of each node (Google's
+        adjacency layer, e.g. "adaptive reuse"); NO metrics, enrich separately.
+    ``depth`` is how many related-search hops to expand (0 = seed only, 1 = its
+    related searches, 2 = related-of-related)."""
     kw = (seed or "").strip()
     if not kw:
-        return [], None
+        return [], [], None
     payload = [{
         "keyword": kw, **_loc(location_code, language_code),
         "depth": max(0, min(depth, 4)),
         "limit": max(1, min(limit, 1000)),
     }]
     body = await _post(_RELATED_KEYWORDS_PATH, payload)
-    return parse_related_keywords(body), cost_of(body)
+    return parse_related_keywords(body), parse_related_neighbors(body), cost_of(body)
 
 
 async def fetch_keyword_overview(

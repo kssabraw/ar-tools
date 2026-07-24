@@ -395,6 +395,25 @@ def test_parse_related_keywords_harvests_enriched_nodes():
     assert r["search_intent"] == "informational"
 
 
+def test_parse_related_neighbors_harvests_and_dedupes_strings():
+    body = {
+        "tasks": [{
+            "status_code": 20000,
+            "result": [{
+                "items": [
+                    {"keyword_data": {"keyword": "historic preservation"},
+                     "related_keywords": ["adaptive reuse", "SHPO", "adaptive reuse"]},
+                    {"keyword_data": {"keyword": "adaptive reuse"},
+                     "related_keywords": ["heritage consultant", "SHPO"]},
+                ],
+            }],
+        }],
+    }
+    neighbors = dataforseo_labs.parse_related_neighbors(body)
+    # Deduped case-insensitively, order preserved.
+    assert neighbors == ["adaptive reuse", "SHPO", "heritage consultant"]
+
+
 def test_parse_keyword_suggestions_shares_item_shape():
     # keyword_suggestions returns the same nested metric objects as ideas.
     body = {
