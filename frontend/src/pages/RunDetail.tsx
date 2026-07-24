@@ -114,6 +114,7 @@ function StatusChip({ status }: { status: RunStatus }) {
     sources_cited_running:   { bg: '#dbeafe', color: '#1e40af', label: 'Running' },
     service_brief_running:   { bg: '#dbeafe', color: '#1e40af', label: 'Running' },
     service_writer_running:  { bg: '#dbeafe', color: '#1e40af', label: 'Running' },
+    retry_scheduled:         { bg: '#fef3c7', color: '#92400e', label: 'Retrying' },
     complete:                { bg: '#dcfce7', color: '#166534', label: 'Complete' },
     failed:                  { bg: '#fee2e2', color: '#991b1b', label: 'Failed' },
     cancelled:               { bg: '#f1f5f9', color: '#475569', label: 'Cancelled' },
@@ -587,9 +588,17 @@ export function RunDetail() {
         </div>
 
         {run.error_message && (
-          <div style={{ marginTop: 14, padding: '12px 14px', background: '#fef2f2', borderRadius: 8, color: '#dc2626', fontSize: 13 }}>
-            <strong>Error{run.error_stage ? ` (${run.error_stage})` : ''}:</strong> {run.error_message}
-          </div>
+          run.status === 'retry_scheduled' ? (
+            // Parked on a transient upstream failure — the message carries the
+            // auto-retry schedule, so render it as a wait-state, not an error.
+            <div style={{ marginTop: 14, padding: '12px 14px', background: '#fffbeb', borderRadius: 8, color: '#92400e', fontSize: 13 }}>
+              <strong>Auto-retry{run.error_stage ? ` (${run.error_stage})` : ''}:</strong> {run.error_message}
+            </div>
+          ) : (
+            <div style={{ marginTop: 14, padding: '12px 14px', background: '#fef2f2', borderRadius: 8, color: '#dc2626', fontSize: 13 }}>
+              <strong>Error{run.error_stage ? ` (${run.error_stage})` : ''}:</strong> {run.error_message}
+            </div>
+          )
         )}
       </div>
 

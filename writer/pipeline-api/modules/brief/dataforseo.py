@@ -12,8 +12,10 @@ All calls use HTTP Basic Auth with login + password from env vars.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
+import secrets
 from typing import Any, Optional
 
 import httpx
@@ -27,9 +29,24 @@ DEFAULT_TIMEOUT = 60.0
 DEFAULT_LANGUAGE_CODE = "en"
 DEFAULT_LOCATION_CODE = 2840  # United States
 
+# DataForSEO status-code convention: 20000 = ok, 40000-49999 = client/task
+# errors (bad request, invalid keyword, no results — permanent), 50000+ =
+# server-side errors ("Internal Error" / "Internal SE Server Error" — transient,
+# clear on a re-set after a short delay).
+_DFS_SERVER_ERROR_FLOOR = 50000
+_DFS_ERROR_FLOOR = 40000
+
 
 class DataForSEOError(Exception):
-    """Raised when DataForSEO returns an unexpected response."""
+    """Raised when DataForSEO returns an unexpected response.
+
+    `retryable` marks the transient server-side band (status_code >= 50000) so
+    `_post` retries it; client/task errors are permanent and raised immediately.
+    """
+
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable
 
 
 def _auth_header() -> dict[str, str]:
@@ -38,8 +55,22 @@ def _auth_header() -> dict[str, str]:
     return {"Authorization": f"Basic {encoded}", "Content-Type": "application/json"}
 
 
-async def _post(path: str, payload: list[dict[str, Any]], timeout: float = DEFAULT_TIMEOUT) -> dict[str, Any]:
-    """POST to DataForSEO and return the parsed first task result.
+def _is_transient_dataforseo_error(exc: Exception) -> bool:
+    """Retryable DataForSEO failures: server-side task errors (status_code
+    >= 50000), HTTP 5xx, and timeouts / connection drops. Client errors (4xx,
+    status_code 40000-49999) fail fast — a retry can't fix a bad keyword or a
+    404 endpoint."""
+    if isinstance(exc, DataForSEOError):
+        return exc.retryable
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    if isinstance(exc, (httpx.TimeoutException, httpx.TransportError)):
+        return True
+    return False
+
+
+async def _request_once(path: str, payload: list[dict[str, Any]], timeout: float) -> dict[str, Any]:
+    """One POST to DataForSEO returning the parsed first task result.
 
     DataForSEO wraps everything in a tasks[] array even for single requests.
     """
@@ -49,18 +80,53 @@ async def _post(path: str, payload: list[dict[str, Any]], timeout: float = DEFAU
         response.raise_for_status()
         body = response.json()
 
-    if body.get("status_code") and body["status_code"] >= 40000:
-        raise DataForSEOError(f"{path}: {body.get('status_message')}")
+    body_status = body.get("status_code")
+    if body_status and body_status >= _DFS_ERROR_FLOOR:
+        raise DataForSEOError(
+            f"{path}: {body.get('status_message')}",
+            retryable=body_status >= _DFS_SERVER_ERROR_FLOOR,
+        )
 
     tasks = body.get("tasks") or []
     if not tasks:
         raise DataForSEOError(f"{path}: no tasks in response")
 
     task = tasks[0]
-    if task.get("status_code") and task["status_code"] >= 40000:
-        raise DataForSEOError(f"{path}: task error {task.get('status_message')}")
+    task_status = task.get("status_code")
+    if task_status and task_status >= _DFS_ERROR_FLOOR:
+        raise DataForSEOError(
+            f"{path}: task error {task.get('status_message')}",
+            retryable=task_status >= _DFS_SERVER_ERROR_FLOOR,
+        )
 
     return task
+
+
+async def _post(path: str, payload: list[dict[str, Any]], timeout: float = DEFAULT_TIMEOUT) -> dict[str, Any]:
+    """POST to DataForSEO with transient-error retries (exponential backoff +
+    jitter). Only the transient band is retried; permanent client/task errors
+    raise on the first attempt. See `dataforseo_max_retries` in config."""
+    attempt = 0
+    while True:
+        try:
+            return await _request_once(path, payload, timeout)
+        except Exception as exc:  # noqa: BLE001 — classify, re-raise if terminal
+            if attempt >= settings.dataforseo_max_retries or not _is_transient_dataforseo_error(exc):
+                raise
+            delay = settings.dataforseo_retry_base_seconds * (2 ** attempt) * (
+                0.5 + secrets.randbelow(1000) / 1000.0
+            )
+            logger.warning(
+                "dataforseo_transient_retry",
+                extra={
+                    "path": path,
+                    "attempt": attempt + 1,
+                    "delay_s": round(delay, 1),
+                    "error": str(exc)[:200],
+                },
+            )
+            await asyncio.sleep(delay)
+            attempt += 1
 
 
 async def serp_organic_advanced(

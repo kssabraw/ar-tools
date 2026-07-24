@@ -30,7 +30,10 @@ async def generate_sie(request: SIERequest) -> SIEResponse:
         result = await run_sie(request)
     except SIEError as exc:
         logger.warning("sie.failed: %s - %s", exc.code, exc.message)
-        raise HTTPException(status_code=422, detail=exc.message)
+        # Prefix the stable code so the orchestrator can classify the failure
+        # (e.g. `serp_failed` → a transient DataForSEO outage worth a run-level
+        # auto-retry) without parsing the human message.
+        raise HTTPException(status_code=422, detail=f"{exc.code}: {exc.message}")
     except Exception as exc:
         logger.exception("sie.unexpected: %s", exc)
         raise HTTPException(status_code=500, detail="internal_error")

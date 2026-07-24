@@ -32,6 +32,21 @@ class Settings(BaseSettings):
     sie_min_pages: int = 5
     log_level: str = "INFO"
 
+    # Transient-error retry for every DataForSEO call (shared by the Brief and
+    # SIE modules via modules/brief/dataforseo.py). DataForSEO's SERP endpoints
+    # intermittently return a server-side task error ("Internal SE Server Error",
+    # status_code 50000+) or a 5xx / timeout; DataForSEO's own guidance is to
+    # re-set a failed task after a delay rather than hammer it. Without a retry a
+    # single transient blip on the primary SERP call aborted the whole brief (and
+    # therefore the run) with an opaque HTTP 500. Retries only the transient band
+    # (5xx HTTP, timeouts/transport drops, DataForSEO status_code >= 50000);
+    # client/task errors (4xx, status_code 40000-49999 — bad keyword, no results,
+    # the llm_responses 404) fail fast. Exponential backoff + jitter, budget
+    # 2/4/8s (×0.5-1.5) ≈ up to ~25s, well inside the brief (200s) and SIE (240s)
+    # module timeouts.
+    dataforseo_max_retries: int = 3
+    dataforseo_retry_base_seconds: float = 2.0
+
     # ------------------------------------------------------------
     # Research & Citations module - latency guards
     # ------------------------------------------------------------

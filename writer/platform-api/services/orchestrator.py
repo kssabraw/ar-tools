@@ -7,12 +7,14 @@ import logging
 import time
 import uuid
 from contextvars import ContextVar
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import httpx
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import run_retry
 from services.page_structure_render import render_reference_structure
 
 logger = logging.getLogger(__name__)
@@ -910,20 +912,35 @@ async def _orchestrate_run_impl(run_id: str) -> None:
         logger.info("run_cancelled", extra={"run_id": run_id})
 
     except StageError as exc:
-        logger.error(
-            "stage_failed",
-            extra={"run_id": run_id, "stage": exc.stage, "error": str(exc.cause)},
-        )
-        # Append run_id to the error message so it surfaces in the UI.
-        # Without it, the user has nothing to grep production logs for
-        # when reporting a failure — "Error (brief): module_timeout"
-        # is identical for every failed run.
-        await _set_run_status(
-            run_id,
-            "failed",
-            error_stage=exc.stage,
-            error_message=f"{exc.cause} (run_id: {run_id})",
-        )
+        cause = str(exc.cause)
+        # Resilience layer: a stage that failed on a transient upstream outage
+        # (a DataForSEO SERP outage, an upstream 5xx, a module timeout) that
+        # outlasted the in-call HTTP retries is parked in `retry_scheduled` and
+        # re-dispatched by the shared scheduler after a backoff delay (resuming —
+        # only the failed stage re-runs), rather than left terminally failed for
+        # a human to notice and re-run. Permanent failures fall through and fail
+        # immediately, as before. `run` was loaded fresh at this dispatch's start
+        # (and is always bound here — StageError only fires from a stage, after
+        # the load), so its retry_count reflects prior auto-retries.
+        prior_retries = int(run.get("retry_count") or 0)
+        if run_retry.should_retry(prior_retries, cause, settings.run_transient_retry_max):
+            await _schedule_retry(run_id, exc.stage, cause, prior_retries + 1)
+        else:
+            logger.error(
+                "stage_failed",
+                extra={"run_id": run_id, "stage": exc.stage, "error": cause},
+            )
+            # Append run_id to the error message so it surfaces in the UI.
+            # Without it, the user has nothing to grep production logs for
+            # when reporting a failure — "Error (brief): module_timeout"
+            # is identical for every failed run.
+            await _set_run_status(
+                run_id,
+                "failed",
+                error_stage=exc.stage,
+                error_message=f"{exc.cause} (run_id: {run_id})",
+            )
+            _notify_run_failed(run, exc.stage, cause)
 
     except Exception as exc:
         logger.exception("orchestrator.unhandled", extra={"run_id": run_id, "error": str(exc)})
@@ -950,6 +967,165 @@ def _spawn_resume(run_id: str) -> None:
     task = asyncio.create_task(orchestrate_run(run_id))
     _RESUME_TASKS.add(task)
     task.add_done_callback(_RESUME_TASKS.discard)
+
+
+async def _schedule_retry(run_id: str, stage: str, cause: str, attempt: int) -> None:
+    """Park a transiently-failed run in `retry_scheduled` for the scheduler to
+    re-dispatch after a backoff delay. Not a terminal state, so this bypasses
+    `_set_run_status` (no completed_at / silo-promotion / task-producer side
+    effects fire until the run truly finishes)."""
+    delay_min = run_retry.retry_delay_minutes(
+        attempt,
+        settings.run_transient_retry_base_minutes,
+        settings.run_transient_retry_factor,
+    )
+    next_at = datetime.now(timezone.utc) + timedelta(minutes=delay_min)
+    message = (
+        f"{cause} — transient upstream failure; auto-retry "
+        f"{attempt}/{settings.run_transient_retry_max} scheduled for "
+        f"{next_at.strftime('%Y-%m-%d %H:%M UTC')} (run_id: {run_id})"
+    )
+    # Conditional park: a user may have cancelled while the failing stage was
+    # in flight (cancellation is only checked between stages, so the StageError
+    # still fires). An unconditional update would overwrite `cancelled` and
+    # resurrect a run the user killed — guard on not-cancelled and treat an
+    # empty result (cancelled, or row deleted) as "leave it be".
+    claimed = (
+        _sb()
+        .table("runs")
+        .update(
+            {
+                "status": "retry_scheduled",
+                "retry_count": attempt,
+                "next_retry_at": next_at.isoformat(),
+                "error_stage": stage,
+                "error_message": message[:2000],
+                "updated_at": "now()",
+            }
+        )
+        .eq("id", run_id)
+        .neq("status", "cancelled")
+        .execute()
+    )
+    if not (claimed.data or []):
+        logger.info(
+            "run_retry_skipped",
+            extra={"run_id": run_id, "reason": "cancelled_or_missing"},
+        )
+        return
+    logger.warning(
+        "run_retry_scheduled",
+        extra={
+            "run_id": run_id,
+            "stage": stage,
+            "attempt": attempt,
+            "delay_minutes": round(delay_min, 1),
+            "cause": cause[:200],
+        },
+    )
+
+
+def _notify_run_failed(run: dict, stage: str, cause: str) -> None:
+    """Emit a warning notification when a run fails terminally, so a permanent
+    failure (or one that exhausted its auto-retries) is never silently left for
+    a human to stumble on. Best-effort — `notifications.emit` never raises."""
+    try:
+        from services import notifications
+
+        run_id = run.get("id")
+        label = run.get("keyword") or run.get("service") or "content run"
+        retries = int(run.get("retry_count") or 0)
+        retry_note = f" after {retries} auto-retry attempt(s)" if retries else ""
+        # No dedupe_key: this sits in a code path that executes exactly once per
+        # terminal StageError (single-process orchestrator), and a permanent key
+        # like f"run_failed:{run_id}" would suppress the notification forever if
+        # the run is manually resumed and fails again later.
+        notifications.emit(
+            client_id=run.get("client_id"),
+            kind="run_failed",
+            title=f"Content run failed: {label}",
+            summary=f"The {stage} stage failed{retry_note}. {cause}",
+            severity="warning",
+            payload={"link": f"runs/{run_id}"},
+        )
+    except Exception as exc:  # never let notification wiring break the run path
+        logger.warning("run_failed_notify_error", extra={"error": str(exc)})
+
+
+def disarm_scheduled_retry(run_id: str) -> bool:
+    """Flip a run parked in `retry_scheduled` to terminal `failed` (CAS).
+
+    For synchronous drivers that own their own retry machinery (the fanout
+    content scheduler, content batches): they read the run's status right after
+    `orchestrate_run` returns and treat non-complete as failure — without this,
+    the parked run would ALSO self-heal in the background while the driver's own
+    retry spawns a second run for the same keyword, publishing duplicate
+    articles. Exactly one retry system may own recovery. Returns True if the
+    run was reclaimed (False = it wasn't parked, or the CAS lost)."""
+    try:
+        claimed = (
+            _sb()
+            .table("runs")
+            .update(
+                {
+                    "status": "failed",
+                    "next_retry_at": None,
+                    "completed_at": "now()",
+                    "updated_at": "now()",
+                }
+            )
+            .eq("id", run_id)
+            .eq("status", "retry_scheduled")
+            .execute()
+        )
+        return bool(claimed.data)
+    except Exception as exc:
+        logger.warning(
+            "disarm_retry_failed", extra={"run_id": run_id, "error": str(exc)}
+        )
+        return False
+
+
+async def redispatch_due_retries() -> None:
+    """Re-dispatch runs whose transient-failure backoff has elapsed. Called each
+    scheduler tick (cheap due-query). Best-effort — a failure here never breaks
+    the scheduler loop.
+
+    Each due run is claimed with a compare-and-swap to `queued` (clearing
+    `next_retry_at`) BEFORE dispatch, so a subsequent tick — or a startup
+    `recover_stuck_runs` pass, since `queued` is orphan-recoverable — can't
+    double-dispatch it. `_spawn_resume` re-enters `orchestrate_run`, which loads
+    completed module_outputs and re-runs only the failed stage onward."""
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        result = (
+            _sb()
+            .table("runs")
+            .select("id, retry_count")
+            .eq("status", "retry_scheduled")
+            .lte("next_retry_at", now_iso)
+            .execute()
+        )
+        due = result.data or []
+        for run in due:
+            run_id = run["id"]
+            claimed = (
+                _sb()
+                .table("runs")
+                .update({"status": "queued", "next_retry_at": None, "updated_at": "now()"})
+                .eq("id", run_id)
+                .eq("status", "retry_scheduled")
+                .execute()
+            )
+            if not (claimed.data or []):
+                continue  # another tick already claimed it
+            logger.info(
+                "run_retry_dispatch",
+                extra={"run_id": run_id, "attempt": run.get("retry_count")},
+            )
+            _spawn_resume(run_id)
+    except Exception as exc:
+        logger.error("run_retry_dispatch_failed", extra={"error": str(exc)})
 
 
 async def recover_stuck_runs() -> None:

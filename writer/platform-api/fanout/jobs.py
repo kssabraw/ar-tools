@@ -1255,6 +1255,15 @@ def generate_service_page_core(
             (get_supabase().table("runs").select("status").eq("id", run_id).single().execute()).data
             or {}
         ).get("status")
+        if status == "retry_scheduled":
+            # The orchestrator parked a transient failure for its background
+            # retry — but THIS driver owns retry for scheduled content. Reclaim
+            # the run to failed so the two retry systems can't both regenerate
+            # the keyword (duplicate articles).
+            from services.orchestrator import disarm_scheduled_retry
+
+            disarm_scheduled_retry(run_id)
+            status = "failed"
         if status != "complete":
             _record(f"run status {status}")
             return None

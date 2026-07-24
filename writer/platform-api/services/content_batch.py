@@ -173,6 +173,14 @@ async def _generate_run(payload: dict) -> Optional[str]:
         (get_supabase().table("runs").select("status").eq("id", run_id).single().execute()).data
         or {}
     ).get("status")
+    if status == "retry_scheduled":
+        # The orchestrator parked a transient failure for its background retry —
+        # but the batch's job-level retry owns recovery here. Reclaim the run to
+        # failed so both retry systems can't regenerate the same keyword.
+        from services.orchestrator import disarm_scheduled_retry
+
+        disarm_scheduled_retry(run_id)
+        status = "failed"
     return run_id if status == "complete" else None
 
 
