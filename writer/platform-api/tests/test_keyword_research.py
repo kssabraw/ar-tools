@@ -185,6 +185,28 @@ def test_filter_coherence_gate_drops_generic_token_drift():
     assert report["dropped_off_topic"] == 3
 
 
+def test_filter_coherence_uses_full_seed_even_when_brand_token_present():
+    # "historical preservation architect" (client "Henson Architect"): "architect"
+    # is a brand token, but the coherence gate keys on the FULL 3-token seed, so
+    # the "historical" single-token category ("historical fiction books",
+    # "historical figures") is dropped while topic-adjacent keywords survive.
+    rows = _ideas(
+        "historical preservation architect nyc",  # 3 → keep
+        "historical preservation grants",          # historical+preservation = 2 → keep
+        "preservation architect",                  # preservation+architect = 2 → keep
+        "historical fiction books",                # historical only → drop
+        "historical figures",                      # historical only → drop
+        "residential architect",                   # architect only → drop
+    )
+    kept, report = kr.filter_relevant_ideas(
+        rows, ["historical preservation architect"], "Henson Architect")
+    kws = {r["keyword"] for r in kept}
+    assert kws == {"historical preservation architect nyc",
+                   "historical preservation grants", "preservation architect"}
+    assert report["gate"] == "coherence"
+    assert report["dropped_off_topic"] == 3
+
+
 def test_filter_coherence_gate_runs_without_brand_match():
     # Generic-token drift is filtered even when no seed token is a brand token —
     # the coherence gate is not brand-conditioned.

@@ -234,16 +234,18 @@ def cluster_keywords(rows: list[dict]) -> list[dict]:
 #
 # filter_relevant_ideas addresses both, scaling strictness to how specific the
 # seed is:
-#   * Specific seed (≥3 topical tokens, e.g. "local law 97 architect"): a kept
-#     idea must share ≥2 topical tokens, so one generic word can't admit an
-#     off-topic category.
-#   * Short seed (1–2 topical tokens): only the brand-homonym gate engages, so
-#     clean service seeds keep their cross-topic broadening
-#     ("plumber" → "blocked drain").
+#   * Specific seed (≥3 seed tokens, e.g. "local law 97 architect",
+#     "historical preservation architect"): a kept idea must share ≥2 of the FULL
+#     seed tokens, so one generic word ("law", "historical") can't admit its whole
+#     category. Keys on the full seed — not the brand-subtracted set — so a brand
+#     token that is also a topic word ("architect") can't shrink the seed out of
+#     the gate.
+#   * Short seed (1–2 seed tokens): only the brand-homonym gate engages, so clean
+#     service seeds keep their cross-topic broadening ("plumber" → "blocked drain").
 # seed_warnings additionally advises when a seed is essentially the business name.
 # ---------------------------------------------------------------------------
-_COHERENCE_MIN_TOPICAL = 3   # seed token count at/above which the coherence gate runs
-_COHERENCE_MIN_OVERLAP = 2   # topical tokens a kept idea must share under that gate
+_COHERENCE_MIN_SEED_TOKENS = 3   # seed token count at/above which the coherence gate runs
+_COHERENCE_MIN_OVERLAP = 2       # seed tokens a kept idea must share under that gate
 
 
 def filter_relevant_ideas(
@@ -258,7 +260,7 @@ def filter_relevant_ideas(
 
     Returns (kept_rows, report). ``report`` = {gate, input, kept,
     dropped_off_topic, dropped_brand_only}. ``gate`` is 'off' (disabled),
-    'coherence' (specific seed, ≥2-topical-overlap rule), 'topical'
+    'coherence' (specific seed, ≥2 full-seed-token overlap), 'topical'
     (brand-homonym rule), or 'none' (nothing to gate). Pure."""
     total = len(idea_rows)
     report = {"gate": "off", "input": total, "kept": total,
@@ -274,17 +276,18 @@ def filter_relevant_ideas(
 
     brand = brand_tokens(client_name)
     brand_in_seed = seed_toks & brand
-    # Topical tokens = seed minus brand; if the brand name absorbs every seed
-    # token, fall back to the seed tokens so a specific seed still gets a gate.
-    topical = (seed_toks - brand) or seed_toks
 
-    # Specific/entity seed → coherence gate: require ≥2 topical-token overlap so a
-    # lone generic word ("law") can't drag in its whole category.
-    if len(topical) >= _COHERENCE_MIN_TOPICAL:
+    # Specific/entity seed → coherence gate: require ≥2 overlap with the FULL seed
+    # tokens so a lone generic word ("law", "historical") can't drag in its whole
+    # category. Keyed on the full seed — NOT the brand-subtracted set — because a
+    # brand token is often also a real topic word ("architect" for client "Henson
+    # Architect"): subtracting it shrank a 3-word seed to 2 tokens and silently
+    # disabled this gate, letting "historical figures"/"historical fiction" through.
+    if len(seed_toks) >= _COHERENCE_MIN_SEED_TOKENS:
         kept: list[dict] = []
         off_topic = 0
         for r in idea_rows:
-            if len(token_set(r.get("keyword")) & topical) >= _COHERENCE_MIN_OVERLAP:
+            if len(token_set(r.get("keyword")) & seed_toks) >= _COHERENCE_MIN_OVERLAP:
                 kept.append(r)
             else:
                 off_topic += 1
