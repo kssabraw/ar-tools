@@ -222,18 +222,30 @@ def cluster_keywords(rows: list[dict]) -> list[dict]:
 # Relevance gate + brand guard (pure) — keep topic drift out of the results.
 #
 # DataForSEO Labs ``keyword_ideas`` expands a seed by *category*, not by phrase
-# containment, so a branded seed that shares a token with a well-known entity
-# (e.g. "henson architect" → "henson" the shaving brand / Jim Henson) drags in a
-# whole off-topic category. Two layered, deterministic guards address that:
+# containment, so it drifts two ways:
 #
-#   1. filter_relevant_ideas — when a seed mixes a client-brand token with a
-#      topical (non-brand) token, drop ideas that match the brand token but NOT
-#      the topic (the homonym hijack) and ideas that match neither. Pure-service
-#      seeds (no brand token) pass through untouched, so semantic broadening
-#      ("plumber" → "blocked drain") is preserved.
-#   2. seed_warnings — advise when a seed is essentially the business name (the
-#      case filtering alone can't salvage: research a service/topic, not a brand).
+#   * Brand homonym — a branded seed shares a token with a well-known entity
+#     ("henson architect" → "henson" the shaving brand / Jim Henson), dragging in
+#     that entity's whole category.
+#   * Generic-token hijack — a multi-word ENTITY seed contains a common word that
+#     is itself a huge category ("local law 97 architect" → the token "law" pulls
+#     in "family law attorney", "law firm", "law school", …). Single-token
+#     overlap can't catch this: "family law attorney" legitimately shares "law".
+#
+# filter_relevant_ideas addresses both, scaling strictness to how specific the
+# seed is:
+#   * Specific seed (≥3 topical tokens, e.g. "local law 97 architect"): a kept
+#     idea must share ≥2 topical tokens, so one generic word can't admit an
+#     off-topic category.
+#   * Short seed (1–2 topical tokens): only the brand-homonym gate engages, so
+#     clean service seeds keep their cross-topic broadening
+#     ("plumber" → "blocked drain").
+# seed_warnings additionally advises when a seed is essentially the business name.
 # ---------------------------------------------------------------------------
+_COHERENCE_MIN_TOPICAL = 3   # seed token count at/above which the coherence gate runs
+_COHERENCE_MIN_OVERLAP = 2   # topical tokens a kept idea must share under that gate
+
+
 def filter_relevant_ideas(
     idea_rows: list[dict],
     seeds: list[str],
@@ -241,11 +253,13 @@ def filter_relevant_ideas(
     *,
     enabled: bool = True,
 ) -> tuple[list[dict], dict]:
-    """Drop off-topic / brand-homonym ideas from a raw Labs idea set.
+    """Drop off-topic / brand-homonym / generic-token-drift ideas from a raw Labs
+    idea set.
 
     Returns (kept_rows, report). ``report`` = {gate, input, kept,
-    dropped_off_topic, dropped_brand_only}. The gate only engages for
-    brand+topic seeds; otherwise every row is kept (gate 'none'/'off'). Pure."""
+    dropped_off_topic, dropped_brand_only}. ``gate`` is 'off' (disabled),
+    'coherence' (specific seed, ≥2-topical-overlap rule), 'topical'
+    (brand-homonym rule), or 'none' (nothing to gate). Pure."""
     total = len(idea_rows)
     report = {"gate": "off", "input": total, "kept": total,
               "dropped_off_topic": 0, "dropped_brand_only": 0}
@@ -260,18 +274,35 @@ def filter_relevant_ideas(
 
     brand = brand_tokens(client_name)
     brand_in_seed = seed_toks & brand
-    topical = seed_toks - brand
-    # Engage only when a brand token and a topical token coexist in the seed —
-    # that's the homonym-hijack shape. Leave pure-service seeds alone.
-    if not (brand_in_seed and topical):
+    # Topical tokens = seed minus brand; if the brand name absorbs every seed
+    # token, fall back to the seed tokens so a specific seed still gets a gate.
+    topical = (seed_toks - brand) or seed_toks
+
+    # Specific/entity seed → coherence gate: require ≥2 topical-token overlap so a
+    # lone generic word ("law") can't drag in its whole category.
+    if len(topical) >= _COHERENCE_MIN_TOPICAL:
+        kept: list[dict] = []
+        off_topic = 0
+        for r in idea_rows:
+            if len(token_set(r.get("keyword")) & topical) >= _COHERENCE_MIN_OVERLAP:
+                kept.append(r)
+            else:
+                off_topic += 1
+        report.update({"gate": "coherence", "kept": len(kept),
+                       "dropped_off_topic": off_topic})
+        return kept, report
+
+    # Short seed → brand-homonym gate only (preserve broadening for clean seeds).
+    topical_bh = seed_toks - brand
+    if not (brand_in_seed and topical_bh):
         report["gate"] = "none"
         return idea_rows, report
 
-    kept: list[dict] = []
+    kept = []
     off_topic = brand_only = 0
     for r in idea_rows:
         rt = token_set(r.get("keyword"))
-        if rt & topical:
+        if rt & topical_bh:
             kept.append(r)
         elif rt & brand_in_seed:
             brand_only += 1   # matches the brand but not the topic → hijack noise
@@ -317,13 +348,13 @@ def seed_warnings(
             "on the service or topic you want to rank for (e.g. “architect "
             "<city>”, “residential architect”) rather than a brand name."
         )
-    if filter_report and filter_report.get("gate") == "topical":
+    if filter_report and filter_report.get("gate") in ("topical", "coherence"):
         dropped = (filter_report.get("dropped_brand_only", 0)
                    + filter_report.get("dropped_off_topic", 0))
         if dropped:
             warnings.append(
-                f"Filtered {dropped} off-topic keyword(s) that matched your brand "
-                "name but not the topic."
+                f"Filtered {dropped} off-topic keyword(s) that didn't match the "
+                "seed topic closely enough."
             )
     if total_results == 0:
         warnings.append(
