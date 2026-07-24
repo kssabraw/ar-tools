@@ -191,10 +191,21 @@ def test_seed_warnings_flags_brand_seed():
 def test_seed_warnings_reports_filtering_and_empty_result():
     report = {"gate": "topical", "input": 5, "kept": 0,
               "dropped_off_topic": 3, "dropped_brand_only": 2}
-    ws = kr.seed_warnings(["residential architect"], "Acme Homes", report)
+    ws = kr.seed_warnings(["residential architect"], "Acme Homes", report, total_results=0)
     joined = " ".join(ws)
     assert "Filtered 5" in joined
-    assert "No on-topic keywords survived" in joined
+    assert "No on-topic keywords were found" in joined
+
+
+def test_seed_warnings_empty_result_suppressed_when_suggestions_filled_run():
+    # Ideas fully filtered, but suggestions returned rows → run isn't empty, so
+    # the "no keywords found" advisory must not fire.
+    report = {"gate": "topical", "input": 5, "kept": 0,
+              "dropped_off_topic": 3, "dropped_brand_only": 2}
+    ws = kr.seed_warnings(["residential architect"], "Acme Homes", report, total_results=12)
+    joined = " ".join(ws)
+    assert "Filtered 5" in joined
+    assert "No on-topic keywords" not in joined
 
 
 def test_seed_warnings_none_for_clean_service_seed():
@@ -259,6 +270,30 @@ def test_parse_keyword_ideas_skips_blank_keywords():
     ]}]}]}
     rows = dataforseo_labs.parse_keyword_ideas(body)
     assert [r["keyword"] for r in rows] == ["good"]
+
+
+def test_parse_keyword_suggestions_shares_item_shape():
+    # keyword_suggestions returns the same nested metric objects as ideas.
+    body = {
+        "tasks": [{
+            "status_code": 20000,
+            "result": [{
+                "items": [{
+                    "keyword": "emergency plumber sydney",
+                    "keyword_info": {"search_volume": 210, "cpc": 9.0, "competition_index": 55},
+                    "keyword_properties": {"keyword_difficulty": 22},
+                    "search_intent_info": {"main_intent": "transactional"},
+                }],
+            }],
+        }],
+    }
+    rows = dataforseo_labs.parse_keyword_suggestions(body)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["keyword"] == "emergency plumber sydney"
+    assert r["volume"] == 210
+    assert r["keyword_difficulty"] == 22
+    assert r["search_intent"] == "transactional"
 
 
 # --- report builders (pure) ---------------------------------------------------

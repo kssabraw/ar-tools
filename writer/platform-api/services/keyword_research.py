@@ -1,11 +1,20 @@
 """Keyword Research — the seed-keyword explorer.
 
-Enter seed keyword(s) for a client → the DataForSEO Labs ``keyword_ideas``
-endpoint returns the related keyword universe, each idea already enriched with
-search volume / CPC / competition / keyword difficulty / search intent (one
-billed call — no follow-up keyword_overview batch). The ideas are then
-auto-clustered into topic groups and persisted as a research run so the view is
-a cheap re-read and the CSV export is deterministic.
+Enter seed keyword(s) for a client → two DataForSEO Labs sources expand them
+into the related keyword universe, each already enriched with search volume /
+CPC / competition / keyword difficulty / search intent (no follow-up
+keyword_overview batch):
+
+  * ``keyword_suggestions`` (PRIMARY, one call per seed) — phrase-containment:
+    every returned keyword contains the seed phrase, so the set stays tightly
+    on-topic. This is the trustworthy core.
+  * ``keyword_ideas`` (BROADENER, one call for the seed set) — category-based
+    semantic expansion that reaches keywords not containing the seed phrase, but
+    drifts on branded/homonym seeds, so it's passed through the relevance gate
+    before merging.
+
+The merged, deduped set is auto-clustered into topic groups and persisted as a
+research run so the view is a cheap re-read and the CSV export is deterministic.
 
 This is a research tool, NOT a content generator — it replaces the old
 "Keyword Research" workspace card that pointed at the Topic Fanout (a
@@ -19,6 +28,7 @@ re-opening a run never re-bills.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import datetime, timezone
@@ -290,9 +300,14 @@ def seed_warnings(
     client_name: Optional[str],
     filter_report: Optional[dict] = None,
     ratio_threshold: float = 0.6,
+    total_results: Optional[int] = None,
 ) -> list[str]:
     """Human-readable advisories for a run: branded seeds and heavy filtering.
-    Deterministic; safe to recompute on read from seeds + client name. Pure."""
+    ``total_results`` is the final merged keyword count (suggestions + filtered
+    ideas) — the empty-result advisory only fires when the whole run came back
+    empty, not merely when the ideas broadener was fully filtered. Deterministic;
+    safe to recompute on read from seeds + client name (filter_report omitted).
+    Pure."""
     warnings: list[str] = []
     branded = [s for s in (seeds or []) if looks_like_brand_seed(s, client_name, ratio_threshold)]
     if branded:
@@ -310,11 +325,11 @@ def seed_warnings(
                 f"Filtered {dropped} off-topic keyword(s) that matched your brand "
                 "name but not the topic."
             )
-        if filter_report.get("input") and filter_report.get("kept", 0) == 0:
-            warnings.append(
-                "No on-topic keywords survived filtering — try a more specific "
-                "service or topic as the seed."
-            )
+    if total_results == 0:
+        warnings.append(
+            "No on-topic keywords were found — try a more specific service or "
+            "topic as the seed."
+        )
     return warnings
 
 
@@ -422,25 +437,60 @@ async def run_keyword_research(
     if location_code is None:
         location_code = ctx.get("rank_tracking_location_code")
 
-    reserve_budget(1)
-    idea_rows, cost = await dataforseo_labs.fetch_keyword_ideas(
-        seed_list, location_code, language_code,
-        limit=settings.keyword_research_idea_limit,
-    )
-    # Relevance gate — drop brand-homonym / off-topic drift before scoring.
-    idea_rows, filter_report = filter_relevant_ideas(
-        idea_rows, seed_list, client_name,
-        enabled=settings.keyword_research_relevance_filter,
-    )
+    use_suggestions = settings.keyword_research_use_suggestions
+    # Always run at least one source: fall back to ideas if suggestions are off.
+    broaden = settings.keyword_research_broaden_with_ideas or not use_suggestions
+    n_calls = (len(seed_list) if use_suggestions else 0) + (1 if broaden else 0)
+    reserve_budget(max(1, n_calls))
+
+    cost = 0.0
+    # PRIMARY — phrase-containment suggestions, one call per seed (fanned out).
+    # These contain the seed phrase, so they're trusted on-topic and skip the gate.
+    suggestion_rows: list[dict] = []
+    if use_suggestions:
+        results = await asyncio.gather(*[
+            dataforseo_labs.fetch_keyword_suggestions(
+                s, location_code, language_code,
+                limit=settings.keyword_research_suggestion_limit,
+            ) for s in seed_list
+        ], return_exceptions=True)
+        for res in results:
+            if isinstance(res, Exception):
+                logger.warning("keyword_research.suggestions_failed",
+                               extra={"client_id": client_id, "error": str(res)})
+                continue
+            rows_i, cost_i = res
+            suggestion_rows.extend(rows_i)
+            cost += cost_i or 0.0
+
+    # BROADENER — category-based ideas, passed through the relevance gate to drop
+    # brand-homonym / off-topic drift before merging.
+    idea_rows: list[dict] = []
+    filter_report = {"gate": "off", "input": 0, "kept": 0,
+                     "dropped_off_topic": 0, "dropped_brand_only": 0}
+    if broaden:
+        idea_rows, cost_ideas = await dataforseo_labs.fetch_keyword_ideas(
+            seed_list, location_code, language_code,
+            limit=settings.keyword_research_idea_limit,
+        )
+        cost += cost_ideas or 0.0
+        idea_rows, filter_report = filter_relevant_ideas(
+            idea_rows, seed_list, client_name,
+            enabled=settings.keyword_research_relevance_filter,
+        )
+
+    # Merge + dedupe (build_research_rows keeps the highest-volume instance per
+    # normalized keyword, so a keyword in both sources collapses to one row).
+    rows = build_research_rows(suggestion_rows + idea_rows)
     warnings = seed_warnings(
         seed_list, client_name, filter_report,
         ratio_threshold=settings.keyword_research_brand_seed_ratio,
+        total_results=len(rows),
     )
     if warnings:
         logger.info("keyword_research.seed_warnings",
                     extra={"client_id": client_id, "seeds": seed_list,
                            "filter": filter_report, "warnings": warnings})
-    rows = build_research_rows(idea_rows)
     clusters = cluster_keywords(rows)
     label_for = {kw: c["label"] for c in clusters for kw in c["keywords"]}
 
