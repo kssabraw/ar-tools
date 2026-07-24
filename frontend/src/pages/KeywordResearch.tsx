@@ -45,6 +45,7 @@ interface RunResponse {
   run: (RunSummary & { location_code: number | null; language_code: string | null }) | null
   keywords: ResearchKeyword[]
   clusters: ClusterSummary[]
+  warnings?: string[]
 }
 interface ReportRow {
   id: string
@@ -233,6 +234,18 @@ export function KeywordResearch() {
         <div style={emptyBox}>{running ? 'Research in progress…' : 'No run found.'}</div>
       ) : (
         <>
+          {/* Relevance / brand-seed advisories */}
+          {(runData?.warnings?.length ?? 0) > 0 && (
+            <div style={warnBox}>
+              <HelpCircle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+              <div>
+                {runData!.warnings!.map((w, i) => (
+                  <div key={i} style={{ marginBottom: i < runData!.warnings!.length - 1 ? 4 : 0 }}>{w}</div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Cluster rail */}
           {clusters.length > 0 && (
             <div style={{ marginBottom: 16 }}>
@@ -345,3 +358,4 @@ const th: React.CSSProperties = { textAlign: 'left', padding: '9px 12px', backgr
 const td: React.CSSProperties = { padding: '8px 12px', color: '#334155' }
 const emptyBox: React.CSSProperties = { padding: 40, textAlign: 'center', color: '#94a3b8', border: '1px dashed #e2e8f0', borderRadius: 8 }
 const errBox: React.CSSProperties = { padding: '10px 14px', background: '#fef2f2', color: '#b91c1c', borderRadius: 8, fontSize: 13, marginBottom: 16 }
+const warnBox: React.CSSProperties = { display: 'flex', gap: 8, padding: '10px 14px', background: '#fffbeb', color: '#92400e', border: '1px solid #fde68a', borderRadius: 8, fontSize: 13, marginBottom: 16 }

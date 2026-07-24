@@ -73,6 +73,24 @@ def tokenize(keyword: str) -> list[str]:
     return [w for w in words if len(w) >= 2 and w not in _STOPWORDS]
 
 
+def _stem(token: str) -> str:
+    """Naive plural fold so 'architects'/'razors' match 'architect'/'razor' in the
+    relevance gate. Only trims a trailing 's' on tokens long enough that it's a
+    plural, not the whole word ('is', 'gas' are left alone). Pure."""
+    return token[:-1] if len(token) > 3 and token.endswith("s") else token
+
+
+def token_set(keyword: Optional[str]) -> set[str]:
+    """Stemmed significant-token set of a keyword, for relevance comparison. Pure."""
+    return {_stem(t) for t in tokenize(keyword or "")}
+
+
+def brand_tokens(client_name: Optional[str]) -> set[str]:
+    """Stemmed significant tokens of a client's business name — the tokens a seed
+    shares when it's really the brand, not a topic. Pure."""
+    return token_set(client_name)
+
+
 def is_question(keyword: str) -> bool:
     """Whether a keyword reads as a question (leads with an interrogative or
     ends with '?'). Pure — used to tag question keywords for the view/export."""
@@ -191,6 +209,116 @@ def cluster_keywords(rows: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Relevance gate + brand guard (pure) — keep topic drift out of the results.
+#
+# DataForSEO Labs ``keyword_ideas`` expands a seed by *category*, not by phrase
+# containment, so a branded seed that shares a token with a well-known entity
+# (e.g. "henson architect" → "henson" the shaving brand / Jim Henson) drags in a
+# whole off-topic category. Two layered, deterministic guards address that:
+#
+#   1. filter_relevant_ideas — when a seed mixes a client-brand token with a
+#      topical (non-brand) token, drop ideas that match the brand token but NOT
+#      the topic (the homonym hijack) and ideas that match neither. Pure-service
+#      seeds (no brand token) pass through untouched, so semantic broadening
+#      ("plumber" → "blocked drain") is preserved.
+#   2. seed_warnings — advise when a seed is essentially the business name (the
+#      case filtering alone can't salvage: research a service/topic, not a brand).
+# ---------------------------------------------------------------------------
+def filter_relevant_ideas(
+    idea_rows: list[dict],
+    seeds: list[str],
+    client_name: Optional[str] = None,
+    *,
+    enabled: bool = True,
+) -> tuple[list[dict], dict]:
+    """Drop off-topic / brand-homonym ideas from a raw Labs idea set.
+
+    Returns (kept_rows, report). ``report`` = {gate, input, kept,
+    dropped_off_topic, dropped_brand_only}. The gate only engages for
+    brand+topic seeds; otherwise every row is kept (gate 'none'/'off'). Pure."""
+    total = len(idea_rows)
+    report = {"gate": "off", "input": total, "kept": total,
+              "dropped_off_topic": 0, "dropped_brand_only": 0}
+    if not enabled:
+        return idea_rows, report
+
+    seed_toks: set[str] = set()
+    for s in seeds or []:
+        seed_toks |= token_set(s)
+    if not seed_toks:
+        return idea_rows, report
+
+    brand = brand_tokens(client_name)
+    brand_in_seed = seed_toks & brand
+    topical = seed_toks - brand
+    # Engage only when a brand token and a topical token coexist in the seed —
+    # that's the homonym-hijack shape. Leave pure-service seeds alone.
+    if not (brand_in_seed and topical):
+        report["gate"] = "none"
+        return idea_rows, report
+
+    kept: list[dict] = []
+    off_topic = brand_only = 0
+    for r in idea_rows:
+        rt = token_set(r.get("keyword"))
+        if rt & topical:
+            kept.append(r)
+        elif rt & brand_in_seed:
+            brand_only += 1   # matches the brand but not the topic → hijack noise
+        else:
+            off_topic += 1    # matches nothing in the seed → drift
+    report.update({"gate": "topical", "kept": len(kept),
+                   "dropped_off_topic": off_topic, "dropped_brand_only": brand_only})
+    return kept, report
+
+
+def looks_like_brand_seed(
+    seed: str, client_name: Optional[str], ratio_threshold: float = 0.6
+) -> bool:
+    """Whether a seed is essentially the client's business name (so keyword
+    research on it will drift). True when a majority of the seed's tokens are
+    brand tokens. Pure."""
+    brand = brand_tokens(client_name)
+    st = token_set(seed)
+    if not brand or not st:
+        return False
+    return (len(st & brand) / len(st)) >= ratio_threshold
+
+
+def seed_warnings(
+    seeds: list[str],
+    client_name: Optional[str],
+    filter_report: Optional[dict] = None,
+    ratio_threshold: float = 0.6,
+) -> list[str]:
+    """Human-readable advisories for a run: branded seeds and heavy filtering.
+    Deterministic; safe to recompute on read from seeds + client name. Pure."""
+    warnings: list[str] = []
+    branded = [s for s in (seeds or []) if looks_like_brand_seed(s, client_name, ratio_threshold)]
+    if branded:
+        quoted = ", ".join(f"“{s}”" for s in branded)
+        warnings.append(
+            f"{quoted} looks like your business name. Keyword research works best "
+            "on the service or topic you want to rank for (e.g. “architect "
+            "<city>”, “residential architect”) rather than a brand name."
+        )
+    if filter_report and filter_report.get("gate") == "topical":
+        dropped = (filter_report.get("dropped_brand_only", 0)
+                   + filter_report.get("dropped_off_topic", 0))
+        if dropped:
+            warnings.append(
+                f"Filtered {dropped} off-topic keyword(s) that matched your brand "
+                "name but not the topic."
+            )
+        if filter_report.get("input") and filter_report.get("kept", 0) == 0:
+            warnings.append(
+                "No on-topic keywords survived filtering — try a more specific "
+                "service or topic as the seed."
+            )
+    return warnings
+
+
+# ---------------------------------------------------------------------------
 # Budget guard (I/O) — mirrors domain_intel's daily meter.
 # ---------------------------------------------------------------------------
 def _today() -> str:
@@ -257,16 +385,22 @@ def parse_seeds(raw) -> list[str]:
     return seen[: settings.keyword_research_max_seeds]
 
 
-def _client_location_code(client_id: str) -> Optional[int]:
+def _client_context(client_id: str) -> dict:
+    """The client's rank-tracking location + business name (for the relevance
+    gate/brand guard). Best-effort — an empty dict on failure."""
     try:
         rows = (
-            get_supabase().table("clients").select("rank_tracking_location_code")
+            get_supabase().table("clients").select("name, rank_tracking_location_code")
             .eq("id", client_id).limit(1).execute()
         ).data
     except Exception as exc:
-        logger.warning("keyword_research.location_lookup_failed", extra={"client_id": client_id, "error": str(exc)})
-        return None
-    return (rows or [{}])[0].get("rank_tracking_location_code")
+        logger.warning("keyword_research.client_lookup_failed", extra={"client_id": client_id, "error": str(exc)})
+        return {}
+    return (rows or [{}])[0] or {}
+
+
+def _client_location_code(client_id: str) -> Optional[int]:
+    return _client_context(client_id).get("rank_tracking_location_code")
 
 
 async def run_keyword_research(
@@ -283,14 +417,29 @@ async def run_keyword_research(
     if not seed_list:
         raise ValueError("no_seeds")
     supabase = get_supabase()
+    ctx = _client_context(client_id)
+    client_name = ctx.get("name")
     if location_code is None:
-        location_code = _client_location_code(client_id)
+        location_code = ctx.get("rank_tracking_location_code")
 
     reserve_budget(1)
     idea_rows, cost = await dataforseo_labs.fetch_keyword_ideas(
         seed_list, location_code, language_code,
         limit=settings.keyword_research_idea_limit,
     )
+    # Relevance gate — drop brand-homonym / off-topic drift before scoring.
+    idea_rows, filter_report = filter_relevant_ideas(
+        idea_rows, seed_list, client_name,
+        enabled=settings.keyword_research_relevance_filter,
+    )
+    warnings = seed_warnings(
+        seed_list, client_name, filter_report,
+        ratio_threshold=settings.keyword_research_brand_seed_ratio,
+    )
+    if warnings:
+        logger.info("keyword_research.seed_warnings",
+                    extra={"client_id": client_id, "seeds": seed_list,
+                           "filter": filter_report, "warnings": warnings})
     rows = build_research_rows(idea_rows)
     clusters = cluster_keywords(rows)
     label_for = {kw: c["label"] for c in clusters for kw in c["keywords"]}
@@ -328,6 +477,7 @@ async def run_keyword_research(
     return {
         "run_id": run["id"], "keyword_count": len(rows),
         "cluster_count": len(clusters), "cost_usd": round(cost or 0.0, 4),
+        "warnings": warnings,
     }
 
 
@@ -420,7 +570,13 @@ def get_run(client_id: str, run_id: str) -> Optional[dict]:
         .limit(settings.keyword_research_idea_limit).execute()
     ).data or []
     clusters = _clusters_from_rows(kws)
-    return {"run": runs[0], "keywords": kws, "clusters": clusters}
+    # Recompute the branded-seed advisory on read (deterministic from the stored
+    # seeds + the client's name), so re-opening a run still shows the guidance.
+    warnings = seed_warnings(
+        runs[0].get("seeds") or [], _client_context(client_id).get("name"),
+        ratio_threshold=settings.keyword_research_brand_seed_ratio,
+    )
+    return {"run": runs[0], "keywords": kws, "clusters": clusters, "warnings": warnings}
 
 
 def _clusters_from_rows(kws: list[dict]) -> list[dict]:

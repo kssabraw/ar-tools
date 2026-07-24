@@ -122,6 +122,85 @@ def test_cluster_keywords_no_significant_tokens_bucketed_other():
     assert clusters[0]["label"] == "other"
 
 
+# --- relevance gate + brand guard --------------------------------------------
+def test_token_set_stems_plurals():
+    assert kr.token_set("architects sydney") == {"architect", "sydney"}
+    assert kr.token_set("razors") == {"razor"}
+
+
+def _ideas(*kws):
+    return [{"keyword": k, "volume": 10} for k in kws]
+
+
+def test_filter_drops_brand_homonyms_for_brand_plus_topic_seed():
+    # Seed "henson architect", client "Henson Design Studio": brand token "henson"
+    # coexists with topical "architect" → drop henson-but-not-architect drift.
+    rows = _ideas(
+        "henson architect sydney",   # topical → keep
+        "residential architect",     # topical → keep
+        "jim henson",                # brand-only → drop
+        "henson shaving razors",     # brand-only → drop
+        "best safety razor",         # off-topic → drop
+    )
+    kept, report = kr.filter_relevant_ideas(rows, ["henson architect"], "Henson Design Studio")
+    kws = {r["keyword"] for r in kept}
+    assert kws == {"henson architect sydney", "residential architect"}
+    assert report["gate"] == "topical"
+    assert report["dropped_brand_only"] == 2
+    assert report["dropped_off_topic"] == 1
+
+
+def test_filter_inert_for_pure_service_seed_preserves_broadening():
+    # No brand token in the seed → gate stays off, semantic broadening survives.
+    rows = _ideas("emergency plumber", "blocked drain", "hot water system")
+    kept, report = kr.filter_relevant_ideas(rows, ["plumber"], "Acme Plumbing")
+    assert len(kept) == 3
+    assert report["gate"] == "none"
+
+
+def test_filter_inert_when_whole_name_is_brand_plus_service():
+    # Client "Henson Architects" absorbs both seed tokens → no topical token to
+    # gate on → nothing filtered (the brand-seed warning covers this case).
+    rows = _ideas("jim henson", "henson architect sydney")
+    kept, report = kr.filter_relevant_ideas(rows, ["henson architect"], "Henson Architects")
+    assert len(kept) == 2
+    assert report["gate"] == "none"
+
+
+def test_filter_disabled_keeps_everything():
+    rows = _ideas("jim henson", "henson architect")
+    kept, report = kr.filter_relevant_ideas(rows, ["henson architect"], "Henson Design", enabled=False)
+    assert len(kept) == 2
+    assert report["gate"] == "off"
+
+
+def test_looks_like_brand_seed():
+    assert kr.looks_like_brand_seed("henson architect", "Henson Architects")
+    assert kr.looks_like_brand_seed("henson architects sydney", "Henson Architects")  # 2/3 brand
+    assert not kr.looks_like_brand_seed("residential architect", "Henson Architects")
+    assert not kr.looks_like_brand_seed("plumber", "Acme Plumbing")
+    assert not kr.looks_like_brand_seed("architect", "")
+
+
+def test_seed_warnings_flags_brand_seed():
+    ws = kr.seed_warnings(["henson architect"], "Henson Architects")
+    assert len(ws) == 1
+    assert "business name" in ws[0]
+
+
+def test_seed_warnings_reports_filtering_and_empty_result():
+    report = {"gate": "topical", "input": 5, "kept": 0,
+              "dropped_off_topic": 3, "dropped_brand_only": 2}
+    ws = kr.seed_warnings(["residential architect"], "Acme Homes", report)
+    joined = " ".join(ws)
+    assert "Filtered 5" in joined
+    assert "No on-topic keywords survived" in joined
+
+
+def test_seed_warnings_none_for_clean_service_seed():
+    assert kr.seed_warnings(["plumber"], "Acme Plumbing") == []
+
+
 # --- parse_seeds --------------------------------------------------------------
 def test_parse_seeds_from_string_splits_and_dedupes():
     assert kr.parse_seeds("plumber, roof repair\nplumber") == ["plumber", "roof repair"]
