@@ -480,6 +480,7 @@ async def gsc_scheduler() -> None:
     from services.page_backlink_intel import enqueue_due_page_backlinks
     from services.backlink_explorer import auto_track_client_domains, enqueue_due_backlink_snapshots
     from services.response_episodes import run_episode_sync
+    from services.orchestrator import redispatch_due_retries
 
     from services.strategist import enqueue_due_strategy_reviews
 
@@ -682,6 +683,11 @@ async def gsc_scheduler() -> None:
             # come due (per-item scheduled_at; evaluated every tick so drip/weekly
             # slots fire near their local time-of-day).
             enqueue_due_content_items()
+            # Resilience: re-dispatch runs parked in `retry_scheduled` whose
+            # transient-failure backoff has elapsed (per-run next_retry_at). Runs
+            # every tick so a recovered upstream (e.g. DataForSEO) picks the run
+            # back up within one poll interval of its due time.
+            await redispatch_due_retries()
             # Deliverables Sheet Sync — the client-Notes poller (~15-min per-
             # client interval, self-gated via deliverables_notes_state.scanned_at
             # + in-flight job guard; no-ops while deliverables_sheet_enabled is

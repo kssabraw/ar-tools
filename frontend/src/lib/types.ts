@@ -7,6 +7,7 @@ export type RunStatus =
   | 'sources_cited_running'
   | 'service_brief_running'
   | 'service_writer_running'
+  | 'retry_scheduled'
   | 'complete'
   | 'failed'
   | 'cancelled'

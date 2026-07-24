@@ -22,6 +22,22 @@ class Settings(BaseSettings):
     # times per run; past the cap the run fails with the old "Service restarted
     # mid-run" message. 0 disables auto-resume (always fail, the old behavior).
     run_auto_resume_max: int = 2
+    # Run-level transient-failure auto-retry (resilience layer, distinct from the
+    # orphan-recovery resume above). When a run fails at a stage because a
+    # transient upstream outage (a multi-minute DataForSEO SERP outage, an
+    # upstream 5xx, a module timeout) outlasted the in-call HTTP retries, the
+    # orchestrator parks it in `retry_scheduled` and the shared scheduler
+    # re-dispatches it after a backoff delay (resuming — only the failed stage
+    # re-runs) instead of leaving it terminally failed for a human to re-run.
+    # Only the transient band is retried (module_timeout / module_unavailable /
+    # HTTP 5xx / serp_failed); permanent failures (schema mismatch, content
+    # validation, genuinely-empty SERP) fail immediately as before. Backoff is
+    # base * factor**(attempt-1) minutes → 5 / 15 / 45 at the defaults, a ~65-min
+    # recovery window matching DataForSEO's "re-set the task after a few minutes"
+    # guidance. 0 disables (always fail immediately, the old behavior).
+    run_transient_retry_max: int = 3
+    run_transient_retry_base_minutes: float = 5.0
+    run_transient_retry_factor: float = 3.0
     scrapeowl_api_key: str = ""
     openai_api_key: str = ""
     anthropic_api_key: str = ""
