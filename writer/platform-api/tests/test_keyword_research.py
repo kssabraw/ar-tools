@@ -158,6 +158,45 @@ def test_filter_inert_for_pure_service_seed_preserves_broadening():
     assert report["gate"] == "none"
 
 
+def test_filter_two_token_service_seed_still_broadens():
+    # A 2-topical-token service seed stays under the coherence threshold, so
+    # cross-topic broadening ("emergency plumber" → "blocked drain") survives.
+    rows = _ideas("blocked drain", "hot water repair", "burst pipe")
+    kept, report = kr.filter_relevant_ideas(rows, ["emergency plumber"], "Acme Plumbing")
+    assert len(kept) == 3
+    assert report["gate"] == "none"
+
+
+def test_filter_coherence_gate_drops_generic_token_drift():
+    # "local law 97 architect" (client "Henson Architect"): topical {local, law,
+    # 97} (architect is a brand token) → 3 tokens → require ≥2 overlap, so the
+    # generic-"law" category ("family law attorney", "law firm") is dropped.
+    rows = _ideas(
+        "local law 97 compliance",   # local+law+97 = 3 → keep
+        "local law 97 deadline",     # 3 → keep
+        "family law attorney",       # "law" only = 1 → drop
+        "law firm",                  # "law" only → drop
+        "architect salary",          # architect is brand, salary off-topic → 0 → drop
+    )
+    kept, report = kr.filter_relevant_ideas(rows, ["local law 97 architect"], "Henson Architect")
+    kws = {r["keyword"] for r in kept}
+    assert kws == {"local law 97 compliance", "local law 97 deadline"}
+    assert report["gate"] == "coherence"
+    assert report["dropped_off_topic"] == 3
+
+
+def test_filter_coherence_gate_runs_without_brand_match():
+    # Generic-token drift is filtered even when no seed token is a brand token —
+    # the coherence gate is not brand-conditioned.
+    rows = _ideas("local law 97 requirements", "family law", "97 tips")
+    kept, report = kr.filter_relevant_ideas(rows, ["local law 97 compliance"], "Acme Buildings")
+    kws = {r["keyword"] for r in kept}
+    assert "local law 97 requirements" in kws   # local+law+97 = 3
+    assert "family law" not in kws              # "law" only
+    assert "97 tips" not in kws                 # "97" only
+    assert report["gate"] == "coherence"
+
+
 def test_filter_inert_when_whole_name_is_brand_plus_service():
     # Client "Henson Architects" absorbs both seed tokens → no topical token to
     # gate on → nothing filtered (the brand-seed warning covers this case).
