@@ -288,10 +288,15 @@ async def fetch_anchors(target: str, target_type: str = "domain", limit: int = 1
 
 
 async def fetch_domain_pages(target: str, target_type: str = "domain", limit: int = 100) -> list[dict]:
+    # NB: no ``order_by`` here. ``referring_domains`` is NOT a sortable field on
+    # the domain_pages endpoint — sending it returned a task-level "invalid field"
+    # error (HTTP 200 + status_code >= 40000), which _refresh silently swallowed,
+    # leaving every snapshot's per-page breakdown empty. The ordering is done
+    # downstream anyway (``_read_pages`` sorts by referring_domains desc, and the
+    # frontend Pages tab re-sorts), so we just take the endpoint's default order.
     payload = [{"target": target, "limit": limit, "internal_list_limit": 1,
                 "backlinks_status_type": "live",
-                "include_subdomains": _include_subdomains(target_type),
-                "order_by": ["referring_domains,desc"]}]
+                "include_subdomains": _include_subdomains(target_type)}]
     return parse_domain_pages(await _post(_DOMAIN_PAGES_PATH, payload))
 
 
