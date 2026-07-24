@@ -28,6 +28,23 @@ def test_safe_swallows_and_continues():
     assert calls == ["a", "c"]
 
 
+def test_safe_returns_success_flag():
+    # The weekday/month-gated blocks gate their durable marker on this.
+    assert sched._safe("ok", lambda: None) is True
+    assert sched._safe("boom", lambda: (_ for _ in ()).throw(RuntimeError("x"))) is False
+
+
+def test_safe_async_returns_success_flag():
+    async def ok():
+        return None
+
+    async def boom():
+        raise RuntimeError("x")
+
+    assert asyncio.run(sched._safe_async("ok", ok)) is True
+    assert asyncio.run(sched._safe_async("boom", boom)) is False
+
+
 def test_safe_passes_args():
     seen = []
     sched._safe("x", lambda a, b: seen.append((a, b)), 1, 2)

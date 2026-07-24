@@ -88,21 +88,28 @@ def save_marker(key: str, value: str) -> None:
         )
 
 
-def _safe(label: str, fn, *args) -> None:
+def _safe(label: str, fn, *args) -> bool:
     """Run a sync scheduler step, swallowing+logging any error so one broken
-    enqueue can't abort the rest of the tick (esp. the per-cycle content release)."""
+    enqueue can't abort the rest of the tick (esp. the per-cycle content release).
+    Returns True on success, False if it caught an error — callers that gate a
+    durable marker on success (the weekday/month-scheduled blocks) use this so a
+    transient failure retries next tick instead of being skipped to next week."""
     try:
         fn(*args)
+        return True
     except Exception as exc:  # noqa: BLE001 — one bad step must not break the loop
         logger.error("gsc_scheduler.step_failed", extra={"step": label, "error": str(exc)})
+        return False
 
 
-async def _safe_async(label: str, fn, *args) -> None:
+async def _safe_async(label: str, fn, *args) -> bool:
     """Async sibling of `_safe`."""
     try:
         await fn(*args)
+        return True
     except Exception as exc:  # noqa: BLE001
         logger.error("gsc_scheduler.step_failed", extra={"step": label, "error": str(exc)})
+        return False
 
 
 def _has_pending_ingest(supabase, property_id: str) -> bool:
@@ -528,10 +535,14 @@ async def gsc_scheduler() -> None:
         try:
             now = datetime.now(timezone.utc)
             if should_run(now, last_run_date, hour):
-                # Every daily step is individually guarded (_safe/_safe_async) so a
-                # persistently-failing one can't abort the rest of the block — the
-                # block always completes and the marker advances, instead of the
-                # block re-running (and re-firing every earlier step) each tick.
+                # Daily-cadence block: it re-fires every tick until the marker
+                # advances, so each step is _safe-guarded AND the marker advances
+                # unconditionally (below) — a persistently-failing step can't abort
+                # its siblings NOR re-fire the whole block every tick (the storm the
+                # per-step guards were added to kill). A step that fails is retried
+                # on the next daily run, not this tick. (The weekday/month-gated
+                # blocks further down gate their marker on success instead, since
+                # they don't re-fire every tick.)
                 _safe("gsc_ingests", enqueue_due_ingests)
                 # Daily GBP performance-metrics ingest (no-op until enabled).
                 _safe("gbp_metrics", enqueue_due_gbp_metrics)
@@ -624,31 +635,39 @@ async def gsc_scheduler() -> None:
             # Weekly query×page ingest + competitive SERP snapshots still
             # piggyback the global DataForSEO weekday (diagnostic/GSC-side data,
             # not the per-client tracked rank).
+            # Weekday/month-gated blocks below advance their marker ONLY on
+            # success (`if ok:`) so a transient failure retries on the next tick
+            # (bounded — they only fire on their weekday/day-of-month) rather than
+            # being skipped to next week/month. Each step is still _safe-guarded so
+            # it never aborts a sibling block.
             if now.weekday() == weekday and should_run(now, last_df_date, hour):
-                _safe("page_ingest", enqueue_due_page_ingest)
+                ok = _safe("page_ingest", enqueue_due_page_ingest)
                 # SERP snapshots are now captured on keyword first-entry, on a
                 # detected rank drop (≤1/mo), and on-demand — not weekly — unless
                 # serp_snapshot_auto_weekly is re-enabled (cost vs trend density).
                 if settings.serp_snapshot_auto_weekly:
-                    _safe("serp_snapshots", enqueue_due_serp_snapshots)
-                last_df_date = now.date()
-                save_marker("df_weekly", last_df_date.isoformat())
+                    ok = _safe("serp_snapshots", enqueue_due_serp_snapshots) and ok
+                if ok:
+                    last_df_date = now.date()
+                    save_marker("df_weekly", last_df_date.isoformat())
             # Weekly Maps geo-grid scans (Module #5) on their own weekday.
             if now.weekday() == maps_weekday and should_run(now, last_maps_date, hour):
-                _safe("maps_scans", enqueue_due_maps_scans)
-                last_maps_date = now.date()
-                save_marker("maps_weekly", last_maps_date.isoformat())
+                if _safe("maps_scans", enqueue_due_maps_scans):
+                    last_maps_date = now.date()
+                    save_marker("maps_weekly", last_maps_date.isoformat())
             # Weekly reoptimization action-plan digest on its own weekday.
             if now.weekday() == reopt_weekday and should_run(now, last_reopt_date, hour):
-                _safe("reopt_plans", enqueue_due_reopt_plans)
-                last_reopt_date = now.date()
-                save_marker("reopt_weekly", last_reopt_date.isoformat())
+                if _safe("reopt_plans", enqueue_due_reopt_plans):
+                    last_reopt_date = now.date()
+                    save_marker("reopt_weekly", last_reopt_date.isoformat())
             # SerMaStr strategist reviews — now per-client staggered: each
             # client has its own review weekday (clients.strategist_weekday,
             # unset → the global default), so the due-check runs DAILY and the
             # enqueue helper filters to the clients whose day is today. The
             # durable weekly guard keeps each client to one scheduled run/week;
             # the helper no-ops entirely while strategist_enabled is false.
+            # Daily-cadence (should_run only) → unconditional marker advance, like
+            # the daily block: gating it on success would re-fire every tick.
             if should_run(now, last_strategist_date, hour):
                 _safe("strategy_reviews", enqueue_due_strategy_reviews, now.weekday())
                 last_strategist_date = now.date()
@@ -657,9 +676,9 @@ async def gsc_scheduler() -> None:
             # the day after the weekly SERP-snapshot pass. No-ops entirely while
             # rank_analysis_auto_enabled is false.
             if now.weekday() == rank_analysis_weekday and should_run(now, last_rank_analysis_date, hour):
-                _safe("keyword_reports", enqueue_due_keyword_reports)
-                last_rank_analysis_date = now.date()
-                save_marker("rank_analysis_weekly", last_rank_analysis_date.isoformat())
+                if _safe("keyword_reports", enqueue_due_keyword_reports):
+                    last_rank_analysis_date = now.date()
+                    save_marker("rank_analysis_weekly", last_rank_analysis_date.isoformat())
             # Monthly Asana section automation: once per month on the configured
             # day-of-month, enqueue an asana_monthly job per mapped client (the
             # job itself no-ops if the month's section already exists).
@@ -669,15 +688,19 @@ async def gsc_scheduler() -> None:
                 and now.hour >= hour
             ):
                 target = shift_months(now.date(), settings.asana_month_target_offset)
-                _safe("asana_monthly", enqueue_due_asana_monthly, target)
+                ok = _safe("asana_monthly", enqueue_due_asana_monthly, target)
                 # Native monthly generation rides the same cadence (self-gated
                 # on native_tasks_enabled; per-task idempotent).
-                _safe("task_months", enqueue_due_task_months, target)
-                last_asana_month = (now.year, now.month)
-                save_marker("asana_month", f"{now.year:04d}-{now.month:02d}")
+                ok = _safe("task_months", enqueue_due_task_months, target) and ok
+                # Only mark the month done if generation actually ran — else a
+                # transient blip on the trigger day would skip the WHOLE month.
+                if ok:
+                    last_asana_month = (now.year, now.month)
+                    save_marker("asana_month", f"{now.year:04d}-{now.month:02d}")
             # Daily Team Workload overload alert (effort-weighted): once per day
             # after the target hour, emit one suite notification if anyone is
             # over capacity. run_workload_alert self-guards when unconfigured.
+            # Daily-cadence → unconditional marker advance (see strategist above).
             if should_run(now, last_asana_workload_date, hour):
                 # Overload math is identical; the data source follows the
                 # parallel-run flag (native tasks vs Asana fetches).
