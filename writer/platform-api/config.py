@@ -730,6 +730,10 @@ class Settings(BaseSettings):
     keyword_research_related_neighbor_cap: int = 700
     # Max phrase-containment suggestions fetched per seed (Labs caps at 1000).
     keyword_research_suggestion_limit: int = 500
+    # Max keywords a single "Send to Content Scheduler" handoff turns into
+    # scheduled articles (one article per keyword) — bounds the batch a user can
+    # queue in one click.
+    keyword_research_scheduler_max: int = 100
     # Client-facing keyword research PDF report: the exec-summary LLM (best-effort,
     # Anthropic with OpenAI→Gemini fallback via report_llm; deterministic fallback
     # summary when no key is set).
