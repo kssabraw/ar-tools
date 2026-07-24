@@ -244,8 +244,16 @@ def cluster_keywords(rows: list[dict]) -> list[dict]:
 #     service seeds keep their cross-topic broadening ("plumber" → "blocked drain").
 # seed_warnings additionally advises when a seed is essentially the business name.
 # ---------------------------------------------------------------------------
-_COHERENCE_MIN_SEED_TOKENS = 3   # seed token count at/above which the coherence gate runs
+_COHERENCE_MIN_SEED_TOKENS = 3   # seed token count at/above which the coherence gate always runs
 _COHERENCE_MIN_OVERLAP = 2       # seed tokens a kept idea must share under that gate
+# For 2-token seeds the coherence gate runs only when one seed token is a "drift
+# anchor" — present in at least this fraction of the returned ideas. That's the
+# signature of a generic word DataForSEO expanded a whole category on ("historic"
+# → "synonym for historic", "hisd jobs"), as opposed to a clean service seed
+# where broadening dilutes any single token below the bar ("plumber" → "blocked
+# drain"). When an anchor dominates, a kept idea must carry a 2nd seed token too.
+_COHERENCE_ANCHOR_FRACTION = 0.6
+_SPARSE_RESULT_MIN = 8   # below this many results, a long seed gets a "shorten it" advisory
 
 
 def filter_relevant_ideas(
@@ -277,17 +285,33 @@ def filter_relevant_ideas(
     brand = brand_tokens(client_name)
     brand_in_seed = seed_toks & brand
 
-    # Specific/entity seed → coherence gate: require ≥2 overlap with the FULL seed
-    # tokens so a lone generic word ("law", "historical") can't drag in its whole
-    # category. Keyed on the full seed — NOT the brand-subtracted set — because a
-    # brand token is often also a real topic word ("architect" for client "Henson
-    # Architect"): subtracting it shrank a 3-word seed to 2 tokens and silently
-    # disabled this gate, letting "historical figures"/"historical fiction" through.
-    if len(seed_toks) >= _COHERENCE_MIN_SEED_TOKENS:
+    # Cache each idea's token set once (reused by anchor detection + the gates).
+    idea_tokens = [token_set(r.get("keyword")) for r in idea_rows]
+
+    # Coherence gate → require ≥2 overlap with the FULL seed tokens so a lone
+    # generic word ("law", "historic") can't drag in its whole category. Keyed on
+    # the full seed (NOT brand-subtracted): a brand token is often also a real
+    # topic word ("architect" for client "Henson Architect"), and subtracting it
+    # would silently shrink the seed out of the gate. It runs when EITHER:
+    #   * the seed has ≥3 tokens (specific by construction), OR
+    #   * a seed token is a drift anchor — present in ≥60% of the returned ideas
+    #     (catches 2-word entity seeds like "historic preservation" whose single
+    #     dominant token would otherwise pass unfiltered).
+    # Only a NON-brand seed token can be a drift anchor — a dominant brand token
+    # ("henson" for client "Henson …") is the brand-homonym case handled below,
+    # not generic-category drift.
+    anchor = False
+    if len(seed_toks) >= 2 and idea_tokens:
+        n = len(idea_tokens)
+        anchor = any(
+            sum(1 for rt in idea_tokens if t in rt) >= _COHERENCE_ANCHOR_FRACTION * n
+            for t in (seed_toks - brand)
+        )
+    if len(seed_toks) >= _COHERENCE_MIN_SEED_TOKENS or (anchor and len(seed_toks) >= 2):
         kept: list[dict] = []
         off_topic = 0
-        for r in idea_rows:
-            if len(token_set(r.get("keyword")) & seed_toks) >= _COHERENCE_MIN_OVERLAP:
+        for r, rt in zip(idea_rows, idea_tokens):
+            if len(rt & seed_toks) >= _COHERENCE_MIN_OVERLAP:
                 kept.append(r)
             else:
                 off_topic += 1
@@ -303,8 +327,7 @@ def filter_relevant_ideas(
 
     kept = []
     off_topic = brand_only = 0
-    for r in idea_rows:
-        rt = token_set(r.get("keyword"))
+    for r, rt in zip(idea_rows, idea_tokens):
         if rt & topical_bh:
             kept.append(r)
         elif rt & brand_in_seed:
@@ -363,6 +386,14 @@ def seed_warnings(
         warnings.append(
             "No on-topic keywords were found — try a more specific service or "
             "topic as the seed."
+        )
+    elif (total_results is not None and total_results < _SPARSE_RESULT_MIN
+          and any(len(token_set(s)) >= 3 for s in (seeds or []))):
+        warnings.append(
+            f"This seed is very specific and returned only {total_results} "
+            "keyword(s). For a fuller set, try a shorter core topic (e.g. the main "
+            "subject on its own, like “historic preservation” or “preservation "
+            "architect”) rather than a long descriptive phrase."
         )
     return warnings
 
