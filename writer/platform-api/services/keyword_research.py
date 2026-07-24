@@ -8,10 +8,12 @@ keyword_overview batch):
   * ``keyword_suggestions`` (PRIMARY, one call per seed) — phrase-containment:
     every returned keyword contains the seed phrase, so the set stays tightly
     on-topic. This is the trustworthy core.
-  * ``keyword_ideas`` (BROADENER, one call for the seed set) — category-based
+  * ``keyword_ideas`` (BROADENER, OPT-IN — off by default) — category-based
     semantic expansion that reaches keywords not containing the seed phrase, but
-    drifts on branded/homonym seeds, so it's passed through the relevance gate
-    before merging.
+    reliably drifts on branded/entity seeds (a category like "historic" pulls in
+    "mesopotamia important facts"). Off by default because suggestions alone give
+    a rich on-topic set; when enabled it's passed through the relevance gate
+    (brand-homonym + drift-anchor coherence) before merging.
 
 The merged, deduped set is auto-clustered into topic groups and persisted as a
 research run so the view is a cheap re-read and the CSV export is deterministic.

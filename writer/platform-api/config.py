@@ -708,9 +708,13 @@ class Settings(BaseSettings):
     # call per seed. Set False to use keyword_ideas alone (the old behaviour).
     keyword_research_use_suggestions: bool = True
     # Also fetch keyword_ideas (category-based) as a broadener alongside
-    # suggestions, cleaned by the relevance gate before merging. When suggestions
-    # are off, ideas run regardless (there must be at least one source).
-    keyword_research_broaden_with_ideas: bool = True
+    # suggestions, cleaned by the relevance gate before merging. OFF by default:
+    # keyword_ideas expands by category, not phrase, so it reliably drifts on
+    # entity/branded seeds (e.g. "historic preservation" → "mesopotamia important
+    # facts"), and the phrase-containment suggestions alone give a rich, on-topic
+    # set. Turn on for extra cross-topic reach at the cost of some noise. When
+    # suggestions are off, ideas run regardless (there must be at least one source).
+    keyword_research_broaden_with_ideas: bool = False
     # Max phrase-containment suggestions fetched per seed (Labs caps at 1000).
     keyword_research_suggestion_limit: int = 500
     # Client-facing keyword research PDF report: the exec-summary LLM (best-effort,
