@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Download, FileText, HelpCircle, RefreshCw, Search } from 'lucide-react'
+import { ArrowLeft, CalendarPlus, Download, FileText, HelpCircle, RefreshCw, Search } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 
@@ -62,6 +62,7 @@ const num = (n: number | null | undefined, digits = 0) =>
 export function KeywordResearch() {
   const { id } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
 
   const { data: client } = useQuery<Client>({
     queryKey: ['client', id],
@@ -80,6 +81,10 @@ export function KeywordResearch() {
   const [activeCluster, setActiveCluster] = useState<string | null>(null)
   const [downloadErr, setDownloadErr] = useState<string | null>(null)
   const [onlyQuestions, setOnlyQuestions] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+
+  // Selection is per-run — clear it when the open run changes.
+  useEffect(() => { setSelected(new Set()) }, [runId])
 
   // Open the newest run by default once history loads.
   const [pickedInitial, setPickedInitial] = useState(false)
@@ -124,6 +129,26 @@ export function KeywordResearch() {
     if (onlyQuestions) ks = ks.filter((k) => k.is_question)
     return ks
   }, [keywords, activeCluster, onlyQuestions])
+
+  // --- Selection + "Send to Content Scheduler" ---
+  const allShownSelected = filtered.length > 0 && filtered.every((k) => selected.has(k.keyword))
+  const toggleAllShown = () => setSelected((prev) => {
+    const next = new Set(prev)
+    if (allShownSelected) filtered.forEach((k) => next.delete(k.keyword))
+    else filtered.forEach((k) => next.add(k.keyword))
+    return next
+  })
+  const toggleOne = (kw: string) => setSelected((prev) => {
+    const next = new Set(prev)
+    if (next.has(kw)) next.delete(kw); else next.add(kw)
+    return next
+  })
+  const sendToScheduler = useMutation({
+    mutationFn: (kws: string[]) =>
+      api.post<{ session_id: string; cluster_count: number; schedule_url: string }>(
+        `/clients/${id}/keyword-research/runs/${runId}/to-scheduler`, { keywords: kws }),
+    onSuccess: (r) => navigate(r.schedule_url),
+  })
 
   // --- Client-facing PDF report ---
   const { data: reportsData } = useQuery<{ reports: ReportRow[] }>({
@@ -281,7 +306,16 @@ export function KeywordResearch() {
             <span style={{ fontSize: 12, color: '#94a3b8' }}>
               Showing {num(filtered.length)}{activeCluster ? ` in "${activeCluster}"` : ''}{onlyQuestions ? ' · questions' : ''}
             </span>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                style={{ ...primaryBtn, height: 34, padding: '7px 14px', fontSize: 13, opacity: selected.size === 0 ? 0.5 : 1 }}
+                onClick={() => runId && sendToScheduler.mutate([...selected])}
+                disabled={selected.size === 0 || sendToScheduler.isPending}
+                title="Create one scheduled article per selected keyword in the Content Scheduler"
+              >
+                <CalendarPlus size={14} />
+                {sendToScheduler.isPending ? 'Sending…' : `Send${selected.size ? ` ${selected.size}` : ''} to Content Scheduler`}
+              </button>
               <button style={ghostBtn} onClick={() => runId && genReport.mutate(runId)} disabled={!keywords.length || genReport.isPending}>
                 <FileText size={14} /> {genReport.isPending ? 'Building…' : 'Client PDF report'}
               </button>
@@ -290,6 +324,7 @@ export function KeywordResearch() {
               </button>
             </div>
           </div>
+          {sendToScheduler.isError && <div style={errBox}>{(sendToScheduler.error as Error)?.message ?? 'Could not send to the Content Scheduler.'}</div>}
           {genReport.isError && <div style={errBox}>{(genReport.error as Error)?.message ?? 'Report failed.'}</div>}
           {downloadErr && <div style={errBox}>{downloadErr}</div>}
           {runReports.length > 0 && (
@@ -307,6 +342,11 @@ export function KeywordResearch() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr>
+                  <th style={{ ...th, width: 34, textAlign: 'center' }}>
+                    <input type="checkbox" checked={allShownSelected} onChange={toggleAllShown}
+                      title={allShownSelected ? 'Clear shown' : 'Select all shown'}
+                      style={{ cursor: 'pointer' }} />
+                  </th>
                   {['Keyword', 'Cluster', 'Volume', 'CPC', 'Comp', 'KD', 'Intent', 'Opportunity'].map((h) => (
                     <th key={h} style={th}>{h}</th>
                   ))}
@@ -314,7 +354,10 @@ export function KeywordResearch() {
               </thead>
               <tbody>
                 {filtered.map((k, i) => (
-                  <tr key={`${k.keyword}-${i}`} style={{ borderTop: '1px solid #f1f5f9' }}>
+                  <tr key={`${k.keyword}-${i}`} style={{ borderTop: '1px solid #f1f5f9', background: selected.has(k.keyword) ? '#f0f7ff' : undefined }}>
+                    <td style={{ ...td, textAlign: 'center' }}>
+                      <input type="checkbox" checked={selected.has(k.keyword)} onChange={() => toggleOne(k.keyword)} style={{ cursor: 'pointer' }} />
+                    </td>
                     <td style={{ ...td, fontWeight: 500, color: '#0f172a' }}>
                       {k.keyword}
                       {k.is_question && <HelpCircle size={12} style={{ marginLeft: 6, color: '#94a3b8', verticalAlign: 'middle' }} />}
@@ -329,7 +372,7 @@ export function KeywordResearch() {
                   </tr>
                 ))}
                 {!filtered.length && (
-                  <tr><td style={{ ...td, color: '#94a3b8' }} colSpan={8}>No keywords match this filter.</td></tr>
+                  <tr><td style={{ ...td, color: '#94a3b8' }} colSpan={9}>No keywords match this filter.</td></tr>
                 )}
               </tbody>
             </table>

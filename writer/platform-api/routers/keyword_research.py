@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from config import settings
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
-from services import keyword_research, keyword_research_report
+from services import keyword_research, keyword_research_handoff, keyword_research_report
 
 router = APIRouter(tags=["keyword-research"])
 logger = logging.getLogger(__name__)
@@ -80,6 +80,32 @@ async def start_research(
         logger.error("keyword_research_start_failed", extra={"client_id": str(client_id), "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
     return {"job_id": job_id, "seeds": seeds}
+
+
+class ToSchedulerRequest(BaseModel):
+    keywords: list[str]
+
+
+@router.post("/clients/{client_id}/keyword-research/runs/{run_id}/to-scheduler")
+async def to_scheduler(
+    client_id: UUID, run_id: UUID, body: ToSchedulerRequest,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Turn selected research keywords into a ready-to-schedule Content Scheduler
+    (Fanout) session — one article per keyword. Returns {session_id,
+    cluster_count, schedule_url} for the frontend to navigate to."""
+    if not body.keywords:
+        raise HTTPException(status_code=422, detail="no_keywords")
+    try:
+        return keyword_research_handoff.send_keywords_to_scheduler(
+            str(client_id), str(run_id), body.keywords, auth["user_id"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("keyword_research_to_scheduler_failed",
+                     extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
 
 
 @router.post("/clients/{client_id}/keyword-research/runs/{run_id}/report")
