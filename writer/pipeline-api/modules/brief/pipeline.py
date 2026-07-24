@@ -347,7 +347,15 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         research_customer_reviews(keyword)
     )
 
-    serp_result = await serp_task
+    # The primary SERP task is the one hard dependency (every other source is
+    # swallowed and degrades). A transient DataForSEO failure that survives the
+    # client-level retries surfaces here — classify it as a legible BriefError
+    # (clean 422 `serp_failed`, matching the SIE module) rather than letting the
+    # raw DataForSEOError escape as an opaque HTTP 500 `internal_error`.
+    try:
+        serp_result = await serp_task
+    except dataforseo.DataForSEOError as exc:
+        raise BriefError("serp_failed", f"DataForSEO SERP failed: {exc}")
     serp_items = serp_result["items"]
     if not serp_items:
         raise BriefError(
