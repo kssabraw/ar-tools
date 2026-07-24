@@ -304,6 +304,13 @@ def reserve_budget(n: int) -> None:
 # ---------------------------------------------------------------------------
 # Orchestration (I/O) — Phase 1: Domain Overview + Ranked Keywords.
 # ---------------------------------------------------------------------------
+def _scope_client(query, client_id: Optional[str]):
+    """Apply the client-scope filter to a snapshot query: a real client id, or
+    the client-less (standalone) NULL scope when ``client_id`` is None. The
+    standalone Domain lookup stores/reads snapshots with client_id NULL."""
+    return query.eq("client_id", client_id) if client_id else query.is_("client_id", "null")
+
+
 def _client_location_code(client_id: str) -> Optional[int]:
     """The client's rank-tracking location (§10 open question #1 default), or None."""
     try:
@@ -318,7 +325,7 @@ def _client_location_code(client_id: str) -> Optional[int]:
 
 
 async def run_domain_overview(
-    client_id: str,
+    client_id: Optional[str],
     target_domain: str,
     role: str = "competitor",
     location_code: Optional[int] = None,
@@ -336,13 +343,15 @@ async def run_domain_overview(
     if not domain:
         raise ValueError("invalid_domain")
     supabase = get_supabase()
-    if location_code is None:
+    if location_code is None and client_id:
         location_code = _client_location_code(client_id)
 
     if not force:
         existing = (
-            supabase.table("domain_intel_snapshots").select("id, captured_at")
-            .eq("client_id", client_id).eq("target_domain", domain)
+            _scope_client(
+                supabase.table("domain_intel_snapshots").select("id, captured_at"),
+                client_id,
+            ).eq("target_domain", domain)
             .order("captured_at", desc=True).limit(1).execute()
         ).data
         if existing and is_snapshot_fresh(existing[0]["captured_at"]):
@@ -406,8 +415,10 @@ async def run_domain_overview(
     # re-analyses must not accumulate 1000-row child sets forever. Best-effort.
     try:
         old = (
-            supabase.table("domain_intel_snapshots").select("id")
-            .eq("client_id", client_id).eq("target_domain", domain)
+            _scope_client(
+                supabase.table("domain_intel_snapshots").select("id"),
+                client_id,
+            ).eq("target_domain", domain)
             .order("captured_at", desc=True).execute()
         ).data or []
         stale_ids = [r["id"] for r in old[_SNAPSHOT_KEEP:]]
@@ -423,14 +434,16 @@ async def run_domain_overview(
 
 
 def enqueue_domain_overview(
-    client_id: str,
+    client_id: Optional[str],
     target_domain: str,
     role: str = "competitor",
     location_code: Optional[int] = None,
     language_code: Optional[str] = None,
     force: bool = False,
 ) -> str:
-    """Enqueue a domain_overview async job. Returns the job id."""
+    """Enqueue a domain_overview async job. Returns the job id. ``client_id`` is
+    None for a standalone (client-less) lookup — ``standalone`` marks the job so
+    the handler doesn't mistake the null entity_id for a client."""
     row = (
         get_supabase().table("async_jobs").insert({
             "job_type": "domain_overview",
@@ -438,6 +451,7 @@ def enqueue_domain_overview(
             "payload": {
                 "client_id": client_id, "target_domain": target_domain, "role": role,
                 "location_code": location_code, "language_code": language_code, "force": force,
+                "standalone": client_id is None,
             },
         }).execute()
     ).data[0]
@@ -448,9 +462,14 @@ async def run_domain_overview_job(job: dict) -> None:
     """async_jobs handler for domain_overview."""
     payload = job.get("payload") or {}
     supabase = get_supabase()
+    # Standalone jobs carry client_id=None deliberately — don't fall back to
+    # entity_id (also null there). The fallback stays for older client jobs.
+    client_id = payload.get("client_id")
+    if client_id is None and not payload.get("standalone"):
+        client_id = job.get("entity_id")
     try:
         result = await run_domain_overview(
-            payload.get("client_id") or job.get("entity_id"),
+            client_id,
             payload.get("target_domain"),
             role=payload.get("role") or "competitor",
             location_code=payload.get("location_code"),
@@ -474,15 +493,18 @@ async def run_domain_overview_job(job: dict) -> None:
 # ---------------------------------------------------------------------------
 # Reads (for the router).
 # ---------------------------------------------------------------------------
-def get_latest_overview(client_id: str, target_domain: str) -> Optional[dict]:
-    """The most recent snapshot for (client, domain) + its ranked keywords, or None."""
+def get_latest_overview(client_id: Optional[str], target_domain: str) -> Optional[dict]:
+    """The most recent snapshot for (client, domain) + its ranked keywords, or
+    None. ``client_id`` None reads the standalone (client-less) scope."""
     domain = normalize_domain(target_domain)
     if not domain:
         return None
     supabase = get_supabase()
     snap = (
-        supabase.table("domain_intel_snapshots").select("*")
-        .eq("client_id", client_id).eq("target_domain", domain)
+        _scope_client(
+            supabase.table("domain_intel_snapshots").select("*"),
+            client_id,
+        ).eq("target_domain", domain)
         .order("captured_at", desc=True).limit(1).execute()
     ).data
     if not snap:
@@ -495,13 +517,16 @@ def get_latest_overview(client_id: str, target_domain: str) -> Optional[dict]:
     return {"snapshot": snap[0], "ranked_keywords": kws}
 
 
-def list_snapshots(client_id: str, limit: int = 50) -> list[dict]:
-    """Snapshot summary rows for a client (no child keywords), newest first."""
+def list_snapshots(client_id: Optional[str], limit: int = 50) -> list[dict]:
+    """Snapshot summary rows (no child keywords), newest first. ``client_id``
+    None lists the standalone (client-less) research history."""
     return (
-        get_supabase().table("domain_intel_snapshots")
-        .select("id, target_domain, role, organic_traffic_est, ranked_keyword_count, "
-                "dr, rd, traffic_value_est, cost_usd, captured_at")
-        .eq("client_id", client_id).order("captured_at", desc=True).limit(limit).execute()
+        _scope_client(
+            get_supabase().table("domain_intel_snapshots")
+            .select("id, target_domain, role, organic_traffic_est, ranked_keyword_count, "
+                    "dr, rd, traffic_value_est, cost_usd, captured_at"),
+            client_id,
+        ).order("captured_at", desc=True).limit(limit).execute()
     ).data or []
 
 

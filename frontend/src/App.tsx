@@ -29,7 +29,6 @@ import { Backlinks } from './pages/Backlinks'
 import { Activity } from './pages/Activity'
 import { Competitors } from './pages/Competitors'
 import { DomainIntel } from './pages/DomainIntel'
-import { DomainIntelHome } from './pages/DomainIntelHome'
 import { KeywordResearch } from './pages/KeywordResearch'
 import { Forecast } from './pages/Forecast'
 import { Sops } from './pages/Sops'
@@ -81,7 +80,7 @@ export default function App() {
                       <Route path="/pace" element={<Pace />} />
                       <Route path="/qa" element={<Qa />} />
                       <Route path="/backlinks" element={<Backlinks />} />
-                      <Route path="/domain-intel" element={<DomainIntelHome />} />
+                      <Route path="/domain-intel" element={<DomainIntel />} />
                       <Route path="/activity" element={<Activity />} />
                       {/* Topic Fan-out, merged in (Option C) — a native route
                           subtree that renders inside the suite Layout, so it

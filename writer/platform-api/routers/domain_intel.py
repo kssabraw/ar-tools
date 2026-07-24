@@ -44,6 +44,73 @@ class LinkGapRequest(BaseModel):
     competitor_domains: Optional[list[str]] = None
 
 
+# ---------------------------------------------------------------------------
+# Standalone (client-less) Domain lookup. The core research view — point at any
+# domain, get its traffic / ranked keywords / pages / content mix — needs no
+# client. Snapshots are stored/read under the client-less NULL scope. The
+# client-relative modes (Keyword Gap, Discover) stay on the /clients routes
+# below since they compare against a client's competitor set.
+# ---------------------------------------------------------------------------
+@router.get("/domain-intel")
+async def list_standalone_snapshots(auth: dict = Depends(require_auth)) -> dict:
+    """History of standalone-analyzed domains (summary rows, newest first)."""
+    try:
+        return {
+            "enabled": settings.domain_intel_enabled,
+            "budget_remaining": domain_intel.budget_remaining(),
+            "snapshots": domain_intel.list_snapshots(None),
+        }
+    except Exception as exc:
+        logger.error("domain_intel_list_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.get("/domain-intel/overview/{target_domain}")
+async def get_standalone_overview(target_domain: str, auth: dict = Depends(require_auth)) -> dict:
+    """Latest standalone snapshot + ranked keywords for a domain."""
+    try:
+        result = domain_intel.get_latest_overview(None, target_domain)
+    except Exception as exc:
+        logger.error("domain_intel_get_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    return result or {"snapshot": None, "ranked_keywords": []}
+
+
+@router.post("/domain-intel/overview")
+async def start_standalone_overview(body: OverviewRequest, auth: dict = Depends(require_auth)) -> dict:
+    """Enqueue a standalone (client-less) Domain Overview analysis."""
+    if not settings.domain_intel_enabled:
+        raise HTTPException(status_code=403, detail="domain_intel_disabled")
+    domain = domain_intel.normalize_domain(body.target_domain)
+    if not domain:
+        raise HTTPException(status_code=422, detail="invalid_domain")
+    if body.role not in ("competitor", "client", "prospect"):
+        raise HTTPException(status_code=422, detail="invalid_role")
+    if domain_intel.budget_remaining() <= 0:
+        raise HTTPException(status_code=429, detail="budget_exceeded")
+    try:
+        job_id = domain_intel.enqueue_domain_overview(
+            None, domain, role=body.role,
+            location_code=body.location_code, language_code=body.language_code,
+            force=body.force,
+        )
+    except Exception as exc:
+        logger.error("domain_intel_start_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    return {"job_id": job_id, "target_domain": domain}
+
+
+@router.get("/domain-intel/jobs/{job_id}")
+async def standalone_overview_status(job_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    rows = (
+        get_supabase().table("async_jobs").select("id, status, result, error")
+        .eq("id", str(job_id)).limit(1).execute()
+    ).data
+    if not rows:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    return rows[0]
+
+
 @router.get("/clients/{client_id}/domain-intel")
 async def list_domain_snapshots(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
     """History of analyzed domains for the client (summary rows, newest first)."""
