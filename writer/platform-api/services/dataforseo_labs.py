@@ -46,6 +46,7 @@ _COMPETITORS_DOMAIN_PATH = "/v3/dataforseo_labs/google/competitors_domain/live"
 _KEYWORD_OVERVIEW_PATH = "/v3/dataforseo_labs/google/keyword_overview/live"
 _KEYWORD_IDEAS_PATH = "/v3/dataforseo_labs/google/keyword_ideas/live"
 _KEYWORD_SUGGESTIONS_PATH = "/v3/dataforseo_labs/google/keyword_suggestions/live"
+_RELATED_KEYWORDS_PATH = "/v3/dataforseo_labs/google/related_keywords/live"
 
 _DEFAULT_LOCATION_CODE = 2840  # US
 _DEFAULT_LANGUAGE_CODE = "en"
@@ -273,6 +274,25 @@ def parse_keyword_suggestions(body: dict) -> list[dict]:
     return _parse_metric_items(result.get("items"))
 
 
+def parse_related_keywords(body: dict) -> list[dict]:
+    """Rows for the keywords in Google's "searches related to" graph for a seed.
+
+    Each related_keywords item nests the enriched metrics under ``keyword_data``
+    (same sub-objects as keyword_ideas), plus a bare ``related_keywords`` string
+    array of neighbours. We harvest the enriched ``keyword_data`` nodes only (the
+    neighbour strings carry no metrics), so every row arrives fully enriched.
+    Unlike keyword_ideas this is Google's related-searches graph, not category
+    co-occurrence — it surfaces adjacent terms that don't contain the seed phrase
+    ("historic preservation" → "adaptive reuse") without the category drift."""
+    result = _first_result(body, "labs_related_keywords_error")
+    containers = [
+        item["keyword_data"]
+        for item in result.get("items") or []
+        if isinstance(item, dict) and isinstance(item.get("keyword_data"), dict)
+    ]
+    return _parse_metric_items(containers)
+
+
 def chunk(items: list, size: int) -> list[list]:
     """Split a list into chunks of at most ``size``. Pure."""
     return [items[i : i + size] for i in range(0, len(items), size)]
@@ -443,6 +463,30 @@ async def fetch_keyword_suggestions(
     }]
     body = await _post(_KEYWORD_SUGGESTIONS_PATH, payload)
     return parse_keyword_suggestions(body), cost_of(body)
+
+
+async def fetch_related_keywords(
+    seed: str,
+    location_code: Optional[int] = None,
+    language_code: Optional[str] = None,
+    depth: int = 2,
+    limit: int = 500,
+) -> tuple[list[dict], Optional[float]]:
+    """Keywords from Google's "searches related to" graph for a SINGLE seed, each
+    enriched with volume / CPC / competition / KD / intent. ``depth`` is how many
+    related-search hops to expand (0 = seed only, 1 = its related searches, 2 =
+    related-of-related). Stays on Google's related graph, so it broadens to
+    adjacent terms without keyword_ideas' category drift. One billed call."""
+    kw = (seed or "").strip()
+    if not kw:
+        return [], None
+    payload = [{
+        "keyword": kw, **_loc(location_code, language_code),
+        "depth": max(0, min(depth, 4)),
+        "limit": max(1, min(limit, 1000)),
+    }]
+    body = await _post(_RELATED_KEYWORDS_PATH, payload)
+    return parse_related_keywords(body), cost_of(body)
 
 
 async def fetch_keyword_overview(
