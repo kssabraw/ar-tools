@@ -207,6 +207,37 @@ def test_filter_coherence_uses_full_seed_even_when_brand_token_present():
     assert report["dropped_off_topic"] == 3
 
 
+def test_filter_anchor_gate_catches_two_token_entity_seed():
+    # "historic preservation" (2 tokens): "historic" is a drift anchor (present in
+    # most returned ideas), so the coherence gate engages and requires BOTH tokens.
+    rows = _ideas(
+        "historic preservation division",   # both → keep
+        "national trust for historic preservation",  # both → keep
+        "synonym for historic",             # historic only → drop
+        "hisd jobs",                        # neither (hisd != historic) → drop
+        "what does historic mean",          # historic only → drop
+        "historic sites",                   # historic only → drop
+    )
+    kept, report = kr.filter_relevant_ideas(rows, ["historic preservation"], "Acme Restoration")
+    kws = {r["keyword"] for r in kept}
+    assert kws == {"historic preservation division", "national trust for historic preservation"}
+    assert report["gate"] == "coherence"
+
+
+def test_filter_no_anchor_preserves_two_token_service_broadening():
+    # "emergency plumber" (2 tokens): no single seed token dominates the broadened
+    # set, so no anchor → broadening ("blocked drain") is preserved.
+    rows = _ideas("blocked drain", "hot water repair", "burst pipe", "emergency plumber")
+    kept, report = kr.filter_relevant_ideas(rows, ["emergency plumber"], "Acme Plumbing")
+    assert len(kept) == 4
+    assert report["gate"] == "none"
+
+
+def test_seed_warnings_sparse_long_seed_suggests_shorter():
+    ws = kr.seed_warnings(["historical preservation architect"], "Henson Architect", total_results=1)
+    assert any("shorter core topic" in w for w in ws)
+
+
 def test_filter_coherence_gate_runs_without_brand_match():
     # Generic-token drift is filtered even when no seed token is a brand token —
     # the coherence gate is not brand-conditioned.
