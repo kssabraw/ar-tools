@@ -50,6 +50,13 @@ def test_is_pace_message():
     assert pace_agent.is_pace_message("who's overloaded this week?")
     assert pace_agent.is_pace_message("generate this month for First Class")
     assert pace_agent.is_pace_message("nudge whoever owns the blocked task")
+    # Status moves + pulse (the two 2026-07-24 actions) on shared surfaces.
+    assert pace_agent.is_pace_message("write the client pulse for Acme")
+    assert pace_agent.is_pace_message("mark the GBP audit as done")
+    assert pace_agent.is_pace_message("mark it complete")
+    assert pace_agent.is_pace_message("reopen the citations audit")
+    assert pace_agent.is_pace_message("put the audit in QA")
+    assert pace_agent.is_pace_message("is anything sent to client yet?")
     # Not PACE-shaped → falls through to SerMaStr.
     assert not pace_agent.is_pace_message("how is the campaign going?")
     assert not pace_agent.is_pace_message("what should we improve for Acme?")

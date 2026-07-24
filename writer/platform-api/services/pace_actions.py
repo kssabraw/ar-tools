@@ -103,10 +103,16 @@ def resolve_status(query: str, statuses: list[dict]) -> Optional[dict]:
 def move_direction(statuses: list[dict], from_key: Optional[str], to_key: Optional[str]) -> str:
     """A phrase for the confirm line describing a status move along the workflow's
     sort order: 'forward to' / 'back to' / 'to' (unknown position or same). Pure —
-    the workflow order is the ``statuses`` list order (get_statuses sorts it)."""
+    the workflow order is the ``statuses`` list order (get_statuses sorts it).
+    Statuses parked AFTER the done status (Blocked / In Review — the off-workflow
+    exception states, owner ruling 2026-07-12) aren't workflow positions, so a
+    move into or out of one is a plain 'to', never 'forward'."""
     order = {s.get("key"): i for i, s in enumerate(statuses)}
     a, b = order.get(from_key), order.get(to_key)
     if a is None or b is None or a == b:
+        return "to"
+    done_idx = next((i for i, s in enumerate(statuses) if s.get("is_done")), None)
+    if done_idx is not None and (a > done_idx or b > done_idx):
         return "to"
     return "forward to" if b > a else "back to"
 
@@ -313,10 +319,39 @@ def run_unblock(context: ActionContext, client_id: str, args: dict) -> str:
 # done flag; every other move is a plain status write (which itself auto-ticks
 # markers + fires the QA-on-In-QA hook).
 # ---------------------------------------------------------------------------
+def _completed_tasks(client_id: str) -> list[dict]:
+    """Recent completed top-level tasks — resolvable ONLY by set_task_status
+    (reopen / move back out of Completed); every other action stays open-only."""
+    return (
+        get_supabase().table("tasks")
+        .select("id, name, status_key, assignee_gid, assignee_name, completed")
+        .eq("client_id", client_id).eq("completed", True)
+        .is_("deleted_at", "null").is_("parent_task_id", "null")
+        .order("completed_at", desc=True).limit(200)
+        .execute()
+    ).data or []
+
+
 def stage_set_status(context: ActionContext, client_id: str, args: dict) -> tuple[str, dict | str]:
-    task, reply = _resolve_one_task(client_id, args.get("task_name", ""), "move")
-    if reply:
-        return "reply", reply
+    # Bespoke resolve: open tasks first; on zero OPEN matches fall back to
+    # completed tasks so "reopen X" / "move X back to In Progress" can target a
+    # finished task (_open_tasks filters completed=False, and match_open_tasks
+    # drops completed rows — hence match_named on the completed set). The
+    # fallback never fires on open-task ambiguity.
+    query = (args.get("task_name") or "").strip()
+    if not query:
+        return "reply", "Which task should I move? Give me (part of) its name."
+    open_tasks = _open_tasks(client_id)
+    matches = match_open_tasks(open_tasks, query)
+    if not matches:
+        matches = match_named(_completed_tasks(client_id), query)
+    if not matches:
+        names = "; ".join(t.get("name") for t in open_tasks[:8]) or "none"
+        return "reply", f"No task matches “{query}”. Open: {names}."
+    if len(matches) > 1:
+        listing = "\n".join(f"• {t.get('name')}" for t in matches[:8])
+        return "reply", f"“{query}” matches {len(matches)} tasks — which one?\n{listing}"
+    task = matches[0]
     statuses = task_service.get_statuses()
     target = resolve_status(args.get("status", ""), statuses)
     if not target:
@@ -369,9 +404,10 @@ def stage_write_pulse(context: ActionContext, client_id: str, args: dict) -> tup
     ok, reason = pace_auth.require(context, "write_client_pulse")
     if not ok:
         return "reply", reason
+    # NB: the entrypoints render this as "This will {confirm} for *{client}*."
     return _staged(
         {}, context,
-        "write this week's client pulse — a copy-paste update email you can send the client",
+        "write this week's client pulse (the copy-paste client update email)",
     )
 
 

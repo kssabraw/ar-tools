@@ -50,7 +50,9 @@ _WEB_PENDING_MAX = 500
 _PACE_RE = re.compile(
     r"\b(task|tasks|assign|reassign|assigned|due date|overdue|stuck|blocked|unblock|"
     r"workload|overloaded|my plate|work on today|to-?do|to do|board|reprioriti|"
-    r"nudge|generate (this|the) month|month'?s tasks|behind (on )?(pace|schedule)|checklist)\b",
+    r"nudge|generate (this|the) month|month'?s tasks|behind (on )?(pace|schedule)|checklist|"
+    r"client pulse|weekly pulse|client update|reopen|in qa|sent to client|client approved|"
+    r"mark .{0,60}(completed?|done))\b",
     re.IGNORECASE,
 )
 _BRIEF_RE = re.compile(
