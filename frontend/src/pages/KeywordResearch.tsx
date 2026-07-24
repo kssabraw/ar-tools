@@ -55,6 +55,15 @@ interface ReportRow {
   drive_url: string | null
   created_at: string
 }
+interface HandoffResponse {
+  session_id: string
+  cluster_count: number
+  requested: number
+  skipped_over_limit: number
+  skipped_unknown: number
+  limit: number
+  schedule_url: string
+}
 
 const num = (n: number | null | undefined, digits = 0) =>
   n === null || n === undefined ? '—' : n.toLocaleString(undefined, { maximumFractionDigits: digits })
@@ -82,9 +91,10 @@ export function KeywordResearch() {
   const [downloadErr, setDownloadErr] = useState<string | null>(null)
   const [onlyQuestions, setOnlyQuestions] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [handoff, setHandoff] = useState<{ url: string; text: string } | null>(null)
 
-  // Selection is per-run — clear it when the open run changes.
-  useEffect(() => { setSelected(new Set()) }, [runId])
+  // Selection is per-run — clear it (and any handoff notice) when the run changes.
+  useEffect(() => { setSelected(new Set()); setHandoff(null) }, [runId])
 
   // Open the newest run by default once history loads.
   const [pickedInitial, setPickedInitial] = useState(false)
@@ -145,9 +155,21 @@ export function KeywordResearch() {
   })
   const sendToScheduler = useMutation({
     mutationFn: (kws: string[]) =>
-      api.post<{ session_id: string; cluster_count: number; schedule_url: string }>(
+      api.post<HandoffResponse>(
         `/clients/${id}/keyword-research/runs/${runId}/to-scheduler`, { keywords: kws }),
-    onSuccess: (r) => navigate(r.schedule_url),
+    onSuccess: (r) => {
+      // Nothing gets dropped silently: if the per-send cap or the run-membership
+      // check skipped any of the selection, say so and let the user click through
+      // instead of navigating away from the message.
+      const parts: string[] = []
+      if (r.skipped_over_limit) parts.push(`${num(r.skipped_over_limit)} over the ${num(r.limit)}-per-send limit`)
+      if (r.skipped_unknown) parts.push(`${num(r.skipped_unknown)} not part of this run`)
+      if (!parts.length) { navigate(r.schedule_url); return }
+      setHandoff({
+        url: r.schedule_url,
+        text: `Scheduled ${num(r.cluster_count)} of ${num(r.requested)} selected — not included: ${parts.join('; ')}.`,
+      })
+    },
   })
 
   // --- Client-facing PDF report ---
@@ -325,6 +347,13 @@ export function KeywordResearch() {
             </div>
           </div>
           {sendToScheduler.isError && <div style={errBox}>{(sendToScheduler.error as Error)?.message ?? 'Could not send to the Content Scheduler.'}</div>}
+          {handoff && (
+            <div style={warnBox}>
+              <span>{handoff.text}</span>
+              <button style={{ ...ghostBtn, height: 26, padding: '2px 10px', fontSize: 12 }}
+                onClick={() => navigate(handoff.url)}>Open schedule</button>
+            </div>
+          )}
           {genReport.isError && <div style={errBox}>{(genReport.error as Error)?.message ?? 'Report failed.'}</div>}
           {downloadErr && <div style={errBox}>{downloadErr}</div>}
           {runReports.length > 0 && (
