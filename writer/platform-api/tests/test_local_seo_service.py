@@ -915,3 +915,19 @@ async def test_stream_nlp_names_the_upstream_status_on_a_non_200():
             await local_seo_service._stream_nlp("/generate-page", {})
     assert exc.value.detail.startswith("local_seo_provider_error")
     assert "503" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_stream_nlp_skips_a_non_object_sse_payload():
+    """`data: null` is valid JSON but not an object. Before the isinstance guard
+    it reached event.get() and raised "'NoneType' object has no attribute 'get'"
+    — the same crash that killed 6 page_structure_scrape jobs."""
+    resp = _FakeStreamResponse(lines=[
+        "data: null",
+        "data: [1, 2]",
+        f'data: {json.dumps({"step": "done", "result": {"id": "page-1"}})}',
+    ])
+    with _patch_nlp_stream(resp):
+        result = await local_seo_service._stream_nlp("/generate-page", {})
+    # The junk lines are skipped, not fatal, and the real event still lands.
+    assert result == {"id": "page-1"}

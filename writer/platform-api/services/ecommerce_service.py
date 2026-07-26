@@ -18,6 +18,7 @@ twice. Product facts come from a pasted `product_input` and/or a scraped
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -166,9 +167,12 @@ async def _stream_nlp(path: str, payload: dict) -> dict:
                     if not line.startswith("data:"):
                         continue
                     try:
-                        import json as _json
-                        event = _json.loads(line[len("data:"):].strip())
+                        event = json.loads(line[len("data:"):].strip())
                     except ValueError:
+                        continue
+                    # `data: null` parses fine and would crash the next line with
+                    # "'NoneType' object has no attribute 'get'". Skip it.
+                    if not isinstance(event, dict):
                         continue
                     step = event.get("step")
                     if step == "error":

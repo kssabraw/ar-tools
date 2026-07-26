@@ -200,6 +200,11 @@ async def _stream_nlp(path: str, payload: dict) -> dict:
                         event = json.loads(line[len("data:"):].strip())
                     except json.JSONDecodeError:
                         continue
+                    # Valid JSON isn't necessarily an object: `data: null` parses
+                    # fine and would crash the next line with "'NoneType' object
+                    # has no attribute 'get'". Skip it like an unparseable line.
+                    if not isinstance(event, dict):
+                        continue
                     step = event.get("step")
                     if step == "error":
                         # The nlp worker's own message says WHY generation failed.

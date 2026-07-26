@@ -195,7 +195,9 @@ def _run_failure_reason(run_id: str, status: Optional[str]) -> str:
 
 async def _generate_run(payload: dict) -> Optional[str]:
     """Blog / service / location page: create a suite run + drive the orchestrator
-    to completion. Returns the run id on success, None on failure."""
+    to completion. Returns the run id on success. Raises TransientContentError
+    when the run was parked for a backoff retry, and ContentGenerationError —
+    carrying the run's own error_stage/error_message — on a terminal failure."""
     from services.local_seo_service import _get_client
     from services.orchestrator import orchestrate_run
     from services.run_dispatch import create_run_and_snapshot
