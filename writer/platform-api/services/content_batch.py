@@ -39,6 +39,14 @@ class TransientContentError(Exception):
     with backoff rather than mark it terminally failed."""
 
 
+class ContentGenerationError(Exception):
+    """A content-batch item's generator finished without producing an artifact.
+    Carries the underlying reason (the run's own error_stage/error_message) so the
+    Content Scheduler shows WHY an item failed instead of a bare
+    'content generation failed', which is indistinguishable between a transient
+    upstream blip and a real defect."""
+
+
 def _spacing_seconds() -> int:
     # Reuse the Local SEO bulk spacing so batch jobs run at background priority
     # (staggered scheduled_at interleaves now-dated interactive jobs ahead of the
@@ -165,6 +173,26 @@ def _run_status(run_id: str) -> Optional[str]:
     return row.get("status")
 
 
+def _run_failure_reason(run_id: str, status: Optional[str]) -> str:
+    """The run's own failure detail, for the batch item's error. The orchestrator
+    already writes a precise `error_stage`/`error_message` (module, HTTP status,
+    upstream body, run_id); surfacing it is the difference between "content
+    generation failed" and "brief: DataForSEO SERP outage". Best-effort — falls
+    back to the bare status if the row can't be read."""
+    try:
+        row = (
+            get_supabase().table("runs").select("error_stage, error_message")
+            .eq("id", run_id).single().execute()
+        ).data or {}
+    except Exception:  # noqa: BLE001 — diagnostics must not mask the failure
+        row = {}
+    message = (row.get("error_message") or "").strip()
+    stage = (row.get("error_stage") or "").strip()
+    if message:
+        return f"{stage}: {message}" if stage else message
+    return f"run {run_id} ended as {status or 'missing'} without producing an article"
+
+
 async def _generate_run(payload: dict) -> Optional[str]:
     """Blog / service / location page: create a suite run + drive the orchestrator
     to completion. Returns the run id on success, None on failure."""
@@ -200,7 +228,9 @@ async def _generate_run(payload: dict) -> Optional[str]:
 
         disarm_scheduled_retry(run_id)
         raise TransientContentError(f"transient upstream failure on run {run_id}")
-    return run_id if status == "complete" else None
+    if status == "complete":
+        return run_id
+    raise ContentGenerationError(_run_failure_reason(run_id, status))
 
 
 def _raise_if_transient_nlp(exc: HTTPException, label: str) -> None:
@@ -364,10 +394,13 @@ async def run_content_batch_item_job(job: dict) -> None:
                     logger.warning("content_batch.github_publish_enqueue_failed",
                                    extra={"item_id": item_id, "run_id": ref, "error": str(exc)})
         else:
-            store.finish_item(item_id, "failed", error="content generation failed")
+            # The blog/service/location path raises ContentGenerationError with the
+            # run's own reason; this covers the generators that signal failure by
+            # returning nothing, so at least name which one gave up.
+            reason = f"{content_type or 'generator'} produced no page"
+            store.finish_item(item_id, "failed", error=reason)
             supabase.table("async_jobs").update(
-                {"status": "failed", "error": "content generation failed",
-                 "completed_at": "now()"}
+                {"status": "failed", "error": reason, "completed_at": "now()"}
             ).eq("id", job_id).execute()
     except TransientContentError as exc:
         # Transient upstream outage (e.g. a DataForSEO SERP outage). Re-schedule
