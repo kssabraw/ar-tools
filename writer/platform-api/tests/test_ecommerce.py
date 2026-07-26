@@ -8,6 +8,7 @@ functions hit Supabase + nlp and are covered by integration testing).
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -227,3 +228,60 @@ def test_discover_pages_no_website_is_degraded_not_error():
     assert res["items"] == []
     assert res["source"] == "none"
     assert "no website" in res["note"].lower()
+
+
+# ── _stream_nlp error propagation (mirrors local_seo) ───────────────────────
+# The nlp worker's reason must reach async_jobs.error, not just the logs.
+class _FakeStreamResponse:
+    def __init__(self, status_code=200, lines=(), body=b""):
+        self.status_code = status_code
+        self._lines = list(lines)
+        self._body = body
+
+    async def aread(self):
+        return self._body
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+
+def _patch_nlp_stream(resp):
+    stream_ctx = MagicMock()
+    stream_ctx.__aenter__ = AsyncMock(return_value=resp)
+    stream_ctx.__aexit__ = AsyncMock(return_value=False)
+    client = MagicMock()
+    client.stream = MagicMock(return_value=stream_ctx)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=client)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return patch.object(e.httpx, "AsyncClient", return_value=ctx)
+
+
+def test_ecommerce_stream_carries_the_worker_reason():
+    from fastapi import HTTPException
+
+    reason = "scrape failed: source_url returned 403"
+    resp = _FakeStreamResponse(
+        lines=[f'data: {json.dumps({"step": "error", "message": reason})}']
+    )
+    with _patch_nlp_stream(resp):
+        try:
+            asyncio.run(e._stream_nlp("/generate-ecommerce-page", {}))
+            raise AssertionError("expected HTTPException")
+        except HTTPException as exc:
+            assert exc.detail.startswith("ecommerce_generation_failed")
+            assert reason in exc.detail
+
+
+def test_ecommerce_stream_names_upstream_status_on_non_200():
+    from fastapi import HTTPException
+
+    resp = _FakeStreamResponse(status_code=502, body=b"bad gateway")
+    with _patch_nlp_stream(resp):
+        try:
+            asyncio.run(e._stream_nlp("/generate-ecommerce-page", {}))
+            raise AssertionError("expected HTTPException")
+        except HTTPException as exc:
+            assert exc.detail.startswith("ecommerce_provider_error")
+            assert "502" in exc.detail

@@ -187,7 +187,12 @@ async def _stream_nlp(path: str, payload: dict) -> dict:
                         "local_seo.stream_http_error",
                         extra={"path": path, "status_code": response.status_code, "body": body[:500]},
                     )
-                    raise HTTPException(status_code=502, detail="local_seo_provider_error")
+                    # Name the upstream status so a persisted failure distinguishes
+                    # "nlp is down" (502/503) from "nlp rejected the request" (4xx).
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"local_seo_provider_error: nlp returned HTTP {response.status_code}",
+                    )
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -197,11 +202,22 @@ async def _stream_nlp(path: str, payload: dict) -> dict:
                         continue
                     step = event.get("step")
                     if step == "error":
+                        # The nlp worker's own message says WHY generation failed.
+                        # Logging it alone is not enough: for a background job the
+                        # detail is what lands in `async_jobs.error`, and logs roll
+                        # off — 65 `local_seo_generation_failed` rows are now
+                        # permanently undiagnosable because the reason was dropped
+                        # here. Keep the code as a prefix so matching still works.
+                        message = str(event.get("message") or "").strip()
                         logger.warning(
                             "local_seo.stream_worker_error",
-                            extra={"path": path, "error": event.get("message")},
+                            extra={"path": path, "error": message},
                         )
-                        raise HTTPException(status_code=502, detail="local_seo_generation_failed")
+                        raise HTTPException(
+                            status_code=502,
+                            detail=(f"local_seo_generation_failed: {message[:400]}"
+                                    if message else "local_seo_generation_failed"),
+                        )
                     if step == "done":
                         result = event.get("result")
     except httpx.HTTPError as exc:

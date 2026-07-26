@@ -262,6 +262,16 @@ async def llm_annotate_structure(
         )
         return {"sections": [], "structure_summary": "", "intro_pattern": ""}
 
+    # Valid JSON is not necessarily an object: a bare `null` parses fine and then
+    # crashes every caller with "'NoneType' object has no attribute 'get'" (6 such
+    # page_structure_scrape jobs died this way). Degrade like a parse failure.
+    if not isinstance(result, dict):
+        logger.warning(
+            "page_structure_scraper.llm_json_not_an_object",
+            extra={"page_type": page_type, "parsed_type": type(result).__name__},
+        )
+        return {"sections": [], "structure_summary": "", "intro_pattern": ""}
+
     return result
 
 

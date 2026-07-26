@@ -158,7 +158,10 @@ async def _stream_nlp(path: str, payload: dict) -> dict:
                         "ecommerce.stream_http_error",
                         extra={"path": path, "status_code": response.status_code, "body": body[:500]},
                     )
-                    raise HTTPException(status_code=502, detail="ecommerce_provider_error")
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"ecommerce_provider_error: nlp returned HTTP {response.status_code}",
+                    )
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -169,8 +172,16 @@ async def _stream_nlp(path: str, payload: dict) -> dict:
                         continue
                     step = event.get("step")
                     if step == "error":
-                        logger.warning("ecommerce.stream_worker_error", extra={"path": path, "error": event.get("message")})
-                        raise HTTPException(status_code=502, detail="ecommerce_generation_failed")
+                        # Carry the nlp worker's reason into the detail — it's what
+                        # lands in `async_jobs.error`, and logs roll off. Code kept
+                        # as a prefix so existing matching still works.
+                        message = str(event.get("message") or "").strip()
+                        logger.warning("ecommerce.stream_worker_error", extra={"path": path, "error": message})
+                        raise HTTPException(
+                            status_code=502,
+                            detail=(f"ecommerce_generation_failed: {message[:400]}"
+                                    if message else "ecommerce_generation_failed"),
+                        )
                     if step == "done":
                         result = event.get("result")
     except httpx.HTTPError as exc:
