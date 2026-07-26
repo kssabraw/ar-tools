@@ -591,3 +591,44 @@ def test_render_back_compat_with_legacy_analysis():
         out = render_reference_structure(legacy, "service", mode=mode)
         assert out is not None
         assert "Why it matters" in out or mode == "opening"
+
+
+# ── llm_annotate_structure result validation ────────────────────────────────
+# Valid JSON is not necessarily a JSON *object*. A bare `null` parses fine and
+# then crashes every caller with "'NoneType' object has no attribute 'get'" —
+# 6 page_structure_scrape jobs died exactly that way.
+import asyncio  # noqa: E402
+
+import pytest  # noqa: E402
+
+from services import page_structure_scraper as pss  # noqa: E402
+from services import report_llm  # noqa: E402
+
+
+_EMPTY = {"sections": [], "structure_summary": "", "intro_pattern": ""}
+
+
+@pytest.mark.parametrize("payload", ["null", "[1, 2]", '"a string"', "42"])
+def test_llm_annotate_degrades_when_json_is_not_an_object(monkeypatch, payload):
+    async def _fake_generate_text(**_kwargs):
+        return payload
+
+    monkeypatch.setattr(report_llm, "generate_text", _fake_generate_text)
+
+    result = asyncio.run(pss.llm_annotate_structure("<p>hi</p>", [{"heading": "H"}], "blog_post"))
+
+    assert result == _EMPTY
+    # The contract callers rely on: always a dict, so .get() is always safe.
+    assert result.get("intro_pattern") == ""
+
+
+def test_llm_annotate_passes_through_a_real_object(monkeypatch):
+    async def _fake_generate_text(**_kwargs):
+        return '{"sections": [{"i": 0}], "structure_summary": "s", "intro_pattern": "p"}'
+
+    monkeypatch.setattr(report_llm, "generate_text", _fake_generate_text)
+
+    result = asyncio.run(pss.llm_annotate_structure("<p>hi</p>", [{"heading": "H"}], "blog_post"))
+
+    assert result["structure_summary"] == "s"
+    assert result["intro_pattern"] == "p"

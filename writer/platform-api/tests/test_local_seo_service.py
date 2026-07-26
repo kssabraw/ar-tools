@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -847,3 +848,86 @@ async def test_run_action_job_unknown_action_fails():
     update_arg = supabase.table.return_value.update.call_args[0][0]
     assert update_arg["status"] == "failed"
     assert "unknown_local_seo_action" in update_arg["error"]
+
+
+# ── _stream_nlp error propagation ───────────────────────────────────────────
+# 65 local_seo_generate jobs failed with the bare string
+# "local_seo_generation_failed". The nlp worker sends its reason in the SSE
+# error event; it was logged and dropped, so once Railway logs rolled off those
+# failures became permanently undiagnosable. The detail is what reaches
+# async_jobs.error, so the reason has to travel in it.
+class _FakeStreamResponse:
+    def __init__(self, status_code=200, lines=(), body=b""):
+        self.status_code = status_code
+        self._lines = list(lines)
+        self._body = body
+
+    async def aread(self):
+        return self._body
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+
+def _patch_nlp_stream(resp):
+    """Patch httpx.AsyncClient so _stream_nlp's client.stream() yields `resp`."""
+    stream_ctx = MagicMock()
+    stream_ctx.__aenter__ = AsyncMock(return_value=resp)
+    stream_ctx.__aexit__ = AsyncMock(return_value=False)
+    client = MagicMock()
+    client.stream = MagicMock(return_value=stream_ctx)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=client)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return patch.object(local_seo_service.httpx, "AsyncClient", return_value=ctx)
+
+
+@pytest.mark.asyncio
+async def test_stream_nlp_carries_the_worker_reason_into_the_detail():
+    reason = "Anthropic overloaded_error: the model is temporarily unavailable"
+    resp = _FakeStreamResponse(
+        lines=[f'data: {json.dumps({"step": "error", "message": reason})}']
+    )
+    with _patch_nlp_stream(resp):
+        with pytest.raises(HTTPException) as exc:
+            await local_seo_service._stream_nlp("/generate-page", {})
+    # Code kept as a prefix so existing matching still works...
+    assert exc.value.detail.startswith("local_seo_generation_failed")
+    # ...and the reason now survives into async_jobs.error.
+    assert reason in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_stream_nlp_falls_back_to_the_bare_code_without_a_message():
+    resp = _FakeStreamResponse(lines=[f'data: {json.dumps({"step": "error"})}'])
+    with _patch_nlp_stream(resp):
+        with pytest.raises(HTTPException) as exc:
+            await local_seo_service._stream_nlp("/generate-page", {})
+    assert exc.value.detail == "local_seo_generation_failed"
+
+
+@pytest.mark.asyncio
+async def test_stream_nlp_names_the_upstream_status_on_a_non_200():
+    resp = _FakeStreamResponse(status_code=503, body=b"upstream down")
+    with _patch_nlp_stream(resp):
+        with pytest.raises(HTTPException) as exc:
+            await local_seo_service._stream_nlp("/generate-page", {})
+    assert exc.value.detail.startswith("local_seo_provider_error")
+    assert "503" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_stream_nlp_skips_a_non_object_sse_payload():
+    """`data: null` is valid JSON but not an object. Before the isinstance guard
+    it reached event.get() and raised "'NoneType' object has no attribute 'get'"
+    — the same crash that killed 6 page_structure_scrape jobs."""
+    resp = _FakeStreamResponse(lines=[
+        "data: null",
+        "data: [1, 2]",
+        f'data: {json.dumps({"step": "done", "result": {"id": "page-1"}})}',
+    ])
+    with _patch_nlp_stream(resp):
+        result = await local_seo_service._stream_nlp("/generate-page", {})
+    # The junk lines are skipped, not fatal, and the real event still lands.
+    assert result == {"id": "page-1"}

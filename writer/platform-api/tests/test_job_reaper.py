@@ -456,3 +456,61 @@ def test_claim_filters_to_interactive_types(monkeypatch):
     # No filter → no job_type restriction.
     _run(job_worker._claim_next_job())
     assert ("job_type", "in") not in t.queries[1].filters
+
+
+# ── _settle_if_running / _process_job safety net ──────────────────────────────
+# Handlers settle their own row by convention. `qa_review` didn't: every review
+# ran, succeeded, and left the row 'running' — so the reaper requeued it (running
+# each review TWICE, 30 min apart) and finally marked it stale_timeout. 8/8 jobs
+# "failed" while every one had actually worked. These cover the safety net.
+def test_settle_if_running_guards_on_running(monkeypatch):
+    sb = _FakeSupabase([])
+    monkeypatch.setattr(job_worker, "get_supabase", lambda: sb)
+
+    assert job_worker._settle_if_running("j1", {"status": "complete"}) is True
+    # The status='running' guard is what makes this safe to call unconditionally.
+    assert sb._table.queries[-1].filters["status"] == "running"
+    assert sb._table.queries[-1].filters["id"] == "j1"
+
+
+def test_settle_if_running_is_noop_for_a_self_settled_job(monkeypatch):
+    """A handler that already wrote its own terminal status must keep it."""
+    sb = _FakeSupabase([], update_hits=False)  # no row matched status='running'
+    monkeypatch.setattr(job_worker, "get_supabase", lambda: sb)
+
+    assert job_worker._settle_if_running("j1", {"status": "complete"}) is False
+
+
+def test_settle_if_running_survives_a_db_error(monkeypatch):
+    class _Boom:
+        def table(self, _n):
+            raise RuntimeError("db down")
+
+    monkeypatch.setattr(job_worker, "get_supabase", lambda: _Boom())
+    assert job_worker._settle_if_running("j1", {"status": "complete"}) is False
+
+
+def test_process_job_settles_a_handler_that_forgot(monkeypatch):
+    """The qa_review regression: handler returns without settling -> complete."""
+    sb = _FakeSupabase([])
+    monkeypatch.setattr(job_worker, "get_supabase", lambda: sb)
+
+    async def _handler(_job):
+        return None  # settles nothing, like run_qa_review_job
+
+    monkeypatch.setattr(job_worker, "run_qa_review_job", _handler)
+    _run(job_worker._process_job({"id": "j1", "job_type": "qa_review"}))
+
+    assert sb._table.updates == [{"status": "complete", "completed_at": "now()"}]
+
+
+def test_process_job_fails_an_unknown_job_type(monkeypatch):
+    """An unroutable type is a real defect — it must not be masked as complete."""
+    sb = _FakeSupabase([])
+    monkeypatch.setattr(job_worker, "get_supabase", lambda: sb)
+
+    _run(job_worker._process_job({"id": "j1", "job_type": "no_such_type"}))
+
+    assert len(sb._table.updates) == 1
+    assert sb._table.updates[0]["status"] == "failed"
+    assert "unknown_job_type" in sb._table.updates[0]["error"]

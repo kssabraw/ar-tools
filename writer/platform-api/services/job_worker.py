@@ -202,6 +202,31 @@ def _plan_reap(attempts: int, max_attempts: int) -> tuple[dict, str]:
     }, "failed"
 
 
+def _settle_if_running(job_id: str, update: dict) -> bool:
+    """Write a terminal state to a job row **only if it is still 'running'**.
+
+    Handlers settle their own row (recording a result/error the generic path
+    can't know). This is the safety net for the ones that don't: without it a
+    handler that returns without settling leaves the row 'running' forever, so
+    the reaper requeues it — re-running the work — and finally marks it
+    `stale_timeout` even though it succeeded every time. `qa_review` did exactly
+    that: 8/8 jobs "failed" while every review actually completed, and each one
+    ran twice, 30 minutes apart.
+
+    The status='running' guard is what makes this safe to call unconditionally:
+    a handler that already settled has a terminal status, so this is a no-op and
+    its own result/error is preserved. Best-effort — never breaks the worker."""
+    try:
+        result = (
+            get_supabase().table("async_jobs")
+            .update(update).eq("id", job_id).eq("status", "running").execute()
+        )
+        return bool(result.data)
+    except Exception as exc:  # noqa: BLE001 — settling must never break the loop
+        logger.error("job_worker.settle_failed", extra={"job_id": job_id, "error": str(exc)})
+        return False
+
+
 async def _reap_stale_jobs() -> None:
     """Sweep jobs stuck in 'running' past the stale timeout and re-queue or fail
     them (see `_plan_reap`). Guards each update on status='running' so a job that
@@ -665,6 +690,22 @@ async def _process_job(job: dict) -> None:
         await run_blog_media_publish_job(job)
     else:
         logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
+        # Settle as failed, not complete: an unroutable job type is a real
+        # defect (a producer enqueueing a type the worker can't handle) and
+        # must not be masked by the success safety net below.
+        _settle_if_running(
+            job["id"],
+            {"status": "failed", "error": f"unknown_job_type: {job_type}",
+             "completed_at": "now()"},
+        )
+        return
+
+    # Safety net: the handler returned without raising, so the job is done. If it
+    # settled its own row this is a no-op (guarded on status='running'); if it
+    # forgot, this is what keeps the row from being reaped and re-run.
+    if _settle_if_running(job["id"], {"status": "complete", "completed_at": "now()"}):
+        logger.info("job_worker.settled_by_worker",
+                    extra={"job_id": job["id"], "job_type": job_type})
 
     # Cross-module batch awareness: after a content-generation job settles (the
     # handler has already written its terminal status), check whether it was the

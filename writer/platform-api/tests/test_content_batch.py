@@ -137,3 +137,47 @@ class TestRescheduleOrFail:
 
         resched.assert_not_called()   # attempt 0 >= max 0 → straight to failed
         finish.assert_called_once()
+
+
+class TestRunFailureReason:
+    """A failed item must carry the run's OWN reason. The generic
+    'content generation failed' made a transient DataForSEO outage
+    indistinguishable from a real defect, so every failure looked like the
+    same unfixed bug."""
+
+    def _sb_with_run(self, row):
+        sb = MagicMock()
+        (sb.table.return_value.select.return_value.eq.return_value
+           .single.return_value.execute.return_value) = MagicMock(data=row)
+        return sb
+
+    def test_stage_and_message_are_surfaced(self, monkeypatch):
+        monkeypatch.setattr(cb, "get_supabase", lambda: self._sb_with_run(
+            {"error_stage": "brief",
+             "error_message": "module_error: HTTP 422: serp_failed: DataForSEO SERP failed"}))
+
+        reason = cb._run_failure_reason("run-1", "failed")
+
+        assert reason.startswith("brief: ")
+        assert "serp_failed" in reason
+
+    def test_message_without_stage_stands_alone(self, monkeypatch):
+        monkeypatch.setattr(cb, "get_supabase", lambda: self._sb_with_run(
+            {"error_stage": None, "error_message": "boom"}))
+
+        assert cb._run_failure_reason("run-1", "failed") == "boom"
+
+    def test_falls_back_to_status_when_run_has_no_message(self, monkeypatch):
+        monkeypatch.setattr(cb, "get_supabase", lambda: self._sb_with_run({}))
+
+        reason = cb._run_failure_reason("run-1", "failed")
+
+        assert "run-1" in reason and "failed" in reason
+
+    def test_unreadable_run_still_yields_a_reason(self, monkeypatch):
+        """Diagnostics must never mask the failure they describe."""
+        sb = MagicMock()
+        sb.table.side_effect = RuntimeError("db down")
+        monkeypatch.setattr(cb, "get_supabase", lambda: sb)
+
+        assert "run-1" in cb._run_failure_reason("run-1", None)
