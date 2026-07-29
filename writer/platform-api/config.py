@@ -169,6 +169,19 @@ class Settings(BaseSettings):
     # as-is. Set max_images to 0 to disable sideloading entirely.
     wordpress_media_max_images: int = 20
     wordpress_media_max_bytes: int = 15_000_000  # 15 MB per image
+    # User-Agent sent on every WP REST call. httpx's default (`python-httpx/x.y`)
+    # is a well-known trigger for managed-host bot filters — SiteGround's Anti-Bot
+    # AI answers it with an `/.well-known/sgcaptcha/` challenge page instead of the
+    # API response, which surfaces as `wordpress_http_error_400` on a request that
+    # is otherwise valid and authenticated. A browser-like UA is what those filters
+    # expect from a human-driven admin client, which is what this is: an authorized
+    # publish with the client's own application password. Overridable per
+    # deployment so a host that wants a different string can be satisfied without a
+    # code change.
+    wordpress_user_agent: str = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+    )
     # Internal-linking analyzer + injector. WordPress (app-password) sources are
     # injectable after per-edit human approval; non-WP sites are crawled
     # (sitemap + ScrapeOwl) for recommend-only suggestions.
