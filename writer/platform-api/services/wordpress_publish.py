@@ -57,6 +57,17 @@ def _strip_leading_h1(html: str) -> str:
     """Remove a single leading <h1>…</h1> block from the body (best-effort)."""
     return _LEADING_H1_RE.sub("", html, count=1)
 
+
+def _default_headers() -> dict:
+    """Headers applied to every request in this module's httpx clients.
+
+    The User-Agent is the point: httpx's default identifies us as a script, which
+    managed WordPress hosts' bot filters challenge (see `wordpress_user_agent` in
+    config for the failure this fixes). Set at the client level so the REST calls,
+    the media uploads, and the source-image downloads all carry it."""
+    return {"User-Agent": settings.wordpress_user_agent}
+
+
 # WP statuses we expose. Default to draft so nothing goes live unreviewed.
 ALLOWED_STATUSES = {"draft", "publish"}
 # content_type → WP REST resource. Blog posts become posts; the conversion-
@@ -379,10 +390,18 @@ async def publish_to_wordpress(
     # are "Plain" (the pretty /wp-json/ route 404s / returns HTML in that case).
     fallback_url = f"{site_root}/?rest_route=/wp/v2/{resource}"
     auth = _auth_header(client["wordpress_username"], client["wordpress_app_password"])
-    headers = {"Authorization": auth, "Content-Type": "application/json"}
+    headers = {
+        "Authorization": auth,
+        "Content-Type": "application/json",
+        # Ask for JSON explicitly: a host that intercepts the call is likelier to
+        # pass through (or at least answer in kind) than when we accept anything.
+        "Accept": "application/json",
+    }
 
     try:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=False) as http:
+        async with httpx.AsyncClient(
+            timeout=60, follow_redirects=False, headers=_default_headers()
+        ) as http:
             featured_id: Optional[int] = None
             if sideload_images:
                 # Best-effort: never let a media failure abort the publish.
@@ -452,10 +471,12 @@ async def list_content(client: dict, *, per_page: int = 100, max_pages: int = 10
         raise WordPressPublishError("wordpress_not_configured")
     rest_base = _rest_base(client["wordpress_site_url"])
     auth = _auth_header(client["wordpress_username"], client["wordpress_app_password"])
-    headers = {"Authorization": auth}
+    headers = {"Authorization": auth, "Accept": "application/json"}
     out: list[dict] = []
     try:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=False) as http:
+        async with httpx.AsyncClient(
+            timeout=60, follow_redirects=False, headers=_default_headers()
+        ) as http:
             for resource in ("posts", "pages"):
                 page = 1
                 while len(out) < max_pages:
@@ -518,9 +539,17 @@ async def update_post_content(
         resource = "posts"
     rest_base = _rest_base(client["wordpress_site_url"])
     auth = _auth_header(client["wordpress_username"], client["wordpress_app_password"])
-    headers = {"Authorization": auth, "Content-Type": "application/json"}
+    headers = {
+        "Authorization": auth,
+        "Content-Type": "application/json",
+        # Ask for JSON explicitly: a host that intercepts the call is likelier to
+        # pass through (or at least answer in kind) than when we accept anything.
+        "Accept": "application/json",
+    }
     try:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=False) as http:
+        async with httpx.AsyncClient(
+            timeout=60, follow_redirects=False, headers=_default_headers()
+        ) as http:
             resp = await http.post(  # WP accepts POST for updates to /{resource}/{id}
                 f"{rest_base}/{resource}/{post_id}",
                 json={"content": html},

@@ -66,11 +66,13 @@ class _FakeClient:
 
 
 def _patch(monkeypatch, response, capture):
-    monkeypatch.setattr(
-        wordpress_publish.httpx,
-        "AsyncClient",
-        lambda *a, **k: _FakeClient(response, capture),
-    )
+    def _factory(*a, **k):
+        # The client-level kwargs matter: the default headers set there (notably
+        # User-Agent) ride every request the helper makes.
+        capture["client_kwargs"] = k
+        return _FakeClient(response, capture)
+
+    monkeypatch.setattr(wordpress_publish.httpx, "AsyncClient", _factory)
 
 
 def test_client_is_configured():
@@ -97,6 +99,24 @@ async def test_publish_success_blog_post_hits_posts_endpoint(monkeypatch):
     assert capture["url"] == "https://acmehvac.com/wp-json/wp/v2/posts"
     assert capture["json"] == {"title": "T", "content": "<p>hi</p>", "status": "draft"}
     assert capture["headers"]["Authorization"].startswith("Basic ")
+
+
+@pytest.mark.asyncio
+async def test_requests_carry_a_browser_user_agent(monkeypatch):
+    """Managed WP hosts' bot filters (SiteGround's Anti-Bot AI among them) answer
+    httpx's default `python-httpx/x.y` UA with a captcha page instead of the API
+    response — an authenticated, otherwise-valid publish then fails as a 400. The
+    UA is set on the client so every request in the module carries it."""
+    capture = {}
+    _patch(monkeypatch, _FakeResponse(201, {"id": 1, "link": "https://acmehvac.com/?p=1"}), capture)
+
+    await publish_to_wordpress(
+        client=_CLIENT, title="T", html="<p>hi</p>", status="draft", content_type="blog_post"
+    )
+    ua = capture["client_kwargs"]["headers"]["User-Agent"]
+    assert "httpx" not in ua.lower()
+    assert ua.startswith("Mozilla/")
+    assert capture["headers"]["Accept"] == "application/json"
 
 
 @pytest.mark.asyncio
