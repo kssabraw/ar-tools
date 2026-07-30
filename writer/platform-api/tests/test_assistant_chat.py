@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from services import assistant_chat
 
 
@@ -74,3 +76,43 @@ def test_pending_store_evicts_expired_and_caps_size():
     assert len(assistant_chat._pending) <= assistant_chat._PENDING_MAX
     assert tokens[0] not in assistant_chat._pending
     assert tokens[-1] in assistant_chat._pending
+
+
+# --- surface separation: SerMaStr's chat never answers as PACE ----------------
+async def test_pace_shaped_message_is_not_delegated_to_pace(monkeypatch):
+    """The SerMaStr chat page is SerMaStr's alone.
+
+    A delivery-shaped message ("what's stuck", "reassign the task") used to be
+    handed to PACE here, so clicking the SerMaStr icon could return a reply in
+    PACE's persona — which disclaims strategy — while the UI still said
+    SerMaStr. PACE has its own surface now (`POST /pace/chat`); this asserts the
+    delegate is gone even with `pace_enabled` on and an actor supplied.
+    """
+    from services import pace_agent
+
+    called = {"pace": False}
+
+    async def _boom(*a, **k):
+        called["pace"] = True
+        return {"reply": "PACE answered"}
+
+    monkeypatch.setattr(pace_agent, "maybe_handle_web", _boom)
+    monkeypatch.setattr("config.settings.pace_enabled", True)
+    # Stop the turn right after routing — resolving the client is the first
+    # thing the SerMaStr flow does, so reaching it proves PACE was bypassed.
+    reached = {"sermastr": False}
+
+    def _clients():
+        reached["sermastr"] = True
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(assistant_chat, "_list_clients", _clients)
+
+    with pytest.raises(RuntimeError, match="stop here"):
+        await assistant_chat.handle_chat(
+            "what's stuck on Acme? reassign the overdue task to Ivy",
+            [], None, None,
+            action_context=object(),
+        )
+    assert called["pace"] is False
+    assert reached["sermastr"] is True

@@ -5,10 +5,13 @@ The PACE sidebar chatbox's endpoint — the delivery-PM sibling of
 resolution, board digest, Haiku, confirm-gated + actor-bound actions) in
 `services/pace_agent`. Same persona as the Slack/PACE-channel assistant.
 
-Unlike `/assistant/chat` — where PACE only gets first-refusal on PACE-shaped
-messages and otherwise falls through to SerMaStr — this surface calls
+The two web personas are separated **by surface**: `/assistant/chat` is
+SerMaStr's alone and never delegates here, and this endpoint calls
 `pace_agent.maybe_handle_web(..., force=True)` so PACE answers *every* turn
-(deferring strategy questions to SerMaStr in prose). Everything here is gated
+(deferring strategy questions to SerMaStr in prose). It used to be a shape gate
+on the shared SerMaStr surface, which meant clicking the SerMaStr icon could
+return a reply in PACE's persona. (Slack still routes by shape — one channel,
+one bot, so `is_pace_message` is the only way to reach PACE there.) Everything here is gated
 on `settings.pace_enabled`; while it's off the endpoints 503 and the sidebar
 entry stays hidden (see `GET /pace/status`).
 """
