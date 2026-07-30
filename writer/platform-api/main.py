@@ -118,11 +118,13 @@ async def lifespan(app: FastAPI):
         if _ssh_check is None:
             pass
         elif _ssh_check["ok"]:
-            logger.info("wordpress_ssh_selftest_ok", extra={"detail": _ssh_check["detail"]})
+            # Inline, not extra=: basicConfig above formats only %(message)s, so
+            # anything passed via extra never reaches the logs.
+            logger.info("wordpress_ssh_selftest_ok detail=%s", _ssh_check["detail"])
         else:
-            logger.error("wordpress_ssh_selftest_failed", extra={"detail": _ssh_check["detail"]})
+            logger.error("wordpress_ssh_selftest_failed detail=%s", _ssh_check["detail"])
     except Exception as exc:  # pragma: no cover - startup best-effort
-        logger.warning("wordpress_ssh_selftest_error", extra={"error": str(exc)})
+        logger.warning("wordpress_ssh_selftest_error error=%s", str(exc))
     worker_task = asyncio.create_task(job_worker())
     interactive_worker_task = (
         asyncio.create_task(
