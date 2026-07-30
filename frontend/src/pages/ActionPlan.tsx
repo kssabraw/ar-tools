@@ -91,7 +91,7 @@ export function ActionPlan() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {actions.map((a, i) => (
-            <ActionRow key={`${a.kind}-${a.keyword}-${i}`} action={a} onGo={() => navigate('/' + a.cta_path.replace(/^\//, ''))} />
+            <ActionRow key={`${a.kind}-${a.keyword}-${i}`} action={a} clientId={id!} onGo={() => navigate('/' + a.cta_path.replace(/^\//, ''))} />
           ))}
         </div>
       )}
@@ -100,8 +100,16 @@ export function ActionPlan() {
   )
 }
 
-function ActionRow({ action, onGo }: { action: ReoptAction; onGo: () => void }) {
+function ActionRow({ action, clientId, onGo }: { action: ReoptAction; clientId: string; onGo: () => void }) {
   const [open, setOpen] = useState(false)
+  const queryClient = useQueryClient()
+  // Saved SerMaStr steps are the one kind with a lifecycle of their own — they
+  // persist through rebuilds until explicitly closed, so they carry a close.
+  const close = useMutation({
+    mutationFn: () =>
+      api.post<ReoptPlan>(`/clients/${clientId}/assistant-actions/${action.assistant_action_id}/close`, {}),
+    onSuccess: (fresh) => queryClient.setQueryData(['action-plan', clientId], fresh),
+  })
   const c = sev(action.severity)
   const meta = kindMeta(action.kind)
   const ch = channel(action)
@@ -127,9 +135,16 @@ function ActionRow({ action, onGo }: { action: ReoptAction; onGo: () => void }) 
           <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>{action.diagnosis}</div>
           <div style={{ fontSize: 13, color: '#334155', marginTop: 4, lineHeight: 1.5 }}>{action.recommendation}</div>
         </div>
-        <button style={goBtn} onClick={onGo}>
-          {action.cta_label} <ArrowRight size={13} />
-        </button>
+        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+          {action.kind === 'assistant_action' && action.assistant_action_id && (
+            <button style={doneBtn} disabled={close.isPending} onClick={() => close.mutate()}>
+              <CheckCircle2 size={13} /> {close.isPending ? 'Closing…' : 'Mark done'}
+            </button>
+          )}
+          <button style={goBtn} onClick={onGo}>
+            {action.cta_label} <ArrowRight size={13} />
+          </button>
+        </div>
       </div>
 
       {/* Q3: dropdown with why this is recommended + what's needed. */}
@@ -425,6 +440,11 @@ const chIcon: React.CSSProperties = { flexShrink: 0 }
 const goBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0,
   fontSize: 12, fontWeight: 600, color: '#6366f1', background: '#eef2ff',
+  border: 'none', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', alignSelf: 'center',
+}
+const doneBtn: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0,
+  fontSize: 12, fontWeight: 600, color: '#047857', background: '#ecfdf5',
   border: 'none', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', alignSelf: 'center',
 }
 const discloseBtn: React.CSSProperties = {

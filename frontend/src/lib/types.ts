@@ -1183,6 +1183,9 @@ export interface ReoptAction {
   severity: 'info' | 'warning' | 'critical'
   sort: number
   detail?: ReoptActionDetail | null
+  // Saved SerMaStr strategy steps only: their assistant_plan_actions row id,
+  // used by the per-row "Mark done" close.
+  assistant_action_id?: string | null
 }
 
 // SOP-grounded enrichment for one action (present only once a playbook is loaded).

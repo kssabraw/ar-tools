@@ -29,6 +29,10 @@ class ReoptAction(BaseModel):
     severity: str                   # critical | warning | info
     sort: float = 0
     detail: Optional[ReoptActionDetail] = None
+    # Saved SerMaStr strategy steps only: their assistant_plan_actions row id,
+    # so the frontend can close one. (Pydantic drops unknown keys, so the
+    # passthrough must be declared.)
+    assistant_action_id: Optional[str] = None
 
 
 class ReoptPlan(BaseModel):

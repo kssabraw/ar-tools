@@ -254,6 +254,18 @@ def test_duplicate_task_copies_fields_not_source(monkeypatch):
 # ---------------------------------------------------------------------------
 # Producers (Phase 4) + importer (Phase 5) pure helpers
 # ---------------------------------------------------------------------------
+def test_action_source_ref_uses_the_assistant_action_id_when_present():
+    # Saved SerMaStr steps can share a keyword ("Strategy" is the default), so
+    # keying on keyword would collapse distinct steps into one task; their
+    # durable row id is the identity instead.
+    from services.task_producers import action_source_ref
+
+    a = {"kind": "assistant_action", "keyword": "Strategy", "assistant_action_id": "id-1"}
+    b = {"kind": "assistant_action", "keyword": "Strategy", "assistant_action_id": "id-2"}
+    assert action_source_ref("c1", a) != action_source_ref("c1", b)
+    assert action_source_ref("c1", a) == action_source_ref("c1", dict(a))
+
+
 def test_action_source_ref_stable_across_rebuilds():
     from services.task_producers import action_source_ref
 

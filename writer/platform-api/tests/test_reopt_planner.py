@@ -577,9 +577,12 @@ def test_build_assistant_actions_preserves_written_order():
     assert [a["recommendation"] for a in actions] == [f"step {i}" for i in range(4)]
 
 
-def test_build_assistant_actions_rank_below_a_sitewide_banner_and_above_drops():
+def test_build_assistant_actions_rank_between_ordinary_drops_and_the_emergencies():
+    # Above ordinary drops (a person chose these), below BOTH emergencies:
+    # the sitewide banner and a deindexed page.
     a = reopt_planner.build_assistant_actions("c1", [{"id": "x", "title": "t"}])[0]
-    assert reopt_planner._SORT_DROP < a["sort"] < reopt_planner._SORT_SITEWIDE
+    deindex_sort = reopt_planner._SORT_DROP + reopt_planner._SORT_DEINDEX_BONUS
+    assert reopt_planner._SORT_DROP < a["sort"] < deindex_sort < reopt_planner._SORT_SITEWIDE
 
 
 def test_build_assistant_actions_skips_untitled_rows_and_caps():

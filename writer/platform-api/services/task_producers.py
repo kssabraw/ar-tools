@@ -140,8 +140,19 @@ def on_maps_alerts(client_id: str, opened: list[dict], resolved_ids: list[str]) 
 def action_source_ref(client_id: str, action: dict) -> str:
     """Stable per-action key: an action is "the same item" across plan rebuilds
     when its kind + keyword (or CTA label) match — plan rows have no ids.
-    Pure — unit-tested."""
-    ident = (action.get("keyword") or action.get("cta_label") or action.get("recommendation") or "")[:120]
+    Pure — unit-tested.
+
+    Saved SerMaStr strategy steps DO carry a durable id (their
+    assistant_plan_actions row), and several can share one keyword — "Strategy"
+    is the default — so for those the id is the identity; keyword-keying would
+    collapse distinct steps into one task."""
+    ident = (
+        str(action.get("assistant_action_id") or "")
+        or action.get("keyword")
+        or action.get("cta_label")
+        or action.get("recommendation")
+        or ""
+    )[:120]
     return f"{client_id}:{action.get('kind')}:{ident.strip().casefold()}"
 
 

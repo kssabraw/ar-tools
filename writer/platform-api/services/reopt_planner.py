@@ -48,14 +48,17 @@ TOTAL_MAX = 25
 # quick win must not leapfrog an urgent drop, and same-kind rows must not all tie.)
 _TIER = 10_000
 _WITHIN_MAX = 9_999          # within-tier term is clamped to [0, _WITHIN_MAX]
-_SORT_SITEWIDE = 8 * _TIER   # §A sitewide-decline banner sits above everything
-# Steps a strategist saved out of a SerMaStr conversation. Above the signal-
-# derived tiers because a person explicitly chose these — but below the
-# sitewide banner, which is an emergency nobody opted into.
+_SORT_SITEWIDE = 9 * _TIER   # §A sitewide-decline banner sits above everything
+# Steps a strategist saved out of a SerMaStr conversation. Above the ordinary
+# signal-derived tiers because a person explicitly chose these — but below the
+# emergencies nobody opted into: the sitewide banner AND deindexed pages
+# (a page gone from Google outranks any plan).
 _SORT_ASSISTANT = 7 * _TIER
 _SORT_DROP = 6 * _TIER
 _SORT_OFFPAGE = 5 * _TIER    # aggregate link loss / RD spike: between drops and cannibalization
-_SORT_DEINDEX_BONUS = _TIER  # deindex sits in its own band above ordinary drops
+# Deindex sits in its own band above ordinary drops AND above saved strategy
+# steps (2 tiers up from _SORT_DROP, clearing the assistant band at 7×).
+_SORT_DEINDEX_BONUS = 2 * _TIER
 _SORT_CANNIBAL = 4 * _TIER
 _SORT_MAPS = 3 * _TIER       # local-pack declines: below cannibalization, above quick wins
 _SORT_QUICK = 2 * _TIER

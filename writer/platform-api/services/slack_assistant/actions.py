@@ -981,7 +981,9 @@ async def _act_save_strategy_actions(client_id: str, args: Optional[dict] = None
     except Exception as exc:
         return f"Couldn't save those steps: {exc}"
     try:
-        reopt_planner.build_plan(client_id, trigger="assistant")
+        # trigger="manual" — it IS a user-initiated rebuild, and reopt_plans has
+        # a CHECK constraint allowing only scheduled|drop|manual.
+        reopt_planner.build_plan(client_id, trigger="manual")
     except Exception:
         # The rows are saved; they'll appear on the next rebuild regardless.
         return (

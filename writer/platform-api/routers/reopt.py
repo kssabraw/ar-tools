@@ -63,6 +63,46 @@ async def get_response_episodes(client_id: UUID, auth: dict = Depends(require_au
     }
 
 
+@router.post("/clients/{client_id}/assistant-actions/{action_id}/close", response_model=ReoptPlan)
+async def close_assistant_action(
+    client_id: UUID, action_id: UUID, auth: dict = Depends(require_auth)
+) -> ReoptPlan:
+    """Close a saved SerMaStr strategy step (done or no-longer-wanted — the
+    distinction doesn't change the plan) and rebuild so it leaves the list.
+
+    These rows are merged into every plan build precisely so they persist;
+    this is the one way they stop."""
+    supabase = get_supabase()
+    try:
+        updated = (
+            supabase.table("assistant_plan_actions")
+            .update({"status": "done", "closed_at": "now()"})
+            .eq("id", str(action_id))
+            .eq("client_id", str(client_id))
+            .eq("status", "active")
+            .execute()
+        ).data
+    except Exception as exc:
+        logger.error(
+            "assistant_action_close_failed",
+            extra={"client_id": str(client_id), "action_id": str(action_id), "error": str(exc)},
+        )
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    if not updated:
+        raise HTTPException(status_code=404, detail="assistant_action_not_found")
+    try:
+        reopt_planner.build_plan(str(client_id), trigger="manual")
+    except Exception as exc:  # the close already happened; the row leaves on the next rebuild
+        logger.warning(
+            "assistant_action_close_rebuild_failed",
+            extra={"client_id": str(client_id), "error": str(exc)},
+        )
+    row = _latest_plan(str(client_id))
+    if not row:
+        raise HTTPException(status_code=500, detail="internal_error")
+    return ReoptPlan(**row)
+
+
 @router.post("/clients/{client_id}/action-plan/refresh", response_model=ReoptPlan)
 async def refresh_action_plan(client_id: UUID, auth: dict = Depends(require_auth)) -> ReoptPlan:
     """Rebuild the plan now (manual trigger — no notification) and return it."""

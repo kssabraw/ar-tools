@@ -242,11 +242,32 @@ def enqueue_site_inventory(client_id: str) -> Optional[str]:
 
 
 async def run_site_inventory_job(job: dict) -> None:
-    """Worker entry point for a `site_inventory` job."""
+    """Worker entry point for a `site_inventory` job.
+
+    The worker loop only logs unhandled errors — a handler must settle its own
+    async_jobs row, else the job sits `running` until the stale reaper requeues
+    it and the refresh (with its paid fallback) re-runs on a loop.
+    """
+    supabase = get_supabase()
     client_id = (job.get("payload") or {}).get("client_id") or job.get("entity_id")
     if not client_id:
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": "missing client_id", "completed_at": "now()"}
+        ).eq("id", job["id"]).execute()
         return
-    await refresh_site_inventory(client_id)
+    try:
+        result = await refresh_site_inventory(client_id)
+        supabase.table("async_jobs").update(
+            {"status": "complete", "result": result, "completed_at": "now()"}
+        ).eq("id", job["id"]).execute()
+    except Exception as exc:
+        logger.warning(
+            "site_inventory.job_failed",
+            extra={"client_id": client_id, "error": str(exc)},
+        )
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": str(exc)[:500], "completed_at": "now()"}
+        ).eq("id", job["id"]).execute()
 
 
 def enqueue_due_site_inventory() -> int:
@@ -259,7 +280,10 @@ def enqueue_due_site_inventory() -> int:
     cutoff = datetime.now(timezone.utc) - timedelta(days=settings.site_inventory_interval_days)
     try:
         clients = (
-            supabase.table("clients").select("id, website_url").execute()
+            supabase.table("clients")
+            .select("id, website_url")
+            .eq("archived", False)
+            .execute()
         ).data or []
         fetched = {
             r["client_id"]: r.get("fetched_at")
