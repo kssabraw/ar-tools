@@ -1234,6 +1234,9 @@ def test_wants_sop_grounding_matches_strategy_shapes():
 
 
 def test_wants_sop_grounding_skips_pure_data_reads():
+    # Grounding defaults ON since 2026-07-30 (owner ruling) — these are the
+    # narrow opt-outs: a stored number, or a bare command whose answer is a
+    # tool call rather than advice.
     for q in (
         "What's our rank for roof repair?",
         "Show me the tracked keywords",
@@ -1262,8 +1265,10 @@ def test_sop_domains_from_context_signals():
     }
     domains = slack_assistant.sop_domains("how is the campaign going", ctx)
     assert {"organic_drop", "maps", "ai_visibility"} <= domains
-    # No alerts / modules → no context-driven domains.
-    assert slack_assistant.sop_domains("how is the campaign going", {"organic_rank": {}}) == set()
+    # No alerts / modules → no context-driven domains, but never empty: an empty
+    # set collapses the SOP selection to the router doc alone, which is the
+    # thin-advice failure the 2026-07-30 Pompano Beach turn exhibited.
+    assert slack_assistant.sop_domains("how is the campaign going", {"organic_rank": {}}) == {"content"}
 
 
 def test_read_sop_tool_lists_docs():
@@ -1339,3 +1344,186 @@ def test_wants_portfolio_ignores_single_client_asks():
     assert not slack_assistant.wants_portfolio("what should we improve next?")
     assert not slack_assistant.wants_portfolio("")
     assert not slack_assistant.wants_portfolio(None)
+
+
+# ---------------------------------------------------------------------------
+# looks_underspecified — the deterministic "ask, don't waffle" trigger
+# ---------------------------------------------------------------------------
+_CTX_WITH_KEYWORDS = {
+    "organic_rank": {"keywords": [{"keyword": "emergency plumber sydney"}, {"keyword": "blocked drain"}]}
+}
+
+
+def test_underspecified_bare_requests_for_direction():
+    for msg in [
+        "what should we do?",
+        "what should we do next for these guys",
+        "any ideas?",
+        "thoughts?",
+        "what would you do here",
+        "how should we approach this",
+        "help me out",
+        "what's next",
+    ]:
+        assert slack_assistant.looks_underspecified(msg, {}, []), msg
+
+
+def test_anchored_asks_are_not_flagged():
+    # Each names something advice can attach to, so the model should just answer.
+    for msg in [
+        "what should we do about the maps drop?",
+        "what should we do with our link building budget",
+        "any ideas for the blog content plan",
+        "what should we do about 'emergency plumber sydney'",
+        "what should we do — we're at position 14",
+        "how should we approach Q4",
+        "what should we do about https://example.com/services",
+    ]:
+        assert not slack_assistant.looks_underspecified(msg, {}, []), msg
+
+
+def test_tracked_keyword_counts_as_an_anchor():
+    msg = "what should we do about emergency plumber sydney"
+    assert not slack_assistant.looks_underspecified(msg, _CTX_WITH_KEYWORDS, [])
+    # …and the same question without it stays flagged.
+    assert slack_assistant.looks_underspecified("what should we do", _CTX_WITH_KEYWORDS, [])
+
+
+def test_vague_followup_in_an_anchored_conversation_is_not_flagged():
+    # "what should we do?" three turns into a conversation about the geo-grid is
+    # not a vague question — the thread already says about what.
+    history = [
+        {"role": "user", "content": "how are the maps rankings looking?"},
+        {"role": "assistant", "content": "Pack presence is 6/25 pins…"},
+    ]
+    assert not slack_assistant.looks_underspecified("what should we do?", {}, history)
+
+
+def test_anchorless_history_does_not_rescue_a_vague_ask():
+    history = [
+        {"role": "user", "content": "hey"},
+        {"role": "assistant", "content": "Hi — what can I help with?"},
+    ]
+    assert slack_assistant.looks_underspecified("what should we do?", {}, history)
+
+
+def test_non_advice_messages_never_flagged():
+    for msg in [
+        "how is the campaign going?",
+        "run a maps scan",
+        "what's our rank for blocked drain",
+        "add 'roof repair' to the tracker",
+        "",
+    ]:
+        assert not slack_assistant.looks_underspecified(msg, {}, []), msg
+
+
+def test_gate_tolerates_missing_or_malformed_context():
+    assert slack_assistant.looks_underspecified("what should we do?", None, None)
+    assert slack_assistant.looks_underspecified("what should we do?", {"organic_rank": {}}, [])
+    assert slack_assistant.looks_underspecified("what should we do?", {"organic_rank": {"keywords": ["oops"]}}, [])
+
+
+def _system_prompt_for(question: str, context=None, history=None) -> str:
+    """Run one interpret() turn against a stubbed Anthropic and return the
+    system prompt it sent — the way to assert per-turn prompt assembly."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    anthropic = __import__("anthropic")
+    seen = {}
+
+    async def _create(**kwargs):
+        seen["system"] = kwargs.get("system", "")
+        block = MagicMock()
+        block.type = "text"
+        block.text = "ok"
+        resp = MagicMock()
+        resp.content = [block]
+        resp.stop_reason = "end_turn"
+        return resp
+
+    api = MagicMock()
+    api.messages.create = AsyncMock(side_effect=_create)
+    with patch.object(anthropic, "AsyncAnthropic", return_value=api):
+        asyncio.run(
+            slack_assistant.interpret(
+                question, {"id": "c1", "name": "Acme"}, context or {}, history or []
+            )
+        )
+    return seen["system"]
+
+
+def test_vague_ask_gets_the_clarify_instruction():
+    system = _system_prompt_for("what should we do?")
+    assert "THIS TURN IS UNDERSPECIFIED" in system
+
+
+def test_anchored_ask_does_not_get_the_clarify_instruction():
+    system = _system_prompt_for("what should we do about the maps drop?")
+    assert "THIS TURN IS UNDERSPECIFIED" not in system
+    # …but the standing prompt is still there.
+    assert "ASK WHEN UNSURE" in system
+
+
+# ---------------------------------------------------------------------------
+# The Pompano Beach regression (2026-07-30)
+#
+# "how can bsa claims rank in pompano beach" — a textbook How-To-Rank-In-Maps
+# question — got NO SOP block and NO clarifying question, and read as generic.
+# Three separate gates were wrong at once, so all three are pinned here.
+# ---------------------------------------------------------------------------
+_POMPANO = "how can bsa claims rank in pompano beach"
+
+
+def test_pompano_question_is_sop_grounded():
+    # Was False: the allowlist had "how do we"/"how should" but not "how can",
+    # and no ranking vocabulary at all.
+    assert slack_assistant.wants_sop_grounding(_POMPANO)
+
+
+def test_pompano_question_selects_real_sop_domains():
+    # Was an empty set, which collapses the selection to the router doc alone.
+    domains = slack_assistant.sop_domains(_POMPANO, {"maps_geogrid": {}})
+    assert "maps" in domains and "content" in domains
+
+
+def test_pompano_question_is_flagged_underspecified():
+    # Was False twice over: the advice gate demanded "how can WE", and the
+    # anchor test counted the question's own verb ("rank") as specificity.
+    assert slack_assistant.looks_underspecified(_POMPANO, {}, [])
+
+
+def test_sop_grounding_defaults_on_for_unanticipated_phrasings():
+    for msg in [
+        "how can bsa claims rank in pompano beach",
+        "any way to get found in Boca?",
+        "we want to show up in more suburbs",
+        "thoughts on the fort lauderdale market",
+    ]:
+        assert slack_assistant.wants_sop_grounding(msg), msg
+
+
+def test_pure_data_reads_skip_the_sop_block():
+    for msg in [
+        "what's our rank for blocked drain",
+        "how many keywords do we track",
+        "when was the last maps scan",
+        "list our open alerts",
+        "do we have a geo-grid for tampa",
+        "thanks!",
+    ]:
+        assert not slack_assistant.wants_sop_grounding(msg), msg
+
+
+def test_lookup_with_an_advisory_tail_still_grounds():
+    # The strategy shape wins over the lookup shape when both are present.
+    assert slack_assistant.wants_sop_grounding(
+        "what's our rank for blocked drain and how do we improve it"
+    )
+
+
+def test_sop_domains_never_empty():
+    # An empty set degrades the SOP block to the router doc — the thin-advice
+    # failure. There's always a floor.
+    assert slack_assistant.sop_domains("something unclassifiable", {})

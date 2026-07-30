@@ -176,3 +176,40 @@ def test_read_sop_truncates():
     out = sop_library.read_sop("Link_Building_SOP", max_chars=500)
     assert len(out) < 700
     assert "read_sop tool" in out  # truncation marker
+
+
+def test_router_doc_cannot_starve_the_topic_sops():
+    """_ORCHESTRATOR is 14k raw. At the chat's SOP budget it was taking ~87% of
+    the block, truncating away the doc that actually answered the question —
+    the mechanism behind the 2026-07-30 generic-advice turn. It's now bounded to
+    a third of the budget."""
+    text = sop_library.select_sops_text({"maps_growth", "maps"}, budget_chars=24_000)
+    blocks = dict(_doc_blocks(text))
+    assert "_ORCHESTRATOR.md" in blocks
+    assert len(blocks["_ORCHESTRATOR.md"]) <= 24_000 // 3 + 200  # + heading slack
+    # The growth playbook survives the budget rather than being squeezed out.
+    assert "How_To_Rank_In_Google_Maps_SOP.md" in blocks
+    assert len(blocks["How_To_Rank_In_Google_Maps_SOP.md"]) > 5_000
+
+
+def test_maps_growth_orders_the_how_to_rank_doc_first():
+    """A growth question ('how can we rank in <city>') wants the How-To-Rank SOP
+    ahead of the drop-mitigation one; a drop question keeps the old order."""
+    growth = sop_library.relevant_docs({"maps_growth", "maps"})
+    assert growth.index("How_To_Rank_In_Google_Maps_SOP.md") < growth.index(
+        "Rank_Drop_Mitigation_SOP_Maps.md"
+    )
+    drop = sop_library.relevant_docs({"maps"})
+    assert drop.index("Rank_Drop_Mitigation_SOP_Maps.md") < drop.index(
+        "How_To_Rank_In_Google_Maps_SOP.md"
+    )
+
+
+def _doc_blocks(text: str):
+    """[(doc_name, body)] parsed out of a rendered SOP block."""
+    import re
+
+    marks = list(re.finditer(r"### SOP DOC: (\S+)\n", text))
+    for i, m in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+        yield m.group(1), text[m.end():end]

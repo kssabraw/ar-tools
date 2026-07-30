@@ -616,7 +616,11 @@ class Settings(BaseSettings):
     # SOP grounding for the assistant (Slack + dashboard chat): strategy-shaped
     # questions inject a budgeted SOP selection into the prompt, and the model
     # can pull more via a read_sop tool (bounded rounds per message).
-    slack_assistant_sop_budget_chars: int = 16_000
+    # Raised 16k→24k (2026-07-30): at 16k the _ORCHESTRATOR router doc alone
+    # consumed most of the block and the SOP that answered the question was
+    # truncated away. Grounding is on by default now, so the block has to be
+    # big enough to carry a real doc (~+2k tokens/turn).
+    slack_assistant_sop_budget_chars: int = 24_000
     slack_assistant_sop_rounds: int = 3
     # Frontend base URL for deep links in email/Slack (e.g. https://ar-internal.netlify.app).
     app_base_url: str = ""
