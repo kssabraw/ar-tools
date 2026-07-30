@@ -1171,7 +1171,10 @@ export interface ReoptAction {
     | 'content_gap'
     | 'local_relevance'
     | 'brand_search_decline'
-  source?: 'organic' | 'maps'
+    // Saved out of a SerMaStr strategy conversation rather than derived from a
+    // tracker signal — stored separately so it survives plan rebuilds.
+    | 'assistant_action'
+  source?: 'organic' | 'maps' | 'assistant'
   keyword: string
   diagnosis: string
   recommendation: string
@@ -1180,6 +1183,9 @@ export interface ReoptAction {
   severity: 'info' | 'warning' | 'critical'
   sort: number
   detail?: ReoptActionDetail | null
+  // Saved SerMaStr strategy steps only: their assistant_plan_actions row id,
+  // used by the per-row "Mark done" close.
+  assistant_action_id?: string | null
 }
 
 // SOP-grounded enrichment for one action (present only once a playbook is loaded).

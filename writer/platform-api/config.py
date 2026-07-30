@@ -143,6 +143,16 @@ class Settings(BaseSettings):
     # auto-discovery + competitor content watch (sitemap reads only).
     competitor_intel_enabled: bool = True
     competitor_intel_interval_days: int = 7
+
+    # Client site inventory — the pages the client's live site actually has,
+    # so strategy answers can tell what already exists. Refreshed weekly by the
+    # site_inventory job; the paid fallback is one DataForSEO `site:` query and
+    # only fires when no sitemap is readable.
+    site_inventory_enabled: bool = True
+    site_inventory_interval_days: int = 7
+    site_inventory_paid_fallback: bool = True
+    site_inventory_max_urls: int = 2000      # stored per client
+    site_inventory_context_paths: int = 80   # landing paths carried into a prompt
     competitor_watch_max_pages: int = 2000
     # Trend watching (strategist phase 4): cross-client algo-update detection
     # (daily DB-reads-only sweep) + seasonal demand from cached volume history.

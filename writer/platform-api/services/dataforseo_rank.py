@@ -189,6 +189,66 @@ async def fetch_serp_rank(keyword: str, domain: str, location_code: int) -> Opti
     return find_rank_in_items(items, domain)
 
 
+def find_local_pack_in_items(items: list[dict]) -> list[dict]:
+    """The local pack (map pack) entries in a SERP `items` array, in order. Pure.
+
+    Returns ``[{position, title, domain, rating, reviews}, ...]`` — empty when
+    the SERP has no local pack, which is itself the answer to "is this keyword
+    even a local-pack query?". The organic and local-pack blocks come back in
+    the SAME response, so reading this costs no extra call.
+    """
+    out: list[dict] = []
+    for item in items or []:
+        if (item.get("type") or "") != "local_pack":
+            continue
+        rating = item.get("rating") or {}
+        out.append({
+            "position": item.get("rank_group") or len(out) + 1,
+            "title": item.get("title"),
+            "domain": item.get("domain"),
+            "rating": rating.get("value"),
+            "reviews": rating.get("votes_count"),
+        })
+    return out
+
+
+async def fetch_serp_overview(
+    keyword: str, domain: str, location_code: int
+) -> dict:
+    """One live SERP call, read two ways: where `domain` ranks organically AND
+    who holds the local pack.
+
+    Returns ``{"organic": [{url, position}, ...], "local_pack": [...],
+    "has_local_pack": bool}``. A strategy question ("how do we rank in X") needs
+    both channels, and DataForSEO returns both blocks in a single response — so
+    this is one paid call, not two. Raises on a task error so callers degrade.
+    """
+    payload = [
+        {
+            "keyword": keyword,
+            "language_code": settings.dataforseo_default_language_code,
+            "location_code": location_code,
+            "depth": settings.dataforseo_serp_depth,
+            "calculate_rectangles": False,
+        }
+    ]
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(f"{_BASE_URL}{_SERP_PATH}", headers=_auth_header(), json=payload)
+        resp.raise_for_status()
+        body = resp.json()
+
+    tasks = body.get("tasks") or []
+    if not tasks or (tasks[0].get("status_code") or 0) >= 40000:
+        raise RuntimeError(f"dataforseo_serp_error: {tasks[0].get('status_message') if tasks else 'no tasks'}")
+    items = (tasks[0].get("result") or [{}])[0].get("items") or []
+    pack = find_local_pack_in_items(items)
+    return {
+        "organic": find_all_ranks_in_items(items, domain),
+        "local_pack": pack,
+        "has_local_pack": bool(pack),
+    }
+
+
 async def fetch_serp_rank_urls(keyword: str, domain: str, location_code: int) -> list[dict]:
     """Live organic SERP: ALL of `domain`'s ranking URLs for `keyword`.
 

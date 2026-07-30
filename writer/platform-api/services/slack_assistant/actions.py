@@ -915,8 +915,109 @@ def _act_generate_report(client_id: str, args: Optional[dict] = None) -> str:
     )
 
 
+def _clean_strategy_actions(raw) -> list[dict]:
+    """Normalize the model's `actions` argument into storable rows. Pure.
+
+    Tolerant of the two shapes a model actually emits — a list of objects, or a
+    list of bare strings — and drops anything with no title rather than storing
+    an empty row.
+    """
+    out: list[dict] = []
+    for item in raw or []:
+        if isinstance(item, str):
+            item = {"title": item}
+        if not isinstance(item, dict):
+            continue
+        title = (item.get("title") or "").strip()
+        if not title:
+            continue
+        out.append({
+            "title": title,
+            "detail": (item.get("detail") or "").strip() or None,
+            "keyword": (item.get("keyword") or "").strip() or None,
+        })
+    return out
+
+
+async def _stage_save_strategy_actions(client_id: str, args: dict) -> tuple[str, dict | str]:
+    """Normalize the steps and name them in the confirm, so nobody approves a
+    list they haven't read."""
+    from services.reopt_planner import ASSISTANT_ACTION_MAX
+
+    steps = _clean_strategy_actions(args.get("actions"))
+    if not steps:
+        return (
+            "reply",
+            "I don't have any concrete steps to save yet — tell me which parts "
+            "of the plan you want on the Action Plan.",
+        )
+    dropped = max(0, len(steps) - ASSISTANT_ACTION_MAX)
+    steps = steps[:ASSISTANT_ACTION_MAX]
+    args["actions"] = steps
+    listed = "\n".join(f"  {i}. {s['title']}" for i, s in enumerate(steps, 1))
+    tail = f"\n(That's the first {ASSISTANT_ACTION_MAX} — {dropped} more didn't fit.)" if dropped else ""
+    args["_confirm"] = (
+        f"add {len(steps)} step{'s' if len(steps) != 1 else ''} to the Action "
+        f"Plan:\n{listed}{tail}"
+    )
+    return "confirm", args
+
+
+async def _act_save_strategy_actions(client_id: str, args: Optional[dict] = None) -> str:
+    """Persist the steps, then rebuild the plan so they show up immediately.
+
+    The steps live in their own table because `build_plan` regenerates
+    `reopt_plans.items` wholesale; the rebuild here is what merges them in.
+    """
+    from services import reopt_planner
+
+    steps = _clean_strategy_actions((args or {}).get("actions"))
+    if not steps:
+        return "Nothing to save."
+    try:
+        get_supabase().table("assistant_plan_actions").insert(
+            [{"client_id": client_id, **s} for s in steps]
+        ).execute()
+    except Exception as exc:
+        return f"Couldn't save those steps: {exc}"
+    try:
+        # trigger="manual" — it IS a user-initiated rebuild, and reopt_plans has
+        # a CHECK constraint allowing only scheduled|drop|manual.
+        reopt_planner.build_plan(client_id, trigger="manual")
+    except Exception:
+        # The rows are saved; they'll appear on the next rebuild regardless.
+        return (
+            f"Saved {len(steps)} step(s) to the Action Plan — they'll appear on "
+            "the next rebuild."
+        )
+    return (
+        f"Saved {len(steps)} step(s) to the Action Plan. They're at the top of "
+        "the list now, and they'll stay there through rebuilds until someone "
+        "closes them."
+    )
+
+
+def _client_for_serp(client_id: str) -> Optional[dict]:
+    rows = (
+        get_supabase().table("clients")
+        .select("website_url, gbp, business_location, rank_tracking_location_code")
+        .eq("id", client_id)
+        .limit(1)
+        .execute()
+    ).data
+    return rows[0] if rows else None
+
+
 async def _stage_live_serp(client_id: str, args: dict) -> tuple[str, dict | str]:
-    """Validate the keyword and name it in the confirm phrase."""
+    """Validate the keyword, resolve an optional location override, and name
+    both in the confirm phrase.
+
+    The location matters more than it looks: without it the check runs at the
+    client's CONFIGURED tracking location, so asking about Pompano Beach for a
+    client tracked in Tampa silently returns Tampa's results — the wrong answer
+    to a question about a new area. Resolving it here (before the confirm) also
+    means the teammate sees exactly which place is about to be searched.
+    """
     keyword = (args.get("keyword") or "").strip()
     if not keyword:
         return (
@@ -924,41 +1025,97 @@ async def _stage_live_serp(client_id: str, args: dict) -> tuple[str, dict | str]
             "Which keyword should I check? e.g. “check the live SERP for "
             "roof repair akron for Acme”.",
         )
-    args["_confirm"] = f"run one live Google SERP check for *{keyword}*"
+    where = (args.get("location") or "").strip()
+    if where:
+        # The client row is only needed to infer the country for the location
+        # lookup — a plain keyword stages without touching the DB.
+        client = _client_for_serp(client_id)
+        if not client:
+            return "reply", "Client not found."
+        from services import locations_service
+
+        try:
+            matches = await locations_service.search_locations(client, where, limit=5)
+        except Exception:
+            matches = []
+        if not matches:
+            return (
+                "reply",
+                f"I couldn't resolve “{where}” to a Google search location. Try the "
+                "city with its state or region (e.g. “Pompano Beach, Florida”), or "
+                "drop the location and I'll use the client's tracking location.",
+            )
+        chosen = matches[0]
+        args["location_code"] = chosen["location_code"]
+        args["location_name"] = chosen.get("location_name") or where
+    else:
+        args["location_code"] = None
+        args["location_name"] = None
+
+    scope = args["location_name"] or "their tracked location"
+    args["_confirm"] = (
+        f"run one live Google check for *{keyword}* in *{scope}* "
+        "(organic results + the local pack)"
+    )
     return "confirm", args
 
 
 async def _act_live_serp(client_id: str, args: Optional[dict] = None) -> str:
-    """One live DataForSEO SERP pull: where the client's domain ranks right now."""
+    """One live DataForSEO SERP pull, read for both channels: where the client's
+    domain ranks organically, and who holds the local pack.
+
+    Both blocks come back in the same response, so this stays one paid call.
+    """
     from services import dataforseo_rank
 
-    keyword = ((args or {}).get("keyword") or "").strip()
-    supabase = get_supabase()
-    rows = (
-        supabase.table("clients")
-        .select("website_url, gbp, rank_tracking_location_code")
-        .eq("id", client_id)
-        .limit(1)
-        .execute()
-    ).data
-    if not rows:
+    args = args or {}
+    keyword = (args.get("keyword") or "").strip()
+    client = _client_for_serp(client_id)
+    if not client:
         return "Client not found."
-    c = rows[0]
-    domain = dataforseo_rank.extract_domain(c.get("website_url") or "")
+    domain = dataforseo_rank.extract_domain(client.get("website_url") or "")
     if not domain:
         return "This client has no website URL on file — I can't identify their domain in the SERP."
-    location_code = dataforseo_rank.location_code_for(c)
+
+    location_code = args.get("location_code") or dataforseo_rank.location_code_for(client)
+    where = args.get("location_name")
+    scope = f" in {where}" if where else ""
     try:
-        urls = await dataforseo_rank.fetch_serp_rank_urls(keyword, domain, location_code)
+        serp = await dataforseo_rank.fetch_serp_overview(keyword, domain, location_code)
     except Exception as exc:
         return f"Live SERP check failed: {exc}"
-    if not urls:
-        return (
-            f"Live SERP for *{keyword}* (just checked): no page of {domain} in the "
-            f"top {settings.dataforseo_serp_depth} organic results."
+
+    lines = [f"Live Google results for *{keyword}*{scope} (just checked):", ""]
+
+    organic = serp.get("organic") or []
+    if organic:
+        lines.append(f"*Organic* — {domain} ranks:")
+        lines += [f"  #{u['position']} — {u['url']}" for u in organic[:5]]
+    else:
+        lines.append(
+            f"*Organic* — no page of {domain} in the top "
+            f"{settings.dataforseo_serp_depth} results."
         )
-    lines = "\n".join(f"  #{u['position']} — {u['url']}" for u in urls[:5])
-    return f"Live SERP for *{keyword}* (just checked) — {domain} ranks:\n{lines}"
+
+    lines.append("")
+    pack = serp.get("local_pack") or []
+    if not serp.get("has_local_pack"):
+        lines.append(
+            "*Local pack* — this search doesn't show one, so there's no map-pack "
+            "position to win here; it's an organic play."
+        )
+    else:
+        lines.append("*Local pack* — currently held by:")
+        for p in pack:
+            rating = (
+                f" — {p['rating']}★ ({p['reviews']} reviews)"
+                if p.get("rating") is not None else ""
+            )
+            lines.append(f"  #{p['position']} — {p.get('title') or p.get('domain')}{rating}")
+        if not any((p.get("domain") or "") == domain for p in pack):
+            lines.append(f"  ({domain} is not in the pack.)")
+
+    return "\n".join(lines)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1292,7 +1449,7 @@ _ACTIONS: dict[str, dict] = {
     # A right-now Google SERP read for one keyword — the on-demand freshness
     # escape hatch when the weekly tracked rank isn't recent enough.
     "check_live_serp": {
-        "label": "run a live Google SERP check",
+        "label": "run a live Google check (organic + local pack)",
         "paid": True,
         "note": "one live DataForSEO SERP pull",
         "run": _act_live_serp,
@@ -1300,8 +1457,48 @@ _ACTIONS: dict[str, dict] = {
         "params": {
             "properties": {
                 "keyword": {"type": "string", "description": "The exact search keyword to check the live Google results for."},
+                "location": {
+                    "type": "string",
+                    "description": (
+                        "Optional city/area to search from, e.g. 'Pompano Beach, "
+                        "Florida'. Supply this whenever the question is about a "
+                        "specific place — without it the check runs at the client's "
+                        "configured tracking location, which may be a different city."
+                    ),
+                },
             },
             "required": ["keyword"],
+        },
+    },
+    # Save the steps of a strategy into the client's Action Plan, where the
+    # team already looks. Confirm-gated: no API spend, but it creates rows a
+    # human will act on.
+    "save_strategy_actions": {
+        "label": "save these steps to the Action Plan",
+        "paid": True,
+        "note": "adds the steps to the client's Action Plan (recommend-only — nothing runs)",
+        "run": _act_save_strategy_actions,
+        "stage": _stage_save_strategy_actions,
+        "params": {
+            "properties": {
+                "actions": {
+                    "type": "array",
+                    "description": (
+                        "The steps to save, in the order they should be done. Each "
+                        "is one concrete piece of work, not a theme."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string", "description": "The step itself, as an instruction (e.g. 'Build a Pompano Beach service page for water damage restoration')."},
+                            "detail": {"type": "string", "description": "Why this step, with the numbers behind it."},
+                            "keyword": {"type": "string", "description": "The keyword or theme this step serves, for grouping."},
+                        },
+                        "required": ["title"],
+                    },
+                },
+            },
+            "required": ["actions"],
         },
     },
     # ── Admin actions: AI Visibility keywords + competitors ────────────────

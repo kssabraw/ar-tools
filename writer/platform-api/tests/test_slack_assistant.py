@@ -1527,3 +1527,194 @@ def test_sop_domains_never_empty():
     # An empty set degrades the SOP block to the router doc — the thin-advice
     # failure. There's always a floor.
     assert slack_assistant.sop_domains("something unclassifiable", {})
+
+
+# ---------------------------------------------------------------------------
+# Ranking-strategy asks — scope (keyword + channel) before strategising.
+#
+# The Pompano question is answerable only once you know WHICH search and WHICH
+# channel; the generic clarify gate catches it but asks for one specific, and a
+# campaign plan needs both.
+# ---------------------------------------------------------------------------
+
+
+def test_ranking_strategy_ask_fires_on_the_pompano_question():
+    assert slack_assistant.looks_like_ranking_strategy_ask(_POMPANO)
+
+
+def test_ranking_strategy_ask_fires_across_phrasings():
+    for msg in [
+        "how can bsa claims rank in pompano beach",
+        "how do we rank for water damage restoration",
+        "we want to rank in Boca Raton",
+        "how can we get into the map pack in Deerfield",
+        "help us show up in more suburbs",
+        "any ideas how to improve our rankings in Tampa?",
+        "what should we do to compete in Fort Lauderdale",
+        "trying to break into the top 3 in Orlando",
+    ]:
+        assert slack_assistant.looks_like_ranking_strategy_ask(msg), msg
+
+
+def test_ranking_metric_lookups_are_not_strategy_asks():
+    # These want a number, not a plan — the gate must not turn a lookup into
+    # an interrogation.
+    for msg in [
+        "what's our rank for blocked drain",
+        "how did we rank last month",
+        "where do we rank in pompano beach",
+        "what rank are we for roof repair",
+        "list the keywords ranking in the top 10",
+    ]:
+        assert not slack_assistant.looks_like_ranking_strategy_ask(msg), msg
+
+
+def test_non_ranking_advice_is_not_a_ranking_strategy_ask():
+    # Advice-shaped but not about ranking — these belong to the generic gate.
+    for msg in [
+        "what should we do about the budget",
+        "any thoughts on the new brief?",
+        "how can we speed up content delivery",
+    ]:
+        assert not slack_assistant.looks_like_ranking_strategy_ask(msg), msg
+
+
+def test_pompano_question_gets_the_ranking_instruction_not_the_generic_one():
+    # Wiring: the specific instruction reaches the prompt, and the generic
+    # "ask ONE question" instruction is suppressed so they can't conflict.
+    system = _system_prompt_for(_POMPANO)
+    assert "THIS TURN IS A RANKING-STRATEGY REQUEST" in system
+    assert "THIS TURN IS UNDERSPECIFIED" not in system
+
+
+def test_ranking_instruction_names_both_specifics_and_all_three_channels():
+    system = _system_prompt_for(_POMPANO)
+    assert "THE KEYWORD" in system and "THE CHANNEL" in system
+    for channel in ("organic", "local pack", "AI answers"):
+        assert channel in system, channel
+
+
+def test_non_ranking_vague_ask_still_gets_the_generic_instruction():
+    system = _system_prompt_for("what should we do?")
+    assert "THIS TURN IS UNDERSPECIFIED" in system
+    assert "THIS TURN IS A RANKING-STRATEGY REQUEST" not in system
+
+
+# ---------------------------------------------------------------------------
+# check_live_serp — location-scoped, and read for both channels.
+#
+# Without a location the check runs at the client's CONFIGURED tracking
+# location, so a question about a new city silently returns the old one.
+# ---------------------------------------------------------------------------
+
+
+def test_live_serp_action_accepts_a_location():
+    params = slack_assistant._ACTIONS["check_live_serp"]["params"]
+    assert "location" in params["properties"]
+    assert params["required"] == ["keyword"]  # still optional
+
+
+def test_live_serp_stage_resolves_a_location_and_names_it_in_the_confirm():
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from services.slack_assistant import actions
+
+    with patch.object(actions, "_client_for_serp", return_value={"gbp": {}}), \
+         patch("services.locations_service.search_locations", new=AsyncMock(
+             return_value=[{"location_code": 1015214, "location_name": "Pompano Beach,Florida,United States"}])):
+        kind, staged = asyncio.run(actions._stage_live_serp(
+            "c1", {"keyword": "water damage restoration", "location": "pompano beach"}
+        ))
+    assert kind == "confirm"
+    assert staged["location_code"] == 1015214
+    assert "Pompano Beach" in staged["_confirm"]
+    assert "water damage restoration" in staged["_confirm"]
+
+
+def test_live_serp_stage_asks_again_when_a_location_cannot_be_resolved():
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    from services.slack_assistant import actions
+
+    with patch.object(actions, "_client_for_serp", return_value={"gbp": {}}), \
+         patch("services.locations_service.search_locations", new=AsyncMock(return_value=[])):
+        kind, msg = asyncio.run(actions._stage_live_serp(
+            "c1", {"keyword": "roof repair", "location": "nowhereville"}
+        ))
+    assert kind == "reply"
+    assert "nowhereville" in msg
+
+
+def test_live_serp_without_a_location_falls_back_to_the_tracked_location():
+    import asyncio
+    from unittest.mock import patch
+
+    from services.slack_assistant import actions
+
+    # No location supplied: must not touch the DB at all.
+    with patch.object(actions, "_client_for_serp", side_effect=AssertionError("should not read the client")):
+        kind, staged = asyncio.run(actions._stage_live_serp("c1", {"keyword": "roof repair"}))
+    assert kind == "confirm"
+    assert staged["location_code"] is None
+    assert "their tracked location" in staged["_confirm"]
+
+
+# ---------------------------------------------------------------------------
+# save_strategy_actions — a written strategy becomes Action Plan steps.
+# ---------------------------------------------------------------------------
+
+
+def test_clean_strategy_actions_normalizes_objects_and_bare_strings():
+    from services.slack_assistant import actions
+
+    cleaned = actions._clean_strategy_actions([
+        {"title": "  Build a Pompano page  ", "detail": "no page exists", "keyword": "water damage"},
+        "Add Pompano to tracked keywords",
+        {"title": "   "},          # empty title — dropped
+        {"detail": "orphan"},      # no title — dropped
+        42,                        # not a step at all
+    ])
+    assert [c["title"] for c in cleaned] == [
+        "Build a Pompano page", "Add Pompano to tracked keywords",
+    ]
+    assert cleaned[0]["keyword"] == "water damage"
+    assert cleaned[1]["detail"] is None
+
+
+def test_stage_save_strategy_actions_lists_every_step_in_the_confirm():
+    import asyncio
+
+    from services.slack_assistant import actions
+
+    kind, staged = asyncio.run(actions._stage_save_strategy_actions("c1", {
+        "actions": [{"title": "Build a Pompano page"}, {"title": "Run a geo-grid"}],
+    }))
+    assert kind == "confirm"
+    assert "Build a Pompano page" in staged["_confirm"]
+    assert "Run a geo-grid" in staged["_confirm"]
+
+
+def test_stage_save_strategy_actions_asks_again_with_nothing_to_save():
+    import asyncio
+
+    from services.slack_assistant import actions
+
+    kind, msg = asyncio.run(actions._stage_save_strategy_actions("c1", {"actions": []}))
+    assert kind == "reply"
+    assert "steps" in msg.lower()
+
+
+def test_stage_save_strategy_actions_caps_and_says_what_was_dropped():
+    import asyncio
+
+    from services.reopt_planner import ASSISTANT_ACTION_MAX
+    from services.slack_assistant import actions
+
+    kind, staged = asyncio.run(actions._stage_save_strategy_actions("c1", {
+        "actions": [{"title": f"step {i}"} for i in range(ASSISTANT_ACTION_MAX + 3)],
+    }))
+    assert kind == "confirm"
+    assert len(staged["actions"]) == ASSISTANT_ACTION_MAX
+    assert "3 more didn't fit" in staged["_confirm"]

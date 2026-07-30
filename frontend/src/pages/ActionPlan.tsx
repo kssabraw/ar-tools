@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, ArrowRight, RefreshCw, AlertTriangle, TrendingUp, TrendingDown, GitMerge, Sparkles,
   CheckCircle2, MapPin, Users, Star, Link2, FileText, Target, ChevronDown, Globe, Bot,
+  MessageSquare,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client, ReoptAction, ReoptPlan } from '../lib/types'
@@ -90,7 +91,7 @@ export function ActionPlan() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {actions.map((a, i) => (
-            <ActionRow key={`${a.kind}-${a.keyword}-${i}`} action={a} onGo={() => navigate('/' + a.cta_path.replace(/^\//, ''))} />
+            <ActionRow key={`${a.kind}-${a.keyword}-${i}`} action={a} clientId={id!} onGo={() => navigate('/' + a.cta_path.replace(/^\//, ''))} />
           ))}
         </div>
       )}
@@ -99,8 +100,16 @@ export function ActionPlan() {
   )
 }
 
-function ActionRow({ action, onGo }: { action: ReoptAction; onGo: () => void }) {
+function ActionRow({ action, clientId, onGo }: { action: ReoptAction; clientId: string; onGo: () => void }) {
   const [open, setOpen] = useState(false)
+  const queryClient = useQueryClient()
+  // Saved SerMaStr steps are the one kind with a lifecycle of their own — they
+  // persist through rebuilds until explicitly closed, so they carry a close.
+  const close = useMutation({
+    mutationFn: () =>
+      api.post<ReoptPlan>(`/clients/${clientId}/assistant-actions/${action.assistant_action_id}/close`, {}),
+    onSuccess: (fresh) => queryClient.setQueryData(['action-plan', clientId], fresh),
+  })
   const c = sev(action.severity)
   const meta = kindMeta(action.kind)
   const ch = channel(action)
@@ -126,9 +135,16 @@ function ActionRow({ action, onGo }: { action: ReoptAction; onGo: () => void }) 
           <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>{action.diagnosis}</div>
           <div style={{ fontSize: 13, color: '#334155', marginTop: 4, lineHeight: 1.5 }}>{action.recommendation}</div>
         </div>
-        <button style={goBtn} onClick={onGo}>
-          {action.cta_label} <ArrowRight size={13} />
-        </button>
+        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+          {action.kind === 'assistant_action' && action.assistant_action_id && (
+            <button style={doneBtn} disabled={close.isPending} onClick={() => close.mutate()}>
+              <CheckCircle2 size={13} /> {close.isPending ? 'Closing…' : 'Mark done'}
+            </button>
+          )}
+          <button style={goBtn} onClick={onGo}>
+            {action.cta_label} <ArrowRight size={13} />
+          </button>
+        </div>
       </div>
 
       {/* Q3: dropdown with why this is recommended + what's needed. */}
@@ -202,6 +218,7 @@ function kindMeta(kind: string): { label: string; icon: React.ReactNode } {
     case 'local_relevance': return { label: 'Local relevance', icon: <Target size={18} /> }
     case 'maps_solv_drop': return { label: 'Local share loss', icon: <TrendingDown size={18} /> }
     case 'brand_search_decline': return { label: 'Brand search down', icon: <TrendingDown size={18} /> }
+    case 'assistant_action': return { label: 'Saved from SerMaStr', icon: <MessageSquare size={18} /> }
     default: return { label: 'Opportunity', icon: <TrendingUp size={18} /> }
   }
 }
@@ -212,6 +229,8 @@ function kindMeta(kind: string): { label: string; icon: React.ReactNode } {
 function channel(action: ReoptAction): { label: string; fg: string; bg: string; icon: React.ReactNode } {
   if (action.kind === 'brand_search_decline')
     return { label: 'AI / LLM visibility', fg: '#7c3aed', bg: '#f5f3ff', icon: <Bot size={11} style={chIcon} /> }
+  if (action.source === 'assistant')
+    return { label: 'Saved strategy', fg: '#b45309', bg: '#fffbeb', icon: <MessageSquare size={11} style={chIcon} /> }
   if (action.source === 'maps')
     return { label: 'Local pack · Maps geo-grid', fg: '#0369a1', bg: '#f0f9ff', icon: <MapPin size={11} style={chIcon} /> }
   return { label: 'Organic search', fg: '#047857', bg: '#ecfdf5', icon: <Globe size={11} style={chIcon} /> }
@@ -228,6 +247,7 @@ function target(action: ReoptAction): { label: string; value: string } {
     case 'backlink_gap': return { label: 'Scope', value: v }
     case 'maps_solv_drop': return { label: 'Scope', value: v }
     case 'brand_search_decline': return { label: 'Scope', value: v }
+    case 'assistant_action': return { label: 'Focus', value: v }
     default: return { label: 'Keyword', value: v }
   }
 }
@@ -368,6 +388,12 @@ function kindGuide(kind: string): { why: string; needed: string[]; source: strin
         ],
         source: 'Rank tracker — branded GSC impressions trend.',
       }
+    case 'assistant_action':
+      return {
+        why: 'A step you saved out of a strategy conversation with SerMaStr. It stays on the plan through rebuilds until someone closes it.',
+        needed: ['Do the step, then close it out.'],
+        source: 'Saved from a SerMaStr conversation — not a tracker signal.',
+      }
     default:
       return {
         why: 'An opportunity surfaced from this client’s rank-tracker signals.',
@@ -414,6 +440,11 @@ const chIcon: React.CSSProperties = { flexShrink: 0 }
 const goBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0,
   fontSize: 12, fontWeight: 600, color: '#6366f1', background: '#eef2ff',
+  border: 'none', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', alignSelf: 'center',
+}
+const doneBtn: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0,
+  fontSize: 12, fontWeight: 600, color: '#047857', background: '#ecfdf5',
   border: 'none', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', alignSelf: 'center',
 }
 const discloseBtn: React.CSSProperties = {

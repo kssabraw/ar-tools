@@ -34,6 +34,7 @@ from services.rank_report import run_rank_report_job
 from services.rank_materialize import run_gsc_materialize_job
 from services.citation_check import run_citation_check_job
 from services.competitor_intel import run_competitor_intel_job
+from services.site_inventory import run_site_inventory_job
 from services.deliverables_sheet import (
     run_log_job as run_deliverables_log_job,
     run_notes_scan_job as run_deliverable_notes_scan_job,
@@ -536,6 +537,8 @@ async def _process_job(job: dict) -> None:
         await run_citation_check_job(job)
     elif job_type == "competitor_intel":
         await run_competitor_intel_job(job)
+    elif job_type == "site_inventory":
+        await run_site_inventory_job(job)
     elif job_type == "page_backlink_intel":
         await run_page_backlink_job(job)
     elif job_type == "website_scrape":

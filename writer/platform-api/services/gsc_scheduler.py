@@ -490,6 +490,7 @@ async def gsc_scheduler() -> None:
     from services.local_dominator import enqueue_due_maps_scans, poll_pending_maps_scans
     from services.citation_check import enqueue_due_citation_checks
     from services.competitor_intel import enqueue_due_competitor_intel
+    from services.site_inventory import enqueue_due_site_inventory
     from services.deliverables_sheet import enqueue_due_notes_scans as enqueue_due_deliverable_notes
     from services.domain_intel import enqueue_due_domain_intel
     from services.trend_watch import run_trend_sweep
@@ -588,6 +589,7 @@ async def gsc_scheduler() -> None:
                 # monthly page-level RD-imbalance captures.
                 _safe("citation_checks", enqueue_due_citation_checks)
                 _safe("competitor_intel", enqueue_due_competitor_intel)
+                _safe("site_inventory", enqueue_due_site_inventory)
                 # Weekly Domain Intelligence keyword-gap refresh (per-client
                 # interval-gated; notifies on newly-opened gaps).
                 _safe("domain_intel", enqueue_due_domain_intel)

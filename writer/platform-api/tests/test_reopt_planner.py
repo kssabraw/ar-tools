@@ -543,3 +543,118 @@ def test_enqueue_event_trigger_window_zero_disables_debounce(monkeypatch):
     # event refresh on + window=0 → no recency query; the event rebuild is allowed.
     fake = _run_enqueue(monkeypatch, "maps_drop", has_recent=True, window=0, event_refresh=True)
     assert len(fake.inserts) == 1
+
+
+# ---------------------------------------------------------------------------
+# Saved SerMaStr strategy steps — merged into every rebuild.
+#
+# The plan's items are regenerated wholesale on each build, which is exactly why
+# these rows live in their own table.
+# ---------------------------------------------------------------------------
+
+
+def test_build_assistant_actions_maps_saved_steps():
+    rows = [
+        {"id": "a1", "title": "Build a Pompano Beach page", "detail": "No page exists today.",
+         "keyword": "water damage restoration"},
+    ]
+    actions = reopt_planner.build_assistant_actions("c1", rows)
+    assert len(actions) == 1
+    a = actions[0]
+    assert a["kind"] == "assistant_action" and a["source"] == "assistant"
+    assert a["recommendation"] == "Build a Pompano Beach page"
+    assert a["diagnosis"] == "No page exists today."
+    assert a["keyword"] == "water damage restoration"
+    assert a["assistant_action_id"] == "a1"
+    assert a["cta_path"] == "clients/c1/action-plan"
+
+
+def test_build_assistant_actions_preserves_written_order():
+    rows = [{"id": str(i), "title": f"step {i}"} for i in range(4)]
+    actions = reopt_planner.build_assistant_actions("c1", rows)
+    sorts = [a["sort"] for a in actions]
+    assert sorts == sorted(sorts, reverse=True)  # first written sorts highest
+    assert [a["recommendation"] for a in actions] == [f"step {i}" for i in range(4)]
+
+
+def test_build_assistant_actions_rank_between_ordinary_drops_and_the_emergencies():
+    # Above ordinary drops (a person chose these), below BOTH emergencies:
+    # the sitewide banner and a deindexed page.
+    a = reopt_planner.build_assistant_actions("c1", [{"id": "x", "title": "t"}])[0]
+    deindex_sort = reopt_planner._SORT_DROP + reopt_planner._SORT_DEINDEX_BONUS
+    assert reopt_planner._SORT_DROP < a["sort"] < deindex_sort < reopt_planner._SORT_SITEWIDE
+
+
+def test_build_assistant_actions_skips_untitled_rows_and_caps():
+    rows = [{"id": "x", "title": ""}] + [
+        {"id": str(i), "title": f"s{i}"} for i in range(reopt_planner.ASSISTANT_ACTION_MAX + 5)
+    ]
+    actions = reopt_planner.build_assistant_actions("c1", rows)
+    assert len(actions) <= reopt_planner.ASSISTANT_ACTION_MAX
+    assert all(a["recommendation"] for a in actions)
+
+
+def test_build_assistant_actions_defaults_the_grouping_and_diagnosis():
+    a = reopt_planner.build_assistant_actions("c1", [{"id": "x", "title": "Do the thing"}])[0]
+    assert a["keyword"] == "Strategy"
+    assert "SerMaStr" in a["diagnosis"]
+
+
+# ---------------------------------------------------------------------------
+# Trigger vocabulary vs the DB CHECK.
+#
+# reopt_plans.trigger is constrained, and an unlisted value builds the entire
+# plan before dying at the INSERT — expensive and silent. This scans real call
+# sites so a new trigger can't be introduced without widening the constraint.
+# ---------------------------------------------------------------------------
+
+import ast
+import pathlib
+
+
+def _trigger_literals() -> list[tuple[str, int, str]]:
+    """Every literal `trigger=` passed to enqueue_reopt_plan / build_plan in
+    the app source (tests excluded — they may exercise invalid values)."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    targets = {"enqueue_reopt_plan", "build_plan"}
+    found: list[tuple[str, int, str]] = []
+    for sub in ("services", "routers"):
+        for path in sorted((root / sub).rglob("*.py")):
+            try:
+                tree = ast.parse(path.read_text())
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                fn = node.func
+                name = getattr(fn, "attr", None) or getattr(fn, "id", None)
+                if name not in targets:
+                    continue
+                # recipe_engine.build_plan is a different function on a
+                # different table — skip it by module qualifier.
+                if isinstance(fn, ast.Attribute) and getattr(fn.value, "id", "") == "recipe_engine":
+                    continue
+                for kw in node.keywords:
+                    if kw.arg == "trigger" and isinstance(kw.value, ast.Constant):
+                        if isinstance(kw.value.value, str):
+                            found.append((path.name, node.lineno, kw.value.value))
+    return found
+
+
+def test_every_trigger_literal_is_allowed_by_the_db_check():
+    offenders = [
+        f"{f}:{ln}: {val!r}"
+        for f, ln, val in _trigger_literals()
+        if val not in reopt_planner.PLAN_TRIGGERS
+    ]
+    assert not offenders, (
+        "trigger values not in reopt_planner.PLAN_TRIGGERS (and therefore "
+        "rejected by the reopt_plans CHECK): " + str(offenders)
+    )
+
+
+def test_the_scan_actually_finds_call_sites():
+    # A scan that silently matches nothing would make the test above vacuous.
+    values = {v for _, _, v in _trigger_literals()}
+    assert {"manual", "scheduled", "drop", "maps_drop", "offpage"} <= values

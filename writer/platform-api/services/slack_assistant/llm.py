@@ -27,6 +27,7 @@ from services.slack_assistant.helpers import (
     format_context,
     format_history,
     is_affirmative,
+    looks_like_ranking_strategy_ask,
     looks_underspecified,
     resolve_client,
     sop_domains,
@@ -35,6 +36,7 @@ from services.slack_assistant.helpers import (
 )
 from services.slack_assistant.prompts import (
     _CLARIFY_NUDGE,
+    _RANKING_STRATEGY_NUDGE,
     _PORTFOLIO_SYSTEM,
     _SYSTEM,
     _WEB_STYLE,
@@ -668,7 +670,13 @@ async def interpret(
     # per-turn instruction (deterministic gate, not the model's judgement): the
     # standing ask-when-unsure rule loses to the Director's-voice pull toward
     # committing, and the observed failure is a confident generic answer.
-    if looks_underspecified(question, context, history):
+    # A ranking-strategy ask ("how can we rank in <city>") needs BOTH the keyword
+    # and the channel before a strategy means anything, so it gets its own
+    # instruction and wins over the generic one — which also catches this
+    # question but asks for a single specific.
+    if looks_like_ranking_strategy_ask(question):
+        system += _RANKING_STRATEGY_NUDGE
+    elif looks_underspecified(question, context, history):
         system += _CLARIFY_NUDGE
 
     async def on_text(delta: str) -> None:
