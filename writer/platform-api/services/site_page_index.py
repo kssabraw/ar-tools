@@ -186,7 +186,9 @@ async def _fetch_sitemap_urls(base_url: str) -> list[str]:
     seen_sitemaps: set[str] = set()
 
     async with httpx.AsyncClient(
-        timeout=_TIMEOUT, follow_redirects=True, headers={"User-Agent": "ar-tools-sitemap/1.0"}
+        timeout=_TIMEOUT,
+        follow_redirects=True,
+        headers={"User-Agent": settings.crawler_user_agent},
     ) as client:
         # Seed the queue from robots.txt + the conventional sitemap paths.
         queue: list[str] = []

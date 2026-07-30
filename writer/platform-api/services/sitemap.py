@@ -25,9 +25,14 @@ from xml.etree import ElementTree as ET
 
 import httpx
 
+from config import settings
+
 logger = logging.getLogger(__name__)
 
-_UA = "Mozilla/5.0 (compatible; AR-Tools-SitemapBot/1.0)"
+# Shared honest crawler UA. This used to be a local
+# `Mozilla/5.0 (compatible; AR-Tools-SitemapBot/1.0)` — the generic-scraper shape
+# managed hosts rule on directly. See `crawler_user_agent` in config.
+_UA = settings.crawler_user_agent
 # Hard cap on bytes read off the wire per request (bounds memory for plain bodies).
 _MAX_DOWNLOAD = 25 * 1024 * 1024
 # Hard cap on bytes handed to the XML parser / produced by gzip inflation (bounds a

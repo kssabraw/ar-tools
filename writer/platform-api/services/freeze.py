@@ -287,18 +287,38 @@ def _recent_deindex_suspect(client_id: str, within_days: int = 6) -> bool:
         return True
 
 
+# Statuses that prove the origin is *serving* while refusing this particular
+# request: a bot filter, an auth wall, a rate limit. They are not evidence of a
+# deindex — a deindexed site still answers 200, and a dead one doesn't answer at
+# all. SiteGround's Anti-Bot AI returns 400 (with an `/.well-known/sgcaptcha/`
+# body) and 403 here, which is why this set exists: read as "not live" they made
+# a challenged-but-healthy site look dead and let a false deindex warning through.
+_REFUSED_BUT_SERVING = frozenset({400, 401, 403, 406, 407, 429, 451})
+
+
+def _is_serving(status_code: int) -> bool:
+    """Pure: does this status mean the origin is serving the homepage?
+
+    True for ordinary success/redirect statuses and for the refusal set above.
+    False for 404/410 (genuinely absent) and 5xx (genuinely down)."""
+    return status_code < 400 or status_code in _REFUSED_BUT_SERVING
+
+
 async def _homepage_is_live(website_url: str) -> bool:
-    """Best-effort: does the homepage respond (status < 400, following
-    redirects)? A live homepage means a `site:` miss is a probe artifact, not a
-    deindex — so we suppress the warning. On any network error we can't confirm
-    the site is up, so we return False (let the probe result stand)."""
+    """Best-effort: is the homepage being served (following redirects)?
+
+    A live homepage means a `site:` miss is a probe artifact, not a deindex — so
+    we suppress the warning. A refusal (`_REFUSED_BUT_SERVING`) also counts as
+    live: the host answered, it just declined us, which says nothing about
+    Google's index. On a network error or a 5xx we can't confirm the site is up,
+    so we return False and let the probe result stand."""
     import httpx
 
     url = website_url if website_url.startswith("http") else f"https://{website_url}"
     try:
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; ARToolsBot/1.0)"})
-        return resp.status_code < 400
+            resp = await client.get(url, headers={"User-Agent": settings.crawler_user_agent})
+        return _is_serving(resp.status_code)
     except Exception:
         return False
 

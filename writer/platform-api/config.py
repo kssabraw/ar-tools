@@ -178,10 +178,32 @@ class Settings(BaseSettings):
     # publish with the client's own application password. Overridable per
     # deployment so a host that wants a different string can be satisfied without a
     # code change.
+    #
+    # KEEP THE VERSION CURRENT. A pinned browser version does not stay benign: it
+    # ages into the *other* half of the same filter. SiteGround flagged our traffic
+    # for "legacy Chrome signatures" while this read Chrome/140 (a ~2025 release),
+    # i.e. the first attempt at this fix escaped the "script" rule only to land in
+    # the "outdated browser" rule. Treat a stale string here as a live defect, not
+    # cosmetic drift, and re-check it whenever a host starts challenging publishes.
+    # Impersonation is confined to this one path on purpose — everything that
+    # merely *reads* a client's site identifies itself honestly via
+    # `crawler_user_agent` below.
     wordpress_user_agent: str = (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+        "(KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
     )
+    # User-Agent for our first-party reads of a client's own site (sitemap
+    # discovery, the QA agent's page fetches, the freeze homepage probe, the
+    # location-page index). These are crawls, not an admin client, so they say so.
+    #
+    # The shape matters as much as the honesty: `Mozilla/5.0 (compatible; Foo/1.0)`
+    # is the classic generic-scraper signature and managed hosts rule on it
+    # directly — SiteGround matched exactly that pattern from our egress IPs, which
+    # came from four services each hardcoding their own variant of it. One honest
+    # token with a contact URL is both truthful and unmatched by that rule; a host
+    # that wants to allow us can key on it, and one that wants to block us can do
+    # that too, which is the point of identifying yourself.
+    crawler_user_agent: str = "AR-Tools/1.0 (+https://amazingrankings.com/bot)"
     # A fixed header identifying this tool on every request to a client's own
     # WordPress host, so a managed host can scope a bot-filter exemption to us
     # specifically instead of to a shared egress IP. The value is a shared secret
