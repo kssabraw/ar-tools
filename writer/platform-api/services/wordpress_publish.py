@@ -410,6 +410,19 @@ def _ssh_enabled_for(client: dict) -> bool:
     return True
 
 
+def _ssh_private_key() -> str:
+    """The configured private key, tolerating an escaped-newline PEM.
+
+    A PEM is multi-line, and pasting one into a KEY=VALUE environment editor
+    commonly flattens it into literal backslash-n sequences. A real PEM never
+    contains a backslash, so unescaping is unambiguous and saves a confusing
+    "invalid key" failure at publish time."""
+    key = settings.wordpress_ssh_private_key or ""
+    if "\\n" in key:
+        key = key.replace("\\n", "\n")
+    return key.strip() + "\n"
+
+
 async def _publish_via_ssh(
     *,
     client: dict,
@@ -472,7 +485,7 @@ async def _publish_via_ssh(
     connect_kwargs: dict = {
         "port": settings.wordpress_ssh_port,
         "username": settings.wordpress_ssh_username,
-        "client_keys": [asyncssh.import_private_key(settings.wordpress_ssh_private_key)],
+        "client_keys": [asyncssh.import_private_key(_ssh_private_key())],
     }
     if settings.wordpress_ssh_known_host:
         connect_kwargs["known_hosts"] = ([settings.wordpress_ssh_known_host], [], [])

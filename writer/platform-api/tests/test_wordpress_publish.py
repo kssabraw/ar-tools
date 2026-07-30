@@ -715,3 +715,14 @@ async def test_ssh_publish_refuses_explicit_featured_image(monkeypatch):
             featured_image_url="https://cdn.example.com/hero.jpg",
         )
     assert str(exc.value) == "wordpress_ssh_images_unsupported"
+
+
+def test_ssh_private_key_accepts_escaped_newline_pem(monkeypatch):
+    """Pasting a PEM into a KEY=VALUE editor commonly flattens the newlines."""
+    real = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\ndef\n-----END OPENSSH PRIVATE KEY-----"
+    flattened = real.replace("\n", "\\n")
+    monkeypatch.setattr(wordpress_publish.settings, "wordpress_ssh_private_key", flattened)
+    assert wordpress_publish._ssh_private_key() == real + "\n"
+    # A genuine multi-line PEM is unchanged apart from a trailing newline.
+    monkeypatch.setattr(wordpress_publish.settings, "wordpress_ssh_private_key", real)
+    assert wordpress_publish._ssh_private_key() == real + "\n"
