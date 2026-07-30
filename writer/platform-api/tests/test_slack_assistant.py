@@ -1718,3 +1718,30 @@ def test_stage_save_strategy_actions_caps_and_says_what_was_dropped():
     assert kind == "confirm"
     assert len(staged["actions"]) == ASSISTANT_ACTION_MAX
     assert "3 more didn't fit" in staged["_confirm"]
+
+
+# ---------------------------------------------------------------------------
+# The keyword-inference regression (2026-07-30, live).
+#
+# "I want to rank bsa claims in pompano beach. what do we need to do?" tripped
+# the gate and the instruction reached the model, which asked about the CHANNEL
+# but not the KEYWORD — it treated the client's 27 existing tracked keywords as
+# already answering "which keyword". Those are anchored to Tampa, Fort
+# Lauderdale, Orlando and Jacksonville; not one names Pompano Beach. Picking
+# what to rank for in a new city is the teammate's commercial decision.
+# ---------------------------------------------------------------------------
+_POMPANO_WANT = "I want to rank bsa claims in pompano beach. what do we need to do?"
+
+
+def test_the_want_to_rank_phrasing_trips_the_ranking_gate():
+    assert slack_assistant.looks_like_ranking_strategy_ask(_POMPANO_WANT)
+
+
+def test_ranking_instruction_forbids_inferring_the_keyword_from_tracked_data():
+    system = _system_prompt_for(_POMPANO_WANT)
+    assert "WHAT COUNTS AS THE KEYWORD BEING SUPPLIED" in system
+    # The exact wrong inference the live turn made.
+    assert "tracked keywords" in system
+    # And the two sentence-parsing traps that made it look supplied.
+    assert "SUBJECT of the sentence" in system
+    assert "the WHERE, never the WHAT" in system
