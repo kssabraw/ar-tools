@@ -257,6 +257,37 @@ def _looks_like_json(response: httpx.Response) -> bool:
     return False
 
 
+_LOGGED_HEADER_MAX = 600
+
+
+def _header_summary(response: httpx.Response) -> str:
+    """Render response headers onto a diagnostic log line.
+
+    A managed host's bot filter is diagnosed from the response headers — the
+    `set-cookie` a challenge issues, the edge's `server` and cache markers — and
+    a host's support team will ask for them, so the failure paths carry them
+    rather than status and body alone. Cookie *values* are reduced to the cookie
+    name: that a cookie was set is the diagnostic signal, its value is not, and
+    this keeps opaque tokens out of the logs. Bounded so a chatty edge can't
+    flood the line.
+    Never raises. This runs *inside* the failure paths, so an exception here
+    would replace a specific, actionable error code with a generic one — the
+    diagnostic must not be able to destroy the diagnosis."""
+    try:
+        headers = response.headers
+        # httpx.Headers preserves repeated headers (a challenge sets several
+        # cookies) via multi_items(); a plain mapping only has items().
+        items = headers.multi_items() if hasattr(headers, "multi_items") else headers.items()
+        parts: list[str] = []
+        for key, value in items:
+            if str(key).lower() == "set-cookie":
+                value = f"{str(value).split('=', 1)[0]}=<redacted>"
+            parts.append(f"{key}: {value}")
+        return "; ".join(parts)[:_LOGGED_HEADER_MAX]
+    except Exception:  # noqa: BLE001 — diagnostic only; never mask the real error
+        return "<unavailable>"
+
+
 async def _rest_create(
     http: httpx.AsyncClient,
     primary_url: str,
@@ -288,40 +319,48 @@ async def _rest_create(
         or (resp.status_code < 400 and not _looks_like_json(resp))
     )
     if needs_fallback and fallback_url != primary_url:
+        # Log the primary response in full before it is discarded. When the
+        # primary is an edge intercept rather than a permalink problem (a
+        # challenge page served as 2xx), this is the only record of the first
+        # of the two responses — the fallback's failure is logged below, but
+        # without this the intercept that triggered it leaves no evidence.
         logger.info(
-            "wordpress_rest_fallback resource=%s primary_status=%s", resource, resp.status_code
+            "wordpress_rest_fallback resource=%s primary_status=%s headers=%s body=%s",
+            resource, resp.status_code, _header_summary(resp), (resp.text or "")[:300],
         )
         resp = await _post(fallback_url)
 
     if resp.status_code in (401, 403):
         logger.error(
-            "wordpress_http_error status=%s resource=%s body=%s",
-            resp.status_code, resource, (resp.text or "")[:300],
+            "wordpress_http_error status=%s resource=%s headers=%s body=%s",
+            resp.status_code, resource, _header_summary(resp), (resp.text or "")[:300],
         )
         raise WordPressPublishError("wordpress_auth_failed")
     if resp.status_code == 404:
         logger.error(
-            "wordpress_http_error status=404 resource=%s body=%s",
-            resource, (resp.text or "")[:300],
+            "wordpress_http_error status=404 resource=%s headers=%s body=%s",
+            resource, _header_summary(resp), (resp.text or "")[:300],
         )
         raise WordPressPublishError("wordpress_rest_api_unreachable")
     if resp.is_redirect:
         logger.error(
-            "wordpress_rest_redirect status=%s resource=%s location=%s",
+            "wordpress_rest_redirect status=%s resource=%s location=%s headers=%s",
             resp.status_code, resource, resp.headers.get("location", ""),
+            _header_summary(resp),
         )
         raise WordPressPublishError("wordpress_rest_redirect")
     if resp.status_code >= 400:
         logger.error(
-            "wordpress_http_error status=%s resource=%s body=%s",
-            resp.status_code, resource, (resp.text or "")[:300],
+            "wordpress_http_error status=%s resource=%s headers=%s body=%s",
+            resp.status_code, resource, _header_summary(resp), (resp.text or "")[:300],
         )
         raise WordPressPublishError(f"wordpress_http_error_{resp.status_code}")
 
     if not _looks_like_json(resp):
         logger.error(
-            "wordpress_rest_not_json url=%s resource=%s content_type=%s body=%s",
-            str(resp.url), resource, resp.headers.get("content-type", ""), (resp.text or "")[:300],
+            "wordpress_rest_not_json url=%s resource=%s content_type=%s headers=%s body=%s",
+            str(resp.url), resource, resp.headers.get("content-type", ""),
+            _header_summary(resp), (resp.text or "")[:300],
         )
         raise WordPressPublishError("wordpress_rest_not_json")
     try:

@@ -415,3 +415,52 @@ async def test_explicit_featured_image_is_uploaded_and_set(monkeypatch):
     )
     assert capture["fetched"] == ["https://cdn.example.com/hero.jpg"]
     assert capture["json"]["featured_media"] == 99
+
+
+def test_header_summary_redacts_cookie_values_and_keeps_names():
+    """Response headers go into the diagnostic log line, but a challenge's
+    Set-Cookie value is an opaque token — the cookie's presence is the signal we
+    need, so the name survives and the value does not."""
+    resp = httpx.Response(
+        400,
+        headers=[
+            ("content-type", "text/html"),
+            ("server", "nginx"),
+            ("set-cookie", "sgcaptcha_token=abc123secret; Path=/"),
+            ("set-cookie", "wordpress_test=deadbeef; Path=/"),
+        ],
+    )
+    summary = wordpress_publish._header_summary(resp)
+    assert "content-type: text/html" in summary
+    assert "server: nginx" in summary
+    # Both cookies are named, neither value leaks.
+    assert "sgcaptcha_token=<redacted>" in summary
+    assert "wordpress_test=<redacted>" in summary
+    assert "abc123secret" not in summary
+    assert "deadbeef" not in summary
+
+
+def test_header_summary_is_bounded():
+    """A chatty edge can't flood the log line."""
+    resp = httpx.Response(400, headers=[(f"x-h{i}", "v" * 50) for i in range(50)])
+    assert len(wordpress_publish._header_summary(resp)) <= wordpress_publish._LOGGED_HEADER_MAX
+
+
+def test_header_summary_never_raises_on_a_plain_mapping():
+    """The helper runs inside the failure paths. If it could raise it would
+    replace a specific error code with a generic one, so a headers object it
+    doesn't understand degrades to a placeholder instead of blowing up."""
+    class _Odd:
+        headers = {"content-type": "text/html", "set-cookie": "t=secret"}
+
+    summary = wordpress_publish._header_summary(_Odd())
+    assert "content-type: text/html" in summary
+    assert "t=<redacted>" in summary
+    assert "secret" not in summary
+
+    class _Hostile:
+        @property
+        def headers(self):
+            raise RuntimeError("boom")
+
+    assert wordpress_publish._header_summary(_Hostile()) == "<unavailable>"
