@@ -464,3 +464,93 @@ def test_header_summary_never_raises_on_a_plain_mapping():
             raise RuntimeError("boom")
 
     assert wordpress_publish._header_summary(_Hostile()) == "<unavailable>"
+
+
+class _HeaderCaptureClient:
+    """Fake client recording BOTH the client-level headers and the per-request
+    headers, so a test can tell the difference between the two."""
+
+    def __init__(self, capture, client_kwargs):
+        self._capture = capture
+        self._capture["client_headers"] = client_kwargs.get("headers") or {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, url, follow_redirects=False):
+        self._capture.setdefault("fetched", []).append(url)
+        return _ImgResponse()
+
+    async def post(self, url, json=None, content=None, headers=None):
+        if url.endswith("/media"):
+            self._capture["media_headers"] = headers
+            return _FakeResponse(
+                201, {"id": 99, "source_url": "https://acmehvac.com/wp-content/x.jpg"}
+            )
+        self._capture["create_headers"] = headers
+        return _FakeResponse(201, {"id": 5, "link": "u", "status": "draft"})
+
+
+def _patch_client(monkeypatch, capture):
+    monkeypatch.setattr(
+        wordpress_publish.httpx,
+        "AsyncClient",
+        lambda *a, **k: _HeaderCaptureClient(capture, k),
+    )
+
+
+@pytest.mark.asyncio
+async def test_publisher_header_sent_on_wp_requests_when_configured(monkeypatch):
+    monkeypatch.setattr(
+        wordpress_publish.settings, "wordpress_publisher_header_value", "s3cret-token"
+    )
+    monkeypatch.setattr(
+        wordpress_publish.settings, "wordpress_publisher_header_name", "X-Publisher-Tool"
+    )
+    capture = {}
+    _patch_client(monkeypatch, capture)
+    await publish_to_wordpress(
+        client=_CLIENT,
+        title="T",
+        html='<p>hi</p><img src="https://cdn.example.com/hero.jpg" />',
+    )
+    # Both the post create and the media upload carry it.
+    assert capture["create_headers"]["X-Publisher-Tool"] == "s3cret-token"
+    assert capture["media_headers"]["X-Publisher-Tool"] == "s3cret-token"
+
+
+@pytest.mark.asyncio
+async def test_publisher_header_omitted_entirely_when_unconfigured(monkeypatch):
+    monkeypatch.setattr(wordpress_publish.settings, "wordpress_publisher_header_value", "")
+    capture = {}
+    _patch_client(monkeypatch, capture)
+    await publish_to_wordpress(client=_CLIENT, title="T", html="<p>hi</p>")
+    assert not any(
+        k.lower() == "x-publisher-tool" for k in capture["create_headers"]
+    ), "no header should be sent at all when no value is configured"
+
+
+@pytest.mark.asyncio
+async def test_publisher_header_never_leaks_to_third_party_image_hosts(monkeypatch):
+    """The publish client also GETs source images from arbitrary CDNs. The token
+    is a shared secret, so it must be per-request on WP-bound calls only — never
+    a client-level default that rides along to every host we fetch from."""
+    monkeypatch.setattr(
+        wordpress_publish.settings, "wordpress_publisher_header_value", "s3cret-token"
+    )
+    capture = {}
+    _patch_client(monkeypatch, capture)
+    await publish_to_wordpress(
+        client=_CLIENT,
+        title="T",
+        html='<p>hi</p><img src="https://cdn.example.com/hero.jpg" />',
+    )
+    # The external image really was fetched on this client...
+    assert capture["fetched"] == ["https://cdn.example.com/hero.jpg"]
+    # ...and the client-level headers, which that GET inherits, must not carry it.
+    client_headers = {str(k).lower(): v for k, v in dict(capture["client_headers"]).items()}
+    assert "x-publisher-tool" not in client_headers
+    assert "s3cret-token" not in str(client_headers)

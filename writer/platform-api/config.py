@@ -182,6 +182,17 @@ class Settings(BaseSettings):
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
     )
+    # A fixed header identifying this tool on every request to a client's own
+    # WordPress host, so a managed host can scope a bot-filter exemption to us
+    # specifically instead of to a shared egress IP. The value is a shared secret
+    # agreed with the host: a rule keyed on a guessable header is spoofable by
+    # anyone who learns the name, so the exemption is only as narrow as the value
+    # is unguessable. Dormant until the value is set (no header is sent), and it
+    # is deliberately NOT set at the httpx client level — the publish client also
+    # fetches source images from third-party CDNs, and a client-level header
+    # would broadcast the secret to every one of them.
+    wordpress_publisher_header_name: str = "X-Publisher-Tool"
+    wordpress_publisher_header_value: str = ""
     # Internal-linking analyzer + injector. WordPress (app-password) sources are
     # injectable after per-edit human approval; non-WP sites are crawled
     # (sitemap + ScrapeOwl) for recommend-only suggestions.

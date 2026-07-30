@@ -68,6 +68,22 @@ def _default_headers() -> dict:
     return {"User-Agent": settings.wordpress_user_agent}
 
 
+def _publisher_header() -> dict:
+    """The fixed header identifying this tool, for requests to the client's own
+    WordPress host only.
+
+    Deliberately NOT part of `_default_headers`. The publish client also GETs
+    source images from arbitrary third-party CDNs, so a client-level header
+    would send this shared secret to every host we ever fetch an image from.
+    Merged per-request instead, and only onto requests aimed at the client's
+    site. Empty (header omitted entirely) until a value is configured."""
+    value = (settings.wordpress_publisher_header_value or "").strip()
+    if not value:
+        return {}
+    name = (settings.wordpress_publisher_header_name or "").strip()
+    return {name: value} if name else {}
+
+
 # WP statuses we expose. Default to draft so nothing goes live unreviewed.
 ALLOWED_STATUSES = {"draft", "publish"}
 # content_type → WP REST resource. Blog posts become posts; the conversion-
@@ -138,6 +154,7 @@ async def _upload_media(
         "Authorization": auth,
         "Content-Type": mime,
         "Content-Disposition": f'attachment; filename="{filename}"',
+        **_publisher_header(),
     }
     try:
         resp = await http.post(f"{rest_base}/media", content=img_bytes, headers=headers)
@@ -435,6 +452,7 @@ async def publish_to_wordpress(
         # Ask for JSON explicitly: a host that intercepts the call is likelier to
         # pass through (or at least answer in kind) than when we accept anything.
         "Accept": "application/json",
+        **_publisher_header(),
     }
 
     try:
@@ -510,7 +528,7 @@ async def list_content(client: dict, *, per_page: int = 100, max_pages: int = 10
         raise WordPressPublishError("wordpress_not_configured")
     rest_base = _rest_base(client["wordpress_site_url"])
     auth = _auth_header(client["wordpress_username"], client["wordpress_app_password"])
-    headers = {"Authorization": auth, "Accept": "application/json"}
+    headers = {"Authorization": auth, "Accept": "application/json", **_publisher_header()}
     out: list[dict] = []
     try:
         async with httpx.AsyncClient(
@@ -584,6 +602,7 @@ async def update_post_content(
         # Ask for JSON explicitly: a host that intercepts the call is likelier to
         # pass through (or at least answer in kind) than when we accept anything.
         "Accept": "application/json",
+        **_publisher_header(),
     }
     try:
         async with httpx.AsyncClient(
