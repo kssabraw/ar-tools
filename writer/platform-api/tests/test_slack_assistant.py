@@ -1234,6 +1234,9 @@ def test_wants_sop_grounding_matches_strategy_shapes():
 
 
 def test_wants_sop_grounding_skips_pure_data_reads():
+    # Grounding defaults ON since 2026-07-30 (owner ruling) — these are the
+    # narrow opt-outs: a stored number, or a bare command whose answer is a
+    # tool call rather than advice.
     for q in (
         "What's our rank for roof repair?",
         "Show me the tracked keywords",
@@ -1262,8 +1265,10 @@ def test_sop_domains_from_context_signals():
     }
     domains = slack_assistant.sop_domains("how is the campaign going", ctx)
     assert {"organic_drop", "maps", "ai_visibility"} <= domains
-    # No alerts / modules → no context-driven domains.
-    assert slack_assistant.sop_domains("how is the campaign going", {"organic_rank": {}}) == set()
+    # No alerts / modules → no context-driven domains, but never empty: an empty
+    # set collapses the SOP selection to the router doc alone, which is the
+    # thin-advice failure the 2026-07-30 Pompano Beach turn exhibited.
+    assert slack_assistant.sop_domains("how is the campaign going", {"organic_rank": {}}) == {"content"}
 
 
 def test_read_sop_tool_lists_docs():
@@ -1459,3 +1464,66 @@ def test_anchored_ask_does_not_get_the_clarify_instruction():
     assert "THIS TURN IS UNDERSPECIFIED" not in system
     # …but the standing prompt is still there.
     assert "ASK WHEN UNSURE" in system
+
+
+# ---------------------------------------------------------------------------
+# The Pompano Beach regression (2026-07-30)
+#
+# "how can bsa claims rank in pompano beach" — a textbook How-To-Rank-In-Maps
+# question — got NO SOP block and NO clarifying question, and read as generic.
+# Three separate gates were wrong at once, so all three are pinned here.
+# ---------------------------------------------------------------------------
+_POMPANO = "how can bsa claims rank in pompano beach"
+
+
+def test_pompano_question_is_sop_grounded():
+    # Was False: the allowlist had "how do we"/"how should" but not "how can",
+    # and no ranking vocabulary at all.
+    assert slack_assistant.wants_sop_grounding(_POMPANO)
+
+
+def test_pompano_question_selects_real_sop_domains():
+    # Was an empty set, which collapses the selection to the router doc alone.
+    domains = slack_assistant.sop_domains(_POMPANO, {"maps_geogrid": {}})
+    assert "maps" in domains and "content" in domains
+
+
+def test_pompano_question_is_flagged_underspecified():
+    # Was False twice over: the advice gate demanded "how can WE", and the
+    # anchor test counted the question's own verb ("rank") as specificity.
+    assert slack_assistant.looks_underspecified(_POMPANO, {}, [])
+
+
+def test_sop_grounding_defaults_on_for_unanticipated_phrasings():
+    for msg in [
+        "how can bsa claims rank in pompano beach",
+        "any way to get found in Boca?",
+        "we want to show up in more suburbs",
+        "thoughts on the fort lauderdale market",
+    ]:
+        assert slack_assistant.wants_sop_grounding(msg), msg
+
+
+def test_pure_data_reads_skip_the_sop_block():
+    for msg in [
+        "what's our rank for blocked drain",
+        "how many keywords do we track",
+        "when was the last maps scan",
+        "list our open alerts",
+        "do we have a geo-grid for tampa",
+        "thanks!",
+    ]:
+        assert not slack_assistant.wants_sop_grounding(msg), msg
+
+
+def test_lookup_with_an_advisory_tail_still_grounds():
+    # The strategy shape wins over the lookup shape when both are present.
+    assert slack_assistant.wants_sop_grounding(
+        "what's our rank for blocked drain and how do we improve it"
+    )
+
+
+def test_sop_domains_never_empty():
+    # An empty set degrades the SOP block to the router doc — the thin-advice
+    # failure. There's always a floor.
+    assert slack_assistant.sop_domains("something unclassifiable", {})

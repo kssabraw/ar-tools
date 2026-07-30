@@ -289,12 +289,56 @@ _SOP_DOMAIN_HINTS: list[tuple[str, str]] = [
     (r"content|blog|page|on.?page|silo|internal link|schema", "content"),
     (r"drop|decline|fell|lost rank|penalt|deindex|cannibal", "organic_drop"),
     (r"leadoff|market intel|market opportunit|market selection|effort target|which (?:city|market)", "leadoff"),
+    # Ranking vocabulary itself — "how can we rank / get found / show up /
+    # outrank X". Absent this, "how can <client> rank in <city>" resolved to no
+    # domain at all and the block degraded to the router doc alone.
+    (r"\brank(?:ing)?s?\b|\boutrank\b|\bget found\b|\bshow up\b|\bcompete\b|\bvisib(?:le|ility)\b", "content"),
+    (r"\brank(?:ing)?s?\b|\bget found\b|\bshow up\b|\boutrank\b", "maps_growth"),
 ]
 
 
+# The only turns that DON'T need the playbook: pure data reads ("what's our
+# rank for X", "how many keywords", "when did the last scan run") and bare
+# imperatives ("add an asana task for Ivy") — a stored number or a tool call is
+# a complete answer, and a SOP adds nothing but tokens.
+# Advisory language anywhere in the message overrides this (checked below), so
+# "what's our rank for X and how do we improve it" still gets grounded.
+_DATA_LOOKUP_RE = re.compile(
+    r"^\s*(?:hi|hey|hello|thanks|thank you|ok(?:ay)?|got it|cool|nice)\b|"
+    r"\bwhat(?:'?s| is| are)? (?:our|the|their) (?:rank|ranking|position|score|dr|"
+    r"rd|traffic|clicks|impressions|visibility|average|status)\b|"
+    r"\bwhat rank\b|\bwhere (?:do|are) we rank\b|"
+    r"\bhow many\b|\bhow much (?:is|are|do we)\b|"
+    r"\bwhen (?:did|was|is)\b|\bwho (?:is|are)\b|"
+    r"\b(?:list|show me|give me)\b|\bdo we have\b|"
+    # A bare command — the answer is the tool call, not advice.
+    r"^\s*(?:add|remove|delete|create|run|push|generate|rebuild|scan|set|"
+    r"update|complete|mark|assign|track|untrack|refresh|publish)\b",
+    re.IGNORECASE,
+)
+
+
 def wants_sop_grounding(text: str) -> bool:
-    """True when the message is strategy-shaped and must carry the SOPs. Pure."""
-    return bool(_SOP_HINT_RE.search(text or ""))
+    """Whether this turn must carry the agency SOP library. Pure.
+
+    **Inverted 2026-07-30 (owner ruling).** This was a keyword allowlist, and it
+    silently missed "how can <client> rank in <city>" — a textbook Maps-SOP
+    question that got answered with no playbook attached at all, in one pass,
+    and read as generic. An allowlist can only ever cover the phrasings someone
+    thought of; the next unanticipated one fails identically.
+
+    So the default is now YES and only a pure data read opts out. A needless SOP
+    block costs prompt tokens; a missing one costs a generic answer, which is
+    the failure we're fixing — over-attaching is the cheaper mistake.
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+    # An explicit strategy shape always grounds, even if phrased as a lookup
+    # ("what's our rank for X and how do we improve it").
+    if _SOP_HINT_RE.search(t):
+        return True
+    return not _DATA_LOOKUP_RE.search(t)
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +365,7 @@ _ADVICE_RE = re.compile(
     r"\bwhat(?:'?s| is)? next\b|\bwhat now\b|\bwhere (?:to|do we go) (?:from here|next)\b|"
     r"\b(?:any )?(?:ideas|thoughts|suggestions?|recommendations?)\b|"
     r"\bwhat do you (?:think|reckon)\b|"
-    r"\b(?:how (?:do|can|should) we|where should we)\b|"
+    r"\bhow (?:can|could|do|does|should|would)\b|\bwhere should we\b|"
     r"\bhelp (?:me|us)\b|\bfix (?:this|it)\b|\bmake it better\b",
     re.IGNORECASE,
 )
@@ -331,10 +375,10 @@ _ADVICE_RE = re.compile(
 # anchor is enough to make an ask answerable, and a missed anchor costs an
 # unnecessary question.
 _ANCHOR_RE = re.compile(
-    r"\brank(?:ing)?s?\b|\bkeywords?\b|\bposition\b|\bserp\b|"
+    r"\bkeywords?\b|\bserp\b|"
     r"\bmaps?\b|\blocal pack\b|\bgeo.?grid\b|\bgbp\b|\bgoogle business\b|"
     r"\bai (?:visibility|overview|mode)\b|\baio\b|\baeo\b|\bchatgpt\b|"
-    r"\bcontent\b|\bblog\b|\bpages?\b|\bsilo\b|\bschema\b|\bon.?page\b|"
+    r"\bcontent\b|\bblog\b|\bsilo\b|\bschema\b|\bon.?page\b|"
     r"\blinks?\b|\bbacklinks?\b|\breferring domain\b|\bcitations?\b|\bauthority\b|"
     r"\breviews?\b|\bbudget\b|\bretainer\b|\bspend\b|\breports?\b|\bgoals?\b|"
     r"\bcompetitors?\b|\btraffic\b|\bclicks?\b|\bimpressions?\b|\bconversions?\b|"
@@ -408,4 +452,7 @@ def sop_domains(question: str, context: dict) -> set[str]:
         domains.add("maps")
     if "ai_visibility" in ctx:
         domains.add("ai_visibility")
-    return domains
+    # Never return empty on a grounded turn: with no domain at all the selection
+    # collapses to the router doc, which is the thin-advice failure again. On-page
+    # + architecture is the widest-applicable floor.
+    return domains or {"content"}

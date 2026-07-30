@@ -56,6 +56,10 @@ _ALWAYS = ["_ORCHESTRATOR.md"]
 _RELEVANCE: dict[str, list[str]] = {
     "organic_drop": ["Rank_Drop_Mitigation_SOP_Organic.md"],
     "maps": ["Rank_Drop_Mitigation_SOP_Maps.md", "How_To_Rank_In_Google_Maps_SOP.md"],
+    # Growth-shaped local questions ("how can we rank in <city>") — the same doc
+    # the "maps" domain carries second, but ordered FIRST so the budget reaches
+    # it. Set by ranking vocabulary in the question, not by an alert signal.
+    "maps_growth": ["How_To_Rank_In_Google_Maps_SOP.md"],
     "offpage": ["Link_Building_SOP.md", "Link_Building_Recipe_Engine.md"],
     "budget": ["Link_Building_Recipe_Engine.md"],
     "ai_visibility": ["AIO_AEO_SOP.md"],
@@ -148,7 +152,8 @@ def _truncate(text: str, limit: int) -> str:
 def relevant_docs(active_domains: set[str]) -> list[str]:
     """Ordered doc list for a set of active signal domains. Pure."""
     ordered: list[str] = list(_ALWAYS)
-    for domain in ("organic_drop", "maps", "offpage", "budget", "ai_visibility", "content", "leadoff", "qa"):
+    for domain in ("maps_growth", "organic_drop", "maps", "offpage", "budget",
+                   "ai_visibility", "content", "leadoff", "qa"):
         if domain in active_domains:
             for doc in _RELEVANCE[domain]:
                 if doc not in ordered:
@@ -188,6 +193,13 @@ def select_sops_text(active_domains: set[str], budget_chars: int = 40_000) -> st
         if not text or remaining <= 500:
             continue
         cap = min(_DOC_CAP_CHARS.get(name, _DEFAULT_DOC_CAP), remaining)
+        if name in _ALWAYS:
+            # The router is an index, not an answer: bound it to a share of the
+            # budget so the topic SOPs behind it still fit. At the chat's 16k
+            # budget its raw 14k was taking ~87% of the block and truncating
+            # away the SOP that answered the question — which is how a
+            # "grounded" turn still produced generic advice (2026-07-30).
+            cap = min(cap, max(budget_chars // 3, 1_000))
         block = f"### SOP DOC: {name}\n{_truncate(text.strip(), cap)}"
         parts.append(block)
         remaining -= len(block)
