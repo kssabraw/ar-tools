@@ -89,3 +89,37 @@ def test_assert_not_frozen_passes_when_clear():
 def test_is_frozen_handles_missing_client_id():
     assert freeze.is_frozen(None) is False
     assert freeze.is_frozen("") is False
+
+
+# ---------------------------------------------------------------------------
+# _homepage_is_live — the guard that stops a `site:` miss becoming a false
+# deindex warning. A bot filter answering 403/400 means the host is serving and
+# declining us, which says nothing about Google's index; reading that as "dead"
+# was letting false alarms through (SiteGround's Anti-Bot AI does exactly this).
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("status", [200, 204, 301, 302, 399])
+def test_homepage_live_on_success_statuses(status):
+    assert freeze._is_serving(status) is True
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 406, 407, 429, 451])
+def test_homepage_live_when_host_refuses_us(status):
+    """Served-but-refused is still served — never evidence of a deindex."""
+    assert freeze._is_serving(status) is True
+
+
+@pytest.mark.parametrize("status", [404, 410, 500, 502, 503, 504])
+def test_homepage_not_live_when_genuinely_absent_or_down(status):
+    assert freeze._is_serving(status) is False
+
+
+def test_crawler_ua_is_not_the_generic_scraper_shape():
+    """`Mozilla/5.0 (compatible; Foo/1.0)` is the signature managed hosts rule on.
+    Our first-party site reads identify honestly instead — pin that so the old
+    shape can't creep back in service by service."""
+    from config import settings
+
+    ua = settings.crawler_user_agent
+    assert not ua.startswith("Mozilla/")
+    assert "compatible;" not in ua
+    assert "AR-Tools" in ua

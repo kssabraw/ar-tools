@@ -46,7 +46,10 @@ from services import task_service
 
 logger = logging.getLogger(__name__)
 
-_UA = "Mozilla/5.0 (compatible; ARTools-QA/1.0)"
+# Shared honest crawler UA — see `crawler_user_agent` in config. Was a local
+# `Mozilla/5.0 (compatible; ARTools-QA/1.0)`, the generic-scraper shape that
+# managed hosts (SiteGround among them) match and challenge.
+_UA = settings.crawler_user_agent
 _MAX_FETCH_REDIRECTS = 5
 _MAX_FETCH_BYTES = 8_000_000  # cap a page/CSV body so a huge response can't OOM
 
