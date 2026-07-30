@@ -698,3 +698,20 @@ async def test_rest_path_untouched_for_other_clients(monkeypatch):
         client=dict(_CLIENT, id="client-2"), title="T", html="<p>x</p>"
     )
     assert "create_headers" in capture  # the REST client was used
+
+
+@pytest.mark.asyncio
+async def test_ssh_publish_refuses_explicit_featured_image(monkeypatch):
+    """The SSH path can't sideload, so an explicit featured image must fail
+    loudly rather than be dropped — the caller would otherwise believe the post
+    has a featured image it does not have."""
+    _ssh_settings(monkeypatch)
+    _fake_asyncssh(monkeypatch, {}, _FakeSSHResult("1\nl\n"))
+    with pytest.raises(wordpress_publish.WordPressPublishError) as exc:
+        await publish_to_wordpress(
+            client=dict(_CLIENT, id="client-1"),
+            title="T",
+            html="<p>no body images at all</p>",
+            featured_image_url="https://cdn.example.com/hero.jpg",
+        )
+    assert str(exc.value) == "wordpress_ssh_images_unsupported"

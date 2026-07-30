@@ -419,6 +419,7 @@ async def _publish_via_ssh(
     content_type: str,
     slug: Optional[str],
     seo_title: Optional[str],
+    featured_image_url: Optional[str],
 ) -> dict:
     """Create a post/page over SSH with WP-CLI, bypassing the REST API entirely.
 
@@ -430,7 +431,10 @@ async def _publish_via_ssh(
     into the media library, and a post that publishes with dead external <img>
     srcs looks like a success while being materially wrong. A refusal surfaces
     through the caller's existing publish_error + notification path."""
-    if _IMG_SRC_RE.search(html):
+    if _IMG_SRC_RE.search(html) or (featured_image_url or "").strip():
+        # Covers BOTH body images and an explicitly-passed featured image. The
+        # latter matters just as much: silently ignoring the argument would
+        # publish a post the caller believes has a featured image and does not.
         raise WordPressPublishError("wordpress_ssh_images_unsupported")
 
     try:
@@ -560,6 +564,7 @@ async def publish_to_wordpress(
         return await _publish_via_ssh(
             client=client, title=title, html=html, status=status,
             content_type=content_type, slug=slug, seo_title=seo_title,
+            featured_image_url=featured_image_url,
         )
 
     rest_base = _rest_base(client["wordpress_site_url"])
