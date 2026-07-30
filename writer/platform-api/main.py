@@ -107,6 +107,22 @@ async def lifespan(app: FastAPI):
     # Start background job workers + GSC ingest scheduler. Two worker lanes:
     # main claims everything; the interactive lane only claims short,
     # user-awaited job types so they don't queue behind long background work.
+    # Verify the SSH publish transport if one is configured. Best-effort and
+    # non-blocking in effect (a few seconds at most): the point is that a bad
+    # key or wrong path is loud on deploy rather than discovered when a
+    # scheduled article fails to publish hours later.
+    try:
+        from services import wordpress_publish as _wp
+
+        _ssh_check = await _wp.ssh_selftest()
+        if _ssh_check is None:
+            pass
+        elif _ssh_check["ok"]:
+            logger.info("wordpress_ssh_selftest_ok", extra={"detail": _ssh_check["detail"]})
+        else:
+            logger.error("wordpress_ssh_selftest_failed", extra={"detail": _ssh_check["detail"]})
+    except Exception as exc:  # pragma: no cover - startup best-effort
+        logger.warning("wordpress_ssh_selftest_error", extra={"error": str(exc)})
     worker_task = asyncio.create_task(job_worker())
     interactive_worker_task = (
         asyncio.create_task(
