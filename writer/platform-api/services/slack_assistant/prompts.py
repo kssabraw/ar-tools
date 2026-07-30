@@ -130,9 +130,14 @@ _SYSTEM = (
     "latest search performance, top queries or pages, clicks/impressions — or when "
     "the stored context can't answer a performance question. Then answer from the "
     "result, saying the numbers are a live Search Console pull.\n"
-    "- check_live_serp (paid, confirm-gated): a live Google SERP check for one "
-    "keyword. Call it when the teammate explicitly wants a right-now SERP/position "
-    "check; the teammate will be asked to confirm before it runs.\n\n"
+    "- check_live_serp (paid, confirm-gated): a live Google check for one keyword "
+    "— the client's organic positions AND who currently holds the local pack, in "
+    "one pull. Takes an optional `location`: ALWAYS pass it when the question is "
+    "about a specific city, because without it the check runs at the client's "
+    "configured tracking location and would answer about the wrong place. Call it "
+    "when a right-now read would settle the question — including when you're asked "
+    "to plan for an area you hold no data on, where it turns guesswork into a real "
+    "picture of the field. The teammate confirms before it runs.\n\n"
     "ASKED ABOUT SOMETHING YOU HAVE NO DATA ON: teammates will ask about a city, "
     "keyword, page or competitor that appears NOWHERE in the context JSON — a "
     "market the client wants to expand into, a term nobody tracks yet. This is "
@@ -277,6 +282,41 @@ _CLARIFY_NUDGE = (
     "nothing worth leading with, say that plainly and ask your question — an "
     "honest 'nothing's flashing red; what prompted the question?' beats "
     "invented priorities."
+)
+
+# Appended for THIS TURN ONLY when `helpers.looks_like_ranking_strategy_ask`
+# fires. Takes precedence over _CLARIFY_NUDGE: both catch "how can we rank in
+# X", but the generic one says "ask ONE question", and this ask needs two —
+# keyword and channel are orthogonal and a strategy is undefined without both.
+_RANKING_STRATEGY_NUDGE = (
+    "\n\nTHIS TURN IS A RANKING-STRATEGY REQUEST. Someone wants to know how to "
+    "rank somewhere. That is a campaign plan, and two things define it:\n"
+    "  (a) THE KEYWORD — which specific search, or the service behind it. "
+    "'Rank in <city>' is not a target; different services in the same city want "
+    "different pages, different links and different timelines.\n"
+    "  (b) THE CHANNEL — the web SERP (organic), the Maps local pack, or AI "
+    "answers (ChatGPT, AI Overviews, Perplexity). These are three different "
+    "games: the local pack is won on proximity, GBP and review velocity; "
+    "organic on pages, links and topical depth; AI answers on entity clarity "
+    "and citable third-party sources. They can be pursued together, and the "
+    "answer may be all three — but you must know which before you plan.\n\n"
+    "SO, THIS TURN: (1) lead with a SHORT read of what you already hold that "
+    "bears on this ask — is anything tracked at that location, what ranks "
+    "nearby, what the client's site already covers, what the goals say — with "
+    "real numbers and the module each came from. If the subject of the question "
+    "is absent from your data, say so plainly and specifically. (2) Then ask "
+    "for whichever of the keyword and the channel the request has not already "
+    "given you, offering the three channels by name so 'all three' is an easy "
+    "answer. (3) Say plainly that you will build the strategy once you have "
+    "them. Keep the whole turn tight — this is a scoping turn, not an essay.\n\n"
+    "IF THE REQUEST (or the conversation so far) ALREADY SUPPLIES BOTH, do NOT "
+    "ask again — go straight to the strategy. When you write it, ground every "
+    "part in this client's real data: their current rankings and trends, their "
+    "geo-grid coverage, the pages their site actually has, their goals, their "
+    "competitors, their GBP and their link profile — and cite the numbers as "
+    "you go. Follow the retrieved SOPs for the chosen channel and cite them. "
+    "Sequence the work and say what comes first. A strategy that would read the "
+    "same for any client in any city is the failure mode."
 )
 
 # Appended to the system prompt when the assistant speaks through the dashboard

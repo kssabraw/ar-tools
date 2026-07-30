@@ -440,6 +440,69 @@ def looks_underspecified(
     return True
 
 
+# ---------------------------------------------------------------------------
+# Ranking-strategy asks — scope before strategising.
+#
+# "how can bsa claims rank in pompano beach" is the canonical case. It is a
+# request for a whole campaign strategy, and it is missing the two things that
+# decide what that strategy IS: which keyword (a roofer's "storm damage repair"
+# and "roof replacement" want different pages, different links, different
+# timelines), and which channel — the web SERP, the Maps local pack and AI
+# answers are three different games with three different playbooks. Answering
+# without them produces the generic checklist that reads as filler.
+#
+# The generic clarify gate above already catches this question, but its
+# instruction is "ask ONE question", which is the wrong shape here: keyword and
+# channel are orthogonal, both cheap to answer, and a strategy needs both. So a
+# ranking-shaped ask gets its own per-turn instruction, and this gate wins over
+# the generic one in `interpret` (more specific instruction, same mechanism).
+#
+# The gate is deliberately shape-only. WHICH of the two specifics is missing is
+# left to the model — that is ordinary reading comprehension it does reliably,
+# unlike remembering to ask at all, which is the thing that needed pinning down.
+# ---------------------------------------------------------------------------
+
+# Wanting to rank — as an aim, not as a metric being looked up.
+_RANKING_INTENT_RE = re.compile(
+    r"\brank(?:ing)? (?:in|for|at|on)\b|"
+    r"\b(?:to|start|begin|get|be|become|keep) rank(?:ing)?\b|"
+    r"\brank (?:higher|better|well|top|first|#?\d)\b|"
+    r"\bshow up (?:in|for|on|when)\b|\bget (?:seen|found) (?:in|for|on)\b|"
+    r"\bget (?:in|into) the (?:map ?pack|local pack|3.?pack|top)\b|"
+    r"\bbreak into\b|\bcompete (?:in|for)\b|"
+    r"\bimprove (?:our |the |their )?rank(?:ing)?s?\b|"
+    r"\bvisibility (?:in|for)\b|\bdominate\b",
+    re.IGNORECASE,
+)
+
+# Wanting it, phrased as a goal rather than as a question ("we want to rank in X").
+_RANK_DESIRE_RE = re.compile(
+    r"\b(?:want|need|trying|like|hoping|looking) to\b|\bgoal is\b|"
+    r"\bhelp (?:us|me|them|him|her)\b|\bget (?:us|them|him|her)\b",
+    re.IGNORECASE,
+)
+
+
+def looks_like_ranking_strategy_ask(message: str) -> bool:
+    """True when a turn asks how to rank somewhere — a strategy request, not a
+    metric lookup. Pure.
+
+    Drives the scope-first instruction in `interpret`. Requires ranking INTENT
+    (wanting to rank) plus either an advice shape ("how can we…") or a desire
+    shape ("we want to…"), so "how can bsa claims rank in pompano beach" fires
+    while "what's our rank in pompano" (a lookup) and "how did we rank last
+    month" (past tense — no advice match) do not.
+
+    Shape only: whether the message already names the keyword and channel is the
+    model's read, instructed by the nudge. Firing on an already-scoped ask is
+    harmless — the nudge tells it not to re-ask what it has.
+    """
+    text = message or ""
+    if not _RANKING_INTENT_RE.search(text):
+        return False
+    return bool(_ADVICE_RE.search(text) or _RANK_DESIRE_RE.search(text))
+
+
 def sop_domains(question: str, context: dict) -> set[str]:
     """The sop_library relevance domains for a question: keyword hints from the
     question itself plus what's live/alerting in the client context. Pure."""

@@ -768,6 +768,50 @@ def _ctx_qa(supabase, client_id: str, today: date) -> Optional[dict]:
     return out
 
 
+def _ctx_site_inventory(supabase, client_id: str, today: date) -> Optional[dict]:
+    """The client's LIVE site: how many pages it has and what its landing pages
+    are — distinct from `content`, which counts what THIS suite generated.
+
+    This is the module that answers "do they already have a page for X?", which
+    every ranking-strategy answer turns on. Read-only and cheap (one row); the
+    discovery behind it runs weekly in the `site_inventory` job.
+    """
+    from services import site_inventory
+
+    row = site_inventory.get_inventory(client_id)
+    if not row:
+        return None
+    urls = row.get("urls") or []
+    summary = site_inventory.summarize_inventory(urls)
+    fetched = row.get("fetched_at")
+    out: dict = {
+        "page_count": summary["page_count"],
+        "discovered_via": row.get("source"),
+        "last_checked": (fetched or "")[:10] or None,
+        "pages_by_type": summary["counts"],
+        "landing_pages": summary["landing_pages"],
+    }
+    if summary["landing_truncated"]:
+        out["landing_pages_not_shown"] = summary["landing_truncated"]
+    if row.get("error"):
+        out["discovery_error"] = row["error"]
+    if not urls:
+        out["note"] = (
+            "No pages discovered — the site has no readable sitemap and nothing "
+            "was found in Google's index. Treat the inventory as UNKNOWN here, "
+            "not as an empty site."
+        )
+    else:
+        out["note"] = (
+            "TRAP: this is the client's own live site, discovered via "
+            f"{row.get('source')}. Landing pages are listed shallowest-first and "
+            "blog posts are excluded from the list (they're in the counts). A "
+            "path being absent is good evidence the page doesn't exist — say so "
+            "plainly when a strategy needs a page they don't have."
+        )
+    return out
+
+
 def _ctx_citations(supabase, client_id: str, today: date) -> Optional[dict]:
     """Citation liveness — status counts plus the currently-dead URLs."""
     rows = (
@@ -1055,6 +1099,7 @@ _CONTEXT_PROVIDERS = [
     ("maps_geogrid", _ctx_maps),
     ("ai_visibility", _ctx_ai_visibility),
     ("content", _ctx_content),
+    ("site_inventory", _ctx_site_inventory),
     ("keyword_research", _ctx_keyword_research),
     ("task_plan", _ctx_task_plan),
     ("qa", _ctx_qa),
