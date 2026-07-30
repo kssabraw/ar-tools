@@ -18,6 +18,7 @@ import logging
 import mimetypes
 import posixpath
 import re
+import shlex
 from typing import Optional
 from urllib.parse import unquote, urlparse
 
@@ -66,6 +67,22 @@ def _default_headers() -> dict:
     config for the failure this fixes). Set at the client level so the REST calls,
     the media uploads, and the source-image downloads all carry it."""
     return {"User-Agent": settings.wordpress_user_agent}
+
+
+def _publisher_header() -> dict:
+    """The fixed header identifying this tool, for requests to the client's own
+    WordPress host only.
+
+    Deliberately NOT part of `_default_headers`. The publish client also GETs
+    source images from arbitrary third-party CDNs, so a client-level header
+    would send this shared secret to every host we ever fetch an image from.
+    Merged per-request instead, and only onto requests aimed at the client's
+    site. Empty (header omitted entirely) until a value is configured."""
+    value = (settings.wordpress_publisher_header_value or "").strip()
+    if not value:
+        return {}
+    name = (settings.wordpress_publisher_header_name or "").strip()
+    return {name: value} if name else {}
 
 
 # WP statuses we expose. Default to draft so nothing goes live unreviewed.
@@ -138,6 +155,7 @@ async def _upload_media(
         "Authorization": auth,
         "Content-Type": mime,
         "Content-Disposition": f'attachment; filename="{filename}"',
+        **_publisher_header(),
     }
     try:
         resp = await http.post(f"{rest_base}/media", content=img_bytes, headers=headers)
@@ -257,6 +275,37 @@ def _looks_like_json(response: httpx.Response) -> bool:
     return False
 
 
+_LOGGED_HEADER_MAX = 600
+
+
+def _header_summary(response: httpx.Response) -> str:
+    """Render response headers onto a diagnostic log line.
+
+    A managed host's bot filter is diagnosed from the response headers — the
+    `set-cookie` a challenge issues, the edge's `server` and cache markers — and
+    a host's support team will ask for them, so the failure paths carry them
+    rather than status and body alone. Cookie *values* are reduced to the cookie
+    name: that a cookie was set is the diagnostic signal, its value is not, and
+    this keeps opaque tokens out of the logs. Bounded so a chatty edge can't
+    flood the line.
+    Never raises. This runs *inside* the failure paths, so an exception here
+    would replace a specific, actionable error code with a generic one — the
+    diagnostic must not be able to destroy the diagnosis."""
+    try:
+        headers = response.headers
+        # httpx.Headers preserves repeated headers (a challenge sets several
+        # cookies) via multi_items(); a plain mapping only has items().
+        items = headers.multi_items() if hasattr(headers, "multi_items") else headers.items()
+        parts: list[str] = []
+        for key, value in items:
+            if str(key).lower() == "set-cookie":
+                value = f"{str(value).split('=', 1)[0]}=<redacted>"
+            parts.append(f"{key}: {value}")
+        return "; ".join(parts)[:_LOGGED_HEADER_MAX]
+    except Exception:  # noqa: BLE001 — diagnostic only; never mask the real error
+        return "<unavailable>"
+
+
 async def _rest_create(
     http: httpx.AsyncClient,
     primary_url: str,
@@ -288,40 +337,48 @@ async def _rest_create(
         or (resp.status_code < 400 and not _looks_like_json(resp))
     )
     if needs_fallback and fallback_url != primary_url:
+        # Log the primary response in full before it is discarded. When the
+        # primary is an edge intercept rather than a permalink problem (a
+        # challenge page served as 2xx), this is the only record of the first
+        # of the two responses — the fallback's failure is logged below, but
+        # without this the intercept that triggered it leaves no evidence.
         logger.info(
-            "wordpress_rest_fallback resource=%s primary_status=%s", resource, resp.status_code
+            "wordpress_rest_fallback resource=%s primary_status=%s headers=%s body=%s",
+            resource, resp.status_code, _header_summary(resp), (resp.text or "")[:300],
         )
         resp = await _post(fallback_url)
 
     if resp.status_code in (401, 403):
         logger.error(
-            "wordpress_http_error status=%s resource=%s body=%s",
-            resp.status_code, resource, (resp.text or "")[:300],
+            "wordpress_http_error status=%s resource=%s headers=%s body=%s",
+            resp.status_code, resource, _header_summary(resp), (resp.text or "")[:300],
         )
         raise WordPressPublishError("wordpress_auth_failed")
     if resp.status_code == 404:
         logger.error(
-            "wordpress_http_error status=404 resource=%s body=%s",
-            resource, (resp.text or "")[:300],
+            "wordpress_http_error status=404 resource=%s headers=%s body=%s",
+            resource, _header_summary(resp), (resp.text or "")[:300],
         )
         raise WordPressPublishError("wordpress_rest_api_unreachable")
     if resp.is_redirect:
         logger.error(
-            "wordpress_rest_redirect status=%s resource=%s location=%s",
+            "wordpress_rest_redirect status=%s resource=%s location=%s headers=%s",
             resp.status_code, resource, resp.headers.get("location", ""),
+            _header_summary(resp),
         )
         raise WordPressPublishError("wordpress_rest_redirect")
     if resp.status_code >= 400:
         logger.error(
-            "wordpress_http_error status=%s resource=%s body=%s",
-            resp.status_code, resource, (resp.text or "")[:300],
+            "wordpress_http_error status=%s resource=%s headers=%s body=%s",
+            resp.status_code, resource, _header_summary(resp), (resp.text or "")[:300],
         )
         raise WordPressPublishError(f"wordpress_http_error_{resp.status_code}")
 
     if not _looks_like_json(resp):
         logger.error(
-            "wordpress_rest_not_json url=%s resource=%s content_type=%s body=%s",
-            str(resp.url), resource, resp.headers.get("content-type", ""), (resp.text or "")[:300],
+            "wordpress_rest_not_json url=%s resource=%s content_type=%s headers=%s body=%s",
+            str(resp.url), resource, resp.headers.get("content-type", ""),
+            _header_summary(resp), (resp.text or "")[:300],
         )
         raise WordPressPublishError("wordpress_rest_not_json")
     try:
@@ -333,6 +390,139 @@ async def _rest_create(
         )
         raise WordPressPublishError("wordpress_rest_not_json") from exc
     return parsed
+
+
+_WP_CLI_TYPE = {"posts": "post", "pages": "page"}
+
+
+def _ssh_enabled_for(client: dict) -> bool:
+    """True when this client's publishing is routed over SSH + WP-CLI.
+
+    Gated to explicit client ids: an interim workaround for one host's WAF must
+    never silently become the default transport for every WordPress client."""
+    ids = {i.strip() for i in (settings.wordpress_ssh_client_ids or "").split(",") if i.strip()}
+    if not ids or str(client.get("id") or "") not in ids:
+        return False
+    if not (settings.wordpress_ssh_host and settings.wordpress_ssh_username
+            and settings.wordpress_ssh_private_key and settings.wordpress_ssh_wp_path):
+        logger.error("wordpress_ssh_enabled_but_unconfigured client_id=%s", client.get("id"))
+        return False
+    return True
+
+
+def _ssh_private_key() -> str:
+    """The configured private key, tolerating an escaped-newline PEM.
+
+    A PEM is multi-line, and pasting one into a KEY=VALUE environment editor
+    commonly flattens it into literal backslash-n sequences. A real PEM never
+    contains a backslash, so unescaping is unambiguous and saves a confusing
+    "invalid key" failure at publish time."""
+    key = settings.wordpress_ssh_private_key or ""
+    if "\\n" in key:
+        key = key.replace("\\n", "\n")
+    return key.strip() + "\n"
+
+
+async def _publish_via_ssh(
+    *,
+    client: dict,
+    title: str,
+    html: str,
+    status: str,
+    content_type: str,
+    slug: Optional[str],
+    seo_title: Optional[str],
+    featured_image_url: Optional[str],
+) -> dict:
+    """Create a post/page over SSH with WP-CLI, bypassing the REST API entirely.
+
+    Returns the same dict as the REST path so callers are unaffected. The body is
+    piped over stdin rather than embedded in the command, so the HTML never has
+    to survive remote shell quoting; every interpolated value is shlex-quoted.
+
+    Images are refused rather than silently dropped: the REST path sideloads them
+    into the media library, and a post that publishes with dead external <img>
+    srcs looks like a success while being materially wrong. A refusal surfaces
+    through the caller's existing publish_error + notification path."""
+    if _IMG_SRC_RE.search(html) or (featured_image_url or "").strip():
+        # Covers BOTH body images and an explicitly-passed featured image. The
+        # latter matters just as much: silently ignoring the argument would
+        # publish a post the caller believes has a featured image and does not.
+        raise WordPressPublishError("wordpress_ssh_images_unsupported")
+
+    try:
+        import asyncssh  # imported lazily: absent in environments that never use SSH
+    except ImportError as exc:
+        raise WordPressPublishError("wordpress_ssh_unavailable") from exc
+
+    resource = _POST_TYPE_BY_CONTENT.get(content_type, "posts")
+    post_type = _WP_CLI_TYPE.get(resource, "post")
+
+    argv = [
+        "wp", "post", "create", "-",
+        f"--post_title={shlex.quote(title)}",
+        f"--post_status={shlex.quote(status)}",
+        f"--post_type={shlex.quote(post_type)}",
+    ]
+    if slug:
+        argv.append(f"--post_name={shlex.quote(slug)}")
+    argv.append("--porcelain")
+
+    # Capture the new id, set the SEO meta-title if it differs, then echo the id
+    # and the permalink so the caller gets the same fields the REST path returns.
+    parts = [f"cd {shlex.quote(settings.wordpress_ssh_wp_path)}", f"ID=$({' '.join(argv)})"]
+    meta_title = (seo_title or "").strip()
+    if meta_title and meta_title.lower() != (title or "").strip().lower():
+        for key in _SEO_TITLE_META_KEYS:
+            parts.append(
+                f"wp post meta update \"$ID\" {shlex.quote(key)} "
+                f"{shlex.quote(meta_title)} >/dev/null 2>&1 || true"
+            )
+    parts.append('echo "$ID"')
+    parts.append('wp post get "$ID" --field=link')
+    command = " && ".join(parts)
+
+    connect_kwargs: dict = {
+        "port": settings.wordpress_ssh_port,
+        "username": settings.wordpress_ssh_username,
+        "client_keys": [asyncssh.import_private_key(_ssh_private_key())],
+    }
+    if settings.wordpress_ssh_known_host:
+        connect_kwargs["known_hosts"] = ([settings.wordpress_ssh_known_host], [], [])
+    else:
+        logger.warning("wordpress_ssh_host_key_unverified host=%s", settings.wordpress_ssh_host)
+        connect_kwargs["known_hosts"] = None
+
+    try:
+        async with asyncssh.connect(settings.wordpress_ssh_host, **connect_kwargs) as conn:
+            result = await conn.run(command, input=html, check=False)
+    except WordPressPublishError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — connect/auth/transport
+        logger.error("wordpress_ssh_connect_failed error=%s", str(exc), extra={"error": str(exc)})
+        raise WordPressPublishError("wordpress_ssh_connect_failed") from exc
+
+    if result.exit_status != 0:
+        stderr = (str(result.stderr or ""))[:300]
+        logger.error(
+            "wordpress_ssh_wpcli_failed exit=%s stderr=%s", result.exit_status, stderr
+        )
+        raise WordPressPublishError(f"wordpress_ssh_wpcli_error_{result.exit_status}")
+
+    lines = [ln.strip() for ln in str(result.stdout or "").splitlines() if ln.strip()]
+    if not lines or not lines[0].isdigit():
+        logger.error("wordpress_ssh_unexpected_output out=%s", str(result.stdout or "")[:300])
+        raise WordPressPublishError("wordpress_unexpected_response")
+
+    post_id = int(lines[0])
+    link = lines[1] if len(lines) > 1 else None
+    return {
+        "post_id": post_id,
+        "link": link,
+        "status": status,
+        "edit_link": edit_link_for(client["wordpress_site_url"], post_id),
+        "featured_media": None,
+    }
 
 
 async def publish_to_wordpress(
@@ -381,6 +571,15 @@ async def publish_to_wordpress(
     if strip_leading_h1:
         html = _strip_leading_h1(html)
 
+    # Routed here rather than at each call site so every caller — the scheduler,
+    # the publish router, bulk publish — picks it up with no change.
+    if _ssh_enabled_for(client):
+        return await _publish_via_ssh(
+            client=client, title=title, html=html, status=status,
+            content_type=content_type, slug=slug, seo_title=seo_title,
+            featured_image_url=featured_image_url,
+        )
+
     rest_base = _rest_base(client["wordpress_site_url"])
     site_host = urlparse(client["wordpress_site_url"].strip()).netloc
     site_root = rest_base.rsplit("/wp-json", 1)[0]
@@ -396,6 +595,7 @@ async def publish_to_wordpress(
         # Ask for JSON explicitly: a host that intercepts the call is likelier to
         # pass through (or at least answer in kind) than when we accept anything.
         "Accept": "application/json",
+        **_publisher_header(),
     }
 
     try:
@@ -471,7 +671,7 @@ async def list_content(client: dict, *, per_page: int = 100, max_pages: int = 10
         raise WordPressPublishError("wordpress_not_configured")
     rest_base = _rest_base(client["wordpress_site_url"])
     auth = _auth_header(client["wordpress_username"], client["wordpress_app_password"])
-    headers = {"Authorization": auth, "Accept": "application/json"}
+    headers = {"Authorization": auth, "Accept": "application/json", **_publisher_header()}
     out: list[dict] = []
     try:
         async with httpx.AsyncClient(
@@ -545,6 +745,7 @@ async def update_post_content(
         # Ask for JSON explicitly: a host that intercepts the call is likelier to
         # pass through (or at least answer in kind) than when we accept anything.
         "Accept": "application/json",
+        **_publisher_header(),
     }
     try:
         async with httpx.AsyncClient(

@@ -182,6 +182,41 @@ class Settings(BaseSettings):
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
     )
+    # A fixed header identifying this tool on every request to a client's own
+    # WordPress host, so a managed host can scope a bot-filter exemption to us
+    # specifically instead of to a shared egress IP. The value is a shared secret
+    # agreed with the host: a rule keyed on a guessable header is spoofable by
+    # anyone who learns the name, so the exemption is only as narrow as the value
+    # is unguessable. Dormant until the value is set (no header is sent), and it
+    # is deliberately NOT set at the httpx client level — the publish client also
+    # fetches source images from third-party CDNs, and a client-level header
+    # would broadcast the secret to every one of them.
+    wordpress_publisher_header_name: str = "X-Publisher-Tool"
+    wordpress_publisher_header_value: str = ""
+    # ---- Interim SSH publish transport -------------------------------------
+    # A managed host's WAF can challenge the REST API from our egress IP while
+    # leaving SSH untouched (SiteGround's Anti-Bot AI does exactly this). For an
+    # affected client, publishing can be routed over SSH + WP-CLI instead, which
+    # the filter never sees.
+    #
+    # Config is env-only and gated to explicit client ids ON PURPOSE. This is an
+    # interim measure, so it takes no migration and — more importantly — keeps
+    # the SSH private key in the deployment's secret store rather than in the
+    # clients table. An SSH key is shell access to the client's hosting account,
+    # a categorically larger secret than the application password it stands in
+    # for, and it should not sit in a database row alongside ordinary content.
+    # If a second client ever needs this, replace it with proper per-client
+    # storage rather than widening these.
+    wordpress_ssh_client_ids: str = ""     # comma-separated client uuids
+    wordpress_ssh_host: str = ""
+    wordpress_ssh_port: int = 22
+    wordpress_ssh_username: str = ""
+    wordpress_ssh_private_key: str = ""    # PEM contents, not a path
+    wordpress_ssh_wp_path: str = ""        # WordPress root on the remote host
+    # Optional known_hosts line for the target. When empty the host key is not
+    # verified — logged as a warning, since it leaves the connection open to a
+    # man-in-the-middle who could observe or alter published content.
+    wordpress_ssh_known_host: str = ""
     # Internal-linking analyzer + injector. WordPress (app-password) sources are
     # injectable after per-edit human approval; non-WP sites are crawled
     # (sitemap + ScrapeOwl) for recommend-only suggestions.

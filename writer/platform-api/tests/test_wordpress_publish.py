@@ -415,3 +415,314 @@ async def test_explicit_featured_image_is_uploaded_and_set(monkeypatch):
     )
     assert capture["fetched"] == ["https://cdn.example.com/hero.jpg"]
     assert capture["json"]["featured_media"] == 99
+
+
+def test_header_summary_redacts_cookie_values_and_keeps_names():
+    """Response headers go into the diagnostic log line, but a challenge's
+    Set-Cookie value is an opaque token — the cookie's presence is the signal we
+    need, so the name survives and the value does not."""
+    resp = httpx.Response(
+        400,
+        headers=[
+            ("content-type", "text/html"),
+            ("server", "nginx"),
+            ("set-cookie", "sgcaptcha_token=abc123secret; Path=/"),
+            ("set-cookie", "wordpress_test=deadbeef; Path=/"),
+        ],
+    )
+    summary = wordpress_publish._header_summary(resp)
+    assert "content-type: text/html" in summary
+    assert "server: nginx" in summary
+    # Both cookies are named, neither value leaks.
+    assert "sgcaptcha_token=<redacted>" in summary
+    assert "wordpress_test=<redacted>" in summary
+    assert "abc123secret" not in summary
+    assert "deadbeef" not in summary
+
+
+def test_header_summary_is_bounded():
+    """A chatty edge can't flood the log line."""
+    resp = httpx.Response(400, headers=[(f"x-h{i}", "v" * 50) for i in range(50)])
+    assert len(wordpress_publish._header_summary(resp)) <= wordpress_publish._LOGGED_HEADER_MAX
+
+
+def test_header_summary_never_raises_on_a_plain_mapping():
+    """The helper runs inside the failure paths. If it could raise it would
+    replace a specific error code with a generic one, so a headers object it
+    doesn't understand degrades to a placeholder instead of blowing up."""
+    class _Odd:
+        headers = {"content-type": "text/html", "set-cookie": "t=secret"}
+
+    summary = wordpress_publish._header_summary(_Odd())
+    assert "content-type: text/html" in summary
+    assert "t=<redacted>" in summary
+    assert "secret" not in summary
+
+    class _Hostile:
+        @property
+        def headers(self):
+            raise RuntimeError("boom")
+
+    assert wordpress_publish._header_summary(_Hostile()) == "<unavailable>"
+
+
+class _HeaderCaptureClient:
+    """Fake client recording BOTH the client-level headers and the per-request
+    headers, so a test can tell the difference between the two."""
+
+    def __init__(self, capture, client_kwargs):
+        self._capture = capture
+        self._capture["client_headers"] = client_kwargs.get("headers") or {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, url, follow_redirects=False):
+        self._capture.setdefault("fetched", []).append(url)
+        return _ImgResponse()
+
+    async def post(self, url, json=None, content=None, headers=None):
+        if url.endswith("/media"):
+            self._capture["media_headers"] = headers
+            return _FakeResponse(
+                201, {"id": 99, "source_url": "https://acmehvac.com/wp-content/x.jpg"}
+            )
+        self._capture["create_headers"] = headers
+        return _FakeResponse(201, {"id": 5, "link": "u", "status": "draft"})
+
+
+def _patch_client(monkeypatch, capture):
+    monkeypatch.setattr(
+        wordpress_publish.httpx,
+        "AsyncClient",
+        lambda *a, **k: _HeaderCaptureClient(capture, k),
+    )
+
+
+@pytest.mark.asyncio
+async def test_publisher_header_sent_on_wp_requests_when_configured(monkeypatch):
+    monkeypatch.setattr(
+        wordpress_publish.settings, "wordpress_publisher_header_value", "s3cret-token"
+    )
+    monkeypatch.setattr(
+        wordpress_publish.settings, "wordpress_publisher_header_name", "X-Publisher-Tool"
+    )
+    capture = {}
+    _patch_client(monkeypatch, capture)
+    await publish_to_wordpress(
+        client=_CLIENT,
+        title="T",
+        html='<p>hi</p><img src="https://cdn.example.com/hero.jpg" />',
+    )
+    # Both the post create and the media upload carry it.
+    assert capture["create_headers"]["X-Publisher-Tool"] == "s3cret-token"
+    assert capture["media_headers"]["X-Publisher-Tool"] == "s3cret-token"
+
+
+@pytest.mark.asyncio
+async def test_publisher_header_omitted_entirely_when_unconfigured(monkeypatch):
+    monkeypatch.setattr(wordpress_publish.settings, "wordpress_publisher_header_value", "")
+    capture = {}
+    _patch_client(monkeypatch, capture)
+    await publish_to_wordpress(client=_CLIENT, title="T", html="<p>hi</p>")
+    assert not any(
+        k.lower() == "x-publisher-tool" for k in capture["create_headers"]
+    ), "no header should be sent at all when no value is configured"
+
+
+@pytest.mark.asyncio
+async def test_publisher_header_never_leaks_to_third_party_image_hosts(monkeypatch):
+    """The publish client also GETs source images from arbitrary CDNs. The token
+    is a shared secret, so it must be per-request on WP-bound calls only — never
+    a client-level default that rides along to every host we fetch from."""
+    monkeypatch.setattr(
+        wordpress_publish.settings, "wordpress_publisher_header_value", "s3cret-token"
+    )
+    capture = {}
+    _patch_client(monkeypatch, capture)
+    await publish_to_wordpress(
+        client=_CLIENT,
+        title="T",
+        html='<p>hi</p><img src="https://cdn.example.com/hero.jpg" />',
+    )
+    # The external image really was fetched on this client...
+    assert capture["fetched"] == ["https://cdn.example.com/hero.jpg"]
+    # ...and the client-level headers, which that GET inherits, must not carry it.
+    client_headers = {str(k).lower(): v for k, v in dict(capture["client_headers"]).items()}
+    assert "x-publisher-tool" not in client_headers
+    assert "s3cret-token" not in str(client_headers)
+
+
+# --- SSH publish transport -------------------------------------------------
+
+def _ssh_settings(monkeypatch, **over):
+    vals = {
+        "wordpress_ssh_client_ids": "client-1",
+        "wordpress_ssh_host": "ssh.example.com",
+        "wordpress_ssh_port": 18765,
+        "wordpress_ssh_username": "u16-abc",
+        "wordpress_ssh_private_key": "-----BEGIN KEY-----\nx\n-----END KEY-----",
+        "wordpress_ssh_wp_path": "/home/u16-abc/www/example.com/public_html",
+        "wordpress_ssh_known_host": "",
+    }
+    vals.update(over)
+    for k, v in vals.items():
+        monkeypatch.setattr(wordpress_publish.settings, k, v)
+
+
+def test_ssh_disabled_by_default(monkeypatch):
+    monkeypatch.setattr(wordpress_publish.settings, "wordpress_ssh_client_ids", "")
+    assert wordpress_publish._ssh_enabled_for({"id": "client-1"}) is False
+
+
+def test_ssh_only_for_listed_clients(monkeypatch):
+    _ssh_settings(monkeypatch)
+    assert wordpress_publish._ssh_enabled_for({"id": "client-1"}) is True
+    # An interim workaround must never leak to other clients.
+    assert wordpress_publish._ssh_enabled_for({"id": "client-2"}) is False
+
+
+def test_ssh_refuses_when_listed_but_unconfigured(monkeypatch):
+    _ssh_settings(monkeypatch, wordpress_ssh_private_key="")
+    assert wordpress_publish._ssh_enabled_for({"id": "client-1"}) is False
+
+
+class _FakeSSHResult:
+    def __init__(self, stdout, exit_status=0, stderr=""):
+        self.stdout, self.exit_status, self.stderr = stdout, exit_status, stderr
+
+
+class _FakeSSHConn:
+    def __init__(self, capture, result):
+        self._capture, self._result = capture, result
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def run(self, command, input=None, check=False):
+        self._capture["command"] = command
+        self._capture["stdin"] = input
+        return self._result
+
+
+def _fake_asyncssh(monkeypatch, capture, result):
+    import types
+    mod = types.ModuleType("asyncssh")
+    mod.import_private_key = lambda pem: f"key({len(pem)})"
+
+    def connect(host, **kw):
+        capture["host"] = host
+        capture["connect_kwargs"] = kw
+        return _FakeSSHConn(capture, result)
+
+    mod.connect = connect
+    monkeypatch.setitem(sys.modules, "asyncssh", mod)
+    return capture
+
+
+@pytest.mark.asyncio
+async def test_ssh_publish_returns_rest_shaped_result(monkeypatch):
+    _ssh_settings(monkeypatch)
+    capture = _fake_asyncssh(
+        monkeypatch, {}, _FakeSSHResult("4321\nhttps://example.com/hello\n")
+    )
+    client = dict(_CLIENT, id="client-1")
+    result = await publish_to_wordpress(
+        client=client, title="Hello", html="<p>body</p>", status="publish"
+    )
+    assert result["post_id"] == 4321
+    assert result["link"] == "https://example.com/hello"
+    assert result["status"] == "publish"
+    assert result["featured_media"] is None
+    # Body goes over stdin, never inside the command.
+    assert capture["stdin"] == "<p>body</p>"
+    assert "<p>body</p>" not in capture["command"]
+    assert "wp post create -" in capture["command"]
+
+
+@pytest.mark.asyncio
+async def test_ssh_publish_shell_quotes_hostile_title(monkeypatch):
+    """A title is attacker-influenced content in the sense that matters here: it
+    is interpolated into a remote shell command."""
+    _ssh_settings(monkeypatch)
+    capture = _fake_asyncssh(monkeypatch, {}, _FakeSSHResult("7\nhttps://x/y\n"))
+    nasty = "Title'; rm -rf / #"
+    await publish_to_wordpress(
+        client=dict(_CLIENT, id="client-1"), title=nasty, html="<p>b</p>", status="draft"
+    )
+    import shlex
+    # Parse the command the way a shell would rather than string-matching: the
+    # title must survive as ONE argument, and must not introduce a command.
+    tokens = shlex.split(capture["command"])
+    assert f"--post_title={nasty}" in tokens, "title must be a single intact argument"
+    assert "rm" not in tokens, "title must not be able to introduce a command"
+
+
+@pytest.mark.asyncio
+async def test_ssh_publish_refuses_images_rather_than_dropping_them(monkeypatch):
+    _ssh_settings(monkeypatch)
+    _fake_asyncssh(monkeypatch, {}, _FakeSSHResult("1\nl\n"))
+    with pytest.raises(wordpress_publish.WordPressPublishError) as exc:
+        await publish_to_wordpress(
+            client=dict(_CLIENT, id="client-1"),
+            title="T",
+            html='<p>x</p><img src="https://cdn.example.com/a.jpg" />',
+        )
+    assert str(exc.value) == "wordpress_ssh_images_unsupported"
+
+
+@pytest.mark.asyncio
+async def test_ssh_publish_surfaces_wpcli_failure(monkeypatch):
+    _ssh_settings(monkeypatch)
+    _fake_asyncssh(monkeypatch, {}, _FakeSSHResult("", exit_status=1, stderr="boom"))
+    with pytest.raises(wordpress_publish.WordPressPublishError) as exc:
+        await publish_to_wordpress(
+            client=dict(_CLIENT, id="client-1"), title="T", html="<p>x</p>"
+        )
+    assert str(exc.value) == "wordpress_ssh_wpcli_error_1"
+
+
+@pytest.mark.asyncio
+async def test_rest_path_untouched_for_other_clients(monkeypatch):
+    """The client not on the SSH list still goes over REST."""
+    _ssh_settings(monkeypatch)
+    capture = {}
+    _patch_client(monkeypatch, capture)
+    await publish_to_wordpress(
+        client=dict(_CLIENT, id="client-2"), title="T", html="<p>x</p>"
+    )
+    assert "create_headers" in capture  # the REST client was used
+
+
+@pytest.mark.asyncio
+async def test_ssh_publish_refuses_explicit_featured_image(monkeypatch):
+    """The SSH path can't sideload, so an explicit featured image must fail
+    loudly rather than be dropped — the caller would otherwise believe the post
+    has a featured image it does not have."""
+    _ssh_settings(monkeypatch)
+    _fake_asyncssh(monkeypatch, {}, _FakeSSHResult("1\nl\n"))
+    with pytest.raises(wordpress_publish.WordPressPublishError) as exc:
+        await publish_to_wordpress(
+            client=dict(_CLIENT, id="client-1"),
+            title="T",
+            html="<p>no body images at all</p>",
+            featured_image_url="https://cdn.example.com/hero.jpg",
+        )
+    assert str(exc.value) == "wordpress_ssh_images_unsupported"
+
+
+def test_ssh_private_key_accepts_escaped_newline_pem(monkeypatch):
+    """Pasting a PEM into a KEY=VALUE editor commonly flattens the newlines."""
+    real = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\ndef\n-----END OPENSSH PRIVATE KEY-----"
+    flattened = real.replace("\n", "\\n")
+    monkeypatch.setattr(wordpress_publish.settings, "wordpress_ssh_private_key", flattened)
+    assert wordpress_publish._ssh_private_key() == real + "\n"
+    # A genuine multi-line PEM is unchanged apart from a trailing newline.
+    monkeypatch.setattr(wordpress_publish.settings, "wordpress_ssh_private_key", real)
+    assert wordpress_publish._ssh_private_key() == real + "\n"
