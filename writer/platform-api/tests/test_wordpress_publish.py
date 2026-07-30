@@ -554,3 +554,147 @@ async def test_publisher_header_never_leaks_to_third_party_image_hosts(monkeypat
     client_headers = {str(k).lower(): v for k, v in dict(capture["client_headers"]).items()}
     assert "x-publisher-tool" not in client_headers
     assert "s3cret-token" not in str(client_headers)
+
+
+# --- SSH publish transport -------------------------------------------------
+
+def _ssh_settings(monkeypatch, **over):
+    vals = {
+        "wordpress_ssh_client_ids": "client-1",
+        "wordpress_ssh_host": "ssh.example.com",
+        "wordpress_ssh_port": 18765,
+        "wordpress_ssh_username": "u16-abc",
+        "wordpress_ssh_private_key": "-----BEGIN KEY-----\nx\n-----END KEY-----",
+        "wordpress_ssh_wp_path": "/home/u16-abc/www/example.com/public_html",
+        "wordpress_ssh_known_host": "",
+    }
+    vals.update(over)
+    for k, v in vals.items():
+        monkeypatch.setattr(wordpress_publish.settings, k, v)
+
+
+def test_ssh_disabled_by_default(monkeypatch):
+    monkeypatch.setattr(wordpress_publish.settings, "wordpress_ssh_client_ids", "")
+    assert wordpress_publish._ssh_enabled_for({"id": "client-1"}) is False
+
+
+def test_ssh_only_for_listed_clients(monkeypatch):
+    _ssh_settings(monkeypatch)
+    assert wordpress_publish._ssh_enabled_for({"id": "client-1"}) is True
+    # An interim workaround must never leak to other clients.
+    assert wordpress_publish._ssh_enabled_for({"id": "client-2"}) is False
+
+
+def test_ssh_refuses_when_listed_but_unconfigured(monkeypatch):
+    _ssh_settings(monkeypatch, wordpress_ssh_private_key="")
+    assert wordpress_publish._ssh_enabled_for({"id": "client-1"}) is False
+
+
+class _FakeSSHResult:
+    def __init__(self, stdout, exit_status=0, stderr=""):
+        self.stdout, self.exit_status, self.stderr = stdout, exit_status, stderr
+
+
+class _FakeSSHConn:
+    def __init__(self, capture, result):
+        self._capture, self._result = capture, result
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def run(self, command, input=None, check=False):
+        self._capture["command"] = command
+        self._capture["stdin"] = input
+        return self._result
+
+
+def _fake_asyncssh(monkeypatch, capture, result):
+    import types
+    mod = types.ModuleType("asyncssh")
+    mod.import_private_key = lambda pem: f"key({len(pem)})"
+
+    def connect(host, **kw):
+        capture["host"] = host
+        capture["connect_kwargs"] = kw
+        return _FakeSSHConn(capture, result)
+
+    mod.connect = connect
+    monkeypatch.setitem(sys.modules, "asyncssh", mod)
+    return capture
+
+
+@pytest.mark.asyncio
+async def test_ssh_publish_returns_rest_shaped_result(monkeypatch):
+    _ssh_settings(monkeypatch)
+    capture = _fake_asyncssh(
+        monkeypatch, {}, _FakeSSHResult("4321\nhttps://example.com/hello\n")
+    )
+    client = dict(_CLIENT, id="client-1")
+    result = await publish_to_wordpress(
+        client=client, title="Hello", html="<p>body</p>", status="publish"
+    )
+    assert result["post_id"] == 4321
+    assert result["link"] == "https://example.com/hello"
+    assert result["status"] == "publish"
+    assert result["featured_media"] is None
+    # Body goes over stdin, never inside the command.
+    assert capture["stdin"] == "<p>body</p>"
+    assert "<p>body</p>" not in capture["command"]
+    assert "wp post create -" in capture["command"]
+
+
+@pytest.mark.asyncio
+async def test_ssh_publish_shell_quotes_hostile_title(monkeypatch):
+    """A title is attacker-influenced content in the sense that matters here: it
+    is interpolated into a remote shell command."""
+    _ssh_settings(monkeypatch)
+    capture = _fake_asyncssh(monkeypatch, {}, _FakeSSHResult("7\nhttps://x/y\n"))
+    nasty = "Title'; rm -rf / #"
+    await publish_to_wordpress(
+        client=dict(_CLIENT, id="client-1"), title=nasty, html="<p>b</p>", status="draft"
+    )
+    import shlex
+    # Parse the command the way a shell would rather than string-matching: the
+    # title must survive as ONE argument, and must not introduce a command.
+    tokens = shlex.split(capture["command"])
+    assert f"--post_title={nasty}" in tokens, "title must be a single intact argument"
+    assert "rm" not in tokens, "title must not be able to introduce a command"
+
+
+@pytest.mark.asyncio
+async def test_ssh_publish_refuses_images_rather_than_dropping_them(monkeypatch):
+    _ssh_settings(monkeypatch)
+    _fake_asyncssh(monkeypatch, {}, _FakeSSHResult("1\nl\n"))
+    with pytest.raises(wordpress_publish.WordPressPublishError) as exc:
+        await publish_to_wordpress(
+            client=dict(_CLIENT, id="client-1"),
+            title="T",
+            html='<p>x</p><img src="https://cdn.example.com/a.jpg" />',
+        )
+    assert str(exc.value) == "wordpress_ssh_images_unsupported"
+
+
+@pytest.mark.asyncio
+async def test_ssh_publish_surfaces_wpcli_failure(monkeypatch):
+    _ssh_settings(monkeypatch)
+    _fake_asyncssh(monkeypatch, {}, _FakeSSHResult("", exit_status=1, stderr="boom"))
+    with pytest.raises(wordpress_publish.WordPressPublishError) as exc:
+        await publish_to_wordpress(
+            client=dict(_CLIENT, id="client-1"), title="T", html="<p>x</p>"
+        )
+    assert str(exc.value) == "wordpress_ssh_wpcli_error_1"
+
+
+@pytest.mark.asyncio
+async def test_rest_path_untouched_for_other_clients(monkeypatch):
+    """The client not on the SSH list still goes over REST."""
+    _ssh_settings(monkeypatch)
+    capture = {}
+    _patch_client(monkeypatch, capture)
+    await publish_to_wordpress(
+        client=dict(_CLIENT, id="client-2"), title="T", html="<p>x</p>"
+    )
+    assert "create_headers" in capture  # the REST client was used
