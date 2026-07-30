@@ -5,10 +5,13 @@ The PACE sidebar chatbox's endpoint — the delivery-PM sibling of
 resolution, board digest, Haiku, confirm-gated + actor-bound actions) in
 `services/pace_agent`. Same persona as the Slack/PACE-channel assistant.
 
-Unlike `/assistant/chat` — where PACE only gets first-refusal on PACE-shaped
-messages and otherwise falls through to SerMaStr — this surface calls
+The two web personas are separated **by surface**: `/assistant/chat` is
+SerMaStr's alone and never delegates here, and this endpoint calls
 `pace_agent.maybe_handle_web(..., force=True)` so PACE answers *every* turn
-(deferring strategy questions to SerMaStr in prose). Everything here is gated
+(deferring strategy questions to SerMaStr in prose). It used to be a shape gate
+on the shared SerMaStr surface, which meant clicking the SerMaStr icon could
+return a reply in PACE's persona. (Slack still routes by shape — one channel,
+one bot, so `is_pace_message` is the only way to reach PACE there.) Everything here is gated
 on `settings.pace_enabled`; while it's off the endpoints 503 and the sidebar
 entry stays hidden (see `GET /pace/status`).
 """
@@ -27,11 +30,13 @@ from pydantic import BaseModel, Field
 
 from config import settings
 from middleware.auth import require_auth
-from services import pace_agent, pace_auth
+from services import assistant_store, pace_agent, pace_auth
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_SURFACE = "pace"
 
 
 class PaceChatTurn(BaseModel):
@@ -41,12 +46,16 @@ class PaceChatTurn(BaseModel):
 
 class PaceChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
+    # Only seeds a brand-new thread (and serves frontends predating
+    # persistence); once a conversation exists, history comes from the store.
     history: list[PaceChatTurn] = Field(default_factory=list, max_length=40)
     # The conversation's sticky client (echoed back from the previous response)
     # so follow-ups needn't re-name the client.
     client_id: Optional[str] = None
     # One-time token of a staged (confirm-gated, actor-bound) PACE action.
     pending_token: Optional[str] = None
+    # The durable thread this turn belongs to; omit to start a new one.
+    conversation_id: Optional[str] = None
 
 
 class PaceChatResponse(BaseModel):
@@ -54,6 +63,16 @@ class PaceChatResponse(BaseModel):
     client_id: Optional[str] = None
     client_name: Optional[str] = None
     pending_token: Optional[str] = None
+    conversation_id: Optional[str] = None
+
+
+class PaceConversationSummary(BaseModel):
+    id: str
+    title: Optional[str] = None
+    client_id: Optional[str] = None
+    client_name: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 def _require_enabled() -> None:
@@ -63,11 +82,36 @@ def _require_enabled() -> None:
         raise HTTPException(status_code=503, detail="assistant_not_configured")
 
 
+async def _open_turn(body: PaceChatRequest, auth: dict) -> tuple[Optional[str], list[dict]]:
+    """Resolve this turn's durable thread → (conversation_id, prompt history).
+
+    Mirrors `routers/assistant._open_turn`: a supplied id must be one the caller
+    owns (admins read transcripts, they don't append to them), and an unknown or
+    foreign id is refused rather than silently starting a fresh thread.
+    """
+    history = [t.model_dump() for t in body.history]
+    if body.conversation_id:
+        convo = await run_in_threadpool(assistant_store.get_conversation, body.conversation_id)
+        if not convo or convo.get("surface") != _SURFACE:
+            raise HTTPException(status_code=404, detail="conversation_not_found")
+        if not assistant_store.can_write(convo, auth.get("user_id")):
+            raise HTTPException(status_code=403, detail="forbidden")
+    return await run_in_threadpool(
+        assistant_store.begin_turn,
+        body.conversation_id,
+        auth.get("user_id"),
+        _SURFACE,
+        body.message.strip(),
+        history,
+    )
+
+
 async def _run_turn(body: PaceChatRequest, auth: dict, on_event=None) -> dict:
     actor = pace_auth.context_from_auth(auth)
+    conversation_id, history = await _open_turn(body, auth)
     result = await pace_agent.maybe_handle_web(
         body.message.strip(),
-        [t.model_dump() for t in body.history],
+        history,
         body.client_id,
         body.pending_token,
         actor,
@@ -75,7 +119,14 @@ async def _run_turn(body: PaceChatRequest, auth: dict, on_event=None) -> dict:
         force=True,
     )
     # force=True always handles, but stay defensive.
-    return result or {"reply": "Sorry — PACE couldn't answer that."}
+    result = result or {"reply": "Sorry — PACE couldn't answer that."}
+    # Stored before the caller returns/streams 'done', so a turn abandoned
+    # mid-stream still lands in the thread (the producer outlives the request).
+    await run_in_threadpool(
+        assistant_store.end_turn, conversation_id,
+        result.get("reply") or "", result.get("client_id"),
+    )
+    return {**result, "conversation_id": conversation_id}
 
 
 @router.get("/pace/status")
@@ -145,6 +196,67 @@ async def pace_chat_stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get("/pace/conversations")
+async def list_pace_conversations(auth: dict = Depends(require_auth)) -> dict:
+    """The signed-in user's PACE threads, most recently active first."""
+    rows = await run_in_threadpool(
+        assistant_store.list_conversations, auth["user_id"], _SURFACE
+    )
+    names = await run_in_threadpool(assistant_store.client_names_for, rows)
+    return {
+        "conversations": [
+            PaceConversationSummary(
+                id=str(r["id"]),
+                title=r.get("title"),
+                client_id=r.get("client_id"),
+                client_name=names.get(r.get("client_id")),
+                created_at=r.get("created_at"),
+                updated_at=r.get("updated_at"),
+            ).model_dump()
+            for r in rows
+        ]
+    }
+
+
+@router.get("/pace/conversations/{conversation_id}")
+async def get_pace_conversation(
+    conversation_id: str, auth: dict = Depends(require_auth)
+) -> dict:
+    """One PACE thread's transcript — author, or an admin diagnosing it."""
+    convo = await run_in_threadpool(assistant_store.get_conversation, conversation_id)
+    if not convo or convo.get("surface") != _SURFACE:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    if not assistant_store.can_read(convo, auth.get("user_id"), auth.get("role")):
+        # 404, not 403 — an unreadable thread is indistinguishable from a
+        # missing one, so ids can't be probed.
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    messages = await run_in_threadpool(assistant_store.get_messages, conversation_id)
+    return {
+        "id": str(convo["id"]),
+        "title": convo.get("title"),
+        "client_id": convo.get("client_id"),
+        "updated_at": convo.get("updated_at"),
+        "messages": [
+            {"role": m["role"], "content": m["content"], "created_at": m.get("created_at")}
+            for m in messages
+        ],
+    }
+
+
+@router.delete("/pace/conversations/{conversation_id}")
+async def delete_pace_conversation(
+    conversation_id: str, auth: dict = Depends(require_auth)
+) -> dict:
+    """Archive a PACE thread (soft). Author only."""
+    convo = await run_in_threadpool(assistant_store.get_conversation, conversation_id)
+    if not convo or convo.get("surface") != _SURFACE:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    if not assistant_store.can_write(convo, auth.get("user_id")):
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    await run_in_threadpool(assistant_store.archive_conversation, conversation_id)
+    return {"ok": True}
 
 
 @router.get("/pace/brief")

@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import { Markdown } from './Markdown'
+import { ConversationHistory, type ConversationDetail } from './ConversationHistory'
 import { Send, ListChecks, X } from 'lucide-react'
 
 // PACE chatbox — the delivery project-manager persona, spoken over
@@ -22,6 +23,7 @@ type ChatResponse = {
   client_id?: string | null
   client_name?: string | null
   pending_token?: string | null
+  conversation_id?: string | null
 }
 
 type ChatState = {
@@ -29,12 +31,15 @@ type ChatState = {
   clientId: string | null
   clientName: string | null
   pendingToken: string | null
+  // The durable thread these messages belong to (assistant_conversations,
+  // surface 'pace'); null until the first reply opens one server-side.
+  conversationId: string | null
 }
 
 type BriefResponse = { text: string }
 
 const STORAGE_PREFIX = 'pace-chat-v1'
-const EMPTY: ChatState = { messages: [], clientId: null, clientName: null, pendingToken: null }
+const EMPTY: ChatState = { messages: [], clientId: null, clientName: null, pendingToken: null, conversationId: null }
 
 function storageKey(userId: string | null): string | null {
   return userId ? `${STORAGE_PREFIX}:${userId}` : null
@@ -143,12 +148,14 @@ export function PaceChat({ fullPage = false }: { fullPage?: boolean }) {
         history,
         client_id: state.clientId,
         pending_token: state.pendingToken,
+        conversation_id: state.conversationId,
       })
       setState(s => ({
         messages: [...s.messages, { role: 'assistant', content: res.reply }],
         clientId: res.client_id ?? s.clientId,
         clientName: res.client_name ?? s.clientName,
         pendingToken: res.pending_token ?? null,
+        conversationId: res.conversation_id ?? s.conversationId,
       }))
     } catch (e) {
       const detail = e instanceof Error ? e.message : 'unknown_error'
@@ -199,8 +206,21 @@ export function PaceChat({ fullPage = false }: { fullPage?: boolean }) {
             </button>
           </span>
         )}
+        <ConversationHistory
+          basePath="/pace"
+          accent="#0d9488"
+          activeId={state.conversationId}
+          onOpen={(d: ConversationDetail) => setState({
+            messages: d.messages,
+            clientId: d.client_id ?? null,
+            clientName: null,     // re-resolved by the next turn
+            pendingToken: null,   // staged actions never survive a reload
+            conversationId: d.id,
+          })}
+          onArchiveActive={() => setState(EMPTY)}
+        />
         {state.messages.length > 0 && (
-          <button onClick={() => setState(EMPTY)} style={clearBtn}>Clear chat</button>
+          <button onClick={() => setState(EMPTY)} style={clearBtn} title="Start a new conversation — this one stays in History">New chat</button>
         )}
       </div>
 

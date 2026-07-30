@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import { Markdown } from './Markdown'
+import { ConversationHistory, type ConversationDetail } from './ConversationHistory'
 import { Send, Sparkles, X } from 'lucide-react'
 
 // SerMaStr chatbox on the Home dashboard — same brain as the Slack assistant,
@@ -12,8 +13,15 @@ import { Send, Sparkles, X } from 'lucide-react'
 //
 // The thread is scoped to the signed-in user (storage key carries their id), so
 // on a shared browser one user never sees another's chat: switching accounts
-// loads that account's own (empty) thread, and logout clears it. History is not
-// persisted server-side — it stays local to this browser session.
+// loads that account's own (empty) thread, and logout clears it.
+//
+// Conversations are ALSO persisted server-side (assistant_conversations /
+// assistant_messages via /assistant/conversations): sessionStorage keeps the
+// live thread rendering instantly across navigation, while `conversationId`
+// ties it to the durable record, so closing the tab or moving to another
+// machine no longer loses it — reopen it from the History picker. The server
+// is authoritative for prompt history once a conversation exists; `history`
+// below is sent only to seed a brand-new thread.
 
 type ChatMsg = { role: 'user' | 'assistant'; content: string }
 
@@ -22,6 +30,7 @@ type ChatResponse = {
   client_id?: string | null
   client_name?: string | null
   pending_token?: string | null
+  conversation_id?: string | null
 }
 
 type ChatState = {
@@ -29,6 +38,9 @@ type ChatState = {
   clientId: string | null
   clientName: string | null
   pendingToken: string | null
+  // The durable thread these messages belong to. Null until the first reply
+  // comes back (the server opens the thread and returns its id).
+  conversationId: string | null
 }
 
 type BriefItem = {
@@ -44,7 +56,7 @@ const STORAGE_PREFIX = 'sermastr-chat-v1'
 // Pre-isolation key: a single shared bucket not tied to any user. Purged on
 // mount so a previous user's chat can't linger on a shared browser.
 const LEGACY_STORAGE_KEY = 'sermastr-chat-v1'
-const EMPTY: ChatState = { messages: [], clientId: null, clientName: null, pendingToken: null }
+const EMPTY: ChatState = { messages: [], clientId: null, clientName: null, pendingToken: null, conversationId: null }
 
 function storageKey(userId: string | null): string | null {
   return userId ? `${STORAGE_PREFIX}:${userId}` : null
@@ -165,6 +177,7 @@ export function SerMastrChat({ exampleClient, fullPage = false }: { exampleClien
         history,
         client_id: state.clientId,
         pending_token: state.pendingToken,
+        conversation_id: state.conversationId,
       })
       setState(s => ({
         messages: [...s.messages, { role: 'assistant', content: res.reply }],
@@ -172,6 +185,7 @@ export function SerMastrChat({ exampleClient, fullPage = false }: { exampleClien
         clientName: res.client_name ?? s.clientName,
         // The server consumes a sent token either way, so only a fresh one survives.
         pendingToken: res.pending_token ?? null,
+        conversationId: res.conversation_id ?? s.conversationId,
       }))
     } catch (e) {
       const detail = e instanceof Error ? e.message : 'unknown_error'
@@ -224,8 +238,23 @@ export function SerMastrChat({ exampleClient, fullPage = false }: { exampleClien
             </button>
           </span>
         )}
+        <ConversationHistory
+          basePath="/assistant"
+          accent="#7c3aed"
+          activeId={state.conversationId}
+          onOpen={(d: ConversationDetail) => setState({
+            messages: d.messages,
+            clientId: d.client_id ?? null,
+            // The name is re-resolved by the next turn; the chip stays quiet
+            // until then rather than showing a stale one.
+            clientName: null,
+            pendingToken: null,   // staged actions never survive a reload
+            conversationId: d.id,
+          })}
+          onArchiveActive={() => setState(EMPTY)}
+        />
         {state.messages.length > 0 && (
-          <button onClick={() => setState(EMPTY)} style={clearBtn}>Clear chat</button>
+          <button onClick={() => setState(EMPTY)} style={clearBtn} title="Start a new conversation — this one stays in History">New chat</button>
         )}
       </div>
 

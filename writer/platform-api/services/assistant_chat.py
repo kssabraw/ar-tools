@@ -19,7 +19,6 @@ of Slack events. Differences from the Slack path:
 
 from __future__ import annotations
 
-import logging
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -30,7 +29,6 @@ from fastapi.concurrency import run_in_threadpool
 from db.supabase_client import get_supabase
 from services import slack_assistant
 
-logger = logging.getLogger(__name__)
 
 _HISTORY_LIMIT = 12  # prior turns folded into the prompt (mirrors the Slack cap)
 _PENDING_TTL_SECONDS = 15 * 60
@@ -164,28 +162,21 @@ async def handle_chat(
     `on_event` (async callable) streams the turn as it generates — text deltas
     + tool-activity status markers — for the SSE endpoint; the returned dict is
     the same either way (the frontend renders the final reply from it).
-    `action_context` (a `pace_auth.ActionContext`) is the authenticated actor,
-    used only by the PACE delegate below.
+    `action_context` (a `pace_auth.ActionContext`) is the authenticated actor.
+    SerMaStr doesn't authorize per-user yet, so nothing here reads it — it stays
+    on the signature as the hook per-user action authorization will use.
+
+    **This surface is SerMaStr only.** It used to give PACE first refusal on
+    project-management-shaped turns, which meant clicking the SerMaStr icon
+    could get you a reply from PACE — under PACE's persona, which is instructed
+    to disclaim strategy ("that's SerMaStr's call") while the UI still said
+    SerMaStr. PACE has its own chat surface (`POST /pace/chat`, the PACE sidebar
+    page), so the two personas are now separated by surface, not by a keyword
+    gate on a shared one. The Slack path still routes by message shape —
+    there's one channel and one bot there, so shape is the only way to reach
+    PACE (see `pace_agent.maybe_handle_slack`).
     """
     history = history[-_HISTORY_LIMIT:]
-
-    # 0) PACE (delivery PM) gets first refusal when enabled (default off → inert,
-    # SerMaStr behaviour unchanged). It handles project-management-shaped turns +
-    # its own actor-bound confirm tokens; anything else returns None and falls
-    # through to the SerMaStr flow below.
-    from config import settings as _settings
-
-    if _settings.pace_enabled and action_context is not None:
-        try:
-            from services import pace_agent
-
-            handled = await pace_agent.maybe_handle_web(
-                message, history, sticky_client_id, pending_token, action_context, on_event
-            )
-            if handled is not None:
-                return handled
-        except Exception as exc:  # PACE must never break the SerMaStr path
-            logger.warning("pace_web_delegate_failed", extra={"error": str(exc)})
 
     # 1) Confirmation of a staged action — the token pins the exact action +
     # client, so the "yes" needn't name anything.
