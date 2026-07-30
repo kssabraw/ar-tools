@@ -114,6 +114,13 @@ def _should_store(action_count: int, latest_action_count: "int | None") -> bool:
     return latest_action_count is None or latest_action_count > 0
 
 
+# Every value `reopt_plans.trigger` accepts. MUST stay in sync with the DB CHECK
+# (migration 20260730180000) — an unlisted value builds the whole plan and then
+# dies at the INSERT. `tests/test_reopt_planner.py` scans the codebase for
+# trigger= literals and fails on anything not listed here.
+PLAN_TRIGGERS = frozenset({"scheduled", "manual", "drop", "maps_drop", "offpage"})
+
+
 def _plan_path(client_id: str) -> str:
     return f"clients/{client_id}/action-plan"
 

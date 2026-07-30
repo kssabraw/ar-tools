@@ -598,3 +598,63 @@ def test_build_assistant_actions_defaults_the_grouping_and_diagnosis():
     a = reopt_planner.build_assistant_actions("c1", [{"id": "x", "title": "Do the thing"}])[0]
     assert a["keyword"] == "Strategy"
     assert "SerMaStr" in a["diagnosis"]
+
+
+# ---------------------------------------------------------------------------
+# Trigger vocabulary vs the DB CHECK.
+#
+# reopt_plans.trigger is constrained, and an unlisted value builds the entire
+# plan before dying at the INSERT — expensive and silent. This scans real call
+# sites so a new trigger can't be introduced without widening the constraint.
+# ---------------------------------------------------------------------------
+
+import ast
+import pathlib
+
+
+def _trigger_literals() -> list[tuple[str, int, str]]:
+    """Every literal `trigger=` passed to enqueue_reopt_plan / build_plan in
+    the app source (tests excluded — they may exercise invalid values)."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    targets = {"enqueue_reopt_plan", "build_plan"}
+    found: list[tuple[str, int, str]] = []
+    for sub in ("services", "routers"):
+        for path in sorted((root / sub).rglob("*.py")):
+            try:
+                tree = ast.parse(path.read_text())
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                fn = node.func
+                name = getattr(fn, "attr", None) or getattr(fn, "id", None)
+                if name not in targets:
+                    continue
+                # recipe_engine.build_plan is a different function on a
+                # different table — skip it by module qualifier.
+                if isinstance(fn, ast.Attribute) and getattr(fn.value, "id", "") == "recipe_engine":
+                    continue
+                for kw in node.keywords:
+                    if kw.arg == "trigger" and isinstance(kw.value, ast.Constant):
+                        if isinstance(kw.value.value, str):
+                            found.append((path.name, node.lineno, kw.value.value))
+    return found
+
+
+def test_every_trigger_literal_is_allowed_by_the_db_check():
+    offenders = [
+        f"{f}:{ln}: {val!r}"
+        for f, ln, val in _trigger_literals()
+        if val not in reopt_planner.PLAN_TRIGGERS
+    ]
+    assert not offenders, (
+        "trigger values not in reopt_planner.PLAN_TRIGGERS (and therefore "
+        "rejected by the reopt_plans CHECK): " + str(offenders)
+    )
+
+
+def test_the_scan_actually_finds_call_sites():
+    # A scan that silently matches nothing would make the test above vacuous.
+    values = {v for _, _, v in _trigger_literals()}
+    assert {"manual", "scheduled", "drop", "maps_drop", "offpage"} <= values
