@@ -1339,3 +1339,123 @@ def test_wants_portfolio_ignores_single_client_asks():
     assert not slack_assistant.wants_portfolio("what should we improve next?")
     assert not slack_assistant.wants_portfolio("")
     assert not slack_assistant.wants_portfolio(None)
+
+
+# ---------------------------------------------------------------------------
+# looks_underspecified — the deterministic "ask, don't waffle" trigger
+# ---------------------------------------------------------------------------
+_CTX_WITH_KEYWORDS = {
+    "organic_rank": {"keywords": [{"keyword": "emergency plumber sydney"}, {"keyword": "blocked drain"}]}
+}
+
+
+def test_underspecified_bare_requests_for_direction():
+    for msg in [
+        "what should we do?",
+        "what should we do next for these guys",
+        "any ideas?",
+        "thoughts?",
+        "what would you do here",
+        "how should we approach this",
+        "help me out",
+        "what's next",
+    ]:
+        assert slack_assistant.looks_underspecified(msg, {}, []), msg
+
+
+def test_anchored_asks_are_not_flagged():
+    # Each names something advice can attach to, so the model should just answer.
+    for msg in [
+        "what should we do about the maps drop?",
+        "what should we do with our link building budget",
+        "any ideas for the blog content plan",
+        "what should we do about 'emergency plumber sydney'",
+        "what should we do — we're at position 14",
+        "how should we approach Q4",
+        "what should we do about https://example.com/services",
+    ]:
+        assert not slack_assistant.looks_underspecified(msg, {}, []), msg
+
+
+def test_tracked_keyword_counts_as_an_anchor():
+    msg = "what should we do about emergency plumber sydney"
+    assert not slack_assistant.looks_underspecified(msg, _CTX_WITH_KEYWORDS, [])
+    # …and the same question without it stays flagged.
+    assert slack_assistant.looks_underspecified("what should we do", _CTX_WITH_KEYWORDS, [])
+
+
+def test_vague_followup_in_an_anchored_conversation_is_not_flagged():
+    # "what should we do?" three turns into a conversation about the geo-grid is
+    # not a vague question — the thread already says about what.
+    history = [
+        {"role": "user", "content": "how are the maps rankings looking?"},
+        {"role": "assistant", "content": "Pack presence is 6/25 pins…"},
+    ]
+    assert not slack_assistant.looks_underspecified("what should we do?", {}, history)
+
+
+def test_anchorless_history_does_not_rescue_a_vague_ask():
+    history = [
+        {"role": "user", "content": "hey"},
+        {"role": "assistant", "content": "Hi — what can I help with?"},
+    ]
+    assert slack_assistant.looks_underspecified("what should we do?", {}, history)
+
+
+def test_non_advice_messages_never_flagged():
+    for msg in [
+        "how is the campaign going?",
+        "run a maps scan",
+        "what's our rank for blocked drain",
+        "add 'roof repair' to the tracker",
+        "",
+    ]:
+        assert not slack_assistant.looks_underspecified(msg, {}, []), msg
+
+
+def test_gate_tolerates_missing_or_malformed_context():
+    assert slack_assistant.looks_underspecified("what should we do?", None, None)
+    assert slack_assistant.looks_underspecified("what should we do?", {"organic_rank": {}}, [])
+    assert slack_assistant.looks_underspecified("what should we do?", {"organic_rank": {"keywords": ["oops"]}}, [])
+
+
+def _system_prompt_for(question: str, context=None, history=None) -> str:
+    """Run one interpret() turn against a stubbed Anthropic and return the
+    system prompt it sent — the way to assert per-turn prompt assembly."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    anthropic = __import__("anthropic")
+    seen = {}
+
+    async def _create(**kwargs):
+        seen["system"] = kwargs.get("system", "")
+        block = MagicMock()
+        block.type = "text"
+        block.text = "ok"
+        resp = MagicMock()
+        resp.content = [block]
+        resp.stop_reason = "end_turn"
+        return resp
+
+    api = MagicMock()
+    api.messages.create = AsyncMock(side_effect=_create)
+    with patch.object(anthropic, "AsyncAnthropic", return_value=api):
+        asyncio.run(
+            slack_assistant.interpret(
+                question, {"id": "c1", "name": "Acme"}, context or {}, history or []
+            )
+        )
+    return seen["system"]
+
+
+def test_vague_ask_gets_the_clarify_instruction():
+    system = _system_prompt_for("what should we do?")
+    assert "THIS TURN IS UNDERSPECIFIED" in system
+
+
+def test_anchored_ask_does_not_get_the_clarify_instruction():
+    system = _system_prompt_for("what should we do about the maps drop?")
+    assert "THIS TURN IS UNDERSPECIFIED" not in system
+    # …but the standing prompt is still there.
+    assert "ASK WHEN UNSURE" in system

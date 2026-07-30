@@ -141,6 +141,7 @@ from services.slack_assistant.helpers import (
     group_maps_series,
     is_affirmative,
     is_local_client,
+    looks_underspecified,
     maps_series_point,
     resolve_client,
     sop_domains,
@@ -179,4 +180,9 @@ from services.slack_assistant.llm import (
     interpret_portfolio,
     post_message,
 )
-from services.slack_assistant.prompts import _PORTFOLIO_SYSTEM, _SYSTEM, _WEB_STYLE
+from services.slack_assistant.prompts import (
+    _CLARIFY_NUDGE,
+    _PORTFOLIO_SYSTEM,
+    _SYSTEM,
+    _WEB_STYLE,
+)

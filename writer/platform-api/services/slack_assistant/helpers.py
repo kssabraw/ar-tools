@@ -297,6 +297,105 @@ def wants_sop_grounding(text: str) -> bool:
     return bool(_SOP_HINT_RE.search(text or ""))
 
 
+# ---------------------------------------------------------------------------
+# Underspecified asks — make "ask when unsure" actually fire.
+#
+# The system prompt has always told SerMaStr to ask a clarifying question when
+# a request is ambiguous, but that instruction sits mid-prompt and is pulled
+# against by the Director's-voice block above it ("commit", "lead with the
+# answer", "end with the ball in play") and hedged in its own paragraph ("don't
+# over-ask"). Faced with a bare "what should we do?", the cheapest fully
+# compliant output is a confident generic list — prompt-satisfying, useless.
+#
+# So the trigger is computed here instead of left to the model's judgement: when
+# a turn asks for direction and nothing in the conversation says direction
+# toward WHAT, `interpret` appends an explicit instruction for that turn only.
+# Deliberately conservative — it fires only when there is no anchor anywhere in
+# the message OR the recent history, since a vague follow-up in a conversation
+# already about a keyword is not vague at all.
+# ---------------------------------------------------------------------------
+
+# Asking for direction ("what should we do?", "any ideas?", "where do we focus?").
+_ADVICE_RE = re.compile(
+    r"\bwhat (?:should|would|do|can|could) (?:we|i|you)\b|"
+    r"\bwhat(?:'?s| is)? next\b|\bwhat now\b|\bwhere (?:to|do we go) (?:from here|next)\b|"
+    r"\b(?:any )?(?:ideas|thoughts|suggestions?|recommendations?)\b|"
+    r"\bwhat do you (?:think|reckon)\b|"
+    r"\b(?:how (?:do|can|should) we|where should we)\b|"
+    r"\bhelp (?:me|us)\b|\bfix (?:this|it)\b|\bmake it better\b",
+    re.IGNORECASE,
+)
+
+# Something concrete for advice to attach to: a named module or metric, a
+# timeframe, a quoted phrase, a URL, or any number. Broad on purpose — one
+# anchor is enough to make an ask answerable, and a missed anchor costs an
+# unnecessary question.
+_ANCHOR_RE = re.compile(
+    r"\brank(?:ing)?s?\b|\bkeywords?\b|\bposition\b|\bserp\b|"
+    r"\bmaps?\b|\blocal pack\b|\bgeo.?grid\b|\bgbp\b|\bgoogle business\b|"
+    r"\bai (?:visibility|overview|mode)\b|\baio\b|\baeo\b|\bchatgpt\b|"
+    r"\bcontent\b|\bblog\b|\bpages?\b|\bsilo\b|\bschema\b|\bon.?page\b|"
+    r"\blinks?\b|\bbacklinks?\b|\breferring domain\b|\bcitations?\b|\bauthority\b|"
+    r"\breviews?\b|\bbudget\b|\bretainer\b|\bspend\b|\breports?\b|\bgoals?\b|"
+    r"\bcompetitors?\b|\btraffic\b|\bclicks?\b|\bimpressions?\b|\bconversions?\b|"
+    r"\bleads?\b|\brevenue\b|\bgsc\b|\bsearch console\b|\blocal seo\b|\becommerce\b|"
+    r"\bproducts?\b|\bsyndication\b|\bfreeze\b|\bdeindex\b|\bdrops?\b|"
+    r"\bthis (?:month|week|quarter|year)\b|\bnext (?:month|week|quarter|year)\b|"
+    r"\bq[1-4]\b|\bby (?:friday|monday|end of)\b|"
+    r"[\"“'‘][^\"”'’]{3,}[\"”'’]|"          # a quoted phrase — usually the keyword
+    r"https?://|www\.|\b\w+\.(?:com|co|net|org|au|uk)\b|"
+    r"\d",                                    # any number pins something
+    re.IGNORECASE,
+)
+
+# Recent turns scanned for an anchor before calling a follow-up underspecified.
+_ANCHOR_HISTORY_TURNS = 6
+
+
+def _has_anchor(text: str, keywords: list[str]) -> bool:
+    """Whether `text` names anything advice could attach to — a module, metric,
+    timeframe, quoted phrase, URL, number, or one of the client's own tracked
+    keywords. Pure."""
+    if not text:
+        return False
+    if _ANCHOR_RE.search(text):
+        return True
+    low = text.lower()
+    return any(k and k.lower() in low for k in keywords)
+
+
+def _tracked_keywords(context: Optional[dict]) -> list[str]:
+    """The client's tracked keyword strings from the assembled context, so a
+    message naming one counts as anchored even with no other signal. Pure;
+    tolerant of a missing/!empty organic_rank module."""
+    rows = ((context or {}).get("organic_rank") or {}).get("keywords") or []
+    return [str(r.get("keyword")) for r in rows if isinstance(r, dict) and r.get("keyword")]
+
+
+def looks_underspecified(
+    message: str,
+    context: Optional[dict] = None,
+    history: Optional[list[dict]] = None,
+) -> bool:
+    """True when a turn asks for direction but names nothing to direct at. Pure.
+
+    Drives the per-turn clarify instruction in `interpret`. Requires ALL of:
+    the message asks for advice; it carries no anchor; and no anchor appears in
+    the recent conversation either — so "what should we do?" is flagged, while
+    "what should we do about the maps drop?" and the same bare question asked
+    three turns into a conversation about a keyword are not.
+    """
+    if not _ADVICE_RE.search(message or ""):
+        return False
+    keywords = _tracked_keywords(context)
+    if _has_anchor(message, keywords):
+        return False
+    for turn in (history or [])[-_ANCHOR_HISTORY_TURNS:]:
+        if _has_anchor((turn or {}).get("content") or "", keywords):
+            return False
+    return True
+
+
 def sop_domains(question: str, context: dict) -> set[str]:
     """The sop_library relevance domains for a question: keyword hints from the
     question itself plus what's live/alerting in the client context. Pure."""

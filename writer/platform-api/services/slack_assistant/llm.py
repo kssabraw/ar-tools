@@ -27,12 +27,18 @@ from services.slack_assistant.helpers import (
     format_context,
     format_history,
     is_affirmative,
+    looks_underspecified,
     resolve_client,
     sop_domains,
     strip_mention,
     wants_sop_grounding,
 )
-from services.slack_assistant.prompts import _PORTFOLIO_SYSTEM, _SYSTEM, _WEB_STYLE
+from services.slack_assistant.prompts import (
+    _CLARIFY_NUDGE,
+    _PORTFOLIO_SYSTEM,
+    _SYSTEM,
+    _WEB_STYLE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -658,6 +664,12 @@ async def interpret(
     # with in-answer tool reads — first wins).
     max_rounds = max(settings.slack_assistant_sop_rounds, _LIVE_GSC_ROUNDS)
     system = _SYSTEM + (_WEB_STYLE if style == "web" else "")
+    # A request for direction that names nothing to direct at gets an explicit
+    # per-turn instruction (deterministic gate, not the model's judgement): the
+    # standing ask-when-unsure rule loses to the Director's-voice pull toward
+    # committing, and the observed failure is a confident generic answer.
+    if looks_underspecified(question, context, history):
+        system += _CLARIFY_NUDGE
 
     async def on_text(delta: str) -> None:
         await on_event({"type": "text", "text": delta})

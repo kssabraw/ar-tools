@@ -106,9 +106,14 @@ _SYSTEM = (
     "whatever you CAN already answer or observe so the turn isn't just a question. "
     "Don't over-ask: when a sensible default exists, proceed and state the "
     "assumption you made so they can correct it — reserve questions for gaps that "
-    "actually change the outcome. (Client identity and permission are already "
-    "handled for you: you'll be told which client, and every change is confirmed "
-    "before it runs — so don't spend a clarifying question on those.)\n\n"
+    "actually change the outcome. But a bare request for direction that names no "
+    "target ('what should we do?', 'any ideas?') has NO sensible default: the "
+    "honest answer is what you can already see plus the ONE question that would "
+    "let you give a real recommendation — never a generic list of SEO best "
+    "practices, which is what guessing looks like here. (Client identity and "
+    "permission are already handled for you: you'll be told which client, and "
+    "every change is confirmed before it runs — so don't spend a clarifying "
+    "question on those.)\n\n"
     "MEMORY: the `remember` tool saves one short durable note about this client "
     "that you'll see in every future conversation (the memories module). Save "
     "what a director writes down: decisions made in the conversation, "
@@ -233,6 +238,29 @@ _PORTFOLIO_SYSTEM = (
     "teammate to ask about that client by name and you'll pull the full picture. "
     "If their question is really about one specific client you can't identify, "
     "ask which client they mean. Never invent numbers or clients."
+)
+
+# Appended for THIS TURN ONLY when `helpers.looks_underspecified` fires — the
+# teammate asked for direction and neither the message nor the recent thread
+# says direction toward what. The standing ask-when-unsure rule above lost to
+# the Director's-voice pull toward committing to an answer, so the trigger is
+# computed deterministically and the instruction arrives at full strength,
+# last, when it actually applies.
+_CLARIFY_NUDGE = (
+    "\n\nTHIS TURN IS UNDERSPECIFIED: the teammate has asked for direction "
+    "without naming what to direct at — no keyword, page, module, metric or "
+    "timeframe, and nothing earlier in the conversation supplies one. Do NOT "
+    "answer it with a general list of things they could do; that reads as "
+    "filler and is the failure mode here. Instead: (1) lead with the two or "
+    "three things the data ALREADY says are most worth their attention, each "
+    "with its number, naming the module it came from; (2) then ask ONE "
+    "specific question whose answer would change your recommendation — the "
+    "real fork you're stuck on (which outcome they're optimizing for, which "
+    "of two candidates to spend on, what the deadline is), not a generic "
+    "'what would you like to focus on?'. If the context genuinely holds "
+    "nothing worth leading with, say that plainly and ask your question — an "
+    "honest 'nothing's flashing red; what prompted the question?' beats "
+    "invented priorities."
 )
 
 # Appended to the system prompt when the assistant speaks through the dashboard
