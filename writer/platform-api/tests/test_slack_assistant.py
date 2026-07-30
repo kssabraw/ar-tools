@@ -1659,3 +1659,62 @@ def test_live_serp_without_a_location_falls_back_to_the_tracked_location():
     assert kind == "confirm"
     assert staged["location_code"] is None
     assert "their tracked location" in staged["_confirm"]
+
+
+# ---------------------------------------------------------------------------
+# save_strategy_actions — a written strategy becomes Action Plan steps.
+# ---------------------------------------------------------------------------
+
+
+def test_clean_strategy_actions_normalizes_objects_and_bare_strings():
+    from services.slack_assistant import actions
+
+    cleaned = actions._clean_strategy_actions([
+        {"title": "  Build a Pompano page  ", "detail": "no page exists", "keyword": "water damage"},
+        "Add Pompano to tracked keywords",
+        {"title": "   "},          # empty title — dropped
+        {"detail": "orphan"},      # no title — dropped
+        42,                        # not a step at all
+    ])
+    assert [c["title"] for c in cleaned] == [
+        "Build a Pompano page", "Add Pompano to tracked keywords",
+    ]
+    assert cleaned[0]["keyword"] == "water damage"
+    assert cleaned[1]["detail"] is None
+
+
+def test_stage_save_strategy_actions_lists_every_step_in_the_confirm():
+    import asyncio
+
+    from services.slack_assistant import actions
+
+    kind, staged = asyncio.run(actions._stage_save_strategy_actions("c1", {
+        "actions": [{"title": "Build a Pompano page"}, {"title": "Run a geo-grid"}],
+    }))
+    assert kind == "confirm"
+    assert "Build a Pompano page" in staged["_confirm"]
+    assert "Run a geo-grid" in staged["_confirm"]
+
+
+def test_stage_save_strategy_actions_asks_again_with_nothing_to_save():
+    import asyncio
+
+    from services.slack_assistant import actions
+
+    kind, msg = asyncio.run(actions._stage_save_strategy_actions("c1", {"actions": []}))
+    assert kind == "reply"
+    assert "steps" in msg.lower()
+
+
+def test_stage_save_strategy_actions_caps_and_says_what_was_dropped():
+    import asyncio
+
+    from services.reopt_planner import ASSISTANT_ACTION_MAX
+    from services.slack_assistant import actions
+
+    kind, staged = asyncio.run(actions._stage_save_strategy_actions("c1", {
+        "actions": [{"title": f"step {i}"} for i in range(ASSISTANT_ACTION_MAX + 3)],
+    }))
+    assert kind == "confirm"
+    assert len(staged["actions"]) == ASSISTANT_ACTION_MAX
+    assert "3 more didn't fit" in staged["_confirm"]

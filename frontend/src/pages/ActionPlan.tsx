@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, ArrowRight, RefreshCw, AlertTriangle, TrendingUp, TrendingDown, GitMerge, Sparkles,
   CheckCircle2, MapPin, Users, Star, Link2, FileText, Target, ChevronDown, Globe, Bot,
+  MessageSquare,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client, ReoptAction, ReoptPlan } from '../lib/types'
@@ -202,6 +203,7 @@ function kindMeta(kind: string): { label: string; icon: React.ReactNode } {
     case 'local_relevance': return { label: 'Local relevance', icon: <Target size={18} /> }
     case 'maps_solv_drop': return { label: 'Local share loss', icon: <TrendingDown size={18} /> }
     case 'brand_search_decline': return { label: 'Brand search down', icon: <TrendingDown size={18} /> }
+    case 'assistant_action': return { label: 'Saved from SerMaStr', icon: <MessageSquare size={18} /> }
     default: return { label: 'Opportunity', icon: <TrendingUp size={18} /> }
   }
 }
@@ -212,6 +214,8 @@ function kindMeta(kind: string): { label: string; icon: React.ReactNode } {
 function channel(action: ReoptAction): { label: string; fg: string; bg: string; icon: React.ReactNode } {
   if (action.kind === 'brand_search_decline')
     return { label: 'AI / LLM visibility', fg: '#7c3aed', bg: '#f5f3ff', icon: <Bot size={11} style={chIcon} /> }
+  if (action.source === 'assistant')
+    return { label: 'Saved strategy', fg: '#b45309', bg: '#fffbeb', icon: <MessageSquare size={11} style={chIcon} /> }
   if (action.source === 'maps')
     return { label: 'Local pack · Maps geo-grid', fg: '#0369a1', bg: '#f0f9ff', icon: <MapPin size={11} style={chIcon} /> }
   return { label: 'Organic search', fg: '#047857', bg: '#ecfdf5', icon: <Globe size={11} style={chIcon} /> }
@@ -228,6 +232,7 @@ function target(action: ReoptAction): { label: string; value: string } {
     case 'backlink_gap': return { label: 'Scope', value: v }
     case 'maps_solv_drop': return { label: 'Scope', value: v }
     case 'brand_search_decline': return { label: 'Scope', value: v }
+    case 'assistant_action': return { label: 'Focus', value: v }
     default: return { label: 'Keyword', value: v }
   }
 }
@@ -367,6 +372,12 @@ function kindGuide(kind: string): { why: string; needed: string[]; source: strin
           'Invest in brand-building and reputation: reviews, PR/mentions, branded campaigns.',
         ],
         source: 'Rank tracker — branded GSC impressions trend.',
+      }
+    case 'assistant_action':
+      return {
+        why: 'A step you saved out of a strategy conversation with SerMaStr. It stays on the plan through rebuilds until someone closes it.',
+        needed: ['Do the step, then close it out.'],
+        source: 'Saved from a SerMaStr conversation — not a tracker signal.',
       }
     default:
       return {

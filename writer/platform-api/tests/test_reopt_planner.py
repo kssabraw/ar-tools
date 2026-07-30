@@ -543,3 +543,55 @@ def test_enqueue_event_trigger_window_zero_disables_debounce(monkeypatch):
     # event refresh on + window=0 → no recency query; the event rebuild is allowed.
     fake = _run_enqueue(monkeypatch, "maps_drop", has_recent=True, window=0, event_refresh=True)
     assert len(fake.inserts) == 1
+
+
+# ---------------------------------------------------------------------------
+# Saved SerMaStr strategy steps — merged into every rebuild.
+#
+# The plan's items are regenerated wholesale on each build, which is exactly why
+# these rows live in their own table.
+# ---------------------------------------------------------------------------
+
+
+def test_build_assistant_actions_maps_saved_steps():
+    rows = [
+        {"id": "a1", "title": "Build a Pompano Beach page", "detail": "No page exists today.",
+         "keyword": "water damage restoration"},
+    ]
+    actions = reopt_planner.build_assistant_actions("c1", rows)
+    assert len(actions) == 1
+    a = actions[0]
+    assert a["kind"] == "assistant_action" and a["source"] == "assistant"
+    assert a["recommendation"] == "Build a Pompano Beach page"
+    assert a["diagnosis"] == "No page exists today."
+    assert a["keyword"] == "water damage restoration"
+    assert a["assistant_action_id"] == "a1"
+    assert a["cta_path"] == "clients/c1/action-plan"
+
+
+def test_build_assistant_actions_preserves_written_order():
+    rows = [{"id": str(i), "title": f"step {i}"} for i in range(4)]
+    actions = reopt_planner.build_assistant_actions("c1", rows)
+    sorts = [a["sort"] for a in actions]
+    assert sorts == sorted(sorts, reverse=True)  # first written sorts highest
+    assert [a["recommendation"] for a in actions] == [f"step {i}" for i in range(4)]
+
+
+def test_build_assistant_actions_rank_below_a_sitewide_banner_and_above_drops():
+    a = reopt_planner.build_assistant_actions("c1", [{"id": "x", "title": "t"}])[0]
+    assert reopt_planner._SORT_DROP < a["sort"] < reopt_planner._SORT_SITEWIDE
+
+
+def test_build_assistant_actions_skips_untitled_rows_and_caps():
+    rows = [{"id": "x", "title": ""}] + [
+        {"id": str(i), "title": f"s{i}"} for i in range(reopt_planner.ASSISTANT_ACTION_MAX + 5)
+    ]
+    actions = reopt_planner.build_assistant_actions("c1", rows)
+    assert len(actions) <= reopt_planner.ASSISTANT_ACTION_MAX
+    assert all(a["recommendation"] for a in actions)
+
+
+def test_build_assistant_actions_defaults_the_grouping_and_diagnosis():
+    a = reopt_planner.build_assistant_actions("c1", [{"id": "x", "title": "Do the thing"}])[0]
+    assert a["keyword"] == "Strategy"
+    assert "SerMaStr" in a["diagnosis"]

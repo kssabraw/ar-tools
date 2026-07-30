@@ -1171,7 +1171,10 @@ export interface ReoptAction {
     | 'content_gap'
     | 'local_relevance'
     | 'brand_search_decline'
-  source?: 'organic' | 'maps'
+    // Saved out of a SerMaStr strategy conversation rather than derived from a
+    // tracker signal — stored separately so it survives plan rebuilds.
+    | 'assistant_action'
+  source?: 'organic' | 'maps' | 'assistant'
   keyword: string
   diagnosis: string
   recommendation: string

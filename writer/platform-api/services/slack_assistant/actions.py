@@ -915,6 +915,86 @@ def _act_generate_report(client_id: str, args: Optional[dict] = None) -> str:
     )
 
 
+def _clean_strategy_actions(raw) -> list[dict]:
+    """Normalize the model's `actions` argument into storable rows. Pure.
+
+    Tolerant of the two shapes a model actually emits — a list of objects, or a
+    list of bare strings — and drops anything with no title rather than storing
+    an empty row.
+    """
+    out: list[dict] = []
+    for item in raw or []:
+        if isinstance(item, str):
+            item = {"title": item}
+        if not isinstance(item, dict):
+            continue
+        title = (item.get("title") or "").strip()
+        if not title:
+            continue
+        out.append({
+            "title": title,
+            "detail": (item.get("detail") or "").strip() or None,
+            "keyword": (item.get("keyword") or "").strip() or None,
+        })
+    return out
+
+
+async def _stage_save_strategy_actions(client_id: str, args: dict) -> tuple[str, dict | str]:
+    """Normalize the steps and name them in the confirm, so nobody approves a
+    list they haven't read."""
+    from services.reopt_planner import ASSISTANT_ACTION_MAX
+
+    steps = _clean_strategy_actions(args.get("actions"))
+    if not steps:
+        return (
+            "reply",
+            "I don't have any concrete steps to save yet — tell me which parts "
+            "of the plan you want on the Action Plan.",
+        )
+    dropped = max(0, len(steps) - ASSISTANT_ACTION_MAX)
+    steps = steps[:ASSISTANT_ACTION_MAX]
+    args["actions"] = steps
+    listed = "\n".join(f"  {i}. {s['title']}" for i, s in enumerate(steps, 1))
+    tail = f"\n(That's the first {ASSISTANT_ACTION_MAX} — {dropped} more didn't fit.)" if dropped else ""
+    args["_confirm"] = (
+        f"add {len(steps)} step{'s' if len(steps) != 1 else ''} to the Action "
+        f"Plan:\n{listed}{tail}"
+    )
+    return "confirm", args
+
+
+async def _act_save_strategy_actions(client_id: str, args: Optional[dict] = None) -> str:
+    """Persist the steps, then rebuild the plan so they show up immediately.
+
+    The steps live in their own table because `build_plan` regenerates
+    `reopt_plans.items` wholesale; the rebuild here is what merges them in.
+    """
+    from services import reopt_planner
+
+    steps = _clean_strategy_actions((args or {}).get("actions"))
+    if not steps:
+        return "Nothing to save."
+    try:
+        get_supabase().table("assistant_plan_actions").insert(
+            [{"client_id": client_id, **s} for s in steps]
+        ).execute()
+    except Exception as exc:
+        return f"Couldn't save those steps: {exc}"
+    try:
+        reopt_planner.build_plan(client_id, trigger="assistant")
+    except Exception:
+        # The rows are saved; they'll appear on the next rebuild regardless.
+        return (
+            f"Saved {len(steps)} step(s) to the Action Plan — they'll appear on "
+            "the next rebuild."
+        )
+    return (
+        f"Saved {len(steps)} step(s) to the Action Plan. They're at the top of "
+        "the list now, and they'll stay there through rebuilds until someone "
+        "closes them."
+    )
+
+
 def _client_for_serp(client_id: str) -> Optional[dict]:
     rows = (
         get_supabase().table("clients")
@@ -1386,6 +1466,37 @@ _ACTIONS: dict[str, dict] = {
                 },
             },
             "required": ["keyword"],
+        },
+    },
+    # Save the steps of a strategy into the client's Action Plan, where the
+    # team already looks. Confirm-gated: no API spend, but it creates rows a
+    # human will act on.
+    "save_strategy_actions": {
+        "label": "save these steps to the Action Plan",
+        "paid": True,
+        "note": "adds the steps to the client's Action Plan (recommend-only — nothing runs)",
+        "run": _act_save_strategy_actions,
+        "stage": _stage_save_strategy_actions,
+        "params": {
+            "properties": {
+                "actions": {
+                    "type": "array",
+                    "description": (
+                        "The steps to save, in the order they should be done. Each "
+                        "is one concrete piece of work, not a theme."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string", "description": "The step itself, as an instruction (e.g. 'Build a Pompano Beach service page for water damage restoration')."},
+                            "detail": {"type": "string", "description": "Why this step, with the numbers behind it."},
+                            "keyword": {"type": "string", "description": "The keyword or theme this step serves, for grouping."},
+                        },
+                        "required": ["title"],
+                    },
+                },
+            },
+            "required": ["actions"],
         },
     },
     # ── Admin actions: AI Visibility keywords + competitors ────────────────

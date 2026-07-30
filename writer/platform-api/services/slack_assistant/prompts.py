@@ -137,7 +137,11 @@ _SYSTEM = (
     "configured tracking location and would answer about the wrong place. Call it "
     "when a right-now read would settle the question — including when you're asked "
     "to plan for an area you hold no data on, where it turns guesswork into a real "
-    "picture of the field. The teammate confirms before it runs.\n\n"
+    "picture of the field. The teammate confirms before it runs.\n"
+    "- save_strategy_actions (confirm-gated): put the steps of a plan you've just "
+    "written onto the client's Action Plan, in order, where the team already "
+    "looks. Recommend-only — saving a step schedules nothing and runs nothing. "
+    "Offer it after you've given a strategy; never call it unprompted.\n\n"
     "ASKED ABOUT SOMETHING YOU HAVE NO DATA ON: teammates will ask about a city, "
     "keyword, page or competitor that appears NOWHERE in the context JSON — a "
     "market the client wants to expand into, a term nobody tracks yet. This is "
@@ -316,7 +320,11 @@ _RANKING_STRATEGY_NUDGE = (
     "competitors, their GBP and their link profile — and cite the numbers as "
     "you go. Follow the retrieved SOPs for the chosen channel and cite them. "
     "Sequence the work and say what comes first. A strategy that would read the "
-    "same for any client in any city is the failure mode."
+    "same for any client in any city is the failure mode.\n\n"
+    "WHEN YOU HAVE WRITTEN THE STRATEGY, offer to save its steps to the client's "
+    "Action Plan (the save_strategy_actions action) so the work lands where the "
+    "team already looks instead of scrolling away in a chat. Offer it once, in a "
+    "single closing line — don't nag, and never save without being asked."
 )
 
 # Appended to the system prompt when the assistant speaks through the dashboard

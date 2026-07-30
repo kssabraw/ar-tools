@@ -49,6 +49,10 @@ TOTAL_MAX = 25
 _TIER = 10_000
 _WITHIN_MAX = 9_999          # within-tier term is clamped to [0, _WITHIN_MAX]
 _SORT_SITEWIDE = 8 * _TIER   # §A sitewide-decline banner sits above everything
+# Steps a strategist saved out of a SerMaStr conversation. Above the signal-
+# derived tiers because a person explicitly chose these — but below the
+# sitewide banner, which is an emergency nobody opted into.
+_SORT_ASSISTANT = 7 * _TIER
 _SORT_DROP = 6 * _TIER
 _SORT_OFFPAGE = 5 * _TIER    # aggregate link loss / RD spike: between drops and cannibalization
 _SORT_DEINDEX_BONUS = _TIER  # deindex sits in its own band above ordinary drops
@@ -233,6 +237,61 @@ def build_actions(
 
     actions.sort(key=lambda a: a["sort"], reverse=True)
     return actions if cap is None else actions[:cap]
+
+
+# Saved conversation steps merged per build. Capped so a long strategy can't
+# push the signal-derived rows out of TOTAL_MAX.
+ASSISTANT_ACTION_MAX = 8
+
+
+def build_assistant_actions(client_id: str, rows: list[dict]) -> list[dict]:
+    """Map saved SerMaStr strategy steps to Action Plan rows. Pure (unit-tested).
+
+    Ordered oldest-first within the tier so a strategy saved as a sequence keeps
+    the order it was written in — the first step stays the first step.
+    """
+    actions: list[dict] = []
+    for i, row in enumerate(rows[:ASSISTANT_ACTION_MAX]):
+        title = (row.get("title") or "").strip()
+        if not title:
+            continue
+        actions.append(
+            {
+                "kind": "assistant_action",
+                "source": "assistant",
+                "keyword": (row.get("keyword") or "").strip() or "Strategy",
+                "diagnosis": (row.get("detail") or "").strip()
+                or "Saved from a SerMaStr strategy conversation.",
+                "recommendation": title,
+                "cta_label": (row.get("cta_label") or "").strip() or "Action Plan",
+                "cta_path": (row.get("cta_path") or "").strip()
+                or f"clients/{client_id}/action-plan",
+                "severity": "info",
+                "sort": _SORT_ASSISTANT + _within(9_000 - i),
+                "assistant_action_id": row.get("id"),
+            }
+        )
+    return actions
+
+
+def _fetch_assistant_actions(supabase, client_id: str) -> list[dict]:
+    """Open saved strategy steps for a client, oldest first. Best-effort."""
+    try:
+        return (
+            supabase.table("assistant_plan_actions")
+            .select("id, title, detail, keyword, cta_label, cta_path")
+            .eq("client_id", client_id)
+            .eq("status", "active")
+            .order("created_at")
+            .limit(ASSISTANT_ACTION_MAX)
+            .execute()
+        ).data or []
+    except Exception as exc:
+        logger.warning(
+            "reopt_plan_assistant_actions_failed",
+            extra={"client_id": client_id, "error": str(exc)},
+        )
+        return []
 
 
 def build_offpage_actions(client_id: str, offpage_alerts: list[dict]) -> list[dict]:
@@ -1024,7 +1083,11 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     maps_actions += build_content_action(client_id, content_gap)
     brand_actions = build_brand_action(client_id, brand_decline)
     brand_actions += build_backlink_action(client_id, backlink_gap)
-    actions = organic + maps_actions + brand_actions
+    # Steps a strategist saved out of a SerMaStr conversation. Merged on every
+    # build (they live in their own table precisely because this list is
+    # regenerated wholesale) so a saved step survives until someone closes it.
+    saved = build_assistant_actions(client_id, _fetch_assistant_actions(supabase, client_id))
+    actions = organic + maps_actions + brand_actions + saved
     actions.sort(key=lambda a: a["sort"], reverse=True)
     actions = actions[:TOTAL_MAX]
 
