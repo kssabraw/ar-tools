@@ -423,6 +423,54 @@ def _ssh_private_key() -> str:
     return key.strip() + "\n"
 
 
+async def ssh_selftest() -> Optional[dict]:
+    """Verify the configured SSH publish transport actually works.
+
+    Returns None when SSH publishing isn't configured, else
+    {ok, detail}. Run at startup so a bad key, an unauthorised key or a wrong
+    WordPress path surfaces on deploy rather than at publish time — the failure
+    mode this whole transport exists to avoid is a scheduled article stranding
+    because publishing broke silently.
+
+    Connects and asks WP-CLI for the site's home URL: proves the key is
+    accepted, the remote path is a WordPress install, and wp is on PATH."""
+    ids = {i.strip() for i in (settings.wordpress_ssh_client_ids or "").split(",") if i.strip()}
+    if not ids:
+        return None
+    if not (settings.wordpress_ssh_host and settings.wordpress_ssh_username
+            and settings.wordpress_ssh_private_key and settings.wordpress_ssh_wp_path):
+        return {"ok": False, "detail": "ssh publishing is enabled but incompletely configured"}
+
+    try:
+        import asyncssh
+    except ImportError:
+        return {"ok": False, "detail": "asyncssh is not installed"}
+
+    connect_kwargs: dict = {
+        "port": settings.wordpress_ssh_port,
+        "username": settings.wordpress_ssh_username,
+        "known_hosts": None,
+    }
+    if settings.wordpress_ssh_known_host:
+        connect_kwargs["known_hosts"] = ([settings.wordpress_ssh_known_host], [], [])
+    try:
+        connect_kwargs["client_keys"] = [asyncssh.import_private_key(_ssh_private_key())]
+    except Exception as exc:  # noqa: BLE001 — a malformed/passphrased key
+        return {"ok": False, "detail": f"private key could not be loaded: {exc}"}
+
+    command = f"cd {shlex.quote(settings.wordpress_ssh_wp_path)} && wp option get home"
+    try:
+        async with asyncssh.connect(settings.wordpress_ssh_host, **connect_kwargs) as conn:
+            result = await conn.run(command, check=False)
+    except Exception as exc:  # noqa: BLE001 — connect/auth failure
+        return {"ok": False, "detail": f"connect failed: {type(exc).__name__}: {exc}"}
+
+    if result.exit_status != 0:
+        return {"ok": False,
+                "detail": f"wp-cli exit {result.exit_status}: {str(result.stderr or '')[:200]}"}
+    return {"ok": True, "detail": f"home={str(result.stdout or '').strip()[:120]}"}
+
+
 async def _publish_via_ssh(
     *,
     client: dict,
