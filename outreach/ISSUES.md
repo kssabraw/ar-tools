@@ -308,3 +308,22 @@ Two consequences:
    with, so changing the environment does not affect a session already in flight; a NEW session
    is required. Check with `curl -o /dev/null -w '%{http_code}' https://example.com` — 200 means
    the wider policy is live, 403 means the session is still on Trusted.
+
+### I-030 · `outreach/supabase/` shadowed the installed `supabase` package — FIXED
+The migrations directory was named `supabase/`, and once `/outreach` is on `sys.path` (which the
+CLI does deliberately, and which the container's WORKDIR makes automatic) Python resolved
+`from supabase import Client` to that directory as a namespace package rather than the installed
+library. It fails as `cannot import name 'Client' from 'supabase' (unknown location)` — a message
+that reads like a version problem rather than a name collision.
+*Fixed:* renamed to `outreach/migrations/`, plus a `.dockerignore` that keeps migrations out of
+the runtime image entirely (they are applied out-of-band, never by the job). Deliberately diverges
+from the `writer/supabase/migrations` convention, which is safe only because nothing there ever
+puts that directory on `sys.path`.
+
+### I-031 · Railway `redeploy` re-runs the OLD deployment's config, not the current one
+Changing `startCommand` and calling redeploy silently re-ran the previous start command — twice,
+looking identical each time. `redeploy` replays a specific deployment; only a fresh deployment
+picks up config changes.
+*Consequence for this service:* the run mode must be driven by the `OUTREACH_COMMAND` variable
+through one entrypoint (`run_market.py`), not by overriding the start command per run. `calibrate`
+was added as a subcommand for exactly this reason.

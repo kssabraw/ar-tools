@@ -20,7 +20,7 @@ services/suppression.py       suppression index, tolerant of a missing/empty tab
 services/cost.py              pre-flight estimate, abort gate, ledger rows
 services/pipeline.py          Stage A1 then Stage A2
 ../queries/phase1-dod.sql     the four §6 definition-of-done questions
-../supabase/migrations/       six tables + suppression
+../migrations/                six tables + suppression
 ```
 
 ## Running the tests

@@ -24,10 +24,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from api.config import get_settings  # noqa: E402
-from api.db import get_client  # noqa: E402
 from api.services import seeding  # noqa: E402
 from api.services.cost import CostLimitExceeded  # noqa: E402
 from api.services.pipeline import run_filter, run_ingest  # noqa: E402
+
+
+def _client():
+    """Imported lazily — `calibrate` touches no database and must not require one."""
+    from api.db import get_client
+
+    return get_client()
 
 
 def _market_id(client, name: str) -> str:
@@ -44,7 +50,7 @@ def _submarkets(client, market_id: str):
 
 def cmd_seed(args) -> int:
     definition = seeding.MarketDefinition.from_file(args.definition)
-    client = get_client()
+    client = _client()
 
     try:
         report = seeding.seed_market(
@@ -74,7 +80,7 @@ def cmd_seed(args) -> int:
 def cmd_ingest(args) -> int:
     definition = seeding.MarketDefinition.from_file(args.definition)
     settings = get_settings()
-    client = get_client()
+    client = _client()
 
     market_id = _market_id(client, definition.name)
     submarkets = _submarkets(client, market_id)
@@ -144,7 +150,7 @@ def cmd_ingest(args) -> int:
 
 def cmd_filter(args) -> int:
     definition = seeding.MarketDefinition.from_file(args.definition)
-    client = get_client()
+    client = _client()
     market_id = _market_id(client, definition.name)
 
     report = run_filter(client=client, settings=get_settings(), market_id=market_id)
@@ -164,6 +170,25 @@ def cmd_filter(args) -> int:
     return 0
 
 
+def cmd_calibrate(args) -> int:
+    """One tiny paid pull to settle the response field names and the billing rate.
+
+    Lives here rather than as a separate start command because Railway resolves the start command
+    from the deployment being re-run, not from the current service config — so overriding it per
+    run silently re-executes the previous one. One entrypoint driven by OUTREACH_COMMAND is the
+    only shape that reliably does what the variable says.
+    """
+    import asyncio as _asyncio
+
+    from api.scripts.calibrate import calibrate
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    category = definition.categories[0] if definition.categories else "plumber"
+    submarket = definition.submarkets[0].name if definition.submarkets else definition.name
+
+    return _asyncio.run(calibrate(f"{category}, {submarket}", args.limit))
+
+
 def cmd_run(args) -> int:
     for step in (cmd_seed, cmd_ingest, cmd_filter):
         code = step(args)
@@ -176,9 +201,12 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 
     parser = argparse.ArgumentParser(description="Outreach pipeline — Phase 1")
-    parser.add_argument("command", choices=["seed", "ingest", "filter", "run"])
+    parser.add_argument("command", choices=["seed", "ingest", "filter", "run", "calibrate"])
     parser.add_argument("definition", help="path to a market definition JSON file")
     parser.add_argument("--cycle", type=int, default=None, help="cycle number for cost_ledger")
+    parser.add_argument(
+        "--limit", type=int, default=20, help="places per query, calibrate only"
+    )
     parser.add_argument(
         "--allow-geometry-change",
         action="store_true",
@@ -191,6 +219,7 @@ def main() -> int:
         "ingest": cmd_ingest,
         "filter": cmd_filter,
         "run": cmd_run,
+        "calibrate": cmd_calibrate,
     }[args.command](args)
 
 
