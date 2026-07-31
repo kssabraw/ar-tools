@@ -20,6 +20,15 @@ outreach tooling sending through owned mailboxes is the lower-risk path.
 **Severity: blocks Phase 5. 3–4 weeks calendar.**
 Start in parallel with Phase 1, not after Phase 4.
 
+### I-037 · `LEAD_INTAKE_SECRET` unset; the intake endpoint has never been invoked
+**Severity: blocks inbound capture.** Account action.
+The `lead-intake` edge function is deployed and fails closed (`503 not_configured`) until the
+secret is set in the dashboard. It has also never been called once — the build sandbox's network
+policy blocks egress to the project host — so the deployed path is unverified end to end.
+*Note:* under the suite-module ruling this function is a candidate for retirement — inbound could
+arrive through a platform-api route instead, which would put it behind the same auth and logging
+as everything else. Not decided; the function works and costs nothing to keep for now.
+
 ## OPEN — verification spikes
 
 ### I-003 · Outscraper pixel field unverified (~1h)
@@ -98,9 +107,109 @@ local SEO work qualifies for the adjacent-vertical bin (+24).
 Adequate at ~5 replies/month. Build IMAP polling at ~30/month. `replied_at` is the field the
 entire model is fit against, so a logging gap here costs more than anywhere else.
 
+### I-038 · Phase 1's live `suppression` does not match `crm-layer-spec.md` §3
+**Found while patching it for Phase 1b.**
+Spec §3 defines `suppression` with separate `email` and `phone` columns plus `prospect_id`,
+`reason`, `source`, and unique indexes on `lower(email)` and `phone`. The live Phase 1 table is
+`(id, scope, value, created_at)` — a generic scope/value pair, no reason, no source, no unique
+index. Phase 1b patched the live shape additively rather than recreating it, on the grounds that
+Phase 1 is closed and its emit path will write the shape it knows.
+Consequence: the spec's §6 views and §4 rules are written against columns that do not exist.
+**Options:** (a) treat the live scope/value shape as authoritative and amend the spec;
+(b) migrate to the spec's shape while the table is empty. **Recommend (a)** — scope/value
+generalises to `place_id` suppression, which the spec's fixed columns cannot express.
+
+### I-039 · `crm-layer-spec.md` §3 indexes a column that does not exist
+`create index on lead_activity (prospect_id, occurred_at desc)` — `lead_activity` has no
+`prospect_id` in its own DDL; it reaches prospects through `lead_id`. Minor, but it will fail if
+applied verbatim. Logged rather than silently corrected, per the session protocol.
 ---
 
 ## RESOLVED
+
+> **Numbering note.** Phase 1b's issues were first filed as I-015…I-019, which collided with
+> Phase 1's own I-015…I-036 — the two tracks ran in parallel branches and both appended to this
+> file from the same I-014 base. Phase 1b's have been renumbered into I-037+ and the resolved ones
+> moved here. If you are chasing a reference to "I-017" written before 2026-07-31, it means the
+> CRM schema divergence, now **R-012**.
+
+### R-011 · The CRM needed Supabase auth users that were never going to exist
+*Resolved 2026-07-31 by the suite-module ruling.* Phase 1b assumed staff would hold `auth.users`
+accounts in the Outreacher project, because Retool was to connect directly with per-user JWTs.
+`lead.owner_id` and `lead_activity.actor_id` had foreign keys to that table, and it held zero
+rows — so leads could not be assigned to anybody.
+
+Making the pipeline an AR Tools module dissolved the problem rather than solving it: platform-api
+is now the only client, it holds the service role, and staff identities live in AR-Internal-Tools.
+The FKs are dropped (they referenced a pool that will stay permanently empty) and those columns
+now carry the **suite's** profile id, validated in platform-api. Nobody needs an Outreacher login.
+
+### R-012 · Phase 1b's applied schema diverged from `crm-layer-spec.md` §3
+*Resolved 2026-07-31 by migration `20260731190000_lead_crm_spec_reconcile.sql`, verified by 17
+checks in `tests/lead_crm_rls.sql`.* Filed as I-017 before the renumbering above.
+
+Phase 1b was built from a plan derived from the spec; the spec itself arrived afterwards. What was
+corrected, while `lead` still held zero rows:
+
+- **`source` could not record a `manual` lead** — the phase's primary use case. The old check held
+  `('outbound_scan','inbound','referral')`; `'inbound'` was not a spec token at all and `manual`
+  and `partner` were missing. Now the spec's six. `'outbound_scan'` was already exact and is
+  unchanged, which is the one that mattered — Phase 3's `outcome` check compares that literal.
+- **`lost_reason` was absent entirely**, with `lost_to` and the DB-enforced `lost_requires_reason`.
+  §5 calls it the highest-value field in the layer and notes it is unrecoverable after the moment
+  of loss. Modelled as a CHECK rather than a lookup table, deliberately unlike `stage`: stages are
+  presentation and get edited, lost reasons are joined to scoring coefficients and adding one
+  silently changes what a refit means.
+- **`next_action` / `next_action_due` were absent**, so `v_overdue_actions` — which §10 designates
+  the forcing function for manual reply capture — could not exist. Both added and the view built.
+- **The stage vocabulary reintroduced `qualified`**, which §8a deliberately collapsed into
+  `in_conversation`; and `disqualified`, which is a lost *reason*, not a stage. Both removed.
+- `stage_changed_at`, `outbound_requires_prospect`, `non_prospect_needs_identity` added;
+  `business_name`/`notes` renamed to the spec's `company_name`/`notes_intake`; `lead_activity`
+  gained real `from_stage`/`to_stage` columns instead of burying them in `metadata`, so the
+  acceptance criterion is checkable by query.
+- **A straight §4 violation removed:** the migration had granted DELETE on `suppression` and
+  shipped a delete policy, against "suppression records MUST NOT be deleted, ever". The invented
+  `expires_at` went with it — a time-limited suppression is a soft delete of a record the spec
+  treats as permanent.
+
+Three divergences were **kept deliberately**: `lead_stage` stays a lookup table (the board needs
+`sort_order` and `is_terminal`, neither of which survives in an enum) with the spec's values;
+`actor_id` stays a uuid rather than the spec's `actor text`; and `unique (prospect_id, source)`
+stays *alongside* the spec's plain unique, because the spec's key alone cannot support the
+composite FK that makes Phase 3's outbound-only rule structural.
+
+### R-007 · Phase 1b's grants removed nothing
+*Resolved 2026-07-31 during Phase 1b verification.* Supabase's default privileges already grant
+ALL on new `public` tables to `anon` and `authenticated`, so the migration's
+`grant select, insert on lead_activity` was purely additive — it read like a restriction while
+leaving UPDATE, DELETE and TRUNCATE in place. Append-only was therefore resting entirely on the
+absence of an update policy, and an UPDATE with no matching policy silently affects zero rows
+rather than erroring: a "save note" button would have reported success and changed nothing.
+Separately, TRUNCATE is not subject to RLS at all. Fixed by revoking before granting; recorded as
+a standing rule in `DECISIONS.md`. Row data was never at risk — RLS held the row-level line
+throughout. The defect was that the wrong outcome was silent rather than loud.
+
+### R-008 · Phase 1b's trigger functions were reachable as RPC endpoints
+*Resolved 2026-07-31.* All three are `SECURITY DEFINER` — they write `lead_activity` on behalf of
+a caller with no rights there — and living in `public` made them callable at
+`/rest/v1/rpc/lead_flag_suppressed` and siblings by `anon` and `authenticated`. Invoking a trigger
+function directly errors out, so it was not exploitable, but that is a weak thing to rely on for a
+definer-rights function. `execute` revoked; `search_path` pinned on the fourth. Found by the
+Supabase security advisor, not by the verification script — the two catch different classes of
+problem, and both are worth running.
+
+### R-009 · `now()` cannot appear in an index predicate
+*Resolved 2026-07-31.* The intended partial index over live suppression rows was rejected — index
+predicates must be immutable. Liveness is filtered at query time instead; the unique
+`(scope, value)` index serves the lookup.
+
+### R-010 · Phase 1b's `source` vocabulary was a guess
+*Resolved 2026-07-31 when the specs were supplied.* Built without access to `crm-layer-spec.md`,
+Phase 1b assumed `'inbound'` and `'referral'` alongside the known-exact `'outbound_scan'`. §3
+names the real enum: `outbound_scan, inbound_form, inbound_call, referral, manual, partner`. The
+guess was wrong, and the correction is tracked as part of **I-017**.
+
 
 ### R-006 · Phase 1 specified a geogrid placeholder score before any grid data exists
 *Resolved while extracting the Phase 1 brief.* `START-HERE.md` and PRD §17 both put "placeholder
@@ -475,6 +584,16 @@ path cannot supply on its own — a follow-up worth doing before the cron schedu
 
 ---
 
+## Linter state (2026-07-31)
+
+The Supabase security advisor reports **no warnings** on this project — only ten INFO
+`rls_enabled_no_policy` notices, which now include `lead`, `lead_activity`, `lead_stage` and
+`suppression`. That is the intended posture under the suite-module ruling: RLS on, no policies,
+reachable only by the service role platform-api holds. Do not "fix" them by adding policies.
+
+An earlier revision of this file recorded six `rls_policy_always_true` warnings as permanent and
+expected. That was true of the Retool access model and stopped being true when those policies were
+dropped.
 ## Phase 2 foundations + suite router (2026-08-01)
 
 ### I-025 RESOLVED · Grid point count settled at 81

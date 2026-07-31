@@ -470,6 +470,119 @@ async def _run_website_scrape(job: dict) -> None:
         ).eq("id", job_id).execute()
 
 
+def _store_page_structure(client_id: str, page_type: str, entry: dict) -> None:
+    """Merge `entry` into clients.page_structures[page_type] without clobbering
+    the sibling page types. A read-modify-write of the JSONB column — safe
+    because the worker processes one job per tick (no concurrent writers to the
+    same client row). Shared by the scrape and manual-parse jobs."""
+    supabase = get_supabase()
+    current = (
+        supabase.table("clients")
+        .select("page_structures")
+        .eq("id", client_id)
+        .single()
+        .execute()
+    )
+    structures = (current.data or {}).get("page_structures") or {}
+    existing = structures.get(page_type) or {}
+    existing.update(entry)
+    structures[page_type] = existing
+    supabase.table("clients").update({"page_structures": structures}).eq("id", client_id).execute()
+
+
+async def _run_page_structure_parse(job: dict) -> None:
+    """Execute a page_structure_parse job: turn a client's WRITTEN page-structure
+    guidelines (pasted, or parsed out of an uploaded document) into the same
+    stored analysis a scrape produces.
+
+    Used when there's no live page to scrape — a client with no website yet, or
+    one whose layout is specified in a brand/design document rather than shipped
+    on a site. The guidelines text rides the job payload so the parse re-runs
+    against exactly what was submitted."""
+    payload = job.get("payload") or {}
+    client_id = payload.get("client_id")
+    page_type = payload.get("page_type")
+    guidelines = payload.get("guidelines_text") or ""
+    original_filename = payload.get("original_filename")
+    job_id = job["id"]
+
+    logger.info(
+        "page_structure_parse_started",
+        extra={
+            "job_id": job_id,
+            "client_id": client_id,
+            "page_type": page_type,
+            "chars": len(guidelines),
+        },
+    )
+
+    supabase = get_supabase()
+    try:
+        from services.page_structure_manual import parse_guidelines
+
+        analysis = await parse_guidelines(guidelines, page_type)
+        _store_page_structure(
+            client_id,
+            page_type,
+            {
+                # No URL for a manual reference; `source` is what tells the UI
+                # (and a future re-analysis) which capture path owns this entry.
+                "url": "",
+                "source": "manual",
+                "guidelines_text": guidelines,
+                "original_filename": original_filename,
+                "status": "complete",
+                "error": None,
+                "empty": False,
+                "note": None,
+                "analysis": analysis,
+                "analyzed_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        supabase.table("async_jobs").update(
+            {"status": "complete", "result": analysis, "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+        logger.info(
+            "page_structure_parse_complete",
+            extra={
+                "job_id": job_id,
+                "client_id": client_id,
+                "page_type": page_type,
+                "sections": len(analysis.get("outline") or []),
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "page_structure_parse_failed",
+            extra={
+                "job_id": job_id,
+                "client_id": client_id,
+                "page_type": page_type,
+                "error": str(exc),
+            },
+        )
+        try:
+            # Keep the submitted text on the entry so the user can see + fix what
+            # failed to parse instead of having to retype it.
+            _store_page_structure(
+                client_id,
+                page_type,
+                {
+                    "url": "",
+                    "source": "manual",
+                    "guidelines_text": guidelines,
+                    "original_filename": original_filename,
+                    "status": "failed",
+                    "error": str(exc)[:500],
+                },
+            )
+        except Exception:
+            logger.error("page_structure_parse_store_failed", extra={"job_id": job_id})
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": str(exc)[:500], "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+
+
 async def _run_page_structure_scrape(job: dict) -> None:
     """Execute a page_structure_scrape job for one of a client's reference pages.
 
@@ -488,22 +601,8 @@ async def _run_page_structure_scrape(job: dict) -> None:
         extra={"job_id": job_id, "client_id": client_id, "page_type": page_type, "url": url},
     )
 
-    supabase = get_supabase()
-
     def _store(entry: dict) -> None:
-        """Merge `entry` into page_structures[page_type] without clobbering siblings."""
-        current = (
-            supabase.table("clients")
-            .select("page_structures")
-            .eq("id", client_id)
-            .single()
-            .execute()
-        )
-        structures = (current.data or {}).get("page_structures") or {}
-        existing = structures.get(page_type) or {}
-        existing.update(entry)
-        structures[page_type] = existing
-        supabase.table("clients").update({"page_structures": structures}).eq("id", client_id).execute()
+        _store_page_structure(client_id, page_type, entry)
 
     try:
         html = await scrapeowl_fetch(url, timeout=45)
@@ -550,6 +649,11 @@ async def _run_page_structure_scrape(job: dict) -> None:
         _store(
             {
                 "url": url,
+                "source": "scrape",
+                # A page type can be switched from manual guidelines to a scraped
+                # URL; clear the manual payload so the entry has one source.
+                "guidelines_text": None,
+                "original_filename": None,
                 "status": "complete",
                 "error": None,
                 "empty": empty,
@@ -580,7 +684,7 @@ async def _run_page_structure_scrape(job: dict) -> None:
             extra={"job_id": job_id, "client_id": client_id, "page_type": page_type, "error": str(exc)},
         )
         try:
-            _store({"url": url, "status": "failed", "error": str(exc)[:500]})
+            _store({"url": url, "source": "scrape", "status": "failed", "error": str(exc)[:500]})
         except Exception:
             logger.error("page_structure_scrape_store_failed", extra={"job_id": job_id})
         supabase.table("async_jobs").update(
@@ -618,6 +722,8 @@ async def _process_job(job: dict) -> None:
         await _run_website_scrape(job)
     elif job_type == "page_structure_scrape":
         await _run_page_structure_scrape(job)
+    elif job_type == "page_structure_parse":
+        await _run_page_structure_parse(job)
     elif job_type == "silo_dedup":
         await process_silo_dedup_job(job)
     elif job_type == "gsc_ingest":

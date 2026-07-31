@@ -129,6 +129,23 @@ no enrichment is required.
 | `docs/crm-layer-spec.md` | Lead pipeline — inbound and outbound, suppression, ESP boundary. |
 | `docs/dataforseo-dependency-note.md` | Provider contingency. Not build input. |
 
+Implementation, added as phases land:
+
+| File | What it is |
+|---|---|
+| `migrations/` | SQL applied to the Outreacher project via the Supabase MCP. |
+| `functions/` | Supabase edge functions. |
+| `tests/lead_crm_rls.sql` | Phase 1b verification — grants, RLS, append-only, triggers. |
+| `PHASE3-outcome-constraint.md` | The DDL Phase 3 must adopt to keep `outcome` outbound-only. |
+| `PHASE1B-STATUS.md` | What the CRM layer is, its access model, and what is left. |
+
+> **Two databases, two directories.** This tree targets the **Outreacher**
+> Supabase project (`fkwhgvcggvsricuinuqy`). It deliberately sits outside
+> `writer/supabase/migrations/`, which is applied to AR-Internal-Tools — the SEO
+> suite this repo mostly holds. An Outreacher migration filed in that directory
+> would eventually be applied to the wrong database. The tree is self-contained,
+> so it moves to its own repo unchanged if that turns out to be its real home.
+
 ---
 
 ## Key concepts
@@ -168,7 +185,13 @@ reachability after enrichment and produces the final order.
 
 ## Status
 
-**Specification complete. Implementation not started.**
+**Specification complete. Phase 1 and Phase 1b applied to the Outreacher project.**
+
+Phase 1's tables are live (`market`, `submarket`, `keyword`, `prospect` — 1,388 rows —
+`filter_result`, `cost_ledger`, `suppression`). Phase 1b's CRM layer is applied and verified:
+`lead`, `lead_activity`, `lead_stage`, the suppression patch, and a `lead-intake` edge function,
+reconciled to `docs/crm-layer-spec.md` §3 on 2026-07-31 (`ISSUES.md` R-012) and covered by 17
+checks in `tests/lead_crm_rls.sql`. Phases 2–6 are not started.
 
 Every design decision is recorded in `DECISIONS.md` with its reasoning. Open work is in
 `ISSUES.md` and falls into three groups:
