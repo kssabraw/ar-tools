@@ -692,6 +692,48 @@ def _ctx_trends(supabase, client_id: str, today: date) -> Optional[dict]:
     }
 
 
+def _ctx_budget(supabase, client_id: str, today: date) -> Optional[dict]:
+    """What this client's retainer can actually fund this month.
+
+    Distinct from `task_plan`, which reads a STORED Recipe Engine plan — most
+    clients have never had one generated, so that module is absent and the
+    assistant plans as though money were no object. This computes the envelope
+    straight from the retainer with the Recipe Engine's own §1 arithmetic, so a
+    strategy can be sized to it whether or not a plan exists.
+    """
+    from services import recipe_engine
+
+    rows = (
+        supabase.table("clients")
+        .select("retainer_monthly, is_sab, client_type")
+        .eq("id", client_id)
+        .limit(1)
+        .execute()
+    ).data or []
+    if not rows:
+        return None
+    retainer = rows[0].get("retainer_monthly")
+    if retainer in (None, ""):
+        return {
+            "note": (
+                "No monthly retainer on file, so there is no budget envelope. Say "
+                "so when recommending spend rather than assuming it's unlimited."
+            )
+        }
+    env = recipe_engine.budget_envelope(
+        float(retainer), is_sab=bool(rows[0].get("is_sab"))
+    )
+    env["client_type"] = rows[0].get("client_type")
+    env["note"] = (
+        "Deployable = retainer × margin. Reporting and the mandatory Baseline "
+        "Stack come off the top; `discretionary` is what is genuinely left for "
+        "anything a strategy proposes ON TOP of the baseline. A NEGATIVE "
+        "discretionary means the retainer cannot fund even the baseline — say "
+        "that plainly and scope to it; do not write a plan the money can't buy."
+    )
+    return env
+
+
 def _ctx_task_plan(supabase, client_id: str, today: date) -> Optional[dict]:
     """Latest Recipe Engine monthly task plan — budget, flags, assigned lines."""
     rows = (
@@ -1218,6 +1260,7 @@ _CONTEXT_PROVIDERS = [
     ("content", _ctx_content),
     ("site_inventory", _ctx_site_inventory),
     ("keyword_research", _ctx_keyword_research),
+    ("budget", _ctx_budget),
     ("task_plan", _ctx_task_plan),
     ("qa", _ctx_qa),
     ("citations", _ctx_citations),
