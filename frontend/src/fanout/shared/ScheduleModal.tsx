@@ -85,6 +85,10 @@ export function ScheduleModal(props: {
   // the client's WP site at its cluster slug, as a draft or live.
   const [wpPublish, setWpPublish] = useState(false);
   const [wpStatus, setWpStatus] = useState<"draft" | "publish">("draft");
+  // Production ceiling. Defaults to 1000 — the volume the team actually works to,
+  // and what the semaglutide/retatrutide campaigns ended up with (previously by
+  // accident, via an unpaged read PostgREST truncated at 1000 rows). Blank = no cap.
+  const [maxArticles, setMaxArticles] = useState("1000");
 
   const isLocalSeo = contentType === "local_seo_page";
   const isServicePage = contentType === "service_page";
@@ -95,9 +99,13 @@ export function ScheduleModal(props: {
   const usesStartDate = isPeriodic || mode === "fixed";
   const locCountry = locationCode ? isoForLocationCode(locationCode) : undefined;
 
+  const maxParsed = parseInt(maxArticles, 10);
+  const maxValid = maxArticles.trim() === "" || (Number.isFinite(maxParsed) && maxParsed > 0);
+
   const body: ScheduleRequest = {
     mode,
     cluster_ids: clusterIds,
+    max_articles: maxValid && maxArticles.trim() !== "" ? maxParsed : undefined,
     per_day: isPeriodic ? perDay : undefined,
     start_date: usesStartDate ? startDate : undefined,
     time_of_day: usesStartDate ? timeOfDay : undefined,
@@ -416,6 +424,27 @@ export function ScheduleModal(props: {
             </div>
           )}
 
+          {/* Production ceiling — cap what gets written, not what got planned. */}
+          <div className="field">
+            <span className="field-label">Maximum {noun}s</span>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              placeholder="No limit"
+              value={maxArticles}
+              onChange={(e) => setMaxArticles(e.target.value)}
+              aria-label={`Maximum ${noun}s to schedule`}
+            />
+            <span className="muted" style={{ fontSize: 12 }}>
+              Caps how many get written. Taken in priority order (pillars first) — the
+              rest stay in the plan and can be scheduled later. Leave blank for no limit.
+            </span>
+            {!maxValid && (
+              <span className="form-error">Must be a whole number above 0, or blank.</span>
+            )}
+          </div>
+
           {/* Live preview */}
           <div className="schedule-preview">
             {est.isLoading ? (
@@ -436,6 +465,19 @@ export function ScheduleModal(props: {
                     {est.data.already_scheduled} already scheduled — skipped.
                   </div>
                 )}
+                {est.data.capped && (
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    Capped from {est.data.eligible} — the other{" "}
+                    {(est.data.eligible ?? 0) - count} stay in the plan, unscheduled.
+                  </div>
+                )}
+                {est.data.capped && est.data.ordered_by === "plan_order" && (
+                  <div className="banner banner-warn" style={{ marginTop: 6, fontSize: 13 }}>
+                    No site architecture yet, so this takes the first {count} in plan
+                    order rather than the most important ones. Generate the architecture
+                    first if you want pillars prioritised.
+                  </div>
+                )}
                 {est.data.requires_approval && (
                   <div className="banner banner-warn" style={{ marginTop: 6, fontSize: 13 }}>
                     Over the ${est.data.approval_threshold_usd} limit — needs owner approval.
@@ -450,7 +492,7 @@ export function ScheduleModal(props: {
             <button
               className="btn btn-primary"
               style={{ width: "auto" }}
-              disabled={create.isPending || missingRequirement || count === 0}
+              disabled={create.isPending || missingRequirement || count === 0 || !maxValid}
               title={
                 missingRequirement
                   ? isLocalSeo ? "Enter a target area first" : "Enter a site base URL first"
