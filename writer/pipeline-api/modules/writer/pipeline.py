@@ -59,6 +59,7 @@ from .heading_entity_enforcer import enforce_heading_entities
 from .icp_verification import verify_icp_callout_landed
 from .sections import SectionWriteResult, write_h2_group
 from .term_usage import compute_term_usage_by_zone
+from .voice_compliance import article_text, check_article
 from .title import generate_h1_enrichment, generate_title
 
 logger = logging.getLogger(__name__)
@@ -946,6 +947,15 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         schema_version=schema_effective,
         brief_schema_version=(brief.get("metadata") or {}).get("schema_version", "1.7"),
         generation_time_ms=int((time.perf_counter() - started) * 1000),
+    )
+
+    # ---- Deterministic brand-guide checks (warn-and-accept) ----
+    # Banned terms are already hard-enforced above. These cover the two things
+    # that were slipping through into shipped articles: a guide-specified
+    # grammatical person the generator overrode, and preferred phrasing that
+    # never made it in. Surfaced on metadata for editorial QA.
+    metadata.voice_violations = check_article(
+        article_text(title, article), brand_voice_card
     )
 
     # ---- Em dash sanitizer ----

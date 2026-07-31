@@ -22,6 +22,7 @@ from models.service_writer import (
 )
 from modules.service_brief import cost
 from modules.writer.distillation import distill_brand_voice
+from modules.writer.voice_compliance import check_person, check_preferred_terms
 
 from . import generation
 from .jsonld import build_jsonld
@@ -176,6 +177,21 @@ async def run_service_writer(request: ServiceWriterRequest) -> ServiceWriterResp
         location=request.location,
         services=request.services,
     )
+
+    # Deterministic brand-guide checks (warn-and-accept). Banned terms are
+    # already hard-enforced in generation; these cover grammatical person and
+    # preferred phrasing, the two ways a guide was being ignored unnoticed.
+    # Recorded as degraded_notes so no output-schema change is needed.
+    page_text = "\n".join(
+        f"{section.heading}\n{generation._block_text(section.blocks)}"
+        for section in (sections or [])
+    )
+    for finding in (
+        check_person(page_text, (brand_card or {}).get("person", "") or ""),
+        check_preferred_terms(page_text, (brand_card or {}).get("preferred_terms") or []),
+    ):
+        if finding:
+            notes.append(f"voice_violation:{finding['check']}")
 
     metadata = ServiceWriterMetadata(
         schema_version=SCHEMA_VERSION,

@@ -35,11 +35,33 @@ export interface LocalSeoPageListItem {
   published_at?: string | null
 }
 
+/**
+ * Deterministic brand-guide audit attached to a generated page (nlp-api
+ * `voice_card.compliance_summary`). Null/undefined when the client has no
+ * brand voice guide or ICP on file, or for pages generated before voice
+ * enforcement existed.
+ */
+export interface VoiceViolation {
+  check: 'never_use_terms' | 'must_use_terms' | 'person' | 'cta_language' | string
+  severity: 'critical' | 'warning'
+  message: string
+  terms?: string[]
+  detail?: string
+}
+
+export interface VoiceCompliance {
+  passed: boolean
+  critical_count: number
+  warning_count: number
+  violations: VoiceViolation[]
+}
+
 export interface LocalSeoPageDetail extends LocalSeoPageListItem {
   run_analysis: boolean
   content_html: string
   schema_json: string
   content_gaps: ContentGap[]
+  voice_violations?: VoiceCompliance | null
   token_usage: Record<string, unknown> | null
   cost_breakdown: Record<string, unknown> | null
   published_doc_url: string | null

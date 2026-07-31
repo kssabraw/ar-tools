@@ -30,6 +30,16 @@ def _brand_directive(brand_card: Optional[dict]) -> str:
     lines = [f"Tone: {tone}."]
     if directives:
         lines.append(f"Voice directives: {directives}.")
+    # Stated explicitly: the page prompts default to third person, so a guide
+    # asking for "we/our" needs to say so or it loses silently.
+    person = (brand_card.get("person") or "").strip().lower()
+    if person == "first":
+        lines.append(
+            "Grammatical person: FIRST PERSON — write as \"we/our\". This overrides "
+            "any default preference for third person."
+        )
+    elif person == "third":
+        lines.append("Grammatical person: THIRD PERSON — name the brand, not \"we/our\".")
     if preferred:
         lines.append(f"Prefer these terms: {preferred}.")
     if banned:

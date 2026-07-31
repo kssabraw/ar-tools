@@ -26,6 +26,7 @@ You must output a single JSON object matching this exact schema:
 {
   "brand_name": string (the actual brand/company name, e.g. "Ubiquitous", "Acme Co"; empty string if not stated),
   "tone_adjectives": [string],
+  "person": "first" | "third" | "" (does the guide tell the writer to speak as "we/our" (first) or to name the brand in third person (third)? "" if the guide does not say),
   "voice_directives": [string, max 200 chars each, max 8 items],
   "audience_summary": string (max 300 chars),
   "audience_personas": [string, max 8 items - job titles or roles the ICP names, e.g. "VP of Growth", "CMO", "Director of Marketing"],
@@ -43,7 +44,8 @@ You must output a single JSON object matching this exact schema:
 
 CRITICAL RULES:
 - brand_name is the proper noun the brand uses for itself in the brand guide. Extract it verbatim - do NOT paraphrase or expand acronyms. If the brand guide does not state a name, return "".
-- tone_adjectives and voice_directives come ONLY from the brand guide text. NEVER from website analysis.
+- tone_adjectives, person and voice_directives come ONLY from the brand guide text. NEVER from website analysis.
+- person: answer "first" only if the guide actually asks the writer to use we/our/us, and "third" only if it asks for the brand to be named instead. If the guide is silent on this, return "". Do not infer it from how the guide itself is written.
 - A term is "banned" ONLY when the brand guide uses literal prohibitive language about it: "never use", "do not use", "DO NOT", "banned", "prohibited", "must not appear", "absolute no", or equivalent. The bar is HIGH - banned means the writer must error if the term appears.
 - A term is "discouraged" when the brand guide expresses any softer preference against it - "avoid", "we prefer X over Y", "try not to use", "lean away from", "use sparingly", "minimize", or any preference-without-prohibition language. When in doubt between banned and discouraged, classify as discouraged.
 - A term is "preferred" when the brand guide names it as preferred phrasing.
@@ -126,9 +128,12 @@ def _parse_card(raw: dict) -> BrandVoiceCard:
     if not isinstance(contact_raw, dict):
         contact_raw = {}
 
+    person = str(raw.get("person") or "").strip().lower()
+
     return BrandVoiceCard(
         brand_name=str(raw.get("brand_name") or "").strip()[:120],
         tone_adjectives=_list("tone_adjectives", 12),
+        person=person if person in ("first", "third") else "",
         voice_directives=_list("voice_directives", 8),
         audience_summary=str(raw.get("audience_summary") or "")[:300],
         audience_personas=_list("audience_personas", 8),

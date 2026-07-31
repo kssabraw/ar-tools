@@ -7,6 +7,7 @@ import { localSeoApi } from './api'
 import { useResumableJob } from '../../lib/useResumableJob'
 import type { LocalSeoPageDetail, SocialPostsResult } from './types'
 import { RelatedPagesList } from './RelatedPagesList'
+import { VoiceCompliancePanel } from './VoiceCompliancePanel'
 import { BulkCreateBar } from './BulkCreateBar'
 import { useSiloPlan } from './useSiloPlan'
 import { useBulkCreate } from './useBulkCreate'
@@ -51,7 +52,7 @@ type Tab = 'preview' | 'html' | 'social' | 'related'
 export function GeneratedPageView({
   clientId, page, isNew, prevScore, onBack, onScoreAndImprove, onRelatedAction, onNewPage,
 }: Props) {
-  const { keyword, location, content_html, schema_json, page_title, content_gaps, mode } = page
+  const { keyword, location, content_html, schema_json, page_title, content_gaps, voice_violations, mode } = page
   const score = page.composite_score
   const status = page.composite_status
 
@@ -286,6 +287,7 @@ export function GeneratedPageView({
             <style>{PREVIEW_CSS}</style>
             <div className="seo-preview" dangerouslySetInnerHTML={{ __html: content_html }} />
           </div>
+          <VoiceCompliancePanel compliance={voice_violations} />
           {content_gaps && content_gaps.length > 0 && (
             <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
               <div style={{ background: '#f8fafc', padding: '16px 20px', borderBottom: '1px solid #e2e8f0' }}>

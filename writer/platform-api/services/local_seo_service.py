@@ -255,6 +255,10 @@ def _persist_page(client_id: str, keyword: str, location: str, run_analysis: boo
         # Structural-fidelity verdict from the generation gate ({composite,
         # dimensions, notes}). None when no reference structure drove the page.
         "structure_fidelity": result.get("structure_fidelity"),
+        # Deterministic brand-guide audit ({passed, critical_count,
+        # warning_count, violations}). None when the client has no guide on
+        # file, or on an nlp build predating voice enforcement.
+        "voice_violations": result.get("voice_compliance"),
         "mode": mode,
         "token_usage": result.get("token_usage"),
         "cost_breakdown": result.get("cost_breakdown"),
@@ -463,6 +467,14 @@ async def generate_page(
     payload = _gbp_to_generate_payload(
         client, keyword, location, location_code, include_decision_map=include_decision_map
     )
+    # The client's brand guide, distilled into enforceable rules (cached per
+    # guide revision). Steers generation and drives the deterministic post-write
+    # check; an empty card means the client has no guide and nothing changes.
+    # Imported lazily: voice_card_service -> brand_voice_service -> this module
+    # would close an import cycle at module scope.
+    from services import voice_card_service
+
+    payload["voice_card"] = await voice_card_service.get_voice_card(client, user_id=user_id)
     # Page template: per-page value wins; otherwise the client's saved default.
     template_url = (page_template_url or "").strip() or client.get("local_seo_page_template_url")
     reference_analysis: Optional[dict] = None
@@ -872,6 +884,8 @@ async def score_page(
         serp_analysis = await _get_or_compute_analysis(
             keyword, location, location_code, force_refresh, user_id, required=False
         )
+    from services import voice_card_service
+
     result = await _post_nlp("/score-page", {
         "keyword": keyword,
         "location": location,
@@ -882,6 +896,9 @@ async def score_page(
         "gbp_category": fields["gbp_category"],
         "address": fields["address"],
         "serp_analysis": serp_analysis,
+        # Without these the rubric measured SEO only: icp_alignment inferred an
+        # audience from the keyword and nothing scored brand voice at all.
+        "voice_card": await voice_card_service.get_voice_card(client, user_id=user_id),
     }, user_id=user_id)
     # A standalone score has no page row — log it against page_url (may be None
     # when scoring raw HTML) so the verdict is still kept in the run history.
@@ -923,6 +940,13 @@ async def reoptimize_page(
     if not existing_page_html and not existing_page_url:
         raise HTTPException(status_code=400, detail="page_url_or_html_required")
 
+    from services import voice_card_service
+
+    # Reoptimize never used to receive the brand guide, so each pass rewrote the
+    # page without it — a page generated in the client's voice drifted further
+    # from them with every improvement to its score.
+    voice_card = await voice_card_service.get_voice_card(client, user_id=user_id)
+
     result = await _stream_nlp("/reoptimize-page", {
         "keyword": keyword,
         "location": location,
@@ -934,6 +958,7 @@ async def reoptimize_page(
         "address": fields["address"],
         "phone": fields["phone"],
         "serp_analysis": serp_analysis,
+        "voice_card": voice_card,
         # Keep the decision-fit treatment on reoptimization (parity with generate).
         "include_decision_map": True,
     })
@@ -951,11 +976,13 @@ async def reoptimize_page(
                 "gbp_category": fields["gbp_category"],
                 "address": fields["address"],
                 "serp_analysis": serp_analysis,
+                "voice_card": voice_card,
             })
             result["composite_score"] = score.get("composite_score")
             result["composite_status"] = score.get("composite_status")
             result["engine_scores"] = score.get("engine_scores")
             result["deficiencies"] = score.get("deficiencies")
+            result.setdefault("voice_compliance", score.get("voice_compliance"))
         except Exception:
             # Non-fatal — the expensive rewrite already succeeded, so persist the
             # reoptimized page without a fresh score rather than losing the work.
@@ -1005,6 +1032,8 @@ async def reoptimize_url(
         keyword, location, location_code, force_refresh=False, user_id=user_id, required=False
     )
 
+    from services import voice_card_service
+
     score_result = await _post_nlp("/score-page", {
         "keyword": keyword,
         "location": location,
@@ -1015,6 +1044,7 @@ async def reoptimize_url(
         "gbp_category": fields["gbp_category"],
         "address": fields["address"],
         "serp_analysis": serp,
+        "voice_card": await voice_card_service.get_voice_card(client, user_id=user_id),
     }, user_id=user_id)
 
     # Record the "before" verdict of the live page (whether or not we go on to

@@ -222,6 +222,8 @@ def _persist_page(
         # Structural-fidelity verdict from the product generation gate. None for
         # collections and for products driven by a house template (gate off).
         "structure_fidelity": result.get("structure_fidelity"),
+        # Deterministic brand-guide audit. None when the client has no guide.
+        "voice_violations": result.get("voice_compliance"),
         "mode": mode,
         "token_usage": result.get("token_usage"),
         "cost_breakdown": result.get("cost_breakdown"),
@@ -329,6 +331,12 @@ async def generate_page(
         page_template_url=template_url, notes=notes,
         reference_page_structure=reference_structure,
     )
+    # The client's brand guide, distilled into enforceable rules (cached per
+    # guide revision). Imported lazily — voice_card_service -> brand_voice_service
+    # -> local_seo_service would otherwise close an import cycle.
+    from services import voice_card_service
+
+    payload["voice_card"] = await voice_card_service.get_voice_card(client, user_id=user_id)
     result = await _stream_nlp("/generate-ecommerce-page", payload)
     result = await _apply_structure_gate(result, payload, reference_analysis)
     return _persist_page(client_id, keyword.strip(), page_type, source_url, product_input, "generate", result, user_id, notes=notes)
@@ -346,6 +354,8 @@ async def score_page(
     page_type = _norm_page_type(page_type)
     if not page_url and not page_content:
         raise HTTPException(status_code=400, detail="page_url_or_content_required")
+    from services import voice_card_service
+
     result = await _post_nlp("/score-ecommerce-page", {
         "keyword": keyword,
         "page_type": page_type,
@@ -354,6 +364,7 @@ async def score_page(
         "business_name": _business_name(client),
         "brand_context": _brand_context(client),
         "serp_analysis": serp_analysis,
+        "voice_card": await voice_card_service.get_voice_card(client, user_id=user_id),
     }, user_id=user_id)
     _record_score_run(client_id, keyword, page_type, "score", result, page_id=None, page_url=page_url, user_id=user_id)
     return result
@@ -374,6 +385,9 @@ async def reoptimize_from(
     page_type = _norm_page_type(page_type)
     if not existing_page_html and not existing_page_url:
         raise HTTPException(status_code=400, detail="page_url_or_html_required")
+
+    from services import voice_card_service
+
     result = await _stream_nlp("/reoptimize-ecommerce-page", {
         "keyword": keyword,
         "page_type": page_type,
@@ -383,6 +397,7 @@ async def reoptimize_from(
         "business_name": _business_name(client),
         "brand_voice": client.get("brand_voice"),
         "detected_icp": client.get("detected_icp"),
+        "voice_card": await voice_card_service.get_voice_card(client, user_id=user_id),
         "serp_analysis": serp_analysis,
         "product_input": (product_input or "").strip() or None,
         "notes": (notes or "").strip() or None,

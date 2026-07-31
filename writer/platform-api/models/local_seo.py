@@ -322,6 +322,10 @@ class LocalSeoPageDetail(BaseModel):
     # Structural-fidelity verdict from the generation gate ({composite, dimensions,
     # notes}). None when no reference structure drove the page.
     structure_fidelity: Optional[dict[str, Any]] = None
+    # Deterministic brand-guide audit ({passed, critical_count, warning_count,
+    # violations}). None when the client has no brand voice / ICP on file, or for
+    # pages generated before voice enforcement existed.
+    voice_violations: Optional[dict[str, Any]] = None
     mode: str
     token_usage: Optional[dict[str, Any]] = None
     cost_breakdown: Optional[dict[str, Any]] = None

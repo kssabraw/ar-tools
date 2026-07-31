@@ -83,6 +83,11 @@ class ClientContactInfo(BaseModel):
 class BrandVoiceCard(BaseModel):
     brand_name: str = ""
     tone_adjectives: list[str] = []
+    # Grammatical person the guide asks for: "first" (we/our), "third" (name
+    # the brand), or "" when the guide is silent. Carried because the generator
+    # prompts default to third person, and a guide specifying otherwise was
+    # being overridden with nothing noticing.
+    person: str = ""
     voice_directives: list[str] = []
     audience_summary: str = ""
     audience_personas: list[str] = []
@@ -165,6 +170,11 @@ class WriterMetadata(BaseModel):
     citations_unused: int = 0
     no_citations: bool = False
     retry_count: int = 0
+    # Deterministic brand-guide findings beyond banned terms (grammatical
+    # person, preferred phrasing) — see modules/writer/voice_compliance.py.
+    # Warn-and-accept: surfaced for editorial QA, never an abort. Additive
+    # metadata only, so the article contract (and schema_version) is unchanged.
+    voice_violations: list[dict] = []
     # Banned terms that leaked into body content after the section LLM's
     # one-retry attempt. The run does NOT abort on body leakage (the
     # distillation LLM occasionally over-classifies common words like

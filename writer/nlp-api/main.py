@@ -119,6 +119,7 @@ app.add_middleware(LimitRequestSizeMiddleware)
 
 import ecommerce_mcs as mcs  # Max-Cosine Synthesis (AIO capture + entity + heading synthesis)
 import ecommerce_facts as ecom_facts  # invariant public-spec auto-research (cited)
+import voice_card as vcard  # brand voice + ICP: distilled card, prompt block, hard checks
 
 STOP_WORDS = set(stopwords.words('english'))
 
@@ -236,6 +237,88 @@ _ECOM_RESEARCH_MAX_TURNS = ECOMMERCE_FACT_RESEARCH_MAX_SEARCHES + 3  # search ro
 # same page reoptimizes to the same result run-to-run.
 MAX_ECOMMERCE_AUTO_PASSES = int(os.environ.get("MAX_ECOMMERCE_AUTO_PASSES", "3"))
 
+# ── Brand voice & ICP enforcement ──────────────────────────────────────────
+# The client's guide is distilled ONCE per revision into a compact card
+# (platform-api caches it against a fingerprint of the raw documents and sends
+# it on every call), then rendered as a late high-priority prompt block and
+# checked deterministically after generation. When the caller sends the raw
+# brand_voice/detected_icp without a card, we distill inline so the endpoints
+# stay self-contained. Distillation is categorization-only and cheap, so Haiku
+# is sufficient — it extracts stated rules, it never judges prose.
+VOICE_CARD_MODEL = os.environ.get("VOICE_CARD_MODEL", "claude-haiku-4-5-20251001")
+VOICE_ENFORCEMENT_ENABLED = os.environ.get(
+    "VOICE_ENFORCEMENT_ENABLED", "true"
+).lower() in ("1", "true", "yes", "on")
+# Corrective rewrite passes run when the deterministic check finds a violation
+# a page must not ship with. Separate from the score-driven auto-retry: a
+# forbidden word is a fact, not a score, and gets its own targeted pass.
+MAX_VOICE_CORRECTION_PASSES = int(os.environ.get("MAX_VOICE_CORRECTION_PASSES", "2"))
+
+
+async def _distill_voice_card(client, brand_voice: Optional[dict], detected_icp: Optional[dict]) -> dict:
+    """Best-effort: distill a client's brand guide + ICP into a voice card.
+
+    Returns an empty card on any failure — a distillation outage must degrade
+    to today's behaviour (voice as prose in the prompt, no hard checks), never
+    block a page. Reuses the same renderers the prompt blocks use, so the card
+    is distilled from exactly the text the writer would otherwise have seen.
+    """
+    brand_text = _build_brand_voice_text(brand_voice)
+    icp_text = _build_icp_text(detected_icp)
+    if not (brand_text.strip() or icp_text.strip()):
+        return vcard.empty_card()
+
+    for attempt in range(2):
+        system = vcard.DISTILL_SYSTEM
+        if attempt:
+            system += "\n\nYour previous response did not parse as JSON. Return ONLY the JSON object."
+        try:
+            msg = await client.messages.create(
+                model=VOICE_CARD_MODEL,
+                max_tokens=3000,
+                temperature=0,
+                system=system,
+                messages=[{
+                    "role": "user",
+                    "content": vcard.build_distill_prompt(brand_text, icp_text),
+                }],
+            )
+            raw = (msg.content[0].text or "").strip()
+            # Models occasionally fence the JSON despite the instruction.
+            if raw.startswith("```"):
+                raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw).strip()
+            return vcard.parse_voice_card(json.loads(raw))
+        except Exception as exc:
+            logger.warning(f"voice card distillation attempt {attempt + 1} failed: {exc}")
+    logger.warning("voice card distillation gave up; proceeding without enforcement")
+    return vcard.empty_card()
+
+
+async def _resolve_voice_card(client, body) -> dict:
+    """The card for this request: the caller's cached one when supplied,
+    otherwise distilled inline from whatever brand_voice/detected_icp arrived.
+
+    platform-api sends `voice_card` on every generation so the distillation is
+    paid once per guide edit rather than once per page; direct callers and
+    older platform builds still get enforcement via the inline path."""
+    if not VOICE_ENFORCEMENT_ENABLED:
+        return vcard.empty_card()
+    supplied = getattr(body, "voice_card", None)
+    if isinstance(supplied, dict) and supplied:
+        return vcard.parse_voice_card(supplied)
+    return await _distill_voice_card(
+        client, getattr(body, "brand_voice", None), getattr(body, "detected_icp", None)
+    )
+
+
+def _page_text_for_voice_check(html: str, page_title: str = "") -> str:
+    """Visible text for the deterministic voice check — title included, markup
+    excluded. Checking raw HTML would match forbidden terms inside class names,
+    URLs and the JSON-LD block, none of which a reader ever sees."""
+    from bs4 import BeautifulSoup as _BS
+    text = _BS(html or "", "html.parser").get_text(separator="\n", strip=True)
+    return f"{page_title}\n{text}" if page_title else text
+
 
 async def _research_public_facts(client, entity: str, page_type: str, focus: Optional[list] = None):
     """Best-effort: research the invariant public specs for `entity` via a
@@ -331,7 +414,11 @@ optimised for Answer Engine Optimisation. Follow all of them in every section.
    pronoun; (b) makes ONE complete factual claim; (c) uses NO back-references ("this", "that",
    "it", "as mentioned", "the above", "these") that only resolve from an earlier sentence. Prefer
    naming the subject over a pronoun in the key claim — third-person reads as more authoritative
-   and is lifted more often than "we/our".
+   and is lifted more often than "we/our". This third-person preference is a DEFAULT: if a
+   "BRAND VOICE & AUDIENCE" block later in this prompt specifies a grammatical person, that
+   wins. What is never optional is that the key claim names its subject explicitly rather than
+   opening on a bare "it"/"this" — "We restore tile roofs across Melbourne" is a liftable
+   first-person claim; "It's usually done in a day" is not liftable in any person.
    Apply this to the OPENING sentence of every section AND to every factual claim in body prose,
    not just the FAQ. This is the #1 factor — treat a section whose sentences only make sense in
    order as a miss.
@@ -439,12 +526,17 @@ optimised for Answer Engine Optimisation. Follow all of them in every section.
     This ensures it is visible above the fold. It must also appear in Sections 4, 8, and 11.
 
 14. ICP-MATCHED CTA TONE: The SEO checklist in the user prompt identifies the Ideal Customer
-    Profile (ICP) for this keyword. All CTAs must match the ICP tone exactly:
+    Profile (ICP). When that ICP came from the client's own ICP document (the checklist says
+    so, and a "BRAND VOICE & AUDIENCE" block appears later in this prompt), write the CTAs in
+    the client's stated CTA language and skip the generic examples below entirely — they are
+    defaults for when we have to infer the audience from the keyword, and substituting them
+    for a client's own wording is a mistake.
+    Inferred-ICP defaults:
     - Emergency ICP → urgency language: "Call Now", "Available 24/7", "Dispatch in 60 min"
     - Commercial ICP → professional: "Request a Quote", "Schedule a Site Assessment"
     - Budget ICP → value-first: "Get a Free Estimate", "No Trip Fee", "Transparent Pricing"
     - General ICP → confident: "Get a Quote Today", "Schedule Service"
-    Repeat the ICP-appropriate CTA in ≥3 sections (hero, mid-page, closing).
+    Either way, repeat the ICP-appropriate CTA in ≥3 sections (hero, mid-page, closing).
 
 15. POSITIVE, CONFIDENT SENTIMENT THROUGHOUT: keep the sentiment toward the SERVICE and
     [Brand] strictly positive and confident from start to finish — [Brand] is capable,
@@ -476,7 +568,16 @@ AEO rules govern STRUCTURE — where the answer sits, paragraph length, heading 
 list usage. These are layout decisions and are non-negotiable regardless of brand voice.
 
 Brand voice governs EXPRESSION — word choice, tone, personality, sentence rhythm,
-vocabulary. These apply within every structural element.
+vocabulary, GRAMMATICAL PERSON (we/our vs naming the brand), and CTA WORDING. These
+apply within every structural element, and where a "BRAND VOICE & AUDIENCE" block
+appears later in this prompt, its rules on all of the above beat every default stated
+earlier — including this prompt's own third-person preference (rule 1) and its generic
+CTA examples (rule 14, and the ICP ALIGNMENT lines in the SEO checklist).
+
+Be honest with yourself about which side a rule is on. "Prefer third person" and "use
+urgency language in the CTA" look structural because they appear in a rules list, but
+they are expression: they change how the page sounds, not where the answer sits. If the
+client's guide speaks to it, the client wins.
 
 In practice: a warm, conversational brand still writes short paragraphs and answer-first
 openings — it just does so in its own voice, not in a clinical or generic one.
@@ -3054,6 +3155,40 @@ async def analyze_brand_voice(request: Request, body: BrandVoiceRequest):
     return await run_brand_voice_analysis(body)
 
 
+class DistillVoiceCardRequest(BaseModel):
+    brand_voice: Optional[dict] = None
+    detected_icp: Optional[dict] = None
+
+
+class DistillVoiceCardResponse(BaseModel):
+    voice_card: dict
+    fingerprint: str
+
+
+@app.post('/distill-voice-card', response_model=DistillVoiceCardResponse)
+@limiter.limit("20/minute")
+async def distill_voice_card(request: Request, body: DistillVoiceCardRequest):
+    """Distill a client's brand guide + ICP into the enforceable voice card.
+
+    platform-api calls this when a client's guide changes and caches the result
+    against `fingerprint`, so page generation pays for distillation once per
+    revision instead of once per page. Never fails the caller: an unusable
+    guide returns an empty card, which every consumer treats as "no
+    enforcement" and falls back to prior behaviour.
+    """
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
+    import anthropic as _anthropic
+    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    card = await _distill_voice_card(client, body.brand_voice, body.detected_icp)
+    return DistillVoiceCardResponse(
+        voice_card=card,
+        fingerprint=vcard.card_fingerprint(
+            _build_brand_voice_text(body.brand_voice), _build_icp_text(body.detected_icp)
+        ),
+    )
+
+
 def _build_icp_text(detected_icp: Optional[dict], max_segments: int = 3) -> str:
     """Render the detected ICP as a plain-text block for the system prompt.
 
@@ -3318,7 +3453,88 @@ _ENGINE_LABELS = {
     "geographic_legitimacy": "Geographic Legitimacy Engine",
     "nearme_intent":         "Hyperlocal / Near-Me Engine",
     "serp_signal_coverage":  "SERP Signal Coverage",
+    "brand_voice_fit":       "Brand Voice & Audience Fit",
 }
+
+# ── Brand voice scoring ────────────────────────────────────────────────────
+# The rubric above measures SEO/AEO and nothing else, so a page could score
+# "good" while contradicting the client's brand guide on every paragraph.
+# `brand_voice_fit` closes that: it only exists when the client actually has a
+# guide on file, so a client without one scores exactly as before and no
+# historical composite shifts underneath them.
+#
+# The 10% comes off gbp_maps and aeo_llm_retrieval (5 each) — the two heaviest
+# engines, so the relative shape of the rubric barely moves. Both weight maps
+# still sum to 1.0.
+_ENGINE_WEIGHTS_VOICE = {
+    **_ENGINE_WEIGHTS,
+    "gbp_maps":          _ENGINE_WEIGHTS["gbp_maps"] - 0.05,
+    "aeo_llm_retrieval": _ENGINE_WEIGHTS["aeo_llm_retrieval"] - 0.05,
+    "brand_voice_fit":   0.10,
+}
+_ENGINE_WEIGHTS_NATIONAL_VOICE = {
+    **_ENGINE_WEIGHTS_NATIONAL,
+    "gbp_maps":          _ENGINE_WEIGHTS_NATIONAL["gbp_maps"] - 0.05,
+    "aeo_llm_retrieval": _ENGINE_WEIGHTS_NATIONAL["aeo_llm_retrieval"] - 0.05,
+    "brand_voice_fit":   0.10,
+}
+
+
+def _weights_for(geo_mode: str = "local", voice_card: Optional[dict] = None) -> dict:
+    """The weight map for this scoring run. Adding the voice engine is gated on
+    the client having a guide — without one there is nothing to score against
+    and the page must not be penalised for it."""
+    scoring_voice = not vcard.is_card_empty(voice_card)
+    if geo_mode == "national":
+        return _ENGINE_WEIGHTS_NATIONAL_VOICE if scoring_voice else _ENGINE_WEIGHTS_NATIONAL
+    return _ENGINE_WEIGHTS_VOICE if scoring_voice else _ENGINE_WEIGHTS
+
+
+_VOICE_SCORE_PROMPT_SUFFIX = """
+
+──────────────────────────────────────────────────────────────────────────────
+ADDITIONAL ENGINE — this client has a written brand guide and ICP, supplied in
+the user message under "CLIENT BRAND VOICE & AUDIENCE". Two changes apply:
+
+A. OVERRIDE for icp_alignment: score it against the SUPPLIED ICP, not against a
+   guess inferred from the keyword. The audience is whoever that document says
+   it is. Judge whether the page speaks to their stated situation, triggers,
+   motivations and objections, and whether the CTAs use the client's own CTA
+   language. A page written for a generic "homeowner" when the ICP describes a
+   specific customer scores LOW here, however polished it reads.
+
+B. NEW ENGINE — brand_voice_fit (weight 10%): how faithfully the page follows
+   the supplied brand guide.
+   - Tone and personality match the stated tone adjectives throughout, not just
+     in the intro.
+   - Grammatical person matches what the guide specifies (first person "we/our"
+     vs naming the brand). A page that ignores a stated preference scores LOW.
+   - Required phrasing appears; forbidden and discouraged terms do not.
+   - Sentence rhythm and the guide's explicit voice rules are followed.
+   - The writing sounds like THIS client, not like a generic local-service page
+     with the brand name substituted in. Interchangeability is the failure mode
+     to catch — if this copy could be dropped onto a competitor's site by
+     swapping the business name, score LOW and say so.
+   Judge expression only. Do NOT penalise the page here for answer-first
+   openings, short paragraphs, lists, tables, headings or schema — those are
+   required layout and are scored by the other engines.
+
+Add these keys to the JSON object you return, in addition to every key already
+listed above:
+  "brand_voice_fit": {"score": 0, "issues": [], "recommendations": []}
+
+For both engines, quote the actual phrasing you judged — a recommendation that
+does not name the offending sentence is not actionable."""
+
+
+def _score_system_prompt_for(geo_mode: str = "local", voice_card: Optional[dict] = None) -> str:
+    """The scoring system prompt, extended with the voice engine when the client
+    has a guide. Appending rather than editing keeps the tuned base rubric
+    byte-identical for every client without one."""
+    base = _SCORE_SYSTEM_PROMPT_NATIONAL if geo_mode == "national" else _SCORE_SYSTEM_PROMPT
+    if vcard.is_card_empty(voice_card):
+        return base
+    return base + _VOICE_SCORE_PROMPT_SUFFIX
 
 def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict]) -> dict:
     """
@@ -3486,6 +3702,7 @@ async def _score_html_inline(
     address: Optional[str],
     serp_analysis_dict: Optional[dict],
     client,
+    voice_card: Optional[dict] = None,
 ) -> tuple:
     """Score a page in-process (no HTTP). Returns (composite_score, deficiencies, scores, token_rec)."""
     from bs4 import BeautifulSoup as _BS
@@ -3493,12 +3710,19 @@ async def _score_html_inline(
     page_text = _BS(page_html, "html.parser").get_text(separator="\n", strip=True)
     city = location.split(",")[0].strip()
     serp_ctx = _serp_context(serp_analysis_dict)
-    user_prompt = _build_score_prompt(business_name, gbp_category, keyword, city, address, serp_ctx, page_text, html_structure)
+    user_prompt = _build_score_prompt(
+        business_name, gbp_category, keyword, city, address, serp_ctx, page_text,
+        html_structure, voice_card=voice_card,
+    )
 
     msg = await client.messages.create(
         model=SCORE_MODEL,
         max_tokens=8192,
-        system=[{"type": "text", "text": _SCORE_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+        system=[{
+            "type": "text",
+            "text": _score_system_prompt_for("local", voice_card),
+            "cache_control": {"type": "ephemeral"},
+        }],
         messages=[
             {"role": "user", "content": user_prompt},
         ],
@@ -3508,7 +3732,7 @@ async def _score_html_inline(
     if not scores:
         raise Exception("Inline scoring returned invalid JSON")
     scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_html, serp_analysis_dict)
-    composite, _ = _composite_from_scores(scores)
+    composite, _ = _composite_from_scores(scores, _weights_for("local", voice_card))
     deficiencies = _build_deficiencies(scores)
     return composite, deficiencies, scores, token_rec
 
@@ -3566,8 +3790,16 @@ async def _reoptimize_html_inline(
     serp_analysis_dict: Optional[dict],
     seo_checklist: str,
     client,
+    voice_block: str = "",
+    voice_corrections: str = "",
 ) -> tuple:
-    """Reoptimize HTML in-process. Returns (content_html, schema_json, page_title, token_rec)."""
+    """Reoptimize HTML in-process. Returns (content_html, schema_json, page_title, token_rec).
+
+    `voice_block` is the client's brand-guide card; without it every rewrite
+    pass stripped the voice back out of a page that had it at generation.
+    `voice_corrections` are the deterministic violations from the previous
+    draft — named words to remove, which is far better rewrite input than a
+    score — and go last so they carry the most recency."""
     page_zones = _parse_page_zones(existing_html)
     serp_ctx = _reopt_serp_context(page_zones, serp_analysis_dict)
 
@@ -3577,6 +3809,8 @@ async def _reoptimize_html_inline(
         f"  Fixes needed: {'; '.join(d.get('recommendations', []))}"
         for d in deficiencies
     )
+    voice_section = f"\n{voice_block}\n" if voice_block else ""
+    corrections_section = f"\n{voice_corrections}\n" if voice_corrections else ""
 
     user_prompt = f"""BUSINESS: {business_name} | CATEGORY: {gbp_category}
 KEYWORD: {keyword} | CITY: {city}
@@ -3588,9 +3822,10 @@ ADDRESS: {address or "Not provided"}
 
 SEO DEFICIENCIES TO FIX (these must all be addressed in the rewrite):
 {deficiency_text}
-
+{voice_section}
 EXISTING PAGE (use as reference — preserve accurate facts, fix everything else):
-{existing_html}"""
+{existing_html}
+{corrections_section}"""
 
     claude_msg = await client.messages.create(
         model=GENERATION_MODEL,
@@ -3743,17 +3978,28 @@ def _build_score_prompt(
     page_text: str,
     html_structure: str = "",
     geo_mode: str = "local",
+    voice_card: Optional[dict] = None,
 ) -> str:
     """Returns the dynamic user-message portion of the scoring prompt.
     The static system instructions are in _SCORE_SYSTEM_PROMPT (cached separately).
-    For geo_mode="national" the city/address context is omitted (location-agnostic)."""
+    For geo_mode="national" the city/address context is omitted (location-agnostic).
+
+    When the client has a brand guide, its card is included so icp_alignment can
+    be scored against the real ICP and brand_voice_fit has something to judge —
+    without it the scorer was inferring an audience from the keyword."""
     structure_block = f"\n{html_structure}\n" if html_structure else ""
     geo_lines = "" if geo_mode == "national" else f"City: {city}\nAddress: {address or 'Not provided'}\n"
+    voice_rendered = vcard.render_voice_card_block(voice_card)
+    voice_block = (
+        f"\nCLIENT BRAND VOICE & AUDIENCE (score icp_alignment and brand_voice_fit "
+        f"against this, not against the keyword):\n{voice_rendered}\n"
+        if voice_rendered else ""
+    )
     return f"""CONTEXT
 Business: {business_name}
 Category: {gbp_category}
 Keyword: {keyword}
-{geo_lines}{serp_ctx}{structure_block}
+{geo_lines}{serp_ctx}{structure_block}{voice_block}
 PAGE CONTENT (first 8,000 chars):
 {page_text}"""
 
@@ -4183,6 +4429,7 @@ async def _build_seo_checklist(
     gbp_category: str,
     serp_analysis: Optional[dict],
     client,   # Anthropic client — used for ZIP lookup
+    voice_card: Optional[dict] = None,
 ) -> str:
     """
     Build a concrete, data-driven SEO checklist from scoring rubric + SERP data + business data.
@@ -4192,8 +4439,16 @@ async def _build_seo_checklist(
     state_parts = location.split(",")
     state = state_parts[1].strip() if len(state_parts) > 1 else ""
 
-    icp_label, icp_tone, icp_cta = _detect_icp_from_keyword(keyword)
-    is_emergency = "Emergency" in icp_label
+    # The keyword heuristic is now a FALLBACK, not the answer. It used to be
+    # the only ICP the checklist stated — and because the system prompt tells
+    # the writer to match the checklist's ICP tone exactly, a three-word guess
+    # ("emergency → urgent") outranked the client's actual ICP document sitting
+    # elsewhere in the prompt. When the client has an ICP on file, it wins.
+    keyword_icp = _detect_icp_from_keyword(keyword)
+    icp_label, icp_tone, icp_cta = vcard.resolve_icp_directives(voice_card, keyword_icp)
+    # Urgency stays keyword-derived: it governs availability claims on the page,
+    # which depend on the search intent, not on who the customer is.
+    is_emergency = "Emergency" in keyword_icp[0]
 
     # ── Geo entities from SERP ───────────────────────────────────────────────
     # Extract LOCATION-type entities found across competitor pages — these are
@@ -4332,13 +4587,25 @@ async def _build_seo_checklist(
     lines += [
         "",
         f'【ICP ALIGNMENT — icp_alignment 5%】',
-        f'  • Detected ICP: {icp_label}',
+        f'  • {"Client ICP (from their own ICP document — this is the real audience, not an inference)" if not vcard.is_card_empty(voice_card) else "Detected ICP"}: {icp_label}',
         f'  • Tone: {icp_tone}',
         f'  • Primary CTA must match ICP intent: {icp_cta}',
         f'  • Repeat or rephrase the CTA in ≥2 additional sections (hero, mid-page, and closing)',
         f'  • Address the ICP\'s primary pain point directly in the first 2 sections',
-        f'  • CTA button/link text must use ICP-appropriate urgency language (e.g. "Call Now" for emergency, "Get a Free Quote" for general)',
     ]
+    # The generic urgency examples only help when we're guessing. With a real
+    # ICP on file they actively fight it — that hard-coded "Call Now" / "Get a
+    # Free Quote" pair is how a client's own CTA wording lost to a default.
+    if vcard.is_card_empty(voice_card):
+        lines.append(
+            '  • CTA button/link text must use ICP-appropriate urgency language '
+            '(e.g. "Call Now" for emergency, "Get a Free Quote" for general)'
+        )
+    else:
+        lines.append(
+            '  • CTA button/link text must use the client\'s own CTA wording above — '
+            'do NOT substitute a generic "Call Now" / "Get a Free Quote"'
+        )
 
     # ── SERP keyword + entity targets (entity_establishment 15%) ────────────
     if serp_analysis:
@@ -4757,6 +5024,13 @@ class ScorePageRequest(BaseModel):
     gbp_category: str
     address: Optional[str] = None
     serp_analysis: Optional[dict] = None
+    # Brand voice + ICP. The scorer never used to receive these, so nothing in
+    # the rubric could measure voice adherence and pages scored "good" while
+    # failing a human voice audit. They feed the brand_voice_fit engine and the
+    # (previously keyword-guessed) icp_alignment engine.
+    brand_voice: Optional[dict] = None
+    detected_icp: Optional[dict] = None
+    voice_card: Optional[dict] = None
     # "local" (default — full 7-engine Local SEO scoring) or "national" (Service
     # Pages — drops the geo engines, de-geos gbp_maps/entity_establishment).
     geo_mode: str = "local"
@@ -4769,6 +5043,10 @@ class ScorePageResponse(BaseModel):
     token_usage: dict
     serp_analysis: Optional[dict] = None   # populated when analysis was run inline
     analysis_cost: Optional[dict] = None   # cost of the inline SERP analysis
+    # Deterministic brand-guide audit (no LLM): forbidden terms found, required
+    # phrasing missing, grammatical person, CTA language. `{"passed": true, …}`
+    # with an empty violation list when the client has no guide on file.
+    voice_compliance: Optional[dict] = None
 
 
 @app.post('/score-page', response_model=ScorePageResponse)
@@ -4784,8 +5062,13 @@ async def score_page(request: Request, body: ScorePageRequest):
     # gbp_maps/entity_establishment (location-agnostic). Default "local" is the
     # full 7-engine Local SEO rubric — unchanged.
     national = (body.geo_mode or "local").lower() == "national"
-    system_prompt = _SCORE_SYSTEM_PROMPT_NATIONAL if national else _SCORE_SYSTEM_PROMPT
-    weights = _ENGINE_WEIGHTS_NATIONAL if national else _ENGINE_WEIGHTS
+    geo_mode = "national" if national else "local"
+    # The client's brand guide, distilled. Adds the brand_voice_fit engine and
+    # repoints icp_alignment at the real ICP; absent a guide, both the prompt
+    # and the weights are byte-identical to before.
+    voice_card = await _resolve_voice_card(client, body)
+    system_prompt = _score_system_prompt_for(geo_mode, voice_card)
+    weights = _weights_for(geo_mode, voice_card)
 
     # ── Run SERP analysis inline if not provided ───────────────────────────────
     # Scoring against competitors requires SERP data. If the caller doesn't pass
@@ -4822,7 +5105,7 @@ async def score_page(request: Request, body: ScorePageRequest):
     city = body.location.split(",")[0].strip() if body.location else ""
     serp_ctx = _serp_context(serp_analysis_dict)
 
-    user_prompt = _build_score_prompt(body.business_name, body.gbp_category, body.keyword, city, body.address, serp_ctx, page_text, html_structure, geo_mode=("national" if national else "local"))
+    user_prompt = _build_score_prompt(body.business_name, body.gbp_category, body.keyword, city, body.address, serp_ctx, page_text, html_structure, geo_mode=geo_mode, voice_card=voice_card)
 
     scores = None
     token_rec = None
@@ -4855,10 +5138,17 @@ async def score_page(request: Request, body: ScorePageRequest):
 
     composite, status = _composite_from_scores(scores, weights)
 
+    # Deterministic brand-guide audit alongside the LLM rubric. A judge can be
+    # talked out of a verdict; a word-boundary regex cannot.
+    voice_compliance = vcard.compliance_summary(
+        vcard.check_voice_compliance(_page_text_for_voice_check(page_html), voice_card)
+    )
+
     return ScorePageResponse(
         composite_score=composite,
         composite_status=status,
         engine_scores=scores,
+        voice_compliance=voice_compliance,
         deficiencies=_build_deficiencies(scores),
         token_usage=token_rec,
         serp_analysis=serp_analysis_dict if inline_serp else None,
@@ -5464,6 +5754,11 @@ class GeneratePageRequest(BaseModel):
     differentiators: Optional[List[dict]] = None
     brand_voice: Optional[dict] = None
     detected_icp: Optional[dict] = None
+    # Pre-distilled, enforceable form of brand_voice + detected_icp (see
+    # voice_card.py). platform-api caches one per guide revision and sends it
+    # here; when it's absent we distill inline from the two fields above, so
+    # older callers still get enforcement.
+    voice_card: Optional[dict] = None
     reviews: Optional[List[dict]] = None
     serp_analysis: Optional[dict] = None
     # Phase 3 — "page template": mirror the section structure of a reference page.
@@ -5763,6 +6058,12 @@ async def generate_page(request: Request, body: GeneratePageRequest):
             logger.info("generate-page: mirroring client reference page structure")
 
         await q.put({"step": "progress", "progress": 60, "message": "Building SEO checklist…"})
+        # The client's guide, distilled into enforceable rules. Feeds three
+        # things: the checklist's ICP lines (which used to state a keyword
+        # guess), the late high-priority prompt block, and the deterministic
+        # post-generation check.
+        voice_card = await _resolve_voice_card(client, body)
+
         seo_checklist = await _build_seo_checklist(
             keyword=body.keyword,
             location=body.location,
@@ -5771,7 +6072,11 @@ async def generate_page(request: Request, body: GeneratePageRequest):
             gbp_category=body.gbp_category,
             serp_analysis=serp_analysis_dict,
             client=client,
+            voice_card=voice_card,
         )
+        voice_block = vcard.render_voice_card_block(voice_card)
+        if voice_block:
+            voice_block = "\n" + voice_block + "\n"
 
         gbp_description_text = (
             f"GBP Description: {body.gbp_description}"
@@ -5845,6 +6150,7 @@ Full location: {body.location}
 {seo_checklist}
 
 {template_text}
+{voice_block}
 {corrections_text}"""
 
         await q.put({"step": "progress", "progress": 65, "message": "Generating your page…"})
@@ -5915,6 +6221,7 @@ Full location: {body.location}
                 inline_score, _, inline_scores, score_tok = await _score_html_inline(
                     content_html, body.keyword, body.location, body.business_name,
                     body.gbp_category, body.address, serp_analysis_dict, client,
+                    voice_card=voice_card,
                 )
                 token_rec["input_tokens"]  += score_tok["input_tokens"]
                 token_rec["output_tokens"] += score_tok["output_tokens"]
@@ -5925,6 +6232,57 @@ Full location: {body.location}
                     await asyncio.sleep(2 ** _score_attempt)  # 1s then 2s
                 else:
                     logger.warning(f"generate-page: scoring failed after 3 attempts: {_ae}")
+
+        # ── Brand-guide compliance: deterministic check + corrective passes ──
+        # The rubric above is an LLM's opinion; this is a regex. A forbidden
+        # word is a fact, so it gets its own targeted rewrite rather than
+        # waiting for a score to drag it out. Warnings are reported but never
+        # burn a pass on their own — only a `critical` finding rewrites.
+        voice_violations = vcard.check_voice_compliance(
+            _page_text_for_voice_check(content_html, page_title), voice_card
+        )
+        if vcard.has_critical(voice_violations):
+            for _fix_pass in range(1, MAX_VOICE_CORRECTION_PASSES + 1):
+                await q.put({
+                    "step": "progress", "progress": 92,
+                    "message": f"Fixing brand-guide violations (pass {_fix_pass} of {MAX_VOICE_CORRECTION_PASSES})…",
+                })
+                try:
+                    fixed_html, fixed_schema, fixed_title, fix_tok = await _reoptimize_html_inline(
+                        existing_html=content_html,
+                        keyword=body.keyword, location=body.location, city=city,
+                        business_name=body.business_name, gbp_category=body.gbp_category,
+                        address=body.address, phone=body.phone,
+                        deficiencies=[], serp_analysis_dict=serp_analysis_dict,
+                        seo_checklist=seo_checklist, client=client,
+                        voice_block=voice_block,
+                        voice_corrections=vcard.violations_to_corrections(voice_violations),
+                    )
+                except Exception as _ve:
+                    logger.warning(f"generate-page: voice correction pass {_fix_pass} failed: {_ve}")
+                    break
+                if not (fixed_html or "").strip():
+                    logger.warning(f"generate-page: voice correction pass {_fix_pass} returned empty HTML; keeping previous")
+                    break
+                token_rec["input_tokens"]  += fix_tok["input_tokens"]
+                token_rec["output_tokens"] += fix_tok["output_tokens"]
+                token_rec["cost_usd"]       = round(token_rec["cost_usd"] + fix_tok["cost_usd"], 6)
+                content_html = fixed_html
+                schema_json = fixed_schema or schema_json
+                page_title = fixed_title or page_title
+                voice_violations = vcard.check_voice_compliance(
+                    _page_text_for_voice_check(content_html, page_title), voice_card
+                )
+                if not vcard.has_critical(voice_violations):
+                    break
+            if vcard.has_critical(voice_violations):
+                # Surfaced to the user rather than silently shipped: the page is
+                # saveable, but it is flagged as breaking the brand guide.
+                logger.warning(
+                    "generate-page: brand-guide violations persist after "
+                    f"{MAX_VOICE_CORRECTION_PASSES} correction passes for '{body.keyword}'"
+                )
+        voice_compliance = vcard.compliance_summary(voice_violations)
 
         # Build combined cost breakdown
         ac = (serp_analysis_dict or {}).get("analysis_cost", {})
@@ -5960,6 +6318,9 @@ Full location: {body.location}
                 "cost_breakdown": cost_breakdown,
                 "serp_analysis": serp_analysis_dict,
                 "content_gaps": content_gaps,
+                # Deterministic brand-guide audit — persisted by platform-api and
+                # shown to the user next to the content gaps.
+                "voice_compliance": voice_compliance,
             },
         })
 
@@ -5979,6 +6340,12 @@ class ReoptimizePageRequest(BaseModel):
     address: Optional[str] = None
     phone: Optional[str] = None
     serp_analysis: Optional[dict] = None
+    # Brand voice + ICP. Previously absent here, which meant every reoptimize
+    # pass rewrote the page with the client's guide missing from the prompt —
+    # so voice present at generation was diluted by each later pass.
+    brand_voice: Optional[dict] = None
+    detected_icp: Optional[dict] = None
+    voice_card: Optional[dict] = None
     # Mirror of GeneratePageRequest — keep the condition->option decision-fit
     # treatment (default) or suppress it on reoptimization.
     include_decision_map: bool = True
@@ -6047,6 +6414,16 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
             for d in body.deficiencies
         )
 
+        # The client's brand guide. Reoptimize used to receive neither
+        # brand_voice nor detected_icp, so every pass rewrote the page with the
+        # guide missing — voice present at generation was diluted by each later
+        # pass, and a reoptimized page drifted further from the client with
+        # every improvement to its score.
+        voice_card = await _resolve_voice_card(client, body)
+        voice_block = vcard.render_voice_card_block(voice_card)
+        if voice_block:
+            voice_block = "\n" + voice_block + "\n"
+
         # Decision-fit: keep the condition->option treatment on reoptimization unless
         # explicitly suppressed (mirrors /generate-page).
         if body.include_decision_map:
@@ -6094,7 +6471,7 @@ Full location: {body.location}
 
 SEO DEFICIENCIES TO FIX — address ALL of these in the new page:
 {deficiency_text}
-
+{voice_block}
 EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT invent any facts not present here):
 {existing_page_text[:4000]}"""
 
@@ -6150,11 +6527,16 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
         inline_score = None  # final composite after the auto-retry loop (surfaced below)
         inline_scores = None  # full per-engine verdict for the final page (surfaced below)
         inline_defs = []      # per-engine deficiencies for the final page
+        # Bound out here as well as inside the loop: the voice-correction pass
+        # below needs it even when the scoring call raised and the loop's own
+        # assignment never ran.
+        seo_checklist = ""
         await q.put({"step": "progress", "progress": 78, "message": "Scoring your page…"})
         try:
             inline_score, inline_defs, inline_scores, score_tok = await _score_html_inline(
                 current_html, body.keyword, body.location, body.business_name,
                 body.gbp_category, body.address, body.serp_analysis, client,
+                voice_card=voice_card,
             )
             token_rec["input_tokens"]  += score_tok["input_tokens"]
             token_rec["output_tokens"] += score_tok["output_tokens"]
@@ -6175,6 +6557,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                     gbp_category=body.gbp_category,
                     serp_analysis=body.serp_analysis,
                     client=client,
+                    voice_card=voice_card,
                 )
 
             for pass_num in range(2, MAX_AUTO_PASSES + 1):
@@ -6191,6 +6574,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                         current_html, body.keyword, body.location, city,
                         body.business_name, body.gbp_category, body.address, body.phone,
                         inline_defs, body.serp_analysis, seo_checklist, client,
+                        voice_block=voice_block,
                     )
                     token_rec["input_tokens"]  += reopt_tok["input_tokens"]
                     token_rec["output_tokens"] += reopt_tok["output_tokens"]
@@ -6212,6 +6596,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                     inline_score, inline_defs, inline_scores, score_tok = await _score_html_inline(
                         current_html, body.keyword, body.location, body.business_name,
                         body.gbp_category, body.address, body.serp_analysis, client,
+                        voice_card=voice_card,
                     )
                     token_rec["input_tokens"]  += score_tok["input_tokens"]
                     token_rec["output_tokens"] += score_tok["output_tokens"]
@@ -6229,6 +6614,58 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
 
         if not content_html:
             raise Exception("Reoptimization produced empty content. Please try again.")
+
+        # ── Brand-guide compliance, same contract as generate-page ───────────
+        # A rewrite can introduce a forbidden term the original never had, so
+        # the deterministic check runs on the FINAL page regardless of how many
+        # score passes ran.
+        voice_violations = vcard.check_voice_compliance(
+            _page_text_for_voice_check(content_html, page_title), voice_card
+        )
+        if vcard.has_critical(voice_violations):
+            if not seo_checklist:
+                # The score loop only builds this when a pass will run; a page
+                # that scored ≥90 but broke the guide still needs it here.
+                try:
+                    seo_checklist = await _build_seo_checklist(
+                        keyword=body.keyword, location=body.location, address=body.address,
+                        phone=body.phone, gbp_category=body.gbp_category,
+                        serp_analysis=body.serp_analysis, client=client, voice_card=voice_card,
+                    )
+                except Exception as _ce:
+                    logger.warning(f"reoptimize-page: checklist build for voice correction failed: {_ce}")
+                    seo_checklist = ""
+            for _fix_pass in range(1, MAX_VOICE_CORRECTION_PASSES + 1):
+                await q.put({
+                    "step": "progress", "progress": 93,
+                    "message": f"Fixing brand-guide violations (pass {_fix_pass} of {MAX_VOICE_CORRECTION_PASSES})…",
+                })
+                try:
+                    fixed_html, fixed_schema, fixed_title, fix_tok = await _reoptimize_html_inline(
+                        content_html, body.keyword, body.location, city,
+                        body.business_name, body.gbp_category, body.address, body.phone,
+                        [], body.serp_analysis, seo_checklist, client,
+                        voice_block=voice_block,
+                        voice_corrections=vcard.violations_to_corrections(voice_violations),
+                    )
+                except Exception as _ve:
+                    logger.warning(f"reoptimize-page: voice correction pass {_fix_pass} failed: {_ve}")
+                    break
+                if not (fixed_html or "").strip():
+                    logger.warning(f"reoptimize-page: voice correction pass {_fix_pass} returned empty HTML; keeping previous")
+                    break
+                token_rec["input_tokens"]  += fix_tok["input_tokens"]
+                token_rec["output_tokens"] += fix_tok["output_tokens"]
+                token_rec["cost_usd"]       = round(token_rec["cost_usd"] + fix_tok["cost_usd"], 6)
+                content_html = fixed_html
+                schema_json = fixed_schema if fixed_schema is not None else schema_json
+                page_title = fixed_title or page_title
+                voice_violations = vcard.check_voice_compliance(
+                    _page_text_for_voice_check(content_html, page_title), voice_card
+                )
+                if not vcard.has_critical(voice_violations):
+                    break
+        voice_compliance = vcard.compliance_summary(voice_violations)
 
         await q.put({"step": "progress", "progress": 95, "message": "Finishing up…"})
         await q.put({
@@ -6248,6 +6685,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                 "token_usage": token_rec,
                 "html_css_notes": [],
                 "original_html": original_content_html,
+                "voice_compliance": voice_compliance,
             },
         })
 
@@ -7275,7 +7713,32 @@ _ECOMMERCE_ENGINE_LABELS = {
     "conversion_readiness":  "Conversion Readiness Engine",
     "structured_data":       "Structured Data (Schema) Engine",
     "serp_signal_coverage":  "SERP Signal Coverage",
+    "brand_voice_fit":       "Brand Voice & Audience Fit",
 }
+
+# Same contract as the Local SEO rubric: the voice engine only exists when the
+# client has a guide, so no historical composite moves under a client without
+# one. The 10% comes off product_content_depth and aeo_llm_retrieval (5 each).
+_ECOMMERCE_ENGINE_WEIGHTS_VOICE = {
+    **_ECOMMERCE_ENGINE_WEIGHTS,
+    "product_content_depth": _ECOMMERCE_ENGINE_WEIGHTS["product_content_depth"] - 0.05,
+    "aeo_llm_retrieval":     _ECOMMERCE_ENGINE_WEIGHTS["aeo_llm_retrieval"] - 0.05,
+    "brand_voice_fit":       0.10,
+}
+
+
+def _ecommerce_weights_for(voice_card: Optional[dict] = None) -> dict:
+    return (
+        _ECOMMERCE_ENGINE_WEIGHTS
+        if vcard.is_card_empty(voice_card)
+        else _ECOMMERCE_ENGINE_WEIGHTS_VOICE
+    )
+
+
+def _ecommerce_score_system_prompt_for(voice_card: Optional[dict] = None) -> str:
+    if vcard.is_card_empty(voice_card):
+        return _ECOMMERCE_SCORE_SYSTEM_PROMPT
+    return _ECOMMERCE_SCORE_SYSTEM_PROMPT + _VOICE_SCORE_PROMPT_SUFFIX
 
 
 def _ecommerce_build_deficiencies(scores: dict) -> List[dict]:
@@ -7362,17 +7825,23 @@ def _build_ecommerce_score_prompt(
     serp_ctx: str,
     page_text: str,
     html_structure: str = "",
+    voice_card: Optional[dict] = None,
 ) -> str:
     """Dynamic user-message portion of the ecommerce scoring prompt. The static
     rubric lives in _ECOMMERCE_SCORE_SYSTEM_PROMPT (cached separately)."""
     structure_block = f"\n{html_structure}\n" if html_structure else ""
     ptype = "COLLECTION / category page" if page_type == "collection" else "PRODUCT page"
     ctx_line = f"Brand/category context: {brand_context}\n" if brand_context else ""
+    voice_rendered = vcard.render_voice_card_block(voice_card)
+    voice_block = (
+        f"\nCLIENT BRAND VOICE & AUDIENCE (score brand_voice_fit against this):\n{voice_rendered}\n"
+        if voice_rendered else ""
+    )
     return f"""CONTEXT
 Business / store: {business_name}
 Page type: {ptype}
 Target keyword: {keyword}
-{ctx_line}{serp_ctx}{structure_block}
+{ctx_line}{serp_ctx}{structure_block}{voice_block}
 PAGE CONTENT (first 8,000 chars):
 {page_text[:8000]}"""
 
@@ -7385,6 +7854,7 @@ async def _ecommerce_score_html_inline(
     brand_context: str,
     serp_analysis_dict: Optional[dict],
     client,
+    voice_card: Optional[dict] = None,
 ) -> tuple:
     """Score an ecommerce page in-process (no HTTP). Returns
     (composite_score, deficiencies, scores, token_rec)."""
@@ -7393,13 +7863,18 @@ async def _ecommerce_score_html_inline(
     page_text = _BS(page_html, "html.parser").get_text(separator="\n", strip=True)
     serp_ctx = _serp_context(serp_analysis_dict)
     user_prompt = _build_ecommerce_score_prompt(
-        business_name, brand_context, keyword, page_type, serp_ctx, page_text, html_structure,
+        business_name, brand_context, keyword, page_type, serp_ctx, page_text,
+        html_structure, voice_card=voice_card,
     )
     msg = await client.messages.create(
         model=SCORE_MODEL,
         max_tokens=8192,
         temperature=0,  # deterministic scoring so a page scores the same run-to-run
-        system=[{"type": "text", "text": _ECOMMERCE_SCORE_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+        system=[{
+            "type": "text",
+            "text": _ecommerce_score_system_prompt_for(voice_card),
+            "cache_control": {"type": "ephemeral"},
+        }],
         messages=[{"role": "user", "content": user_prompt}],
     )
     token_rec = _token_record("score-ecommerce-inline", SCORE_MODEL, msg.usage.input_tokens, msg.usage.output_tokens)
@@ -7407,7 +7882,7 @@ async def _ecommerce_score_html_inline(
     if not scores:
         raise Exception("Inline ecommerce scoring returned invalid JSON")
     scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_html, serp_analysis_dict)
-    composite, _ = _composite_from_scores(scores, _ECOMMERCE_ENGINE_WEIGHTS)
+    composite, _ = _composite_from_scores(scores, _ecommerce_weights_for(voice_card))
     deficiencies = _ecommerce_build_deficiencies(scores)
     return composite, deficiencies, scores, token_rec
 
@@ -7586,6 +8061,9 @@ class EcommerceScoreRequest(BaseModel):
     serp_analysis: Optional[dict] = None
     location: str = _ECOMMERCE_SERP_LOCATION
     location_code: Optional[int] = None
+    brand_voice: Optional[dict] = None
+    detected_icp: Optional[dict] = None
+    voice_card: Optional[dict] = None
 
 
 class EcommerceScoreResponse(BaseModel):
@@ -7596,6 +8074,7 @@ class EcommerceScoreResponse(BaseModel):
     token_usage: dict
     serp_analysis: Optional[dict] = None
     analysis_cost: Optional[dict] = None
+    voice_compliance: Optional[dict] = None
 
 
 @app.post('/score-ecommerce-page', response_model=EcommerceScoreResponse)
@@ -7637,8 +8116,10 @@ async def score_ecommerce_page(request: Request, body: EcommerceScoreRequest):
     page_text = _BS(page_html, "html.parser").get_text(separator="\n", strip=True)
     serp_ctx = _serp_context(serp_analysis_dict)
     brand_context = body.brand_context or body.business_name
+    voice_card = await _resolve_voice_card(client, body)
     user_prompt = _build_ecommerce_score_prompt(
-        body.business_name, brand_context, body.keyword, page_type, serp_ctx, page_text, html_structure,
+        body.business_name, brand_context, body.keyword, page_type, serp_ctx, page_text,
+        html_structure, voice_card=voice_card,
     )
 
     scores = None
@@ -7648,7 +8129,11 @@ async def score_ecommerce_page(request: Request, body: EcommerceScoreRequest):
             msg = await client.messages.create(
                 model=SCORE_MODEL,
                 max_tokens=8192,
-                system=[{"type": "text", "text": _ECOMMERCE_SCORE_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+                system=[{
+                    "type": "text",
+                    "text": _ecommerce_score_system_prompt_for(voice_card),
+                    "cache_control": {"type": "ephemeral"},
+                }],
                 messages=[{"role": "user", "content": user_prompt}],
             )
             token_rec = _token_record("score-ecommerce-page", SCORE_MODEL, msg.usage.input_tokens, msg.usage.output_tokens)
@@ -7666,13 +8151,16 @@ async def score_ecommerce_page(request: Request, body: EcommerceScoreRequest):
         raise HTTPException(status_code=502, detail="Scoring service returned an invalid response. Please try again.")
 
     scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_html, serp_analysis_dict)
-    composite, status = _composite_from_scores(scores, _ECOMMERCE_ENGINE_WEIGHTS)
+    composite, status = _composite_from_scores(scores, _ecommerce_weights_for(voice_card))
 
     return EcommerceScoreResponse(
         composite_score=composite,
         composite_status=status,
         engine_scores=scores,
         deficiencies=_ecommerce_build_deficiencies(scores),
+        voice_compliance=vcard.compliance_summary(
+            vcard.check_voice_compliance(_page_text_for_voice_check(page_html), voice_card)
+        ),
         token_usage=token_rec,
         serp_analysis=serp_analysis_dict if inline_serp else None,
         analysis_cost=inline_serp.analysis_cost if inline_serp else None,
@@ -7688,6 +8176,9 @@ class GenerateEcommerceRequest(BaseModel):
     product_input: Optional[str] = None  # pasted product facts (specs/price/variants)
     brand_voice: Optional[dict] = None
     detected_icp: Optional[dict] = None
+    # Distilled, enforceable form of the two fields above (see voice_card.py).
+    # Sent pre-built by platform-api; distilled inline when absent.
+    voice_card: Optional[dict] = None
     differentiators: Optional[List[dict]] = None
     serp_analysis: Optional[dict] = None
     run_analysis: bool = True
@@ -7771,6 +8262,88 @@ async def _ecommerce_mcs_block(client, serp_analysis_dict: Optional[dict], page_
         return ""
 
 
+async def _ecommerce_fix_voice(
+    client,
+    *,
+    content_html: str,
+    page_title: str,
+    schema_json: Optional[str],
+    content_gaps: list,
+    voice_card: dict,
+    voice_block: str,
+    business_name: str,
+    keyword: str,
+    page_type: str,
+    serp_entities: list,
+) -> tuple:
+    """Run corrective rewrite passes until the page stops breaking the client's
+    brand guide (or we run out of passes).
+
+    Returns `(content_html, schema_json, page_title, content_gaps, violations,
+    token_rec)`. Shared by generate + reoptimize so both surfaces enforce the
+    guide identically. Only `critical` findings trigger a pass — a warning is
+    reported, not worth a rewrite of the whole page.
+    """
+    zero = {"endpoint": "ecommerce-voice-fix", "model": GENERATION_MODEL,
+            "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+    violations = vcard.check_voice_compliance(
+        _page_text_for_voice_check(content_html, page_title), voice_card
+    )
+    if not vcard.has_critical(violations):
+        return content_html, schema_json, page_title, content_gaps, violations, zero
+
+    for _pass in range(1, MAX_VOICE_CORRECTION_PASSES + 1):
+        prompt = f"""STORE / BUSINESS DATA
+Store name: {business_name}
+Primary keyword: {keyword}
+
+{_ecommerce_page_type_directive(page_type)}
+{voice_block}
+{vcard.violations_to_corrections(violations)}
+
+EXISTING PAGE (fix ONLY the brand-guide violations above — keep every product
+fact, spec value, heading structure, table, list and schema exactly as it is):
+{content_html[:30000]}"""
+        try:
+            msg = await client.messages.create(
+                model=GENERATION_MODEL,
+                max_tokens=16000,
+                temperature=0,
+                system=[{"type": "text", "text": _ECOMMERCE_GEN_SYSTEM_PROMPT,
+                         "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except Exception as exc:
+            logger.warning(f"ecommerce voice correction pass {_pass} failed: {exc}")
+            break
+        rec = _token_record("ecommerce-voice-fix", GENERATION_MODEL,
+                            msg.usage.input_tokens, msg.usage.output_tokens)
+        zero["input_tokens"]  += rec["input_tokens"]
+        zero["output_tokens"] += rec["output_tokens"]
+        zero["cost_usd"]       = round(zero["cost_usd"] + rec["cost_usd"], 6)
+
+        fixed_html, fixed_schema, fixed_title, fixed_gaps = _parse_generated_ecommerce(msg.content[0].text)
+        if not fixed_html:
+            logger.warning(f"ecommerce voice correction pass {_pass} returned empty HTML; keeping previous")
+            break
+        content_html = _apply_rdfa_markup(fixed_html, serp_entities)
+        schema_json = fixed_schema or schema_json
+        page_title = fixed_title or page_title
+        content_gaps = fixed_gaps or content_gaps
+        violations = vcard.check_voice_compliance(
+            _page_text_for_voice_check(content_html, page_title), voice_card
+        )
+        if not vcard.has_critical(violations):
+            break
+
+    if vcard.has_critical(violations):
+        logger.warning(
+            f"ecommerce: brand-guide violations persist after {MAX_VOICE_CORRECTION_PASSES} "
+            f"correction passes for '{keyword}'"
+        )
+    return content_html, schema_json, page_title, content_gaps, violations, zero
+
+
 @app.post('/generate-ecommerce-page')
 @limiter.limit("5/minute")
 async def generate_ecommerce_page(request: Request, body: GenerateEcommerceRequest):
@@ -7832,6 +8405,12 @@ async def generate_ecommerce_page(request: Request, body: GenerateEcommerceReque
 
         brand_voice_text = _build_brand_voice_text(body.brand_voice)
         icp_text = _build_icp_text(body.detected_icp)
+        # Distilled + enforceable: steers generation from a late, high-priority
+        # position and drives the deterministic check after the write.
+        voice_card = await _resolve_voice_card(client, body)
+        voice_block = vcard.render_voice_card_block(voice_card)
+        if voice_block:
+            voice_block = "\n" + voice_block + "\n"
         diff_text = ""
         if body.differentiators:
             diff_text = "Differentiators (use these — include the mechanism for each):\n" + \
@@ -7906,6 +8485,7 @@ Primary keyword: {body.keyword}
 {serp_ctx}
 
 {template_text}
+{voice_block}
 {corrections_text}"""
 
         await q.put({"step": "progress", "progress": 65, "message": "Writing your page…"})
@@ -7946,7 +8526,7 @@ Primary keyword: {body.keyword}
             try:
                 inline_score, _, inline_scores, score_tok = await _ecommerce_score_html_inline(
                     content_html, body.keyword, page_type, body.business_name, brand_context,
-                    serp_analysis_dict, client,
+                    serp_analysis_dict, client, voice_card=voice_card,
                 )
                 token_rec["input_tokens"]  += score_tok["input_tokens"]
                 token_rec["output_tokens"] += score_tok["output_tokens"]
@@ -7957,6 +8537,21 @@ Primary keyword: {body.keyword}
                     await asyncio.sleep(2 ** _attempt)
                 else:
                     logger.warning(f"generate-ecommerce: scoring failed after 3 attempts: {_ae}")
+
+        # Deterministic brand-guide check + corrective rewrite(s).
+        (
+            content_html, schema_json, page_title, content_gaps, voice_violations, voice_tok
+        ) = await _ecommerce_fix_voice(
+            client,
+            content_html=content_html, page_title=page_title, schema_json=schema_json,
+            content_gaps=content_gaps, voice_card=voice_card, voice_block=voice_block,
+            business_name=body.business_name, keyword=body.keyword, page_type=page_type,
+            serp_entities=(serp_analysis_dict or {}).get("google_entities", [])[:_ECOMMERCE_RDFA_MAX_ENTITIES],
+        )
+        token_rec["input_tokens"]  += voice_tok["input_tokens"]
+        token_rec["output_tokens"] += voice_tok["output_tokens"]
+        token_rec["cost_usd"]       = round(token_rec["cost_usd"] + voice_tok["cost_usd"], 6)
+        voice_compliance = vcard.compliance_summary(voice_violations)
 
         ac = (serp_analysis_dict or {}).get("analysis_cost", {})
         claude_cost = token_rec["cost_usd"]
@@ -7989,6 +8584,7 @@ Primary keyword: {body.keyword}
                 "serp_analysis": serp_analysis_dict,
                 "content_gaps": content_gaps,
                 "researched_facts": researched_facts,
+                "voice_compliance": voice_compliance,
             },
         })
 
@@ -8004,6 +8600,7 @@ class ReoptimizeEcommerceRequest(BaseModel):
     business_name: str = ""
     brand_voice: Optional[dict] = None
     detected_icp: Optional[dict] = None
+    voice_card: Optional[dict] = None
     serp_analysis: Optional[dict] = None
     product_input: Optional[str] = None
     # High-priority editorial guidance from the user (e.g. "remove the Research
@@ -8069,6 +8666,10 @@ async def reoptimize_ecommerce_page(request: Request, body: ReoptimizeEcommerceR
 
         brand_voice_text = _build_brand_voice_text(body.brand_voice)
         icp_text = _build_icp_text(body.detected_icp)
+        voice_card = await _resolve_voice_card(client, body)
+        voice_block = vcard.render_voice_card_block(voice_card)
+        if voice_block:
+            voice_block = "\n" + voice_block + "\n"
         extra_facts = ""
         if (body.product_input or "").strip():
             extra_facts = "ADDITIONAL PRODUCT DETAILS (authoritative — use these facts):\n" + body.product_input.strip()
@@ -8090,6 +8691,7 @@ Primary keyword: {body.keyword}
 {deficiency_text}
 
 {extra_facts}
+{voice_block}
 
 EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT invent any facts not present here or in the additional details above, EXCEPT values given in the VERIFIED PUBLIC SPECIFICATIONS block, which you may state):
 {page_text[:5000]}"""
@@ -8147,7 +8749,7 @@ EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT inven
             try:
                 pass_score, pass_defs, pass_scores, score_tok = await _ecommerce_score_html_inline(
                     pass_html, body.keyword, page_type, body.business_name, brand_context,
-                    body.serp_analysis, client,
+                    body.serp_analysis, client, voice_card=voice_card,
                 )
                 _accumulate(score_tok)
             except Exception as _ae:
@@ -8172,6 +8774,20 @@ EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT inven
         inline_score = best["score"]
         inline_scores = best["scores"]
 
+        # Keep-best picks on SCORE, and the score says nothing about the brand
+        # guide — so the winning pass still has to clear the deterministic check.
+        (
+            content_html, schema_json, page_title, content_gaps, voice_violations, voice_tok
+        ) = await _ecommerce_fix_voice(
+            client,
+            content_html=content_html, page_title=page_title, schema_json=schema_json,
+            content_gaps=content_gaps, voice_card=voice_card, voice_block=voice_block,
+            business_name=body.business_name, keyword=body.keyword, page_type=page_type,
+            serp_entities=(body.serp_analysis or {}).get("google_entities", [])[:_ECOMMERCE_RDFA_MAX_ENTITIES],
+        )
+        _accumulate(voice_tok)
+        voice_compliance = vcard.compliance_summary(voice_violations)
+
         await q.put({"step": "progress", "progress": 95, "message": "Finishing up…"})
         await q.put({
             "step": "done",
@@ -8187,6 +8803,7 @@ EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT inven
                 "original_html": existing_html[:30000],
                 "content_gaps": content_gaps,
                 "researched_facts": researched_facts,
+                "voice_compliance": voice_compliance,
             },
         })
 
