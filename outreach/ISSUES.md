@@ -250,3 +250,10 @@ two. An egress proxy refusing CONNECT is exactly the case failover exists for.
 *Fixed:* `outscraper_client.FAILOVER_ERRORS` now covers ConnectError, ConnectTimeout and
 ProxyError. ReadTimeout is deliberately excluded — a slow response is the host working, not
 failing. Regression-tested.
+
+**I-027 update (2026-07-31):** re-tested after the calibration request; the egress policy still
+rejects all three Outscraper hosts. `/root/.ccr/README.md` classifies a 403 from the gateway as
+an organisation policy denial and directs that it be reported rather than retried or routed
+around, so this is not a transient failure to work through. Added
+`api/scripts/calibrate_standalone.py` — stdlib only, no repo or dependencies needed — so the pull
+can be run from any host with egress and the output pasted back.
