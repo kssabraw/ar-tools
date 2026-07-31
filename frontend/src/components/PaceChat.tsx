@@ -108,12 +108,19 @@ export function PaceChat({ fullPage = false }: { fullPage?: boolean }) {
   // Recover a reply the server finished but the stream didn't deliver — the
   // turn is stored before 'done' and the producer outlives a disconnect, so a
   // dropped connection means the answer exists server-side.
-  async function recoverReply(conversationId: string): Promise<ChatResponse | null> {
+  async function recoverReply(conversationId: string, sentMessage: string): Promise<ChatResponse | null> {
     try {
       const convo = await api.get<{ client_id?: string | null; messages: ChatMsg[] }>(
         `/pace/conversations/${conversationId}`,
       )
-      const last = convo.messages?.[convo.messages.length - 1]
+      const msgs = convo.messages ?? []
+      // The stored reply is only OURS if the turn actually landed: the thread's
+      // last user message must be the one we just sent. Without this check, a
+      // request rejected before the turn opened "recovered" the PREVIOUS
+      // answer and replayed it as if it were new.
+      const lastUser = [...msgs].reverse().find(m => m.role === 'user')
+      if (!lastUser || lastUser.content !== sentMessage) return null
+      const last = msgs[msgs.length - 1]
       if (!last || last.role !== 'assistant' || !last.content.trim()) return null
       return {
         reply: last.content,
@@ -127,12 +134,18 @@ export function PaceChat({ fullPage = false }: { fullPage?: boolean }) {
 
   async function requestReply(payload: unknown): Promise<ChatResponse> {
     let streamed = ''
+    // True once any SSE event arrives — i.e. the server ACCEPTED the request.
+    // A rejected request (422/403/…) must surface as an error, not be papered
+    // over by "recovering" the previous stored answer.
+    let streamOpened = false
+    const sentMessage = String((payload as { message?: string })?.message ?? '')
     let convoId: string | null =
       (payload as { conversation_id?: string | null })?.conversation_id ?? null
     try {
       let final: ChatResponse | null = null
       let failure: string | null = null
       await api.streamEvents('/pace/chat/stream', payload, evt => {
+        streamOpened = true
         if (evt.type === 'text') {
           setStatus(null)
           const chunk = String(evt.text ?? '')
@@ -156,8 +169,8 @@ export function PaceChat({ fullPage = false }: { fullPage?: boolean }) {
       if (detail === 'Not Found' || detail === 'stream_ended_early') {
         return api.post<ChatResponse>('/pace/chat', payload)
       }
-      if (convoId) {
-        const recovered = await recoverReply(convoId)
+      if (streamOpened && convoId) {
+        const recovered = await recoverReply(convoId, sentMessage)
         if (recovered) return recovered
       }
       if (streamed.trim()) {
@@ -173,7 +186,10 @@ export function PaceChat({ fullPage = false }: { fullPage?: boolean }) {
   async function send(text: string) {
     const message = text.trim()
     if (!message || sending) return
-    const history = state.messages.slice(-12)
+    // History only seeds a brand-new thread; once a conversation exists the
+    // server reads history from the store, and sending our copy only risks
+    // rejection (a 9-10k-char director answer used to 422 the whole follow-up).
+    const history = state.conversationId ? [] : state.messages.slice(-12)
     setState(s => ({ ...s, messages: [...s.messages, { role: 'user', content: message }] }))
     setInput('')
     setSending(true)

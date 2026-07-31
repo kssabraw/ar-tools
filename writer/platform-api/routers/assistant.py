@@ -15,7 +15,7 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from config import settings
 from middleware.auth import require_auth
@@ -30,7 +30,18 @@ _SURFACE = "sermastr"
 
 class ChatTurn(BaseModel):
     role: Literal["user", "assistant"]
-    content: str = Field(max_length=8000)
+    # Clipped, never rejected. The assistant's own replies exceed any cap we
+    # pick (director-mode strategies run 9-10k chars after the max_tokens raise),
+    # and a max_length here turned every follow-up into a 422 — which the
+    # frontend's stream-recovery path then masked by re-showing the previous
+    # answer. History only seeds a brand-new thread (the store is the real
+    # history), so a clipped seed is harmless; a rejected request is not.
+    content: str
+
+    @field_validator("content")
+    @classmethod
+    def _clip(cls, v: str) -> str:
+        return v[:8000]
 
 
 class ChatRequest(BaseModel):
