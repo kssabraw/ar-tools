@@ -35,6 +35,12 @@ REQUEST_ARCHIVE_PATH = "/requests/{request_id}"
 # Outscraper reports a still-running request with this status. Anything else is terminal.
 PENDING_STATUS = "Pending"
 
+# Transport failures that justify trying the next host. ProxyError is here because it is NOT a
+# subclass of ConnectError — an egress proxy refusing CONNECT looks nothing like a refused
+# connection to httpx, so omitting it means the fallback hosts are never tried at all. Read
+# timeouts are deliberately excluded: a slow response is the host working, not failing.
+FAILOVER_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.ProxyError)
+
 
 class OutscraperError(RuntimeError):
     """Any failure talking to Outscraper, including body-level errors returned with a 2xx."""
@@ -114,7 +120,7 @@ class OutscraperClient:
                 response = await self._client.request(
                     method, f"{base_url}{path}", headers=self._headers, **kwargs
                 )
-            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            except FAILOVER_ERRORS as exc:
                 last_transport_error = exc
                 logger.warning("outscraper host unreachable, failing over", extra={"host": base_url})
                 continue

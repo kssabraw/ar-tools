@@ -229,3 +229,24 @@ real pull can propose the list rather than requiring it up front. Proposed, not 
 be an addition to the existing rule, still flag-only, never an exclusion.
 **Action:** run the repetition query after the first ingest and seed
 `OUTREACH_FRANCHISE_PATTERNS` from what it surfaces, then keep the list in config.
+
+### I-027 · The build sandbox cannot reach Outscraper or the Supabase REST endpoint
+**Severity: blocks running Phase 1 from this environment. Does not block the code.**
+The remote execution environment's network policy rejects CONNECT to all three Outscraper hosts
+(`api.app.outscraper.com`, `.cloud`, `api.outscraper.net`) and to
+`fkwhgvcggvsricuinuqy.supabase.co`. Confirmed via the agent proxy's own failure log
+(`connect_rejected`, "gateway answered 403 to CONNECT"). The Supabase MCP is unaffected because
+it uses a different authorised channel, which is why the migration and seed succeeded.
+**Consequence:** the calibration pull could not run, so I-018 (response field names) and I-022
+(real billing rate) remain open, and the ingest has never executed against the live API.
+**Two ways forward:** (a) widen the environment's network policy to allow those hosts; or
+(b) run `api.scripts.calibrate` and `run_market ingest` from the Railway service, where the
+egress is unrestricted and the env vars belong anyway.
+
+### I-028 · Host failover never triggered on a proxy rejection — FIXED
+Found while hitting I-027. `httpx.ProxyError` is not a subclass of `httpx.ConnectError`, so the
+client's failover loop did not catch it and gave up on the first host instead of trying the other
+two. An egress proxy refusing CONNECT is exactly the case failover exists for.
+*Fixed:* `outscraper_client.FAILOVER_ERRORS` now covers ConnectError, ConnectTimeout and
+ProxyError. ReadTimeout is deliberately excluded — a slow response is the host working, not
+failing. Regression-tested.

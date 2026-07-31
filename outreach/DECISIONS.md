@@ -219,3 +219,13 @@ Names are always editable.
 often coincide. Categories drive the Stage A1 Outscraper listing pull; keywords drive Phase 2
 SERP and geogrid scanning. Conflating them costs nothing today and would be painful to unpick
 once both are in use.
+
+**Los Angeles x Plumber is the first market-vertical.** One category, per the brief's definition
+of a market-vertical ("one business category in one city"). 14 submarkets at a 5-mile radius over
+the LA basin — the city plus inner metro (San Fernando Valley, San Gabriel Valley, South Bay,
+Long Beach). Every submarket has a neighbour within 10 miles, so with 5-mile radii the whole set
+overlaps, which is the only coverage insurance available given I-017. Deliberately NOT all of LA
+County (4,751 sq mi); the covered area is what a local SEO client would plausibly serve. If that
+proves too narrow, add submarkets rather than widening radii — radius is grid geometry and
+freezes at the first scan, whereas a new submarket starts its own clean history.
+*Still editable:* nothing has been scanned, so these centroids can move freely until Phase 2.

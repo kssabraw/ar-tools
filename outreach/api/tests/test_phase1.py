@@ -377,3 +377,23 @@ def test_extract_places_tolerates_a_flat_list():
 
 def test_extract_places_on_a_missing_payload():
     assert extract_places({"status": "Pending"}) == []
+
+
+# --- host failover -----------------------------------------------------------------------
+
+
+def test_proxy_error_triggers_failover():
+    """httpx.ProxyError is NOT a subclass of ConnectError. An egress proxy refusing CONNECT looks
+    nothing like a refused connection, so omitting it means the fallback hosts are never tried.
+    Found for real: this environment's network policy 403s the CONNECT and the client gave up on
+    the first host instead of trying the other two."""
+    import httpx as _httpx
+
+    from api.services.outscraper_client import FAILOVER_ERRORS
+
+    assert not issubclass(_httpx.ProxyError, _httpx.ConnectError)
+    assert issubclass(_httpx.ProxyError, FAILOVER_ERRORS)
+    assert issubclass(_httpx.ConnectError, FAILOVER_ERRORS)
+
+    # A slow host is working, not failing — do not burn the fallbacks on it.
+    assert not issubclass(_httpx.ReadTimeout, FAILOVER_ERRORS)
