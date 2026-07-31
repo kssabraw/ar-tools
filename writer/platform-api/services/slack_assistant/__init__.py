@@ -128,6 +128,7 @@ from services.slack_assistant.context import (
     _run_remember,
     build_context,
     build_portfolio_context,
+    capture_memories,
 )
 from services.slack_assistant.helpers import (
     _MENTION_RE,

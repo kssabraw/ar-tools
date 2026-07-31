@@ -615,6 +615,14 @@ class Settings(BaseSettings):
     # "be concise" rule is the real length governor. Still-truncated replies
     # get an explicit "say continue" marker appended (see interpret()).
     slack_assistant_max_tokens: int = 2000
+    # Post-turn memory capture. The `remember` TOOL can barely fire in practice:
+    # it competes with writing the answer inside the same bounded tool loop, and
+    # the round that produces the reply has tool_choice="none". So a cheap second
+    # pass reads the finished turn and decides what was worth keeping.
+    slack_assistant_memory_enabled: bool = True
+    slack_assistant_memory_model: str = "claude-haiku-4-5-20251001"
+    slack_assistant_memory_max_notes: int = 2   # per turn
+    slack_assistant_memory_min_reply_chars: int = 400  # skip trivial exchanges
     slack_assistant_max_keywords: int = 60   # cap keywords folded into the LLM context
     # Anthropic's server-side web_search tool on the assistant's Claude call —
     # lets SerMastr look up public info (reviews on TrustPilot/Google, competitor
