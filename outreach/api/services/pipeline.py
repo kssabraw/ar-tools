@@ -6,6 +6,7 @@ Ordering for inspection, if any is wanted, is by review count — see queries/ph
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -24,7 +25,7 @@ from .outscraper_client import (
 )
 from .parser import parse_place, unmapped_fields
 from .suppression import load_suppression_index
-from .tiling import DedupeStats, Submarket, build_tiles, dedupe_on_place_id, nearest_submarket
+from .tiling import DedupeStats, Submarket, build_tiles, nearest_submarket
 
 logger = logging.getLogger(__name__)
 
@@ -103,66 +104,125 @@ async def run_ingest(
     cost.enforce_limit(estimate)  # raises CostLimitExceeded; nothing paid has happened yet
 
     # -- fan out ---------------------------------------------------------------------------
-    tile_places: list[tuple[TileRequest, list[dict[str, Any]]]] = []
+    #
+    # Tiles run CONCURRENTLY and each one is PERSISTED THE MOMENT IT LANDS. Both properties were
+    # learned the expensive way: the first real LA run pulled 12 of 14 tiles sequentially over
+    # ~4 minutes, was terminated mid-poll, and wrote nothing — every paid call discarded because
+    # the insert only happened after the last tile.
+    #
+    # Paid work must be durable at the granularity it is paid for. An interruption should cost
+    # the tile in flight, not the twelve already bought. This is the brief's own principle
+    # ("re-parsing from stored raw is free, re-pulling is not") applied per tile rather than
+    # per run.
+    #
+    # Concurrency also shortens the exposure window: 14 sequential tiles at ~20s each is ~5
+    # minutes of wall time to be interrupted in; four at a time is closer to 90 seconds.
+    seen: dict[str, str] = {}  # place_id -> first tile label, for dedupe across tiles
+    seen_unmapped: set[str] = set()
+    semaphore = asyncio.Semaphore(max(1, settings.outscraper_tile_concurrency))
 
-    async with OutscraperClient(settings) as outscraper:
-        for tile in tiles:
+    async def fetch_tile(tile: TileRequest) -> tuple[TileRequest, list[dict[str, Any]] | None, str]:
+        async with semaphore:
             try:
                 request_id = await outscraper.submit_maps_search(tile)
-                report.tiles_submitted += 1
-
                 body = await outscraper.fetch_result(request_id)
                 _landing_write(raw_landing_dir, request_id, body)
-
-                tile_places.append((tile, extract_places(body)))
+                return tile, extract_places(body), ""
             except OutscraperError as exc:
-                # One dead tile is a hole in coverage, not a reason to lose the other forty.
+                # One dead tile is a hole in coverage, not a reason to lose the other thirteen.
+                return tile, None, str(exc)
+
+    async with OutscraperClient(settings) as outscraper:
+        pending = [asyncio.create_task(fetch_tile(tile)) for tile in tiles]
+
+        for finished in asyncio.as_completed(pending):
+            tile, places, error = await finished
+            label = tile.label or tile.query
+
+            if places is None:
                 report.tiles_failed += 1
-                report.tile_errors.append(f"{tile.label or tile.query}: {exc}")
-                logger.error(
-                    "tile failed", extra={"tile": tile.label or tile.query, "error": str(exc)}
+                report.tile_errors.append(f"{label}: {error}")
+                logger.error("tile failed", extra={"tile": label, "error": error})
+                continue
+
+            report.tiles_submitted += 1
+            report.stats.per_tile_counts[label] = len(places)
+
+            rows: list[dict[str, Any]] = []
+            for raw in places:
+                report.stats.total_returned += 1
+                place = parse_place(raw)
+
+                if place is None:
+                    # No place_id or no name. Never fabricate one — grid results join on
+                    # place_id, so an invented value silently matches nothing forever.
+                    report.stats.unparseable += 1
+                    continue
+
+                if place.place_id in seen:
+                    report.stats.duplicates_dropped += 1
+                    continue
+
+                seen[place.place_id] = label
+                seen_unmapped.update(unmapped_fields(place.raw))
+
+                # `raw` carries the untouched provider dict. The only thing read out of it
+                # before the row lands is place_id and name, which are NOT NULL on the table —
+                # every other column is derived from the stored copy and can be re-derived for
+                # free against a corrected alias map.
+                rows.append(
+                    {
+                        "market_id": market_id,
+                        "submarket_id": nearest_submarket(place.lat, place.lng, submarkets),
+                        "place_id": place.place_id,
+                        "name": place.name,
+                        "category": place.category,
+                        "address": place.address,
+                        "phone": place.phone,
+                        "phone_type": place.phone_type,  # always 'unknown' in Phase 1
+                        "website": place.website,
+                        "rating": place.rating,
+                        "review_count": place.review_count,
+                        "latest_review_at": None,  # review recency deferred — DECISIONS.md
+                        "lat": place.lat,
+                        "lng": place.lng,
+                        "business_status": place.business_status,
+                        "raw": place.raw,
+                    }
                 )
 
-    # -- dedupe on place_id across overlapping tiles ---------------------------------------
-    deduped, stats = dedupe_on_place_id(tile_places, parse=parse_place)
-    report.stats = stats
+            if rows:
+                client.table("prospect").upsert(rows, on_conflict="place_id").execute()
+                report.prospects_written += len(rows)
 
-    # -- persist ---------------------------------------------------------------------------
-    # `raw` carries the untouched provider dict. The only thing read out of it before the row
-    # lands is place_id and name, which are NOT NULL on the table — every other column is
-    # derived from the stored copy and can be re-derived for free against a corrected alias map.
-    rows: list[dict[str, Any]] = []
-    seen_unmapped: set[str] = set()
+            # Ledger per tile, for the same durability reason: an interrupted run must not
+            # under-report what it actually spent. The DoD query sums these.
+            tile_cost = cost.actual_cost_cents(
+                len(places), settings.outscraper_cost_per_1000_places_cents
+            )
+            report.cost_cents += tile_cost
+            client.table("cost_ledger").insert(
+                cost.build_ledger_row(
+                    market_id=market_id,
+                    cycle_number=cycle_number,
+                    stage=cost.STAGE_INGEST,
+                    provider=cost.PROVIDER_OUTSCRAPER,
+                    units=len(places),
+                    cost_cents=tile_cost,
+                )
+            ).execute()
 
-    for entry in deduped.values():
-        place = entry.place
-        seen_unmapped.update(unmapped_fields(place.raw))
+            logger.info(
+                "tile persisted",
+                extra={
+                    "tile": label,
+                    "returned": len(places),
+                    "written": len(rows),
+                    "running_total": report.prospects_written,
+                },
+            )
 
-        rows.append(
-            {
-                "market_id": market_id,
-                "submarket_id": nearest_submarket(place.lat, place.lng, submarkets),
-                "place_id": place.place_id,
-                "name": place.name,
-                "category": place.category,
-                "address": place.address,
-                "phone": place.phone,
-                "phone_type": place.phone_type,  # always 'unknown' in Phase 1
-                "website": place.website,
-                "rating": place.rating,
-                "review_count": place.review_count,
-                "latest_review_at": None,  # review recency deferred — see DECISIONS.md
-                "lat": place.lat,
-                "lng": place.lng,
-                "business_status": place.business_status,
-                "raw": place.raw,
-            }
-        )
-
-    if rows:
-        client.table("prospect").upsert(rows, on_conflict="place_id").execute()
-
-    report.prospects_written = len(rows)
+    report.stats.unique_places = len(seen)
     report.unmapped_raw_fields = sorted(seen_unmapped)
 
     if report.unmapped_raw_fields:
@@ -170,21 +230,6 @@ async def run_ingest(
             "provider returned fields no alias claims — check parser.FIELD_ALIASES",
             extra={"fields": report.unmapped_raw_fields},
         )
-
-    # -- ledger ----------------------------------------------------------------------------
-    report.cost_cents = cost.actual_cost_cents(
-        stats.total_returned, settings.outscraper_cost_per_1000_places_cents
-    )
-    client.table("cost_ledger").insert(
-        cost.build_ledger_row(
-            market_id=market_id,
-            cycle_number=cycle_number,
-            stage=cost.STAGE_INGEST,
-            provider=cost.PROVIDER_OUTSCRAPER,
-            units=stats.total_returned,
-            cost_cents=report.cost_cents,
-        )
-    ).execute()
 
     return report
 

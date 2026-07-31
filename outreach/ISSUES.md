@@ -400,3 +400,36 @@ it is greppable from the logs.
 alerts. A log line nobody greps is only marginally better than a green tick nobody questions.
 Options: Railway webhook on deploy, or the job posting its own result somewhere durable —
 `cost_ledger` already gets a row per stage, so a `run_log` table is the cheap version.
+
+### I-035 · The first real ingest lost 12 tiles of PAID work — FIXED
+Deployment `923ef997` ran the real LA ingest: seeded, passed the cost gate, and pulled 12 of 14
+tiles sequentially over ~4 minutes. At 09:09:54, mid-poll on the Torrance tile, the container
+stopped. No traceback, no `OUTREACH_RESULT` marker, memory at 54 MB (no OOM), no superseding
+deployment, no platform maintenance notice. The signature — abrupt silence with no Python-level
+error — is an external SIGTERM, whose default handling kills the process immediately and prints
+nothing.
+
+**The termination cost nothing by itself. The DESIGN cost twelve tiles.** Every place was
+buffered in memory and written in one bulk insert after the last tile, so an interruption at 12/14
+discarded 12 tiles of paid pulls and left `prospect` empty. The brief's own principle —
+"re-parsing from stored raw is free, re-pulling is not" — was applied per RUN when it needed to be
+applied per TILE.
+
+*Fixed, three ways:*
+1. **Per-tile persistence.** Each tile's places are upserted the moment they land, with a
+   `cost_ledger` row per tile so an interrupted run cannot under-report spend either. An
+   interruption now costs the tile in flight, not the ones already bought.
+2. **Bounded concurrency** (`outscraper_tile_concurrency`, default 4). Shrinks the window from
+   ~5 minutes of wall time to ~90 seconds. Modest by default — this is a courtesy limit on a paid
+   third-party API, not a throughput contest.
+3. **SIGTERM handler** printing `OUTREACH_RESULT status=failed reason=terminated signal=15`, so
+   an external kill is self-evident rather than silent.
+
+Regression-tested: incremental writes, one failing tile not discarding the rest, cross-tile dedup
+writing once, and the cost gate still firing before any client is opened.
+
+**Root cause of the termination itself is NOT established** — only its signature. Candidates:
+a Railway runtime limit for a container that binds no port, or platform-side reaping of a job
+whose deployment already reported SUCCESS. Worth pinning down before the semi-monthly schedule is
+set, because a recurring silent kill at ~4 minutes would cap how large a market can be ingested in
+one run. The mitigations above make it survivable either way.

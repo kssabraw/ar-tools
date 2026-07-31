@@ -18,6 +18,7 @@ import argparse
 import asyncio
 import json
 import logging
+import signal
 import sys
 from pathlib import Path
 
@@ -210,7 +211,26 @@ def cmd_run(args) -> int:
     return 0
 
 
+def _install_sigterm_marker() -> None:
+    """Print the result marker if the platform terminates us.
+
+    Python's default SIGTERM handling kills the process immediately with no traceback and no
+    output, which is exactly what the first real LA run looked like: 12 paid tiles, then silence,
+    and a deployment still reporting SUCCESS. A handler makes an external kill self-evident.
+    """
+
+    def _handler(signum, _frame):  # noqa: ANN001
+        print(
+            f"OUTREACH_RESULT status=failed reason=terminated signal={signum}",
+            flush=True,
+        )
+        raise SystemExit(143)
+
+    signal.signal(signal.SIGTERM, _handler)
+
+
 def main() -> int:
+    _install_sigterm_marker()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 
     parser = argparse.ArgumentParser(description="Outreach pipeline — Phase 1")

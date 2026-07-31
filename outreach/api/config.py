@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     # we ask for. Tiling by submarket centroid is what gets past that, not a larger limit.
     outscraper_places_per_query_limit: int = 400
 
+    # Tiles run concurrently. Sequential 14-tile runs took ~5 minutes of wall time and the
+    # first real run was terminated at ~4; shortening the window is half the mitigation, the
+    # other half being per-tile persistence. Modest by default — this is a courtesy limit on
+    # a paid third-party API, not a throughput contest.
+    outscraper_tile_concurrency: int = 4
+
     outscraper_language: str = "en"
     outscraper_region: str = "US"
 

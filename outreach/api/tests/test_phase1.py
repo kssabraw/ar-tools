@@ -668,3 +668,211 @@ def test_missing_credentials_names_only_the_absent_one():
     assert missing_supabase_vars(
         Settings(supabase_url="https://x.supabase.co", supabase_service_role_key="k")
     ) == []
+
+
+# --- durability of paid work -------------------------------------------------------------
+#
+# The first real LA run pulled 12 of 14 tiles over ~4 minutes, was terminated mid-poll, and wrote
+# NOTHING — a single bulk insert after the last tile meant every paid call was discarded. These
+# lock in the fix: an interruption must cost the tile in flight, not the ones already bought.
+
+
+class _FakeTable:
+    def __init__(self, store, name):
+        self._store, self._name = store, name
+        self._rows = None
+
+    def upsert(self, rows, on_conflict=None):
+        self._rows = rows
+        return self
+
+    def insert(self, row):
+        self._rows = [row]
+        return self
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def execute(self):
+        self._store.setdefault(self._name, []).extend(self._rows or [])
+        return type("R", (), {"data": []})()
+
+
+class _FakeClient:
+    def __init__(self):
+        self.store = {}
+        self.writes = 0
+
+    def table(self, name):
+        self.writes += 1
+        return _FakeTable(self.store, name)
+
+
+def _place_payload(place_id):
+    return {
+        "place_id": place_id,
+        "name": f"Plumber {place_id}",
+        "phone": "+1 213-555-0100",
+        "business_status": "OPERATIONAL",
+        "latitude": 34.04,
+        "longitude": -118.24,
+    }
+
+
+def _run_ingest_with(monkeypatched_fetch, tiles_wanted, concurrency=4):
+    import asyncio
+
+    from api.config import Settings
+    from api.services import pipeline
+    from api.services.tiling import Submarket
+
+    settings = Settings(
+        outscraper_api_key="k",
+        outscraper_tile_concurrency=concurrency,
+        outscraper_cost_per_1000_places_cents=200,
+    )
+    subs = [
+        Submarket(id=f"s{i}", name=f"Area {i}", center_lat=34.0 + i / 100, center_lng=-118.2)
+        for i in range(tiles_wanted)
+    ]
+    client = _FakeClient()
+
+    class _StubOutscraper:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return None
+
+        async def submit_maps_search(self, tile, limit=None):
+            return f"req-{tile.label}"
+
+        async def fetch_result(self, request_id):
+            return monkeypatched_fetch(request_id)
+
+    original = pipeline.OutscraperClient
+    pipeline.OutscraperClient = _StubOutscraper
+    try:
+        report = asyncio.run(
+            pipeline.run_ingest(
+                client=client,
+                settings=settings,
+                market_id="m1",
+                market_name="Test",
+                categories=["plumber"],
+                submarkets=subs,
+                region="CA, USA",
+            )
+        )
+    finally:
+        pipeline.OutscraperClient = original
+
+    return report, client
+
+
+def test_each_tile_is_persisted_as_it_lands_not_after_the_last_one():
+    """The property that matters: prospects reach the database incrementally, so a run killed
+    part-way keeps what it already paid for."""
+    counter = {"n": 0}
+
+    def fetch(request_id):
+        counter["n"] += 1
+        n = counter["n"]
+        return {"status": "Success", "data": [[_place_payload(f"p{n}-{i}") for i in range(3)]]}
+
+    report, client = _run_ingest_with(fetch, tiles_wanted=5)
+
+    assert report.tiles_submitted == 5
+    assert report.prospects_written == 15
+    assert len(client.store["prospect"]) == 15
+    # One ledger row per tile, so an interrupted run cannot under-report what it spent.
+    assert len(client.store["cost_ledger"]) == 5
+
+
+def test_a_failing_tile_does_not_discard_the_others():
+    counter = {"n": 0}
+
+    def fetch(request_id):
+        counter["n"] += 1
+        if counter["n"] == 2:
+            from api.services.outscraper_client import OutscraperError
+
+            raise OutscraperError("quota exceeded")
+        n = counter["n"]
+        return {"status": "Success", "data": [[_place_payload(f"q{n}")]]}
+
+    report, client = _run_ingest_with(fetch, tiles_wanted=4)
+
+    assert report.tiles_failed == 1
+    assert report.tiles_submitted == 3
+    assert report.prospects_written == 3
+    assert len(report.tile_errors) == 1
+    assert "quota exceeded" in report.tile_errors[0]
+
+
+def test_duplicates_across_tiles_are_written_once():
+    def fetch(request_id):
+        # Every tile returns the same place — maximal overlap.
+        return {"status": "Success", "data": [[_place_payload("shared")]]}
+
+    report, client = _run_ingest_with(fetch, tiles_wanted=4)
+
+    assert report.prospects_written == 1
+    assert report.stats.duplicates_dropped == 3
+    assert report.stats.unique_places == 1
+    assert len(client.store["prospect"]) == 1
+
+
+def test_the_cost_gate_still_fires_before_any_tile_runs():
+    """The gate must precede the concurrency, or a fan-out spends before it is checked."""
+    import asyncio
+
+    from api.config import Settings
+    from api.services import cost as cost_mod
+    from api.services import pipeline
+    from api.services.tiling import Submarket
+
+    called = {"fetched": False}
+
+    class _NeverCalled:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            called["fetched"] = True
+            return self
+
+        async def __aexit__(self, *a):
+            return None
+
+    original = pipeline.OutscraperClient
+    pipeline.OutscraperClient = _NeverCalled
+    try:
+        with pytest.raises(cost_mod.CostLimitExceeded):
+            asyncio.run(
+                pipeline.run_ingest(
+                    client=_FakeClient(),
+                    settings=Settings(
+                        outscraper_api_key="k",
+                        max_market_run_cost_cents=1,
+                        outscraper_cost_per_1000_places_cents=200,
+                    ),
+                    market_id="m1",
+                    market_name="Test",
+                    categories=["plumber"],
+                    submarkets=[
+                        Submarket(id="s", name="A", center_lat=34.0, center_lng=-118.2)
+                    ],
+                    region="CA, USA",
+                )
+            )
+    finally:
+        pipeline.OutscraperClient = original
+
+    assert not called["fetched"], "no Outscraper client may be opened once the gate has failed"
