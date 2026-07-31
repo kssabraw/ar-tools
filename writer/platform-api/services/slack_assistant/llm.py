@@ -30,6 +30,7 @@ from services.slack_assistant.helpers import (
     is_affirmative,
     looks_like_ranking_strategy_ask,
     looks_underspecified,
+    question_domains,
     resolve_client,
     sop_domains,
     strip_mention,
@@ -756,6 +757,9 @@ async def interpret(
         sops = sop_library.select_sops_text(
             sop_domains(question, context),
             budget_chars=settings.slack_assistant_sop_budget_chars,
+            # What the teammate actually asked about is funded before what the
+            # client's context merely implies.
+            lead_domains=question_domains(question),
         )
         if sops:
             blocks.append(

@@ -312,3 +312,40 @@ def test_docs_that_dont_fit_are_named_not_silently_dropped():
 def test_a_generous_budget_leaves_nothing_deferred_on_a_growth_turn():
     text = sop_library.select_sops_text(_GROWTH, budget_chars=60_000)
     assert "SOP DOCS NOT INLINED" not in text
+
+
+# ---------------------------------------------------------------------------
+# The question's own topic is funded first (2026-07-31).
+#
+# Measuring the deferral behaviour surfaced a worse bug than the one being
+# measured: on a client with open alerts, context-derived diagnostic domains
+# outranked the domain the teammate actually asked about — a "how should we
+# structure internal links" turn deferred the Site Architecture SOP itself.
+# ---------------------------------------------------------------------------
+
+_ALERTING = {"organic_drop", "maps", "content", "offpage", "ai_visibility", "maps_growth"}
+
+
+def test_the_questions_own_domain_leads_even_when_the_client_is_alerting():
+    links = sop_library.relevant_docs(_ALERTING, lead_domains={"offpage"})
+    assert links[1] == "Link_Building_SOP.md"
+    content = sop_library.relevant_docs(_ALERTING, lead_domains={"content"})
+    assert content[1] == "On_Page_Criteria_and_Coverage.md"
+    ai = sop_library.relevant_docs(_ALERTING, lead_domains={"ai_visibility"})
+    assert ai[1] == "AIO_AEO_SOP.md"
+
+
+def test_without_lead_domains_the_old_priority_order_still_applies():
+    docs = sop_library.relevant_docs(_ALERTING)
+    assert docs.index("Rank_Drop_Mitigation_SOP_Organic.md") < docs.index("AIO_AEO_SOP.md")
+
+
+def test_nothing_defers_on_the_heaviest_realistic_turn():
+    from config import settings
+
+    text = sop_library.select_sops_text(
+        _ALERTING,
+        budget_chars=settings.slack_assistant_sop_budget_chars,
+        lead_domains={"offpage", "content"},
+    )
+    assert "SOP DOCS NOT INLINED" not in text, "a doc deferred on a normal turn"

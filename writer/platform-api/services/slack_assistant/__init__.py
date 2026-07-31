@@ -144,6 +144,7 @@ from services.slack_assistant.helpers import (
     is_local_client,
     looks_like_ranking_strategy_ask,
     looks_underspecified,
+    question_domains,
     maps_series_point,
     resolve_client,
     sop_domains,

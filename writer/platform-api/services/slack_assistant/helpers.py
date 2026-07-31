@@ -289,9 +289,15 @@ _SOP_DOMAIN_HINTS: list[tuple[str, str]] = [
     (r"content|blog|page|on.?page|silo|internal link|schema", "content"),
     (r"drop|decline|fell|lost rank|penalt|deindex|cannibal", "organic_drop"),
     (r"leadoff|market intel|market opportunit|market selection|effort target|which (?:city|market)", "leadoff"),
-    # Ranking vocabulary itself — "how can we rank / get found / show up /
-    # outrank X". Absent this, "how can <client> rank in <city>" resolved to no
-    # domain at all and the block degraded to the router doc alone.
+]
+
+# Ranking vocabulary itself — "how can we rank / get found / show up / outrank
+# X". Absent this, "how can <client> rank in <city>" resolved to no domain at
+# all and the block degraded to the router doc alone. Kept SEPARATE from the
+# specific hints above because it's a floor, not a topic: "how do we show up in
+# ChatGPT" matches it, and letting that outrank the explicit ChatGPT match put
+# the Maps playbook ahead of the AI one.
+_SOP_GENERIC_HINTS: list[tuple[str, str]] = [
     (r"\brank(?:ing)?s?\b|\boutrank\b|\bget found\b|\bshow up\b|\bcompete\b|\bvisib(?:le|ility)\b", "content"),
     (r"\brank(?:ing)?s?\b|\bget found\b|\bshow up\b|\boutrank\b", "maps_growth"),
 ]
@@ -503,11 +509,33 @@ def looks_like_ranking_strategy_ask(message: str) -> bool:
     return bool(_ADVICE_RE.search(text) or _RANK_DESIRE_RE.search(text))
 
 
+def question_domains(question: str) -> set[str]:
+    """The SOP domains the QUESTION itself names, ignoring client context. Pure.
+
+    Kept separate from `sop_domains` because the two must not compete on equal
+    footing when the budget is tight. Context-derived domains (this client has
+    open drop alerts) are supporting material; the domain the teammate actually
+    asked about has to be funded first, or a question about internal linking
+    gets the drop playbooks and defers the architecture SOP that answers it.
+    """
+    q = question or ""
+    specific = {d for pat, d in _SOP_DOMAIN_HINTS if re.search(pat, q, re.IGNORECASE)}
+    # A specific match wins outright: the generic ranking floor exists so a bare
+    # "how do we rank in X" isn't domainless, not to compete with a named topic.
+    return specific or {
+        d for pat, d in _SOP_GENERIC_HINTS if re.search(pat, q, re.IGNORECASE)
+    }
+
+
 def sop_domains(question: str, context: dict) -> set[str]:
     """The sop_library relevance domains for a question: keyword hints from the
     question itself plus what's live/alerting in the client context. Pure."""
-    q = question or ""
-    domains = {d for pat, d in _SOP_DOMAIN_HINTS if re.search(pat, q, re.IGNORECASE)}
+    # The full set (specific + the generic ranking floor) decides which docs are
+    # AVAILABLE; question_domains decides which are funded first.
+    domains = {
+        d for pat, d in _SOP_DOMAIN_HINTS + _SOP_GENERIC_HINTS
+        if re.search(pat, question or "", re.IGNORECASE)
+    }
     ctx = context or {}
     if (ctx.get("organic_rank") or {}).get("open_drop_alerts"):
         domains.add("organic_drop")

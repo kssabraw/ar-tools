@@ -159,8 +159,18 @@ def _truncate(text: str, limit: int) -> str:
     return cut.rstrip() + "\n…[truncated — use the read_sop tool for the full section]"
 
 
-def relevant_docs(active_domains: set[str]) -> list[str]:
-    """Ordered doc list for a set of active signal domains. Pure."""
+def relevant_docs(
+    active_domains: set[str], lead_domains: "set[str] | None" = None
+) -> list[str]:
+    """Ordered doc list for a set of active signal domains. Pure.
+
+    `lead_domains` are the domains the QUESTION named (as opposed to those
+    inferred from the client's context). Their docs are funded first: a client
+    with an open drop alert would otherwise have the drop playbooks crowd out
+    the doc that answers whatever was actually asked — measured, a "how should
+    we structure internal links" turn on an alerting client deferred the Site
+    Architecture SOP itself.
+    """
     ordered: list[str] = list(_ALWAYS)
     # Order is question-shaped, because the budget only funds two or three docs
     # and whatever comes last gets crumbs. On the Jupiter growth question,
@@ -185,7 +195,11 @@ def relevant_docs(active_domains: set[str]) -> list[str]:
         ("maps_growth", "ai_visibility", "offpage", "content",
          "organic_drop", "maps", "budget", "leadoff", "qa")
     )
-    for domain in priority:
+    lead = lead_domains or set()
+    ordered_priority = (
+        [d for d in priority if d in lead] + [d for d in priority if d not in lead]
+    )
+    for domain in ordered_priority:
         if domain in active_domains:
             for doc in _RELEVANCE[domain]:
                 if doc not in ordered:
@@ -211,7 +225,11 @@ def qa_sops_text(budget_chars: int = 8_000) -> str:
     return "\n\n".join(parts)
 
 
-def select_sops_text(active_domains: set[str], budget_chars: int = 40_000) -> str:
+def select_sops_text(
+    active_domains: set[str],
+    budget_chars: int = 40_000,
+    lead_domains: "set[str] | None" = None,
+) -> str:
     """The budgeted SOP block for a strategist run: the docs relevant to the
     client's active signals, in priority order, each capped, the whole block
     bounded by ``budget_chars``. Returns '' when no docs are loadable."""
@@ -221,7 +239,7 @@ def select_sops_text(active_domains: set[str], budget_chars: int = 40_000) -> st
     parts: list[str] = []
     deferred: list[str] = []
     remaining = budget_chars
-    for name in relevant_docs(active_domains):
+    for name in relevant_docs(active_domains, lead_domains):
         text = docs.get(name)
         if not text:
             continue

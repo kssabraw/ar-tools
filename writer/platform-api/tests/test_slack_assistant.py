@@ -2044,3 +2044,31 @@ def test_memory_context_tells_the_model_live_data_beats_a_stale_note():
 
 def test_memory_context_is_absent_when_there_is_nothing_remembered():
     assert _memories_ctx([]) is None
+
+
+def test_a_named_topic_beats_the_generic_ranking_floor():
+    # "show up" matches the generic ranking floor AND the question names
+    # ChatGPT. The specific match must lead, or the Maps playbook is funded
+    # ahead of the AI one on an explicitly-AI question.
+    assert slack_assistant.question_domains(
+        "how do we show up in chatgpt and ai overviews"
+    ) == {"ai_visibility"}
+
+
+def test_the_generic_floor_still_catches_a_bare_ranking_question():
+    # Nothing specific named — the floor is what stops the block collapsing to
+    # the router doc alone.
+    assert slack_assistant.question_domains("how do we rank in jupiter fl") == {
+        "content", "maps_growth",
+    }
+
+
+def test_context_domains_are_available_even_when_they_do_not_lead():
+    # A links question on an alerting client: drop docs stay AVAILABLE, they
+    # just don't outrank the doc that answers the question.
+    full = slack_assistant.sop_domains(
+        "how should we approach link building",
+        {"organic_rank": {"open_drop_alerts": [1]}},
+    )
+    assert {"offpage", "organic_drop"} <= full
+    assert slack_assistant.question_domains("how should we approach link building") == {"offpage"}
