@@ -119,6 +119,7 @@ app.add_middleware(LimitRequestSizeMiddleware)
 
 import ecommerce_mcs as mcs  # Max-Cosine Synthesis (AIO capture + entity + heading synthesis)
 import ecommerce_facts as ecom_facts  # invariant public-spec auto-research (cited)
+import ecommerce_loop as ecom_loop  # auto-retry loop stop decisions (pure)
 import voice_card as vcard  # brand voice + ICP: distilled card, prompt block, hard checks
 
 STOP_WORDS = set(stopwords.words('english'))
@@ -236,6 +237,20 @@ _ECOM_RESEARCH_MAX_TURNS = ECOMMERCE_FACT_RESEARCH_MAX_SEARCHES + 3  # search ro
 # per-request score_threshold. Rewrites + scoring run at temperature=0 so the
 # same page reoptimizes to the same result run-to-run.
 MAX_ECOMMERCE_AUTO_PASSES = int(os.environ.get("MAX_ECOMMERCE_AUTO_PASSES", "3"))
+
+# Plateau guard: the minimum composite gain a pass must produce to justify
+# running another one. A run that has flat-lined and one that is still climbing
+# are otherwise treated identically — both burn every pass at ~3m40s and ~$0.22
+# each, and roughly a third of observed runs plateau below threshold and pay for
+# the last pass anyway.
+#
+# DEFAULT 0 = DISABLED. Per-pass scores were unobservable until the
+# "reoptimize-ecommerce pass N scored" log line below, so there is no data to
+# calibrate a threshold against yet. Let that logging run over a batch of real
+# reoptimizes, read the marginal gains, then set this on the `nlp` service.
+# Starting guess once data exists: 3.0 points. The decision itself is the pure
+# `ecom_loop.should_stop_early`.
+ECOMMERCE_MIN_PASS_GAIN = float(os.environ.get("ECOMMERCE_MIN_PASS_GAIN", "0"))
 
 # ── Brand voice & ICP enforcement ──────────────────────────────────────────
 # The client's guide is distilled ONCE per revision into a compact card
@@ -8914,14 +8929,40 @@ EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT inven
             except Exception as _ae:
                 logger.warning(f"reoptimize-ecommerce pass {pass_num} scoring failed: {_ae}")
 
+            # Captured BEFORE keep-best folds this pass in, or the plateau
+            # comparison below would be against the value we just wrote.
+            prev_best_score = best["score"] if best else None
+
             # Keep-best: an unscored pass only wins if nothing has scored yet.
             if best is None or (pass_score is not None and (best["score"] is None or pass_score > best["score"])):
                 best = {"score": pass_score, "html": pass_html, "schema": pass_schema,
                         "title": pass_title, "gaps": pass_gaps, "scores": pass_scores,
                         "voice": pass_voice}
 
+            # The only place per-pass scores are observable: they are never
+            # persisted (only the winning pass reaches `ecommerce_page_scores`)
+            # and platform-api's SSE reader discards progress events. This line
+            # is what the plateau threshold gets calibrated against.
+            _gain = (None if (pass_score is None or prev_best_score is None)
+                     else round(pass_score - prev_best_score, 1))
+            logger.info(
+                f"reoptimize-ecommerce pass {pass_num}/{MAX_ECOMMERCE_AUTO_PASSES} scored "
+                f"{pass_score} (prev best {prev_best_score}, gain {_gain}, "
+                f"threshold {body.score_threshold}) for '{body.keyword}'"
+            )
+
             if pass_score is None or pass_score >= body.score_threshold:
                 break  # can't score further, or target reached
+            # Plateau guard: a pass that gains almost nothing means the model has
+            # run out of headroom against this SERP — another ~3m40s/$0.22 will
+            # not find it. Disabled by default (ECOMMERCE_MIN_PASS_GAIN=0).
+            if ecom_loop.should_stop_early(prev_best_score, pass_score, ECOMMERCE_MIN_PASS_GAIN):
+                logger.info(
+                    f"reoptimize-ecommerce: plateau at pass {pass_num} "
+                    f"({prev_best_score} -> {pass_score}, gain {_gain} < "
+                    f"{ECOMMERCE_MIN_PASS_GAIN}); stopping early"
+                )
+                break
             current_text = BeautifulSoup(pass_html, "html.parser").get_text(separator="\n", strip=True)
             current_def_text = _ecommerce_deficiency_text(pass_defs)
 
