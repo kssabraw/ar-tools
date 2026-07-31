@@ -1,6 +1,7 @@
+import { useState } from "react";
 import { Link, NavLink, Outlet, useOutletContext, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { getMe, getSession, getSummary, planArticles, type Silo } from "../shared/api";
+import { getMe, getSession, getSummary, planArticles, regate, type Silo } from "../shared/api";
 import { AppShell } from "../shared/AppShell";
 import { CancelRunButton } from "../shared/CancelRunButton";
 import { CostBanner } from "../shared/CostBanner";
@@ -72,6 +73,25 @@ export function SessionWorkspace() {
     mutationFn: () => planArticles(sessionId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["summary", sessionId] }),
   });
+
+  // Re-gate: re-run the relevance gate + clustering on the stored keyword pool at
+  // a stricter cutoff, to drop off-topic keywords the default threshold let in.
+  // The backend has always supported it (a calibration tool that skips DataForSEO,
+  // so it costs no expansion spend) but nothing in the UI reached it. Owner-only,
+  // matching the endpoint. It clears any existing article plan, so it has to be
+  // followed by a fresh "Plan articles" — hence the confirm.
+  const [threshold, setThreshold] = useState("");
+  const regateMut = useMutation({
+    mutationFn: () => {
+      const t = parseFloat(threshold);
+      return regate(sessionId, Number.isFinite(t) ? { relevance_threshold: t } : {});
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["summary", sessionId] }),
+  });
+  const thresholdValid = threshold.trim() === "" || (() => {
+    const t = parseFloat(threshold);
+    return Number.isFinite(t) && t > 0 && t < 1;
+  })();
 
   const status = summary.data?.status ?? session.data?.status;
   const topics = session.data?.silos ?? [];
@@ -179,6 +199,57 @@ export function SessionWorkspace() {
         )}
         {planMut.isError && (
           <p className="form-error">Couldn’t start planning. Try again.</p>
+        )}
+
+        {role === "owner" && status && hasResults(status) && (
+          <div className="plan-bar">
+            <div>
+              <p style={{ margin: 0, fontWeight: 600 }}>Tighten the keyword pool</p>
+              <p className="muted" style={{ margin: "2px 0 0" }}>
+                Re-run the relevance gate at a stricter cutoff to drop off-topic keywords,
+                then re-cluster. Uses the keywords already collected — no new expansion
+                spend. Leave blank for the default. <strong>Clears the current article
+                plan</strong>, so run “Plan articles” again afterwards.
+              </p>
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input
+                type="number"
+                min="0.05"
+                max="0.99"
+                step="0.01"
+                placeholder="0.65"
+                value={threshold}
+                onChange={(e) => setThreshold(e.target.value)}
+                aria-label="Relevance threshold"
+                style={{ width: 90 }}
+              />
+              <button
+                className="btn btn-ghost"
+                style={{ width: "auto" }}
+                disabled={regateMut.isPending || !thresholdValid}
+                onClick={() => {
+                  const at = threshold.trim() === "" ? "the default threshold" : threshold.trim();
+                  if (
+                    window.confirm(
+                      `Re-gate this session at ${at}?\n\nThis discards the current article plan ` +
+                        `and re-clusters the keyword pool. You'll need to run "Plan articles" again.`,
+                    )
+                  ) {
+                    regateMut.mutate();
+                  }
+                }}
+              >
+                {regateMut.isPending ? "Starting…" : "Re-gate"}
+              </button>
+            </div>
+          </div>
+        )}
+        {!thresholdValid && (
+          <p className="form-error">Threshold must be between 0 and 1 (e.g. 0.75).</p>
+        )}
+        {regateMut.isError && (
+          <p className="form-error">Couldn’t start the re-gate. Try again.</p>
         )}
 
         {status && hasResults(status) && session.data && (
