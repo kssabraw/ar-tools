@@ -8535,30 +8535,44 @@ async def generate_ecommerce_page(request: Request, body: GenerateEcommerceReque
 
         serp_ctx = _serp_context(serp_analysis_dict)
 
-        # Max-Cosine Synthesis: aim the entity + headings at the live AI Overview
-        # answer (best-effort; '' when no AIO / on failure).
-        await q.put({"step": "progress", "progress": 52, "message": "Aligning headings to the AI answer…"})
-        mcs_block = await _ecommerce_mcs_block(client, serp_analysis_dict, page_type, body.keyword)
+        # Four mutually independent pre-write steps, run CONCURRENTLY so the
+        # critical path is the slowest rather than their sum (the same change as
+        # the reoptimize worker — fact research alone measured 1m24s serial):
+        #   - Max-Cosine Synthesis — aims the entity + headings at the live AI
+        #     Overview answer. Needs only the SERP analysis.
+        #   - Public-spec auto-research — fills the invariant PUBLIC specs
+        #     (CAS/MW/sequence/solubility/…) with citations so the writer states
+        #     them instead of gating them; vendor facts stay gated. Needs only
+        #     the keyword + page_type.
+        #   - Voice card — the client's brand guide, distilled + enforceable:
+        #     steers generation from a late, high-priority position and drives
+        #     the deterministic check after the write.
+        #   - Source-URL scrape — reference product facts. Needs only source_url.
+        # Each is individually best-effort and swallows its own failures, so a
+        # bare gather (no return_exceptions) keeps exactly today's semantics.
+        await q.put({"step": "progress", "progress": 52,
+                     "message": "Aligning headings, researching specs, gathering product facts…"})
 
-        # Auto-research the invariant PUBLIC specs (CAS/MW/sequence/solubility/…)
-        # with citations, so the writer states them instead of gating them.
-        # Vendor facts stay gated. Best-effort; '' when disabled / nothing found.
-        await q.put({"step": "progress", "progress": 54, "message": "Researching public product specs…"})
-        researched_block, research_tok, researched_facts = await _research_public_facts(
-            client, body.keyword, page_type
+        async def _source_facts() -> str:
+            return await _scrape_source_facts(body.source_url) if body.source_url else ""
+
+        mcs_block, research_result, voice_card, scraped_source = await asyncio.gather(
+            _ecommerce_mcs_block(client, serp_analysis_dict, page_type, body.keyword),
+            _research_public_facts(client, body.keyword, page_type),
+            _resolve_voice_card(client, body),
+            _source_facts(),
         )
+        researched_block, research_tok, researched_facts = research_result
 
-        # Product facts: pasted input + optional scrape of a source URL.
-        await q.put({"step": "progress", "progress": 55, "message": "Gathering product facts…"})
+        # Product facts: researched specs + pasted input + the scraped source.
+        await q.put({"step": "progress", "progress": 55, "message": "Assembling product facts…"})
         facts_sections: list[str] = []
         if researched_block:
             facts_sections.append(researched_block)
         if (body.product_input or "").strip():
             facts_sections.append("PROVIDED PRODUCT DETAILS (authoritative — use these facts; do not contradict them):\n" + body.product_input.strip())
-        if body.source_url:
-            _scraped = await _scrape_source_facts(body.source_url)
-            if _scraped:
-                facts_sections.append(f"SOURCE PAGE CONTENT ({body.source_url}) — extract accurate facts, do NOT copy wording:\n{_scraped}")
+        if scraped_source:
+            facts_sections.append(f"SOURCE PAGE CONTENT ({body.source_url}) — extract accurate facts, do NOT copy wording:\n{scraped_source}")
         facts_text = "\n\n".join(facts_sections) if facts_sections else (
             "NO explicit product facts were provided. Write from the keyword + brand context only, "
             "keep claims generic-but-truthful, and record specific missing facts (price, specs, "
@@ -8567,9 +8581,6 @@ async def generate_ecommerce_page(request: Request, body: GenerateEcommerceReque
 
         brand_voice_text = _build_brand_voice_text(body.brand_voice)
         icp_text = _build_icp_text(body.detected_icp)
-        # Distilled + enforceable: steers generation from a late, high-priority
-        # position and drives the deterministic check after the write.
-        voice_card = await _resolve_voice_card(client, body)
         voice_block = vcard.render_voice_card_block(voice_card)
         if voice_block:
             voice_block = "\n" + voice_block + "\n"
@@ -8822,25 +8833,33 @@ async def reoptimize_ecommerce_page(request: Request, body: ReoptimizeEcommerceR
         existing_page_text = BeautifulSoup(existing_html, "html.parser").get_text(separator="\n", strip=True)
         serp_ctx = _serp_context(body.serp_analysis)
 
-        # Max-Cosine Synthesis: aim the entity + headings at the live AI Overview
-        # answer (Gemini-embedding cosine synthesis), same as generate — the
-        # reoptimize SERP analysis already carried the AIO. Best-effort; '' when
-        # no AIO / on failure, so the rewrite still runs.
-        await q.put({"step": "progress", "progress": 22, "message": "Aligning headings to the AI answer…"})
-        mcs_block = await _ecommerce_mcs_block(client, body.serp_analysis, page_type, body.keyword)
-
-        # Auto-research invariant PUBLIC specs (CAS/MW/sequence/…) with citations
-        # so the rewrite fills them instead of gating them. Vendor facts stay
-        # gated. Best-effort; '' when disabled / nothing found.
-        await q.put({"step": "progress", "progress": 25, "message": "Researching public product specs…"})
-        researched_block, research_tok, researched_facts = await _research_public_facts(
-            client, body.keyword, page_type
+        # Three mutually independent pre-rewrite steps, run CONCURRENTLY so the
+        # critical path is the slowest of them rather than their sum (fact
+        # research alone measured 1m24s serial on a reference run):
+        #   - Max-Cosine Synthesis — aims the entity + headings at the live AI
+        #     Overview answer (Gemini-embedding cosine synthesis), same as
+        #     generate; the reoptimize SERP analysis already carried the AIO.
+        #     Needs only `serp_analysis`.
+        #   - Public-spec auto-research — fills invariant PUBLIC specs
+        #     (CAS/MW/sequence/…) with citations so the rewrite states them
+        #     instead of gating them; vendor facts stay gated. Needs only the
+        #     keyword + page_type.
+        #   - Voice card — the client's distilled brand guide. Needs only
+        #     brand_voice/detected_icp.
+        # Each is individually best-effort and swallows its own failures, so a
+        # bare gather (no return_exceptions) keeps exactly today's semantics.
+        await q.put({"step": "progress", "progress": 22,
+                     "message": "Aligning headings, researching specs, reading your brand guide…"})
+        mcs_block, research_result, voice_card = await asyncio.gather(
+            _ecommerce_mcs_block(client, body.serp_analysis, page_type, body.keyword),
+            _research_public_facts(client, body.keyword, page_type),
+            _resolve_voice_card(client, body),
         )
+        researched_block, research_tok, researched_facts = research_result
         researched_section = (researched_block + "\n\n") if researched_block else ""
 
         brand_voice_text = _build_brand_voice_text(body.brand_voice)
         icp_text = _build_icp_text(body.detected_icp)
-        voice_card = await _resolve_voice_card(client, body)
         voice_block = vcard.render_voice_card_block(voice_card)
         if voice_block:
             voice_block = "\n" + voice_block + "\n"
