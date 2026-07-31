@@ -28,6 +28,7 @@ from fastapi import HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import ecommerce_facts_cache
 from services.gbp_service import normalize_website_url
 from services.google_docs import resolve_drive_folder
 from services.wordpress_publish import WordPressPublishError, publish_to_wordpress
@@ -342,9 +343,19 @@ async def generate_page(
     from services import voice_card_service
 
     payload["voice_card"] = await voice_card_service.get_voice_card(client, user_id=user_id)
+    # Invariant public specs (CAS/MW/sequence/…) already researched for this
+    # compound. A hit skips nlp's web_search pass entirely — those values never
+    # change, and the pass costs ~$0.37 and ~1m24s each time it runs.
+    payload["researched_facts"] = ecommerce_facts_cache.get_cached_facts(keyword.strip(), page_type)
     result = await _stream_nlp("/generate-ecommerce-page", payload)
     result = await _apply_structure_gate(result, payload, reference_analysis)
-    return _persist_page(client_id, keyword.strip(), page_type, source_url, product_input, "generate", result, user_id, notes=notes)
+    page = _persist_page(client_id, keyword.strip(), page_type, source_url, product_input, "generate", result, user_id, notes=notes)
+    # Fill the cache on a miss, off the facts already persisted on the page.
+    if not payload["researched_facts"]:
+        ecommerce_facts_cache.store_facts(
+            keyword.strip(), page_type, result.get("researched_facts"), source_page_id=page["id"],
+        )
+    return page
 
 
 async def score_page(
@@ -393,8 +404,13 @@ async def reoptimize_from(
 
     from services import voice_card_service
 
+    # See generate_page: a cache hit skips nlp's ~$0.37 / ~1m24s research pass.
+    # This client re-reoptimizes the same pages repeatedly with different notes,
+    # which is exactly the case the cache exists for.
+    cached_facts = ecommerce_facts_cache.get_cached_facts(keyword, page_type)
     result = await _stream_nlp("/reoptimize-ecommerce-page", {
         "keyword": keyword,
+        "researched_facts": cached_facts,
         "page_type": page_type,
         "existing_page_html": existing_page_html,
         "existing_page_url": existing_page_url,
@@ -408,7 +424,12 @@ async def reoptimize_from(
         "notes": (notes or "").strip() or None,
         "score_threshold": score_threshold,
     })
-    return _persist_page(client_id, keyword, page_type, existing_page_url, product_input, "reoptimize", result, user_id, notes=notes)
+    page = _persist_page(client_id, keyword, page_type, existing_page_url, product_input, "reoptimize", result, user_id, notes=notes)
+    if not cached_facts:
+        ecommerce_facts_cache.store_facts(
+            keyword, page_type, result.get("researched_facts"), source_page_id=page["id"],
+        )
+    return page
 
 
 async def reoptimize_url(

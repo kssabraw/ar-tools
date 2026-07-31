@@ -285,3 +285,72 @@ def test_ecommerce_stream_names_upstream_status_on_non_200():
         except HTTPException as exc:
             assert exc.detail.startswith("ecommerce_provider_error")
             assert "502" in exc.detail
+
+
+# ── public-spec fact cache: normalization ────────────────────────────────────
+# The cache is keyed globally on a normalized compound name, so the whole
+# question is "do two keywords name the same molecule?". Over-normalizing is the
+# dangerous direction — it would serve one compound's CAS number for another.
+
+from services import ecommerce_facts_cache as fc  # noqa: E402
+
+
+def test_normalize_strips_commercial_modifiers_and_dosage():
+    # The four spellings of the same product this client actually uses.
+    key = fc.normalize_entity_key("L-Carnitine")
+    assert key == "l carnitine"
+    assert fc.normalize_entity_key("Buy L Carnitine") == key
+    assert fc.normalize_entity_key("L-Carnitine 1200mg 10ml") == key
+    assert fc.normalize_entity_key("  BEST  l carnitine  ONLINE ") == key
+
+
+def test_normalize_handles_spaced_dose_units():
+    assert fc.normalize_entity_key("Semaglutide 5 mg vial") == "semaglutide"
+
+
+def test_normalize_keeps_compound_identity_numbers():
+    # BPC-157's number IS its identity — it must survive where "1200mg" does not.
+    assert fc.normalize_entity_key("BPC-157") == "bpc 157"
+    assert fc.normalize_entity_key("Buy BPC-157 5mg") == "bpc 157"
+
+
+def test_normalize_keeps_blends_distinct_from_their_components():
+    # The single most important property: a blend is NOT the same molecule.
+    assert fc.normalize_entity_key("BPC-157 TB-500") != fc.normalize_entity_key("BPC-157")
+
+
+def test_normalize_returns_empty_when_nothing_identifying_survives():
+    for junk in ["", None, "buy online", "10ml", "1200 10", "   "]:
+        assert fc.normalize_entity_key(junk) == ""
+
+
+# ── public-spec fact cache: freshness ────────────────────────────────────────
+
+def test_is_fresh_within_ttl():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime(2026, 7, 31, tzinfo=timezone.utc)
+    assert fc.is_fresh((now - timedelta(days=30)).isoformat(), 180, now) is True
+    assert fc.is_fresh((now - timedelta(days=200)).isoformat(), 180, now) is False
+
+
+def test_is_fresh_treats_unusable_input_as_stale():
+    # Safe direction: re-research (one pass) beats serving an entry of unknown age.
+    assert fc.is_fresh(None, 180) is False
+    assert fc.is_fresh("not-a-date", 180) is False
+
+
+def test_is_fresh_ttl_zero_disables_the_cache():
+    from datetime import datetime, timezone
+
+    assert fc.is_fresh(datetime.now(timezone.utc).isoformat(), 0) is False
+
+
+def test_cache_row_shape():
+    facts = [{"field": "CAS number", "value": "541-15-1"}]
+    row = fc.cache_row("l carnitine", " L-Carnitine ", "product", facts, source_page_id="page-1")
+    assert row["entity_key"] == "l carnitine"
+    assert row["entity"] == "L-Carnitine"
+    assert row["facts"] == facts
+    assert row["source_page_id"] == "page-1"
+    assert row["fetched_at"] == "now()"

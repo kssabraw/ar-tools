@@ -340,7 +340,8 @@ def _page_text_for_voice_check(html: str, page_title: str = "") -> str:
     return f"{page_title}\n{text}" if page_title else text
 
 
-async def _research_public_facts(client, entity: str, page_type: str, focus: Optional[list] = None):
+async def _research_public_facts(client, entity: str, page_type: str, focus: Optional[list] = None,
+                                 supplied: Optional[list] = None):
     """Best-effort: research the invariant public specs for `entity` via a
     bounded Anthropic web_search pass, returning them WITH citations.
 
@@ -349,6 +350,13 @@ async def _research_public_facts(client, entity: str, page_type: str, focus: Opt
     gap them); `facts` is echoed in the SSE result for the UI to show as
     "auto-sourced — verify". Never raises — any failure returns
     ('', <zero token_rec>, []) so generation proceeds exactly as before.
+
+    `supplied` short-circuits the whole pass: platform-api caches these facts by
+    compound (they are invariant, so researching them twice is pure waste) and
+    sends them on the request when it has them. The supplied list is re-validated
+    through `parse_researched_facts` rather than trusted — the hard exclusions
+    (clinical/therapeutic/regulatory/dosing) must hold no matter where a fact
+    entered from, including a cache row written before an exclusion was added.
     """
     # Zero-cost record built directly (NOT via _token_record, which would log a
     # misleading "in=0 out=0" line before the real one on every call).
@@ -356,6 +364,16 @@ async def _research_public_facts(client, entity: str, page_type: str, focus: Opt
             "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
     if not (ECOMMERCE_FACT_RESEARCH_ENABLED and (entity or "").strip() and page_type == "product"):
         return "", zero, []
+    if supplied:
+        facts = ecom_facts.parse_researched_facts(supplied)
+        if facts:
+            logger.info(
+                f"ecommerce fact research: {len(facts)} public specs for '{entity}' "
+                f"supplied by caller (cached) — skipping the web_search pass"
+            )
+            return ecom_facts.render_researched_facts_block(facts), zero, facts
+        # Supplied but nothing survived validation — fall through and research.
+        logger.warning(f"ecommerce fact research: supplied facts for '{entity}' failed validation; researching")
     try:
         import anthropic as _anthropic  # noqa: F401  (client already an AsyncAnthropic)
         tools = [
@@ -8341,6 +8359,11 @@ class GenerateEcommerceRequest(BaseModel):
     # Pre-analyzed product reference structure (from clients.page_structures['product'])
     # the suite renders + mirrors when no house template URL is set. Products only.
     reference_page_structure: Optional[str] = None
+    # Invariant public specs (CAS/MW/sequence/…) platform-api already has cached
+    # for this compound. Supplied → the bounded web_search research pass is
+    # skipped entirely (these values never change, so researching them twice is
+    # pure waste). Re-validated here, never trusted. Absent → researched as before.
+    researched_facts: Optional[List[dict]] = None
     # Corrective directives from platform-api's structural-fidelity gate (retry
     # passes only), injected as the highest-priority last block so the retry
     # converges on the reference layout.
@@ -8558,7 +8581,7 @@ async def generate_ecommerce_page(request: Request, body: GenerateEcommerceReque
 
         mcs_block, research_result, voice_card, scraped_source = await asyncio.gather(
             _ecommerce_mcs_block(client, serp_analysis_dict, page_type, body.keyword),
-            _research_public_facts(client, body.keyword, page_type),
+            _research_public_facts(client, body.keyword, page_type, supplied=body.researched_facts),
             _resolve_voice_card(client, body),
             _source_facts(),
         )
@@ -8794,6 +8817,10 @@ class ReoptimizeEcommerceRequest(BaseModel):
     # Target composite the auto-retry loop climbs toward (keep-best, capped at
     # MAX_ECOMMERCE_AUTO_PASSES). Threaded from platform-api's REOPT threshold.
     score_threshold: float = 75.0
+    # Invariant public specs platform-api already has cached for this compound —
+    # supplied → the web_search research pass is skipped. See the twin field on
+    # GenerateEcommerceRequest.
+    researched_facts: Optional[List[dict]] = None
 
 
 def _ecommerce_deficiency_text(defs: Optional[List[dict]]) -> str:
@@ -8852,7 +8879,7 @@ async def reoptimize_ecommerce_page(request: Request, body: ReoptimizeEcommerceR
                      "message": "Aligning headings, researching specs, reading your brand guide…"})
         mcs_block, research_result, voice_card = await asyncio.gather(
             _ecommerce_mcs_block(client, body.serp_analysis, page_type, body.keyword),
-            _research_public_facts(client, body.keyword, page_type),
+            _research_public_facts(client, body.keyword, page_type, supplied=body.researched_facts),
             _resolve_voice_card(client, body),
         )
         researched_block, research_tok, researched_facts = research_result
