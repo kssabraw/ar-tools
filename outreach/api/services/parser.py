@@ -1,13 +1,21 @@
 """Parse an Outscraper place dict into prospect columns.
 
-Written as an alias map rather than fixed field names on purpose. The response schema could not
-be verified from the live docs (outscraper.com is Cloudflare-blocked from the build environment)
-and the SDK does not declare one for the maps search — the only names confirmed from its own
-example are `place_id`, `name`, `phone` and `site` (NOT `website`). See ISSUES I-018.
+Most of these aliases are now confirmed rather than guessed. `writer/platform-api/services/
+gbp_service.py` has been parsing live Outscraper maps responses against this same API key for
+months, and its field handling is the evidence behind the ordering below:
 
-This is cheap insurance rather than a workaround: the brief mandates persisting raw before
-parsing, so re-parsing an entire market against a corrected alias map costs nothing and needs no
-re-pull. Pin the aliases against the first real 20-row pull.
+    place_id / google_id · name · full_address then address · phone · site then website ·
+    category then type · subtypes (comma-joined string) · rating · reviews (the COUNT) ·
+    latitude/lat · longitude/lng · working_hours · location_link · reviews_data · area_service
+
+STILL UNCONFIRMED: `business_status`. Production never reads it, so nothing in this estate has
+observed whether it is returned, under what name, or with what values — and it is the field the
+closed-listing gate depends on. `filters.evaluate` therefore treats an absent or unrecognised
+status as "not evaluated" rather than "closed", so an unconfirmed field cannot silently exclude
+live businesses.
+
+The alias map stays regardless. The brief mandates persisting raw before parsing, so re-parsing
+an entire market against corrected aliases costs nothing and needs no re-pull. See ISSUES I-018.
 """
 
 from __future__ import annotations
@@ -16,17 +24,23 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 # Ordered by preference — the first alias present and non-empty wins.
+# Ordering follows platform-api's gbp_service, which reads live responses from this account.
 FIELD_ALIASES: dict[str, tuple[str, ...]] = {
-    "place_id": ("place_id", "google_id", "place_id_google"),
+    "place_id": ("place_id", "google_id"),
     "name": ("name", "title", "business_name"),
-    "category": ("type", "category", "main_category"),
+    # gbp_service does `category or type`, then falls back to `subtypes` (a comma-joined string).
+    "category": ("category", "type", "subtypes", "main_category"),
     "address": ("full_address", "address", "formatted_address"),
     "phone": ("phone", "phone_number", "formatted_phone_number"),
+    # `site` first is confirmed, not a guess — gbp_service does `site or website`.
     "website": ("site", "website", "url"),
     "rating": ("rating", "average_rating"),
+    # `reviews` is the COUNT on a place object. `reviews_data` is the inline review list and must
+    # never be read here — it would parse as a count of nothing.
     "review_count": ("reviews", "reviews_count", "review_count", "user_ratings_total"),
     "lat": ("latitude", "lat"),
     "lng": ("longitude", "lng", "lon"),
+    # UNCONFIRMED — no production code in this estate reads it. See the module docstring.
     "business_status": ("business_status", "status", "permanently_closed"),
 }
 

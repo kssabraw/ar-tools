@@ -229,3 +229,16 @@ County (4,751 sq mi); the covered area is what a local SEO client would plausibl
 proves too narrow, add submarkets rather than widening radii — radius is grid geometry and
 freezes at the first scan, whereas a new submarket starts its own clean history.
 *Still editable:* nothing has been scanned, so these centroids can move freely until Phase 2.
+
+**Default to `GET /maps/search-v3`, with `POST /google-maps-search` available via config.**
+Both endpoints are live. The first is proven against THIS Outscraper account by platform-api's
+`gbp_service`, which has used it in production for months; the second is what the vendor's
+current SDK uses but is unproven here. With no way to test either from the build sandbox
+(I-027), running-in-production evidence against the same account and key is the stronger signal.
+Reversing is a one-line config change and both request shapes are regression-tested.
+*This reverses my earlier "the brief is stale" claim — see ISSUES I-029.*
+
+**Consult the AR Tools repo before vendor docs for provider behaviour.** It already integrates
+Outscraper, DataForSEO, Google and others against these accounts, so it carries verified
+request shapes and response field names that no amount of documentation reading would have
+settled — and in this case contradicted a conclusion I had drawn from the vendor's own SDK.

@@ -30,7 +30,11 @@ from api.services.filters import (  # noqa: E402
     matches_franchise_pattern,
 )
 from api.services.outscraper_client import TileRequest, extract_places  # noqa: E402
-from api.services.parser import parse_place, normalize_business_status  # noqa: E402
+from api.services.parser import (  # noqa: E402
+    FIELD_ALIASES,
+    normalize_business_status,
+    parse_place,
+)
 from api.services.tiling import (  # noqa: E402
     Submarket,
     build_tiles,
@@ -397,3 +401,185 @@ def test_proxy_error_triggers_failover():
 
     # A slow host is working, not failing — do not burn the fallbacks on it.
     assert not issubclass(_httpx.ReadTimeout, FAILOVER_ERRORS)
+
+
+# --- aliases confirmed against production ------------------------------------------------
+#
+# platform-api's services/gbp_service.py parses live Outscraper maps responses using this same
+# API key. These lock in the field handling it demonstrates, so a future "tidy-up" of the alias
+# order cannot silently break parsing that is known to work.
+
+
+def test_category_prefers_category_then_type_then_subtypes():
+    """gbp_service does `category or type`, falling back to a comma-joined `subtypes` string."""
+    assert parse_place({"place_id": "x", "name": "n", "category": "Plumber",
+                        "type": "Contractor"}).category == "Plumber"
+    assert parse_place({"place_id": "x", "name": "n", "type": "Contractor"}).category == "Contractor"
+    assert parse_place({"place_id": "x", "name": "n",
+                        "subtypes": "Plumber, Drain service"}).category == "Plumber, Drain service"
+
+
+def test_address_prefers_full_address():
+    parsed = parse_place({"place_id": "x", "name": "n", "full_address": "1 Main St",
+                          "address": "Main St"})
+    assert parsed.address == "1 Main St"
+
+
+def test_place_id_falls_back_to_google_id():
+    """gbp_service resolves `place_id or google_id`. Both are real identifiers, so either is a
+    legitimate key — unlike inventing one, which would join to nothing forever."""
+    assert parse_place({"google_id": "0x80c2c7:0x5141f", "name": "n"}).place_id == "0x80c2c7:0x5141f"
+
+
+def test_review_count_never_reads_reviews_data():
+    """`reviews` is the count; `reviews_data` is the inline review list. Reading the latter as a
+    count would produce a number that means nothing."""
+    parsed = parse_place({
+        "place_id": "x", "name": "n", "reviews": 42,
+        "reviews_data": [{"review_text": "great"}, {"review_text": "good"}],
+    })
+    assert parsed.review_count == 42
+    assert "reviews_data" not in {a for al in FIELD_ALIASES.values() for a in al}
+
+
+def test_a_production_shaped_place_parses_completely():
+    """Field names taken from what gbp_service actually reads off a live response."""
+    parsed = parse_place({
+        "place_id": "ChIJN1t_tDeuEmsRUsoyG83frY4",
+        "google_id": "0x80c2c7:0x5141f",
+        "name": "Acme Plumbing",
+        "full_address": "123 S Main St, Los Angeles, CA 90012",
+        "phone": "+1 213-555-0100",
+        "site": "https://acmeplumbing.example",
+        "category": "Plumber",
+        "subtypes": "Plumber, Drainage service",
+        "rating": 4.7,
+        "reviews": 218,
+        "latitude": 34.0407,
+        "longitude": -118.2468,
+        "working_hours": {"Monday": "8AM-5PM"},
+        "location_link": "https://maps.google.com/?cid=123",
+        "area_service": False,
+    })
+
+    assert parsed.place_id == "ChIJN1t_tDeuEmsRUsoyG83frY4"
+    assert parsed.website == "https://acmeplumbing.example"
+    assert parsed.address.startswith("123 S Main St")
+    assert parsed.category == "Plumber"
+    assert parsed.review_count == 218
+    assert (parsed.lat, parsed.lng) == (34.0407, -118.2468)
+    # business_status is absent from real responses as far as anything here has observed —
+    # it must not exclude.
+    assert parsed.business_status is None
+    assert not run(parsed).excluded
+
+
+def test_endpoint_default_is_the_production_proven_one():
+    from api.config import Settings
+    from api.services.outscraper_client import ENDPOINT_MAPS_SEARCH, ENDPOINT_SEARCH_V3
+
+    assert Settings().outscraper_search_endpoint == ENDPOINT_SEARCH_V3
+    assert ENDPOINT_SEARCH_V3 != ENDPOINT_MAPS_SEARCH
+
+
+# --- request shape per endpoint ----------------------------------------------------------
+
+
+def _capture(endpoint: str):
+    """Submit one tile against a mock transport and return the captured request."""
+    import asyncio
+
+    import httpx as _httpx
+
+    from api.config import Settings
+    from api.services.outscraper_client import OutscraperClient
+
+    seen = {}
+
+    def handler(request: _httpx.Request) -> _httpx.Response:
+        seen["method"] = request.method
+        seen["url"] = request.url
+        seen["body"] = request.content.decode() if request.content else ""
+        seen["api_key_header"] = request.headers.get("X-API-KEY")
+        return _httpx.Response(200, json={"id": "req-1"})
+
+    settings = Settings(
+        outscraper_api_key="test-key", outscraper_search_endpoint=endpoint
+    )
+    mock = _httpx.AsyncClient(transport=_httpx.MockTransport(handler))
+
+    async def go():
+        async with OutscraperClient(settings, client=mock) as client:
+            return await client.submit_maps_search(
+                TileRequest(query="plumber, Downtown Los Angeles", coordinates="34.04,-118.24"),
+                limit=20,
+            )
+
+    request_id = asyncio.run(go())
+    assert request_id == "req-1"
+    return seen
+
+
+def test_search_v3_submits_a_GET_with_string_booleans():
+    """Production passes `async` as the string "false"; the async form must mirror that."""
+    from api.services.outscraper_client import ENDPOINT_SEARCH_V3
+
+    seen = _capture(ENDPOINT_SEARCH_V3)
+
+    assert seen["method"] == "GET"
+    assert seen["url"].path == "/maps/search-v3"
+    params = dict(seen["url"].params)
+    assert params["query"] == "plumber, Downtown Los Angeles"
+    assert params["async"] == "true"
+    assert params["organizationsPerQueryLimit"] == "20"
+    assert params["coordinates"] == "34.04,-118.24"
+    assert seen["api_key_header"] == "test-key"
+
+
+def test_google_maps_search_submits_a_POST_with_a_json_body():
+    import json as _json
+
+    from api.services.outscraper_client import ENDPOINT_MAPS_SEARCH
+
+    seen = _capture(ENDPOINT_MAPS_SEARCH)
+
+    assert seen["method"] == "POST"
+    assert seen["url"].path == "/google-maps-search"
+    body = _json.loads(seen["body"])
+    assert body["query"] == ["plumber, Downtown Los Angeles"]
+    assert body["async"] is True
+    assert body["organizationsPerQueryLimit"] == 20
+
+
+def test_enrichment_is_never_populated_on_either_endpoint():
+    """Base tier only. An enrichment slipping in here is billed separately and is Phase 5."""
+    import json as _json
+
+    from api.services.outscraper_client import ENDPOINT_MAPS_SEARCH, ENDPOINT_SEARCH_V3
+
+    assert dict(_capture(ENDPOINT_SEARCH_V3)["url"].params)["enrichment"] == ""
+    assert _json.loads(_capture(ENDPOINT_MAPS_SEARCH)["body"])["enrichment"] == ""
+
+
+def test_a_2xx_carrying_an_error_body_still_raises():
+    """Outscraper reports failures with HTTP 200 and error:true. Status-code-only handling would
+    treat this as success and return zero places."""
+    import asyncio
+
+    import httpx as _httpx
+
+    from api.config import Settings
+    from api.services.outscraper_client import OutscraperClient, OutscraperError
+
+    mock = _httpx.AsyncClient(
+        transport=_httpx.MockTransport(
+            lambda r: _httpx.Response(200, json={"error": True, "errorMessage": "quota exceeded"})
+        )
+    )
+
+    async def go():
+        async with OutscraperClient(Settings(outscraper_api_key="k"), client=mock) as client:
+            await client.submit_maps_search(TileRequest(query="plumber"))
+
+    with pytest.raises(OutscraperError, match="quota exceeded"):
+        asyncio.run(go())

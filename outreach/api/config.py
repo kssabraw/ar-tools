@@ -68,6 +68,15 @@ class Settings(BaseSettings):
         ]
     )
 
+    # Which maps-search endpoint to use. Two are live:
+    #   /maps/search-v3      GET  — DEFAULT; proven against THIS account by platform-api's
+    #                               gbp_service, which has called it with this key for months.
+    #   /google-maps-search  POST — what the vendor's current SDK (v6.0.4) uses. Newer, but
+    #                               unproven against this account.
+    # Defaulting to the one with production evidence. Flip after the first pull if the other
+    # behaves better at market scale.
+    outscraper_search_endpoint: str = "/maps/search-v3"
+
     # Google returns no more than ~400 organisations for a single query area regardless of what
     # we ask for. Tiling by submarket centroid is what gets past that, not a larger limit.
     outscraper_places_per_query_limit: int = 400

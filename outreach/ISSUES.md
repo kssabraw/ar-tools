@@ -257,3 +257,38 @@ an organisation policy denial and directs that it be reported rather than retrie
 around, so this is not a transient failure to work through. Added
 `api/scripts/calibrate_standalone.py` — stdlib only, no repo or dependencies needed — so the pull
 can be run from any host with egress and the output pasted back.
+
+### I-029 · CORRECTION — `/maps/search-v3` is live, and the brief was right
+**I previously recorded that the Phase 1 brief was stale for naming `/maps/search-v3`. That was
+wrong, and the error is worth keeping visible.** I inferred "stale" from the vendor's current SDK
+(v6.0.4) using `POST /google-maps-search`, and treated a newer client as proof the older path was
+gone. It is not: `writer/platform-api/services/gbp_service.py` calls
+`GET /maps/search-v3` with this same API key, in production, today.
+
+Both endpoints exist. The client now supports both and DEFAULTS to `/maps/search-v3`, because
+running-in-production evidence against this exact account beats a newer SDK.
+`outscraper_search_endpoint` switches it. Request shape for each is regression-tested against a
+mock transport.
+
+*Method note:* the SDK's newer endpoint takes a JSON body with real booleans; `/maps/search-v3`
+takes query params with booleans as lowercase STRINGS (production sends `"async": "false"`).
+
+**Lesson for the rest of this build:** the AR Tools repo is itself a source of verified provider
+behaviour and should be consulted before the vendor docs. It integrates Outscraper, DataForSEO
+and several others against these accounts already.
+
+### I-018 update · Response field names largely CONFIRMED, one gap remains
+`gbp_service.py` resolves live maps responses using: `place_id or google_id` · `name` ·
+`full_address or address` · `phone` · `site or website` · `category or type` then `subtypes`
+(comma-joined string) · `rating` · `reviews` (the COUNT — `reviews_data` is the inline review
+list and must never be read as a count) · `latitude/lat` · `longitude/lng` · `working_hours` ·
+`location_link` · `area_service`. `parser.FIELD_ALIASES` now follows that ordering, and the
+envelope (`data` as an array-of-arrays) is confirmed too.
+
+**STILL OPEN: `business_status`.** No code in this estate reads it, so nothing has observed
+whether Outscraper returns it, under what name, or with what values — and it is the only input to
+the closed-listing gate, the first hard filter. `filters.evaluate` already treats an absent or
+unrecognised status as `not_evaluated` rather than "closed", so the unknown cannot silently
+exclude live businesses; the risk is the opposite one, that the gate never fires at all.
+**Action:** confirm from the first real pull. If `business_status` is absent from the base tier,
+the closed gate needs a different source and the brief's filter table needs revisiting.

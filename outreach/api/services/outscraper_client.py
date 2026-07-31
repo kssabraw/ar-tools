@@ -1,14 +1,24 @@
 """Outscraper API client — Google Maps base pull only.
 
-Endpoint paths and parameter names were verified against the official outscraper-python SDK
-v6.0.4 (commit 2026-06-11), which is the authoritative live client. THE PHASE 1 BRIEF IS STALE
-HERE and the differences are not cosmetic:
+TWO endpoints do this job and both are live. This client supports both, because we have direct
+evidence for each and no way to test either from the build sandbox (ISSUES I-027):
 
-  * The endpoint is POST /google-maps-search. It is not /maps/search-v3, and /maps/search is the
-    deprecated v1.
-  * Body parameters are camelCase: organizationsPerQueryLimit, skipPlaces, dropDuplicates.
+  * GET /maps/search-v3 — DEFAULT. Proven in production against THIS Outscraper account:
+    `writer/platform-api/services/gbp_service.py` has been calling it with this API key for
+    months. Query parameters, `async` passed as a string.
+  * POST /google-maps-search — what the official outscraper-python SDK v6.0.4 (2026-06-11) uses.
+    JSON body. Newer, and the vendor's own current client, but unproven against this account.
+
+An earlier revision of this file asserted the brief was stale for naming /maps/search-v3. That
+was wrong — the brief was right and the SDK simply moved on. The default is the endpoint we have
+running-in-production evidence for; `outscraper_search_endpoint` switches it.
+
+What holds for both:
+
+  * Parameters are camelCase: organizationsPerQueryLimit, skipPlaces, dropDuplicates.
   * Errors are returned as HTTP 2xx with {"error": true, "errorMessage": ...} in the body.
     Checking the status code alone silently swallows them.
+  * `data` is an array-of-arrays — one inner list per query.
   * A completed async response is retained for TWO HOURS. Persist raw on arrival.
 
 Base tier only. `enrichment` is never sent — enrichments are billed separately and belong to
@@ -29,7 +39,11 @@ from ..config import Settings
 
 logger = logging.getLogger(__name__)
 
-MAPS_SEARCH_PATH = "/google-maps-search"
+# GET + query params. Production-proven against this account (platform-api's gbp_service).
+ENDPOINT_SEARCH_V3 = "/maps/search-v3"
+# POST + JSON body. What the vendor's current SDK uses.
+ENDPOINT_MAPS_SEARCH = "/google-maps-search"
+
 REQUEST_ARCHIVE_PATH = "/requests/{request_id}"
 
 # Outscraper reports a still-running request with this status. Anything else is terminal.
@@ -159,12 +173,13 @@ class OutscraperClient:
 
         Synchronous calls time out at market scale (brief §2), so `async` is always true.
         """
-        payload: dict[str, Any] = {
-            "query": [tile.query],
-            "organizationsPerQueryLimit": limit or self._settings.outscraper_places_per_query_limit,
+        endpoint = self._settings.outscraper_search_endpoint
+        places_limit = limit or self._settings.outscraper_places_per_query_limit
+
+        common: dict[str, Any] = {
+            "organizationsPerQueryLimit": places_limit,
             "language": self._settings.outscraper_language,
             "region": self._settings.outscraper_region,
-            "async": True,
             # Dedup happens in our own code across ALL tiles, keyed on place_id. Outscraper's
             # dropDuplicates only spans queries inside one request, so it would not catch the
             # overlap between separately submitted tiles.
@@ -173,10 +188,24 @@ class OutscraperClient:
             # Do not populate this, and do not add a config flag that would let someone else.
             "enrichment": "",
         }
-        if tile.coordinates:
-            payload["coordinates"] = tile.coordinates
 
-        body = await self._request("POST", MAPS_SEARCH_PATH, json=payload)
+        if endpoint == ENDPOINT_SEARCH_V3:
+            # GET + query params. Booleans go over the wire as lowercase strings — this is how
+            # platform-api calls it in production (`"async": "false"`).
+            params = {
+                **common,
+                "query": tile.query,
+                "async": "true",
+                "dropDuplicates": "false",
+            }
+            if tile.coordinates:
+                params["coordinates"] = tile.coordinates
+            body = await self._request("GET", endpoint, params=params)
+        else:
+            payload = {**common, "query": [tile.query], "async": True}
+            if tile.coordinates:
+                payload["coordinates"] = tile.coordinates
+            body = await self._request("POST", endpoint, json=payload)
 
         request_id = body.get("id")
         if not request_id:
