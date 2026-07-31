@@ -39,6 +39,33 @@ class PlannedRun:
     scheduled_at: datetime          # tz-aware UTC
 
 
+def resolve_max_articles(
+    *, field_present: bool, requested: int | None, server_default: int | None
+) -> int | None:
+    """The production ceiling to apply: the request's value when it said anything
+    at all, otherwise the server default. None = no limit.
+
+    The `field_present` distinction is the whole point and cannot be replaced by
+    an `is None` check, because "absent" and "explicitly no limit" both leave the
+    parsed value None. On 2026-07-31 the tirzepatide session was scheduled at its
+    full 3,896 articles even though the modal defaults to 1000: the browser was
+    still running the bundle it loaded before the deploy (an SPA doesn't re-fetch
+    its JS without a reload), so the field was never sent and the backend read
+    absence as "no cap". A ceiling that only exists client-side isn't a ceiling.
+    """
+    return requested if field_present else server_default
+
+
+def apply_max_articles(targets: list[str], max_articles: int | None) -> list[str]:
+    """Trim an ordered target list to the ceiling. Callers must order FIRST, so
+    the kept slice is the front of the pillars-first order rather than arbitrary.
+    A negative ceiling is ignored (treated as no limit) rather than reversing the
+    slice, which is what `targets[:-5]` would silently do."""
+    if max_articles is not None and max_articles >= 0:
+        return targets[:max_articles]
+    return targets
+
+
 def order_clusters(architecture: dict | None, all_cluster_ids: list[str]) -> list[str]:
     """Order clusters pillars-first: walk the architecture's pillars in order, emitting each
     pillar's supporting-article cluster ids (that still exist), then append any clusters not

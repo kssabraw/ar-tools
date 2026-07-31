@@ -349,6 +349,18 @@ class Settings(BaseSettings):
     scheduler_sweep_every_ticks: int = 5
     writer_schedule_approval_threshold_usd: float = 90.0   # VA Schedule-all > this -> M9 approval
     writer_article_cost_estimate_usd: float = 0.30         # per-article preview figure (§9.4)
+    # Production ceiling applied when a schedule request OMITS `max_articles`
+    # entirely. An explicit value in the request always wins — including an
+    # explicit null, which means "no limit".
+    #
+    # This lives server-side because the client is the wrong place for a safety
+    # default. On 2026-07-31 the tirzepatide session was scheduled at its full
+    # 3,896 articles despite the modal defaulting to 1000: the browser was still
+    # running the bundle it had loaded before the deploy (an SPA doesn't re-fetch
+    # its JS without a reload), so the field was never sent and the backend read
+    # "absent" as "no cap". A stale client must not be able to bypass the ceiling.
+    # Set to None to disable the default entirely.
+    writer_schedule_max_articles_default: int | None = 1000
     # Publishing destinations (dormant until provisioned). GitHub: fine-grained PAT with
     # Contents:write on the target repo; the repo/branch/path are per-session in publish_config.
     github_publish_token: str = ""

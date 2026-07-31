@@ -22,7 +22,13 @@ from fanout.auth.dependencies import get_role
 from fanout.config import get_settings
 from fanout.storage import silo as store
 from fanout.writer import schedule_store
-from fanout.writer.schedule_planner import ScheduleError, order_clusters, plan_runs
+from fanout.writer.schedule_planner import (
+    ScheduleError,
+    apply_max_articles,
+    order_clusters,
+    plan_runs,
+    resolve_max_articles,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -99,6 +105,17 @@ def _session_cluster_ids(session_id: str, cluster_ids: list[str] | None) -> list
     return ids
 
 
+def _effective_max_articles(body: ScheduleBody) -> int | None:
+    """The production ceiling for this request. `model_fields_set` tells apart the
+    two cases a plain `is None` check cannot — field absent (apply the server
+    default) vs explicitly null (the user asked for no limit)."""
+    return resolve_max_articles(
+        field_present="max_articles" in body.model_fields_set,
+        requested=body.max_articles,
+        server_default=get_settings().writer_schedule_max_articles_default,
+    )
+
+
 def _ordered_targets(session_id: str, cluster_ids: list[str] | None) -> list[str]:
     """Pillars-first ordered target cluster ids (reads the architecture). Used by create,
     where write order matters; the estimate skips this and just counts the set."""
@@ -160,8 +177,8 @@ def schedule_estimate(
     # list) but not how many, and the estimate only reports counts — so applying
     # it to the unordered set here is exact.
     eligible = len(targets)
-    if body.max_articles is not None and body.max_articles >= 0:
-        targets = targets[: body.max_articles]
+    max_articles = _effective_max_articles(body)
+    targets = apply_max_articles(targets, max_articles)
     est = _estimate(
         len(targets), body.mode, body.per_day, body.start_date,
         weekday=body.weekday, weekdays=body.weekdays, day_of_month=body.day_of_month,
@@ -170,6 +187,7 @@ def schedule_estimate(
     est["already_scheduled"] = len(candidates) - eligible
     est["eligible"] = eligible
     est["capped"] = len(targets) < eligible
+    est["max_articles"] = max_articles
     # Without an architecture, order_clusters falls back to plain plan order — so a
     # cap would take an arbitrary slice rather than the pillars-first priority the
     # user expects. Let the UI say so before they commit.
@@ -271,11 +289,8 @@ def create_schedule(
     pending = schedule_store.pending_cluster_ids(session_id)
     targets = [c for c in ordered if c not in pending]
     skipped = len(ordered) - len(targets)
-    # Trim to the production ceiling AFTER ordering, so the kept slice is the
-    # front of the pillars-first architecture order rather than an arbitrary one.
     eligible = len(targets)
-    if body.max_articles is not None and body.max_articles >= 0:
-        targets = targets[: body.max_articles]
+    targets = apply_max_articles(targets, _effective_max_articles(body))
     capped = eligible - len(targets)
     if not targets:
         raise HTTPException(
