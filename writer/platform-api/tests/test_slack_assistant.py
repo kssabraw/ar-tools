@@ -1927,3 +1927,34 @@ def test_cost_plan_clamps_the_margin_to_the_sop_floor_and_ceiling():
 def test_cost_plan_handles_a_client_with_no_retainer():
     out = _cost_plan([{"task_type": "content_page", "quantity": 1}], retainer=None)
     assert out["budget"]["deployable"] == 0.0 and out["fits"] is False
+
+
+# ---------------------------------------------------------------------------
+# Over-budget plans are presented and priced, not silently shrunk.
+#
+# Owner ruling: recommend the work that achieves the goal, cost it honestly, and
+# put the commercial decision to the teammate. Trimming to fit without showing
+# the real cost hides a choice that isn't the assistant's to make.
+# ---------------------------------------------------------------------------
+
+
+def test_budget_rule_shows_the_real_cost_and_asks_rather_than_shrinking():
+    system = _system_prompt_for(_POMPANO)
+    assert "DON'T PRE-EMPTIVELY SHRINK IT" in system
+    # The three numbers every costed plan must carry.
+    assert "what the recommended plan costs" in system
+    assert "discretionary budget actually is" in system
+    assert "the gap" in system
+    # And the decision goes to the human, with real options.
+    assert "fund the overage" in system and "phase it" in system and "trim to fit" in system
+
+
+def test_budget_rule_forbids_passing_off_an_over_budget_plan_as_affordable():
+    system = _system_prompt_for(_POMPANO)
+    assert "Never present an over-budget plan as if it fits." in system
+
+
+def test_costing_is_still_required_to_come_from_the_tool():
+    system = _system_prompt_for(_POMPANO)
+    assert "from cost_plan, not estimated" in system
+    assert "CALL THIS BEFORE PRESENTING ANY PLAN THAT COSTS MONEY" in system
