@@ -873,14 +873,19 @@ def _client_blog_url_style(session: dict | None):
 
 def _inject_internal_links(session_id: str, cluster_id: str, article) -> None:
     """M15 — wrap the M6 architecture link graph into the article as absolute internal
-    links, then re-serialize. No-op when the session has no `site_base_url` or no generated
-    architecture. URLs follow the linked client's real permalink pattern when a blog-post
-    reference URL is on the client card; lateral links are gated on the peer's article
-    actually existing (a drip schedule leaves planned peers unwritten for months — a live
-    post must not link a URL that doesn't resolve); the session's user-specified extra
-    link URLs (money pages) are folded in under the ≤5-outbound cap and inject even when
-    no lateral survives the gate (the first articles of a session have no generated
-    peers yet). Enrichment only — any failure is swallowed (the article still ships)."""
+    links, then re-serialize. URLs follow the linked client's real permalink pattern when a
+    blog-post reference URL is on the client card; lateral links are gated on the peer's
+    article actually existing (a drip schedule leaves planned peers unwritten for months —
+    a live post must not link a URL that doesn't resolve); the session's user-specified
+    extra link URLs (money pages) are folded in under the ≤5-outbound cap.
+
+    The two target sources are gated **independently**. Laterals need `site_base_url` (to
+    build peer URLs) and a generated architecture (for the link graph); the user's extras
+    are absolute URLs that need neither, so they inject on their own. They used to sit
+    behind a combined early return, which meant a session whose architecture was never
+    generated published every article with no links at all — including the money page the
+    owner had explicitly configured on it. Enrichment only — any failure is swallowed (the
+    article still ships)."""
     try:
         from fanout.storage import silo as store
         from fanout.writer import store as article_store
@@ -894,23 +899,31 @@ def _inject_internal_links(session_id: str, cluster_id: str, article) -> None:
 
         session = store.get_session(session_id)
         base_url = (session or {}).get("site_base_url")
-        arch_row = store.get_architecture(session_id)
-        if not base_url or not arch_row:
-            return
-        architecture = arch_row["architecture_json"]
-        slugs = store.ensure_session_slugs(session_id)
-        clusters = store.list_clusters_link_info(session_id)
-        clusters_by_id = {c["id"]: {**c, "slug": slugs.get(c["id"], c.get("slug"))} for c in clusters}
-        topics_by_id = {t["id"]: t for t in store.list_topics(session_id)}
-        keywords_by_id = store.get_keyword_texts(
-            [c["primary_keyword_id"] for c in clusters if c.get("primary_keyword_id")])
+        arch_row = store.get_architecture(session_id) if base_url else None
 
-        targets, is_pillar = build_targets(
-            cluster_id, architecture=architecture, clusters_by_id=clusters_by_id,
-            topics_by_id=topics_by_id, keywords_by_id=keywords_by_id, base_url=base_url,
-            url_style=_client_blog_url_style(session),
-            generated_cluster_ids=article_store.list_generated_cluster_ids(session_id))
-        extras = build_extra_targets((session or {}).get("extra_link_urls"))
+        targets: list = []
+        is_pillar = False
+        if base_url and arch_row:
+            architecture = arch_row["architecture_json"]
+            slugs = store.ensure_session_slugs(session_id)
+            clusters = store.list_clusters_link_info(session_id)
+            clusters_by_id = {
+                c["id"]: {**c, "slug": slugs.get(c["id"], c.get("slug"))} for c in clusters
+            }
+            topics_by_id = {t["id"]: t for t in store.list_topics(session_id)}
+            keywords_by_id = store.get_keyword_texts(
+                [c["primary_keyword_id"] for c in clusters if c.get("primary_keyword_id")])
+
+            targets, is_pillar = build_targets(
+                cluster_id, architecture=architecture, clusters_by_id=clusters_by_id,
+                topics_by_id=topics_by_id, keywords_by_id=keywords_by_id, base_url=base_url,
+                url_style=_client_blog_url_style(session),
+                generated_cluster_ids=article_store.list_generated_cluster_ids(session_id))
+
+        extras = build_extra_targets(
+            (session or {}).get("extra_link_urls"),
+            seed_keyword=(session or {}).get("seed_keyword") or "",
+        )
         if extras and not is_pillar:
             # Not on pillars: their target list renders as the "In This Guide" children
             # list, and money pages don't belong in it.
