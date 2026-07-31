@@ -144,10 +144,11 @@ class EcommercePageDetail(BaseModel):
     # Structural-fidelity verdict from the product generation gate ({composite,
     # dimensions, notes}). None for collections / house-template products.
     structure_fidelity: Optional[dict[str, Any]] = None
-    # Deterministic brand-guide audit ({passed, critical_count, warning_count,
-    # violations}). None when the client has no brand voice / ICP on file, or for
-    # pages generated before voice enforcement existed.
+    # Brand-voice scorecard: {score, band, dimensions, violations, deficiencies,
+    # needs_rewrite}. Reported SEPARATELY from composite_score, which measures
+    # SEO/AEO only. Both null when the client has no brand guide on file.
     voice_violations: Optional[dict[str, Any]] = None
+    voice_score: Optional[float] = None
     mode: str
     token_usage: Optional[dict[str, Any]] = None
     cost_breakdown: Optional[dict[str, Any]] = None
@@ -168,6 +169,8 @@ class EcommercePageListItem(BaseModel):
     source_url: Optional[str] = None
     page_title: Optional[str] = None
     composite_score: Optional[float] = None
+    # Brand voice, scored separately from the SEO composite above.
+    voice_score: Optional[float] = None
     composite_status: Optional[str] = None
     mode: str
     created_at: str

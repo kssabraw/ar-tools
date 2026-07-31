@@ -558,3 +558,194 @@ def compliance_summary(violations: Optional[list[dict]]) -> dict:
         "warning_count": sum(1 for v in violations if v.get("severity") == "warning"),
         "violations": violations,
     }
+
+
+# ── The voice scorecard ────────────────────────────────────────────────────
+# Brand voice is scored SEPARATELY from SEO/AEO rather than folded into that
+# composite as one weighted engine. Two reasons:
+#
+#   * A single 10% engine cannot move a composite enough to matter — a page
+#     scoring 40 on voice loses five points against one scoring 90, so it still
+#     reads "good". Hiding voice inside an SEO number is the same mistake that
+#     let it be ignored in the first place.
+#   * "Voice is 62" is not actionable. Which part — the tone, the sentence
+#     rhythm, the fact that it never addresses what the customer is worried
+#     about? Sub-dimensions make the number tell you what to fix.
+#
+# Weights favour the dimensions a reader actually notices (tone, style,
+# vocabulary, whether it speaks to them) over the mechanical ones.
+
+VOICE_DIMENSIONS: dict[str, dict] = {
+    "tone":            {"label": "Tone & personality", "weight": 0.15},
+    "writing_style":   {"label": "Writing style",      "weight": 0.15},
+    "person":          {"label": "Grammatical person", "weight": 0.10},
+    "vocabulary":      {"label": "Vocabulary",         "weight": 0.15},
+    "audience_fit":    {"label": "Audience fit",       "weight": 0.15},
+    "pain_points":     {"label": "Pain points & objections", "weight": 0.10},
+    "cta_fit":         {"label": "Call-to-action fit", "weight": 0.10},
+    "distinctiveness": {"label": "Distinctiveness",    "weight": 0.10},
+}
+
+# A dimension the guide says nothing about must not drag the score down — a
+# guide that never mentions sentence rhythm is not a page failing at it. The
+# scorer marks those `applicable: false` and the remaining weights renormalize.
+VOICE_PASS_THRESHOLD = 80.0
+
+# Deterministic findings outrank the judge on the things a regex can settle.
+# Without this a scorer can call vocabulary "strong" on a page that provably
+# contains a forbidden word.
+_DETERMINISTIC_CAPS = {
+    "never_use_terms": ("vocabulary", 40.0),
+    "must_use_terms":  ("vocabulary", 70.0),
+    "person":          ("person", 40.0),
+    "cta_language":    ("cta_fit", 50.0),
+}
+
+
+def voice_band(score: Optional[float]) -> str:
+    """Plain-language band for a voice score. Deliberately not the SEO status
+    vocabulary — this answers "does it sound like the client", not "will it
+    rank"."""
+    if score is None:
+        return "not_scored"
+    if score >= 90:
+        return "on_voice"
+    if score >= VOICE_PASS_THRESHOLD:
+        return "mostly_on_voice"
+    if score >= 60:
+        return "drifting"
+    return "off_voice"
+
+
+def _dimension_score(raw: Any) -> tuple[Optional[float], bool]:
+    """Pull `(score, applicable)` out of one scorer dimension, tolerantly."""
+    if not isinstance(raw, dict):
+        return None, False
+    if raw.get("applicable") is False:
+        return None, False
+    score = raw.get("score")
+    if not isinstance(score, (int, float)):
+        return None, False
+    return max(0.0, min(100.0, float(score))), True
+
+
+def apply_deterministic_caps(
+    dimensions: dict, violations: Optional[list[dict]]
+) -> dict:
+    """Lower any dimension the deterministic checks have already disproved.
+
+    Returns a new dimensions dict; never raises the score, only caps it, and
+    records why on the dimension so the UI can show the reason.
+    """
+    out = {key: dict(value) if isinstance(value, dict) else value
+           for key, value in (dimensions or {}).items()}
+    for violation in violations or []:
+        mapping = _DETERMINISTIC_CAPS.get(violation.get("check", ""))
+        if not mapping:
+            continue
+        key, cap = mapping
+        entry = out.get(key)
+        if not isinstance(entry, dict):
+            continue
+        score, applicable = _dimension_score(entry)
+        if not applicable or score is None or score <= cap:
+            continue
+        entry["score"] = cap
+        entry["capped_by_check"] = violation.get("check")
+    return out
+
+
+def compute_voice_score(dimensions: Optional[dict]) -> Optional[float]:
+    """Weighted 0-100 across the applicable dimensions, renormalized.
+
+    None when nothing could be scored — honest, and distinct from zero.
+    """
+    total_weight = 0.0
+    total = 0.0
+    for key, meta in VOICE_DIMENSIONS.items():
+        score, applicable = _dimension_score((dimensions or {}).get(key))
+        if not applicable or score is None:
+            continue
+        total += score * meta["weight"]
+        total_weight += meta["weight"]
+    if total_weight <= 0:
+        return None
+    return round(total / total_weight, 1)
+
+
+def build_voice_deficiencies(dimensions: Optional[dict]) -> list[dict]:
+    """The failing dimensions, worst first, as rewrite input.
+
+    Shaped like the SEO scorer's deficiencies so the rewrite prompt can render
+    them the same way.
+    """
+    out: list[dict] = []
+    for key, meta in VOICE_DIMENSIONS.items():
+        entry = (dimensions or {}).get(key)
+        score, applicable = _dimension_score(entry)
+        if not applicable or score is None or score >= VOICE_PASS_THRESHOLD:
+            continue
+        entry = entry if isinstance(entry, dict) else {}
+        out.append({
+            "engine": meta["label"],
+            "engine_key": key,
+            "score": score,
+            "issues": [i for i in (entry.get("issues") or []) if i],
+            "recommendations": [r for r in (entry.get("recommendations") or []) if r],
+            "evidence": entry.get("evidence") or "",
+        })
+    return sorted(out, key=lambda d: d["score"])
+
+
+def voice_scorecard(
+    dimensions: Optional[dict], violations: Optional[list[dict]]
+) -> dict:
+    """The complete, storable voice verdict: headline score, band, per-dimension
+    detail, deterministic violations, and the failing dimensions to rewrite.
+
+    This is what gets persisted and rendered — one object so the page's voice
+    verdict can't drift apart across surfaces.
+    """
+    capped = apply_deterministic_caps(dimensions or {}, violations)
+    score = compute_voice_score(capped)
+    summary = compliance_summary(violations)
+    deficiencies = build_voice_deficiencies(capped)
+    return {
+        **summary,
+        "score": score,
+        "band": voice_band(score),
+        "dimensions": {
+            key: {
+                "label": meta["label"],
+                "weight": meta["weight"],
+                **(capped.get(key) if isinstance(capped.get(key), dict) else {}),
+            }
+            for key, meta in VOICE_DIMENSIONS.items()
+            if key in (capped or {})
+        },
+        "deficiencies": deficiencies,
+        # The page needs work when a regex caught something OR the judge scored
+        # it below the bar. Either is enough to earn a corrective rewrite.
+        "needs_rewrite": bool(summary["critical_count"])
+        or (score is not None and score < VOICE_PASS_THRESHOLD),
+    }
+
+
+def voice_deficiency_text(deficiencies: Optional[list[dict]]) -> str:
+    """Render failing dimensions as rewrite instructions."""
+    if not deficiencies:
+        return ""
+    lines = [
+        "BRAND VOICE — the page does not yet sound like this client. Fix each of "
+        "these, changing nothing about its structure, keywords, entities, or schema:",
+    ]
+    for deficiency in deficiencies:
+        # `:g` so a whole score renders as "45/100", not "45.0/100".
+        lines.append(f"  {deficiency['engine']} — scored {deficiency['score']:g}/100")
+        for issue in (deficiency.get("issues") or [])[:4]:
+            lines.append(f"    - {issue}")
+        for rec in (deficiency.get("recommendations") or [])[:4]:
+            lines.append(f"    → {rec}")
+        if deficiency.get("evidence"):
+            lines.append(f"    (example from the page: \"{deficiency['evidence']}\")")
+    return "\n".join(lines)

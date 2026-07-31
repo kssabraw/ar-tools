@@ -305,3 +305,144 @@ def test_distill_prompt_marks_missing_documents():
     prompt = vc.build_distill_prompt("", "ICP ONLY")
     assert "(none provided)" in prompt
     assert "ICP ONLY" in prompt
+
+
+# --- the voice scorecard ---------------------------------------------------
+
+def _dims(**overrides):
+    """A full set of applicable dimensions, all scoring 100 unless overridden."""
+    dims = {key: {"score": 100, "applicable": True} for key in vc.VOICE_DIMENSIONS}
+    for key, value in overrides.items():
+        dims[key] = value if isinstance(value, dict) else {"score": value, "applicable": True}
+    return dims
+
+
+def test_dimension_weights_sum_to_one():
+    assert round(sum(m["weight"] for m in vc.VOICE_DIMENSIONS.values()), 6) == 1.0
+
+
+def test_compute_voice_score_all_perfect():
+    assert vc.compute_voice_score(_dims()) == 100.0
+
+
+def test_compute_voice_score_is_weighted():
+    # distinctiveness carries 0.10, so a zero there costs exactly 10 points.
+    assert vc.compute_voice_score(_dims(distinctiveness=0)) == 90.0
+    # tone carries 0.15.
+    assert vc.compute_voice_score(_dims(tone=0)) == 85.0
+
+
+def test_inapplicable_dimensions_are_excluded_and_renormalized():
+    """A guide that says nothing about sentence rhythm must not be punished for
+    it — the remaining weights renormalize rather than scoring it zero."""
+    dims = _dims(writing_style={"applicable": False})
+    assert vc.compute_voice_score(dims) == 100.0
+    dims = _dims(writing_style={"applicable": False}, tone=0)
+    # tone 0.15 of the remaining 0.85 → 100 * (0.85-0.15)/0.85
+    assert vc.compute_voice_score(dims) == round(100 * 0.70 / 0.85, 1)
+
+
+def test_compute_voice_score_none_when_nothing_scoreable():
+    assert vc.compute_voice_score({}) is None
+    assert vc.compute_voice_score(None) is None
+    assert vc.compute_voice_score({k: {"applicable": False} for k in vc.VOICE_DIMENSIONS}) is None
+
+
+def test_compute_voice_score_clamps_and_ignores_junk():
+    assert vc.compute_voice_score(_dims(tone={"score": 500, "applicable": True})) == 100.0
+    assert vc.compute_voice_score(_dims(tone={"score": "high", "applicable": True})) == 100.0
+
+
+def test_voice_band_thresholds():
+    assert vc.voice_band(95) == "on_voice"
+    assert vc.voice_band(80) == "mostly_on_voice"
+    assert vc.voice_band(79.9) == "drifting"
+    assert vc.voice_band(59) == "off_voice"
+    assert vc.voice_band(None) == "not_scored"
+
+
+def test_deterministic_caps_override_a_generous_judge():
+    """A scorer cannot call vocabulary strong on a page that provably contains a
+    forbidden word."""
+    violations = [{"check": "never_use_terms", "severity": "critical", "terms": ["world-class"]}]
+    capped = vc.apply_deterministic_caps(_dims(), violations)
+    assert capped["vocabulary"]["score"] == 40.0
+    assert capped["vocabulary"]["capped_by_check"] == "never_use_terms"
+    # Untouched dimensions keep their score.
+    assert capped["tone"]["score"] == 100
+
+
+def test_deterministic_caps_never_raise_a_score():
+    violations = [{"check": "never_use_terms", "severity": "critical"}]
+    capped = vc.apply_deterministic_caps(_dims(vocabulary=10), violations)
+    assert capped["vocabulary"]["score"] == 10
+
+
+def test_deterministic_caps_map_each_check():
+    for check, (dimension, cap) in vc._DETERMINISTIC_CAPS.items():
+        capped = vc.apply_deterministic_caps(_dims(), [{"check": check, "severity": "warning"}])
+        assert capped[dimension]["score"] == cap
+
+
+def test_build_voice_deficiencies_only_failing_worst_first():
+    dims = _dims(tone=55, cta_fit=70, vocabulary=95)
+    deficiencies = vc.build_voice_deficiencies(dims)
+    assert [d["engine_key"] for d in deficiencies] == ["tone", "cta_fit"]
+    assert deficiencies[0]["score"] == 55
+
+
+def test_build_voice_deficiencies_skips_inapplicable():
+    assert vc.build_voice_deficiencies(_dims(tone={"applicable": False})) == []
+
+
+def test_voice_scorecard_assembles_everything():
+    violations = [{"check": "never_use_terms", "severity": "critical", "terms": ["world-class"],
+                   "message": "forbidden"}]
+    card = vc.voice_scorecard(_dims(tone=60), violations)
+    assert card["score"] is not None
+    assert card["band"] in ("drifting", "mostly_on_voice", "off_voice")
+    assert card["critical_count"] == 1
+    assert card["passed"] is False
+    assert card["needs_rewrite"] is True
+    assert "tone" in card["dimensions"]
+    assert card["dimensions"]["tone"]["label"] == "Tone & personality"
+    assert {d["engine_key"] for d in card["deficiencies"]} >= {"tone", "vocabulary"}
+
+
+def test_voice_scorecard_needs_rewrite_on_low_score_alone():
+    """No forbidden word, but the page does not sound like the client."""
+    card = vc.voice_scorecard(_dims(tone=40, distinctiveness=30, audience_fit=50), [])
+    assert card["critical_count"] == 0
+    assert card["score"] < vc.VOICE_PASS_THRESHOLD
+    assert card["needs_rewrite"] is True
+
+
+def test_voice_scorecard_clean_page_needs_no_rewrite():
+    card = vc.voice_scorecard(_dims(), [])
+    assert card["needs_rewrite"] is False
+    assert card["passed"] is True
+    assert card["score"] == 100.0
+
+
+def test_voice_scorecard_survives_a_scorer_that_returned_nothing():
+    card = vc.voice_scorecard({}, [])
+    assert card["score"] is None
+    assert card["band"] == "not_scored"
+    assert card["needs_rewrite"] is False
+
+
+def test_voice_deficiency_text_names_dimension_and_evidence():
+    dims = _dims(tone={"score": 45, "applicable": True, "issues": ["reads like a brochure"],
+                       "recommendations": ["use their plain-spoken register"],
+                       "evidence": "We are a world-class provider of solutions"})
+    text = vc.voice_deficiency_text(vc.build_voice_deficiencies(dims))
+    assert "Tone & personality" in text
+    assert "45/100" in text
+    assert "reads like a brochure" in text
+    assert "use their plain-spoken register" in text
+    assert "world-class provider" in text
+
+
+def test_voice_deficiency_text_empty_when_clean():
+    assert vc.voice_deficiency_text([]) == ""
+    assert vc.voice_deficiency_text(None) == ""

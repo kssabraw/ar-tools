@@ -73,6 +73,7 @@ export interface EcommercePageDetail extends EcommercePageListItem {
   // Deterministic brand-guide audit. Null when the client has no guide on file
   // or for pages generated before voice enforcement existed.
   voice_violations?: VoiceCompliance | null
+  voice_score?: number | null
   composite_score?: number | null
   composite_status?: string | null
   engine_scores?: Record<string, EngineScore> | null

@@ -25,6 +25,8 @@ export interface LocalSeoPageListItem {
   page_title: string | null
   composite_score: number | null
   composite_status: string | null
+  /** Brand voice, scored separately from composite_score. */
+  voice_score?: number | null
   mode: 'generate' | 'reoptimize'
   created_at: string
   // Set when soft-deleted (moved to Drafts); null = active (Saved Pages).
@@ -49,11 +51,32 @@ export interface VoiceViolation {
   detail?: string
 }
 
+/** One of the eight scored dimensions on the brand-voice scorecard. */
+export interface VoiceDimension {
+  label: string
+  weight: number
+  score?: number | null
+  /** False when the guide says nothing about this dimension — excluded from
+   *  the score rather than counted as a failure. */
+  applicable?: boolean
+  evidence?: string
+  issues?: string[]
+  recommendations?: string[]
+  /** Set when a deterministic check overrode a more generous judgement. */
+  capped_by_check?: string
+}
+
 export interface VoiceCompliance {
   passed: boolean
   critical_count: number
   warning_count: number
   violations: VoiceViolation[]
+  /** Headline 0-100, weighted across the applicable dimensions. Null when
+   *  nothing could be scored — distinct from scoring zero. */
+  score?: number | null
+  band?: 'on_voice' | 'mostly_on_voice' | 'drifting' | 'off_voice' | 'not_scored'
+  dimensions?: Record<string, VoiceDimension>
+  needs_rewrite?: boolean
 }
 
 export interface LocalSeoPageDetail extends LocalSeoPageListItem {

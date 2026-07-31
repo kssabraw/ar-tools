@@ -255,10 +255,13 @@ def _persist_page(client_id: str, keyword: str, location: str, run_analysis: boo
         # Structural-fidelity verdict from the generation gate ({composite,
         # dimensions, notes}). None when no reference structure drove the page.
         "structure_fidelity": result.get("structure_fidelity"),
-        # Deterministic brand-guide audit ({passed, critical_count,
-        # warning_count, violations}). None when the client has no guide on
-        # file, or on an nlp build predating voice enforcement.
+        # Brand-voice verdict: the full scorecard (headline score, band, the
+        # eight per-dimension results, deterministic violations) as jsonb, with
+        # the headline number lifted into its own column so it can be sorted and
+        # filtered beside the SEO score. Both null when the client has no brand
+        # guide on file — which is not the same as scoring zero.
         "voice_violations": result.get("voice_compliance"),
+        "voice_score": (result.get("voice_compliance") or {}).get("score"),
         "mode": mode,
         "token_usage": result.get("token_usage"),
         "cost_breakdown": result.get("cost_breakdown"),
@@ -1248,7 +1251,7 @@ async def run_local_seo_action_job(job: dict) -> None:
 # Columns returned for the page-list views (Saved Pages + Drafts).
 _LIST_COLUMNS = (
     "id, client_id, keyword, location, page_title, composite_score, "
-    "composite_status, mode, created_at, deleted_at, "
+    "composite_status, voice_score, mode, created_at, deleted_at, "
     "published_doc_url, published_url, published_at"
 )
 
