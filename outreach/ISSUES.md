@@ -381,3 +381,22 @@ multiply by 1000 to get `OUTREACH_OUTSCRAPER_COST_PER_1000_PLACES_CENTS`.
 Until then the abort gate runs on the 200c/1000 placeholder. At 14 tiles x 400 places the
 worst-case projection is $11.20 against a $50 ceiling, so the gate has ample headroom even if the
 placeholder is wrong by 4x — but it should be set from measurement before the portfolio scales.
+
+### I-034 · Railway reports a CRASHED job as deployment status SUCCESS
+**Observed, not theorised.** With `restartPolicyType = NEVER`, the `filter` run died with an
+unhandled `RuntimeError` (missing credential) and the deployment still showed **SUCCESS**, and
+posted a green commit status to the PR.
+
+**This is a live trap for an unattended cron job.** From cycle two onward nobody watches these
+runs, and a failed ingest that reports green is indistinguishable from a healthy one — the market
+would simply stop updating while the dashboard said everything was fine.
+
+*Partial mitigation:* `run_market.main` now prints a terminal marker on every exit path —
+`OUTREACH_RESULT status=ok|failed command=<cmd> exit=<n>` — including from the exception handler,
+so it survives any failure mode. The deployment status is NOT a success signal; this line is, and
+it is greppable from the logs.
+
+**Still needed (Phase 2, with the scheduler):** something that actually reads that marker and
+alerts. A log line nobody greps is only marginally better than a green tick nobody questions.
+Options: Railway webhook on deploy, or the job posting its own result somewhere durable —
+`cost_ledger` already gets a row per stage, so a `run_log` table is the cheap version.

@@ -13,16 +13,15 @@ from functools import lru_cache
 
 from supabase import Client, create_client
 
-from .config import get_settings
+from .config import get_settings, missing_supabase_vars
 
 
 @lru_cache
 def get_client() -> Client:
     settings = get_settings()
 
-    if not settings.supabase_url or not settings.supabase_service_role_key:
-        raise RuntimeError(
-            "OUTREACH_SUPABASE_URL and OUTREACH_SUPABASE_SERVICE_ROLE_KEY must be set"
-        )
+    missing = missing_supabase_vars(settings)
+    if missing:
+        raise RuntimeError(f"not set: {', '.join(missing)}")
 
     return create_client(settings.supabase_url, settings.supabase_service_role_key)

@@ -131,6 +131,26 @@ class Settings(BaseSettings):
     scan_interval_days: int = 15
 
 
+def missing_supabase_vars(settings: "Settings") -> list[str]:
+    """Which Supabase credentials are absent, by env-var name.
+
+    Pure, and deliberately not in db.py: that module imports the Supabase driver at module scope,
+    so a test for this check would need the driver installed to assert on a message about the
+    driver's configuration.
+
+    Names only what is actually missing. "A and B must be set" when only B is absent sends people
+    to check A first, which is set, and makes the error look wrong.
+    """
+    return [
+        name
+        for name, value in (
+            ("OUTREACH_SUPABASE_URL", settings.supabase_url),
+            ("OUTREACH_SUPABASE_SERVICE_ROLE_KEY", settings.supabase_service_role_key),
+        )
+        if not value
+    ]
+
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()

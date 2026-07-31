@@ -227,13 +227,27 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    return {
+    handler = {
         "seed": cmd_seed,
         "ingest": cmd_ingest,
         "filter": cmd_filter,
         "run": cmd_run,
         "calibrate": cmd_calibrate,
-    }[args.command](args)
+    }[args.command]
+
+    # Railway reports a crashed job as deployment status SUCCESS when restartPolicy is NEVER —
+    # observed: `filter` died on a missing credential and the deployment still showed green.
+    # For a job that runs unattended twice a month, the deployment status is therefore NOT a
+    # success signal. This marker is, and it is greppable from the logs.
+    try:
+        code = handler(args)
+    except Exception as exc:  # noqa: BLE001 — the marker must outlive any failure mode
+        print(f"OUTREACH_RESULT status=failed command={args.command} error={exc!r}", flush=True)
+        raise
+
+    status = "ok" if code == 0 else "failed"
+    print(f"OUTREACH_RESULT status={status} command={args.command} exit={code}", flush=True)
+    return code
 
 
 if __name__ == "__main__":

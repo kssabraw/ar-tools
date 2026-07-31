@@ -646,3 +646,25 @@ def test_the_los_angeles_market_carries_a_region():
 
     path = Path(__file__).resolve().parents[2] / "markets" / "los-angeles-plumbing.json"
     assert MarketDefinition.from_file(path).region == "CA, USA"
+
+
+# --- job result marker -------------------------------------------------------------------
+
+
+def test_missing_credentials_names_only_the_absent_one():
+    """"A and B must be set" when only B is missing sends people to check A first — which is
+    set — and makes the error look wrong. Observed for real on the first Railway run."""
+    from api.config import Settings, missing_supabase_vars
+
+    only_key_missing = Settings(
+        supabase_url="https://x.supabase.co", supabase_service_role_key=""
+    )
+    assert missing_supabase_vars(only_key_missing) == ["OUTREACH_SUPABASE_SERVICE_ROLE_KEY"]
+
+    assert missing_supabase_vars(
+        Settings(supabase_url="", supabase_service_role_key="")
+    ) == ["OUTREACH_SUPABASE_URL", "OUTREACH_SUPABASE_SERVICE_ROLE_KEY"]
+
+    assert missing_supabase_vars(
+        Settings(supabase_url="https://x.supabase.co", supabase_service_role_key="k")
+    ) == []
