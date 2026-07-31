@@ -116,3 +116,43 @@ async def test_pace_shaped_message_is_not_delegated_to_pace(monkeypatch):
         )
     assert called["pace"] is False
     assert reached["sermastr"] is True
+
+
+# ---------------------------------------------------------------------------
+# Follow-up regression (2026-07-31, live): "whenever I ask a follow up question
+# it just repeats the last answer."
+#
+# The chain: #516 raised the reply cap so director answers run 9-10k chars; the
+# ChatTurn history items were capped at 8,000 chars with a REJECTING
+# max_length, so every follow-up carrying the previous answer 422'd; and the
+# frontend's stream-recovery path masked the 422 by re-showing the thread's
+# last stored answer. The Henson conversation proves it: one user message, one
+# reply, and every follow-up invisible.
+# ---------------------------------------------------------------------------
+
+
+def test_follow_up_with_a_long_previous_answer_is_accepted_not_rejected():
+    from routers.assistant import ChatRequest
+
+    req = ChatRequest(
+        message="what about the maps side?",
+        history=[{"role": "assistant", "content": "x" * 9905}],  # the Henson reply's size
+        conversation_id="47db8f32-e681-4c47-99cf-5f77f20d57c4",
+    )
+    # Clipped as a seed, never a 422 — history is only a seed; the store is
+    # the real history.
+    assert len(req.history[0].content) == 8000
+
+
+def test_pace_follow_up_is_clipped_the_same_way():
+    from routers.pace import PaceChatRequest
+
+    req = PaceChatRequest(message="and the board?", history=[{"role": "user", "content": "y" * 20000}])
+    assert len(req.history[0].content) == 8000
+
+
+def test_short_history_passes_through_unclipped():
+    from routers.assistant import ChatRequest
+
+    req = ChatRequest(message="hi", history=[{"role": "user", "content": "short"}])
+    assert req.history[0].content == "short"
