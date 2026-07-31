@@ -1462,8 +1462,8 @@ def test_vague_ask_gets_the_clarify_instruction():
 def test_anchored_ask_does_not_get_the_clarify_instruction():
     system = _system_prompt_for("what should we do about the maps drop?")
     assert "THIS TURN IS UNDERSPECIFIED" not in system
-    # …but the standing prompt is still there.
-    assert "ASK WHEN UNSURE" in system
+    # …but the standing posture rule is still there.
+    assert "DECIDE, DON'T INTERROGATE" in system
 
 
 # ---------------------------------------------------------------------------
@@ -1587,9 +1587,12 @@ def test_pompano_question_gets_the_ranking_instruction_not_the_generic_one():
     assert "THIS TURN IS UNDERSPECIFIED" not in system
 
 
-def test_ranking_instruction_names_both_specifics_and_all_three_channels():
+def test_ranking_instruction_decides_both_specifics_itself():
     system = _system_prompt_for(_POMPANO)
-    assert "THE KEYWORD" in system and "THE CHANNEL" in system
+    # It must OWN both calls rather than ask for them.
+    assert "TARGET KEYWORD" in system and "THE CHANNEL" in system
+    assert "YOU DECIDE BOTH YOURSELF" in system
+    assert "ANSWER IT" in system
     for channel in ("organic", "local pack", "AI answers"):
         assert channel in system, channel
 
@@ -1737,11 +1740,24 @@ def test_the_want_to_rank_phrasing_trips_the_ranking_gate():
     assert slack_assistant.looks_like_ranking_strategy_ask(_POMPANO_WANT)
 
 
-def test_ranking_instruction_forbids_inferring_the_keyword_from_tracked_data():
+def test_client_plus_city_only_is_treated_as_normal_not_as_a_gap():
+    # "rank <client> in <city>" names no keyword. That is the COMMON case and
+    # must produce a chosen target, not a question back.
     system = _system_prompt_for(_POMPANO_WANT)
-    assert "WHAT COUNTS AS THE KEYWORD BEING SUPPLIED" in system
-    # The exact wrong inference the live turn made.
-    assert "tracked keywords" in system
-    # And the two sentence-parsing traps that made it look supplied.
-    assert "SUBJECT of the sentence" in system
-    assert "the WHERE, never the WHAT" in system
+    assert "NORMAL and you are expected to choose" in system
+
+
+def test_ranking_instruction_still_forbids_reusing_other_cities_keywords():
+    # The one real finding from the live failure survives the reversal: the
+    # client's existing keywords carry the wrong geo-modifier.
+    system = _system_prompt_for(_POMPANO_WANT)
+    assert "existing tracked keywords for other cities" in system
+    assert "build the local equivalent" in system
+
+
+def test_ranking_instruction_requires_stated_assumptions_not_a_gate():
+    # Control over the target is preserved by making the assumption explicit
+    # and correctable — never by withholding the strategy.
+    system = _system_prompt_for(_POMPANO_WANT)
+    assert "INVITATION, not a" in system
+    assert "I've assumed" in system
