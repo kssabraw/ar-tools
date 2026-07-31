@@ -16,6 +16,7 @@ from models.clients import (
     ClientDetail,
     ClientListItem,
     ClientUpdateRequest,
+    PageStructureGuidelines,
     PageStructureUrls,
 )
 from services import brand_voice_service, github_infer, icp_service, rank_location
@@ -85,6 +86,31 @@ def _enqueue_page_structure_scrape(client_id: str, page_type: str, url: str) -> 
     ).execute()
 
 
+def _enqueue_page_structure_parse(
+    client_id: str, page_type: str, guidelines_text: str, original_filename: Optional[str]
+) -> None:
+    supabase = get_supabase()
+    supabase.table("async_jobs").insert(
+        {
+            "job_type": "page_structure_parse",
+            "entity_id": client_id,
+            "payload": {
+                "client_id": client_id,
+                "page_type": page_type,
+                "guidelines_text": guidelines_text,
+                "original_filename": original_filename,
+            },
+        }
+    ).execute()
+
+
+def _is_manual(entry: dict) -> bool:
+    """Whether a stored page_structures entry came from written guidelines rather
+    than a scraped URL. Entries predating the manual source have no `source` key
+    and are scrapes (they always carry a URL)."""
+    return (entry or {}).get("source") == "manual"
+
+
 def _sync_page_structures(
     existing: dict, urls: Optional[PageStructureUrls]
 ) -> tuple[dict, list[tuple[str, str]]]:
@@ -94,7 +120,10 @@ def _sync_page_structures(
     (page_type, url) whose page must be (re)scraped. Behavior per page type:
       - new/changed URL  → mark pending + clear stale analysis + enqueue scrape
       - unchanged URL    → keep the stored entry (don't re-scrape)
-      - cleared (empty)  → drop the entry entirely
+      - cleared (empty)  → drop the entry, UNLESS it's a manual (guidelines)
+        entry, which this field doesn't own — the frontend submits every URL
+        field on every save, so an empty URL here must not delete a page type
+        configured via `page_structure_guidelines`.
     A None `urls` (field omitted) leaves the structures untouched.
     """
     merged = dict(existing or {})
@@ -108,12 +137,14 @@ def _sync_page_structures(
         current = merged.get(page_type) or {}
         current_url = (current.get("url") or "").strip()
         if not new_url:
-            merged.pop(page_type, None)
+            if not _is_manual(current):
+                merged.pop(page_type, None)
             continue
         if new_url == current_url and current.get("status") == "complete":
             continue  # unchanged + already analyzed — leave as-is
         merged[page_type] = {
             "url": new_url,
+            "source": "scrape",
             "status": "pending",
             "error": None,
             "analysis": None,
@@ -121,6 +152,82 @@ def _sync_page_structures(
         }
         to_enqueue.append((page_type, new_url))
     return merged, to_enqueue
+
+
+def _sync_page_structure_guidelines(
+    existing: dict, guidelines: Optional[PageStructureGuidelines]
+) -> tuple[dict, list[tuple[str, str, Optional[str]]]]:
+    """Diff submitted written page-structure specs against the stored structures.
+
+    The guidelines counterpart of `_sync_page_structures`, and it owns exactly
+    the manual entries: per page type a new/changed spec marks the entry pending
+    and enqueues a parse; unchanged text is left alone (re-parsing is an LLM call
+    and the result wouldn't change); empty text clears the entry only when the
+    stored one is manual, so submitting a blank spec can't wipe a scraped URL.
+
+    Returns (merged_structures, to_enqueue) with to_enqueue as
+    (page_type, guidelines_text, original_filename).
+    """
+    merged = dict(existing or {})
+    to_enqueue: list[tuple[str, str, Optional[str]]] = []
+    if guidelines is None:
+        return merged, to_enqueue
+
+    submitted = guidelines.model_dump()
+    for page_type in PAGE_TYPES:
+        field = submitted.get(page_type) or {}
+        text = (field.get("text") or "").strip()
+        filename = (field.get("original_filename") or "").strip() or None
+        current = merged.get(page_type) or {}
+        if not text:
+            if _is_manual(current):
+                merged.pop(page_type, None)
+            continue
+        current_text = (current.get("guidelines_text") or "").strip()
+        if (
+            _is_manual(current)
+            and text == current_text
+            and current.get("status") == "complete"
+        ):
+            continue  # unchanged + already parsed — don't spend another LLM call
+        merged[page_type] = {
+            "url": "",
+            "source": "manual",
+            "guidelines_text": text,
+            "original_filename": filename,
+            "status": "pending",
+            "error": None,
+            "analysis": None,
+            "analyzed_at": None,
+        }
+        to_enqueue.append((page_type, text, filename))
+    return merged, to_enqueue
+
+
+def _assert_single_structure_source(
+    urls: Optional[PageStructureUrls], guidelines: Optional[PageStructureGuidelines]
+) -> None:
+    """Reject a page type configured with BOTH a reference URL and written
+    guidelines — one source per page type, so it's unambiguous which one the
+    writers mirror and which one a re-analysis refreshes."""
+    if urls is None or guidelines is None:
+        return
+    submitted_urls = urls.model_dump()
+    submitted_guides = guidelines.model_dump()
+    conflicts = [
+        page_type
+        for page_type in PAGE_TYPES
+        if (submitted_urls.get(page_type) or "").strip()
+        and ((submitted_guides.get(page_type) or {}).get("text") or "").strip()
+    ]
+    if conflicts:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "validation_error: page structure must use either a reference URL "
+                "or written guidelines, not both — " + ", ".join(conflicts)
+            ),
+        )
 
 
 def _resolve_file_fields(
@@ -282,7 +389,11 @@ async def create_client(
         row["strategist_weekday"] = body.strategist_weekday
     # Reference page structures: seed the pending entries so the row reflects the
     # configured URLs immediately; the scrape jobs are enqueued after insert.
+    _assert_single_structure_source(body.page_structure_urls, body.page_structure_guidelines)
     page_structures, ps_to_enqueue = _sync_page_structures({}, body.page_structure_urls)
+    page_structures, ps_guides_to_enqueue = _sync_page_structure_guidelines(
+        page_structures, body.page_structure_guidelines
+    )
     if page_structures:
         row["page_structures"] = page_structures
     # Converge the legacy free-text brand guide into the canonical brand_voice
@@ -304,6 +415,8 @@ async def create_client(
         github_infer.enqueue_github_infer(client["id"])
     for page_type, url in ps_to_enqueue:
         _enqueue_page_structure_scrape(client["id"], page_type, url)
+    for page_type, text, filename in ps_guides_to_enqueue:
+        _enqueue_page_structure_parse(client["id"], page_type, text, filename)
     # Auto-generate the brand voice + ICP so they exist without a manual scan.
     _enqueue_auto_brand_voice_icp(client, auth["user_id"])
     # Auto-track the client's own domain for backlink monitoring (best-effort;
@@ -434,11 +547,20 @@ async def update_client(
     if body.target_cities is not None:
         updates["target_cities"] = body.target_cities
 
-    # Reference page structures: diff submitted URLs vs stored, enqueue changed.
+    # Reference page structures: diff submitted URLs + written guidelines vs
+    # stored, enqueue whatever changed. Both sync passes run over the same merged
+    # map so a page type can be switched from one source to the other in one save.
     ps_to_enqueue: list[tuple[str, str]] = []
-    if body.page_structure_urls is not None:
+    ps_guides_to_enqueue: list[tuple[str, str, Optional[str]]] = []
+    if body.page_structure_urls is not None or body.page_structure_guidelines is not None:
+        _assert_single_structure_source(
+            body.page_structure_urls, body.page_structure_guidelines
+        )
         merged_ps, ps_to_enqueue = _sync_page_structures(
             existing.get("page_structures") or {}, body.page_structure_urls
+        )
+        merged_ps, ps_guides_to_enqueue = _sync_page_structure_guidelines(
+            merged_ps, body.page_structure_guidelines
         )
         updates["page_structures"] = merged_ps
 
@@ -455,6 +577,8 @@ async def update_client(
         github_infer.enqueue_github_infer(str(client_id))
     for page_type, url in ps_to_enqueue:
         _enqueue_page_structure_scrape(str(client_id), page_type, url)
+    for page_type, text, filename in ps_guides_to_enqueue:
+        _enqueue_page_structure_parse(str(client_id), page_type, text, filename)
     # Re-derive the rank-tracking location only when the GBP actually changed
     # (the job still skips manually-set clients and only re-pulls on a change).
     if body.gbp is not None and updates.get("gbp") != existing.get("gbp"):
@@ -555,13 +679,14 @@ async def reanalyze_page_structures(
     page_type: Optional[str] = Query(None),
     auth: dict = Depends(require_staff),
 ) -> dict:
-    """Re-scrape + re-analyze the client's stored reference page structure(s).
+    """Re-analyze the client's stored reference page structure(s).
 
-    Unlike create/update — which only (re)scrape a URL when it *changes* — this
-    forces a fresh analysis of the already-stored URL(s), e.g. after the client's
-    page itself was redesigned. Pass `page_type` to refresh one reference page;
-    omit it to refresh all stored ones. Resets each target to `pending` and
-    enqueues a `page_structure_scrape` job.
+    Unlike create/update — which only re-analyze a source when it *changes* —
+    this forces a fresh analysis of what's already stored, e.g. after the
+    client's page was redesigned. Each entry is refreshed through the capture
+    path that owns it: a scraped entry re-fetches its URL, a manual entry
+    re-parses its stored guidelines text. Pass `page_type` to refresh one
+    reference page; omit it to refresh all stored ones.
     """
     if page_type is not None and page_type not in PAGE_TYPES:
         raise HTTPException(status_code=422, detail="invalid_page_type")
@@ -579,29 +704,52 @@ async def reanalyze_page_structures(
 
     structures = result.data.get("page_structures") or {}
     targets = [page_type] if page_type else list(PAGE_TYPES)
-    reanalyzed: list[str] = []
+    scrapes: list[tuple[str, str]] = []
+    parses: list[tuple[str, str, Optional[str]]] = []
     for pt in targets:
-        url = ((structures.get(pt) or {}).get("url") or "").strip()
+        entry = structures.get(pt) or {}
+        if _is_manual(entry):
+            text = (entry.get("guidelines_text") or "").strip()
+            if not text:
+                continue
+            filename = entry.get("original_filename")
+            structures[pt] = {
+                "url": "",
+                "source": "manual",
+                "guidelines_text": text,
+                "original_filename": filename,
+                "status": "pending",
+                "error": None,
+                "analysis": None,
+                "analyzed_at": None,
+            }
+            parses.append((pt, text, filename))
+            continue
+        url = (entry.get("url") or "").strip()
         if not url:
             continue
         structures[pt] = {
             "url": url,
+            "source": "scrape",
             "status": "pending",
             "error": None,
             "analysis": None,
             "analyzed_at": None,
         }
-        reanalyzed.append(pt)
+        scrapes.append((pt, url))
 
+    reanalyzed = [pt for pt, _ in scrapes] + [pt for pt, _, _ in parses]
     if not reanalyzed:
-        raise HTTPException(status_code=422, detail="no_reference_urls_to_reanalyze")
+        raise HTTPException(status_code=422, detail="no_reference_structures_to_reanalyze")
 
     supabase.table("clients").update(
         {"page_structures": structures, "updated_at": "now()"}
     ).eq("id", str(client_id)).execute()
 
-    for pt in reanalyzed:
-        _enqueue_page_structure_scrape(str(client_id), pt, structures[pt]["url"])
+    for pt, url in scrapes:
+        _enqueue_page_structure_scrape(str(client_id), pt, url)
+    for pt, text, filename in parses:
+        _enqueue_page_structure_parse(str(client_id), pt, text, filename)
 
     logger.info(
         "client_page_structures_reanalyze",
