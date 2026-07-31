@@ -203,6 +203,79 @@ def _plan_reap(attempts: int, max_attempts: int) -> tuple[dict, str]:
     }, "failed"
 
 
+# Backoff before a re-queued transient failure becomes claimable again. The
+# worker claims by oldest `scheduled_at` with no `<= now` gate, so this
+# de-prioritizes the retry behind other queued work rather than hard-gating it —
+# enough that a sustained nlp outage cannot hot-loop a job, without stalling the
+# retry when the queue is otherwise empty. Mirrors the bulk-job staggering lever.
+_TRANSIENT_RETRY_BACKOFF_MINUTES = (5, 15, 45)
+
+
+def plan_job_retry(
+    attempts: int, max_attempts: int, transient: bool, error: str,
+    now: datetime | None = None,
+) -> tuple[dict, str]:
+    """Decide how a handler should settle a FAILED run: re-queue it for another
+    attempt, or fail it terminally. Pure; unit-tested.
+
+    Handlers historically wrote `status='failed'` on any exception, which made
+    `max_attempts` decorative for them: the reaper only re-queues rows still in
+    'running', so a handler that settles the row terminally has already opted out
+    of every retry. That cost a real 8-minute ecommerce reoptimize on 2026-07-31
+    — the nlp container restarted mid-stream, the SSE read died with a transport
+    error, and the whole run was discarded at `attempts: 1`.
+
+    A retry is only correct when the failure is TRANSIENT (5xx / transport — the
+    classifier is `content_batch._raise_if_transient_nlp`). A 4xx is
+    client-actionable and retrying cannot fix it, so it fails immediately and the
+    user sees the real reason instead of the same error three attempts later.
+
+    `attempts` is the count already consumed (the claim increments it before the
+    handler runs), so `attempts >= max_attempts` means this was the last one.
+    """
+    if not transient or attempts >= max_attempts:
+        return {"status": "failed", "error": error[:500], "completed_at": "now()"}, "failed"
+    idx = min(max(attempts - 1, 0), len(_TRANSIENT_RETRY_BACKOFF_MINUTES) - 1)
+    delay = _TRANSIENT_RETRY_BACKOFF_MINUTES[idx]
+    when = (now or datetime.now(timezone.utc)) + timedelta(minutes=delay)
+    return {
+        "status": "pending",
+        "started_at": None,
+        "scheduled_at": when.isoformat(),
+        "error": f"transient (attempt {attempts}/{max_attempts}, retrying in {delay}m): {error}"[:500],
+    }, "requeued"
+
+
+def settle_job_failure(job_id: str, exc: Exception, job: dict) -> None:
+    """Settle a handler's failed run — re-queueing it on a transient upstream
+    failure while attempts remain, else failing it terminally.
+
+    The counterpart to the `status='failed'` line handlers write today. Uses the
+    same transient classifier as the content-batch path so "retryable" means one
+    thing across the suite. Best-effort: if the settle itself fails, the row stays
+    'running' and the reaper picks it up, which is the correct fallback.
+    """
+    from services.content_batch import is_transient_upstream
+
+    detail = str(getattr(exc, "detail", None) or exc)
+    update, outcome = plan_job_retry(
+        attempts=int(job.get("attempts") or 1),
+        max_attempts=int(job.get("max_attempts") or 2),
+        transient=is_transient_upstream(exc),
+        error=detail,
+    )
+    try:
+        get_supabase().table("async_jobs").update(update).eq("id", job_id).execute()
+    except Exception:  # noqa: BLE001 — the reaper is the fallback
+        logger.warning("job_worker.settle_failure_failed", extra={"job_id": job_id})
+        return
+    logger.warning(
+        "job_worker.handler_failed",
+        extra={"job_id": job_id, "job_type": job.get("job_type"),
+               "outcome": outcome, "attempts": job.get("attempts"), "error": detail[:200]},
+    )
+
+
 def _settle_if_running(job_id: str, update: dict) -> bool:
     """Write a terminal state to a job row **only if it is still 'running'**.
 

@@ -770,11 +770,13 @@ async def run_generate_job(job: dict) -> None:
         ).eq("id", job_id).execute()
         logger.info("ecommerce.generate_job_complete", extra={"job_id": job_id, "page_id": page["id"]})
     except Exception as exc:  # noqa: BLE001
-        detail = getattr(exc, "detail", None) or str(exc)
-        logger.warning("ecommerce.generate_job_failed", extra={"job_id": job_id, "error": str(detail)})
-        supabase.table("async_jobs").update(
-            {"status": "failed", "error": str(detail)[:500], "completed_at": "now()"}
-        ).eq("id", job_id).execute()
+        # Settle via the shared planner rather than writing 'failed' directly: a
+        # transient nlp outage (container restart mid-stream) re-queues for
+        # another attempt instead of discarding minutes of work, while a 4xx
+        # still fails immediately with the real reason. See job_worker.
+        from services.job_worker import settle_job_failure
+
+        settle_job_failure(job_id, exc, job)
 
 
 def get_generate_job(job_id: str, client_id: str) -> dict:
@@ -868,11 +870,12 @@ async def run_reoptimize_url_job(job: dict) -> None:
         ).eq("id", job_id).execute()
         logger.info("ecommerce.reoptimize_job_complete", extra={"job_id": job_id})
     except Exception as exc:  # noqa: BLE001
-        detail = getattr(exc, "detail", None) or str(exc)
-        logger.warning("ecommerce.reoptimize_job_failed", extra={"job_id": job_id, "error": str(detail)})
-        supabase.table("async_jobs").update(
-            {"status": "failed", "error": str(detail)[:500], "completed_at": "now()"}
-        ).eq("id", job_id).execute()
+        # See run_generate_job: transient upstream failures re-queue instead of
+        # discarding the run. This is the job type that lost an 8-minute run to
+        # an nlp container restart on 2026-07-31 with `attempts: 1`.
+        from services.job_worker import settle_job_failure
+
+        settle_job_failure(job_id, exc, job)
 
 
 def get_jobs_status(client_id: str, job_ids: list[str]) -> list[dict]:

@@ -514,3 +514,102 @@ def test_process_job_fails_an_unknown_job_type(monkeypatch):
     assert len(sb._table.updates) == 1
     assert sb._table.updates[0]["status"] == "failed"
     assert "unknown_job_type" in sb._table.updates[0]["error"]
+
+
+# ── plan_job_retry (pure decision) ───────────────────────────────────────────
+# Handlers used to write status='failed' on any exception, which made
+# max_attempts decorative for them — the reaper only re-queues rows still in
+# 'running', so a handler that settles terminally has opted out of every retry.
+# A real 8-minute ecommerce reoptimize was discarded that way at attempts:1 when
+# the nlp container restarted mid-stream.
+
+def test_plan_job_retry_requeues_a_transient_failure():
+    update, outcome = job_worker.plan_job_retry(
+        attempts=1, max_attempts=2, transient=True, error="ecommerce_provider_error",
+    )
+    assert outcome == "requeued"
+    assert update["status"] == "pending"
+    assert update["started_at"] is None
+    # Backed off via scheduled_at so a sustained outage can't hot-loop the job.
+    assert "scheduled_at" in update
+    assert "retrying in 5m" in update["error"]
+
+
+def test_plan_job_retry_fails_a_permanent_failure_immediately():
+    # A 4xx is client-actionable; retrying burns attempts and delays the real
+    # error reaching the user.
+    update, outcome = job_worker.plan_job_retry(
+        attempts=1, max_attempts=2, transient=False, error="page_url_or_html_required",
+    )
+    assert outcome == "failed"
+    assert update["status"] == "failed"
+    assert update["error"] == "page_url_or_html_required"
+    assert update["completed_at"] == "now()"
+
+
+def test_plan_job_retry_fails_once_attempts_are_exhausted():
+    update, outcome = job_worker.plan_job_retry(
+        attempts=2, max_attempts=2, transient=True, error="ecommerce_provider_error",
+    )
+    assert outcome == "failed"
+    assert update["status"] == "failed"
+
+
+def test_plan_job_retry_backoff_grows_with_attempts():
+    def _delay(attempts):
+        update, _ = job_worker.plan_job_retry(
+            attempts=attempts, max_attempts=9, transient=True, error="boom",
+        )
+        return update["error"]
+
+    assert "retrying in 5m" in _delay(1)
+    assert "retrying in 15m" in _delay(2)
+    assert "retrying in 45m" in _delay(3)
+    # Clamped at the last rung rather than indexing off the end.
+    assert "retrying in 45m" in _delay(8)
+
+
+def test_plan_job_retry_truncates_a_long_error():
+    update, _ = job_worker.plan_job_retry(
+        attempts=1, max_attempts=2, transient=False, error="x" * 900,
+    )
+    assert len(update["error"]) == 500
+
+
+# ── settle_job_failure (wiring, mocked Supabase) ─────────────────────────────
+
+def test_settle_job_failure_requeues_a_transient_nlp_outage(monkeypatch):
+    from fastapi import HTTPException
+
+    sb = _FakeSupabase([])
+    monkeypatch.setattr(job_worker, "get_supabase", lambda: sb)
+
+    job = {"id": "j1", "job_type": "ecommerce_reoptimize_url", "attempts": 1, "max_attempts": 2}
+    job_worker.settle_job_failure("j1", HTTPException(status_code=502, detail="ecommerce_provider_error"), job)
+
+    assert len(sb._table.updates) == 1
+    assert sb._table.updates[0]["status"] == "pending"
+    assert "completed_at" not in sb._table.updates[0]
+
+
+def test_settle_job_failure_fails_a_client_actionable_error(monkeypatch):
+    from fastapi import HTTPException
+
+    sb = _FakeSupabase([])
+    monkeypatch.setattr(job_worker, "get_supabase", lambda: sb)
+
+    job = {"id": "j1", "job_type": "ecommerce_generate", "attempts": 1, "max_attempts": 2}
+    job_worker.settle_job_failure("j1", HTTPException(status_code=400, detail="page_url_or_html_required"), job)
+
+    assert sb._table.updates[0]["status"] == "failed"
+    assert sb._table.updates[0]["error"] == "page_url_or_html_required"
+
+
+def test_settle_job_failure_leaves_the_row_running_when_the_write_fails(monkeypatch):
+    # The reaper is the fallback — a failed settle must not raise into the worker.
+    class _Boom:
+        def table(self, *_a, **_k):
+            raise RuntimeError("supabase down")
+
+    monkeypatch.setattr(job_worker, "get_supabase", lambda: _Boom())
+    job_worker.settle_job_failure("j1", RuntimeError("boom"), {"id": "j1", "attempts": 1, "max_attempts": 2})
