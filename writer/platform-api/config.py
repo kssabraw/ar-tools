@@ -614,7 +614,12 @@ class Settings(BaseSettings):
     # replies (opinion + numbers + citations + next move) room; the prompt's
     # "be concise" rule is the real length governor. Still-truncated replies
     # get an explicit "say continue" marker appended (see interpret()).
-    slack_assistant_max_tokens: int = 2000
+    # A director-mode strategy covers three channels in sequence and is long by
+    # design. At 2000 the Pompano plan was guillotined mid-Maps section — the
+    # off-page and AI halves were never written, and the user reasonably read
+    # that as "it only does on-page". The truncation handler ("say continue")
+    # papered over it.
+    slack_assistant_max_tokens: int = 8000
     # Post-turn memory capture. The `remember` TOOL can barely fire in practice:
     # it competes with writing the answer inside the same bounded tool loop, and
     # the round that produces the reply has tool_choice="none". So a cheap second

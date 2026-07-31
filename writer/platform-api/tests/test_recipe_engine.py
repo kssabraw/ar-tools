@@ -109,3 +109,45 @@ def test_capacity_cap_flags():
     pages = _line(plan, "content_page")
     assert pages["quantity"] == 10
     assert "capacity_capped" in plan["flags"]
+
+
+# ---------------------------------------------------------------------------
+# budget_envelope — what a retainer funds, without needing a stored plan.
+#
+# Most clients have never had a monthly plan generated, so reading
+# monthly_task_plans alone leaves the assistant planning as if money were no
+# object. BSA Claims ($500/mo) can't even cover the mandatory Baseline Stack.
+# ---------------------------------------------------------------------------
+
+
+def test_budget_envelope_matches_the_allocation_formula():
+    env = re_.budget_envelope(2500.0)
+    assert env["deployable"] == 850.0                      # 2500 × 0.34
+    assert env["reporting_cost"] == re_.REPORTING_COST
+    assert env["baseline_stack_cost"] == 135.0
+    assert env["discretionary"] == 565.0                   # 850 − 150 − 135
+    assert env["covers_baseline"] is True
+
+
+def test_budget_envelope_goes_negative_when_the_retainer_cannot_fund_baseline():
+    # The real BSA Claims case — a strategist must be told, not shown zero.
+    env = re_.budget_envelope(500.0)
+    assert env["discretionary"] == -115.0
+    assert env["covers_baseline"] is False
+
+
+def test_budget_envelope_excludes_the_gbp_blast_for_sab_clients():
+    physical = re_.budget_envelope(2500.0)
+    sab = re_.budget_envelope(2500.0, is_sab=True)
+    assert sab["baseline_stack_cost"] == physical["baseline_stack_cost"] - 5.0
+    assert sab["discretionary"] > physical["discretionary"]
+
+
+def test_budget_envelope_handles_a_missing_retainer():
+    env = re_.budget_envelope(None)
+    assert env["deployable"] == 0.0 and env["covers_baseline"] is False
+
+
+def test_budget_envelope_respects_the_drop_margin():
+    env = re_.budget_envelope(2500.0, margin=re_.DROP_MARGIN)
+    assert env["deployable"] == 1250.0 and env["discretionary"] == 965.0

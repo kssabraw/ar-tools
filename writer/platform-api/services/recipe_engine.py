@@ -163,6 +163,45 @@ def cost_of(costed_items: "list[dict] | None", catalog: "dict[str, dict] | None"
 # ─────────────────────────────────────────────────────────────────────────────
 # Pure allocation engine (§1–§5) — conformance-tested against the worked example
 # ─────────────────────────────────────────────────────────────────────────────
+def budget_envelope(
+    retainer: "float | None",
+    *,
+    margin: float = DEFAULT_MARGIN,
+    is_sab: bool = False,
+) -> dict:
+    """What a retainer can actually fund this month, before any diagnosis. Pure.
+
+    The same §1 arithmetic `allocate` opens with — retainer × margin, less fixed
+    reporting, less the mandatory Baseline Stack — surfaced on its own so a
+    strategy can be sized to the money WITHOUT a stored monthly plan existing.
+    Most clients have never had one generated, so reading `monthly_task_plans`
+    alone leaves the assistant planning as if budget were unlimited.
+
+    `discretionary` is what's left for anything a strategy proposes on top of
+    the baseline; it goes negative when the retainer can't even cover the
+    baseline, which is a fact a strategist needs stated, not hidden at zero.
+    """
+    gross = round((retainer or 0.0) * margin, 2)
+    baseline = round(
+        sum(
+            item["quantity"] * item["unit_cost"]
+            for item in BASELINE_STACK
+            if not (is_sab and item.get("sab_excluded"))
+        ),
+        2,
+    )
+    discretionary = round(gross - REPORTING_COST - baseline, 2)
+    return {
+        "retainer_monthly": retainer,
+        "margin_used": margin,
+        "deployable": gross,
+        "reporting_cost": REPORTING_COST,
+        "baseline_stack_cost": baseline,
+        "discretionary": discretionary,
+        "covers_baseline": discretionary >= 0,
+    }
+
+
 def allocate(
     retainer: float,
     diagnosis: dict,
