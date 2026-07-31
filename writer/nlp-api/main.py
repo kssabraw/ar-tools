@@ -304,8 +304,13 @@ async def _resolve_voice_card(client, body) -> dict:
     if not VOICE_ENFORCEMENT_ENABLED:
         return vcard.empty_card()
     supplied = getattr(body, "voice_card", None)
-    if isinstance(supplied, dict) and supplied:
-        return vcard.parse_voice_card(supplied)
+    if isinstance(supplied, dict):
+        # An explicitly-supplied card is authoritative even when EMPTY: platform
+        # caches {} for a guide that distilled to nothing enforceable, and
+        # falling through here would re-pay an inline distillation on every
+        # single page for that client — the exact cost the cache exists to
+        # avoid. Absent field (None) = older caller → distill inline.
+        return vcard.parse_voice_card(supplied) if supplied else vcard.empty_card()
     return await _distill_voice_card(
         client, getattr(body, "brand_voice", None), getattr(body, "detected_icp", None)
     )
@@ -3748,8 +3753,12 @@ def _client_has_guide(body) -> bool:
     the same on the finished page.
     """
     supplied = getattr(body, "voice_card", None)
-    if isinstance(supplied, dict) and any(supplied.values()):
-        return True
+    if isinstance(supplied, dict):
+        # The field being present means platform already ran the resolution:
+        # a non-empty card is a guide, an empty one means the guide distilled
+        # to nothing enforceable — which is an ANSWER, not a failure, so it
+        # must not trip the "could not be prepared" verdict below.
+        return any(supplied.values())
     return bool(
         _build_brand_voice_text(getattr(body, "brand_voice", None)).strip()
         or _build_icp_text(getattr(body, "detected_icp", None)).strip()
@@ -3768,6 +3777,10 @@ def _ensure_voice_verdict(
     """
     if scorecard is not None:
         return scorecard
+    if not VOICE_ENFORCEMENT_ENABLED:
+        # Disabled means no verdicts at all — emitting "not analysed" here
+        # would turn the kill switch into a warning generator.
+        return None
     deterministic = _voice_deterministic_scorecard(page_html, page_title, voice_card)
     if deterministic is not None:
         return deterministic

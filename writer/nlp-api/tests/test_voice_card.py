@@ -481,3 +481,11 @@ def test_unanalyzed_scorecard_is_not_a_pass():
     assert card["needs_rewrite"] is False   # nothing to rewrite toward
     assert card["reason"] == "guide could not be prepared"
     assert card["violations"] == []
+
+
+def test_dimension_score_rejects_booleans():
+    """isinstance(True, int) is True in Python — a scorer emitting
+    `"score": true` must read as unscoreable, not as 1/100."""
+    dims = _dims(tone={"score": True, "applicable": True})
+    # tone excluded → renormalized over the rest, still 100.
+    assert vc.compute_voice_score(dims) == 100.0

@@ -624,7 +624,7 @@ def _dimension_score(raw: Any) -> tuple[Optional[float], bool]:
     if raw.get("applicable") is False:
         return None, False
     score = raw.get("score")
-    if not isinstance(score, (int, float)):
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
         return None, False
     return max(0.0, min(100.0, float(score))), True
 
