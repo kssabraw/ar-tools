@@ -447,25 +447,16 @@ def looks_underspecified(
 
 
 # ---------------------------------------------------------------------------
-# Ranking-strategy asks — scope before strategising.
+# Ranking-strategy asks — detect them so the director instruction fires.
 #
-# "how can bsa claims rank in pompano beach" is the canonical case. It is a
-# request for a whole campaign strategy, and it is missing the two things that
-# decide what that strategy IS: which keyword (a roofer's "storm damage repair"
-# and "roof replacement" want different pages, different links, different
-# timelines), and which channel — the web SERP, the Maps local pack and AI
-# answers are three different games with three different playbooks. Answering
-# without them produces the generic checklist that reads as filler.
-#
-# The generic clarify gate above already catches this question, but its
-# instruction is "ask ONE question", which is the wrong shape here: keyword and
-# channel are orthogonal, both cheap to answer, and a strategy needs both. So a
-# ranking-shaped ask gets its own per-turn instruction, and this gate wins over
-# the generic one in `interpret` (more specific instruction, same mechanism).
-#
-# The gate is deliberately shape-only. WHICH of the two specifics is missing is
-# left to the model — that is ordinary reading comprehension it does reliably,
-# unlike remembering to ask at all, which is the thing that needed pinning down.
+# "how can bsa claims rank in pompano beach" is the canonical case: a request
+# for a whole campaign plan. This gate only detects the SHAPE; what the
+# instruction it triggers (_RANKING_STRATEGY_NUDGE) demands has been through
+# two reversals and now reads: DECIDE the target keyword and channel sequence
+# yourself from the client's data, write the strategy, and close with the
+# assumptions as a correctable line — never interrogate (owner ruling, #513).
+# The history matters: v1 (#511) answered generically, v2 (#512) asked for
+# keyword+channel and read as an intake form. Don't reintroduce either.
 # ---------------------------------------------------------------------------
 
 # Wanting to rank — as an aim, not as a metric being looked up.
