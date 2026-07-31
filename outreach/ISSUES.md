@@ -292,3 +292,19 @@ unrecognised status as `not_evaluated` rather than "closed", so the unknown cann
 exclude live businesses; the risk is the opposite one, that the gate never fires at all.
 **Action:** confirm from the first real pull. If `business_status` is absent from the base tier,
 the closed gate needs a different source and the brief's filter table needs revisiting.
+
+**I-027 correction (2026-07-31):** I framed this as the egress policy rejecting Outscraper
+specifically. It is broader and more mundane than that — the session is running at the **Trusted**
+network access level, so everything outside the default package-manager allowlist is refused.
+Measured from inside the session: `pypi.org` → 200 (on the default list), `example.com` → 403
+(not on it, and obviously not blocked for security reasons). Same 403 for
+`api.app.outscraper.com`, `fkwhgvcggvsricuinuqy.supabase.co` and `api.dataforseo.com`.
+
+Two consequences:
+1. **`api.dataforseo.com` is blocked too**, so this is not an Outscraper problem — Phase 2's
+   entire scan layer (geogrid, organic SERP, AI surfaces) hits the same wall. Whatever resolves
+   this now also unblocks Phase 2.
+2. **Network access level is fixed at VM start.** A running session keeps the level it booted
+   with, so changing the environment does not affect a session already in flight; a NEW session
+   is required. Check with `curl -o /dev/null -w '%{http_code}' https://example.com` — 200 means
+   the wider policy is live, 403 means the session is still on Trusted.
