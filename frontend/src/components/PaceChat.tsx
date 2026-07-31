@@ -105,16 +105,43 @@ export function PaceChat({ fullPage = false }: { fullPage?: boolean }) {
 
   // The reply streams over SSE; falls back to the blocking endpoint when the
   // stream endpoint isn't deployed yet (the frontend can ship ahead).
+  // Recover a reply the server finished but the stream didn't deliver — the
+  // turn is stored before 'done' and the producer outlives a disconnect, so a
+  // dropped connection means the answer exists server-side.
+  async function recoverReply(conversationId: string): Promise<ChatResponse | null> {
+    try {
+      const convo = await api.get<{ client_id?: string | null; messages: ChatMsg[] }>(
+        `/pace/conversations/${conversationId}`,
+      )
+      const last = convo.messages?.[convo.messages.length - 1]
+      if (!last || last.role !== 'assistant' || !last.content.trim()) return null
+      return {
+        reply: last.content,
+        client_id: convo.client_id ?? undefined,
+        conversation_id: conversationId,
+      } as ChatResponse
+    } catch {
+      return null
+    }
+  }
+
   async function requestReply(payload: unknown): Promise<ChatResponse> {
+    let streamed = ''
+    let convoId: string | null =
+      (payload as { conversation_id?: string | null })?.conversation_id ?? null
     try {
       let final: ChatResponse | null = null
       let failure: string | null = null
       await api.streamEvents('/pace/chat/stream', payload, evt => {
         if (evt.type === 'text') {
           setStatus(null)
-          setStreaming(s => s + String(evt.text ?? ''))
+          const chunk = String(evt.text ?? '')
+          streamed += chunk
+          setStreaming(s => s + chunk)
         } else if (evt.type === 'status') {
           setStatus(String(evt.label ?? ''))
+        } else if (evt.type === 'meta') {
+          convoId = String(evt.conversation_id ?? '') || convoId
         } else if (evt.type === 'done') {
           final = evt as unknown as ChatResponse
         } else if (evt.type === 'error') {
@@ -128,6 +155,16 @@ export function PaceChat({ fullPage = false }: { fullPage?: boolean }) {
       const detail = err instanceof Error ? err.message : ''
       if (detail === 'Not Found' || detail === 'stream_ended_early') {
         return api.post<ChatResponse>('/pace/chat', payload)
+      }
+      if (convoId) {
+        const recovered = await recoverReply(convoId)
+        if (recovered) return recovered
+      }
+      if (streamed.trim()) {
+        return {
+          reply: `${streamed}\n\n---\n\n_The connection dropped before this finished. The text above is what arrived — ask me to continue if it's cut short._`,
+          conversation_id: convoId ?? undefined,
+        } as ChatResponse
       }
       throw err
     }

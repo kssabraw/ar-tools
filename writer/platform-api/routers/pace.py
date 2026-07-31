@@ -107,8 +107,20 @@ async def _open_turn(body: PaceChatRequest, auth: dict) -> tuple[Optional[str], 
 
 
 async def _run_turn(body: PaceChatRequest, auth: dict, on_event=None) -> dict:
-    actor = pace_auth.context_from_auth(auth)
     conversation_id, history = await _open_turn(body, auth)
+    return await _finish_turn(body, auth, conversation_id, history, on_event)
+
+
+async def _finish_turn(
+    body: PaceChatRequest, auth: dict, conversation_id, history, on_event=None
+) -> dict:
+    """The turn itself, once its durable thread is resolved.
+
+    Split out so the streaming path can open the thread BEFORE the response
+    generator starts — the conversation id is the first thing sent, and it has
+    to exist by then.
+    """
+    actor = pace_auth.context_from_auth(auth)
     result = await pace_agent.maybe_handle_web(
         body.message.strip(),
         history,
@@ -168,15 +180,23 @@ async def pace_chat_stream(
     async def on_event(evt: dict) -> None:
         await queue.put(evt)
 
+    # Resolved before the generator runs: gen() sends this id first, so it must
+    # already exist (and a 404/403 here should fail the request, not the stream).
+    conversation_id, history = await _open_turn(body, auth)
+
     async def produce() -> None:
         try:
-            result = await _run_turn(body, auth, on_event=on_event)
+            result = await _finish_turn(body, auth, conversation_id, history, on_event)
             await queue.put({"type": "done", **result})
         except Exception as exc:
             logger.exception("pace_chat_stream_failed", extra={"error": str(exc)})
             await queue.put({"type": "error", "detail": "pace_error"})
 
     async def gen():
+        # The conversation id goes out FIRST, before any work that could drop the
+        # connection, so a client whose stream dies can still fetch back the
+        # reply the producer stored (see /assistant/chat/stream).
+        yield f"data: {json.dumps({'type': 'meta', 'conversation_id': conversation_id})}\n\n"
         # Like /assistant/chat/stream, the producer is deliberately NOT cancelled
         # on client disconnect — an in-flight turn (which may be mid-action or
         # mid-confirm-stage) runs to completion server-side.
