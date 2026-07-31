@@ -72,13 +72,23 @@ _RELEVANCE: dict[str, list[str]] = {
     # checklists + the shared on-page verdict definition its narratives cite.
     "qa": ["QA_Checklists.md", "On_Page_Criteria_and_Coverage.md"],
 }
-# Per-doc character caps: the big SOPs would eat the whole budget otherwise.
+# Per-doc character caps: only the three genuinely large SOPs need one — every
+# other doc in the corpus is under 13k and is meant to arrive WHOLE.
 _DOC_CAP_CHARS = {
-    "Link_Building_SOP.md": 9_000,
-    "Site_Architecture_and_Internal_Linking_SOP.md": 6_000,
-    "How_To_Rank_In_Google_Maps_SOP.md": 8_000,
+    "Site_Architecture_and_Internal_Linking_SOP.md": 10_000,   # 65k raw
+    "Link_Building_SOP.md": 12_000,                            # 36k raw
+    "How_To_Rank_In_Google_Maps_SOP.md": 12_000,               # 24k raw
 }
 _DEFAULT_DOC_CAP = 14_000
+
+# A doc is included at its full intended size or not at all. It used to be
+# included at `min(cap, whatever budget was left)`, so the last doc in the queue
+# got the scraps: on the 2026-07-31 Jupiter turn AIO_AEO_SOP (12,741 chars, well
+# under its 14k cap, so it should have arrived whole) received 1,973 — Part 1's
+# theory, and none of Part 2's tactics. A fragment is worse than an omission,
+# because nothing in it tells the model that the half answering the question was
+# cut; it reads the intro and believes it has the playbook.
+_MIN_USEFUL_FRACTION = 0.75  # of the doc's intended size, else defer to read_sop
 
 
 def _first_existing(candidates: tuple[Path, ...]) -> Path | None:
@@ -209,12 +219,13 @@ def select_sops_text(active_domains: set[str], budget_chars: int = 40_000) -> st
     if not docs:
         return ""
     parts: list[str] = []
+    deferred: list[str] = []
     remaining = budget_chars
     for name in relevant_docs(active_domains):
         text = docs.get(name)
-        if not text or remaining <= 500:
+        if not text:
             continue
-        cap = min(_DOC_CAP_CHARS.get(name, _DEFAULT_DOC_CAP), remaining)
+        cap = _DOC_CAP_CHARS.get(name, _DEFAULT_DOC_CAP)
         if name in _ALWAYS:
             # The router is an index, not an answer: bound it to a share of the
             # budget so the topic SOPs behind it still fit. At the chat's 16k
@@ -222,9 +233,23 @@ def select_sops_text(active_domains: set[str], budget_chars: int = 40_000) -> st
             # away the SOP that answered the question — which is how a
             # "grounded" turn still produced generic advice (2026-07-30).
             cap = min(cap, max(budget_chars // 3, 1_000))
-        block = f"### SOP DOC: {name}\n{_truncate(text.strip(), cap)}"
+        # What this doc needs to be worth inlining at all.
+        wanted = min(cap, len(text))
+        if remaining < wanted * _MIN_USEFUL_FRACTION:
+            deferred.append(name)
+            continue
+        block = f"### SOP DOC: {name}\n{_truncate(text.strip(), min(cap, remaining))}"
         parts.append(block)
         remaining -= len(block)
+    if deferred:
+        # Name what didn't fit. Silence here is how a model concludes a topic
+        # has no playbook when it simply wasn't sent one.
+        parts.append(
+            "### SOP DOCS NOT INLINED (relevant, but the block was full)\n"
+            + "\n".join(f"- {n}" for n in deferred)
+            + "\nUse the read_sop tool to fetch any of these before advising on "
+            "what they cover — do not assume the agency has no procedure for it."
+        )
     return "\n\n".join(parts)
 
 
