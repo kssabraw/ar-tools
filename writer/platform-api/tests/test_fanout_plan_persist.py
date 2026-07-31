@@ -169,3 +169,83 @@ def test_keyword_missing_from_the_index_is_skipped():
 def test_empty_plan_sends_no_linkage_requests():
     calls = _run_persist([], {})
     assert not [c for c in calls if c[1].endswith("/rpc/bulk_link_keywords_to_clusters")]
+
+
+# --- reset_article_planning ------------------------------------------------
+#
+# Six foreign keys point at `clusters` (keywords, coverage_gaps, briefs,
+# keyword_analyses, article_outputs, scheduled_article_runs), so every deleted
+# row fires six trigger checks. Deleting a whole session's clusters in one
+# statement measured ~3.6s warm at 4,043 clusters — inside the 8s
+# statement_timeout, but not by enough. The 2026-07-31 tirzepatide re-plan blew
+# it cold and died with `57014: canceling statement due to statement timeout`,
+# and because reset runs *between* planning and persistence it threw away the
+# orchestrator spend that had already completed.
+
+
+def _run_reset(cluster_ids):
+    calls: list[tuple[str, str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path, str(request.url.query)))
+        return httpx.Response(
+            200, headers={"Content-Type": "application/json"}, content=b"[]"
+        )
+
+    with (
+        patch.object(silo, "get_service_client", return_value=_client_with_transport(handler)),
+        patch.object(silo, "list_topics", return_value=[{"id": "t1"}]),
+        patch.object(silo, "_session_cluster_ids", return_value=cluster_ids),
+    ):
+        silo.reset_article_planning("sess-1")
+    return calls
+
+
+def test_cluster_delete_is_batched():
+    ids = [f"cid-{i}" for i in range(4043)]
+
+    calls = _run_reset(ids)
+    deletes = [c for c in calls if c[0] == "DELETE" and c[1].endswith("/clusters")]
+
+    # 4,043 clusters / 500 per statement == 9 DELETEs, none of them unbounded.
+    assert len(deletes) == 9
+    # Every batch filters on explicit ids, never on topic_id (the old whole-session
+    # statement, which is the one that timed out).
+    for _method, _path, query in deletes:
+        assert "id=in." in query
+        assert "topic_id" not in query
+
+
+def test_reset_with_no_clusters_issues_no_delete():
+    calls = _run_reset([])
+    assert not [c for c in calls if c[0] == "DELETE" and c[1].endswith("/clusters")]
+
+
+def test_session_cluster_ids_pages_past_the_postgrest_default():
+    """A large plan runs to several thousand clusters; PostgREST caps a plain
+    select at 1000 rows, so a single unpaged read would silently under-delete."""
+    pages = [
+        [{"id": f"cid-{i}"} for i in range(1000)],
+        [{"id": f"cid-{1000 + i}"} for i in range(1000)],
+        [{"id": f"cid-{2000 + i}"} for i in range(43)],
+    ]
+    seen_ranges: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        seen_ranges.append(request.headers.get("range", "") or str(request.url.query))
+        body = pages[len(seen_ranges) - 1]
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/json"},
+            content=json.dumps(body).encode(),
+        )
+
+    with patch.object(silo, "get_service_client", return_value=_client_with_transport(handler)):
+        ids = silo._session_cluster_ids(["t1"])
+
+    assert len(ids) == 2043
+    assert ids[0] == "cid-0" and ids[-1] == "cid-2042"
+    # Stopped on the short page rather than looping forever.
+    assert len(seen_ranges) == 3
