@@ -19,10 +19,12 @@ frozen client's pending items fail fast with `client_frozen`.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import httpx
 from fastapi import HTTPException
 
 from config import settings
@@ -235,12 +237,29 @@ async def _generate_run(payload: dict) -> Optional[str]:
     raise ContentGenerationError(_run_failure_reason(run_id, status))
 
 
+def is_transient_upstream(exc: BaseException) -> bool:
+    """Whether a failure is a transient upstream one that is worth retrying.
+
+    The nlp generators map a provider/transport failure to HTTP >= 500 and a
+    client-actionable problem (bad URL, empty site) to a 4xx, so the status code
+    is the classifier. A raw transport error (connection reset mid-stream — the
+    shape a container restart produces) counts too; anything else is treated as
+    permanent, because retrying a bug or a bad input just burns the attempts and
+    delays the real error reaching the user.
+
+    Pure. Shared by the content-batch item path and `job_worker.settle_job_failure`
+    so "retryable" means one thing across the suite."""
+    if isinstance(exc, HTTPException):
+        return (exc.status_code or 0) >= 500
+    if isinstance(exc, TransientContentError):
+        return True
+    return isinstance(exc, (httpx.HTTPError, ConnectionError, TimeoutError, asyncio.TimeoutError))
+
+
 def _raise_if_transient_nlp(exc: HTTPException, label: str) -> None:
-    """The nlp generators map a provider/transport failure to HTTP >= 500 and a
-    client-actionable problem (bad URL, empty site) to a 4xx. Re-raise the former
-    as TransientContentError so the item retries with backoff; let the 4xx
-    propagate as a permanent failure (retrying can't fix it)."""
-    if (exc.status_code or 0) >= 500:
+    """Re-raise a transient nlp failure as TransientContentError so the item
+    retries with backoff; let a permanent one propagate (retrying can't fix it)."""
+    if is_transient_upstream(exc):
         raise TransientContentError(f"{label} provider error: {exc.detail}") from exc
 
 

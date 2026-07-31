@@ -119,6 +119,7 @@ app.add_middleware(LimitRequestSizeMiddleware)
 
 import ecommerce_mcs as mcs  # Max-Cosine Synthesis (AIO capture + entity + heading synthesis)
 import ecommerce_facts as ecom_facts  # invariant public-spec auto-research (cited)
+import ecommerce_loop as ecom_loop  # auto-retry loop stop decisions (pure)
 import voice_card as vcard  # brand voice + ICP: distilled card, prompt block, hard checks
 
 STOP_WORDS = set(stopwords.words('english'))
@@ -237,6 +238,20 @@ _ECOM_RESEARCH_MAX_TURNS = ECOMMERCE_FACT_RESEARCH_MAX_SEARCHES + 3  # search ro
 # same page reoptimizes to the same result run-to-run.
 MAX_ECOMMERCE_AUTO_PASSES = int(os.environ.get("MAX_ECOMMERCE_AUTO_PASSES", "3"))
 
+# Plateau guard: the minimum composite gain a pass must produce to justify
+# running another one. A run that has flat-lined and one that is still climbing
+# are otherwise treated identically — both burn every pass at ~3m40s and ~$0.22
+# each, and roughly a third of observed runs plateau below threshold and pay for
+# the last pass anyway.
+#
+# DEFAULT 0 = DISABLED. Per-pass scores were unobservable until the
+# "reoptimize-ecommerce pass N scored" log line below, so there is no data to
+# calibrate a threshold against yet. Let that logging run over a batch of real
+# reoptimizes, read the marginal gains, then set this on the `nlp` service.
+# Starting guess once data exists: 3.0 points. The decision itself is the pure
+# `ecom_loop.should_stop_early`.
+ECOMMERCE_MIN_PASS_GAIN = float(os.environ.get("ECOMMERCE_MIN_PASS_GAIN", "0"))
+
 # ── Brand voice & ICP enforcement ──────────────────────────────────────────
 # The client's guide is distilled ONCE per revision into a compact card
 # (platform-api caches it against a fingerprint of the raw documents and sends
@@ -325,7 +340,8 @@ def _page_text_for_voice_check(html: str, page_title: str = "") -> str:
     return f"{page_title}\n{text}" if page_title else text
 
 
-async def _research_public_facts(client, entity: str, page_type: str, focus: Optional[list] = None):
+async def _research_public_facts(client, entity: str, page_type: str, focus: Optional[list] = None,
+                                 supplied: Optional[list] = None):
     """Best-effort: research the invariant public specs for `entity` via a
     bounded Anthropic web_search pass, returning them WITH citations.
 
@@ -334,6 +350,13 @@ async def _research_public_facts(client, entity: str, page_type: str, focus: Opt
     gap them); `facts` is echoed in the SSE result for the UI to show as
     "auto-sourced — verify". Never raises — any failure returns
     ('', <zero token_rec>, []) so generation proceeds exactly as before.
+
+    `supplied` short-circuits the whole pass: platform-api caches these facts by
+    compound (they are invariant, so researching them twice is pure waste) and
+    sends them on the request when it has them. The supplied list is re-validated
+    through `parse_researched_facts` rather than trusted — the hard exclusions
+    (clinical/therapeutic/regulatory/dosing) must hold no matter where a fact
+    entered from, including a cache row written before an exclusion was added.
     """
     # Zero-cost record built directly (NOT via _token_record, which would log a
     # misleading "in=0 out=0" line before the real one on every call).
@@ -341,6 +364,16 @@ async def _research_public_facts(client, entity: str, page_type: str, focus: Opt
             "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
     if not (ECOMMERCE_FACT_RESEARCH_ENABLED and (entity or "").strip() and page_type == "product"):
         return "", zero, []
+    if supplied:
+        facts = ecom_facts.parse_researched_facts(supplied)
+        if facts:
+            logger.info(
+                f"ecommerce fact research: {len(facts)} public specs for '{entity}' "
+                f"supplied by caller (cached) — skipping the web_search pass"
+            )
+            return ecom_facts.render_researched_facts_block(facts), zero, facts
+        # Supplied but nothing survived validation — fall through and research.
+        logger.warning(f"ecommerce fact research: supplied facts for '{entity}' failed validation; researching")
     try:
         import anthropic as _anthropic  # noqa: F401  (client already an AsyncAnthropic)
         tools = [
@@ -8326,6 +8359,11 @@ class GenerateEcommerceRequest(BaseModel):
     # Pre-analyzed product reference structure (from clients.page_structures['product'])
     # the suite renders + mirrors when no house template URL is set. Products only.
     reference_page_structure: Optional[str] = None
+    # Invariant public specs (CAS/MW/sequence/…) platform-api already has cached
+    # for this compound. Supplied → the bounded web_search research pass is
+    # skipped entirely (these values never change, so researching them twice is
+    # pure waste). Re-validated here, never trusted. Absent → researched as before.
+    researched_facts: Optional[List[dict]] = None
     # Corrective directives from platform-api's structural-fidelity gate (retry
     # passes only), injected as the highest-priority last block so the retry
     # converges on the reference layout.
@@ -8520,30 +8558,44 @@ async def generate_ecommerce_page(request: Request, body: GenerateEcommerceReque
 
         serp_ctx = _serp_context(serp_analysis_dict)
 
-        # Max-Cosine Synthesis: aim the entity + headings at the live AI Overview
-        # answer (best-effort; '' when no AIO / on failure).
-        await q.put({"step": "progress", "progress": 52, "message": "Aligning headings to the AI answer…"})
-        mcs_block = await _ecommerce_mcs_block(client, serp_analysis_dict, page_type, body.keyword)
+        # Four mutually independent pre-write steps, run CONCURRENTLY so the
+        # critical path is the slowest rather than their sum (the same change as
+        # the reoptimize worker — fact research alone measured 1m24s serial):
+        #   - Max-Cosine Synthesis — aims the entity + headings at the live AI
+        #     Overview answer. Needs only the SERP analysis.
+        #   - Public-spec auto-research — fills the invariant PUBLIC specs
+        #     (CAS/MW/sequence/solubility/…) with citations so the writer states
+        #     them instead of gating them; vendor facts stay gated. Needs only
+        #     the keyword + page_type.
+        #   - Voice card — the client's brand guide, distilled + enforceable:
+        #     steers generation from a late, high-priority position and drives
+        #     the deterministic check after the write.
+        #   - Source-URL scrape — reference product facts. Needs only source_url.
+        # Each is individually best-effort and swallows its own failures, so a
+        # bare gather (no return_exceptions) keeps exactly today's semantics.
+        await q.put({"step": "progress", "progress": 52,
+                     "message": "Aligning headings, researching specs, gathering product facts…"})
 
-        # Auto-research the invariant PUBLIC specs (CAS/MW/sequence/solubility/…)
-        # with citations, so the writer states them instead of gating them.
-        # Vendor facts stay gated. Best-effort; '' when disabled / nothing found.
-        await q.put({"step": "progress", "progress": 54, "message": "Researching public product specs…"})
-        researched_block, research_tok, researched_facts = await _research_public_facts(
-            client, body.keyword, page_type
+        async def _source_facts() -> str:
+            return await _scrape_source_facts(body.source_url) if body.source_url else ""
+
+        mcs_block, research_result, voice_card, scraped_source = await asyncio.gather(
+            _ecommerce_mcs_block(client, serp_analysis_dict, page_type, body.keyword),
+            _research_public_facts(client, body.keyword, page_type, supplied=body.researched_facts),
+            _resolve_voice_card(client, body),
+            _source_facts(),
         )
+        researched_block, research_tok, researched_facts = research_result
 
-        # Product facts: pasted input + optional scrape of a source URL.
-        await q.put({"step": "progress", "progress": 55, "message": "Gathering product facts…"})
+        # Product facts: researched specs + pasted input + the scraped source.
+        await q.put({"step": "progress", "progress": 55, "message": "Assembling product facts…"})
         facts_sections: list[str] = []
         if researched_block:
             facts_sections.append(researched_block)
         if (body.product_input or "").strip():
             facts_sections.append("PROVIDED PRODUCT DETAILS (authoritative — use these facts; do not contradict them):\n" + body.product_input.strip())
-        if body.source_url:
-            _scraped = await _scrape_source_facts(body.source_url)
-            if _scraped:
-                facts_sections.append(f"SOURCE PAGE CONTENT ({body.source_url}) — extract accurate facts, do NOT copy wording:\n{_scraped}")
+        if scraped_source:
+            facts_sections.append(f"SOURCE PAGE CONTENT ({body.source_url}) — extract accurate facts, do NOT copy wording:\n{scraped_source}")
         facts_text = "\n\n".join(facts_sections) if facts_sections else (
             "NO explicit product facts were provided. Write from the keyword + brand context only, "
             "keep claims generic-but-truthful, and record specific missing facts (price, specs, "
@@ -8552,9 +8604,6 @@ async def generate_ecommerce_page(request: Request, body: GenerateEcommerceReque
 
         brand_voice_text = _build_brand_voice_text(body.brand_voice)
         icp_text = _build_icp_text(body.detected_icp)
-        # Distilled + enforceable: steers generation from a late, high-priority
-        # position and drives the deterministic check after the write.
-        voice_card = await _resolve_voice_card(client, body)
         voice_block = vcard.render_voice_card_block(voice_card)
         if voice_block:
             voice_block = "\n" + voice_block + "\n"
@@ -8768,6 +8817,10 @@ class ReoptimizeEcommerceRequest(BaseModel):
     # Target composite the auto-retry loop climbs toward (keep-best, capped at
     # MAX_ECOMMERCE_AUTO_PASSES). Threaded from platform-api's REOPT threshold.
     score_threshold: float = 75.0
+    # Invariant public specs platform-api already has cached for this compound —
+    # supplied → the web_search research pass is skipped. See the twin field on
+    # GenerateEcommerceRequest.
+    researched_facts: Optional[List[dict]] = None
 
 
 def _ecommerce_deficiency_text(defs: Optional[List[dict]]) -> str:
@@ -8807,25 +8860,33 @@ async def reoptimize_ecommerce_page(request: Request, body: ReoptimizeEcommerceR
         existing_page_text = BeautifulSoup(existing_html, "html.parser").get_text(separator="\n", strip=True)
         serp_ctx = _serp_context(body.serp_analysis)
 
-        # Max-Cosine Synthesis: aim the entity + headings at the live AI Overview
-        # answer (Gemini-embedding cosine synthesis), same as generate — the
-        # reoptimize SERP analysis already carried the AIO. Best-effort; '' when
-        # no AIO / on failure, so the rewrite still runs.
-        await q.put({"step": "progress", "progress": 22, "message": "Aligning headings to the AI answer…"})
-        mcs_block = await _ecommerce_mcs_block(client, body.serp_analysis, page_type, body.keyword)
-
-        # Auto-research invariant PUBLIC specs (CAS/MW/sequence/…) with citations
-        # so the rewrite fills them instead of gating them. Vendor facts stay
-        # gated. Best-effort; '' when disabled / nothing found.
-        await q.put({"step": "progress", "progress": 25, "message": "Researching public product specs…"})
-        researched_block, research_tok, researched_facts = await _research_public_facts(
-            client, body.keyword, page_type
+        # Three mutually independent pre-rewrite steps, run CONCURRENTLY so the
+        # critical path is the slowest of them rather than their sum (fact
+        # research alone measured 1m24s serial on a reference run):
+        #   - Max-Cosine Synthesis — aims the entity + headings at the live AI
+        #     Overview answer (Gemini-embedding cosine synthesis), same as
+        #     generate; the reoptimize SERP analysis already carried the AIO.
+        #     Needs only `serp_analysis`.
+        #   - Public-spec auto-research — fills invariant PUBLIC specs
+        #     (CAS/MW/sequence/…) with citations so the rewrite states them
+        #     instead of gating them; vendor facts stay gated. Needs only the
+        #     keyword + page_type.
+        #   - Voice card — the client's distilled brand guide. Needs only
+        #     brand_voice/detected_icp.
+        # Each is individually best-effort and swallows its own failures, so a
+        # bare gather (no return_exceptions) keeps exactly today's semantics.
+        await q.put({"step": "progress", "progress": 22,
+                     "message": "Aligning headings, researching specs, reading your brand guide…"})
+        mcs_block, research_result, voice_card = await asyncio.gather(
+            _ecommerce_mcs_block(client, body.serp_analysis, page_type, body.keyword),
+            _research_public_facts(client, body.keyword, page_type, supplied=body.researched_facts),
+            _resolve_voice_card(client, body),
         )
+        researched_block, research_tok, researched_facts = research_result
         researched_section = (researched_block + "\n\n") if researched_block else ""
 
         brand_voice_text = _build_brand_voice_text(body.brand_voice)
         icp_text = _build_icp_text(body.detected_icp)
-        voice_card = await _resolve_voice_card(client, body)
         voice_block = vcard.render_voice_card_block(voice_card)
         if voice_block:
             voice_block = "\n" + voice_block + "\n"
@@ -8914,14 +8975,40 @@ EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT inven
             except Exception as _ae:
                 logger.warning(f"reoptimize-ecommerce pass {pass_num} scoring failed: {_ae}")
 
+            # Captured BEFORE keep-best folds this pass in, or the plateau
+            # comparison below would be against the value we just wrote.
+            prev_best_score = best["score"] if best else None
+
             # Keep-best: an unscored pass only wins if nothing has scored yet.
             if best is None or (pass_score is not None and (best["score"] is None or pass_score > best["score"])):
                 best = {"score": pass_score, "html": pass_html, "schema": pass_schema,
                         "title": pass_title, "gaps": pass_gaps, "scores": pass_scores,
                         "voice": pass_voice}
 
+            # The only place per-pass scores are observable: they are never
+            # persisted (only the winning pass reaches `ecommerce_page_scores`)
+            # and platform-api's SSE reader discards progress events. This line
+            # is what the plateau threshold gets calibrated against.
+            _gain = (None if (pass_score is None or prev_best_score is None)
+                     else round(pass_score - prev_best_score, 1))
+            logger.info(
+                f"reoptimize-ecommerce pass {pass_num}/{MAX_ECOMMERCE_AUTO_PASSES} scored "
+                f"{pass_score} (prev best {prev_best_score}, gain {_gain}, "
+                f"threshold {body.score_threshold}) for '{body.keyword}'"
+            )
+
             if pass_score is None or pass_score >= body.score_threshold:
                 break  # can't score further, or target reached
+            # Plateau guard: a pass that gains almost nothing means the model has
+            # run out of headroom against this SERP — another ~3m40s/$0.22 will
+            # not find it. Disabled by default (ECOMMERCE_MIN_PASS_GAIN=0).
+            if ecom_loop.should_stop_early(prev_best_score, pass_score, ECOMMERCE_MIN_PASS_GAIN):
+                logger.info(
+                    f"reoptimize-ecommerce: plateau at pass {pass_num} "
+                    f"({prev_best_score} -> {pass_score}, gain {_gain} < "
+                    f"{ECOMMERCE_MIN_PASS_GAIN}); stopping early"
+                )
+                break
             current_text = BeautifulSoup(pass_html, "html.parser").get_text(separator="\n", strip=True)
             current_def_text = _ecommerce_deficiency_text(pass_defs)
 

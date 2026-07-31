@@ -932,6 +932,16 @@ class Settings(BaseSettings):
     ecommerce_structure_gate_enabled: bool = True
     ecommerce_structure_min_composite: float = 85.0
     ecommerce_structure_max_passes: int = 2
+    # Cache for the ecommerce writer's invariant public-spec research (CAS
+    # number, molecular weight, sequence, solubility, …). That research cost
+    # $0.372 and 1m24s on a reference reoptimize and re-ran from scratch on every
+    # reoptimize of the same product, for values that by definition never change.
+    # Keyed globally on a normalized compound name (a CAS number does not depend
+    # on who sells it). The TTL is long because it is a re-verification cadence,
+    # not an expiry; set to 0 to treat every entry as stale. Empty results are
+    # never cached. Lives in platform-api because nlp-api has no database.
+    ecommerce_fact_cache_enabled: bool = True
+    ecommerce_fact_cache_days: int = 180
     # Structural-fidelity gate on SERVICE / LOCATION pages (the runs pipeline). The
     # reference (page_structures['service'|'location']) is already injected into the
     # brief; this scores the writer's output against it and, when it drifts, folds

@@ -181,3 +181,32 @@ class TestRunFailureReason:
         monkeypatch.setattr(cb, "get_supabase", lambda: sb)
 
         assert "run-1" in cb._run_failure_reason("run-1", None)
+
+
+class TestIsTransientUpstream:
+    """The shared retryable/permanent classifier. `job_worker.settle_job_failure`
+    uses this too, so "retryable" means one thing across the suite."""
+
+    def test_5xx_is_transient(self):
+        assert cb.is_transient_upstream(HTTPException(status_code=502, detail="provider")) is True
+        assert cb.is_transient_upstream(HTTPException(status_code=500, detail="boom")) is True
+
+    def test_4xx_is_permanent(self):
+        assert cb.is_transient_upstream(HTTPException(status_code=422, detail="bad url")) is False
+        assert cb.is_transient_upstream(HTTPException(status_code=404, detail="missing")) is False
+
+    def test_transport_errors_are_transient(self):
+        # The shape a container restart mid-stream produces.
+        import httpx
+
+        assert cb.is_transient_upstream(httpx.ReadError("connection reset")) is True
+        assert cb.is_transient_upstream(httpx.ConnectTimeout("timed out")) is True
+        assert cb.is_transient_upstream(TimeoutError()) is True
+
+    def test_transient_content_error_is_transient(self):
+        assert cb.is_transient_upstream(TransientContentError("upstream")) is True
+
+    def test_unexpected_errors_are_permanent(self):
+        # Retrying a bug just burns attempts and delays the real error.
+        assert cb.is_transient_upstream(ValueError("bad payload")) is False
+        assert cb.is_transient_upstream(KeyError("client_id")) is False
