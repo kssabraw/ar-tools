@@ -1,0 +1,16 @@
+# Keep the runtime image to what the job actually needs.
+#
+# `supabase/` was RENAMED to `migrations/` because a directory named `supabase` sitting on
+# sys.path shadows the installed `supabase` package — `from supabase import Client` then fails
+# with "unknown location". This file keeps migrations out of the image regardless; they are
+# applied out-of-band, never by the job.
+migrations/
+queries/
+docs/
+tests/
+api/tests/
+*.md
+.env
+__pycache__/
+*.pyc
+.pytest_cache/

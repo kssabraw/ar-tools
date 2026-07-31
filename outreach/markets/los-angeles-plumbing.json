@@ -1,0 +1,120 @@
+{
+  "_comment": [
+    "Los Angeles x Plumber \u2014 the first real market-vertical.",
+    "",
+    "SUBMARKET GEOMETRY IS STILL EDITABLE. Nothing has been scanned, so these centroids can be",
+    "moved freely until Phase 2 runs its first geogrid. After that they are frozen: changing a",
+    "centre invalidates every snapshot taken against it and resets delta history. Review them now.",
+    "",
+    "Coverage: 14 submarkets at a 5-mile radius cover the LA basin \u2014 the city plus the inner",
+    "metro (San Fernando Valley, San Gabriel Valley, South Bay, Long Beach). This is NOT all of",
+    "LA County, which is 4,751 sq mi and would need far more. It is the area a local SEO client",
+    "would plausibly serve. Add submarkets rather than widening radii if that is too narrow.",
+    "",
+    "Names are functional, not labels: each goes into the Outscraper query text as",
+    "'plumber, <name>', so they must be place names Google recognises."
+  ],
+  "name": "Los Angeles, CA \u2014 Plumbing",
+  "center_lat": 34.0522,
+  "center_lng": -118.2437,
+  "radius_miles": 30,
+  "region": "CA, USA",
+  "scan_interval_days": 15,
+  "categories": [
+    "plumber"
+  ],
+  "keywords": [
+    {
+      "term": "plumber",
+      "is_primary": true
+    },
+    {
+      "term": "emergency plumber",
+      "is_primary": false
+    },
+    {
+      "term": "drain cleaning",
+      "is_primary": false
+    },
+    {
+      "term": "water heater repair",
+      "is_primary": false
+    },
+    {
+      "term": "plumbing repair",
+      "is_primary": false
+    }
+  ],
+  "submarkets": [
+    {
+      "name": "Downtown Los Angeles",
+      "center_lat": 34.0407,
+      "center_lng": -118.2468
+    },
+    {
+      "name": "Hollywood",
+      "center_lat": 34.0928,
+      "center_lng": -118.3287
+    },
+    {
+      "name": "West Los Angeles",
+      "center_lat": 34.0395,
+      "center_lng": -118.4455
+    },
+    {
+      "name": "Santa Monica",
+      "center_lat": 34.0195,
+      "center_lng": -118.4912
+    },
+    {
+      "name": "Van Nuys",
+      "center_lat": 34.1867,
+      "center_lng": -118.4487
+    },
+    {
+      "name": "Northridge",
+      "center_lat": 34.2381,
+      "center_lng": -118.5301
+    },
+    {
+      "name": "Woodland Hills",
+      "center_lat": 34.1683,
+      "center_lng": -118.6059
+    },
+    {
+      "name": "Burbank",
+      "center_lat": 34.1808,
+      "center_lng": -118.309
+    },
+    {
+      "name": "Pasadena",
+      "center_lat": 34.1478,
+      "center_lng": -118.1445
+    },
+    {
+      "name": "East Los Angeles",
+      "center_lat": 34.0239,
+      "center_lng": -118.172
+    },
+    {
+      "name": "Inglewood",
+      "center_lat": 33.9617,
+      "center_lng": -118.3531
+    },
+    {
+      "name": "Torrance",
+      "center_lat": 33.8358,
+      "center_lng": -118.3406
+    },
+    {
+      "name": "Long Beach",
+      "center_lat": 33.7701,
+      "center_lng": -118.1937
+    },
+    {
+      "name": "Whittier",
+      "center_lat": 33.9792,
+      "center_lng": -118.0328
+    }
+  ]
+}

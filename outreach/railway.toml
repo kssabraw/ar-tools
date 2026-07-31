@@ -1,0 +1,18 @@
+# Railway config for the outreach pipeline cron service.
+#
+# restartPolicyType = "never" is load-bearing. The default ("always") is correct for a server and
+# catastrophic for a job: the CLI exits when the market is done, Railway would read that as a
+# crash, restart it, and the pipeline would re-run — including the paid Outscraper pull — in a
+# loop until something noticed.
+#
+# No cronSchedule here yet. A cron service also runs its start command on every deploy, so the
+# schedule is set once the first real ingest has been validated. Semi-monthly per the config
+# reference (scan_interval_days = 15) is roughly "0 6 1,16 * *" — 06:00 UTC on the 1st and 16th.
+# Note Railway crons are UTC and skip an execution if the previous one is still running.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+restartPolicyType = "never"
