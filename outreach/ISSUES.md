@@ -362,3 +362,22 @@ back in total; the unmapped ones are all genuinely unused in Phase 1 (`about`, `
 
 Note `subtypes` and `type` are both populated, and `category` is present too — the alias order
 taken from `gbp_service` (category → type → subtypes) resolved correctly on the first attempt.
+
+**I-032 VERIFIED FIXED (2026-07-31).** Re-ran the same calibration with the fix in place:
+`GET /maps/search-v3?...&query=plumber%2C+Downtown+Los+Angeles%2C+CA%2C+USA&coordinates=34.0407%2C-118.2468`
+→ first result **"Alliance United Plumber Los Angeles", 1035 S Los Angeles St, Los Angeles, CA
+90015**, lat 34.0390 / lng -118.2570 — roughly a mile from the submarket centroid. 20/20 parsed,
+`business_status` OPERATIONAL 20/20, `phone` populated 20/20 (19/20 in the New Jersey run).
+
+**I-027 RESOLVED (2026-07-31).** Superseded by the Railway service. The sandbox's egress
+restriction no longer blocks anything: the pipeline runs where it will live anyway, with
+unrestricted egress and the credentials already on the platform. The `calibrate_standalone.py`
+script is kept — it is still the fastest way to sanity-check the provider from any machine.
+
+### I-033 · Outscraper billing rate still unmeasured
+Two calibration pulls have run (20 places each, 40 total). The API returns no per-request cost,
+so the rate must come from the dashboard: divide the charge for those two requests by 40 and
+multiply by 1000 to get `OUTREACH_OUTSCRAPER_COST_PER_1000_PLACES_CENTS`.
+Until then the abort gate runs on the 200c/1000 placeholder. At 14 tiles x 400 places the
+worst-case projection is $11.20 against a $50 ceiling, so the gate has ample headroom even if the
+placeholder is wrong by 4x — but it should be set from measurement before the portfolio scales.
