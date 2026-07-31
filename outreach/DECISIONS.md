@@ -422,3 +422,40 @@ the audit trail structural rather than conventional, so a stage corrected by han
 gets logged. Losing that to gain an actor id is a bad trade when a column buys both. The router
 therefore never writes `stage_change` rows, and refuses them over the API, so one event can never
 produce two rows in an append-only table.
+
+---
+
+## Grid geometry confirmed: 81 points (owner ruling, 2026-08-01)
+
+**`grid_radius_miles` = 5, `grid_spacing_miles` = 1, 81 points per submarket × keyword.** This
+supersedes the "decided from the specs, awaiting confirmation" status recorded earlier the same
+day. It is now a ruling, and it freezes at the first scan.
+
+**The count was challenged on arithmetic first** — "5-mile radius, one point per mile, isn't that
+25?" It is not, and the reasoning is worth keeping because the mistake is a natural one: a 5-mile
+*radius* spans 10 miles, so a row holds **11** points (5 west + centre + 5 east), the bounding box
+is 11 × 11 = 121, and clipping to the circle leaves 81. 25 would require ~1.67-mile spacing; a 5×5
+box at 2.5-mile spacing clips to 13, because the corners of a square fall outside the inscribed
+circle.
+
+**Then on cost, which is the substantive version of the question.** The point count is an output
+of radius and spacing, both per-submarket config, so it is a real lever: 81 → 49 at 1.25-mile
+spacing, 25 at 1.67, 21 at 2. Across the 50-market portfolio that is 2.92M DataForSEO tasks a year
+versus 756k. Declined, for three reasons:
+
+1. **81 is not an overrun — it is the budgeted figure.** The specs costed the geogrid at ~89
+   points, so 81 is marginally *cheaper* than the estimate already sitting behind
+   `max_market_run_cost_cents` = 5000 and the ~$3–6 per market-vertical per cycle figure. Nothing
+   about this number is a surprise to the cost model.
+2. **Coarser spacing degrades the product, not just the resolution.** `centroid_dist_at_loss` and
+   the "invisible past N miles" claim (PRD §9a) are derived from *where on the grid* a business
+   drops out. At 2-mile spacing there are ~2 usable rings, and that claim degrades from a distance
+   into a direction — which is the single most persuasive line the audit produces.
+3. **If cost ever binds, the right lever is elsewhere.** Fewer keywords or fewer submarkets per
+   market scale spend linearly without damaging the signal each individual scan yields. Cutting
+   points makes every scan worth less; cutting scans makes fewer scans.
+
+*Revisit:* not for an existing submarket, ever — geometry is immutable and an edit orphans every
+prior snapshot. A future market-vertical could in principle be seeded at different spacing, but
+mixing geometries across the portfolio would make coverage percentages non-comparable between
+markets, which is worse than the cost it saves.

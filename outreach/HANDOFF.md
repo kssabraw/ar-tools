@@ -204,12 +204,14 @@ Phase 1 and Phase 1b ran in parallel and both appended from the same `I-014` bas
 ### 7.2 A paid run should need more than a variable
 `OUTREACH_COMMAND=run` plus deploy-on-push means **any push to the tracked branch fires a paid ingest**. This actually happened (§6.4). Before any cron schedule is set, gate paid runs behind something the deploy path cannot supply on its own.
 
-### 7.3 Grid geometry — RESOLVED at 81, and still reversible until the first scan
+### 7.3 Grid geometry — SETTLED at 81, confirmed by the owner 2026-08-01
 `ISSUES` I-025 is closed. `reporting-layer-spec.md` §4.1 is the only document that *defines* the generator — "square lattice covering the bounding box, row-major from NW corner, clipped to distance <= radius_miles" — and that construction holds exactly **81** points. Every alternative was computed rather than assumed: hexagonal **91** (π·25·2/√3 = 90.7, the likeliest origin of a remembered "89"), concentric rings **41**, unclipped 11×11 box **121**. Nothing produces 89, and the PRD hedges it as "~89" because it was an estimate.
 
 Built as `api/services/geometry.py` version `v1`; `README.md`, PRD §8b and the storage spec's volume arithmetic corrected with markers rather than silently.
 
-**Still wants owner confirmation.** It was decided from the specs, not by a human, and every `submarket.last_scanned_at` is still null — so it costs nothing to change today and cannot be changed after the first scan.
+**Confirmed by the owner on 2026-08-01, with the cost lever considered and declined.** This is no longer an inference from the specs — it is a ruling. Treat `radius 5 / spacing 1 / 81 points` as fixed, and see DECISIONS.md for why coarser spacing was rejected as a cost lever.
+
+**The recurring confusion, recorded so it is not relitigated:** a 5-mile *radius* is 10 miles across, so a 1-mile lattice has **11** points per row (5 west + centre + 5 east), not 5. 11 x 11 = 121 in the bounding box, 81 after clipping. "25" comes from reading the 5 as a side length rather than a radius; it would need ~1.67-mile spacing, and a 5x5 box at 2.5-mile spacing clips to 13, not 25.
 
 ### 7.4 `ai_region` does not exist
 Not as a table, not as data. AI checks run per `ai_region`, which is a *different and coarser* geography than `submarket` — several submarkets share one region. Drafting the names is a Phase 0 manual task that was never done, and it needs human judgement about which place names an LLM actually recognises. Blocked on §8.2.
@@ -254,7 +256,7 @@ Funnel aggregation runs in Postgres (`v_prospect_status`, `outreach_market_summa
 - **Spend approval.** ~$3–6 per market-vertical per cycle, guarded at `max_market_run_cost_cents` 5000 — a gate that is only as honest as §7.1.
 
 ### 8.3 Do not
-- Start Phase 2 scanning before §7.3 is **confirmed by a human** (it is settled in code, not by an owner) — partitioning now exists.
+- Change grid radius, spacing or point count. §7.3 is settled by owner ruling and freezes at the first scan. Adding a submarket starts its own clean history; editing one orphans every snapshot it has.
 - Derive `grid_result.scan_month` from `now()`. It must come from the snapshot being written, or one snapshot splits across two partitions and the retention job blames the rollup (`ISSUES` I-044).
 - Add RLS policies to the CRM tables to silence the advisor's `rls_enabled_no_policy` INFO notices. That is the intended posture (§2).
 - Point outreach code at AR-Internal-Tools, or file an outreach migration under `writer/supabase/migrations/`.

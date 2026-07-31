@@ -607,10 +607,15 @@ Every alternative was computed, not assumed: hexagonal lattice **91**, concentri
 because it was an estimate. Implemented in `api/services/geometry.py` (version `v1`, 18 tests);
 `README.md`, PRD §8b and the storage spec's volume arithmetic corrected with markers, not silently.
 
-**Still reversible, and only until the first scan.** Every `submarket.last_scanned_at` is null, so
-the geometry can still change freely today. Raised with the owner and implemented on the
-spec-literal reading in the absence of a contrary instruction — recorded here as decided-by-me,
-not as confirmed.
+**CONFIRMED BY THE OWNER 2026-08-01.** Previously recorded here as decided-by-me pending
+confirmation; that caveat is now discharged. The owner questioned the count (reasonably — see the
+note below), the arithmetic and the cost lever were both put in front of them, and the ruling is
+**keep 81**. Geometry is now fixed and freezes at the first scan.
+
+*The question worth keeping, because it will be asked again:* "5-mile radius, one point per mile —
+isn't that 25?" No: a 5-mile radius is 10 miles ACROSS, so a row holds 11 points (5 west + centre
++ 5 east), the bounding box is 11 x 11 = 121, and the clip leaves 81. 25 would need ~1.67-mile
+spacing; a 5x5 box at 2.5-mile spacing clips to 13, not 25.
 
 ### I-040 · The lead audit trail had no actor under the module ruling — FIXED
 `lead_log_changes` writes the stage-change and reassignment rows with `actor_id := auth.uid()`.
