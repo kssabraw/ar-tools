@@ -632,3 +632,344 @@ def test_llm_annotate_passes_through_a_real_object(monkeypatch):
 
     assert result["structure_summary"] == "s"
     assert result["intro_pattern"] == "p"
+
+
+# ── manual (pasted / uploaded) page structures ──────────────────────────────
+# The no-website capture path: a written spec parsed into the SAME analysis
+# shape a scrape produces. The load-bearing rule is that a number the client
+# never stated must never appear as a target — see page_structure_manual.
+
+def test_normalize_sections_keeps_only_stated_numbers():
+    from services.page_structure_manual import normalize_sections
+
+    out = normalize_sections([
+        {"heading": "Hero", "level": "h2", "intent": "hero", "intent_note": "Lead in",
+         "word_count": 90, "blocks": [{"type": "cta", "count": 1}]},
+        # No word_count / blocks stated -> neither may be invented.
+        {"heading": "Why choose us", "level": "H3", "intent": "value_prop"},
+    ])
+
+    assert [s["heading"] for s in out] == ["Hero", "Why choose us"]
+    assert out[0]["level"] == "H2"  # lowercase normalized
+    assert out[0]["word_count"] == 90
+    assert out[0]["blocks"] == [{"type": "cta", "count": 1}]
+    assert out[1]["level"] == "H3"
+    assert "word_count" not in out[1]
+    assert "blocks" not in out[1]
+
+
+def test_normalize_sections_rejects_bad_values():
+    from services.page_structure_manual import normalize_sections
+
+    out = normalize_sections([
+        {"heading": "  ", "intent": "hero"},                      # no heading -> dropped
+        {"heading": "Ok", "level": "H7", "intent": "not_a_tag",   # bad level/intent
+         "word_count": 0,                                         # non-positive -> dropped
+         "blocks": [{"type": "bullet list"}, {"type": "list", "items": 5}]},
+        "not-a-dict",
+    ])
+
+    assert len(out) == 1
+    assert out[0]["level"] == "H2"
+    assert out[0]["intent"] == "other"
+    assert "word_count" not in out[0]
+    # An unknown block type is dropped rather than passed through: block scoring
+    # is a set intersection of type names, so a synonym reads as a missing block.
+    assert out[0]["blocks"] == [{"type": "list", "count": 1, "items": 5}]
+
+
+def test_normalize_sections_handles_non_list():
+    from services.page_structure_manual import normalize_sections
+
+    assert normalize_sections(None) == []
+    assert normalize_sections({"sections": []}) == []
+
+
+def test_build_analysis_derives_elements_deterministically():
+    from services.page_structure_manual import build_analysis
+
+    analysis = build_analysis(
+        {
+            "sections": [
+                {"heading": "Hero", "level": "H2", "intent": "hero", "word_count": 100},
+                {"heading": "Services", "level": "H2", "intent": "service_detail",
+                 "word_count": 200, "blocks": [{"type": "list", "items": 4}]},
+                {"heading": "Common questions", "level": "H2", "intent": "faq", "word_count": 120},
+            ],
+            "structure_summary": "Opens with a hero, then services, then FAQ.",
+            "intro_pattern": "hero statement + value prop",
+        },
+        "Hero section. Services list. FAQ block.",
+    )
+
+    el = analysis["elements"]
+    assert el["section_count"] == 3
+    # Every section is sized here, so the total is meaningful. When only SOME are
+    # sized it must be dropped instead — see the partial-counts test below.
+    assert el["approx_total_words"] == 420
+    assert el["has_lists"] is True
+    # A declared `faq` intent counts even without a tagged block.
+    assert el["has_faq"] is True
+    assert el["intro_pattern"] == "hero statement + value prop"
+    assert analysis["structure_summary"].startswith("Opens with a hero")
+
+
+def test_build_analysis_tolerates_garbage():
+    from services.page_structure_manual import build_analysis
+
+    analysis = build_analysis("not a dict", "")
+    assert analysis["outline"] == []
+    assert analysis["structure_summary"] == ""
+
+
+def test_parse_guidelines_raises_when_no_sections_found(monkeypatch):
+    """An empty parse must FAIL rather than store a complete-but-useless entry:
+    unlike the scraper's annotation pass, the LLM is the whole extraction here."""
+    from services import page_structure_manual as psm
+
+    async def _fake_generate_text(**_kwargs):
+        return '{"sections": [], "structure_summary": "No structure described."}'
+
+    monkeypatch.setattr(report_llm, "generate_text", _fake_generate_text)
+
+    with pytest.raises(ValueError):
+        asyncio.run(psm.parse_guidelines("some prose that isn't a page spec", "service"))
+
+
+def test_parse_guidelines_raises_on_unparseable_response(monkeypatch):
+    from services import page_structure_manual as psm
+
+    async def _fake_generate_text(**_kwargs):
+        return "I'm afraid I can't do that."
+
+    monkeypatch.setattr(report_llm, "generate_text", _fake_generate_text)
+
+    with pytest.raises(ValueError):
+        asyncio.run(psm.parse_guidelines("Hero — 80 words", "service"))
+
+
+def test_parse_guidelines_requires_text():
+    from services import page_structure_manual as psm
+
+    with pytest.raises(ValueError):
+        asyncio.run(psm.parse_guidelines("   ", "service"))
+
+
+def test_parse_guidelines_happy_path_strips_fences(monkeypatch):
+    from services import page_structure_manual as psm
+
+    async def _fake_generate_text(**_kwargs):
+        return (
+            '```json\n'
+            '{"sections": [{"heading": "Hero", "level": "H2", "intent": "hero", '
+            '"word_count": 80}], "structure_summary": "Hero then detail.", '
+            '"intro_pattern": "hero statement"}\n'
+            '```'
+        )
+
+    monkeypatch.setattr(report_llm, "generate_text", _fake_generate_text)
+
+    analysis = asyncio.run(psm.parse_guidelines("Hero — 80 words", "service"))
+    assert analysis["outline"][0]["heading"] == "Hero"
+    assert analysis["elements"]["intro_pattern"] == "hero statement"
+
+
+# ── manual entries flow through the existing consumers unchanged ────────────
+
+def _manual_entry(with_counts: bool) -> dict:
+    section = {"heading": "Hero", "level": "H2", "intent": "hero", "intent_note": "Lead in"}
+    second = {"heading": "Objections", "level": "H2", "intent": "objection"}
+    if with_counts:
+        section["word_count"] = 80
+        second["word_count"] = 150
+    return {
+        "url": "",
+        "source": "manual",
+        "guidelines_text": "Hero, then objections.",
+        "status": "complete",
+        "analysis": {
+            "outline": [section, second],
+            "structure_summary": "Hero then objection handling.",
+            "elements": {"section_count": 2, "has_cta": True},
+        },
+    }
+
+
+def test_render_full_omits_word_targets_when_guidelines_state_none():
+    """A spec that names sections but no lengths must not produce a word-count
+    directive — the writer would be held to a number nobody specified."""
+    out = render_reference_structure(_manual_entry(with_counts=False), "service", mode="full")
+    assert out is not None
+    # Section purposes still come through as hard layout directives.
+    assert "objection handling" in out
+    assert "Replication checklist:" in out
+    assert "same number, order, and purpose" in out or "main (H2) sections" in out
+    # ...but nothing about hitting word counts or reproducing block composition.
+    assert "word count" not in out
+    assert "block composition" not in out
+    # And no dangling "— target" with nothing after it.
+    assert "— target\n" not in out and not out.endswith("— target")
+
+
+def test_render_full_keeps_word_targets_when_guidelines_state_them():
+    out = render_reference_structure(_manual_entry(with_counts=True), "service", mode="full")
+    assert out is not None
+    assert "~80 words" in out
+    assert "word count" in out
+
+
+def test_manual_entry_is_usable_and_scores_without_word_counts():
+    """The structural gate must not burn regeneration passes chasing word counts
+    a manual reference never carried: word_fit is a free pass in that case."""
+    from services.page_structure_eval import score_structural_fidelity
+    from services.page_structure_render import usable_analysis
+
+    entry = _manual_entry(with_counts=False)
+    assert usable_analysis(entry) is not None
+
+    generated = {
+        "outline": [
+            {"heading": "Hero", "level": "H2", "word_count": 120},
+            {"heading": "Objections", "level": "H2", "word_count": 300},
+        ],
+        "elements": {"section_count": 2, "has_cta": True},
+    }
+    result = score_structural_fidelity(entry, generated)
+    assert result["dimensions"]["word_fit"] == 100.0
+    assert result["composite"] >= 85.0
+
+
+def test_sync_page_structure_guidelines():
+    from models.clients import PageStructureGuideline, PageStructureGuidelines
+    from routers.clients import _sync_page_structure_guidelines
+
+    # New spec -> pending entry + enqueue.
+    guides = PageStructureGuidelines(
+        service=PageStructureGuideline(text="Hero — 80 words", original_filename="spec.docx")
+    )
+    merged, enq = _sync_page_structure_guidelines({}, guides)
+    assert merged["service"]["status"] == "pending"
+    assert merged["service"]["source"] == "manual"
+    assert enq == [("service", "Hero — 80 words", "spec.docx")]
+
+    # Unchanged + complete -> no re-parse (an LLM call we'd pay for nothing).
+    existing = {
+        "service": {
+            "source": "manual", "guidelines_text": "Hero — 80 words",
+            "status": "complete", "analysis": {"outline": [{"heading": "Hero"}]},
+        }
+    }
+    _, enq2 = _sync_page_structure_guidelines(
+        existing, PageStructureGuidelines(service=PageStructureGuideline(text="Hero — 80 words"))
+    )
+    assert enq2 == []
+
+    # Changed text -> re-parse.
+    merged3, enq3 = _sync_page_structure_guidelines(
+        existing, PageStructureGuidelines(service=PageStructureGuideline(text="Hero — 120 words"))
+    )
+    assert merged3["service"]["status"] == "pending"
+    assert enq3 == [("service", "Hero — 120 words", None)]
+
+    # Cleared -> manual entry dropped.
+    merged4, _ = _sync_page_structure_guidelines(
+        existing, PageStructureGuidelines(service=PageStructureGuideline(text=""))
+    )
+    assert "service" not in merged4
+
+    # None -> untouched.
+    merged5, enq5 = _sync_page_structure_guidelines(existing, None)
+    assert merged5 == existing and enq5 == []
+
+
+def test_guidelines_and_urls_do_not_clobber_each_other():
+    """The client form submits every URL field on every save, so a blank URL must
+    not delete a page type configured via guidelines (and vice versa)."""
+    from models.clients import (
+        PageStructureGuideline, PageStructureGuidelines, PageStructureUrls,
+    )
+    from routers.clients import _sync_page_structure_guidelines, _sync_page_structures
+
+    existing = {
+        "service": {"source": "manual", "guidelines_text": "Hero", "status": "complete",
+                    "analysis": {"outline": [{"heading": "Hero"}]}},
+        "blog_post": {"url": "https://x.com/b", "source": "scrape", "status": "complete",
+                      "analysis": {"outline": [{"heading": "Intro"}]}},
+    }
+
+    # A save with all URL fields blank keeps the manual `service` entry.
+    merged, _ = _sync_page_structures(existing, PageStructureUrls(blog_post="https://x.com/b"))
+    assert "service" in merged
+
+    # A save with all guideline fields blank keeps the scraped `blog_post` entry.
+    merged2, _ = _sync_page_structure_guidelines(
+        merged, PageStructureGuidelines(service=PageStructureGuideline(text="Hero"))
+    )
+    assert "blog_post" in merged2
+    assert merged2["blog_post"]["url"] == "https://x.com/b"
+
+
+def test_assert_single_structure_source_rejects_both():
+    from fastapi import HTTPException
+
+    from models.clients import (
+        PageStructureGuideline, PageStructureGuidelines, PageStructureUrls,
+    )
+    from routers.clients import _assert_single_structure_source
+
+    with pytest.raises(HTTPException) as exc:
+        _assert_single_structure_source(
+            PageStructureUrls(service="https://x.com/s"),
+            PageStructureGuidelines(service=PageStructureGuideline(text="Hero — 80 words")),
+        )
+    assert exc.value.status_code == 422
+    assert "service" in str(exc.value.detail)
+
+    # Different page types is not a conflict.
+    _assert_single_structure_source(
+        PageStructureUrls(service="https://x.com/s"),
+        PageStructureGuidelines(blog_post=PageStructureGuideline(text="Intro")),
+    )
+
+
+def test_build_analysis_drops_total_words_when_counts_are_partial():
+    """A spec that sizes SOME sections must not produce a whole-page total: the
+    partial sum renders as 'aim for roughly N total words' and would squeeze the
+    page down to the size of only its documented sections."""
+    from services.page_structure_manual import build_analysis
+
+    partial = build_analysis(
+        {"sections": [
+            {"heading": "Hero", "level": "H2", "intent": "hero", "word_count": 100},
+            {"heading": "Concerns", "level": "H2", "intent": "objection"},  # unsized
+        ]},
+        "",
+    )
+    assert partial["elements"]["approx_total_words"] == 0
+
+    # Every section sized -> the total is real and is kept.
+    full = build_analysis(
+        {"sections": [
+            {"heading": "Hero", "level": "H2", "intent": "hero", "word_count": 100},
+            {"heading": "Concerns", "level": "H2", "intent": "objection", "word_count": 150},
+        ]},
+        "",
+    )
+    assert full["elements"]["approx_total_words"] == 250
+
+
+def test_render_full_omits_total_words_directive_for_partial_counts():
+    from services.page_structure_manual import build_analysis
+
+    analysis = build_analysis(
+        {"sections": [
+            {"heading": "Hero", "level": "H2", "intent": "hero", "word_count": 100},
+            {"heading": "Concerns", "level": "H2", "intent": "objection"},
+        ]},
+        "",
+    )
+    out = render_reference_structure({"status": "complete", "analysis": analysis}, "service")
+    assert out is not None
+    assert "total words across the page" not in out
+    # The per-section targets that WERE stated still come through.
+    assert "~100 words" in out

@@ -195,7 +195,12 @@ def _outline_lines(outline: Any, with_targets: bool = False) -> list[str]:
         blocks_txt = _format_blocks(item.get("blocks"))
         blocks_part = f" [{blocks_txt}]" if blocks_txt else ""
         if with_targets:
-            lines.append(f"{indent}- {level}: {heading}{intent_txt} — target{words_txt}{blocks_part}")
+            # "— target …" only reads as a directive when there IS a target. A
+            # written guidelines spec (page_structure_manual) carries a word
+            # count / block list only where the client stated one, so a section
+            # with neither renders as a plain slot rather than "— target".
+            target_txt = f" — target{words_txt}{blocks_part}" if (words_txt or blocks_part) else ""
+            lines.append(f"{indent}- {level}: {heading}{intent_txt}{target_txt}")
         else:
             lines.append(f"{indent}- {level}: {heading}{intent_txt}{words_txt}{blocks_part}")
     return lines
@@ -217,12 +222,25 @@ def _render_full(analysis: dict[str, Any], page_type: str) -> str:
     if summary:
         lines.append(f"Summary: {summary}")
 
+    # Whether the reference actually carries size / block targets. A scraped page
+    # always does (they're measured off the DOM); a written guidelines spec only
+    # does where the client stated them. Directives about targets are emitted
+    # only when there are targets — otherwise the prompt demands the model hit
+    # numbers that were never specified.
+    has_word_targets = any(_section_words(it) for it in outline if isinstance(it, dict))
+    has_block_targets = any(
+        _block_type_list(it.get("blocks")) for it in outline if isinstance(it, dict)
+    )
+
     outline_lines = _outline_lines(outline, with_targets=True)
     if outline_lines:
-        lines.append(
-            "Outline: each section lists its purpose, target word count, and the content "
-            "blocks to include — treat these as targets to hit."
-        )
+        if has_word_targets or has_block_targets:
+            lines.append(
+                "Outline: each section lists its purpose, target word count, and the content "
+                "blocks to include — treat these as targets to hit."
+            )
+        else:
+            lines.append("Outline: each section lists its purpose — cover them in this order.")
         lines.extend(outline_lines)
 
     if isinstance(elements, dict) and elements:
@@ -250,14 +268,16 @@ def _render_full(analysis: dict[str, Any], page_type: str) -> str:
     else:
         checklist.append("Keep the same number, order, and purpose of main sections.")
     checklist.append("Preserve the heading hierarchy depth (H2 vs H3 nesting) shown above.")
-    checklist.append(
-        f"Hit each section's target word count within about {_WORD_TOLERANCE_PCT}% — do not pad a "
-        "short section or truncate a long one."
-    )
-    checklist.append(
-        "Reproduce each section's block composition: the same number of paragraphs, lists "
-        "(with a similar item count), tables, and CTAs shown in that section's target."
-    )
+    if has_word_targets:
+        checklist.append(
+            f"Hit each section's target word count within about {_WORD_TOLERANCE_PCT}% — do not pad a "
+            "short section or truncate a long one."
+        )
+    if has_block_targets:
+        checklist.append(
+            "Reproduce each section's block composition: the same number of paragraphs, lists "
+            "(with a similar item count), tables, and CTAs shown in that section's target."
+        )
     total_words = elements.get("approx_total_words") if isinstance(elements, dict) else None
     if isinstance(total_words, int) and total_words:
         checklist.append(f"Aim for roughly {total_words} total words across the page.")

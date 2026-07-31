@@ -3,7 +3,7 @@ import { useNavigate, useParams, Link, useLocation } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { Client, GbpProfile, PageStructureType, PageStructureEntry } from '../lib/types'
-import { ArrowLeft, Check, Image as ImageIcon, RefreshCw } from 'lucide-react'
+import { ArrowLeft, Check, Image as ImageIcon, RefreshCw, Upload } from 'lucide-react'
 import { GbpPicker } from '../components/GbpPicker'
 
 interface FormData {
@@ -40,11 +40,27 @@ interface FormData {
   ps_blog_post: string
   ps_product: string
   ps_solution: string
+  // Per page type, which source configures it: a live URL we scrape, or written
+  // guidelines we parse (for clients with no site to scrape). Only the active
+  // source is submitted for a page type — the two are mutually exclusive server-side.
+  ps_mode: Record<PageStructureType, 'url' | 'guidelines'>
+  ps_guidelines: Record<PageStructureType, string>
+  ps_filename: Record<PageStructureType, string>
   retainer_monthly: string
   is_sab: boolean
   illustrate_content: boolean
   client_type: 'local' | 'enterprise'
   strategist_weekday: string  // '' = global default, else '0'..'6'
+}
+
+const PAGE_STRUCTURE_TYPES: PageStructureType[] = [
+  'local_landing', 'service', 'location', 'blog_post', 'product', 'solution',
+]
+
+function emptyPsRecord<T>(value: T): Record<PageStructureType, T> {
+  return Object.fromEntries(
+    PAGE_STRUCTURE_TYPES.map(t => [t, value]),
+  ) as Record<PageStructureType, T>
 }
 
 const empty: FormData = {
@@ -55,6 +71,7 @@ const empty: FormData = {
   wordpress_site_url: '', wordpress_username: '', wordpress_app_password: '', wordpress_app_password_set: false,
   logo_url: '', gsc_property: '', business_location: '', target_cities: '', gbp_place_id: null, gbp: null,
   ps_local_landing: '', ps_service: '', ps_location: '', ps_blog_post: '', ps_product: '', ps_solution: '',
+  ps_mode: emptyPsRecord('url'), ps_guidelines: emptyPsRecord(''), ps_filename: emptyPsRecord(''),
   retainer_monthly: '', is_sab: false, illustrate_content: false, client_type: 'local', strategist_weekday: '',
 }
 
@@ -99,6 +116,41 @@ export function ClientForm() {
   const [saving, setSaving] = useState(false)
   const [logoUploading, setLogoUploading] = useState(false)
   const [logoError, setLogoError] = useState<string | null>(null)
+  // Page-structure guidelines upload: which page type is mid-upload, and any
+  // per-page-type error. Reuses the shared /files/upload parser, so a .docx or
+  // .pdf spec lands in the textarea as text the user can review and edit before
+  // saving — an upload is a shortcut for typing, not a separate storage path.
+  const [psUploading, setPsUploading] = useState<PageStructureType | null>(null)
+  const [psUploadError, setPsUploadError] = useState<Partial<Record<PageStructureType, string>>>({})
+
+  async function handleGuidelinesUpload(
+    e: React.ChangeEvent<HTMLInputElement>, type: PageStructureType,
+  ) {
+    const file = e.target.files?.[0]
+    e.target.value = '' // allow re-selecting the same file after an error
+    if (!file) return
+    setPsUploadError(s => ({ ...s, [type]: undefined }))
+    setPsUploading(type)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await api.upload<{ parsed_text: string }>('/files/upload', fd)
+      const text = (res.parsed_text ?? '').trim()
+      if (!text) {
+        setPsUploadError(s => ({ ...s, [type]: "We couldn't read any text from that file." }))
+        return
+      }
+      setForm(f => ({
+        ...f,
+        ps_guidelines: { ...f.ps_guidelines, [type]: text },
+        ps_filename: { ...f.ps_filename, [type]: file.name },
+      }))
+    } catch (err) {
+      setPsUploadError(s => ({ ...s, [type]: (err as Error).message || 'Upload failed.' }))
+    } finally {
+      setPsUploading(null)
+    }
+  }
 
   async function handleLogoSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -132,13 +184,17 @@ export function ClientForm() {
     enabled: isEdit,
   })
 
-  // Snapshot of the reference-page URLs as loaded into the form. On save,
-  // page_structure_urls is sent only when the fields differ from this snapshot —
-  // an untouched form omits the key and the server leaves stored references
-  // as-is. Without this, a save from a form loaded before the references were
-  // added (a stale tab, a teammate's concurrent edit) submits blanks and
-  // silently wipes them (last write wins).
-  const loadedPsRef = useRef<Record<string, string> | null>(null)
+  // Snapshot of the reference-page sources (URLs + written guidelines) as loaded
+  // into the form. On save, page_structure_urls / page_structure_guidelines are
+  // sent only when the fields differ from this snapshot — an untouched form omits
+  // the key and the server leaves stored references as-is. Without this, a save
+  // from a form loaded before the references were added (a stale tab, a
+  // teammate's concurrent edit) submits blanks and silently wipes them (last
+  // write wins).
+  const loadedPsRef = useRef<{
+    urls: Record<string, string>
+    guidelines: Record<string, string>
+  } | null>(null)
 
   // Deep-link support (e.g. /clients/:id/edit#gbp from the workspace) —
   // scroll the targeted section into view once it has rendered.
@@ -151,14 +207,13 @@ export function ClientForm() {
 
   useEffect(() => {
     if (existing) {
-      loadedPsRef.current = {
-        local_landing: existing.page_structures?.local_landing?.url ?? '',
-        service: existing.page_structures?.service?.url ?? '',
-        location: existing.page_structures?.location?.url ?? '',
-        blog_post: existing.page_structures?.blog_post?.url ?? '',
-        product: existing.page_structures?.product?.url ?? '',
-        solution: existing.page_structures?.solution?.url ?? '',
-      }
+      const psUrls = Object.fromEntries(
+        PAGE_STRUCTURE_TYPES.map(t => [t, existing.page_structures?.[t]?.url ?? '']),
+      )
+      const psGuidelines = Object.fromEntries(
+        PAGE_STRUCTURE_TYPES.map(t => [t, existing.page_structures?.[t]?.guidelines_text ?? '']),
+      )
+      loadedPsRef.current = { urls: psUrls, guidelines: psGuidelines }
       setForm({
         name: existing.name,
         website_url: existing.website_url,
@@ -187,12 +242,21 @@ export function ClientForm() {
         target_cities: (existing.target_cities ?? []).join(', '),
         gbp_place_id: existing.gbp_place_id,
         gbp: existing.gbp,
-        ps_local_landing: existing.page_structures?.local_landing?.url ?? '',
-        ps_service: existing.page_structures?.service?.url ?? '',
-        ps_location: existing.page_structures?.location?.url ?? '',
-        ps_blog_post: existing.page_structures?.blog_post?.url ?? '',
-        ps_product: existing.page_structures?.product?.url ?? '',
-        ps_solution: existing.page_structures?.solution?.url ?? '',
+        ps_local_landing: psUrls.local_landing,
+        ps_service: psUrls.service,
+        ps_location: psUrls.location,
+        ps_blog_post: psUrls.blog_post,
+        ps_product: psUrls.product,
+        ps_solution: psUrls.solution,
+        ps_mode: Object.fromEntries(
+          PAGE_STRUCTURE_TYPES.map(t => [
+            t, existing.page_structures?.[t]?.source === 'manual' ? 'guidelines' : 'url',
+          ]),
+        ) as Record<PageStructureType, 'url' | 'guidelines'>,
+        ps_guidelines: psGuidelines as Record<PageStructureType, string>,
+        ps_filename: Object.fromEntries(
+          PAGE_STRUCTURE_TYPES.map(t => [t, existing.page_structures?.[t]?.original_filename ?? '']),
+        ) as Record<PageStructureType, string>,
         retainer_monthly: existing.retainer_monthly != null ? String(existing.retainer_monthly) : '',
         is_sab: existing.is_sab ?? false,
         illustrate_content: existing.illustrate_content ?? false,
@@ -293,7 +357,7 @@ export function ClientForm() {
         // added elsewhere (stale tab / concurrent edit) can't silently wipe them.
         // Explicitly clearing a loaded field still sends '' → server drops it.
         ...(() => {
-          const current: Record<string, string> = {
+          const urlByType: Record<PageStructureType, string> = {
             local_landing: form.ps_local_landing.trim(),
             service: form.ps_service.trim(),
             location: form.ps_location.trim(),
@@ -301,16 +365,42 @@ export function ClientForm() {
             product: form.ps_product.trim(),
             solution: form.ps_solution.trim(),
           }
+          // Only the ACTIVE source is submitted per page type. The server rejects
+          // a page type carrying both a URL and guidelines, and blanking the
+          // inactive one is what lets a page type be switched between sources.
+          const urls: Record<string, string> = {}
+          const guidelines: Record<string, string> = {}
+          for (const t of PAGE_STRUCTURE_TYPES) {
+            const isManual = form.ps_mode[t] === 'guidelines'
+            urls[t] = isManual ? '' : urlByType[t]
+            guidelines[t] = isManual ? form.ps_guidelines[t].trim() : ''
+          }
           const loaded = loadedPsRef.current
-          const unchanged =
-            isEdit && loaded && Object.keys(current).every(k => current[k] === (loaded[k] ?? '').trim())
-          return unchanged
-            ? {}
-            : {
-                page_structure_urls: Object.fromEntries(
-                  Object.entries(current).map(([k, v]) => [k, v || null]),
-                ),
-              }
+          const same = (cur: Record<string, string>, was: Record<string, string>) =>
+            PAGE_STRUCTURE_TYPES.every(t => cur[t] === (was[t] ?? '').trim())
+          const urlsUnchanged = isEdit && loaded && same(urls, loaded.urls)
+          const guidesUnchanged = isEdit && loaded && same(guidelines, loaded.guidelines)
+          return {
+            ...(urlsUnchanged
+              ? {}
+              : {
+                  page_structure_urls: Object.fromEntries(
+                    Object.entries(urls).map(([k, v]) => [k, v || null]),
+                  ),
+                }),
+            ...(guidesUnchanged
+              ? {}
+              : {
+                  page_structure_guidelines: Object.fromEntries(
+                    PAGE_STRUCTURE_TYPES.map(t => [
+                      t,
+                      guidelines[t]
+                        ? { text: guidelines[t], original_filename: form.ps_filename[t] || null }
+                        : { text: '' },
+                    ]),
+                  ),
+                }),
+          }
         })(),
       }
       if (isEdit) {
@@ -599,25 +689,41 @@ export function ClientForm() {
         <div style={sectionStyle}>
           <h2 style={sectionTitle}>Reference Page Structures</h2>
           <p style={descStyle}>
-            Optional. Paste one example URL per page type. We scrape and analyze each page's
-            structure — ignoring nav, sidebars, footers, and popups — and store the layout so the
-            writing modules can mirror how this client structures their own pages. We re-analyze a
-            URL whenever you change it; use <strong>Re-analyze</strong> to refresh a stored URL whose
-            page has since changed.
+            Optional. For each page type, either point us at an example URL — we scrape and analyze
+            that page's structure, ignoring nav, sidebars, footers, and popups — or write out the
+            structure yourself. Either way we store the layout so the writing modules can mirror how
+            this client's pages are organized. Use <strong>Written guidelines</strong> when there's no
+            live page to scrape: a client with no site yet, a rebuild, or a layout that only exists in
+            a brand or design document. We re-analyze whenever you change the source; use{' '}
+            <strong>Re-analyze</strong> to refresh a stored one.
           </p>
           {PAGE_STRUCTURE_FIELDS.map(({ key, type, label, placeholder, help }) => {
             const entry = existing?.page_structures?.[type]
+            const mode = form.ps_mode[type]
+            const isManual = mode === 'guidelines'
             const trimmed = (form[key] as string).trim()
-            // Re-analyze applies to the STORED url — only offer it when the typed
-            // value matches what's stored (no unsaved edit) and it's not already
+            const guidelines = form.ps_guidelines[type]
+            const storedGuidelines = (entry?.guidelines_text ?? '').trim()
+            // Re-analyze applies to the STORED source — only offer it when the
+            // form matches what's stored (no unsaved edit) and it's not already
             // mid-analysis.
-            const canReanalyze = isEdit && !!entry?.url && entry.url === trimmed && entry.status !== 'pending'
+            const canReanalyze = isEdit && entry?.status !== 'pending' && (
+              isManual
+                ? entry?.source === 'manual' && !!storedGuidelines && storedGuidelines === guidelines.trim()
+                : !!entry?.url && entry.url === trimmed
+            )
             const rowReanalyzing = reanalyzeMutation.isPending && reanalyzeMutation.variables === type
             return (
-              <div key={type} style={{ marginBottom: 16 }}>
+              <div key={type} style={{ marginBottom: 20 }}>
                 <div style={titleRow}>
                   <label style={{ ...labelStyle, margin: 0 }}>{label}</label>
-                  {isEdit && <PageStructureStatus entry={entry} url={form[key] as string} />}
+                  {isEdit && (
+                    <PageStructureStatus
+                      entry={entry}
+                      value={isManual ? guidelines : (form[key] as string)}
+                      mode={mode}
+                    />
+                  )}
                   {(canReanalyze || rowReanalyzing) && (
                     <button
                       type="button"
@@ -629,14 +735,77 @@ export function ClientForm() {
                     </button>
                   )}
                 </div>
-                <input
-                  type="url"
-                  value={form[key] as string}
-                  onChange={set(key)}
-                  placeholder={placeholder}
-                  style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', marginTop: 6 }}
-                />
-                <p style={hintStyle}>{help}</p>
+                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                  {(['url', 'guidelines'] as const).map(m => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setForm(f => ({ ...f, ps_mode: { ...f.ps_mode, [type]: m } }))}
+                      style={{ ...psToggleStyle, ...(mode === m ? psToggleActiveStyle : {}) }}
+                    >
+                      {m === 'url' ? 'Example URL' : 'Written guidelines'}
+                    </button>
+                  ))}
+                </div>
+                {isManual ? (
+                  <>
+                    <textarea
+                      value={guidelines}
+                      onChange={(e) => setForm(f => ({
+                        ...f, ps_guidelines: { ...f.ps_guidelines, [type]: e.target.value },
+                      }))}
+                      rows={7}
+                      placeholder={
+                        'Describe the page section by section, e.g.\n\n' +
+                        'Hero — 80-120 words. Headline, one-line value prop, CTA button.\n' +
+                        'Why choose us — 150 words, 4-item bullet list.\n' +
+                        'Our process — 200 words, numbered steps.\n' +
+                        'FAQ — 5 questions.\n' +
+                        'Closing CTA — 60 words.'
+                      }
+                      style={{
+                        ...inputStyle, width: '100%', boxSizing: 'border-box', marginTop: 6,
+                        fontFamily: 'inherit', resize: 'vertical', lineHeight: 1.5,
+                      }}
+                    />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6 }}>
+                      <label style={{ ...reanalyzeBtnStyle, cursor: psUploading === type ? 'default' : 'pointer' }}>
+                        <Upload size={12} />
+                        {psUploading === type ? 'Reading…' : 'Upload a document'}
+                        <input
+                          type="file"
+                          accept=".pdf,.doc,.docx,.txt,.md,.rtf"
+                          onChange={(e) => handleGuidelinesUpload(e, type)}
+                          disabled={psUploading === type}
+                          style={{ display: 'none' }}
+                        />
+                      </label>
+                      {form.ps_filename[type] && (
+                        <span style={{ fontSize: 12, color: '#64748b' }}>
+                          from <strong>{form.ps_filename[type]}</strong>
+                        </span>
+                      )}
+                    </div>
+                    {psUploadError[type] && (
+                      <p style={{ ...hintStyle, color: '#dc2626' }}>{psUploadError[type]}</p>
+                    )}
+                    <p style={hintStyle}>
+                      {help} Give each section a length only if you want it enforced — we never
+                      invent word counts, so a section without one is written to fit its purpose.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <input
+                      type="url"
+                      value={form[key] as string}
+                      onChange={set(key)}
+                      placeholder={placeholder}
+                      style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', marginTop: 6 }}
+                    />
+                    <p style={hintStyle}>{help}</p>
+                  </>
+                )}
               </div>
             )
           })}
@@ -793,10 +962,18 @@ export function ClientForm() {
   )
 }
 
-function PageStructureStatus({ entry, url }: { entry?: PageStructureEntry; url: string }) {
-  const trimmed = url.trim()
-  // Pending save: the typed URL differs from what's stored (or nothing stored yet).
-  if (!entry?.url || entry.url !== trimmed) {
+function PageStructureStatus(
+  { entry, value, mode }: { entry?: PageStructureEntry; value: string; mode: 'url' | 'guidelines' },
+) {
+  const trimmed = value.trim()
+  // Which stored value the form's current input is compared against depends on
+  // the source: a scraped entry is keyed by its URL, a manual one by its text.
+  const isManual = mode === 'guidelines'
+  const stored = (isManual ? entry?.guidelines_text : entry?.url) ?? ''
+  const storedMatchesMode = isManual === (entry?.source === 'manual')
+  // Pending save: the form differs from what's stored (or nothing stored yet,
+  // or the source was switched).
+  if (!entry || !storedMatchesMode || !stored || stored.trim() !== trimmed) {
     if (!trimmed) return null
     return <span style={{ ...psBadge, color: '#475569', background: '#f1f5f9', border: '1px solid #e2e8f0' }}>Analyzes on save</span>
   }
@@ -811,7 +988,7 @@ function PageStructureStatus({ entry, url }: { entry?: PageStructureEntry; url: 
           style={{ ...psBadge, color: '#92400e', background: '#fef3c7', border: '1px solid #fde68a' }}
           title={entry.note ?? 'Captured 0 content sections — try a different, content-rich reference URL.'}
         >
-          Empty — try another URL
+          {isManual ? 'No sections found' : 'Empty — try another URL'}
         </span>
       )
     return <span style={{ ...psBadge, color: '#166534', background: '#dcfce7', border: '1px solid #bbf7d0' }}>Analyzed</span>
@@ -842,6 +1019,8 @@ const titleRow: React.CSSProperties = { display: 'flex', alignItems: 'center', g
 const parkedBadge: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 600, color: '#92400e', background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 999, padding: '2px 9px', lineHeight: 1.4, whiteSpace: 'nowrap' }
 const psBadge: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 600, borderRadius: 999, padding: '2px 9px', lineHeight: 1.4, whiteSpace: 'nowrap' }
 const reanalyzeBtnStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px', background: '#fff', color: '#4f46e5', border: '1px solid #c7d2fe', borderRadius: 999, fontSize: 11, fontWeight: 600, cursor: 'pointer' }
+const psToggleStyle: React.CSSProperties = { padding: '4px 12px', background: '#fff', color: '#64748b', border: '1px solid #e2e8f0', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer' }
+const psToggleActiveStyle: React.CSSProperties = { background: '#eef2ff', color: '#4f46e5', borderColor: '#c7d2fe' }
 const sectionTitle: React.CSSProperties = { fontSize: 15, fontWeight: 600, color: '#0f172a', margin: '0 0 4px' }
 const descStyle: React.CSSProperties = { fontSize: 13, color: '#64748b', margin: '0 0 16px', lineHeight: 1.6 }
 const labelStyle: React.CSSProperties = { display: 'block', fontSize: 12, fontWeight: 500, color: '#374151', marginBottom: 6 }

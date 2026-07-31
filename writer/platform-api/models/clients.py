@@ -69,6 +69,31 @@ class PageStructureUrls(BaseModel):
     solution: Optional[str] = None
 
 
+class PageStructureGuideline(BaseModel):
+    """A written page-structure spec for one page type, as an alternative to a
+    reference URL — for clients with no live page to scrape (no website yet, a
+    rebuild, or a layout that only exists in a design/brand document).
+
+    `text` is the spec itself. When it came from an uploaded file the frontend
+    sends the parser's extracted text here too and passes `original_filename`
+    for provenance (mirroring how the brand guide handles an upload).
+    """
+    text: str = ""
+    original_filename: Optional[str] = None
+
+
+class PageStructureGuidelines(BaseModel):
+    """Written page-structure specs keyed by page type. An empty/omitted value
+    clears that page type; a page type set here and in `page_structure_urls` is
+    a conflict (one source per page type) and is rejected at the API."""
+    local_landing: Optional[PageStructureGuideline] = None
+    service: Optional[PageStructureGuideline] = None
+    location: Optional[PageStructureGuideline] = None
+    blog_post: Optional[PageStructureGuideline] = None
+    product: Optional[PageStructureGuideline] = None
+    solution: Optional[PageStructureGuideline] = None
+
+
 class ClientDetail(BaseModel):
     id: UUID
     name: str
@@ -185,10 +210,13 @@ class ClientCreateRequest(BaseModel):
     strategist_weekday: Optional[int] = Field(None, ge=0, le=6)
     # Reference page URLs to scrape + analyze for structure mirroring.
     page_structure_urls: Optional[PageStructureUrls] = None
+    # Written page-structure specs — the no-website alternative to the URLs above.
+    page_structure_guidelines: Optional[PageStructureGuidelines] = None
 
 
 class ClientUpdateRequest(BaseModel):
     page_structure_urls: Optional[PageStructureUrls] = None
+    page_structure_guidelines: Optional[PageStructureGuidelines] = None
     target_cities: Optional[list[str]] = None
     name: Optional[str] = Field(None, min_length=1, max_length=200)
     website_url: Optional[str] = None

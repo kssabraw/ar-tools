@@ -108,6 +108,13 @@ export type PageStructureType = 'local_landing' | 'service' | 'location' | 'blog
 
 export interface PageStructureEntry {
   url: string
+  // Which capture path owns this entry: a scraped reference URL, or written
+  // guidelines pasted/uploaded for a client with no live page to scrape.
+  // Entries stored before the manual source existed have no `source` and are
+  // scrapes (they always carry a URL).
+  source?: 'scrape' | 'manual'
+  guidelines_text?: string | null
+  original_filename?: string | null
   status: 'pending' | 'complete' | 'failed'
   error: string | null
   // True when the scrape completed but captured 0 content sections (not a
