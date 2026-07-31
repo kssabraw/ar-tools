@@ -19,6 +19,7 @@ from db.supabase_client import get_supabase
 from services.slack_assistant.actions import _ACTION_TOOLS, _ACTIONS, _pending
 from services.slack_assistant.context import (
     _MEMORY_TOOL,
+    capture_memories,
     _run_remember,
     build_context,
     build_portfolio_context,
@@ -999,6 +1000,10 @@ async def handle_message(event: dict) -> None:
                 await post_message(channel, await _run_action(name, client["id"], args), thread_ts)
             return
         await post_message(channel, payload, thread_ts)
+        # Post-turn memory capture — awaited here (unlike the web surface, this
+        # handler already runs detached in a BackgroundTask, so the reply is
+        # posted and nobody is waiting on us). Never raises.
+        await capture_memories(client["id"], question, str(payload), "slack")
     except Exception as exc:
         logger.warning("slack_assistant_failed", extra={"channel": channel, "error": str(exc)})
         try:

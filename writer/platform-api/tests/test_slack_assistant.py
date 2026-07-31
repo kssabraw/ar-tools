@@ -1761,3 +1761,103 @@ def test_ranking_instruction_requires_stated_assumptions_not_a_gate():
     system = _system_prompt_for(_POMPANO_WANT)
     assert "INVITATION, not a" in system
     assert "I've assumed" in system
+
+
+# ---------------------------------------------------------------------------
+# Post-turn memory capture.
+#
+# The `remember` TOOL never fired once in weeks — assistant_memories was empty
+# across all 14 clients. It isn't broken; it's starved. It lives in interpret's
+# tool loop, where a call competes with writing the answer, and the round that
+# produces the reply runs with tool_choice="none". Capture now happens after the
+# turn instead.
+# ---------------------------------------------------------------------------
+
+
+def _capture(monkeypatch, notes, **cfg):
+    """Run capture_memories against a stubbed Anthropic; return saved notes."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from config import settings
+    from services.slack_assistant import context as ctx
+
+    for k, v in cfg.items():
+        monkeypatch.setattr(settings, k, v, raising=False)
+    monkeypatch.setattr(settings, "anthropic_api_key", "test-key", raising=False)
+
+    saved: list[str] = []
+    monkeypatch.setattr(ctx, "_run_remember",
+                        lambda cid, args, src: saved.append(args["note"]) or "ok")
+    monkeypatch.setattr(ctx, "get_supabase", lambda: MagicMock())
+
+    block = MagicMock()
+    block.type = "tool_use"
+    block.input = {"notes": notes}
+    resp = MagicMock()
+    resp.content = [block]
+    api = MagicMock()
+    api.messages.create = AsyncMock(return_value=resp)
+
+    anthropic = __import__("anthropic")
+    with patch.object(anthropic, "AsyncAnthropic", return_value=api):
+        asyncio.run(ctx.capture_memories("c1", "q", "r" * 900, "chat"))
+    return saved
+
+
+def test_capture_saves_the_notes_the_model_returns(monkeypatch):
+    saved = _capture(monkeypatch, ["Targeting independent insurance adjuster Pompano Beach."])
+    assert saved == ["Targeting independent insurance adjuster Pompano Beach."]
+
+
+def test_capture_saves_nothing_when_the_turn_holds_nothing_durable(monkeypatch):
+    # The common, correct outcome — a data lookup is not a memory.
+    assert _capture(monkeypatch, []) == []
+
+
+def test_capture_respects_the_per_turn_note_cap(monkeypatch):
+    saved = _capture(monkeypatch, ["a", "b", "c", "d"], slack_assistant_memory_max_notes=2)
+    assert len(saved) == 2
+
+
+def test_capture_drops_blank_notes(monkeypatch):
+    assert _capture(monkeypatch, ["  ", "", "real note"]) == ["real note"]
+
+
+def test_capture_skips_trivial_replies(monkeypatch):
+    import asyncio
+    from unittest.mock import MagicMock, patch
+
+    from config import settings
+    from services.slack_assistant import context as ctx
+
+    monkeypatch.setattr(settings, "anthropic_api_key", "test-key", raising=False)
+    anthropic = __import__("anthropic")
+    with patch.object(anthropic, "AsyncAnthropic") as api:
+        # Below slack_assistant_memory_min_reply_chars — must not call the API.
+        n = asyncio.run(ctx.capture_memories("c1", "thanks", "no worries", "chat"))
+    assert n == 0 and api.call_count == 0
+
+
+def test_capture_is_disabled_by_its_flag(monkeypatch):
+    import asyncio
+
+    from config import settings
+    from services.slack_assistant import context as ctx
+
+    monkeypatch.setattr(settings, "slack_assistant_memory_enabled", False, raising=False)
+    assert asyncio.run(ctx.capture_memories("c1", "q", "r" * 900, "chat")) == 0
+
+
+def test_capture_never_raises_into_the_turn(monkeypatch):
+    import asyncio
+    from unittest.mock import MagicMock, patch
+
+    from config import settings
+    from services.slack_assistant import context as ctx
+
+    monkeypatch.setattr(settings, "anthropic_api_key", "test-key", raising=False)
+    monkeypatch.setattr(ctx, "get_supabase", MagicMock(side_effect=RuntimeError("db down")))
+    anthropic = __import__("anthropic")
+    with patch.object(anthropic, "AsyncAnthropic"):
+        assert asyncio.run(ctx.capture_memories("c1", "q", "r" * 900, "chat")) == 0

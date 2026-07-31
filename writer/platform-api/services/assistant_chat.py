@@ -19,6 +19,8 @@ of Slack events. Differences from the Slack path:
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -26,8 +28,11 @@ from typing import Optional
 
 from fastapi.concurrency import run_in_threadpool
 
+from config import settings
 from db.supabase_client import get_supabase
 from services import slack_assistant
+
+logger = logging.getLogger(__name__)
 
 
 _HISTORY_LIMIT = 12  # prior turns folded into the prompt (mirrors the Slack cap)
@@ -146,6 +151,30 @@ def _list_clients() -> list[dict]:
     ).data or []
 
 
+
+# Strong refs so fire-and-forget capture tasks aren't garbage-collected mid-flight.
+_MEMORY_TASKS: set = set()
+
+
+def _schedule_memory_capture(client_id: str, question: str, reply: str, source: str) -> None:
+    """Run the post-turn memory pass without making the turn wait for it.
+
+    The reply is already composed by the time this is called, so capture must
+    never delay or fail it — a scheduling error is swallowed exactly like a
+    capture error.
+    """
+    if not settings.slack_assistant_memory_enabled:
+        return
+    try:
+        task = asyncio.create_task(
+            slack_assistant.capture_memories(client_id, question, reply, source)
+        )
+        _MEMORY_TASKS.add(task)
+        task.add_done_callback(_MEMORY_TASKS.discard)
+    except RuntimeError:
+        pass  # no running loop (sync caller) — skip rather than raise
+
+
 async def handle_chat(
     message: str,
     history: list[dict],
@@ -241,4 +270,5 @@ async def handle_chat(
             }
         return {**base, "reply": await slack_assistant._run_action(name, client["id"], args)}
 
+    _schedule_memory_capture(client["id"], message, str(payload), "chat")
     return {**base, "reply": payload}

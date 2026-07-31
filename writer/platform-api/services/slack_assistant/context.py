@@ -9,6 +9,7 @@ full picture."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, timedelta
 from typing import Optional
@@ -1060,6 +1061,122 @@ def _run_remember(client_id: str, args: dict, source: str) -> str:
             "id", [r["id"] for r in overflow]
         ).execute()
     return "Saved to memory."
+
+
+# ---------------------------------------------------------------------------
+# Post-turn memory capture.
+#
+# The `remember` tool above has been available for weeks and has never once
+# fired — `assistant_memories` was empty across all 14 clients. It isn't broken;
+# it's structurally starved. The tool lives in `interpret`'s bounded tool loop,
+# where calling it competes with writing the answer: a tool call in a non-final
+# round makes the model re-generate its reply next round (and, when streaming,
+# emits the prose twice), while the round that finally produces the answer runs
+# with tool_choice="none", so tools are unavailable exactly when the model knows
+# what was worth remembering.
+#
+# So capture moved out of the answer. This runs AFTER the turn, reads the
+# finished exchange, and decides what deserves keeping — a cheap call on a small
+# model, fire-and-forget, that can never delay or break a reply.
+# ---------------------------------------------------------------------------
+
+_MEMORY_CAPTURE_TOOL = {
+    "name": "save_memories",
+    "description": "Record what from this exchange is worth recalling weeks later.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "notes": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Zero or more short self-contained notes. EMPTY is the right "
+                    "answer for most turns — only durable things belong here."
+                ),
+            }
+        },
+        "required": ["notes"],
+    },
+}
+
+_MEMORY_CAPTURE_SYSTEM = (
+    "You keep the long-term memory of an SEO agency's strategist. You are shown "
+    "one exchange between a teammate and the strategist. Decide what — if "
+    "anything — should be remembered weeks from now.\n\n"
+    "SAVE: decisions reached ('targeting independent insurance adjuster Pompano "
+    "Beach, Maps first'), commitments and their timing, client facts the tools "
+    "don't track, stated preferences or constraints, and deadlines.\n"
+    "DO NOT SAVE: anything the suite already measures (ranks, alerts, traffic, "
+    "review counts — these change and would go stale as notes), restatements of "
+    "the question, pleasantries, or generic SEO advice.\n\n"
+    "Most turns deserve NOTHING — a data lookup is not a memory. Returning an "
+    "empty list is the common, correct answer. Never duplicate or lightly "
+    "reword a note that already exists. Each note is one short sentence that "
+    "will make sense on its own months later, with no pronouns referring to "
+    "this conversation."
+)
+
+
+async def capture_memories(
+    client_id: str, question: str, reply: str, source: str = "chat"
+) -> int:
+    """Read a finished turn and persist anything durable. Returns notes saved.
+
+    Best-effort in every direction: disabled, unconfigured, trivial, or failing
+    all return 0 quietly. It is called fire-and-forget after the reply has gone
+    out, so it must never raise into the turn.
+    """
+    if not settings.slack_assistant_memory_enabled or not settings.anthropic_api_key:
+        return 0
+    if not client_id or len(reply or "") < settings.slack_assistant_memory_min_reply_chars:
+        return 0
+    try:
+        import anthropic
+
+        existing = [
+            r["content"] for r in (
+                get_supabase().table("assistant_memories")
+                .select("content").eq("client_id", client_id)
+                .order("created_at", desc=True).limit(_MEMORY_CONTEXT_LIMIT)
+                .execute()
+            ).data or []
+        ]
+        known = ("\n".join(f"- {c}" for c in existing)) or "(none yet)"
+        api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=30.0)
+        resp = await api.messages.create(
+            model=settings.slack_assistant_memory_model,
+            max_tokens=500,
+            system=_MEMORY_CAPTURE_SYSTEM,
+            tools=[_MEMORY_CAPTURE_TOOL],
+            tool_choice={"type": "tool", "name": "save_memories"},
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"ALREADY REMEMBERED (never repeat these):\n{known}\n\n"
+                    f"TEAMMATE ASKED:\n{question[:2000]}\n\n"
+                    f"STRATEGIST REPLIED:\n{reply[:6000]}"
+                ),
+            }],
+        )
+        notes: list[str] = []
+        for block in resp.content:
+            if getattr(block, "type", None) == "tool_use":
+                notes = [str(n).strip() for n in (block.input or {}).get("notes") or []]
+        notes = [n for n in notes if n][: settings.slack_assistant_memory_max_notes]
+        for note in notes:
+            await asyncio.to_thread(_run_remember, client_id, {"note": note}, source)
+        if notes:
+            logger.info(
+                "assistant_memory_captured",
+                extra={"client_id": client_id, "count": len(notes)},
+            )
+        return len(notes)
+    except Exception as exc:
+        logger.warning(
+            "assistant_memory_capture_failed",
+            extra={"client_id": client_id, "error": str(exc)},
+        )
+        return 0
 
 
 def _ctx_memories(supabase, client_id: str, today: date) -> Optional[dict]:
