@@ -105,7 +105,10 @@ export function ScheduleModal(props: {
   const body: ScheduleRequest = {
     mode,
     cluster_ids: clusterIds,
-    max_articles: maxValid && maxArticles.trim() !== "" ? maxParsed : undefined,
+    // Explicit null (not undefined) when blank: the server applies its default
+    // ceiling to requests that OMIT the field, so "no limit" has to be stated
+    // rather than implied by absence.
+    max_articles: maxValid && maxArticles.trim() !== "" ? maxParsed : null,
     per_day: isPeriodic ? perDay : undefined,
     start_date: usesStartDate ? startDate : undefined,
     time_of_day: usesStartDate ? timeOfDay : undefined,

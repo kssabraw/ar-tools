@@ -17,16 +17,11 @@ than an arbitrary one, and the remainder stays in the plan.
 
 from __future__ import annotations
 
-from fanout.writer.schedule_planner import order_clusters
-
-
-def _cap(targets: list[str], max_articles: int | None) -> list[str]:
-    """The trim the API applies. Mirrors fanout/api/schedules.py — kept in one
-    place so the boundary conditions are pinned even though the endpoint itself
-    needs a DB to exercise."""
-    if max_articles is not None and max_articles >= 0:
-        return targets[:max_articles]
-    return targets
+from fanout.writer.schedule_planner import (
+    apply_max_articles as _cap,
+    order_clusters,
+    resolve_max_articles,
+)
 
 
 # --- the trim ---------------------------------------------------------------
@@ -97,6 +92,84 @@ def test_ordering_is_stable_and_lossless():
     assert len(ordered) == len(all_ids)
     assert len(set(ordered)) == len(all_ids)
     assert ordered[:2] == ["c5", "c1"]  # deduped, pillar order preserved
+
+
+# --- where the ceiling comes from -------------------------------------------
+#
+# The 2026-07-31 regression: the 1000 default lived only in the frontend, so a
+# browser still running a bundle from before the deploy sent no `max_articles`
+# at all and scheduled the whole 3,896-article plan. A safety ceiling has to sit
+# server-side, where a stale client cannot bypass it — and that requires telling
+# "field absent" apart from "explicitly no limit", which `is None` cannot do.
+
+
+def test_absent_field_gets_the_server_default():
+    """The stale-client case. A request that never mentions max_articles must be
+    capped, not treated as unlimited."""
+    assert resolve_max_articles(
+        field_present=False, requested=None, server_default=1000
+    ) == 1000
+
+
+def test_explicit_null_means_no_limit():
+    """A current client saying 'no limit' must be honoured, and must not be
+    confused with the absent case above — the parsed value is None in BOTH."""
+    assert resolve_max_articles(
+        field_present=True, requested=None, server_default=1000
+    ) is None
+
+
+def test_explicit_value_wins_over_the_default():
+    for requested in (250, 2500):
+        assert resolve_max_articles(
+            field_present=True, requested=requested, server_default=1000
+        ) == requested, "including a value above the default"
+
+
+def test_default_can_be_disabled():
+    assert resolve_max_articles(
+        field_present=False, requested=None, server_default=None
+    ) is None
+
+
+def test_absent_field_actually_trims_the_targets():
+    """The regression in one assertion, end to end through both helpers."""
+    targets = [f"c{i}" for i in range(3896)]
+    kept = _cap(targets, resolve_max_articles(
+        field_present=False, requested=None, server_default=1000
+    ))
+    assert len(kept) == 1000, "a request omitting max_articles must not schedule the whole plan"
+
+
+def test_negative_ceiling_is_ignored_not_reversed():
+    """targets[:-5] would silently drop the LAST five instead of capping."""
+    targets = [f"c{i}" for i in range(10)]
+    assert _cap(targets, -5) == targets
+
+
+def test_pydantic_distinguishes_absent_from_explicit_null():
+    """Contract test for the assumption the whole fix rests on.
+
+    `_effective_max_articles` in fanout/api/schedules.py reads
+    `"max_articles" in body.model_fields_set` because the parsed value is None in
+    BOTH the absent and explicit-null cases. If a pydantic upgrade ever stopped
+    distinguishing them, the server default would start overriding a deliberate
+    "no limit" — silently, and in the safe direction, so nothing would fail
+    loudly. Pinned here rather than in the router, which can't be imported
+    without the whole job graph.
+    """
+    from pydantic import BaseModel
+
+    class _Body(BaseModel):
+        mode: str
+        max_articles: int | None = None
+
+    absent = _Body.model_validate({"mode": "weekly"})
+    explicit_null = _Body.model_validate({"mode": "weekly", "max_articles": None})
+
+    assert absent.max_articles is None and explicit_null.max_articles is None
+    assert "max_articles" not in absent.model_fields_set
+    assert "max_articles" in explicit_null.model_fields_set
 
 
 def test_architecture_referencing_deleted_clusters_is_ignored():

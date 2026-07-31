@@ -1116,9 +1116,13 @@ export interface ScheduleRequest {
   mode: "all_at_once" | "drip" | "fixed" | "weekly" | "monthly_date" | "monthly_weekday";
   cluster_ids?: string[];          // omit/[] -> whole session
   // Production ceiling: schedule at most this many, taken from the front of the
-  // pillars-first architecture order. omit -> no cap. The plan keeps every
-  // article; the remainder stays available to schedule later.
-  max_articles?: number;
+  // pillars-first architecture order. The plan keeps every article; the
+  // remainder stays available to schedule later.
+  //
+  // Send an explicit null for "no limit" — OMITTING the field makes the server
+  // apply its own default ceiling, which is deliberate: that is what protects a
+  // stale browser bundle from silently scheduling an entire plan.
+  max_articles?: number | null;
   per_day?: number;                // count per period (per day/week/month)
   start_date?: string;             // YYYY-MM-DD — periodic start / fixed target day
   time_of_day?: string;            // HH:MM
@@ -1162,6 +1166,9 @@ export interface ScheduleEstimate {
   // Targets before max_articles trimmed them, and whether it did.
   eligible?: number;
   capped?: boolean;
+  // The ceiling actually applied (request value, or the server default when the
+  // request omitted the field). null = no limit.
+  max_articles?: number | null;
   // 'architecture' = pillars-first priority order; 'plan_order' = no architecture
   // has been generated, so a cap takes an arbitrary slice rather than the most
   // important articles.
