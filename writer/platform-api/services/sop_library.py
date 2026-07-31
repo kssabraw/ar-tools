@@ -152,8 +152,30 @@ def _truncate(text: str, limit: int) -> str:
 def relevant_docs(active_domains: set[str]) -> list[str]:
     """Ordered doc list for a set of active signal domains. Pure."""
     ordered: list[str] = list(_ALWAYS)
-    for domain in ("maps_growth", "organic_drop", "maps", "offpage", "budget",
-                   "ai_visibility", "content", "leadoff", "qa"):
+    # Order is question-shaped, because the budget only funds two or three docs
+    # and whatever comes last gets crumbs. On the Jupiter growth question,
+    # ai_visibility sat 6th and received 1,973 of AIO_AEO_SOP's 12,741 chars —
+    # the theory, none of Part 2's actual tactics — so the answer's AI section
+    # was measurement plus a platitude.
+    #
+    # A DIAGNOSTIC turn (the question names a drop/decline) is led by the
+    # mitigation playbooks; a GROWTH turn is led by the channel playbooks for
+    # the channels it will sequence. Getting this backwards starves whichever
+    # half the turn is actually about.
+    # `organic_drop` is the diagnostic signal: it's set by explicit drop
+    # vocabulary in the question, or by a client having open organic drop
+    # alerts. `maps` alone is NOT — it now requires a live maps alert, but a
+    # growth question asked about a client that happens to have one is still a
+    # growth question and wants the How-To-Rank playbook first.
+    diagnostic = "organic_drop" in active_domains
+    priority = (
+        ("organic_drop", "maps", "maps_growth", "ai_visibility", "offpage",
+         "content", "budget", "leadoff", "qa")
+        if diagnostic else
+        ("maps_growth", "ai_visibility", "offpage", "content",
+         "organic_drop", "maps", "budget", "leadoff", "qa")
+    )
+    for domain in priority:
         if domain in active_domains:
             for doc in _RELEVANCE[domain]:
                 if doc not in ordered:

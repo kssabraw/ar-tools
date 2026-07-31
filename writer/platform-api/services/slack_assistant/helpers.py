@@ -511,7 +511,12 @@ def sop_domains(question: str, context: dict) -> set[str]:
     ctx = context or {}
     if (ctx.get("organic_rank") or {}).get("open_drop_alerts"):
         domains.add("organic_drop")
-    if "maps_geogrid" in ctx:
+    # The "maps" domain leads with Rank_Drop_MITIGATION — a diagnostic doc. It
+    # used to be added merely because the client HAS a geo-grid, which is true
+    # of every local client, so a growth question ("how do we rank in Jupiter?")
+    # spent 6.7k of a 24k budget on drop mitigation and starved the docs that
+    # actually answered it. Gate it on a real drop, mirroring organic_drop.
+    if (ctx.get("maps_geogrid") or {}).get("open_alerts"):
         domains.add("maps")
     if "ai_visibility" in ctx:
         domains.add("ai_visibility")

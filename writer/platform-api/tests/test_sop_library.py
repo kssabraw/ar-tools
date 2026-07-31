@@ -213,3 +213,42 @@ def _doc_blocks(text: str):
     for i, m in enumerate(marks):
         end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
         yield m.group(1), text[m.end():end]
+
+
+# ---------------------------------------------------------------------------
+# Budget order is question-shaped (2026-07-31).
+#
+# The Jupiter growth turn spent 6.7k of a 24k budget on Rank_Drop_Mitigation
+# (pulled in merely because the client HAS a geo-grid) and left AIO_AEO_SOP with
+# 1,973 of its 12,741 chars — the theory, none of Part 2's tactics. The AI
+# section of that answer was "add keywords to tracking", because that was
+# genuinely all the model had.
+# ---------------------------------------------------------------------------
+
+
+def test_growth_turn_funds_channel_playbooks_before_diagnostics():
+    docs = sop_library.relevant_docs({"maps_growth", "ai_visibility", "content"})
+    assert docs.index("How_To_Rank_In_Google_Maps_SOP.md") < docs.index("AIO_AEO_SOP.md")
+    assert docs.index("AIO_AEO_SOP.md") < docs.index("On_Page_Criteria_and_Coverage.md")
+
+
+def test_diagnostic_turn_still_leads_with_the_mitigation_playbooks():
+    docs = sop_library.relevant_docs(
+        {"organic_drop", "maps", "maps_growth", "ai_visibility", "content"}
+    )
+    assert docs.index("Rank_Drop_Mitigation_SOP_Organic.md") < docs.index("AIO_AEO_SOP.md")
+    assert docs.index("Rank_Drop_Mitigation_SOP_Maps.md") < docs.index("AIO_AEO_SOP.md")
+
+
+def test_growth_turn_gives_the_aeo_sop_enough_room_for_its_tactics():
+    # Part 2 (the Platform-Influence Matrix — G Stacks for AIO, Medium/LinkedIn/
+    # Reddit for LLMs) starts past the 2k mark. A slice that stops short of it
+    # leaves the model with theory and no actions.
+    text = sop_library.select_sops_text(
+        {"maps_growth", "ai_visibility", "content"}, budget_chars=24_000
+    )
+    start = text.index("### SOP DOC: AIO_AEO_SOP.md")
+    nxt = text.find("### SOP DOC:", start + 10)
+    slice_len = (nxt if nxt > 0 else len(text)) - start
+    assert slice_len > 6_000, f"AEO SOP only got {slice_len} chars"
+    assert "Platform-Influence Matrix" in text

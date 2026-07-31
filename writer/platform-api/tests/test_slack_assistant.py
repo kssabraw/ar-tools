@@ -1260,11 +1260,20 @@ def test_sop_domains_from_question_keywords():
 def test_sop_domains_from_context_signals():
     ctx = {
         "organic_rank": {"open_drop_alerts": [{"keyword": "roof repair"}]},
-        "maps_geogrid": {"scans": []},
+        # An OPEN maps alert is what earns the maps drop-mitigation playbook —
+        # merely having scans doesn't (every local client has them, and the
+        # doc used to eat the budget on growth turns).
+        "maps_geogrid": {"scans": [], "open_alerts": [{"keyword": "roof repair"}]},
         "ai_visibility": {"visibility": 40},
     }
     domains = slack_assistant.sop_domains("how is the campaign going", ctx)
     assert {"organic_drop", "maps", "ai_visibility"} <= domains
+    # Scans without alerts: the AI + organic-drop domains still fire, maps doesn't.
+    quiet = slack_assistant.sop_domains(
+        "how is the campaign going",
+        {"organic_rank": {}, "maps_geogrid": {"scans": []}, "ai_visibility": {"visibility": 40}},
+    )
+    assert "maps" not in quiet and "ai_visibility" in quiet
     # No alerts / modules → no context-driven domains, but never empty: an empty
     # set collapses the SOP selection to the router doc alone, which is the
     # thin-advice failure the 2026-07-30 Pompano Beach turn exhibited.
@@ -1485,7 +1494,9 @@ def test_pompano_question_is_sop_grounded():
 def test_pompano_question_selects_real_sop_domains():
     # Was an empty set, which collapses the selection to the router doc alone.
     domains = slack_assistant.sop_domains(_POMPANO, {"maps_geogrid": {}})
-    assert "maps" in domains and "content" in domains
+    # maps_growth (How-To-Rank), not maps (drop mitigation) — nothing has
+    # dropped, and the drop playbook used to eat the budget on growth turns.
+    assert "maps_growth" in domains and "content" in domains
 
 
 def test_pompano_question_is_flagged_underspecified():
@@ -1958,3 +1969,21 @@ def test_costing_is_still_required_to_come_from_the_tool():
     system = _system_prompt_for(_POMPANO)
     assert "from cost_plan, not estimated" in system
     assert "CALL THIS BEFORE PRESENTING ANY PLAN THAT COSTS MONEY" in system
+
+
+def test_maps_drop_playbook_is_not_pulled_in_by_merely_having_a_geogrid():
+    # Every local client has a geo-grid; that is not a reason to spend the SOP
+    # budget on drop mitigation during a growth question.
+    growth = slack_assistant.sop_domains(
+        "how do we rank in jupiter", {"maps_geogrid": {}, "ai_visibility": {}}
+    )
+    assert "maps" not in growth
+    assert "ai_visibility" in growth
+
+
+def test_maps_drop_playbook_is_pulled_in_when_something_actually_dropped():
+    dropped = slack_assistant.sop_domains(
+        "how do we rank in jupiter",
+        {"maps_geogrid": {"open_alerts": [{"keyword": "x"}]}, "ai_visibility": {}},
+    )
+    assert "maps" in dropped
