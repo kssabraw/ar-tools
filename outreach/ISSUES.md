@@ -805,3 +805,32 @@ Note the gate keys on `observed_value = 'not_evaluated'` for an ENABLED rule. A 
 config (`review_recency`, deferred by decision) writes the same sentinel and must NOT gate spend —
 otherwise every prospect in the portfolio is blocked, since `review_recency` writes
 `not_evaluated` for all of them.
+
+### I-047 · Repointing the job at `main` sharpened the paid-run footgun, and the fix is not applied
+**Severity: this is the one open item that can cost real money without anyone deciding to spend it.**
+
+The `outreach` Railway service was repointed from the merged `claude/phase-1-outscraper-ingestion-llje34` to `main` on 2026-08-01, which was correct — a service deploying from a dead branch is a confusing thing to debug. But **"Auto deploys when pushed to GitHub" is still enabled**, and that setting means something very different now.
+
+| | tracked branch | pushes to it | deploys of this job |
+|---|---|---|---|
+| before | a merged feature branch | none, ever | effectively never |
+| after | `main` | several a day | **several a day** |
+
+At `OUTREACH_COMMAND=filter` each such deploy is free — a filter re-run over 1,388 prospects and a $0 `cost_ledger` row. The exposure is I-035's footgun, which now has a far wider trigger: if the command is set to `run` or `ingest` for a deliberate run and not put back within minutes, **the next merge to `main` by anyone, on any unrelated PR, fires a paid ingest.** The duplicate LA ingest happened when the trigger was a push to a branch only that work touched; the trigger is now the whole repository's merge traffic.
+
+**Action (one click, not applied):** Settings → Source → **Disable** auto-deploy on this service. It is a job with no cron schedule; it should deploy when a human decides to run it. Cost is one manual Deploy click when a run is actually wanted.
+
+*Note this does not replace the §7.2 mitigation* — a paid run should still need a token the deploy path cannot supply on its own. Disabling auto-deploy narrows the trigger; it does not make `OUTREACH_COMMAND=run` safe to leave set.
+
+### I-048 · Railway's config API disagrees with the dashboard after a staged change — resolved, recorded
+Changing the source branch reported "applied — staged for deployment" while `get-service-config` continued to report the **old** branch. Neither was wrong: the change was staged, and that API reports the currently-deployed config. The dashboard showed `main` immediately and settled it.
+
+Recorded because the natural next move on an apparently-failed infra write is to retry it, and retrying a write you cannot confirm is how one change becomes two. When two instruments disagree, find a third (§6.3, §6.11).
+
+### I-049 · The Railway agent's persistent memory carries two false facts about this service
+It wrote itself a project memory during the repoint. Two entries are wrong and will be repeated confidently if anyone consults it:
+
+1. **Start command** recorded as `python -m api.scripts.calibrate "plumber, Downtown Los Angeles, CA" 20`. That is a stale one-off calibration command; the real one is the `run_market` entrypoint driven by `OUTREACH_COMMAND`.
+2. **The Phase 1 run** recorded as exiting silently with "**NO OUTREACH_RESULT marker**" — the original I-035 diagnosis, which is **debunked**. The run completed normally at 09:11:01 and the log stream lagged. That misdiagnosis is what caused the duplicate paid ingest.
+
+Low stakes and not worth chasing, but a second source repeating a debunked failure story is exactly how a corrected mistake gets un-corrected.

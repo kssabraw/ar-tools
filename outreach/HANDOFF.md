@@ -22,7 +22,7 @@ Status as of 2026-08-01:
 | Phase 1b PR | [#534](https://github.com/kssabraw/ar-tools/pull/534) | **merged** 2026-07-31 as `452a726` |
 | Phase 2 foundations PR | [#538](https://github.com/kssabraw/ar-tools/pull/538) | open, draft, CI green |
 | Database | Supabase project **Outreacher**, ref `fkwhgvcggvsricuinuqy` | Phase 1 + 1b + Phase 2 storage applied; LA ingested and filtered |
-| Job runner | Railway service **outreach**, id `928c84bc-d7ca-416a-bd61-39e91cc64872` in project `ar-tools` (`2c718e53-…`) | no cron schedule; **repoint its source at `main`** now that #528 is merged |
+| Job runner | Railway service **outreach**, id `928c84bc-d7ca-416a-bd61-39e91cc64872` in project `ar-tools` (`2c718e53-73c8-4de8-bef8-7136f06b6ead`) | no cron schedule; source repointed to `main` 2026-08-01. **Auto-deploy-on-push is still ON — see §7.2** |
 | platform-api integration | `routers/outreach.py` + `services/outreach{,_db}.py` | **built** — 14 routes, read-only over the pipeline, read/write over the CRM |
 | Suite UI | not built | nothing in `frontend/` — **now the next build** |
 | Grid geometry | `api/services/geometry.py` | **built**, version `v1`, **81 points** (I-025 resolved) |
@@ -34,7 +34,7 @@ Live row counts: `prospect` 1,388 · `filter_result` 8,328 · `submarket` 14 · 
 ### Railway service configuration
 
 ```
-source           kssabraw/ar-tools @ claude/phase-1-outscraper-ingestion-llje34   ← STALE, move to main
+source           kssabraw/ar-tools @ main   ← repointed 2026-08-01 (was the merged phase-1 branch)
 rootDirectory    /outreach
 railwayConfigFile  outreach/railway.toml   ← repo-root-relative, NOT relative to rootDirectory
 builder          DOCKERFILE (from railway.toml)
@@ -196,13 +196,24 @@ Phase 1 and Phase 1b ran in parallel and both appended from the same `I-014` bas
 
 ---
 
+### 6.11 Railway's service-config API reports the DEPLOYED config, not the staged one
+Changing the source branch through the Railway agent returned "applied — staged for deployment", and reading the config back through `get-service-config` still showed the **old** branch. Both were telling the truth about different things: the change was staged, and the API reports what is currently deployed. The dashboard (Settings → Source) showed the new branch immediately and is the tiebreak.
+
+Worth knowing before someone concludes a write silently failed and applies it a second time. Same family as §6.3 — when two instruments disagree, find a third rather than trusting the more convenient one.
+
+---
+
 ## 7. What is NOT done
 
 ### 7.1 The Outscraper billing rate is still a placeholder — do this first
 `outscraper_cost_per_1000_places_cents` is **200¢/1000, a guess**. Every cost figure above and the `max_market_run_cost_cents` abort gate are only as honest as that number. 2,807 places have been pulled; divide the Outscraper dashboard charge for 2026-07-31 by 2,807, multiply by 1000, set the variable. (`ISSUES` I-033.)
 
-### 7.2 A paid run should need more than a variable
+### 7.2 A paid run should need more than a variable — AND THE BLAST RADIUS JUST GREW
 `OUTREACH_COMMAND=run` plus deploy-on-push means **any push to the tracked branch fires a paid ingest**. This actually happened (§6.4). Before any cron schedule is set, gate paid runs behind something the deploy path cannot supply on its own.
+
+**Repointing the source to `main` on 2026-08-01 made this materially worse, and the mitigation was not applied.** While the service tracked a dead feature branch, nothing ever pushed to it and the footgun was close to theoretical. Tracking `main` in a repo that merges several PRs a day means **every unrelated merge now deploys and runs this job.** At `OUTREACH_COMMAND=filter` that is free but noisy — a filter re-run over 1,388 prospects and a $0 ledger row per merge. If the command is ever set to `run` or `ingest` and not put back within minutes, the next merge by anyone, on any unrelated PR, spends money.
+
+**Recommended and NOT yet done: turn OFF "Auto deploys when pushed to GitHub"** on the service (Settings → Source). This is a job with no cron schedule; it should deploy when a human decides to run it, not when a Fanout PR merges. The cost is one manual Deploy click on the rare occasions it is wanted.
 
 ### 7.3 Grid geometry — SETTLED at 81, confirmed by the owner 2026-08-01
 `ISSUES` I-025 is closed. `reporting-layer-spec.md` §4.1 is the only document that *defines* the generator — "square lattice covering the bounding box, row-major from NW corner, clipped to distance <= radius_miles" — and that construction holds exactly **81** points. Every alternative was computed rather than assumed: hexagonal **91** (π·25·2/√3 = 90.7, the likeliest origin of a remembered "89"), concentric rings **41**, unclipped 11×11 box **121**. Nothing produces 89, and the PRD hedges it as "~89" because it was an estimate.
