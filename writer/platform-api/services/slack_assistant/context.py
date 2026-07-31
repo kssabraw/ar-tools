@@ -1235,10 +1235,11 @@ async def capture_memories(
 
 
 def _ctx_memories(supabase, client_id: str, today: date) -> Optional[dict]:
-    """Durable notes saved by the `remember` tool in past conversations."""
+    """Durable notes about this client — captured after past turns, or written
+    and corrected by hand in the memory editor."""
     rows = (
         supabase.table("assistant_memories")
-        .select("content, source, created_at")
+        .select("content, source, created_at, updated_at")
         .eq("client_id", client_id)
         .order("created_at", desc=True)
         .limit(_MEMORY_CONTEXT_LIMIT)
@@ -1251,10 +1252,21 @@ def _ctx_memories(supabase, client_id: str, today: date) -> Optional[dict]:
             {
                 "note": r["content"],
                 "when": str(r.get("created_at") or "")[:10],
+                # 'user' = typed by a teammate; 'chat'/'slack' = captured from a
+                # conversation. human_verified means a person edited it since.
                 "source": r.get("source"),
+                "human_verified": bool(r.get("updated_at")) or r.get("source") == "user",
             }
             for r in rows
-        ]
+        ],
+        "note": (
+            "These are things you concluded or were told in earlier "
+            "conversations, not measurements — a note can be out of date or "
+            "simply wrong. Where a note contradicts the live module data in "
+            "this context, TRUST THE MODULE DATA and say the note looks stale. "
+            "A note with human_verified=true was written or corrected by a "
+            "teammate and outranks one you captured yourself."
+        ),
     }
 
 
