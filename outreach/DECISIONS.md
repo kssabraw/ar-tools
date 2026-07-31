@@ -242,3 +242,83 @@ Reversing is a one-line config change and both request shapes are regression-tes
 Outscraper, DataForSEO, Google and others against these accounts, so it carries verified
 request shapes and response field names that no amount of documentation reading would have
 settled — and in this case contradicted a conclusion I had drawn from the vendor's own SDK.
+
+---
+
+## The outreach pipeline is an AR Tools module (owner ruling, 2026-07-31)
+
+**Amends the Phase 1 build decision, which is not withdrawn.** That decision said the code lives
+in the `kssabraw/ar-tools` repo while the database stays a SEPARATE Supabase project, and it
+recorded a cost: *"a separate project means a separate `auth.users` pool… do not expect SSO with
+existing AR Tools users."* The storage half of that reasoning stands — outreach's ~2 GB steady
+state and ~64M `grid_result` rows a year would eat the suite project's headroom, and the storage
+spec sized partitioning for a dedicated project.
+
+What was wrong was the inference, not the decision. A decision about where the *data* lives got
+allowed to determine where the *application* lives, and those are separable.
+
+**So: the database stays here; the API and UI move into the suite.** platform-api gains an
+`outreach` router backed by a project-scoped Supabase client, and the suite SPA gains the pages.
+There is precedent for reading a foreign data source this way — LeadOff reads the
+`market_scanner` schema through `services/leadoff_db.py`, and the Fanout backend is vendored and
+mounted under a path prefix — though both of those stay inside one Supabase project, and this is
+the first reach into a second.
+
+**This dissolves the SSO cost rather than paying it.** platform-api holds the Outreacher service
+role and is the only client, so staff authenticate against the suite exactly as they do for every
+other module and never need an Outreacher account. That is why the identity FKs are dropped: they
+pointed at a `auth.users` pool that will now stay permanently empty (ISSUES.md R-011).
+
+**Consequences that follow, and are not optional:**
+
+- **Retool is dropped**, and with it the per-user RLS model built for it. §8a's instruction to
+  write per-owner policies at launch was aimed at a direct database connection; there is no longer
+  one. The policies are removed rather than left in place, because a permissive policy on a table
+  nothing reaches through PostgREST is not "safe, tighten later" — it is an access model that
+  looks load-bearing and is not. RLS stays enabled with zero policies, which is the posture of
+  every other table in the estate.
+- **Authorization moves up** into platform-api, beside the suite's existing role checks.
+- **No cross-database joins.** A won lead becomes an AR Tools client through an API call, not a
+  foreign key. Worth knowing before someone designs a report that assumes otherwise.
+
+*Revisit:* if outreach ever needs to join prospects to suite clients in SQL rather than in
+application code, or if the storage argument stops holding.
+
+## Implementation — Phase 1b (2026-07-31)
+
+**The CRM tables carry real RLS policies. Every other table in the estate carries none.**
+Not drift. The rest of the estate sits behind a service that holds the service role and does its
+own auth, so a policy there would be unreachable code. The CRM tables are read **directly by a
+low-code UI over PostgREST** — when the client is the database's own REST layer, the database has
+to be the thing that says no. The trap this guards against: a Retool *Postgres* resource
+connecting as `postgres`/`service_role` bypasses RLS entirely, leaving every policy sitting in the
+schema looking correct and doing nothing. That failure is invisible in a schema diff. The
+connection MUST therefore be a **Supabase/REST resource with per-user JWTs** — load-bearing, not a
+preference. Policies start permissive per §8a.
+
+*Superseded the same day by the suite-module ruling above.* Retool never connected, so the
+policies were dropped rather than tightened, and the six `rls_policy_always_true` warnings this
+entry once predicted would be permanent are gone with them. The entry is kept because the trap it
+describes is real and independent of Retool: a Postgres-type connection authenticating as
+`postgres` or `service_role` bypasses RLS entirely, leaving every policy in place and enforcing
+nothing. That will apply again the next time anything is pointed straight at a Supabase database.
+
+**`outcome`'s outbound-only rule is keyed on `(prospect_id, source)`, not on `prospect` alone.**
+Phase 1b ships `lead.unique (prospect_id, source)` as the FK target and hands the enforcing DDL
+to Phase 3 (`PHASE3-outcome-constraint.md`); it creates neither `outcome` nor `touch`. Keying on
+prospect alone — the §10 shape — leaves the rule as a convention a trigger remembers, because a
+**promoted inbound lead also carries a `prospect_id`**, so nothing in the schema would object to
+an outcome attached to one. Since `lead.prospect_id` is already unique the composite costs
+nothing and makes the violation unrepresentable. Verified live against the real key with a
+throwaway probe table: outbound accepted, inbound-with-a-prospect_id rejected by FK, and
+reclassifying a lead that already has an outcome blocked through `on update cascade` — that last
+being the back door a plain FK would leave open.
+
+**Revoke before granting on any table PostgREST can reach.**
+Supabase's default privileges already grant ALL on new `public` tables to `anon` and
+`authenticated`, so a bare `grant select, insert` adds nothing and removes nothing — it reads
+like a restriction while leaving UPDATE, DELETE and TRUNCATE in place. Two consequences, both
+caught in verification: append-only on `lead_activity` was resting on the *absence* of an update
+policy, and an UPDATE with no matching policy is not an error but a silent zero-row no-op; and
+TRUNCATE is not subject to RLS at all, so no policy can stop a role that holds it. The failure
+mode is a silent wrong outcome rather than a refusal, which is the kind that survives review.
