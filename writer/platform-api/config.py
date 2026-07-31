@@ -647,7 +647,14 @@ class Settings(BaseSettings):
     # its 12,741 chars on a growth turn, i.e. the theory and none of the
     # tactics. Every SOP but the three large ones is under 13k and is meant to
     # arrive whole; this funds that. ~15k tokens per grounded turn.
-    slack_assistant_sop_budget_chars: int = 60_000
+    # Sized so nothing defers. Measured across growth/drop/links/content/AI
+    # questions on both quiet and alerting clients: the heaviest real block is
+    # ~74k, and every domain active at once is ~86k. This is a CEILING, not a
+    # floor — a turn that needs three docs still sends three docs — so headroom
+    # costs nothing on ordinary turns and keeps deferral a genuine safety net.
+    # That matters because a deferred doc depends on the model choosing to call
+    # read_sop, which is a weaker guarantee than simply sending it.
+    slack_assistant_sop_budget_chars: int = 90_000
     slack_assistant_sop_rounds: int = 3
     # Frontend base URL for deep links in email/Slack (e.g. https://ar-internal.netlify.app).
     app_base_url: str = ""
