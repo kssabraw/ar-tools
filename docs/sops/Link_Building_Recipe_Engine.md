@@ -56,7 +56,7 @@ Spend `Remaining` on the **deficient variable** identified by diagnosis (Maps Pa
 | **Contextual Relevance** | Cloud Stack $10 · Niche edit · Guest post (all high-relevance) |
 | **Entity / Knowledge Graph** | Content pages $5 · Reddit/LinkedIn/Medium $10 · IFTTT ring $100 (once ever) · RDF-triple placements (via PR/guest post/G stack) · reviews $15 |
 | **Reviews (below threshold — Maps Part 3)** | Reviews $15 each (GBP + Trustpilot) until ≥25 and ≥ lowest-in-pack |
-| **Maps / GBP (proximity/engagement)** | GBP Blast $5/mo (physical/hybrid only) · Hyper Local GBP Blast $10/mo (weak areas) · GBP Sniper $10/run (campaign start + drops) · GBP posts $2 ea · Agency Assassin $85/mo (≥$1,200) |
+| **Maps / GBP (proximity/engagement)** | GBP Blast $5/mo (physical/hybrid only) · Hyper Local GBP Blast $10/mo (weak areas) · GBP Sniper $10/run (campaign start + drops; **targets the GBP, never a page**) · GBP posts $2 ea · Agency Assassin $85/mo (≥$1,200) |
 
 **Knowledge-graph build-out** (when entity is the deficiency): fund service pages and blog posts ($5 each) on-vector, plus the entity procedure (Maps SOP Part 5) tools above.
 

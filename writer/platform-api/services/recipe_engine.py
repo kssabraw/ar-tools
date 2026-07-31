@@ -320,7 +320,8 @@ def allocate(
     # Maps drop → GBP Sniper run (campaign start + on drops — Maps SOP Part 7).
     if diagnosis.get("maps_drop") and budget >= GBP_SNIPER_COST:
         budget -= _add("gbp_sniper", "GBP Sniper (drop → 1 run)", 1, GBP_SNIPER_COST, "Minda → Ivy",
-                       "Open maps drop — Sniper re-run per Maps SOP Part 7")
+                       "Open maps drop — Sniper re-run per Maps SOP Part 7 "
+                       "(points at the GBP, never at a page)")
 
     # Remainder → on-vector content pages, capped by production capacity (§4).
     pages = min(int(budget // CONTENT_PAGE_COST), content_page_cap)

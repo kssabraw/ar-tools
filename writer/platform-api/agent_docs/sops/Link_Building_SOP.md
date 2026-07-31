@@ -106,7 +106,7 @@ How much value a single link actually delivers is computable:
 | T1 Booster | — | *(row deferred — to be specced later)* | | | | | | |
 | **GBP Blast** (maps — SEO NEO) | $5/mo | — | — | — | *driving-direction signal, not a link* | — | — | — |
 | **Hyper Local GBP Blast** (maps) | monthly | — | — | — | *targeted driving-direction signal* | — | — | — |
-| **GBP Sniper** (maps — SEO NEO) | $10/run | 40/80 | Low (~10%) | 33% | **High juice / low RD** → the GBP (follow-mix 0.43; ×low relevance) | low | — | qualitative |
+| **GBP Sniper** (maps — SEO NEO) | $10/run | 40/80 | Low (~10%) | 33% | **High juice / low RD** → **the GBP URL only — never a page** (follow-mix 0.43; ×low relevance) | low | — | qualitative |
 | **Maps Embeds** (maps) | $5/run | 20/50 (Money Robot) | High (100%) | 100% | **Low juice / high RD** → the GBP (low host UR/DR, but full relevance + dofollow) | high | — | embed = the tactic |
 
 **Maps-side rows:** the last four target the **GBP**, not the website — usage rules, cadences, and mechanics live in the Maps SOP §Part 7 (Standard Maps Tactics Stack). GBP Blasts are a driving-direction popularity signal rather than links, so juice columns don't apply.
@@ -244,6 +244,8 @@ Google tracks how quickly links are built, both to a page (Tier 1) and at Tier 2
 - If organic rankings stick between **spots 5–10** (and on-page/technical/internal linking are solved), more links may be needed.
 
 ### Link Building Targets for Maps Rankings
+
+> **These targets are for ordinary link building only.** The GBP-side tools — **GBP Sniper**, GBP Blast, Hyper Local GBP Blast and Maps Embeds — always point at the **Google Business Profile**, never at a page. Do not read the page targets below as Sniper targets; a Sniper aimed at a landing page is a misconfigured run.
 
 If geo-grid rankings stick between **spots 3–6** (and on-page, technical, internal linking, and CTR are solved), more links may be needed. Determine where the rankings are stuck:
 
