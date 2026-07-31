@@ -139,6 +139,7 @@ def evaluate(
     check_suppression: bool = True,
     min_review_count_enabled: bool = True,
     review_recency_enabled: bool = False,
+    inferred_zero: bool = False,
 ) -> FilterVerdict:
     """Run every rule against one place and return all outcomes.
 
@@ -181,8 +182,21 @@ def evaluate(
     outcomes.append(RuleOutcome(RULE_NOT_FRANCHISE, matched is None, matched))
 
     # -- 5. review count ------------------------------------------------------------------
+    #
+    # A missing count is NOT a low count, and the two must not be conflated — that is why an
+    # absent value records NOT_EVALUATED rather than failing. See ISSUES I-041: the LA pull
+    # returned no count for 113 of 1,388 listings, and folding those into "passed" would claim
+    # every business in the market has been checked when 113 were not.
+    #
+    # `inferred_zero` is the one exception, and it is deliberately a SEPARATE input rather than a
+    # zero written over the missing count. The inference — that this provider encodes "no reviews"
+    # as null — is a claim about a provider convention, not an observation about a business, so it
+    # stays visible in its own field and can be withdrawn by clearing a flag rather than by trying
+    # to work out which zeroes were real. `review_count` itself stays NULL forever.
     if not min_review_count_enabled:
         outcomes.append(RuleOutcome(RULE_REVIEW_COUNT, True, NOT_EVALUATED))
+    elif place.review_count is None and inferred_zero:
+        outcomes.append(RuleOutcome(RULE_REVIEW_COUNT, 0 >= min_review_count, "0 (inferred)"))
     elif place.review_count is None:
         # No count returned is not the same as a low count.
         outcomes.append(RuleOutcome(RULE_REVIEW_COUNT, True, NOT_EVALUATED))

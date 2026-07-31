@@ -838,3 +838,98 @@ It wrote itself a project memory during the repoint. Two entries are wrong and w
 2. **The Phase 1 run** recorded as exiting silently with "**NO OUTREACH_RESULT marker**" — the original I-035 diagnosis, which is **debunked**. The run completed normally at 09:11:01 and the log stream lagged. That misdiagnosis is what caused the duplicate paid ingest.
 
 Low stakes and not worth chasing, but a second source repeating a debunked failure story is exactly how a corrected mistake gets un-corrected.
+
+### I-041 UPDATE (2026-08-01, second pass) · The 8 checked, the 105 NOT verifiable from here
+
+**The 8 (null count + numeric rating) — all eight checked. Verdict: provider gaps, not zeros.**
+
+| Business | Our rating | External finding | Google-specific? |
+|---|---|---|---|
+| **Mejia Rooter** | 5.0 | **"5.0 on Google Reviews based on 3 reviews"** | **yes** |
+| DARROW Heating & Air | 4.6 | "4.6 stars from 13 reviews"; Birdeye 15 | ambiguous |
+| Mobile Vet, Glendale | 4.3 | 4.3 / 84 reviews — Yelp | no |
+| Troutwine Plumbing | 4.4 | Birdeye 24, Yelp 58, "108 online" | no |
+| A.S. Photography | 5.0 | Yelp 44 | no |
+| PHCC Greater LA | 4.8 | Facebook 6, 86% recommend | no |
+| USA Business Insurance | 4.8 | Yelp + own-site, no count | no |
+| J & D HVAC, Silver Lake | 3.0 | not found anywhere | no |
+
+Only one yielded an explicitly-Google count, but **all eight are real, established businesses with
+review presence somewhere** — none resembles a new zero-review listing. They stay NULL and route
+to I-045.
+
+**APPLIED: Mejia Rooter `review_count = 3`** (owner ruling). 3 < 10, so it now FAILS
+`review_count_min` and is excluded. **Survivors 925 → 924.** The lesson generalises: resolving the
+8 can REMOVE survivors, not merely fill blanks.
+
+**The 105 (null count + null rating) — the spot-check could not be run.**
+Every route is closed from the build session: WebFetch 403s on Google *and* on third-party mirrors
+(Birdeye); raw egress is blocked at the Trusted network level (I-027, re-tested and unchanged);
+all three Outscraper hosts are unreachable. WebSearch works but returns synthesized third-party
+aggregates, and the question requires proving a **negative** — a listing with 0 Google reviews and
+one with 3 produce identical empty results. Three were tried (Fast Leak Detection, Global Plumbing
+& Fire, Sunstate Plumbing); all returned no count, which is consistent with zero and equally
+consistent with three.
+
+**The owner's mechanical argument, which was under-credited first time round:** a rating is an
+average, so zero reviews cannot produce one; null+null is therefore internally coherent, and the
+105:8 ratio points the same way. The counter is narrower than first stated — H2 does *not* need a
+second unobserved failure mode, because a single one (the review block failing to parse) would
+null both fields together. That makes the 8 the stranger shape, not the 105. Both hypotheses need
+a mechanism; H1 is the more economical, and that is why ground truth is worth buying rather than
+reasoning about further.
+
+**Corrected survivor arithmetic** — the premise that the rule drops ~105 is wrong: **only 89 of
+the 105 are currently surviving** (the other 16 already fail another rule).
+
+| | count | pass rate |
+|---|---|---|
+| Survivors now (Mejia applied) | **924** | 66.6% |
+| If the flag were set on all 105 | 835 | 60.2% |
+
+### I-050 · Re-asking Outscraper is not independent of the hypothesis it would test
+**Bounds what the approved ~$0.10 can buy, so it is recorded before the money is spent.**
+
+The question is whether *Outscraper* encodes "no reviews" as null. Asking Outscraper again cannot
+answer it: if the null comes from its parser failing to read the review block, it fails identically
+on the second pull, and the answer returns null either way. **The ambiguous value is also the
+expected value.**
+
+A detail pull is still worth running, because of the *sub-objects* rather than the count field:
+`reviews_per_score` (the star histogram) and `reviews_data` (inline reviews). Neither can exist
+without reviews, so either one contradicts "zero" on a listing whose count is null.
+`review_verify.classify_lookup` is built around that and treats an all-zero histogram as a
+rendered empty widget rather than as evidence.
+
+**The genuinely independent check is a different vendor.** DataForSEO returns `rating.votes_count`
+on the same item as `place_id` (verified in `platform-api/services/maps_dataforseo.py`), and that
+credential does not exist on the outreach service (HANDOFF §8.2). If the Outscraper pass comes back
+mostly `ambiguous`, the next step is DataForSEO, **not more Outscraper pulls.**
+
+### I-051 · `review_count_inferred_zero` shipped, deliberately unset
+Migration `20260801130000`, applied live. A boolean on `prospect`, wired into
+`filters.evaluate(..., inferred_zero=)` and read from the column by `pipeline.run_filter`.
+
+`review_count` stays NULL on these rows **forever**. Writing 0 would launder an inference about a
+vendor convention into a measurement of a business: afterwards a real 0, a genuine zero-review
+listing and a guess would read identically, and withdrawing the inference would mean working out
+which zeroes had been ours. A DB constraint (`inferred_zero_requires_null_count`) makes the two
+mutually exclusive, and `filter_result.observed_value` records `"0 (inferred)"` so the audit trail
+says the exclusion rests on an inference.
+
+**Zero rows are flagged and behaviour is unchanged.** The flag is applied by hand, once, on
+evidence — `verify-reviews` reports and never acts.
+
+**To spend the approved ~$0.10** (needs egress, so from the Railway service or any machine with
+credentials — auto-deploy is off, so this is a deliberate Deploy):
+
+```
+OUTREACH_COMMAND=verify-reviews        # then Deploy; returns to `filter` afterwards
+# or locally:
+python -m api.scripts.run_market verify-reviews markets/los-angeles-plumbing.json --limit 20
+```
+
+Read-only apart from a `cost_ledger` row, cost-gated before any client is opened, and it prints
+`by_verdict` / `counts_found` / a recommendation. **A single `has_reviews` in the sample withholds
+the flag** — it would be written across every future market pull, so one false zero here is a
+systematic error there.
