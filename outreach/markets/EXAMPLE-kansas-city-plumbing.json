@@ -1,0 +1,47 @@
+{
+  "_comment": [
+    "EXAMPLE ONLY — coordinates are illustrative and have not been checked. Copy this to a real",
+    "file (e.g. kansas-city-plumbing.json) and replace everything before running anything paid.",
+    "",
+    "One file per market-vertical: one business category in one city. The portfolio target is",
+    "5 verticals x 10 cities = 50 of these.",
+    "",
+    "SUBMARKET GEOMETRY IS IMMUTABLE ONCE SCANNING BEGINS. Names are editable forever; centres,",
+    "radii and spacing are not. The seeder refuses to change the geometry of a submarket that has",
+    "been scanned. Before the first scan you can still revise freely, so getting these approximately",
+    "right now is fine — getting them wrong after Phase 2 starts is not.",
+    "",
+    "categories vs keywords: categories drive the Outscraper listing pull (Stage A1); keywords",
+    "drive Phase 2 SERP and geogrid scanning. They often overlap. They are not the same field."
+  ],
+
+  "name": "Kansas City, MO — Plumbing",
+  "center_lat": 39.0997,
+  "center_lng": -94.5786,
+  "radius_miles": 25,
+  "scan_interval_days": 15,
+
+  "categories": [
+    "plumber",
+    "drain cleaning service",
+    "water heater repair"
+  ],
+
+  "keywords": [
+    { "term": "plumber", "is_primary": true },
+    { "term": "emergency plumber", "is_primary": false },
+    { "term": "drain cleaning", "is_primary": false },
+    { "term": "water heater repair", "is_primary": false }
+  ],
+
+  "submarkets": [
+    { "name": "Downtown Kansas City", "center_lat": 39.1000, "center_lng": -94.5800 },
+    { "name": "Overland Park",        "center_lat": 38.9822, "center_lng": -94.6708 },
+    { "name": "Lee's Summit",         "center_lat": 38.9108, "center_lng": -94.3822 },
+    { "name": "Independence",         "center_lat": 39.0911, "center_lng": -94.4155 },
+    { "name": "Olathe",               "center_lat": 38.8814, "center_lng": -94.8191 },
+    { "name": "Liberty",              "center_lat": 39.2461, "center_lng": -94.4191 },
+    { "name": "Blue Springs",         "center_lat": 39.0169, "center_lng": -94.2816 },
+    { "name": "Shawnee",              "center_lat": 39.0417, "center_lng": -94.7202 }
+  ]
+}

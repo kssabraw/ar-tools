@@ -199,3 +199,23 @@ Nearest-centroid is deterministic and depends only on geometry, which is immutab
 **Franchise matching is non-exclusionary by construction, not by convention.** The rule is
 declared outside `NON_EXCLUSIONARY_RULES` in `services/filters.py` and the exclusion verdict is
 derived from that set, so no caller can turn a flag into an exclusion by adding a branch.
+
+**Markets are defined in checked-in JSON, not hardcoded.** `outreach/markets/<slug>.json` per
+market-vertical, applied idempotently by `services/seeding.py` via
+`python -m api.scripts.run_market seed`. Adding the tenth city is the same act as adding the
+first, and definitions are reviewable in a diff. The pipeline was already multi-market — every
+table keys on `market_id` — but there was no repeatable way to DEFINE one, which made it look
+like a single-market tool.
+
+**The geometry immutability invariant is enforced in code, not just documented.**
+`seeding.check_geometry_change` refuses any centre/radius/spacing change to a submarket with
+`last_scanned_at` set, and there is deliberately NO override flag that unlocks a scanned one —
+the correct move is a new submarket, which starts its own history, rather than an edit that
+silently orphans prior snapshots. Changing an UNSCANNED submarket is permitted but requires an
+explicit `--allow-geometry-change`, so it cannot happen by accident during a routine re-seed.
+Names are always editable.
+
+**`categories` and `keyword` are kept separate in the market definition** even though the strings
+often coincide. Categories drive the Stage A1 Outscraper listing pull; keywords drive Phase 2
+SERP and geogrid scanning. Conflating them costs nothing today and would be painful to unpick
+once both are in use.

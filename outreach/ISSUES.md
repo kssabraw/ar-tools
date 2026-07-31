@@ -206,3 +206,26 @@ derived from the stored copy. An optional on-disk landing (`raw_landing_dir`) wr
 archive body before anything reads it, as a hedge against a crash inside Outscraper's 2-hour
 retention window.
 **Action:** revisit when R2 lands in Phase 2 — the landing belongs in object storage.
+
+### I-025 · Grid point count (89) does not match the stated geometry (5-mile radius, 1-mile spacing)
+`README.md` and the concept notes describe an "89-point geogrid" over a "5-mile-radius scan area
+with 1-mile spacing". A 1-mile lattice bounded by a 5-mile radius contains **81** points, which is
+also exactly a 9x9 square grid. 89 matches neither the inscribed-circle count nor any square
+lattice.
+**Why it matters now rather than later:** Phase 2 pins grid geometry into a versioned function
+and persists its parameters per snapshot, and geometry is immutable once scanning begins. If the
+intended shape is 9x9=81, or a 5-mile radius with a different spacing, or 89 points from some
+other construction, that must be settled BEFORE the first scan. Afterwards it cannot be corrected
+without invalidating every snapshot taken.
+**No Phase 1 impact** — Phase 1 uses submarket centroids for tiling only and never touches radius
+or spacing. Raised now because it is free to fix today and expensive in six weeks.
+**Action:** confirm the intended point count and construction before Phase 2 builds the geometry
+function.
+
+### I-026 · Franchise pattern list can be bootstrapped from the first pull
+No hand-written chain list exists (I-020) and the owner does not have one. A name appearing at
+three or more distinct `place_id`s inside one market is almost certainly a chain, so the first
+real pull can propose the list rather than requiring it up front. Proposed, not built — it would
+be an addition to the existing rule, still flag-only, never an exclusion.
+**Action:** run the repetition query after the first ingest and seed
+`OUTREACH_FRANCHISE_PATTERNS` from what it surfaces, then keep the list in config.
