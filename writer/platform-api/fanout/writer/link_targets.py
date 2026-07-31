@@ -74,12 +74,26 @@ def infer_url_style(reference_url: str) -> UrlStyle | None:
     return UrlStyle(prefix=prefix, trailing_slash=path.endswith("/"))
 
 
-def build_extra_targets(urls: list[str] | None, *, limit: int = 3) -> list[LinkTarget]:
+def build_extra_targets(
+    urls: list[str] | None, *, limit: int = 3, seed_keyword: str = "",
+) -> list[LinkTarget]:
     """User-specified extra link targets (money pages — product/service/landing URLs the
     user wants every article to link to). The anchor phrase and title are derived from
     the URL's last path segment de-slugged ("/retatrutide-for-sale/" → "retatrutide for
     sale"); the injector links the first prose occurrence, falling back to the Related
-    Articles list like any other target. Invalid/duplicate URLs are dropped; capped."""
+    Articles list like any other target. Invalid/duplicate URLs are dropped; capped.
+
+    `seed_keyword` (the session's seed topic) is added as a **secondary anchor** and, when
+    the slug carries none of it, becomes the display title. A commercial slug is often a
+    SKU-ish code rather than prose — "/shop/glp-1-sema/" de-slugs to "glp 1 sema", which
+    no article will ever contain, so the target silently fell through to the Related
+    Articles list on every post as a bullet reading "Glp 1 Sema". The seed keyword
+    ("semaglutide") does appear in the prose, so it lets the money page earn a real
+    inline contextual link — and reads as a sane title when it doesn't. The slug phrase
+    still ranks first: where it IS prose ("retatrutide for sale") it's the better,
+    more specific anchor.
+    """
+    seed = (seed_keyword or "").strip()
     out: list[LinkTarget] = []
     seen: set[str] = set()
     for raw in urls or []:
@@ -95,11 +109,14 @@ def build_extra_targets(urls: list[str] | None, *, limit: int = 3) -> list[LinkT
         seen.add(url)
         segments = [s for s in (parsed.path or "").split("/") if s]
         phrase = segments[-1].replace("-", " ").replace("_", " ").strip() if segments else ""
-        out.append(LinkTarget(
-            url=url,
-            anchors=[phrase] if phrase else [],
-            title=phrase.title() if phrase else parsed.netloc,
-        ))
+        anchors = [a for a in (phrase, seed) if a]
+        # A slug that already names the topic is the better title ("Retatrutide For
+        # Sale"); one that doesn't is a code, so show the topic instead.
+        if seed and seed.lower() not in phrase.lower():
+            title = seed.title()
+        else:
+            title = phrase.title() if phrase else parsed.netloc
+        out.append(LinkTarget(url=url, anchors=anchors, title=title))
         if len(out) >= limit:
             break
     return out

@@ -70,6 +70,31 @@ def test_extra_targets_derive_anchor_from_slug():
     assert t.title == "Retatrutide For Sale"
 
 
+def test_extra_targets_seed_keyword_is_a_secondary_anchor():
+    # A SKU-ish commercial slug de-slugs to something no article ever says, so on its
+    # own the money page could only ever land in the Related Articles list. The seed
+    # keyword does appear in the prose, so it earns a real inline link.
+    [t] = build_extra_targets(
+        ["https://novalifepeptides.com/shop/glp-1-sema/"], seed_keyword="semaglutide")
+    assert t.anchors == ["glp 1 sema", "semaglutide"]
+    assert t.title == "Semaglutide"          # the slug names no topic -> show the topic
+
+
+def test_extra_targets_keep_a_descriptive_slug_as_the_title():
+    # The slug already names the topic: it's the more specific anchor AND the better
+    # title, so the seed keyword only trails it as a fallback anchor.
+    [t] = build_extra_targets(
+        ["https://novalifepeptides.com/retatrutide-for-sale/"], seed_keyword="retatrutide")
+    assert t.anchors == ["retatrutide for sale", "retatrutide"]
+    assert t.title == "Retatrutide For Sale"
+
+
+def test_extra_targets_without_seed_keyword_unchanged():
+    [t] = build_extra_targets(["https://a.com/shop/glp-1-sema/"])
+    assert t.anchors == ["glp 1 sema"]
+    assert t.title == "Glp 1 Sema"
+
+
 def test_extra_targets_drop_invalid_dupes_and_cap_at_three():
     targets = build_extra_targets([
         "https://a.com/one/",
