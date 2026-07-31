@@ -131,4 +131,33 @@ def create_run_and_snapshot(
         }
     ).execute()
 
+    # The snapshot is frozen here, so a run created before a client's brand guide
+    # is written produces an article with NO voice and NO ICP — and used to do so
+    # silently (the Writer degrades to schema 1.9-degraded and completes happily).
+    # That is how an article can fail a brand-voice audit it never had the guide
+    # for. Say so, once per client, rather than discovering it in review.
+    if not brand_text.strip() and not icp_text.strip():
+        logger.warning(
+            "run.no_brand_context",
+            extra={"run_id": run_id, "client_id": client_id},
+        )
+        from services import notifications
+
+        notifications.emit(
+            client_id,
+            kind="content_no_brand_context",
+            title="Content generated without a brand voice or ICP",
+            summary=(
+                "This client has no brand voice guide and no ICP on file, so the "
+                "article is being written without them. Add them on the client's "
+                "Setup page — content created before they exist cannot follow them, "
+                "and will not match a later brand-voice review."
+            ),
+            severity="warning",
+            payload={"run_id": run_id},
+            # One per client: the gap is a client-level fact, not a per-run event,
+            # so a bulk batch must not fire a notification per article.
+            dedupe_key=f"content_no_brand_context:{client_id}",
+        )
+
     return run_id

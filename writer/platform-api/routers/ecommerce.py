@@ -273,6 +273,10 @@ async def purge_ecommerce_drafts(
 class PublishPageRequest(BaseModel):
     destination: Literal["google_docs", "wordpress"] = "google_docs"
     status: Literal["draft", "publish"] = "draft"
+    # Publishing is refused when the page uses wording the client's brand guide
+    # forbids. This is the deliberate override, offered only after the user has
+    # been shown which words offended.
+    force_voice: bool = False
 
 
 @router.post("/ecommerce/pages/{page_id}/publish")
@@ -284,7 +288,8 @@ async def publish_ecommerce_page(
     """Publish a saved page to a Google Doc in the client's Drive folder, or
     directly to the client's WordPress site (destination='wordpress')."""
     return await ecommerce_service.publish_page(
-        str(page_id), auth["user_id"], destination=body.destination, status=body.status
+        str(page_id), auth["user_id"], destination=body.destination, status=body.status,
+        force_voice=body.force_voice,
     )
 
 

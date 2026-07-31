@@ -222,6 +222,13 @@ def _persist_page(
         # Structural-fidelity verdict from the product generation gate. None for
         # collections and for products driven by a house template (gate off).
         "structure_fidelity": result.get("structure_fidelity"),
+        # Brand-voice verdict: the full scorecard (headline score, band, the
+        # eight per-dimension results, deterministic violations) as jsonb, with
+        # the headline number lifted into its own column so it can be sorted and
+        # filtered beside the SEO score. Both null when the client has no brand
+        # guide on file — which is not the same as scoring zero.
+        "voice_violations": result.get("voice_compliance"),
+        "voice_score": (result.get("voice_compliance") or {}).get("score"),
         "mode": mode,
         "token_usage": result.get("token_usage"),
         "cost_breakdown": result.get("cost_breakdown"),
@@ -329,6 +336,12 @@ async def generate_page(
         page_template_url=template_url, notes=notes,
         reference_page_structure=reference_structure,
     )
+    # The client's brand guide, distilled into enforceable rules (cached per
+    # guide revision). Imported lazily — voice_card_service -> brand_voice_service
+    # -> local_seo_service would otherwise close an import cycle.
+    from services import voice_card_service
+
+    payload["voice_card"] = await voice_card_service.get_voice_card(client, user_id=user_id)
     result = await _stream_nlp("/generate-ecommerce-page", payload)
     result = await _apply_structure_gate(result, payload, reference_analysis)
     return _persist_page(client_id, keyword.strip(), page_type, source_url, product_input, "generate", result, user_id, notes=notes)
@@ -346,6 +359,8 @@ async def score_page(
     page_type = _norm_page_type(page_type)
     if not page_url and not page_content:
         raise HTTPException(status_code=400, detail="page_url_or_content_required")
+    from services import voice_card_service
+
     result = await _post_nlp("/score-ecommerce-page", {
         "keyword": keyword,
         "page_type": page_type,
@@ -354,6 +369,7 @@ async def score_page(
         "business_name": _business_name(client),
         "brand_context": _brand_context(client),
         "serp_analysis": serp_analysis,
+        "voice_card": await voice_card_service.get_voice_card(client, user_id=user_id),
     }, user_id=user_id)
     _record_score_run(client_id, keyword, page_type, "score", result, page_id=None, page_url=page_url, user_id=user_id)
     return result
@@ -374,6 +390,9 @@ async def reoptimize_from(
     page_type = _norm_page_type(page_type)
     if not existing_page_html and not existing_page_url:
         raise HTTPException(status_code=400, detail="page_url_or_html_required")
+
+    from services import voice_card_service
+
     result = await _stream_nlp("/reoptimize-ecommerce-page", {
         "keyword": keyword,
         "page_type": page_type,
@@ -383,6 +402,7 @@ async def reoptimize_from(
         "business_name": _business_name(client),
         "brand_voice": client.get("brand_voice"),
         "detected_icp": client.get("detected_icp"),
+        "voice_card": await voice_card_service.get_voice_card(client, user_id=user_id),
         "serp_analysis": serp_analysis,
         "product_input": (product_input or "").strip() or None,
         "notes": (notes or "").strip() or None,
@@ -412,19 +432,31 @@ async def reoptimize_url(
     # row; re-tag as reoptimize_before for the reoptimize history semantics).
     _record_score_run(client_id, keyword, page_type, "reoptimize_before", score_result, page_id=None, page_url=page_url, user_id=user_id)
 
+    from services import voice_card_service
+
     composite = score_result.get("composite_score")
-    if composite is not None and composite >= score_threshold and not (notes or "").strip():
-        logger.info("ecommerce.reoptimize_url_skipped", extra={"client_id": client_id, "page_url": page_url, "score": composite})
+    voice_compliance = score_result.get("voice_compliance")
+    # Skip only when the page clears BOTH the SEO and the brand-voice bar.
+    should_reopt, reason = voice_card_service.reoptimize_verdict(
+        composite, voice_compliance, score_threshold
+    )
+    voice_score = (voice_compliance or {}).get("score")
+    if not should_reopt and not (notes or "").strip():
+        logger.info(
+            "ecommerce.reoptimize_url_skipped",
+            extra={
+                "client_id": client_id, "page_url": page_url,
+                "score": composite, "voice_score": voice_score,
+            },
+        )
         return {
             "status": "skipped",
             "page_url": page_url,
             "keyword": keyword,
             "score": composite,
+            "voice_score": voice_score,
             "threshold": score_threshold,
-            "reason": (
-                f"Already scores {round(composite)}/100 — at or above the "
-                f"{int(score_threshold)} threshold, so reoptimization was skipped."
-            ),
+            "reason": reason,
         }
 
     page = await reoptimize_from(
@@ -465,7 +497,7 @@ async def reoptimize_url(
 
 _LIST_COLUMNS = (
     "id, client_id, keyword, page_type, source_url, page_title, composite_score, "
-    "composite_status, mode, created_at, deleted_at, "
+    "composite_status, voice_score, mode, created_at, deleted_at, "
     "published_doc_url, published_url, published_at"
 )
 
@@ -597,6 +629,7 @@ async def _publish_page_to_wordpress(page: dict, client: dict, user_id: str, sta
 
 async def publish_page(
     page_id: str, user_id: str, destination: str = "google_docs", status: str = "draft",
+    force_voice: bool = False,
 ) -> dict:
     """Publish a saved ecommerce page to a Google Doc in the client's Drive folder
     (default) or to the client's WordPress site (destination='wordpress'). The
@@ -606,6 +639,10 @@ async def publish_page(
 
     supabase = get_supabase()
     page = get_page(page_id)
+
+    from services import voice_card_service
+
+    voice_card_service.assert_voice_publishable(page.get("voice_violations"), force_voice)
 
     if destination == "wordpress":
         client_res = (

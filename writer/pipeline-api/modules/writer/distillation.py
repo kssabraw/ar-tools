@@ -26,13 +26,19 @@ You must output a single JSON object matching this exact schema:
 {
   "brand_name": string (the actual brand/company name, e.g. "Ubiquitous", "Acme Co"; empty string if not stated),
   "tone_adjectives": [string],
+  "person": "first" | "third" | "" (does the guide tell the writer to speak as "we/our" (first) or to name the brand in third person (third)? "" if the guide does not say),
   "voice_directives": [string, max 200 chars each, max 8 items],
+  "sentence_rhythm": string (max 200 chars - what the guide says about sentence length/rhythm/cadence; "" if unstated),
   "audience_summary": string (max 300 chars),
   "audience_personas": [string, max 8 items - job titles or roles the ICP names, e.g. "VP of Growth", "CMO", "Director of Marketing"],
   "audience_verticals": [string, max 12 items - industry verticals or categories the ICP targets, e.g. "Beauty", "Health & Wellness", "Pet Care"],
   "audience_company_size": string (max 120 chars - the company-size descriptor the ICP uses, e.g. "$20M+ ARR (sweet spot $30M–$100M)"),
   "audience_pain_points": [string, max 5 items],
   "audience_goals": [string, max 5 items],
+  "audience_triggers": [string, max 6 items - what makes this reader search or act RIGHT NOW],
+  "audience_motivations": [string, max 6 items - what they actually want],
+  "audience_objections": [string, max 6 items - what makes them hesitate],
+  "cta_language": [string, max 8 items - the call-to-action phrasings the guide or ICP calls for, verbatim],
   "preferred_terms": [string, max 20 items],
   "banned_terms": [string, max 30 items],
   "discouraged_terms": [string, max 20 items],
@@ -43,11 +49,14 @@ You must output a single JSON object matching this exact schema:
 
 CRITICAL RULES:
 - brand_name is the proper noun the brand uses for itself in the brand guide. Extract it verbatim - do NOT paraphrase or expand acronyms. If the brand guide does not state a name, return "".
-- tone_adjectives and voice_directives come ONLY from the brand guide text. NEVER from website analysis.
+- tone_adjectives, person and voice_directives come ONLY from the brand guide text. NEVER from website analysis.
+- person: answer "first" only if the guide actually asks the writer to use we/our/us, and "third" only if it asks for the brand to be named instead. If the guide is silent on this, return "". Do not infer it from how the guide itself is written.
 - A term is "banned" ONLY when the brand guide uses literal prohibitive language about it: "never use", "do not use", "DO NOT", "banned", "prohibited", "must not appear", "absolute no", or equivalent. The bar is HIGH - banned means the writer must error if the term appears.
 - A term is "discouraged" when the brand guide expresses any softer preference against it - "avoid", "we prefer X over Y", "try not to use", "lean away from", "use sparingly", "minimize", or any preference-without-prohibition language. When in doubt between banned and discouraged, classify as discouraged.
 - A term is "preferred" when the brand guide names it as preferred phrasing.
-- audience_summary, audience_personas, audience_verticals, audience_company_size, audience_pain_points, audience_goals all come from the ICP text.
+- audience_summary, audience_personas, audience_verticals, audience_company_size, audience_pain_points, audience_goals, audience_triggers, audience_motivations, audience_objections all come from the ICP text.
+- cta_language may come from either document, wherever CTA wording is specified. sentence_rhythm comes from the brand guide only.
+- audience_triggers/motivations/objections: extract only what the ICP states. An empty array is the correct answer when it says nothing — never infer plausible-sounding ones.
 - audience_personas: extract the named job titles/roles verbatim (e.g. "VP of Growth", "Director of Marketing"). Do not infer titles that aren't in the ICP.
 - audience_verticals: extract the named industry verticals verbatim (e.g. "Beauty", "Food & Beverage"). Do not infer verticals that aren't in the ICP.
 - audience_company_size: extract the literal company-size descriptor (revenue band, employee count, growth stage, etc.). Empty string if the ICP doesn't specify.
@@ -126,9 +135,13 @@ def _parse_card(raw: dict) -> BrandVoiceCard:
     if not isinstance(contact_raw, dict):
         contact_raw = {}
 
+    person = str(raw.get("person") or "").strip().lower()
+
     return BrandVoiceCard(
         brand_name=str(raw.get("brand_name") or "").strip()[:120],
+        sentence_rhythm=str(raw.get("sentence_rhythm") or "").strip()[:200],
         tone_adjectives=_list("tone_adjectives", 12),
+        person=person if person in ("first", "third") else "",
         voice_directives=_list("voice_directives", 8),
         audience_summary=str(raw.get("audience_summary") or "")[:300],
         audience_personas=_list("audience_personas", 8),
@@ -136,6 +149,10 @@ def _parse_card(raw: dict) -> BrandVoiceCard:
         audience_company_size=str(raw.get("audience_company_size") or "").strip()[:120],
         audience_pain_points=_list("audience_pain_points", 5),
         audience_goals=_list("audience_goals", 5),
+        audience_triggers=_list("audience_triggers", 6),
+        audience_motivations=_list("audience_motivations", 6),
+        audience_objections=_list("audience_objections", 6),
+        cta_language=_list("cta_language", 8),
         preferred_terms=_list("preferred_terms", 20),
         banned_terms=_list("banned_terms", 30),
         discouraged_terms=_list("discouraged_terms", 20),

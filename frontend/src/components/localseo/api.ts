@@ -201,7 +201,13 @@ export const localSeoApi = {
   // WordPress site (destination='wordpress').
   publishPage: (
     pageId: string,
-    opts: { destination?: 'google_docs' | 'wordpress'; status?: 'draft' | 'publish' } = {},
+    opts: {
+      destination?: 'google_docs' | 'wordpress'
+      status?: 'draft' | 'publish'
+      // Deliberate override after the brand-guide block. Only ever set
+      // from an explicit second click, never a default.
+      force_voice?: boolean
+    } = {},
   ) =>
     api.post<{
       success: boolean

@@ -1,3 +1,5 @@
+import type { VoiceCompliance } from '../localseo/types'
+
 // Shared types for the Ecommerce Product & Collection Writer module frontend.
 // These mirror the platform-api passthrough responses. This module is national
 // (no location/area) — a page targets a keyword + a page_type (product or
@@ -68,6 +70,10 @@ export interface EcommercePageDetail extends EcommercePageListItem {
   content_gaps: Array<ContentGap | string>
   // Public specs auto-filled from cited sources; empty when none were found.
   researched_facts?: ResearchedFact[]
+  // Deterministic brand-guide audit. Null when the client has no guide on file
+  // or for pages generated before voice enforcement existed.
+  voice_violations?: VoiceCompliance | null
+  voice_score?: number | null
   composite_score?: number | null
   composite_status?: string | null
   engine_scores?: Record<string, EngineScore> | null

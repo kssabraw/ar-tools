@@ -36,6 +36,9 @@ class PublishRequest(BaseModel):
     destination: Literal["google_docs", "wordpress", "github"] = "google_docs"
     # WordPress only: draft (default, safe) or publish (live).
     status: Literal["draft", "publish"] = "draft"
+    # Publishing is refused when the article uses wording the client's brand
+    # guide forbids. This is the deliberate override.
+    force_voice: bool = False
 
 
 class FeaturedImageRequest(BaseModel):
@@ -282,6 +285,40 @@ def _resolve_content(supabase, run_id: UUID, content_type: str) -> tuple[str, st
     return markdown_to_html(markdown), markdown_to_gutenberg(markdown), None
 
 
+def _resolve_voice_verdict(supabase, run_id: UUID) -> dict | None:
+    """The brand-voice verdict for this run, from whichever module produced it.
+
+    The two content paths record it differently: the blog writer scores its own
+    article and stores the scorecard on `metadata.voice_scorecard`, while a
+    service/location page is scored by nlp afterwards and the verdict lands on
+    the `service_score` output as `voice_compliance`. Newest row wins, so a
+    re-score after a reoptimize pass supersedes the original.
+
+    Best-effort: an unreadable output returns None, which the gate treats as
+    "nothing to enforce". A publish must not fail because a lookup did.
+    """
+    try:
+        result = (
+            supabase.table("module_outputs")
+            .select("module, output_payload, created_at")
+            .eq("run_id", str(run_id))
+            .in_("module", ["writer", "service_writer", "service_score"])
+            .eq("status", "complete")
+            .order("created_at", desc=True)
+            .execute()
+        )
+    except Exception:
+        return None
+    for row in result.data or []:
+        payload = row.get("output_payload") or {}
+        verdict = payload.get("voice_compliance")
+        if not isinstance(verdict, dict):
+            verdict = (payload.get("metadata") or {}).get("voice_scorecard")
+        if isinstance(verdict, dict):
+            return verdict
+    return None
+
+
 def _resolve_blog_title_h1(supabase, run_id: UUID) -> tuple[str | None, str | None]:
     """SEO title + on-page H1 from the Brief Generator output (v2.0 Step 3.5).
 
@@ -431,6 +468,15 @@ async def publish_run(
 
     if run["status"] != "complete":
         raise HTTPException(status_code=409, detail="run_not_complete")
+
+    # An article that breaks the client's brand guide does not go out. The
+    # verdict rides the writer's own output rather than a column on `runs`,
+    # so there is one source of truth for what the finished article scored.
+    from services import voice_card_service
+
+    voice_card_service.assert_voice_publishable(
+        _resolve_voice_verdict(supabase, run_id), body.force_voice
+    )
 
     client_result = (
         supabase.table("clients")

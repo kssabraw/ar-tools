@@ -25,6 +25,8 @@ export interface LocalSeoPageListItem {
   page_title: string | null
   composite_score: number | null
   composite_status: string | null
+  /** Brand voice, scored separately from composite_score. */
+  voice_score?: number | null
   mode: 'generate' | 'reoptimize'
   created_at: string
   // Set when soft-deleted (moved to Drafts); null = active (Saved Pages).
@@ -35,11 +37,61 @@ export interface LocalSeoPageListItem {
   published_at?: string | null
 }
 
+/**
+ * Deterministic brand-guide audit attached to a generated page (nlp-api
+ * `voice_card.compliance_summary`). Null/undefined when the client has no
+ * brand voice guide or ICP on file, or for pages generated before voice
+ * enforcement existed.
+ */
+export interface VoiceViolation {
+  check: 'never_use_terms' | 'must_use_terms' | 'person' | 'cta_language' | string
+  severity: 'critical' | 'warning'
+  message: string
+  terms?: string[]
+  detail?: string
+}
+
+/** One of the eight scored dimensions on the brand-voice scorecard. */
+export interface VoiceDimension {
+  label: string
+  weight: number
+  score?: number | null
+  /** False when the guide says nothing about this dimension — excluded from
+   *  the score rather than counted as a failure. */
+  applicable?: boolean
+  evidence?: string
+  issues?: string[]
+  recommendations?: string[]
+  /** Set when a deterministic check overrode a more generous judgement. */
+  capped_by_check?: string
+}
+
+export interface VoiceCompliance {
+  passed: boolean
+  critical_count: number
+  warning_count: number
+  violations: VoiceViolation[]
+  /** Headline 0-100, weighted across the applicable dimensions. Null when
+   *  nothing could be scored — distinct from scoring zero. */
+  score?: number | null
+  band?: 'on_voice' | 'mostly_on_voice' | 'drifting' | 'off_voice' | 'not_scored'
+  /** How much of the analysis ran. 'full' = scored across all dimensions;
+   *  'deterministic_only' = the scoring call failed, so only the word-level
+   *  checks were applied; 'not_analyzed' = the client has a guide but it
+   *  couldn't be prepared, so nothing was checked. Never treat the latter two
+   *  as a pass. */
+  analysis?: 'full' | 'deterministic_only' | 'not_analyzed'
+  reason?: string
+  dimensions?: Record<string, VoiceDimension>
+  needs_rewrite?: boolean
+}
+
 export interface LocalSeoPageDetail extends LocalSeoPageListItem {
   run_analysis: boolean
   content_html: string
   schema_json: string
   content_gaps: ContentGap[]
+  voice_violations?: VoiceCompliance | null
   token_usage: Record<string, unknown> | null
   cost_breakdown: Record<string, unknown> | null
   published_doc_url: string | null

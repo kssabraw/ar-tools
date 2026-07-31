@@ -322,6 +322,11 @@ class LocalSeoPageDetail(BaseModel):
     # Structural-fidelity verdict from the generation gate ({composite, dimensions,
     # notes}). None when no reference structure drove the page.
     structure_fidelity: Optional[dict[str, Any]] = None
+    # Brand-voice scorecard: {score, band, dimensions, violations, deficiencies,
+    # needs_rewrite}. Reported SEPARATELY from composite_score, which measures
+    # SEO/AEO only. Both null when the client has no brand guide on file.
+    voice_violations: Optional[dict[str, Any]] = None
+    voice_score: Optional[float] = None
     mode: str
     token_usage: Optional[dict[str, Any]] = None
     cost_breakdown: Optional[dict[str, Any]] = None
@@ -341,6 +346,8 @@ class LocalSeoPageListItem(BaseModel):
     location: str
     page_title: Optional[str] = None
     composite_score: Optional[float] = None
+    # Brand voice, scored separately from the SEO composite above.
+    voice_score: Optional[float] = None
     composite_status: Optional[str] = None
     mode: str
     created_at: str

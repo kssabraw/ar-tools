@@ -255,6 +255,13 @@ def _persist_page(client_id: str, keyword: str, location: str, run_analysis: boo
         # Structural-fidelity verdict from the generation gate ({composite,
         # dimensions, notes}). None when no reference structure drove the page.
         "structure_fidelity": result.get("structure_fidelity"),
+        # Brand-voice verdict: the full scorecard (headline score, band, the
+        # eight per-dimension results, deterministic violations) as jsonb, with
+        # the headline number lifted into its own column so it can be sorted and
+        # filtered beside the SEO score. Both null when the client has no brand
+        # guide on file — which is not the same as scoring zero.
+        "voice_violations": result.get("voice_compliance"),
+        "voice_score": (result.get("voice_compliance") or {}).get("score"),
         "mode": mode,
         "token_usage": result.get("token_usage"),
         "cost_breakdown": result.get("cost_breakdown"),
@@ -463,6 +470,14 @@ async def generate_page(
     payload = _gbp_to_generate_payload(
         client, keyword, location, location_code, include_decision_map=include_decision_map
     )
+    # The client's brand guide, distilled into enforceable rules (cached per
+    # guide revision). Steers generation and drives the deterministic post-write
+    # check; an empty card means the client has no guide and nothing changes.
+    # Imported lazily: voice_card_service -> brand_voice_service -> this module
+    # would close an import cycle at module scope.
+    from services import voice_card_service
+
+    payload["voice_card"] = await voice_card_service.get_voice_card(client, user_id=user_id)
     # Page template: per-page value wins; otherwise the client's saved default.
     template_url = (page_template_url or "").strip() or client.get("local_seo_page_template_url")
     reference_analysis: Optional[dict] = None
@@ -872,6 +887,8 @@ async def score_page(
         serp_analysis = await _get_or_compute_analysis(
             keyword, location, location_code, force_refresh, user_id, required=False
         )
+    from services import voice_card_service
+
     result = await _post_nlp("/score-page", {
         "keyword": keyword,
         "location": location,
@@ -882,6 +899,9 @@ async def score_page(
         "gbp_category": fields["gbp_category"],
         "address": fields["address"],
         "serp_analysis": serp_analysis,
+        # Without these the rubric measured SEO only: icp_alignment inferred an
+        # audience from the keyword and nothing scored brand voice at all.
+        "voice_card": await voice_card_service.get_voice_card(client, user_id=user_id),
     }, user_id=user_id)
     # A standalone score has no page row — log it against page_url (may be None
     # when scoring raw HTML) so the verdict is still kept in the run history.
@@ -923,6 +943,13 @@ async def reoptimize_page(
     if not existing_page_html and not existing_page_url:
         raise HTTPException(status_code=400, detail="page_url_or_html_required")
 
+    from services import voice_card_service
+
+    # Reoptimize never used to receive the brand guide, so each pass rewrote the
+    # page without it — a page generated in the client's voice drifted further
+    # from them with every improvement to its score.
+    voice_card = await voice_card_service.get_voice_card(client, user_id=user_id)
+
     result = await _stream_nlp("/reoptimize-page", {
         "keyword": keyword,
         "location": location,
@@ -934,6 +961,7 @@ async def reoptimize_page(
         "address": fields["address"],
         "phone": fields["phone"],
         "serp_analysis": serp_analysis,
+        "voice_card": voice_card,
         # Keep the decision-fit treatment on reoptimization (parity with generate).
         "include_decision_map": True,
     })
@@ -951,11 +979,13 @@ async def reoptimize_page(
                 "gbp_category": fields["gbp_category"],
                 "address": fields["address"],
                 "serp_analysis": serp_analysis,
+                "voice_card": voice_card,
             })
             result["composite_score"] = score.get("composite_score")
             result["composite_status"] = score.get("composite_status")
             result["engine_scores"] = score.get("engine_scores")
             result["deficiencies"] = score.get("deficiencies")
+            result.setdefault("voice_compliance", score.get("voice_compliance"))
         except Exception:
             # Non-fatal — the expensive rewrite already succeeded, so persist the
             # reoptimized page without a fresh score rather than losing the work.
@@ -1005,6 +1035,8 @@ async def reoptimize_url(
         keyword, location, location_code, force_refresh=False, user_id=user_id, required=False
     )
 
+    from services import voice_card_service
+
     score_result = await _post_nlp("/score-page", {
         "keyword": keyword,
         "location": location,
@@ -1015,6 +1047,7 @@ async def reoptimize_url(
         "gbp_category": fields["gbp_category"],
         "address": fields["address"],
         "serp_analysis": serp,
+        "voice_card": await voice_card_service.get_voice_card(client, user_id=user_id),
     }, user_id=user_id)
 
     # Record the "before" verdict of the live page (whether or not we go on to
@@ -1025,25 +1058,40 @@ async def reoptimize_url(
     )
 
     composite = score_result.get("composite_score")
-    # Gate: a page already at/above the threshold is left untouched.
-    if composite is not None and composite >= score_threshold:
+    voice_compliance = score_result.get("voice_compliance")
+    # Gate: skip only when the page clears BOTH bars. Deciding on the SEO score
+    # alone silently skipped the pages most worth rewriting — a page at 78 SEO
+    # and 40 voice never had its voice score looked at.
+    should_reopt, reason = voice_card_service.reoptimize_verdict(
+        composite, voice_compliance, score_threshold
+    )
+    voice_score = (voice_compliance or {}).get("score")
+    if not should_reopt:
         logger.info(
             "local_seo.reoptimize_url_skipped",
-            extra={"client_id": client_id, "page_url": page_url, "score": composite},
+            extra={
+                "client_id": client_id, "page_url": page_url,
+                "score": composite, "voice_score": voice_score,
+            },
         )
         return {
             "status": "skipped",
             "page_url": page_url,
             "keyword": keyword,
             "score": composite,
+            "voice_score": voice_score,
             "threshold": score_threshold,
-            "reason": (
-                f"Already scores {round(composite)}/100 — at or above the "
-                f"{int(score_threshold)} threshold, so reoptimization was skipped."
-            ),
+            "reason": reason,
         }
+    logger.info(
+        "local_seo.reoptimize_url_proceeding",
+        extra={
+            "client_id": client_id, "page_url": page_url,
+            "score": composite, "voice_score": voice_score, "reason": reason,
+        },
+    )
 
-    # Below threshold (or unscoreable) → reoptimize. Reuses the shared op, which
+    # Below either threshold (or unscoreable) → reoptimize. Reuses the shared op, which
     # rewrites + re-scores + persists the page as a mode='reoptimize' row.
     page = await reoptimize_page(
         client_id=client_id,
@@ -1218,7 +1266,7 @@ async def run_local_seo_action_job(job: dict) -> None:
 # Columns returned for the page-list views (Saved Pages + Drafts).
 _LIST_COLUMNS = (
     "id, client_id, keyword, location, page_title, composite_score, "
-    "composite_status, mode, created_at, deleted_at, "
+    "composite_status, voice_score, mode, created_at, deleted_at, "
     "published_doc_url, published_url, published_at"
 )
 
@@ -1430,6 +1478,7 @@ async def publish_page(
     user_id: str,
     destination: str = "google_docs",
     status: str = "draft",
+    force_voice: bool = False,
 ) -> dict:
     """Publish a saved Local SEO page to a Google Doc in the client's Drive folder
     via the Apps Script webhook (same path as the blog writer), or directly to the
@@ -1442,6 +1491,12 @@ async def publish_page(
 
     supabase = get_supabase()
     page = get_page(page_id)  # 404s if missing
+
+    # A page that breaks the brand guide does not go out. Checked here rather
+    # than per-destination so Docs, WordPress and GitHub are all covered.
+    from services import voice_card_service
+
+    voice_card_service.assert_voice_publishable(page.get("voice_violations"), force_voice)
 
     if destination == "github":
         client_res = (

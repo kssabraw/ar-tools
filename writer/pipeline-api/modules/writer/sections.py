@@ -258,6 +258,21 @@ def _build_section_user_prompt(
                 f"  voice directives (apply throughout): "
                 f"{' | '.join(brand_voice_card.voice_directives[:5])}"
             )
+        # Grammatical person. Stated explicitly because every generator prompt
+        # in the suite defaults to third person for retrievability, and a guide
+        # that asks for "we/our" was silently losing that argument.
+        if brand_voice_card.person == "first":
+            parts.append(
+                "  grammatical person: FIRST PERSON - write as \"we/our\". This "
+                "overrides any default preference for naming the brand in third "
+                "person. Keep each key claim's subject explicit (\"We handle...\" "
+                "or the brand name), never a bare \"it\"/\"this\"."
+            )
+        elif brand_voice_card.person == "third":
+            parts.append(
+                "  grammatical person: THIRD PERSON - name the brand rather than "
+                "writing \"we/our\"."
+            )
         # Preferred terms (brand's `do_say` vocabulary) - favor these
         # phrasings where natural. Distillation extracts these but
         # earlier prompts dropped them on the floor, leaving the LLM

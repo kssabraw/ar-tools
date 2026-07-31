@@ -7,6 +7,7 @@ import { localSeoApi } from './api'
 import { useResumableJob } from '../../lib/useResumableJob'
 import type { LocalSeoPageDetail, SocialPostsResult } from './types'
 import { RelatedPagesList } from './RelatedPagesList'
+import { VoiceCompliancePanel } from './VoiceCompliancePanel'
 import { BulkCreateBar } from './BulkCreateBar'
 import { useSiloPlan } from './useSiloPlan'
 import { useBulkCreate } from './useBulkCreate'
@@ -51,7 +52,7 @@ type Tab = 'preview' | 'html' | 'social' | 'related'
 export function GeneratedPageView({
   clientId, page, isNew, prevScore, onBack, onScoreAndImprove, onRelatedAction, onNewPage,
 }: Props) {
-  const { keyword, location, content_html, schema_json, page_title, content_gaps, mode } = page
+  const { keyword, location, content_html, schema_json, page_title, content_gaps, voice_violations, mode } = page
   const score = page.composite_score
   const status = page.composite_status
 
@@ -73,21 +74,38 @@ export function GeneratedPageView({
     setFeaturedImageUrl(url)
   }
 
-  const handlePublish = async () => {
+  // Set when the server refused the publish because the page uses wording the
+  // brand guide forbids. Surfacing an override rather than a dead end: the
+  // forbidden list is distilled from the guide by an LLM, so a wrong extraction
+  // must not lock the page permanently — but it takes a second, deliberate click.
+  const [voiceBlocked, setVoiceBlocked] = useState(false)
+
+  const handlePublish = async (forceVoice = false) => {
     setPublishing(true)
     setPublishError('')
     try {
-      const res = await localSeoApi.publishPage(page.id)
+      const res = await localSeoApi.publishPage(
+        page.id, forceVoice ? { force_voice: true } : {},
+      )
       setPublishedUrl(res.doc_url ?? null)
+      setVoiceBlocked(false)
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Publish failed'
-      setPublishError(
-        msg.includes('missing_google_drive_folder_id')
-          ? 'Set this client’s Google Drive folder first (Client → Edit), then publish.'
-          : msg.includes('publish_not_configured')
-            ? 'Publishing isn’t configured on the server (no Apps Script URL).'
-            : msg,
-      )
+      if (msg.includes('voice_violation')) {
+        setVoiceBlocked(true)
+        setPublishError(
+          'Not published — this page uses wording the client’s brand guide forbids. '
+          + 'See the Brand voice panel below for the exact words.',
+        )
+      } else {
+        setPublishError(
+          msg.includes('missing_google_drive_folder_id')
+            ? 'Set this client’s Google Drive folder first (Client → Edit), then publish.'
+            : msg.includes('publish_not_configured')
+              ? 'Publishing isn’t configured on the server (no Apps Script URL).'
+              : msg,
+        )
+      }
     } finally {
       setPublishing(false)
     }
@@ -286,6 +304,7 @@ export function GeneratedPageView({
             <style>{PREVIEW_CSS}</style>
             <div className="seo-preview" dangerouslySetInnerHTML={{ __html: content_html }} />
           </div>
+          <VoiceCompliancePanel compliance={voice_violations} />
           {content_gaps && content_gaps.length > 0 && (
             <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
               <div style={{ background: '#f8fafc', padding: '16px 20px', borderBottom: '1px solid #e2e8f0' }}>
@@ -435,7 +454,7 @@ export function GeneratedPageView({
           <FeaturedImagePicker value={featuredImageUrl} onChange={handleFeaturedImage} />
         </div>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button style={outlineBtn} onClick={handlePublish} disabled={publishing}>
+          <button style={outlineBtn} onClick={() => handlePublish()} disabled={publishing}>
             <ExternalLink size={14} /> {publishing ? 'Publishing…' : publishedUrl ? 'Re-publish to Google Doc' : 'Publish to Google Doc'}
           </button>
           {publishedUrl && (
@@ -471,7 +490,22 @@ export function GeneratedPageView({
             </a>
           )}
         </div>
-        {publishError && <div style={errorBox}>{publishError}</div>}
+        {publishError && (
+          <div style={errorBox}>
+            {publishError}
+            {voiceBlocked && (
+              <div style={{ marginTop: 8 }}>
+                <button
+                  style={outlineBtn}
+                  disabled={publishing}
+                  onClick={() => handlePublish(true)}
+                >
+                  Publish anyway
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         <button onClick={onNewPage} style={{ ...backLink, alignSelf: 'center', marginBottom: 0 }}>← Start a new page</button>
       </div>
     </div>

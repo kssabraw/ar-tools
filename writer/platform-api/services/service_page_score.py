@@ -133,6 +133,11 @@ async def score_run(run_id: str, user_id: Optional[str] = None) -> dict:
         payload["address"] = address
     else:
         payload["geo_mode"] = "national"
+    # The client's distilled brand guide: adds the brand_voice_fit engine and
+    # repoints icp_alignment at the real ICP instead of a keyword-derived guess.
+    from services import voice_card_service
+
+    payload["voice_card"] = await voice_card_service.get_voice_card(client, user_id=user_id)
     result = await _post_nlp("/score-page", payload, user_id=user_id)
     cost = (result.get("token_usage") or {}).get("cost_usd")
     _insert_output(run_id, "service_score", result, cost)
@@ -174,6 +179,11 @@ async def score_external_page(
         payload["address"] = address
     else:
         payload["geo_mode"] = "national"
+    # The client's distilled brand guide: adds the brand_voice_fit engine and
+    # repoints icp_alignment at the real ICP instead of a keyword-derived guess.
+    from services import voice_card_service
+
+    payload["voice_card"] = await voice_card_service.get_voice_card(client, user_id=user_id)
     result = await _post_nlp("/score-page", payload, user_id=user_id)
     cost = (result.get("token_usage") or {}).get("cost_usd")
     _insert_output(run_id, "source_page_score", result, cost)
