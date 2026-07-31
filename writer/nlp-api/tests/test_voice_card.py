@@ -446,3 +446,38 @@ def test_voice_deficiency_text_names_dimension_and_evidence():
 def test_voice_deficiency_text_empty_when_clean():
     assert vc.voice_deficiency_text([]) == ""
     assert vc.voice_deficiency_text(None) == ""
+
+
+# --- "we could not check this" is its own answer ---------------------------
+
+def test_scorecard_marks_analysis_full_when_dimensions_scored():
+    assert vc.voice_scorecard(_dims(), [])["analysis"] == "full"
+
+
+def test_scorecard_marks_deterministic_only_when_the_scorer_gave_nothing():
+    """A scoring outage still runs the regex checks — but the page must not be
+    mistaken for one that passed the full analysis."""
+    card = vc.voice_scorecard({}, [{"check": "never_use_terms", "severity": "critical",
+                                    "message": "forbidden word present"}])
+    assert card["analysis"] == "deterministic_only"
+    assert card["score"] is None
+    assert card["band"] == "not_scored"
+    # Crucially: a forbidden word still earns a rewrite with no scorer at all.
+    assert card["needs_rewrite"] is True
+    assert card["critical_count"] == 1
+
+
+def test_deterministic_only_clean_page_needs_no_rewrite():
+    card = vc.voice_scorecard({}, [])
+    assert card["analysis"] == "deterministic_only"
+    assert card["needs_rewrite"] is False
+
+
+def test_unanalyzed_scorecard_is_not_a_pass():
+    card = vc.unanalyzed_scorecard("guide could not be prepared")
+    assert card["analysis"] == "not_analyzed"
+    assert card["passed"] is False          # never looks clean
+    assert card["score"] is None
+    assert card["needs_rewrite"] is False   # nothing to rewrite toward
+    assert card["reason"] == "guide could not be prepared"
+    assert card["violations"] == []

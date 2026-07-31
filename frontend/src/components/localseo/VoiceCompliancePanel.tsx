@@ -30,8 +30,28 @@ export function VoiceCompliancePanel({ compliance }: { compliance?: VoiceComplia
 
   const score = compliance.score
   const band = compliance.band || 'not_scored'
+  const analysis = compliance.analysis || 'full'
   const tone = BAND_TONE[band] || BAND_TONE.not_scored
   const clean = criticals.length === 0 && (score === null || score === undefined || score >= 80)
+
+  // A page we could only half-check must never read as a page that passed.
+  if (analysis === 'not_analyzed') {
+    return (
+      <div style={{ border: '1px solid #fde68a', background: '#fffbeb', borderRadius: 12, padding: '14px 18px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <AlertTriangle size={16} color="#d97706" />
+          <p style={{ fontSize: 14, fontWeight: 600, color: '#0f172a', margin: 0 }}>
+            Brand voice not checked
+          </p>
+        </div>
+        <p style={{ fontSize: 12, color: '#64748b', margin: '6px 0 0' }}>
+          {compliance.reason
+            || 'This client has a brand guide, but the page could not be checked against it.'}
+          {' '}Re-run the page to check it.
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div style={{ border: `1px solid ${tone.border}`, borderRadius: 12, overflow: 'hidden' }}>
@@ -60,8 +80,12 @@ export function VoiceCompliancePanel({ compliance }: { compliance?: VoiceComplia
           )}
         </div>
         <p style={{ fontSize: 11, color: '#94a3b8', margin: '10px 0 0' }}>
-          Measured against this client's own brand guide and ICP. Scored separately from the SEO
-          score — a page can rank well and still not sound like them.
+          {analysis === 'deterministic_only'
+            ? 'Automatic scoring was unavailable for this page, so only the word-level checks ran '
+              + '(forbidden and required phrasing, grammatical person, CTA wording). Tone and '
+              + 'audience fit were not assessed — re-run the page for the full scorecard.'
+            : "Measured against this client's own brand guide and ICP. Scored separately from the "
+              + 'SEO score — a page can rank well and still not sound like them.'}
         </p>
       </div>
 

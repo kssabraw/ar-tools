@@ -3723,6 +3723,62 @@ def _voice_scorecard_from(
     return vcard.voice_scorecard(dimensions if isinstance(dimensions, dict) else {}, violations)
 
 
+def _voice_deterministic_scorecard(
+    page_html: str, page_title: str, voice_card: Optional[dict]
+) -> Optional[dict]:
+    """The scorecard when the LLM scoring call could not be made.
+
+    Every generated page must be analysed against the client's guide — so a
+    scoring outage cannot mean "no analysis". The deterministic checks are pure
+    Python with no network dependency, so they still run: forbidden terms,
+    required phrasing, grammatical person and CTA language are all still
+    caught, and a forbidden term still earns a corrective rewrite.
+
+    The result is marked `analysis: "deterministic_only"` so nobody mistakes a
+    page we could only half-check for a page that passed.
+    """
+    return _voice_scorecard_from({}, page_html, page_title, voice_card)
+
+
+def _client_has_guide(body) -> bool:
+    """Whether this client has a brand guide or ICP at all.
+
+    Deliberately distinct from "we produced a card": distillation can fail on a
+    client who very much does have a guide, and those two states must not look
+    the same on the finished page.
+    """
+    supplied = getattr(body, "voice_card", None)
+    if isinstance(supplied, dict) and any(supplied.values()):
+        return True
+    return bool(
+        _build_brand_voice_text(getattr(body, "brand_voice", None)).strip()
+        or _build_icp_text(getattr(body, "detected_icp", None)).strip()
+    )
+
+
+def _ensure_voice_verdict(
+    scorecard: Optional[dict], page_html: str, page_title: str,
+    voice_card: Optional[dict], body,
+) -> Optional[dict]:
+    """Every generated page for a client with a brand guide leaves here with a
+    verdict — full, deterministic-only, or an explicit "not analysed".
+
+    The one case that returns None is a client with no guide on file, where
+    there is genuinely nothing to check and a verdict would be a fiction.
+    """
+    if scorecard is not None:
+        return scorecard
+    deterministic = _voice_deterministic_scorecard(page_html, page_title, voice_card)
+    if deterministic is not None:
+        return deterministic
+    if _client_has_guide(body):
+        return vcard.unanalyzed_scorecard(
+            "This client has a brand guide, but it could not be prepared for "
+            "checking, so the page was not verified against it."
+        )
+    return None
+
+
 async def _score_html_inline(
     page_html: str,
     keyword: str,
@@ -6263,6 +6319,17 @@ Full location: {body.location}
                 else:
                     logger.warning(f"generate-page: scoring failed after 3 attempts: {_ae}")
 
+        # A scoring outage must not silently produce an unchecked page. The
+        # deterministic half needs no network, so run it on its own — a
+        # forbidden word still gets caught and still triggers a rewrite.
+        if voice_scorecard is None:
+            voice_scorecard = _ensure_voice_verdict(None, content_html, page_title, voice_card, body)
+            if voice_scorecard is not None:
+                logger.warning(
+                    "generate-page: brand-voice scoring unavailable; fell back to the "
+                    f"deterministic checks only for '{body.keyword}'"
+                )
+
         # ── Brand-voice enforcement: rewrite until it sounds like the client ──
         # Two independent triggers, either of which earns a corrective pass:
         # a deterministic `critical` finding (a forbidden word is a fact, not an
@@ -6667,8 +6734,9 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
         # Runs on the FINAL page whatever the score loop did: a rewrite can
         # introduce a forbidden term the original never had, and the keep-best
         # loop picks on the SEO score, which says nothing about voice.
-        if voice_scorecard is None:
-            voice_scorecard = _voice_scorecard_from({}, content_html, page_title, voice_card)
+        voice_scorecard = _ensure_voice_verdict(
+            voice_scorecard, content_html, page_title, voice_card, body
+        )
         if (voice_scorecard or {}).get("needs_rewrite"):
             if not seo_checklist:
                 # The score loop only builds this when a pass will run; a page
@@ -8605,6 +8673,16 @@ Primary keyword: {body.keyword}
                 else:
                     logger.warning(f"generate-ecommerce: scoring failed after 3 attempts: {_ae}")
 
+        # Same guarantee as the Local SEO path: a scoring outage falls back to
+        # the deterministic checks rather than shipping an unanalysed page.
+        if voice_scorecard is None:
+            voice_scorecard = _ensure_voice_verdict(None, content_html, page_title, voice_card, body)
+            if voice_scorecard is not None:
+                logger.warning(
+                    "generate-ecommerce: brand-voice scoring unavailable; fell back to the "
+                    f"deterministic checks only for '{body.keyword}'"
+                )
+
         # Brand-voice enforcement: rewrite until the page sounds like the client.
         (
             content_html, schema_json, page_title, content_gaps, voice_scorecard, voice_tok
@@ -8851,7 +8929,10 @@ EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT inven
             client,
             content_html=content_html, page_title=page_title, schema_json=schema_json,
             content_gaps=content_gaps, voice_card=voice_card, voice_block=voice_block,
-            scorecard=best.get("voice"), business_name=body.business_name,
+            scorecard=_ensure_voice_verdict(
+                best.get("voice"), content_html, page_title, voice_card, body
+            ),
+            business_name=body.business_name,
             keyword=body.keyword, page_type=page_type, brand_context=brand_context,
             serp_analysis=body.serp_analysis,
             serp_entities=(body.serp_analysis or {}).get("google_entities", [])[:_ECOMMERCE_RDFA_MAX_ENTITIES],

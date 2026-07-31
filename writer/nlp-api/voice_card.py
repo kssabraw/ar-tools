@@ -710,8 +710,15 @@ def voice_scorecard(
     score = compute_voice_score(capped)
     summary = compliance_summary(violations)
     deficiencies = build_voice_deficiencies(capped)
+    # How much of the analysis actually ran. The deterministic checks need no
+    # network and always run; the scored dimensions come from an LLM call that
+    # can fail. A page whose scoring call died must not be indistinguishable
+    # from a clean one — "we could not check this" is a different answer from
+    # "this passed", and only one of them is safe to publish on.
+    analysis = "full" if score is not None else "deterministic_only"
     return {
         **summary,
+        "analysis": analysis,
         "score": score,
         "band": voice_band(score),
         "dimensions": {
@@ -728,6 +735,33 @@ def voice_scorecard(
         # it below the bar. Either is enough to earn a corrective rewrite.
         "needs_rewrite": bool(summary["critical_count"])
         or (score is not None and score < VOICE_PASS_THRESHOLD),
+    }
+
+
+def unanalyzed_scorecard(reason: str) -> dict:
+    """The verdict for a page we could not check at all.
+
+    Reached when the client HAS a brand guide but it could not be distilled
+    into a card — so there was nothing to check against, even though there
+    should have been. Emitted rather than returning nothing, because a page
+    that silently skipped its brand-voice analysis must not look identical to
+    one that passed it.
+
+    `needs_rewrite` is False: there is no finding to rewrite toward, and
+    burning corrective passes against an unknown would be guesswork.
+    """
+    return {
+        "passed": False,
+        "critical_count": 0,
+        "warning_count": 0,
+        "violations": [],
+        "analysis": "not_analyzed",
+        "reason": reason,
+        "score": None,
+        "band": "not_scored",
+        "dimensions": {},
+        "deficiencies": [],
+        "needs_rewrite": False,
     }
 
 

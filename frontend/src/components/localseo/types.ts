@@ -75,6 +75,13 @@ export interface VoiceCompliance {
    *  nothing could be scored — distinct from scoring zero. */
   score?: number | null
   band?: 'on_voice' | 'mostly_on_voice' | 'drifting' | 'off_voice' | 'not_scored'
+  /** How much of the analysis ran. 'full' = scored across all dimensions;
+   *  'deterministic_only' = the scoring call failed, so only the word-level
+   *  checks were applied; 'not_analyzed' = the client has a guide but it
+   *  couldn't be prepared, so nothing was checked. Never treat the latter two
+   *  as a pass. */
+  analysis?: 'full' | 'deterministic_only' | 'not_analyzed'
+  reason?: string
   dimensions?: Record<string, VoiceDimension>
   needs_rewrite?: boolean
 }
