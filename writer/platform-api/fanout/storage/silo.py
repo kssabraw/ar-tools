@@ -664,12 +664,7 @@ def _cluster_counts_by_session(session_ids: list[str]) -> dict[str, int]:
     if not topics:
         return {}
     topic_to_session = {t["id"]: t["session_id"] for t in topics}
-    clusters = (
-        client.table("clusters")
-        .select("topic_id")
-        .in_("topic_id", list(topic_to_session))
-        .execute()
-    ).data
+    clusters = paged_cluster_rows(list(topic_to_session), "topic_id")
     counts: dict[str, int] = {}
     for c in clusters:
         sid = topic_to_session.get(c["topic_id"])
@@ -911,28 +906,42 @@ def get_active_keyword_index(session_id: str) -> dict[tuple[str, str], str]:
     return index
 
 
-def _session_cluster_ids(topic_ids: list[str]) -> list[str]:
-    """Every cluster id under these topics. Paged — a large plan runs to several
-    thousand clusters, well past PostgREST's 1000-row default."""
+def paged_cluster_rows(
+    topic_ids: list[str], columns: str, *, order: str = "id"
+) -> list[dict]:
+    """Every cluster row under these topics, paged.
+
+    PostgREST truncates an unpaged select at 1000 rows *silently* — no error, no
+    partial-content signal the client surfaces — so any whole-session cluster read
+    that isn't paged quietly loses everything past the first 1000. That is not
+    hypothetical: the semaglutide (1,594 clusters) and retatrutide (1,413) sessions
+    each had exactly 1000 clusters slugged and exactly 1000 scheduled, because
+    `list_clusters_link_info` and `list_clusters` fed those paths unpaged.
+
+    `id` is always appended as a tiebreak: clusters are bulk-inserted, so
+    `created_at` ties across a whole batch and an unstable sort would make pages
+    overlap and drop rows.
+    """
     client = get_service_client()
-    ids: list[str] = []
+    out: list[dict] = []
     offset = 0
     page = 1000
     while True:
-        res = (
-            client.table("clusters")
-            .select("id")
-            .in_("topic_id", topic_ids)
-            .order("id")
-            .range(offset, offset + page - 1)
-            .execute()
-        )
+        q = client.table("clusters").select(columns).in_("topic_id", topic_ids)
+        if order != "id":
+            q = q.order(order)
+        res = q.order("id").range(offset, offset + page - 1).execute()
         rows = res.data or []
-        ids.extend(r["id"] for r in rows)
+        out.extend(rows)
         if len(rows) < page:
             break
         offset += page
-    return ids
+    return out
+
+
+def _session_cluster_ids(topic_ids: list[str]) -> list[str]:
+    """Every cluster id under these topics."""
+    return [r["id"] for r in paged_cluster_rows(topic_ids, "id")]
 
 
 def reset_article_planning(session_id: str) -> None:
@@ -1175,15 +1184,9 @@ def list_clusters_link_info(session_id: str) -> list[dict]:
     topic_ids = [t["id"] for t in list_topics(session_id)]
     if not topic_ids:
         return []
-    res = (
-        get_service_client()
-        .table("clusters")
-        .select("id, topic_id, name, primary_keyword_id, slug")
-        .in_("topic_id", topic_ids)
-        .order("created_at")
-        .execute()
+    return paged_cluster_rows(
+        topic_ids, "id, topic_id, name, primary_keyword_id, slug", order="created_at"
     )
-    return res.data
 
 
 def ensure_session_slugs(session_id: str) -> dict[str, str]:
@@ -1209,13 +1212,24 @@ def ensure_session_slugs(session_id: str) -> dict[str, str]:
             existing[c["topic_id"]][c["id"]] = c["slug"]
 
     result: dict[str, str] = {}
-    client = get_service_client()
+    changed: list[dict] = []
     for tid, items in by_topic.items():
         assigned = assign_slugs(items, existing=existing[tid])
         for cid, slug in assigned.items():
             result[cid] = slug
             if existing[tid].get(cid) != slug:   # only write the new/changed ones
-                client.table("clusters").update({"slug": slug}).eq("id", cid).execute()
+                changed.append({"cluster_id": cid, "slug": slug})
+
+    # Batched, not one UPDATE per cluster. The per-row form was survivable only
+    # while the read above truncated at PostgREST's 1000-row cap; now that it
+    # pages, a 4k-cluster session would issue 4k sequential requests and hit the
+    # same HTTP/2 ConnectionTerminated wall the article-plan linkage did.
+    client = get_service_client()
+    for start in range(0, len(changed), _LINK_BATCH):
+        client.rpc(
+            "bulk_set_cluster_slugs",
+            {"p_rows": changed[start : start + _LINK_BATCH]},
+        ).execute()
     return result
 
 
@@ -1225,19 +1239,13 @@ def list_clusters(session_id: str) -> list[dict]:
     topic_ids = [t["id"] for t in list_topics(session_id)]
     if not topic_ids:
         return []
-    res = (
-        get_service_client()
-        .table("clusters")
-        .select(
-            "id, topic_id, name, primary_keyword_id, intent, suggested_h2s, "
-            "peer_article_links, source_statistical_grouping_id, orchestrator_notes, "
-            "is_user_edited, is_gap_placeholder, prepublish_action, created_at"
-        )
-        .in_("topic_id", topic_ids)
-        .order("created_at")
-        .execute()
+    return paged_cluster_rows(
+        topic_ids,
+        "id, topic_id, name, primary_keyword_id, intent, suggested_h2s, "
+        "peer_article_links, source_statistical_grouping_id, orchestrator_notes, "
+        "is_user_edited, is_gap_placeholder, prepublish_action, created_at",
+        order="created_at",
     )
-    return res.data
 
 
 def set_clusters_prepublish_action(
@@ -1466,15 +1474,8 @@ def get_cluster_centroids(session_id: str) -> dict[str, list[float] | None]:
     topic_ids = [t["id"] for t in list_topics(session_id)]
     if not topic_ids:
         return {}
-    res = (
-        get_service_client()
-        .table("clusters")
-        .select("id, centroid_embedding")
-        .in_("topic_id", topic_ids)
-        .execute()
-    )
     out: dict[str, list[float] | None] = {}
-    for row in res.data:
+    for row in paged_cluster_rows(topic_ids, "id, centroid_embedding"):
         emb = row.get("centroid_embedding")
         if isinstance(emb, str):
             try:
@@ -1826,12 +1827,7 @@ def _remove_cluster_from_peers(
     if not topic_ids:
         return
     client = get_service_client()
-    rows = (
-        client.table("clusters")
-        .select("id, peer_article_links")
-        .in_("topic_id", topic_ids)
-        .execute()
-    ).data
+    rows = paged_cluster_rows(topic_ids, "id, peer_article_links")
     removed = set(removed_ids)
     for r in rows or []:
         links = r.get("peer_article_links") or []
