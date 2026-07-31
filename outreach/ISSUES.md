@@ -560,3 +560,124 @@ entirely the wrong component.
 *Mitigation:* `verify_grid_result_months()` reports mismatches, and is cheap enough to run monthly.
 **Action:** the scan writer MUST derive `scan_month` from the snapshot it is writing under, never
 from the clock. Call it out in that PR.
+
+---
+
+## I-040 sweep + I-041 evidence (2026-08-01)
+
+### I-040 sweep · Two failure modes, swept separately
+Grepping `auth.uid()` uniformly would have conflated two things that fail differently, so the
+Outreacher schema was swept as two lists.
+
+**List A — expressions that RUN under the service role and receive null.** Column defaults,
+generated-column expressions, CHECK constraints, view definitions, trigger bodies, and any
+function reading `auth.uid()` / `auth.jwt()` / `auth.role()` / `current_setting('request.jwt…')`.
+These produce the anonymous-actor pattern.
+
+| Object | Kind | Reads | Status |
+|---|---|---|---|
+| `lead_log_changes` | trigger fn on `lead` | `auth.uid()` | **FIXED** — `coalesce(auth.uid(), new.updated_by)` |
+
+**That is the entire list.** Zero column defaults, zero generated columns, zero CHECK constraints,
+zero views, zero non-trigger functions, and zero `request.jwt` readers anywhere in `public`. The
+other three triggers on `lead` (`lead_flag_suppressed`, `lead_log_suppressed`,
+`lead_touch_updated_at`) reference no caller identity at all. `lead_log_changes` still *appears*
+in the sweep because it still prefers `auth.uid()` when one is present — which is intended.
+
+**List B — RLS policies.** Not evaluated at all under the service role: bypassed silently, and
+therefore never a source of the anonymous-actor pattern.
+
+**Zero policies exist in `public`.** The category is empty, which is the intended posture (RLS
+enabled, no policies, no grants to anon/authenticated) rather than an absence to be fixed.
+
+*Conclusion:* the port carries exactly one instance of this defect and it is fixed. The sweep is
+worth re-running after any migration that adds a trigger or a default, since only List A can
+regress.
+
+### I-041 UPDATE · Population evidence gathered; Google spot-check NOT done
+**Do not act on this yet — one input is still missing, and it is the one that decides the answer.**
+
+**What the existing data already settles (free, whole population, no sampling):**
+
+| Fact | Value |
+|---|---|
+| Prospects with `review_count is null` | 113 |
+| …where the provider key `reviews` is PRESENT and explicitly JSON-null | **113 / 113** |
+| …where `rating` is ALSO null | **105** |
+| …where `rating` is populated but the count is null | **8** |
+| Prospects anywhere in the market with `review_count = 0` | **0** |
+| Prospects with counts of 1 / 2 / 3–5 / 6–9 | 118 / 70 / 129 / 116 |
+| Prospects with a count but no rating | **0** |
+
+Two readings follow, and they split the 113:
+
+1. **This is not an alias or parsing gap.** The key is present on every one of the 113 and its
+   value is null. `parser.FIELD_ALIASES` resolved correctly; there is nothing to re-parse.
+2. **Outscraper appears to encode zero as null.** It reports counts down to 1 freely (118 rows)
+   but emits `0` literally never, across 1,388 listings. Combined with 105 of the 113 also having
+   a null rating — and a rating being an average *of reviews* — the 105 look like genuinely
+   zero-review listings, which is precisely what the `>= 10` rule exists to catch.
+3. **The 8 with a rating and no count are a real gap.** A 4.6-star rating cannot coexist with zero
+   reviews, and every other rated prospect in the market carries a count. Those 8 are genuinely
+   unknown, not genuinely zero.
+
+**What is still missing: the direct Google Maps check.** It could not be run from the build
+session — Google returns 403 to every route available here (Maps place URL,
+`search.google.com/local/reviews`, and Google search), and raw egress is still blocked at the
+Trusted network level (I-027). Search-engine snippets do not carry a Google review count. This is
+an environment limitation, not a finding; **treat the reading above as strong circumstantial
+evidence, not as the confirmation that was asked for.**
+
+Ten place_ids are queued for that check the moment a session or machine with egress is available:
+`ChIJ85sqYl65woAR0YobClIKhls`, `ChIJVVVVFfO7woAReGLHX8ivBxg`, `ChIJ64hlhLebwoAROhhNnojNZdo`,
+`ChIJ40_30pDHwoARtA82xZQcoKo`, `ChIJbY6g6-GdwoARNlyGXEJituc`, `ChIJVVVVVdCkwoARv8EiT_bvoa0`,
+`ChIJl5tHxGfJwoAReMBp7CpysXw`, `ChIJ9xXATQDHwoAR_sAcRRd0hrs`, `ChIJv6eS5sDBwoARkLhYDvw6DbQ`,
+`ChIJB_aokmC5568ROqlq4J0YYPY` — plus **all 8** of the rating-but-no-count rows, which matter more
+per listing than any of the 105 (`select … from prospect where review_count is null and
+raw->>'rating' is not null`). Open as
+`https://www.google.com/maps/place/?q=place_id:<id>`. The question is only: does the listing show
+a review count, and is it zero or non-zero?
+
+*(Aside worth noting for I-020/I-026: three of the ten carry `ChIJVVVVV…`-prefixed place_ids, a
+Google pattern associated with weak/auto-generated listings.)*
+
+### I-045 · Backfill review counts from the Phase 2 geogrid — free, from data already paid for
+**Binding obligation on the scan writer, not a Phase 5 enrichment.**
+
+DataForSEO Maps responses carry the review count per result, on the same item that carries the
+`place_id` — so any of the 113 that appears at any grid point on any keyword resolves for **zero
+additional spend**, from a response already being bought.
+
+Field path **verified against this estate's production code**, not vendor docs (the I-029 lesson):
+`item["rating"]["votes_count"]`, with `item["rating"]["value"]` as the rating and
+`item["place_id"]` as the join key. Confirmed in `writer/platform-api/services/maps_dataforseo.py`
+(`_business_from_item`) and `services/dataforseo_rank.py` (`local_pack` parsing). Both item shapes
+carry `place_id` and `rating.votes_count` together, so the join needs nothing extra.
+
+**The scan writer MUST** capture `rating.votes_count` per result and update
+`prospect.review_count` (and `rating`) where the current value is null and the place_id matches,
+then re-evaluate the affected `filter_result` rows.
+
+**How many of the 113 this resolves is not yet knowable** — it depends on which of them appear in
+a local pack, which no data answers until the first scan runs. It is reported after cycle one, by
+comparing the count of `review_count is null` before and after. Listings with genuinely zero
+reviews will mostly *not* appear in a pack, so a low resolution rate is itself evidence for
+reading 2 above rather than a failure of the backfill.
+
+### I-046 · Phase 5 precondition — unresolved filter evaluations gate SPEND, not the filter
+**Recorded now so it is not rediscovered at the moment money is committed.**
+
+A prospect whose filter evaluation is unresolved — any `filter_result` row with
+`observed_value = 'not_evaluated'` on a rule that is enabled — **MUST NOT be enriched or
+contacted.** It may pass through ingestion, scanning, scoring and audit generation unchanged.
+
+This is deliberately the same shape as the franchise flag: the prospect proceeds through the
+pipeline and is blocked before spend, rather than being excluded at the filter. The reasoning is
+also the same — excluding at the filter permanently discards a prospect on the strength of a fact
+nobody has established, whereas gating at the spend costs only a deferral, and by Phase 5 the
+geogrid backfill (I-045) will have resolved most of them anyway.
+
+Note the gate keys on `observed_value = 'not_evaluated'` for an ENABLED rule. A rule disabled by
+config (`review_recency`, deferred by decision) writes the same sentinel and must NOT gate spend —
+otherwise every prospect in the portfolio is blocked, since `review_recency` writes
+`not_evaluated` for all of them.

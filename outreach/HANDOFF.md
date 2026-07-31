@@ -282,7 +282,18 @@ Migration `20260801110000` adds `lead.updated_by` and the trigger prefers it. **
 shape elsewhere in the port:** the Retool-era schema assumed an end-user JWT, and anything reading
 `auth.uid()` is now reading a null.
 
-### 8.4 And one found, not fixed
+### 8.4 The I-040 sweep — one instance, already fixed
+Swept as two lists, because the failure modes differ: expressions that RUN under the service role
+and receive null (defaults, generated columns, CHECK constraints, views, trigger bodies, functions
+reading `auth.*` or `request.jwt`) versus RLS policies, which are bypassed silently and never
+evaluated at all. Only the first produces an anonymous actor.
+
+**List A: one row — `lead_log_changes`, already fixed.** Zero defaults, zero generated columns,
+zero CHECKs, zero views, zero non-trigger functions, zero `request.jwt` readers.
+**List B: zero policies exist**, which is the intended posture, not a gap.
+Re-run after any migration that adds a trigger or a default; only List A can regress.
+
+### 8.5 And one found, not fixed
 `review_count_min` reports 842 passed / 433 failed / **113 not evaluated** — Outscraper returned no
 review count for those 113, and they are counted among the 925 survivors. Correct filter behaviour,
 invisible in §2's numbers, and ~12% of the shortlist pool would be contacted at Phase 5 on a
