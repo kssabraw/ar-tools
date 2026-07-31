@@ -239,8 +239,10 @@ def seed_market(
         report = SeedReport(market_id=market_id, market_created=True, problems=problems)
 
     # -- submarkets -----------------------------------------------------------------------
-    current = (
-        client.table("submarket").select("*").eq("market_id", market_id).execute().data or []
+    from .paging import fetch_all
+
+    current = fetch_all(
+        lambda: client.table("submarket").select("*").eq("market_id", market_id)
     )
     by_name = {row["name"].strip().lower(): row for row in current}
 

@@ -876,3 +876,78 @@ def test_the_cost_gate_still_fires_before_any_tile_runs():
         pipeline.OutscraperClient = original
 
     assert not called["fetched"], "no Outscraper client may be opened once the gate has failed"
+
+
+# --- paged reads -------------------------------------------------------------------------
+#
+# PostgREST silently caps an unbounded select at 1000 rows. The first LA run reported
+# "evaluated: 1000" against 1388 prospects and left 215 unfiltered, with no error anywhere.
+
+
+class _PagedTable:
+    """Mimics PostgREST: never returns more than `cap` rows for one range request."""
+
+    def __init__(self, rows, cap=1000):
+        self._rows, self._cap = rows, cap
+        self._lo, self._hi = 0, None
+        self.range_calls = []
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def range(self, lo, hi):
+        self._lo, self._hi = lo, hi
+        self.range_calls.append((lo, hi))
+        return self
+
+    def execute(self):
+        window = self._rows[self._lo : self._hi + 1]
+        return type("R", (), {"data": window[: self._cap]})()
+
+
+def test_fetch_all_reads_past_the_1000_row_cap():
+    from api.services.paging import fetch_all
+
+    rows = [{"id": i} for i in range(1388)]
+    table = _PagedTable(rows)
+
+    got = fetch_all(lambda: table)
+
+    assert len(got) == 1388, "the exact failure that left 215 LA prospects unfiltered"
+    assert got[-1]["id"] == 1387
+    assert len(table.range_calls) == 2
+
+
+def test_fetch_all_stops_on_a_short_page():
+    from api.services.paging import fetch_all
+
+    table = _PagedTable([{"id": i} for i in range(10)])
+    assert len(fetch_all(lambda: table)) == 10
+    assert table.range_calls == [(0, 999)]
+
+
+def test_fetch_all_handles_an_exact_multiple_of_the_page_size():
+    """1000 rows exactly: the first page is full, so it must ask again and get nothing."""
+    from api.services.paging import fetch_all
+
+    table = _PagedTable([{"id": i} for i in range(1000)])
+    assert len(fetch_all(lambda: table)) == 1000
+    assert len(table.range_calls) == 2
+
+
+def test_fetch_all_builds_a_fresh_query_per_page():
+    """supabase-py builders are stateful; reusing one compounds .range() instead of replacing it."""
+    from api.services.paging import fetch_all
+
+    built = {"n": 0}
+    rows = [{"id": i} for i in range(2500)]
+
+    def build():
+        built["n"] += 1
+        return _PagedTable(rows)
+
+    assert len(fetch_all(build)) == 2500
+    assert built["n"] == 3

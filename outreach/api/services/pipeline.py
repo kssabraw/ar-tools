@@ -23,6 +23,7 @@ from .outscraper_client import (
     TileRequest,
     extract_places,
 )
+from .paging import fetch_all
 from .parser import parse_place, unmapped_fields
 from .suppression import load_suppression_index
 from .tiling import DedupeStats, Submarket, build_tiles, nearest_submarket
@@ -251,13 +252,13 @@ def run_filter(
     today = today or date.today()
     index = suppression if suppression is not None else load_suppression_index(client)
 
-    response = (
-        client.table("prospect")
+    # Paged: an unbounded select stops at 1000 rows with no error, which silently left 215 of
+    # 1388 LA prospects unfiltered on the first run (ISSUES I-036).
+    prospects = fetch_all(
+        lambda: client.table("prospect")
         .select("id,place_id,name,phone,website,rating,review_count,lat,lng,business_status,raw")
         .eq("market_id", market_id)
-        .execute()
     )
-    prospects = response.data or []
 
     filter_rows: list[dict[str, Any]] = []
     franchise_updates: list[str] = []

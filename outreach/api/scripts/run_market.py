@@ -45,7 +45,9 @@ def _market_id(client, name: str) -> str:
 
 
 def _submarkets(client, market_id: str):
-    rows = client.table("submarket").select("*").eq("market_id", market_id).execute().data or []
+    from api.services.paging import fetch_all
+
+    rows = fetch_all(lambda: client.table("submarket").select("*").eq("market_id", market_id))
     return seeding.submarket_rows_to_tiling(rows)
 
 

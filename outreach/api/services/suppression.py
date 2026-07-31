@@ -31,8 +31,11 @@ _VALUE_COLUMNS = ("value", "identifier", "target", "key")
 
 def load_suppression_index(client: Any) -> SuppressionIndex:
     try:
-        response = client.table("suppression").select("*").execute()
-        rows = response.data or []
+        from .paging import fetch_all
+
+        # Suppression is a hard exclusion gate. A truncated read would silently CONTACT people
+        # who asked not to be, which is the worst failure available in this pipeline.
+        rows = fetch_all(lambda: client.table("suppression").select("*"))
     except Exception as exc:  # noqa: BLE001 — any failure degrades to an empty index in Phase 1
         logger.warning(
             "suppression table unreadable, treating as empty (Phase 1 only)",

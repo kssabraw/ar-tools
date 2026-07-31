@@ -433,3 +433,42 @@ a Railway runtime limit for a container that binds no port, or platform-side rea
 whose deployment already reported SUCCESS. Worth pinning down before the semi-monthly schedule is
 set, because a recurring silent kill at ~4 minutes would cap how large a market can be ingested in
 one run. The mitigations above make it survivable either way.
+
+### I-036 · PostgREST silently truncated the filter at 1000 rows — FIXED
+`run_filter` read prospects with an unbounded `select()`. PostgREST caps that at **1000 rows** and
+returns the truncated set with no error, no header and nothing a caller could notice. Both LA
+filter runs therefore reported `evaluated: 1000` against 1388 prospects, leaving **215 prospects
+never filtered** — and the definition-of-done question "how many survived" would have undercounted
+by that much, confidently and invisibly.
+
+*Fixed:* `services/paging.fetch_all` reads page by page until a short page arrives, and every read
+that grows with the portfolio now goes through it — prospects, submarkets, and **suppression**
+especially, where a truncated read would silently contact people who asked not to be contacted.
+`build_query` is a callable because supabase-py builders are stateful: reusing one compounds
+`.range()` calls instead of replacing them, which pages wrongly in a way that also looks fine.
+
+Regression-tested including the exact-multiple-of-page-size boundary, where a full first page must
+provoke a second request.
+
+### I-035 CORRECTED (2026-07-31) · The first run did NOT lose its work
+I recorded I-035 as "the first real ingest lost 12 tiles of paid work". **That was wrong.** The
+`cost_ledger` shows deployment `923ef997` wrote its ingest row at 09:10:59 (1399 places) and its
+filter row at 09:11:01. It completed normally, roughly 70 seconds after the last log line I could
+retrieve.
+
+The mistake was diagnosing from a log stream that lags the container, treating "no new logs" as
+"process dead", and not re-checking the database after the point where the old code would have
+written. The Railway agent's "exited at 09:09:54" was inferred from the same lagging stream and
+carried the same error. **Two sources agreeing is not corroboration when both read the same
+instrument.**
+
+The direct cost of that misdiagnosis: a `git push` while `OUTREACH_COMMAND=run` was still set
+auto-deployed and fired a SECOND full paid ingest (1408 places, ~2.8x the placeholder rate) that
+nobody asked for — the exact footgun documented in the Dockerfile comment, walked into anyway.
+
+*What stands from I-035:* per-tile persistence, bounded concurrency and the SIGTERM marker are all
+still right, and per-tile persistence is what makes the ledger legible enough to have caught this.
+They were built on a false premise and remain worth keeping.
+*What to change:* `OUTREACH_COMMAND` must be returned to `filter` IMMEDIATELY after any paid run,
+not at the end of the working session. Better still, a paid run should require a token the deploy
+path cannot supply on its own — a follow-up worth doing before the cron schedule is set.
