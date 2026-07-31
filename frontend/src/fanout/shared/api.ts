@@ -1115,6 +1115,10 @@ export const splitUncovered = (sessionId: string, clusterId: string) =>
 export interface ScheduleRequest {
   mode: "all_at_once" | "drip" | "fixed" | "weekly" | "monthly_date" | "monthly_weekday";
   cluster_ids?: string[];          // omit/[] -> whole session
+  // Production ceiling: schedule at most this many, taken from the front of the
+  // pillars-first architecture order. omit -> no cap. The plan keeps every
+  // article; the remainder stays available to schedule later.
+  max_articles?: number;
   per_day?: number;                // count per period (per day/week/month)
   start_date?: string;             // YYYY-MM-DD — periodic start / fixed target day
   time_of_day?: string;            // HH:MM
@@ -1155,6 +1159,13 @@ export interface ScheduleEstimate {
   already_scheduled: number;
   requires_approval: boolean;
   approval_threshold_usd: number;
+  // Targets before max_articles trimmed them, and whether it did.
+  eligible?: number;
+  capped?: boolean;
+  // 'architecture' = pillars-first priority order; 'plan_order' = no architecture
+  // has been generated, so a cap takes an arbitrary slice rather than the most
+  // important articles.
+  ordered_by?: "architecture" | "plan_order";
 }
 export interface ContentSchedule {
   id: string;

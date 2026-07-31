@@ -32,6 +32,19 @@ class ScheduleBody(BaseModel):
     # all_at_once | drip | fixed | weekly | monthly_date | monthly_weekday
     mode: str
     cluster_ids: list[str] | None = None        # None/[] -> the whole session
+    # Production ceiling: schedule at most this many articles, taken from the
+    # front of the pillars-first architecture order. None = no cap (schedule
+    # everything). This is a deliberate limit on what gets *written*; the plan
+    # keeps every article, and the remainder stays available to schedule later.
+    #
+    # It exists because that ceiling used to happen by accident: `list_clusters`
+    # was an unpaged select, and PostgREST silently truncates those at 1000 rows,
+    # so a whole-session schedule could never exceed 1000 targets no matter how
+    # big the plan was. semaglutide (1,594 clusters) and retatrutide (1,413) were
+    # both capped that way without anyone choosing it — and *which* 1000 was
+    # arbitrary, since the sort was unstable across a bulk insert. Now the read
+    # pages correctly and the ceiling is an explicit, ordered choice.
+    max_articles: int | None = None
     # Count per period for the periodic cadences (per day for drip, per week for
     # weekly, per month for the monthly modes).
     per_day: int | None = None
@@ -143,12 +156,27 @@ def schedule_estimate(
     candidates = _session_cluster_ids(session_id, body.cluster_ids)
     pending = schedule_store.pending_cluster_ids(session_id)
     targets = [c for c in candidates if c not in pending]
+    # The cap changes which clusters are taken (create applies it to the ordered
+    # list) but not how many, and the estimate only reports counts — so applying
+    # it to the unordered set here is exact.
+    eligible = len(targets)
+    if body.max_articles is not None and body.max_articles >= 0:
+        targets = targets[: body.max_articles]
     est = _estimate(
         len(targets), body.mode, body.per_day, body.start_date,
         weekday=body.weekday, weekdays=body.weekdays, day_of_month=body.day_of_month,
         week_of_month=body.week_of_month,
     )
-    est["already_scheduled"] = len(candidates) - len(targets)
+    est["already_scheduled"] = len(candidates) - eligible
+    est["eligible"] = eligible
+    est["capped"] = len(targets) < eligible
+    # Without an architecture, order_clusters falls back to plain plan order — so a
+    # cap would take an arbitrary slice rather than the pillars-first priority the
+    # user expects. Let the UI say so before they commit.
+    est["ordered_by"] = (
+        "architecture" if (store.get_architecture(session_id) or {}).get("architecture_json")
+        else "plan_order"
+    )
     s = get_settings()
     est["requires_approval"] = (
         get_role(user) != "owner" and est["cost_estimate_usd"] > s.writer_schedule_approval_threshold_usd
@@ -243,6 +271,12 @@ def create_schedule(
     pending = schedule_store.pending_cluster_ids(session_id)
     targets = [c for c in ordered if c not in pending]
     skipped = len(ordered) - len(targets)
+    # Trim to the production ceiling AFTER ordering, so the kept slice is the
+    # front of the pillars-first architecture order rather than an arbitrary one.
+    eligible = len(targets)
+    if body.max_articles is not None and body.max_articles >= 0:
+        targets = targets[: body.max_articles]
+    capped = eligible - len(targets)
     if not targets:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -296,9 +330,10 @@ def create_schedule(
         day_of_month=body.day_of_month, week_of_month=body.week_of_month,
     )
     logger.info("schedule_created", extra={"event": "schedule_created", "session_id": session_id,
-                                           "mode": body.mode, "runs": len(runs), "skipped": skipped})
+                                           "mode": body.mode, "runs": len(runs),
+                                           "skipped": skipped, "capped": capped})
     return {"status": "scheduled", "created": True, "schedule": schedule,
-            "scheduled": len(runs), "skipped": skipped, "estimate": est}
+            "scheduled": len(runs), "skipped": skipped, "capped": capped, "estimate": est}
 
 
 @router.get("/sessions/{session_id}/schedules")
