@@ -1861,3 +1861,69 @@ def test_capture_never_raises_into_the_turn(monkeypatch):
     anthropic = __import__("anthropic")
     with patch.object(anthropic, "AsyncAnthropic"):
         assert asyncio.run(ctx.capture_memories("c1", "q", "r" * 900, "chat")) == 0
+
+
+# ---------------------------------------------------------------------------
+# cost_plan — affordability computed, not asserted.
+# ---------------------------------------------------------------------------
+
+
+def _cost_plan(items, retainer=500.0, margin=None, is_sab=False):
+    import asyncio
+    import json
+    from unittest.mock import MagicMock, patch
+
+    from services.slack_assistant import llm
+
+    sb = MagicMock()
+    sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
+        {"retainer_monthly": retainer, "is_sab": is_sab}
+    ]
+    args = {"items": items}
+    if margin is not None:
+        args["margin"] = margin
+    with patch.object(llm, "get_supabase", return_value=sb):
+        return json.loads(asyncio.run(llm._run_cost_plan("c1", args)))
+
+
+def test_cost_plan_flags_a_plan_the_retainer_cannot_fund():
+    # BSA Claims: $500/mo is already negative before anything is proposed.
+    out = _cost_plan([{"task_type": "content_page", "quantity": 4}])
+    assert out["budget"]["discretionary"] == -115.0
+    assert out["proposed_total"] == 20.0
+    assert out["fits"] is False
+    assert out["over_budget_by"] == 135.0
+    assert "OVER by" in out["verdict"]
+
+
+def test_cost_plan_accepts_a_plan_that_fits():
+    out = _cost_plan([{"task_type": "content_page", "quantity": 4}], retainer=2500.0)
+    assert out["budget"]["discretionary"] == 565.0
+    assert out["fits"] is True and out["over_budget_by"] == 0
+
+
+def test_cost_plan_prices_from_the_real_catalog():
+    out = _cost_plan(
+        [{"task_type": "reviews", "quantity": 10}, {"task_type": "content_page", "quantity": 2}],
+        retainer=2500.0,
+    )
+    assert out["proposed_total"] == 160.0  # 10×15 + 2×5
+    assert {line["task_type"] for line in out["proposed"]} == {"reviews", "content_page"}
+
+
+def test_cost_plan_reports_unknown_task_types_instead_of_silently_dropping_them():
+    out = _cost_plan([{"task_type": "magic_beans", "quantity": 3}], retainer=2500.0)
+    assert out["unknown_task_types"] == ["magic_beans"]
+    assert out["proposed_total"] == 0
+
+
+def test_cost_plan_clamps_the_margin_to_the_sop_floor_and_ceiling():
+    # Below 0.34 would spend past the agency's margin target; above 0.50 is a
+    # hard stop in the Recipe Engine.
+    assert _cost_plan([], retainer=1000.0, margin=0.10)["budget"]["margin_used"] == 0.34
+    assert _cost_plan([], retainer=1000.0, margin=0.90)["budget"]["margin_used"] == 0.50
+
+
+def test_cost_plan_handles_a_client_with_no_retainer():
+    out = _cost_plan([{"task_type": "content_page", "quantity": 1}], retainer=None)
+    assert out["budget"]["deployable"] == 0.0 and out["fits"] is False

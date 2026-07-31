@@ -724,12 +724,25 @@ def _ctx_budget(supabase, client_id: str, today: date) -> Optional[dict]:
         float(retainer), is_sab=bool(rows[0].get("is_sab"))
     )
     env["client_type"] = rows[0].get("client_type")
+    # What things actually cost. Without this the model can only guess at the
+    # price of what it proposes, which makes "fits the budget" unfalsifiable.
+    env["price_list"] = sorted(
+        (
+            {"task": v["label"], "task_type": k,
+             "unit_cost": v["unit_cost"], "per": v["unit"]}
+            for k, v in recipe_engine.price_catalog().items()
+        ),
+        key=lambda r: r["unit_cost"],
+    )
     env["note"] = (
         "Deployable = retainer × margin. Reporting and the mandatory Baseline "
         "Stack come off the top; `discretionary` is what is genuinely left for "
         "anything a strategy proposes ON TOP of the baseline. A NEGATIVE "
         "discretionary means the retainer cannot fund even the baseline — say "
-        "that plainly and scope to it; do not write a plan the money can't buy."
+        "that plainly and scope to it; do not write a plan the money can't buy. "
+        "`price_list` is the agency's real per-unit costs — cost what you "
+        "propose against it, and use the cost_plan tool to check the total "
+        "rather than doing the arithmetic yourself."
     )
     return env
 
