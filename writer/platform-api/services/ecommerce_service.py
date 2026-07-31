@@ -629,6 +629,7 @@ async def _publish_page_to_wordpress(page: dict, client: dict, user_id: str, sta
 
 async def publish_page(
     page_id: str, user_id: str, destination: str = "google_docs", status: str = "draft",
+    force_voice: bool = False,
 ) -> dict:
     """Publish a saved ecommerce page to a Google Doc in the client's Drive folder
     (default) or to the client's WordPress site (destination='wordpress'). The
@@ -638,6 +639,10 @@ async def publish_page(
 
     supabase = get_supabase()
     page = get_page(page_id)
+
+    from services import voice_card_service
+
+    voice_card_service.assert_voice_publishable(page.get("voice_violations"), force_voice)
 
     if destination == "wordpress":
         client_res = (

@@ -1478,6 +1478,7 @@ async def publish_page(
     user_id: str,
     destination: str = "google_docs",
     status: str = "draft",
+    force_voice: bool = False,
 ) -> dict:
     """Publish a saved Local SEO page to a Google Doc in the client's Drive folder
     via the Apps Script webhook (same path as the blog writer), or directly to the
@@ -1490,6 +1491,12 @@ async def publish_page(
 
     supabase = get_supabase()
     page = get_page(page_id)  # 404s if missing
+
+    # A page that breaks the brand guide does not go out. Checked here rather
+    # than per-destination so Docs, WordPress and GitHub are all covered.
+    from services import voice_card_service
+
+    voice_card_service.assert_voice_publishable(page.get("voice_violations"), force_voice)
 
     if destination == "github":
         client_res = (

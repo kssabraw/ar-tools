@@ -93,7 +93,10 @@ def test_cached_card_handles_missing_and_malformed_storage():
 # get_voice_card
 # ---------------------------------------------------------------------------
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # asyncio.run, not get_event_loop().run_until_complete: the latter reuses a
+    # process-wide loop that another test in the suite may already have closed,
+    # which makes these pass in isolation and fail in a full run.
+    return asyncio.run(coro)
 
 
 def _stub_nlp(response=None, raises=None):
@@ -216,3 +219,40 @@ def test_skip_reason_omits_voice_when_there_is_none():
     _, reason = vcs.reoptimize_verdict(85, None, 75)
     assert "brand voice" not in reason
     assert "85/100 on SEO" in reason
+
+
+# ---------------------------------------------------------------------------
+# assert_voice_publishable — the publish gate
+# ---------------------------------------------------------------------------
+import pytest  # noqa: E402
+from fastapi import HTTPException  # noqa: E402
+
+
+def test_publish_blocked_by_a_forbidden_word():
+    verdict = {"critical_count": 1, "passed": False,
+               "violations": [{"check": "never_use_terms", "severity": "critical"}]}
+    with pytest.raises(HTTPException) as exc:
+        vcs.assert_voice_publishable(verdict)
+    assert exc.value.status_code == 409
+    assert exc.value.detail == "voice_violation"
+
+
+def test_publish_allowed_when_only_warnings():
+    """A missing preferred term is advisory. Blocking on it would make the gate
+    something people route around."""
+    vcs.assert_voice_publishable({"critical_count": 0, "warning_count": 3, "passed": False})
+
+
+def test_publish_allowed_on_a_low_score_without_criticals():
+    """A low score is a judgement, not a fact — it does not stop a publish."""
+    vcs.assert_voice_publishable({"critical_count": 0, "score": 41, "passed": False})
+
+
+def test_force_overrides_the_block():
+    """A wrong extraction from the guide must not deadlock the team forever."""
+    vcs.assert_voice_publishable({"critical_count": 2}, force=True)
+
+
+def test_publish_allowed_when_there_is_no_verdict():
+    for verdict in (None, {}, "not a dict", []):
+        vcs.assert_voice_publishable(verdict)

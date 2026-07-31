@@ -27,6 +27,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
+from fastapi import HTTPException
+
 from db.supabase_client import get_supabase
 from services import brand_voice_service, icp_service
 
@@ -197,3 +199,26 @@ def reoptimize_verdict(
             f"{round(voice_score)}/100 — rewriting for voice."
         )
     return True, "Below the SEO threshold — rewriting."
+
+
+def assert_voice_publishable(verdict: Optional[dict], force: bool = False) -> None:
+    """Refuse to publish content that breaks the client's brand guide.
+
+    Only a `critical` finding blocks — a forbidden word, caught by word-boundary
+    regex, so the term is provably on the page. A low score is a judgement and
+    warnings are advisory; neither stops a publish, because blocking on a
+    subjective call would make the gate something people route around.
+
+    `force` is the deliberate override. The never-use list comes from an LLM
+    distillation of the guide, so a wrong extraction must not deadlock the team
+    permanently — but it takes an explicit second action, which is the
+    difference between "stopped" and "flagged".
+
+    Raises 409 `voice_violation`; the caller already has the verdict and can
+    render exactly which words offended.
+    """
+    if force or not isinstance(verdict, dict):
+        return
+    if not verdict.get("critical_count"):
+        return
+    raise HTTPException(status_code=409, detail="voice_violation")

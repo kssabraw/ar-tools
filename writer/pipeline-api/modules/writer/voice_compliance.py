@@ -1,112 +1,74 @@
-"""Deterministic brand-guide checks beyond banned terms.
+"""Deterministic brand-guide checks, as consumed by the Service/Location writer.
 
-`banned_terms.py` already hard-enforces the guide's prohibitions. This module
-adds the two checks that were missing, both of which a real client audit
-surfaced on shipped articles:
+These used to carry their own copies of the person-density thresholds and the
+required-term matcher. That was one implementation too many: the vendored
+`voice_card.py` (byte-identical to nlp-api's, sync-guarded by a test) already
+defines them, and two copies of a threshold in one service is a drift waiting to
+happen — the page path and the article path would start disagreeing about what
+"wrong grammatical person" means without anyone noticing.
 
-  * **grammatical person** — a guide that says "write as we/our" lost to the
-    generator's own default preference for third person, and nothing noticed.
-  * **required phrasing** — the guide's preferred terms reached the prompt as a
-    suggestion and were simply not used.
+So this is now an adapter, not an implementation. It keeps the granular
+`check_person` / `check_preferred_terms` API the Service writer calls, and
+delegates every actual decision to the shared module.
 
-Both are warnings, never aborts. Banned terms in a heading remain the only
-hard stop (see `banned_terms.BannedTermLeakage`): a missing preferred term is
-an editorial note, not a reason to throw away a finished article.
-
-Shared by the blog Writer and the Service/Location Writer, which already share
-the distillation and banned-term layer. Thresholds are deliberately identical
-to `nlp-api/voice_card.py` so a page and an article are judged the same way —
-if you change one, change both.
+Both remain warnings, never aborts. Banned terms in a heading are still the only
+hard stop (see `banned_terms.BannedTermLeakage`): a missing preferred term is an
+editorial note, not a reason to throw away a finished page.
 """
 
 from __future__ import annotations
 
-import re
 from typing import Optional
 
 from models.writer import BrandVoiceCard
 
-from .banned_terms import build_banned_regex
-
-_FIRST_PERSON_RE = re.compile(r"\b(?:we|we're|we've|we'll|our|ours|us)\b", re.IGNORECASE)
-_WORD_RE = re.compile(r"[A-Za-z']+")
-
-# Per 1,000 words. Set wide so ordinary prose variation never trips them: a
-# genuinely first-person article lands well above 6, a strictly third-person one
-# near 0. A noisy warning gets ignored and stops being a check at all.
-_FIRST_PERSON_ABSENT_MAX = 1.0
-_THIRD_PERSON_EXCEEDED_MIN = 6.0
-_MIN_WORDS_FOR_PERSON_CHECK = 100
+from . import voice_card as vcard
 
 
-def _word_count(text: str) -> int:
-    return len(_WORD_RE.findall(text or ""))
+def _findings(text: str, card: dict) -> dict[str, dict]:
+    """Run the shared checks and index the results by check name."""
+    return {v["check"]: v for v in vcard.check_voice_compliance(text or "", card)}
 
 
 def check_person(text: str, person: str) -> Optional[dict]:
     """Flag prose whose grammatical person contradicts the brand guide.
 
-    Returns None when the guide is silent (`person` empty), when the text is
-    too short for density to mean anything, or when the article already matches.
+    Returns None when the guide is silent, when the text is too short for
+    density to mean anything, or when the prose already matches.
     """
     if person not in ("first", "third"):
         return None
-    words = _word_count(text)
-    if words < _MIN_WORDS_FOR_PERSON_CHECK:
-        return None
-
-    hits = len(_FIRST_PERSON_RE.findall(text))
-    density = (hits / words) * 1000
-    detail = f"{hits} first-person words across {words} ({density:.1f}/1k)"
-
-    if person == "first" and density <= _FIRST_PERSON_ABSENT_MAX:
-        return {
-            "check": "person",
-            "severity": "warning",
-            "detail": detail,
-            "message": (
-                "The brand guide specifies first person (we/our) but the article is "
-                "written in third person."
-            ),
-        }
-    if person == "third" and density >= _THIRD_PERSON_EXCEEDED_MIN:
-        return {
-            "check": "person",
-            "severity": "warning",
-            "detail": detail,
-            "message": (
-                "The brand guide specifies third person (name the brand) but the "
-                "article leans on we/our."
-            ),
-        }
-    return None
+    card = vcard.empty_card()
+    card["person"] = person
+    return _findings(text, card).get("person")
 
 
 def check_preferred_terms(text: str, preferred_terms: list[str]) -> Optional[dict]:
-    """Flag guide-preferred phrasings that never appear in the article."""
-    missing: list[str] = []
-    for term in preferred_terms or []:
-        regex = build_banned_regex([term])  # word-boundary matcher, not a ban
-        if regex is None or not regex.search(text or ""):
-            missing.append(term)
-    if not missing:
+    """Flag guide-preferred phrasings that never appear in the text."""
+    if not preferred_terms:
         return None
-    return {
-        "check": "preferred_terms",
-        "severity": "warning",
-        "terms": missing,
-        "message": (
-            "The brand guide names this phrasing as preferred and it never appears: "
-            + ", ".join(f'"{t}"' for t in missing)
-        ),
-    }
+    card = vcard.empty_card()
+    card["must_use_terms"] = list(preferred_terms)
+    finding = _findings(text, card).get("must_use_terms")
+    if finding is None:
+        return None
+    # The Service writer's callers know these as "preferred terms"; the shared
+    # module calls the same list must_use_terms. Rename on the way out so the
+    # message and check name match the vocabulary of this side of the fence.
+    finding = dict(finding)
+    finding["check"] = "preferred_terms"
+    finding["message"] = (
+        "The brand guide names this phrasing as preferred and it never appears: "
+        + ", ".join(f'"{t}"' for t in finding.get("terms", []))
+    )
+    return finding
 
 
 def check_article(text: str, card: Optional[BrandVoiceCard]) -> list[dict]:
-    """Run every deterministic check against an article's full text.
+    """Every deterministic check against a finished piece of prose.
 
-    `text` should be the rendered prose (title + headings + bodies). Returns an
-    empty list when there is no card, no text, or nothing to report.
+    `text` should be the rendered content (title + headings + bodies). Returns
+    an empty list when there is no card, no text, or nothing to report.
     """
     if card is None or not (text or "").strip():
         return []
@@ -121,10 +83,10 @@ def check_article(text: str, card: Optional[BrandVoiceCard]) -> list[dict]:
 
 
 def article_text(title: str, sections: list) -> str:
-    """Flatten a finished article into the text the checks read.
+    """Flatten finished content into the text the checks read.
 
     Takes `ArticleSection`-shaped objects (or anything with `.heading`/`.body`)
-    so it can serve both writers without importing either's pipeline.
+    so it can serve either writer without importing their pipelines.
     """
     parts: list[str] = [title or ""]
     for section in sections or []:

@@ -776,8 +776,30 @@ async def _orchestrate_service_page(
             struct_def = structural_deficiency(run, snapshot)
             if struct_def:
                 deficiencies.append(struct_def)
+            # Brand-voice gate: the scorer returns its voice verdict alongside
+            # the SEO one. Fold the failing dimensions into the SAME reopt pass
+            # (mirroring the structural gate) so an off-voice page is rewritten
+            # without spending an extra pass on it. A forbidden word is added as
+            # its own synthetic deficiency — the rewrite needs to be told the
+            # exact term, not just that vocabulary scored low.
+            voice = score.get("voice_compliance") or {}
+            voice_defs = list(voice.get("deficiencies") or [])
+            for violation in voice.get("violations") or []:
+                if violation.get("severity") == "critical":
+                    voice_defs.append({
+                        "engine": "Brand guide — forbidden wording",
+                        "engine_key": "voice_forbidden_terms",
+                        "score": 0,
+                        "issues": [violation.get("message", "")],
+                        "recommendations": [
+                            "Remove every occurrence, including headings and the "
+                            "FAQ, and rephrase in the brand's own words."
+                        ],
+                    })
+            deficiencies.extend(voice_defs)
+            needs_voice_rewrite = bool(voice.get("needs_rewrite"))
             below_threshold = (score.get("composite_score") or 0) < settings.service_page_score_threshold
-            if below_threshold or struct_def:
+            if below_threshold or struct_def or needs_voice_rewrite:
                 await _set_run_status(run_id, "service_reopt_running")
                 await reoptimize_run(run_id, deficiencies)
         except Exception as exc:

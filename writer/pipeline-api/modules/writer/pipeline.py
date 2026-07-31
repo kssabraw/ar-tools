@@ -59,7 +59,7 @@ from .heading_entity_enforcer import enforce_heading_entities
 from .icp_verification import verify_icp_callout_landed
 from .sections import SectionWriteResult, write_h2_group
 from .term_usage import compute_term_usage_by_zone
-from .voice_compliance import article_text, check_article
+from .voice_review import review_article_voice
 from .title import generate_h1_enrichment, generate_title
 
 logger = logging.getLogger(__name__)
@@ -949,13 +949,20 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         generation_time_ms=int((time.perf_counter() - started) * 1000),
     )
 
-    # ---- Deterministic brand-guide checks (warn-and-accept) ----
-    # Banned terms are already hard-enforced above. These cover the two things
-    # that were slipping through into shipped articles: a guide-specified
-    # grammatical person the generator overrode, and preferred phrasing that
-    # never made it in. Surfaced on metadata for editorial QA.
-    metadata.voice_violations = check_article(
-        article_text(title, article), brand_voice_card
+    # ---- Brand-voice review: score the article, then revise it if needed ----
+    # Banned terms are already hard-enforced above (headings abort, bodies
+    # retry). This is the layer beyond mechanics: the eight-dimension scorecard
+    # the page generators use — tone across every section, audience fit, whether
+    # the ICP's stated worries are addressed, and whether the article could be
+    # published on a competitor's site by swapping the brand name. An article
+    # below the bar gets its prose revised in place; headings are never touched.
+    _section_bodies_before = [s.body for s in article]
+    voice_scorecard = await review_article_voice(title, article, brand_voice_card)
+    metadata.voice_scorecard = voice_scorecard
+    metadata.voice_violations = (voice_scorecard or {}).get("violations") or []
+    metadata.voice_sections_revised = sum(
+        1 for before, section in zip(_section_bodies_before, article)
+        if before != section.body
     )
 
     # ---- Em dash sanitizer ----

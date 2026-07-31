@@ -89,12 +89,23 @@ class BrandVoiceCard(BaseModel):
     # being overridden with nothing noticing.
     person: str = ""
     voice_directives: list[str] = []
+    # What the guide says about cadence — feeds the `writing_style` dimension
+    # of the voice scorecard. Empty when the guide is silent, which marks that
+    # dimension inapplicable rather than failed.
+    sentence_rhythm: str = ""
     audience_summary: str = ""
     audience_personas: list[str] = []
     audience_verticals: list[str] = []
     audience_company_size: str = ""
     audience_pain_points: list[str] = []
     audience_goals: list[str] = []
+    # What makes the reader act now, what they want, and what stops them —
+    # the raw material for the `audience_fit` and `pain_points` dimensions.
+    audience_triggers: list[str] = []
+    audience_motivations: list[str] = []
+    audience_objections: list[str] = []
+    # CTA phrasings the guide/ICP calls for — the `cta_fit` dimension.
+    cta_language: list[str] = []
     preferred_terms: list[str] = []
     banned_terms: list[str] = []
     discouraged_terms: list[str] = []
@@ -175,6 +186,14 @@ class WriterMetadata(BaseModel):
     # Warn-and-accept: surfaced for editorial QA, never an abort. Additive
     # metadata only, so the article contract (and schema_version) is unchanged.
     voice_violations: list[dict] = []
+    # Full brand-voice scorecard: {score, band, analysis, dimensions,
+    # violations, deficiencies, needs_rewrite}. Same shape and same weights as
+    # the page generators produce, so "did it sound like the client" means one
+    # thing across the suite. None when the client has no guide on file.
+    voice_scorecard: Optional[dict] = None
+    # Sections whose prose a voice revision pass rewrote (headings only — the
+    # revision never touches structure).
+    voice_sections_revised: int = 0
     # Banned terms that leaked into body content after the section LLM's
     # one-retry attempt. The run does NOT abort on body leakage (the
     # distillation LLM occasionally over-classifies common words like
