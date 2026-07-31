@@ -144,3 +144,56 @@ async def get_voice_card(client: dict, user_id: Optional[str] = None) -> dict:
         card,
     )
     return card
+
+
+# Mirrors nlp-api's `voice_card.VOICE_PASS_THRESHOLD`. A page below this does
+# not sound like the client, whatever it scores on SEO.
+VOICE_PASS_THRESHOLD = 80.0
+
+
+def reoptimize_verdict(
+    composite: Optional[float],
+    voice_compliance: Optional[dict],
+    seo_threshold: float,
+    voice_threshold: float = VOICE_PASS_THRESHOLD,
+) -> tuple[bool, str]:
+    """Should this live page be rewritten? Returns `(reoptimize, reason)`.
+
+    The bulk reoptimizer used to decide purely on the SEO score, which meant a
+    page at 78 SEO / 40 voice was skipped without the voice score ever being
+    looked at — exactly the pages most worth re-running. A page now earns a
+    rewrite when EITHER score falls short, or when a forbidden term is on it.
+
+    Pure so the decision is unit-testable without a live score call; the
+    `reason` is user-facing copy shown on skipped rows.
+    """
+    voice_compliance = voice_compliance or {}
+    voice_score = voice_compliance.get("score")
+    has_critical = bool(voice_compliance.get("critical_count"))
+
+    seo_ok = composite is not None and composite >= seo_threshold
+    voice_ok = (
+        not has_critical
+        and (voice_score is None or voice_score >= voice_threshold)
+    )
+
+    if seo_ok and voice_ok:
+        detail = f"Already scores {round(composite)}/100 on SEO"
+        if voice_score is not None:
+            detail += f" and {round(voice_score)}/100 on brand voice"
+        return False, (
+            f"{detail} — at or above threshold, so reoptimization was skipped."
+        )
+
+    # Unscoreable SEO (None) still reoptimizes, as it always did.
+    if seo_ok and not voice_ok:
+        if has_critical:
+            return True, (
+                f"SEO is fine at {round(composite)}/100, but the page uses wording the "
+                f"brand guide forbids — rewriting for voice."
+            )
+        return True, (
+            f"SEO is fine at {round(composite)}/100, but brand voice scores "
+            f"{round(voice_score)}/100 — rewriting for voice."
+        )
+    return True, "Below the SEO threshold — rewriting."

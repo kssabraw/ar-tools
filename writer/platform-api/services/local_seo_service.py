@@ -1058,25 +1058,40 @@ async def reoptimize_url(
     )
 
     composite = score_result.get("composite_score")
-    # Gate: a page already at/above the threshold is left untouched.
-    if composite is not None and composite >= score_threshold:
+    voice_compliance = score_result.get("voice_compliance")
+    # Gate: skip only when the page clears BOTH bars. Deciding on the SEO score
+    # alone silently skipped the pages most worth rewriting — a page at 78 SEO
+    # and 40 voice never had its voice score looked at.
+    should_reopt, reason = voice_card_service.reoptimize_verdict(
+        composite, voice_compliance, score_threshold
+    )
+    voice_score = (voice_compliance or {}).get("score")
+    if not should_reopt:
         logger.info(
             "local_seo.reoptimize_url_skipped",
-            extra={"client_id": client_id, "page_url": page_url, "score": composite},
+            extra={
+                "client_id": client_id, "page_url": page_url,
+                "score": composite, "voice_score": voice_score,
+            },
         )
         return {
             "status": "skipped",
             "page_url": page_url,
             "keyword": keyword,
             "score": composite,
+            "voice_score": voice_score,
             "threshold": score_threshold,
-            "reason": (
-                f"Already scores {round(composite)}/100 — at or above the "
-                f"{int(score_threshold)} threshold, so reoptimization was skipped."
-            ),
+            "reason": reason,
         }
+    logger.info(
+        "local_seo.reoptimize_url_proceeding",
+        extra={
+            "client_id": client_id, "page_url": page_url,
+            "score": composite, "voice_score": voice_score, "reason": reason,
+        },
+    )
 
-    # Below threshold (or unscoreable) → reoptimize. Reuses the shared op, which
+    # Below either threshold (or unscoreable) → reoptimize. Reuses the shared op, which
     # rewrites + re-scores + persists the page as a mode='reoptimize' row.
     page = await reoptimize_page(
         client_id=client_id,

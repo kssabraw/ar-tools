@@ -158,3 +158,61 @@ def test_unextractable_guide_caches_the_empty_result():
             patch.object(vcs, "_persist") as persist:
         assert _run(vcs.get_voice_card(client)) == {}
     assert persist.call_args[0][2] == {}
+
+
+# ---------------------------------------------------------------------------
+# reoptimize_verdict — the bulk-reoptimize gate
+# ---------------------------------------------------------------------------
+def _voice(score=None, critical=0):
+    return {"score": score, "critical_count": critical}
+
+
+def test_skips_when_both_scores_clear():
+    reopt, reason = vcs.reoptimize_verdict(85, _voice(score=92), 75)
+    assert reopt is False
+    assert "85/100 on SEO" in reason
+    assert "92/100 on brand voice" in reason
+
+
+def test_reoptimizes_when_seo_is_low():
+    reopt, reason = vcs.reoptimize_verdict(60, _voice(score=95), 75)
+    assert reopt is True
+    assert "Below the SEO threshold" in reason
+
+
+def test_reoptimizes_a_strong_seo_page_that_is_off_voice():
+    """The case the SEO-only gate silently skipped: good SEO, bad voice."""
+    reopt, reason = vcs.reoptimize_verdict(78, _voice(score=40), 75)
+    assert reopt is True
+    assert "SEO is fine at 78/100" in reason
+    assert "40/100" in reason
+
+
+def test_reoptimizes_a_strong_seo_page_with_a_forbidden_word():
+    reopt, reason = vcs.reoptimize_verdict(90, _voice(score=95, critical=1), 75)
+    assert reopt is True
+    assert "forbids" in reason
+
+
+def test_voice_score_exactly_at_the_bar_passes():
+    reopt, _ = vcs.reoptimize_verdict(80, _voice(score=80), 75)
+    assert reopt is False
+    reopt, _ = vcs.reoptimize_verdict(80, _voice(score=79.9), 75)
+    assert reopt is True
+
+
+def test_clients_without_a_guide_behave_exactly_as_before():
+    """No voice score means no voice opinion — the SEO threshold alone decides."""
+    for voice in (None, {}, _voice(score=None)):
+        assert vcs.reoptimize_verdict(85, voice, 75)[0] is False
+        assert vcs.reoptimize_verdict(60, voice, 75)[0] is True
+
+
+def test_unscoreable_seo_still_reoptimizes():
+    assert vcs.reoptimize_verdict(None, _voice(score=95), 75)[0] is True
+
+
+def test_skip_reason_omits_voice_when_there_is_none():
+    _, reason = vcs.reoptimize_verdict(85, None, 75)
+    assert "brand voice" not in reason
+    assert "85/100 on SEO" in reason

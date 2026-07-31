@@ -432,19 +432,31 @@ async def reoptimize_url(
     # row; re-tag as reoptimize_before for the reoptimize history semantics).
     _record_score_run(client_id, keyword, page_type, "reoptimize_before", score_result, page_id=None, page_url=page_url, user_id=user_id)
 
+    from services import voice_card_service
+
     composite = score_result.get("composite_score")
-    if composite is not None and composite >= score_threshold and not (notes or "").strip():
-        logger.info("ecommerce.reoptimize_url_skipped", extra={"client_id": client_id, "page_url": page_url, "score": composite})
+    voice_compliance = score_result.get("voice_compliance")
+    # Skip only when the page clears BOTH the SEO and the brand-voice bar.
+    should_reopt, reason = voice_card_service.reoptimize_verdict(
+        composite, voice_compliance, score_threshold
+    )
+    voice_score = (voice_compliance or {}).get("score")
+    if not should_reopt and not (notes or "").strip():
+        logger.info(
+            "ecommerce.reoptimize_url_skipped",
+            extra={
+                "client_id": client_id, "page_url": page_url,
+                "score": composite, "voice_score": voice_score,
+            },
+        )
         return {
             "status": "skipped",
             "page_url": page_url,
             "keyword": keyword,
             "score": composite,
+            "voice_score": voice_score,
             "threshold": score_threshold,
-            "reason": (
-                f"Already scores {round(composite)}/100 — at or above the "
-                f"{int(score_threshold)} threshold, so reoptimization was skipped."
-            ),
+            "reason": reason,
         }
 
     page = await reoptimize_from(
