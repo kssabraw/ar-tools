@@ -98,6 +98,116 @@ _LIVE_GSC_ROUNDS = 2  # tool-use rounds before the answer is forced from what's 
 _LIVE_GSC_TOP = 15  # rows surfaced per pull
 _LIVE_GSC_RESULT_CHARS = 4000
 
+# ---------------------------------------------------------------------------
+# cost_plan — deterministic budget arithmetic.
+#
+# A strategy that "fits the budget" is unfalsifiable if the model priced it in
+# its head. This costs a proposed task list against the Recipe Engine's real
+# catalog and compares it to what the retainer actually funds, so affordability
+# is computed, not asserted. Free (pure arithmetic on stored data).
+# ---------------------------------------------------------------------------
+_COST_PLAN_TOOL = {
+    "name": "cost_plan",
+    "description": (
+        "Price a proposed set of tasks against the agency's real cost catalog "
+        "and check it against this client's monthly discretionary budget "
+        "(free — no confirmation). Use it BEFORE presenting any plan that "
+        "involves spend, so you state a real total rather than an estimate. "
+        "Pass the task_type values from the budget module's price_list."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "description": "The tasks you intend to propose this month.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "task_type": {"type": "string", "description": "A task_type from price_list."},
+                        "quantity": {"type": "number", "description": "How many units."},
+                    },
+                    "required": ["task_type", "quantity"],
+                },
+            },
+            "margin": {
+                "type": "number",
+                "description": (
+                    "Optional margin to budget at (0.34 default = 66% agency "
+                    "margin; 0.50 for a drop/stagnation month). Never below 0.34."
+                ),
+            },
+        },
+        "required": ["items"],
+    },
+}
+
+
+async def _run_cost_plan(client_id: str, args: dict) -> str:
+    """Cost a proposed plan against the catalog + the client's real envelope."""
+    import json as _json
+
+    from services import recipe_engine
+
+    rows = (
+        get_supabase().table("clients")
+        .select("retainer_monthly, is_sab")
+        .eq("id", client_id).limit(1).execute()
+    ).data or []
+    if not rows:
+        return "Client not found."
+    retainer = rows[0].get("retainer_monthly")
+    margin = args.get("margin")
+    try:
+        margin = float(margin) if margin is not None else recipe_engine.DEFAULT_MARGIN
+    except (TypeError, ValueError):
+        margin = recipe_engine.DEFAULT_MARGIN
+    # The margin floor is a hard rule, not a preference (Recipe Engine SS1).
+    margin = max(recipe_engine.DEFAULT_MARGIN, min(margin, recipe_engine.DROP_MARGIN))
+
+    env = recipe_engine.budget_envelope(
+        float(retainer) if retainer not in (None, "") else None,
+        margin=margin,
+        is_sab=bool(rows[0].get("is_sab")),
+    )
+    catalog = recipe_engine.price_catalog()
+    items = [i for i in (args.get("items") or []) if isinstance(i, dict)]
+    lines, unknown = [], []
+    for item in items:
+        task_type = str(item.get("task_type") or "")
+        entry = catalog.get(task_type)
+        if not entry:
+            unknown.append(task_type)
+            continue
+        try:
+            qty = float(item.get("quantity") or 0)
+        except (TypeError, ValueError):
+            qty = 0.0
+        lines.append({
+            "task": entry["label"], "task_type": task_type, "quantity": qty,
+            "unit_cost": entry["unit_cost"],
+            "line_cost": round(qty * entry["unit_cost"], 2),
+        })
+    total = round(sum(line["line_cost"] for line in lines), 2)
+    over = round(total - env["discretionary"], 2)
+    return _json.dumps({
+        "budget": env,
+        "proposed": lines,
+        "unknown_task_types": unknown,
+        "proposed_total": total,
+        "discretionary_available": env["discretionary"],
+        "over_budget_by": over if over > 0 else 0,
+        "fits": over <= 0,
+        "verdict": (
+            "Fits the month's discretionary budget."
+            if over <= 0 else
+            f"OVER by ${over:,.2f} — cut scope, phase it across months, or say "
+            "plainly what the retainer would need to be."
+        ),
+    }, ensure_ascii=False)
+
+
+
 _LIVE_GSC_TOOL = {
     "name": "fetch_live_gsc",
     "description": (
@@ -661,7 +771,8 @@ async def interpret(
     messages: list[dict] = [{"role": "user", "content": user}]
     tools = build_llm_tools() + [_read_sop_tool(), _LIVE_GSC_TOOL,
                                  _LIST_NONINDEXED_TOOL, _MEMORY_TOOL,
-                                 _LEADOFF_FIND_TOOL, _MAPS_HISTORY_TOOL]
+                                 _LEADOFF_FIND_TOOL, _MAPS_HISTORY_TOOL,
+                                 _COST_PLAN_TOOL]
     # Bounded tool loop: read_sop / fetch_live_gsc calls are answered
     # in-conversation; an action call returns immediately (actions never mix
     # with in-answer tool reads — first wins).
@@ -709,7 +820,7 @@ async def interpret(
             if getattr(b, "type", None) == "tool_use"
             and b.name in ("read_sop", _LIVE_GSC_TOOL["name"], _LIST_NONINDEXED_TOOL["name"],
                            _MEMORY_TOOL["name"], _LEADOFF_FIND_TOOL["name"],
-                           _MAPS_HISTORY_TOOL["name"])
+                           _MAPS_HISTORY_TOOL["name"], _COST_PLAN_TOOL["name"])
         ]
         if not tool_calls or final_round:
             break
@@ -725,6 +836,7 @@ async def interpret(
                     _MEMORY_TOOL["name"]: "Saving a note to memory",
                     _LEADOFF_FIND_TOOL["name"]: "Looking up the LeadOff market board",
                     _MAPS_HISTORY_TOOL["name"]: "Reading the Maps geo-grid scan history",
+                    _COST_PLAN_TOOL["name"]: "Costing the plan against the budget",
                 }.get(b.name, "Working")
                 await on_event({"type": "status", "label": label})
             if b.name == "read_sop":
@@ -740,6 +852,8 @@ async def interpret(
                 text = await asyncio.to_thread(_run_leadoff_find, args)
             elif b.name == _MAPS_HISTORY_TOOL["name"]:
                 text = await _run_maps_history(client["id"], args)
+            elif b.name == _COST_PLAN_TOOL["name"]:
+                text = await _run_cost_plan(client["id"], args)
             else:
                 text = await _run_live_gsc(client["id"], args)
             results.append({"type": "tool_result", "tool_use_id": b.id, "content": text})
