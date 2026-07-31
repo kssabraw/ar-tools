@@ -244,11 +244,71 @@ def test_growth_turn_gives_the_aeo_sop_enough_room_for_its_tactics():
     # Part 2 (the Platform-Influence Matrix — G Stacks for AIO, Medium/LinkedIn/
     # Reddit for LLMs) starts past the 2k mark. A slice that stops short of it
     # leaves the model with theory and no actions.
+    from config import settings
+
     text = sop_library.select_sops_text(
-        {"maps_growth", "ai_visibility", "content"}, budget_chars=24_000
+        {"maps_growth", "ai_visibility", "content"},
+        budget_chars=settings.slack_assistant_sop_budget_chars,
     )
     start = text.index("### SOP DOC: AIO_AEO_SOP.md")
     nxt = text.find("### SOP DOC:", start + 10)
     slice_len = (nxt if nxt > 0 else len(text)) - start
     assert slice_len > 6_000, f"AEO SOP only got {slice_len} chars"
     assert "Platform-Influence Matrix" in text
+
+
+# ---------------------------------------------------------------------------
+# Whole docs, or an explicit deferral — never a silent fragment.
+#
+# select_sops_text used to size each doc at min(cap, remaining), so the last in
+# the queue got the scraps. On the Jupiter turn AIO_AEO_SOP — 12,741 chars,
+# under its 14k cap, so it should have arrived whole — got 1,973: Part 1's
+# theory and none of Part 2's tactics. A fragment is worse than an omission,
+# because nothing in it says the half that answered the question was cut.
+# ---------------------------------------------------------------------------
+
+_GROWTH = {"maps_growth", "ai_visibility", "content"}
+
+
+def test_a_doc_under_its_cap_arrives_whole():
+    text = sop_library.select_sops_text(_GROWTH, budget_chars=60_000)
+    raw = sop_library.load_sop_docs()["AIO_AEO_SOP.md"]
+    start = text.index("### SOP DOC: AIO_AEO_SOP.md")
+    nxt = text.find("### SOP DOC", start + 10)
+    got = (nxt if nxt > 0 else len(text)) - start
+    assert got >= len(raw) - 100, f"AEO SOP truncated to {got} of {len(raw)}"
+    # Part 2 is where the tactics live; the theory alone is what caused the bug.
+    assert "Platform-Influence Matrix" in text
+
+
+def test_no_doc_is_emitted_as_a_starved_fragment():
+    # A budget too small for everything must drop whole docs, not shave the tail.
+    text = sop_library.select_sops_text(_GROWTH, budget_chars=30_000)
+    docs = sop_library.load_sop_docs()
+    import re
+
+    for m in re.finditer(r"### SOP DOC: (\S+)", text):
+        name = m.group(1)
+        start = m.end()
+        nxt = text.find("### SOP DOC", start)
+        got = (nxt if nxt > 0 else len(text)) - start
+        cap = sop_library._DOC_CAP_CHARS.get(name, sop_library._DEFAULT_DOC_CAP)
+        if name in sop_library._ALWAYS:
+            # The router is deliberately bounded to a third of the block so the
+            # topic SOPs behind it still fit; that's a cap, not starvation.
+            cap = min(cap, max(30_000 // 3, 1_000))
+        wanted = min(cap, len(docs[name]))
+        assert got >= wanted * sop_library._MIN_USEFUL_FRACTION, (
+            f"{name} got {got}, under {sop_library._MIN_USEFUL_FRACTION:.0%} of its {wanted}"
+        )
+
+
+def test_docs_that_dont_fit_are_named_not_silently_dropped():
+    text = sop_library.select_sops_text(_GROWTH, budget_chars=30_000)
+    assert "SOP DOCS NOT INLINED" in text
+    assert "read_sop" in text
+
+
+def test_a_generous_budget_leaves_nothing_deferred_on_a_growth_turn():
+    text = sop_library.select_sops_text(_GROWTH, budget_chars=60_000)
+    assert "SOP DOCS NOT INLINED" not in text

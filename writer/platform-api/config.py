@@ -643,7 +643,11 @@ class Settings(BaseSettings):
     # consumed most of the block and the SOP that answered the question was
     # truncated away. Grounding is on by default now, so the block has to be
     # big enough to carry a real doc (~+2k tokens/turn).
-    slack_assistant_sop_budget_chars: int = 24_000
+    # 24k left the last doc in the queue with scraps — AIO_AEO_SOP got 1,973 of
+    # its 12,741 chars on a growth turn, i.e. the theory and none of the
+    # tactics. Every SOP but the three large ones is under 13k and is meant to
+    # arrive whole; this funds that. ~15k tokens per grounded turn.
+    slack_assistant_sop_budget_chars: int = 60_000
     slack_assistant_sop_rounds: int = 3
     # Frontend base URL for deep links in email/Slack (e.g. https://ar-internal.netlify.app).
     app_base_url: str = ""
