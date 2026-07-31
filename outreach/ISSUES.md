@@ -806,7 +806,7 @@ config (`review_recency`, deferred by decision) writes the same sentinel and mus
 otherwise every prospect in the portfolio is blocked, since `review_recency` writes
 `not_evaluated` for all of them.
 
-### I-047 · Repointing the job at `main` sharpened the paid-run footgun, and the fix is not applied
+### I-047 · Repointing the job at `main` sharpened the paid-run footgun — RESOLVED
 **Severity: this is the one open item that can cost real money without anyone deciding to spend it.**
 
 The `outreach` Railway service was repointed from the merged `claude/phase-1-outscraper-ingestion-llje34` to `main` on 2026-08-01, which was correct — a service deploying from a dead branch is a confusing thing to debug. But **"Auto deploys when pushed to GitHub" is still enabled**, and that setting means something very different now.
@@ -818,9 +818,13 @@ The `outreach` Railway service was repointed from the merged `claude/phase-1-out
 
 At `OUTREACH_COMMAND=filter` each such deploy is free — a filter re-run over 1,388 prospects and a $0 `cost_ledger` row. The exposure is I-035's footgun, which now has a far wider trigger: if the command is set to `run` or `ingest` for a deliberate run and not put back within minutes, **the next merge to `main` by anyone, on any unrelated PR, fires a paid ingest.** The duplicate LA ingest happened when the trigger was a push to a branch only that work touched; the trigger is now the whole repository's merge traffic.
 
-**Action (one click, not applied):** Settings → Source → **Disable** auto-deploy on this service. It is a job with no cron schedule; it should deploy when a human decides to run it. Cost is one manual Deploy click when a run is actually wanted.
+**RESOLVED 2026-08-01** — auto-deploy is disabled on the service. Merges to `main` no longer deploy or run this job; it runs only on a deliberate Deploy click. The branch connection is retained, so the source repoint stands.
 
-*Note this does not replace the §7.2 mitigation* — a paid run should still need a token the deploy path cannot supply on its own. Disabling auto-deploy narrows the trigger; it does not make `OUTREACH_COMMAND=run` safe to leave set.
+*What this does NOT resolve.* Disabling auto-deploy removed the trigger that had just widened from one dormant branch to the whole repo's merge traffic. Two paths remain, and the second is scheduled to arrive:
+1. A **manual Deploy while `OUTREACH_COMMAND` is `run` or `ingest`** still spends money — and it is the same click used for a legitimate free `filter` run, so the two are indistinguishable at the moment of clicking.
+2. **Setting a `cronSchedule`** — the stated plan once the first real ingest is validated — re-arms it twice: a Railway cron service runs its start command on every deploy *and* on schedule (`railway.toml`).
+
+So §7.2's requirement is untouched and now has a deadline: a paid run must need something the deploy path cannot supply on its own (`--confirm`, a date-stamped token, or a last-ingest-was-≥N-days-ago check) **before any cron schedule is set**.
 
 ### I-048 · Railway's config API disagrees with the dashboard after a staged change — resolved, recorded
 Changing the source branch reported "applied — staged for deployment" while `get-service-config` continued to report the **old** branch. Neither was wrong: the change was staged, and that API reports the currently-deployed config. The dashboard showed `main` immediately and settled it.

@@ -22,7 +22,7 @@ Status as of 2026-08-01:
 | Phase 1b PR | [#534](https://github.com/kssabraw/ar-tools/pull/534) | **merged** 2026-07-31 as `452a726` |
 | Phase 2 foundations PR | [#538](https://github.com/kssabraw/ar-tools/pull/538) | open, draft, CI green |
 | Database | Supabase project **Outreacher**, ref `fkwhgvcggvsricuinuqy` | Phase 1 + 1b + Phase 2 storage applied; LA ingested and filtered |
-| Job runner | Railway service **outreach**, id `928c84bc-d7ca-416a-bd61-39e91cc64872` in project `ar-tools` (`2c718e53-73c8-4de8-bef8-7136f06b6ead`) | no cron schedule; source repointed to `main` 2026-08-01. **Auto-deploy-on-push is still ON — see §7.2** |
+| Job runner | Railway service **outreach**, id `928c84bc-d7ca-416a-bd61-39e91cc64872` in project `ar-tools` (`2c718e53-73c8-4de8-bef8-7136f06b6ead`) | no cron schedule; source repointed to `main` and **auto-deploy-on-push DISABLED**, both 2026-08-01. Runs only on a manual Deploy |
 | platform-api integration | `routers/outreach.py` + `services/outreach{,_db}.py` | **built** — 14 routes, read-only over the pipeline, read/write over the CRM |
 | Suite UI | not built | nothing in `frontend/` — **now the next build** |
 | Grid geometry | `api/services/geometry.py` | **built**, version `v1`, **81 points** (I-025 resolved) |
@@ -213,7 +213,13 @@ Worth knowing before someone concludes a write silently failed and applies it a 
 
 **Repointing the source to `main` on 2026-08-01 made this materially worse, and the mitigation was not applied.** While the service tracked a dead feature branch, nothing ever pushed to it and the footgun was close to theoretical. Tracking `main` in a repo that merges several PRs a day means **every unrelated merge now deploys and runs this job.** At `OUTREACH_COMMAND=filter` that is free but noisy — a filter re-run over 1,388 prospects and a $0 ledger row per merge. If the command is ever set to `run` or `ingest` and not put back within minutes, the next merge by anyone, on any unrelated PR, spends money.
 
-**Recommended and NOT yet done: turn OFF "Auto deploys when pushed to GitHub"** on the service (Settings → Source). This is a job with no cron schedule; it should deploy when a human decides to run it, not when a Fanout PR merges. The cost is one manual Deploy click on the rare occasions it is wanted.
+**DONE 2026-08-01: "Auto deploys when pushed to GitHub" is disabled.** Merges to `main` no longer deploy or run this job; it runs only on a deliberate Deploy click. The branch connection stays, so Railway still knows where to pull from.
+
+**That narrows the trigger. It does not close this item.** Two ways the risk returns, both foreseeable:
+- **A manual Deploy while `OUTREACH_COMMAND` is `run` or `ingest`** still spends money — now the likeliest remaining path, because it is the same click used for a legitimate free `filter` run.
+- **Setting a `cronSchedule`**, which is the plan once the first real ingest is validated, re-arms it twice over: a Railway cron service runs its start command **on every deploy as well as on schedule** (noted in `railway.toml`). Whatever gates paid runs must exist *before* that schedule is set, not after.
+
+So the original requirement stands: a paid run should need a token the deploy path cannot supply on its own — a `--confirm` flag, a date-stamped value, or a check that the last ingest was ≥N days ago.
 
 ### 7.3 Grid geometry — SETTLED at 81, confirmed by the owner 2026-08-01
 `ISSUES` I-025 is closed. `reporting-layer-spec.md` §4.1 is the only document that *defines* the generator — "square lattice covering the bounding box, row-major from NW corner, clipped to distance <= radius_miles" — and that construction holds exactly **81** points. Every alternative was computed rather than assumed: hexagonal **91** (π·25·2/√3 = 90.7, the likeliest origin of a remembered "89"), concentric rings **41**, unclipped 11×11 box **121**. Nothing produces 89, and the PRD hedges it as "~89" because it was an estimate.
