@@ -30,7 +30,7 @@ That's not a pitch. It's a diagnosis the prospect can verify in thirty seconds.
 
 **Scan at market level. Score at business level. Spend at shortlist level.**
 
-A single geogrid scan of a submarket returns the full local pack at 89 points — which means one
+A single geogrid scan of a submarket returns the full local pack at 81 points — which means one
 scan measures *every* business in that area simultaneously. Scoring 400 businesses costs the same
 as scoring one. Only the expensive per-record work (contact enrichment) is reserved for the
 handful that make the shortlist.
@@ -49,7 +49,7 @@ Once per market
   3. Match     Check against the case-study library for social proof
 
 Every 15 days, per submarket
-  4. Scan      89-point geogrid + organic SERP + AI Overview + LLM citation checks
+  4. Scan      81-point geogrid + organic SERP + AI Overview + LLM citation checks
   5. Delta     Diff against prior snapshots — who lost ground, who was overtaken
   6. Detect    Fetch each site for ad pixels, conversion tags, vendor tools
   7. Score     Pain × money × reachability, three ways
@@ -136,7 +136,7 @@ no enrichment is required.
 **Market-vertical** — one business category in one city (e.g. LA plumbing). The portfolio is
 5 verticals × 10 cities = 50 market-verticals.
 
-**Submarket** — a 5-mile-radius scan area with an 89-point grid at 1-mile spacing. A city has
+**Submarket** — a 5-mile-radius scan area with an 81-point grid at 1-mile spacing. A city has
 roughly 6–10. Geometry is **immutable** once scanning begins; changing it invalidates all prior
 snapshots.
 

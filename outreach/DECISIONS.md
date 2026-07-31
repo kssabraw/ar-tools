@@ -242,3 +242,106 @@ Reversing is a one-line config change and both request shapes are regression-tes
 Outscraper, DataForSEO, Google and others against these accounts, so it carries verified
 request shapes and response field names that no amount of documentation reading would have
 settled — and in this case contradicted a conclusion I had drawn from the vendor's own SDK.
+
+---
+
+## Phase 2 foundations + suite router (2026-08-01)
+
+**The grid holds 81 points. "89" was an arithmetic estimate, not a design.**
+`reporting-layer-spec.md` §4.1 is the only document that defines the generator, and it is
+unambiguous: *"Square lattice covering the bounding box, row-major from NW corner, clipped to
+distance <= radius_miles from centre."* At a 5-mile radius and 1-mile spacing that construction
+contains exactly **81** points — by row from the north, 1, 7, 9, 9, 9, 11, 9, 9, 9, 7, 1.
+
+The alternatives were computed rather than assumed: a hexagonal lattice at the same spacing gives
+**91** (and π·25·2/√3 = 90.7 is the likeliest origin of a remembered "89"), concentric 8-point
+rings give **41**, the unclipped 11×11 bounding box gives **121**. Nothing produces 89. The PRD
+itself hedges it as "~89"; only `README.md` stated it flatly.
+
+The deciding argument is that **the count is not a parameter.** It is an output of (radius,
+spacing, lattice, clip), and the specs fix all four. Choosing 89 would have meant changing one of
+the four to hit a number, which is backwards. Hexagonal is the one genuinely defensible
+alternative — it covers a disc more evenly — but adopting it would contradict the spec that owns
+`point_seq` ordering, and ordering is the property the whole storage model rests on.
+*Revisit:* only before the first scan. `submarket.last_scanned_at` is null everywhere today, so
+this is still free; it stops being free the first time a geogrid runs. Raised with the owner and
+implemented on the spec-literal reading in the absence of a contrary instruction — flagged rather
+than assumed settled.
+
+**The geometry generator is a version REGISTRY, not a version string.**
+`_GENERATORS = {"v1": ...}` keeps every shipped generator callable forever, and an unknown
+version raises instead of falling back to the current one. A bare version constant that labels
+whatever the code currently does is not a pin: change the ordering, bump the label, and every
+historical `rank_vector` is decoded against coordinates that were never used to collect it —
+silently, with the heatmap still rendering and every number still plausible. Falling back on an
+unknown version would produce a picture instead of an error, which is strictly worse than
+crashing.
+
+**The clip measures flat mile offsets, not great-circle distance.**
+The coordinates come from the spec's flat 69-miles-per-degree approximation, so the flat offsets
+*are* the distances that approximation implies. A more accurate distance would disagree with the
+lattice that produced it and could flip a borderline point — and a flipped point does not merely
+change the count, it renumbers every `point_seq` after it. Reproducible beats accurate here.
+This grid is unusually exposed to that: the 3-4-5 Pythagorean triple puts **12 of the 81 points
+exactly on the boundary**, so a strict `<` would shave 15% off the grid rather than one point.
+
+**No DEFAULT partition on `grid_result` / `serp_result`.**
+A default partition never loses a row, which reads as the safe choice. It has a long-fuse trap:
+once a month's rows land in it, that month's partition can never be attached until every one of
+them is moved out — surfacing months later, on a table too large to reorganise casually. Without
+one, an insert for an uncovered month raises immediately. The trade follows the storage spec's own
+governing principle: `grid_result` is the *replaceable* data, recoverable by rescan for cents,
+whereas an un-attachable partition is not recoverable without a maintenance window.
+`create_month_partitions()` runs two months ahead and is idempotent, so a writer can also call it
+defensively before a batch.
+
+**`serp_result` is partitioned now, `prospect_coverage` is populated later.**
+Both are empty and neither has a writer, so the "build it before cycle two" rule is satisfiable
+either way — but the two are not symmetric. Partitioning `serp_result` costs three lines today
+and a table rebuild later, so it was done. The coverage ROLLUP is the opposite: `rank_vector`
+ordering depends on the geometry generator and on land masking that does not exist yet, and a
+rollup written blind would emit vectors that render every historical heatmap against the wrong
+coordinates while looking entirely healthy. `prospect_coverage` is created (the storage spec owns
+it) and `rollup_coverage()` is deliberately not written. `drop_cold_partitions` refuses to drop
+any partition whose snapshots lack a rollup, so the absence fails closed and costs nothing until
+there is something to drop.
+
+**`drop_cold_partitions` fails closed on every table that does not exist yet.**
+`audit_asset` (§3.3 citation guard) and `slot` (§3.4 client guard) arrive in later phases. Each is
+checked with `to_regclass(...) is null` explicitly, logging a sentence, rather than being allowed
+to raise or — far worse — being skipped as "not applicable yet". Until those tables exist the job
+drops nothing at all, which is correct: retaining a partition too long costs disk, dropping one
+whose citation table did not exist yet costs a dispatched claim with no evidence behind it.
+
+**The suite router reaches a second PROJECT, which is new here.**
+`services/leadoff_db.py` was the stated pattern, but it scopes a client to a second SCHEMA inside
+the same project. Outreach needs a second URL and a second service-role key, so
+`services/outreach_db.py` diverges: no `ClientOptions(schema=...)`, and an explicit
+`outreach_configured()` predicate so an unprovisioned deployment answers `503
+outreach_not_configured` instead of failing inside the first query. Env vars are deliberately
+named `OUTREACH_SUPABASE_URL` / `OUTREACH_SUPABASE_SERVICE_ROLE_KEY` — identical to what the
+outreach Railway job already uses, carrying identical values.
+
+**Aggregation for the suite happens in Postgres, not in platform-api.**
+`v_prospect_status` and `outreach_market_summary()` were added to the Outreacher project rather
+than computing the funnel in Python. Two reasons, the second stronger: storage spec §9 requires
+it, and PostgREST silently caps an unbounded `select()` at 1,000 rows — with 8,328 `filter_result`
+rows already present, a Python-side funnel would have been wrong on day one in exactly the way
+ISSUES I-036 describes, reporting a confident undercount with no error anywhere.
+
+**The per-rule summary reports `not_evaluated` as a third number, not folded into `passed`.**
+`filter_result.passed` is `not null boolean`, so a rule that did not run says so through
+`observed_value` (I-016). Reporting two numbers instead of three would state that all 1,388 LA
+businesses have a recent review when not one was checked. It immediately earned this: the live
+summary shows **113 prospects whose review count was never evaluated** because Outscraper returned
+none — invisible in a pass/fail pair, and 113 of the 925 "survivors" (ISSUES I-041).
+
+**Stage-change activity rows stay trigger-owned; the API supplies the actor.**
+Under the module ruling platform-api connects with the service role, so the `lead_log_changes`
+trigger's `auth.uid()` is always NULL and the audit trail would have been anonymous (I-040). The
+fix adds `lead.updated_by` and has the trigger prefer it. Moving the activity write into
+platform-api instead — now that it is the only writer — was rejected: the trigger is what makes
+the audit trail structural rather than conventional, so a stage corrected by hand in SQL still
+gets logged. Losing that to gain an actor id is a bad trade when a column buys both. The router
+therefore never writes `stage_change` rows, and refuses them over the API, so one event can never
+produce two rows in an append-only table.

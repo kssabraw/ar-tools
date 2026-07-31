@@ -2,8 +2,11 @@
 
 **Read this first, then `CLAUDE.md` → `START-HERE.md` → `ISSUES.md` → `DECISIONS.md`.**
 
-Status as of 2026-07-31: **Phase 1 (ingest + filter) is COMPLETE and verified against a real
-market.** Nothing from Phase 2 has been started. Do not start it without being asked.
+Status as of 2026-08-01: **Phase 1 (ingest + filter) is merged. Phase 1b (lead CRM) is applied
+live, PR #534 open. Phase 2's STORAGE FOUNDATIONS and the suite router are built** — see §8.
+
+**Phase 2 SCANNING has not started and is still blocked on credentials.** Nothing built on
+2026-08-01 scans, ingests or spends; `OUTREACH_COMMAND` stays `filter`.
 
 ---
 
@@ -106,11 +109,15 @@ ingest**. This actually happened (§5.4). Before the cron schedule is set, gate 
 something the deploy path cannot supply on its own — a required `--confirm` flag, a date-stamped
 token, a check that the last ingest was ≥N days ago.
 
-### 4.3 Grid geometry ambiguity — free now, frozen later
-`ISSUES I-025`: the specs describe an "89-point geogrid" at 1-mile spacing over a 5-mile radius. A
-1-mile lattice in a 5-mile radius holds **81** points (also exactly 9×9). 89 matches neither.
-No Phase 1 impact, but **Phase 2 pins geometry and it becomes immutable**, so settle it before the
-first scan.
+### 4.3 Grid geometry — RESOLVED at 81, still reversible until the first scan
+`ISSUES I-025` is closed. `reporting-layer-spec.md` §4.1 defines the generator outright — square
+lattice, row-major from NW, clipped to the radius — and that yields exactly **81** points. Nothing
+produces 89: hexagonal gives 91, rings give 41, the unclipped box gives 121. Built as
+`api/services/geometry.py` version `v1`; README, PRD and the storage spec's arithmetic corrected
+with markers.
+
+**Confirm this before the first scan.** It was decided from the specs, not by the owner, and every
+`submarket.last_scanned_at` is still null — so it is free today and permanent afterwards.
 
 ### 4.4 Smaller open items
 - **I-034** — nothing reads `OUTREACH_RESULT` yet. A log line nobody greps ≈ a green tick nobody
@@ -210,11 +217,73 @@ outreach/
 
 ---
 
-## 7. If you are starting Phase 2
+## 7. If you are starting Phase 2 SCANNING
 
-Read `START-HERE.md` §4 for the phase definition and `docs/storage-retention-spec.md` **before**
-the second scan cycle writes data — `grid_result` partitioning is far cheaper to build than to
-retrofit, and the spec is the owner of that table (the PRD's copy is context only).
+The storage foundations are already in place (§8) — do not rebuild them. What remains is the scan
+layer itself: DataForSEO geogrid via the standard queue with postback, organic SERP + AI Overview
+per submarket × keyword, AI checks per `ai_region`, land masking, and the coverage rollup.
 
-Settle §4.3 (grid point count) first. Geometry becomes immutable the moment the first scan runs,
-and the 14 LA submarket centroids are still freely editable **only until then**.
+Three things the foundations hand you, and one trap:
+
+- **Use `api/services/geometry.generate_points()`** for scan points, and stamp
+  `scan_snapshot.geometry_version` with the version you used. Never regenerate a historical
+  snapshot with the default version — pass its stored one.
+- **Derive `grid_result.scan_month` from the snapshot, never from `now()`** (ISSUES I-044). Getting
+  this wrong splits a snapshot across two partitions and makes the retention job blame the rollup.
+- **Write `rollup_coverage()`** (ISSUES I-042). Until it exists the retention job drops nothing but
+  empty partitions — correct, but not finished.
+- Partitions run two months ahead and there is **no default partition**, so an insert for an
+  uncovered month raises. That is deliberate (DECISIONS.md); call `create_month_partitions()`
+  defensively before a batch rather than adding one.
+
+---
+
+## 8. Built on 2026-08-01
+
+### 8.1 The suite router — outreach is reachable from AR Tools
+`platform-api`: `routers/outreach.py`, `services/outreach.py`, `services/outreach_db.py`, 24 unit
+tests. Reads markets, the filter funnel, prospects and their per-rule verdicts; reads and writes
+the lead CRM and suppression. **Nothing in it can spend money** — ingestion stays on the Railway
+job, deliberately, because a route that fires a paid pull is one click from the duplicate ingest
+that already happened once (§5.4).
+
+`services/outreach_db.py` reaches a second **PROJECT**, not a second schema — the one real
+divergence from the `leadoff_db.py` pattern. New on PLATFORM: `OUTREACH_SUPABASE_URL`,
+`OUTREACH_SUPABASE_SERVICE_ROLE_KEY` (same names and values the outreach job already uses),
+`OUTREACH_ENABLED`. Absent them every route answers `503 outreach_not_configured`.
+
+Two objects were added to the Outreacher project to keep aggregation in Postgres (storage spec §9,
+and I-036 — a Python-side funnel over 8,328 `filter_result` rows would have been silently truncated
+at 1,000): `v_prospect_status` and `outreach_market_summary()`. Verified live against LA — 1,388
+prospects, 925 survived, 463 excluded, 22 flagged, matching §2 exactly.
+
+**Nothing in `frontend/` exists yet.** The suite pages are the next piece.
+
+### 8.2 Phase 2 storage foundations — applied live
+Migration `20260801120000`: `scan_snapshot`, `grid_result` (partitioned by month, no lat/lng),
+`serp_result` (partitioned identically), `grid_result_retained`, `prospect_coverage`,
+`grid_result_all` (the union view), `storage_retention_log`, `create_month_partitions()`,
+`verify_grid_result_months()`, `drop_cold_partitions()`, and two `pg_cron` schedules (create on the
+1st, drop on the 2nd — deliberately the day after, so a failed creation is visible before anything
+is dropped).
+
+Verified by `tests/storage_partitioning.sql` — **14 checks, run live, all passing**, including that
+a cold partition with unverifiable snapshots is RETAINED and says why. Run it the same way as
+`tests/lead_crm_rls.sql`; a pass reports `ERROR: ROLLBACK — 14 checks passed`.
+
+The retention job **fails closed on everything it cannot verify**, including tables that do not
+exist yet (`audit_asset`, `slot`) and the missing rollup. Today it drops nothing but empty
+partitions. That is correct and is not the same as finished — see I-042.
+
+### 8.3 A defect fixed along the way
+`lead_log_changes` stamped `actor_id := auth.uid()`, which is NULL for the service role — so under
+the module ruling every stage change would have been logged anonymously (ISSUES **I-040**).
+Migration `20260801110000` adds `lead.updated_by` and the trigger prefers it. **Watch for the same
+shape elsewhere in the port:** the Retool-era schema assumed an end-user JWT, and anything reading
+`auth.uid()` is now reading a null.
+
+### 8.4 And one found, not fixed
+`review_count_min` reports 842 passed / 433 failed / **113 not evaluated** — Outscraper returned no
+review count for those 113, and they are counted among the 925 survivors. Correct filter behaviour,
+invisible in §2's numbers, and ~12% of the shortlist pool would be contacted at Phase 5 on a
+qualification never checked. ISSUES **I-041**, needs a decision before enrichment.

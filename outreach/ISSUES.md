@@ -472,3 +472,91 @@ They were built on a false premise and remain worth keeping.
 *What to change:* `OUTREACH_COMMAND` must be returned to `filter` IMMEDIATELY after any paid run,
 not at the end of the working session. Better still, a paid run should require a token the deploy
 path cannot supply on its own — a follow-up worth doing before the cron schedule is set.
+
+---
+
+## Phase 2 foundations + suite router (2026-08-01)
+
+### I-025 RESOLVED · Grid point count settled at 81
+The specs did carry the answer; it was in the document nobody had cross-read against the count.
+`reporting-layer-spec.md` §4.1 defines the generator explicitly — square lattice over the bounding
+box, row-major from the NW corner, clipped to `distance <= radius_miles` — and that construction
+contains **81** points at a 5-mile radius with 1-mile spacing.
+
+Every alternative was computed, not assumed: hexagonal lattice **91**, concentric 8-point rings
+**41**, unclipped 11×11 box **121**. Nothing yields 89, and the PRD hedges it as "~89" precisely
+because it was an estimate. Implemented in `api/services/geometry.py` (version `v1`, 18 tests);
+`README.md`, PRD §8b and the storage spec's volume arithmetic corrected with markers, not silently.
+
+**Still reversible, and only until the first scan.** Every `submarket.last_scanned_at` is null, so
+the geometry can still change freely today. Raised with the owner and implemented on the
+spec-literal reading in the absence of a contrary instruction — recorded here as decided-by-me,
+not as confirmed.
+
+### I-040 · The lead audit trail had no actor under the module ruling — FIXED
+`lead_log_changes` writes the stage-change and reassignment rows with `actor_id := auth.uid()`.
+That was correct when the CRM was reached directly with a per-user Supabase JWT. Under the module
+ruling platform-api holds the **service role** and is the only client, and `auth.uid()` is NULL for
+the service role — so every stage change and every reassignment would have been logged
+anonymously. The trail would exist, be append-only, be correct in every other respect, and be
+unable to say who did anything.
+
+Not caught by PR #534's 17 checks because `lead` held zero rows and no client existed; it only
+becomes observable the moment something writes. **This is the general shape to watch for in the
+rest of the module port:** the Retool-era schema assumed an end-user JWT, and anything else that
+reads `auth.uid()` or `auth.jwt()` is now reading a null.
+
+*Fixed:* migration `20260801110000` adds `lead.updated_by` (the mutation-side twin of the existing
+`created_by`) and the trigger takes `coalesce(auth.uid(), new.updated_by)` — that order, because a
+genuine end-user JWT, if one ever reaches this database again, is stronger evidence than a column
+the caller populated itself. `services/outreach.update_lead` sets it on every update, not only on
+stage changes.
+
+### I-041 · 113 of the 925 LA survivors were never measured against the review-count bar
+Surfaced immediately by the new `outreach_market_summary` per-rule split. `review_count_min`
+reports 842 passed / 433 failed / **113 not_evaluated** — and all 113 are prospects where
+Outscraper returned no `review_count` at all (verified: `count(*) filter (where review_count is
+null)` = 113 = the not_evaluated row count).
+
+The filter is behaving correctly — a rule that could not run cannot have failed, so it writes
+`passed = true, observed_value = 'not_evaluated'` (I-016) — and Phase 1 contacts nobody, so
+nothing is harmed today. But HANDOFF §2's per-rule table reports only the 433 failures, so the
+113 are invisible in the numbers everyone is reading, and they are counted as survivors.
+
+**Why it matters at Phase 5, not now:** those 113 would be enriched and contacted on a
+qualification that was never checked. Roughly 12% of the shortlist pool.
+**Action:** decide whether an unmeasurable review count should qualify. Options: (a) leave as-is
+and accept the 12%; (b) treat missing review data as a soft exclusion pending enrichment; (c) let
+the Phase 5 review-VELOCITY rule resolve it, since that pull returns the counts anyway — probably
+the cheapest, since it needs no decision now beyond remembering to look.
+
+### I-042 · The coverage rollup is specified but not implemented
+`prospect_coverage` exists (storage spec §4 owns it) and `drop_cold_partitions` enforces its
+presence, but `rollup_coverage()` is deliberately unwritten — `rank_vector` ordering depends on
+the geometry generator and on land masking (`grid_point_status`, PRD-owned, absent), and a rollup
+written before those exist would emit vectors that render every historical heatmap against the
+wrong coordinates while looking healthy.
+
+Consequence: **the retention job currently drops nothing but empty partitions**, by design. That
+is the correct fail-closed posture and costs nothing while there is no scan data, but it must not
+be mistaken for "retention is done". It is not done until the rollup is written and reconciled.
+**Action:** build with the scan writer, in the same phase as land masking. `centroid_dist_at_loss`
+must survive it (storage spec §4) even though it is derived.
+
+### I-043 · `serp_result` payload offload to R2 is not built
+The table carries `payload_path` / `payload_summary` per storage spec §6 and is partitioned, but
+nothing migrates payloads to R2 and nothing monitors migration lag. `payload_path IS NULL` means
+*not yet migrated*, never *absent* — a reader that treats null as missing data is wrong, and
+CLAUDE.md lists that specific mistake as a plausible-looking action that is wrong.
+**Action:** Phase 2's scan layer, alongside the R2 landing that ISSUES I-024 also wants.
+
+### I-044 · `grid_result.scan_month` is not enforced against its snapshot
+It is denormalized from `scan_snapshot.scanned_at`, and nothing forces the two to agree: a CHECK
+cannot reference another table, and a per-row trigger on a table taking ~58M rows a year is not
+worth its cost. A writer that computes the month from `now()` instead of the snapshot will split
+one snapshot across two partitions — and the retention job's per-snapshot reconciliation would
+then compare a partial count against a full one and blame the ROLLUP, sending the reader to debug
+entirely the wrong component.
+*Mitigation:* `verify_grid_result_months()` reports mismatches, and is cheap enough to run monthly.
+**Action:** the scan writer MUST derive `scan_month` from the snapshot it is writing under, never
+from the clock. Call it out in that PR.

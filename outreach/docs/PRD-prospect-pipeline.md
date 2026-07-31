@@ -624,7 +624,9 @@ alter table prospect add column franchise_status text not null default 'unknown'
 > produces and the most damaging to get wrong.
 
 - MUST generate grid geometry per submarket: default 5-mile radius, 1 point per mile, clipped
-  to the circle (~89 points). Grid parameters MUST be persisted per snapshot — the audit
+  to the circle (**81 points** — corrected 2026-08-01 from "~89", which no construction of this
+  geometry produces; the count is an output of radius/spacing/lattice/clip, all fixed by
+  reporting spec §4.1. See ISSUES I-025 and `api/services/geometry.py`). Grid parameters MUST be persisted per snapshot — the audit
   heatmap becomes the day-one campaign baseline and a later provider must reproduce it.
 - MUST write an immutable `scan_snapshot` row per submarket × keyword × cycle. Snapshots are
   append-only; deltas depend on history.
@@ -707,7 +709,7 @@ meant to align:
 
 | | Unit | Typical count per market | What it measures |
 |---|---|---|---|
-| **Geogrid** | `submarket` — 5-mile radius, ~89 points | ~10 | Proximity-sensitive pack coverage |
+| **Geogrid** | `submarket` — 5-mile radius, 81 points (corrected from ~89, I-025) | ~10 | Proximity-sensitive pack coverage |
 | **AI check** | `ai_region` — a recognised place name | ~5 | Whether the model names them at all |
 
 Real neighbourhoods are far smaller than submarkets. Los Feliz is roughly 2 miles across, Queen
