@@ -48,6 +48,11 @@ def _vector_literal(vector: list[float]) -> str:
 # payload small enough to stay well inside PostgREST's request-body limit.
 _LINK_BATCH = 500
 
+# Clusters per DELETE statement in `reset_article_planning`. Each deleted row
+# fires six FK trigger checks, so the cost scales with cluster count and a
+# whole-session delete runs into the 8s statement_timeout on a large plan.
+_DELETE_BATCH = 500
+
 # Columns returned to the API — never the raw embedding vector.
 _TOPIC_COLS = (
     "id, session_id, name, rationale, relationship_type, supporting_evidence, "
@@ -906,6 +911,30 @@ def get_active_keyword_index(session_id: str) -> dict[tuple[str, str], str]:
     return index
 
 
+def _session_cluster_ids(topic_ids: list[str]) -> list[str]:
+    """Every cluster id under these topics. Paged — a large plan runs to several
+    thousand clusters, well past PostgREST's 1000-row default."""
+    client = get_service_client()
+    ids: list[str] = []
+    offset = 0
+    page = 1000
+    while True:
+        res = (
+            client.table("clusters")
+            .select("id")
+            .in_("topic_id", topic_ids)
+            .order("id")
+            .range(offset, offset + page - 1)
+            .execute()
+        )
+        rows = res.data or []
+        ids.extend(r["id"] for r in rows)
+        if len(rows) < page:
+            break
+        offset += page
+    return ids
+
+
 def reset_article_planning(session_id: str) -> None:
     """Clear any prior article-planning output so /plan-articles is idempotent
     (and re-runnable). Resets keyword orchestrator fields, un-drops
@@ -935,7 +964,20 @@ def reset_article_planning(session_id: str) -> None:
     topic_ids = [t["id"] for t in list_topics(session_id)]
     if topic_ids:
         client.table("coverage_gaps").delete().in_("topic_id", topic_ids).execute()
-        client.table("clusters").delete().in_("topic_id", topic_ids).execute()
+        # Delete clusters in id batches rather than as one whole-session statement.
+        # SIX foreign keys point at `clusters` (keywords, coverage_gaps, briefs,
+        # keyword_analyses, article_outputs, scheduled_article_runs), so every
+        # deleted row fires six trigger checks. At 4,043 clusters the single
+        # statement measured ~3.6s with a warm cache — inside the 8s
+        # statement_timeout, but not by enough. The 2026-07-31 tirzepatide re-plan
+        # blew it cold and died with 57014 *after* the orchestrator had already
+        # spent its budget, since reset runs between planning and persistence.
+        # Batching keeps each statement an order of magnitude clear of the limit.
+        cluster_ids = _session_cluster_ids(topic_ids)
+        for start in range(0, len(cluster_ids), _DELETE_BATCH):
+            client.table("clusters").delete().in_(
+                "id", cluster_ids[start : start + _DELETE_BATCH]
+            ).execute()
 
 
 def delete_architecture(session_id: str) -> None:
