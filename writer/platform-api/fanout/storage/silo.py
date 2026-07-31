@@ -42,6 +42,12 @@ def _vector_literal(vector: list[float]) -> str:
     # pgvector accepts its text form "[a,b,c]".
     return "[" + ",".join(repr(float(x)) for x in vector) + "]"
 
+# Keywords per `bulk_link_keywords_to_clusters` call. Sized so a very large plan
+# costs tens of requests rather than thousands (the per-cluster UPDATE it replaced
+# exhausted a single HTTP/2 connection at ~4.1k requests), while keeping each
+# payload small enough to stay well inside PostgREST's request-body limit.
+_LINK_BATCH = 500
+
 # Columns returned to the API — never the raw embedding vector.
 _TOPIC_COLS = (
     "id, session_id, name, rationale, relationship_type, supporting_evidence, "
@@ -952,7 +958,13 @@ def persist_article_plan(session_id: str, result: PlanResult, embed_fn) -> dict:
     included), removing the per-row read-back and backfill (review M1). All
     read-only computation (embeddings, row building) happens before any write, so
     a transient failure can't leave a half-written plan beyond what the next run's
-    reset_article_planning cleans up (review M2)."""
+    reset_article_planning cleans up (review M2).
+
+    Every write is batched — including the keyword->cluster linkage, which goes
+    through the `bulk_link_keywords_to_clusters` RPC rather than one UPDATE per
+    cluster. Request count scales with keyword count / _LINK_BATCH, not with
+    cluster count, so a multi-thousand-cluster plan no longer exhausts the HTTP/2
+    connection mid-write (see the write-phase comment)."""
     client = get_service_client()
     kw_index = get_active_keyword_index(session_id)
     articles = [(p.topic_id, a) for p in result.per_topic for a in p.articles]
@@ -1044,23 +1056,55 @@ def persist_article_plan(session_id: str, result: PlanResult, embed_fn) -> dict:
     for start in range(0, len(cluster_rows), 200):
         client.table("clusters").insert(cluster_rows[start : start + 200]).execute()
 
-    primary_ids: list[str] = []
+    # Keyword linkage goes out as bulk batches, NOT one UPDATE per cluster: every
+    # cluster has a distinct cluster_id, so `.in_()` can't fold them together and
+    # the old loop issued one request per cluster. The 2026-07-31 tirzepatide run
+    # (4,043 clusters) thereby fired ~4,100 sequential requests down a single
+    # HTTP/2 connection and died mid-write with ConnectionTerminated at
+    # last_stream_id 8201 — leaving clusters and linkage written but primary
+    # flags, drops and coverage gaps missing. `bulk_link_keywords_to_clusters`
+    # carries a whole batch in one payload (~9 requests for 4.4k keywords).
+    #
+    # The payload is one row per keyword, not per (keyword, cluster): a keyword can
+    # appear in two clusters (primary of one, supporting of another), and
+    # `UPDATE ... FROM` picks an arbitrary match when a target row is named twice.
+    # Folding here reproduces the old loop's semantics exactly — later cluster wins
+    # the linkage, primary-anywhere wins the flag (it was applied in a final pass),
+    # last SERP capture wins.
+    by_keyword: dict[str, dict] = {}
+
+    def _link(kid: str, cid: str) -> dict:
+        row = by_keyword.get(kid)
+        if row is None:
+            row = by_keyword[kid] = {
+                "keyword_id": kid,
+                "cluster_id": cid,
+                "is_primary": False,
+                "serp_top_urls": None,
+            }
+        else:
+            row["cluster_id"] = cid
+        return row
+
     for idx, cid in enumerate(cluster_ids):
         pkid = primary_kw_ids[idx]
-        link_ids = ([pkid] if pkid else []) + support_ids_per[idx]
-        if link_ids:
-            client.table("keywords").update({"cluster_id": cid}).in_("id", link_ids).execute()
         if pkid:
-            primary_ids.append(pkid)
-            serp = articles[idx][1].serp_top_urls
-            if serp:
-                client.table("keywords").update({"serp_top_urls": serp}).eq("id", pkid).execute()
-    for start in range(0, len(primary_ids), 500):
-        batch = primary_ids[start : start + 500]
-        if batch:
-            client.table("keywords").update({"is_primary_for_cluster": True}).in_(
-                "id", batch
-            ).execute()
+            row = _link(pkid, cid)
+            row["is_primary"] = True
+            # Only the primary carries the article's SERP capture; the RPC leaves
+            # the column untouched when this is null.
+            if articles[idx][1].serp_top_urls:
+                row["serp_top_urls"] = articles[idx][1].serp_top_urls
+        for kid in support_ids_per[idx]:
+            _link(kid, cid)
+
+    link_rows = list(by_keyword.values())
+
+    for start in range(0, len(link_rows), _LINK_BATCH):
+        client.rpc(
+            "bulk_link_keywords_to_clusters",
+            {"p_rows": link_rows[start : start + _LINK_BATCH]},
+        ).execute()
 
     dropped = 0
     for reason, ids in drops_by_reason.items():
