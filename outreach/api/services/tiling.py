@@ -40,17 +40,34 @@ def haversine_miles(lat1: float, lng1: float, lat2: float, lng2: float) -> float
     return 2 * EARTH_RADIUS_MILES * math.asin(math.sqrt(a))
 
 
+def build_query(category: str, place: str, region: str = "") -> str:
+    """The query text for one tile.
+
+    The region qualifier is not decoration. A calibration pull for "plumber, Downtown Los Angeles"
+    with no coordinates and no region returned businesses in JERSEY CITY, NEW JERSEY — Outscraper
+    resolves ambiguous place names against its own server location, and most submarket names
+    ("Torrance", "Whittier", "Burbank") exist in several states. A market full of the wrong
+    state's businesses would look perfectly well-formed and be entirely worthless.
+    """
+    parts = [category, place]
+    if region:
+        parts.append(region)
+    return ", ".join(parts)
+
+
 def build_tiles(
     *,
     categories: Sequence[str],
     submarkets: Sequence[Submarket],
     market_name: str,
+    region: str = "",
 ) -> list[TileRequest]:
     """One query per category x submarket centroid.
 
-    The query text carries the place name as well as the coordinates. Outscraper's own guidance
-    is that server IPs may sit in other countries, so a query without a location in the text can
-    drift; the coordinates bias the centre and the text anchors the geography.
+    Geography is pinned twice, deliberately: `coordinates` biases the search centre, and the
+    region qualifier in the query text disambiguates the place name. Neither alone is sufficient
+    — the text alone demonstrably lands in the wrong state, and coordinates are a bias rather
+    than a bound.
     """
     tiles: list[TileRequest] = []
 
@@ -58,7 +75,7 @@ def build_tiles(
         for submarket in submarkets:
             tiles.append(
                 TileRequest(
-                    query=f"{category}, {submarket.name}",
+                    query=build_query(category, submarket.name, region),
                     coordinates=f"{submarket.center_lat},{submarket.center_lng}",
                     submarket_id=submarket.id,
                     label=f"{category} @ {submarket.name}",
@@ -71,7 +88,10 @@ def build_tiles(
         # WILL under-cover anything larger than a small town. It exists so the pipeline is
         # runnable for a smoke test, not so a real market can be ingested without submarkets.
         tiles = [
-            TileRequest(query=f"{category}, {market_name}", label=f"{category} @ {market_name}")
+            TileRequest(
+                query=build_query(category, market_name, region),
+                label=f"{category} @ {market_name}",
+            )
             for category in categories
         ]
 

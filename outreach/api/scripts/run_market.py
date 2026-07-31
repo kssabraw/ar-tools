@@ -103,6 +103,7 @@ def cmd_ingest(args) -> int:
                 market_name=definition.name,
                 categories=definition.categories,
                 submarkets=submarkets,
+                region=definition.region,
                 cycle_number=args.cycle,
                 raw_landing_dir=settings.raw_landing_dir,
             )
@@ -181,12 +182,24 @@ def cmd_calibrate(args) -> int:
     import asyncio as _asyncio
 
     from api.scripts.calibrate import calibrate
+    from api.services.tiling import Submarket, build_tiles
 
     definition = seeding.MarketDefinition.from_file(args.definition)
-    category = definition.categories[0] if definition.categories else "plumber"
-    submarket = definition.submarkets[0].name if definition.submarkets else definition.name
 
-    return _asyncio.run(calibrate(f"{category}, {submarket}", args.limit))
+    # Build the tile the same way the ingest does, so the calibration measures the request that
+    # actually runs — including coordinates and the region qualifier.
+    subs = [
+        Submarket(id="calib", name=s.name, center_lat=s.center_lat, center_lng=s.center_lng)
+        for s in definition.submarkets[:1]
+    ]
+    tile = build_tiles(
+        categories=definition.categories[:1] or ["plumber"],
+        submarkets=subs,
+        market_name=definition.name,
+        region=definition.region,
+    )[0]
+
+    return _asyncio.run(calibrate(tile.query, args.limit, tile.coordinates))
 
 
 def cmd_run(args) -> int:

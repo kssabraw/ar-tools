@@ -327,3 +327,38 @@ picks up config changes.
 *Consequence for this service:* the run mode must be driven by the `OUTREACH_COMMAND` variable
 through one entrypoint (`run_market.py`), not by overriding the start command per run. `calibrate`
 was added as a subcommand for exactly this reason.
+
+### I-032 · Tile queries resolved to the WRONG STATE — found by the first live pull
+**The most valuable thing the calibration produced.** A live pull for `plumber, Downtown Los
+Angeles` (no coordinates, no region qualifier) returned businesses in **Jersey City, New Jersey**
+— the first result was "City Plumbing & Drain Service, 290 Webster Ave, Jersey City, NJ", at
+lat 40.75 / lng -74.04.
+
+Outscraper resolves an ambiguous place name against its own server location. Most submarket names
+are ambiguous nationally — Torrance, Whittier, Burbank, Hollywood and Pasadena all exist in
+several states. **The failure mode is the dangerous kind:** a market full of the wrong state's
+businesses is perfectly well-formed, parses at 100%, passes every filter, and is completely
+worthless. Nothing downstream would have flagged it.
+
+*Fixed:* geography is now pinned twice. `coordinates` biases the search centre (the ingest always
+sent these; the calibration did not, which is why it drifted), and a new required-in-practice
+`region` field on the market definition is appended to every tile query — `plumber, Downtown Los
+Angeles, CA, USA`. `validate_definition` flags a market with no region. Regression-tested,
+including the degenerate no-submarket path, which is the one most likely to be hit by accident.
+
+**Lesson:** the calibration was only useful because it exercised the real request path. A
+smoke test that differs from production in one parameter validates the wrong thing — the first
+version of this one omitted coordinates and would have "passed" while proving nothing.
+
+### I-018 RESOLVED (2026-07-31) · Response field names confirmed against a live pull
+20/20 places parsed. Every alias resolved: `place_id` via `place_id`, `name`, `category` via
+`category`, `address` via `address`, `phone`, `website` via `website`, `rating`, `review_count`
+via `reviews`, `lat` via `latitude`, `lng` via `longitude`.
+
+**`business_status` IS returned** — populated 20/20, value `OPERATIONAL` — which closes the open
+half of this issue. The closed-listing gate has a real input and will fire. 49 provider keys come
+back in total; the unmapped ones are all genuinely unused in Phase 1 (`about`, `area_service`,
+`cid`, `h3`, `photos_count`, `reviews_per_score`, `verified`, `working_hours`, …).
+
+Note `subtypes` and `type` are both populated, and `category` is present too — the alias order
+taken from `gbp_service` (category → type → subtypes) resolved correctly on the first attempt.

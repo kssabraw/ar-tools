@@ -33,16 +33,19 @@ from api.services.outscraper_client import (  # noqa: E402
 from api.services.parser import FIELD_ALIASES, parse_place, unmapped_fields  # noqa: E402
 
 
-async def calibrate(query: str, limit: int) -> int:
+async def calibrate(query: str, limit: int, coordinates: str | None = None) -> int:
     settings = get_settings()
     if not settings.outscraper_api_key:
         print("OUTREACH_OUTSCRAPER_API_KEY is not set", file=sys.stderr)
         return 2
 
-    tile = TileRequest(query=query, label="calibration")
+    # Must mirror a real tile, coordinates included. A calibration without them is not
+    # calibrating the thing that runs: the first attempt omitted coordinates and returned
+    # New Jersey businesses for a Los Angeles query (ISSUES I-032).
+    tile = TileRequest(query=query, coordinates=coordinates, label="calibration")
 
     async with OutscraperClient(settings) as client:
-        print(f"submitting: {query!r} (limit {limit})")
+        print(f"submitting: {query!r} coords={coordinates!r} (limit {limit})")
         request_id = await client.submit_maps_search(tile, limit=limit)
         print(f"request id: {request_id}\npolling…")
 

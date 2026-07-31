@@ -583,3 +583,66 @@ def test_a_2xx_carrying_an_error_body_still_raises():
 
     with pytest.raises(OutscraperError, match="quota exceeded"):
         asyncio.run(go())
+
+
+# --- geography: the region qualifier -----------------------------------------------------
+#
+# A live calibration pull for "plumber, Downtown Los Angeles" with no coordinates and no region
+# returned businesses in JERSEY CITY, NEW JERSEY. Outscraper resolves an ambiguous place name
+# against its own server location, and most submarket names exist in several states. The failure
+# mode is the dangerous kind: a market full of the wrong state's businesses is perfectly
+# well-formed and completely worthless.
+
+
+def test_region_qualifier_is_appended_to_tile_queries():
+    from api.services.tiling import build_query
+
+    assert build_query("plumber", "Downtown Los Angeles", "CA, USA") == (
+        "plumber, Downtown Los Angeles, CA, USA"
+    )
+    assert build_query("plumber", "Downtown Los Angeles") == "plumber, Downtown Los Angeles"
+
+
+def test_tiles_pin_geography_twice_with_coordinates_and_region():
+    tiles = build_tiles(
+        categories=["plumber"],
+        submarkets=SUBMARKETS,
+        market_name="Kansas City",
+        region="MO, USA",
+    )
+    for tile in tiles:
+        assert tile.coordinates, "coordinates bias the search centre"
+        assert tile.query.endswith("MO, USA"), "the region disambiguates the place name"
+
+
+def test_the_degenerate_no_submarket_tile_still_carries_the_region():
+    """The fallback path is the one most likely to be hit by accident, so it must not be the one
+    that silently searches the wrong state."""
+    tiles = build_tiles(
+        categories=["plumber"], submarkets=[], market_name="Springfield", region="IL, USA"
+    )
+    assert tiles[0].query == "plumber, Springfield, IL, USA"
+
+
+def test_a_market_without_a_region_is_flagged():
+    from api.services.seeding import MarketDefinition, SubmarketDefinition, validate_definition
+
+    definition = MarketDefinition(
+        name="M",
+        center_lat=39.0,
+        center_lng=-94.0,
+        radius_miles=25,
+        categories=["plumber"],
+        submarkets=[SubmarketDefinition(name="S", center_lat=39.0, center_lng=-94.0)],
+    )
+    assert any("region" in p for p in validate_definition(definition))
+
+    definition.region = "MO, USA"
+    assert validate_definition(definition) == []
+
+
+def test_the_los_angeles_market_carries_a_region():
+    from api.services.seeding import MarketDefinition
+
+    path = Path(__file__).resolve().parents[2] / "markets" / "los-angeles-plumbing.json"
+    assert MarketDefinition.from_file(path).region == "CA, USA"

@@ -57,6 +57,9 @@ class MarketDefinition:
     center_lat: float
     center_lng: float
     radius_miles: float
+    # Appended to every tile query to disambiguate submarket names, e.g. "CA, USA".
+    # Without it "plumber, Torrance" can resolve to the wrong state entirely (ISSUES I-032).
+    region: str = ""
     # Outscraper query categories for the base pull. NOT the same thing as `keyword`, even when
     # the strings coincide: categories drive the Stage A1 listing pull, keywords drive Phase 2
     # SERP and geogrid scanning. Keeping them separate costs one JSON key and avoids a conflation
@@ -73,6 +76,7 @@ class MarketDefinition:
             center_lat=float(data["center_lat"]),
             center_lng=float(data["center_lng"]),
             radius_miles=float(data["radius_miles"]),
+            region=str(data.get("region", "")),
             categories=list(data.get("categories", [])),
             keywords=list(data.get("keywords", [])),
             submarkets=[SubmarketDefinition(**s) for s in data.get("submarkets", [])],
@@ -95,6 +99,12 @@ def validate_definition(definition: MarketDefinition) -> list[str]:
 
     if not definition.categories:
         problems.append("no categories — Stage A1 would have nothing to query")
+
+    if not definition.region:
+        problems.append(
+            "no region qualifier — tile queries will be ambiguous and can resolve to the "
+            "wrong state (a calibration pull for 'Downtown Los Angeles' returned New Jersey)"
+        )
 
     if not -90 <= definition.center_lat <= 90 or not -180 <= definition.center_lng <= 180:
         problems.append(f"market centre out of range: {definition.center_lat},{definition.center_lng}")

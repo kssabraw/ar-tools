@@ -51,6 +51,7 @@ def market(**overrides) -> MarketDefinition:
         center_lat=39.0997,
         center_lng=-94.5786,
         radius_miles=25,
+        region="MO, USA",
         categories=["plumber"],
         submarkets=[sub()],
     )

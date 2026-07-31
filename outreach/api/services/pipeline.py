@@ -75,6 +75,7 @@ async def run_ingest(
     market_name: str,
     categories: Sequence[str],
     submarkets: Sequence[Submarket],
+    region: str = "",
     cycle_number: int | None = None,
     raw_landing_dir: str | None = None,
 ) -> IngestReport:
@@ -86,7 +87,10 @@ async def run_ingest(
     report = IngestReport(market_id=market_id)
 
     tiles = build_tiles(
-        categories=categories, submarkets=submarkets, market_name=market_name
+        categories=categories,
+        submarkets=submarkets,
+        market_name=market_name,
+        region=region,
     )
 
     # -- cost gate, before the first paid call --------------------------------------------
