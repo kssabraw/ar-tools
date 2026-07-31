@@ -11,15 +11,21 @@
 `grid_result` is ~99% of all rows the system will ever write.
 
 ```
-89 grid points × ~20 results per point   =  1,780 rows per snapshot
+81 grid points × ~20 results per point   =  1,620 rows per snapshot
 10 submarkets × 3 keywords               =     30 snapshots per cycle
-                                         = 53,400 rows per cycle
-× 24 cycles/year (semi-monthly)          =  1.28M rows/year per market-vertical
+                                         = 48,600 rows per cycle
+× 24 cycles/year (semi-monthly)          =  1.17M rows/year per market-vertical
 × 50 market-verticals (5 verticals × 10 cities)
-                                         =    64M rows/year
+                                         =    58M rows/year
 ```
 
-At ~120 bytes/row including index overhead, that is **~7.7 GB/year from one table**. Add SERP
+> **Corrected 2026-08-01: 81 points, not 89.** The grid holds 81 points, not the 89 this
+> arithmetic assumed — see ISSUES I-025. Every figure below is ~9% lower than previously stated.
+> **The conclusion is unchanged in every respect**: the Pro allowance is still exhausted inside
+> year one, and partitioning is still a Phase 2 prerequisite rather than a later optimisation.
+> A 9% correction does not move a ceiling that arrives 12 months out to one that arrives 13.
+
+At ~120 bytes/row including index overhead, that is **~7.0 GB/year from one table**. Add SERP
 payloads and LLM responses and year one lands near **9 GB**.
 
 Supabase Pro includes 8 GB of database storage at $25/month, with roughly $0.125 per GB-month
@@ -142,7 +148,7 @@ follow-up land.
 
 - One unsigned byte per grid point, ordered by `point_seq`, aligned to the snapshot's geometry.
 - Encoding: `0` = absent, `1–20` = rank, `255` = dead point (land-masked or not scanned).
-- ~89 bytes per prospect-snapshot; roughly **31 MB/year** across the portfolio, versus the ~1.8 GB
+- ~81 bytes per prospect-snapshot; roughly **28 MB/year** across the portfolio, versus the ~1.8 GB
   of raw rows it replaces. About a 20× saving while preserving full renderability.
 - `point_seq` ordering MUST match the snapshot's pinned geometry generator, or historical vectors
   will render against the wrong coordinates.

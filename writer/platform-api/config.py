@@ -1457,6 +1457,21 @@ class Settings(BaseSettings):
     # compares each market's field against comparable-size, comparable-income
     # cities. See services/leadoff_income.py + services/leadoff_peer_cohort.py.
     leadoff_income_enabled: bool = True
+    # --- Outreach pipeline (the Outreacher project) --------------------------
+    # A SEPARATE Supabase PROJECT, not a second schema — the difference from
+    # LeadOff's market_scanner client. The pipeline's storage projection is
+    # ~64M grid_result rows/year, which would eat this project's headroom, so
+    # the DATA lives apart; the API lives here so staff authenticate against
+    # the suite once and never need an Outreacher account (outreach/HANDOFF.md
+    # §2). Same variable names the outreach Railway job already uses, carrying
+    # the same values. Absent them every /outreach route answers 503
+    # outreach_not_configured rather than failing inside a query.
+    outreach_supabase_url: str = ""
+    outreach_supabase_service_role_key: str = ""
+    # Kill switch independent of the credentials, so the module can be taken
+    # off the suite without unsetting keys the Railway job also needs.
+    outreach_enabled: bool = True
+
     leadoff_income_acs_year: int = 2023
     leadoff_income_refresh_days: int = 365
     # Per-city county map (public.city_counties) — reverse-geocoded from each

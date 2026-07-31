@@ -2,11 +2,12 @@
 
 **Read this first, then `CLAUDE.md` → `START-HERE.md` → `ISSUES.md` → `DECISIONS.md`.**
 
-Status as of 2026-07-31:
+Status as of 2026-08-01:
 
 - **Phase 1 (ingest + filter) is COMPLETE, verified against a real market, and MERGED to `main`** (#528, squashed as `67f235b`).
-- **Phase 1b (lead CRM) is COMPLETE and applied live.** PR [#534](https://github.com/kssabraw/ar-tools/pull/534) is open, draft, green, rebased onto Phase 1.
-- **Phase 2 has not been started.** Do not start it without being asked, and read §8 first — it is blocked on credentials that do not exist yet.
+- **Phase 1b (lead CRM) is COMPLETE, applied live, and MERGED to `main`** (#534, squashed as `452a726`).
+- **All three of §8.1's unblocked items are BUILT** — the platform-api `outreach` router, the Phase 2 storage/partitioning layer, and the pinned grid-geometry generator. PR [#538](https://github.com/kssabraw/ar-tools/pull/538), open and draft. Migrations applied live.
+- **Phase 2 SCANNING has still not started and is still blocked on credentials.** Nothing built on 2026-08-01 scans, ingests or spends; `OUTREACH_COMMAND` stays `filter`.
 
 **The biggest thing that changed today is architectural: this is now an AR Tools suite module, not a standalone tool.** See §2. It supersedes parts of what Phase 1 recorded, and reading Phase 1's decisions without it will mislead you.
 
@@ -16,13 +17,15 @@ Status as of 2026-07-31:
 
 | Thing | Where | State |
 |---|---|---|
-| Code | `outreach/` in `kssabraw/ar-tools` | Phase 1 on `main`; Phase 1b on `claude/lead-crm-foundation-mb1k9g` |
+| Code | `outreach/` in `kssabraw/ar-tools` | Phase 1 + 1b on `main`; Phase 2 foundations on `claude/outreach-phase-2-foundations-mm33py` |
 | Phase 1 PR | [#528](https://github.com/kssabraw/ar-tools/pull/528) | **merged** 2026-07-31 |
-| Phase 1b PR | [#534](https://github.com/kssabraw/ar-tools/pull/534) | open, draft, CI green, 9 files |
-| Database | Supabase project **Outreacher**, ref `fkwhgvcggvsricuinuqy` | Phase 1 + Phase 1b applied; LA ingested and filtered |
-| Job runner | Railway service **outreach**, id `928c84bc-d7ca-416a-bd61-39e91cc64872` in project `ar-tools` (`2c718e53-…`) | no cron schedule; **repoint its source at `main`** now that #528 is merged |
-| platform-api integration | not built | §8.1 — this is the next build |
-| Suite UI | not built | nothing in `frontend/` |
+| Phase 1b PR | [#534](https://github.com/kssabraw/ar-tools/pull/534) | **merged** 2026-07-31 as `452a726` |
+| Phase 2 foundations PR | [#538](https://github.com/kssabraw/ar-tools/pull/538) | open, draft, CI green |
+| Database | Supabase project **Outreacher**, ref `fkwhgvcggvsricuinuqy` | Phase 1 + 1b + Phase 2 storage applied; LA ingested and filtered |
+| Job runner | Railway service **outreach**, id `928c84bc-d7ca-416a-bd61-39e91cc64872` in project `ar-tools` (`2c718e53-73c8-4de8-bef8-7136f06b6ead`) | no cron schedule; source repointed to `main` and **auto-deploy-on-push DISABLED**, both 2026-08-01. Runs only on a manual Deploy |
+| platform-api integration | `routers/outreach.py` + `services/outreach{,_db}.py` | **built** — 14 routes, read-only over the pipeline, read/write over the CRM |
+| Suite UI | not built | nothing in `frontend/` — **now the next build** |
+| Grid geometry | `api/services/geometry.py` | **built**, version `v1`, **81 points** (I-025 resolved) |
 
 **This is a SEPARATE Supabase project from AR-Internal-Tools.** Do not point outreach code at the suite's database, and do not put outreach migrations in `writer/supabase/migrations/`.
 
@@ -31,7 +34,7 @@ Live row counts: `prospect` 1,388 · `filter_result` 8,328 · `submarket` 14 · 
 ### Railway service configuration
 
 ```
-source           kssabraw/ar-tools @ claude/phase-1-outscraper-ingestion-llje34   ← STALE, move to main
+source           kssabraw/ar-tools @ main   ← repointed 2026-08-01 (was the merged phase-1 branch)
 rootDirectory    /outreach
 railwayConfigFile  outreach/railway.toml   ← repo-root-relative, NOT relative to rootDirectory
 builder          DOCKERFILE (from railway.toml)
@@ -193,16 +196,39 @@ Phase 1 and Phase 1b ran in parallel and both appended from the same `I-014` bas
 
 ---
 
+### 6.11 Railway's service-config API reports the DEPLOYED config, not the staged one
+Changing the source branch through the Railway agent returned "applied — staged for deployment", and reading the config back through `get-service-config` still showed the **old** branch. Both were telling the truth about different things: the change was staged, and the API reports what is currently deployed. The dashboard (Settings → Source) showed the new branch immediately and is the tiebreak.
+
+Worth knowing before someone concludes a write silently failed and applies it a second time. Same family as §6.3 — when two instruments disagree, find a third rather than trusting the more convenient one.
+
+---
+
 ## 7. What is NOT done
 
 ### 7.1 The Outscraper billing rate is still a placeholder — do this first
 `outscraper_cost_per_1000_places_cents` is **200¢/1000, a guess**. Every cost figure above and the `max_market_run_cost_cents` abort gate are only as honest as that number. 2,807 places have been pulled; divide the Outscraper dashboard charge for 2026-07-31 by 2,807, multiply by 1000, set the variable. (`ISSUES` I-033.)
 
-### 7.2 A paid run should need more than a variable
+### 7.2 A paid run should need more than a variable — AND THE BLAST RADIUS JUST GREW
 `OUTREACH_COMMAND=run` plus deploy-on-push means **any push to the tracked branch fires a paid ingest**. This actually happened (§6.4). Before any cron schedule is set, gate paid runs behind something the deploy path cannot supply on its own.
 
-### 7.3 Grid geometry ambiguity — free now, frozen forever after the first scan
-`ISSUES` I-025: the specs describe an **89-point** geogrid at 1-mile spacing over a 5-mile radius. A 1-mile lattice in a 5-mile radius holds **81** (exactly 9×9). 89 matches neither. No Phase 1 impact, but **Phase 2 pins geometry and it becomes immutable**, and the 14 LA submarket centroids are freely editable only until then. **Settle this before the first scan.**
+**Repointing the source to `main` on 2026-08-01 made this materially worse, and the mitigation was not applied.** While the service tracked a dead feature branch, nothing ever pushed to it and the footgun was close to theoretical. Tracking `main` in a repo that merges several PRs a day means **every unrelated merge now deploys and runs this job.** At `OUTREACH_COMMAND=filter` that is free but noisy — a filter re-run over 1,388 prospects and a $0 ledger row per merge. If the command is ever set to `run` or `ingest` and not put back within minutes, the next merge by anyone, on any unrelated PR, spends money.
+
+**DONE 2026-08-01: "Auto deploys when pushed to GitHub" is disabled.** Merges to `main` no longer deploy or run this job; it runs only on a deliberate Deploy click. The branch connection stays, so Railway still knows where to pull from.
+
+**That narrows the trigger. It does not close this item.** Two ways the risk returns, both foreseeable:
+- **A manual Deploy while `OUTREACH_COMMAND` is `run` or `ingest`** still spends money — now the likeliest remaining path, because it is the same click used for a legitimate free `filter` run.
+- **Setting a `cronSchedule`**, which is the plan once the first real ingest is validated, re-arms it twice over: a Railway cron service runs its start command **on every deploy as well as on schedule** (noted in `railway.toml`). Whatever gates paid runs must exist *before* that schedule is set, not after.
+
+So the original requirement stands: a paid run should need a token the deploy path cannot supply on its own — a `--confirm` flag, a date-stamped value, or a check that the last ingest was ≥N days ago.
+
+### 7.3 Grid geometry — SETTLED at 81, confirmed by the owner 2026-08-01
+`ISSUES` I-025 is closed. `reporting-layer-spec.md` §4.1 is the only document that *defines* the generator — "square lattice covering the bounding box, row-major from NW corner, clipped to distance <= radius_miles" — and that construction holds exactly **81** points. Every alternative was computed rather than assumed: hexagonal **91** (π·25·2/√3 = 90.7, the likeliest origin of a remembered "89"), concentric rings **41**, unclipped 11×11 box **121**. Nothing produces 89, and the PRD hedges it as "~89" because it was an estimate.
+
+Built as `api/services/geometry.py` version `v1`; `README.md`, PRD §8b and the storage spec's volume arithmetic corrected with markers rather than silently.
+
+**Confirmed by the owner on 2026-08-01, with the cost lever considered and declined.** This is no longer an inference from the specs — it is a ruling. Treat `radius 5 / spacing 1 / 81 points` as fixed, and see DECISIONS.md for why coarser spacing was rejected as a cost lever.
+
+**The recurring confusion, recorded so it is not relitigated:** a 5-mile *radius* is 10 miles across, so a 1-mile lattice has **11** points per row (5 west + centre + 5 east), not 5. 11 x 11 = 121 in the bounding box, 81 after clipping. "25" comes from reading the 5 as a side length rather than a radius; it would need ~1.67-mile spacing, and a 5x5 box at 2.5-mile spacing clips to 13, not 25.
 
 ### 7.4 `ai_region` does not exist
 Not as a table, not as data. AI checks run per `ai_region`, which is a *different and coarser* geography than `submarket` — several submarkets share one region. Drafting the names is a Phase 0 manual task that was never done, and it needs human judgement about which place names an LLM actually recognises. Blocked on §8.2.
@@ -219,10 +245,26 @@ Not as a table, not as data. AI checks run per `ai_region`, which is a *differen
 
 ## 8. What to do next
 
+### 8.0 Done on 2026-08-01 — all three former §8.1 items (PR #538)
+
+**The platform-api `outreach` router.** `routers/outreach.py` + `services/outreach.py` + `services/outreach_db.py`, 24 unit tests. The project-scoped client turned out to be the one real divergence from `leadoff_db.py`: that scopes to a second SCHEMA, this reaches a second **PROJECT**, so `ClientOptions(schema=…)` buys nothing and it needs its own URL, its own key, and an `outreach_configured()` predicate so an unprovisioned deploy answers `503 outreach_not_configured` instead of failing inside the first query. **Nothing in it can spend money** — ingestion stays on the Railway job.
+
+Funnel aggregation runs in Postgres (`v_prospect_status`, `outreach_market_summary()`, migration `20260801100000`) — storage spec §9 requires it, and with 8,328 `filter_result` rows a Python-side funnel would have hit PostgREST's silent 1,000-row cap on day one (§6.5). Verified live against LA: 1,388 / 925 survived / 463 excluded / 22 flagged, matching §3 exactly.
+
+**Phase 2 storage foundations** (migration `20260801120000`, applied live). `scan_snapshot`, `grid_result` (partitioned by month, no lat/lng), `serp_result` (partitioned identically), `grid_result_retained`, `prospect_coverage`, `grid_result_all`, `storage_retention_log`, `create_month_partitions()`, `verify_grid_result_months()`, `drop_cold_partitions()`, and two `pg_cron` schedules. Verified by `tests/storage_partitioning.sql` — **14 checks, run live, all passing** (a pass reports `ERROR: ROLLBACK — 14 checks passed`).
+
+**No default partition**, deliberately: it never loses a row, but once a month's rows land in it that month's partition can never be attached, which surfaces months later on a huge table. The retention job **fails closed on everything it cannot verify**, including `audit_asset` and `slot`, which do not exist yet — so today it drops nothing but empty partitions. Correct, and not the same as finished.
+
+**The pinned grid-geometry generator** — see §7.3. 81 points, version `v1`, 18 tests with hand-derived expectations.
+
+**A defect fixed on the way (I-040).** `lead_log_changes` stamped `actor_id := auth.uid()`, which is NULL for the service role, so under §2 every stage change would have been logged anonymously. `lead.updated_by` added; the trigger prefers it. **The sweep for others came back clean:** one instance total. Swept as two lists, because the failure modes differ — expressions that RUN and receive null (defaults, generated columns, CHECKs, views, trigger bodies, `request.jwt` readers) versus RLS policies, which are bypassed silently and never evaluated. Zero of the former beyond `lead_log_changes`; zero policies exist at all. Re-run after any migration that adds a trigger or a default; only the first list can regress.
+
+**And one found, not fixed (I-041).** `review_count_min` is 842 passed / 433 failed / **113 not evaluated** — Outscraper returned no review count for those 113 and they sit inside the 925 "survivors". Population evidence splits them: `review_count = 0` never occurs anywhere in 1,388 rows while counts of 1/2/3–5/6–9 occur 118/70/129/116 times, so null reads as the provider's encoding of zero; 105 of the 113 also have a null rating (consistent with genuinely zero reviews), and **8 have a rating but no count**, which cannot both be true and are genuinely unknown. The direct Google Maps spot-check **could not be run** — Google 403s every route and egress is blocked (I-027) — so this is strong circumstantial evidence, not confirmation. Ten place_ids plus all 8 anomalies are queued in `ISSUES`.
+
 ### 8.1 Unblocked, and the highest-regret thing to defer
-1. **The platform-api `outreach` router.** A project-scoped Supabase client — the `services/leadoff_db.py` / vendored-fanout pattern, extended to a second Supabase **project** rather than a second schema, which is new ground in this codebase. Then suite SPA pages. Nothing in `frontend/` exists.
-2. **Phase 2 storage foundations.** `grid_result` partitioning and the retention jobs, per `docs/storage-retention-spec.md` — which **owns** that table (the PRD's copy is context only). The spec is emphatic that this must exist *before cycle two writes data*; retrofitting partitioning onto a multi-gigabyte table is materially harder than building it first. Zero spend, no credentials needed.
-3. **The pinned, versioned grid-geometry function.** Pure math, unit-testable, no network. Settle §7.3 first.
+1. **Repoint the `outreach` Railway service at `main`.** It still tracks `claude/phase-1-outscraper-ingestion-llje34`, which is merged and dead. Low urgency while `OUTREACH_COMMAND=filter`, but a deploy from a dead branch is a confusing thing to debug later. **Confirm `OUTREACH_COMMAND` is `filter` BEFORE repointing** — changing the source triggers a deploy, and that is exactly the sequence that fired a duplicate paid ingest in §6.4.
+2. **Suite SPA pages.** Nothing in `frontend/` exists. The read surface they need is built and verified.
+3. **The coverage rollup** (`ISSUES` I-042). Until it exists the retention job drops nothing but empty partitions. It needs the geometry generator (built) and land masking (not built), so it lands with the scan writer.
 
 ### 8.2 Blocked on a human
 - **DataForSEO credentials on the `outreach` Railway service.** It is the sole provider for geogrid, organic SERP and AI Overview. The service holds only `OUTREACH_OUTSCRAPER_API_KEY`. Also needs a **public callback URL** — the spec requires postback, not polling, and this is a command worker with no domain.
@@ -231,7 +273,8 @@ Not as a table, not as data. AI checks run per `ai_region`, which is a *differen
 - **Spend approval.** ~$3–6 per market-vertical per cycle, guarded at `max_market_run_cost_cents` 5000 — a gate that is only as honest as §7.1.
 
 ### 8.3 Do not
-- Start Phase 2 scanning before §7.3 is settled and partitioning exists.
+- Change grid radius, spacing or point count. §7.3 is settled by owner ruling and freezes at the first scan. Adding a submarket starts its own clean history; editing one orphans every snapshot it has.
+- Derive `grid_result.scan_month` from `now()`. It must come from the snapshot being written, or one snapshot splits across two partitions and the retention job blames the rollup (`ISSUES` I-044).
 - Add RLS policies to the CRM tables to silence the advisor's `rls_enabled_no_policy` INFO notices. That is the intended posture (§2).
 - Point outreach code at AR-Internal-Tools, or file an outreach migration under `writer/supabase/migrations/`.
 - Trigger a paid Outscraper or DataForSEO run without being asked. `OUTREACH_COMMAND` must stay `filter`.

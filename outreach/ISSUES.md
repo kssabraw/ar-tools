@@ -594,3 +594,247 @@ reachable only by the service role platform-api holds. Do not "fix" them by addi
 An earlier revision of this file recorded six `rls_policy_always_true` warnings as permanent and
 expected. That was true of the Retool access model and stopped being true when those policies were
 dropped.
+## Phase 2 foundations + suite router (2026-08-01)
+
+### I-025 RESOLVED · Grid point count settled at 81
+The specs did carry the answer; it was in the document nobody had cross-read against the count.
+`reporting-layer-spec.md` §4.1 defines the generator explicitly — square lattice over the bounding
+box, row-major from the NW corner, clipped to `distance <= radius_miles` — and that construction
+contains **81** points at a 5-mile radius with 1-mile spacing.
+
+Every alternative was computed, not assumed: hexagonal lattice **91**, concentric 8-point rings
+**41**, unclipped 11×11 box **121**. Nothing yields 89, and the PRD hedges it as "~89" precisely
+because it was an estimate. Implemented in `api/services/geometry.py` (version `v1`, 18 tests);
+`README.md`, PRD §8b and the storage spec's volume arithmetic corrected with markers, not silently.
+
+**CONFIRMED BY THE OWNER 2026-08-01.** Previously recorded here as decided-by-me pending
+confirmation; that caveat is now discharged. The owner questioned the count (reasonably — see the
+note below), the arithmetic and the cost lever were both put in front of them, and the ruling is
+**keep 81**. Geometry is now fixed and freezes at the first scan.
+
+*The question worth keeping, because it will be asked again:* "5-mile radius, one point per mile —
+isn't that 25?" No: a 5-mile radius is 10 miles ACROSS, so a row holds 11 points (5 west + centre
++ 5 east), the bounding box is 11 x 11 = 121, and the clip leaves 81. 25 would need ~1.67-mile
+spacing; a 5x5 box at 2.5-mile spacing clips to 13, not 25.
+
+### I-040 · The lead audit trail had no actor under the module ruling — FIXED
+`lead_log_changes` writes the stage-change and reassignment rows with `actor_id := auth.uid()`.
+That was correct when the CRM was reached directly with a per-user Supabase JWT. Under the module
+ruling platform-api holds the **service role** and is the only client, and `auth.uid()` is NULL for
+the service role — so every stage change and every reassignment would have been logged
+anonymously. The trail would exist, be append-only, be correct in every other respect, and be
+unable to say who did anything.
+
+Not caught by PR #534's 17 checks because `lead` held zero rows and no client existed; it only
+becomes observable the moment something writes. **This is the general shape to watch for in the
+rest of the module port:** the Retool-era schema assumed an end-user JWT, and anything else that
+reads `auth.uid()` or `auth.jwt()` is now reading a null.
+
+*Fixed:* migration `20260801110000` adds `lead.updated_by` (the mutation-side twin of the existing
+`created_by`) and the trigger takes `coalesce(auth.uid(), new.updated_by)` — that order, because a
+genuine end-user JWT, if one ever reaches this database again, is stronger evidence than a column
+the caller populated itself. `services/outreach.update_lead` sets it on every update, not only on
+stage changes.
+
+### I-041 · 113 of the 925 LA survivors were never measured against the review-count bar
+Surfaced immediately by the new `outreach_market_summary` per-rule split. `review_count_min`
+reports 842 passed / 433 failed / **113 not_evaluated** — and all 113 are prospects where
+Outscraper returned no `review_count` at all (verified: `count(*) filter (where review_count is
+null)` = 113 = the not_evaluated row count).
+
+The filter is behaving correctly — a rule that could not run cannot have failed, so it writes
+`passed = true, observed_value = 'not_evaluated'` (I-016) — and Phase 1 contacts nobody, so
+nothing is harmed today. But HANDOFF §2's per-rule table reports only the 433 failures, so the
+113 are invisible in the numbers everyone is reading, and they are counted as survivors.
+
+**Why it matters at Phase 5, not now:** those 113 would be enriched and contacted on a
+qualification that was never checked. Roughly 12% of the shortlist pool.
+**Action:** decide whether an unmeasurable review count should qualify. Options: (a) leave as-is
+and accept the 12%; (b) treat missing review data as a soft exclusion pending enrichment; (c) let
+the Phase 5 review-VELOCITY rule resolve it, since that pull returns the counts anyway — probably
+the cheapest, since it needs no decision now beyond remembering to look.
+
+### I-042 · The coverage rollup is specified but not implemented
+`prospect_coverage` exists (storage spec §4 owns it) and `drop_cold_partitions` enforces its
+presence, but `rollup_coverage()` is deliberately unwritten — `rank_vector` ordering depends on
+the geometry generator and on land masking (`grid_point_status`, PRD-owned, absent), and a rollup
+written before those exist would emit vectors that render every historical heatmap against the
+wrong coordinates while looking healthy.
+
+Consequence: **the retention job currently drops nothing but empty partitions**, by design. That
+is the correct fail-closed posture and costs nothing while there is no scan data, but it must not
+be mistaken for "retention is done". It is not done until the rollup is written and reconciled.
+**Action:** build with the scan writer, in the same phase as land masking. `centroid_dist_at_loss`
+must survive it (storage spec §4) even though it is derived.
+
+### I-043 · `serp_result` payload offload to R2 is not built
+The table carries `payload_path` / `payload_summary` per storage spec §6 and is partitioned, but
+nothing migrates payloads to R2 and nothing monitors migration lag. `payload_path IS NULL` means
+*not yet migrated*, never *absent* — a reader that treats null as missing data is wrong, and
+CLAUDE.md lists that specific mistake as a plausible-looking action that is wrong.
+**Action:** Phase 2's scan layer, alongside the R2 landing that ISSUES I-024 also wants.
+
+### I-044 · `grid_result.scan_month` is not enforced against its snapshot
+It is denormalized from `scan_snapshot.scanned_at`, and nothing forces the two to agree: a CHECK
+cannot reference another table, and a per-row trigger on a table taking ~58M rows a year is not
+worth its cost. A writer that computes the month from `now()` instead of the snapshot will split
+one snapshot across two partitions — and the retention job's per-snapshot reconciliation would
+then compare a partial count against a full one and blame the ROLLUP, sending the reader to debug
+entirely the wrong component.
+*Mitigation:* `verify_grid_result_months()` reports mismatches, and is cheap enough to run monthly.
+**Action:** the scan writer MUST derive `scan_month` from the snapshot it is writing under, never
+from the clock. Call it out in that PR.
+
+---
+
+## I-040 sweep + I-041 evidence (2026-08-01)
+
+### I-040 sweep · Two failure modes, swept separately
+Grepping `auth.uid()` uniformly would have conflated two things that fail differently, so the
+Outreacher schema was swept as two lists.
+
+**List A — expressions that RUN under the service role and receive null.** Column defaults,
+generated-column expressions, CHECK constraints, view definitions, trigger bodies, and any
+function reading `auth.uid()` / `auth.jwt()` / `auth.role()` / `current_setting('request.jwt…')`.
+These produce the anonymous-actor pattern.
+
+| Object | Kind | Reads | Status |
+|---|---|---|---|
+| `lead_log_changes` | trigger fn on `lead` | `auth.uid()` | **FIXED** — `coalesce(auth.uid(), new.updated_by)` |
+
+**That is the entire list.** Zero column defaults, zero generated columns, zero CHECK constraints,
+zero views, zero non-trigger functions, and zero `request.jwt` readers anywhere in `public`. The
+other three triggers on `lead` (`lead_flag_suppressed`, `lead_log_suppressed`,
+`lead_touch_updated_at`) reference no caller identity at all. `lead_log_changes` still *appears*
+in the sweep because it still prefers `auth.uid()` when one is present — which is intended.
+
+**List B — RLS policies.** Not evaluated at all under the service role: bypassed silently, and
+therefore never a source of the anonymous-actor pattern.
+
+**Zero policies exist in `public`.** The category is empty, which is the intended posture (RLS
+enabled, no policies, no grants to anon/authenticated) rather than an absence to be fixed.
+
+*Conclusion:* the port carries exactly one instance of this defect and it is fixed. The sweep is
+worth re-running after any migration that adds a trigger or a default, since only List A can
+regress.
+
+### I-041 UPDATE · Population evidence gathered; Google spot-check NOT done
+**Do not act on this yet — one input is still missing, and it is the one that decides the answer.**
+
+**What the existing data already settles (free, whole population, no sampling):**
+
+| Fact | Value |
+|---|---|
+| Prospects with `review_count is null` | 113 |
+| …where the provider key `reviews` is PRESENT and explicitly JSON-null | **113 / 113** |
+| …where `rating` is ALSO null | **105** |
+| …where `rating` is populated but the count is null | **8** |
+| Prospects anywhere in the market with `review_count = 0` | **0** |
+| Prospects with counts of 1 / 2 / 3–5 / 6–9 | 118 / 70 / 129 / 116 |
+| Prospects with a count but no rating | **0** |
+
+Two readings follow, and they split the 113:
+
+1. **This is not an alias or parsing gap.** The key is present on every one of the 113 and its
+   value is null. `parser.FIELD_ALIASES` resolved correctly; there is nothing to re-parse.
+2. **Outscraper appears to encode zero as null.** It reports counts down to 1 freely (118 rows)
+   but emits `0` literally never, across 1,388 listings. Combined with 105 of the 113 also having
+   a null rating — and a rating being an average *of reviews* — the 105 look like genuinely
+   zero-review listings, which is precisely what the `>= 10` rule exists to catch.
+3. **The 8 with a rating and no count are a real gap.** A 4.6-star rating cannot coexist with zero
+   reviews, and every other rated prospect in the market carries a count. Those 8 are genuinely
+   unknown, not genuinely zero.
+
+**What is still missing: the direct Google Maps check.** It could not be run from the build
+session — Google returns 403 to every route available here (Maps place URL,
+`search.google.com/local/reviews`, and Google search), and raw egress is still blocked at the
+Trusted network level (I-027). Search-engine snippets do not carry a Google review count. This is
+an environment limitation, not a finding; **treat the reading above as strong circumstantial
+evidence, not as the confirmation that was asked for.**
+
+Ten place_ids are queued for that check the moment a session or machine with egress is available:
+`ChIJ85sqYl65woAR0YobClIKhls`, `ChIJVVVVFfO7woAReGLHX8ivBxg`, `ChIJ64hlhLebwoAROhhNnojNZdo`,
+`ChIJ40_30pDHwoARtA82xZQcoKo`, `ChIJbY6g6-GdwoARNlyGXEJituc`, `ChIJVVVVVdCkwoARv8EiT_bvoa0`,
+`ChIJl5tHxGfJwoAReMBp7CpysXw`, `ChIJ9xXATQDHwoAR_sAcRRd0hrs`, `ChIJv6eS5sDBwoARkLhYDvw6DbQ`,
+`ChIJB_aokmC5568ROqlq4J0YYPY` — plus **all 8** of the rating-but-no-count rows, which matter more
+per listing than any of the 105 (`select … from prospect where review_count is null and
+raw->>'rating' is not null`). Open as
+`https://www.google.com/maps/place/?q=place_id:<id>`. The question is only: does the listing show
+a review count, and is it zero or non-zero?
+
+*(Aside worth noting for I-020/I-026: three of the ten carry `ChIJVVVVV…`-prefixed place_ids, a
+Google pattern associated with weak/auto-generated listings.)*
+
+### I-045 · Backfill review counts from the Phase 2 geogrid — free, from data already paid for
+**Binding obligation on the scan writer, not a Phase 5 enrichment.**
+
+DataForSEO Maps responses carry the review count per result, on the same item that carries the
+`place_id` — so any of the 113 that appears at any grid point on any keyword resolves for **zero
+additional spend**, from a response already being bought.
+
+Field path **verified against this estate's production code**, not vendor docs (the I-029 lesson):
+`item["rating"]["votes_count"]`, with `item["rating"]["value"]` as the rating and
+`item["place_id"]` as the join key. Confirmed in `writer/platform-api/services/maps_dataforseo.py`
+(`_business_from_item`) and `services/dataforseo_rank.py` (`local_pack` parsing). Both item shapes
+carry `place_id` and `rating.votes_count` together, so the join needs nothing extra.
+
+**The scan writer MUST** capture `rating.votes_count` per result and update
+`prospect.review_count` (and `rating`) where the current value is null and the place_id matches,
+then re-evaluate the affected `filter_result` rows.
+
+**How many of the 113 this resolves is not yet knowable** — it depends on which of them appear in
+a local pack, which no data answers until the first scan runs. It is reported after cycle one, by
+comparing the count of `review_count is null` before and after. Listings with genuinely zero
+reviews will mostly *not* appear in a pack, so a low resolution rate is itself evidence for
+reading 2 above rather than a failure of the backfill.
+
+### I-046 · Phase 5 precondition — unresolved filter evaluations gate SPEND, not the filter
+**Recorded now so it is not rediscovered at the moment money is committed.**
+
+A prospect whose filter evaluation is unresolved — any `filter_result` row with
+`observed_value = 'not_evaluated'` on a rule that is enabled — **MUST NOT be enriched or
+contacted.** It may pass through ingestion, scanning, scoring and audit generation unchanged.
+
+This is deliberately the same shape as the franchise flag: the prospect proceeds through the
+pipeline and is blocked before spend, rather than being excluded at the filter. The reasoning is
+also the same — excluding at the filter permanently discards a prospect on the strength of a fact
+nobody has established, whereas gating at the spend costs only a deferral, and by Phase 5 the
+geogrid backfill (I-045) will have resolved most of them anyway.
+
+Note the gate keys on `observed_value = 'not_evaluated'` for an ENABLED rule. A rule disabled by
+config (`review_recency`, deferred by decision) writes the same sentinel and must NOT gate spend —
+otherwise every prospect in the portfolio is blocked, since `review_recency` writes
+`not_evaluated` for all of them.
+
+### I-047 · Repointing the job at `main` sharpened the paid-run footgun — RESOLVED
+**Severity: this is the one open item that can cost real money without anyone deciding to spend it.**
+
+The `outreach` Railway service was repointed from the merged `claude/phase-1-outscraper-ingestion-llje34` to `main` on 2026-08-01, which was correct — a service deploying from a dead branch is a confusing thing to debug. But **"Auto deploys when pushed to GitHub" is still enabled**, and that setting means something very different now.
+
+| | tracked branch | pushes to it | deploys of this job |
+|---|---|---|---|
+| before | a merged feature branch | none, ever | effectively never |
+| after | `main` | several a day | **several a day** |
+
+At `OUTREACH_COMMAND=filter` each such deploy is free — a filter re-run over 1,388 prospects and a $0 `cost_ledger` row. The exposure is I-035's footgun, which now has a far wider trigger: if the command is set to `run` or `ingest` for a deliberate run and not put back within minutes, **the next merge to `main` by anyone, on any unrelated PR, fires a paid ingest.** The duplicate LA ingest happened when the trigger was a push to a branch only that work touched; the trigger is now the whole repository's merge traffic.
+
+**RESOLVED 2026-08-01** — auto-deploy is disabled on the service. Merges to `main` no longer deploy or run this job; it runs only on a deliberate Deploy click. The branch connection is retained, so the source repoint stands.
+
+*What this does NOT resolve.* Disabling auto-deploy removed the trigger that had just widened from one dormant branch to the whole repo's merge traffic. Two paths remain, and the second is scheduled to arrive:
+1. A **manual Deploy while `OUTREACH_COMMAND` is `run` or `ingest`** still spends money — and it is the same click used for a legitimate free `filter` run, so the two are indistinguishable at the moment of clicking.
+2. **Setting a `cronSchedule`** — the stated plan once the first real ingest is validated — re-arms it twice: a Railway cron service runs its start command on every deploy *and* on schedule (`railway.toml`).
+
+So §7.2's requirement is untouched and now has a deadline: a paid run must need something the deploy path cannot supply on its own (`--confirm`, a date-stamped token, or a last-ingest-was-≥N-days-ago check) **before any cron schedule is set**.
+
+### I-048 · Railway's config API disagrees with the dashboard after a staged change — resolved, recorded
+Changing the source branch reported "applied — staged for deployment" while `get-service-config` continued to report the **old** branch. Neither was wrong: the change was staged, and that API reports the currently-deployed config. The dashboard showed `main` immediately and settled it.
+
+Recorded because the natural next move on an apparently-failed infra write is to retry it, and retrying a write you cannot confirm is how one change becomes two. When two instruments disagree, find a third (§6.3, §6.11).
+
+### I-049 · The Railway agent's persistent memory carries two false facts about this service
+It wrote itself a project memory during the repoint. Two entries are wrong and will be repeated confidently if anyone consults it:
+
+1. **Start command** recorded as `python -m api.scripts.calibrate "plumber, Downtown Los Angeles, CA" 20`. That is a stale one-off calibration command; the real one is the `run_market` entrypoint driven by `OUTREACH_COMMAND`.
+2. **The Phase 1 run** recorded as exiting silently with "**NO OUTREACH_RESULT marker**" — the original I-035 diagnosis, which is **debunked**. The run completed normally at 09:11:01 and the log stream lagged. That misdiagnosis is what caused the duplicate paid ingest.
+
+Low stakes and not worth chasing, but a second source repeating a debunked failure story is exactly how a corrected mistake gets un-corrected.

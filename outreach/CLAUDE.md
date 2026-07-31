@@ -23,18 +23,32 @@ configuration reference. The six specs are reference material, not a work order.
 
 ## Current phase
 
-**Phase 1 — Ingest and filter.** Read `docs/PHASE-1-BRIEF.md` — it is self-contained and you do
-not need the PRD for this phase. Eight acceptance criteria. **No scoring of any kind**, no
-scanning, no deltas, no enrichment, no audits.
+**Read `HANDOFF.md` first — it carries current state.** As of 2026-08-01: Phase 1 is merged,
+Phase 1b (lead CRM) is applied live, and Phase 2's **storage foundations**, the **pinned geometry
+generator** and the **suite router** are built. Phase 2 **scanning** has not started and is
+blocked on credentials.
 
-**Phase 1b — Lead CRM — runs in parallel, not after.** Independent of the scanning pipeline; see
-`START-HERE.md` §4. If asked to work on the CRM, that is a separate track, not scope creep into
-Phase 1. Do not merge the two.
+**The pipeline is an AR Tools SUITE MODULE, not a standalone tool** (owner ruling, HANDOFF §2).
+The database stays in the Outreacher project; the API and UI belong in `platform-api` and the
+suite SPA. Retool is dropped; access is service-role only. Anything you read that says to create
+Supabase auth users for the Outreacher project is out of date, and anything in the schema that
+reads `auth.uid()` is now reading a null — see ISSUES I-040.
+
+**Two databases, two migration directories.** Outreach migrations go in `outreach/migrations/`
+and never in `writer/supabase/migrations/`, which targets AR-Internal-Tools.
 
 ## Invariants — violating these breaks things expensively
 
 - **Grid geometry is immutable.** Changing a submarket's centre, radius, or spacing invalidates
   every prior snapshot and resets its delta history. Names are editable; geometry is not.
+- **The grid holds 81 points, and the generator is a version REGISTRY.**
+  `api/services/geometry.py` — square lattice, row-major from NW, clipped to the radius, per
+  reporting spec §4.1. "89" was an estimate no construction produces (ISSUES I-025). Never
+  regenerate a historical snapshot with the default version; pass its stored `geometry_version`.
+  An unknown version must raise, never fall back.
+- **`grid_result.scan_month` comes from the snapshot, never from `now()`** (ISSUES I-044).
+  Deriving it from the clock splits one snapshot across two partitions and makes the retention
+  job blame the rollup.
 - **`grid_result` is owned by `docs/storage-retention-spec.md`.** Partitioned by month, no
   lat/lng columns. The copy in the PRD is context only.
 - **Partitioning must exist before cycle two writes data.** At the portfolio size, unpartitioned
