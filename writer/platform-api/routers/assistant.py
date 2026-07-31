@@ -173,6 +173,11 @@ async def assistant_chat_stream(
             await queue.put({"type": "error", "detail": "assistant_error"})
 
     async def gen():
+        # The conversation id goes out FIRST, before any work that could drop
+        # the connection. A stream that dies mid-answer used to leave the client
+        # with no id, so it couldn't fetch back the reply the producer had
+        # already stored — the answer existed and was unreachable.
+        yield f"data: {json.dumps({'type': 'meta', 'conversation_id': conversation_id})}\n\n"
         # The producer is deliberately NOT cancelled on client disconnect —
         # like the non-stream endpoint, an in-flight turn (which may be
         # mid-action or mid-memory-write) runs to completion server-side.
