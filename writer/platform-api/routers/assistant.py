@@ -282,3 +282,136 @@ async def delete_conversation(
         raise HTTPException(status_code=404, detail="conversation_not_found")
     await run_in_threadpool(assistant_store.archive_conversation, conversation_id)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Memory editor.
+#
+# The post-turn capture pass writes these, and every future answer about the
+# client reads them. That makes a wrong note quietly durable — it shapes
+# answers indefinitely, and nothing in the reply reveals where the bad premise
+# came from. Memories are agency knowledge about a client (not private to their
+# author, unlike conversations), so any authenticated teammate can curate them;
+# deletion is hard, because the point is to remove a note that is actively
+# misleading the assistant.
+# ---------------------------------------------------------------------------
+
+
+class MemoryUpsert(BaseModel):
+    content: str = Field(min_length=3, max_length=500)
+
+
+def _memory_row(row: dict) -> dict:
+    return {
+        "id": str(row["id"]),
+        "content": row.get("content"),
+        "source": row.get("source"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+@router.get("/clients/{client_id}/memories")
+async def list_memories(client_id: str, auth: dict = Depends(require_auth)) -> dict:
+    """Everything SerMaStr durably remembers about this client, newest first."""
+    from fastapi.concurrency import run_in_threadpool
+
+    from db.supabase_client import get_supabase
+
+    def _read() -> list[dict]:
+        return (
+            get_supabase().table("assistant_memories")
+            .select("id, content, source, created_at, updated_at")
+            .eq("client_id", client_id)
+            .order("created_at", desc=True)
+            .execute()
+        ).data or []
+
+    rows = await run_in_threadpool(_read)
+    return {"memories": [_memory_row(r) for r in rows]}
+
+
+@router.post("/clients/{client_id}/memories")
+async def create_memory(
+    client_id: str, body: MemoryUpsert, auth: dict = Depends(require_auth)
+) -> dict:
+    """Add a note by hand. Stored with source='user' so the assistant can see it
+    was written by a person rather than inferred from a conversation."""
+    from fastapi.concurrency import run_in_threadpool
+
+    from db.supabase_client import get_supabase
+
+    def _write() -> dict:
+        return (
+            get_supabase().table("assistant_memories")
+            .insert({
+                "client_id": client_id,
+                "content": body.content.strip(),
+                "source": "user",
+            })
+            .execute()
+        ).data[0]
+
+    try:
+        row = await run_in_threadpool(_write)
+    except Exception as exc:
+        logger.error("memory_create_failed", extra={"client_id": client_id, "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    return _memory_row(row)
+
+
+@router.put("/memories/{memory_id}")
+async def update_memory(
+    memory_id: str, body: MemoryUpsert, auth: dict = Depends(require_auth)
+) -> dict:
+    """Correct a note. `updated_at` is stamped so the assistant can tell a
+    human-corrected memory from one it captured itself."""
+    from datetime import datetime, timezone
+
+    from fastapi.concurrency import run_in_threadpool
+
+    from db.supabase_client import get_supabase
+
+    def _write() -> list[dict]:
+        return (
+            get_supabase().table("assistant_memories")
+            .update({
+                "content": body.content.strip(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
+            .eq("id", memory_id)
+            .execute()
+        ).data or []
+
+    try:
+        rows = await run_in_threadpool(_write)
+    except Exception as exc:
+        logger.error("memory_update_failed", extra={"memory_id": memory_id, "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    if not rows:
+        raise HTTPException(status_code=404, detail="memory_not_found")
+    return _memory_row(rows[0])
+
+
+@router.delete("/memories/{memory_id}")
+async def delete_memory(memory_id: str, auth: dict = Depends(require_auth)) -> dict:
+    """Forget a note outright. Hard delete: a memory that is actively misleading
+    the assistant should stop reaching the prompt, not linger soft-deleted."""
+    from fastapi.concurrency import run_in_threadpool
+
+    from db.supabase_client import get_supabase
+
+    def _delete() -> list[dict]:
+        return (
+            get_supabase().table("assistant_memories")
+            .delete().eq("id", memory_id).execute()
+        ).data or []
+
+    try:
+        rows = await run_in_threadpool(_delete)
+    except Exception as exc:
+        logger.error("memory_delete_failed", extra={"memory_id": memory_id, "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    if not rows:
+        raise HTTPException(status_code=404, detail="memory_not_found")
+    return {"ok": True}

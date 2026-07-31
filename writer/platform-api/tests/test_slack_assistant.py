@@ -1987,3 +1987,60 @@ def test_maps_drop_playbook_is_pulled_in_when_something_actually_dropped():
         {"maps_geogrid": {"open_alerts": [{"keyword": "x"}]}, "ai_visibility": {}},
     )
     assert "maps" in dropped
+
+
+# ---------------------------------------------------------------------------
+# Memory provenance + staleness (the editor's counterpart in the prompt).
+#
+# A captured note is a past conclusion, not a measurement — it can go stale or
+# simply be wrong. Now that notes are editable, the context has to say which
+# ones a human stands behind.
+# ---------------------------------------------------------------------------
+
+
+def _memories_ctx(rows):
+    from unittest.mock import MagicMock
+
+    from services.slack_assistant import context as ctx
+
+    sb = MagicMock()
+    (sb.table.return_value.select.return_value.eq.return_value
+       .order.return_value.limit.return_value.execute.return_value.data) = rows
+    import datetime as _dt
+    return ctx._ctx_memories(sb, "c1", _dt.date(2026, 7, 31))
+
+
+def test_memory_context_marks_user_written_notes_as_human_verified():
+    out = _memories_ctx([
+        {"content": "Owner prefers Maps-first.", "source": "user",
+         "created_at": "2026-07-30T00:00:00Z", "updated_at": None},
+    ])
+    assert out["notes"][0]["human_verified"] is True
+
+
+def test_memory_context_marks_an_edited_capture_as_human_verified():
+    out = _memories_ctx([
+        {"content": "Corrected note.", "source": "chat",
+         "created_at": "2026-07-30T00:00:00Z", "updated_at": "2026-07-31T00:00:00Z"},
+    ])
+    assert out["notes"][0]["human_verified"] is True
+
+
+def test_an_untouched_capture_is_not_human_verified():
+    out = _memories_ctx([
+        {"content": "Auto-captured note.", "source": "chat",
+         "created_at": "2026-07-30T00:00:00Z", "updated_at": None},
+    ])
+    assert out["notes"][0]["human_verified"] is False
+
+
+def test_memory_context_tells_the_model_live_data_beats_a_stale_note():
+    out = _memories_ctx([
+        {"content": "DR is 20.7.", "source": "chat",
+         "created_at": "2026-07-01T00:00:00Z", "updated_at": None},
+    ])
+    assert "TRUST THE MODULE DATA" in out["note"]
+
+
+def test_memory_context_is_absent_when_there_is_nothing_remembered():
+    assert _memories_ctx([]) is None

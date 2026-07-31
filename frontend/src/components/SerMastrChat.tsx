@@ -4,6 +4,7 @@ import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import { Markdown } from './Markdown'
 import { ConversationHistory, type ConversationDetail } from './ConversationHistory'
+import { MemoryEditor } from './MemoryEditor'
 import { Send, Sparkles, X } from 'lucide-react'
 
 // SerMaStr chatbox on the Home dashboard — same brain as the Slack assistant,
@@ -281,6 +282,9 @@ export function SerMastrChat({ exampleClient, fullPage = false }: { exampleClien
               <X size={11} />
             </button>
           </span>
+        )}
+        {state.clientId && (
+          <MemoryEditor clientId={state.clientId} clientName={state.clientName} />
         )}
         <ConversationHistory
           basePath="/assistant"
