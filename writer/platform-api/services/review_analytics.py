@@ -2,9 +2,15 @@
 
 Compares Google review volume, velocity (reviews/month), rating distribution and
 recent negatives for the client vs its top local-pack competitors. Reviews are
-fetched via DataForSEO (all ratings, newest-first — unlike gbp_service's
-4★-only "strong reviews" marketing pull) and stored in `reviews`; analytics are
-deterministic and computed on read.
+fetched via `services.dataforseo_reviews` (all ratings, newest-first — unlike
+gbp_service's 4★-only "strong reviews" marketing pull) and stored in `reviews`;
+analytics are deterministic and computed on read.
+
+A failed fetch RAISES rather than returning an empty list. Every headline this
+module produces — count, velocity, recent negatives — has zero as a legitimate
+value, so a fetch that reports failure as emptiness does not degrade the feature,
+it fabricates a result. That is what happened for months behind a 404 (outreach
+ISSUES I-059), and why `fetch_and_store` now reports `failures` explicitly.
 
 LLM sentiment/theme extraction is a deliberate follow-up (the `reviews.sentiment`
 column is reserved); v1 surfaces volume/velocity/rating/recent-negatives, which
@@ -17,16 +23,13 @@ import hashlib
 import logging
 from datetime import date, timedelta
 
-import httpx
-
 from config import settings
 from db.supabase_client import get_supabase
-from services import competitor_gbp
-from services.gbp_service import _DATAFORSEO_REVIEWS_ENDPOINT, _to_float
+from services import competitor_gbp, dataforseo_reviews
+from services.dataforseo_reviews import ReviewFetchError
 
 logger = logging.getLogger(__name__)
 
-_TIMEOUT = 30.0
 _NEGATIVE_MAX_RATING = 2.0
 _RECENT_DAYS = 90
 _VELOCITY_DAYS = 365
@@ -36,52 +39,18 @@ def _review_key(place_id: str, reviewer: str, d: str, text: str) -> str:
     return hashlib.md5(f"{place_id}|{reviewer}|{d}|{text}".encode("utf-8")).hexdigest()
 
 
-def _parse_reviews_all(data: dict) -> list[dict]:
-    """Map a DataForSEO reviews/live response to our shape — ALL ratings (so the
-    distribution + negatives are real), newest-first preserved from the request."""
-    tasks = data.get("tasks") or []
-    if not tasks:
-        return []
-    result = (tasks[0] or {}).get("result") or []
-    if not result:
-        return []
-    items = (result[0] or {}).get("items") or []
-    out: list[dict] = []
-    for r in items:
-        if not isinstance(r, dict):
-            continue
-        rating_raw = r.get("review_rating")
-        rating = _to_float(rating_raw.get("value")) if isinstance(rating_raw, dict) else _to_float(r.get("rating"))
-        ts = r.get("timestamp") or ""
-        dt = r.get("review_datetime_utc") or ""
-        d = ts.split("T")[0] if ts else (dt.split(" ")[0] if dt else "")
-        out.append(
-            {
-                "reviewer": r.get("profile_name") or r.get("author_title") or "Anonymous",
-                "rating": rating,
-                "text": r.get("review_text") or "",
-                "date": d,
-            }
-        )
-    return out
-
-
 async def fetch_reviews_full(place_id: str, depth: int) -> list[dict]:
-    """Fetch up to `depth` newest reviews (all ratings) for a place. Best-effort."""
-    if not place_id or not settings.dataforseo_login or not settings.dataforseo_password:
-        return []
-    body = [{"place_id": place_id, "depth": depth, "sort_by": "newest", "language_name": "English"}]
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.post(
-                _DATAFORSEO_REVIEWS_ENDPOINT, json=body,
-                auth=(settings.dataforseo_login, settings.dataforseo_password),
-            )
-            resp.raise_for_status()
-            return _parse_reviews_all(resp.json())
-    except httpx.HTTPError:
-        logger.warning("review_analytics.fetch_failed", extra={"place_id": place_id})
-        return []
+    """Fetch up to `depth` newest reviews (all ratings) for a place.
+
+    Raises `ReviewFetchError` on failure. It previously returned `[]`, which this
+    module's analytics cannot distinguish from a business that genuinely has no
+    reviews — and because the endpoint it called had been 404ing all along
+    (outreach ISSUES I-059), every client and competitor looked like it had zero
+    reviews, zero velocity and zero recent negatives. Those are the module's
+    headline outputs, so the failure produced confident, wrong numbers rather
+    than a visible outage. Failures must reach the caller.
+    """
+    return await dataforseo_reviews.fetch_reviews(place_id, depth, sort_by="newest")
 
 
 # --- pure analytics ---------------------------------------------------------
@@ -197,27 +166,62 @@ def _store(client_id: str, place_id: str, is_client: bool, reviews: list[dict]) 
     return len(rows)
 
 
+async def _fetch_or_record(place_id: str, depth: int, failures: list[dict]) -> list[dict]:
+    """One lookup, with the failure RECORDED rather than disguised as zero reviews.
+
+    A failed place is skipped (no rows stored) and named in `failures`, so a run that
+    could not reach the provider is distinguishable from a run that found nothing —
+    the distinction this module lost when its fetch swallowed a 404 into `[]`.
+    """
+    try:
+        return await fetch_reviews_full(place_id, depth)
+    except ReviewFetchError as exc:
+        logger.error(
+            "review_analytics.fetch_failed",
+            extra={"place_id": place_id, "error": str(exc)},
+        )
+        failures.append({"place_id": place_id, "error": str(exc)})
+        return []
+
+
 async def fetch_and_store(client_id: str) -> dict:
     """Fetch + store reviews for the client's own GBP and its top local-pack
-    competitors. Returns {client_reviews, competitor_reviews, competitors}."""
+    competitors.
+
+    Returns {client_reviews, competitor_reviews, competitors, failures, failed} —
+    `failures` names every place whose lookup errored. A caller (or a human reading
+    the job result) can then tell "this market has no reviews" apart from "we could
+    not ask", which reporting zero for both made impossible.
+    """
     supabase = get_supabase()
     depth = settings.review_intel_depth
     stored_client = 0
     stored_comp = 0
+    failures: list[dict] = []
 
     client_rows = supabase.table("clients").select("gbp_place_id").eq("id", client_id).limit(1).execute().data
     client_place = (client_rows[0].get("gbp_place_id") if client_rows else None)
     if client_place:
-        stored_client = _store(client_id, client_place, True, await fetch_reviews_full(client_place, depth))
+        stored_client = _store(
+            client_id, client_place, True, await _fetch_or_record(client_place, depth, failures)
+        )
 
     profiles = competitor_gbp.latest_profiles(client_id)
     for p in profiles[: settings.competitor_gbp_max]:
         pid = p.get("place_id")
         if not pid:
             continue
-        stored_comp += _store(client_id, pid, False, await fetch_reviews_full(pid, depth))
+        stored_comp += _store(
+            client_id, pid, False, await _fetch_or_record(pid, depth, failures)
+        )
 
-    return {"client_reviews": stored_client, "competitor_reviews": stored_comp, "competitors": len(profiles)}
+    return {
+        "client_reviews": stored_client,
+        "competitor_reviews": stored_comp,
+        "competitors": len(profiles),
+        "failures": failures,
+        "failed": len(failures),
+    }
 
 
 def get_review_intel(client_id: str, today: "date | None" = None) -> dict:

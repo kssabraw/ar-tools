@@ -63,15 +63,12 @@ def normalize_website_url(url: Optional[str]) -> Optional[str]:
 
 _OUTSCRAPER_BASE_URL = "https://api.app.outscraper.com"
 _SEARCH_ENDPOINT = f"{_OUTSCRAPER_BASE_URL}/maps/search-v3"
-_DATAFORSEO_REVIEWS_ENDPOINT = (
-    "https://api.dataforseo.com/v3/business_data/google/reviews/live"
-)
 _TIMEOUT = 45
 # Only surface strong reviews with actual text, capped to a handful.
 _REVIEW_MIN_RATING = 4
-# Keep as many parsed reviews as the DataForSEO call already fetches (depth=10)
-# — the strategist mines them for recurring customer-voice themes, and a larger
-# sample costs nothing extra (the cap only truncated parsing).
+# Keep as many parsed reviews as the Outscraper response carries inline — the
+# strategist mines them for recurring customer-voice themes, and a larger sample
+# costs nothing extra (the cap only truncated parsing).
 _REVIEW_LIMIT = 10
 
 # Hosts used by Google Maps "share" / short links that 302-redirect to the
@@ -220,52 +217,16 @@ def _service_area_places(place: dict[str, Any]) -> list[str]:
     return out
 
 
-def _reviews_from_dataforseo(data: dict[str, Any]) -> list[dict]:
-    """Map a DataForSEO reviews/live response to our review shape."""
-    tasks = data.get("tasks") or []
-    if not tasks:
-        return []
-    result = (tasks[0] or {}).get("result") or []
-    if not result:
-        return []
-    items = (result[0] or {}).get("items") or []
-
-    reviews: list[dict] = []
-    for r in items:
-        if not isinstance(r, dict):
-            continue
-        text = r.get("review_text")
-        rating_raw = r.get("review_rating")
-        rating = None
-        if isinstance(rating_raw, dict):
-            rating = _to_float(rating_raw.get("value"))
-        if rating is None:
-            rating = _to_float(r.get("rating"))
-        if not text or (rating or 0) < _REVIEW_MIN_RATING:
-            continue
-        timestamp = r.get("timestamp") or ""
-        datetime_utc = r.get("review_datetime_utc") or ""
-        if timestamp:
-            date = timestamp.split("T")[0]
-        elif datetime_utc:
-            date = datetime_utc.split(" ")[0]
-        else:
-            date = ""
-        reviews.append(
-            {
-                "reviewer": r.get("profile_name") or r.get("author_title") or "Anonymous",
-                "rating": rating if rating is not None else 5.0,
-                "text": text,
-                "date": date,
-            }
-        )
-        if len(reviews) >= _REVIEW_LIMIT:
-            break
-    return reviews
-
-
 def _reviews_from_outscraper(place: dict[str, Any]) -> list[dict]:
-    """Fallback: map Outscraper's inline reviews_data to our review shape."""
+    """Map Outscraper's inline reviews_data to our review shape.
+
+    This is the ONLY review-text source for GBP enrichment. It used to be the
+    fallback behind a DataForSEO `reviews/live` call — an endpoint that 404s, whose
+    failure was swallowed into "no reviews" (outreach ISSUES I-059) — so in practice
+    it has been the sole source for months. Rating-filtered by `_REVIEW_MIN_RATING`:
+    these feed marketing copy, which makes them positive-theme raw material and
+    NEVER a sentiment sample.
+    """
     raw = place.get("reviews_data")
     if not isinstance(raw, list):
         return []
@@ -292,31 +253,19 @@ def _reviews_from_outscraper(place: dict[str, Any]) -> list[dict]:
     return reviews
 
 
-async def _fetch_reviews(place_id: str) -> list[dict]:
-    """Fetch top reviews for a place via DataForSEO. Best-effort: any failure
-    or missing credentials returns [] so it never breaks the details call."""
-    if not place_id or not settings.dataforseo_login or not settings.dataforseo_password:
-        return []
-    body = [
-        {
-            "place_id": place_id,
-            "depth": 10,
-            "sort_by": "most_relevant",
-            "language_name": "English",
-        }
-    ]
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            response = await client.post(
-                _DATAFORSEO_REVIEWS_ENDPOINT,
-                json=body,
-                auth=(settings.dataforseo_login, settings.dataforseo_password),
-            )
-            response.raise_for_status()
-            return _reviews_from_dataforseo(response.json())
-    except httpx.HTTPError:
-        logger.warning("gbp_service.reviews_fetch_failed", extra={"place_id": place_id})
-        return []
+# NOTE (outreach ISSUES I-059). This module used to call
+# `POST /v3/business_data/google/reviews/live` here for review text. That path does
+# not exist — it 404s — and the call was wrapped in `except httpx.HTTPError:
+# return []`. Since `httpx.HTTPStatusError` subclasses `HTTPError`, every 404 was
+# converted into "this business has no reviews" and returned as data, silently, for
+# as long as the endpoint has been gone. Reviews have in practice come from
+# Outscraper's inline `reviews_data` the whole time, via the fallback below.
+#
+# The DataForSEO call is removed rather than repointed: the endpoint that does
+# exist for review TEXT is a queued lifecycle (task_post → task_get) that can take
+# tens of seconds, and this runs inside a synchronous, user-facing details fetch.
+# `services/dataforseo_reviews.py` implements that lifecycle for callers that can
+# wait (the review-analytics job), with failures that raise instead of vanishing.
 
 
 async def search_businesses(query: str) -> list[dict]:
@@ -505,12 +454,11 @@ async def get_business_details(query: str) -> dict:
 
     resolved_place_id = p.get("place_id") or p.get("google_id") or query
 
-    # Review enrichment: DataForSEO is preferred; fall back to whatever
-    # Outscraper returned inline. Both are best-effort — never fatal.
-    reviews = await _fetch_reviews(resolved_place_id)
-    if not reviews:
-        reviews = _reviews_from_outscraper(p)
-    gbp["reviews"] = reviews
+    # Review enrichment from whatever Outscraper returned inline. Best-effort —
+    # never fatal, and never a paid second call inside a user-facing fetch. See
+    # the I-059 note above `_reviews_from_outscraper` for why the DataForSEO leg
+    # that used to sit in front of this is gone.
+    gbp["reviews"] = _reviews_from_outscraper(p)
 
     return {
         "place_id": resolved_place_id,
