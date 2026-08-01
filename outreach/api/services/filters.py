@@ -140,6 +140,7 @@ def evaluate(
     min_review_count_enabled: bool = True,
     review_recency_enabled: bool = False,
     inferred_zero: bool = False,
+    review_count_override: int | None = None,
 ) -> FilterVerdict:
     """Run every rule against one place and return all outcomes.
 
@@ -193,19 +194,26 @@ def evaluate(
     # as null — is a claim about a provider convention, not an observation about a business, so it
     # stays visible in its own field and can be withdrawn by clearing a flag rather than by trying
     # to work out which zeroes were real. `review_count` itself stays NULL forever.
+    # An override is a count obtained OUTSIDE the provider payload — a manual verification, or
+    # the Phase 2 geogrid backfill (I-045). It has to win, because `place` is re-parsed from
+    # stored raw on every filter run and raw will never carry a correction we made. Without this
+    # the next routine `filter` silently reverts the fix and says nothing, which is the exact
+    # failure mode this project keeps hitting (I-036, I-035).
+    effective_count = review_count_override if review_count_override is not None else place.review_count
+
     if not min_review_count_enabled:
         outcomes.append(RuleOutcome(RULE_REVIEW_COUNT, True, NOT_EVALUATED))
-    elif place.review_count is None and inferred_zero:
+    elif effective_count is None and inferred_zero:
         outcomes.append(RuleOutcome(RULE_REVIEW_COUNT, 0 >= min_review_count, "0 (inferred)"))
-    elif place.review_count is None:
+    elif effective_count is None:
         # No count returned is not the same as a low count.
         outcomes.append(RuleOutcome(RULE_REVIEW_COUNT, True, NOT_EVALUATED))
     else:
         outcomes.append(
             RuleOutcome(
                 RULE_REVIEW_COUNT,
-                place.review_count >= min_review_count,
-                str(place.review_count),
+                effective_count >= min_review_count,
+                str(effective_count),
             )
         )
 

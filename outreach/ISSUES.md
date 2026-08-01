@@ -933,3 +933,51 @@ Read-only apart from a `cost_ledger` row, cost-gated before any client is opened
 `by_verdict` / `counts_found` / a recommendation. **A single `has_reviews` in the sample withholds
 the flag** — it would be written across every future market pull, so one false zero here is a
 systematic error there.
+
+### I-052 · Disabling auto-deploy PINS the service to its last-built commit — found by a failed run
+**This is a direct consequence of the I-047 mitigation and was not anticipated when it was
+recommended.** "Auto deploys when pushed to GitHub" does not only stop deploys on push; it stops
+Railway *tracking* new commits at all. The service stays pinned to the last commit it built, and a
+variable change redeploys **that snapshot** rather than fetching the connected branch's HEAD.
+
+Observed: with the source correctly set to `main` (dashboard-confirmed) and `verify-reviews` merged
+to `main`, setting `OUTREACH_COMMAND=verify-reviews` deployed commit `7f9430b` from
+`claude/phase-1-outscraper-ingestion-llje34` — the old branch — and failed with
+`invalid choice: 'verify-reviews'`. **Nothing was spent**: argparse rejects before any client is
+opened.
+
+So the repoint is real in config and **inert in practice** until something explicitly deploys a
+newer commit. To run new code: deploy the latest commit from the Railway dashboard (the service's
+Deploy control offers it when undeployed commits exist), or re-enable auto-deploy briefly and turn
+it back off.
+
+*Do not "fix" this by leaving auto-deploy on.* The pinning is the safety property working: this
+service spends money, and a job that only ever runs code someone deliberately deployed is the
+posture I-047 was asking for. The cost is one extra click, paid at the moment of running.
+
+**Two things the same failure settled for free:**
+- The build log loads `outreach/Dockerfile`, so `railway.toml` **is** read and the DOCKERFILE
+  builder is in effect. The `RAILPACK` value reported by the config API is the stale pre-override
+  field, not what builds. Closes the ambiguity noted in HANDOFF §1.
+- Deployment status came back **SUCCESS** on a job that errored — I-034 observed live a second
+  time — and **no `OUTREACH_RESULT` marker printed**, because argparse exits before `main()` can
+  emit one. The marker does not cover bad-argument failures, which is precisely the shape an
+  unattended cron misconfiguration would take.
+
+### I-053 · A verified review count did not survive a filter re-run — FIXED
+**Found while checking the retry path, not by a test.** `pipeline.run_filter` re-parses `place`
+from stored `raw` on every run and passes THAT to `filters.evaluate`. The `prospect.review_count`
+column was selected but never handed to the filter. Mejia Rooter's manually-confirmed count of 3 —
+an owner ruling — lives only in the column, because `raw.reviews` is still null and always will be.
+
+**The next routine `filter` run would therefore have scored it `not_evaluated` and silently
+returned it to the survivor set**, reverting the ruling with nothing anywhere reporting it. Same
+family as I-035 and I-036: correct-looking output, quietly wrong, no signal.
+
+*Fixed:* `evaluate(..., review_count_override=)`, threaded from the COLUMN by `run_filter`. An
+externally-obtained count — a manual verification, or the Phase 2 geogrid backfill (I-045) — beats
+a re-parse of the provider payload, in both directions. Three regression tests, including the
+exact Mejia shape (raw null, column 3, must exclude).
+
+This also makes I-045 land correctly when it arrives: the backfill writes the column, and the
+filter now reads it.

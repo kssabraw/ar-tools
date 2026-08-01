@@ -285,6 +285,10 @@ def run_filter(
             # raw is the provider's untouched payload, which by definition does not carry our
             # inference about it (ISSUES I-041).
             inferred_zero=bool(row.get("review_count_inferred_zero")),
+            # The COLUMN, not the re-parsed payload. At ingest the two agree; when they diverge
+            # the column holds a count obtained outside the provider (a manual verification, or
+            # the I-045 geogrid backfill), and re-parsing raw would silently discard it.
+            review_count_override=row.get("review_count"),
         )
 
         report.evaluated += 1

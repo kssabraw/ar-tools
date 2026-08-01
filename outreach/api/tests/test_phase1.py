@@ -277,6 +277,40 @@ def test_inferred_zero_never_overrides_a_real_count():
     assert outcome.observed_value == "42"
 
 
+def test_a_verified_count_survives_a_filter_rerun():
+    """The bug this guards: `evaluate` is handed a `place` re-parsed from stored raw on every
+    filter run, and raw never carries a correction we made outside the provider. Mejia Rooter was
+    manually confirmed at 3 Google reviews and excluded; without the override the next routine
+    `filter` would re-read raw (reviews: null), score it not_evaluated, and silently put it back
+    among the survivors — reverting an owner ruling with nothing reporting it."""
+    parsed = parse_place({"place_id": "x", "name": "n", "phone": "555"})  # raw has no count
+    assert parsed.review_count is None
+
+    outcome = next(
+        o for o in run(parsed, review_count_override=3).outcomes if o.rule == RULE_REVIEW_COUNT
+    )
+    assert not outcome.passed
+    assert outcome.observed_value == "3"
+    assert run(parsed, review_count_override=3).excluded
+
+
+def test_an_override_beats_a_stale_payload_count_in_both_directions():
+    """Ground truth wins whichever way it points — a correction upward must also stick, or a
+    listing wrongly excluded stays excluded forever."""
+    low = next(o for o in run(place(reviews=2), review_count_override=40).outcomes
+               if o.rule == RULE_REVIEW_COUNT)
+    assert low.passed and low.observed_value == "40"
+
+    high = next(o for o in run(place(reviews=99), review_count_override=1).outcomes
+                if o.rule == RULE_REVIEW_COUNT)
+    assert not high.passed and high.observed_value == "1"
+
+
+def test_no_override_leaves_the_payload_count_untouched():
+    outcome = next(o for o in run(place(reviews=12)).outcomes if o.rule == RULE_REVIEW_COUNT)
+    assert outcome.passed and outcome.observed_value == "12"
+
+
 def test_inferred_zero_respects_the_rule_being_disabled():
     """Disabling the rule in config must silence it completely. A flag that fires anyway would
     make `filter_min_review_count_enabled = False` a lie."""
