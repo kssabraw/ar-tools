@@ -39,6 +39,7 @@ from typing import Any, Sequence
 
 from ..config import Settings
 from .cost import CostLimitExceeded
+from .dataforseo_client import DataForSEOClient, PlaceReviews, missing_dataforseo_vars
 from .outscraper_client import OutscraperClient, TileRequest, extract_places
 from .paging import fetch_all
 
@@ -108,6 +109,43 @@ class VerifyReport:
 
 
 # --- pure helpers -----------------------------------------------------------------------------
+
+
+def classify_dataforseo(reviews: PlaceReviews | None) -> LookupResult:
+    """Turn one DataForSEO reviews/live lookup into a verdict.
+
+    Simpler than the Outscraper classifier, and stronger, because this provider answers the actual
+    question rather than one adjacent to it:
+
+      reviews_count > 0   -> HAS_REVIEWS. Outscraper's null was a dropped count.
+      review items present -> HAS_REVIEWS, even if the count somehow did not parse.
+      reviews_count == 0  -> ZERO, and this is a POSITIVE ASSERTION of zero rather than an
+                             absence to be interpreted. It is what Outscraper never emits, and
+                             the whole reason a second vendor is worth paying for.
+      count is None       -> AMBIGUOUS. Both providers declining to say is a real outcome and must
+                             not be rounded down to "zero" — that would let a second silence
+                             argue for the conclusion under test.
+    """
+    if reviews is None:
+        return LookupResult(place_id="", name="", verdict=ERROR, error="no result")
+
+    if reviews.items_returned > 0:
+        verdict = HAS_REVIEWS
+    elif reviews.reviews_count is None:
+        verdict = AMBIGUOUS
+    elif reviews.reviews_count > 0:
+        verdict = HAS_REVIEWS
+    else:
+        verdict = ZERO
+
+    return LookupResult(
+        place_id=reviews.place_id,
+        name="",
+        verdict=verdict,
+        review_count=reviews.reviews_count,
+        rating=reviews.rating,
+        inline_reviews=reviews.items_returned,
+    )
 
 
 def classify_lookup(place: dict[str, Any] | None) -> LookupResult:
@@ -188,12 +226,22 @@ async def verify_review_counts(
     market_id: str,
     limit: int = 20,
     group: str = "both_null",
+    provider: str = "outscraper",
 ) -> VerifyReport:
     """Look up `limit` prospects one at a time and report what comes back.
 
     `group` selects which half of I-041 is being tested:
       both_null      the 105 — no count AND no rating. The convention question.
       rating_present the 8 — no count but a rating. Known gaps; here for completeness.
+
+    `provider` selects who is asked:
+      outscraper   the same vendor whose convention is under test. Bounded evidence — see I-050
+                   and the module docstring.
+      dataforseo   an independent vendor, queried by place_id, returning the reviews themselves.
+                   This is the one that can actually settle it.
+
+    Both are kept because the comparison IS the result. Two vendors agreeing on a null is
+    evidence; one vendor repeating itself is not.
     """
     rows = fetch_all(
         lambda: client.table("prospect")
@@ -212,9 +260,21 @@ async def verify_review_counts(
     if not candidates:
         return report
 
+    if provider not in ("outscraper", "dataforseo"):
+        raise ValueError(f"unknown provider {provider!r}")
+    if provider == "dataforseo":
+        missing = missing_dataforseo_vars(settings)
+        if missing:
+            raise RuntimeError(f"not set: {', '.join(missing)}")
+
     # Cost gate BEFORE any client is opened — same order as the ingest, so an over-budget run
     # cannot spend a single request before aborting.
-    projected = round(len(candidates) * settings.outscraper_cost_per_1000_places_cents / 1000)
+    if provider == "dataforseo":
+        projected = len(candidates) * settings.dataforseo_cost_per_request_cents
+    else:
+        projected = round(
+            len(candidates) * settings.outscraper_cost_per_1000_places_cents / 1000
+        )
     if projected > settings.max_market_run_cost_cents:
         raise CostLimitExceeded(
             f"projected {projected}c exceeds max_market_run_cost_cents "
@@ -222,9 +282,71 @@ async def verify_review_counts(
         )
     logger.info(
         "review verification starting",
-        extra={"places": len(candidates), "projected_cents": projected, "group": group},
+        extra={
+            "places": len(candidates),
+            "projected_cents": projected,
+            "group": group,
+            "provider": provider,
+        },
     )
 
+    if provider == "dataforseo":
+        report.results = await _run_dataforseo(settings, candidates)
+    else:
+        report.results = await _run_outscraper(settings, candidates)
+
+    # Ledger the spend even on a partly-failed run. A verification that quietly costs money
+    # without a row is how the reconciliation against the dashboard stops adding up (I-022).
+    try:
+        client.table("cost_ledger").insert(
+            {
+                "market_id": market_id,
+                "stage": "a2_verify_reviews",
+                "provider": provider,
+                "units": len(candidates),
+                "cost_cents": projected,
+            }
+        ).execute()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("could not write cost_ledger row", extra={"error": str(exc)})
+
+    return report
+
+
+async def _run_dataforseo(
+    settings: Settings, candidates: list[dict[str, Any]]
+) -> list[LookupResult]:
+    """One reviews/live lookup per prospect, bounded concurrency, one bad row never ends the run."""
+    async with DataForSEOClient(settings) as api:
+        sem = asyncio.Semaphore(settings.outscraper_tile_concurrency)
+
+        async def one(row: dict[str, Any]) -> LookupResult:
+            async with sem:
+                place_id = str(row.get("place_id"))
+                try:
+                    result = classify_dataforseo(await api.fetch_place_reviews(place_id))
+                    if not result.place_id:
+                        result.place_id = place_id
+                    result.name = str(row.get("name") or "")
+                    return result
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "dataforseo lookup failed",
+                        extra={"place_id": place_id, "error": str(exc)},
+                    )
+                    return LookupResult(
+                        place_id=place_id,
+                        name=str(row.get("name") or ""),
+                        verdict=ERROR,
+                        error=str(exc),
+                    )
+
+        return list(await asyncio.gather(*(one(r) for r in candidates)))
+
+
+async def _run_outscraper(
+    settings: Settings, candidates: list[dict[str, Any]]
+) -> list[LookupResult]:
     async with OutscraperClient(settings) as api:
         sem = asyncio.Semaphore(settings.outscraper_tile_concurrency)
 
@@ -258,21 +380,4 @@ async def verify_review_counts(
                         error=str(exc),
                     )
 
-        report.results = list(await asyncio.gather(*(one(r) for r in candidates)))
-
-    # Ledger the spend even on a partly-failed run. A verification that quietly costs money
-    # without a row is how the reconciliation against the dashboard stops adding up (I-022).
-    try:
-        client.table("cost_ledger").insert(
-            {
-                "market_id": market_id,
-                "stage": "a2_verify_reviews",
-                "provider": "outscraper",
-                "units": len(candidates),
-                "cost_cents": projected,
-            }
-        ).execute()
-    except Exception as exc:  # noqa: BLE001
-        logger.error("could not write cost_ledger row", extra={"error": str(exc)})
-
-    return report
+        return list(await asyncio.gather(*(one(r) for r in candidates)))

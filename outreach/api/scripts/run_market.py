@@ -213,9 +213,11 @@ def cmd_verify_reviews(args) -> int:
     once, on evidence, and a verifier that applied its own findings would delete the step where
     someone looks at them.
 
-    Note the result is bounded by asking the SAME provider whose convention is under test: see
-    services/review_verify for why the review sub-objects rather than the count field carry the
-    evidence, and why DataForSEO is the next step if this comes back ambiguous.
+    Defaults to --provider dataforseo, which is independent of the hypothesis: it is queried by
+    place_id and returns the reviews themselves, and a reviews_count of 0 is a positive assertion
+    of zero rather than an absence to interpret. --provider outscraper re-asks the vendor whose
+    convention is under test and is bounded accordingly (I-050) — kept because the COMPARISON is
+    the result.
     """
     import asyncio as _asyncio
 
@@ -233,6 +235,7 @@ def cmd_verify_reviews(args) -> int:
                 market_id=market_id,
                 limit=args.limit,
                 group=args.group,
+                provider=args.provider,
             )
         )
     except CostLimitExceeded as exc:
@@ -292,6 +295,10 @@ def build_identity(env: dict[str, str], commands: "list[str]") -> str:
     subcommands the binary actually accepts are read from the running code, so a stale image is
     self-evident from the banner whether or not the SHA resolved.
     """
+    # NOTE the branch label is NOT trustworthy on Railway: a deployment of main's HEAD was
+    # observed reporting branch=claude/phase-1-outscraper-ingestion-llje34, the stale connected
+    # branch, alongside the correct SHA. The SHA and the command list are the signals; the branch
+    # is context.
     sha = next((env[k] for k in _SHA_VARS if env.get(k)), None)
     return (
         f"OUTREACH_BUILD sha={sha[:12] if sha else 'unknown'} "
@@ -346,6 +353,13 @@ def main() -> int:
     parser.add_argument(
         "--group", choices=["both_null", "rating_present"], default="both_null",
         help="verify-reviews: which I-041 group to sample",
+    )
+    parser.add_argument(
+        "--provider", choices=["outscraper", "dataforseo"], default="dataforseo",
+        help=(
+            "verify-reviews: who to ask. Defaults to dataforseo because it is INDEPENDENT of the "
+            "hypothesis — re-asking Outscraper returns the ambiguous value either way (I-050)."
+        ),
     )
     parser.add_argument(
         "--allow-geometry-change",

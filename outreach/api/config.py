@@ -101,6 +101,18 @@ class Settings(BaseSettings):
     # for a smoke test and unwise for a real market run. Moves to R2 in Phase 2 (ISSUES I-024).
     raw_landing_dir: str | None = None
 
+    # --- DataForSEO ----------------------------------------------------------------------
+    # The independent second opinion for I-041, and the sole provider for Phase 2 scanning.
+    # Set on Railway as REFERENCE variables (${{PLATFORM.DATAFORSEO_LOGIN}}) rather than copies,
+    # so the secrets never leave the platform and a rotation propagates automatically.
+    dataforseo_login: str = ""
+    dataforseo_password: str = ""
+
+    # Business Data reviews/live is billed per task. Used for the pre-flight projection on
+    # verify-reviews; like the Outscraper rate this is a CONFIGURED number, not one the API
+    # reports back, so the abort gate is exactly as honest as it is (same caveat as I-022).
+    dataforseo_cost_per_request_cents: int = 1
+
     # --- Cost guardrails -----------------------------------------------------------------
     # Abort the paid stage if the pre-flight projection exceeds this (brief §4).
     max_market_run_cost_cents: int = 5000

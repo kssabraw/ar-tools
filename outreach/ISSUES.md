@@ -1097,3 +1097,44 @@ it must NOT wait for its own results.
 Note also that auto-deploy is off (I-047) and a Railway cron service runs its start command on
 every deploy — so whichever way this is wired, deploying it will fire one immediate run. Free for
 the collector; not free if the two ever share a command.
+
+### I-057 · DataForSEO wired as the independent check for I-041
+`api/services/dataforseo_client.py` + `verify-reviews --provider dataforseo` (now the **default**).
+
+Endpoint and request shape taken from this estate rather than the vendor docs — the I-029 lesson.
+`platform-api/services/gbp_service.py` has called `POST /v3/business_data/google/reviews/live`
+with `{"place_id": ...}` and HTTP basic auth against this same account, in production, for months.
+
+**It is a better instrument than a count field.** It takes a `place_id` and returns the review
+objects *plus* `reviews_count`, so "does this listing have reviews" is answered by the presence of
+reviews rather than by re-reading a number that may be null for the very reason under
+investigation. And a DataForSEO `reviews_count` of **0** is a positive assertion of zero — exactly
+what Outscraper never emits across 1,388 prospects, and the single most valuable answer the run
+can return.
+
+Four verdicts, and the third is the one that matters most:
+`count > 0` or items present → `has_reviews` · `count == 0` → `zero` · `count is None` →
+**`ambiguous`, never `zero`** (rounding a second silence down would let absence of evidence argue
+for the conclusion under test) · lookup failed → `error`.
+
+`--provider outscraper` is kept, because the COMPARISON is the result: two vendors agreeing on a
+null is evidence, one vendor repeating itself is not (I-050).
+
+Credentials are Railway reference variables (`${{PLATFORM.DATAFORSEO_LOGIN}}`), so no secret was
+copied and a rotation propagates. Cost is a configured per-request rate
+(`dataforseo_cost_per_request_cents`, default 1c) — like the Outscraper rate it is not reported
+back by the API, so the abort gate is exactly as honest as that number (same caveat as I-022).
+
+### I-058 · The build banner's BRANCH label is stale on Railway — SHA is the signal
+The first deployment of main's HEAD printed
+`OUTREACH_BUILD sha=b8a0e3295661 branch=claude/phase-1-outscraper-ingestion-llje34`. The SHA was
+correct; the branch was the stale connected branch Railway still had on file. Since the whole
+point of the banner is to make a wrong build obvious, a wrong-looking branch beside a right SHA is
+exactly the kind of thing that would send someone chasing the wrong problem. Noted in the code:
+**the SHA and the command list are the signals; the branch is context.**
+
+### I-053 VERIFIED IN PRODUCTION (2026-08-01)
+The free `filter` run on deployment `601e1c23` confirmed the `review_count_override` fix against
+live data: **survived 925 → 924**, `review_count_min` failures **433 → 434**. Mejia Rooter's
+manually-verified count of 3 survived a full filter re-run and kept it excluded — the exact silent
+revert that prompted the class audit, now proven fixed where it counts rather than only in tests.
