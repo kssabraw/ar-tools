@@ -1,0 +1,145 @@
+---
+import type { GetStaticPaths } from 'astro';
+import { render } from 'astro:content';
+import Layout from '../../layouts/Layout.astro';
+import CardGrid from '../../theme/components/CardGrid.astro';
+import ArticleCard from '../../theme/components/ArticleCard.astro';
+import PageHeader from '../../theme/components/PageHeader.astro';
+import { allPosts, relatedTo, slugify } from '../../lib/content';
+import { article } from '../../lib/schema';
+import { has } from '../../lib/site';
+
+export const getStaticPaths: GetStaticPaths = async () => {
+  const posts = await allPosts();
+  if (posts.length === 0) return [];
+  return [
+    { params: { slug: undefined }, props: { post: undefined, posts } },
+    ...posts.map((post) => ({ params: { slug: post.id }, props: { post, posts } })),
+  ];
+};
+
+const { post, posts } = Astro.props;
+const Content = post ? (await render(post)).Content : null;
+const d = post?.data;
+const related = post ? relatedTo(post, posts) : [];
+
+const meta = d
+  ? [d.author, d.readingTime, d.publishDate?.toLocaleDateString('en', { month: 'long', year: 'numeric' })]
+      .filter(has)
+      .join(' · ')
+  : '';
+
+// A generated page may carry its own JSON-LD; otherwise we build Article
+// structured data from the frontmatter.
+const ld = d
+  ? (d.jsonld ??
+    article({
+      title: d.title,
+      description: d.description,
+      url: Astro.url.href,
+      published: d.publishDate,
+      updated: d.updatedDate,
+      author: d.author,
+      image: d.heroImage,
+    }))
+  : undefined;
+---
+
+{!d || !Content ? (
+  <Layout title="Library" description="Every article, newest first.">
+    <PageHeader title="Library" lede="Everything we've published, newest first." />
+    <CardGrid>
+      {posts.map((p) => (
+        <ArticleCard
+          href={`/blog/${p.id}/`}
+          title={p.data.title}
+          kicker={p.data.category}
+          excerpt={p.data.description}
+          meta={p.data.readingTime}
+          image={p.data.heroImage}
+          imageAlt={p.data.heroImageAlt}
+        />
+      ))}
+    </CardGrid>
+  </Layout>
+) : (
+<Layout title={d.title} description={d.description} image={d.heroImage} jsonld={ld}>
+  <article>
+    <header class="prose-wrap post-head">
+      <nav class="post-breadcrumb" aria-label="Breadcrumb">
+        <a href="/">Home</a>
+        {has(d.category) && (
+          <> · <a href={`/topics/${slugify(d.category)}/`}>{d.category}</a></>
+        )}
+      </nav>
+      {has(d.category) && <p class="eyebrow">{d.category}</p>}
+      <h1 class="post-title">{d.title}</h1>
+      {has(d.description) && <p class="lede post-lede">{d.description}</p>}
+      {has(meta) && <p class="post-meta">{meta}</p>}
+    </header>
+
+    {has(d.heroImage) && (
+      <div class="wrap post-hero">
+        <img src={d.heroImage} alt={d.heroImageAlt} width="960" height="540" loading="eager" />
+      </div>
+    )}
+
+    <div class="prose-wrap richtext post-body">
+      <Content />
+    </div>
+  </article>
+
+  {related.length > 0 && (
+    <CardGrid title="Related reading">
+      {related.map((r) => (
+        <ArticleCard
+          href={`/blog/${r.id}/`}
+          title={r.data.title}
+          kicker={r.data.category}
+          meta={r.data.readingTime}
+        />
+      ))}
+    </CardGrid>
+  )}
+</Layout>
+)}
+
+<style>
+  .post-head {
+    padding-block: var(--space-8) var(--space-5);
+  }
+  .post-breadcrumb {
+    font-size: var(--text-sm);
+    color: var(--color-text-subtle);
+    margin-bottom: var(--space-5);
+  }
+  .post-breadcrumb a {
+    color: var(--color-text-muted);
+  }
+  .post-title {
+    font-size: var(--text-4xl);
+    font-weight: 700;
+    margin-top: var(--space-3);
+  }
+  .post-lede {
+    margin: var(--space-4) 0 0;
+  }
+  .post-meta {
+    margin: var(--space-5) 0 0;
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--color-border);
+    font-size: var(--text-sm);
+    color: var(--color-text-subtle);
+  }
+  .post-hero {
+    padding-block: var(--space-5);
+  }
+  .post-hero img {
+    width: 100%;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--color-border);
+  }
+  .post-body {
+    padding-bottom: var(--space-8);
+  }
+</style>

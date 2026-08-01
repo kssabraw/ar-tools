@@ -1,0 +1,85 @@
+---
+import { has } from '../../lib/site';
+
+interface Props {
+  eyebrow?: string;
+  title: string;
+  lede?: string;
+  ctaLabel?: string;
+  ctaHref?: string;
+  secondaryLabel?: string;
+  secondaryHref?: string;
+  image?: string;
+  imageAlt?: string;
+}
+
+const { eyebrow, title, lede, ctaLabel, ctaHref, secondaryLabel, secondaryHref, image, imageAlt = '' } =
+  Astro.props;
+---
+
+<section class="hero">
+  <div class="wrap hero__inner">
+    <div class="hero__copy">
+      {has(eyebrow) && <p class="eyebrow">{eyebrow}</p>}
+      <h1 class="hero__title">{title}</h1>
+      {has(lede) && <p class="lede hero__lede">{lede}</p>}
+      {(has(ctaHref) || has(secondaryHref)) && (
+        <div class="hero__actions">
+          {has(ctaHref) && <a class="button" href={ctaHref}>{ctaLabel}</a>}
+          {has(secondaryHref) && (
+            <a class="button button--ghost" href={secondaryHref}>{secondaryLabel}</a>
+          )}
+        </div>
+      )}
+    </div>
+    {/* The image slot simply disappears when no image has been sourced yet
+        (plan §4.7) rather than leaving a broken frame. */}
+    {has(image) && (
+      <div class="hero__media">
+        <img src={image} alt={imageAlt} width="720" height="480" loading="eager" />
+      </div>
+    )}
+  </div>
+</section>
+
+<style>
+  .hero {
+    border-bottom: 1px solid var(--color-border);
+  }
+  .hero__inner {
+    display: grid;
+    gap: var(--space-7);
+    padding-block: var(--space-8) var(--space-7);
+    align-items: center;
+  }
+  .hero__inner:has(.hero__media) {
+    grid-template-columns: 1.1fr 1fr;
+  }
+  .hero__title {
+    font-size: var(--text-4xl);
+    font-weight: 700;
+    max-width: 20ch;
+  }
+  .hero__lede {
+    margin: var(--space-5) 0 0;
+    max-width: 58ch;
+  }
+  .hero__actions {
+    display: flex;
+    gap: var(--space-3);
+    margin-top: var(--space-6);
+    flex-wrap: wrap;
+  }
+  .hero__media img {
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--color-border);
+    width: 100%;
+    object-fit: cover;
+  }
+
+  @media (max-width: 860px) {
+    .hero__inner:has(.hero__media) {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

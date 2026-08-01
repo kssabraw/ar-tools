@@ -1,0 +1,106 @@
+---
+import { site, isLocal, displayPhone, has } from '../../lib/site';
+
+const phone = displayPhone();
+const current = Astro.url.pathname.replace(/\/$/, '') || '/';
+---
+
+<header class="site-header">
+  <div class="wrap site-header__inner">
+    <a class="brand" href="/">
+      <span class="brand__mark" aria-hidden="true">{site.siteName.trim().charAt(0) || 'A'}</span>
+      <span class="brand__name">{site.siteName}</span>
+    </a>
+
+    <nav class="site-nav" aria-label="Primary">
+      {site.nav.map((item) => (
+        <a
+          href={item.href}
+          aria-current={current === item.href.replace(/\/$/, '') ? 'page' : undefined}
+        >
+          {item.label}
+        </a>
+      ))}
+    </nav>
+
+    {/* A local business leads with the phone; a publication has nothing to call. */}
+    {isLocal && has(phone) && (
+      <a class="button site-header__cta" href={`tel:${phone.replace(/[^\d+]/g, '')}`}>
+        {phone}
+      </a>
+    )}
+  </div>
+</header>
+
+<style>
+  .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .site-header__inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-5);
+    padding-block: var(--space-4);
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    color: var(--color-text);
+    flex: none;
+  }
+  .brand__mark {
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-sm);
+    background: var(--color-accent);
+    color: #fff;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: var(--text-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-transform: lowercase;
+  }
+  .brand__name {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: var(--text-xl);
+    letter-spacing: var(--tracking-tight);
+  }
+  .site-nav {
+    display: flex;
+    gap: var(--space-5);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    flex-wrap: wrap;
+  }
+  .site-nav a {
+    color: var(--color-text-muted);
+  }
+  .site-nav a:hover,
+  .site-nav a[aria-current='page'] {
+    color: var(--color-accent);
+  }
+  .site-header__cta {
+    flex: none;
+  }
+
+  @media (max-width: 720px) {
+    .site-header__inner {
+      flex-wrap: wrap;
+      gap: var(--space-3);
+    }
+    .site-nav {
+      order: 3;
+      width: 100%;
+    }
+  }
+</style>

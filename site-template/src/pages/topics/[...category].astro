@@ -1,0 +1,60 @@
+---
+import type { GetStaticPaths } from 'astro';
+import Layout from '../../layouts/Layout.astro';
+import PageHeader from '../../theme/components/PageHeader.astro';
+import CardGrid from '../../theme/components/CardGrid.astro';
+import ArticleCard from '../../theme/components/ArticleCard.astro';
+import { allPosts, categoriesOf, slugify } from '../../lib/content';
+
+// Index + per-category in one route, so a site with no posts has no /topics/.
+export const getStaticPaths: GetStaticPaths = async () => {
+  const posts = await allPosts();
+  const categories = categoriesOf(posts);
+  if (categories.length === 0) return [];
+  return [
+    { params: { category: undefined }, props: { category: undefined, posts, categories } },
+    ...categories.map((category) => ({
+      params: { category: slugify(category) },
+      props: { category, posts: posts.filter((p) => p.data.category === category), categories },
+    })),
+  ];
+};
+
+const { category, posts, categories } = Astro.props;
+const countOf = (cat: string) => posts.filter((p) => p.data.category === cat).length;
+---
+
+{category ? (
+  <Layout title={category} description={`Articles about ${category.toLowerCase()}.`}>
+    <PageHeader
+      eyebrow="Topic"
+      title={category}
+      lede={`Everything we've written about ${category.toLowerCase()}.`}
+    />
+    <CardGrid>
+      {posts.map((post) => (
+        <ArticleCard
+          href={`/blog/${post.id}/`}
+          title={post.data.title}
+          excerpt={post.data.description}
+          meta={post.data.readingTime}
+          image={post.data.heroImage}
+          imageAlt={post.data.heroImageAlt}
+        />
+      ))}
+    </CardGrid>
+  </Layout>
+) : (
+  <Layout title="Topics" description="Browse by subject.">
+    <PageHeader title="Topics" lede="Browse everything by subject." />
+    <CardGrid min="220px">
+      {categories.map((cat) => (
+        <ArticleCard
+          href={`/topics/${slugify(cat)}/`}
+          title={cat}
+          meta={`${countOf(cat)} article${countOf(cat) === 1 ? '' : 's'}`}
+        />
+      ))}
+    </CardGrid>
+  </Layout>
+)}

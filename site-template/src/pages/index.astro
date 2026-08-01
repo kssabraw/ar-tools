@@ -1,0 +1,89 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Hero from '../theme/components/Hero.astro';
+import CardGrid from '../theme/components/CardGrid.astro';
+import ArticleCard from '../theme/components/ArticleCard.astro';
+import CtaBand from '../theme/components/CtaBand.astro';
+import ReviewStrip from '../theme/components/ReviewStrip.astro';
+import { site, isLocal, has } from '../lib/site';
+import { allPosts, allServices, allLocations, corePage } from '../lib/content';
+
+const home = await corePage('home');
+const s = (home?.data.sections ?? {}) as Record<string, string>;
+
+// Copy precedence: generated section copy, then config, then a plain default.
+// Nothing here invents a business fact — only framing.
+const heroTitle = s.heroTitle || home?.data.title || site.siteName;
+const heroLede = s.heroLede || site.tagline || site.description;
+const heroEyebrow = s.heroEyebrow || (isLocal ? site.business.city : undefined);
+
+const posts = await allPosts();
+const services = isLocal ? await allServices() : [];
+const locations = isLocal ? await allLocations() : [];
+const latest = posts.slice(0, isLocal ? 3 : 6);
+---
+
+<Layout title={site.siteName} description={site.description}>
+  <Hero
+    eyebrow={heroEyebrow}
+    title={heroTitle}
+    lede={heroLede}
+    ctaLabel={isLocal ? s.ctaLabel || 'Get a free quote' : undefined}
+    ctaHref={isLocal ? '/contact' : undefined}
+    secondaryLabel={isLocal && services.length > 0 ? 'Our services' : undefined}
+    secondaryHref={isLocal && services.length > 0 ? '/services' : undefined}
+    image={home?.data.heroImage}
+    imageAlt={home?.data.heroImageAlt}
+  />
+
+  {services.length > 0 && (
+    <CardGrid title={s.servicesTitle || 'What we do'}>
+      {services.slice(0, 6).map((svc) => (
+        <ArticleCard
+          href={`/services/${svc.id}/`}
+          title={svc.data.title}
+          excerpt={svc.data.teaser || svc.data.description}
+          image={svc.data.heroImage}
+          imageAlt={svc.data.heroImageAlt}
+        />
+      ))}
+    </CardGrid>
+  )}
+
+  <ReviewStrip />
+
+  {locations.length > 0 && (
+    <CardGrid title={s.locationsTitle || 'Areas we serve'} min="200px">
+      {locations.slice(0, 8).map((loc) => (
+        <ArticleCard
+          href={`/locations/${loc.id}/`}
+          title={loc.data.locationName || loc.data.title}
+          excerpt={loc.data.teaser}
+        />
+      ))}
+    </CardGrid>
+  )}
+
+  {latest.length > 0 && (
+    <CardGrid title={isLocal ? 'From the blog' : s.latestTitle || 'Latest'}>
+      {latest.map((post) => (
+        <ArticleCard
+          href={`/blog/${post.id}/`}
+          title={post.data.title}
+          kicker={post.data.category}
+          excerpt={post.data.description}
+          meta={post.data.readingTime}
+          image={post.data.heroImage}
+          imageAlt={post.data.heroImageAlt}
+        />
+      ))}
+    </CardGrid>
+  )}
+
+  {isLocal && (
+    <CtaBand
+      title={s.ctaTitle || 'Ready to get started?'}
+      body={s.ctaBody || (has(site.business.city) ? `Serving ${site.business.city} and nearby.` : undefined)}
+    />
+  )}
+</Layout>

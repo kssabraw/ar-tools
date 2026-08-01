@@ -1,0 +1,47 @@
+{
+  "siteName": "Example Site",
+  "siteType": "informational",
+  "url": "https://ar-site.workers.dev",
+  "tagline": "Clear, careful writing on the things that matter.",
+  "description": "An independent publication.",
+  "locale": "en",
+  "nav": [
+    { "label": "Topics", "href": "/topics" },
+    { "label": "About", "href": "/about" }
+  ],
+  "footerNav": [
+    { "label": "About", "href": "/about" },
+    { "label": "Privacy", "href": "/privacy" },
+    { "label": "Contact", "href": "/contact" }
+  ],
+  "business": {
+    "name": "",
+    "legalName": "",
+    "phoneReal": "",
+    "phoneDisplayed": "",
+    "email": "",
+    "street": "",
+    "city": "",
+    "region": "",
+    "postalCode": "",
+    "country": "",
+    "areaServed": [],
+    "categories": [],
+    "hours": [],
+    "mapPlaceId": "",
+    "rating": "",
+    "reviewCount": "",
+    "reviews": [],
+    "provenance": {}
+  },
+  "forms": {
+    "web3formsKey": ""
+  },
+  "analytics": {
+    "ga4": "",
+    "callrailSnippet": ""
+  },
+  "agency": {
+    "name": "Amazing Rankings"
+  }
+}

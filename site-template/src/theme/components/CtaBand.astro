@@ -1,0 +1,45 @@
+---
+import { has } from '../../lib/site';
+
+interface Props {
+  title: string;
+  body?: string;
+  ctaLabel?: string;
+  ctaHref?: string;
+}
+const { title, body, ctaLabel = 'Get in touch', ctaHref = '/contact' } = Astro.props;
+---
+
+<section class="cta-band">
+  <div class="wrap cta-band__inner">
+    <div>
+      <h2 class="cta-band__title">{title}</h2>
+      {has(body) && <p class="cta-band__body">{body}</p>}
+    </div>
+    <a class="button" href={ctaHref}>{ctaLabel}</a>
+  </div>
+</section>
+
+<style>
+  .cta-band {
+    background: var(--color-surface-muted);
+    border-block: 1px solid var(--color-border);
+    margin-top: var(--space-8);
+  }
+  .cta-band__inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-6);
+    padding-block: var(--space-7);
+    flex-wrap: wrap;
+  }
+  .cta-band__title {
+    font-size: var(--text-2xl);
+  }
+  .cta-band__body {
+    margin: var(--space-3) 0 0;
+    color: var(--color-text-muted);
+    max-width: 60ch;
+  }
+</style>

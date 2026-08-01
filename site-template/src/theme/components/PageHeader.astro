@@ -1,0 +1,33 @@
+---
+import { has } from '../../lib/site';
+
+interface Props {
+  eyebrow?: string;
+  title: string;
+  lede?: string;
+}
+const { eyebrow, title, lede } = Astro.props;
+---
+
+<header class="page-header">
+  <div class="prose-wrap">
+    {has(eyebrow) && <p class="eyebrow">{eyebrow}</p>}
+    <h1 class="page-header__title">{title}</h1>
+    {has(lede) && <p class="lede page-header__lede">{lede}</p>}
+  </div>
+</header>
+
+<style>
+  .page-header {
+    padding-block: var(--space-8) var(--space-6);
+  }
+  .page-header__title {
+    font-size: var(--text-3xl);
+    font-weight: 700;
+    margin-top: var(--space-3);
+  }
+  .page-header__lede {
+    margin: var(--space-4) 0 0;
+    max-width: 62ch;
+  }
+</style>

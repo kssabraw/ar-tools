@@ -1,0 +1,85 @@
+---
+import { site, has } from '../../lib/site';
+
+interface Props {
+  title?: string;
+  limit?: number;
+}
+const { title = 'What customers say', limit = 3 } = Astro.props;
+
+const b = site.business;
+const reviews = (b.reviews ?? []).slice(0, limit);
+
+// No reviews yet — a brand-new business, or a client with no GBP — so the
+// section renders nothing at all rather than an empty promise (plan §4.5).
+const show = reviews.length > 0;
+const stars = (n: number) => '★'.repeat(Math.round(n)).padEnd(5, '☆');
+---
+
+{show && (
+  <section class="reviews">
+    <div class="wrap">
+      <div class="reviews__head">
+        <h2 class="reviews__title">{title}</h2>
+        {has(b.rating) && has(b.reviewCount) && (
+          <p class="reviews__summary muted">
+            {b.rating} out of 5 · {b.reviewCount} reviews
+          </p>
+        )}
+      </div>
+      <div class="reviews__list">
+        {reviews.map((r) => (
+          <blockquote class="card review">
+            <p class="review__stars" aria-label={`${r.rating} out of 5`}>{stars(r.rating)}</p>
+            <p class="review__text">{r.text}</p>
+            {has(r.author) && <footer class="review__author">— {r.author}</footer>}
+          </blockquote>
+        ))}
+      </div>
+    </div>
+  </section>
+)}
+
+<style>
+  .reviews {
+    padding-block: var(--space-7);
+  }
+  .reviews__head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-4);
+    margin-bottom: var(--space-5);
+    flex-wrap: wrap;
+  }
+  .reviews__title {
+    font-size: var(--text-2xl);
+  }
+  .reviews__summary {
+    font-size: var(--text-sm);
+    margin: 0;
+  }
+  .reviews__list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: var(--space-5);
+  }
+  .review {
+    margin: 0;
+    padding: var(--space-5);
+  }
+  .review__stars {
+    color: var(--color-accent);
+    letter-spacing: 0.1em;
+    margin: 0 0 var(--space-3);
+  }
+  .review__text {
+    margin: 0;
+    line-height: var(--leading-normal);
+  }
+  .review__author {
+    margin-top: var(--space-3);
+    font-size: var(--text-sm);
+    color: var(--color-text-subtle);
+  }
+</style>

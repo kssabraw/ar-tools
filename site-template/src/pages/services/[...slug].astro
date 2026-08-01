@@ -1,0 +1,84 @@
+---
+import type { GetStaticPaths } from 'astro';
+import { render } from 'astro:content';
+import Layout from '../../layouts/Layout.astro';
+import PageHeader from '../../theme/components/PageHeader.astro';
+import CardGrid from '../../theme/components/CardGrid.astro';
+import ArticleCard from '../../theme/components/ArticleCard.astro';
+import CtaBand from '../../theme/components/CtaBand.astro';
+import ReviewStrip from '../../theme/components/ReviewStrip.astro';
+import { allServices } from '../../lib/content';
+import { site } from '../../lib/site';
+import { service } from '../../lib/schema';
+
+/**
+ * Index and detail share one route so that a site with no services builds
+ * *no* /services/ pages at all. A separate index.astro would always emit an
+ * empty listing — a thin page we'd be publishing for no reason.
+ */
+export const getStaticPaths: GetStaticPaths = async () => {
+  const services = await allServices();
+  if (services.length === 0) return [];
+  return [
+    { params: { slug: undefined }, props: { entry: undefined, services } },
+    ...services.map((entry) => ({ params: { slug: entry.id }, props: { entry, services } })),
+  ];
+};
+
+const { entry, services } = Astro.props;
+const Content = entry ? (await render(entry)).Content : null;
+const d = entry?.data;
+
+const ld = d
+  ? (d.jsonld ?? service({ title: d.title, description: d.description, url: Astro.url.href }))
+  : undefined;
+---
+
+{d && Content ? (
+  <Layout title={d.title} description={d.description} image={d.heroImage} jsonld={ld}>
+    <PageHeader eyebrow="Service" title={d.title} lede={d.teaser || d.description} />
+    {d.heroImage && (
+      <div class="wrap media">
+        <img src={d.heroImage} alt={d.heroImageAlt} width="960" height="480" loading="eager" />
+      </div>
+    )}
+    <div class="prose-wrap richtext body">
+      <Content />
+    </div>
+    <ReviewStrip />
+    <CtaBand title={`Talk to us about ${d.title.toLowerCase()}`} />
+  </Layout>
+) : (
+  <Layout title="Services" description={`What ${site.business.name || site.siteName} does.`}>
+    <PageHeader
+      title="Services"
+      lede={site.business.city ? `What we do in ${site.business.city} and nearby.` : undefined}
+    />
+    <CardGrid>
+      {services.map((svc) => (
+        <ArticleCard
+          href={`/services/${svc.id}/`}
+          title={svc.data.title}
+          excerpt={svc.data.teaser || svc.data.description}
+          image={svc.data.heroImage}
+          imageAlt={svc.data.heroImageAlt}
+        />
+      ))}
+    </CardGrid>
+    <CtaBand title="Need a hand?" />
+  </Layout>
+)}
+
+<style>
+  .media {
+    padding-block: var(--space-4);
+  }
+  .media img {
+    width: 100%;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--color-border);
+  }
+  .body {
+    padding-bottom: var(--space-7);
+  }
+</style>

@@ -1,0 +1,32 @@
+---
+interface Props {
+  title?: string;
+  /** Minimum column width; the grid decides its own column count from this. */
+  min?: string;
+}
+const { title, min = '260px' } = Astro.props;
+---
+
+<section class="card-grid-section">
+  <div class="wrap">
+    {title && <h2 class="card-grid-section__title">{title}</h2>}
+    <div class="card-grid" style={`--min:${min}`}>
+      <slot />
+    </div>
+  </div>
+</section>
+
+<style>
+  .card-grid-section {
+    padding-block: var(--space-7);
+  }
+  .card-grid-section__title {
+    font-size: var(--text-2xl);
+    margin-bottom: var(--space-5);
+  }
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--min), 1fr));
+    gap: var(--space-5);
+  }
+</style>

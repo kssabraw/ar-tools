@@ -1,0 +1,66 @@
+---
+import { has } from '../../lib/site';
+
+interface Props {
+  href: string;
+  title: string;
+  /** Category for posts, teaser-kicker for services/locations. */
+  kicker?: string;
+  excerpt?: string;
+  meta?: string;
+  image?: string;
+  imageAlt?: string;
+}
+const { href, title, kicker, excerpt, meta, image, imageAlt = '' } = Astro.props;
+---
+
+<article class="card article-card">
+  <a class="article-card__link" href={href}>
+    {has(image) && (
+      <img class="article-card__image" src={image} alt={imageAlt} width="400" height="225" loading="lazy" />
+    )}
+    <div class="article-card__body">
+      {has(kicker) && <p class="eyebrow">{kicker}</p>}
+      <h3 class="article-card__title">{title}</h3>
+      {has(excerpt) && <p class="article-card__excerpt muted">{excerpt}</p>}
+      {has(meta) && <p class="article-card__meta">{meta}</p>}
+    </div>
+  </a>
+</article>
+
+<style>
+  .article-card {
+    transition: border-color 0.15s ease;
+  }
+  .article-card:hover {
+    border-color: var(--color-border-strong);
+  }
+  .article-card__link {
+    color: inherit;
+    display: block;
+    height: 100%;
+  }
+  .article-card__image {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+  }
+  .article-card__body {
+    padding: var(--space-5);
+    display: grid;
+    gap: var(--space-2);
+  }
+  .article-card__title {
+    font-size: var(--text-lg);
+    line-height: var(--leading-snug);
+  }
+  .article-card__excerpt {
+    font-size: var(--text-sm);
+    margin: 0;
+  }
+  .article-card__meta {
+    font-size: var(--text-xs);
+    color: var(--color-text-subtle);
+    margin: 0;
+  }
+</style>

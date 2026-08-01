@@ -1,0 +1,102 @@
+---
+import Layout from '../layouts/Layout.astro';
+import PageHeader from '../theme/components/PageHeader.astro';
+import { site, has, hasAddress, formattedAddress } from '../lib/site';
+import { corePage } from '../lib/content';
+import { render } from 'astro:content';
+
+/**
+ * Legal pages are deterministic (plan §4.8): the business facts are merged
+ * into a fixed template, no LLM involved. An uploaded/authored policy in the
+ * `pages` collection overrides this default outright.
+ */
+const entry = await corePage('privacy');
+const Content = entry ? (await render(entry)).Content : null;
+
+const name = site.business.name || site.siteName;
+const contactEmail = site.business.email;
+const usesForm = has(site.forms.web3formsKey);
+const usesAnalytics = has(site.analytics.ga4);
+const usesCallTracking = has(site.analytics.callrailSnippet);
+const updated = new Date().toISOString().slice(0, 10);
+---
+
+<Layout title="Privacy Policy" description={`How ${name} handles your information.`} noindex={false}>
+  <PageHeader title="Privacy Policy" lede={`How ${name} collects and handles your information.`} />
+
+  <div class="prose-wrap richtext">
+    {Content ? (
+      <Content />
+    ) : (
+      <>
+        <p class="muted">Last updated {updated}</p>
+
+        <h2>Who we are</h2>
+        <p>
+          This website is operated by {name}
+          {hasAddress() && <> of {formattedAddress()}</>}.
+          {has(contactEmail) && (
+            <> You can reach us at <a href={`mailto:${contactEmail}`}>{contactEmail}</a>.</>
+          )}
+        </p>
+
+        <h2>What we collect</h2>
+        {usesForm ? (
+          <p>
+            If you submit our contact form we collect the name, email address, phone number and
+            message you provide, so that we can respond to your enquiry. Submissions are delivered
+            to us by email through a third-party form service.
+          </p>
+        ) : (
+          <p>
+            We do not collect personal information through this website unless you choose to contact
+            us directly.
+          </p>
+        )}
+        {usesAnalytics && (
+          <p>
+            We use Google Analytics to understand how visitors use the site. It collects usage data
+            such as pages viewed, approximate location and device type. This is used in aggregate
+            and is not used to identify you personally.
+          </p>
+        )}
+        {usesCallTracking && (
+          <p>
+            We use call-tracking software, which may display a different phone number depending on
+            how you reached the site and record the fact that a call took place. This helps us
+            understand which marketing is working.
+          </p>
+        )}
+
+        <h2>How we use it</h2>
+        <p>
+          We use the information you give us to respond to your enquiry and to provide the services
+          you ask for. We do not sell your personal information.
+        </p>
+
+        <h2>How long we keep it</h2>
+        <p>
+          We keep enquiry correspondence for as long as needed to deal with your request and to meet
+          our record-keeping obligations, then delete it.
+        </p>
+
+        <h2>Your choices</h2>
+        <p>
+          You can ask us what personal information we hold about you, ask us to correct it, or ask
+          us to delete it.
+          {has(contactEmail) ? (
+            <> Email <a href={`mailto:${contactEmail}`}>{contactEmail}</a> and we'll help.</>
+          ) : (
+            <> Contact us using the details on this site and we'll help.</>
+          )}
+        </p>
+
+        <h2>Changes</h2>
+        <p>
+          We may update this policy from time to time. The date at the top shows when it was last
+          revised.
+        </p>
+      </>
+    )}
+  </div>
+</Layout>

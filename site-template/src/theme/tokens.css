@@ -1,0 +1,75 @@
+/*
+ * Design tokens — THE ONLY FILE A THEME SWAP NEEDS TO TOUCH.
+ *
+ * The theme compiler (services/website_theme.py) writes this file and the
+ * components beside it; nothing outside src/theme/ is theme-specific. That
+ * separation is what lets template upgrades roll out to every site repo
+ * without disturbing any site's design.
+ *
+ * Values below are the neutral house default. A compiled theme replaces them
+ * with the tokens extracted from the uploaded design.
+ */
+:root {
+  /* Brand */
+  --color-accent: oklch(0.55 0.11 210);
+  --color-accent-hover: oklch(0.46 0.11 210);
+  --color-accent-soft: oklch(0.55 0.11 210 / 0.12);
+
+  /* Surfaces */
+  --color-bg: #fbfcfc;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f3f6f6;
+
+  /* Ink */
+  --color-text: #182220;
+  --color-text-muted: #55635f;
+  --color-text-subtle: #7d8b87;
+
+  /* Lines */
+  --color-border: #e4eae8;
+  --color-border-strong: #d5dedb;
+
+  /* Type */
+  --font-display: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-body: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --text-xs: 0.78rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.3rem;
+  --text-2xl: 1.6rem;
+  --text-3xl: 2.1rem;
+  --text-4xl: 2.75rem;
+
+  --leading-tight: 1.1;
+  --leading-snug: 1.35;
+  --leading-normal: 1.6;
+  --leading-relaxed: 1.72;
+
+  --tracking-tight: -0.03em;
+  --tracking-wide: 0.06em;
+
+  /* Space */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 22px;
+  --space-6: 32px;
+  --space-7: 44px;
+  --space-8: 56px;
+  --space-9: 80px;
+
+  /* Shape */
+  --radius-sm: 5px;
+  --radius-md: 9px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  /* Layout */
+  --width-page: 1120px;
+  --width-prose: 720px;
+  --gutter: var(--space-6);
+}

@@ -1,0 +1,89 @@
+---
+import '../theme/tokens.css';
+import '../theme/base.css';
+import Header from '../theme/components/Header.astro';
+import Footer from '../theme/components/Footer.astro';
+import { site, canonical } from '../lib/site';
+import { graph, webSite, organization } from '../lib/schema';
+
+interface Props {
+  title: string;
+  description?: string;
+  /** Page-specific schema.org node(s). The site-level WebSite/Organization
+   *  graph is always emitted alongside these. */
+  jsonld?: Record<string, unknown> | Record<string, unknown>[];
+  image?: string;
+  noindex?: boolean;
+}
+
+const { title, description = site.description, jsonld, image, noindex = false } = Astro.props;
+
+const pageTitle = title === site.siteName ? title : `${title} · ${site.siteName}`;
+const url = canonical(Astro.url.pathname, Astro.site ?? site.url);
+const ogImage = image ? canonical(image, Astro.site ?? site.url) : undefined;
+
+const extra = jsonld ? (Array.isArray(jsonld) ? jsonld : [jsonld]) : [];
+const ld = graph(webSite(), organization(), ...extra);
+
+const { ga4, callrailSnippet } = site.analytics;
+---
+
+<!doctype html>
+<html lang={site.locale}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{pageTitle}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={url} />
+    {noindex && <meta name="robots" content="noindex,nofollow" />}
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={site.siteName} />
+    <meta property="og:title" content={pageTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={url} />
+    {ogImage && <meta property="og:image" content={ogImage} />}
+    <meta name="twitter:card" content={ogImage ? 'summary_large_image' : 'summary'} />
+
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    <link rel="alternate" type="application/rss+xml" title={site.siteName} href="/rss.xml" />
+
+    {/* set:html on the tag itself — the JSON must not be HTML-escaped. */}
+    <script type="application/ld+json" is:inline set:html={ld} />
+
+    {/* Sanctioned third-party snippets only (plan §4.8) — the theme is
+        otherwise self-contained, with no external requests. */}
+    {ga4 && (
+      <>
+        <script async is:inline src={`https://www.googletagmanager.com/gtag/js?id=${ga4}`}></script>
+        <script
+          is:inline
+          set:html={`window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','${ga4}');`}
+        />
+      </>
+    )}
+    {callrailSnippet && <Fragment set:html={callrailSnippet} />}
+  </head>
+  <body>
+    <a class="visually-hidden" href="#main">Skip to content</a>
+    <div class="shell">
+      <Header />
+      <main id="main" class="shell__main">
+        <slot />
+      </main>
+      <Footer />
+    </div>
+  </body>
+</html>
+
+<style>
+  .shell {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .shell__main {
+    flex: 1;
+  }
+</style>
