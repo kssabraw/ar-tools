@@ -274,6 +274,32 @@ def cmd_run(args) -> int:
     return 0
 
 
+# Env vars that may carry the deployed commit. Railway sets RAILWAY_GIT_COMMIT_SHA; the others
+# are conventional and cost nothing to check.
+_SHA_VARS = ("OUTREACH_BUILD_SHA", "RAILWAY_GIT_COMMIT_SHA", "SOURCE_COMMIT", "GIT_COMMIT")
+
+
+def build_identity(env: dict[str, str], commands: "list[str]") -> str:
+    """One line saying WHICH code is running, printed before anything else happens.
+
+    A deploy that built the wrong commit is otherwise invisible until it fails at something, and
+    then only by inference: `verify-reviews` was rejected as an invalid choice, and working out
+    that the container held a commit from a merged branch took reading the deployment metadata.
+    That should have been line one.
+
+    The command list is part of the identity on purpose, and is the half that always works. A SHA
+    can come back `unknown` — Railway does not expose its git vars to every service — but the
+    subcommands the binary actually accepts are read from the running code, so a stale image is
+    self-evident from the banner whether or not the SHA resolved.
+    """
+    sha = next((env[k] for k in _SHA_VARS if env.get(k)), None)
+    return (
+        f"OUTREACH_BUILD sha={sha[:12] if sha else 'unknown'} "
+        f"branch={env.get('RAILWAY_GIT_BRANCH') or 'unknown'} "
+        f"commands={','.join(commands)}"
+    )
+
+
 def _install_sigterm_marker() -> None:
     """Print the result marker if the platform terminates us.
 
@@ -296,6 +322,16 @@ def main() -> int:
     _install_sigterm_marker()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 
+    import os
+
+    print(
+        build_identity(
+            dict(os.environ),
+            ["seed", "ingest", "filter", "run", "calibrate", "verify-reviews"],
+        ),
+        flush=True,
+    )
+
     parser = argparse.ArgumentParser(description="Outreach pipeline — Phase 1")
     parser.add_argument(
         "command",
@@ -316,29 +352,47 @@ def main() -> int:
         action="store_true",
         help="permit geometry edits to submarkets that have NOT been scanned",
     )
-    args = parser.parse_args()
-
-    handler = {
+    handlers = {
         "seed": cmd_seed,
         "ingest": cmd_ingest,
         "filter": cmd_filter,
         "run": cmd_run,
         "calibrate": cmd_calibrate,
         "verify-reviews": cmd_verify_reviews,
-    }[args.command]
+    }
 
     # Railway reports a crashed job as deployment status SUCCESS when restartPolicy is NEVER —
-    # observed: `filter` died on a missing credential and the deployment still showed green.
-    # For a job that runs unattended twice a month, the deployment status is therefore NOT a
-    # success signal. This marker is, and it is greppable from the logs.
+    # observed twice: `filter` died on a missing credential, and `verify-reviews` was rejected as
+    # an invalid choice. Both showed green. For a job that runs unattended twice a month the
+    # deployment status is therefore NOT a success signal. This marker is, and it is greppable.
+    #
+    # ARGPARSE IS INSIDE THE TRY, which is the half this originally missed. `parse_args` raises
+    # SystemExit on a bad argument, and SystemExit derives from BaseException rather than
+    # Exception — so a marker guarding only `Exception` never printed for exactly the failure an
+    # unattended misconfiguration produces: a wrong OUTREACH_COMMAND. The process did exit
+    # non-zero; the silence was the missing half, not the exit code.
+    command = "(unparsed)"
     try:
-        code = handler(args)
+        args = parser.parse_args()
+        command = args.command
+        code = handlers[command](args)
+    except SystemExit as exc:
+        # argparse's bad-argument exit, or an explicit SystemExit("message") from a command.
+        raw = exc.code
+        code = raw if isinstance(raw, int) else (0 if raw is None else 1)
+        reason = "" if isinstance(raw, (int, type(None))) else f" reason={raw!r}"
+        status = "ok" if code == 0 else "failed"
+        print(
+            f"OUTREACH_RESULT status={status} command={command} exit={code}{reason}",
+            flush=True,
+        )
+        return code
     except Exception as exc:  # noqa: BLE001 — the marker must outlive any failure mode
-        print(f"OUTREACH_RESULT status=failed command={args.command} error={exc!r}", flush=True)
+        print(f"OUTREACH_RESULT status=failed command={command} error={exc!r}", flush=True)
         raise
 
     status = "ok" if code == 0 else "failed"
-    print(f"OUTREACH_RESULT status={status} command={args.command} exit={code}", flush=True)
+    print(f"OUTREACH_RESULT status={status} command={command} exit={code}", flush=True)
     return code
 
 

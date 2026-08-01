@@ -256,7 +256,7 @@ def run_filter(
     # 1388 LA prospects unfiltered on the first run (ISSUES I-036).
     prospects = fetch_all(
         lambda: client.table("prospect")
-        .select("id,place_id,name,phone,website,rating,review_count,review_count_inferred_zero,lat,lng,business_status,raw")
+        .select("id,place_id,name,phone,website,rating,review_count,review_count_inferred_zero,franchise_status,lat,lng,business_status,raw")
         .eq("market_id", market_id)
     )
 
@@ -285,6 +285,11 @@ def run_filter(
             # raw is the provider's untouched payload, which by definition does not carry our
             # inference about it (ISSUES I-041).
             inferred_zero=bool(row.get("review_count_inferred_zero")),
+            # The COLUMN, not the re-parsed payload. At ingest the two agree; when they diverge
+            # the column holds a count obtained outside the provider (a manual verification, or
+            # the I-045 geogrid backfill), and re-parsing raw would silently discard it.
+            review_count_override=row.get("review_count"),
+            franchise_decision=row.get("franchise_status"),
         )
 
         report.evaluated += 1
@@ -295,7 +300,11 @@ def run_filter(
 
         if verdict.franchise_flagged:
             report.franchise_flagged += 1
-            franchise_updates.append(row["id"])
+            if row.get("franchise_status") not in (
+                "confirmed_franchise",
+                "confirmed_independent",
+            ):
+                franchise_updates.append(row["id"])
 
         for outcome in verdict.outcomes:
             if not outcome.passed:
@@ -318,6 +327,11 @@ def run_filter(
         ).execute()
 
     # Flag only — never 'confirmed_franchise'. Confirmation is a human act.
+    #
+    # And never over a confirmation either, which is the half this originally missed: a reviewer
+    # who recorded confirmed_independent (or the stronger confirmed_franchise) had it silently
+    # reset to 'flagged' by the next routine filter run. Skipped here so the intent is legible at
+    # the call site; the database guard enforces it regardless of caller (ISSUES I-054).
     if franchise_updates:
         client.table("prospect").update({"franchise_status": "flagged"}).in_(
             "id", franchise_updates

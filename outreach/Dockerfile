@@ -12,6 +12,16 @@
 
 FROM python:3.11-slim
 
+# Which commit this image holds, printed as line one of every run (`OUTREACH_BUILD ...`).
+#
+# Railway supplies RAILWAY_GIT_COMMIT_SHA to the build, so declaring it as an ARG bakes it in.
+# The runtime also checks the env directly, so this working is not load-bearing — and if the
+# banner says `sha=unknown` the command list still exposes a stale image, which is the failure
+# that actually cost time: a deploy silently built a merged branch's commit and only announced
+# itself by rejecting a subcommand that did not exist yet.
+ARG RAILWAY_GIT_COMMIT_SHA=""
+ENV OUTREACH_BUILD_SHA=$RAILWAY_GIT_COMMIT_SHA
+
 WORKDIR /app
 
 COPY api/requirements.txt ./api/requirements.txt

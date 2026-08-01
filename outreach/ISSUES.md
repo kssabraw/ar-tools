@@ -933,3 +933,124 @@ Read-only apart from a `cost_ledger` row, cost-gated before any client is opened
 `by_verdict` / `counts_found` / a recommendation. **A single `has_reviews` in the sample withholds
 the flag** — it would be written across every future market pull, so one false zero here is a
 systematic error there.
+
+### I-052 · Disabling auto-deploy PINS the service to its last-built commit — found by a failed run
+**This is a direct consequence of the I-047 mitigation and was not anticipated when it was
+recommended.** "Auto deploys when pushed to GitHub" does not only stop deploys on push; it stops
+Railway *tracking* new commits at all. The service stays pinned to the last commit it built, and a
+variable change redeploys **that snapshot** rather than fetching the connected branch's HEAD.
+
+Observed: with the source correctly set to `main` (dashboard-confirmed) and `verify-reviews` merged
+to `main`, setting `OUTREACH_COMMAND=verify-reviews` deployed commit `7f9430b` from
+`claude/phase-1-outscraper-ingestion-llje34` — the old branch — and failed with
+`invalid choice: 'verify-reviews'`. **Nothing was spent**: argparse rejects before any client is
+opened.
+
+So the repoint is real in config and **inert in practice** until something explicitly deploys a
+newer commit. To run new code: deploy the latest commit from the Railway dashboard (the service's
+Deploy control offers it when undeployed commits exist), or re-enable auto-deploy briefly and turn
+it back off.
+
+*Do not "fix" this by leaving auto-deploy on.* The pinning is the safety property working: this
+service spends money, and a job that only ever runs code someone deliberately deployed is the
+posture I-047 was asking for. The cost is one extra click, paid at the moment of running.
+
+**Two things the same failure settled for free:**
+- The build log loads `outreach/Dockerfile`, so `railway.toml` **is** read and the DOCKERFILE
+  builder is in effect. The `RAILPACK` value reported by the config API is the stale pre-override
+  field, not what builds. Closes the ambiguity noted in HANDOFF §1.
+- Deployment status came back **SUCCESS** on a job that errored — I-034 observed live a second
+  time — and **no `OUTREACH_RESULT` marker printed**, because argparse exits before `main()` can
+  emit one. The marker does not cover bad-argument failures, which is precisely the shape an
+  unattended cron misconfiguration would take.
+
+### I-053 · A verified review count did not survive a filter re-run — FIXED
+**Found while checking the retry path, not by a test.** `pipeline.run_filter` re-parses `place`
+from stored `raw` on every run and passes THAT to `filters.evaluate`. The `prospect.review_count`
+column was selected but never handed to the filter. Mejia Rooter's manually-confirmed count of 3 —
+an owner ruling — lives only in the column, because `raw.reviews` is still null and always will be.
+
+**The next routine `filter` run would therefore have scored it `not_evaluated` and silently
+returned it to the survivor set**, reverting the ruling with nothing anywhere reporting it. Same
+family as I-035 and I-036: correct-looking output, quietly wrong, no signal.
+
+*Fixed:* `evaluate(..., review_count_override=)`, threaded from the COLUMN by `run_filter`. An
+externally-obtained count — a manual verification, or the Phase 2 geogrid backfill (I-045) — beats
+a re-parse of the provider payload, in both directions. Three regression tests, including the
+exact Mejia shape (raw null, column 3, must exclude).
+
+This also makes I-045 land correctly when it arrives: the backfill writes the column, and the
+filter now reads it.
+
+### I-054 · CLASS AUDIT — human decisions overwritten by re-derivation
+**Prompted by the observation that I-035, I-036 and I-053 are three instances of one pattern:** a
+decision is stored in a column, and some later code path re-derives that value from source and
+overwrites or ignores it. Nothing errors. The revert surfaces weeks later as "why did that number
+move". Fixing instances does not catch the fourth, so every column that can hold a human decision
+was audited against every path that writes it.
+
+| Column | Holds a decision? | Re-derived by | Risk | Status |
+|---|---|---|---|---|
+| `prospect.franchise_status` (`confirmed_*`) | reviewer read the listing | `run_filter`'s unconditional `update({franchise_status: 'flagged'})` | **CONFIRMED** | **FIXED** |
+| `prospect.review_count` (verified) | manual or geogrid | `run_filter` re-parses raw **and** the ingest upsert rewrites from payload | **CONFIRMED, two paths** | **FIXED** |
+| `prospect.review_count_inferred_zero` | inference about a vendor convention (I-051) | nothing today | latent | guarded preemptively |
+| `prospect.latest_review_at` | Phase 5 review recency | ingest upsert writes `None` unconditionally | **latent, will bite at Phase 5** | flagged below |
+| `prospect.submarket_id` | not today | ingest recomputes nearest-centroid | none now | documented, unguarded — see below |
+| `submarket` geometry | yes | `seed` | already guarded | `check_geometry_change` — the existing precedent |
+| `lead.stage` / `owner_id` / `lost_reason` / `next_action` | all human | nothing re-derives | none | safe by construction |
+| `lead.suppressed_at` / `suppression_reason` | trigger-set | `BEFORE INSERT` only, never on update | none | safe |
+| `suppression` rows | human | nothing; no delete path exists | none | safe |
+| `conflict_check.decision`, `audit_approval.state` | future | not built | future | flag at build time |
+
+**`franchise_status` was the worst of them and had not been noticed.** `run_filter` updated every
+pattern-matching prospect to `flagged` unconditionally, so a reviewer's `confirmed_independent`
+was reset on the next routine run — and `confirmed_franchise`, a *stronger* statement than
+flagged, was silently downgraded. The code carried a comment saying "never writes
+`confirmed_franchise` — confirmation is a human act", which shows the author considered not
+*writing* a confirmation and not that the same update *destroys* one.
+
+**`review_count` had a second revert path** beyond the one fixed in I-053: the ingest upsert
+(`on_conflict = place_id`) rewrites it from the payload on every re-ingest. A call-site fix in
+`run_filter` alone would have left that open — which is the argument for guarding the class.
+
+*Fixed structurally, in the database.* `prospect_preserve_decisions()` (`BEFORE UPDATE`, migration
+`20260801140000`) preserves a verified `review_count`, a `confirmed_*` franchise ruling, and the
+inferred-zero flag, **regardless of which code path writes** — the ingest, the filter, a future
+backfill, or a hand-written UPDATE at 2am. Provenance comes from a new
+`prospect.review_count_source` (`provider` | `verified` | `geogrid`); a write that does not claim
+better provenance cannot overwrite a value that has it, and one that does (the I-045 backfill)
+still can. A human can always revise their own ruling. Six live guard checks pass.
+
+Plus the call-site half, so intent is legible where it is enforced: `run_filter` skips confirmed
+rows, and `filters.evaluate(..., franchise_decision=)` makes the *verdict* honour the ruling in
+both directions rather than contradicting the stored status on every run.
+
+**`latest_review_at` is the fourth instance, found by this audit before it could bite.** The ingest
+writes `None` unconditionally, so once Phase 5 populates review recency, a re-ingest will null it.
+Not guarded now because nothing writes it yet and a guard on a column with no writer is untestable.
+**Action for the Phase 5 session:** add it to `prospect_preserve_decisions()` in the same migration
+that starts writing it.
+
+**`submarket_id` is deliberately unguarded.** It is recomputed on every re-ingest, but
+nearest-centroid is deterministic and depends only on geometry, which is immutable once scanned
+(DECISIONS.md) — so a re-ingest reproduces the same value rather than reverting anything. It joins
+this class the moment a human can reassign a prospect by hand, and no such path exists. Recorded so
+the absence is a decision rather than an oversight.
+
+### I-052 UPDATE · Fixed — the job now says which code it is, and bad invocations report
+**The build banner.** Line one of every run is now
+`OUTREACH_BUILD sha=<12> branch=<b> commands=<list>`. The SHA is baked at image build from
+`RAILWAY_GIT_COMMIT_SHA` (Dockerfile `ARG`) with a runtime env fallback. **The command list is the
+half that always works** — a SHA can read `unknown` if the platform does not expose its git vars,
+but the subcommands come from the running code, so a stale image is self-evident either way. The
+container that failed I-052 would have shown a list without `verify-reviews` on line one, instead
+of announcing itself by rejecting an argument several seconds later.
+
+**I-034 closed properly.** `parse_args()` is now inside the try. Argparse raises `SystemExit`,
+which derives from `BaseException` and not `Exception`, so a handler guarding only `Exception`
+never fired for exactly the failure an unattended misconfiguration produces — a wrong
+`OUTREACH_COMMAND`. Note the process *did* exit non-zero all along; the missing half was the
+marker, and Railway's SUCCESS badge is unaffected either way, which is why the marker is the
+signal and the badge is not. `--help` still exits 0 and is not reported as a failure, or whoever
+greps these markers learns to ignore them. Four subprocess regression tests, including the exact
+`verify-reviewz` shape.
