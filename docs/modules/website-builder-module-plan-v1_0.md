@@ -43,7 +43,7 @@ Today, turning that content into a live site is 100% manual: design, repo, hosti
 
 A per-suite **Websites** module (with per-client attachment) that:
 
-1. **Ingests a Claude Design export** (uploaded HTML/zip, or a pasted share/export URL) and **compiles it into an Astro theme**: design tokens (colors, fonts, spacing), layout components (header/footer/nav), and section components (hero, service card, review strip, article card…) with content slots — then renders a **preview** the user approves before anything is provisioned.
+1. **Ingests a Claude Design export** (a `.zip` of `.dc.html` prototype files — format verified against a real sample, §4.3) and **compiles it into an Astro theme**: design tokens (colors, fonts, spacing), layout components (header/footer/nav), and one template per page-screen in the design, with content slots wired to the collection fields the design's own repeaters imply — then renders a **preview** the user approves before anything is provisioned.
 2. **Provisions the site**: creates a GitHub repo from a house **`ar-site-template`** Astro repo, commits the compiled theme + a `site.config.json`, creates the Cloudflare project, and deploys a skeleton immediately (every site gets a `*.workers.dev`/`*.pages.dev` staging URL before the real domain exists). Attaches the custom domain + DNS when the zone is on Cloudflare.
 3. **Generates and populates content** using the engines the suite already has:
    - **Local business site**: site plan from Plan Silo + GBP → home, `/services/<slug>`, `/locations/<slug>`, about, contact (+ optional `/blog`). Business facts and LocalBusiness/Service JSON-LD come from the client's business-facts block (manual entry > GBP — §4.5; GBP is a source, not a dependency) — the writer never invents NAP.
@@ -126,14 +126,34 @@ Two viable Cloudflare paths:
 
 ### 4.3 Design ingestion & theme compile (the risky part, so it's constrained)
 
-**Input:** whatever Claude Design exports — v1 accepts (a) an uploaded `.zip` / `.html` file into the existing `files` upload path, or (b) a pasted URL the backend fetches. Multi-page designs are accepted; the compiler treats the first page as the primary layout and additional pages as section sources.
+**Input — the real export format (verified against a live sample 2026-08-01;** fixture: an informational-site design, `Informational_site_design.zip`, kept as the Phase 1 test case**).** A Claude Design export is a **`.zip` containing `.dc.html` files** — *not* plain HTML. Each is a self-contained prototype rendered client-side by a bundled `support.js` React runtime, in a small custom DSL:
 
-**Compile (LLM-assisted, but narrow):** one `website_theme_compile` job (Claude Sonnet, `website_theme_model`) that does **extraction + translation, not free design**:
+| Piece | What it is |
+|---|---|
+| `<x-dc>` | Root wrapper holding the whole template |
+| `<helmet data-dc-atomics>` | Head content — Google Fonts `<link>`s + a small global `<style>` (reset, body font/colors, link colors) |
+| `<script type="text/x-dc" data-dc-script>` | A `class Component extends DCLogic` with `state` and a `renderVals()` returning every binding the template uses — **including sample data arrays** |
+| `<sc-if value="{{ isHome }}">` | Conditional screen rendering — **one branch per page** |
+| `<sc-for list="{{ latest }}" as="a">` | Repeaters — **the content-collection binding points** |
+| `{{ expr }}`, `onClick="{{ goHome }}"`, `style-hover="…"`, `hint-placeholder-val/-count` | Interpolation, handlers, hover styling, design-time preview hints |
 
-1. Deterministic pre-pass: parse the HTML, inline/download assets (fonts, images → `public/`), strip scripts, extract the raw palette/typography.
-2. LLM pass: map the design into the **fixed theme contract** — `tokens.json` (colors, type scale, spacing, radii), `Layout.astro` (header/nav/footer), and a bounded set of section components (`Hero`, `ServiceCard`, `ReviewStrip`, `CtaBand`, `ArticleCard`, `ContactBlock`…), each with named content slots. The LLM never invents page copy and never emits `<script>`.
-3. Deterministic post-checks: valid Astro/HTML, no external script/style URLs (self-contained), all tokens referenced exist, sample page renders.
-4. Output: theme files stored (storage bucket + `website_themes` row) and a **static preview** (sample page with placeholder content) rendered to the bucket → signed URL shown in the UI. **User approves the preview before provisioning** — this is the fidelity gate; a bad compile costs a re-run, never a bad live site.
+Four properties of the sample drive the compiler design:
+
+1. **The whole multi-page site is ONE file.** The fixture's six `sc-if` branches — `isHome`, `isTopics`, `isArticle`, `isAbout`, `isPrivacy`, `isContact` — are exactly the informational-site page set. Each branch maps 1:1 to an Astro route/layout, so one export yields the complete page-type set rather than "first page = layout, rest = section sources."
+2. **`sc-for` + the script's sample arrays are a schema contract, not content.** The fixture's `latest` / `catList` / `related` arrays carry `{cat, title, read, photo}` per item — i.e. the design is telling us the frontmatter it expects (`category`, `title`, `readingTime`, `heroImage`). The compiler reads the shape and **discards the sample rows**.
+3. **All styling is inline `style="…"` attributes — no classes, no stylesheet.** Extraction to tokens is therefore real work but very tractable: literal values repeat verbatim (the fixture's accent `oklch(0.5 0.1 180)` appears 21×, the border `#e3e9e6` throughout). Modern CSS is in play (`oklch()`, `text-wrap:pretty`, `backdrop-filter`) — fine for Astro.
+4. **The design ships zero images.** No `<img>` tags at all; placeholders are literal strings inside striped-gradient blocks (`[ hero photo: plated balanced meal ]`, `[ photo: dumbbells ]`). This **confirms §4.7 is load-bearing** — the design contributes no imagery whatsoever. Bonus: the placeholder text is a ready-made **image-generation prompt seed**, so it is captured per slot rather than discarded.
+
+An export may also contain a **canvas/directions doc** (the fixture's second file carries `<meta name="design_doc_mode" content="canvas">` and holds the exploration turns — multiple design *options* per turn in `dv-turn`/`dv-opt` cards). That is not a design: the ingest step **detects `design_doc_mode=canvas` and excludes it**, and when a zip has several real designs it asks which to compile rather than guessing. A `.thumbnail` (WebP) rides along and is reused as the theme-library card image.
+
+**Compile (LLM-assisted, but narrow):** one `website_theme_compile` job (Claude Sonnet, `website_theme_model`) that does **extraction + translation, not free design**. The DSL's structure means most of it is deterministic:
+
+1. **Deterministic pre-pass:** pick the design file (skip canvas docs); parse `<x-dc>`; lift `<helmet>` (fonts → **self-hosted** at build, so the theme stays self-contained; global CSS → base layer); split the template on `sc-if` branches → one page template each; collect `sc-for` bindings + the script's `renderVals()` shape → the collection schema; harvest image-placeholder strings per slot; census inline styles → candidate tokens (color/type/spacing frequency table). **Discard the prototype's navigation machinery** — `state.screen`, `go*()` handlers, `isX` flags exist only because a prototype can't route; Astro has real routes, so `onClick="{{ goTopics }}"` becomes `<a href="/topics">`.
+2. **LLM pass:** map the extracted material into the **fixed theme contract** — `tokens.json` (colors, type scale, spacing, radii), `Layout.astro` (header/nav/footer), and the section components each page branch needs (`Hero`, `ArticleCard`, `CategoryGrid`, `PostBody`, `CtaBand`, `ContactBlock`, `ServiceCard`, `ReviewStrip`…), each with named content slots wired to the collection fields found in step 1. The LLM never invents page copy, never emits `<script>`, and never counts or re-derives the token census — it names and organizes what the pre-pass measured.
+3. **Deterministic post-checks:** valid Astro/HTML; **no external requests** (fonts self-hosted; only the §4.8 sanctioned snippets allowed); every referenced token exists; each page template renders against the collection schema; no leftover `sc-*`/`{{ }}`/`onClick` residue.
+4. **Output:** theme files stored (storage bucket + `website_themes` row) and a **static preview** (each page type with placeholder content) rendered to the bucket → signed URL shown in the UI. **User approves the preview before provisioning** — this is the fidelity gate; a bad compile costs a re-run, never a bad live site.
+
+The local-business page set (home/services/locations/about/contact) differs from the fixture's informational set, so the compiler keys off **which `sc-if` branches actually exist** rather than a fixed expected list — a design with fewer screens compiles to fewer templates, and the site type only decides which templates the site plan *requires*.
 
 Themes are versioned (`website_themes.version`); recompiling a re-uploaded design creates a new version, and applying it to a live site is an explicit action (commit → redeploy). **Themes are reusable across sites and industries** (owner ruling 2026-07-17): the theme library is industry-agnostic, so the efficient steady-state is a handful of approved house themes where a new site is often just a token swap (colors, logo, fonts) on an existing theme — a fresh Claude Design session is for genuinely custom builds, not every site.
 
@@ -186,6 +206,8 @@ A local business site without photos looks generated. Every hero, service card, 
 1. **GBP photos** — real storefront/jobsite photos already attached to the listing; the GBP enrichment path pulls them into a per-site media library. Strongest local trust signal, $0.
 2. **Client uploads** — a media step in the wizard reusing the existing file-upload path (and `clients.logo_url` for the logo).
 3. **AI-generated** (owner ruling 2026-07-17: include an image-generation API) — a provider-pluggable `image_gen` service fills whatever the ladder leaves empty. **Default: Gemini image generation ("Nano Banana")** — `GEMINI_API_KEY` is already on PLATFORM (AI-visibility engine), so no new vendor; **OpenAI** (`gpt-image-1`) as the config-switchable alternative (key also already provisioned); **Ideogram** optional behind a new key if text-in-image graphics are ever needed (`website_image_provider` config, mirroring the `report_llm` provider-selection pattern). Prompts are derived from the page context (service, area, brand palette from the theme tokens). **Owner ruling 2026-07-17: generated imagery may include realistic jobsite/work scenes** — functionally the same role stock photography plays today, so heroes and service cards can show the trade in action even when no real photos exist. Residual recommendation (overridable): keep fabricated **before/after "results" photos and fake team-member portraits** out — those function as proof of specific work rather than generic imagery. Real GBP photos still outrank generated ones on the ladder whenever they exist.
+
+**Prompt seeds come from the design itself:** Claude Design exports carry no images, only labelled placeholders (`[ hero photo: plated balanced meal ]` — §4.3), which the compiler captures per slot. Those strings are exactly what an image prompt wants, so each slot arrives with the designer's own intent for that image rather than a generic guess.
 
 Mechanics: images land in the site repo's `public/` (Astro's asset pipeline handles responsive sizes at build), each with LLM-written alt text; `website_pages` slots record the image source (`gbp|upload|generated`) so a later real photo can replace a generated one surgically. Generation rides the existing job pattern (part of `website_core_pages` / per-page publish jobs, freeze-gated).
 
@@ -241,7 +263,7 @@ Repos are **private** (content is invisible until deployed; drafts never leak). 
 | Phase | Scope | Notes |
 |---|---|---|
 | **0 — Foundations** | Owner decisions (§12), creds provisioned, **`ar-site-template` built by hand** (the template is real engineering: theme contract, collections, SEO plumbing, deploy workflow), migration, config flags. One site deployed *manually* from the template end-to-end to prove the GitHub→Actions→Cloudflare line before any module code. | The manual dry run de-risks everything downstream. |
-| **1 — Theme pipeline** | Upload/URL ingest → `website_theme_compile` → preview → approve. Theme library CRUD. | Testable in isolation (fixtures of real Claude Design exports). |
+| **1 — Theme pipeline** | Zip ingest + design-vs-canvas detection → deterministic pre-pass → `website_theme_compile` → preview → approve. Theme library CRUD. | Testable in isolation — the real export at `docs/reference/claude-design-export/` is the fixture, and the pre-pass (parse/split/census) is pure and unit-testable with no LLM call. |
 | **2 — Provision + deploy** | Repo-from-template, theme commit, secrets, CF project, first deploy, staging URL, `website_deploys` + poll job, custom domain + DNS attach. | Idempotent step machine; every step re-runnable. |
 | **3 — Local business sites** | Site plan (Plan Silo + fixed pages + business facts), core-pages generator (§4.6, incl. the three prompt profiles), imagery ladder + `image_gen` service (§4.7), launch form + Web3Forms/phone setup + legal pages + checklist (§4.8), generate → HTML→MD → publish jobs, plan-review UI. | The nlp-api engine is reused unchanged for service/location pages; the core-pages endpoint is the one new generation surface. |
 | **4 — Informational sites** | Content plan from Keyword Research/Fanout, Blog Writer runs → posts, categories/RSS/home, drip publishing via the Fanout scheduler. | Blog output is already Markdown — lightest content phase. |
@@ -284,7 +306,7 @@ Hosting is ~$0 at the ruled scale of **~50 sites in year one** (owner, 2026-07-1
 
 **Remaining inputs (not blocking Phase 0 — needed at the phase indicated):**
 
-1. **A real Claude Design export sample** (owner: later) — needed **before Phase 1** as the theme-compiler fixture; its format (single HTML / multi-page / zip / share URL) finalizes the ingest UI.
+1. ~~A real Claude Design export sample~~ — **RECEIVED 2026-08-01** (`Informational_site_design.zip`). Format documented in §4.3 and the compiler design rewritten against it; the file is the Phase 1 test fixture. A **local-business** design export would be a useful second fixture before Phase 3 (different screen set), but is not blocking.
 2. **Pilot clients** (owner: later) — one with a GBP and one without (the §4.5 path), needed **before Phase 3** end-to-end validation.
 3. **Core-pages prompt copy** — three small prompt profiles (home / about / contact blurb, §4.6); an owner-involved writing task **in Phase 3**, per the "things to ask" convention.
 
