@@ -256,7 +256,7 @@ def run_filter(
     # 1388 LA prospects unfiltered on the first run (ISSUES I-036).
     prospects = fetch_all(
         lambda: client.table("prospect")
-        .select("id,place_id,name,phone,website,rating,review_count,lat,lng,business_status,raw")
+        .select("id,place_id,name,phone,website,rating,review_count,review_count_inferred_zero,lat,lng,business_status,raw")
         .eq("market_id", market_id)
     )
 
@@ -281,6 +281,10 @@ def run_filter(
             check_suppression=settings.filter_check_suppression,
             min_review_count_enabled=settings.filter_min_review_count_enabled,
             review_recency_enabled=settings.filter_review_recency_enabled,
+            # Read from the COLUMN, not from `place` — `place` is re-parsed from stored raw, and
+            # raw is the provider's untouched payload, which by definition does not carry our
+            # inference about it (ISSUES I-041).
+            inferred_zero=bool(row.get("review_count_inferred_zero")),
         )
 
         report.evaluated += 1

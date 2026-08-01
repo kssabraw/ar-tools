@@ -205,6 +205,67 @@ def cmd_calibrate(args) -> int:
     return _asyncio.run(calibrate(tile.query, args.limit, tile.coordinates))
 
 
+def cmd_verify_reviews(args) -> int:
+    """PAID, tiny, read-only: does a null review count mean zero? (ISSUES I-041)
+
+    Reports; never acts. It does not write review_count, does not set
+    review_count_inferred_zero, and excludes nothing — applying the flag is a human decision made
+    once, on evidence, and a verifier that applied its own findings would delete the step where
+    someone looks at them.
+
+    Note the result is bounded by asking the SAME provider whose convention is under test: see
+    services/review_verify for why the review sub-objects rather than the count field carry the
+    evidence, and why DataForSEO is the next step if this comes back ambiguous.
+    """
+    import asyncio as _asyncio
+
+    from api.services.review_verify import verify_review_counts
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    client = _client()
+    market_id = _market_id(client, definition.name)
+
+    try:
+        report = _asyncio.run(
+            verify_review_counts(
+                client=client,
+                settings=get_settings(),
+                market_id=market_id,
+                limit=args.limit,
+                group=args.group,
+            )
+        )
+    except CostLimitExceeded as exc:
+        print(f"ABORTED before spending: {exc}", file=sys.stderr)
+        return 2
+
+    print(
+        json.dumps(
+            {
+                "requested": report.requested,
+                "by_verdict": report.by_verdict,
+                "counts_found": report.counts_found,
+                "recommendation": report.recommendation(),
+                "results": [
+                    {
+                        "place_id": r.place_id,
+                        "name": r.name,
+                        "verdict": r.verdict,
+                        "review_count": r.review_count,
+                        "rating": r.rating,
+                        "has_histogram": r.has_histogram,
+                        "inline_reviews": r.inline_reviews,
+                        "error": r.error,
+                    }
+                    for r in report.results
+                ],
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
 def cmd_run(args) -> int:
     for step in (cmd_seed, cmd_ingest, cmd_filter):
         code = step(args)
@@ -236,11 +297,19 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 
     parser = argparse.ArgumentParser(description="Outreach pipeline — Phase 1")
-    parser.add_argument("command", choices=["seed", "ingest", "filter", "run", "calibrate"])
+    parser.add_argument(
+        "command",
+        choices=["seed", "ingest", "filter", "run", "calibrate", "verify-reviews"],
+    )
     parser.add_argument("definition", help="path to a market definition JSON file")
     parser.add_argument("--cycle", type=int, default=None, help="cycle number for cost_ledger")
     parser.add_argument(
-        "--limit", type=int, default=20, help="places per query, calibrate only"
+        "--limit", type=int, default=20,
+        help="places per query (calibrate); prospects to look up (verify-reviews)",
+    )
+    parser.add_argument(
+        "--group", choices=["both_null", "rating_present"], default="both_null",
+        help="verify-reviews: which I-041 group to sample",
     )
     parser.add_argument(
         "--allow-geometry-change",
@@ -255,6 +324,7 @@ def main() -> int:
         "filter": cmd_filter,
         "run": cmd_run,
         "calibrate": cmd_calibrate,
+        "verify-reviews": cmd_verify_reviews,
     }[args.command]
 
     # Railway reports a crashed job as deployment status SUCCESS when restartPolicy is NEVER —

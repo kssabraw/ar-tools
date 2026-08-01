@@ -228,6 +228,67 @@ def test_absent_review_count_is_not_treated_as_a_low_count():
     assert outcome.observed_value == NOT_EVALUATED
 
 
+# --- inferred zero (ISSUES I-041) --------------------------------------------------------
+#
+# The provider appears to encode "no reviews" as null: `review_count = 0` never occurs across
+# 1,388 LA prospects while 1/2/3-5/6-9 occur 118/70/129/116 times. Reading that null AS zero is an
+# inference about a VENDOR CONVENTION, so it is carried in its own flag and never written into
+# review_count — see migration 20260801130000.
+
+
+def test_inferred_zero_fails_the_review_count_rule():
+    """A null read as zero must FAIL >= 10, not sit in not_evaluated. That is the entire point of
+    the flag: an unmeasured prospect and a zero-review prospect stop being the same thing."""
+    parsed = parse_place({"place_id": "x", "name": "n", "phone": "555"})
+    outcome = next(
+        o for o in run(parsed, inferred_zero=True).outcomes if o.rule == RULE_REVIEW_COUNT
+    )
+    assert not outcome.passed
+    assert run(parsed, inferred_zero=True).excluded
+
+
+def test_inferred_zero_is_visible_in_the_observed_value():
+    """The audit trail must say the exclusion rests on an inference, not on a measurement.
+    `observed_value` is the only place a reader of filter_result would ever see that."""
+    parsed = parse_place({"place_id": "x", "name": "n", "phone": "555"})
+    outcome = next(
+        o for o in run(parsed, inferred_zero=True).outcomes if o.rule == RULE_REVIEW_COUNT
+    )
+    assert "inferred" in (outcome.observed_value or "")
+    assert outcome.observed_value != NOT_EVALUATED
+
+
+def test_inferred_zero_defaults_off_so_behaviour_is_unchanged():
+    """The flag ships unset. Until ground truth says otherwise, a missing count stays
+    not_evaluated — the state the 113 are in today."""
+    parsed = parse_place({"place_id": "x", "name": "n", "phone": "555"})
+    outcome = next(o for o in run(parsed).outcomes if o.rule == RULE_REVIEW_COUNT)
+    assert outcome.observed_value == NOT_EVALUATED
+
+
+def test_inferred_zero_never_overrides_a_real_count():
+    """A measurement always beats an inference. If both are somehow present the count wins — and
+    the database constraint makes that combination impossible in the first place."""
+    outcome = next(
+        o for o in run(place(reviews=42), inferred_zero=True).outcomes
+        if o.rule == RULE_REVIEW_COUNT
+    )
+    assert outcome.passed
+    assert outcome.observed_value == "42"
+
+
+def test_inferred_zero_respects_the_rule_being_disabled():
+    """Disabling the rule in config must silence it completely. A flag that fires anyway would
+    make `filter_min_review_count_enabled = False` a lie."""
+    parsed = parse_place({"place_id": "x", "name": "n", "phone": "555"})
+    outcome = next(
+        o for o in run(parsed, inferred_zero=True, min_review_count_enabled=False).outcomes
+        if o.rule == RULE_REVIEW_COUNT
+    )
+    assert outcome.passed
+    assert outcome.observed_value == NOT_EVALUATED
+
+
 # --- suppression -------------------------------------------------------------------------
 
 
