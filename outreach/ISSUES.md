@@ -1228,3 +1228,42 @@ Three defects the run exposed, all fixed in `0cbe246`:
   and "the provider said null", "the provider said nothing" and "the parser missed it" were
   indistinguishable. `rating_evidence()` now logs `rating` / `rating_distribution` /
   `has_rating_key` verbatim, for every lookup.
+
+### I-062 · The I-059 suite defect is fixed — and it was two consumers, not one
+I-059 found that `platform-api` calls `POST /v3/business_data/google/reviews/live`, that the path
+404s, and that `except httpx.HTTPError: return []` turns the 404 into "this business has no
+reviews". It was raised for the owner as one live defect in `gbp_service`. Fixed now, and the
+audit found **a second consumer with the same dead endpoint and the same swallow**:
+
+`services/review_analytics.py` — the whole Tier-B review-intelligence feature (review volume,
+velocity, rating distribution, recent negatives, client vs competitor comparison) — imported the
+endpoint constant *from* `gbp_service` and wrapped it in the identical handler. Its `_store()`
+no-ops on an empty list, so nothing was ever written; `analyze_reviews([])` then returned
+`count: 0`, `velocity_per_month: 0.0`, `recent_negatives: 0`, and `detect_review_gap` found no gap.
+
+**This is the worse of the two.** `gbp_service` degrades to Outscraper's inline `reviews_data`, so
+it has had real review text all along. `review_analytics` had no fallback, and every one of its
+headline outputs has zero as a *legitimate* value — so the failure did not present as an outage,
+it presented as a confident measurement of a client with no reviews.
+
+The fix, in `writer/platform-api`:
+
+* **`services/dataforseo_reviews.py`** (new) — the corrected instrument, with the probe-confirmed
+  paths from I-059 and the dead one named-but-unused so nobody re-derives the discovery. A failed
+  lookup **raises `ReviewFetchError`**; only the provider may assert zero. Task-level errors
+  inside a 200 raise too — `raise_for_status()` never sees those.
+* **`gbp_service`** — the DataForSEO leg is removed, not repointed. The endpoint that exists for
+  review *text* is the queued `task_post`→`task_get` lifecycle, and this runs inside a
+  synchronous user-facing details fetch. It uses the Outscraper inline reviews it has effectively
+  been using for months, now stated rather than accidental.
+* **`review_analytics`** — uses the queued lifecycle (it is a background job; it can wait) and
+  reports `failures` per place. "No reviews in this market" and "we could not ask" are separate
+  answers again.
+
+**What is verified and what is not.** The error semantics are unit-tested (14 tests, and the
+error tests are the point — a 404, a transport error, a task-level error and absent credentials
+must all raise rather than return `[]`). The `task_post`/`task_get` *result envelope* is parsed
+tolerantly but has **not** been confirmed against a live paid task — the probe established that
+the lifecycle exists, not what it returns for these credentials. That is exactly why the failure
+path was fixed first: if the shape is wrong, the next call raises and says so, instead of quietly
+meaning "no reviews" for another few months. One paid task closes it.
