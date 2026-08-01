@@ -39,5 +39,11 @@ COPY . .
 # change, a rebuild — would silently fire a paid Outscraper pull. Set OUTREACH_COMMAND=run
 # deliberately when a paid ingest is intended, and set it back afterwards.
 #
+# OUTREACH_ARGS carries flags (`--group control --limit 5`). Its own variable rather than
+# smuggling them into OUTREACH_MARKET on word-splitting: that trick works, and it makes the market
+# variable read as one filename while holding three arguments, which is the sort of thing that
+# survives exactly until the person reading it is not the person who wrote it. Empty by default,
+# so it contributes nothing unless deliberately set.
+#
 # `exec` so the CLI is PID 1 and receives SIGTERM directly; sh as PID 1 discards it.
-CMD ["sh", "-c", "exec python -m api.scripts.run_market ${OUTREACH_COMMAND:-filter} ${OUTREACH_MARKET:-markets/los-angeles-plumbing.json}"]
+CMD ["sh", "-c", "exec python -m api.scripts.run_market ${OUTREACH_COMMAND:-filter} ${OUTREACH_MARKET:-markets/los-angeles-plumbing.json} ${OUTREACH_ARGS:-}"]
