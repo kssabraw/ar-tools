@@ -1138,3 +1138,93 @@ The free `filter` run on deployment `601e1c23` confirmed the `review_count_overr
 live data: **survived 925 → 924**, `review_count_min` failures **433 → 434**. Mejia Rooter's
 manually-verified count of 3 survived a full filter re-run and kept it excluded — the exact silent
 revert that prompted the class audit, now proven fixed where it counts rather than only in tests.
+
+### I-059 · `reviews/live` does not exist, and platform-api has been swallowing the 404
+**Measured, not inferred.** The free `probe-dataforseo` command posted a deliberately-invalid task
+to seven candidate paths against these credentials (a rejected task is not billed, so discovery
+cost nothing):
+
+| path | HTTP | task status | exists |
+|---|---|---|---|
+| `/v3/business_data/google/reviews/live` | **404** | — | no |
+| `/v3/business_data/google/reviews/live/advanced` | 404 | — | no |
+| `/v3/business_data/google/reviews/task_post` | 200 | 40503 | **yes** |
+| `/v3/business_data/google/my_business_info/live` | 200 | 40501 *"Invalid Field: 'keyword'."* | **yes** |
+| `/v3/business_data/google/my_business_info/live/advanced` | 404 | — | no |
+| `/v3/business_data/google/my_business_info/task_post` | 200 | 40503 | **yes** |
+| `/v3/serp/google/maps/live/advanced` | 200 | 40503 | **yes** |
+
+**Two findings.**
+
+*Mine.* I-057 above asserted `reviews/live` was "production-proven against this account" because
+`platform-api/services/gbp_service.py` calls it in production. It is called there. It also 404s. I
+confirmed the endpoint was CALLED and claimed it WORKED — which is the shallow version of the
+I-029 lesson I was citing while doing it. Twenty lookups failed; **no money was spent**, because
+DataForSEO bills on task acceptance. The corrected instrument is `my_business_info/live`, whose
+own 40501 named the field it wanted.
+
+*A live suite defect, outside this pipeline.* `gbp_service._fetch_reviews` wraps the call in
+`except httpx.HTTPError: return []`. `httpx.HTTPStatusError` subclasses `HTTPError`, so the 404 is
+caught and returned as "this business has no reviews". **GBP review enrichment has been silently
+returning nothing for as long as that endpoint has been gone**, with no error surfaced anywhere.
+Not fixed here — it is in `writer/platform-api`, a different service on a different database, and
+it wants its own change with its own verification. Raised for the owner.
+
+The value form inside `keyword` is still unmeasured, so `build_lookup_bodies` tries three rungs
+(`place_id:<id>` → name+coordinate → name+country) and keeps whichever the account accepts. A
+name-search rung can answer about a *neighbouring* business, so `place_id_matches` is checked and
+a mismatch classifies **ambiguous**, never as evidence — a true review count for the wrong listing
+is worse than no answer, because it looks exactly like an answer.
+
+### I-060 · Seventeen log lines printed their message and dropped their content
+`run_market.py` configured `format="%(levelname)s %(name)s %(message)s"`, which renders nothing
+from `extra=`. Every call site in `api/` puts its payload there: the `place_id` and error of a
+failed lookup, the row count behind the I-036 truncation guard, the projected spend before a paid
+run, the host in "outscraper host unreachable, failing over". All of it was being written and none
+of it printed — and because the sentences themselves read fine, the logs looked healthy.
+
+Fixed at the formatter (`_ExtraFormatter`), not at the call sites: the call sites are correct,
+this is a rendering bug, and a fix at the formatter also covers lines not yet written.
+
+### I-061 · DataForSEO returned NO review count for any of the 20 — I-041 still open
+First real DataForSEO run (deployment `b8297c77`, commit `225d061`, 2026-08-01):
+`{"error": 4, "ambiguous": 16}`, `counts_found: []`, recommendation **INCONCLUSIVE**.
+
+The `place_id:<id>` keyword form works — every successful lookup reports `form: "place_id"` and
+the returned `place_id` matched the one asked about, so no name-search fallback was used and no
+result is about the wrong business. Cost was `0.0054` per task, ~$0.11 for the run.
+
+**Of the 16 that completed, not one returned a review count.** No explicit zero, no positive
+count. DataForSEO found each business (`Top Sewer Hollywood`, `California Rooter & Plumbing`,
+`Sloane Plumbing & Heating`, …) and reported no `votes_count`.
+
+**This is not evidence for the flag, and the temptation to read it as such is the exact failure
+mode this module exists to avoid.** Two readings produce identical output:
+
+1. Both providers omit the count when a listing genuinely has no reviews. → the flag is correct.
+2. `my_business_info` does not carry review counts, or we are asking it wrongly. → the flag would
+   be applied to 105 prospects on a measurement error.
+
+Nothing observed so far distinguishes them, so `classify_dataforseo` returns AMBIGUOUS and the
+verifier writes nothing. **`review_count_inferred_zero` remains unset. The 105 stay NULL.**
+
+**The control group settles it, and is cheap.** `verify-reviews --group control` samples
+prospects whose review count is already KNOWN. If the same call returns a `votes_count` for
+those, the silence on the 105 is the provider asserting zero. If it returns nothing for those
+either, this endpoint does not measure what we are asking it and no volume of further lookups
+against it will ever mean anything. ~5 lookups, **~$0.03**. Awaiting approval — the previous
+approval was for a specific 20-lookup run, which has now happened.
+
+Three defects the run exposed, all fixed in `0cbe246`:
+
+* **4 of 20 timed out.** `my_business_info/live` is a live endpoint (~19s typical, long tail) and
+  was running under the 60s Outscraper timeout. It has its own 180s budget now. A timeout here is
+  not merely a lost answer — DataForSEO has already run the query, so it is a lookup paid for and
+  discarded.
+* **Those 4 logged `error: ''`.** httpx timeout exceptions carry an empty message. Errors are
+  typed now (`ReadTimeout: ...`).
+* **The sample log truncated at 2000 chars and cut off `rating`**, which sits after `latitude` in
+  the item's field order — so the one field the question turns on was the one field not logged,
+  and "the provider said null", "the provider said nothing" and "the parser missed it" were
+  indistinguishable. `rating_evidence()` now logs `rating` / `rating_distribution` /
+  `has_rating_key` verbatim, for every lookup.

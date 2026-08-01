@@ -113,6 +113,14 @@ class Settings(BaseSettings):
     # reports back, so the abort gate is exactly as honest as it is (same caveat as I-022).
     dataforseo_cost_per_request_cents: int = 1
 
+    # my_business_info/live is a LIVE endpoint: DataForSEO queries Google while the request is
+    # open. The observed round trip is ~19s typical, and 4 of the first 20 lookups blew straight
+    # through the 60s Outscraper timeout — which reported as an EMPTY error string, since httpx's
+    # timeout exceptions carry no message. Its own budget, well clear of the tail, because a
+    # timeout here does not just lose the answer: DataForSEO has already run the query, so it is
+    # a lookup paid for and thrown away.
+    dataforseo_request_timeout_seconds: float = 180.0
+
     # --- Cost guardrails -----------------------------------------------------------------
     # Abort the paid stage if the pre-flight projection exceeds this (brief §4).
     max_market_run_cost_cents: int = 5000

@@ -258,6 +258,7 @@ def cmd_verify_reviews(args) -> int:
                         "rating": r.rating,
                         "has_histogram": r.has_histogram,
                         "inline_reviews": r.inline_reviews,
+                        "form": r.form,
                         "error": r.error,
                     }
                     for r in report.results
@@ -266,6 +267,57 @@ def cmd_verify_reviews(args) -> int:
             indent=2,
         )
     )
+    return 0
+
+
+def cmd_probe_dataforseo(args) -> int:
+    """Which DataForSEO endpoints actually exist? FREE — every probe task is deliberately invalid.
+
+    Exists because `/v3/business_data/google/reviews/live` was asserted to be production-proven on
+    the strength of appearing in platform-api's gbp_service. It is called there; it also 404s, and
+    that call site swallows the failure — being CALLED is not being WORKING. This measures rather
+    than infers.
+
+    With --sample-place-id, follows up with ONE real request against each surviving path to learn
+    the response shape. That part BILLS, a few cents, and is still cheaper than another wrong
+    guess about a response body.
+    """
+    import asyncio as _asyncio
+
+    from api.services.dataforseo_client import probe_endpoints, sample_endpoint
+
+    settings = get_settings()
+    results = _asyncio.run(probe_endpoints(settings))
+
+    print(json.dumps(
+        {
+            "probe": [
+                {
+                    "path": r.path,
+                    "http_status": r.http_status,
+                    "task_status": r.task_status,
+                    "task_message": r.task_message,
+                    "exists": r.exists,
+                    "error": r.error,
+                }
+                for r in results
+            ],
+            "exists": [r.path for r in results if r.exists],
+        },
+        indent=2,
+    ))
+
+    if args.sample_place_id:
+        for r in results:
+            if not r.exists:
+                continue
+            print(f"--- SAMPLE {r.path} ---", flush=True)
+            try:
+                out = _asyncio.run(sample_endpoint(settings, r.path, args.sample_place_id))
+                print(json.dumps(out, indent=2)[:4000], flush=True)
+            except Exception as exc:  # noqa: BLE001
+                print(json.dumps({"path": r.path, "error": str(exc)}, indent=2), flush=True)
+
     return 0
 
 
@@ -325,16 +377,50 @@ def _install_sigterm_marker() -> None:
     signal.signal(signal.SIGTERM, _handler)
 
 
+# Everything a LogRecord carries by default. Anything else on a record came from `extra=`.
+_STANDARD_RECORD_FIELDS = set(
+    logging.LogRecord("", 0, "", 0, "", None, None).__dict__
+) | {"message", "asctime", "taskName"}
+
+
+class _ExtraFormatter(logging.Formatter):
+    """Print `extra=` payloads, which the plain format string silently dropped.
+
+    Seventeen call sites across this codebase put the entire content of their log line in `extra`
+    — the place_id of a failed lookup, the row count behind the I-036 truncation guard, the
+    projected spend before a paid run — and every one of them rendered as a bare sentence with the
+    facts removed. "outscraper host unreachable, failing over" without the host. The logs looked
+    fine, which is why nobody noticed.
+
+    Fixed here rather than by inlining the values at each call site: this is a formatting bug, the
+    call sites are correct, and a fix at the formatter also covers the ones not yet written.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        base = super().format(record)
+        extras = {
+            key: value
+            for key, value in record.__dict__.items()
+            if key not in _STANDARD_RECORD_FIELDS
+        }
+        return f"{base} {extras}" if extras else base
+
+
 def main() -> int:
     _install_sigterm_marker()
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+    handler = logging.StreamHandler()
+    handler.setFormatter(_ExtraFormatter("%(levelname)s %(name)s %(message)s"))
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
 
     import os
 
     print(
         build_identity(
             dict(os.environ),
-            ["seed", "ingest", "filter", "run", "calibrate", "verify-reviews"],
+            [
+                "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
+                "probe-dataforseo",
+            ],
         ),
         flush=True,
     )
@@ -342,7 +428,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Outreach pipeline — Phase 1")
     parser.add_argument(
         "command",
-        choices=["seed", "ingest", "filter", "run", "calibrate", "verify-reviews"],
+        choices=[
+            "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
+            "probe-dataforseo",
+        ],
     )
     parser.add_argument("definition", help="path to a market definition JSON file")
     parser.add_argument("--cycle", type=int, default=None, help="cycle number for cost_ledger")
@@ -351,8 +440,15 @@ def main() -> int:
         help="places per query (calibrate); prospects to look up (verify-reviews)",
     )
     parser.add_argument(
-        "--group", choices=["both_null", "rating_present"], default="both_null",
+        "--group", choices=["both_null", "rating_present", "control"], default="both_null",
         help="verify-reviews: which I-041 group to sample",
+    )
+    parser.add_argument(
+        "--sample-place-id", default=None,
+        help=(
+            "probe-dataforseo: after discovery, send ONE real request per surviving path with "
+            "this place_id to learn the response shape. This BILLS (a few cents)."
+        ),
     )
     parser.add_argument(
         "--provider", choices=["outscraper", "dataforseo"], default="dataforseo",
@@ -373,6 +469,7 @@ def main() -> int:
         "run": cmd_run,
         "calibrate": cmd_calibrate,
         "verify-reviews": cmd_verify_reviews,
+        "probe-dataforseo": cmd_probe_dataforseo,
     }
 
     # Railway reports a crashed job as deployment status SUCCESS when restartPolicy is NEVER —

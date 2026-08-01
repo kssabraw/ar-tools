@@ -106,9 +106,9 @@ def test_a_string_count_is_not_trusted_as_a_number():
 # --- recommendation ----------------------------------------------------------------------
 
 
-def _report(*verdicts, counts=None):
+def _report(*verdicts, counts=None, group="both_null"):
     counts = counts or {}
-    rep = VerifyReport(requested=len(verdicts))
+    rep = VerifyReport(requested=len(verdicts), group=group)
     rep.results = [
         LookupResult(place_id=f"p{i}", name="n", verdict=v, review_count=counts.get(i))
         for i, v in enumerate(verdicts)
@@ -140,6 +140,49 @@ def test_any_error_blocks_a_conclusion():
     sample of the population."""
     rec = _report(ZERO, ZERO, ERROR).recommendation()
     assert "INCONCLUSIVE" in rec
+
+
+# --- the control group -------------------------------------------------------------------
+#
+# The first real run came back 16 ambiguous / 4 error: DataForSEO found every listing and
+# reported no count for any of them. That is two vendors silent, which reads as evidence — but
+# "both providers omit the count when there are no reviews" and "this endpoint does not carry
+# counts at all" produce IDENTICAL output, and one of them would have us flag 105 prospects on a
+# measurement error. Prospects with a KNOWN count separate the two. The verdicts invert, because
+# this group tests the instrument rather than the prospects.
+
+
+def test_finding_every_known_reviewer_validates_the_instrument():
+    rec = _report(*[HAS_REVIEWS] * 5, group="control").recommendation()
+    assert rec.startswith("INSTRUMENT VALID")
+
+
+def test_finding_none_of_them_disqualifies_the_evidence():
+    """The outcome that matters most: if the endpoint misses listings that demonstrably have
+    reviews, its silence on the 105 means nothing, and no volume of further lookups will fix
+    that."""
+    rec = _report(*[AMBIGUOUS] * 5, group="control").recommendation()
+    assert rec.startswith("INSTRUMENT INVALID")
+    assert "do not set the flag" in rec
+
+
+def test_finding_some_of_them_is_not_good_enough():
+    """A provider that reports counts most of the time still cannot have its silence read as a
+    zero — the missing ones are exactly the population under test."""
+    rec = _report(HAS_REVIEWS, HAS_REVIEWS, AMBIGUOUS, group="control").recommendation()
+    assert rec.startswith("INSTRUMENT UNRELIABLE")
+
+
+def test_a_control_run_that_only_errored_proves_nothing():
+    rec = _report(ERROR, ERROR, group="control").recommendation()
+    assert "INCONCLUSIVE" in rec
+
+
+def test_a_control_error_alongside_successes_does_not_block_the_verdict():
+    """Unlike the prospect groups, a partial control run is still informative: the lookups that
+    DID complete each demonstrate the instrument works."""
+    rec = _report(HAS_REVIEWS, HAS_REVIEWS, ERROR, group="control").recommendation()
+    assert rec.startswith("INSTRUMENT VALID")
 
 
 def test_counts_found_reports_the_actual_numbers():
@@ -266,3 +309,188 @@ def test_zero_reviews_with_an_ok_task_is_a_real_zero_not_an_error():
     got = parse_place_reviews(_envelope([{"reviews_count": 0, "items": []}]), "p")
     assert got.reviews_count == 0
     assert classify_dataforseo(got).verdict == ZERO
+
+
+# --- my_business_info: the endpoint that actually exists ---------------------------------
+#
+# `reviews/live` returns 404 against these credentials. The probe found `my_business_info/live`
+# and, via its own 40501, named the required field as `keyword` — but not what a *place* looks
+# like inside one. So the value form is discovered at runtime and these tests cover the discovery
+# as much as the parsing.
+
+from api.services.dataforseo_client import build_lookup_bodies, parse_my_business_info
+
+
+def _mbi(record, status=20000):
+    return {"tasks": [{"status_code": status, "result": [{"items": [record]}]}]}
+
+
+def test_votes_count_is_the_review_count():
+    got = parse_my_business_info(_mbi({"place_id": "p", "rating": {"value": 4.7, "votes_count": 31}}), "p")
+    assert got.reviews_count == 31
+    assert got.rating == 4.7
+
+
+def test_zero_votes_is_the_answer_this_whole_exercise_wants():
+    """The one result that settles I-041. Outscraper emits 0 for nobody in 1,388 prospects; a
+    second vendor asserting 0 outright is what makes the null readable as a zero."""
+    got = parse_my_business_info(_mbi({"place_id": "p", "rating": {"value": None, "votes_count": 0}}), "p")
+    assert got.reviews_count == 0
+    assert classify_dataforseo(got).verdict == ZERO
+
+
+def test_a_missing_votes_count_is_not_a_zero():
+    """Absent and zero are different claims. Reading a parse gap as 'zero reviews' would let this
+    verifier vote for the conclusion it exists to test."""
+    got = parse_my_business_info(_mbi({"place_id": "p", "rating": {"value": 4.1}}), "p")
+    assert got.reviews_count is None
+    assert classify_dataforseo(got).verdict == AMBIGUOUS
+
+
+def test_flat_spellings_are_accepted_as_fallbacks():
+    """The envelope is measured from one live sample, not from a contract, so the parser reads
+    the likely spellings rather than betting the run on one."""
+    assert parse_my_business_info(_mbi({"place_id": "p", "reviews_count": 9}), "p").reviews_count == 9
+
+
+def test_a_record_without_an_items_wrapper_still_parses():
+    body = {"tasks": [{"status_code": 20000, "result": [{"place_id": "p", "rating": {"votes_count": 5}}]}]}
+    assert parse_my_business_info(body, "p").reviews_count == 5
+
+
+def test_a_task_error_raises_so_the_ladder_moves_on():
+    with pytest.raises(DataForSEOError):
+        parse_my_business_info(_mbi({}, status=40501), "p")
+
+
+def test_a_different_place_id_is_flagged_not_believed():
+    """The name-search rungs can land on a neighbouring business. A true review count for the
+    wrong listing is worse than no answer, because it looks exactly like an answer."""
+    got = parse_my_business_info(_mbi({"place_id": "OTHER", "rating": {"votes_count": 88}}), "p")
+    assert not got.place_id_matches
+    assert classify_dataforseo(got).verdict == AMBIGUOUS
+
+
+def test_a_matching_place_id_is_believed():
+    got = parse_my_business_info(_mbi({"place_id": "p", "rating": {"votes_count": 88}}), "p")
+    assert got.place_id_matches
+    assert classify_dataforseo(got).verdict == HAS_REVIEWS
+
+
+# --- the keyword ladder ------------------------------------------------------------------
+
+
+def test_place_id_is_tried_first():
+    """Ordered by how much the answer is worth, not by how likely the form is to be accepted —
+    the place_id rung is the only one that cannot match the wrong business."""
+    forms = build_lookup_bodies("PID", "Acme Plumbing", 34.0, -118.2)
+    assert [f[0] for f in forms] == ["place_id", "name_coordinate", "name_country"]
+    assert forms[0][1]["keyword"] == "place_id:PID"
+
+
+def test_coordinates_are_only_offered_when_both_are_present():
+    forms = build_lookup_bodies("PID", "Acme Plumbing", 34.0, None)
+    assert [f[0] for f in forms] == ["place_id", "name_country"]
+
+
+def test_a_nameless_prospect_still_gets_the_place_id_rung():
+    assert [f[0] for f in build_lookup_bodies("PID")] == ["place_id"]
+
+
+def test_a_prospect_with_no_keys_at_all_yields_no_ladder():
+    """`fetch_place_info` turns this into a named error rather than posting an empty task."""
+    assert build_lookup_bodies("", None) == []
+
+
+def test_every_rung_carries_a_language():
+    for _, body in build_lookup_bodies("PID", "Acme", 34.0, -118.2):
+        assert body["language_code"] == "en"
+
+
+# --- walking the ladder ------------------------------------------------------------------
+#
+# The rungs are free until one is accepted (DataForSEO does not bill a rejected task), which is
+# what makes runtime discovery cheaper than another round of guessing. These cover that the walk
+# stops at the first acceptance and remembers it.
+
+import asyncio
+
+from api.services.dataforseo_client import DataForSEOClient
+
+
+class _FakeResponse:
+    def __init__(self, body):
+        self._body = body
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._body
+
+
+class _FakeHttp:
+    """Answers each POST from a scripted queue and records the keyword it was asked for."""
+
+    def __init__(self, bodies):
+        self._bodies = list(bodies)
+        self.keywords = []
+
+    async def post(self, path, json):
+        self.keywords.append(json[0]["keyword"])
+        return _FakeResponse(self._bodies.pop(0))
+
+
+def _client(bodies, settings=None):
+    http = _FakeHttp(bodies)
+    return DataForSEOClient(settings or object(), client=http), http
+
+
+def test_the_walk_stops_at_the_first_accepted_form():
+    api, http = _client([_mbi({"place_id": "p", "rating": {"votes_count": 4}})])
+    got = asyncio.run(api.fetch_place_info("p", "Acme", 34.0, -118.2))
+    assert got.reviews_count == 4
+    assert got.form == "place_id"
+    assert http.keywords == ["place_id:p"]  # the weaker rungs were never posted
+
+
+def test_a_rejected_form_falls_through_to_the_next():
+    api, http = _client([
+        _mbi({}, status=40501),                                   # place_id form rejected
+        _mbi({"place_id": "p", "rating": {"votes_count": 4}}),     # name+coords accepted
+    ])
+    got = asyncio.run(api.fetch_place_info("p", "Acme", 34.0, -118.2))
+    assert got.form == "name_coordinate"
+    assert http.keywords == ["place_id:p", "Acme"]
+
+
+def test_the_accepted_form_is_remembered_for_later_places():
+    """Discovery is a property of the account, not of the place. Re-walking the ladder for all
+    twenty lookups would work, but it would also mean twenty rejected tasks for no new
+    information."""
+    api, http = _client([
+        _mbi({}, status=40501),
+        _mbi({"place_id": "p", "rating": {"votes_count": 4}}),
+        _mbi({"place_id": "q", "rating": {"votes_count": 7}}),
+    ])
+    asyncio.run(api.fetch_place_info("p", "Acme", 34.0, -118.2))
+    got = asyncio.run(api.fetch_place_info("q", "Beta", 34.1, -118.3))
+    assert got.reviews_count == 7
+    assert http.keywords == ["place_id:p", "Acme", "Beta"]  # no second rejected place_id task
+
+
+def test_every_form_failing_reports_what_each_one_said():
+    """A bare 'task failed' would send the next person back to the probe. Naming each rung's
+    verdict is the difference between a debuggable failure and a repeat of this file's history."""
+    api, _ = _client([_mbi({}, status=40501), _mbi({}, status=40501), _mbi({}, status=40501)])
+    with pytest.raises(DataForSEOError) as exc:
+        asyncio.run(api.fetch_place_info("p", "Acme", 34.0, -118.2))
+    assert "place_id" in str(exc.value) and "name_country" in str(exc.value)
+
+
+def test_a_prospect_with_no_lookup_key_fails_by_name():
+    api, http = _client([])
+    with pytest.raises(DataForSEOError) as exc:
+        asyncio.run(api.fetch_place_info("", None))
+    assert "no usable lookup key" in str(exc.value)
+    assert http.keywords == []
