@@ -175,3 +175,122 @@ class DataForSEOClient:
         response = await self._client.post(REVIEWS_LIVE_PATH, json=body)
         response.raise_for_status()
         return parse_place_reviews(response.json(), place_id)
+
+
+# --- endpoint discovery -------------------------------------------------------------------
+#
+# Written because I asserted `/v3/business_data/google/reviews/live` was "production-proven
+# against this account" on the strength of finding it in `platform-api/services/gbp_service.py`.
+# It is called there, in production. It also returns 404, and that call site swallows the failure
+# (`except httpx.HTTPError: return []`), so it has been silently returning "no reviews" — being
+# CALLED is not the same as WORKING, and I checked the first and claimed the second.
+#
+# So: measure, don't infer. Candidate paths, all of them, with the status each returns.
+
+CANDIDATE_REVIEW_PATHS: tuple[str, ...] = (
+    # What gbp_service uses. Included to prove the 404 rather than assume it.
+    "/v3/business_data/google/reviews/live",
+    "/v3/business_data/google/reviews/live/advanced",
+    "/v3/business_data/google/reviews/task_post",
+    "/v3/business_data/google/my_business_info/live",
+    "/v3/business_data/google/my_business_info/live/advanced",
+    "/v3/business_data/google/my_business_info/task_post",
+    # The live twin of the Maps path that IS genuinely proven — maps_dataforseo.py has used
+    # /v3/serp/google/maps/task_post + task_get/advanced in production.
+    "/v3/serp/google/maps/live/advanced",
+)
+
+# A task with no fields. A path that exists answers 200 and rejects the task at the task level
+# (status_code 40xxx); a path that does not exist answers 404. **DataForSEO does not bill a
+# rejected task**, so discovery costs nothing — which is the whole point of probing this way
+# rather than sending a real request to seven candidate paths.
+_EMPTY_TASK: list[dict[str, Any]] = [{}]
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    path: str
+    http_status: int | None
+    task_status: int | None
+    task_message: str | None
+    exists: bool
+    error: str | None = None
+
+
+async def probe_endpoints(
+    settings: Settings, paths: tuple[str, ...] = CANDIDATE_REVIEW_PATHS
+) -> list[ProbeResult]:
+    """Which of these paths exist? Free — every task sent is deliberately invalid.
+
+    `exists` is HTTP 200 regardless of the task-level verdict: a 40501 "invalid field" means the
+    endpoint is real and read our body, which is exactly what needs establishing. A 401 would mean
+    the credentials are wrong rather than the path, and is reported as-is rather than folded into
+    "does not exist".
+    """
+    missing = missing_dataforseo_vars(settings)
+    if missing:
+        raise DataForSEOError(f"not set: {', '.join(missing)}")
+
+    results: list[ProbeResult] = []
+    async with httpx.AsyncClient(
+        base_url=BASE_URL,
+        timeout=settings.outscraper_request_timeout_seconds,
+        auth=(settings.dataforseo_login, settings.dataforseo_password),
+    ) as client:
+        for path in paths:
+            try:
+                response = await client.post(path, json=_EMPTY_TASK)
+                task_status: int | None = None
+                task_message: str | None = None
+                if response.status_code == 200:
+                    body = response.json()
+                    tasks = body.get("tasks") or []
+                    if tasks:
+                        task_status = (tasks[0] or {}).get("status_code")
+                        task_message = (tasks[0] or {}).get("status_message")
+                    else:
+                        task_status = body.get("status_code")
+                        task_message = body.get("status_message")
+                results.append(
+                    ProbeResult(
+                        path=path,
+                        http_status=response.status_code,
+                        task_status=task_status,
+                        task_message=task_message,
+                        exists=response.status_code == 200,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 — one dead path must not end the probe
+                results.append(
+                    ProbeResult(
+                        path=path,
+                        http_status=None,
+                        task_status=None,
+                        task_message=None,
+                        exists=False,
+                        error=str(exc),
+                    )
+                )
+    return results
+
+
+async def sample_endpoint(
+    settings: Settings, path: str, place_id: str
+) -> dict[str, Any]:
+    """One REAL request against a discovered path, to learn the response shape.
+
+    **This one bills** — a valid task is a charged task. Called for a single place on a single
+    path, so the cost is cents, and the alternative is guessing at the response shape after
+    guessing at the path, which is how this went wrong the first time.
+    """
+    body = [{"place_id": place_id, "depth": 10, "language_name": "English"}]
+    async with httpx.AsyncClient(
+        base_url=BASE_URL,
+        timeout=settings.outscraper_request_timeout_seconds,
+        auth=(settings.dataforseo_login, settings.dataforseo_password),
+    ) as client:
+        response = await client.post(path, json=body)
+        return {
+            "http_status": response.status_code,
+            "body": response.json() if response.status_code == 200 else response.text[:500],
+        }

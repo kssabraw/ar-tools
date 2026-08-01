@@ -269,6 +269,57 @@ def cmd_verify_reviews(args) -> int:
     return 0
 
 
+def cmd_probe_dataforseo(args) -> int:
+    """Which DataForSEO endpoints actually exist? FREE — every probe task is deliberately invalid.
+
+    Exists because `/v3/business_data/google/reviews/live` was asserted to be production-proven on
+    the strength of appearing in platform-api's gbp_service. It is called there; it also 404s, and
+    that call site swallows the failure — being CALLED is not being WORKING. This measures rather
+    than infers.
+
+    With --sample-place-id, follows up with ONE real request against each surviving path to learn
+    the response shape. That part BILLS, a few cents, and is still cheaper than another wrong
+    guess about a response body.
+    """
+    import asyncio as _asyncio
+
+    from api.services.dataforseo_client import probe_endpoints, sample_endpoint
+
+    settings = get_settings()
+    results = _asyncio.run(probe_endpoints(settings))
+
+    print(json.dumps(
+        {
+            "probe": [
+                {
+                    "path": r.path,
+                    "http_status": r.http_status,
+                    "task_status": r.task_status,
+                    "task_message": r.task_message,
+                    "exists": r.exists,
+                    "error": r.error,
+                }
+                for r in results
+            ],
+            "exists": [r.path for r in results if r.exists],
+        },
+        indent=2,
+    ))
+
+    if args.sample_place_id:
+        for r in results:
+            if not r.exists:
+                continue
+            print(f"--- SAMPLE {r.path} ---", flush=True)
+            try:
+                out = _asyncio.run(sample_endpoint(settings, r.path, args.sample_place_id))
+                print(json.dumps(out, indent=2)[:4000], flush=True)
+            except Exception as exc:  # noqa: BLE001
+                print(json.dumps({"path": r.path, "error": str(exc)}, indent=2), flush=True)
+
+    return 0
+
+
 def cmd_run(args) -> int:
     for step in (cmd_seed, cmd_ingest, cmd_filter):
         code = step(args)
@@ -334,7 +385,10 @@ def main() -> int:
     print(
         build_identity(
             dict(os.environ),
-            ["seed", "ingest", "filter", "run", "calibrate", "verify-reviews"],
+            [
+                "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
+                "probe-dataforseo",
+            ],
         ),
         flush=True,
     )
@@ -342,7 +396,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Outreach pipeline — Phase 1")
     parser.add_argument(
         "command",
-        choices=["seed", "ingest", "filter", "run", "calibrate", "verify-reviews"],
+        choices=[
+            "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
+            "probe-dataforseo",
+        ],
     )
     parser.add_argument("definition", help="path to a market definition JSON file")
     parser.add_argument("--cycle", type=int, default=None, help="cycle number for cost_ledger")
@@ -353,6 +410,13 @@ def main() -> int:
     parser.add_argument(
         "--group", choices=["both_null", "rating_present"], default="both_null",
         help="verify-reviews: which I-041 group to sample",
+    )
+    parser.add_argument(
+        "--sample-place-id", default=None,
+        help=(
+            "probe-dataforseo: after discovery, send ONE real request per surviving path with "
+            "this place_id to learn the response shape. This BILLS (a few cents)."
+        ),
     )
     parser.add_argument(
         "--provider", choices=["outscraper", "dataforseo"], default="dataforseo",
@@ -373,6 +437,7 @@ def main() -> int:
         "run": cmd_run,
         "calibrate": cmd_calibrate,
         "verify-reviews": cmd_verify_reviews,
+        "probe-dataforseo": cmd_probe_dataforseo,
     }
 
     # Railway reports a crashed job as deployment status SUCCESS when restartPolicy is NEVER —
