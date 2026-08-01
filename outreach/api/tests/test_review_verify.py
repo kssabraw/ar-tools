@@ -163,3 +163,106 @@ def test_sample_never_exceeds_the_limit():
     rows = [{"place_id": f"p{i}"} for i in range(50)]
     assert len(select_candidates(rows, 20)) == 20
     assert len(select_candidates(rows[:5], 20)) == 5
+
+
+# --- DataForSEO: the independent check ---------------------------------------------------
+#
+# The reason this provider is worth paying for is that it answers the actual question. Outscraper
+# is being asked whether its own null means zero, and if the null comes from a parse failure it
+# will fail the same way twice (I-050). DataForSEO is queried by place_id and returns the reviews
+# themselves — and a reviews_count of 0 is a POSITIVE ASSERTION of zero, which is precisely what
+# Outscraper never emits.
+
+from api.services.dataforseo_client import DataForSEOError, PlaceReviews, parse_place_reviews
+from api.services.review_verify import classify_dataforseo
+
+
+def _reviews(count=None, rating=None, items=0):
+    return PlaceReviews(place_id="p", reviews_count=count, rating=rating, items_returned=items)
+
+
+def test_an_explicit_zero_settles_the_convention_question():
+    """The single most valuable answer this can return. Outscraper emits 0 for nobody in 1,388
+    prospects; a second vendor saying 0 outright is the evidence that null meant zero."""
+    r = classify_dataforseo(_reviews(count=0))
+    assert r.verdict == ZERO
+    assert r.review_count == 0
+
+
+def test_a_positive_count_refutes_the_convention():
+    r = classify_dataforseo(_reviews(count=14, rating=4.6))
+    assert r.verdict == HAS_REVIEWS
+    assert r.review_count == 14
+
+
+def test_review_items_beat_a_missing_count():
+    """If the count fails to parse but reviews came back, the listing plainly has reviews."""
+    r = classify_dataforseo(_reviews(count=None, items=3))
+    assert r.verdict == HAS_REVIEWS
+
+
+def test_both_providers_silent_is_ambiguous_not_zero():
+    """The trap. Rounding a second silence down to 'zero' would let absence of evidence argue for
+    the conclusion under test — which is the entire error this second vendor exists to avoid."""
+    r = classify_dataforseo(_reviews(count=None))
+    assert r.verdict == AMBIGUOUS
+
+
+def test_a_failed_lookup_is_an_error_not_a_zero():
+    assert classify_dataforseo(None).verdict == ERROR
+
+
+# --- response parsing --------------------------------------------------------------------
+
+
+def _envelope(result, status=20000):
+    return {"tasks": [{"status_code": status, "result": result}]}
+
+
+def test_parses_count_rating_and_items():
+    got = parse_place_reviews(
+        _envelope([{"place_id": "p", "reviews_count": 42, "rating": {"value": 4.4},
+                    "items": [{"review_text": "a"}, {"review_text": "b"}]}]),
+        "p",
+    )
+    assert got.reviews_count == 42
+    assert got.rating == 4.4
+    assert got.items_returned == 2
+
+
+def test_count_is_not_the_item_count():
+    """`depth` bounds the items returned but never `reviews_count`. Reading the item count as the
+    review count would understate every busy business in the market."""
+    got = parse_place_reviews(
+        _envelope([{"reviews_count": 400, "items": [{"review_text": "x"}] * 10}]), "p"
+    )
+    assert got.reviews_count == 400
+    assert got.items_returned == 10
+
+
+def test_a_task_level_error_raises_rather_than_reading_as_zero():
+    """DataForSEO reports task failures inside a 200. Treating one as 'no reviews' would let an
+    outage argue in favour of the flag."""
+    try:
+        parse_place_reviews(_envelope([], status=40501), "p")
+    except DataForSEOError as exc:
+        assert "40501" in str(exc)
+    else:
+        raise AssertionError("a failed task was read as a result")
+
+
+def test_an_empty_result_block_raises():
+    try:
+        parse_place_reviews(_envelope([]), "p")
+    except DataForSEOError:
+        pass
+    else:
+        raise AssertionError("a missing result block was read as a result")
+
+
+def test_zero_reviews_with_an_ok_task_is_a_real_zero_not_an_error():
+    """The distinction that matters: an OK task reporting reviews_count 0 is data, whereas a
+    missing result block is a failure. Collapsing them loses the only definitive answer."""
+    got = parse_place_reviews(_envelope([{"reviews_count": 0, "items": []}]), "p")
+    assert got.reviews_count == 0
+    assert classify_dataforseo(got).verdict == ZERO
