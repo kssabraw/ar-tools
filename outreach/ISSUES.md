@@ -1054,3 +1054,46 @@ marker, and Railway's SUCCESS badge is unaffected either way, which is why the m
 signal and the badge is not. `--help` still exits 0 and is not reported as a failure, or whoever
 greps these markers learns to ignore them. Four subprocess regression tests, including the exact
 `verify-reviewz` shape.
+
+### I-055 · Task-state persistence has no table, and the PRD data model has no place for one
+Raised by the `tasks_ready` ruling (DECISIONS.md, 2026-08-01), which makes durable task state a
+hard requirement rather than an implementation detail: **an un-persisted task id is a paid task
+that can never be collected**, and no amount of later reconciliation recovers it.
+
+Nothing in the PRD's schema holds one. `scan_snapshot` is per submarket × keyword × cycle and is
+written when results EXIST; a submitted-but-uncollected DataForSEO task has no row anywhere. At
+81 points × 10 submarkets × 3 keywords that is ~2,430 in-flight ids per market-vertical per cycle.
+
+**Needs a `scan_task` table** (or equivalent) before the scan layer is built, carrying at minimum:
+the DataForSEO task id, the snapshot/submarket/keyword/point it belongs to, `submitted_at`,
+`collected_at`, and a status. The submission run writes it; the collector marks it; the ~5-day
+alert and the 3-day fallback both read it.
+
+**Two things it must support that are easy to miss:**
+- The 30-day retrievable-by-id window is longer than the 3-day ready-list window, so the table has
+  to survive well past the point where `tasks_ready` stops mentioning a task.
+- It is the only place that can answer "did we pay for a result we never collected", which is the
+  question the cost reconciliation (I-022) will eventually need.
+
+### I-056 · The collector needs a SECOND Railway schedule, and the cadence is a trap
+The `outreach` service currently has no cron schedule at all. The ruling requires **two**
+independent cadences on what is one service:
+
+| Run | Cadence | Cost |
+|---|---|---|
+| submission (scan) | semi-monthly, 15 days | **paid** — `task_post` |
+| collection | hourly or daily | **free** — `tasks_ready` and `task_get` do not bill |
+
+**The trap:** a collector running on the scan cadence lets every task age off the ready list
+between runs, silently demoting the normal path to the id-fallback path. That still works, which
+is precisely why nobody would notice — the same shape as I-035/I-036/I-053, where the wrong
+behaviour produces plausible output.
+
+Railway gives one `cronSchedule` per service, so this needs either a second service sharing the
+image (with `OUTREACH_COMMAND=collect`) or an external tick. **Decide before the scan layer is
+built**, because the collector's existence changes what the submission run is allowed to assume:
+it must NOT wait for its own results.
+
+Note also that auto-deploy is off (I-047) and a Railway cron service runs its start command on
+every deploy — so whichever way this is wired, deploying it will fire one immediate run. Free for
+the collector; not free if the two ever share a command.

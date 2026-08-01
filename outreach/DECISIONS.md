@@ -459,3 +459,49 @@ versus 756k. Declined, for three reasons:
 prior snapshot. A future market-vertical could in principle be seeded at different spacing, but
 mixing geometries across the portfolio would make coverage percentages non-comparable between
 markets, which is worse than the cost it saves.
+
+---
+
+## DataForSEO task collection: `tasks_ready` polling, not postback (owner ruling, 2026-08-01)
+
+**Corrects the PRD.** §B2 said "MUST batch task submission (up to 100 per POST) and use
+postback/pingback, not polling." That was over-specified, and the correction matters because the
+original wording made the outreach service's *shape* look negotiable when it is not.
+
+**Postback does not remove the need for `tasks_ready`.** A callback that does not receive a
+response within 10 seconds is transferred to the Tasks Ready list anyway, so a collector is
+required as reconciliation whichever mechanism is chosen. Postback therefore *adds* a mechanism
+rather than replacing one — and the added mechanism is the expensive kind: it would force a cron
+job into being a service with a public domain and a live receiver, listening around the clock for
+callbacks that arrive twice a month. All of that to still need the collector.
+
+**The service stays a cron job.** No public domain, no receiver, no shape change. It gains a
+second schedule, not a second nature.
+
+Shape, as ruled:
+
+1. **Submission run** — `task_post` batched at 100/POST; every returned task id persisted
+   immediately with `status = 'submitted'`, before anything else happens.
+2. **Collector run on its own frequent tick** (hourly or daily) — `GET tasks_ready`, `task_get`
+   each, store, mark collected, **loop**: the list caps at 1000 and will not reveal the rest until
+   the current batch is collected.
+3. **Fallback by id** — an id uncollected after ~3 days has aged off the ready list, but results
+   are retained 30 days and remain retrievable directly.
+4. **Alert** past ~5 days uncollected.
+
+**The cadence constraint is the load-bearing part.** The collector must run far more often than
+the 15-day scan cadence. A collector on the scan schedule would let every task age off the ready
+list between runs, silently converting the normal path into the fallback path — which still works,
+which is exactly why it would go unnoticed.
+
+`tasks_ready` is free; only `task_post` bills. So collection frequency costs nothing, and there is
+no reason to be sparing with it.
+
+*Revisit:* only if DataForSEO changes the ready-list retention or the 1000-entry cap. Note that
+adopting postback later would be additive and would not let the collector be removed.
+
+**Credentials added the same day** as Railway reference variables —
+`OUTREACH_DATAFORSEO_LOGIN = ${{PLATFORM.DATAFORSEO_LOGIN}}`, same for the password. References
+rather than copies for two reasons: the secrets never pass through a chat transcript (the
+Outscraper and Supabase keys did, and are flagged for rotation), and a rotation on PLATFORM
+propagates automatically. Nothing is wired to them yet.

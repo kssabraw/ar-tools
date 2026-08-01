@@ -630,9 +630,35 @@ alter table prospect add column franchise_status text not null default 'unknown'
   heatmap becomes the day-one campaign baseline and a later provider must reproduce it.
 - MUST write an immutable `scan_snapshot` row per submarket × keyword × cycle. Snapshots are
   append-only; deltas depend on history.
-- MUST use standard (queued) tier by default. Live mode costs ~3.3× for latency this pipeline
+- MUST batch task submission (up to 100 per POST).
+- **MUST collect results via the `tasks_ready` list, NOT postback.** *(Corrected 2026-08-01 — the
+  original "MUST use postback/pingback, not polling" was over-specified. Owner ruling; see
+  DECISIONS.md.)* Postback does not remove the need for `tasks_ready`: a callback that does not
+  receive a response within 10 seconds is transferred to the Tasks Ready list regardless, so the
+  collector is required as reconciliation either way. Postback adds a mechanism; it does not
+  replace one — and it would force this cron job to become a service with a public domain and a
+  live receiver, for no reduction in what has to be built.
+
+  The collection shape:
+
+  1. **Submission run.** `task_post` batched at 100 per POST. Every returned task id MUST be
+     persisted immediately with `status = 'submitted'`, before anything else happens — an
+     un-persisted id is a paid task that can never be collected.
+  2. **Collector run, on its OWN frequent schedule** (hourly or daily). `GET tasks_ready`, then
+     `task_get` each entry, store, mark collected. **Loop until the list is empty:** it returns at
+     most 1000 entries and will not reveal the rest until the current batch is collected.
+  3. **Fallback by id.** An id submitted and not collected after ~3 days has aged off
+     `tasks_ready`, but results are retained for **30 days** and remain retrievable by id
+     directly. Collect those without waiting for the list.
+  4. **Alert** on anything still uncollected past ~5 days.
+
+  **The collector's schedule MUST be far more frequent than the 15-day scan cadence.** A collector
+  that ran per scan cycle would let tasks age off the ready list between runs, converting the
+  normal path into the fallback path every time.
+
+  `tasks_ready` is **free** — collection does not bill. Only `task_post` costs.
+- MUST use standard (queued) tier by default. Live mode costs ~3.3x for latency this pipeline
   does not need.
-- MUST batch task submission (up to 100 per POST) and use postback/pingback, not polling.
 - MUST parse paid results from the organic response for the ads-gap signal. Do not issue
   separate ad queries.
 - AI engine checks (ChatGPT / Claude / Perplexity) run **per named region, not per submarket** —

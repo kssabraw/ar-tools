@@ -267,7 +267,8 @@ Funnel aggregation runs in Postgres (`v_prospect_status`, `outreach_market_summa
 3. **The coverage rollup** (`ISSUES` I-042). Until it exists the retention job drops nothing but empty partitions. It needs the geometry generator (built) and land masking (not built), so it lands with the scan writer.
 
 ### 8.2 Blocked on a human
-- **DataForSEO credentials on the `outreach` Railway service.** It is the sole provider for geogrid, organic SERP and AI Overview. The service holds only `OUTREACH_OUTSCRAPER_API_KEY`. Also needs a **public callback URL** — the spec requires postback, not polling, and this is a command worker with no domain.
+- ~~**DataForSEO credentials on the `outreach` Railway service.**~~ **DONE 2026-08-01** — set as Railway reference variables (`OUTREACH_DATAFORSEO_LOGIN` = `${{PLATFORM.DATAFORSEO_LOGIN}}`, same for the password), so the secrets never left the platform and follow a rotation automatically. **Nothing is wired to them yet** — no client exists in `outreach/`.
+- ~~**A public callback URL.**~~ **NO LONGER REQUIRED** — the postback MUST was over-specified and has been corrected to `tasks_ready` collection (PRD §B2, DECISIONS.md). The service stays a cron job: no domain, no receiver, no shape change. What it DOES need is a **second, frequent cron schedule** for the collector — see §7.6.
 - **`ai_region` names for LA** (§7.4). A candidate list can be drafted from the 14 submarkets for a human to correct.
 - **Two verification spikes, ~80 minutes total.** `I-004` AI prompt granularity (~20m) decides the `ai_region` grain — too fine and the model silently falls back to metro while you believe you asked a specific question. `I-003` Outscraper pixel field (~1h) decides whether the site-fetch parse is optional or required, which changes the money-signal cost model.
 - **Spend approval.** ~$3–6 per market-vertical per cycle, guarded at `max_market_run_cost_cents` 5000 — a gate that is only as honest as §7.1.

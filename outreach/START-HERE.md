@@ -119,7 +119,8 @@ is needed for inspection.
       not Phase 1 — it needs grid data to exist.
 
 - [ ] Grid geometry generated from pinned, versioned function; parameters persisted per snapshot
-- [ ] Maps geogrid via DataForSEO standard queue, batched, postback not polling
+- [ ] Maps geogrid via DataForSEO standard queue, batched (100/POST), collected via `tasks_ready`
+      on a SEPARATE frequent cron — not postback, and not per scan cycle (PRD §B2, DECISIONS.md)
 - [ ] Organic SERP + AI Overview per submarket × keyword; paid results parsed for ads-gap
 - [ ] AI checks per `ai_region` (not per submarket), ≥3 samples, deduplicated by region
 - [ ] `scan_snapshot` immutable, append-only, with `expected_points` / `actual_points`
