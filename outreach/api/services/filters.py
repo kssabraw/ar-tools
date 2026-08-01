@@ -141,6 +141,7 @@ def evaluate(
     review_recency_enabled: bool = False,
     inferred_zero: bool = False,
     review_count_override: int | None = None,
+    franchise_decision: str | None = None,
 ) -> FilterVerdict:
     """Run every rule against one place and return all outcomes.
 
@@ -179,8 +180,20 @@ def evaluate(
         outcomes.append(RuleOutcome(RULE_NOT_SUPPRESSED, hit is None, hit))
 
     # -- 4. franchise / chain pattern — FLAG ONLY, never excludes -------------------------
-    matched = matches_franchise_pattern(place.name, franchise_patterns)
-    outcomes.append(RuleOutcome(RULE_NOT_FRANCHISE, matched is None, matched))
+    #
+    # A human ruling outranks the pattern match, in BOTH directions. `DEFAULT_FRANCHISE_PATTERNS`
+    # is an unvalidated seed (I-020) and someone who read the listing is better evidence than a
+    # substring; equally, a reviewer who confirmed a chain has said something the pattern list
+    # missed. Without this the verdict would keep contradicting the stored status on every run —
+    # and the status itself would have been overwritten too, before the database guard
+    # (migration 20260801140000) closed that path.
+    if franchise_decision == "confirmed_independent":
+        outcomes.append(RuleOutcome(RULE_NOT_FRANCHISE, True, "confirmed_independent (human)"))
+    elif franchise_decision == "confirmed_franchise":
+        outcomes.append(RuleOutcome(RULE_NOT_FRANCHISE, False, "confirmed_franchise (human)"))
+    else:
+        matched = matches_franchise_pattern(place.name, franchise_patterns)
+        outcomes.append(RuleOutcome(RULE_NOT_FRANCHISE, matched is None, matched))
 
     # -- 5. review count ------------------------------------------------------------------
     #
