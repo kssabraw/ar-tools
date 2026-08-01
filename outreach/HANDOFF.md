@@ -203,6 +203,31 @@ Worth knowing before someone concludes a write silently failed and applies it a 
 
 ---
 
+### 6.12 After a squash merge, RESTART the branch — do not keep committing on it
+Hit twice in one session, both times as a merge conflict that looked like someone else had touched
+the files. Nobody had.
+
+A squash merge replays your commits onto `main` as ONE NEW commit with a different SHA. The branch
+still holds the originals. Keep committing on it and the branch now contains the same content
+twice — once as your commits, once as main's squash — and the next merge conflicts on every file
+both sides touched. `ISSUES.md` and `HANDOFF.md` are the usual casualties because every change
+appends to them.
+
+The fix is mechanical and takes ten seconds:
+
+```
+git fetch origin main
+git checkout -B <branch> origin/main
+git cherry-pick <only the commits made SINCE the merge>
+git push --force-with-lease
+```
+
+Cherry-picking applies cleanly because main already carries the earlier content — the conflict was
+never a real disagreement, only two spellings of the same change. Verify with
+`git log --oneline origin/main..HEAD`: it should list only work that has never been merged.
+
+---
+
 ## 7. What is NOT done
 
 ### 7.1 The Outscraper billing rate is still a placeholder — do this first
