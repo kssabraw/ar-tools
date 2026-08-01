@@ -71,6 +71,7 @@ class LookupResult:
 class VerifyReport:
     requested: int = 0
     results: list[LookupResult] = field(default_factory=list)
+    group: str = "both_null"
 
     @property
     def by_verdict(self) -> dict[str, int]:
@@ -91,6 +92,31 @@ class VerifyReport:
         an isolated bad row.
         """
         v = self.by_verdict
+        if self.group == "control":
+            # Inverted, because the control group tests the INSTRUMENT, not the prospects. These
+            # listings are known to have reviews, so the provider finding them is the pass
+            # condition and the provider missing them is a disqualification.
+            if v.get(ERROR) and not v.get(HAS_REVIEWS):
+                return "INCONCLUSIVE — control lookups failed; the instrument was not exercised"
+            if v.get(HAS_REVIEWS) and not (v.get(AMBIGUOUS) or v.get(ZERO)):
+                completed = len(self.results) - v.get(ERROR, 0)
+                return (
+                    f"INSTRUMENT VALID — {v[HAS_REVIEWS]} of {completed} completed lookups "
+                    "returned a count for a listing known to have reviews. A missing count on "
+                    "the 105 is therefore the provider declining to report, which is what the "
+                    "flag would encode."
+                )
+            if v.get(HAS_REVIEWS):
+                return (
+                    f"INSTRUMENT UNRELIABLE — only {v[HAS_REVIEWS]} of {len(self.results)} "
+                    "listings with known reviews returned a count. A missing count cannot be "
+                    "read as zero when the provider also misses real ones."
+                )
+            return (
+                "INSTRUMENT INVALID — no listing with known reviews returned a count. This "
+                "endpoint does not measure what we are asking it; do not draw anything from the "
+                "silence on the 105, and do not set the flag on this evidence."
+            )
         if v.get(ERROR):
             return "INCONCLUSIVE — lookups failed; re-run before drawing anything from this"
         if v.get(HAS_REVIEWS):
@@ -247,9 +273,12 @@ async def verify_review_counts(
 ) -> VerifyReport:
     """Look up `limit` prospects one at a time and report what comes back.
 
-    `group` selects which half of I-041 is being tested:
+    `group` selects what is being tested:
       both_null      the 105 — no count AND no rating. The convention question.
       rating_present the 8 — no count but a rating. Known gaps; here for completeness.
+      control        prospects with a KNOWN count. Tests the instrument rather than the
+                     prospects, and is the run that makes the other two readable — see the
+                     comment at the query.
 
     `provider` selects who is asked:
       outscraper   the same vendor whose convention is under test. Bounded evidence — see I-050
@@ -260,23 +289,49 @@ async def verify_review_counts(
     Both are kept because the comparison IS the result. Two vendors agreeing on a null is
     evidence; one vendor repeating itself is not.
     """
-    rows = fetch_all(
-        lambda: client.table("prospect")
-        # lat/lng are here for the DataForSEO keyword ladder's name+coordinate rung, not for
-        # display. Explicit columns rather than `*`: `raw` is already the one heavy field this
-        # needs, and selecting the rest of the row would multiply the payload for nothing.
-        .select("id,place_id,name,review_count,lat,lng,raw")
-        .eq("market_id", market_id)
-        .is_("review_count", "null")
-    )
+    # lat/lng are here for the DataForSEO keyword ladder's name+coordinate rung, not for display.
+    # Explicit columns rather than `*`: `raw` is already the one heavy field this needs, and
+    # selecting the rest of the row would multiply the payload for nothing.
+    columns = "id,place_id,name,review_count,lat,lng,raw"
 
-    if group == "rating_present":
-        rows = [r for r in rows if (r.get("raw") or {}).get("rating") is not None]
+    if group == "control":
+        # THE CONTROL GROUP, and the reason the first run could not conclude.
+        #
+        # That run found that DataForSEO reports no count for these listings either. Two vendors
+        # silent is suggestive, but silence is not an assertion — the reading "both providers
+        # omit the count when there are no reviews" and the reading "we are asking wrongly, or
+        # this endpoint simply does not carry counts" produce IDENTICAL output, and one of them
+        # would have us flag 105 prospects on a measurement error.
+        #
+        # Prospects that DO have a count separate them in one cheap run. If the same call returns
+        # a votes_count for those, the omission on the others is the provider saying zero. If it
+        # returns nothing for those either, the instrument does not measure this and no number of
+        # further lookups against it will ever mean anything.
+        rows = fetch_all(
+            lambda: client.table("prospect")
+            .select(columns)
+            .eq("market_id", market_id)
+            .not_.is_("review_count", "null")
+            .gt("review_count", 0)
+        )
+        return_rows = select_candidates(rows, limit)
     else:
-        rows = [r for r in rows if (r.get("raw") or {}).get("rating") is None]
+        rows = fetch_all(
+            lambda: client.table("prospect")
+            .select(columns)
+            .eq("market_id", market_id)
+            .is_("review_count", "null")
+        )
+        if group == "rating_present":
+            rows = [r for r in rows if (r.get("raw") or {}).get("rating") is not None]
+        else:
+            rows = [r for r in rows if (r.get("raw") or {}).get("rating") is None]
+        return_rows = select_candidates(rows, limit)
 
-    candidates = select_candidates(rows, limit)
-    report = VerifyReport(requested=len(candidates))
+    rows = return_rows
+
+    candidates = rows
+    report = VerifyReport(requested=len(candidates), group=group)
     if not candidates:
         return report
 
@@ -357,15 +412,19 @@ async def _run_dataforseo(
                     result.name = str(row.get("name") or "")
                     return result
                 except Exception as exc:  # noqa: BLE001
+                    # Typed, because httpx's timeout exceptions carry an EMPTY message: the first
+                    # run of this reported `error: ''` twenty times over, which says nothing about
+                    # whether the credentials, the endpoint or the clock was the problem.
+                    detail = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
                     logger.warning(
                         "dataforseo lookup failed",
-                        extra={"place_id": place_id, "error": str(exc)},
+                        extra={"place_id": place_id, "error": detail},
                     )
                     return LookupResult(
                         place_id=place_id,
                         name=str(row.get("name") or ""),
                         verdict=ERROR,
-                        error=str(exc),
+                        error=detail,
                     )
 
         return list(await asyncio.gather(*(one(r) for r in candidates)))

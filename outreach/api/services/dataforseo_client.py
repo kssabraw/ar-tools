@@ -174,6 +174,30 @@ def build_lookup_bodies(
     return forms
 
 
+def rating_evidence(body: dict[str, Any]) -> dict[str, Any]:
+    """The review-bearing fields of a response, verbatim, for the log.
+
+    The first run logged the first 2000 characters of the envelope instead, and `rating` sits
+    after `latitude` in this item's field order — so the truncation cut off the exact field the
+    whole question turns on, and the log could not distinguish "the provider said null" from "the
+    provider said nothing" from "the parser missed it". Three different conclusions, one
+    indistinguishable line.
+
+    Returned rather than logged here so it stays pure and testable.
+    """
+    task = ((body.get("tasks") or [{}])[0]) or {}
+    result = (task.get("result") or [{}])[0] or {}
+    items = result.get("items")
+    record = items[0] if isinstance(items, list) and items and isinstance(items[0], dict) else result
+    return {
+        "rating": record.get("rating"),
+        "rating_distribution": record.get("rating_distribution"),
+        # Present-with-null and absent are different claims, and only the key list separates them.
+        "has_rating_key": "rating" in record,
+        "is_claimed": record.get("is_claimed"),
+    }
+
+
 def _first_number(record: dict[str, Any], *keys: str) -> int | None:
     for key in keys:
         value = record.get(key)
@@ -313,7 +337,7 @@ class DataForSEOClient:
         if self._client is None:
             self._client = httpx.AsyncClient(
                 base_url=BASE_URL,
-                timeout=self._settings.outscraper_request_timeout_seconds,
+                timeout=self._settings.dataforseo_request_timeout_seconds,
                 auth=(self._settings.dataforseo_login, self._settings.dataforseo_password),
             )
         return self
@@ -360,15 +384,19 @@ class DataForSEOClient:
                 continue
 
             self._preferred_form = form_name
+            # Logged for EVERY lookup, not just the first, and scoped to the review-bearing
+            # fields rather than the first N characters of the envelope. "Sixteen listings
+            # returned no count" is a much weaker statement than "sixteen listings returned
+            # `rating: {value: None, votes_count: None}`", and only this line can tell them apart.
+            logger.info(
+                "dataforseo rating evidence",
+                extra={"place_id": parsed.place_id, "form": form_name, **rating_evidence(body)},
+            )
             if not self._logged_sample:
-                # One raw body, once, so the response shape is READ rather than assumed. The
-                # parser above was written against a probe error message, not against a real
-                # result; this is the line that tells us whether it was right.
+                # One full body, once, so an unexpected envelope is still recoverable from the
+                # log rather than needing another paid run to diagnose.
                 self._logged_sample = True
-                logger.info(
-                    "dataforseo sample response",
-                    extra={"form": form_name, "raw": str(body)[:2000]},
-                )
+                logger.info("dataforseo sample response", extra={"raw": str(body)[:4000]})
             return replace(parsed, form=form_name)
 
         raise DataForSEOError("; ".join(failures) or "all keyword forms rejected")

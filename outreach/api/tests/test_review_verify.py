@@ -106,9 +106,9 @@ def test_a_string_count_is_not_trusted_as_a_number():
 # --- recommendation ----------------------------------------------------------------------
 
 
-def _report(*verdicts, counts=None):
+def _report(*verdicts, counts=None, group="both_null"):
     counts = counts or {}
-    rep = VerifyReport(requested=len(verdicts))
+    rep = VerifyReport(requested=len(verdicts), group=group)
     rep.results = [
         LookupResult(place_id=f"p{i}", name="n", verdict=v, review_count=counts.get(i))
         for i, v in enumerate(verdicts)
@@ -140,6 +140,49 @@ def test_any_error_blocks_a_conclusion():
     sample of the population."""
     rec = _report(ZERO, ZERO, ERROR).recommendation()
     assert "INCONCLUSIVE" in rec
+
+
+# --- the control group -------------------------------------------------------------------
+#
+# The first real run came back 16 ambiguous / 4 error: DataForSEO found every listing and
+# reported no count for any of them. That is two vendors silent, which reads as evidence — but
+# "both providers omit the count when there are no reviews" and "this endpoint does not carry
+# counts at all" produce IDENTICAL output, and one of them would have us flag 105 prospects on a
+# measurement error. Prospects with a KNOWN count separate the two. The verdicts invert, because
+# this group tests the instrument rather than the prospects.
+
+
+def test_finding_every_known_reviewer_validates_the_instrument():
+    rec = _report(*[HAS_REVIEWS] * 5, group="control").recommendation()
+    assert rec.startswith("INSTRUMENT VALID")
+
+
+def test_finding_none_of_them_disqualifies_the_evidence():
+    """The outcome that matters most: if the endpoint misses listings that demonstrably have
+    reviews, its silence on the 105 means nothing, and no volume of further lookups will fix
+    that."""
+    rec = _report(*[AMBIGUOUS] * 5, group="control").recommendation()
+    assert rec.startswith("INSTRUMENT INVALID")
+    assert "do not set the flag" in rec
+
+
+def test_finding_some_of_them_is_not_good_enough():
+    """A provider that reports counts most of the time still cannot have its silence read as a
+    zero — the missing ones are exactly the population under test."""
+    rec = _report(HAS_REVIEWS, HAS_REVIEWS, AMBIGUOUS, group="control").recommendation()
+    assert rec.startswith("INSTRUMENT UNRELIABLE")
+
+
+def test_a_control_run_that_only_errored_proves_nothing():
+    rec = _report(ERROR, ERROR, group="control").recommendation()
+    assert "INCONCLUSIVE" in rec
+
+
+def test_a_control_error_alongside_successes_does_not_block_the_verdict():
+    """Unlike the prospect groups, a partial control run is still informative: the lookups that
+    DID complete each demonstrate the instrument works."""
+    rec = _report(HAS_REVIEWS, HAS_REVIEWS, ERROR, group="control").recommendation()
+    assert rec.startswith("INSTRUMENT VALID")
 
 
 def test_counts_found_reports_the_actual_numbers():

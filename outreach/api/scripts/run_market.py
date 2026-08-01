@@ -440,7 +440,7 @@ def main() -> int:
         help="places per query (calibrate); prospects to look up (verify-reviews)",
     )
     parser.add_argument(
-        "--group", choices=["both_null", "rating_present"], default="both_null",
+        "--group", choices=["both_null", "rating_present", "control"], default="both_null",
         help="verify-reviews: which I-041 group to sample",
     )
     parser.add_argument(
