@@ -1185,3 +1185,46 @@ of it printed — and because the sentences themselves read fine, the logs looke
 
 Fixed at the formatter (`_ExtraFormatter`), not at the call sites: the call sites are correct,
 this is a rendering bug, and a fix at the formatter also covers lines not yet written.
+
+### I-061 · DataForSEO returned NO review count for any of the 20 — I-041 still open
+First real DataForSEO run (deployment `b8297c77`, commit `225d061`, 2026-08-01):
+`{"error": 4, "ambiguous": 16}`, `counts_found: []`, recommendation **INCONCLUSIVE**.
+
+The `place_id:<id>` keyword form works — every successful lookup reports `form: "place_id"` and
+the returned `place_id` matched the one asked about, so no name-search fallback was used and no
+result is about the wrong business. Cost was `0.0054` per task, ~$0.11 for the run.
+
+**Of the 16 that completed, not one returned a review count.** No explicit zero, no positive
+count. DataForSEO found each business (`Top Sewer Hollywood`, `California Rooter & Plumbing`,
+`Sloane Plumbing & Heating`, …) and reported no `votes_count`.
+
+**This is not evidence for the flag, and the temptation to read it as such is the exact failure
+mode this module exists to avoid.** Two readings produce identical output:
+
+1. Both providers omit the count when a listing genuinely has no reviews. → the flag is correct.
+2. `my_business_info` does not carry review counts, or we are asking it wrongly. → the flag would
+   be applied to 105 prospects on a measurement error.
+
+Nothing observed so far distinguishes them, so `classify_dataforseo` returns AMBIGUOUS and the
+verifier writes nothing. **`review_count_inferred_zero` remains unset. The 105 stay NULL.**
+
+**The control group settles it, and is cheap.** `verify-reviews --group control` samples
+prospects whose review count is already KNOWN. If the same call returns a `votes_count` for
+those, the silence on the 105 is the provider asserting zero. If it returns nothing for those
+either, this endpoint does not measure what we are asking it and no volume of further lookups
+against it will ever mean anything. ~5 lookups, **~$0.03**. Awaiting approval — the previous
+approval was for a specific 20-lookup run, which has now happened.
+
+Three defects the run exposed, all fixed in `0cbe246`:
+
+* **4 of 20 timed out.** `my_business_info/live` is a live endpoint (~19s typical, long tail) and
+  was running under the 60s Outscraper timeout. It has its own 180s budget now. A timeout here is
+  not merely a lost answer — DataForSEO has already run the query, so it is a lookup paid for and
+  discarded.
+* **Those 4 logged `error: ''`.** httpx timeout exceptions carry an empty message. Errors are
+  typed now (`ReadTimeout: ...`).
+* **The sample log truncated at 2000 chars and cut off `rating`**, which sits after `latitude` in
+  the item's field order — so the one field the question turns on was the one field not logged,
+  and "the provider said null", "the provider said nothing" and "the parser missed it" were
+  indistinguishable. `rating_evidence()` now logs `rating` / `rating_distribution` /
+  `has_rating_key` verbatim, for every lookup.
