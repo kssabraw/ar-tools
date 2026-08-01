@@ -1138,3 +1138,50 @@ The free `filter` run on deployment `601e1c23` confirmed the `review_count_overr
 live data: **survived 925 → 924**, `review_count_min` failures **433 → 434**. Mejia Rooter's
 manually-verified count of 3 survived a full filter re-run and kept it excluded — the exact silent
 revert that prompted the class audit, now proven fixed where it counts rather than only in tests.
+
+### I-059 · `reviews/live` does not exist, and platform-api has been swallowing the 404
+**Measured, not inferred.** The free `probe-dataforseo` command posted a deliberately-invalid task
+to seven candidate paths against these credentials (a rejected task is not billed, so discovery
+cost nothing):
+
+| path | HTTP | task status | exists |
+|---|---|---|---|
+| `/v3/business_data/google/reviews/live` | **404** | — | no |
+| `/v3/business_data/google/reviews/live/advanced` | 404 | — | no |
+| `/v3/business_data/google/reviews/task_post` | 200 | 40503 | **yes** |
+| `/v3/business_data/google/my_business_info/live` | 200 | 40501 *"Invalid Field: 'keyword'."* | **yes** |
+| `/v3/business_data/google/my_business_info/live/advanced` | 404 | — | no |
+| `/v3/business_data/google/my_business_info/task_post` | 200 | 40503 | **yes** |
+| `/v3/serp/google/maps/live/advanced` | 200 | 40503 | **yes** |
+
+**Two findings.**
+
+*Mine.* I-057 above asserted `reviews/live` was "production-proven against this account" because
+`platform-api/services/gbp_service.py` calls it in production. It is called there. It also 404s. I
+confirmed the endpoint was CALLED and claimed it WORKED — which is the shallow version of the
+I-029 lesson I was citing while doing it. Twenty lookups failed; **no money was spent**, because
+DataForSEO bills on task acceptance. The corrected instrument is `my_business_info/live`, whose
+own 40501 named the field it wanted.
+
+*A live suite defect, outside this pipeline.* `gbp_service._fetch_reviews` wraps the call in
+`except httpx.HTTPError: return []`. `httpx.HTTPStatusError` subclasses `HTTPError`, so the 404 is
+caught and returned as "this business has no reviews". **GBP review enrichment has been silently
+returning nothing for as long as that endpoint has been gone**, with no error surfaced anywhere.
+Not fixed here — it is in `writer/platform-api`, a different service on a different database, and
+it wants its own change with its own verification. Raised for the owner.
+
+The value form inside `keyword` is still unmeasured, so `build_lookup_bodies` tries three rungs
+(`place_id:<id>` → name+coordinate → name+country) and keeps whichever the account accepts. A
+name-search rung can answer about a *neighbouring* business, so `place_id_matches` is checked and
+a mismatch classifies **ambiguous**, never as evidence — a true review count for the wrong listing
+is worse than no answer, because it looks exactly like an answer.
+
+### I-060 · Seventeen log lines printed their message and dropped their content
+`run_market.py` configured `format="%(levelname)s %(name)s %(message)s"`, which renders nothing
+from `extra=`. Every call site in `api/` puts its payload there: the `place_id` and error of a
+failed lookup, the row count behind the I-036 truncation guard, the projected spend before a paid
+run, the host in "outscraper host unreachable, failing over". All of it was being written and none
+of it printed — and because the sentences themselves read fine, the logs looked healthy.
+
+Fixed at the formatter (`_ExtraFormatter`), not at the call sites: the call sites are correct,
+this is a rendering bug, and a fix at the formatter also covers lines not yet written.

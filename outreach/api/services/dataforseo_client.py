@@ -5,17 +5,32 @@ Asking Outscraper again cannot answer it: if the null comes from its parser fail
 block, it fails identically on the second pull and the ambiguous value comes back either way
 (I-050). Only a provider that does not share that failure mode can settle it.
 
-**Endpoint and request shape are taken from this estate, not from the vendor docs** — the I-029
-lesson, learned when a newer SDK led to the wrong conclusion about a live endpoint.
-`platform-api/services/gbp_service.py` has been calling
-`POST /v3/business_data/google/reviews/live` with `{"place_id": ...}` and HTTP basic auth against
-this same account, in production, for months.
+**Endpoint and request shape are MEASURED against this account, not inferred from anywhere** —
+including not from this estate. The first version of this file asserted that
+`POST /v3/business_data/google/reviews/live` was production-proven because
+`platform-api/services/gbp_service.py` calls it in production. It does call it. It also gets a
+**404**, and swallows the failure (`except httpx.HTTPError: return []`), so GBP review enrichment
+has been silently returning nothing. Being CALLED is not being WORKING, and I checked the first
+and claimed the second — the shallow version of the I-029 lesson I was citing at the time.
 
-**That endpoint is a better instrument than a count field.** It takes a `place_id` and returns the
-reviews themselves plus `reviews_count`. So "does this listing have reviews" is answered by the
-presence of review objects rather than by re-reading a number that might be null for the very
-reason under investigation — and a DataForSEO `reviews_count` of **0** is a positive assertion of
-zero, which is exactly what Outscraper never emits.
+What the probe (`probe_endpoints`, free — every task deliberately invalid) actually established
+against these credentials:
+
+    /v3/business_data/google/reviews/live                 404  does not exist
+    /v3/business_data/google/reviews/task_post            200  exists (queued lifecycle)
+    /v3/business_data/google/my_business_info/live        200  exists, and told us its
+                                                               required field: "Invalid Field:
+                                                               'keyword'."
+    /v3/serp/google/maps/live/advanced                    200  exists
+
+`my_business_info/live` is the instrument this needs: one synchronous call per place, returning
+that listing's own `rating.votes_count`. A votes_count of **0** is a positive assertion of zero,
+which is exactly what Outscraper never emits, and is the whole reason a second vendor is worth
+paying for.
+
+**The `keyword` VALUE form is still unmeasured**, so it is discovered rather than assumed — see
+`build_lookup_bodies`. A rejected task is not billed, so trying three forms costs nothing until
+one is accepted.
 
 This module is read-only. It looks things up; deciding what the answers mean is `review_verify`'s
 job, and acting on that decision is a human's.
@@ -24,7 +39,7 @@ job, and acting on that decision is a human's.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import httpx
@@ -34,7 +49,20 @@ from ..config import Settings
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.dataforseo.com"
-REVIEWS_LIVE_PATH = "/v3/business_data/google/reviews/live"
+
+# Probe-confirmed. Synchronous, one place per call.
+MY_BUSINESS_INFO_LIVE_PATH = "/v3/business_data/google/my_business_info/live"
+
+# Probe-confirmed as EXISTING but NOT used here: it is the queued lifecycle (task_post →
+# tasks_ready → task_get), which is the right shape for the Phase 2 scan and the wrong shape for
+# twenty one-off lookups. `parse_place_reviews` below still reads its result envelope.
+REVIEWS_TASK_POST_PATH = "/v3/business_data/google/reviews/task_post"
+
+# 404s. Kept named so the next person who finds it in gbp_service.py does not re-derive this.
+REVIEWS_LIVE_PATH_DOES_NOT_EXIST = "/v3/business_data/google/reviews/live"
+
+_DEFAULT_LOCATION_CODE = 2840  # United States
+_DEFAULT_LANGUAGE_CODE = "en"
 
 # DataForSEO reports per-task status inside a 200 response, the same trap Outscraper has
 # (ISSUES I-009 in the provider notes): a transport-level 200 says nothing about whether the task
@@ -60,6 +88,14 @@ class PlaceReviews:
     reviews_count: int | None
     rating: float | None
     items_returned: int
+    # Which ladder rung produced this, for the log. A result from a NAME search is weaker evidence
+    # than one from a place_id lookup and the report should be able to say which it was.
+    form: str = ""
+    # False when the provider answered about a DIFFERENT listing than the one asked about. Only
+    # reachable via the name-search rungs, and it must never be read as evidence about our
+    # prospect — a name search that lands on the wrong plumber would otherwise "confirm" a review
+    # count for a business we did not ask about.
+    place_id_matches: bool = True
 
 
 def missing_dataforseo_vars(settings: Settings) -> list[str]:
@@ -79,8 +115,135 @@ def missing_dataforseo_vars(settings: Settings) -> list[str]:
     ]
 
 
+def build_lookup_bodies(
+    place_id: str,
+    name: str | None = None,
+    lat: float | None = None,
+    lng: float | None = None,
+) -> list[tuple[str, dict[str, Any]]]:
+    """The ladder of `keyword` forms to try, strongest evidence first.
+
+    The probe established that `my_business_info/live` requires a `keyword`. It did not establish
+    what a *place* looks like inside one, and guessing is what produced the 404 this file exists
+    to correct. So: try the forms, keep the one the provider accepts, and log which it was. A task
+    DataForSEO rejects is not billed, so the rungs below an accepted one are free.
+
+    Ordered by how much the answer is worth, not by how likely it is to work:
+
+      place_id       unambiguous. Asks about exactly this listing.
+      name + coords  a search. Can land on a neighbouring business with a similar name, so the
+                     caller must check `place_id_matches` before believing it.
+      name + country the same search with a much wider net, and correspondingly more likely to
+                     match the wrong listing. Last because it is the weakest, not because it is
+                     the least likely to be accepted.
+    """
+    forms: list[tuple[str, dict[str, Any]]] = []
+    if place_id:
+        forms.append(
+            (
+                "place_id",
+                {
+                    "keyword": f"place_id:{place_id}",
+                    "location_code": _DEFAULT_LOCATION_CODE,
+                    "language_code": _DEFAULT_LANGUAGE_CODE,
+                },
+            )
+        )
+    if name and lat is not None and lng is not None:
+        forms.append(
+            (
+                "name_coordinate",
+                {
+                    "keyword": name,
+                    "location_coordinate": f"{lat},{lng}",
+                    "language_code": _DEFAULT_LANGUAGE_CODE,
+                },
+            )
+        )
+    if name:
+        forms.append(
+            (
+                "name_country",
+                {
+                    "keyword": name,
+                    "location_code": _DEFAULT_LOCATION_CODE,
+                    "language_code": _DEFAULT_LANGUAGE_CODE,
+                },
+            )
+        )
+    return forms
+
+
+def _first_number(record: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        value = record.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            return int(value)
+    return None
+
+
+def parse_my_business_info(body: dict[str, Any], place_id: str) -> PlaceReviews:
+    """Read one my_business_info/live response.
+
+    The count lives on the rating object as `votes_count` (a rating and its vote count are the
+    same measurement), with the flatter spellings checked as fallbacks because the exact envelope
+    is measured from one live sample, not from a contract.
+
+    **Zero and missing are kept apart.** `votes_count: 0` is the answer this whole exercise is
+    trying to obtain and is returned as an integer 0; a votes_count that is absent entirely returns
+    None and classifies as AMBIGUOUS. Collapsing the two would let a parse failure vote for the
+    conclusion under test, which is precisely the failure mode being investigated.
+    """
+    tasks = body.get("tasks") or []
+    if not tasks:
+        raise DataForSEOError("response carried no tasks")
+
+    task = tasks[0] or {}
+    status = task.get("status_code")
+    if status is not None and status != _TASK_STATUS_OK:
+        raise DataForSEOError(
+            f"task failed: status_code={status} message={task.get('status_message')!r}"
+        )
+
+    result = task.get("result") or []
+    if not result:
+        raise DataForSEOError("task returned no result block")
+
+    first = result[0] or {}
+    items = first.get("items")
+    record = items[0] if isinstance(items, list) and items and isinstance(items[0], dict) else first
+
+    rating_raw = record.get("rating")
+    count: int | None = None
+    rating: float | None = None
+    if isinstance(rating_raw, dict):
+        count = _first_number(rating_raw, "votes_count", "rating_count", "reviews_count")
+        value = rating_raw.get("value")
+        rating = float(value) if isinstance(value, (int, float)) else None
+    elif isinstance(rating_raw, (int, float)):
+        rating = float(rating_raw)
+
+    if count is None:
+        count = _first_number(record, "reviews_count", "rating_count", "votes_count")
+
+    returned_id = str(record.get("place_id") or "")
+    return PlaceReviews(
+        place_id=returned_id or place_id,
+        reviews_count=count,
+        rating=rating,
+        items_returned=0,  # this endpoint returns a business record, never review objects
+        place_id_matches=(not returned_id) or (not place_id) or returned_id == place_id,
+    )
+
+
 def parse_place_reviews(body: dict[str, Any], place_id: str) -> PlaceReviews:
-    """Read one reviews/live response.
+    """Read one reviews-endpoint result envelope.
+
+    Unused by the verifier — `reviews/live` does not exist and the queued `task_get` path is the
+    wrong shape for twenty one-off lookups. Kept because the Phase 2 scan collects exactly this
+    envelope via `tasks_ready`, and because it is tested.
 
     Tolerant of the envelope in the same way `outscraper_client.extract_places` is — a shape
     assumption that holds until it doesn't is how a parser silently returns nothing.
@@ -137,6 +300,11 @@ class DataForSEOClient:
         self._settings = settings
         self._client = client
         self._owns_client = client is None
+        # The rung that worked last time. Discovery is a property of the ACCOUNT, not of the
+        # place, so once one lookup establishes which keyword form this account accepts, every
+        # later lookup starts there instead of re-walking the ladder.
+        self._preferred_form: str | None = None
+        self._logged_sample = False
 
     async def __aenter__(self) -> "DataForSEOClient":
         missing = missing_dataforseo_vars(self._settings)
@@ -155,26 +323,55 @@ class DataForSEOClient:
             await self._client.aclose()
             self._client = None
 
-    async def fetch_place_reviews(self, place_id: str, depth: int = 10) -> PlaceReviews:
-        """Look up one place. `depth` bounds the review ITEMS returned, never `reviews_count`.
+    async def fetch_place_info(
+        self,
+        place_id: str,
+        name: str | None = None,
+        lat: float | None = None,
+        lng: float | None = None,
+    ) -> PlaceReviews:
+        """Look up one place, walking the keyword ladder until the provider accepts a form.
 
-        Depth is kept small on purpose: the question is whether reviews exist at all, and a larger
-        depth costs more while changing nothing about the answer.
+        Every rung the provider rejects is free, so the cost of discovering the right form is the
+        cost of one accepted lookup — the same as if it had been guessed correctly.
+
+        Raises with the whole ladder's verdicts attached when every rung fails. A bare "task
+        failed" would send the next person back to the probe; naming what each form returned is
+        the difference between a debuggable failure and a repeat of this file's history.
         """
         if self._client is None:
             raise DataForSEOError("client used outside its context manager")
 
-        body = [
-            {
-                "place_id": place_id,
-                "depth": depth,
-                "sort_by": "most_relevant",
-                "language_name": "English",
-            }
-        ]
-        response = await self._client.post(REVIEWS_LIVE_PATH, json=body)
-        response.raise_for_status()
-        return parse_place_reviews(response.json(), place_id)
+        forms = build_lookup_bodies(place_id, name, lat, lng)
+        if not forms:
+            raise DataForSEOError("no usable lookup key for this prospect")
+        if self._preferred_form:
+            forms.sort(key=lambda f: f[0] != self._preferred_form)
+
+        failures: list[str] = []
+        for form_name, task in forms:
+            response = await self._client.post(MY_BUSINESS_INFO_LIVE_PATH, json=[task])
+            response.raise_for_status()
+            body = response.json()
+            try:
+                parsed = parse_my_business_info(body, place_id)
+            except DataForSEOError as exc:
+                failures.append(f"{form_name}: {exc}")
+                continue
+
+            self._preferred_form = form_name
+            if not self._logged_sample:
+                # One raw body, once, so the response shape is READ rather than assumed. The
+                # parser above was written against a probe error message, not against a real
+                # result; this is the line that tells us whether it was right.
+                self._logged_sample = True
+                logger.info(
+                    "dataforseo sample response",
+                    extra={"form": form_name, "raw": str(body)[:2000]},
+                )
+            return replace(parsed, form=form_name)
+
+        raise DataForSEOError("; ".join(failures) or "all keyword forms rejected")
 
 
 # --- endpoint discovery -------------------------------------------------------------------
@@ -283,7 +480,7 @@ async def sample_endpoint(
     path, so the cost is cents, and the alternative is guessing at the response shape after
     guessing at the path, which is how this went wrong the first time.
     """
-    body = [{"place_id": place_id, "depth": 10, "language_name": "English"}]
+    body = [build_lookup_bodies(place_id)[0][1]]
     async with httpx.AsyncClient(
         base_url=BASE_URL,
         timeout=settings.outscraper_request_timeout_seconds,

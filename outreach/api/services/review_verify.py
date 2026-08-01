@@ -62,6 +62,9 @@ class LookupResult:
     has_histogram: bool = False
     inline_reviews: int = 0
     error: str | None = None
+    # Which DataForSEO keyword form answered. Reported because a result from a name search is
+    # weaker evidence than one from a place_id lookup, and the reader should not have to assume.
+    form: str = ""
 
 
 @dataclass
@@ -129,6 +132,19 @@ def classify_dataforseo(reviews: PlaceReviews | None) -> LookupResult:
     if reviews is None:
         return LookupResult(place_id="", name="", verdict=ERROR, error="no result")
 
+    if not reviews.place_id_matches:
+        # The provider answered about a different listing — reachable only from the name-search
+        # rungs of the keyword ladder. Its review count is a true fact about the wrong business,
+        # which is worse than no answer, because it looks exactly like an answer.
+        return LookupResult(
+            place_id=reviews.place_id,
+            name="",
+            verdict=AMBIGUOUS,
+            rating=reviews.rating,
+            error=f"{reviews.form} search matched a different place_id",
+            form=reviews.form,
+        )
+
     if reviews.items_returned > 0:
         verdict = HAS_REVIEWS
     elif reviews.reviews_count is None:
@@ -145,6 +161,7 @@ def classify_dataforseo(reviews: PlaceReviews | None) -> LookupResult:
         review_count=reviews.reviews_count,
         rating=reviews.rating,
         inline_reviews=reviews.items_returned,
+        form=reviews.form,
     )
 
 
@@ -245,7 +262,10 @@ async def verify_review_counts(
     """
     rows = fetch_all(
         lambda: client.table("prospect")
-        .select("id,place_id,name,review_count,raw")
+        # lat/lng are here for the DataForSEO keyword ladder's name+coordinate rung, not for
+        # display. Explicit columns rather than `*`: `raw` is already the one heavy field this
+        # needs, and selecting the rest of the row would multiply the payload for nothing.
+        .select("id,place_id,name,review_count,lat,lng,raw")
         .eq("market_id", market_id)
         .is_("review_count", "null")
     )
@@ -324,7 +344,14 @@ async def _run_dataforseo(
             async with sem:
                 place_id = str(row.get("place_id"))
                 try:
-                    result = classify_dataforseo(await api.fetch_place_reviews(place_id))
+                    result = classify_dataforseo(
+                        await api.fetch_place_info(
+                            place_id,
+                            name=str(row.get("name") or ""),
+                            lat=row.get("lat"),
+                            lng=row.get("lng"),
+                        )
+                    )
                     if not result.place_id:
                         result.place_id = place_id
                     result.name = str(row.get("name") or "")

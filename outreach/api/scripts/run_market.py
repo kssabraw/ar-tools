@@ -258,6 +258,7 @@ def cmd_verify_reviews(args) -> int:
                         "rating": r.rating,
                         "has_histogram": r.has_histogram,
                         "inline_reviews": r.inline_reviews,
+                        "form": r.form,
                         "error": r.error,
                     }
                     for r in report.results
@@ -376,9 +377,40 @@ def _install_sigterm_marker() -> None:
     signal.signal(signal.SIGTERM, _handler)
 
 
+# Everything a LogRecord carries by default. Anything else on a record came from `extra=`.
+_STANDARD_RECORD_FIELDS = set(
+    logging.LogRecord("", 0, "", 0, "", None, None).__dict__
+) | {"message", "asctime", "taskName"}
+
+
+class _ExtraFormatter(logging.Formatter):
+    """Print `extra=` payloads, which the plain format string silently dropped.
+
+    Seventeen call sites across this codebase put the entire content of their log line in `extra`
+    — the place_id of a failed lookup, the row count behind the I-036 truncation guard, the
+    projected spend before a paid run — and every one of them rendered as a bare sentence with the
+    facts removed. "outscraper host unreachable, failing over" without the host. The logs looked
+    fine, which is why nobody noticed.
+
+    Fixed here rather than by inlining the values at each call site: this is a formatting bug, the
+    call sites are correct, and a fix at the formatter also covers the ones not yet written.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        base = super().format(record)
+        extras = {
+            key: value
+            for key, value in record.__dict__.items()
+            if key not in _STANDARD_RECORD_FIELDS
+        }
+        return f"{base} {extras}" if extras else base
+
+
 def main() -> int:
     _install_sigterm_marker()
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+    handler = logging.StreamHandler()
+    handler.setFormatter(_ExtraFormatter("%(levelname)s %(name)s %(message)s"))
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
 
     import os
 
