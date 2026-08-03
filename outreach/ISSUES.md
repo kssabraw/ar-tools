@@ -1369,3 +1369,46 @@ Railway MCP `update-service` explicitly does not handle source changes, so this 
 from a session. Once repointed, a Deploy picks up `59abd4a` (the spend gate) and the corrected
 start command together, and the banner will read
 `command=verify-reviews PAID confirm=verify-reviews` before it spends.
+
+### I-066 · The control group ran: the instrument is VALID, and I-064's fix is proven
+Deployment `73f2ea06`, commit `a7a206d` (main), 2026-08-03. **5 of 5 control lookups returned a
+review count.** ~$0.027.
+
+| business | count | rating |
+|---|---|---|
+| CastleWorks Water Heaters | 232 | 4.8 |
+| Kerrygold Plumbing, Inc. | 30 | 5.0 |
+| Derek's Plumbing & Water Heater Repair | 7 | 5.0 |
+| Noble Plumber's Experts | 3 | 5.0 |
+| Maximum Plumbing | **1** | 5.0 |
+
+All `form: "place_id"`, all `error: null`, `OUTREACH_RESULT status=ok exit=0`. The run's own
+verdict: *"INSTRUMENT VALID — 5 of 5 completed lookups returned a count for a listing known to
+have reviews. A missing count on the 105 is therefore the provider declining to report."*
+
+**Maximum Plumbing is the row that carries the argument.** A single review is reported as
+`votes_count: 1`, so the instrument resolves all the way down to one. A listing with *any*
+reviews would have produced a number.
+
+**What this settles for I-041, stated exactly.** The 20/20 silence on `both_null` is no longer
+uninterpretable: it is not a broken endpoint, a wrong keyword form, or a parser miss, because the
+same call on the same day against the same account returned counts for five listings. Two
+independent vendors now decline to report a count for those prospects.
+
+**What it does NOT settle.** Neither vendor ever emits an explicit `0`. DataForSEO reports absence
+as a null `rating` (`has_rating_key: True`, value None), not as `votes_count: 0`, so "zero
+reviews" remains an *inference from corroborated absence* rather than a provider assertion. The
+I-057 verdict rules are unchanged and still correct: `count is None` classifies **ambiguous, never
+zero**, so nothing was written and `review_count_inferred_zero` stays unset.
+
+**The open decision is a human one:** whether corroborated absence from two independent vendors is
+sufficient to set `review_count_inferred_zero` on the 105. The evidence for it is now as good as
+this method can make it; the remaining gap is that no source will ever say "0" out loud. Recorded
+here rather than acted on, per the class audit — a judgement of this kind must not be re-derived
+by whoever next reads the table.
+
+**Also proven here: the I-064 fix.** Line one read
+`command=verify-reviews PAID confirm=verify-reviews`, and the run reported
+`{'places': 5, 'group': 'control'}` — the flags reached argparse for the first time on this
+service. The repointed source (`branch=main`) also retired the stale-branch label from I-058: the
+banner now reports the branch it actually built.
