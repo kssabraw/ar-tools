@@ -166,21 +166,40 @@ def _store(client_id: str, place_id: str, is_client: bool, reviews: list[dict]) 
     return len(rows)
 
 
-async def _fetch_or_record(place_id: str, depth: int, failures: list[dict]) -> list[dict]:
+class _ShapeUnproven(RuntimeError):
+    """The first lookup of a run failed, so nothing has yet proved the provider contract holds.
+
+    Raised to abort the run rather than keep paying to rediscover the same failure. See
+    `fetch_and_store` for why this is a fail-fast rather than a per-place skip.
+    """
+
+
+async def _fetch_or_record(
+    place_id: str, depth: int, failures: list[dict], *, proven: bool
+) -> list[dict]:
     """One lookup, with the failure RECORDED rather than disguised as zero reviews.
 
     A failed place is skipped (no rows stored) and named in `failures`, so a run that
     could not reach the provider is distinguishable from a run that found nothing —
     the distinction this module lost when its fetch swallowed a 404 into `[]`.
+
+    `proven` is False until some lookup in this run has succeeded. While it is False a
+    failure aborts the run (`_ShapeUnproven`) instead of being skipped, because a failure
+    before ANY success is almost certainly systemic — a dead endpoint, a rejected
+    credential, an unparseable envelope — and those fail identically for every remaining
+    place. DataForSEO bills on task acceptance, so continuing would pay N times to learn
+    what the first task already established.
     """
     try:
         return await fetch_reviews_full(place_id, depth)
     except ReviewFetchError as exc:
         logger.error(
             "review_analytics.fetch_failed",
-            extra={"place_id": place_id, "error": str(exc)},
+            extra={"place_id": place_id, "error": str(exc), "proven": proven},
         )
         failures.append({"place_id": place_id, "error": str(exc)})
+        if not proven:
+            raise _ShapeUnproven(str(exc)) from exc
         return []
 
 
@@ -188,31 +207,55 @@ async def fetch_and_store(client_id: str) -> dict:
     """Fetch + store reviews for the client's own GBP and its top local-pack
     competitors.
 
-    Returns {client_reviews, competitor_reviews, competitors, failures, failed} —
+    Returns {client_reviews, competitor_reviews, competitors, failures, failed, aborted} —
     `failures` names every place whose lookup errored. A caller (or a human reading
     the job result) can then tell "this market has no reviews" apart from "we could
     not ask", which reporting zero for both made impossible.
+
+    **The run aborts on a failure that precedes any success**, and `aborted` carries the
+    reason. The `task_post`/`task_get` envelope is parsed tolerantly but has never been
+    confirmed against a live paid task (I-059) — the probe established that the lifecycle
+    exists, not what it returns. Since DataForSEO bills on task acceptance, a wrong
+    envelope would otherwise cost one billed task per place, every one of them failing
+    the same way. Stopping at the first means a bad contract costs a single task instead
+    of a run, and the fix is verified by the next run rather than by a synthetic test that
+    can only confirm the shape we already assumed.
+
+    Once ONE lookup succeeds the contract is proved for this run, and later failures are
+    per-place problems (a delisted business, a transient timeout) that correctly skip and
+    continue.
     """
     supabase = get_supabase()
     depth = settings.review_intel_depth
     stored_client = 0
     stored_comp = 0
     failures: list[dict] = []
+    profiles: list[dict] = []
+    proven = False
+    aborted: str | None = None
 
     client_rows = supabase.table("clients").select("gbp_place_id").eq("id", client_id).limit(1).execute().data
     client_place = (client_rows[0].get("gbp_place_id") if client_rows else None)
-    if client_place:
-        stored_client = _store(
-            client_id, client_place, True, await _fetch_or_record(client_place, depth, failures)
-        )
 
-    profiles = competitor_gbp.latest_profiles(client_id)
-    for p in profiles[: settings.competitor_gbp_max]:
-        pid = p.get("place_id")
-        if not pid:
-            continue
-        stored_comp += _store(
-            client_id, pid, False, await _fetch_or_record(pid, depth, failures)
+    try:
+        if client_place:
+            reviews = await _fetch_or_record(client_place, depth, failures, proven=proven)
+            proven = True
+            stored_client = _store(client_id, client_place, True, reviews)
+
+        profiles.extend(competitor_gbp.latest_profiles(client_id))
+        for p in profiles[: settings.competitor_gbp_max]:
+            pid = p.get("place_id")
+            if not pid:
+                continue
+            reviews = await _fetch_or_record(pid, depth, failures, proven=proven)
+            proven = True
+            stored_comp += _store(client_id, pid, False, reviews)
+    except _ShapeUnproven as exc:
+        aborted = str(exc)
+        logger.error(
+            "review_analytics.run_aborted",
+            extra={"client_id": client_id, "error": aborted},
         )
 
     return {
@@ -221,6 +264,7 @@ async def fetch_and_store(client_id: str) -> dict:
         "competitors": len(profiles),
         "failures": failures,
         "failed": len(failures),
+        "aborted": aborted,
     }
 
 
