@@ -44,22 +44,24 @@ export function DebugView() {
                 <strong>${(debug.data.actual_cost_usd ?? 0).toFixed(2)}</strong>
               </p>
               {breakdownRows.length > 0 ? (
-                <table className="debug-table">
-                  <thead>
-                    <tr>
-                      <th>Step</th>
-                      <th style={{ textAlign: "right" }}>Cost (USD)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {breakdownRows.map(([step, cost]) => (
-                      <tr key={step}>
-                        <td>{step}</td>
-                        <td style={{ textAlign: "right" }}>${cost.toFixed(4)}</td>
+                <div className="scroll-x">
+                  <table className="debug-table">
+                    <thead>
+                      <tr>
+                        <th>Step</th>
+                        <th style={{ textAlign: "right" }}>Cost (USD)</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {breakdownRows.map(([step, cost]) => (
+                        <tr key={step}>
+                          <td>{step}</td>
+                          <td style={{ textAlign: "right" }}>${cost.toFixed(4)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               ) : (
                 <p className="muted">No per-step cost recorded yet.</p>
               )}

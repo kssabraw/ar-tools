@@ -55,7 +55,7 @@ export function SerpTrends({ clientId }: { clientId: string }) {
               Share of the client's keywords whose SERP shows each signal, week over week (as-of
               the latest snapshot per keyword). Hover a name for what it implies.
             </p>
-            <div style={{ overflowX: 'auto' }}>
+            <div className="scroll-x">
               <table style={table}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid #e2e8f0' }}>

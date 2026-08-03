@@ -169,7 +169,7 @@ export function Forecast() {
               <TrendingUp size={16} style={{ color: '#64748b' }} />
               <h2 style={{ ...cardTitle, margin: 0 }}>Keyword trajectories</h2>
             </div>
-            <div style={{ overflowX: 'auto', marginTop: 10 }}>
+            <div className="scroll-x" style={{ marginTop: 10 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                 <thead>
                   <tr>

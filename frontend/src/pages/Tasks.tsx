@@ -337,7 +337,9 @@ export function Tasks() {
   }
 
   const boardView = (
-    <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', overflowX: 'auto', paddingBottom: 16 }}>
+    // scroll-x-board bounds the height to the viewport: without it the board's
+    // horizontal scrollbar sits under the tallest column, far below the fold.
+    <div className="scroll-x scroll-x-board" style={{ display: 'flex', gap: 12, alignItems: 'flex-start', paddingBottom: 16 }}>
       {activeStatuses.map((s) => {
         const colTasks = tasks.filter((t) => (t.status_key ?? '') === s.key)
         return (

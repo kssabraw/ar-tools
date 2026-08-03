@@ -268,84 +268,86 @@ export function AsanaTasks() {
         {rows.length === 0 ? (
           <div style={emptyBox}>No tasks yet. Click <strong>Add task</strong> to start the template.</div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: rowGrid, gap: 8, fontSize: 11, color: '#94a3b8', fontWeight: 600, paddingLeft: 4 }}>
-              <span>Task</span><span>Assignee</span><span>Category</span><span>Est. hrs</span><span>Active</span><span></span>
-            </div>
-            {rows.map((r, i) => (
-              <div key={i} style={{ display: 'grid', gridTemplateColumns: rowGrid, gap: 8, alignItems: 'center' }}>
-                <div style={{ position: 'relative' }}>
-                  <input
-                    style={{ ...input, paddingRight: hasSubtaskTemplate(r.name) ? 26 : 10 }}
-                    placeholder="Task name"
-                    list="asana-task-library"
-                    value={r.name}
-                    onChange={(e) => updateRow(i, { name: e.target.value })}
-                  />
-                  {hasSubtaskTemplate(r.name) && (
-                    <span title="Matches an Asana task template — created with its subtasks"
-                      style={{ position: 'absolute', right: 8, top: 7, fontSize: 13, color: '#4f46e5' }}>⊟</span>
-                  )}
-                </div>
-                <select
-                  style={{ ...input, ...(r.auto_assign ? { color: '#4338ca', fontWeight: 600 } : {}) }}
-                  value={r.auto_assign ? AUTO : (r.assignee_gid ?? '')}
-                  disabled={!configured}
-                  onChange={(e) => {
-                    if (e.target.value === AUTO) {
-                      updateRow(i, { auto_assign: true, assignee_gid: null, assignee_name: 'Auto' })
-                      return
-                    }
-                    const u = users?.find((x) => x.gid === e.target.value)
-                    updateRow(i, { auto_assign: false, assignee_gid: u?.gid ?? null, assignee_name: u?.name ?? null })
-                  }}
-                >
-                  <option value="">Unassigned</option>
-                  <option value={AUTO}>🔀 Auto-distribute</option>
-                  {(users ?? []).map((u) => (
-                    <option key={u.gid} value={u.gid}>{u.name ?? u.gid}</option>
-                  ))}
-                </select>
-                <select
-                  style={input}
-                  value={r.category_option_gid ?? ''}
-                  disabled={!configured}
-                  onChange={(e) => {
-                    const c = categories?.find((x) => x.gid === e.target.value)
-                    updateRow(i, { category_option_gid: c?.gid ?? null, category_name: c?.name ?? null })
-                  }}
-                >
-                  <option value="">{r.category_name ?? 'None'}</option>
-                  {(categories ?? []).map((c) => (
-                    <option key={c.gid} value={c.gid}>{c.name ?? c.gid}</option>
-                  ))}
-                </select>
-                <input
-                  style={input}
-                  type="number"
-                  min="0"
-                  step="0.5"
-                  placeholder={
-                    r.est_hours == null && libByName(r.name)?.default_hours != null
-                      ? `${libByName(r.name)!.default_hours} (lib)`
-                      : '—'
-                  }
-                  value={r.est_hours ?? ''}
-                  onChange={(e) => updateRow(i, { est_hours: e.target.value === '' ? null : Number(e.target.value) })}
-                />
-                <input
-                  type="checkbox"
-                  checked={r.active}
-                  onChange={(e) => updateRow(i, { active: e.target.checked })}
-                  style={{ justifySelf: 'center' }}
-                />
-                <div style={{ display: 'flex', gap: 2 }}>
-                  <button style={iconBtn} title="Move up" onClick={() => move(i, -1)}><ChevronUp size={14} /></button>
-                  <button style={iconBtn} title="Move down" onClick={() => move(i, 1)}><ChevronDown size={14} /></button>
-                  <button style={{ ...iconBtn, color: '#dc2626' }} title="Remove" onClick={() => removeRow(i)}><Trash2 size={14} /></button>
-                </div>
+          <div className="scroll-x">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 760, marginTop: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: rowGrid, gap: 8, fontSize: 11, color: '#94a3b8', fontWeight: 600, paddingLeft: 4 }}>
+                <span>Task</span><span>Assignee</span><span>Category</span><span>Est. hrs</span><span>Active</span><span></span>
               </div>
-            ))}
+              {rows.map((r, i) => (
+                <div key={i} style={{ display: 'grid', gridTemplateColumns: rowGrid, gap: 8, alignItems: 'center' }}>
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      style={{ ...input, paddingRight: hasSubtaskTemplate(r.name) ? 26 : 10 }}
+                      placeholder="Task name"
+                      list="asana-task-library"
+                      value={r.name}
+                      onChange={(e) => updateRow(i, { name: e.target.value })}
+                    />
+                    {hasSubtaskTemplate(r.name) && (
+                      <span title="Matches an Asana task template — created with its subtasks"
+                        style={{ position: 'absolute', right: 8, top: 7, fontSize: 13, color: '#4f46e5' }}>⊟</span>
+                    )}
+                  </div>
+                  <select
+                    style={{ ...input, ...(r.auto_assign ? { color: '#4338ca', fontWeight: 600 } : {}) }}
+                    value={r.auto_assign ? AUTO : (r.assignee_gid ?? '')}
+                    disabled={!configured}
+                    onChange={(e) => {
+                      if (e.target.value === AUTO) {
+                        updateRow(i, { auto_assign: true, assignee_gid: null, assignee_name: 'Auto' })
+                        return
+                      }
+                      const u = users?.find((x) => x.gid === e.target.value)
+                      updateRow(i, { auto_assign: false, assignee_gid: u?.gid ?? null, assignee_name: u?.name ?? null })
+                    }}
+                  >
+                    <option value="">Unassigned</option>
+                    <option value={AUTO}>🔀 Auto-distribute</option>
+                    {(users ?? []).map((u) => (
+                      <option key={u.gid} value={u.gid}>{u.name ?? u.gid}</option>
+                    ))}
+                  </select>
+                  <select
+                    style={input}
+                    value={r.category_option_gid ?? ''}
+                    disabled={!configured}
+                    onChange={(e) => {
+                      const c = categories?.find((x) => x.gid === e.target.value)
+                      updateRow(i, { category_option_gid: c?.gid ?? null, category_name: c?.name ?? null })
+                    }}
+                  >
+                    <option value="">{r.category_name ?? 'None'}</option>
+                    {(categories ?? []).map((c) => (
+                      <option key={c.gid} value={c.gid}>{c.name ?? c.gid}</option>
+                    ))}
+                  </select>
+                  <input
+                    style={input}
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    placeholder={
+                      r.est_hours == null && libByName(r.name)?.default_hours != null
+                        ? `${libByName(r.name)!.default_hours} (lib)`
+                        : '—'
+                    }
+                    value={r.est_hours ?? ''}
+                    onChange={(e) => updateRow(i, { est_hours: e.target.value === '' ? null : Number(e.target.value) })}
+                  />
+                  <input
+                    type="checkbox"
+                    checked={r.active}
+                    onChange={(e) => updateRow(i, { active: e.target.checked })}
+                    style={{ justifySelf: 'center' }}
+                  />
+                  <div style={{ display: 'flex', gap: 2 }}>
+                    <button style={iconBtn} title="Move up" onClick={() => move(i, -1)}><ChevronUp size={14} /></button>
+                    <button style={iconBtn} title="Move down" onClick={() => move(i, 1)}><ChevronDown size={14} /></button>
+                    <button style={{ ...iconBtn, color: '#dc2626' }} title="Remove" onClick={() => removeRow(i)}><Trash2 size={14} /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 

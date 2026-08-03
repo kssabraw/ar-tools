@@ -32,7 +32,7 @@ export function RankPages({ clientId }: { clientId: string }) {
   }
 
   return (
-    <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
+    <div className="scroll-x" style={{ ...card, padding: 0 }}>
       <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 13 }}>
         <thead>
           <tr style={{ borderBottom: '1px solid #e2e8f0' }}>

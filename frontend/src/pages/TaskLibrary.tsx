@@ -74,60 +74,62 @@ export function TaskLibrary() {
         {rows.length === 0 ? (
           <div style={emptyBox}>No standard tasks yet. Click <strong>Add task</strong> to start your library.</div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: grid, gap: 8, fontSize: 11, color: '#94a3b8', fontWeight: 600, paddingLeft: 4 }}>
-              <span>Task name</span><span>Default hrs</span><span>Default category</span><span>Client blurb (used in the Weekly Pulse — why this work matters, in plain client language)</span><span>Active</span><span></span>
-            </div>
-            {rows.map((r, i) => {
-              const key = r.name.trim().toLowerCase()
-              const isSaved = key !== '' && savedNames.has(key)
-              const count = countByName.get(key) ?? 0
-              const isOpen = expanded.has(key)
-              return (
-                <div key={i}>
-                  <div style={{ display: 'grid', gridTemplateColumns: grid, gap: 8, alignItems: 'center' }}>
-                    <input style={input} placeholder="e.g. GBP Blast" value={r.name}
-                      onChange={(e) => update(i, { name: e.target.value })} />
-                    <input style={input} type="number" min="0" step="0.5" placeholder="—"
-                      value={r.default_hours ?? ''}
-                      onChange={(e) => update(i, { default_hours: e.target.value === '' ? null : Number(e.target.value) })} />
-                    <input style={input} placeholder="e.g. Link Building" value={r.default_category_name ?? ''}
-                      onChange={(e) => update(i, { default_category_name: e.target.value || null })} />
-                    <input style={input}
-                      placeholder="e.g. Keeps your business info consistent everywhere Google looks"
-                      value={r.client_blurb ?? ''}
-                      onChange={(e) => update(i, { client_blurb: e.target.value || null })} />
-                    <input type="checkbox" checked={r.active} style={{ justifySelf: 'center' }}
-                      onChange={(e) => update(i, { active: e.target.checked })} />
-                    <button style={{ ...iconBtn, color: '#dc2626' }} title="Remove" onClick={() => removeRow(i)}>
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                  {/* Checklist expander (only for saved tasks — the checklist is keyed by name) */}
-                  <div style={{ paddingLeft: 4, marginTop: 4 }}>
-                    {isSaved ? (
-                      <button style={checklistToggle} onClick={() => toggleExpand(key)}>
-                        {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                        <ListChecks size={13} />
-                        {count > 0 ? `Checklist · ${count} item${count === 1 ? '' : 's'}` : 'Add a default checklist'}
+          <div className="scroll-x">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 820 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: grid, gap: 8, fontSize: 11, color: '#94a3b8', fontWeight: 600, paddingLeft: 4 }}>
+                <span>Task name</span><span>Default hrs</span><span>Default category</span><span>Client blurb (used in the Weekly Pulse — why this work matters, in plain client language)</span><span>Active</span><span></span>
+              </div>
+              {rows.map((r, i) => {
+                const key = r.name.trim().toLowerCase()
+                const isSaved = key !== '' && savedNames.has(key)
+                const count = countByName.get(key) ?? 0
+                const isOpen = expanded.has(key)
+                return (
+                  <div key={i}>
+                    <div style={{ display: 'grid', gridTemplateColumns: grid, gap: 8, alignItems: 'center' }}>
+                      <input style={input} placeholder="e.g. GBP Blast" value={r.name}
+                        onChange={(e) => update(i, { name: e.target.value })} />
+                      <input style={input} type="number" min="0" step="0.5" placeholder="—"
+                        value={r.default_hours ?? ''}
+                        onChange={(e) => update(i, { default_hours: e.target.value === '' ? null : Number(e.target.value) })} />
+                      <input style={input} placeholder="e.g. Link Building" value={r.default_category_name ?? ''}
+                        onChange={(e) => update(i, { default_category_name: e.target.value || null })} />
+                      <input style={input}
+                        placeholder="e.g. Keeps your business info consistent everywhere Google looks"
+                        value={r.client_blurb ?? ''}
+                        onChange={(e) => update(i, { client_blurb: e.target.value || null })} />
+                      <input type="checkbox" checked={r.active} style={{ justifySelf: 'center' }}
+                        onChange={(e) => update(i, { active: e.target.checked })} />
+                      <button style={{ ...iconBtn, color: '#dc2626' }} title="Remove" onClick={() => removeRow(i)}>
+                        <Trash2 size={14} />
                       </button>
-                    ) : (
-                      dirty && r.name.trim() && (
-                        <span style={{ fontSize: 11, color: '#cbd5e1', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                          <ListChecks size={12} /> Save the library to add this task's checklist
-                        </span>
-                      )
-                    )}
-                    {isOpen && isSaved && (
-                      <ChecklistEditor
-                        libraryName={r.name.trim()}
-                        initial={(checklists ?? []).find((c) => c.library_name.trim().toLowerCase() === key)?.subtasks ?? []}
-                      />
-                    )}
+                    </div>
+                    {/* Checklist expander (only for saved tasks — the checklist is keyed by name) */}
+                    <div style={{ paddingLeft: 4, marginTop: 4 }}>
+                      {isSaved ? (
+                        <button style={checklistToggle} onClick={() => toggleExpand(key)}>
+                          {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                          <ListChecks size={13} />
+                          {count > 0 ? `Checklist · ${count} item${count === 1 ? '' : 's'}` : 'Add a default checklist'}
+                        </button>
+                      ) : (
+                        dirty && r.name.trim() && (
+                          <span style={{ fontSize: 11, color: '#cbd5e1', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                            <ListChecks size={12} /> Save the library to add this task's checklist
+                          </span>
+                        )
+                      )}
+                      {isOpen && isSaved && (
+                        <ChecklistEditor
+                          libraryName={r.name.trim()}
+                          initial={(checklists ?? []).find((c) => c.library_name.trim().toLowerCase() === key)?.subtasks ?? []}
+                        />
+                      )}
+                    </div>
                   </div>
-                </div>
-              )
-            })}
+                )
+              })}
+            </div>
           </div>
         )}
 

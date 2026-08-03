@@ -113,68 +113,70 @@ export function RecentScansMatrix(props: {
   const competitor = viewing && viewing !== 'brand' ? viewing : undefined
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      {/* Engine column headers */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 14px' }}>
-        <span style={{ flex: 1 }} />
-        {ENGINE_ORDER.map(e => (
-          <span
-            key={e}
-            style={{ width: 64, textAlign: 'center', fontSize: 10, fontWeight: 600, color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-            title={ENGINES[e].fullLabel}
+    <div className="scroll-x">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 620 }}>
+        {/* Engine column headers */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 14px' }}>
+          <span style={{ flex: 1 }} />
+          {ENGINE_ORDER.map(e => (
+            <span
+              key={e}
+              style={{ width: 64, textAlign: 'center', fontSize: 10, fontWeight: 600, color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+              title={ENGINES[e].fullLabel}
+            >
+              {ENGINES[e].label}
+            </span>
+          ))}
+        </div>
+
+        {keywords.map((k, i) => (
+          <div
+            key={k.id}
+            className={`aiv-card-enter aiv-stagger-${Math.min(i + 1, 6)}`}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
+              background: '#f8fafc', border: '1px solid #f1f5f9', borderRadius: 10,
+            }}
           >
-            {ENGINES[e].label}
-          </span>
+            <span
+              style={{
+                flex: 1, fontSize: 13, fontWeight: 600, color: '#0f172a',
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0,
+              }}
+              title={k.keyword}
+            >
+              {k.keyword}
+            </span>
+
+            {ENGINE_ORDER.map(e => {
+              const m = latestByCell.get(`${k.id}::${e}`)
+              const { state, title } = cellState(m, competitor)
+              const clickable = !competitor && m?.status === 'completed' && state !== 'absent'
+              const aioKind =
+                !competitor && m?.status === 'completed' && AIO_ENGINES.has(e)
+                  ? m.response_analysis?.aio?.mention_kind
+                  : undefined
+              return (
+                <span
+                  key={e}
+                  title={title}
+                  onClick={clickable ? () => onOpenCell(m!, k.keyword) : undefined}
+                  style={{
+                    width: 64, display: 'flex', justifyContent: 'center',
+                    cursor: clickable ? 'pointer' : 'default',
+                  }}
+                >
+                  <span style={{ position: 'relative', display: 'inline-flex', opacity: state === 'none' || state === 'nocomp' ? 0.22 : state === 'absent' ? 0.4 : 1 }}>
+                    <EngineIcon engine={e} size={22} />
+                    <Badge state={state} />
+                    {aioKind && <AioBadge kind={aioKind} />}
+                  </span>
+                </span>
+              )
+            })}
+          </div>
         ))}
       </div>
-
-      {keywords.map((k, i) => (
-        <div
-          key={k.id}
-          className={`aiv-card-enter aiv-stagger-${Math.min(i + 1, 6)}`}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
-            background: '#f8fafc', border: '1px solid #f1f5f9', borderRadius: 10,
-          }}
-        >
-          <span
-            style={{
-              flex: 1, fontSize: 13, fontWeight: 600, color: '#0f172a',
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0,
-            }}
-            title={k.keyword}
-          >
-            {k.keyword}
-          </span>
-
-          {ENGINE_ORDER.map(e => {
-            const m = latestByCell.get(`${k.id}::${e}`)
-            const { state, title } = cellState(m, competitor)
-            const clickable = !competitor && m?.status === 'completed' && state !== 'absent'
-            const aioKind =
-              !competitor && m?.status === 'completed' && AIO_ENGINES.has(e)
-                ? m.response_analysis?.aio?.mention_kind
-                : undefined
-            return (
-              <span
-                key={e}
-                title={title}
-                onClick={clickable ? () => onOpenCell(m!, k.keyword) : undefined}
-                style={{
-                  width: 64, display: 'flex', justifyContent: 'center',
-                  cursor: clickable ? 'pointer' : 'default',
-                }}
-              >
-                <span style={{ position: 'relative', display: 'inline-flex', opacity: state === 'none' || state === 'nocomp' ? 0.22 : state === 'absent' ? 0.4 : 1 }}>
-                  <EngineIcon engine={e} size={22} />
-                  <Badge state={state} />
-                  {aioKind && <AioBadge kind={aioKind} />}
-                </span>
-              </span>
-            )
-          })}
-        </div>
-      ))}
     </div>
   )
 }

@@ -115,43 +115,45 @@ export function AuthorityReport({ kind, endpoint, body, title, onClose }: {
       )}
 
       {rows.length > 0 && (
-        <table style={table}>
-          <thead>
-            <tr>
-              {kind === 'organic'
-                ? <><Th>#</Th><Th>Page</Th><Th right>DR</Th><Th right>UR</Th><Th right>Ref. domains</Th></>
-                : <><Th>Business</Th><Th>Domain</Th><Th right>Top-3 pins</Th><Th right>DR</Th><Th right>UR (home)</Th><Th right>Ref. domains</Th></>}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => (
-              <tr key={i} style={{ borderTop: '1px solid #f1f5f9', background: r.is_client ? '#eef2ff' : undefined }}>
-                {kind === 'organic' ? (
-                  <>
-                    <td style={td}>{r.position ?? <span style={{ color: '#94a3b8' }}>n/r</span>}</td>
-                    <td style={{ ...td, maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {r.url ? (
-                        <a href={r.url} target="_blank" rel="noreferrer" style={linkCell} title={r.url}>
-                          {pathOf(r.url)} <ExternalLink size={11} />
-                        </a>
-                      ) : (r.domain ?? '—')}
-                      {r.is_client && <span style={clientChip}>you</span>}
-                    </td>
-                  </>
-                ) : (
-                  <>
-                    <td style={td}>{r.name ?? '—'}{r.is_client && <span style={clientChip}>you</span>}</td>
-                    <td style={td}>{r.domain ?? <span style={{ color: '#94a3b8' }}>no website</span>}</td>
-                    <td style={tdRight}>{fmt(r.top3_pins)}</td>
-                  </>
-                )}
-                <td style={tdRight}>{rating(r.dr)}</td>
-                <td style={tdRight}>{rating(r.ur)}</td>
-                <td style={tdRight}>{fmt(r.rd)}</td>
+        <div className="scroll-x">
+          <table style={table}>
+            <thead>
+              <tr>
+                {kind === 'organic'
+                  ? <><Th>#</Th><Th>Page</Th><Th right>DR</Th><Th right>UR</Th><Th right>Ref. domains</Th></>
+                  : <><Th>Business</Th><Th>Domain</Th><Th right>Top-3 pins</Th><Th right>DR</Th><Th right>UR (home)</Th><Th right>Ref. domains</Th></>}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i} style={{ borderTop: '1px solid #f1f5f9', background: r.is_client ? '#eef2ff' : undefined }}>
+                  {kind === 'organic' ? (
+                    <>
+                      <td style={td}>{r.position ?? <span style={{ color: '#94a3b8' }}>n/r</span>}</td>
+                      <td style={{ ...td, maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {r.url ? (
+                          <a href={r.url} target="_blank" rel="noreferrer" style={linkCell} title={r.url}>
+                            {pathOf(r.url)} <ExternalLink size={11} />
+                          </a>
+                        ) : (r.domain ?? '—')}
+                        {r.is_client && <span style={clientChip}>you</span>}
+                      </td>
+                    </>
+                  ) : (
+                    <>
+                      <td style={td}>{r.name ?? '—'}{r.is_client && <span style={clientChip}>you</span>}</td>
+                      <td style={td}>{r.domain ?? <span style={{ color: '#94a3b8' }}>no website</span>}</td>
+                      <td style={tdRight}>{fmt(r.top3_pins)}</td>
+                    </>
+                  )}
+                  <td style={tdRight}>{rating(r.dr)}</td>
+                  <td style={tdRight}>{rating(r.ur)}</td>
+                  <td style={tdRight}>{fmt(r.rd)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )

@@ -342,7 +342,7 @@ export function RankKeywords({ clientId, gscConnected, onViewRankability }: {
           don’t rank for yet (those are tracked via DataForSEO until a position appears).
         </div>
       ) : (
-        <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
+        <div className="scroll-x" style={{ ...card, padding: 0 }}>
           <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid #e2e8f0' }}>

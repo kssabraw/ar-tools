@@ -84,7 +84,7 @@ function StackedBars({ series }: { series: BrandSearchResponse['series'] }) {
   const max = Math.max(...series.map(w => w.branded_impressions + w.nonbranded_impressions), 1)
   const H = 120
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: H + 28, overflowX: 'auto' }}>
+    <div className="scroll-x" style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: H + 28 }}>
       {series.map(w => {
         const total = w.branded_impressions + w.nonbranded_impressions
         const h = Math.round((total / max) * H)
