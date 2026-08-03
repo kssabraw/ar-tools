@@ -2,14 +2,18 @@
 
 **Read this first, then `CLAUDE.md` → `START-HERE.md` → `ISSUES.md` → `DECISIONS.md`.**
 
-Status as of 2026-08-01:
+Status as of 2026-08-03:
 
 - **Phase 1 (ingest + filter) is COMPLETE, verified against a real market, and MERGED to `main`** (#528, squashed as `67f235b`).
 - **Phase 1b (lead CRM) is COMPLETE, applied live, and MERGED to `main`** (#534, squashed as `452a726`).
-- **All three of §8.1's unblocked items are BUILT** — the platform-api `outreach` router, the Phase 2 storage/partitioning layer, and the pinned grid-geometry generator. PR [#538](https://github.com/kssabraw/ar-tools/pull/538), open and draft. Migrations applied live.
-- **Phase 2 SCANNING has still not started and is still blocked on credentials.** Nothing built on 2026-08-01 scans, ingests or spends; `OUTREACH_COMMAND` stays `filter`.
+- **The platform-api `outreach` router, Phase 2 storage/partitioning and the pinned grid-geometry generator are MERGED** (#538, squashed as `a7acc05`). Migrations applied live.
+- **I-041 is RESOLVED BY DECISION.** `review_count_inferred_zero` is set on **105 prospects**, `review_count` left NULL, with a trigger that records any future contradiction. See §9.
+- **Paid runs are now gated in code, not by procedure** (§7.2, closed). `OUTREACH_COMMAND` resolves to `filter` when absent, and every paid command additionally requires `OUTREACH_CONFIRM_SPEND` to equal its own name.
+- **Phase 2 SCANNING has still not started.** The DataForSEO credential exists and has now been exercised for real (`verify-reviews`), but nothing scans, ingests or spends on a schedule. `OUTREACH_COMMAND` is `filter` and both spend variables are empty.
 
-**The biggest thing that changed today is architectural: this is now an AR Tools suite module, not a standalone tool.** See §2. It supersedes parts of what Phase 1 recorded, and reading Phase 1's decisions without it will mislead you.
+**Two things changed on 2026-08-03 that will mislead you if you read the older sections first.** The spend gate above supersedes the "set it back to `filter` afterwards" procedure this file used to rely on (§7.2), and the Railway configuration recorded in §1 was found to be **stale in two ways that each cost money** — read `get-service-config`, not this file, for live values.
+
+**The biggest structural thing remains architectural: this is an AR Tools suite module, not a standalone tool.** See §2. It supersedes parts of what Phase 1 recorded, and reading Phase 1's decisions without it will mislead you.
 
 ---
 
@@ -20,16 +24,16 @@ Status as of 2026-08-01:
 | Code | `outreach/` in `kssabraw/ar-tools` | Phase 1 + 1b on `main`; Phase 2 foundations on `claude/outreach-phase-2-foundations-mm33py` |
 | Phase 1 PR | [#528](https://github.com/kssabraw/ar-tools/pull/528) | **merged** 2026-07-31 |
 | Phase 1b PR | [#534](https://github.com/kssabraw/ar-tools/pull/534) | **merged** 2026-07-31 as `452a726` |
-| Phase 2 foundations PR | [#538](https://github.com/kssabraw/ar-tools/pull/538) | open, draft, CI green |
+| Phase 2 foundations PR | [#538](https://github.com/kssabraw/ar-tools/pull/538) | **merged** as `a7acc05` |
 | Database | Supabase project **Outreacher**, ref `fkwhgvcggvsricuinuqy` | Phase 1 + 1b + Phase 2 storage applied; LA ingested and filtered |
-| Job runner | Railway service **outreach**, id `928c84bc-d7ca-416a-bd61-39e91cc64872` in project `ar-tools` (`2c718e53-73c8-4de8-bef8-7136f06b6ead`) | no cron schedule; source repointed to `main` and **auto-deploy-on-push DISABLED**, both 2026-08-01. Runs only on a manual Deploy |
+| Job runner | Railway service **outreach**, id `928c84bc-d7ca-416a-bd61-39e91cc64872` in project `ar-tools` (`2c718e53-73c8-4de8-bef8-7136f06b6ead`) | no cron schedule; auto-deploy-on-push DISABLED (2026-08-01); source **actually** on `main` since 2026-08-03 (the 2026-08-01 repoint did not stick — I-065). Runs only on a manual Deploy |
 | platform-api integration | `routers/outreach.py` + `services/outreach{,_db}.py` | **built** — 14 routes, read-only over the pipeline, read/write over the CRM |
 | Suite UI | not built | nothing in `frontend/` — **now the next build** |
 | Grid geometry | `api/services/geometry.py` | **built**, version `v1`, **81 points** (I-025 resolved) |
 
 **This is a SEPARATE Supabase project from AR-Internal-Tools.** Do not point outreach code at the suite's database, and do not put outreach migrations in `writer/supabase/migrations/`.
 
-Live row counts: `prospect` 1,388 · `filter_result` 8,328 · `submarket` 14 · `keyword` 5 · `market` 1 · `cost_ledger` 19 · `lead` 0 · `lead_activity` 0 · `lead_stage` 7 · `suppression` 0.
+Live row counts: `prospect` 1,388 (**105 carrying `review_count_inferred_zero`**, §9) · `filter_result` 8,328 · `submarket` 14 · `keyword` 5 · `market` 1 · `cost_ledger` 29 (was 19; +10 from the 2026-08-03 DataForSEO verification runs) · `lead` 0 · `lead_activity` 0 · `lead_stage` 7 · `suppression` 0 · `review_inferred_zero_audit` 0.
 
 ### Railway service configuration
 
@@ -107,7 +111,7 @@ Every acceptance criterion in `docs/PHASE-1-BRIEF.md` §5 is met. Verified indep
 
 ```bash
 # tests — no network, no database
-cd outreach && python -m pytest api/tests -q      # 85 passing
+cd outreach && python -m pytest api/tests -q      # 185 passing
 
 # locally (needs OUTREACH_* env vars and network egress to Outscraper + Supabase)
 python -m api.scripts.run_market seed      markets/los-angeles-plumbing.json
@@ -153,6 +157,8 @@ Applied live and verified. Detail in `PHASE1B-STATUS.md`; the reasoning is in `D
 ---
 
 ## 6. Traps — every one of these cost real time or money here
+
+> **The Railway-specific ones now live in repo-root `CLAUDE.md` → "Railway: read the live config, do not infer it", which auto-loads every session.** Read that first. Its framing matters and is not cosmetic: on 2026-08-03 a plausible explanation *from this very section* was believed instead of measured, and cost ~$0.11 (I-064). The traps below are evidence that this environment's config diverges from what the repo implies — never a substitute for reading the live config.
 
 ### 6.1 Railway `redeploy` replays the OLD deployment's config
 Changing `startCommand` and calling redeploy silently re-runs the *previous* command. Twice, and it looked identical each time. Only a **fresh deployment** picks up config changes. This is why run mode is driven by `OUTREACH_COMMAND` through one entrypoint.
@@ -253,7 +259,15 @@ never a real disagreement, only two spellings of the same change. Verify with
 - **A manual Deploy while `OUTREACH_COMMAND` is `run` or `ingest`** still spends money — now the likeliest remaining path, because it is the same click used for a legitimate free `filter` run.
 - **Setting a `cronSchedule`**, which is the plan once the first real ingest is validated, re-arms it twice over: a Railway cron service runs its start command **on every deploy as well as on schedule** (noted in `railway.toml`). Whatever gates paid runs must exist *before* that schedule is set, not after.
 
-So the original requirement stands: a paid run should need a token the deploy path cannot supply on its own — a `--confirm` flag, a date-stamped value, or a check that the last ingest was ≥N days ago.
+**CLOSED 2026-08-03 — the token exists.** `spend_denial` (`api/scripts/run_market.py`) implements exactly what this item asked for, and it was built because the procedural version failed: a `redeploy` ran `verify-reviews` and spent ~$0.11 that nobody approved, *after* the "set it back to `filter`" procedure had been followed (I-063, I-064).
+
+- Absent, empty or whitespace `OUTREACH_COMMAND` resolves to `filter` (`resolve_command`). The safe command is what you get by omission.
+- Every paid command (`ingest`, `run`, `calibrate`, `verify-reviews`) additionally requires **`OUTREACH_CONFIRM_SPEND` to equal that command's own name**, checked before the handler and before any credential is opened. `probe-dataforseo` is free and ungated until `--sample-place-id` makes it bill.
+- The token names the command *deliberately*. A boolean would authorize whatever happens to be set, which is this incident exactly. A name-matched token means a replayed or half-updated config cannot spend: the leftover confirmation names a different command than the one about to run.
+- The two variables fail safe independently — change the command and forget the token → refused; leave a token behind and the command reverts to `filter` → nothing paid to authorize.
+- Line one of every run now reads `command=… PAID confirm=…` beside the SHA, and a refusal exits non-zero through the `OUTREACH_RESULT` marker.
+
+**This is what must be in place before a `cronSchedule` is set**, per the paragraph above. It now is. Setting the schedule no longer re-arms the footgun on its own, because a scheduled deploy carries no confirmation token.
 
 ### 7.3 Grid geometry — SETTLED at 81, confirmed by the owner 2026-08-01
 `ISSUES` I-025 is closed. `reporting-layer-spec.md` §4.1 is the only document that *defines* the generator — "square lattice covering the bounding box, row-major from NW corner, clipped to distance <= radius_miles" — and that construction holds exactly **81** points. Every alternative was computed rather than assumed: hexagonal **91** (π·25·2/√3 = 90.7, the likeliest origin of a remembered "89"), concentric rings **41**, unclipped 11×11 box **121**. Nothing produces 89, and the PRD hedges it as "~89" because it was an estimate.
@@ -296,12 +310,12 @@ Funnel aggregation runs in Postgres (`v_prospect_status`, `outreach_market_summa
 **And one found, not fixed (I-041).** `review_count_min` is 842 passed / 433 failed / **113 not evaluated** — Outscraper returned no review count for those 113 and they sit inside the 925 "survivors". Population evidence splits them: `review_count = 0` never occurs anywhere in 1,388 rows while counts of 1/2/3–5/6–9 occur 118/70/129/116 times, so null reads as the provider's encoding of zero; 105 of the 113 also have a null rating (consistent with genuinely zero reviews), and **8 have a rating but no count**, which cannot both be true and are genuinely unknown. The direct Google Maps spot-check **could not be run** — Google 403s every route and egress is blocked (I-027) — so this is strong circumstantial evidence, not confirmation. Ten place_ids plus all 8 anomalies are queued in `ISSUES`.
 
 ### 8.1 Unblocked, and the highest-regret thing to defer
-1. **Repoint the `outreach` Railway service at `main`.** It still tracks `claude/phase-1-outscraper-ingestion-llje34`, which is merged and dead. Low urgency while `OUTREACH_COMMAND=filter`, but a deploy from a dead branch is a confusing thing to debug later. **Confirm `OUTREACH_COMMAND` is `filter` BEFORE repointing** — changing the source triggers a deploy, and that is exactly the sequence that fired a duplicate paid ingest in §6.4.
+1. ~~**Repoint the `outreach` Railway service at `main`.**~~ **DONE 2026-08-03.** It had been recorded as done on 2026-08-01 and was not: the service still tracked `claude/phase-1-outscraper-ingestion-llje34`, and a Deploy click faithfully built that branch's HEAD (`7f9430b`, 2026-08-01), failing with `invalid choice: 'verify-reviews'` — a commit old enough to predate both the build banner and the result marker, so it failed silently behind a green badge (I-065). *The lesson is not "repoint it" but "a config change recorded in a document is not a config change"*; verify with `get-service-config`.
 2. **Suite SPA pages.** Nothing in `frontend/` exists. The read surface they need is built and verified.
 3. **The coverage rollup** (`ISSUES` I-042). Until it exists the retention job drops nothing but empty partitions. It needs the geometry generator (built) and land masking (not built), so it lands with the scan writer.
 
 ### 8.2 Blocked on a human
-- ~~**DataForSEO credentials on the `outreach` Railway service.**~~ **DONE 2026-08-01** — set as Railway reference variables (`OUTREACH_DATAFORSEO_LOGIN` = `${{PLATFORM.DATAFORSEO_LOGIN}}`, same for the password), so the secrets never left the platform and follow a rotation automatically. **Nothing is wired to them yet** — no client exists in `outreach/`.
+- ~~**DataForSEO credentials on the `outreach` Railway service.**~~ **DONE 2026-08-01** — set as Railway reference variables (`OUTREACH_DATAFORSEO_LOGIN` = `${{PLATFORM.DATAFORSEO_LOGIN}}`, same for the password), so the secrets never left the platform and follow a rotation automatically. **Now wired and exercised for real:** `api/services/dataforseo_client.py` + `verify-reviews`, run live 2026-08-03 against `my_business_info/live` (I-066). The Phase 2 *scan* client is still not built.
 - ~~**A public callback URL.**~~ **NO LONGER REQUIRED** — the postback MUST was over-specified and has been corrected to `tasks_ready` collection (PRD §B2, DECISIONS.md). The service stays a cron job: no domain, no receiver, no shape change. What it DOES need is a **second, frequent cron schedule** for the collector — see §7.6.
 - **`ai_region` names for LA** (§7.4). A candidate list can be drafted from the 14 submarkets for a human to correct.
 - **Two verification spikes, ~80 minutes total.** `I-004` AI prompt granularity (~20m) decides the `ai_region` grain — too fine and the model silently falls back to metro while you believe you asked a specific question. `I-003` Outscraper pixel field (~1h) decides whether the site-fetch parse is optional or required, which changes the money-signal cost model.
@@ -312,11 +326,39 @@ Funnel aggregation runs in Postgres (`v_prospect_status`, `outreach_market_summa
 - Derive `grid_result.scan_month` from `now()`. It must come from the snapshot being written, or one snapshot splits across two partitions and the retention job blames the rollup (`ISSUES` I-044).
 - Add RLS policies to the CRM tables to silence the advisor's `rls_enabled_no_policy` INFO notices. That is the intended posture (§2).
 - Point outreach code at AR-Internal-Tools, or file an outreach migration under `writer/supabase/migrations/`.
-- Trigger a paid Outscraper or DataForSEO run without being asked. `OUTREACH_COMMAND` must stay `filter`.
+- Trigger a paid Outscraper or DataForSEO run without being asked. `OUTREACH_COMMAND` stays `filter` and `OUTREACH_CONFIRM_SPEND` stays empty between approved runs. The gate (§7.2) now refuses rather than trusting this instruction — but it bounds the damage, it does not grant permission.
+- Set `review_count_inferred_zero` on further rows, or clear it, without an explicit decision. It is a human judgement about a vendor convention (§9) and the `prospect_preserve_decisions` trigger deliberately makes it non-re-derivable.
+- "Fix" a `review_inferred_zero_audit` row by deleting it. That table is the falsification record for §9; a `contradicted` row is the system working.
 
 ---
 
-## 9. Layout
+## 9. The inferred-zero decision — read before touching review counts
+
+**105 prospects carry `review_count_inferred_zero = true` with `review_count` still NULL.** Applied 2026-08-03 by owner decision (I-067). This is the single most easily misread piece of state in the database, so it gets its own section.
+
+**What it means.** "This provider encodes *no reviews* as null." It is a claim about a **vendor convention**, not a measurement of any business. Nothing was written into `review_count` and nothing ever will be by this decision — a later real count comes only from a real measurement.
+
+**Why it was safe to conclude.** Three independent lines, none of which is an opinion:
+
+- **Mechanical.** A rating is an average of reviews, so zero reviews cannot produce one. All 105 have a null rating *and* a null count — the only internally coherent shape for a zero-review listing. The 7 rows with a rating but no count are NOT flagged: those two facts cannot both be true, so they are provider gaps.
+- **Distributional.** `review_count = 0` appears **zero** times across all 1,388 prospects, while 1, 2, 3–5 and 6–9 appear 118 / 70 / 129 / 116 times. A provider that reports down to 1 and never emits 0 is encoding zero as null.
+- **Corroborated.** An independent vendor was asked. DataForSEO returned no count for 20 of 20 sampled with no timeouts, and a control group proved the same call resolves down to a **single** review (Maximum Plumbing, `votes_count: 1`). Two vendors decline to report, and the instrument is known to work (I-061, I-066).
+
+**Why it was decided rather than left open.** No source will ever affirmatively report zero — that *is* the convention under test — so waiting for an explicit `0` means waiting forever. An inference held open indefinitely is not caution; it is a decision never made.
+
+**How it gets audited — this is the important part.** The geo-grid scan will eventually return `rating.votes_count` for these same listings. That is the first source that can *contradict* the flag, and the moment it does is the moment the contradiction is easiest to lose. So it is caught structurally, not by convention:
+
+- `review_inferred_zero_audit` + the `prospect_audit_inferred_zero` BEFORE UPDATE trigger record any real count landing on a flagged row (`verdict: contradicted | confirmed`), `raise warning` to the server log, and clear the flag so the **measurement wins**.
+- The `inferred_zero_requires_null_count` CHECK would otherwise have made that write ERROR — loud, but the wrong loud: it aborts the backfill instead of recording what was learned.
+- Trigger ordering is load-bearing. `prospect_audit_inferred_zero` sorts before `prospect_preserve_decisions`, whose preservation branch is guarded on `new.review_count is null` and therefore correctly declines to re-set a flag cleared alongside a real count.
+
+**What to do after the first scan:** `select verdict, count(*) from review_inferred_zero_audit group by 1;` A few `contradicted` rows means the inference was wrong for those listings and they have already self-corrected. A lot of them means the vendor-convention claim is wrong and the flag should be withdrawn wholesale — clear the boolean, never write 0.
+
+**Migrations:** `20260803210000_inferred_zero_audit.sql` (mechanism), `20260803210100_set_inferred_zero_la.sql` (the write, guarded on `count = 105` so it refuses if the set has moved).
+
+---
+
+## 10. Layout
 
 ```
 outreach/
