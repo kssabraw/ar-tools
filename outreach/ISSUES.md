@@ -1462,3 +1462,89 @@ for that run, and later failures skip-and-continue as per-place problems (a deli
 transient timeout). So a wrong envelope costs **one task, not a run**, and the fix is verified by
 the next real run rather than by a test that assumes the answer. Unit-tested three ways
 (`tests/test_review_analytics.py`).
+
+### I-069 · A PARTIALLY-written rollup passes the retention guards — found while planning Phase 2
+`drop_cold_partitions` (migration `20260801120000`) guards a partition on two things: that every
+snapshot in it has *some* row in `prospect_coverage`, and that `max(points_present)` per snapshot
+does not exceed the distinct `point_seq` count in the raw partition.
+
+Neither catches a rollup that covered **some prospects and not others**. The first is
+`not exists (... where pc.snapshot_id = s.snapshot_id)` — presence of any row for the snapshot
+satisfies it. The second compares point counts, so a prospect missing from the rollup entirely
+leaves `max(points_present) <= raw_points` true. A rollup that died halfway through a snapshot
+therefore reads as complete, and the raw partition it was verifying against gets dropped.
+
+**This is the exact failure the rollup was supposed to be verified against**, and it matters most
+here because the loss is silent and unrecoverable: the prospects that were missed lose their
+`rank_vector`, so their historical heatmap cannot be rendered and the omission is invisible
+afterwards — the snapshot looks rolled up.
+
+Not fixed here (Phase 2 planning, no code). Two candidate fixes, cheapest-to-reverse first:
+1. Make the rollup atomic per snapshot and record its own completion (`scan_snapshot.rolled_up_at`
+   or a `rollup_run` row), then have the guard require that marker rather than infer completeness
+   from row presence. A marker written in the same transaction as the last row cannot be half true.
+2. Additionally reconcile *prospect counts*: every prospect with at least one `grid_result` row in
+   the snapshot must have a `prospect_coverage` row. Strictly stronger than the point-count check
+   and cheap, since both sides are already grouped by `snapshot_id`.
+
+Both are worth having: (1) prevents the partial write, (2) detects one that happened anyway.
+
+### I-070 · `scan_snapshot` is described as immutable and append-only, and nothing enforces it
+START-HERE §4 Phase 2 requires "`scan_snapshot` immutable, append-only". The table exists with the
+right columns; there is **no trigger, rule or grant** stopping an UPDATE or DELETE.
+
+The repo already treats this class structurally rather than by convention — `prospect_preserve_decisions`
+exists precisely because "nothing currently writes this" was judged an insufficient guarantee for a
+human decision. A snapshot is the anchor every historical coverage figure is computed against, so a
+silent UPDATE to `expected_points` or `geometry_version` would re-interpret history rather than
+corrupt it visibly.
+
+Deferred to the Phase 2 build, not fixed now. Note the fix is not "revoke UPDATE" alone: the
+completeness flag has to be set at some point, so the guard must permit the write that finalizes a
+snapshot and refuse everything after — or the flag must be computed at insert.
+
+### I-071 · The 98% completeness threshold lives in a SQL comment, not in config
+`scan_snapshot.complete` carries the comment `-- actual/expected >= completeness_threshold (0.98)`.
+`api/config.py` has no `completeness_threshold`; its only scan-related value is `scan_interval_days`.
+
+This collides with a standing invariant — *"All coefficients load from config. Zero hardcoded βs,
+ever."* 0.98 is exactly such a coefficient: it decides which snapshots are excluded from scoring,
+so it changes results. Right now it is documented in a place no code reads, which is the worst of
+both worlds — it looks specified and is unenforced (nothing computes `complete` at all yet).
+
+To settle in the Phase 2 build: add `completeness_threshold: float = 0.98` to `api/config.py`, have
+the snapshot writer compute `complete` from it, and make every scoring consumer filter on
+`complete`. Logged rather than fixed because the writer it belongs to does not exist yet.
+
+### I-072 · There is no UI plan — only an architecture ruling and a read surface
+Raised while planning Phase 2, because Phase 2 produces nothing visible and the UI keeps being
+"next".
+
+**What exists:** the suite-module ruling (the UI is suite SPA pages over platform-api, Retool
+dropped — HANDOFF §2), a **built and verified read surface** (`routers/outreach.py`, 14 routes
+covering markets, submarkets, prospects, leads, activities, suppressions), and
+`reporting-layer-spec.md` §3, which specifies *which views must exist* in three tiers — operator
+(§3.1), analysis (§3.2), client (§3.3).
+
+**What does not exist:** any frontend code, page, route or design. `frontend/src/pages/LeadOff.tsx`
+is a **different module** (the suite's pre-client market-intelligence tool) and is not this
+pipeline. START-HERE's Phase 1b guidance was actively wrong until 2026-08-03 — it still told the
+reader to build a Retool board and *not* to build a React app, which is the reverse of the ruling.
+Now struck with a marker.
+
+**Why it is worth a decision rather than a default.** 1,388 prospects and 925 survivors are sitting
+in the database with no way to look at them except SQL, and the read surface they need was
+finished and then never consumed. Meanwhile HANDOFF §1 has listed Suite UI as "now the next build"
+across several sessions that each built something else.
+
+**The tension to resolve deliberately:**
+- The CRM/prospect board is buildable **today** — data and API both exist, no dependency on
+  scanning.
+- The high-value surfaces — coverage, heatmap, delta — need scan data (Phase 2) and the renderer
+  (Phase 3). Building the UI shell now means building the interesting half twice.
+- `reporting-layer-spec.md` §7a already ruled *PDF first, dashboard later* for CLIENT reporting.
+  That ruling does not cover the OPERATOR views, which is the gap this issue is about.
+
+**Not a blocker for Phase 2.** Recorded so the next session chooses rather than inherits. If the
+answer is "operator board now", it is a self-contained piece of work against an API that is
+already tested; if it is "after Phase 3", that should be written down so it stops resurfacing.
