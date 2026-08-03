@@ -279,30 +279,32 @@ export function Silos() {
         </div>
       ) : (
         <div style={cardStyle}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <SiloTableHead
-              allChecked={selectedIds.size === items.length && items.length > 0}
-              onToggleAll={toggleSelectAll}
-            />
-            <tbody>
-              {items.map(silo => (
-                <SiloRow
-                  key={silo.id}
-                  silo={silo}
-                  selected={selectedIds.has(silo.id)}
-                  expanded={expandedId === silo.id}
-                  onToggleSelect={() => toggleSelected(silo.id)}
-                  onToggleExpand={() =>
-                    setExpandedId(prev => (prev === silo.id ? null : silo.id))
-                  }
-                  onApprove={() => mutations.updateStatus.mutate({ id: silo.id, status: 'approved' })}
-                  onReject={() => mutations.updateStatus.mutate({ id: silo.id, status: 'rejected' })}
-                  onPromote={() => mutations.promote.mutate(silo.id)}
-                  promoting={mutations.promote.isPending && mutations.promote.variables === silo.id}
-                />
-              ))}
-            </tbody>
-          </table>
+          <div className="scroll-x">
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <SiloTableHead
+                allChecked={selectedIds.size === items.length && items.length > 0}
+                onToggleAll={toggleSelectAll}
+              />
+              <tbody>
+                {items.map(silo => (
+                  <SiloRow
+                    key={silo.id}
+                    silo={silo}
+                    selected={selectedIds.has(silo.id)}
+                    expanded={expandedId === silo.id}
+                    onToggleSelect={() => toggleSelected(silo.id)}
+                    onToggleExpand={() =>
+                      setExpandedId(prev => (prev === silo.id ? null : silo.id))
+                    }
+                    onApprove={() => mutations.updateStatus.mutate({ id: silo.id, status: 'approved' })}
+                    onReject={() => mutations.updateStatus.mutate({ id: silo.id, status: 'rejected' })}
+                    onPromote={() => mutations.promote.mutate(silo.id)}
+                    promoting={mutations.promote.isPending && mutations.promote.variables === silo.id}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

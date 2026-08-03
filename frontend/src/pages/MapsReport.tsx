@@ -166,25 +166,27 @@ export function MapsReport() {
               <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 8px' }}>
                 Businesses ranking above {client?.name ?? 'the client'} on the grid — “Beats you on” is the % of tracked pins where they outrank you, across {results.length} keyword{results.length === 1 ? '' : 's'}.
               </p>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr>
-                    <CompTh left>Business</CompTh><CompTh>Rating</CompTh>
-                    <CompTh>Beats you on</CompTh><CompTh>Pins</CompTh><CompTh>Avg rank</CompTh>
-                  </tr>
-                </thead>
-                <tbody>
-                  {topCompetitors.map((c) => (
-                    <tr key={c.pid} style={{ borderTop: '1px solid #f1f5f9' }}>
-                      <CompTd left>{c.name ?? '—'}</CompTd>
-                      <CompTd>{c.rating != null && c.rating > 0 ? `${c.rating}★ (${c.reviews ?? 0})` : '—'}</CompTd>
-                      <CompTd><strong>{slotPct(c.pins)}%</strong></CompTd>
-                      <CompTd>{c.pins}</CompTd>
-                      <CompTd>{c.avgRank != null ? c.avgRank.toFixed(1) : '—'}</CompTd>
+              <div className="scroll-x">
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr>
+                      <CompTh left>Business</CompTh><CompTh>Rating</CompTh>
+                      <CompTh>Beats you on</CompTh><CompTh>Pins</CompTh><CompTh>Avg rank</CompTh>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {topCompetitors.map((c) => (
+                      <tr key={c.pid} style={{ borderTop: '1px solid #f1f5f9' }}>
+                        <CompTd left>{c.name ?? '—'}</CompTd>
+                        <CompTd>{c.rating != null && c.rating > 0 ? `${c.rating}★ (${c.reviews ?? 0})` : '—'}</CompTd>
+                        <CompTd><strong>{slotPct(c.pins)}%</strong></CompTd>
+                        <CompTd>{c.pins}</CompTd>
+                        <CompTd>{c.avgRank != null ? c.avgRank.toFixed(1) : '—'}</CompTd>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
 

@@ -102,40 +102,42 @@ export function ClientReports() {
       ) : reports.length === 0 ? (
         <div style={emptyBox}>No reports yet — click <strong>Generate report</strong> to build the first one.</div>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 18 }}>
-          <thead>
-            <tr>
-              <th style={th}>Generated</th>
-              <th style={th}>Type</th>
-              <th style={th}>Period</th>
-              <th style={th}>Includes</th>
-              <th style={th}>Status</th>
-              <th style={th}>Delivered</th>
-              <th style={{ ...th, textAlign: 'right' }}>PDF</th>
-            </tr>
-          </thead>
-          <tbody>
-            {reports.map((r) => (
-              <tr key={r.id}>
-                <td style={td}>{new Date(r.created_at).toLocaleString()}</td>
-                <td style={td}>{TYPE_NAMES[r.report_type] ?? r.report_type}</td>
-                <td style={td}>{r.period_start && r.period_end ? `${r.period_start} – ${r.period_end}` : '—'}</td>
-                <td style={td}>{sectionsLabel(r)}</td>
-                <td style={td}><StatusBadge status={r.status} error={r.error} /></td>
-                <td style={td}><DeliveryBadges delivery={r.delivery} /></td>
-                <td style={{ ...td, textAlign: 'right' }}>
-                  {r.status === 'complete' ? (
-                    <button style={linkBtn} onClick={() => download(r.id)} disabled={downloading === r.id}>
-                      <Download size={13} /> {downloading === r.id ? 'Opening…' : 'Download'}
-                    </button>
-                  ) : (
-                    <span style={{ color: '#cbd5e1' }}>—</span>
-                  )}
-                </td>
+        <div className="scroll-x">
+          <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 18 }}>
+            <thead>
+              <tr>
+                <th style={th}>Generated</th>
+                <th style={th}>Type</th>
+                <th style={th}>Period</th>
+                <th style={th}>Includes</th>
+                <th style={th}>Status</th>
+                <th style={th}>Delivered</th>
+                <th style={{ ...th, textAlign: 'right' }}>PDF</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {reports.map((r) => (
+                <tr key={r.id}>
+                  <td style={td}>{new Date(r.created_at).toLocaleString()}</td>
+                  <td style={td}>{TYPE_NAMES[r.report_type] ?? r.report_type}</td>
+                  <td style={td}>{r.period_start && r.period_end ? `${r.period_start} – ${r.period_end}` : '—'}</td>
+                  <td style={td}>{sectionsLabel(r)}</td>
+                  <td style={td}><StatusBadge status={r.status} error={r.error} /></td>
+                  <td style={td}><DeliveryBadges delivery={r.delivery} /></td>
+                  <td style={{ ...td, textAlign: 'right' }}>
+                    {r.status === 'complete' ? (
+                      <button style={linkBtn} onClick={() => download(r.id)} disabled={downloading === r.id}>
+                        <Download size={13} /> {downloading === r.id ? 'Opening…' : 'Download'}
+                      </button>
+                    ) : (
+                      <span style={{ color: '#cbd5e1' }}>—</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
     </div>

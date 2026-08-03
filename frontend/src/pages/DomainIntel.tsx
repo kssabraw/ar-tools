@@ -411,7 +411,7 @@ export function DomainIntel() {
           {!gaps.length && !gapRunning ? (
             <div style={emptyBox}>No keyword gaps yet — click Run gap analysis.</div>
           ) : (
-            <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
+            <div className="scroll-x" style={{ border: '1px solid #e2e8f0', borderRadius: 8 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr>
@@ -456,7 +456,7 @@ export function DomainIntel() {
           {discovered?.note && <div style={errBox}>Client website unknown — set it on the client first.</div>}
           {discovered && !discovered.note && (
             discovered.suggestions.length ? (
-              <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
+              <div className="scroll-x" style={{ border: '1px solid #e2e8f0', borderRadius: 8 }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead>
                     <tr>{['Domain', 'Shared keywords', 'Avg pos', 'Organic keywords', ''].map((h) => <th key={h} style={th}>{h}</th>)}</tr>
@@ -598,7 +598,7 @@ export function DomainIntel() {
               {!pageBreakdown.length ? (
                 <div style={emptyBox}>No pages captured.</div>
               ) : (
-                <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
+                <div className="scroll-x" style={{ border: '1px solid #e2e8f0', borderRadius: 8 }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                     <thead>
                       <tr>
@@ -629,22 +629,24 @@ export function DomainIntel() {
                             {open && (
                               <tr>
                                 <td colSpan={6} style={{ padding: 0, background: '#f8fafc', borderTop: '1px solid #f1f5f9' }}>
-                                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                                    <thead>
-                                      <tr>{['Keyword', 'Pos', 'Volume', 'Est. traffic/mo', 'Intent'].map((h) => <th key={h} style={{ ...th, background: '#eef2f7' }}>{h}</th>)}</tr>
-                                    </thead>
-                                    <tbody>
-                                      {[...p.keywords].sort((a, b) => estTraffic(b.volume, b.position) - estTraffic(a.volume, a.position)).map((k, i) => (
-                                        <tr key={`${k.keyword}-${i}`} style={{ borderTop: '1px solid #e2e8f0' }}>
-                                          <td style={{ ...td, color: '#0f172a' }}>{k.keyword}</td>
-                                          <td style={td}>{k.position ?? '—'}</td>
-                                          <td style={td}>{num(k.volume)}</td>
-                                          <td style={td}>{num(Math.round(estTraffic(k.volume, k.position)))}</td>
-                                          <td style={td}><IntentBadge intent={normIntent(k.search_intent)} /></td>
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
+                                  <div className="scroll-x">
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                                      <thead>
+                                        <tr>{['Keyword', 'Pos', 'Volume', 'Est. traffic/mo', 'Intent'].map((h) => <th key={h} style={{ ...th, background: '#eef2f7' }}>{h}</th>)}</tr>
+                                      </thead>
+                                      <tbody>
+                                        {[...p.keywords].sort((a, b) => estTraffic(b.volume, b.position) - estTraffic(a.volume, a.position)).map((k, i) => (
+                                          <tr key={`${k.keyword}-${i}`} style={{ borderTop: '1px solid #e2e8f0' }}>
+                                            <td style={{ ...td, color: '#0f172a' }}>{k.keyword}</td>
+                                            <td style={td}>{k.position ?? '—'}</td>
+                                            <td style={td}>{num(k.volume)}</td>
+                                            <td style={td}>{num(Math.round(estTraffic(k.volume, k.position)))}</td>
+                                            <td style={td}><IntentBadge intent={normIntent(k.search_intent)} /></td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
                                 </td>
                               </tr>
                             )}
@@ -665,7 +667,7 @@ export function DomainIntel() {
                   <Download size={14} /> Export CSV
                 </button>
               </div>
-              <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
+              <div className="scroll-x" style={{ border: '1px solid #e2e8f0', borderRadius: 8 }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead>
                     <tr>

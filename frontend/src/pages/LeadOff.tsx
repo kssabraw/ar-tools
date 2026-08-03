@@ -503,7 +503,7 @@ export function LeadOff() {
 
         {/* Board */}
         <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden' }}>
-          <div style={{ overflowX: 'auto' }}>
+          <div className="scroll-x">
             <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 900, fontSize: 13 }}>
               <thead>
                 <tr>
@@ -816,7 +816,7 @@ function NeighborhoodsView() {
         </button>
       </div>
       <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden' }}>
-        <div style={{ overflowX: 'auto' }}>
+        <div className="scroll-x">
           <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 860, fontSize: 13 }}>
             <thead>
               <tr>
@@ -963,7 +963,7 @@ function TryoutsView() {
           )}
           {open?.status === 'complete' && (
             <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden' }}>
-              <div style={{ overflowX: 'auto' }}>
+              <div className="scroll-x">
                 <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 780, fontSize: 13 }}>
                   <thead>
                     <tr>{['Grade', 'Category', 'Exp $/mo', 'ROI $/rev', 'Demand', 'Supply',

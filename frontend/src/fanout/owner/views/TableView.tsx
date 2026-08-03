@@ -222,7 +222,7 @@ export function TableView() {
         </div>
       )}
 
-      <div className="table-scroll">
+      <div className="table-scroll scroll-x">
         <table className="kw-table">
           <thead>
             <tr>

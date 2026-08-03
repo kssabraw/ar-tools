@@ -1,0 +1,59 @@
+/* ---------------------------------------------------------------------------
+   Horizontal scrolling for content wider than the screen.
+
+   Wrap anything that can outgrow its container — wide data tables, the kanban
+   board, the AI-visibility matrix, the fixed-column editor grids — in
+   <div className="scroll-x">. Several of those wrappers previously carried
+   overflow:hidden purely to clip a border-radius, which silently CUT OFF the
+   right-hand columns with no way to reach them.
+
+   The scrollbar is deliberately drawn rather than left to the platform: macOS
+   (and Chrome on it) uses overlay scrollbars that stay invisible until you
+   scroll, so clipped content just reads as "the data is missing". Defining
+   ::-webkit-scrollbar opts the element back into a persistent bar.
+
+   This file is imported from main.tsx. Note that src/index.css is NOT — it is
+   an unimported Vite-template leftover, so rules added there never ship.
+   Additive utilities only here: no global resets, which would restyle every
+   inline-styled element in the suite at once.
+--------------------------------------------------------------------------- */
+.scroll-x {
+  overflow-x: auto;
+  max-width: 100%;
+  /* Stops a sideways swipe inside a table from triggering browser back-nav. */
+  overscroll-behavior-x: contain;
+}
+
+/* Chrome/Safari/Edge. Styling ::-webkit-scrollbar is what opts the element out
+   of macOS overlay scrollbars, so keep these rules FREE of scrollbar-width /
+   scrollbar-color: Chrome 121+ gives the standard properties precedence and
+   then ignores these pseudo-elements entirely, putting the bar back into
+   auto-hiding overlay mode — the exact thing this is here to prevent. */
+.scroll-x::-webkit-scrollbar { height: 10px; }
+.scroll-x::-webkit-scrollbar-track { background: transparent; }
+.scroll-x::-webkit-scrollbar-thumb {
+  background-color: #cbd5e1;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.scroll-x::-webkit-scrollbar-thumb:hover { background-color: #94a3b8; }
+
+/* Firefox, which has no ::-webkit-scrollbar, gets the standard properties. */
+@supports not selector(::-webkit-scrollbar) {
+  .scroll-x {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 transparent;
+  }
+}
+
+/* Board variant (kanban): a scroll container's horizontal bar sits at the
+   BOTTOM of the box, so on a full board it lands thousands of pixels below the
+   fold and can't be used. Bounding the height to the viewport keeps the bar on
+   screen and scrolls tall columns internally — how Trello/Asana behave. */
+.scroll-x-board {
+  max-height: calc(100vh - 250px);
+  min-height: 340px;
+  overflow-y: auto;
+}
+.scroll-x-board::-webkit-scrollbar { width: 10px; }

@@ -264,26 +264,28 @@ function SiloDrawer({ siloId }: { siloId: string }) {
               <div>
                 <h4 style={siloDrawerH4}>Source headings ({detail.source_headings.length})</h4>
                 <div style={{ maxHeight: 240, overflowY: 'auto' }}>
-                  <table style={{ width: '100%', fontSize: 13 }}>
-                    <thead>
-                      <tr style={{ color: '#64748b', textAlign: 'left' }}>
-                        <th style={{ padding: '4px 0', fontWeight: 600 }}>Heading</th>
-                        <th style={{ padding: '4px 0', fontWeight: 600, width: 80 }}>Source</th>
-                        <th style={{ padding: '4px 0', fontWeight: 600, width: 60 }}>Rel.</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {detail.source_headings.map((h, i) => (
-                        <tr key={i} style={{ borderTop: '1px solid #f1f5f9' }}>
-                          <td style={{ padding: '6px 0', color: '#0f172a' }}>{h.text}</td>
-                          <td style={{ padding: '6px 0', color: '#64748b', fontSize: 12 }}>{h.source}</td>
-                          <td style={{ padding: '6px 0', color: '#64748b', fontSize: 12 }}>
-                            {h.title_relevance !== undefined ? h.title_relevance.toFixed(2) : '—'}
-                          </td>
+                  <div className="scroll-x">
+                    <table style={{ width: '100%', fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ color: '#64748b', textAlign: 'left' }}>
+                          <th style={{ padding: '4px 0', fontWeight: 600 }}>Heading</th>
+                          <th style={{ padding: '4px 0', fontWeight: 600, width: 80 }}>Source</th>
+                          <th style={{ padding: '4px 0', fontWeight: 600, width: 60 }}>Rel.</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {detail.source_headings.map((h, i) => (
+                          <tr key={i} style={{ borderTop: '1px solid #f1f5f9' }}>
+                            <td style={{ padding: '6px 0', color: '#0f172a' }}>{h.text}</td>
+                            <td style={{ padding: '6px 0', color: '#64748b', fontSize: 12 }}>{h.source}</td>
+                            <td style={{ padding: '6px 0', color: '#64748b', fontSize: 12 }}>
+                              {h.title_relevance !== undefined ? h.title_relevance.toFixed(2) : '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
             </div>

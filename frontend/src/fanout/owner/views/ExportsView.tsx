@@ -117,7 +117,7 @@ export function ExportsView() {
           <h2 className="section-title" style={{ marginTop: 24 }}>
             Past reports
           </h2>
-          <div className="table-scroll">
+          <div className="table-scroll scroll-x">
             <table className="kw-table">
               <thead>
                 <tr>
@@ -210,7 +210,7 @@ export function ExportsView() {
         <p className="muted">No exports yet. Generate one above.</p>
       )}
       {exportsQ.data && exportsQ.data.length > 0 && (
-        <div className="table-scroll">
+        <div className="table-scroll scroll-x">
           <table className="kw-table">
             <thead>
               <tr>

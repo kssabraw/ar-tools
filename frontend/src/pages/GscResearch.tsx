@@ -176,28 +176,30 @@ function OpportunityTable({ rows, caption, csvName }: { rows: OpportunityRow[]; 
       ) : (
         <>
           <div style={tableWrap}>
-            <table style={table}>
-              <thead>
-                <tr>
-                  <Th>Keyword</Th><Th>Page</Th><Th right>Position</Th><Th right>Impr.</Th>
-                  <Th right>Clicks</Th><Th right>Volume</Th><Th right>CPC</Th><Th>Competition</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {pageRows.map((r, i) => (
-                  <tr key={`${r.keyword}-${r.page}-${from + i}`} style={i % 2 ? rowAlt : undefined}>
-                    <Td><strong>{r.keyword}</strong></Td>
-                    <Td><PageLink url={r.page} /></Td>
-                    <Td right>{r.position.toFixed(1)}</Td>
-                    <Td right>{r.impressions.toLocaleString()}</Td>
-                    <Td right>{r.clicks.toLocaleString()}</Td>
-                    <Td right>{r.search_volume?.toLocaleString() ?? '—'}</Td>
-                    <Td right>{r.cpc != null ? `$${r.cpc.toFixed(2)}` : '—'}</Td>
-                    <Td>{r.competition ? <CompChip value={r.competition} /> : '—'}</Td>
+            <div className="scroll-x">
+              <table style={table}>
+                <thead>
+                  <tr>
+                    <Th>Keyword</Th><Th>Page</Th><Th right>Position</Th><Th right>Impr.</Th>
+                    <Th right>Clicks</Th><Th right>Volume</Th><Th right>CPC</Th><Th>Competition</Th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {pageRows.map((r, i) => (
+                    <tr key={`${r.keyword}-${r.page}-${from + i}`} style={i % 2 ? rowAlt : undefined}>
+                      <Td><strong>{r.keyword}</strong></Td>
+                      <Td><PageLink url={r.page} /></Td>
+                      <Td right>{r.position.toFixed(1)}</Td>
+                      <Td right>{r.impressions.toLocaleString()}</Td>
+                      <Td right>{r.clicks.toLocaleString()}</Td>
+                      <Td right>{r.search_volume?.toLocaleString() ?? '—'}</Td>
+                      <Td right>{r.cpc != null ? `$${r.cpc.toFixed(2)}` : '—'}</Td>
+                      <Td>{r.competition ? <CompChip value={r.competition} /> : '—'}</Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
           <Pager page={page} setPage={setPage} total={total} totalPages={totalPages} from={from} to={to} unit="keywords" />
         </>
@@ -238,21 +240,23 @@ function CannibalizationTable({ rows }: { rows: CannibalizationRow[] }) {
                   {r.page_count} pages · {r.total_impressions.toLocaleString()} impr · {r.total_clicks.toLocaleString()} clicks
                 </span>
               </div>
-              <table style={table}>
-                <thead>
-                  <tr><Th>Competing URL</Th><Th right>Position</Th><Th right>Impr.</Th><Th right>Clicks</Th></tr>
-                </thead>
-                <tbody>
-                  {r.pages.map((p, j) => (
-                    <tr key={`${p.page}-${j}`} style={j % 2 ? rowAlt : undefined}>
-                      <Td><PageLink url={p.page} /></Td>
-                      <Td right>{p.position != null ? p.position.toFixed(1) : '—'}</Td>
-                      <Td right>{p.impressions.toLocaleString()}</Td>
-                      <Td right>{p.clicks.toLocaleString()}</Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="scroll-x">
+                <table style={table}>
+                  <thead>
+                    <tr><Th>Competing URL</Th><Th right>Position</Th><Th right>Impr.</Th><Th right>Clicks</Th></tr>
+                  </thead>
+                  <tbody>
+                    {r.pages.map((p, j) => (
+                      <tr key={`${p.page}-${j}`} style={j % 2 ? rowAlt : undefined}>
+                        <Td><PageLink url={p.page} /></Td>
+                        <Td right>{p.position != null ? p.position.toFixed(1) : '—'}</Td>
+                        <Td right>{p.impressions.toLocaleString()}</Td>
+                        <Td right>{p.clicks.toLocaleString()}</Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           ))}
           <Pager page={page} setPage={setPage} total={total} totalPages={totalPages} from={from} to={to} unit="queries" />

@@ -118,26 +118,28 @@ export default function TermAnalysisPanel(props: {
 
             <section>
               <h3>Required terms ({report.terms.required.length})</h3>
-              <table className="data-table">
-                <thead>
-                  <tr><th>Term</th><th>Score</th><th>Entity</th><th>H2</th><th>H3</th><th>Paragraphs</th></tr>
-                </thead>
-                <tbody>
-                  {report.terms.required.map((t) => {
-                    const u = usageByTerm.get(t.term);
-                    return (
-                      <tr key={t.term}>
-                        <td>{t.term}</td>
-                        <td>{t.recommendation_score.toFixed(2)}</td>
-                        <td>{t.is_entity ? (t.entity_category ?? "entity") : "—"}</td>
-                        <td>{range(u?.h2)}</td>
-                        <td>{range(u?.h3)}</td>
-                        <td>{range(u?.paragraphs)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+              <div className="scroll-x">
+                <table className="data-table">
+                  <thead>
+                    <tr><th>Term</th><th>Score</th><th>Entity</th><th>H2</th><th>H3</th><th>Paragraphs</th></tr>
+                  </thead>
+                  <tbody>
+                    {report.terms.required.map((t) => {
+                      const u = usageByTerm.get(t.term);
+                      return (
+                        <tr key={t.term}>
+                          <td>{t.term}</td>
+                          <td>{t.recommendation_score.toFixed(2)}</td>
+                          <td>{t.is_entity ? (t.entity_category ?? "entity") : "—"}</td>
+                          <td>{range(u?.h2)}</td>
+                          <td>{range(u?.h3)}</td>
+                          <td>{range(u?.paragraphs)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </section>
 
             {report.terms.avoid.length > 0 && (

@@ -260,105 +260,107 @@ export function ArticlesView() {
       {articles.length === 0 ? (
         <p className="muted">No articles written yet for this session.</p>
       ) : (
-        <table className="kw-table">
-          <thead>
-            <tr>
-              {bulkSelectable && (
-                <th style={{ width: 28 }}>
-                  <input
-                    type="checkbox"
-                    checked={allSelected}
-                    onChange={(e) => toggleAll(e.target.checked)}
-                    disabled={bulkBusy}
-                    title="Select all"
-                  />
-                </th>
-              )}
-              <th>Article</th><th>Words</th><th>Cost</th><th>Source</th><th>Written</th><th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {articles.map((a: ArticleListItem) => {
-              const dr = driveResults[a.cluster_id];
-              const wr = wpResults[a.cluster_id];
-              return (
-              <tr key={a.cluster_id}>
+        <div className="scroll-x">
+          <table className="kw-table">
+            <thead>
+              <tr>
                 {bulkSelectable && (
-                  <td>
+                  <th style={{ width: 28 }}>
                     <input
                       type="checkbox"
-                      checked={selected.has(a.cluster_id)}
-                      onChange={(e) => toggleOne(a.cluster_id, e.target.checked)}
+                      checked={allSelected}
+                      onChange={(e) => toggleAll(e.target.checked)}
                       disabled={bulkBusy}
+                      title="Select all"
                     />
-                  </td>
+                  </th>
                 )}
-                <td>{a.name}</td>
-                <td>{a.total_word_count ?? "—"}</td>
-                <td>{a.cost_usd != null ? `$${Number(a.cost_usd).toFixed(2)}` : "—"}</td>
-                <td><span className="badge">{a.scheduled ? "scheduled" : "ad-hoc"}</span></td>
-                <td className="cell-muted">
-                  {a.generated_at ? new Date(a.generated_at).toLocaleString() : "—"}
-                </td>
-                <td style={{ whiteSpace: "nowrap" }}>
-                  <button className="link-btn" onClick={() => setOpenCluster({ id: a.cluster_id, name: a.name })}>
-                    Read
-                  </button>
-                  {repoConfigured && (
-                    <button
-                      className="link-btn"
-                      style={{ marginLeft: 10 }}
-                      disabled={pushOne.isPending}
-                      title="Commit this article to the GitHub repo"
-                      onClick={() => pushOne.mutate(a.cluster_id)}
-                    >
-                      GitHub
-                    </button>
-                  )}
-                  {driveAvailable && (
-                    <button
-                      className="link-btn"
-                      style={{ marginLeft: 10 }}
-                      disabled={saveDrive.isPending || bulkBusy}
-                      title="Save this article to Google Drive as a Google Doc"
-                      onClick={() => saveDrive.mutate(a.cluster_id)}
-                    >
-                      Drive
-                    </button>
-                  )}
-                  {wordpressAvailable && (
-                    <button
-                      className="link-btn"
-                      style={{ marginLeft: 10 }}
-                      disabled={publishWp.isPending || bulkBusy}
-                      title={`Publish this article to the client's WordPress site as ${wpStatus === "publish" ? "a live post" : "a draft"}`}
-                      onClick={() => publishWp.mutate(a.cluster_id)}
-                    >
-                      Website
-                    </button>
-                  )}
-                  {dr?.status === "done" && (
-                    dr.url
-                      ? <a href={dr.url} target="_blank" rel="noopener noreferrer" className="link-btn" style={{ marginLeft: 10, color: "#16a34a" }}>Open Doc ↗</a>
-                      : <span style={{ marginLeft: 10, color: "#16a34a", fontWeight: 600 }}>Saved</span>
-                  )}
-                  {dr?.status === "failed" && (
-                    <span style={{ marginLeft: 10, color: "#dc2626" }} title={dr.error}>Failed</span>
-                  )}
-                  {wr?.status === "done" && (
-                    (wr.edit_url || wr.url)
-                      ? <a href={wr.edit_url || wr.url || undefined} target="_blank" rel="noopener noreferrer" className="link-btn" style={{ marginLeft: 10, color: "#16a34a" }}>Open post ↗</a>
-                      : <span style={{ marginLeft: 10, color: "#16a34a", fontWeight: 600 }}>Published</span>
-                  )}
-                  {wr?.status === "failed" && (
-                    <span style={{ marginLeft: 10, color: "#dc2626" }} title={wr.error}>WP failed</span>
-                  )}
-                </td>
+                <th>Article</th><th>Words</th><th>Cost</th><th>Source</th><th>Written</th><th></th>
               </tr>
-              );
-            })}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {articles.map((a: ArticleListItem) => {
+                const dr = driveResults[a.cluster_id];
+                const wr = wpResults[a.cluster_id];
+                return (
+                <tr key={a.cluster_id}>
+                  {bulkSelectable && (
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={selected.has(a.cluster_id)}
+                        onChange={(e) => toggleOne(a.cluster_id, e.target.checked)}
+                        disabled={bulkBusy}
+                      />
+                    </td>
+                  )}
+                  <td>{a.name}</td>
+                  <td>{a.total_word_count ?? "—"}</td>
+                  <td>{a.cost_usd != null ? `$${Number(a.cost_usd).toFixed(2)}` : "—"}</td>
+                  <td><span className="badge">{a.scheduled ? "scheduled" : "ad-hoc"}</span></td>
+                  <td className="cell-muted">
+                    {a.generated_at ? new Date(a.generated_at).toLocaleString() : "—"}
+                  </td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <button className="link-btn" onClick={() => setOpenCluster({ id: a.cluster_id, name: a.name })}>
+                      Read
+                    </button>
+                    {repoConfigured && (
+                      <button
+                        className="link-btn"
+                        style={{ marginLeft: 10 }}
+                        disabled={pushOne.isPending}
+                        title="Commit this article to the GitHub repo"
+                        onClick={() => pushOne.mutate(a.cluster_id)}
+                      >
+                        GitHub
+                      </button>
+                    )}
+                    {driveAvailable && (
+                      <button
+                        className="link-btn"
+                        style={{ marginLeft: 10 }}
+                        disabled={saveDrive.isPending || bulkBusy}
+                        title="Save this article to Google Drive as a Google Doc"
+                        onClick={() => saveDrive.mutate(a.cluster_id)}
+                      >
+                        Drive
+                      </button>
+                    )}
+                    {wordpressAvailable && (
+                      <button
+                        className="link-btn"
+                        style={{ marginLeft: 10 }}
+                        disabled={publishWp.isPending || bulkBusy}
+                        title={`Publish this article to the client's WordPress site as ${wpStatus === "publish" ? "a live post" : "a draft"}`}
+                        onClick={() => publishWp.mutate(a.cluster_id)}
+                      >
+                        Website
+                      </button>
+                    )}
+                    {dr?.status === "done" && (
+                      dr.url
+                        ? <a href={dr.url} target="_blank" rel="noopener noreferrer" className="link-btn" style={{ marginLeft: 10, color: "#16a34a" }}>Open Doc ↗</a>
+                        : <span style={{ marginLeft: 10, color: "#16a34a", fontWeight: 600 }}>Saved</span>
+                    )}
+                    {dr?.status === "failed" && (
+                      <span style={{ marginLeft: 10, color: "#dc2626" }} title={dr.error}>Failed</span>
+                    )}
+                    {wr?.status === "done" && (
+                      (wr.edit_url || wr.url)
+                        ? <a href={wr.edit_url || wr.url || undefined} target="_blank" rel="noopener noreferrer" className="link-btn" style={{ marginLeft: 10, color: "#16a34a" }}>Open post ↗</a>
+                        : <span style={{ marginLeft: 10, color: "#16a34a", fontWeight: 600 }}>Published</span>
+                    )}
+                    {wr?.status === "failed" && (
+                      <span style={{ marginLeft: 10, color: "#dc2626" }} title={wr.error}>WP failed</span>
+                    )}
+                  </td>
+                </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {openCluster && (

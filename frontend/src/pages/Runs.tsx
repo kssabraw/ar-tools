@@ -122,28 +122,30 @@ export function Runs() {
   // One silo table, reused by each article card and the "other" bucket.
   function renderSiloTable(list: SiloListItem[]) {
     return (
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <SiloTableHead
-          allChecked={list.length > 0 && list.every(s => selectedSilos.has(s.id))}
-          onToggleAll={() => toggleSiloGroup(list)}
-        />
-        <tbody>
-          {list.map(silo => (
-            <SiloRow
-              key={silo.id}
-              silo={silo}
-              selected={selectedSilos.has(silo.id)}
-              expanded={expandedSilo === silo.id}
-              onToggleSelect={() => toggleSilo(silo.id)}
-              onToggleExpand={() => setExpandedSilo(prev => (prev === silo.id ? null : silo.id))}
-              onApprove={() => siloMutations.updateStatus.mutate({ id: silo.id, status: 'approved' })}
-              onReject={() => siloMutations.updateStatus.mutate({ id: silo.id, status: 'rejected' })}
-              onPromote={() => siloMutations.promote.mutate(silo.id)}
-              promoting={siloMutations.promote.isPending && siloMutations.promote.variables === silo.id}
-            />
-          ))}
-        </tbody>
-      </table>
+      <div className="scroll-x">
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <SiloTableHead
+            allChecked={list.length > 0 && list.every(s => selectedSilos.has(s.id))}
+            onToggleAll={() => toggleSiloGroup(list)}
+          />
+          <tbody>
+            {list.map(silo => (
+              <SiloRow
+                key={silo.id}
+                silo={silo}
+                selected={selectedSilos.has(silo.id)}
+                expanded={expandedSilo === silo.id}
+                onToggleSelect={() => toggleSilo(silo.id)}
+                onToggleExpand={() => setExpandedSilo(prev => (prev === silo.id ? null : silo.id))}
+                onApprove={() => siloMutations.updateStatus.mutate({ id: silo.id, status: 'approved' })}
+                onReject={() => siloMutations.updateStatus.mutate({ id: silo.id, status: 'rejected' })}
+                onPromote={() => siloMutations.promote.mutate(silo.id)}
+                promoting={siloMutations.promote.isPending && siloMutations.promote.variables === silo.id}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
     )
   }
 
@@ -374,32 +376,34 @@ export function Runs() {
         </div>
       ) : (
         <div style={cardStyle}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                {['Client', 'Keyword', 'Status', 'Created', ''].map(h => (
-                  <th key={h} style={thStyle}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {runs.map(run => (
-                <tr key={run.id} style={{ borderBottom: '1px solid #f8fafc' }}>
-                  <td style={tdStyle}>{run.client_name}</td>
-                  <td style={{ ...tdStyle, fontWeight: 500, color: '#0f172a' }}>{run.keyword}</td>
-                  <td style={tdStyle}>{statusBadge(run.status)}</td>
-                  <td style={{ ...tdStyle, color: '#64748b', fontSize: 13 }}>
-                    {new Date(run.created_at).toLocaleString()}
-                  </td>
-                  <td style={tdStyle}>
-                    <Link to={`/runs/${run.id}`} style={{ color: '#6366f1', fontSize: 13, textDecoration: 'none', fontWeight: 500 }}>
-                      View →
-                    </Link>
-                  </td>
+          <div className="scroll-x">
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                  {['Client', 'Keyword', 'Status', 'Created', ''].map(h => (
+                    <th key={h} style={thStyle}>{h}</th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {runs.map(run => (
+                  <tr key={run.id} style={{ borderBottom: '1px solid #f8fafc' }}>
+                    <td style={tdStyle}>{run.client_name}</td>
+                    <td style={{ ...tdStyle, fontWeight: 500, color: '#0f172a' }}>{run.keyword}</td>
+                    <td style={tdStyle}>{statusBadge(run.status)}</td>
+                    <td style={{ ...tdStyle, color: '#64748b', fontSize: 13 }}>
+                      {new Date(run.created_at).toLocaleString()}
+                    </td>
+                    <td style={tdStyle}>
+                      <Link to={`/runs/${run.id}`} style={{ color: '#6366f1', fontSize: 13, textDecoration: 'none', fontWeight: 500 }}>
+                        View →
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 

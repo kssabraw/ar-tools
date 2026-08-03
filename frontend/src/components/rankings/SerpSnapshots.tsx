@@ -271,7 +271,7 @@ function SnapshotDetailView({ snapshotId }: { snapshotId: string }) {
             </div>
           )}
         </div>
-        <div style={{ overflowX: 'auto' }}>
+        <div className="scroll-x">
           <table style={table}>
             <thead>
               <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
@@ -325,7 +325,7 @@ function SnapshotDetailView({ snapshotId }: { snapshotId: string }) {
           <div style={{ padding: '12px 14px' }}>
             <SectionTitle title="Domain authority (DR)" />
           </div>
-          <div style={{ overflowX: 'auto' }}>
+          <div className="scroll-x">
             <table style={table}>
               <thead>
                 <tr style={{ borderBottom: '1px solid #e2e8f0' }}>

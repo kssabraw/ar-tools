@@ -145,73 +145,75 @@ export function ScheduleView() {
               </button>
             )}
           </div>
-          <table className="kw-table">
-            <thead>
-              <tr>
-                <th style={{ width: 28 }}>
-                  <input
-                    type="checkbox"
-                    checked={allQueuedSelected}
-                    disabled={queuedIds.length === 0}
-                    title="Select all queued"
-                    onChange={toggleAllQueued}
-                  />
-                </th>
-                <th>Article</th><th>Scheduled</th><th>Status</th><th>Note</th><th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleRuns.map((r) => (
-                <tr key={r.id}>
-                  <td>
-                    {r.status === "queued" && (
-                      <input
-                        type="checkbox"
-                        checked={selected.has(r.id)}
-                        onChange={() => toggleSel(r.id)}
-                      />
-                    )}
-                  </td>
-                  <td>{clusterName(r.cluster_id)}</td>
-                  <td>{new Date(r.scheduled_at).toLocaleString()}</td>
-                  <td><span className={"badge " + statusBadge(r.status)}>{r.status}</span></td>
-                  <td className="cell-muted" style={{ maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {r.error ?? ""}
-                  </td>
-                  <td style={{ textAlign: "right" }}>
-                    {r.status === "queued" && (
-                      <button
-                        className="link-btn link-danger"
-                        disabled={act.isPending}
-                        onClick={() => act.mutate(() => cancelScheduleRun(sessionId, r.id))}
-                      >
-                        Cancel
-                      </button>
-                    )}
-                    {r.status === "cancelled" && (
-                      <button
-                        className="link-btn"
-                        disabled={act.isPending}
-                        onClick={() => act.mutate(() => reinstateScheduleRun(sessionId, r.id))}
-                      >
-                        Reinstate
-                      </button>
-                    )}
-                    {r.status === "failed" && (
-                      <button
-                        className="link-btn"
-                        disabled={act.isPending}
-                        title="Requeue this article to try generating it again"
-                        onClick={() => act.mutate(() => retryScheduleRun(sessionId, r.id))}
-                      >
-                        Retry
-                      </button>
-                    )}
-                  </td>
+          <div className="scroll-x">
+            <table className="kw-table">
+              <thead>
+                <tr>
+                  <th style={{ width: 28 }}>
+                    <input
+                      type="checkbox"
+                      checked={allQueuedSelected}
+                      disabled={queuedIds.length === 0}
+                      title="Select all queued"
+                      onChange={toggleAllQueued}
+                    />
+                  </th>
+                  <th>Article</th><th>Scheduled</th><th>Status</th><th>Note</th><th></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {visibleRuns.map((r) => (
+                  <tr key={r.id}>
+                    <td>
+                      {r.status === "queued" && (
+                        <input
+                          type="checkbox"
+                          checked={selected.has(r.id)}
+                          onChange={() => toggleSel(r.id)}
+                        />
+                      )}
+                    </td>
+                    <td>{clusterName(r.cluster_id)}</td>
+                    <td>{new Date(r.scheduled_at).toLocaleString()}</td>
+                    <td><span className={"badge " + statusBadge(r.status)}>{r.status}</span></td>
+                    <td className="cell-muted" style={{ maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {r.error ?? ""}
+                    </td>
+                    <td style={{ textAlign: "right" }}>
+                      {r.status === "queued" && (
+                        <button
+                          className="link-btn link-danger"
+                          disabled={act.isPending}
+                          onClick={() => act.mutate(() => cancelScheduleRun(sessionId, r.id))}
+                        >
+                          Cancel
+                        </button>
+                      )}
+                      {r.status === "cancelled" && (
+                        <button
+                          className="link-btn"
+                          disabled={act.isPending}
+                          onClick={() => act.mutate(() => reinstateScheduleRun(sessionId, r.id))}
+                        >
+                          Reinstate
+                        </button>
+                      )}
+                      {r.status === "failed" && (
+                        <button
+                          className="link-btn"
+                          disabled={act.isPending}
+                          title="Requeue this article to try generating it again"
+                          onClick={() => act.mutate(() => retryScheduleRun(sessionId, r.id))}
+                        >
+                          Retry
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

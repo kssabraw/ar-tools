@@ -367,7 +367,7 @@ export function KeywordResearch() {
               ))}
             </div>
           )}
-          <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
+          <div className="scroll-x" style={{ border: '1px solid #e2e8f0', borderRadius: 8 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr>

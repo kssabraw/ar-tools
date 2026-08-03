@@ -225,7 +225,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </button>
         </div>
       </aside>
-      <main style={{ flex: 1, background: '#f8fafc', overflow: 'auto', ...(isMobile ? { paddingTop: 48 } : {}) }}>
+      {/* minWidth:0 lets this flex child shrink below its content's intrinsic
+          width, so an over-wide page scrolls inside its own scroll-x container
+          instead of stretching the whole app sideways. */}
+      <main style={{ flex: 1, minWidth: 0, background: '#f8fafc', overflow: 'auto', ...(isMobile ? { paddingTop: 48 } : {}) }}>
         {children}
       </main>
     </div>

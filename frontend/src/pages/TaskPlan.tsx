@@ -276,41 +276,43 @@ export function TaskPlan() {
 
           {/* Task table */}
           {body && body.tasks.length > 0 ? (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead>
-                <tr style={{ textAlign: 'left', color: '#64748b', borderBottom: '1px solid #e2e8f0' }}>
-                  <th style={{ padding: '8px 6px', width: 30 }}>#</th>
-                  <th style={{ padding: '8px 6px' }}>Task</th>
-                  <th style={{ padding: '8px 6px', width: 50 }}>Qty</th>
-                  <th style={{ padding: '8px 6px', width: 80 }}>Line</th>
-                  <th style={{ padding: '8px 6px', width: 120 }}>Assignee</th>
-                  <th style={{ padding: '8px 6px' }}>Why</th>
-                </tr>
-              </thead>
-              <tbody>
-                {body.tasks.map((t, i) => (
-                  <tr key={t.priority_rank} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                    <td style={{ padding: '8px 6px', color: '#94a3b8' }}>{t.priority_rank}</td>
-                    <td style={{ padding: '8px 6px', fontWeight: 600, color: '#0f172a' }}>
-                      {t.label}
-                      {shown.asana_push?.[`${i}:${t.task_type}`]?.url && (
-                        <a href={shown.asana_push[`${i}:${t.task_type}`].url} target="_blank" rel="noreferrer"
-                          title="Open in Asana"
-                          style={{ marginLeft: 6, color: '#6366f1', verticalAlign: 'middle', display: 'inline-flex' }}>
-                          <ExternalLink size={12} />
-                        </a>
-                      )}
-                    </td>
-                    <td style={{ padding: '8px 6px' }}>{t.quantity}</td>
-                    <td style={{ padding: '8px 6px' }}>{money(t.line_cost)}</td>
-                    <td style={{ padding: '8px 6px', color: t.assignee ? '#334155' : '#b45309', fontWeight: t.assignee ? 400 : 600 }}>
-                      {t.assignee ?? 'UNSTAFFED'}
-                    </td>
-                    <td style={{ padding: '8px 6px', color: '#64748b', fontSize: 12.5 }}>{t.rationale}</td>
+            <div className="scroll-x">
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', color: '#64748b', borderBottom: '1px solid #e2e8f0' }}>
+                    <th style={{ padding: '8px 6px', width: 30 }}>#</th>
+                    <th style={{ padding: '8px 6px' }}>Task</th>
+                    <th style={{ padding: '8px 6px', width: 50 }}>Qty</th>
+                    <th style={{ padding: '8px 6px', width: 80 }}>Line</th>
+                    <th style={{ padding: '8px 6px', width: 120 }}>Assignee</th>
+                    <th style={{ padding: '8px 6px' }}>Why</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {body.tasks.map((t, i) => (
+                    <tr key={t.priority_rank} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                      <td style={{ padding: '8px 6px', color: '#94a3b8' }}>{t.priority_rank}</td>
+                      <td style={{ padding: '8px 6px', fontWeight: 600, color: '#0f172a' }}>
+                        {t.label}
+                        {shown.asana_push?.[`${i}:${t.task_type}`]?.url && (
+                          <a href={shown.asana_push[`${i}:${t.task_type}`].url} target="_blank" rel="noreferrer"
+                            title="Open in Asana"
+                            style={{ marginLeft: 6, color: '#6366f1', verticalAlign: 'middle', display: 'inline-flex' }}>
+                            <ExternalLink size={12} />
+                          </a>
+                        )}
+                      </td>
+                      <td style={{ padding: '8px 6px' }}>{t.quantity}</td>
+                      <td style={{ padding: '8px 6px' }}>{money(t.line_cost)}</td>
+                      <td style={{ padding: '8px 6px', color: t.assignee ? '#334155' : '#b45309', fontWeight: t.assignee ? 400 : 600 }}>
+                        {t.assignee ?? 'UNSTAFFED'}
+                      </td>
+                      <td style={{ padding: '8px 6px', color: '#64748b', fontSize: 12.5 }}>{t.rationale}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           ) : (
             <div style={{ color: '#94a3b8', fontSize: 13, padding: '12px 0' }}>
               {shown.flags.includes('frozen')

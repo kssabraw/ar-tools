@@ -367,64 +367,68 @@ function LocalRankAnalysis({ r, clientId, scanId }: { r: MapsScanResultRow; clie
               <p style={{ fontSize: 11.5, color: '#94a3b8', margin: '0 0 6px' }}>
                 The towns/cities the grid is weakest in — where {r.keyword ? `“${r.keyword}”` : 'this keyword'} ranks poorly or not at all, ordered by <strong>priority</strong> (severity × proximity × beatability) so the top rows are where to work first. <em>Watch</em> = ranks 5–9 (lowest priority); <em>Weak</em> = 10+; <em>Critical</em> = unranked. Open a point on Google Maps to scope local SEO work there.
               </p>
-              <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12.5 }}>
-                <thead>
-                  <tr>
-                    {['Priority', 'City', 'Tier', 'Weak pins', 'Directions', 'Worst rank', 'Map'].map((h, hi) => (
-                      <th key={h} style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: hi === 1 || hi === 4 ? 'left' : hi === 2 || hi === 6 ? 'center' : 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', background: '#f8fafc' }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {weakAreas.map((a, ai) => (
-                    <tr key={ai}>
-                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: '#0f172a' }}>{a.priority}</td>
-                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', color: '#334155' }}>
-                        {a.city ?? '—'}{a.admin_area ? <span style={{ color: '#94a3b8' }}>, {a.admin_area}</span> : null}
-                      </td>
-                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'center' }}>{tierBadge(a.tier)}</td>
-                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', color: '#334155' }}>
-                        {a.pins}{a.not_ranked > 0 ? <span style={{ color: '#dc2626' }}> ({a.not_ranked} unranked)</span> : null}
-                      </td>
-                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', color: '#334155' }}>{a.octants.join(' · ') || '—'}</td>
-                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', color: '#334155' }}>{a.worst_rank ?? 'Not ranked'}</td>
-                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'center' }}>
-                        <a href={gmapsLink(a.lat, a.lng)} target="_blank" rel="noreferrer" style={{ color: '#6366f1', textDecoration: 'none' }}>Open ↗</a>
-                      </td>
+              <div className="scroll-x">
+                <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12.5 }}>
+                  <thead>
+                    <tr>
+                      {['Priority', 'City', 'Tier', 'Weak pins', 'Directions', 'Worst rank', 'Map'].map((h, hi) => (
+                        <th key={h} style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: hi === 1 || hi === 4 ? 'left' : hi === 2 || hi === 6 ? 'center' : 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', background: '#f8fafc' }}>{h}</th>
+                      ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {weakAreas.map((a, ai) => (
+                      <tr key={ai}>
+                        <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: '#0f172a' }}>{a.priority}</td>
+                        <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', color: '#334155' }}>
+                          {a.city ?? '—'}{a.admin_area ? <span style={{ color: '#94a3b8' }}>, {a.admin_area}</span> : null}
+                        </td>
+                        <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'center' }}>{tierBadge(a.tier)}</td>
+                        <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', color: '#334155' }}>
+                          {a.pins}{a.not_ranked > 0 ? <span style={{ color: '#dc2626' }}> ({a.not_ranked} unranked)</span> : null}
+                        </td>
+                        <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', color: '#334155' }}>{a.octants.join(' · ') || '—'}</td>
+                        <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', color: '#334155' }}>{a.worst_rank ?? 'Not ranked'}</td>
+                        <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'center' }}>
+                          <a href={gmapsLink(a.lat, a.lng)} target="_blank" rel="noreferrer" style={{ color: '#6366f1', textDecoration: 'none' }}>Open ↗</a>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
 
           {pins.length > 0 && (
             <div style={{ marginTop: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: '#475569', marginBottom: 6 }}>Suggested hyper-local pins (weak zones)</div>
-              <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12.5 }}>
-                <thead>
-                  <tr>
-                    {['Octant', 'Nearby city', 'Ring (mi)', 'Strength', 'Lat', 'Lng', 'Map'].map((h, hi) => (
-                      <th key={h} style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: hi === 0 || hi === 1 || hi === 3 ? 'left' : hi === 6 ? 'center' : 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', background: '#f8fafc' }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {pins.map((p, pi) => (
-                    <tr key={pi}>
-                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', color: '#334155' }}>{p.octant}</td>
-                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', color: '#334155' }}>{p.city ?? '—'}</td>
-                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', color: '#334155' }}>{p.radius_mi.toFixed(1)}</td>
-                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', color: '#334155' }}>{p.strength}</td>
-                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', color: '#334155', fontVariantNumeric: 'tabular-nums' }}>{p.lat.toFixed(5)}</td>
-                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', color: '#334155', fontVariantNumeric: 'tabular-nums' }}>{p.lng.toFixed(5)}</td>
-                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'center' }}>
-                        <a href={gmapsLink(p.lat, p.lng)} target="_blank" rel="noreferrer" style={{ color: '#6366f1', textDecoration: 'none' }}>Open ↗</a>
-                      </td>
+              <div className="scroll-x">
+                <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12.5 }}>
+                  <thead>
+                    <tr>
+                      {['Octant', 'Nearby city', 'Ring (mi)', 'Strength', 'Lat', 'Lng', 'Map'].map((h, hi) => (
+                        <th key={h} style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: hi === 0 || hi === 1 || hi === 3 ? 'left' : hi === 6 ? 'center' : 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', background: '#f8fafc' }}>{h}</th>
+                      ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {pins.map((p, pi) => (
+                      <tr key={pi}>
+                        <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', color: '#334155' }}>{p.octant}</td>
+                        <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', color: '#334155' }}>{p.city ?? '—'}</td>
+                        <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', color: '#334155' }}>{p.radius_mi.toFixed(1)}</td>
+                        <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', color: '#334155' }}>{p.strength}</td>
+                        <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', color: '#334155', fontVariantNumeric: 'tabular-nums' }}>{p.lat.toFixed(5)}</td>
+                        <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', color: '#334155', fontVariantNumeric: 'tabular-nums' }}>{p.lng.toFixed(5)}</td>
+                        <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'center' }}>
+                          <a href={gmapsLink(p.lat, p.lng)} target="_blank" rel="noreferrer" style={{ color: '#6366f1', textDecoration: 'none' }}>Open ↗</a>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
               {loc && !loc.geocoded && (
                 <p style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>
                   City names unavailable — set a Google Geocoding API key to label these weak zones with their nearest town.
@@ -898,20 +902,22 @@ function SolvPanel({ clientId }: { clientId: string }) {
             </span>
           </div>
           {competitors.length > 0 && (
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead><tr>
-                <th style={{ ...th, textAlign: 'left' }}>Competitor</th><th style={th}>Top-3 presence</th><th style={th}>Pins</th>
-              </tr></thead>
-              <tbody>
-                {competitors.map(c => (
-                  <tr key={c.place_id ?? c.name} style={{ borderTop: '1px solid #f1f5f9' }}>
-                    <td style={{ ...td, textAlign: 'left' }}>{c.name ?? '—'}</td>
-                    <td style={td}>{c.share_pct != null ? `${Math.round(c.share_pct)}%` : '—'}</td>
-                    <td style={{ ...td, color: '#94a3b8' }}>{c.top3_pins}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="scroll-x">
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead><tr>
+                  <th style={{ ...th, textAlign: 'left' }}>Competitor</th><th style={th}>Top-3 presence</th><th style={th}>Pins</th>
+                </tr></thead>
+                <tbody>
+                  {competitors.map(c => (
+                    <tr key={c.place_id ?? c.name} style={{ borderTop: '1px solid #f1f5f9' }}>
+                      <td style={{ ...td, textAlign: 'left' }}>{c.name ?? '—'}</td>
+                      <td style={td}>{c.share_pct != null ? `${Math.round(c.share_pct)}%` : '—'}</td>
+                      <td style={{ ...td, color: '#94a3b8' }}>{c.top3_pins}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </>
       )}
@@ -1023,28 +1029,30 @@ function BacklinkIntel({ clientId }: { clientId: string }) {
               ⚠ Your Domain Rating trails the competitor median ({cmp?.competitor_median_dr}) by {drBehind}.
             </p>
           )}
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr>
-              <th style={{ ...th, textAlign: 'left' }}>Domain</th>
-              <th style={th}>DR</th><th style={th}>Ref. domains</th><th style={th}>Backlinks</th>
-            </tr></thead>
-            <tbody>
-              <tr style={{ borderTop: '1px solid #f1f5f9', background: '#f8fafc' }}>
-                <td style={{ ...td, textAlign: 'left', fontWeight: 700, color: '#0f172a' }}>You{client?.domain ? ` · ${client.domain}` : ''}</td>
-                <td style={{ ...td, fontWeight: 600 }}>{client?.domain_rating ?? '—'}</td>
-                <td style={td}>{client?.referring_domains?.toLocaleString() ?? '—'}</td>
-                <td style={td}>{client?.backlinks?.toLocaleString() ?? '—'}</td>
-              </tr>
-              {competitors.map(c => (
-                <tr key={c.domain} style={{ borderTop: '1px solid #f1f5f9' }}>
-                  <td style={{ ...td, textAlign: 'left', color: '#64748b' }}>{c.domain ?? '—'}</td>
-                  <td style={td}>{c.domain_rating ?? '—'}</td>
-                  <td style={td}>{c.referring_domains?.toLocaleString() ?? '—'}</td>
-                  <td style={td}>{c.backlinks?.toLocaleString() ?? '—'}</td>
+          <div className="scroll-x">
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr>
+                <th style={{ ...th, textAlign: 'left' }}>Domain</th>
+                <th style={th}>DR</th><th style={th}>Ref. domains</th><th style={th}>Backlinks</th>
+              </tr></thead>
+              <tbody>
+                <tr style={{ borderTop: '1px solid #f1f5f9', background: '#f8fafc' }}>
+                  <td style={{ ...td, textAlign: 'left', fontWeight: 700, color: '#0f172a' }}>You{client?.domain ? ` · ${client.domain}` : ''}</td>
+                  <td style={{ ...td, fontWeight: 600 }}>{client?.domain_rating ?? '—'}</td>
+                  <td style={td}>{client?.referring_domains?.toLocaleString() ?? '—'}</td>
+                  <td style={td}>{client?.backlinks?.toLocaleString() ?? '—'}</td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+                {competitors.map(c => (
+                  <tr key={c.domain} style={{ borderTop: '1px solid #f1f5f9' }}>
+                    <td style={{ ...td, textAlign: 'left', color: '#64748b' }}>{c.domain ?? '—'}</td>
+                    <td style={td}>{c.domain_rating ?? '—'}</td>
+                    <td style={td}>{c.referring_domains?.toLocaleString() ?? '—'}</td>
+                    <td style={td}>{c.backlinks?.toLocaleString() ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </>
       )}
       {refresh.error && <div style={{ ...errorBox, marginTop: 10 }}>{(refresh.error as Error).message}</div>}
@@ -1097,30 +1105,32 @@ function ReviewIntel({ clientId }: { clientId: string }) {
               ({cmp?.competitor_median_velocity}/mo) by {behind}/mo.
             </p>
           )}
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr>
-              <th style={{ ...th, textAlign: 'left' }}>Business</th>
-              <th style={th}>Reviews</th><th style={th}>Rating</th><th style={th}>Per month</th><th style={th}>Recent ✗</th>
-            </tr></thead>
-            <tbody>
-              <tr style={{ borderTop: '1px solid #f1f5f9', background: '#f8fafc' }}>
-                <td style={{ ...td, textAlign: 'left', fontWeight: 700, color: '#0f172a' }}>You</td>
-                <td style={{ ...td, fontWeight: 600 }}>{client?.count ?? 0}</td>
-                <td style={td}>{client?.avg_rating != null ? client.avg_rating.toFixed(1) : '—'}</td>
-                <td style={td}>{client?.velocity_per_month ?? 0}</td>
-                <td style={{ ...td, color: (client?.recent_negatives ?? 0) > 0 ? '#dc2626' : '#94a3b8' }}>{client?.recent_negatives ?? 0}</td>
-              </tr>
-              {competitors.map(c => (
-                <tr key={c.place_id ?? c.name} style={{ borderTop: '1px solid #f1f5f9' }}>
-                  <td style={{ ...td, textAlign: 'left' }}>{c.name ?? '—'}</td>
-                  <td style={td}>{c.count}</td>
-                  <td style={td}>{c.avg_rating != null ? c.avg_rating.toFixed(1) : '—'}</td>
-                  <td style={td}>{c.velocity_per_month}</td>
-                  <td style={{ ...td, color: c.recent_negatives > 0 ? '#dc2626' : '#94a3b8' }}>{c.recent_negatives}</td>
+          <div className="scroll-x">
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr>
+                <th style={{ ...th, textAlign: 'left' }}>Business</th>
+                <th style={th}>Reviews</th><th style={th}>Rating</th><th style={th}>Per month</th><th style={th}>Recent ✗</th>
+              </tr></thead>
+              <tbody>
+                <tr style={{ borderTop: '1px solid #f1f5f9', background: '#f8fafc' }}>
+                  <td style={{ ...td, textAlign: 'left', fontWeight: 700, color: '#0f172a' }}>You</td>
+                  <td style={{ ...td, fontWeight: 600 }}>{client?.count ?? 0}</td>
+                  <td style={td}>{client?.avg_rating != null ? client.avg_rating.toFixed(1) : '—'}</td>
+                  <td style={td}>{client?.velocity_per_month ?? 0}</td>
+                  <td style={{ ...td, color: (client?.recent_negatives ?? 0) > 0 ? '#dc2626' : '#94a3b8' }}>{client?.recent_negatives ?? 0}</td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+                {competitors.map(c => (
+                  <tr key={c.place_id ?? c.name} style={{ borderTop: '1px solid #f1f5f9' }}>
+                    <td style={{ ...td, textAlign: 'left' }}>{c.name ?? '—'}</td>
+                    <td style={td}>{c.count}</td>
+                    <td style={td}>{c.avg_rating != null ? c.avg_rating.toFixed(1) : '—'}</td>
+                    <td style={td}>{c.velocity_per_month}</td>
+                    <td style={{ ...td, color: c.recent_negatives > 0 ? '#dc2626' : '#94a3b8' }}>{c.recent_negatives}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </>
       )}
       {refresh.error && <div style={{ ...errorBox, marginTop: 10 }}>{(refresh.error as Error).message}</div>}
@@ -1211,29 +1221,31 @@ function CompetitorIntel({ clientId }: { clientId: string }) {
           No competitor profiles yet. Run a scan to find local-pack competitors, then click <strong>Refresh</strong>.
         </p>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr>
-            <th style={{ ...th, textAlign: 'left' }}>Competitor</th>
-            <th style={{ ...th, textAlign: 'left' }}>Primary category</th>
-            <th style={th}>Type</th>
-            <th style={th}>Rating</th><th style={th}>Reviews</th><th style={th}>Top-3 pins</th><th style={th}>Hours</th>
-          </tr></thead>
-          <tbody>
-            {profiles.map(p => (
-              <tr key={p.place_id ?? p.name} style={{ borderTop: '1px solid #f1f5f9' }}>
-                <td style={{ ...td, textAlign: 'left', fontWeight: 600, color: '#0f172a' }}>
-                  {p.website ? <a href={p.website} target="_blank" rel="noreferrer" style={{ color: '#0f172a' }}>{p.name ?? '—'}</a> : (p.name ?? '—')}
-                </td>
-                <td style={{ ...td, textAlign: 'left', color: '#64748b' }}>{p.primary_category ?? '—'}</td>
-                <td style={td}>{bizTypeLabel(p.business_type)}</td>
-                <td style={td}>{p.rating != null ? p.rating.toFixed(1) : '—'}</td>
-                <td style={td}>{p.review_count != null ? p.review_count.toLocaleString() : '—'}</td>
-                <td style={td}>{p.top3_pins ?? '—'}</td>
-                <td style={td}>{p.has_hours ? '✓' : '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="scroll-x">
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={{ ...th, textAlign: 'left' }}>Competitor</th>
+              <th style={{ ...th, textAlign: 'left' }}>Primary category</th>
+              <th style={th}>Type</th>
+              <th style={th}>Rating</th><th style={th}>Reviews</th><th style={th}>Top-3 pins</th><th style={th}>Hours</th>
+            </tr></thead>
+            <tbody>
+              {profiles.map(p => (
+                <tr key={p.place_id ?? p.name} style={{ borderTop: '1px solid #f1f5f9' }}>
+                  <td style={{ ...td, textAlign: 'left', fontWeight: 600, color: '#0f172a' }}>
+                    {p.website ? <a href={p.website} target="_blank" rel="noreferrer" style={{ color: '#0f172a' }}>{p.name ?? '—'}</a> : (p.name ?? '—')}
+                  </td>
+                  <td style={{ ...td, textAlign: 'left', color: '#64748b' }}>{p.primary_category ?? '—'}</td>
+                  <td style={td}>{bizTypeLabel(p.business_type)}</td>
+                  <td style={td}>{p.rating != null ? p.rating.toFixed(1) : '—'}</td>
+                  <td style={td}>{p.review_count != null ? p.review_count.toLocaleString() : '—'}</td>
+                  <td style={td}>{p.top3_pins ?? '—'}</td>
+                  <td style={td}>{p.has_hours ? '✓' : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       {refresh.error && <div style={{ ...errorBox, marginTop: 10 }}>{(refresh.error as Error).message}</div>}
     </div>
@@ -1292,7 +1304,7 @@ function RelevanceScorecard({ clientId }: { clientId: string }) {
       {rows.length === 0 ? (
         <p style={muted}>No scorecard yet. Click <strong>Refresh</strong> to build it for your first Maps keyword.</p>
       ) : (
-        <div style={{ overflowX: 'auto' }}>
+        <div className="scroll-x">
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
             <thead><tr>
               <th style={{ ...th, textAlign: 'left' }}>Business</th>
@@ -1350,26 +1362,28 @@ function CompetitorMomentum({ clientId }: { clientId: string }) {
       {!enough ? (
         <p style={muted}>Need at least 2 scans with competitor data to show momentum — run another scan and check back.</p>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr>
-            <th style={{ ...th, textAlign: 'left' }}>Competitor</th><th style={th}>Beats you now</th><th style={th}>Change</th><th style={th}>Trend</th>
-          </tr></thead>
-          <tbody>
-            {comps.map(c => {
-              const up = c.delta_pct != null && c.delta_pct > 0
-              const down = c.delta_pct != null && c.delta_pct < 0
-              const color = up ? '#dc2626' : down ? '#16a34a' : '#94a3b8'
-              return (
-                <tr key={c.place_id} style={{ borderTop: '1px solid #f1f5f9' }}>
-                  <td style={{ ...td, textAlign: 'left' }}>{c.name ?? '—'}</td>
-                  <td style={td}>{c.latest_pct != null ? `${Math.round(c.latest_pct)}%` : '—'}</td>
-                  <td style={{ ...td, color, fontWeight: 600 }}>{c.delta_pct != null ? `${up ? '▲' : down ? '▼' : '–'} ${Math.abs(c.delta_pct)} pts` : '—'}</td>
-                  <td style={{ ...td, width: 100 }}><PctSparkline values={c.points.map(p => p.beats_pct)} color={color} /></td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
+        <div className="scroll-x">
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={{ ...th, textAlign: 'left' }}>Competitor</th><th style={th}>Beats you now</th><th style={th}>Change</th><th style={th}>Trend</th>
+            </tr></thead>
+            <tbody>
+              {comps.map(c => {
+                const up = c.delta_pct != null && c.delta_pct > 0
+                const down = c.delta_pct != null && c.delta_pct < 0
+                const color = up ? '#dc2626' : down ? '#16a34a' : '#94a3b8'
+                return (
+                  <tr key={c.place_id} style={{ borderTop: '1px solid #f1f5f9' }}>
+                    <td style={{ ...td, textAlign: 'left' }}>{c.name ?? '—'}</td>
+                    <td style={td}>{c.latest_pct != null ? `${Math.round(c.latest_pct)}%` : '—'}</td>
+                    <td style={{ ...td, color, fontWeight: 600 }}>{c.delta_pct != null ? `${up ? '▲' : down ? '▼' : '–'} ${Math.abs(c.delta_pct)} pts` : '—'}</td>
+                    <td style={{ ...td, width: 100 }}><PctSparkline values={c.points.map(p => p.beats_pct)} color={color} /></td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )
@@ -1499,22 +1513,24 @@ function PeriodSummary({ periods }: { periods?: MapsPeriodsResponse }) {
       {!current ? (
         <p style={muted}>Run at least one scan to see period comparisons. With two or more scans, the 7/30/90-day and since-start columns fill in.</p>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr>
-            <th style={{ ...th, textAlign: 'left' }}>Metric</th>
-            <th style={th}>Now</th>
-            {WINDOWS.map(([, label]) => <th key={label} style={th}>{label}</th>)}
-          </tr></thead>
-          <tbody>
-            {current.metrics.map((m: MapsPeriodMetric) => (
-              <tr key={m.metric}>
-                <td style={{ ...td, textAlign: 'left', fontWeight: 600, color: '#0f172a' }}>{m.label}</td>
-                <td style={{ ...td, fontWeight: 700 }}>{fmtMetric(m.metric, m.now)}</td>
-                {WINDOWS.map(([wk]) => <td key={wk} style={td}><DeltaCell metric={m.metric} d={m.windows[wk]} /></td>)}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="scroll-x">
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={{ ...th, textAlign: 'left' }}>Metric</th>
+              <th style={th}>Now</th>
+              {WINDOWS.map(([, label]) => <th key={label} style={th}>{label}</th>)}
+            </tr></thead>
+            <tbody>
+              {current.metrics.map((m: MapsPeriodMetric) => (
+                <tr key={m.metric}>
+                  <td style={{ ...td, textAlign: 'left', fontWeight: 600, color: '#0f172a' }}>{m.label}</td>
+                  <td style={{ ...td, fontWeight: 700 }}>{fmtMetric(m.metric, m.now)}</td>
+                  {WINDOWS.map(([wk]) => <td key={wk} style={td}><DeltaCell metric={m.metric} d={m.windows[wk]} /></td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )
@@ -1548,25 +1564,27 @@ function AreaTrends({ clientId }: { clientId: string }) {
       {areas.length === 0 ? (
         <p style={muted}>Run at least two scans to chart how each direction's coverage is trending.</p>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr>
-            <th style={{ ...th, textAlign: 'left' }}>Direction</th>
-            <th style={th}>Now (Top-3)</th>
-            {WINDOWS.map(([, label]) => <th key={label} style={th}>{label}</th>)}
-          </tr></thead>
-          <tbody>
-            {areas.map((a: MapsAreaTrend) => (
-              <tr key={a.sector}>
-                <td style={{ ...td, textAlign: 'left', color: '#0f172a' }}>
-                  <span style={{ fontWeight: 600 }}>{a.sector_full}</span>
-                  {a.city && <span style={{ color: '#94a3b8' }}> · {a.city}</span>}
-                </td>
-                <td style={{ ...td, fontWeight: 700 }}>{a.now_top3_pct == null ? '—' : `${Math.round(a.now_top3_pct)}%`}</td>
-                {WINDOWS.map(([wk]) => <td key={wk} style={td}><DeltaCell metric="top3_pct" d={a.windows[wk]} /></td>)}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="scroll-x">
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={{ ...th, textAlign: 'left' }}>Direction</th>
+              <th style={th}>Now (Top-3)</th>
+              {WINDOWS.map(([, label]) => <th key={label} style={th}>{label}</th>)}
+            </tr></thead>
+            <tbody>
+              {areas.map((a: MapsAreaTrend) => (
+                <tr key={a.sector}>
+                  <td style={{ ...td, textAlign: 'left', color: '#0f172a' }}>
+                    <span style={{ fontWeight: 600 }}>{a.sector_full}</span>
+                    {a.city && <span style={{ color: '#94a3b8' }}> · {a.city}</span>}
+                  </td>
+                  <td style={{ ...td, fontWeight: 700 }}>{a.now_top3_pct == null ? '—' : `${Math.round(a.now_top3_pct)}%`}</td>
+                  {WINDOWS.map(([wk]) => <td key={wk} style={td}><DeltaCell metric="top3_pct" d={a.windows[wk]} /></td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )
@@ -1676,19 +1694,21 @@ function ChangeTable({ changes }: { changes?: MapsChangesResponse }) {
       <p style={{ fontSize: 12, color: '#64748b', margin: '2px 0 12px' }}>
         This scan vs the one before it. <span style={{ color: '#dc2626', fontWeight: 600 }}>▲ worse</span> · <span style={{ color: '#16a34a', fontWeight: 600 }}>▼ better</span>.
       </p>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead><tr>
-          <th style={{ ...th, textAlign: 'left' }}>Keyword</th>
-          <th style={th}>Avg rank</th>
-          <th style={th}>Top-3 %</th>
-          <th style={th}>Found %</th>
-          <th style={{ ...th, textAlign: 'left' }}>Weakened areas</th>
-          <th style={{ ...th, textAlign: 'left' }}>Alerts</th>
-        </tr></thead>
-        <tbody>
-          {changes.keywords.map(k => <ChangeRow key={k.keyword} k={k} td={td} />)}
-        </tbody>
-      </table>
+      <div className="scroll-x">
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr>
+            <th style={{ ...th, textAlign: 'left' }}>Keyword</th>
+            <th style={th}>Avg rank</th>
+            <th style={th}>Top-3 %</th>
+            <th style={th}>Found %</th>
+            <th style={{ ...th, textAlign: 'left' }}>Weakened areas</th>
+            <th style={{ ...th, textAlign: 'left' }}>Alerts</th>
+          </tr></thead>
+          <tbody>
+            {changes.keywords.map(k => <ChangeRow key={k.keyword} k={k} td={td} />)}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

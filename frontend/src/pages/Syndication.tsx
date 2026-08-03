@@ -347,50 +347,52 @@ export function Syndication() {
       ) : (
         <>
           <div style={tableWrap}>
-            <table style={table}>
-              <thead>
-                <tr>
-                  <th style={{ ...th, width: 34 }} />
-                  <th style={th}>Page</th>
-                  <th style={th}>Type</th>
-                  <th style={th}>Status</th>
-                  <th style={th} />
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map(item => {
-                  const selectable = PUBLISHABLE.includes(item.status)
-                  return (
-                    <tr key={item.id}>
-                      <td style={{ ...td, textAlign: 'center' }}>
-                        {selectable && (
-                          <input type="checkbox" checked={selected.has(item.id)} onChange={() => toggle(item.id)} />
-                        )}
-                      </td>
-                      <td style={td}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 2 }}>
-                          <span style={{ fontWeight: 500, color: '#0f172a' }}>{displayTitle(item)}</span>
-                          {item.doc_url && <OutChip href={item.doc_url} icon={<FileText size={11} />} label="Doc" />}
-                          {item.sheet_url && <OutChip href={item.sheet_url} icon={<Table2 size={11} />} label="Sheet" />}
-                        </div>
-                        <a href={item.source_url} target="_blank" rel="noreferrer" style={link}>
-                          {item.source_url} <ExternalLink size={11} />
-                        </a>
-                      </td>
-                      <td style={td}>{TYPE_LABEL[item.content_type]}</td>
-                      <td style={td}><StatusBadge status={item.status} error={item.error} /></td>
-                      <td style={{ ...td, textAlign: 'right' }}>
-                        {item.status === 'failed' && (
-                          <button style={retryBtn} disabled={retry.isPending} onClick={() => retry.mutate(item.id)}>
-                            <RefreshCw size={12} /> Retry
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+            <div className="scroll-x">
+              <table style={table}>
+                <thead>
+                  <tr>
+                    <th style={{ ...th, width: 34 }} />
+                    <th style={th}>Page</th>
+                    <th style={th}>Type</th>
+                    <th style={th}>Status</th>
+                    <th style={th} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map(item => {
+                    const selectable = PUBLISHABLE.includes(item.status)
+                    return (
+                      <tr key={item.id}>
+                        <td style={{ ...td, textAlign: 'center' }}>
+                          {selectable && (
+                            <input type="checkbox" checked={selected.has(item.id)} onChange={() => toggle(item.id)} />
+                          )}
+                        </td>
+                        <td style={td}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 2 }}>
+                            <span style={{ fontWeight: 500, color: '#0f172a' }}>{displayTitle(item)}</span>
+                            {item.doc_url && <OutChip href={item.doc_url} icon={<FileText size={11} />} label="Doc" />}
+                            {item.sheet_url && <OutChip href={item.sheet_url} icon={<Table2 size={11} />} label="Sheet" />}
+                          </div>
+                          <a href={item.source_url} target="_blank" rel="noreferrer" style={link}>
+                            {item.source_url} <ExternalLink size={11} />
+                          </a>
+                        </td>
+                        <td style={td}>{TYPE_LABEL[item.content_type]}</td>
+                        <td style={td}><StatusBadge status={item.status} error={item.error} /></td>
+                        <td style={{ ...td, textAlign: 'right' }}>
+                          {item.status === 'failed' && (
+                            <button style={retryBtn} disabled={retry.isPending} onClick={() => retry.mutate(item.id)}>
+                              <RefreshCw size={12} /> Retry
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           {/* ── Pagination ─────────────────────────────────────────────── */}

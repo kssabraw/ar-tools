@@ -265,61 +265,66 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
       )}
 
       {rows.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px 190px 36px', gap: 8, fontSize: 11, color: '#94a3b8', fontWeight: 600, paddingLeft: 2 }}>
-            <span>Member</span><span>Hrs / week</span><span>Suite user (My Tasks)</span><span />
-          </div>
-          {rows.map((r, i) => {
-            // A profile already linked to a DIFFERENT member can't be picked here.
-            const takenElsewhere = new Set(
-              rows.filter((_, j) => j !== i).map((x) => x.profile_id).filter(Boolean) as string[],
-            )
-            return (
-            <div key={r.gid} style={{ display: 'grid', gridTemplateColumns: '1fr 130px 190px 36px', gap: 8, alignItems: 'center' }}>
-              <span style={{ fontSize: 13, color: '#0f172a' }}>
-                {r.name ?? r.gid}
-                {emailByGid.get(r.gid) && (
-                  <span style={{ fontSize: 11.5, color: '#94a3b8', marginLeft: 8 }}>{emailByGid.get(r.gid)}</span>
-                )}
-              </span>
-              <input
-                style={input}
-                type="number"
-                min="0"
-                step="0.5"
-                placeholder={defaultWeekly != null ? `${defaultWeekly} (default)` : 'h / week'}
-                value={r.weekly_hours ?? ''}
-                onChange={(e) => {
-                  const v = e.target.value === '' ? null : Number(e.target.value)
-                  setRows((rs) => rs.map((x, j) => (j === i ? { ...x, weekly_hours: v } : x)))
-                }}
-              />
-              <select
-                style={input}
-                value={r.profile_id ?? ''}
-                onChange={(e) => {
-                  const v = e.target.value || null
-                  setRows((rs) => rs.map((x, j) => (j === i ? { ...x, profile_id: v } : x)))
-                }}
-                title="Link this member to a suite login so their My Tasks auto-resolves"
-              >
-                <option value="">— not linked —</option>
-                {(profiles ?? [])
-                  .filter((p) => !takenElsewhere.has(p.id))
-                  .map((p) => (
-                    <option key={p.id} value={p.id}>{p.full_name}</option>
-                  ))}
-              </select>
-              <button
-                style={{ ...iconBtn, color: '#dc2626' }}
-                title="Remove"
-                onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}
-              >
-                <Trash2 size={14} />
-              </button>
+        // The inner column carries the min-width (fixed px columns would
+        // otherwise crush the member name on a narrow screen); the scroll-x
+        // wrapper is what gives it somewhere to overflow to.
+        <div className="scroll-x">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 560 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px 190px 36px', gap: 8, fontSize: 11, color: '#94a3b8', fontWeight: 600, paddingLeft: 2 }}>
+              <span>Member</span><span>Hrs / week</span><span>Suite user (My Tasks)</span><span />
             </div>
-            )
-          })}
+            {rows.map((r, i) => {
+              // A profile already linked to a DIFFERENT member can't be picked here.
+              const takenElsewhere = new Set(
+                rows.filter((_, j) => j !== i).map((x) => x.profile_id).filter(Boolean) as string[],
+              )
+              return (
+              <div key={r.gid} style={{ display: 'grid', gridTemplateColumns: '1fr 130px 190px 36px', gap: 8, alignItems: 'center' }}>
+                <span style={{ fontSize: 13, color: '#0f172a' }}>
+                  {r.name ?? r.gid}
+                  {emailByGid.get(r.gid) && (
+                    <span style={{ fontSize: 11.5, color: '#94a3b8', marginLeft: 8 }}>{emailByGid.get(r.gid)}</span>
+                  )}
+                </span>
+                <input
+                  style={input}
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  placeholder={defaultWeekly != null ? `${defaultWeekly} (default)` : 'h / week'}
+                  value={r.weekly_hours ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value === '' ? null : Number(e.target.value)
+                    setRows((rs) => rs.map((x, j) => (j === i ? { ...x, weekly_hours: v } : x)))
+                  }}
+                />
+                <select
+                  style={input}
+                  value={r.profile_id ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value || null
+                    setRows((rs) => rs.map((x, j) => (j === i ? { ...x, profile_id: v } : x)))
+                  }}
+                  title="Link this member to a suite login so their My Tasks auto-resolves"
+                >
+                  <option value="">— not linked —</option>
+                  {(profiles ?? [])
+                    .filter((p) => !takenElsewhere.has(p.id))
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>{p.full_name}</option>
+                    ))}
+                </select>
+                <button
+                  style={{ ...iconBtn, color: '#dc2626' }}
+                  title="Remove"
+                  onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+              )
+            })}
+          </div>
         </div>
       )}
 

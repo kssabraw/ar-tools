@@ -374,56 +374,58 @@ function PageMonitor({ clientId }: { clientId: string }) {
           <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8 }}>
             Latest capture · {shortDate(data?.latest_captured_at ?? null)}
           </div>
-          <table style={table}>
-            <thead>
-              <tr style={{ background: '#f8fafc' }}>
-                <Th>Page</Th>
-                <Th right>UR</Th>
-                <Th right>Referring domains</Th>
-                <Th right>Backlinks</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {pages.map((p) => {
-                const hist = data?.history?.[p.url] ?? []
-                const canExpand = hist.length > 1
-                const open = expanded === p.url
-                return (
-                  <Fragment key={p.url}>
-                    <tr style={{ borderTop: '1px solid #f1f5f9', cursor: canExpand ? 'pointer' : 'default' }}
-                      onClick={() => canExpand && setExpanded(open ? null : p.url)}>
-                      <td style={td}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          {canExpand
-                            ? (open ? <ChevronDown size={13} color="#94a3b8" /> : <ChevronRight size={13} color="#94a3b8" />)
-                            : <span style={{ width: 13 }} />}
-                          <a href={p.url} target="_blank" rel="noreferrer" style={linkCell} title={p.url}
-                            onClick={(e) => e.stopPropagation()}>
-                            {pathOf(p.url)} <ExternalLink size={11} />
-                          </a>
-                          {p.is_homepage && <span style={homeChip}>home</span>}
-                          {isImbalanced(p) && <span style={imbalanceChip} title="More referring domains than the home page">imbalance</span>}
-                        </div>
-                      </td>
-                      <td style={tdRight}>{p.url_rating != null ? p.url_rating.toFixed(1) : '—'}</td>
-                      <td style={tdRight}>{fmt(p.referring_domains)}</td>
-                      <td style={tdRight}>{fmt(p.backlinks)}</td>
-                    </tr>
-                    {open && (
-                      <tr>
-                        <td style={{ ...td, background: '#f8fafc' }} colSpan={4}>
-                          <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 6 }}>
-                            Referring domains over time
+          <div className="scroll-x">
+            <table style={table}>
+              <thead>
+                <tr style={{ background: '#f8fafc' }}>
+                  <Th>Page</Th>
+                  <Th right>UR</Th>
+                  <Th right>Referring domains</Th>
+                  <Th right>Backlinks</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {pages.map((p) => {
+                  const hist = data?.history?.[p.url] ?? []
+                  const canExpand = hist.length > 1
+                  const open = expanded === p.url
+                  return (
+                    <Fragment key={p.url}>
+                      <tr style={{ borderTop: '1px solid #f1f5f9', cursor: canExpand ? 'pointer' : 'default' }}
+                        onClick={() => canExpand && setExpanded(open ? null : p.url)}>
+                        <td style={td}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            {canExpand
+                              ? (open ? <ChevronDown size={13} color="#94a3b8" /> : <ChevronRight size={13} color="#94a3b8" />)
+                              : <span style={{ width: 13 }} />}
+                            <a href={p.url} target="_blank" rel="noreferrer" style={linkCell} title={p.url}
+                              onClick={(e) => e.stopPropagation()}>
+                              {pathOf(p.url)} <ExternalLink size={11} />
+                            </a>
+                            {p.is_homepage && <span style={homeChip}>home</span>}
+                            {isImbalanced(p) && <span style={imbalanceChip} title="More referring domains than the home page">imbalance</span>}
                           </div>
-                          <Sparkline points={hist.map((h) => ({ date: h.captured_at, referring_domains: h.referring_domains, backlinks: h.backlinks }))} />
                         </td>
+                        <td style={tdRight}>{p.url_rating != null ? p.url_rating.toFixed(1) : '—'}</td>
+                        <td style={tdRight}>{fmt(p.referring_domains)}</td>
+                        <td style={tdRight}>{fmt(p.backlinks)}</td>
                       </tr>
-                    )}
-                  </Fragment>
-                )
-              })}
-            </tbody>
-          </table>
+                      {open && (
+                        <tr>
+                          <td style={{ ...td, background: '#f8fafc' }} colSpan={4}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 6 }}>
+                              Referring domains over time
+                            </div>
+                            <Sparkline points={hist.map((h) => ({ date: h.captured_at, referring_domains: h.referring_domains, backlinks: h.backlinks }))} />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         </>
       )}
     </div>
@@ -449,25 +451,27 @@ function OverviewTab({ data, onViewPages }: { data: LookupResponse; onViewPages:
           <div style={emptyBox}>No per-page data returned.</div>
         ) : (
           <>
-            <table style={table}>
-              <thead>
-                <tr><Th>Page</Th><Th right>UR</Th><Th right>Ref. domains</Th><Th right>Backlinks</Th></tr>
-              </thead>
-              <tbody>
-                {top.map((p) => (
-                  <tr key={p.url} style={{ borderTop: '1px solid #f1f5f9' }}>
-                    <td style={{ ...td, maxWidth: 380, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      <a href={p.url} target="_blank" rel="noreferrer" style={linkCell} title={p.url}>
-                        {pathOf(p.url)} <ExternalLink size={11} />
-                      </a>
-                    </td>
-                    <td style={tdRight}>{p.page_rating != null ? p.page_rating.toFixed(1) : '—'}</td>
-                    <td style={tdRight}>{fmt(p.referring_domains)}</td>
-                    <td style={tdRight}>{fmt(p.backlinks)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="scroll-x">
+              <table style={table}>
+                <thead>
+                  <tr><Th>Page</Th><Th right>UR</Th><Th right>Ref. domains</Th><Th right>Backlinks</Th></tr>
+                </thead>
+                <tbody>
+                  {top.map((p) => (
+                    <tr key={p.url} style={{ borderTop: '1px solid #f1f5f9' }}>
+                      <td style={{ ...td, maxWidth: 380, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <a href={p.url} target="_blank" rel="noreferrer" style={linkCell} title={p.url}>
+                          {pathOf(p.url)} <ExternalLink size={11} />
+                        </a>
+                      </td>
+                      <td style={tdRight}>{p.page_rating != null ? p.page_rating.toFixed(1) : '—'}</td>
+                      <td style={tdRight}>{fmt(p.referring_domains)}</td>
+                      <td style={tdRight}>{fmt(p.backlinks)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             {data.pages.length > 10 && (
               <button style={{ ...ghostBtn, marginTop: 10 }} onClick={onViewPages}>
                 View all {data.pages.length} pages →
@@ -509,24 +513,26 @@ function PagesTab({ pages, clientId, onViewLinks }: {
           {rows.length} of {pages.length} pages · from the cached snapshot (no extra API calls)
         </span>
       </div>
-      <table style={table}>
-        <thead>
-          <tr>
-            <Th>Page</Th>
-            <SortTh label="UR" active={sortKey === 'page_rating'} onClick={() => setSortKey('page_rating')} />
-            <SortTh label="Ref. domains" active={sortKey === 'referring_domains'} onClick={() => setSortKey('referring_domains')} />
-            <SortTh label="Backlinks" active={sortKey === 'backlinks'} onClick={() => setSortKey('backlinks')} />
-            <Th right>First seen</Th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((p) => (
-            <PageRowView key={p.url} page={p} clientId={clientId}
-              open={open === p.url} onToggle={() => setOpen(open === p.url ? null : p.url)}
-              onViewLinks={() => onViewLinks(p.url)} />
-          ))}
-        </tbody>
-      </table>
+      <div className="scroll-x">
+        <table style={table}>
+          <thead>
+            <tr>
+              <Th>Page</Th>
+              <SortTh label="UR" active={sortKey === 'page_rating'} onClick={() => setSortKey('page_rating')} />
+              <SortTh label="Ref. domains" active={sortKey === 'referring_domains'} onClick={() => setSortKey('referring_domains')} />
+              <SortTh label="Backlinks" active={sortKey === 'backlinks'} onClick={() => setSortKey('backlinks')} />
+              <Th right>First seen</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((p) => (
+              <PageRowView key={p.url} page={p} clientId={clientId}
+                open={open === p.url} onToggle={() => setOpen(open === p.url ? null : p.url)}
+                onViewLinks={() => onViewLinks(p.url)} />
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
@@ -614,16 +620,18 @@ function PageDrill({ url, clientId, onViewLinks }: { url: string; clientId: stri
 function MiniTable({ head, rows }: { head: string[]; rows: (string | null)[][] }) {
   if (rows.length === 0) return <div style={{ fontSize: 12, color: '#94a3b8', margin: '6px 0' }}>Nothing returned.</div>
   return (
-    <table style={{ ...table, margin: '6px 0', fontSize: 12 }}>
-      <thead><tr>{head.map((h, i) => <Th key={h} right={i > 0}>{h}</Th>)}</tr></thead>
-      <tbody>
-        {rows.map((r, i) => (
-          <tr key={i} style={{ borderTop: '1px solid #f1f5f9' }}>
-            {r.map((c, j) => <td key={j} style={j > 0 ? tdRight : td}>{c}</td>)}
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="scroll-x">
+      <table style={{ ...table, margin: '6px 0', fontSize: 12 }}>
+        <thead><tr>{head.map((h, i) => <Th key={h} right={i > 0}>{h}</Th>)}</tr></thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i} style={{ borderTop: '1px solid #f1f5f9' }}>
+              {r.map((c, j) => <td key={j} style={j > 0 ? tdRight : td}>{c}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }
 
@@ -671,28 +679,30 @@ function RdTab({ target, clientId }: { target: string; clientId: string | null }
       {isError && <div style={{ ...emptyBox, borderColor: '#fecaca', color: '#b91c1c' }}>Could not load referring domains.</div>}
       {!isLoading && !isError && rows.length === 0 && <div style={emptyBox}>No referring domains returned.</div>}
       {rows.length > 0 && (
-        <table style={table}>
-          <thead>
-            <tr><Th>Domain</Th><Th right>DR</Th><Th right>Links</Th><Th right>Dofollow</Th><Th right>First seen</Th></tr>
-          </thead>
-          <tbody>
-            {rows.map((rd) => (
-              <tr key={rd.domain} style={{ borderTop: '1px solid #f1f5f9' }}>
-                <td style={td}>
-                  <a href={`https://${rd.domain}`} target="_blank" rel="noreferrer" style={linkCell}>
-                    {rd.domain} <ExternalLink size={11} />
-                  </a>
-                  {rd.is_lost && <span style={{ ...flagChip, color: '#b91c1c', background: '#fef2f2' }}>lost</span>}
-                  {rd.is_new && <span style={{ ...flagChip, color: '#047857', background: '#ecfdf5' }}>new</span>}
-                </td>
-                <td style={tdRight}>{rd.domain_rating != null ? rd.domain_rating.toFixed(1) : '—'}</td>
-                <td style={tdRight}>{fmt(rd.backlinks)}</td>
-                <td style={tdRight}>{fmt(rd.dofollow)}</td>
-                <td style={tdRight}>{shortDate(rd.first_seen)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="scroll-x">
+          <table style={table}>
+            <thead>
+              <tr><Th>Domain</Th><Th right>DR</Th><Th right>Links</Th><Th right>Dofollow</Th><Th right>First seen</Th></tr>
+            </thead>
+            <tbody>
+              {rows.map((rd) => (
+                <tr key={rd.domain} style={{ borderTop: '1px solid #f1f5f9' }}>
+                  <td style={td}>
+                    <a href={`https://${rd.domain}`} target="_blank" rel="noreferrer" style={linkCell}>
+                      {rd.domain} <ExternalLink size={11} />
+                    </a>
+                    {rd.is_lost && <span style={{ ...flagChip, color: '#b91c1c', background: '#fef2f2' }}>lost</span>}
+                    {rd.is_new && <span style={{ ...flagChip, color: '#047857', background: '#ecfdf5' }}>new</span>}
+                  </td>
+                  <td style={tdRight}>{rd.domain_rating != null ? rd.domain_rating.toFixed(1) : '—'}</td>
+                  <td style={tdRight}>{fmt(rd.backlinks)}</td>
+                  <td style={tdRight}>{fmt(rd.dofollow)}</td>
+                  <td style={tdRight}>{shortDate(rd.first_seen)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )
@@ -715,18 +725,20 @@ function AnchorsTab({ target, clientId }: { target: string; clientId: string | n
       {isError && <div style={{ ...emptyBox, borderColor: '#fecaca', color: '#b91c1c' }}>Could not load anchors.</div>}
       {!isLoading && !isError && rows.length === 0 && <div style={emptyBox}>No anchors returned.</div>}
       {rows.length > 0 && (
-        <table style={table}>
-          <thead><tr><Th>Anchor</Th><Th right>Links</Th><Th right>Ref. domains</Th></tr></thead>
-          <tbody>
-            {rows.slice(0, 100).map((a, i) => (
-              <tr key={i} style={{ borderTop: '1px solid #f1f5f9' }}>
-                <td style={td}>{a.anchor || <span style={{ color: '#94a3b8' }}>(empty)</span>}</td>
-                <td style={tdRight}>{fmt(a.backlinks)}</td>
-                <td style={tdRight}>{fmt(a.referring_domains)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="scroll-x">
+          <table style={table}>
+            <thead><tr><Th>Anchor</Th><Th right>Links</Th><Th right>Ref. domains</Th></tr></thead>
+            <tbody>
+              {rows.slice(0, 100).map((a, i) => (
+                <tr key={i} style={{ borderTop: '1px solid #f1f5f9' }}>
+                  <td style={td}>{a.anchor || <span style={{ color: '#94a3b8' }}>(empty)</span>}</td>
+                  <td style={tdRight}>{fmt(a.backlinks)}</td>
+                  <td style={tdRight}>{fmt(a.referring_domains)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )
@@ -776,35 +788,37 @@ function LinksTab({ target, scoped, onClearScope }: { target: string; scoped: bo
 
       {data && data.links.length > 0 && (
         <>
-          <table style={table}>
-            <thead>
-              <tr><Th>Source page</Th><Th>Anchor</Th><Th right>DR</Th><Th>Target</Th><Th right>Type</Th></tr>
-            </thead>
-            <tbody>
-              {data.links.map((l, i) => (
-                <tr key={i} style={{ borderTop: '1px solid #f1f5f9' }}>
-                  <td style={td}>
-                    <a href={l.url_from ?? '#'} target="_blank" rel="noreferrer" style={linkCell}>
-                      {l.domain_from || l.url_from} <ExternalLink size={11} />
-                    </a>
-                  </td>
-                  <td style={{ ...td, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {l.anchor || <span style={{ color: '#94a3b8' }}>—</span>}
-                  </td>
-                  <td style={tdRight}>{l.domain_rating != null ? l.domain_rating.toFixed(1) : '—'}</td>
-                  <td style={{ ...td, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {l.url_to}
-                  </td>
-                  <td style={tdRight}>
-                    <span style={{ ...flagChip, color: l.dofollow ? '#047857' : '#64748b', background: l.dofollow ? '#ecfdf5' : '#f1f5f9' }}>
-                      {l.dofollow ? 'dofollow' : 'nofollow'}
-                    </span>
-                    {l.is_broken && <span style={{ ...flagChip, color: '#b91c1c', background: '#fef2f2' }}>broken</span>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="scroll-x">
+            <table style={table}>
+              <thead>
+                <tr><Th>Source page</Th><Th>Anchor</Th><Th right>DR</Th><Th>Target</Th><Th right>Type</Th></tr>
+              </thead>
+              <tbody>
+                {data.links.map((l, i) => (
+                  <tr key={i} style={{ borderTop: '1px solid #f1f5f9' }}>
+                    <td style={td}>
+                      <a href={l.url_from ?? '#'} target="_blank" rel="noreferrer" style={linkCell}>
+                        {l.domain_from || l.url_from} <ExternalLink size={11} />
+                      </a>
+                    </td>
+                    <td style={{ ...td, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {l.anchor || <span style={{ color: '#94a3b8' }}>—</span>}
+                    </td>
+                    <td style={tdRight}>{l.domain_rating != null ? l.domain_rating.toFixed(1) : '—'}</td>
+                    <td style={{ ...td, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {l.url_to}
+                    </td>
+                    <td style={tdRight}>
+                      <span style={{ ...flagChip, color: l.dofollow ? '#047857' : '#64748b', background: l.dofollow ? '#ecfdf5' : '#f1f5f9' }}>
+                        {l.dofollow ? 'dofollow' : 'nofollow'}
+                      </span>
+                      {l.is_broken && <span style={{ ...flagChip, color: '#b91c1c', background: '#fef2f2' }}>broken</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 }}>
             <button style={ghostBtn} disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - limit))}>Previous</button>
             <span style={{ fontSize: 12, color: '#64748b' }}>Rows {offset + 1}–{offset + data.links.length}</span>

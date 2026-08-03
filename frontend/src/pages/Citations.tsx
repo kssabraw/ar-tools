@@ -126,49 +126,51 @@ export function Citations() {
           No citations yet — paste the URLs from your citation orders above.
         </div>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-          <thead>
-            <tr style={{ textAlign: 'left', color: '#64748b', borderBottom: '1px solid #e2e8f0' }}>
-              <th style={{ padding: '8px 6px' }}>URL</th>
-              <th style={{ padding: '8px 6px', width: 110 }}>Status</th>
-              <th style={{ padding: '8px 6px', width: 70 }}>NAP</th>
-              <th style={{ padding: '8px 6px', width: 110 }}>Last check</th>
-              <th style={{ padding: '8px 6px', width: 40 }} />
-            </tr>
-          </thead>
-          <tbody>
-            {citations.map((c) => {
-              const meta = STATUS_META[c.status] ?? STATUS_META.unknown
-              return (
-                <tr key={c.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                  <td style={{ padding: '8px 6px', maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    <a href={c.url} target="_blank" rel="noreferrer" style={{ color: '#334155', textDecoration: 'none' }}>{c.url}</a>
-                  </td>
-                  <td style={{ padding: '8px 6px' }}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: meta.color, fontWeight: 600 }}>
-                      {meta.icon} {meta.label}
-                    </span>
-                  </td>
-                  <td style={{ padding: '8px 6px', color: '#64748b' }}>
-                    {c.nap_found === true ? '✓' : c.nap_found === false ? '—' : ''}
-                  </td>
-                  <td style={{ padding: '8px 6px', color: '#94a3b8' }}>
-                    {c.last_checked_at ? new Date(c.last_checked_at).toLocaleDateString() : 'never'}
-                  </td>
-                  <td style={{ padding: '8px 6px' }}>
-                    <button
-                      onClick={() => deleteMut.mutate(c.id)}
-                      title="Remove"
-                      style={{ border: 'none', background: 'none', color: '#cbd5e1', cursor: 'pointer', padding: 2 }}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
+        <div className="scroll-x">
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ textAlign: 'left', color: '#64748b', borderBottom: '1px solid #e2e8f0' }}>
+                <th style={{ padding: '8px 6px' }}>URL</th>
+                <th style={{ padding: '8px 6px', width: 110 }}>Status</th>
+                <th style={{ padding: '8px 6px', width: 70 }}>NAP</th>
+                <th style={{ padding: '8px 6px', width: 110 }}>Last check</th>
+                <th style={{ padding: '8px 6px', width: 40 }} />
+              </tr>
+            </thead>
+            <tbody>
+              {citations.map((c) => {
+                const meta = STATUS_META[c.status] ?? STATUS_META.unknown
+                return (
+                  <tr key={c.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                    <td style={{ padding: '8px 6px', maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <a href={c.url} target="_blank" rel="noreferrer" style={{ color: '#334155', textDecoration: 'none' }}>{c.url}</a>
+                    </td>
+                    <td style={{ padding: '8px 6px' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: meta.color, fontWeight: 600 }}>
+                        {meta.icon} {meta.label}
+                      </span>
+                    </td>
+                    <td style={{ padding: '8px 6px', color: '#64748b' }}>
+                      {c.nap_found === true ? '✓' : c.nap_found === false ? '—' : ''}
+                    </td>
+                    <td style={{ padding: '8px 6px', color: '#94a3b8' }}>
+                      {c.last_checked_at ? new Date(c.last_checked_at).toLocaleDateString() : 'never'}
+                    </td>
+                    <td style={{ padding: '8px 6px' }}>
+                      <button
+                        onClick={() => deleteMut.mutate(c.id)}
+                        title="Remove"
+                        style={{ border: 'none', background: 'none', color: '#cbd5e1', cursor: 'pointer', padding: 2 }}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )

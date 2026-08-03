@@ -51,7 +51,7 @@ export function Rankability({ clientId }: { clientId: string }) {
       {scored.length === 0 && unscored.length === 0 ? (
         <div style={{ ...card, color: '#64748b', fontSize: 13 }}>No tracked keywords yet.</div>
       ) : (
-        <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
+        <div className="scroll-x" style={{ ...card, padding: 0 }}>
           <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid #e2e8f0' }}>

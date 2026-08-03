@@ -542,21 +542,23 @@ function Keywords({ clientId, keywords }: { clientId: string; keywords: Keyword[
         <EmptyState title="No keywords yet" body="Add the search queries you want to check this brand's AI visibility for." />
       ) : (
         <div style={tableWrap}>
-          <table style={table}>
-            <thead><tr><Th>Keyword</Th><Th>Status</Th><Th right>Actions</Th></tr></thead>
-            <tbody>
-              {keywords.map((k, i) => (
-                <tr key={k.id} style={i % 2 ? rowAlt : undefined}>
-                  <Td><strong>{k.keyword}</strong></Td>
-                  <Td>{k.is_active ? <span style={badgeOn}>Active</span> : <span style={badgeOff}>Paused</span>}</Td>
-                  <Td right>
-                    <button style={miniBtn} onClick={() => toggleMut.mutate(k)}>{k.is_active ? 'Pause' : 'Activate'}</button>
-                    <button style={{ ...miniBtn, color: '#b91c1c' }} onClick={() => delMut.mutate(k.id)}><Trash2 size={13} /></button>
-                  </Td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="scroll-x">
+            <table style={table}>
+              <thead><tr><Th>Keyword</Th><Th>Status</Th><Th right>Actions</Th></tr></thead>
+              <tbody>
+                {keywords.map((k, i) => (
+                  <tr key={k.id} style={i % 2 ? rowAlt : undefined}>
+                    <Td><strong>{k.keyword}</strong></Td>
+                    <Td>{k.is_active ? <span style={badgeOn}>Active</span> : <span style={badgeOff}>Paused</span>}</Td>
+                    <Td right>
+                      <button style={miniBtn} onClick={() => toggleMut.mutate(k)}>{k.is_active ? 'Pause' : 'Activate'}</button>
+                      <button style={{ ...miniBtn, color: '#b91c1c' }} onClick={() => delMut.mutate(k.id)}><Trash2 size={13} /></button>
+                    </Td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>
@@ -582,17 +584,19 @@ function Competitors({ clientId, competitors }: { clientId: string; competitors:
         <EmptyState title="No competitors yet" body="Add rival brands to compare their AI visibility against this client's." />
       ) : (
         <div style={tableWrap}>
-          <table style={table}>
-            <thead><tr><Th>Competitor</Th><Th right>Actions</Th></tr></thead>
-            <tbody>
-              {competitors.map((c, i) => (
-                <tr key={c.id} style={i % 2 ? rowAlt : undefined}>
-                  <Td><strong>{c.competitor_name}</strong></Td>
-                  <Td right><button style={{ ...miniBtn, color: '#b91c1c' }} onClick={() => delMut.mutate(c.id)}><Trash2 size={13} /></button></Td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="scroll-x">
+            <table style={table}>
+              <thead><tr><Th>Competitor</Th><Th right>Actions</Th></tr></thead>
+              <tbody>
+                {competitors.map((c, i) => (
+                  <tr key={c.id} style={i % 2 ? rowAlt : undefined}>
+                    <Td><strong>{c.competitor_name}</strong></Td>
+                    <Td right><button style={{ ...miniBtn, color: '#b91c1c' }} onClick={() => delMut.mutate(c.id)}><Trash2 size={13} /></button></Td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>
