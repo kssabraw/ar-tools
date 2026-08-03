@@ -41,3 +41,7 @@ pydyf==0.10.0     # pin: weasyprint 62.3 needs pydyf <0.11 — pydyf 0.11 droppe
 pillow==10.4.0    # Maps geo-grid: composite the numbered rank pins onto Google's
                   # static-map tile to save a PNG of each scan (services/maps_image.py).
                   # Self-contained wheels (bundled libjpeg/zlib) — no extra apt libs.
+# GitHub Actions secrets must be sealed with the repo's libsodium public key
+# before upload; there is no unencrypted path. Used only by
+# services/website_provision.py, and imported lazily there.
+PyNaCl==1.5.0

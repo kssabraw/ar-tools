@@ -82,6 +82,7 @@ from services.strategist import run_strategy_review_job
 from services.internal_linking import run_internal_link_analyze_job, run_internal_link_apply_job
 from services.syndication_service import run_syndication_item_job, run_syndication_scan_job
 from services.content_batch import run_content_batch_item_job
+from services.website_provision import run_provision_job as run_website_provision_job
 from services.website_scraper import llm_extract_website_data, scrapeowl_fetch
 
 logger = logging.getLogger(__name__)
@@ -720,6 +721,8 @@ async def _process_job(job: dict) -> None:
         await run_page_backlink_job(job)
     elif job_type == "website_scrape":
         await _run_website_scrape(job)
+    elif job_type == "website_provision":
+        await run_website_provision_job(job.get("payload") or {})
     elif job_type == "page_structure_scrape":
         await _run_page_structure_scrape(job)
     elif job_type == "page_structure_parse":
