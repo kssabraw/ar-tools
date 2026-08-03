@@ -150,6 +150,8 @@ Applied live and verified. Detail in `PHASE1B-STATUS.md`; the reasoning is in `D
 ### 6.1 Railway `redeploy` replays the OLD deployment's config
 Changing `startCommand` and calling redeploy silently re-runs the *previous* command. Twice, and it looked identical each time. Only a **fresh deployment** picks up config changes. This is why run mode is driven by `OUTREACH_COMMAND` through one entrypoint.
 
+Then a third time, and it cost money: a `verify-reviews --group control --limit 5` intent was set on the service, `redeploy` replayed the snapshot from before those variables existed, and the run executed the bare `verify-reviews` default — 20 lookups, ~$0.11, against a group that had already been measured. **This section existed and was not read first.** That is a discoverability failure rather than a discipline one, so the Railway-specific traps (this one, the auto-deploy pinning, `update-service` not handling source changes) now also live in the repo-root **`CLAUDE.md` → "Railway deploy traps"**, which auto-loads every session. Keep this section, but treat CLAUDE.md as the copy that gets read.
+
 ### 6.2 Railway reports a CRASHED job as deployment status SUCCESS
 With `restartPolicy: NEVER`, a job that dies on an unhandled exception still shows SUCCESS and posts a green commit status to the PR. Trust `OUTREACH_RESULT`, not the badge.
 

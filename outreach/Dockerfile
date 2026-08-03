@@ -36,8 +36,14 @@ COPY . .
 #
 # This default is a spend guard, not a preference. A Railway service re-runs its start command on
 # every deploy, so if the default were `run`, an unrelated redeploy — a rollback, a variable
-# change, a rebuild — would silently fire a paid Outscraper pull. Set OUTREACH_COMMAND=run
-# deliberately when a paid ingest is intended, and set it back afterwards.
+# change, a rebuild — would silently fire a paid Outscraper pull.
+#
+# The default alone is NOT sufficient, which is why `spend_denial` exists in run_market.py. The
+# default only protects the case where the variable is absent; it does nothing about the far more
+# common case of a paid value LEFT BEHIND from a previous run, which is how ~$0.11 was spent on a
+# redeploy that replayed a stale config snapshot. So every paid command additionally requires
+# OUTREACH_CONFIRM_SPEND to equal that command's own name. Set the two together, in one config
+# change, and unset both afterwards — a leftover token names the wrong command and refuses.
 #
 # OUTREACH_ARGS carries flags (`--group control --limit 5`). Its own variable rather than
 # smuggling them into OUTREACH_MARKET on word-splitting: that trick works, and it makes the market

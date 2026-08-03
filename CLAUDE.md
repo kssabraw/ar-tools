@@ -135,6 +135,22 @@ When docs conflict: the engineering spec wins for "how to build it," the product
 
 You should NOT need dashboard-level setup. If you think you do, stop and ask.
 
+## Railway deploy traps
+
+**Read this before touching a Railway deployment.** Every entry cost real time or money here, and each was already written down somewhere — in `outreach/HANDOFF.md` §6 or `outreach/ISSUES.md` — where it was not read in time. They live in CLAUDE.md now because this file auto-loads every session and those do not. The `outreach` service is the sharpest case because it spends money on deploy, but the platform mechanics apply to every service in the project.
+
+- **`redeploy` replays the OLD deployment's config snapshot — it does not pick up current variables or start command.** Change a variable, hit redeploy, and it silently re-runs the *previous* command with the *previous* values. Observed three times: twice on `startCommand`, and once when a `verify-reviews --group control --limit 5` intent replayed as the bare 20-lookup default and spent ~$0.11 nobody asked for. **Only a fresh deployment picks up config changes.** There is no MCP tool that creates one for an existing service — `create-deployment` makes a *new service*, and `update-service` states outright that its changes apply on the next deployment. A fresh deploy means the Deploy control in the Railway dashboard, or a push when auto-deploy is on.
+
+- **Auto-deploy off PINS the service to its last-built commit.** "Auto deploys when pushed to GitHub" does not merely stop deploys on push; Railway stops *tracking new commits at all*. A variable change then redeploys that pinned snapshot rather than the connected branch's HEAD, so a source repoint is real in config and **inert in practice** until something explicitly deploys a newer commit. This is how a service with `main` correctly configured ran a commit from a long-merged branch and failed on `invalid choice: 'verify-reviews'`. Do not "fix" it by leaving auto-deploy on: for a service that spends money, only ever running deliberately-deployed code is the safety property working.
+
+- **A crashed job reports deployment status SUCCESS.** With `restartPolicy: NEVER`, a job that dies on an unhandled exception still shows SUCCESS and posts a green commit status to the PR. The deployment badge is not a success signal — grep the run's own marker (`OUTREACH_RESULT` for outreach) instead.
+
+- **The log stream LAGS the container. Do not diagnose from it.** A run was concluded dead at 09:09:54 because logs stopped; it completed at 09:11:01. Asking the Railway agent is not corroboration — it reads the same lagging stream. Check what the job wrote to the database; those writes are synchronous and are ground truth.
+
+- **The deployment's BRANCH label is stale; the SHA is the signal.** A deployment of `main`'s HEAD was observed reporting a long-dead feature branch alongside the correct commit hash.
+
+For anything that spends money, the config default is not sufficient protection on its own — a *leftover* paid value is the common case, not an absent one. The outreach job's `spend_denial` (`outreach/api/scripts/run_market.py`) is the pattern: the safe command is what you get by omission, and a paid command additionally requires `OUTREACH_CONFIRM_SPEND` to equal that command's own name, so a replayed snapshot carries a confirmation that names the wrong command and refuses.
+
 ## Repository layout
 
 ```

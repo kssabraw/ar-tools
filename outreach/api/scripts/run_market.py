@@ -333,6 +333,59 @@ def cmd_run(args) -> int:
 # are conventional and cost nothing to check.
 _SHA_VARS = ("OUTREACH_BUILD_SHA", "RAILWAY_GIT_COMMIT_SHA", "SOURCE_COMMIT", "GIT_COMMIT")
 
+# The commands that spend money. `probe-dataforseo` is deliberately absent: its discovery pass
+# sends only deliberately-invalid tasks, which DataForSEO does not bill. It becomes paid ONLY
+# with --sample-place-id, which is handled as an explicit override rather than by listing it
+# here, because "this command is free except when it isn't" is exactly the kind of thing a
+# static set states wrongly.
+PAID_COMMANDS = frozenset({"ingest", "run", "calibrate", "verify-reviews"})
+
+SAFE_COMMAND = "filter"
+
+
+def resolve_command(env: "dict[str, str]") -> str:
+    """The command a run will execute, with ABSENCE resolving to the free one.
+
+    `filter` is the safe state, so it is what you get by default, by omission, and by blanking
+    the variable. A paid command must be an affirmative act — never a leftover.
+    """
+    return (env.get("OUTREACH_COMMAND") or "").strip() or SAFE_COMMAND
+
+
+def spend_denial(
+    command: str, env: "dict[str, str]", *, bills: "bool | None" = None
+) -> "str | None":
+    """Why this paid command may NOT run, or None if it is authorized.
+
+    **Why a token that repeats the command name rather than a boolean.** A boolean
+    (`OUTREACH_CONFIRM_SPEND=true`) authorizes whatever happens to be set, which is precisely the
+    failure this guards: a stale config snapshot replayed a `verify-reviews` intent as the
+    20-lookup default and spent ~$0.11 nobody asked for. Matching the token to the command name
+    means the confirmation carries the INTENT, so a replayed or half-updated config cannot spend
+    — the leftover token names a different command than the one about to run, and the run refuses.
+
+    It also makes the two variables fail in the safe direction independently: change the command
+    and forget the token → refused; leave a token behind and the command reverts to `filter` →
+    nothing paid to authorize.
+    """
+    pays = bills if bills is not None else command in PAID_COMMANDS
+    if not pays:
+        return None
+    token = (env.get("OUTREACH_CONFIRM_SPEND") or "").strip()
+    if not token:
+        return (
+            f"{command!r} spends money and OUTREACH_CONFIRM_SPEND is not set. "
+            f"Set OUTREACH_CONFIRM_SPEND={command} on the same config change that sets "
+            f"OUTREACH_COMMAND={command}, or leave OUTREACH_COMMAND unset to run {SAFE_COMMAND}."
+        )
+    if token != command:
+        return (
+            f"OUTREACH_CONFIRM_SPEND={token!r} does not authorize {command!r}. The confirmation "
+            f"names the command it authorizes, so a stale one cannot approve a different run. "
+            f"Set OUTREACH_CONFIRM_SPEND={command} if this run is intended."
+        )
+    return None
+
 
 def build_identity(env: dict[str, str], commands: "list[str]") -> str:
     """One line saying WHICH code is running, printed before anything else happens.
@@ -352,9 +405,18 @@ def build_identity(env: dict[str, str], commands: "list[str]") -> str:
     # branch, alongside the correct SHA. The SHA and the command list are the signals; the branch
     # is context.
     sha = next((env[k] for k in _SHA_VARS if env.get(k)), None)
+    # The resolved command and the confirm token ride the identity line because what a run is
+    # ABOUT TO DO belongs beside which code is running. Reading them from a later log line meant
+    # a wrong-command run was only visible after it had started working — and for a paid command,
+    # after it had started spending. Neither is a secret: both are command names, and printing
+    # the token verbatim is the point, since a mismatch is the thing worth seeing.
+    command = resolve_command(env)
+    token = (env.get("OUTREACH_CONFIRM_SPEND") or "").strip()
     return (
         f"OUTREACH_BUILD sha={sha[:12] if sha else 'unknown'} "
         f"branch={env.get('RAILWAY_GIT_BRANCH') or 'unknown'} "
+        f"command={command}{' PAID' if command in PAID_COMMANDS else ''} "
+        f"confirm={token or '(unset)'} "
         f"commands={','.join(commands)}"
     )
 
@@ -486,6 +548,18 @@ def main() -> int:
     try:
         args = parser.parse_args()
         command = args.command
+        # The spend gate, BEFORE the handler and before any credential is touched. Raising
+        # SystemExit rather than returning routes it through the marker path below, so a refused
+        # run reports `OUTREACH_RESULT status=failed` with the reason — a refusal has to be as
+        # visible as a crash, or an unattended job that silently declined to work looks identical
+        # to one that had nothing to do.
+        denial = spend_denial(
+            command,
+            dict(os.environ),
+            bills=True if getattr(args, "sample_place_id", None) else None,
+        )
+        if denial:
+            raise SystemExit(denial)
         code = handlers[command](args)
     except SystemExit as exc:
         # argparse's bad-argument exit, or an explicit SystemExit("message") from a command.
