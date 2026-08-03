@@ -1412,3 +1412,53 @@ by whoever next reads the table.
 `{'places': 5, 'group': 'control'}` — the flags reached argparse for the first time on this
 service. The repointed source (`branch=main`) also retired the stale-branch label from I-058: the
 banner now reports the branch it actually built.
+
+### I-067 · `review_count_inferred_zero` APPLIED to the 105 — owner decision, 2026-08-03
+Applied live to the Outreacher project. **105 rows flagged, `review_count` left NULL on every
+one.** Verified after: 105 flagged, 0 flagged rows carrying a count, 0 carrying a rating, and the
+7 rating-without-count provider gaps untouched (that set is 7, not the original 8, because Mejia
+Rooter now carries its corrected count of 3 — I-053).
+
+*The reasoning, per the owner:* the evidence will not improve by waiting. No source will ever
+affirmatively report zero — that is the vendor convention under test — so holding the inference
+open means it never resolves. Rating-is-an-average is **mechanical**, counts-down-to-1-but-never-0
+is **distributional**, and two vendors corroborate absence with 20/20 silence and no timeouts
+(I-066). The flag exists precisely so the inference is visible and reversible rather than certain.
+
+**Migrations:** `20260803210100_set_inferred_zero_la.sql` guards on `count = 105` and raises
+rather than applying if the set has moved — a human decision must not silently widen its own
+scope when a re-ingest changes the underlying rows.
+
+**The falsification mechanism ships with it.** `20260803210000_inferred_zero_audit.sql` adds
+`review_inferred_zero_audit` + a BEFORE UPDATE trigger: when a real count lands on a flagged row,
+it records the row (`verdict: contradicted | confirmed`), `raise warning`s to the server log, and
+clears the flag so the measurement wins. The `inferred_zero_requires_null_count` CHECK would
+otherwise have made that write ERROR — loud, but the wrong loud, aborting the backfill instead of
+recording what was learned.
+
+Trigger ordering is load-bearing: `prospect_audit_inferred_zero` sorts before
+`prospect_preserve_decisions`, whose preservation branch is guarded on `new.review_count is null`
+and therefore correctly declines to re-set a flag cleared alongside a real count.
+
+*Verified live* by simulating the geo-grid backfill inside a rolled-back transaction:
+`audit_rows=1 verdict=contradicted flag_after=f count_after=4`, and the audit table confirmed
+empty afterwards. The geo-grid resolving these from `rating.votes_count` is now the audit of this
+decision, exactly as intended — and it cannot happen silently.
+
+### I-068 · The task_get envelope is verified by the first real run, not by a synthetic test
+Owner ruling, 2026-08-03: **do not build a separate verification.** Fail-loud is the right
+posture, and a synthetic test can only confirm the shape that was assumed — which is the same
+error as I-057 (asserting an endpoint worked because it was called) in a different costume.
+
+The remaining risk is cost, not correctness: DataForSEO bills on **task acceptance**, so an
+unparseable envelope would previously have cost one billed `task_post` per place — up to 9 per
+client, every one failing identically to rediscover the same fact.
+
+`review_analytics.fetch_and_store` now **aborts on a failure that precedes any success**
+(`_ShapeUnproven`, surfaced as `aborted` in the job result). A failure before anything has worked
+is almost certainly systemic — dead endpoint, rejected credential, unparseable envelope — and
+those fail the same way for every remaining place. Once ONE lookup succeeds the contract is proved
+for that run, and later failures skip-and-continue as per-place problems (a delisted listing, a
+transient timeout). So a wrong envelope costs **one task, not a run**, and the fix is verified by
+the next real run rather than by a test that assumes the answer. Unit-tested three ways
+(`tests/test_review_analytics.py`).
