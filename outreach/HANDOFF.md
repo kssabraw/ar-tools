@@ -34,16 +34,23 @@ Live row counts: `prospect` 1,388 · `filter_result` 8,328 · `submarket` 14 · 
 ### Railway service configuration
 
 ```
-source           kssabraw/ar-tools @ main   ← repointed 2026-08-01 (was the merged phase-1 branch)
+source           kssabraw/ar-tools @ main   ← ACTUALLY repointed 2026-08-03. The 2026-08-01
+                                             repoint did not stick: the service still tracked the
+                                             merged phase-1 branch and a Deploy built its HEAD
+                                             (I-065). Verify with get-service-config, not here.
 rootDirectory    /outreach
 railwayConfigFile  outreach/railway.toml   ← repo-root-relative, NOT relative to rootDirectory
 builder          DOCKERFILE (from railway.toml)
 restartPolicy    NEVER                     ← this is a job; ALWAYS would re-run the paid ingest in a loop
 cronSchedule     (none yet)
-startCommand     sh -c "exec python -m api.scripts.run_market ${OUTREACH_COMMAND:-filter} ${OUTREACH_MARKET:-markets/los-angeles-plumbing.json}"
+startCommand     sh -c "exec python -m api.scripts.run_market ${OUTREACH_COMMAND:-filter} ${OUTREACH_MARKET:-markets/los-angeles-plumbing.json} ${OUTREACH_ARGS:-}"
+                 ← ${OUTREACH_ARGS:-} added 2026-08-03. Its absence silently dropped every flag
+                   ever set in OUTREACH_ARGS and cost ~$0.11 (I-064).
 ```
 
-Variables set: `OUTREACH_SUPABASE_URL`, `OUTREACH_SUPABASE_SERVICE_ROLE_KEY`, `OUTREACH_OUTSCRAPER_API_KEY`, `OUTREACH_COMMAND` (currently `filter`), `OUTREACH_MARKET`.
+Variables set: `OUTREACH_SUPABASE_URL`, `OUTREACH_SUPABASE_SERVICE_ROLE_KEY`, `OUTREACH_OUTSCRAPER_API_KEY`, `OUTREACH_COMMAND` (currently `filter`), `OUTREACH_MARKET`, `OUTREACH_ARGS` (empty), `OUTREACH_CONFIRM_SPEND` (empty), and DataForSEO credentials as Railway reference variables.
+
+**This block is a snapshot and has been wrong twice.** Both the source branch and the start command above were stale in ways that cost money. Read `get-service-config` and `list-variables` for the live values; see repo-root `CLAUDE.md` → "Railway: read the live config, do not infer it".
 
 **There is no DataForSEO credential on this service.** Phase 2 cannot run without one — see §8.2.
 
