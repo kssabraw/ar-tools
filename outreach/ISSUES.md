@@ -1313,3 +1313,59 @@ A refusal exits non-zero through the existing marker path (`OUTREACH_RESULT stat
 job that declined to work is as visible as one that crashed — silence would make it look like a
 run with nothing to do. 20 tests, including the replayed-stale-token case and an end-to-end check
 that the refusal happens before the provider is ever contacted.
+
+### I-064 · I-063 blamed the wrong cause: the startCommand override has no slot for OUTREACH_ARGS
+**Correcting my own diagnosis.** I-063 attributed the ~$0.11 misfire to `redeploy` replaying a
+stale config snapshot (§6.1). That is a real trap, but it is **not what happened here**, and the
+service config says so plainly:
+
+    startCommand  sh -c "exec python -m api.scripts.run_market
+                         ${OUTREACH_COMMAND:-filter} ${OUTREACH_MARKET:-…}"
+
+**No `${OUTREACH_ARGS}`.** The Dockerfile CMD gained the slot in "Give the runner a slot for
+flags"; this **service-level dashboard override**, which Railway applies over the image CMD, never
+did. `railway.toml` sets no startCommand, so there was nothing to override it back. Every flag ever
+put in `OUTREACH_ARGS` has been dropped before argparse saw it — the variable has never worked on
+this service.
+
+*What disproves the snapshot theory.* The 03:40 run **executed `verify-reviews`**. That value came
+from `OUTREACH_COMMAND`, which had been set at 02:05 with `skipDeploys=true` — i.e. AFTER the
+deployment being replayed. A replayed variable snapshot would have run `filter`. So variables were
+read live; only the arguments went missing, and they went missing in the start command.
+
+This is a more dangerous failure than the one I recorded, because it is **silent and total**: a
+dropped flag does not error, it just leaves the CLI on its defaults. `--group control --limit 5`
+became "the 20-lookup both_null default" with nothing in the log marking the difference, and the
+same override would have dropped those flags on a *fresh* deploy too. The fix belongs in config,
+not procedure: the override now carries `${OUTREACH_ARGS:-}`.
+
+*What I-063 still gets right:* a paid command as a service's resting state is a loaded default,
+and `spend_denial` remains the correct guard. It would not have prevented THIS run — the token
+would have matched `verify-reviews`, which is genuinely what was intended — but it does prevent
+the leftover-value case, which is a different and equally live risk. Both fixes stand.
+
+*Standing corollary:* **`get-service-config` before believing the Dockerfile.** The same endpoint
+also reports a stale `builder` (`RAILPACK` while `railway.toml`'s `DOCKERFILE` is what builds,
+I-052), so it is authoritative for the start command and corroborated-only for the builder.
+
+### I-065 · The service still tracks the dead branch, so a Deploy click builds 2026-08-01 code
+The approved control run was deployed and **failed without spending anything**:
+
+    run_market.py: error: argument command: invalid choice: 'verify-reviews'
+                   (choose from 'seed', 'ingest', 'filter', 'run', 'calibrate')
+
+The container held **`7f9430b`** — "Handoff document for the next session", the HEAD of
+`claude/phase-1-outscraper-ingestion-llje34`, which predates `verify-reviews` entirely. This is
+I-052 recurring, and the reason is in the service config: `source.branch` is **still the dead
+merged branch**. HANDOFF §290 listed repointing it to `main` as a pending cleanup; it was never
+done, so a Deploy click faithfully builds that branch's HEAD.
+
+No `OUTREACH_BUILD` banner and no `OUTREACH_RESULT` marker appear in the run's logs — both
+postdate `7f9430b` — so it failed exactly the way I-052 describes: silently, behind a green
+SUCCESS badge. The banner cannot warn you about a commit old enough to predate the banner.
+
+**Unblocking the control run needs a dashboard action**: repoint `source.branch` to `main`. The
+Railway MCP `update-service` explicitly does not handle source changes, so this cannot be done
+from a session. Once repointed, a Deploy picks up `59abd4a` (the spend gate) and the corrected
+start command together, and the banner will read
+`command=verify-reviews PAID confirm=verify-reviews` before it spends.
