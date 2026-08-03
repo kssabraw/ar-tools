@@ -12,8 +12,11 @@
    scroll, so clipped content just reads as "the data is missing". Defining
    ::-webkit-scrollbar opts the element back into a persistent bar.
 
-   This file is imported from main.tsx. Note that src/index.css is NOT — it is
-   an unimported Vite-template leftover, so rules added there never ship.
+   This file is imported from main.tsx. Everything under src/styles/ is, and
+   that is the only place a global rule will actually ship from — the suite has
+   no other loaded global stylesheet (src/index.css used to look like one but
+   was never imported, and has since been deleted).
+
    Additive utilities only here: no global resets, which would restyle every
    inline-styled element in the suite at once.
 --------------------------------------------------------------------------- */

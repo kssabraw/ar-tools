@@ -1,0 +1,25 @@
+/* ---------------------------------------------------------------------------
+   The `spin` utility, for the Loader2 / RefreshCw icons used as busy
+   indicators (className="spin").
+
+   This previously lived in src/index.css, which is never imported — so the
+   class shipped as dead CSS and every one of those spinners rendered as a
+   static, frozen icon. It lives here because this file is imported from
+   main.tsx.
+
+   The keyframes are named ar-spin rather than spin: the vendored fanout
+   stylesheet defines its own global @keyframes spin, and identically-named
+   keyframes are resolved document-wide with the last definition winning, so a
+   change on the fanout side could otherwise silently retime suite spinners.
+
+   No transform-origin is needed. Lucide icons are outer <svg> elements, which
+   resolve transform-origin against their border box like any replaced element
+   (verified: 12px 12px on a 24x24 icon), so they rotate about their centre.
+   The 0 0 default that flings a rotation off-centre applies to SVG *child*
+   elements, which these are not.
+--------------------------------------------------------------------------- */
+@keyframes ar-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.spin { animation: ar-spin 1s linear infinite; }
