@@ -1267,3 +1267,49 @@ tolerantly but has **not** been confirmed against a live paid task — the probe
 the lifecycle exists, not what it returns for these credentials. That is exactly why the failure
 path was fixed first: if the shape is wrong, the next call raises and says so, instead of quietly
 meaning "no reviews" for another few months. One paid task closes it.
+
+### I-063 · The spend guard was procedure-safe, so it failed — now it is fail-safe
+A `redeploy` fired `verify-reviews` with none of its intended flags and spent **~$0.11** on the
+20-lookup `both_null` default, a group already measured in I-061. The approved run was
+`--group control --limit 5`, ~$0.03. Nothing was corrupted — the run completed `status=ok`,
+20/20 ambiguous, and it did incidentally retire the I-061 timeouts (0 errors this time, against
+4 before) — but it is money spent on a question already asked.
+
+**Three causes, and only the third is worth fixing.**
+
+*The proximate one.* `redeploy` replays the old deployment's config snapshot (§6.1), which
+predated `OUTREACH_ARGS`, so the container ran the bare default. Documented, and not read first.
+
+*The discoverability one.* HANDOFF §6.1 described this exact trap. HANDOFF is only read by someone
+who thinks to open it. The Railway traps now also live in repo-root **`CLAUDE.md` → "Railway
+deploy traps"**, which auto-loads every session.
+
+*The real one.* `OUTREACH_COMMAND` held a **paid** command as its resting state, in a service
+where any deploy runs whatever is set. The mitigation for that was a sentence in a runbook —
+"set it back to `filter` immediately after any paid run" (§160/§306). That procedure was followed
+and it still misfired, because a procedure cannot protect the window between setting the variable
+and the deploy that reads it, and cannot protect a snapshot replayed from before the window.
+
+**The fix: the safe state is the default, and spending carries intent.**
+
+* Absent, empty or whitespace `OUTREACH_COMMAND` resolves to `filter` (`resolve_command`).
+* Every paid command additionally requires `OUTREACH_CONFIRM_SPEND` to equal **that command's own
+  name** (`spend_denial`), checked before the handler and before any credential is touched.
+* `probe-dataforseo` stays free and ungated until `--sample-place-id` makes it bill, which is
+  passed as an explicit override rather than encoded in the paid set.
+
+The token names the command deliberately. A boolean (`CONFIRM_SPEND=true`) authorizes whatever
+happens to be set, which is this incident exactly. A token that must equal the command means a
+**replayed or half-updated config cannot spend**: the leftover confirmation names a different
+command than the one about to run, and the run refuses. The two variables also fail safe
+independently — change the command and forget the token → refused; leave a token behind and the
+command reverts to `filter` → nothing paid to authorize.
+
+The banner now carries both, so line one says what a run is about to do:
+
+    OUTREACH_BUILD sha=… branch=… command=verify-reviews PAID confirm=(unset) commands=…
+
+A refusal exits non-zero through the existing marker path (`OUTREACH_RESULT status=failed`), so a
+job that declined to work is as visible as one that crashed — silence would make it look like a
+run with nothing to do. 20 tests, including the replayed-stale-token case and an end-to-end check
+that the refusal happens before the provider is ever contacted.

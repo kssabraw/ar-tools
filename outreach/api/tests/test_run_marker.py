@@ -102,3 +102,127 @@ def test_a_missing_argument_is_reported_too():
     proc = _run("filter")  # definition is required
     assert proc.returncode != 0
     assert "OUTREACH_RESULT status=failed" in (proc.stdout + proc.stderr)
+
+
+# --- the spend gate ------------------------------------------------------------------------
+#
+# Bought with an incident like the two above: a `redeploy` replayed a stale config snapshot, ran
+# `verify-reviews` with none of its intended flags, and spent ~$0.11 on the 20-lookup default
+# nobody asked for. The procedure that was supposed to prevent it (HANDOFF §160/§306: "set
+# OUTREACH_COMMAND back to filter afterwards") had been followed. Procedure-safe was not enough,
+# so the safe state is now the default and spending requires an affirmative, INTENT-CARRYING
+# token.
+
+import os  # noqa: E402
+
+from api.scripts.run_market import (  # noqa: E402
+    PAID_COMMANDS,
+    resolve_command,
+    spend_denial,
+)
+
+
+def test_absent_command_resolves_to_the_free_one():
+    assert resolve_command({}) == "filter"
+    assert resolve_command({"OUTREACH_COMMAND": ""}) == "filter"
+    assert resolve_command({"OUTREACH_COMMAND": "   "}) == "filter"
+
+
+def test_a_set_command_is_honoured():
+    assert resolve_command({"OUTREACH_COMMAND": "verify-reviews"}) == "verify-reviews"
+    assert resolve_command({"OUTREACH_COMMAND": " run "}) == "run"
+
+
+def test_free_commands_need_no_confirmation():
+    for command in ("filter", "seed", "probe-dataforseo"):
+        assert command not in PAID_COMMANDS
+        assert spend_denial(command, {}) is None
+
+
+def test_every_paid_command_refuses_without_a_token():
+    for command in sorted(PAID_COMMANDS):
+        denial = spend_denial(command, {})
+        assert denial is not None
+        assert "OUTREACH_CONFIRM_SPEND" in denial
+
+
+def test_a_matching_token_authorizes():
+    assert spend_denial("run", {"OUTREACH_CONFIRM_SPEND": "run"}) is None
+    assert spend_denial("run", {"OUTREACH_CONFIRM_SPEND": " run "}) is None
+
+
+def test_a_token_for_a_DIFFERENT_command_does_not_authorize():
+    """The point of naming the command in the token.
+
+    This is the replayed-snapshot case: a leftover confirmation from a previous intent must not
+    approve whatever command happens to be set now.
+    """
+    denial = spend_denial("run", {"OUTREACH_CONFIRM_SPEND": "verify-reviews"})
+    assert denial is not None
+    assert "does not authorize" in denial
+
+
+def test_a_truthy_token_does_not_authorize():
+    """`true` is not a command name. A boolean would authorize whatever is set, which is the
+    failure mode this replaces rather than reproduces."""
+    assert spend_denial("run", {"OUTREACH_CONFIRM_SPEND": "true"}) is not None
+    assert spend_denial("run", {"OUTREACH_CONFIRM_SPEND": "1"}) is not None
+
+
+def test_probe_is_free_until_it_samples():
+    """`probe-dataforseo` sends only invalid tasks, which are not billed — until
+    --sample-place-id makes it send a real one."""
+    assert spend_denial("probe-dataforseo", {}) is None
+    assert spend_denial("probe-dataforseo", {}, bills=True) is not None
+    assert spend_denial("probe-dataforseo", {"OUTREACH_CONFIRM_SPEND": "probe-dataforseo"}, bills=True) is None
+
+
+# --- the gate end to end -------------------------------------------------------------------
+
+
+def _run_clean(argv, extra_env=None):
+    """Subprocess with the spend vars stripped, so an ambient token cannot mask a refusal."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("OUTREACH_")}
+    env.update(extra_env or {})
+    return subprocess.run(
+        [sys.executable, "-m", "api.scripts.run_market", *argv],
+        cwd=ROOT, capture_output=True, text=True, timeout=60, env=env,
+    )
+
+
+def test_an_unconfirmed_paid_run_refuses_before_it_spends():
+    proc = _run_clean(["verify-reviews", "markets/los-angeles-plumbing.json"])
+    combined = proc.stdout + proc.stderr
+
+    assert proc.returncode != 0
+    assert "OUTREACH_RESULT status=failed" in combined
+    assert "OUTREACH_CONFIRM_SPEND" in combined
+    # It must refuse at the gate, not inside the handler — a refusal that first opened a provider
+    # connection would already have done the thing the gate exists to prevent.
+    assert "review verification starting" not in combined
+
+
+def test_a_stale_token_refuses_the_replayed_command():
+    """The incident, reproduced: config says one thing, the leftover confirmation says another."""
+    proc = _run_clean(
+        ["verify-reviews", "markets/los-angeles-plumbing.json"],
+        {"OUTREACH_CONFIRM_SPEND": "filter"},
+    )
+    combined = proc.stdout + proc.stderr
+    assert proc.returncode != 0
+    assert "does not authorize" in combined
+
+
+def test_the_banner_shows_the_resolved_command_and_the_token():
+    line = build_identity(
+        {"OUTREACH_COMMAND": "run", "OUTREACH_CONFIRM_SPEND": "run"}, COMMANDS
+    )
+    assert "command=run PAID" in line
+    assert "confirm=run" in line
+
+
+def test_the_banner_marks_an_unset_token_and_the_safe_default():
+    line = build_identity({}, COMMANDS)
+    assert "command=filter" in line
+    assert "PAID" not in line
+    assert "confirm=(unset)" in line
