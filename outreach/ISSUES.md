@@ -1515,3 +1515,36 @@ both worlds — it looks specified and is unenforced (nothing computes `complete
 To settle in the Phase 2 build: add `completeness_threshold: float = 0.98` to `api/config.py`, have
 the snapshot writer compute `complete` from it, and make every scoring consumer filter on
 `complete`. Logged rather than fixed because the writer it belongs to does not exist yet.
+
+### I-072 · There is no UI plan — only an architecture ruling and a read surface
+Raised while planning Phase 2, because Phase 2 produces nothing visible and the UI keeps being
+"next".
+
+**What exists:** the suite-module ruling (the UI is suite SPA pages over platform-api, Retool
+dropped — HANDOFF §2), a **built and verified read surface** (`routers/outreach.py`, 14 routes
+covering markets, submarkets, prospects, leads, activities, suppressions), and
+`reporting-layer-spec.md` §3, which specifies *which views must exist* in three tiers — operator
+(§3.1), analysis (§3.2), client (§3.3).
+
+**What does not exist:** any frontend code, page, route or design. `frontend/src/pages/LeadOff.tsx`
+is a **different module** (the suite's pre-client market-intelligence tool) and is not this
+pipeline. START-HERE's Phase 1b guidance was actively wrong until 2026-08-03 — it still told the
+reader to build a Retool board and *not* to build a React app, which is the reverse of the ruling.
+Now struck with a marker.
+
+**Why it is worth a decision rather than a default.** 1,388 prospects and 925 survivors are sitting
+in the database with no way to look at them except SQL, and the read surface they need was
+finished and then never consumed. Meanwhile HANDOFF §1 has listed Suite UI as "now the next build"
+across several sessions that each built something else.
+
+**The tension to resolve deliberately:**
+- The CRM/prospect board is buildable **today** — data and API both exist, no dependency on
+  scanning.
+- The high-value surfaces — coverage, heatmap, delta — need scan data (Phase 2) and the renderer
+  (Phase 3). Building the UI shell now means building the interesting half twice.
+- `reporting-layer-spec.md` §7a already ruled *PDF first, dashboard later* for CLIENT reporting.
+  That ruling does not cover the OPERATOR views, which is the gap this issue is about.
+
+**Not a blocker for Phase 2.** Recorded so the next session chooses rather than inherits. If the
+answer is "operator board now", it is a self-contained piece of work against an API that is
+already tested; if it is "after Phase 3", that should be written down so it stops resurfacing.

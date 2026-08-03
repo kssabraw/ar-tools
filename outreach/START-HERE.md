@@ -173,7 +173,7 @@ scanning pipeline and can be populated by hand from day one.
 - [ ] `lead`, `lead_activity`, `suppression` tables
 - [ ] Manual and inbound lead entry (`source` ∈ inbound_form, inbound_call, referral, manual)
 - [ ] Per-owner RLS policies written and tested, however permissive
-- [ ] Low-code UI over the Supabase tables (Retool or similar) — 2–3 days, board + detail views
+- [x] ~~Low-code UI over the Supabase tables (Retool or similar) — 2–3 days, board + detail views~~ **SUPERSEDED 2026-07-31** — Retool is dropped; the UI is suite SPA pages over the platform-api `outreach` router (HANDOFF §2, DECISIONS.md). Do not build this.
 - [ ] Suppression check present, tolerant of empty tables
 
 *Outbound leads flow in later, when Phase 3's emit webhook starts writing `lead` rows with
@@ -183,8 +183,19 @@ scanning pipeline and can be populated by hand from day one.
 > referral leads can be tracked while the pipeline is still being built. Deferring it to Phase 5
 > means months of untracked leads for no benefit.
 >
-> **Do not build a custom React app first.** Start with the low-code layer. If it gets used
-> heavily, that is the signal to invest; if it does not, you have spent three days.
+> ~~**Do not build a custom React app first.** Start with the low-code layer. If it gets used
+> heavily, that is the signal to invest; if it does not, you have spent three days.~~
+>
+> **SUPERSEDED 2026-07-31, and it now says the opposite.** The suite-module ruling makes the SPA
+> the only UI: the database is service-role-only with zero RLS policies, so a low-code tool
+> pointed at PostgREST has no access model to work with. The three-days-then-decide logic was
+> sound when a direct database connection existed; it does not survive the connection being
+> removed. Kept struck rather than deleted, because the reasoning is still the right way to think
+> about a tool that *does* have its own access model.
+>
+> **What replaces it is not yet planned.** The read surface exists (`routers/outreach.py`, 14
+> routes, built and verified) and `reporting-layer-spec.md` §3 specifies which views must exist,
+> but no pages, routes or designs do. See ISSUES I-072.
 
 ### Phase 5 — Enrichment, email track, lead promotion
 
