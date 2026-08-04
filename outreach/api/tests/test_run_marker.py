@@ -140,6 +140,14 @@ def test_free_commands_need_no_confirmation():
         assert spend_denial(command, {}) is None
 
 
+def test_the_collector_must_never_be_spend_gated():
+    """`tasks_ready` and `task_get` are free; only `task_post` bills. Gating the collector would
+    make every cron tick refuse, and the tasks it was supposed to collect would age off the ready
+    list — turning a safety measure into the thing that loses the paid work."""
+    assert "collect" not in PAID_COMMANDS
+    assert spend_denial("collect", {}) is None
+
+
 def test_every_paid_command_refuses_without_a_token():
     for command in sorted(PAID_COMMANDS):
         denial = spend_denial(command, {})

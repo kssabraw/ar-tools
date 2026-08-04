@@ -27,15 +27,24 @@ configuration reference. The six specs are reference material, not a work order.
 merged, and Phase 2's **storage foundations**, **pinned geometry generator**, **suite router** and
 **rollup-integrity guard** (I-069) are built and applied live.
 
-**Phase 2 SCANNING has not started, and is no longer blocked on credentials** — DataForSEO is set
-and has been exercised for real (I-066). What is missing is the code: there is no maps geogrid
-client, no batching, no `tasks_ready` collector, no second cron. `api/services/dataforseo_client.py`
-speaks only `business_data`, built for the I-041 review verification.
+**Phase 2 SCANNING: the geogrid client and collector are BUILT; nothing has been scanned yet.**
+`api/services/maps_scan.py` (pure — task bodies, `tasks_ready`/`task_get` parsing, completeness)
+and `api/services/scan_runner.py` (submission, collection, finalization) with the `scan_task`
+bookkeeping table. Two commands: `scan` (paid, one submarket × one keyword) and `collect` (free,
+never spend-gated). What remains before the first live run is a Railway deploy, the confirm token,
+and a **second, frequent cron schedule** for `collect` — see below.
 
-**That collector is the next build**, and everything downstream waits on it — the rollup, land
-masking, dead points, completeness and the placeholder score all need scan rows that nothing
-produces. Owner ruling 2026-08-03: the **first live run is ONE submarket × ONE keyword**, so a
-wrong response envelope costs one batch rather than a market.
+**The collector's schedule is load-bearing, not a preference.** The ready list holds a task ~3
+days. A collector on the 15-day scan cadence lets every task age off between runs, silently
+converting the normal path into the fallback-by-id path — which still works, which is exactly why
+nobody would notice. Collection is free; run it hourly or daily.
+
+Owner ruling 2026-08-03: the **first live run is ONE submarket × ONE keyword**, so a wrong
+response envelope costs one batch rather than a market. `cmd_scan` refuses to do more.
+
+Still unbuilt downstream: the `prospect_coverage` rollup, land masking, dead-point exclusion, the
+organic/AI layers, and the placeholder score — all of which need scan rows that now have a
+producer but no data yet.
 
 **The pipeline is an AR Tools SUITE MODULE, not a standalone tool** (owner ruling, HANDOFF §2).
 The database stays in the Outreacher project; the API and UI belong in `platform-api` and the

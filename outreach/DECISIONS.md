@@ -505,3 +505,52 @@ adopting postback later would be additive and would not let the collector be rem
 rather than copies for two reasons: the secrets never pass through a chat transcript (the
 Outscraper and Supabase keys did, and are flagged for rotation), and a rotation on PLATFORM
 propagates automatically. Nothing is wired to them yet.
+
+## `actual_points` counts points SCANNED, never grid rows written (2026-08-04)
+
+The completeness gate (PRD §9a.3) compares `actual_points` to `expected_points` and excludes a
+snapshot below 98% from scoring. The obvious implementation — count the distinct `point_seq`
+values that produced `grid_result` rows — is wrong, and wrong in a way that gets worse the more
+honest the market is.
+
+A grid point can legitimately return an empty pack. Some sit over water, some over a stretch with
+no business of that category, some over an industrial block. **"Nobody ranks here" is a finding,
+and frequently the strongest one in the whole grid** — it is the shape of the coverage deficit the
+entire pitch is built on. Counting rows classifies every one of those as a missing measurement, so
+a submarket with real dead zones reads as a failed scan *every cycle*, is excluded from scoring
+forever, and the exclusion looks like a provider problem.
+
+So the count comes from `scan_task.status = 'collected'`, which records that a point was measured
+regardless of what the measurement found. There is deliberately no `empty` status: an empty answer
+is a collected answer.
+
+This is the same correction the rollup's completion marker needed on 2026-08-03 (ISSUES I-069),
+where the guard compared distinct prospect ids against coverage rows and would have raised forever
+because most businesses in a grid are not prospects. Twice now the mistake has been counting *what
+was found* where the question was *what was measured*. Recorded as a decision rather than a bug fix
+because the next reader will meet it a third time.
+
+## The `task_post` tag is a recovery key, not a debug label (2026-08-04)
+
+The suite's `maps_dataforseo.py` sends a tag and explicitly treats it as a convenience: it aligns
+responses positionally and only *logs* a tag mismatch. That is sound there, because that code polls
+task ids it holds, and its tags are not unique across keywords.
+
+Here the tag is `<snapshot_id>:<point_seq>`, it is unique, and it is load-bearing for two things
+positional alignment cannot do:
+
+1. **Matching a `task_post` response.** Nothing in the provider's contract guarantees response
+   ordering. Using the tag removes the assumption rather than checking it.
+2. **Recovering a paid task whose id we never stored.** The dangerous window is a request the
+   provider accepted — and billed for — whose response never reached us. Rows are written before
+   the post so that window is as small as possible, but it cannot be closed from our side. The tag
+   closes it from theirs: the provider echoes it on `tasks_ready`, so the collector can reattach
+   the result to its point without ever having known the id.
+
+The difference in posture follows from the difference in mechanism. The suite polls ids it holds,
+so a lost id is one lost pin. This collector discovers work from an account-wide list, which is
+exactly what makes recovery-by-tag possible — and therefore worth designing for rather than
+treating as a log line.
+
+*Consequence:* the tag format is now part of the wire contract. Changing it orphans any task in
+flight, which is a real cost for ~3 days after any submission.
