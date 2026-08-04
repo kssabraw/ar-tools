@@ -1548,3 +1548,44 @@ across several sessions that each built something else.
 **Not a blocker for Phase 2.** Recorded so the next session chooses rather than inherits. If the
 answer is "operator board now", it is a self-contained piece of work against an API that is
 already tested; if it is "after Phase 3", that should be written down so it stops resurfacing.
+
+### I-069 RESOLVED (2026-08-03) — and the fix caught two further errors on the way in
+`snapshot_rollup` + `finalize_snapshot_rollup()` + a replaced GUARD 1 in `drop_cold_partitions`.
+Migration `20260803230000`, applied live.
+
+**The mechanism.** The rollup transaction calls `finalize_snapshot_rollup(snapshot_id)` as its
+last statement. That function re-derives the counts from the data — it does not trust what the
+caller believes it wrote — and RAISES on a mismatch, which aborts the transaction so a partial
+rollup leaves neither a marker nor partial rows. GUARD 1 now requires the marker instead of the
+presence of coverage rows, so completeness is a recorded fact rather than an inference.
+
+The marker lives in its own append-only table rather than as `scan_snapshot.rollup_completed_at`,
+which keeps `scan_snapshot` write-once (I-070) instead of building the first exception into the
+table this project most needs to trust.
+
+**Two errors caught while verifying, both mine, both of the same kind — reasoning from a partial
+read instead of the source:**
+
+1. *A reconstructed function that silently deleted the relocation logic.* The first draft rebuilt
+   `drop_cold_partitions` from memory after reading fragments of it. The real function uses `$$`
+   not `$function$`, takes `p_hot_window_days` not `p_hot_days` (which alone would have failed —
+   Postgres refuses to rename a parameter in CREATE OR REPLACE), and **relocates cited/client
+   survivors into `grid_result_retained` with per-snapshot verification before dropping**. The
+   reconstruction had none of the relocation. It would have destroyed exactly the rows §3.3/§3.4
+   exist to preserve. Replaced with surgical text replacement against the real body.
+2. *A reconciliation that would have made every partition permanently undroppable.* The finalizer
+   first compared `count(distinct grid_result.place_id)` against `count(*) from
+   prospect_coverage`. But grid_result holds the top ~20 businesses at each of 81 points (~1,620
+   rows/snapshot, storage spec §1) and most are **not prospects** — they are whoever ranked.
+   `prospect_coverage` is one row per PROSPECT. The comparison would have raised forever. Fixed
+   by joining through `prospect.place_id`.
+
+**Verified live** in rolled-back transactions, both directions: a snapshot with two prospects and
+one non-prospect business, rolled up for only one prospect, raises *"2 prospects present in
+grid_result, 1 in prospect_coverage"* and writes no marker; rolled up for both, it writes
+`prospect_count=2`. The non-prospect business was correctly ignored in both, which is what proves
+the join. Database left clean afterwards (all scan tables 0, the 105 flags intact).
+
+`point_count` on the marker is deliberately NOT joined through prospect — it records points
+scanned. Counting only points where a prospect appeared would record a number that reads like
+coverage and is not.
