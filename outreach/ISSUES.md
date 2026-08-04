@@ -1548,3 +1548,93 @@ across several sessions that each built something else.
 **Not a blocker for Phase 2.** Recorded so the next session chooses rather than inherits. If the
 answer is "operator board now", it is a self-contained piece of work against an API that is
 already tested; if it is "after Phase 3", that should be written down so it stops resurfacing.
+
+### I-069 RESOLVED (2026-08-03) — and the fix caught two further errors on the way in
+`snapshot_rollup` + `finalize_snapshot_rollup()` + a replaced GUARD 1 in `drop_cold_partitions`.
+Migration `20260803230000`, applied live.
+
+**The mechanism.** The rollup transaction calls `finalize_snapshot_rollup(snapshot_id)` as its
+last statement. That function re-derives the counts from the data — it does not trust what the
+caller believes it wrote — and RAISES on a mismatch, which aborts the transaction so a partial
+rollup leaves neither a marker nor partial rows. GUARD 1 now requires the marker instead of the
+presence of coverage rows, so completeness is a recorded fact rather than an inference.
+
+The marker lives in its own append-only table rather than as `scan_snapshot.rollup_completed_at`,
+which keeps `scan_snapshot` write-once (I-070) instead of building the first exception into the
+table this project most needs to trust.
+
+**Two errors caught while verifying, both mine, both of the same kind — reasoning from a partial
+read instead of the source:**
+
+1. *A reconstructed function that silently deleted the relocation logic.* The first draft rebuilt
+   `drop_cold_partitions` from memory after reading fragments of it. The real function uses `$$`
+   not `$function$`, takes `p_hot_window_days` not `p_hot_days` (which alone would have failed —
+   Postgres refuses to rename a parameter in CREATE OR REPLACE), and **relocates cited/client
+   survivors into `grid_result_retained` with per-snapshot verification before dropping**. The
+   reconstruction had none of the relocation. It would have destroyed exactly the rows §3.3/§3.4
+   exist to preserve. Replaced with surgical text replacement against the real body.
+2. *A reconciliation that would have made every partition permanently undroppable.* The finalizer
+   first compared `count(distinct grid_result.place_id)` against `count(*) from
+   prospect_coverage`. But grid_result holds the top ~20 businesses at each of 81 points (~1,620
+   rows/snapshot, storage spec §1) and most are **not prospects** — they are whoever ranked.
+   `prospect_coverage` is one row per PROSPECT. The comparison would have raised forever. Fixed
+   by joining through `prospect.place_id`.
+
+**Verified live** in rolled-back transactions, both directions: a snapshot with two prospects and
+one non-prospect business, rolled up for only one prospect, raises *"2 prospects present in
+grid_result, 1 in prospect_coverage"* and writes no marker; rolled up for both, it writes
+`prospect_count=2`. The non-prospect business was correctly ignored in both, which is what proves
+the join. Database left clean afterwards (all scan tables 0, the 105 flags intact).
+
+`point_count` on the marker is deliberately NOT joined through prospect — it records points
+scanned. Counting only points where a prospect appeared would record a number that reads like
+coverage and is not.
+
+### I-073 · `ai_region` candidates for LA, with the free evidence run — 3 of 14 names look wrong
+PRD §16a.2 notes a validation that costs nothing and is already in our data: *"check whether
+businesses in the Outscraper pull name themselves after the place — several plumbers with 'Los
+Feliz' in their business name or address means the name is commercially real."* Run against all
+1,388 LA prospects:
+
+| candidate | self-named | `city` field | verdict |
+|---|---|---|---|
+| Van Nuys | 5 | **90** | strong |
+| Burbank | 11 | **84** | strong |
+| Long Beach | 18 | **79** | strong |
+| Torrance | 13 | **76** | strong |
+| Pasadena | 13 | **57** | strong |
+| Whittier | 9 | **48** | strong |
+| Woodland Hills | 8 | **44** | strong |
+| Inglewood | 3 | **38** | strong |
+| Northridge | 6 | **35** | strong |
+| Santa Monica | 4 | **34** | strong |
+| Hollywood | 13 | 4 | **see below** |
+| East Los Angeles | 0 | 4 | **weak** |
+| West Los Angeles | 2 | **0** | **not a locality here** |
+| Downtown Los Angeles | 0 | **0** | **not a locality here** |
+
+**Ten are unambiguous** — a real `city` value on 34–90 prospects each, plus businesses named after
+them. Those are `name_level = 'suburb'` or `'city'` and are very likely to survive a recognition
+test.
+
+**Hollywood is the interesting one.** 13 businesses name themselves after it, but only 4 sit in a
+`city` of "Hollywood" — while 44 addresses mention it. That gap is almost certainly **street
+names** (Hollywood Blvd), not locality. So the address-mention count is a confounded signal and
+should not be used on its own; the `city` field and the self-naming count are the honest ones.
+Hollywood is a real *neighbourhood* whose businesses are addressed "Los Angeles" — exactly the
+`name_level = 'neighbourhood'` case, and exactly where I-004's "model silently falls back to
+metro" risk lives.
+
+**Three look wrong as AI regions.** `Downtown Los Angeles` and `West Los Angeles` have **zero**
+prospects with that `city` and near-zero self-naming; `East Los Angeles` has 4. Google does not
+treat the first two as localities in this data, so asking an engine about them is the case the
+spike is designed to catch: a name that reads specific and returns metro-scale answers.
+
+**What this does and does not settle.** It is a *commercial-reality* filter, not the recognition
+test. It cannot tell you what an engine returns — only which names are worth spending the
+recognition test on. It costs nothing and it has already halved the risky set: the paid test
+matters most for Hollywood and the three weak names, and is close to a formality for the other ten.
+
+**Still blocked:** the recognition test itself (I-004) needs one engine key. None exists in the
+sandbox, and the `outreach` Railway service carries only Outscraper, DataForSEO and Supabase
+credentials.
