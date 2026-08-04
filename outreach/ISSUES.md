@@ -37,10 +37,33 @@ are detected. If GTM injection is largely missed, the site-fetch container parse
 false-negative check to required step, and the money-signal cost model changes.
 **Blocks:** final cost modelling for money coefficients. See PRD §16a.1.
 
-### I-004 · AI prompt granularity untested (~20m)
+### I-004 · AI prompt granularity untested — INSTRUMENT BUILT, not yet run (~20m)
 Which place-name level returns scale-appropriate businesses. Too coarse and the absence claim is
 trivially dismissed; too fine and the model silently falls back to metro while you believe you
 asked a specific question. See PRD §16a.2.
+
+**Built 2026-08-04:** `api/services/ai_granularity.py` (pure analysis + one OpenAI call) and the
+`probe-ai-granularity` command. Nine chat completions — three place names × three samples — with
+the prompt identical across levels except the place name, temperature 0 so repeats measure the
+model's stability rather than sampling noise we introduced, and a summary reporting cross-level
+Jaccard overlap, within-level stability, and error/empty counts kept separate.
+
+The key is `OUTREACH_OPENAI_API_KEY = ${{PLATFORM.OPENAI_API_KEY}}` — a Railway *reference*, so no
+secret is copied and a rotation propagates. The unblocking that was pending in I-073 is done.
+
+**Three things this deliberately does not do.** It does not pick the granularity — that is a human
+call recorded in `ai_region.name_level`, and the output says so in the payload rather than only in
+a docstring, because the payload is what gets pasted into an issue. It does not default the three
+place names; I-073's free evidence run already narrowed which LA names are worth testing, and
+choosing among them is a judgement about the market. And it does not treat a failed call as an
+empty answer — an outage must not read as "the model does not know this place".
+
+**To run:** it is in `PAID_COMMANDS` despite costing well under a cent, so it needs
+`OUTREACH_CONFIRM_SPEND=probe-ai-granularity` alongside `OUTREACH_COMMAND` and
+`OUTREACH_ARGS="--metro 'Los Angeles' --suburb 'Woodland Hills' --neighbourhood 'Hollywood'"`,
+then a fresh Deploy (a redeploy replays the old config snapshot). Hollywood is the right fine
+name to test: I-073 found it commercially real (13 self-named businesses) but addressed
+"Los Angeles" by Google — exactly the silent-fallback case.
 
 ### I-005 · Map tile licensing unchecked (~30m)
 Whether embedding a rendered tile in a client-facing PDF constitutes redistribution, and what

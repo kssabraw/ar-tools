@@ -321,6 +321,100 @@ def cmd_probe_dataforseo(args) -> int:
     return 0
 
 
+def cmd_probe_ai_granularity(args) -> int:
+    """The I-004 spike: does the place name in an AI prompt change the answer? BILLS a few cents.
+
+    Nine chat completions — three place names x three samples — against one engine. The question
+    is not "is the model right"; it is whether a finer name actually narrows the answer, or whether
+    the model silently answers the metro question while we believe we asked a specific one. See
+    `api/services/ai_granularity.py` for why that third case is the one worth paying to detect.
+
+    The three names are supplied rather than derived. I-073's free evidence run already narrowed
+    which LA names are worth testing, and choosing among them is a judgement about the market, not
+    something a script should guess from a definition file.
+    """
+    import asyncio as _asyncio
+
+    from api.services import ai_granularity as aig
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+
+    keyword = args.keyword
+    if not keyword:
+        primary = [k for k in definition.keywords if k.get("is_primary")]
+        pool = primary or definition.keywords
+        keyword = str(pool[0]["term"]) if pool else ""
+    if not keyword:
+        print("REFUSED: no keyword — pass --keyword", file=sys.stderr)
+        return 2
+
+    missing = [
+        flag
+        for flag, value in (
+            ("--metro", args.metro),
+            ("--suburb", args.suburb),
+            ("--neighbourhood", args.neighbourhood),
+        )
+        if not value
+    ]
+    if missing:
+        print(
+            "REFUSED: the three place names are a deliberate choice, not a default — pass "
+            f"{', '.join(missing)}. For the LA market, I-073's free evidence run suggests "
+            "--metro 'Los Angeles' --suburb 'Woodland Hills' --neighbourhood 'Hollywood' "
+            "(Hollywood is the risky case: real neighbourhood, businesses addressed "
+            "'Los Angeles').",
+            file=sys.stderr,
+        )
+        return 2
+
+    settings = get_settings()
+    absent = aig.missing_openai_vars(settings)
+    if absent:
+        print(f"REFUSED: missing credentials: {', '.join(absent)}", file=sys.stderr)
+        return 2
+
+    report = _asyncio.run(
+        aig.run_spike(
+            settings,
+            keyword=keyword,
+            metro=args.metro,
+            suburb=args.suburb,
+            neighbourhood=args.neighbourhood,
+            model=settings.ai_granularity_model,
+        )
+    )
+
+    summary = aig.summarize(report)
+    summary["model"] = settings.ai_granularity_model
+    print(json.dumps(summary, indent=2), flush=True)
+
+    # The raw replies, after the summary, because they are evidence rather than result — and
+    # because a summary computed from unreadable answers is the failure this spike is about.
+    print("--- RAW SAMPLES ---", flush=True)
+    for sample in report.samples:
+        print(
+            json.dumps(
+                {
+                    "level": sample.level,
+                    "place": sample.place,
+                    "sample": sample.sample_index,
+                    "businesses": list(sample.businesses),
+                    "error": sample.error,
+                    "raw": sample.raw[:600],
+                },
+                indent=2,
+            ),
+            flush=True,
+        )
+
+    # A run where every call failed produced no evidence and must not read as a completed spike.
+    if summary["errors"] == len(report.samples):
+        print("REFUSED: every sample errored — no evidence gathered", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_run(args) -> int:
     for step in (cmd_seed, cmd_ingest, cmd_filter):
         code = step(args)
@@ -338,7 +432,14 @@ _SHA_VARS = ("OUTREACH_BUILD_SHA", "RAILWAY_GIT_COMMIT_SHA", "SOURCE_COMMIT", "G
 # with --sample-place-id, which is handled as an explicit override rather than by listing it
 # here, because "this command is free except when it isn't" is exactly the kind of thing a
 # static set states wrongly.
-PAID_COMMANDS = frozenset({"ingest", "run", "calibrate", "verify-reviews"})
+#
+# `probe-ai-granularity` IS listed despite costing well under a cent for the whole run. The gate's
+# rule is "spends money requires an affirmative confirmation", and carving out an exemption for
+# small amounts turns a mechanical test into a judgement about size — which is how a paid command
+# ends up unconfirmed once someone's estimate is wrong.
+PAID_COMMANDS = frozenset(
+    {"ingest", "run", "calibrate", "verify-reviews", "probe-ai-granularity"}
+)
 
 SAFE_COMMAND = "filter"
 
@@ -481,7 +582,7 @@ def main() -> int:
             dict(os.environ),
             [
                 "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-                "probe-dataforseo",
+                "probe-dataforseo", "probe-ai-granularity",
             ],
         ),
         flush=True,
@@ -492,7 +593,7 @@ def main() -> int:
         "command",
         choices=[
             "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-            "probe-dataforseo",
+            "probe-dataforseo", "probe-ai-granularity",
         ],
     )
     parser.add_argument("definition", help="path to a market definition JSON file")
@@ -520,6 +621,26 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--keyword", default=None,
+        help="probe-ai-granularity: the service asked about. Defaults to the market's primary "
+             "keyword.",
+    )
+    parser.add_argument(
+        "--metro", default=None,
+        help="probe-ai-granularity: the coarse place name, e.g. 'Los Angeles'.",
+    )
+    parser.add_argument(
+        "--suburb", default=None,
+        help="probe-ai-granularity: the mid place name, e.g. 'Woodland Hills'.",
+    )
+    parser.add_argument(
+        "--neighbourhood", default=None,
+        help=(
+            "probe-ai-granularity: the fine place name, e.g. 'Hollywood'. Pick the name you most "
+            "suspect the model will not recognise — that is the case worth paying to detect."
+        ),
+    )
+    parser.add_argument(
         "--allow-geometry-change",
         action="store_true",
         help="permit geometry edits to submarkets that have NOT been scanned",
@@ -532,6 +653,7 @@ def main() -> int:
         "calibrate": cmd_calibrate,
         "verify-reviews": cmd_verify_reviews,
         "probe-dataforseo": cmd_probe_dataforseo,
+        "probe-ai-granularity": cmd_probe_ai_granularity,
     }
 
     # Railway reports a crashed job as deployment status SUCCESS when restartPolicy is NEVER —

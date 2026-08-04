@@ -121,6 +121,18 @@ class Settings(BaseSettings):
     # a lookup paid for and thrown away.
     dataforseo_request_timeout_seconds: float = 180.0
 
+    # --- AI engine (I-004 granularity spike, PRD §16a.2) ---------------------------------
+    # Same reference-variable pattern as the DataForSEO credentials above:
+    # OUTREACH_OPENAI_API_KEY = ${{PLATFORM.OPENAI_API_KEY}}, so the secret stays on the
+    # platform service and a rotation propagates without a second place to update.
+    openai_api_key: str = ""
+
+    # The spike asks a consumer-shaped question ("who is the best plumber in X"), so the model
+    # should be one a consumer would actually reach. Overridable because the answer to the
+    # granularity question may differ by model, and re-running against a second one is the
+    # cheapest way to find out.
+    ai_granularity_model: str = "gpt-5.4"
+
     # --- Cost guardrails -----------------------------------------------------------------
     # Abort the paid stage if the pre-flight projection exceeds this (brief §4).
     max_market_run_cost_cents: int = 5000

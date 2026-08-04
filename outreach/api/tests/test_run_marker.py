@@ -11,6 +11,7 @@ The second is the dangerous one for an unattended cron: a wrong OUTREACH_COMMAND
 shape a misconfiguration takes, and it was the one failure mode the marker did not cover.
 """
 
+import ast
 import subprocess
 import sys
 from pathlib import Path
@@ -175,6 +176,52 @@ def test_probe_is_free_until_it_samples():
     assert spend_denial("probe-dataforseo", {}) is None
     assert spend_denial("probe-dataforseo", {}, bills=True) is not None
     assert spend_denial("probe-dataforseo", {"OUTREACH_CONFIRM_SPEND": "probe-dataforseo"}, bills=True) is None
+
+
+def test_the_ai_granularity_spike_is_gated_despite_costing_almost_nothing():
+    """Nine chat completions is well under a cent. It is still gated, because the alternative
+    rule — "confirm only if it's expensive" — is a judgement about size, and that judgement is
+    made by whoever is wrong about the size."""
+    assert "probe-ai-granularity" in PAID_COMMANDS
+    assert spend_denial("probe-ai-granularity", {}) is not None
+    assert (
+        spend_denial("probe-ai-granularity", {"OUTREACH_CONFIRM_SPEND": "probe-ai-granularity"})
+        is None
+    )
+
+
+def test_every_command_the_parser_accepts_has_a_handler_and_a_banner_entry():
+    """I-052 was a command that existed in one list and not another: `verify-reviews` was
+    rejected as an invalid choice by a container that had the code for it. Three lists have to
+    agree — argparse choices, the handler dict, and the banner's paid-marking list — and nothing
+    but this test makes them."""
+    source = (ROOT / "api" / "scripts" / "run_market.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    def string_lists(node) -> list[list[str]]:
+        found = []
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.List) and sub.elts and all(
+                isinstance(e, ast.Constant) and isinstance(e.value, str) for e in sub.elts
+            ):
+                found.append([e.value for e in sub.elts])
+        return found
+
+    main_fn = next(
+        n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main"
+    )
+    handler_keys = next(
+        {k.value for k in n.keys if isinstance(k, ast.Constant)}
+        for n in ast.walk(main_fn)
+        if isinstance(n, ast.Dict) and n.keys
+        and all(isinstance(k, ast.Constant) and isinstance(k.value, str) for k in n.keys)
+        and "seed" in {k.value for k in n.keys}
+    )
+    command_lists = [set(lst) for lst in string_lists(main_fn) if "seed" in lst]
+
+    assert len(command_lists) == 2, "expected the banner list and the argparse choices"
+    assert command_lists[0] == command_lists[1] == handler_keys
+    assert PAID_COMMANDS <= handler_keys
 
 
 # --- the gate end to end -------------------------------------------------------------------
