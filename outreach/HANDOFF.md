@@ -2,14 +2,16 @@
 
 **Read this first, then `CLAUDE.md` → `START-HERE.md` → `ISSUES.md` → `DECISIONS.md`.**
 
-Status as of 2026-08-03:
+Status as of 2026-08-04:
 
 - **Phase 1 (ingest + filter) is COMPLETE, verified against a real market, and MERGED to `main`** (#528, squashed as `67f235b`).
 - **Phase 1b (lead CRM) is COMPLETE, applied live, and MERGED to `main`** (#534, squashed as `452a726`).
 - **The platform-api `outreach` router, Phase 2 storage/partitioning and the pinned grid-geometry generator are MERGED** (#538, squashed as `a7acc05`). Migrations applied live.
 - **I-041 is RESOLVED BY DECISION.** `review_count_inferred_zero` is set on **105 prospects**, `review_count` left NULL, with a trigger that records any future contradiction. See §9.
 - **Paid runs are now gated in code, not by procedure** (§7.2, closed). `OUTREACH_COMMAND` resolves to `filter` when absent, and every paid command additionally requires `OUTREACH_CONFIRM_SPEND` to equal its own name.
-- **Phase 2 SCANNING has still not started.** The DataForSEO credential exists and has now been exercised for real (`verify-reviews`), but nothing scans, ingests or spends on a schedule. `OUTREACH_COMMAND` is `filter` and both spend variables are empty.
+- **I-069 is RESOLVED (#554, `b6700999`).** A partial rollup can no longer pass verification: `finalize_snapshot_rollup()` raises inside the rollup transaction and the retention guard requires its marker. Applied live and verified in both directions. See ISSUES I-069.
+- **The LA `ai_region` candidates are drafted (I-073)** from evidence already in the data — 10 of 14 submarket names are unambiguous localities, 3 are not. No engine calls were needed. See ISSUES I-073.
+- **Phase 2 SCANNING has still not started.** The DataForSEO credential exists and has been exercised for real (`verify-reviews`), but nothing scans, ingests or spends on a schedule. `OUTREACH_COMMAND` is `filter` and both spend variables are empty. **The next build is the maps geogrid client + `tasks_ready` collector** — §8.1.
 
 **Two things changed on 2026-08-03 that will mislead you if you read the older sections first.** The spend gate above supersedes the "set it back to `filter` afterwards" procedure this file used to rely on (§7.2), and the Railway configuration recorded in §1 was found to be **stale in two ways that each cost money** — read `get-service-config`, not this file, for live values.
 
@@ -21,19 +23,19 @@ Status as of 2026-08-03:
 
 | Thing | Where | State |
 |---|---|---|
-| Code | `outreach/` in `kssabraw/ar-tools` | Phase 1 + 1b on `main`; Phase 2 foundations on `claude/outreach-phase-2-foundations-mm33py` |
+| Code | `outreach/` in `kssabraw/ar-tools` | all merged to `main` — Phase 1, 1b, Phase 2 foundations (#538), I-069 (#554) |
 | Phase 1 PR | [#528](https://github.com/kssabraw/ar-tools/pull/528) | **merged** 2026-07-31 |
 | Phase 1b PR | [#534](https://github.com/kssabraw/ar-tools/pull/534) | **merged** 2026-07-31 as `452a726` |
 | Phase 2 foundations PR | [#538](https://github.com/kssabraw/ar-tools/pull/538) | **merged** as `a7acc05` |
 | Database | Supabase project **Outreacher**, ref `fkwhgvcggvsricuinuqy` | Phase 1 + 1b + Phase 2 storage applied; LA ingested and filtered |
 | Job runner | Railway service **outreach**, id `928c84bc-d7ca-416a-bd61-39e91cc64872` in project `ar-tools` (`2c718e53-73c8-4de8-bef8-7136f06b6ead`) | no cron schedule; auto-deploy-on-push DISABLED (2026-08-01); source **actually** on `main` since 2026-08-03 (the 2026-08-01 repoint did not stick — I-065). Runs only on a manual Deploy |
 | platform-api integration | `routers/outreach.py` + `services/outreach{,_db}.py` | **built** — 14 routes, read-only over the pipeline, read/write over the CRM |
-| Suite UI | not built | nothing in `frontend/` — **now the next build** |
+| Suite UI | not built | nothing in `frontend/`. NOT the next build — see ISSUES I-072, which asks for a decision rather than a default |
 | Grid geometry | `api/services/geometry.py` | **built**, version `v1`, **81 points** (I-025 resolved) |
 
 **This is a SEPARATE Supabase project from AR-Internal-Tools.** Do not point outreach code at the suite's database, and do not put outreach migrations in `writer/supabase/migrations/`.
 
-Live row counts: `prospect` 1,388 (**105 carrying `review_count_inferred_zero`**, §9) · `filter_result` 8,328 · `submarket` 14 · `keyword` 5 · `market` 1 · `cost_ledger` 29 (was 19; +10 from the 2026-08-03 DataForSEO verification runs) · `lead` 0 · `lead_activity` 0 · `lead_stage` 7 · `suppression` 0 · `review_inferred_zero_audit` 0.
+Live row counts (2026-08-04): `prospect` 1,388 (**105 carrying `review_count_inferred_zero`**, §9) · `filter_result` 8,328 · `submarket` 14 · `keyword` 5 · `market` 1 · `cost_ledger` 33 · `storage_retention_log` 8 · `lead` 0 · `lead_stage` 7 · `suppression` 0 · `review_inferred_zero_audit` 0 · **`scan_snapshot` 0 · `grid_result` 0 · `prospect_coverage` 0 · `snapshot_rollup` 0** — the scan layer has produced nothing.
 
 ### Railway service configuration
 
@@ -56,7 +58,7 @@ Variables set: `OUTREACH_SUPABASE_URL`, `OUTREACH_SUPABASE_SERVICE_ROLE_KEY`, `O
 
 **This block is a snapshot and has been wrong twice.** Both the source branch and the start command above were stale in ways that cost money. Read `get-service-config` and `list-variables` for the live values; see repo-root `CLAUDE.md` → "Railway: read the live config, do not infer it".
 
-**There is no DataForSEO credential on this service.** Phase 2 cannot run without one — see §8.2.
+~~**There is no DataForSEO credential on this service.**~~ **Set 2026-08-01** as Railway reference variables, and **exercised for real 2026-08-03** — the `verify-reviews` control run completed against `my_business_info/live` (I-066). The Phase 2 *scan* client is still not built.
 
 > The Outscraper key and the Supabase service-role key were pasted into a chat transcript during the Phase 1 build. Rotating both is cheap and worth doing.
 
@@ -311,8 +313,9 @@ Funnel aggregation runs in Postgres (`v_prospect_status`, `outreach_market_summa
 
 ### 8.1 Unblocked, and the highest-regret thing to defer
 1. ~~**Repoint the `outreach` Railway service at `main`.**~~ **DONE 2026-08-03.** It had been recorded as done on 2026-08-01 and was not: the service still tracked `claude/phase-1-outscraper-ingestion-llje34`, and a Deploy click faithfully built that branch's HEAD (`7f9430b`, 2026-08-01), failing with `invalid choice: 'verify-reviews'` — a commit old enough to predate both the build banner and the result marker, so it failed silently behind a green badge (I-065). *The lesson is not "repoint it" but "a config change recorded in a document is not a config change"*; verify with `get-service-config`.
-2. **Suite SPA pages.** Nothing in `frontend/` exists. The read surface they need is built and verified.
-3. **The coverage rollup** (`ISSUES` I-042). Until it exists the retention job drops nothing but empty partitions. It needs the geometry generator (built) and land masking (not built), so it lands with the scan writer.
+2. **The maps geogrid client + `tasks_ready` collector — THE NEXT BUILD.** Checklist §4 Phase 2 item 3. `api/services/dataforseo_client.py` speaks only `business_data` (built for the I-041 verification); there is no maps client, no batching, no collector, no second cron. Everything downstream — rollup, land masking, dead points, completeness, placeholder score — is waiting on scan rows that nothing produces. Owner ruling 2026-08-03: **first live run is ONE submarket × ONE keyword** (81 points, ~1 batch) so a wrong envelope costs one batch.
+3. **Suite SPA pages.** Nothing in `frontend/` exists. The read surface they need is built and verified. Open question, see I-072 — decide rather than inherit.
+4. **The coverage rollup** (`ISSUES` I-042). Until it exists the retention job drops nothing but empty partitions — which is now *enforced* rather than incidental: `drop_cold_partitions` requires a `snapshot_rollup` marker (I-069). It needs the geometry generator (built) and land masking (not built), so it lands with the scan writer.
 
 ### 8.2 Blocked on a human
 - ~~**DataForSEO credentials on the `outreach` Railway service.**~~ **DONE 2026-08-01** — set as Railway reference variables (`OUTREACH_DATAFORSEO_LOGIN` = `${{PLATFORM.DATAFORSEO_LOGIN}}`, same for the password), so the secrets never left the platform and follow a rotation automatically. **Now wired and exercised for real:** `api/services/dataforseo_client.py` + `verify-reviews`, run live 2026-08-03 against `my_business_info/live` (I-066). The Phase 2 *scan* client is still not built.

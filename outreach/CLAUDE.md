@@ -23,10 +23,19 @@ configuration reference. The six specs are reference material, not a work order.
 
 ## Current phase
 
-**Read `HANDOFF.md` first — it carries current state.** As of 2026-08-01: Phase 1 is merged,
-Phase 1b (lead CRM) is applied live, and Phase 2's **storage foundations**, the **pinned geometry
-generator** and the **suite router** are built. Phase 2 **scanning** has not started and is
-blocked on credentials.
+**Read `HANDOFF.md` first — it carries current state.** As of 2026-08-04: Phase 1 and 1b are
+merged, and Phase 2's **storage foundations**, **pinned geometry generator**, **suite router** and
+**rollup-integrity guard** (I-069) are built and applied live.
+
+**Phase 2 SCANNING has not started, and is no longer blocked on credentials** — DataForSEO is set
+and has been exercised for real (I-066). What is missing is the code: there is no maps geogrid
+client, no batching, no `tasks_ready` collector, no second cron. `api/services/dataforseo_client.py`
+speaks only `business_data`, built for the I-041 review verification.
+
+**That collector is the next build**, and everything downstream waits on it — the rollup, land
+masking, dead points, completeness and the placeholder score all need scan rows that nothing
+produces. Owner ruling 2026-08-03: the **first live run is ONE submarket × ONE keyword**, so a
+wrong response envelope costs one batch rather than a market.
 
 **The pipeline is an AR Tools SUITE MODULE, not a standalone tool** (owner ruling, HANDOFF §2).
 The database stays in the Outreacher project; the API and UI belong in `platform-api` and the
