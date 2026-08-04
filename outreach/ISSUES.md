@@ -1589,3 +1589,52 @@ the join. Database left clean afterwards (all scan tables 0, the 105 flags intac
 `point_count` on the marker is deliberately NOT joined through prospect — it records points
 scanned. Counting only points where a prospect appeared would record a number that reads like
 coverage and is not.
+
+### I-073 · `ai_region` candidates for LA, with the free evidence run — 3 of 14 names look wrong
+PRD §16a.2 notes a validation that costs nothing and is already in our data: *"check whether
+businesses in the Outscraper pull name themselves after the place — several plumbers with 'Los
+Feliz' in their business name or address means the name is commercially real."* Run against all
+1,388 LA prospects:
+
+| candidate | self-named | `city` field | verdict |
+|---|---|---|---|
+| Van Nuys | 5 | **90** | strong |
+| Burbank | 11 | **84** | strong |
+| Long Beach | 18 | **79** | strong |
+| Torrance | 13 | **76** | strong |
+| Pasadena | 13 | **57** | strong |
+| Whittier | 9 | **48** | strong |
+| Woodland Hills | 8 | **44** | strong |
+| Inglewood | 3 | **38** | strong |
+| Northridge | 6 | **35** | strong |
+| Santa Monica | 4 | **34** | strong |
+| Hollywood | 13 | 4 | **see below** |
+| East Los Angeles | 0 | 4 | **weak** |
+| West Los Angeles | 2 | **0** | **not a locality here** |
+| Downtown Los Angeles | 0 | **0** | **not a locality here** |
+
+**Ten are unambiguous** — a real `city` value on 34–90 prospects each, plus businesses named after
+them. Those are `name_level = 'suburb'` or `'city'` and are very likely to survive a recognition
+test.
+
+**Hollywood is the interesting one.** 13 businesses name themselves after it, but only 4 sit in a
+`city` of "Hollywood" — while 44 addresses mention it. That gap is almost certainly **street
+names** (Hollywood Blvd), not locality. So the address-mention count is a confounded signal and
+should not be used on its own; the `city` field and the self-naming count are the honest ones.
+Hollywood is a real *neighbourhood* whose businesses are addressed "Los Angeles" — exactly the
+`name_level = 'neighbourhood'` case, and exactly where I-004's "model silently falls back to
+metro" risk lives.
+
+**Three look wrong as AI regions.** `Downtown Los Angeles` and `West Los Angeles` have **zero**
+prospects with that `city` and near-zero self-naming; `East Los Angeles` has 4. Google does not
+treat the first two as localities in this data, so asking an engine about them is the case the
+spike is designed to catch: a name that reads specific and returns metro-scale answers.
+
+**What this does and does not settle.** It is a *commercial-reality* filter, not the recognition
+test. It cannot tell you what an engine returns — only which names are worth spending the
+recognition test on. It costs nothing and it has already halved the risky set: the paid test
+matters most for Hollywood and the three weak names, and is close to a formality for the other ten.
+
+**Still blocked:** the recognition test itself (I-004) needs one engine key. None exists in the
+sandbox, and the `outreach` Railway service carries only Outscraper, DataForSEO and Supabase
+credentials.
