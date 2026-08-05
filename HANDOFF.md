@@ -36,8 +36,10 @@ repo to point at. Nothing is deployed from it and it has no Cloudflare project.
 5. content generated (this is the step that spends money — one nlp-api call per page)
 6. pages published, i.e. committed, which triggers the Actions deploy
 
-Steps 4–6 have no implementation yet. Building the machinery is **setup**;
-creating a site is a separate, deliberate act that nobody has taken.
+Steps 4–6 now have code behind them (2026-08-05), and **still nothing has run**:
+every route 503s while the flag is off, and every step above needs a person to
+take it. Building the machinery is **setup**; creating a site is a separate,
+deliberate act that nobody has taken.
 
 **Docs (read these first, in this order):**
 - `docs/modules/website-builder-module-plan-v1_0.md` — engineering spec:
@@ -65,17 +67,52 @@ creating a site is a separate, deliberate act that nobody has taken.
   (`services/website_provision.py`), REST surface (`routers/websites.py`), job
   wiring. Migrations `20260803190000` + `20260803210000`, both **applied live**.
 
-### What is in flight (PR #560, draft)
+### Slice 3 — merged (#560) plus the wiring that finishes it
 
-`services/website_plan.py` (the site-plan inventory) and
-`services/website_content.py` (content → repo files + publish gates). Both pure
-and fully tested — **99 tests across the three modules**. Not yet wired to any
-route or job.
+Merged in #560: `services/website_plan.py` (the site-plan inventory) and
+`services/website_content.py` (content → repo files + publish gates), both pure.
 
-**Remaining in slice 3:** the `website_page_publish` job committing via
-`github_publish.commit_files_to_github`, plan build/approve endpoints, and the
-nlp-api calls that generate body copy. That last part is where the module starts
-spending money per page.
+The impure half is now built: `services/website_plan_store.py` (build / rebuild
+/ approve a plan as `website_pages` rows), `services/website_generate.py`
+(`website_page_generate` → `local_seo_service.generate_page`, unchanged),
+`services/website_publish.py` (`website_page_publish` → one commit per page via
+`github_publish.commit_files_to_github`), `services/website_deploy.py`
+(`website_deploy_poll` + the scheduler sweep), and eight routes on
+`routers/websites.py`. Migration `20260805120000` applied live. **206 tests
+across the seven modules** (was 99).
+
+**Still unbuilt in the module:** the theme compiler, imagery, core-pages
+generator, custom domains, GSC auto-verify, and all UI. Generation covers the
+nlp-api page types only; a page type with no engine records
+`engine_unavailable:<type>` on its row rather than being silently skipped.
+
+**⚠ Three things the build found that reading the docs did not:**
+
+- **The template's deploy workflow sets `concurrency: cancel-in-progress: true`,**
+  so publishing a 20-page batch cancels 19 runs. The merged
+  `deploy_status_from_run` read `cancelled` as **failed**, which would have
+  painted a successful batch red 19 times. `cancelled` now maps to a new
+  `superseded` status and raises no notification.
+- **Post entry ids doubled the `blog` segment.** `/blog/[...slug]` uses the
+  entry id AS the slug, so the full-path id from `entry_id` would have published
+  `/blog/blog-my-post/`. Found by building the template with real generated
+  files, not by reading the zod schema — do this every time.
+- **`areas_we_serve` and `services_index` were listed as "template-rendered"
+  but the template has no route for either** (they are Writer #6's page types).
+  Publishing would have marked them live at a URL that 404s. They are now
+  `UNRENDERABLE_PAGE_TYPES`, reported as a non-blocking `missing_template` plan
+  issue, and a page with an empty body is held at `body_not_generated` rather
+  than committed as an empty file.
+
+**Where the catalog lives:** the plan is built from a catalog + cities posted to
+`POST /websites/{id}/plan` and persisted onto `websites.config`. The
+client-level Business Facts store (PRD §4.10) is a later slice; this is the
+shape it will feed. Nothing is imported from GBP categories.
+
+**Contradiction resolved against the PRD, not the plan:** a deploy whose Actions
+run cannot be found past `website_deploy_timeout_minutes` is recorded as
+**`unknown`** with a re-check action (PRD §6.3), not as failed — the old config
+comment said failed and has been corrected.
 
 ### Provisioned (all live on PLATFORM)
 

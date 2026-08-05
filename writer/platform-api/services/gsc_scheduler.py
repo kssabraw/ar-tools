@@ -492,6 +492,9 @@ async def gsc_scheduler() -> None:
     from services.competitor_intel import enqueue_due_competitor_intel
     from services.site_inventory import enqueue_due_site_inventory
     from services.deliverables_sheet import enqueue_due_notes_scans as enqueue_due_deliverable_notes
+    from services.website_deploy import (
+        enqueue_due_deploy_polls as enqueue_due_website_deploy_polls,
+    )
     from services.domain_intel import enqueue_due_domain_intel
     from services.trend_watch import run_trend_sweep
     from services.offpage_agent import run_offpage_sweep
@@ -750,5 +753,10 @@ async def gsc_scheduler() -> None:
             # + in-flight job guard; no-ops while deliverables_sheet_enabled is
             # false or no client has a sheet configured).
             _safe("deliverable_notes", enqueue_due_deliverable_notes)
+            # Website Builder: walk any unresolved deploy toward an outcome.
+            # GitHub does not call us back, so a recorded deploy only becomes
+            # success/failed by being polled. Self-gated on
+            # website_builder_enabled, so it is inert while the module is dark.
+            _safe("website_deploys", enqueue_due_website_deploy_polls)
         except Exception as exc:
             logger.error("gsc_scheduler.per_cycle_block_failed", extra={"error": str(exc)})

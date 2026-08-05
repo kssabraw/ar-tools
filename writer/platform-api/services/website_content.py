@@ -54,9 +54,20 @@ _CORE_ENTRY_ID = {
     "privacy": "privacy-policy",
 }
 
-# Page types the template renders from data alone — no generated body, so
+# Page types the house template renders from data alone — no generated body, so
 # nothing to gate and nothing to write.
-TEMPLATE_ONLY_PAGE_TYPES = frozenset({"blog_archive", "sitemap", "services_index", "areas_we_serve"})
+#
+# Deliberately narrower than "pages with no writer". A Services index and an
+# Areas We Serve page also need no LLM in principle, but the shipped template
+# has no route for either (they are Writer #6's page types — PRD §4.7's
+# load-bearing gap), so calling them template-rendered would mark them published
+# and promise a URL that 404s. Verified against the template by building it.
+TEMPLATE_ONLY_PAGE_TYPES = frozenset({"blog_archive", "sitemap"})
+
+# Planned page types the house template cannot render at all — no route, no
+# collection entry, no writer. Reported at plan review (PRD §4.4) rather than
+# discovered at publish.
+UNRENDERABLE_PAGE_TYPES = frozenset({"services_index", "areas_we_serve"})
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -87,12 +98,21 @@ def entry_id(path: str, page_type: str) -> str:
     Derived from the full path rather than the last segment, because segments
     repeat across the matrix: `/anaheim/ac-repair/` and `/brea/ac-repair/` would
     otherwise both be `ac-repair.md` and the second would overwrite the first.
+
+    Two collections are addressed by id instead of by path, so they are exempt:
+    core pages, which the template looks up by name (`corePage('about-us')`),
+    and posts, whose route is `/blog/[...slug]` with the entry id AS the slug —
+    a full-path id there would publish `/blog/blog-my-post/`. Post slugs are
+    unique site-wide by construction (the blog is flat and its slugs are checked
+    against the reserved list), so the last segment is safe.
     """
     if page_type in _CORE_ENTRY_ID:
         return _CORE_ENTRY_ID[page_type]
     segs = [s for s in (path or "").split("/") if s]
     if not segs:
         return "index"
+    if page_type == "post":
+        segs = segs[-1:]
     return _SLUG_RE.sub("-", "-".join(segs).lower()).strip("-")
 
 

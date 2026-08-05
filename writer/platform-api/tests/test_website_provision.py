@@ -137,12 +137,22 @@ class TestDeployStatus:
             == "success"
         )
 
-    @pytest.mark.parametrize("conclusion", ["failure", "cancelled", "timed_out", "skipped", None])
+    @pytest.mark.parametrize("conclusion", ["failure", "timed_out", "skipped", None])
     def test_any_other_completed_conclusion_is_failure(self, conclusion):
         # Nothing shipped, so nothing is "sort of deployed".
         assert (
             wp.deploy_status_from_run({"status": "completed", "conclusion": conclusion})
             == "failed"
+        )
+
+    def test_cancelled_is_superseded_rather_than_failed(self):
+        # The template's workflow sets `concurrency: cancel-in-progress: true`,
+        # so publishing a batch cancels every run but the last. The content
+        # those runs carried shipped in the run that replaced them, and calling
+        # that failed paints a successful 20-page batch red 19 times.
+        assert (
+            wp.deploy_status_from_run({"status": "completed", "conclusion": "cancelled"})
+            == "superseded"
         )
 
 
