@@ -2,7 +2,7 @@
 
 **Read this first, then `CLAUDE.md` → `START-HERE.md` → `ISSUES.md` → `DECISIONS.md`.**
 
-Status as of 2026-08-04:
+Status as of 2026-08-05:
 
 - **Phase 1 (ingest + filter) is COMPLETE, verified against a real market, and MERGED to `main`** (#528, squashed as `67f235b`).
 - **Phase 1b (lead CRM) is COMPLETE, applied live, and MERGED to `main`** (#534, squashed as `452a726`).
@@ -11,7 +11,9 @@ Status as of 2026-08-04:
 - **Paid runs are now gated in code, not by procedure** (§7.2, closed). `OUTREACH_COMMAND` resolves to `filter` when absent, and every paid command additionally requires `OUTREACH_CONFIRM_SPEND` to equal its own name.
 - **I-069 is RESOLVED (#554, `b6700999`).** A partial rollup can no longer pass verification: `finalize_snapshot_rollup()` raises inside the rollup transaction and the retention guard requires its marker. Applied live and verified in both directions. See ISSUES I-069.
 - **The LA `ai_region` candidates are drafted (I-073)** from evidence already in the data — 10 of 14 submarket names are unambiguous localities, 3 are not. No engine calls were needed. See ISSUES I-073.
-- **Phase 2 SCANNING has still not started.** The DataForSEO credential exists and has been exercised for real (`verify-reviews`), but nothing scans, ingests or spends on a schedule. `OUTREACH_COMMAND` is `filter` and both spend variables are empty. **The next build is the maps geogrid client + `tasks_ready` collector** — §8.1.
+- **The maps geogrid client + `tasks_ready` collector is BUILT and MERGED (#557, `29914108`).** Migration `20260804120000_scan_task.sql` applied live. Two commands — `scan` (paid, one submarket × one keyword) and `collect` (free, never spend-gated). See §8.1a for what it does and §11 for the two things standing between it and real rows.
+- **The I-004 spike instrument is BUILT and MERGED (#556, `ccb7e912`)** — `probe-ai-granularity`, nine OpenAI calls, three place names × three samples. **It has not been run.** The key is set as a Railway reference; the run needs a Deploy plus `OUTREACH_CONFIRM_SPEND=probe-ai-granularity`.
+- **NOTHING HAS BEEN SCANNED.** The scan layer now has a producer and still has no data: `scan_snapshot`, `scan_task`, `grid_result`, `prospect_coverage` are all empty. `OUTREACH_COMMAND` is `filter` and both spend variables are empty. **What is missing is no longer code — it is a deploy, a confirm token, and a second cron schedule** (§11).
 
 **Two things changed on 2026-08-03 that will mislead you if you read the older sections first.** The spend gate above supersedes the "set it back to `filter` afterwards" procedure this file used to rely on (§7.2), and the Railway configuration recorded in §1 was found to be **stale in two ways that each cost money** — read `get-service-config`, not this file, for live values.
 
@@ -32,10 +34,13 @@ Status as of 2026-08-04:
 | platform-api integration | `routers/outreach.py` + `services/outreach{,_db}.py` | **built** — 14 routes, read-only over the pipeline, read/write over the CRM |
 | Suite UI | not built | nothing in `frontend/`. NOT the next build — see ISSUES I-072, which asks for a decision rather than a default |
 | Grid geometry | `api/services/geometry.py` | **built**, version `v1`, **81 points** (I-025 resolved) |
+| Geogrid scan client | `api/services/maps_scan.py` (pure) + `scan_runner.py` (I/O) | **built** (#557) — `task_post` batching, `tasks_ready` collection, finalization. Never run |
+| Scan bookkeeping | `scan_task` table, migration `20260804120000` | **applied live**, empty |
+| I-004 spike | `api/services/ai_granularity.py` + `probe-ai-granularity` | **built** (#556), **never run** — needs a Deploy + confirm token |
 
 **This is a SEPARATE Supabase project from AR-Internal-Tools.** Do not point outreach code at the suite's database, and do not put outreach migrations in `writer/supabase/migrations/`.
 
-Live row counts (2026-08-04): `prospect` 1,388 (**105 carrying `review_count_inferred_zero`**, §9) · `filter_result` 8,328 · `submarket` 14 · `keyword` 5 · `market` 1 · `cost_ledger` 33 · `storage_retention_log` 8 · `lead` 0 · `lead_stage` 7 · `suppression` 0 · `review_inferred_zero_audit` 0 · **`scan_snapshot` 0 · `grid_result` 0 · `prospect_coverage` 0 · `snapshot_rollup` 0** — the scan layer has produced nothing.
+Live row counts (2026-08-04, unchanged 2026-08-05): `prospect` 1,388 (**105 carrying `review_count_inferred_zero`**, §9) · `filter_result` 8,328 · `submarket` 14 · `keyword` 5 · `market` 1 · `cost_ledger` 33 · `storage_retention_log` 8 · `lead` 0 · `lead_stage` 7 · `suppression` 0 · `review_inferred_zero_audit` 0 · **`scan_snapshot` 0 · `scan_task` 0 · `grid_result` 0 · `prospect_coverage` 0 · `snapshot_rollup` 0** — the scan layer now has a producer and has still produced nothing. Those two facts are easy to conflate and §11 exists to keep them apart.
 
 ### Railway service configuration
 
@@ -58,7 +63,7 @@ Variables set: `OUTREACH_SUPABASE_URL`, `OUTREACH_SUPABASE_SERVICE_ROLE_KEY`, `O
 
 **This block is a snapshot and has been wrong twice.** Both the source branch and the start command above were stale in ways that cost money. Read `get-service-config` and `list-variables` for the live values; see repo-root `CLAUDE.md` → "Railway: read the live config, do not infer it".
 
-~~**There is no DataForSEO credential on this service.**~~ **Set 2026-08-01** as Railway reference variables, and **exercised for real 2026-08-03** — the `verify-reviews` control run completed against `my_business_info/live` (I-066). The Phase 2 *scan* client is still not built.
+~~**There is no DataForSEO credential on this service.**~~ **Set 2026-08-01** as Railway reference variables, and **exercised for real 2026-08-03** — the `verify-reviews` control run completed against `my_business_info/live` (I-066). ~~The Phase 2 *scan* client is still not built.~~ **Built 2026-08-04 (#557); never run.** `OUTREACH_OPENAI_API_KEY` was added the same day as a reference to `${{PLATFORM.OPENAI_API_KEY}}` for the I-004 spike.
 
 > The Outscraper key and the Supabase service-role key were pasted into a chat transcript during the Phase 1 build. Rotating both is cheap and worth doing.
 
@@ -311,17 +316,33 @@ Funnel aggregation runs in Postgres (`v_prospect_status`, `outreach_market_summa
 
 **And one found, not fixed (I-041).** `review_count_min` is 842 passed / 433 failed / **113 not evaluated** — Outscraper returned no review count for those 113 and they sit inside the 925 "survivors". Population evidence splits them: `review_count = 0` never occurs anywhere in 1,388 rows while counts of 1/2/3–5/6–9 occur 118/70/129/116 times, so null reads as the provider's encoding of zero; 105 of the 113 also have a null rating (consistent with genuinely zero reviews), and **8 have a rating but no count**, which cannot both be true and are genuinely unknown. The direct Google Maps spot-check **could not be run** — Google 403s every route and egress is blocked (I-027) — so this is strong circumstantial evidence, not confirmation. Ten place_ids plus all 8 anomalies are queued in `ISSUES`.
 
+### 8.0a Done on 2026-08-04 — the geogrid producer (#557) and the I-004 instrument (#556)
+
+**The maps geogrid client + `tasks_ready` collector.** `api/services/maps_scan.py` (pure: task bodies, `task_post`/`tasks_ready`/`task_get` parsing, completeness) + `api/services/scan_runner.py` (submission, collection, finalization) + the `scan_task` bookkeeping table. 42 tests; the suite is at **247**.
+
+The endpoint is QUEUED — `task_post` bills and returns an id, the result is fetched later — so almost every decision is about **ordering**, each chosen so an interruption loses at most one point and always in the cheap direction:
+
+- **`scan_task` rows are written `pending` BEFORE the post.** The naive order has a window where money is spent and no record exists. A row still `pending` afterwards just means "not yet posted": reposting an unposted point costs one point, losing a posted one costs the batch.
+- **The tag is a recovery key, not a debug label.** `<snapshot_id>:<point_seq>`, echoed on `tasks_ready`, closes the one window ordering cannot: a request the provider accepted and billed whose response never reached us. This DIVERGES from the suite's `maps_dataforseo.py`, where the tag is explicitly a convenience and alignment is positional — sound there, because that code polls ids it holds. See DECISIONS.md.
+- **Grid rows are written before the task is marked collected.** A crash between them re-collects something free to re-collect; the reverse finalizes a snapshot with a hole nothing downstream can detect.
+- **`actual_points` counts points SCANNED, never rows written.** A point over water returns an empty pack, and "nobody ranks here" is a finding. Counting rows would mark a submarket's real dead zones as scan failures and exclude it from scoring every cycle — the same correction I-069 needed. DECISIONS.md records it because the mistake has now been made twice.
+- **`tasks_ready` RAISES on a shape it cannot read** rather than returning `[]`. Nothing here has ever called that endpoint; an unreadable response reading as "nothing ready" would end the collector's loop, mark the run clean, and leave paid tasks to age off.
+- **The month guard.** Collection lands hours or days after submission, so `scan_month` from the clock is right in every test and wrong twice a year (I-044). `assert_snapshot_month()` checks it per snapshot at finalization — one query, not a per-row trigger on a 58M-row/year table — and refuses rather than repairs.
+
+**The I-004 spike instrument** (#556): `probe-ai-granularity`, nine OpenAI calls at temperature 0, three place names × three samples, reporting cross-level overlap, within-level stability, and error/empty counts kept separate. It gathers evidence and deliberately does **not** pick the granularity — that is a human decision recorded in `ai_region.name_level`, and the output says so in the payload rather than only in a docstring. The three place names are required rather than defaulted; I-073's free evidence run already narrowed which LA names are worth testing.
+
 ### 8.1 Unblocked, and the highest-regret thing to defer
 1. ~~**Repoint the `outreach` Railway service at `main`.**~~ **DONE 2026-08-03.** It had been recorded as done on 2026-08-01 and was not: the service still tracked `claude/phase-1-outscraper-ingestion-llje34`, and a Deploy click faithfully built that branch's HEAD (`7f9430b`, 2026-08-01), failing with `invalid choice: 'verify-reviews'` — a commit old enough to predate both the build banner and the result marker, so it failed silently behind a green badge (I-065). *The lesson is not "repoint it" but "a config change recorded in a document is not a config change"*; verify with `get-service-config`.
-2. **The maps geogrid client + `tasks_ready` collector — THE NEXT BUILD.** Checklist §4 Phase 2 item 3. `api/services/dataforseo_client.py` speaks only `business_data` (built for the I-041 verification); there is no maps client, no batching, no collector, no second cron. Everything downstream — rollup, land masking, dead points, completeness, placeholder score — is waiting on scan rows that nothing produces. Owner ruling 2026-08-03: **first live run is ONE submarket × ONE keyword** (81 points, ~1 batch) so a wrong envelope costs one batch.
+2. ~~**The maps geogrid client + `tasks_ready` collector.**~~ **BUILT 2026-08-04 (#557)** — see §8.0a. Not run. The owner ruling stands: **first live run is ONE submarket × ONE keyword**, and `cmd_scan` refuses to do more.
+2a. **THE NEXT BUILD: the `prospect_coverage` rollup.** Checklist §4 Phase 2, and now the only thing between scan rows and a score. It needs `rank_vector` written **in the same transaction** as the summary statistics — a rollup that produces summaries without it must fail rather than partially succeed (owner instruction 2026-08-03), which is what `finalize_snapshot_rollup()` already enforces from the other side. Land masking and dead-point exclusion land with it: both change the coverage DENOMINATOR, and a denominator that changes after the fact re-writes every historical claim.
 3. **Suite SPA pages.** Nothing in `frontend/` exists. The read surface they need is built and verified. Open question, see I-072 — decide rather than inherit.
-4. **The coverage rollup** (`ISSUES` I-042). Until it exists the retention job drops nothing but empty partitions — which is now *enforced* rather than incidental: `drop_cold_partitions` requires a `snapshot_rollup` marker (I-069). It needs the geometry generator (built) and land masking (not built), so it lands with the scan writer.
+4. **The coverage rollup** (`ISSUES` I-042) — promoted to item 2a above now that the scan writer exists. Until it exists the retention job drops nothing but empty partitions, which is *enforced* rather than incidental: `drop_cold_partitions` requires a `snapshot_rollup` marker (I-069).
 
 ### 8.2 Blocked on a human
 - ~~**DataForSEO credentials on the `outreach` Railway service.**~~ **DONE 2026-08-01** — set as Railway reference variables (`OUTREACH_DATAFORSEO_LOGIN` = `${{PLATFORM.DATAFORSEO_LOGIN}}`, same for the password), so the secrets never left the platform and follow a rotation automatically. **Now wired and exercised for real:** `api/services/dataforseo_client.py` + `verify-reviews`, run live 2026-08-03 against `my_business_info/live` (I-066). The Phase 2 *scan* client is still not built.
 - ~~**A public callback URL.**~~ **NO LONGER REQUIRED** — the postback MUST was over-specified and has been corrected to `tasks_ready` collection (PRD §B2, DECISIONS.md). The service stays a cron job: no domain, no receiver, no shape change. What it DOES need is a **second, frequent cron schedule** for the collector — see §7.6.
 - **`ai_region` names for LA** (§7.4). A candidate list can be drafted from the 14 submarkets for a human to correct.
-- **Two verification spikes, ~80 minutes total.** `I-004` AI prompt granularity (~20m) decides the `ai_region` grain — too fine and the model silently falls back to metro while you believe you asked a specific question. `I-003` Outscraper pixel field (~1h) decides whether the site-fetch parse is optional or required, which changes the money-signal cost model.
+- **Two verification spikes.** `I-004` AI prompt granularity — **the instrument is built (#556); the RUN needs a Deploy plus `OUTREACH_CONFIRM_SPEND=probe-ai-granularity`.** `I-003` Outscraper pixel field (~1h) is still unbuilt and decides whether the site-fetch parse is optional or required, which changes the money-signal cost model.
 - **Spend approval.** ~$3–6 per market-vertical per cycle, guarded at `max_market_run_cost_cents` 5000 — a gate that is only as honest as §7.1.
 
 ### 8.3 Do not
@@ -332,6 +353,14 @@ Funnel aggregation runs in Postgres (`v_prospect_status`, `outreach_market_summa
 - Trigger a paid Outscraper or DataForSEO run without being asked. `OUTREACH_COMMAND` stays `filter` and `OUTREACH_CONFIRM_SPEND` stays empty between approved runs. The gate (§7.2) now refuses rather than trusting this instruction — but it bounds the damage, it does not grant permission.
 - Set `review_count_inferred_zero` on further rows, or clear it, without an explicit decision. It is a human judgement about a vendor convention (§9) and the `prospect_preserve_decisions` trigger deliberately makes it non-re-derivable.
 - "Fix" a `review_inferred_zero_audit` row by deleting it. That table is the falsification record for §9; a `contradicted` row is the system working.
+
+---
+
+## 8a. Also in §8.3 "do not", now that the collector exists
+
+- **Do not gate `collect` behind `OUTREACH_CONFIRM_SPEND`.** `tasks_ready` and `task_get` are free; only `task_post` bills. Gating the collector would make every cron tick refuse and lose exactly the paid work it exists to save. There is a test asserting `collect` is not in `PAID_COMMANDS` — if it starts failing, read this line before "fixing" it.
+- **Do not change the tag format** (`<snapshot_id>:<point_seq>`). It is part of the wire contract now: changing it orphans every task in flight for ~3 days after any submission.
+- **Do not widen `cmd_scan` to a market sweep** before a real run has proven the envelope once. Its refusal to scan more than one submarket is the owner's ruling, not a placeholder.
 
 ---
 
@@ -385,7 +414,26 @@ outreach/
     ├── config.py              every tunable; nothing hardcoded
     ├── db.py                  Supabase client (service role)
     ├── services/              outscraper_client, parser, tiling, filters, suppression,
-    │                          cost, paging, seeding, pipeline
+    │                          cost, paging, seeding, pipeline, geometry, dataforseo_client,
+    │                          review_verify, maps_scan, scan_runner, ai_granularity
     ├── scripts/               run_market (the entrypoint), calibrate, calibrate_standalone
-    └── tests/                 85 tests, no network or database
+    └── tests/                 247 tests, no network or database
 ```
+
+---
+
+## 11. The scan layer has a producer and no data — the gap is not code
+
+This section exists because the previous version of this file said "Phase 2 scanning has not started" and that sentence covered two very different situations. It now means only one thing, and conflating them would send the next session to write code that already exists.
+
+**What is built:** the geogrid submission and collection path, end to end, with 42 tests (§8.0a). **What has happened:** nothing. Zero tasks posted, zero rows collected, zero snapshots.
+
+Three things stand in between, and none of them are code:
+
+1. **A Railway deploy with the scan variables set.** `OUTREACH_COMMAND=scan`, `OUTREACH_CONFIRM_SPEND=scan`, `OUTREACH_ARGS=--submarket '<name>'`. It must be a **fresh Deploy, not a redeploy** — a redeploy replays the previous deployment's config snapshot (§6.1, and the ~$0.11 it cost). Line one of the logs prints the resolved command and the confirm token, so what a run is about to do is visible before it does it.
+
+2. **A SECOND, FREQUENT CRON SCHEDULE for `collect`.** This is the one most likely to be skipped and the most expensive to skip. The ready list holds a task about **three days**; the scan cadence is **fifteen**. A collector on the scan schedule lets every task age off the list between runs, silently converting the normal path into the fallback-by-id path — which still works, which is exactly why nobody would notice, until the day the fallback window (30 days) is also missed. `collect` is free and safe to run on any tick; run it hourly or daily. It is deliberately not spend-gated.
+
+3. **The owner's go-ahead on spend.** One submarket × one keyword is 81 points, ~1 batch, so a wrong envelope costs one batch rather than a market. `cmd_scan` refuses to do more than that.
+
+**After the first real run, the thing to check is not "did it succeed"** — it is whether `scan_task` rows moved `pending → submitted → collected`, whether `actual_points` matches `expected_points`, and whether any row is sitting on `recovered_by_tag`. A run that posts nothing and collects nothing reports clean, because there is nothing to report.
