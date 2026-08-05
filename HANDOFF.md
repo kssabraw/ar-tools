@@ -8,6 +8,37 @@ suite's existing engines, and Cloudflare serves it. **Ships dark behind
 `website_builder_enabled` (default False)** — nothing can create a repo until
 that flag is on.
 
+### 🟢 Nothing has been created — and "publish" here is jargon
+
+**As of 2026-08-05 no website exists.** `websites`, `website_pages`,
+`website_deploys` and `website_themes` are all **empty**, and no
+`website_provision` / `website_page_publish` job has ever run. (16 `website_scrape`
+rows exist — that is the unrelated, pre-existing client-site scraper.)
+
+**"Publish" in this module means "commit a generated page file into that site's
+repo".** It is the name of a code path, not an outward-facing act, and the
+function that does it is not written yet. Likewise "generate" means "call
+nlp-api for body copy", not "put something on the internet". The docs and commit
+messages use these words throughout; none of them describe anything that has
+run.
+
+**`kssabraw/ar-site-template` is the mould, not a site.** Private, containing
+the template plus two sample blog posts. It exists because the provisioner
+creates each site with `POST /repos/{template}/generate`, which needs a template
+repo to point at. Nothing is deployed from it and it has no Cloudflare project.
+
+**For a real website to exist, all of these must happen deliberately:**
+
+1. `website_builder_enabled=true` set on PLATFORM (it is not set, so it is False)
+2. a `websites` row created for a client
+3. `POST /websites/{id}/provision` called by a staff+ user
+4. a site plan built, reviewed and approved
+5. content generated (this is the step that spends money — one nlp-api call per page)
+6. pages published, i.e. committed, which triggers the Actions deploy
+
+Steps 4–6 have no implementation yet. Building the machinery is **setup**;
+creating a site is a separate, deliberate act that nobody has taken.
+
 **Docs (read these first, in this order):**
 - `docs/modules/website-builder-module-plan-v1_0.md` — engineering spec:
   architecture, data model, phasing, locked infrastructure rulings.
