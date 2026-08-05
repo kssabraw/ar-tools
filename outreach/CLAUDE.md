@@ -42,9 +42,15 @@ nobody would notice. Collection is free; run it hourly or daily.
 Owner ruling 2026-08-03: the **first live run is ONE submarket × ONE keyword**, so a wrong
 response envelope costs one batch rather than a market. `cmd_scan` refuses to do more.
 
-Still unbuilt downstream: the `prospect_coverage` rollup, land masking, dead-point exclusion, the
-organic/AI layers, and the placeholder score — all of which need scan rows that now have a
-producer but no data yet.
+**The `prospect_coverage` rollup, land masking and dead-point exclusion are BUILT** (2026-08-05,
+migration `20260805120000`, applied live). One plpgsql function per snapshot ending in
+`finalize_snapshot_rollup()`, so summary statistics cannot be written without their `rank_vector`.
+`collect` rolls up what it finalizes; `rollup` stands alone for backlog and `--verify`. Both free.
+Eight ambiguities logged as I-074…I-081 rather than resolved in the specs — read I-076 before
+building anything that reads coverage.
+
+Still unbuilt downstream: the placeholder score (next), the organic/AI layers, and the heatmap —
+all of which need scan rows that now have a producer, a consumer, and no data yet.
 
 **The pipeline is an AR Tools SUITE MODULE, not a standalone tool** (owner ruling, HANDOFF §2).
 The database stays in the Outreacher project; the API and UI belong in `platform-api` and the
@@ -69,6 +75,16 @@ and never in `writer/supabase/migrations/`, which targets AR-Internal-Tools.
   job blame the rollup.
 - **`grid_result` is owned by `docs/storage-retention-spec.md`.** Partitioned by month, no
   lat/lng columns. The copy in the PRD is context only.
+- **Coverage counts points MEASURED, never points where something was FOUND.** `live_points` reads
+  `scan_task.status = 'collected'` intersected with `grid_point_status.land`. An empty pack stays
+  in the denominator — it was measured, and "nobody ranks here" is a finding. An uncollected task
+  leaves it entirely. This has been the wrong answer three times in three places (DECISIONS.md).
+- **A rollup writes `rank_vector` in the same transaction as the numbers, or writes nothing.**
+  That is why it is one SQL function: PostgREST gives one transaction per call, so an application
+  loop cannot hold both halves. Never add a statement after `finalize_snapshot_rollup()`.
+- **A coverage DENOMINATOR is never recomputed after the fact.** `live_points` is stored
+  contemporaneously. Re-deriving it from today's land mask silently rewrites every claim already
+  made from it.
 - **Partitioning must exist before cycle two writes data.** At the portfolio size, unpartitioned
   append breaches Supabase Pro's 8 GB allowance inside year one.
 - **`outcome` is the modelling substrate.** Workflow changes never mutate it. `touch` is

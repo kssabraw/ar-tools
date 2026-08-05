@@ -196,6 +196,24 @@ class Settings(BaseSettings):
     # retried silently.
     scan_collect_alert_days: int = 5
 
+    # --- Coverage rollup (storage spec §4, PRD §9a.1) --------------------------------------
+    # Consecutive null scans before a grid point leaves the coverage DENOMINATOR. PRD §9a.1 says
+    # three. It lives here rather than in the SQL because it changes what `coverage_pct` MEANS,
+    # and a threshold that only exists inside a function body is one nobody can find when a
+    # coastal submarket's numbers look wrong (the same complaint as ISSUES I-071).
+    #
+    # Raising it is safe; LOWERING it is not retroactive and not free. `live_points` is stored
+    # contemporaneously, so snapshots already rolled up keep the denominator they were computed
+    # with — which is the point (§4: without the contemporaneous value, historical coverage
+    # becomes uninterpretable) and also means a mask that fired too eagerly cannot be undone for
+    # claims already made from it.
+    land_mask_null_scans: int = 3
+
+    # How many snapshots one `rollup` invocation will process. A bound rather than a cap on
+    # ambition: the rollup rides the collector's frequent tick, so a backlog drains over ticks
+    # instead of turning one tick into an unbounded job that the platform may kill halfway.
+    rollup_batch_limit: int = 50
+
 
 def missing_supabase_vars(settings: "Settings") -> list[str]:
     """Which Supabase credentials are absent, by env-var name.

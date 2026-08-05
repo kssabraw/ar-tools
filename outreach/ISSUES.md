@@ -1661,3 +1661,134 @@ matters most for Hollywood and the three weak names, and is close to a formality
 **Still blocked:** the recognition test itself (I-004) needs one engine key. None exists in the
 sandbox, and the `outreach` Railway service carries only Outscraper, DataForSEO and Supabase
 credentials.
+
+---
+
+## The coverage rollup (2026-08-05)
+
+Everything below was found while building `rollup_snapshot_coverage()` (migration
+`20260805120000`). Six are ambiguities in the specs, resolved the cheapest-to-reverse way and
+recorded here rather than silently in the specs, per CLAUDE.md §6. Two are structural consequences
+of the completion contract that the next reader will otherwise meet as a surprise.
+
+### I-074 · Land masking's second null criterion is not computable from stored data
+PRD §9a.1 defines a point as `null` for a scan "if it returns zero results, **or if the nearest
+result exceeds `2 x grid_spacing_miles` from the point**". The second half cannot be evaluated:
+`grid_result` deliberately stores no coordinates (storage spec §5 — they regenerate from the
+snapshot's geometry), and `maps_scan.parse_grid_result` keeps only `place_id` and `rank`, so
+nothing anywhere records where a returned business actually is. Most results are not prospects, so
+`prospect.lat/lng` does not cover it either — the *nearest* result is usually somebody we have
+never heard of.
+
+The distinction matters: the second criterion catches a point where the provider answered with
+businesses from miles away, which is a different failure from an empty pack and arguably the more
+common one over water.
+
+**Implemented:** the zero-results criterion only. **Forward fix:** capture the nearest result's
+distance at collect time — one number per point, computed from `items[0].latitude/longitude`
+against the grid point we already hold — onto `scan_task`. That is a scan-layer change and the
+scan layer has never run, so it was deliberately not made here: the first live run should prove
+the response envelope before anything new is read out of it.
+
+### I-075 · Two ways a snapshot can pin its partition forever, both fail-closed
+`drop_cold_partitions` requires a `snapshot_rollup` marker for **every** snapshot in a partition.
+Two snapshots can never get one:
+
+- **Incomplete snapshots.** PRD §9a.3 requires they be excluded from rollup, and the rollup
+  enforces that. So a snapshot that never reaches 98% completeness blocks its month indefinitely.
+- **Snapshots matching no prospects.** `finalize_snapshot_rollup()` raises when the grid contains
+  no known prospect, so the marker cannot be written. Unlikely at 81 points x ~20 results, but
+  possible in a submarket where every prospect has churned.
+
+Both retain a partition that will never drop — disk, forever, for one snapshot. That is the right
+direction to fail (the alternative is dropping evidence that was never verified), and it is not
+free. **Not fixed:** the fix is a "rolled up as excluded" marker variant, which means deciding what
+`prospect_count` means for a snapshot that legitimately has none — a schema question for whoever
+owns retention next, not something to decide inside a rollup. Watch `storage_retention_log` for
+`retained` rows whose reason names the same partition month after month.
+
+### I-076 · A prospect present at zero grid points gets no coverage row at all
+Forced, not chosen. `finalize_snapshot_rollup()` compares `count(*)` in `prospect_coverage` against
+`count(distinct prospect.id)` joined to `grid_result` with `<>`, so writing a row for a prospect who
+appears nowhere raises exactly as hard as omitting one who appears.
+
+The consequence is the wrong way round from what anyone would want: **the prospect with the worst
+possible coverage — invisible at every point — is the one with no row.** Whatever reads coverage
+next (the placeholder score, the audit, the heatmap) MUST treat a missing row for a scanned
+submarket as **zero coverage**, never as "not measured". Reading it as unknown would exclude the
+most painful prospects from scoring, which is precisely backwards for a pipeline whose entire pitch
+is coverage deficit.
+
+### I-077 · `grid_result` can hold duplicate rows, by design, and nothing constrains them
+There is no unique index on `(snapshot_id, point_seq, place_id)`. `_collect_one` writes the rows
+and *then* marks the task `collected` — deliberately, because a crash between them re-collects
+something free rather than losing something paid (DECISIONS.md) — so a crash in that window leaves
+a point's rows written twice after the retry.
+
+The rollup deduplicates with `min(rank)` per `(prospect, point)`, so `points_present` is correct
+today. Nothing else that reads `grid_result` knows to. **Not fixed here:** a unique index would
+turn the retry into an insert failure and lose the paid result, and `on conflict do nothing` on the
+insert is the better shape — but that is a change to the collector's write path, which has never
+run. Revisit after the first live scan.
+
+### I-078 · `scan_snapshot` has no `center`, though the storage spec says coordinates derive from it
+Storage spec §5: "Store the generator parameters (already in `scan_snapshot`)" and coordinates
+regenerate from `scan_snapshot.{center, grid_radius_miles, grid_spacing_miles}` plus `point_seq`.
+The built table has the two distances and **no centre** — the centre lives on `submarket`, which is
+immutable only by enforcement (`seeding.check_geometry_change`) rather than by storage.
+
+The rollup is unaffected and deliberately stays that way: point *distances* come from
+`steps x spacing` and are centre-independent, so nothing in the rollup reads a mutable column, and
+`centroid_dist_at_loss` cannot be rewritten by a corrected centre. **Phase 3 is affected.** The
+heatmap needs real lat/lng, so it will read `submarket.center_*` — and a submarket whose centre is
+ever corrected would re-render every historical heatmap against coordinates that were never
+scanned, which is the exact failure `geometry_version` exists to prevent, arriving through the one
+door the pin does not cover. **Action:** copy the centre onto `scan_snapshot` before the first
+heatmap renders, not after.
+
+### I-079 · `snapshot_rollup.point_count` counts what was FOUND, not what was measured
+`finalize_snapshot_rollup()` sets it from `count(distinct point_seq)` over `grid_result` — points
+that returned at least one business. Its own comment calls it "distinct grid points captured",
+which reads like coverage and is not: a snapshot with 81 points scanned and results at 60 records
+`point_count = 60`.
+
+This is the same measured-vs-found confusion corrected twice already (DECISIONS.md `actual_points`;
+I-069 itself). **Deliberately not changed** — the marker is a merged contract and the number is
+still the right one for its actual job, which is reconciling against the raw partition at drop
+time. Recorded so nobody reads it as a coverage statistic. The measured number is
+`scan_snapshot.actual_points`; the live one is `prospect_coverage.live_points`.
+
+### I-080 · `centroid_dist_at_loss` has no formula anywhere
+Storage spec §4 gives it a comment ("miles from pin where they drop out") and §11's acceptance
+criteria require it to survive rollup; the reporting spec exposes it in `v_client_coverage_history`
+and the PRD refers to an "invisible past N miles" line. No document defines how to compute it.
+
+**Implemented:** the distance of the **nearest live point at which the prospect is absent**, and
+null when they hold every live point. It is deterministic, needs no assumption about the shape of
+the decay, and on a normally-decaying grid it is the radius at which they drop out.
+
+**The alternative reading**, which "invisible past N miles" arguably fits better, is the smallest
+distance beyond which they are absent at *every* live point — a genuine outer boundary rather than
+a first gap. The two agree when coverage decays monotonically and diverge when a prospect holds an
+isolated far point. Cheapest to reverse: both are recomputable from `rank_vector` plus geometry, so
+switching later is a backfill, not a rescan. **Pick one deliberately before it appears in a
+prospect-facing claim**, because the two numbers can differ by miles and only one of them will
+match what the heatmap looks like.
+
+### I-081 · "3 consecutive null scans" — per snapshot, with the counter shared across keywords
+PRD §9a.1 says a point is masked "after 3 consecutive null scans" without saying what a scan is.
+One market cycle produces one snapshot per keyword per submarket, so "3 scans" could mean 3 cycles
+or 3 snapshots.
+
+**Implemented:** per snapshot, with one counter per `(submarket, point_seq)` shared by every
+keyword. That reading turns out to be the safe one rather than merely the literal one: because the
+counter is shared, a point that returns results for **any** keyword resets it, so the only points
+that ever reach 3 are those returning nothing for everything — which is what "this point is over
+water" actually means. A per-keyword counter would mask a point that is simply a dead zone for one
+service.
+
+**The wrinkle:** within a single cycle the three snapshots roll up in arbitrary order, so a point
+crossing the threshold mid-cycle is masked for the keywords rolled up after it and not for those
+before. Same cycle, two denominators. It is small, self-consistent per snapshot (`live_points` is
+stored contemporaneously), and cheaper to accept than to serialise rollups per cycle. Worth knowing
+before someone reads two keywords' coverage side by side and finds them incomparable.

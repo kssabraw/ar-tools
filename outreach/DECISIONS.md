@@ -554,3 +554,75 @@ treating as a log line.
 
 *Consequence:* the tag format is now part of the wire contract. Changing it orphans any task in
 flight, which is a real cost for ~3 days after any submission.
+
+## The coverage rollup is ONE SQL function, and geometry arrives as a parameter (2026-08-05)
+
+Two decisions, taken together because each forces the other.
+
+**One transaction, therefore one plpgsql function.** The requirement is that `rank_vector` is
+written in the same transaction as the summary statistics, and that a rollup producing summaries
+without vectors FAILS rather than partially succeeding (owner instruction, 2026-08-03). A vector
+written later, or in the wrong `point_seq` order, renders every historical heatmap against
+coordinates that were never used to collect it — silently, with the picture still drawing and every
+number still plausible.
+
+PostgREST gives one transaction per call. So the obvious Python shape — insert the coverage rows,
+then call `finalize_snapshot_rollup()` — cannot hold both halves together: the rows commit, the
+finalizer raises, and the partial rollup survives as exactly the thing I-069 was built to catch.
+Everything therefore happens inside `rollup_snapshot_coverage()`, whose last statement is the
+finalizer. This also satisfies storage spec §9, which requires coverage aggregation to run in
+Postgres rather than by pulling ~1,600 rows per snapshot into the application.
+
+**Geometry is passed in, not re-derived in SQL.** The rollup needs a distance per `point_seq` for
+`centroid_dist_at_loss` and needs to know how long a vector is. Both are properties of the lattice,
+which lives in `api/services/geometry.py` as a version REGISTRY — and that module's own docstring
+explains why a second derivation is dangerous: two implementations eventually disagree about a
+boundary point, and a point flipping in or out renumbers every `point_seq` after it.
+
+Re-implementing the lattice in SQL would create that second definition. Persisting distances into a
+table would create a cache that can go stale against a version bump. So the caller regenerates
+through the registry — using the snapshot's STORED `geometry_version`, never the default — and
+passes `[{"seq": n, "dist": miles}, ...]`; the function validates that it covers `0..expected-1`
+exactly and that the version matches the snapshot, and refuses otherwise.
+
+*Consequence, and it is a real one:* storage spec §7 asks for a daily `rollup_coverage` **pg_cron**
+job, and that is now unbuildable — pg_cron cannot call the Python generator. See the next entry.
+
+## The rollup rides the collector's tick rather than taking a third schedule (2026-08-05)
+
+Given the above, the rollup must run from the Railway job. The choice was a THIRD cron schedule or
+attaching it to an existing one.
+
+HANDOFF §11 already records that the collector's second schedule is the one most likely to be
+skipped and the most expensive to skip. A third would be worse, and its failure mode is quiet: no
+rollup means no completion markers, which means the retention job drops nothing, which means the
+storage ceiling this whole policy exists to avoid arrives on schedule while every run reports clean.
+
+So `collect` rolls up the snapshots it has just finalized — the only moment new work exists — and
+`rollup` also stands alone for backfill and for re-running one snapshot after fixing it. The
+integration is guarded and reported, never raised: collection is the paid work being rescued, and a
+rollup failure must not cost a collected task. `--no-rollup` exists for isolating a collection
+problem, not for routine use.
+
+`rollup` is FREE and must stay out of `PAID_COMMANDS` — same reasoning as `collect` (HANDOFF §8a).
+Spend-gating it would make every routine deploy's tick refuse for want of a confirmation token, and
+the backlog would stop draining silently. There is a test asserting this.
+
+## The coverage denominator counts points MEASURED — the third time (2026-08-05)
+
+`live_points` reads `scan_task.status = 'collected'` intersected with `grid_point_status.land`. It
+does not read `grid_result`, which can only record what was found.
+
+Three consequences, each the opposite of a plausible alternative:
+
+- A point that returned an **empty pack** stays in the denominator. It was measured; "nobody ranks
+  here" is a finding, and usually the strongest one in the grid.
+- A point whose task **never collected** leaves the denominator entirely. It is not an absence
+  anybody observed, and counting it as one manufactures pain out of a provider failure.
+- A **masked** point leaves the denominator but stays in the geometry and in the vector as `255`,
+  because the renderer must draw dead differently from not-found. Conflating them overstates pain
+  in the direction a prospect can catch.
+
+This is the same correction as `actual_points` (2026-08-04) and as I-069's completion marker
+(2026-08-03). Recorded a third time because it has now been the wrong answer three times in three
+different places, and the next place it comes up will be the placeholder score.
