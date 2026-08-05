@@ -1792,3 +1792,48 @@ crossing the threshold mid-cycle is masked for the keywords rolled up after it a
 before. Same cycle, two denominators. It is small, self-consistent per snapshot (`live_points` is
 stored contemporaneously), and cheaper to accept than to serialise rollups per cycle. Worth knowing
 before someone reads two keywords' coverage side by side and finds them incomparable.
+
+---
+
+## The placeholder score and the snapshot centre (2026-08-05)
+
+### I-082 · The placeholder score is a VIEW, not a `prospect_score` row
+START-HERE §4 Phase 2 asks for a "placeholder score = raw geogrid coverage deficit (one SQL
+expression)". The obvious home is `prospect_score`, and it is the wrong one.
+
+That table is the Phase 4 MODEL's, and its shape says so: `model in ('reply','close','value')`,
+`pass in (1,2)`, a `channel`, a `predicted_prob`, a `decile`, and a mandatory `score_run` carrying
+`model_version`, `lambda_shrink` and calibration constants. A coverage deficit has none of those.
+Writing it there would mean picking a `model` value from an enum with no slot for "this is not a
+model", inventing a `lambda_shrink` for a run that fits nothing, and satisfying a `score_factors`
+column whose stated invariant (CLAUDE.md) is that points plus offset reproduce the score exactly.
+
+Each is a small lie, and they compound in the one place this project cannot afford them. The
+reporting layer **already** reads `prospect_score where pass = 2 and model = 'value'`
+(`v_prospect_ranked`, reporting spec §3.1), so a placeholder wearing a model's clothes would be
+picked up as a fitted score by a query written months before it existed — and Phase 4's refit would
+have no column to tell the two apart. Phase 1 was verified on the criterion "`prospect_score` was
+never written"; keeping that true is worth more than the convenience.
+
+**Implemented:** `v_prospect_placeholder_score`, a view over `prospect_coverage`. It stores
+nothing, cannot pollute the modelling substrate, is literally the one SQL expression the checklist
+asks for, and Phase 4 replaces it by dropping it. **If a later phase needs the placeholder
+persisted** — to join scores to outcomes before the real model exists — that is a decision to take
+deliberately, and it needs its own table or a `model` value that admits what it is. Do not reach
+for `prospect_score` because it is there.
+
+### I-078 RESOLVED (2026-08-05) · The snapshot now records its own centre
+`scan_snapshot.center_lat` / `center_lng` added (migration `20260805140000`, applied live) and
+written by `submit_scan` from the same locals passed to the geometry generator, so the recorded
+centre is provably the one used rather than one that merely matches today.
+
+**Nullable deliberately.** NOT NULL would let a stale writer fail a snapshot insert on a
+bookkeeping column, and the fail-safe direction on a path about to spend money is "the scan
+proceeds and the gap is visible". Tighten to NOT NULL once the first real scan proves the writer
+populates it.
+
+Done now rather than later because the window was closing: the table is empty, so this was an
+ALTER with nothing to backfill. After the first snapshot it becomes a backfill that reads today's
+submarket centre and asserts it was the centre used at scan time — exactly the unverifiable claim
+the column exists to make unnecessary. What stood between the pipeline and that first snapshot was
+a Railway deploy.

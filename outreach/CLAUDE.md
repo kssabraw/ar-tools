@@ -49,8 +49,14 @@ migration `20260805120000`, applied live). One plpgsql function per snapshot end
 Eight ambiguities logged as I-074…I-081 rather than resolved in the specs — read I-076 before
 building anything that reads coverage.
 
-Still unbuilt downstream: the placeholder score (next), the organic/AI layers, and the heatmap —
-all of which need scan rows that now have a producer, a consumer, and no data yet.
+**The placeholder score is BUILT** (2026-08-05) as `v_prospect_placeholder_score` — a view over
+`prospect_coverage`, deliberately NOT a `prospect_score` row (ISSUES I-082: that table is the
+Phase 4 model's, and the reporting layer already reads it as one). `scan_snapshot` also records
+its own grid centre now (I-078 resolved), which had to happen before the first snapshot was
+written rather than after.
+
+Still unbuilt downstream: the organic/AI layers and the heatmap — both of which need scan rows
+that now have a producer, a consumer, and no data yet.
 
 **The pipeline is an AR Tools SUITE MODULE, not a standalone tool** (owner ruling, HANDOFF §2).
 The database stays in the Outreacher project; the API and UI belong in `platform-api` and the
@@ -85,6 +91,12 @@ and never in `writer/supabase/migrations/`, which targets AR-Internal-Tools.
 - **A coverage DENOMINATOR is never recomputed after the fact.** `live_points` is stored
   contemporaneously. Re-deriving it from today's land mask silently rewrites every claim already
   made from it.
+- **A prospect with no `prospect_coverage` row has ZERO coverage, not unknown** (ISSUES I-076) —
+  but only inside a submarket carrying a `snapshot_rollup` marker. Outside one, nothing was
+  measured and there is no score to give. Confusing the two scores a failed scan as total
+  invisibility, which is the strongest pitch in the market, manufactured.
+- **`prospect_score` is the Phase 4 model's table and stays empty until then** (ISSUES I-082). The
+  placeholder is a view. The reporting layer already reads `prospect_score` as a fitted score.
 - **Partitioning must exist before cycle two writes data.** At the portfolio size, unpartitioned
   append breaches Supabase Pro's 8 GB allowance inside year one.
 - **`outcome` is the modelling substrate.** Workflow changes never mutate it. `touch` is

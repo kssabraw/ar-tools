@@ -275,6 +275,61 @@ def test_the_denominator_reads_scan_task_not_grid_result():
     assert "gps.land" in live_cte
 
 
+# --- the placeholder score, guarded against drift ---------------------------------------------
+
+PLACEHOLDER = (
+    Path(__file__).resolve().parents[2] / "migrations" / "20260805150000_placeholder_score.sql"
+)
+
+
+def test_the_placeholder_score_is_not_a_prospect_score_row():
+    """It is a VIEW. `prospect_score` is the Phase 4 model's table — `model in
+    ('reply','close','value')`, a mandatory `score_run` with `lambda_shrink`, and a
+    `score_factors` whose invariant is that points plus offset reproduce the score exactly. A
+    coverage deficit is none of those, and the reporting layer already reads
+    `prospect_score where pass = 2 and model = 'value'`, so a placeholder wearing a model's
+    clothes would be picked up as a fitted score by a query written before it existed (I-082)."""
+    sql = PLACEHOLDER.read_text()
+    assert "create or replace view v_prospect_placeholder_score" in sql
+    assert "insert into prospect_score" not in sql
+    assert "insert into score_run" not in sql
+
+
+def test_the_placeholder_gates_on_the_completion_MARKER():
+    """Not on `complete`, and not on "a snapshot exists". An incomplete snapshot has no coverage
+    rows at all, so gating on existence would score every prospect in that submarket at 100%
+    deficit — maximum pain — purely because the scan failed."""
+    sql = PLACEHOLDER.read_text()
+    measured = sql[sql.index("with measured as ("):sql.index("select\n  p.id")]
+    assert "join snapshot_rollup" in measured
+
+
+def test_the_placeholder_keeps_prospects_with_no_coverage_row():
+    """I-076's whole point. The prospect invisible at every grid point has no coverage row, and an
+    inner join would silently omit exactly the prospects this pipeline exists to find."""
+    sql = PLACEHOLDER.read_text()
+    assert "left join prospect_coverage" in sql
+    assert "coalesce(pc.coverage_pct, 0)" in sql
+    assert "join measured m on m.submarket_id = p.submarket_id" in sql
+
+
+def test_the_placeholder_does_not_filter_out_excluded_prospects():
+    """`excluded` is carried as a column, not applied as a predicate. Filtering here would make
+    the view harsher than the filter itself and say nothing about why — the same shape as the
+    franchise rule's original bug (R-003)."""
+    sql = PLACEHOLDER.read_text()
+    assert "st.excluded" in sql
+    assert "where st.excluded" not in sql
+    assert "not st.excluded" not in sql
+
+
+def test_the_latest_snapshot_selection_has_a_tie_break():
+    """`now()` is TRANSACTION time, so snapshots written together share a timestamp exactly. With
+    only `scanned_at desc` the view would pick a different one run to run, silently."""
+    sql = PLACEHOLDER.read_text()
+    assert "order by s.submarket_id, s.keyword_id, s.scanned_at desc, s.id desc" in sql
+
+
 def test_rollup_is_free_and_must_stay_free():
     """`rollup` contacts no provider. Spend-gating it would make the collector's tick refuse on
     every deploy that has no confirmation token — which is every routine deploy — and the backlog

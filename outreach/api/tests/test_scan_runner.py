@@ -279,6 +279,33 @@ def test_the_snapshot_records_expected_points_before_the_scan_runs():
     assert snapshot["complete"] is False
 
 
+def test_the_snapshot_records_the_centre_the_points_were_generated_from():
+    """ISSUES I-078. Coordinates are not stored, so a heatmap regenerates them from the snapshot's
+    parameters — and the centre was not among them, which meant Phase 3 would read
+    `submarket.center_lat/lng` instead. That column is immutable only by enforcement, so a
+    submarket whose centre is ever corrected would re-render every historical heatmap against
+    coordinates that were never scanned: the exact failure `geometry_version` exists to prevent,
+    arriving through the one door the pin does not cover.
+
+    Asserted against the SAME values passed to the generator, not against the fixture's literals.
+    Reading the submarket twice would record a centre that merely happens to be equal today, and
+    the whole value of storing it is that it stays true afterwards.
+    """
+    db = _FakeDB()
+    submarket = _submarket()
+    points = scan_runner.generate_points(34.16, -118.60, 5.0, 5.0)
+    bodies = [b for _, b in maps_scan.build_grid_tasks(
+        SNAP, "plumber", points, zoom=13, depth=20, language_code="en")]
+    asyncio.run(
+        scan_runner.submit_scan(
+            db, _Settings(), submarket, _keyword(), client=_FakeHTTP(posts=[_post_ok(bodies)])
+        )
+    )
+    snapshot = db.tables["scan_snapshot"][0]
+    assert snapshot["center_lat"] == submarket["center_lat"]
+    assert snapshot["center_lng"] == submarket["center_lng"]
+
+
 # --- the month --------------------------------------------------------------------------------
 
 

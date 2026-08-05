@@ -626,3 +626,23 @@ Three consequences, each the opposite of a plausible alternative:
 This is the same correction as `actual_points` (2026-08-04) and as I-069's completion marker
 (2026-08-03). Recorded a third time because it has now been the wrong answer three times in three
 different places, and the next place it comes up will be the placeholder score.
+
+## The placeholder score is a view over coverage, not a row in `prospect_score` (2026-08-05)
+
+The checklist calls for a placeholder score and the model's table is sitting right there. Using it
+would have meant claiming a `model` from an enum with no honest value, an invented `lambda_shrink`,
+and a `score_factors` that cannot satisfy its own replayability invariant.
+
+The decisive argument is not tidiness. `v_prospect_ranked` already selects
+`prospect_score where pass = 2 and model = 'value'`, so a placeholder in that table is not inert —
+it is picked up as a fitted score by a query written before it existed, and the refit that replaces
+it has no column to distinguish the two. A view has none of that reach and is removed in one line.
+
+Recorded as a decision rather than an implementation note because the pull toward the existing
+table will recur every time something needs a score before Phase 4 — and the answer is the same:
+if the placeholder ever needs persisting, it gets a home that admits what it is.
+
+*Consequence:* the placeholder gates on `snapshot_rollup`, the completion marker — not on
+`scan_snapshot.complete` and not on "a snapshot exists". An incomplete snapshot has no coverage
+rows, so gating on existence would score every prospect in that submarket at maximum deficit
+because the scan failed. That is the measured-vs-found error again, in its fourth costume.

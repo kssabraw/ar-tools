@@ -116,8 +116,11 @@ is needed for inspection.
 
 **Goal: real pain signals and the data a heatmap needs.**
 
-- [ ] Placeholder score = raw geogrid coverage deficit (one SQL expression). This belongs here,
+- [x] Placeholder score = raw geogrid coverage deficit (one SQL expression). This belongs here,
       not Phase 1 — it needs grid data to exist.
+      (`v_prospect_placeholder_score`, 2026-08-05. A VIEW, deliberately NOT a `prospect_score`
+      row — that table is the Phase 4 model's and the reporting layer already reads it: ISSUES
+      I-082.)
 
 - [ ] Grid geometry generated from pinned, versioned function; parameters persisted per snapshot
 - [ ] Maps geogrid via DataForSEO standard queue, batched (100/POST), collected via `tasks_ready`
@@ -125,6 +128,8 @@ is needed for inspection.
 - [ ] Organic SERP + AI Overview per submarket × keyword; paid results parsed for ads-gap
 - [ ] AI checks per `ai_region` (not per submarket), ≥3 samples, deduplicated by region
 - [ ] `scan_snapshot` immutable, append-only, with `expected_points` / `actual_points`
+      (append-only is still unenforced — ISSUES I-070. It now also records its own grid centre,
+      ISSUES I-078.)
 - [ ] Snapshots below 98% completeness marked incomplete and excluded from scoring
 - [x] Dead grid points excluded from coverage denominator after 3 consecutive null scans
       (`grid_point_status` + `rollup_snapshot_coverage()`, 2026-08-05. The second null criterion —
