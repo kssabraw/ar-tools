@@ -164,20 +164,79 @@ class TestScaleGates:
         assert plan.matrix_count == 225
         assert any(i.kind == "matrix_signoff" and i.blocking for i in plan.issues)
 
-    def test_links_advisory_never_blocks(self):
-        # The figure is unratified and was ruled too high; a number that blocks
-        # work needs ratifying first, so this warns and approval proceeds.
+    def test_matrix_signoff_is_acknowledgeable_not_a_wall(self):
+        # "Blocks until acknowledged" (§4.3, §8.D). Without the distinction, a
+        # site with a legitimately large matrix could never be approved and the
+        # only way out would be to lie to the planner.
+        catalog = [svc(f"Service {i}", order=i) for i in range(15)]
+        cities = [city(f"City {i}") for i in range(15)]
+        plan = wp.build_plan(site_type="local_business", catalog=catalog, cities=cities)
+        [issue] = [i for i in plan.issues if i.kind == "matrix_signoff"]
+        assert issue.acknowledgeable is True
+
+    def test_link_budget_blocks_now_that_25_is_ratified(self):
+        # Ratified by the owner 2026-08-05, superseding the reference's >40.
+        # While the figure was unratified this could only warn.
         catalog = [svc(f"Service {i}", order=i) for i in range(30)]
         plan = wp.build_plan(site_type="local_business", catalog=catalog, cities=CITIES)
-        advisories = [i for i in plan.issues if i.kind == "links_advisory"]
-        assert advisories, "expected an advisory at 30 services per city"
-        assert all(not i.blocking for i in advisories)
+        issues = [i for i in plan.issues if i.kind == "link_budget"]
+        assert issues, "expected a link-budget breach at 30 services per city"
+        assert all(i.blocking and i.acknowledgeable for i in issues)
 
-    def test_global_nav_is_not_counted_toward_the_advisory(self):
+    def test_a_normal_site_is_nowhere_near_the_budget(self):
+        # The bar has to sit above every legitimate page or people learn to
+        # click through it. The PRD's own worked example — a 12-service city
+        # page — must pass.
+        catalog = [svc(f"Service {i}", order=i) for i in range(12)]
+        plan = wp.build_plan(site_type="local_business", catalog=catalog, cities=CITIES)
+        assert [i for i in plan.issues if i.kind == "link_budget"] == []
+
+    def test_global_nav_is_not_counted_toward_the_budget(self):
         # Counting the SOP-mandated nav would put every legitimate city page
-        # over the bar and train people to ignore the warning.
+        # over the bar. The exclusion is half of what the 25 figure ratifies.
         plan = wp.build_plan(site_type="local_business", catalog=CATALOG, cities=CITIES)
-        assert plan.links_per_index["/overland-park/"] == 2  # its two matrix cells only
+        # Two matrix cells + the Areas We Serve page this multi-city site gets.
+        assert plan.links_per_index["/overland-park/"] == 3
+
+
+class TestLinkCounting:
+    """§4.8b's table, which is not the same as 'pages nested under this path'."""
+
+    def test_a_service_page_counts_the_cities_that_offer_it(self):
+        # The links a path-prefix count misses entirely: on a 15-city site they
+        # are the whole number, and they are what pushes an index over budget.
+        cities = [city(f"City {i}") for i in range(15)]
+        plan = wp.build_plan(site_type="local_business", catalog=CATALOG, cities=cities)
+        assert plan.links_per_index["/roof-repair/"] == 15
+
+    def test_a_city_page_counts_services_neighborhoods_and_areas(self):
+        cities = [city("Overland Park", neighborhoods=("Nall Hills", "Deer Creek")),
+                  city("Lees Summit")]
+        plan = wp.build_plan(site_type="local_business", catalog=CATALOG, cities=cities)
+        # 2 matrix cells + 2 neighborhoods + the Areas We Serve page.
+        assert plan.links_per_index["/overland-park/"] == 5
+
+    def test_a_service_excluded_from_the_matrix_links_to_no_cities(self):
+        catalog = [svc("Roof Repair", order=10), svc("Gutter Cleaning", order=20,
+                                                     include_in_matrix=False)]
+        plan = wp.build_plan(site_type="local_business", catalog=catalog, cities=CITIES)
+        assert plan.links_per_index["/gutter-cleaning/"] == 0
+
+    def test_areas_we_serve_counts_every_city(self):
+        cities = [city(f"City {i}") for i in range(9)]
+        plan = wp.build_plan(site_type="local_business", catalog=CATALOG, cities=cities)
+        assert plan.links_per_index["/areas-we-serve/"] == 9
+
+    def test_a_services_index_counts_every_top_level_service(self):
+        catalog = [svc(f"Service {i}", order=i) for i in range(10)]
+        plan = wp.build_plan(site_type="local_business", catalog=catalog, cities=CITIES)
+        assert plan.links_per_index["/services/"] == 10
+
+    def test_a_single_city_site_has_no_matrix_links_to_count(self):
+        plan = wp.build_plan(
+            site_type="local_business", catalog=CATALOG, cities=[city("Overland Park")]
+        )
+        assert plan.links_per_index["/roof-repair/"] == 0
 
 
 class TestTriggers:

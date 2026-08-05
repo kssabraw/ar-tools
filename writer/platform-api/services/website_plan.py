@@ -84,10 +84,13 @@ UTILITY_PAGE_TYPES = frozenset(
 
 # Scale gates (PRD §4.3).
 MATRIX_SIGNOFF_THRESHOLD = 200
-# The >40 figure is UNRATIFIED in the reference and was ruled too high by the
-# owner (2026-08-04). Advisory only until a figure is ratified into the SOP's
-# link-equity section — it must not block approval.
-LINKS_PER_INDEX_ADVISORY = 25
+# **Ratified at 25 by the owner, 2026-08-05**, superseding the reference's
+# unratified >40 figure (ruled too high 2026-08-04). The number and what it
+# counts ratify together: **body links only**, excluding the SOP-mandated global
+# nav/footer set — see `links_per_index`. Now that it is ratified it BLOCKS
+# approval until acknowledged, per PRD §4.3/§8.D; while it was unratified it
+# could not, because a number that stops work has to be agreed first.
+LINKS_PER_INDEX_MAX = 25
 # A Services index is triggered when the nav would otherwise overflow.
 SERVICES_INDEX_TRIGGER = 8
 
@@ -159,13 +162,20 @@ class PlanIssue:
         "reserved_slug",
         "duplicate_path",
         "matrix_signoff",
-        "links_advisory",
+        "link_budget",
         "single_service_matrix",
         "missing_template",
         "portfolio_conflict",
     ]
     blocking: bool
     detail: str
+    # Whether a human may sign this off and proceed. Scale gates are
+    # "blocking until acknowledged" (PRD §4.3, §8.D) — a big matrix is a
+    # judgement call, so it needs a decision, not a wall. Planning *errors*
+    # (a reserved-slug collision, two entries claiming one path) are never
+    # acknowledgeable: they are wrong, not large, and the fix is to edit the
+    # catalog.
+    acknowledgeable: bool = False
 
 
 @dataclass
@@ -359,36 +369,89 @@ def check_paths(pages: Iterable[PlannedPage]) -> list[PlanIssue]:
     return issues
 
 
+INDEX_PAGE_TYPES = frozenset(
+    {"location", "service", "services_index", "areas_we_serve", "blog_archive"}
+)
+
+
 def links_per_index(pages: Iterable[PlannedPage]) -> dict[str, int]:
-    """Outbound structural body links per index-ish page.
+    """Outbound structural body links per index page, per PRD §4.8b.
 
     Calculable before anything is generated precisely because structural linking
-    is deterministic (PRD §4.8b). The global nav/footer set is deliberately NOT
-    counted: it appears on every page by SOP mandate, so counting it would put
-    every legitimate city page over any useful threshold and train people to
-    ignore the warning.
+    is deterministic — the template renders these from frontmatter and no model
+    is involved, so the volume follows from the plan itself.
+
+    Counted per §4.8b's table, which is NOT the same as "pages nested under this
+    path":
+
+    * **City page** → the services offered in that city (its matrix cells), its
+      neighborhoods, and the Areas We Serve page where one exists.
+    * **Service page** → its sub-services **and the cities where the service is
+      offered**. Those city links are the ones a path-prefix count misses
+      entirely, and on a 15-city site they are the whole number.
+    * **Services index** → every top-level service. **Areas We Serve** → every
+      city. **Blog archive** → its published posts (zero at plan time on a local
+      site; the fan-out owns an informational site's post plan).
+
+    The global nav/footer set is deliberately NOT counted: it appears on every
+    page by SOP mandate, so counting it would put every legitimate city page
+    over any useful threshold and train people to ignore the number. That
+    exclusion is half of what the 25 figure ratifies — the number and what it
+    counts ratify together.
     """
-    counts: dict[str, int] = {}
     by_path = list(pages)
+    counts: dict[str, int] = {}
+
+    matrix = [p for p in by_path if p.page_type in {"local_landing", "hyper_local"}]
+    has_areas_page = any(p.page_type == "areas_we_serve" for p in by_path)
 
     for page in by_path:
-        if page.page_type not in {"location", "service", "services_index", "areas_we_serve", "blog_archive"}:
+        if page.page_type not in INDEX_PAGE_TYPES:
             continue
-        depth = len([s for s in page.path.split("/") if s])
-        children = [
-            p
-            for p in by_path
-            if p.path.startswith(page.path)
-            and p.path != page.path
-            and len([s for s in p.path.split("/") if s]) == depth + 1
-        ]
-        counts[page.path] = len(children)
+        segs = [s for s in page.path.split("/") if s]
+
+        if page.page_type == "location":
+            city = segs[0] if segs else ""
+            services_here = sum(1 for p in matrix if _segments(p.path)[:1] == [city])
+            neighborhoods = sum(
+                1
+                for p in by_path
+                if p.page_type == "neighborhood" and _segments(p.path)[:1] == [city]
+            )
+            counts[page.path] = services_here + neighborhoods + (1 if has_areas_page else 0)
+
+        elif page.page_type == "service":
+            slug = segs[0] if segs else ""
+            sub_services = sum(
+                1
+                for p in by_path
+                if p.page_type == "sub_service" and _segments(p.path)[:1] == [slug]
+            )
+            cities_offering = sum(
+                1 for p in matrix if _segments(p.path)[1:2] == [slug]
+            )
+            counts[page.path] = sub_services + cities_offering
+
+        elif page.page_type == "services_index":
+            counts[page.path] = sum(1 for p in by_path if p.page_type == "service")
+
+        elif page.page_type == "areas_we_serve":
+            counts[page.path] = sum(1 for p in by_path if p.page_type == "location")
+
+        elif page.page_type == "blog_archive":
+            counts[page.path] = sum(1 for p in by_path if p.page_type == "post")
 
     return counts
 
 
 def scale_gates(matrix_count: int, links: dict[str, int]) -> list[PlanIssue]:
-    """Blocking warnings at plan review — never silent truncations."""
+    """Scale gates at plan review — blocking sign-offs, never silent truncations.
+
+    Both are `acknowledgeable`: §4.3 and §8.D describe them as blocking *until
+    acknowledged*, which is a sign-off, not a wall. Without that distinction a
+    site with a legitimately large matrix could never be approved at all, and
+    the only way out would be to lie to the planner.
+    """
     issues: list[PlanIssue] = []
 
     if matrix_count > MATRIX_SIGNOFF_THRESHOLD:
@@ -397,18 +460,19 @@ def scale_gates(matrix_count: int, links: dict[str, int]) -> list[PlanIssue]:
                 "matrix_signoff",
                 True,
                 f"matrix is {matrix_count} pages (> {MATRIX_SIGNOFF_THRESHOLD}) — needs human sign-off",
+                acknowledgeable=True,
             )
         )
 
-    over = {p: n for p, n in links.items() if n > LINKS_PER_INDEX_ADVISORY}
+    over = {p: n for p, n in links.items() if n > LINKS_PER_INDEX_MAX}
     for path, n in sorted(over.items()):
         issues.append(
             PlanIssue(
-                "links_advisory",
-                # Advisory, not blocking: the figure is unratified (reference
-                # §1.2) and a number that blocks work needs ratifying first.
-                False,
-                f"{path} carries {n} outbound structural links (advisory > {LINKS_PER_INDEX_ADVISORY})",
+                "link_budget",
+                True,
+                f"{path} carries {n} outbound structural body links "
+                f"(> {LINKS_PER_INDEX_MAX}) — trim the index or split the silo",
+                acknowledgeable=True,
             )
         )
 

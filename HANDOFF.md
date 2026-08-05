@@ -169,7 +169,12 @@ the six unbuilt writers (§4.7).
 
 ### Open items
 
-- The **ratified links-per-index figure** (Kyle/Ryan) — advisory at 25 meanwhile.
+- ~~The **ratified links-per-index figure**~~ — **ratified at 25 by the owner
+  2026-08-05** (body links only, excluding the global nav/footer set). It now
+  **blocks approval until acknowledged**, like the >200 matrix gate; both clear
+  via `acknowledge` on the approve route, and planning errors never do.
+  Remaining: fold the figure into the SOP's link-equity section and Page Type
+  Reference §1.2, which both still carry the unratified >40 note.
 - **Component renaming is done**, but 13 library components remain unbuilt and
   are listed in `site-template/src/theme/manifest.ts::MISSING_COMPONENTS`; each
   gates a page type that has no writer anyway.
