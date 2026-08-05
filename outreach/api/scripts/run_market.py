@@ -417,7 +417,7 @@ def cmd_collect(args) -> int:
     """Drain the ready list and store whatever is done. FREE, and safe to run on any tick."""
     import asyncio as _asyncio
 
-    from api.services import scan_runner
+    from api.services import coverage_rollup, scan_runner
     from api.services.dataforseo_client import missing_dataforseo_vars
 
     settings = get_settings()
@@ -426,7 +426,38 @@ def cmd_collect(args) -> int:
         print(f"REFUSED: missing credentials: {', '.join(absent)}", file=sys.stderr)
         return 2
 
-    report = _asyncio.run(scan_runner.collect_ready(_client(), settings))
+    client = _client()
+    report = _asyncio.run(scan_runner.collect_ready(client, settings))
+
+    # The rollup rides this tick rather than taking a schedule of its own.
+    #
+    # Storage spec §7 asks for a daily `rollup_coverage` pg_cron job, and that is not buildable:
+    # the rollup needs point distances from the PINNED Python geometry generator, and pg_cron
+    # cannot call it. The alternatives were a THIRD Railway schedule or this. HANDOFF §11 already
+    # records that the collector's second schedule is the one most likely to be skipped, and a
+    # third would be worse — so the rollup runs where a snapshot has just been finalized, which is
+    # the only moment new work exists.
+    #
+    # Guarded, and reported rather than raised: collection is the paid work being rescued here, and
+    # a rollup failure must never cost a collected task. `rollup` standalone clears any backlog.
+    rollup_summary: dict = {}
+    if not args.no_rollup:
+        try:
+            rolled = coverage_rollup.run_rollup(
+                client, settings, limit=settings.rollup_batch_limit
+            )
+            rollup_summary = {
+                "considered": rolled.considered,
+                "rolled_up": rolled.rolled_up,
+                "prospect_rows": rolled.prospect_rows,
+                "problems": rolled.problems,
+            }
+        except Exception as exc:  # noqa: BLE001 — never lose a collection to a rollup
+            rollup_summary = {"error": repr(exc)}
+            logging.getLogger(__name__).error(
+                "rollup after collect failed", extra={"error": str(exc)[:500]}
+            )
+
     print(
         json.dumps(
             {
@@ -439,6 +470,7 @@ def cmd_collect(args) -> int:
                 "recovered_by_tag": report.recovered_by_tag,
                 "snapshots_finalized": report.snapshots_finalized,
                 "problems": report.problems,
+                "rollup": rollup_summary,
             },
             indent=2,
         )
@@ -446,6 +478,60 @@ def cmd_collect(args) -> int:
     # A collector that found nothing is the NORMAL case between cycles, so it exits zero. The
     # failure worth reporting is one that saw work and could not do it.
     return 1 if report.problems and not report.collected else 0
+
+
+def cmd_rollup(args) -> int:
+    """Roll finalized snapshots into `prospect_coverage`. FREE — no provider is contacted.
+
+    Storage spec §4. One transaction per snapshot, ending in `finalize_snapshot_rollup()`, so a
+    rollup that cannot write every prospect's `rank_vector` writes nothing at all rather than
+    leaving summary numbers behind with no picture to check them against.
+
+    `collect` already does this for the snapshots it finalizes. This command exists for the two
+    cases that misses: a backlog left by a rollup that failed for a fixable reason, and re-running
+    one named snapshot after fixing it. Both are idempotent — a snapshot with a completion marker
+    is refused, not rewritten.
+
+    `--verify` recomputes every coverage statistic FROM the stored vectors and reports
+    disagreements (storage spec §12). Nothing is written, so it is safe to run against anything.
+    """
+    from api.services import coverage_rollup
+
+    settings = get_settings()
+    client = _client()
+
+    if args.verify:
+        snapshot_ids = [args.snapshot] if args.snapshot else [
+            r["snapshot_id"]
+            for r in (client.table("snapshot_rollup").select("snapshot_id").execute().data or [])
+        ]
+        results = [coverage_rollup.verify_rollup(client, sid) for sid in snapshot_ids]
+        print(json.dumps({"verified": len(results), "snapshots": results}, indent=2))
+        return 1 if any(r["problems"] for r in results) else 0
+
+    report = coverage_rollup.run_rollup(
+        client,
+        settings,
+        snapshot_ids=[args.snapshot] if args.snapshot else None,
+        limit=args.limit if args.snapshot is None else None,
+    )
+    print(
+        json.dumps(
+            {
+                "considered": report.considered,
+                "rolled_up": report.rolled_up,
+                "already_rolled_up": report.already_done,
+                "prospect_rows": report.prospect_rows,
+                "results": report.results,
+                "problems": report.problems,
+            },
+            indent=2,
+        )
+    )
+    # Nothing pending is the NORMAL state between scans, so an empty run exits zero. A snapshot
+    # that was considered and could not be rolled up is the failure worth reporting: it means a
+    # partition will never drop, and fail-closed retention is only safe while somebody knows.
+    return 1 if report.problems else 0
 
 
 def cmd_probe_ai_granularity(args) -> int:
@@ -709,7 +795,7 @@ def main() -> int:
             dict(os.environ),
             [
                 "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-                "probe-dataforseo", "probe-ai-granularity", "scan", "collect",
+                "probe-dataforseo", "probe-ai-granularity", "scan", "collect", "rollup",
             ],
         ),
         flush=True,
@@ -720,14 +806,18 @@ def main() -> int:
         "command",
         choices=[
             "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-            "probe-dataforseo", "probe-ai-granularity", "scan", "collect",
+            "probe-dataforseo", "probe-ai-granularity", "scan", "collect", "rollup",
         ],
     )
     parser.add_argument("definition", help="path to a market definition JSON file")
     parser.add_argument("--cycle", type=int, default=None, help="cycle number for cost_ledger")
     parser.add_argument(
         "--limit", type=int, default=20,
-        help="places per query (calibrate); prospects to look up (verify-reviews)",
+        help=(
+            "places per query (calibrate); prospects to look up (verify-reviews); snapshots to "
+            "roll up in one invocation (rollup — the command is idempotent, so a larger backlog "
+            "just needs another run)"
+        ),
     )
     parser.add_argument(
         "--group", choices=["both_null", "rating_present", "control"], default="both_null",
@@ -776,6 +866,25 @@ def main() -> int:
         action="store_true",
         help="permit geometry edits to submarkets that have NOT been scanned",
     )
+    parser.add_argument(
+        "--snapshot", default=None,
+        help="rollup: one snapshot id, instead of everything awaiting a rollup",
+    )
+    parser.add_argument(
+        "--verify", action="store_true",
+        help=(
+            "rollup: recompute every coverage statistic from the stored rank_vectors and report "
+            "disagreements. Writes nothing."
+        ),
+    )
+    parser.add_argument(
+        "--no-rollup", action="store_true",
+        help=(
+            "collect: do NOT roll up the snapshots this tick finalizes. The rollup is free and "
+            "riding the collector is what keeps it off a third cron schedule, so this is for "
+            "isolating a collection problem, not for routine use."
+        ),
+    )
     handlers = {
         "seed": cmd_seed,
         "ingest": cmd_ingest,
@@ -787,6 +896,7 @@ def main() -> int:
         "probe-ai-granularity": cmd_probe_ai_granularity,
         "scan": cmd_scan,
         "collect": cmd_collect,
+        "rollup": cmd_rollup,
     }
 
     # Railway reports a crashed job as deployment status SUCCESS when restartPolicy is NEVER —

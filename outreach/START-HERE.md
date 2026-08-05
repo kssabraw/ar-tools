@@ -66,6 +66,7 @@ hardcoded.
 | MMR `λ` | 0.5 → 0.6 → 0.8 (refit-gated) | PRD §8 |
 | `λ_shrink` | 0.5 | PRD §15a |
 | `completeness_threshold` | 0.98 | PRD §9a.3 |
+| `land_mask_null_scans` | 3 | PRD §9a.1 |
 | `max_market_run_cost_cents` | 5000 | PRD §13 |
 | `max_portfolio_cycle_cost_cents` | 40000 | PRD §13 |
 | `email_track_ready` | gate, not a value | PRD §15a |
@@ -125,7 +126,10 @@ is needed for inspection.
 - [ ] AI checks per `ai_region` (not per submarket), ≥3 samples, deduplicated by region
 - [ ] `scan_snapshot` immutable, append-only, with `expected_points` / `actual_points`
 - [ ] Snapshots below 98% completeness marked incomplete and excluded from scoring
-- [ ] Dead grid points excluded from coverage denominator after 3 consecutive null scans
+- [x] Dead grid points excluded from coverage denominator after 3 consecutive null scans
+      (`grid_point_status` + `rollup_snapshot_coverage()`, 2026-08-05. The second null criterion —
+      nearest result > 2 x spacing — is NOT implemented and is not computable from stored data:
+      ISSUES I-074)
 - [ ] Partitioning and retention jobs in place **before** cycle two writes data
 
 > **This is not optional and not deferrable.** At the recorded portfolio size, `grid_result` grows

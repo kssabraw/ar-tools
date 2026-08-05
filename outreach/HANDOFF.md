@@ -13,7 +13,8 @@ Status as of 2026-08-05:
 - **The LA `ai_region` candidates are drafted (I-073)** from evidence already in the data — 10 of 14 submarket names are unambiguous localities, 3 are not. No engine calls were needed. See ISSUES I-073.
 - **The maps geogrid client + `tasks_ready` collector is BUILT and MERGED (#557, `29914108`).** Migration `20260804120000_scan_task.sql` applied live. Two commands — `scan` (paid, one submarket × one keyword) and `collect` (free, never spend-gated). See §8.1a for what it does and §11 for the two things standing between it and real rows.
 - **The I-004 spike instrument is BUILT and MERGED (#556, `ccb7e912`)** — `probe-ai-granularity`, nine OpenAI calls, three place names × three samples. **It has not been run.** The key is set as a Railway reference; the run needs a Deploy plus `OUTREACH_CONFIRM_SPEND=probe-ai-granularity`.
-- **NOTHING HAS BEEN SCANNED.** The scan layer now has a producer and still has no data: `scan_snapshot`, `scan_task`, `grid_result`, `prospect_coverage` are all empty. `OUTREACH_COMMAND` is `filter` and both spend variables are empty. **What is missing is no longer code — it is a deploy, a confirm token, and a second cron schedule** (§11).
+- **The `prospect_coverage` rollup is BUILT (migration `20260805120000`, applied live, 15/15 live checks passing).** Land masking (`grid_point_status`) and dead-point exclusion land with it, because both change the coverage DENOMINATOR. One plpgsql function per snapshot ending in `finalize_snapshot_rollup()`, so `rank_vector` cannot be separated from the numbers it belongs to. A free `rollup` command, and `collect` now rolls up what it finalizes. See §8.0b.
+- **NOTHING HAS BEEN SCANNED.** The scan layer now has a producer, a consumer, and no data: `scan_snapshot`, `scan_task`, `grid_result`, `prospect_coverage`, `grid_point_status` are all empty. `OUTREACH_COMMAND` is `filter` and both spend variables are empty. **What is missing is no longer code — it is a deploy, a confirm token, and a second cron schedule** (§11).
 
 **Two things changed on 2026-08-03 that will mislead you if you read the older sections first.** The spend gate above supersedes the "set it back to `filter` afterwards" procedure this file used to rely on (§7.2), and the Railway configuration recorded in §1 was found to be **stale in two ways that each cost money** — read `get-service-config`, not this file, for live values.
 
@@ -36,11 +37,12 @@ Status as of 2026-08-05:
 | Grid geometry | `api/services/geometry.py` | **built**, version `v1`, **81 points** (I-025 resolved) |
 | Geogrid scan client | `api/services/maps_scan.py` (pure) + `scan_runner.py` (I/O) | **built** (#557) — `task_post` batching, `tasks_ready` collection, finalization. Never run |
 | Scan bookkeeping | `scan_task` table, migration `20260804120000` | **applied live**, empty |
+| Coverage rollup | `rollup_snapshot_coverage()` + `grid_point_status`, migration `20260805120000`; `api/services/coverage_rollup.py` | **applied live**, verified by `tests/coverage_rollup.sql` (15 checks). Never run against real data — there is none |
 | I-004 spike | `api/services/ai_granularity.py` + `probe-ai-granularity` | **built** (#556), **never run** — needs a Deploy + confirm token |
 
 **This is a SEPARATE Supabase project from AR-Internal-Tools.** Do not point outreach code at the suite's database, and do not put outreach migrations in `writer/supabase/migrations/`.
 
-Live row counts (2026-08-04, unchanged 2026-08-05): `prospect` 1,388 (**105 carrying `review_count_inferred_zero`**, §9) · `filter_result` 8,328 · `submarket` 14 · `keyword` 5 · `market` 1 · `cost_ledger` 33 · `storage_retention_log` 8 · `lead` 0 · `lead_stage` 7 · `suppression` 0 · `review_inferred_zero_audit` 0 · **`scan_snapshot` 0 · `scan_task` 0 · `grid_result` 0 · `prospect_coverage` 0 · `snapshot_rollup` 0** — the scan layer now has a producer and has still produced nothing. Those two facts are easy to conflate and §11 exists to keep them apart.
+Live row counts (2026-08-04, unchanged 2026-08-05): `prospect` 1,388 (**105 carrying `review_count_inferred_zero`**, §9) · `filter_result` 8,328 · `submarket` 14 · `keyword` 5 · `market` 1 · `cost_ledger` 33 · `storage_retention_log` 8 · `lead` 0 · `lead_stage` 7 · `suppression` 0 · `review_inferred_zero_audit` 0 · **`scan_snapshot` 0 · `scan_task` 0 · `grid_result` 0 · `prospect_coverage` 0 · `snapshot_rollup` 0 · `grid_point_status` 0** — the scan layer now has a producer and has still produced nothing. Those two facts are easy to conflate and §11 exists to keep them apart.
 
 ### Railway service configuration
 
@@ -118,7 +120,7 @@ Every acceptance criterion in `docs/PHASE-1-BRIEF.md` §5 is met. Verified indep
 
 ```bash
 # tests — no network, no database
-cd outreach && python -m pytest api/tests -q      # 185 passing
+cd outreach && python -m pytest api/tests -q      # 270 passing
 
 # locally (needs OUTREACH_* env vars and network egress to Outscraper + Supabase)
 python -m api.scripts.run_market seed      markets/los-angeles-plumbing.json
@@ -126,6 +128,9 @@ python -m api.scripts.run_market calibrate markets/los-angeles-plumbing.json   #
 python -m api.scripts.run_market ingest    markets/los-angeles-plumbing.json   # PAID
 python -m api.scripts.run_market filter    markets/los-angeles-plumbing.json   # free
 python -m api.scripts.run_market run       markets/los-angeles-plumbing.json   # seed+ingest+filter
+python -m api.scripts.run_market collect   markets/los-angeles-plumbing.json   # free — and rolls up
+python -m api.scripts.run_market rollup    markets/los-angeles-plumbing.json   # free — backlog only
+python -m api.scripts.run_market rollup    markets/los-angeles-plumbing.json --verify   # writes nothing
 ```
 
 On Railway, the run mode is `OUTREACH_COMMAND`. **Only `ingest` and `run` spend money.**
@@ -331,12 +336,63 @@ The endpoint is QUEUED — `task_post` bills and returns an id, the result is fe
 
 **The I-004 spike instrument** (#556): `probe-ai-granularity`, nine OpenAI calls at temperature 0, three place names × three samples, reporting cross-level overlap, within-level stability, and error/empty counts kept separate. It gathers evidence and deliberately does **not** pick the granularity — that is a human decision recorded in `ai_region.name_level`, and the output says so in the payload rather than only in a docstring. The three place names are required rather than defaulted; I-073's free evidence run already narrowed which LA names are worth testing.
 
+### 8.0b Done on 2026-08-05 — the `prospect_coverage` rollup, land masking, dead-point exclusion
+
+Checklist §4 Phase 2, ISSUES I-042. Migration `20260805120000` applied live;
+`api/services/coverage_rollup.py`; 23 new unit tests (suite at **270**) plus a 15-check live
+script, `tests/coverage_rollup.sql`, which passes.
+
+**It is one plpgsql function because it has to be.** `rank_vector` must be written in the same
+transaction as the summary statistics — a rollup producing coverage percentages without vectors
+must FAIL rather than partially succeed, because a vector written later or in the wrong
+`point_seq` order renders every historical heatmap against coordinates that were never used to
+collect it, with the picture still drawing. PostgREST gives one transaction per call, so a Python
+loop that inserted rows and then called `finalize_snapshot_rollup()` physically cannot hold both
+halves together. `rollup_snapshot_coverage()` does the whole snapshot and calls the finalizer as
+its LAST statement; the finalizer re-derives its counts and raises on a mismatch, aborting
+everything. There is a unit test asserting nothing follows that call.
+
+**Geometry arrives as a parameter.** The caller regenerates points through the pinned registry
+using the snapshot's **stored** `geometry_version` — never the default — and passes
+`[{"seq", "dist"}]`; the function refuses a payload that does not cover `0..expected-1` exactly, or
+whose version disagrees with the snapshot. Re-deriving the lattice in SQL would create the second
+definition of point membership that `geometry.py` exists to prevent. Distances are
+centre-independent, so the rollup never reads the mutable `submarket.center_*` (ISSUES I-078 —
+Phase 3's heatmap will, and should not).
+
+**The denominator counts what was MEASURED.** `live_points` = `scan_task.status = 'collected'`
+intersected with `grid_point_status.land`. An empty pack stays in (it was measured; "nobody ranks
+here" is a finding). An uncollected task leaves entirely (nobody observed that absence). A masked
+point leaves the denominator but stays in the vector as `255`, because dead must render
+differently from not-found. Third time this correction has been needed — see DECISIONS.md.
+
+**Land masking self-calibrates** (PRD §9a.1): N consecutive null scans mask a point, any non-null
+result reactivates it, the counter is shared across keywords, and the whole update happens inside
+the rollup's transaction so `live_points` is contemporaneous with the claims made from it. `N` is
+`land_mask_null_scans` in config, not a literal in the SQL.
+
+**Cadence:** `collect` now rolls up the snapshots it finalizes — guarded, reported, never raised,
+because collection is the paid work being rescued. `rollup` also stands alone for backfill and
+`rollup --verify` recomputes every statistic from the stored vectors (storage spec §12). Both are
+FREE and must stay out of `PAID_COMMANDS`. Storage spec §7's daily `rollup_coverage` **pg_cron**
+job is not buildable — pg_cron cannot call the Python generator — and a third Railway schedule was
+rejected for the reason §11 gives about the second one.
+
+**Eight issues logged, not silently resolved** (I-074…I-081). Four matter before the next build:
+the second land-masking criterion is **not computable** from stored data (I-074); an incomplete or
+prospect-less snapshot pins its partition **forever**, fail-closed (I-075); a prospect present at
+**zero** points gets **no row**, so downstream must read a missing row as zero coverage rather than
+unknown (I-076); and `centroid_dist_at_loss` has **no formula in any spec** — one reading is
+implemented and the other must be chosen deliberately before it reaches a prospect-facing claim
+(I-080).
+
 ### 8.1 Unblocked, and the highest-regret thing to defer
 1. ~~**Repoint the `outreach` Railway service at `main`.**~~ **DONE 2026-08-03.** It had been recorded as done on 2026-08-01 and was not: the service still tracked `claude/phase-1-outscraper-ingestion-llje34`, and a Deploy click faithfully built that branch's HEAD (`7f9430b`, 2026-08-01), failing with `invalid choice: 'verify-reviews'` — a commit old enough to predate both the build banner and the result marker, so it failed silently behind a green badge (I-065). *The lesson is not "repoint it" but "a config change recorded in a document is not a config change"*; verify with `get-service-config`.
 2. ~~**The maps geogrid client + `tasks_ready` collector.**~~ **BUILT 2026-08-04 (#557)** — see §8.0a. Not run. The owner ruling stands: **first live run is ONE submarket × ONE keyword**, and `cmd_scan` refuses to do more.
-2a. **THE NEXT BUILD: the `prospect_coverage` rollup.** Checklist §4 Phase 2, and now the only thing between scan rows and a score. It needs `rank_vector` written **in the same transaction** as the summary statistics — a rollup that produces summaries without it must fail rather than partially succeed (owner instruction 2026-08-03), which is what `finalize_snapshot_rollup()` already enforces from the other side. Land masking and dead-point exclusion land with it: both change the coverage DENOMINATOR, and a denominator that changes after the fact re-writes every historical claim.
+2a. ~~**THE NEXT BUILD: the `prospect_coverage` rollup.**~~ **BUILT 2026-08-05** — see §8.0b. Applied live and verified in both directions; never run against real data, because there is none.
+2b. **THE NEXT BUILD: the placeholder score** (checklist §4 Phase 2, first item). "Raw geogrid coverage deficit, one SQL expression" — and it reads `prospect_coverage`, which now exists. Read **ISSUES I-076 first**: a prospect present at zero grid points has no coverage row at all, so a score that joins to the table will silently omit the most invisible prospects, which is exactly backwards. It must treat a missing row for a scanned submarket as zero coverage.
 3. **Suite SPA pages.** Nothing in `frontend/` exists. The read surface they need is built and verified. Open question, see I-072 — decide rather than inherit.
-4. **The coverage rollup** (`ISSUES` I-042) — promoted to item 2a above now that the scan writer exists. Until it exists the retention job drops nothing but empty partitions, which is *enforced* rather than incidental: `drop_cold_partitions` requires a `snapshot_rollup` marker (I-069).
+4. ~~**The coverage rollup** (`ISSUES` I-042)~~ — **DONE.** The retention job now gets past the rollup guard and stops at the next one: `audit_asset` and `slot` do not exist, so a partition whose citations cannot be checked is still never dropped. Verified live (check 15 of `tests/coverage_rollup.sql`). Fail-closed remains the posture; what changed is which guard is doing the refusing.
 
 ### 8.2 Blocked on a human
 - ~~**DataForSEO credentials on the `outreach` Railway service.**~~ **DONE 2026-08-01** — set as Railway reference variables (`OUTREACH_DATAFORSEO_LOGIN` = `${{PLATFORM.DATAFORSEO_LOGIN}}`, same for the password), so the secrets never left the platform and follow a rotation automatically. **Now wired and exercised for real:** `api/services/dataforseo_client.py` + `verify-reviews`, run live 2026-08-03 against `my_business_info/live` (I-066). The Phase 2 *scan* client is still not built.
@@ -408,6 +464,8 @@ outreach/
 ├── queries/                   phase1-dod.sql
 ├── tests/
 │   ├── lead_crm_rls.sql       17-check CRM verification (run in the SQL editor)
+│   ├── storage_partitioning.sql  14-check partitioning/retention verification
+│   ├── coverage_rollup.sql    15-check rollup verification (same rollback-at-the-end shape)
 │   └── fixtures/              golden scorecard fixtures — Phase 4, hand-computed, never regenerate
 ├── Dockerfile · railway.toml  the Railway job image and its restart policy
 └── api/
@@ -433,6 +491,8 @@ Three things stand in between, and none of them are code:
 1. **A Railway deploy with the scan variables set.** `OUTREACH_COMMAND=scan`, `OUTREACH_CONFIRM_SPEND=scan`, `OUTREACH_ARGS=--submarket '<name>'`. It must be a **fresh Deploy, not a redeploy** — a redeploy replays the previous deployment's config snapshot (§6.1, and the ~$0.11 it cost). Line one of the logs prints the resolved command and the confirm token, so what a run is about to do is visible before it does it.
 
 2. **A SECOND, FREQUENT CRON SCHEDULE for `collect`.** This is the one most likely to be skipped and the most expensive to skip. The ready list holds a task about **three days**; the scan cadence is **fifteen**. A collector on the scan schedule lets every task age off the list between runs, silently converting the normal path into the fallback-by-id path — which still works, which is exactly why nobody would notice, until the day the fallback window (30 days) is also missed. `collect` is free and safe to run on any tick; run it hourly or daily. It is deliberately not spend-gated.
+
+   **This schedule now carries the rollup too** (§8.0b), which raises the cost of skipping it a second time: no collection means no finalized snapshots, which means no completion markers, which means the retention job drops nothing — and the storage ceiling the whole partitioning policy exists to avoid arrives on schedule while every run reports clean. `rollup` standalone clears any backlog, so a missed tick is recoverable; a missing schedule is not noticed.
 
 3. **The owner's go-ahead on spend.** One submarket × one keyword is 81 points, ~1 batch, so a wrong envelope costs one batch rather than a market. `cmd_scan` refuses to do more than that.
 
