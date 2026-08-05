@@ -25,6 +25,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Iterable, Literal, Optional
 
+# The one definition of "the template renders this from data, so there is no
+# body to write or commit" — imported rather than restated, because a page type
+# that drifts between the two lists is a page that plans but never publishes.
+from services.website_content import TEMPLATE_ONLY_PAGE_TYPES, UNRENDERABLE_PAGE_TYPES
+
 # Reference §1.2. A service, city or pillar slug colliding with one of these is
 # a planning error to surface, never to silently resolve. Kept in sync with the
 # template's src/lib/routes.ts — the template fails the build on the same set,
@@ -150,7 +155,15 @@ class PlannedPage:
 
 @dataclass
 class PlanIssue:
-    kind: Literal["reserved_slug", "duplicate_path", "matrix_signoff", "links_advisory"]
+    kind: Literal[
+        "reserved_slug",
+        "duplicate_path",
+        "matrix_signoff",
+        "links_advisory",
+        "single_service_matrix",
+        "missing_template",
+        "portfolio_conflict",
+    ]
     blocking: bool
     detail: str
 
@@ -402,6 +415,64 @@ def scale_gates(matrix_count: int, links: dict[str, int]) -> list[PlanIssue]:
     return issues
 
 
+def single_service_gate(
+    catalog: Iterable[ServiceEntry], *, multi_city: bool
+) -> list[PlanIssue]:
+    """Warn when the matrix duplicates the city pages it sits under.
+
+    The reference has an explicit single-*city* exception (no location pages, no
+    matrix) but no mirror for a single-*service* business. With one service and
+    several cities, /{city}/ and /{city}/{service}/ are two pages chasing one
+    query — the top-level location page's own geo term. That is a planning
+    problem, not a generation one, so it surfaces here.
+
+    Advisory rather than blocking: which of the two pages to drop is a judgement
+    about the business (a one-service contractor may genuinely want the deeper
+    page as the money page), and the rule itself is not in the reference yet.
+    """
+    matrix_services = [s for s in catalog if s.include_in_matrix and not s.parent_slug]
+    if multi_city and len(matrix_services) == 1:
+        slug = matrix_services[0].slug
+        return [
+            PlanIssue(
+                "single_service_matrix",
+                False,
+                f'one matrix service ("{slug}"): every /{{city}}/{slug}/ targets the same '
+                f"query as its /{{city}}/ page — keep one of the two per city",
+            )
+        ]
+    return []
+
+
+def template_coverage_gate(pages: Iterable[PlannedPage]) -> list[PlanIssue]:
+    """Page types the house template has no way to render (PRD §4.4).
+
+    Reported at plan review rather than discovered at publish, which is the
+    failure this prevents: a planned page that can never become a URL. Today
+    that is the Services index and Areas We Serve — both Writer #6's page types,
+    the one archetype that unlocks five page types across both site shapes
+    (PRD §4.7, Q14).
+
+    Advisory, not blocking. §4.4 makes it a hard stop *against an approved
+    theme*, with three recoveries (drop the type, add the screen, map it onto an
+    existing template) — none of which exists yet: there is no theme compiler
+    and no plan editor, so blocking here would make every multi-city plan
+    unapprovable with nothing a user could do about it. The page is planned,
+    named, ungenerable and unpublishable; it simply cannot ship silently.
+    """
+    missing = sorted({p.page_type for p in pages if p.page_type in UNRENDERABLE_PAGE_TYPES})
+    if not missing:
+        return []
+    return [
+        PlanIssue(
+            "missing_template",
+            False,
+            f"the house template has no template for: {', '.join(missing)} — these pages "
+            "cannot be generated or published until Writer #6 and their templates exist",
+        )
+    ]
+
+
 def build_plan(
     *,
     site_type: str,
@@ -424,10 +495,223 @@ def build_plan(
         matrix = []
 
     links = links_per_index(pages)
-    issues = check_paths(pages) + scale_gates(len(matrix), links)
+    issues = (
+        check_paths(pages)
+        + scale_gates(len(matrix), links)
+        + single_service_gate(catalog, multi_city=multi_city)
+        + template_coverage_gate(pages)
+    )
 
     pages.sort(key=lambda p: (p.tier, p.path))
     return SitePlan(pages=pages, issues=issues, matrix_count=len(matrix), links_per_index=links)
+
+
+# --------------------------------------------------------------------------
+# Plan row payloads — what a planned page carries into generation and publish
+# --------------------------------------------------------------------------
+
+# Page types the nlp-api local generator can write today (PRD §4.7). Everything
+# else is planned but not generable, and says so rather than being promised.
+NLP_PAGE_TYPES = frozenset({"service", "sub_service", "location", "neighborhood", "local_landing"})
+
+# Written by the core-pages generator (plan §4.6), which is Phase 3 and unbuilt.
+CORE_PAGE_TYPES = frozenset({"home", "about", "contact", "privacy"})
+
+
+def _segments(path: str) -> list[str]:
+    return [s for s in (path or "").split("/") if s]
+
+
+def frontmatter_extra(
+    page: PlannedPage,
+    *,
+    services: dict[str, ServiceEntry],
+    cities: dict[str, CityEntry],
+) -> dict:
+    """The collection-specific frontmatter fields this page's entry needs.
+
+    The template's zod schemas require more than title/path/pageType on two
+    collections — `locations` needs `locationName`, `local-landing` needs the
+    city and service on both axes — and a missing required field fails the whole
+    site build, not just that page. They are derived here, at plan time, from
+    the catalog the path was built from, rather than re-parsed out of the URL at
+    publish time: the reference is explicit that meaning is declared, never
+    inferred from segments.
+    """
+    segs = _segments(page.path)
+    out: dict = {}
+
+    if page.page_type in {"service", "sub_service", "brand_service"}:
+        svc = services.get(segs[-1]) if segs else None
+        if svc:
+            out["teaser"] = svc.teaser
+            out["order"] = svc.order
+        if page.page_type == "sub_service" and len(segs) >= 2:
+            out["parentService"] = segs[0]
+
+    elif page.page_type == "location":
+        city = cities.get(segs[0]) if segs else None
+        out["locationName"] = city.name if city else page.title
+
+    elif page.page_type == "neighborhood":
+        out["locationName"] = page.title
+        if len(segs) >= 2:
+            out["parentCity"] = segs[0]
+
+    elif page.page_type in {"local_landing", "hyper_local"} and len(segs) >= 2:
+        city, svc = cities.get(segs[0]), services.get(segs[1])
+        out["citySlug"] = segs[0]
+        out["serviceSlug"] = segs[1]
+        out["locationName"] = city.name if city else segs[0]
+        out["serviceName"] = svc.name if svc else segs[1]
+        if svc:
+            out["teaser"] = svc.teaser
+
+    return out
+
+
+def generation_inputs(
+    page: PlannedPage,
+    *,
+    services: dict[str, ServiceEntry],
+    cities: dict[str, CityEntry],
+    primary_service: Optional[str] = None,
+    primary_city: Optional[str] = None,
+) -> dict:
+    """What engine writes this page, and what it needs to be told.
+
+    Returns `{engine, keyword, location}` — `engine` is None when nothing in the
+    suite can write this page type, which is deliberately visible rather than
+    silently skipped (PRD §4.7: "the plan tab must not propose a page type
+    without showing its engine status").
+
+    The keyword/location split follows the SOP's targeting rules, which differ
+    by page type in a way the URL alone does not carry:
+
+    * a **service page** is never geo-targeted, so the keyword is the bare
+      service and the location only scopes the SERP analysis;
+    * a **location page** targets the geo head term — the primary service plus
+      the city, not a specific service;
+    * a **local landing page** targets the specific service in that city.
+    """
+    if page.page_type in TEMPLATE_ONLY_PAGE_TYPES:
+        return {"engine": "template", "keyword": None, "location": None}
+    if page.page_type in CORE_PAGE_TYPES:
+        return {"engine": "core_pages", "keyword": None, "location": None}
+    if page.page_type not in NLP_PAGE_TYPES:
+        return {"engine": None, "keyword": None, "location": None}
+
+    segs = _segments(page.path)
+
+    if page.page_type in {"service", "sub_service"}:
+        svc = services.get(segs[-1]) if segs else None
+        return {
+            "engine": "nlp",
+            "keyword": svc.name if svc else page.title,
+            "location": primary_city,
+        }
+
+    if page.page_type == "location":
+        city = cities.get(segs[0]) if segs else None
+        city_name = city.name if city else page.title
+        head = primary_service or ""
+        return {
+            "engine": "nlp",
+            "keyword": f"{head} {city_name}".strip(),
+            "location": city_name,
+        }
+
+    if page.page_type == "neighborhood":
+        parent = cities.get(segs[0]) if segs else None
+        head = primary_service or ""
+        return {
+            "engine": "nlp",
+            "keyword": f"{head} {page.title}".strip(),
+            # The DataForSEO location is the city; a neighborhood is rarely a
+            # resolvable location code, and the geo signal is in the keyword.
+            "location": parent.name if parent else page.title,
+        }
+
+    # local_landing / hyper_local
+    city = cities.get(segs[0]) if len(segs) >= 1 else None
+    svc = services.get(segs[1]) if len(segs) >= 2 else None
+    city_name = city.name if city else (segs[0] if segs else "")
+    svc_name = svc.name if svc else (segs[1] if len(segs) >= 2 else "")
+    return {
+        "engine": "nlp",
+        "keyword": f"{svc_name} {city_name}".strip(),
+        "location": city_name,
+    }
+
+
+def plan_payload(
+    page: PlannedPage,
+    *,
+    services: dict[str, ServiceEntry],
+    cities: dict[str, CityEntry],
+    primary_service: Optional[str] = None,
+    primary_city: Optional[str] = None,
+) -> dict:
+    """Everything a plan row carries besides its route, type, trigger and tier."""
+    inputs = generation_inputs(
+        page,
+        services=services,
+        cities=cities,
+        primary_service=primary_service,
+        primary_city=primary_city,
+    )
+    return {**inputs, "frontmatter": frontmatter_extra(page, services=services, cities=cities)}
+
+
+def matrix_cells(routes: Iterable[str]) -> set[tuple[str, str]]:
+    """The (city, service) cells a set of `/{city}/{service}/` routes claims."""
+    cells: set[tuple[str, str]] = set()
+    for route in routes:
+        segs = _segments(route)
+        if len(segs) == 2:
+            cells.add((segs[0], segs[1]))
+    return cells
+
+
+def portfolio_conflicts(
+    own_routes: Iterable[str], others: Iterable[dict]
+) -> list[PlanIssue]:
+    """Overlapping service × city cells against every other site (PRD §4.12.4).
+
+    Client sites never overlapped — each client had its own footprint. Owned
+    properties break that, and the two collisions are not equally serious:
+
+    * **property vs client** competes with a client for their own keywords on
+      the agency's own infrastructure. That is a relationship failure, and it
+      surfaces at renewal rather than at launch, so it blocks and needs an
+      explicit admin override.
+    * **property vs property** splits our own results, which is our problem to
+      make deliberately. It warns.
+
+    `others` rows are `{name, kind, routes}` where kind is 'client' or
+    'owned_property'.
+    """
+    mine = matrix_cells(own_routes)
+    if not mine:
+        return []
+
+    issues: list[PlanIssue] = []
+    for other in others:
+        overlap = sorted(mine & matrix_cells(other.get("routes") or []))
+        if not overlap:
+            continue
+        is_client = (other.get("kind") or "client") == "client"
+        shown = ", ".join(f"/{c}/{s}/" for c, s in overlap[:5])
+        more = f" (+{len(overlap) - 5} more)" if len(overlap) > 5 else ""
+        issues.append(
+            PlanIssue(
+                "portfolio_conflict",
+                is_client,
+                f'{"client" if is_client else "property"} site "{other.get("name") or "?"}" '
+                f"already claims {len(overlap)} of these cells: {shown}{more}",
+            )
+        )
+    return issues
 
 
 def cities_from_silo_plan(per_silo: list[dict]) -> list[CityEntry]:

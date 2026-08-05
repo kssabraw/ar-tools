@@ -210,13 +210,22 @@ def deploy_status_from_run(run: dict) -> str:
     """Map an Actions run onto a `website_deploys.status`.
 
     A run that is queued or in progress is 'building'; only a *completed* run
-    with conclusion 'success' counts as deployed. Anything else completed —
-    failure, cancelled, timed out — is a failure, because from the site's point
-    of view nothing shipped.
+    with conclusion 'success' counts as deployed.
+
+    'cancelled' is deliberately NOT a failure. The template's workflow sets
+    `concurrency: cancel-in-progress: true`, so publishing a batch of pages
+    cancels every run but the last — the content those runs carried shipped in
+    the run that replaced them. Calling that failed would paint a successful
+    20-page batch red 19 times and teach the team to ignore the colour.
     """
     if (run.get("status") or "") != "completed":
         return "building"
-    return "success" if (run.get("conclusion") or "") == "success" else "failed"
+    conclusion = (run.get("conclusion") or "").lower()
+    if conclusion == "success":
+        return "success"
+    if conclusion == "cancelled":
+        return "superseded"
+    return "failed"
 
 
 # --------------------------------------------------------------------------
@@ -288,17 +297,31 @@ async def set_repo_secret(repo: str, key: str, value: str) -> None:
         raise ProvisionError(f"secret_write_failed_{resp.status_code}")
 
 
-async def latest_workflow_run(repo: str, *, branch: str) -> Optional[dict]:
-    """The most recent Actions run on `branch`, or None if none has started."""
+async def list_workflow_runs(repo: str, *, branch: str, limit: int = 30) -> list[dict]:
+    """Recent Actions runs on `branch`, newest first. Empty on any read failure.
+
+    One read serves a whole poll cycle: a batch publish produces many commits,
+    and matching them by `head_sha` against one page of runs is far cheaper than
+    a request per deploy row.
+    """
     async with httpx.AsyncClient(timeout=30) as http:
         resp = await http.get(
             f"{_GITHUB_API}/repos/{repo}/actions/runs",
             headers=_gh_headers(_token()),
-            params={"branch": branch, "per_page": 1},
+            params={"branch": branch, "per_page": max(1, min(limit, 100))},
         )
     if resp.status_code != 200:
-        return None
-    runs = (resp.json() or {}).get("workflow_runs") or []
+        logger.warning(
+            "website_provision.runs_read_failed",
+            extra={"repo": repo, "status": resp.status_code},
+        )
+        return []
+    return (resp.json() or {}).get("workflow_runs") or []
+
+
+async def latest_workflow_run(repo: str, *, branch: str) -> Optional[dict]:
+    """The most recent Actions run on `branch`, or None if none has started."""
+    runs = await list_workflow_runs(repo, branch=branch, limit=1)
     return runs[0] if runs else None
 
 

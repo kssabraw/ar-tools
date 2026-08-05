@@ -1513,8 +1513,10 @@ class Settings(BaseSettings):
     # Bulk publishing reuses the Local SEO stagger rationale: one job per page,
     # spaced so a batch runs at background priority behind interactive work.
     website_publish_job_spacing_seconds: int = 20
-    # Deploys are polled (GitHub does not call us). Give up marking a deploy
-    # in-flight after this long and record it as failed rather than hanging.
+    # Deploys are polled (GitHub does not call us). Past this age, a deploy
+    # whose Actions run we cannot find is recorded as 'unknown' — NOT failed
+    # (PRD §6.3): the site is very likely serving fine and we simply stopped
+    # being able to see the run, so the recovery is "re-check", not "re-push".
     website_deploy_timeout_minutes: int = 20
     website_theme_model: str = "claude-sonnet-4-6"
     website_image_provider: str = "gemini"

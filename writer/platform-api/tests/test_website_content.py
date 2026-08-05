@@ -43,6 +43,18 @@ class TestRepoLayout:
         assert a != b
         assert a == "anaheim-ac-repair"
 
+    def test_a_post_id_is_its_slug_because_the_route_supplies_the_prefix(self):
+        # /blog/[...slug] uses the entry id AS the slug, so a full-path id would
+        # publish /blog/blog-my-post/. Caught by building the template, not by
+        # reading the schema.
+        assert wc.entry_id("/blog/how-to-spot-a-failing-roof/", "post") == (
+            "how-to-spot-a-failing-roof"
+        )
+        assert (
+            wc.repo_path("/blog/how-to-spot-a-failing-roof/", "post")
+            == "src/content/posts/how-to-spot-a-failing-roof.md"
+        )
+
     def test_core_pages_use_their_fixed_entry_id(self):
         # The template looks these up by name, not by path.
         assert wc.entry_id("/about-us/", "about") == "about-us"

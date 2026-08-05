@@ -54,6 +54,11 @@ FREEZE_GATED_JOB_TYPES = {
     "syndication_item",
     "content_batch_item",
     "gbp_post_publish",
+    # A website's content path: writing body copy and committing it into a site
+    # repo are both output. Deploy polling is observation and stays ungated —
+    # a freeze pauses output, not observation.
+    "website_page_generate",
+    "website_page_publish",
 }
 
 _REASON_TITLES = {
