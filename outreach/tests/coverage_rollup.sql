@@ -4,7 +4,7 @@
 -- block that ALWAYS raises at the end, so every snapshot, task, grid row, coverage row and mask
 -- change is rolled back. A passing run reports:
 --
---     ERROR:  ROLLBACK — 15 checks passed
+--     ERROR:  ROLLBACK — 18 checks passed
 --
 -- An ERROR that says anything else is a real failure. Same shape as tests/storage_partitioning.sql
 -- and tests/lead_crm_rls.sql.
@@ -20,9 +20,12 @@ do $$
 declare
   checks      integer := 0;
   v_submarket uuid;
+  v_submarket_b uuid;
   v_keyword   uuid;
   v_prospect_a uuid;  v_place_a text;
   v_prospect_b uuid;  v_place_b text;
+  v_prospect_c uuid;
+  v_deficit   numeric;
   v_snapshot  uuid;
   v_snap2     uuid;
   v_json      jsonb;
@@ -32,7 +35,6 @@ declare
   v_live      smallint;
   v_land      boolean;
   v_nulls     smallint;
-  v_before    bigint;
   v_reason    text;
   v_month     date := date_trunc('month', current_date)::date;
   v_old_month date := (date_trunc('month', current_date) - interval '8 months')::date;
@@ -42,12 +44,22 @@ declare
   v_points    jsonb := '[{"seq":0,"dist":0.0},{"seq":1,"dist":1.0},
                          {"seq":2,"dist":2.0},{"seq":3,"dist":3.0}]'::jsonb;
 begin
-  select id into v_submarket from submarket limit 1;
+  -- The submarket is chosen FROM the prospects rather than independently. The placeholder-score
+  -- view joins prospects to snapshots through submarket_id, so a submarket picked at random would
+  -- share no rows with the prospects and checks 15-16 would pass by returning nothing.
+  select submarket_id into v_submarket
+    from prospect where submarket_id is not null
+   group by submarket_id having count(*) >= 3 limit 1;
+  select id into v_submarket_b from submarket where id <> v_submarket limit 1;
   select id into v_keyword   from keyword   limit 1;
-  select id, place_id into v_prospect_a, v_place_a from prospect order by id limit 1;
-  select id, place_id into v_prospect_b, v_place_b from prospect order by id offset 1 limit 1;
-  if v_submarket is null or v_keyword is null or v_prospect_b is null then
-    raise exception 'FAIL: no submarket/keyword/prospects seeded — run `run_market seed` + ingest first';
+  select id, place_id into v_prospect_a, v_place_a
+    from prospect where submarket_id = v_submarket order by id limit 1;
+  select id, place_id into v_prospect_b, v_place_b
+    from prospect where submarket_id = v_submarket order by id offset 1 limit 1;
+  select id into v_prospect_c
+    from prospect where submarket_id = v_submarket order by id offset 2 limit 1;
+  if v_submarket is null or v_keyword is null or v_prospect_c is null then
+    raise exception 'FAIL: need a submarket with >= 3 prospects — run `run_market seed` + ingest first';
   end if;
 
   -- 1. grid_point_status exists with the PRD's shape (PRD §10, START-HERE §3a names the PRD as
@@ -72,7 +84,7 @@ begin
   insert into scan_snapshot (submarket_id, keyword_id, grid_radius_miles, grid_spacing_miles,
                              point_count, expected_points, actual_points, complete,
                              geometry_version, scanned_at)
-  values (v_submarket, v_keyword, 5, 1, 4, 4, 3, true, 'test-v1', now())
+  values (v_submarket, v_keyword, 5, 1, 4, 4, 3, true, 'test-v1', now() - interval '3 hours')
   returning id into v_snapshot;
 
   insert into scan_task (snapshot_id, point_seq, status, result_count) values
@@ -229,7 +241,7 @@ begin
   insert into scan_snapshot (submarket_id, keyword_id, grid_radius_miles, grid_spacing_miles,
                              point_count, expected_points, actual_points, complete,
                              geometry_version, scanned_at)
-  values (v_submarket, v_keyword, 5, 1, 4, 4, 4, true, 'test-v1', now())
+  values (v_submarket, v_keyword, 5, 1, 4, 4, 4, true, 'test-v1', now() - interval '2 hours')
   returning id into v_snap2;
   insert into scan_task (snapshot_id, point_seq, status, result_count) values
     (v_snap2, 0, 'collected', 1), (v_snap2, 1, 'collected', 0),
@@ -319,7 +331,7 @@ begin
   insert into scan_snapshot (submarket_id, keyword_id, grid_radius_miles, grid_spacing_miles,
                              point_count, expected_points, actual_points, complete,
                              geometry_version, scanned_at)
-  values (v_submarket, v_keyword, 5, 1, 4, 4, 4, true, 'test-v1', now())
+  values (v_submarket, v_keyword, 5, 1, 4, 4, 4, true, 'test-v1', now() - interval '1 hour')
   returning id into v_snap2;
   insert into scan_task (snapshot_id, point_seq, status, result_count) values
     (v_snap2, 0, 'collected', 1), (v_snap2, 1, 'collected', 1),
@@ -378,7 +390,69 @@ begin
   end if;
   checks := checks + 1;
 
-  -- 15. The retention job gets PAST the rollup guard now.
+  -- The placeholder-score checks run BEFORE the retention check, which backdates a snapshot and
+  -- relocates its rows. Order matters here in a way it does not elsewhere in this script.
+  --
+  -- 15. THE PLACEHOLDER SCORE — a prospect with NO coverage row scores maximum deficit.
+  --
+  -- ISSUES I-076: the rollup writes a row only for prospects that appeared somewhere, so the
+  -- prospect invisible at every single grid point has no row at all. That prospect is the most
+  -- painful one in the market and the best pitch in it, and an inner join would silently omit
+  -- exactly them. This is the check that fails if anyone "tidies" the LEFT JOIN away.
+  select coverage_deficit, keywords_present into v_deficit, v_live
+    from v_prospect_placeholder_score where prospect_id = v_prospect_c;
+  if v_deficit is null then
+    raise exception 'FAIL 15a: a prospect with no coverage row is MISSING from the placeholder '
+                    'score — the most invisible prospect in the market has been dropped (I-076)';
+  end if;
+  if v_deficit <> 100.00 or v_live <> 0 then
+    raise exception 'FAIL 15b: a prospect absent from every point scored deficit % (present %), '
+                    'expected 100.00 (0)', v_deficit, v_live;
+  end if;
+  -- …and a prospect that DOES rank scores less than maximum, or the view is returning a constant.
+  select coverage_deficit into v_deficit
+    from v_prospect_placeholder_score where prospect_id = v_prospect_a;
+  if v_deficit is null or v_deficit >= 100.00 then
+    raise exception 'FAIL 15c: a ranking prospect scored deficit %, expected below 100', v_deficit;
+  end if;
+  checks := checks + 1;
+
+  -- 16. An UNROLLED submarket produces no rows at all — it must not read as maximum deficit.
+  --
+  -- The gate is the completion marker, not `complete` and not "a snapshot exists". An incomplete
+  -- snapshot has no coverage rows (the rollup refuses it), so gating on existence would score
+  -- every prospect in that submarket at 100% deficit — maximum pain — purely because the scan
+  -- failed. Manufacturing pain out of a provider failure is the exact error DECISIONS.md records
+  -- three times over.
+  insert into scan_snapshot (submarket_id, keyword_id, grid_radius_miles, grid_spacing_miles,
+                             point_count, expected_points, actual_points, complete,
+                             geometry_version, scanned_at)
+  values (v_submarket_b, v_keyword, 5, 1, 4, 4, 1, false, 'test-v1', now());
+  select count(*) into v_count
+    from v_prospect_placeholder_score s
+    join prospect p on p.id = s.prospect_id
+   where p.submarket_id = v_submarket_b;
+  if v_count <> 0 then
+    raise exception 'FAIL 16: an unrolled submarket produced % placeholder rows — a failed scan '
+                    'is being scored as total invisibility', v_count;
+  end if;
+  checks := checks + 1;
+
+  -- 17. The snapshot carries the CENTRE it was generated from (ISSUES I-078).
+  --
+  -- Nullable on purpose — a stale writer must not fail a snapshot insert on a bookkeeping column
+  -- — so this checks the columns exist and are writable, not that they are populated. The writer
+  -- half is asserted in api/tests/test_scan_runner.py, where it can be tested without a scan.
+  select count(*) into v_count from information_schema.columns
+   where table_schema = 'public' and table_name = 'scan_snapshot'
+     and column_name in ('center_lat', 'center_lng');
+  if v_count <> 2 then
+    raise exception 'FAIL 17: scan_snapshot has % of the 2 centre columns — Phase 3 would have to '
+                    'read the mutable submarket instead (I-078)', v_count;
+  end if;
+  checks := checks + 1;
+
+  -- 18. The retention job gets PAST the rollup guard now.
   --
   --     Before this migration, `drop_cold_partitions` retained every non-empty partition with
   --     "snapshot(s) have no finalized rollup" and dropped nothing but empties. With a finalized
@@ -397,10 +471,10 @@ begin
   select reason into v_reason from storage_retention_log
    where partition_name = v_part order by ran_at desc limit 1;
   if v_reason like '%no finalized rollup%' then
-    raise exception 'FAIL 15: the partition is still blocked on the rollup guard: %', v_reason;
+    raise exception 'FAIL 18: the partition is still blocked on the rollup guard: %', v_reason;
   end if;
   if v_reason is null then
-    raise exception 'FAIL 15: drop_cold_partitions logged nothing for %', v_part;
+    raise exception 'FAIL 18: drop_cold_partitions logged nothing for %', v_part;
   end if;
   checks := checks + 1;
 

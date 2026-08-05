@@ -108,9 +108,13 @@ async def submit_scan(
 
     radius = float(submarket["grid_radius_miles"])
     spacing = float(submarket["grid_spacing_miles"])
-    points = generate_points(
-        float(submarket["center_lat"]), float(submarket["center_lng"]), radius, spacing
-    )
+    # Bound to locals so the centre RECORDED on the snapshot is provably the centre the points
+    # were generated from (ISSUES I-078). Reading `submarket[...]` twice would record a centre
+    # that is merely equal today — and the whole value of storing it is that it stays true after
+    # somebody corrects the submarket.
+    center_lat = float(submarket["center_lat"])
+    center_lng = float(submarket["center_lng"])
+    points = generate_points(center_lat, center_lng, radius, spacing)
     expected = point_count(radius, spacing)
     if len(points) != expected:
         # Two paths to the same number disagreeing means one of them is wrong, and a scan built
@@ -126,6 +130,8 @@ async def submit_scan(
             {
                 "submarket_id": submarket["id"],
                 "keyword_id": keyword["id"],
+                "center_lat": center_lat,
+                "center_lng": center_lng,
                 "grid_radius_miles": radius,
                 "grid_spacing_miles": spacing,
                 "point_count": expected,
