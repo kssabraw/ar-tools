@@ -6,13 +6,32 @@
   "description": "An independent publication.",
   "locale": "en",
   "nav": [
-    { "label": "Topics", "href": "/topics" },
-    { "label": "About", "href": "/about" }
+    {
+      "label": "Topics",
+      "href": "/blog/"
+    },
+    {
+      "label": "About",
+      "href": "/about-us/"
+    }
   ],
   "footerNav": [
-    { "label": "About", "href": "/about" },
-    { "label": "Privacy", "href": "/privacy" },
-    { "label": "Contact", "href": "/contact" }
+    {
+      "label": "About",
+      "href": "/about-us/"
+    },
+    {
+      "label": "Privacy",
+      "href": "/privacy-policy/"
+    },
+    {
+      "label": "Contact",
+      "href": "/contact-us/"
+    },
+    {
+      "label": "Sitemap",
+      "href": "/sitemap/"
+    }
   ],
   "business": {
     "name": "",

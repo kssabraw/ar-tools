@@ -6,7 +6,7 @@ import { site, isLocal } from '../lib/site';
 import { corePage } from '../lib/content';
 import { render } from 'astro:content';
 
-const entry = await corePage('about');
+const entry = await corePage('about-us');
 const Content = entry ? (await render(entry)).Content : null;
 const title = entry?.data.title || `About ${site.siteName}`;
 const lede = entry?.data.description || site.tagline;

@@ -92,6 +92,24 @@ export function service(input: { title: string; description?: string; url: strin
   });
 }
 
+/**
+ * BreadcrumbList built from the URL path, so it can never disagree with the
+ * canonical (reference §1.2). Callers pass the crumbs derived by
+ * content.breadcrumbsFor; this only shapes them.
+ */
+export function breadcrumbList(crumbs: { label: string; href: string }[], base: string): Json | undefined {
+  if (crumbs.length < 2) return undefined;
+  return {
+    '@type': 'BreadcrumbList',
+    itemListElement: crumbs.map((c, i) => ({
+      '@type': 'ListItem',
+      position: i + 1,
+      name: c.label,
+      item: new URL(c.href, base).toString(),
+    })),
+  };
+}
+
 /** Wraps one or more nodes in a single @graph document. */
 export function graph(...nodes: Json[]): string {
   return JSON.stringify({ '@context': 'https://schema.org', '@graph': nodes.filter(Boolean) });

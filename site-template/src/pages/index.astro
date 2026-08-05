@@ -6,7 +6,7 @@ import ArticleCard from '../theme/components/ArticleCard.astro';
 import CtaBand from '../theme/components/CtaBand.astro';
 import ReviewStrip from '../theme/components/ReviewStrip.astro';
 import { site, isLocal, has } from '../lib/site';
-import { allPosts, allServices, allLocations, corePage } from '../lib/content';
+import { allPosts, routedPages, corePage } from '../lib/content';
 
 const home = await corePage('home');
 const s = (home?.data.sections ?? {}) as Record<string, string>;
@@ -18,8 +18,11 @@ const heroLede = s.heroLede || site.tagline || site.description;
 const heroEyebrow = s.heroEyebrow || (isLocal ? site.business.city : undefined);
 
 const posts = await allPosts();
-const services = isLocal ? await allServices() : [];
-const locations = isLocal ? await allLocations() : [];
+// One query, filtered by declared page type — the template never infers a page
+// type from the URL (reference §1.2).
+const pages = isLocal ? await routedPages() : [];
+const services = pages.filter((p) => p.pageType === 'service');
+const locations = pages.filter((p) => p.pageType === 'location');
 const latest = posts.slice(0, isLocal ? 3 : 6);
 ---
 
@@ -30,8 +33,8 @@ const latest = posts.slice(0, isLocal ? 3 : 6);
     lede={heroLede}
     ctaLabel={isLocal ? s.ctaLabel || 'Get a free quote' : undefined}
     ctaHref={isLocal ? '/contact' : undefined}
-    secondaryLabel={isLocal && services.length > 0 ? 'Our services' : undefined}
-    secondaryHref={isLocal && services.length > 0 ? '/services' : undefined}
+    secondaryLabel={isLocal && services.length > 0 ? 'Browse the site' : undefined}
+    secondaryHref={isLocal && services.length > 0 ? '/sitemap/' : undefined}
     image={home?.data.heroImage}
     imageAlt={home?.data.heroImageAlt}
   />
@@ -39,13 +42,7 @@ const latest = posts.slice(0, isLocal ? 3 : 6);
   {services.length > 0 && (
     <CardGrid title={s.servicesTitle || 'What we do'}>
       {services.slice(0, 6).map((svc) => (
-        <ArticleCard
-          href={`/services/${svc.id}/`}
-          title={svc.data.title}
-          excerpt={svc.data.teaser || svc.data.description}
-          image={svc.data.heroImage}
-          imageAlt={svc.data.heroImageAlt}
-        />
+        <ArticleCard href={svc.path} title={svc.title} excerpt={svc.teaser || svc.description} />
       ))}
     </CardGrid>
   )}
@@ -55,11 +52,7 @@ const latest = posts.slice(0, isLocal ? 3 : 6);
   {locations.length > 0 && (
     <CardGrid title={s.locationsTitle || 'Areas we serve'} min="200px">
       {locations.slice(0, 8).map((loc) => (
-        <ArticleCard
-          href={`/locations/${loc.id}/`}
-          title={loc.data.locationName || loc.data.title}
-          excerpt={loc.data.teaser}
-        />
+        <ArticleCard href={loc.path} title={loc.title} excerpt={loc.teaser} />
       ))}
     </CardGrid>
   )}

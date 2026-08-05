@@ -1,0 +1,118 @@
+---
+import Layout from '../layouts/Layout.astro';
+import PageHeader from '../theme/components/PageHeader.astro';
+import { routedPages, allPosts, categoriesOf } from '../lib/content';
+import { isLocal } from '../lib/site';
+
+/**
+ * HTML sitemap (PRD §4.8c) — human- and crawler-readable, grouped by silo.
+ * Rendered from the same published-pages query as structural linking, so it
+ * self-heals and never lists a page held by a quality gate.
+ *
+ * Note this page type is NOT in the Page Type Reference catalog; it is an
+ * addition this module makes and is worth feeding back for ratification.
+ */
+const pages = isLocal ? await routedPages() : [];
+const posts = await allPosts();
+
+const services = pages.filter((p) => p.pageType === 'service');
+const cities = pages.filter((p) => p.pageType === 'location');
+const childrenOf = (parent: string) =>
+  pages.filter(
+    (p) =>
+      p.path.startsWith(parent) &&
+      p.path !== parent &&
+      p.path.split('/').filter(Boolean).length === parent.split('/').filter(Boolean).length + 1,
+  );
+const categories = categoriesOf(posts);
+---
+
+<Layout title="Sitemap" description="Every page on this site.">
+  <PageHeader title="Sitemap" lede="Every published page, grouped by section." />
+
+  <div class="prose-wrap sitemap">
+    <section>
+      <h2>Main</h2>
+      <ul>
+        <li><a href="/">Home</a></li>
+        <li><a href="/about-us/">About Us</a></li>
+        <li><a href="/contact-us/">Contact Us</a></li>
+        <li><a href="/privacy-policy/">Privacy Policy</a></li>
+      </ul>
+    </section>
+
+    {services.length > 0 && (
+      <section>
+        <h2>Services</h2>
+        <ul>
+          {services.map((s) => (
+            <li>
+              <a href={s.path}>{s.title}</a>
+              {childrenOf(s.path).length > 0 && (
+                <ul>
+                  {childrenOf(s.path).map((c) => <li><a href={c.path}>{c.title}</a></li>)}
+                </ul>
+              )}
+            </li>
+          ))}
+        </ul>
+      </section>
+    )}
+
+    {cities.length > 0 && (
+      <section>
+        <h2>Areas we serve</h2>
+        <ul>
+          {cities.map((c) => (
+            <li>
+              <a href={c.path}>{c.title}</a>
+              {childrenOf(c.path).length > 0 && (
+                <ul>
+                  {childrenOf(c.path).map((x) => <li><a href={x.path}>{x.title}</a></li>)}
+                </ul>
+              )}
+            </li>
+          ))}
+        </ul>
+      </section>
+    )}
+
+    {posts.length > 0 && (
+      <section>
+        <h2>Blog</h2>
+        <ul>
+          <li><a href="/blog/">All posts</a></li>
+          {categories.map((cat) => (
+            <li>
+              {cat}
+              <ul>
+                {posts.filter((p) => p.data.category === cat).map((p) => (
+                  <li><a href={`/blog/${p.id}/`}>{p.data.title}</a></li>
+                ))}
+              </ul>
+            </li>
+          ))}
+        </ul>
+      </section>
+    )}
+  </div>
+</Layout>
+
+<style>
+  .sitemap {
+    padding-bottom: var(--space-8);
+  }
+  .sitemap section + section {
+    margin-top: var(--space-7);
+  }
+  .sitemap h2 {
+    font-size: var(--text-xl);
+    margin-bottom: var(--space-3);
+  }
+  .sitemap ul {
+    padding-left: var(--space-5);
+  }
+  .sitemap li {
+    margin-bottom: var(--space-2);
+  }
+</style>

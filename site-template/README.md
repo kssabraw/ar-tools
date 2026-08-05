@@ -41,7 +41,8 @@ astro.config.mjs          reads site.config.json for the canonical site URL
 wrangler.jsonc            `name` is rewritten per site by the provisioner
 .github/workflows/        push to main -> astro build -> wrangler deploy
 src/content.config.ts     the frontmatter contract (zod-validated)
-src/content/              posts | services | locations | pages
+src/content/              posts | services | locations | local-landing | pages
+src/lib/routes.ts         reserved slugs, path rules, breadcrumb derivation
 src/lib/site.ts           typed config access + the `has()` degradation helper
 src/lib/schema.ts         deterministic JSON-LD, built from facts only
 src/lib/content.ts        collection queries; deterministic ordering
@@ -56,15 +57,32 @@ routes adapt:
 
 | Route | Informational | Local business |
 |---|---|---|
-| `/` | hero + latest + topics | hero + services + reviews + areas + blog + CTA |
-| `/blog/`, `/topics/` | yes | only if posts exist |
-| `/services/`, `/locations/` | **never built** | yes |
-| `/about`, `/contact`, `/privacy` | yes | yes |
+| `/` | hero + latest | hero + services + reviews + areas + blog + CTA |
+| `/blog/`, `/blog/{post}/` | yes | only if posts exist |
+| `/{service}/`, `/{city}/`, `/{city}/{service}/` | **never built** | yes |
+| `/about-us/`, `/contact-us/`, `/privacy-policy/`, `/sitemap/` | yes | yes |
 
-Each section route pairs its index with its detail page in one `[...slug]`
-file. That is deliberate: `getStaticPaths` returns `[]` when a collection is
-empty, so a site with no services builds **no `/services/` page at all** rather
-than publishing an empty listing. A separate `index.astro` could not do that.
+## URL structure — read this before adding a route
+
+The paths come from the **Page Type Reference v3.4 §1.2**
+(`docs/reference/page-type-reference-v3_4.md`), which is subordinate to the AR
+Site Architecture SOP. Three rules matter here:
+
+- **No `/services/` or `/locations/` prefixes.** Services sit at `/{service-slug}/`
+  and cities at `/{city-slug}/`, both in the root namespace. The service × city
+  matrix is **location-first**: `/{city-slug}/{service-slug}/`.
+- **Page type is declared, never inferred.** `/{city}/{x}/` could be a local
+  landing, a neighborhood or a POI — shape cannot tell them apart. So every
+  routed entry declares its full `path` *and* its `pageType` in frontmatter, and
+  `src/pages/[...path].astro` renders all of them. Do not add per-type route
+  files; they would have to guess.
+- **Breadcrumbs follow the URL path, not the link hierarchy**, so BreadcrumbList
+  and canonical can never disagree. A local landing page's breadcrumb parent is
+  its **city**, even though its body links to the service page.
+
+Reserved root slugs live in `src/lib/routes.ts`. The build **fails** on a
+reserved-slug collision or two entries claiming one path — the planner should
+catch both first, but a wrong URL outlives the mistake that made it.
 
 ## Degradation is the default
 
@@ -102,6 +120,6 @@ To exercise the local-business path, set `siteType` to `local_business`, add
 
 ## Sample content
 
-`src/content/posts/sample-*.md` and `src/content/pages/about.md` ship so a fresh
+`src/content/posts/sample-*.md` and `src/content/pages/about-us.md` ship so a fresh
 clone builds into something viewable. **The provisioner clears `src/content/`
 before generating a real site's content.**

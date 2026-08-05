@@ -5,7 +5,7 @@ import ContactBlock from '../theme/components/ContactBlock.astro';
 import { site } from '../lib/site';
 import { corePage } from '../lib/content';
 
-const entry = await corePage('contact');
+const entry = await corePage('contact-us');
 const title = entry?.data.title || 'Contact';
 // Nearly all of this page is deterministic: NAP, hours, form and map render
 // straight from the business facts. Only this intro line is generated.

@@ -10,7 +10,7 @@ import { render } from 'astro:content';
  * into a fixed template, no LLM involved. An uploaded/authored policy in the
  * `pages` collection overrides this default outright.
  */
-const entry = await corePage('privacy');
+const entry = await corePage('privacy-policy');
 const Content = entry ? (await render(entry)).Content : null;
 
 const name = site.business.name || site.siteName;

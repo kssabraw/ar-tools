@@ -5,7 +5,7 @@ import Layout from '../../layouts/Layout.astro';
 import CardGrid from '../../theme/components/CardGrid.astro';
 import ArticleCard from '../../theme/components/ArticleCard.astro';
 import PageHeader from '../../theme/components/PageHeader.astro';
-import { allPosts, relatedTo, slugify } from '../../lib/content';
+import { allPosts, relatedTo } from '../../lib/content';
 import { article } from '../../lib/schema';
 import { has } from '../../lib/site';
 
@@ -67,10 +67,7 @@ const ld = d
   <article>
     <header class="prose-wrap post-head">
       <nav class="post-breadcrumb" aria-label="Breadcrumb">
-        <a href="/">Home</a>
-        {has(d.category) && (
-          <> · <a href={`/topics/${slugify(d.category)}/`}>{d.category}</a></>
-        )}
+        <a href="/">Home</a> · <a href="/blog/">Blog</a>
       </nav>
       {has(d.category) && <p class="eyebrow">{d.category}</p>}
       <h1 class="post-title">{d.title}</h1>
