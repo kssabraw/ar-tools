@@ -149,9 +149,10 @@ export function SiloDiscovery({
   });
 
   const expandMut = useMutation({
-    // The deep-mine selection (§7.2) is saved, then the pipeline kicks off async.
-    mutationFn: async (gatedTopicIds: string[]) => {
-      await setDeepMine(sessionId!, gatedTopicIds);
+    // The run scope + deep-mine selection (§7.2) are saved, then the pipeline
+    // kicks off async.
+    mutationFn: async (v: { gated: string[]; run: string[] }) => {
+      await setDeepMine(sessionId!, v.gated, v.run);
       return expandSession(sessionId!);
     },
     onSuccess: () => {
@@ -283,9 +284,9 @@ export function SiloDiscovery({
           <DeepMineSelection
             sessionId={sessionId}
             onExit={onExit}
-            onRun={(gatedIds) => {
+            onRun={(gatedIds, runIds) => {
               setError(null);
-              expandMut.mutate(gatedIds);
+              expandMut.mutate({ gated: gatedIds, run: runIds });
             }}
           />
         )}
@@ -553,20 +554,42 @@ function PlanResults(p: { plan: NonNullable<PipelineSummary["plan"]>; onExit: ()
 // competitor keywords. The seed is always mined and shown as a locked row.
 function DeepMineSelection(p: {
   sessionId: string;
-  onRun: (gatedTopicIds: string[]) => void;
+  onRun: (gatedTopicIds: string[], runTopicIds: string[]) => void;
   onExit: () => void;
 }) {
   const q = useQuery({
     queryKey: ["session", p.sessionId],
     queryFn: () => getSession(p.sessionId),
   });
+  // Two independent selections. Run scope decides which silos the pipeline
+  // touches at all; deep-mine adds competitor mining on top of those. Run scope
+  // starts as every silo, so doing nothing keeps the old behaviour.
+  const [inRun, setInRun] = useState<Set<string> | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   if (q.isLoading) return <p className="muted">Loading silos…</p>;
   if (q.isError) return <p className="form-error">Failed to load silos.</p>;
   const silos = q.data?.silos ?? [];
+  const runScope = inRun ?? new Set(silos.map((s) => s.id));
 
-  const toggle = (id: string) =>
+  const toggleRun = (id: string) => {
+    const next = new Set(runScope);
+    if (next.has(id)) {
+      next.delete(id);
+      // Mining a silo the run skips would spend SERP budget on nothing, and the
+      // API rejects it — drop the deep-mine choice with the silo.
+      setSelected((prev) => {
+        const kept = new Set(prev);
+        kept.delete(id);
+        return kept;
+      });
+    } else {
+      next.add(id);
+    }
+    setInRun(next);
+  };
+
+  const toggleMine = (id: string) =>
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -576,37 +599,71 @@ function DeepMineSelection(p: {
 
   return (
     <div className="card">
-      <h1 className="page-title">Choose silos to deep-mine</h1>
+      <h1 className="page-title">Choose what this run covers</h1>
       <p className="muted">
-        Competitor mining pulls the keywords competitors already rank for. The seed is always
-        mined; pick the silos worth the extra SERP cost (2–3 is a good budget). You can also
-        run with none selected.
+        <strong>Run</strong> picks the silos the pipeline works on — expansion, the relevance
+        gate, clustering and article planning. An unticked silo is left untouched: it stays on
+        the session but gets no keywords and no articles.
+      </p>
+      <p className="muted">
+        <strong>Deep-mine</strong> additionally pulls the keywords competitors already rank for
+        — the expensive part. The seed is always mined; 2–3 silos is a good budget, and none is
+        a valid choice.
       </p>
 
       <div className="keyword-grid" style={{ marginTop: 16 }}>
-        <label className="keyword-row" style={{ opacity: 0.7 }}>
-          <span>
-            <input type="checkbox" checked disabled style={{ marginRight: 8 }} />
-            Seed keyword (always mined)
+        <div
+          className="keyword-row"
+          style={{ opacity: 0.7, fontSize: "0.85em", textTransform: "uppercase" }}
+        >
+          <span>Silo</span>
+          <span className="keyword-sources" style={{ display: "flex", gap: 16 }}>
+            <span style={{ width: 40, textAlign: "center" }}>Run</span>
+            <span style={{ width: 72, textAlign: "center" }}>Deep-mine</span>
           </span>
-          <span className="keyword-sources">required</span>
-        </label>
-        {silos.map((s) => (
-          <label className="keyword-row" key={s.id} style={{ cursor: "pointer" }}>
-            <span>
-              <input
-                type="checkbox"
-                checked={selected.has(s.id)}
-                onChange={() => toggle(s.id)}
-                style={{ marginRight: 8 }}
-              />
-              {s.name}
+        </div>
+        <div className="keyword-row" style={{ opacity: 0.7 }}>
+          <span>Seed keyword</span>
+          <span className="keyword-sources" style={{ display: "flex", gap: 16 }}>
+            <span style={{ width: 40, textAlign: "center" }}>—</span>
+            <span style={{ width: 72, textAlign: "center" }}>
+              <input type="checkbox" checked disabled title="The seed is always mined" />
             </span>
-            <span className="keyword-sources">
-              {RELATIONSHIP_LABELS[s.relationship_type]}
-            </span>
-          </label>
-        ))}
+          </span>
+        </div>
+        {silos.map((s) => {
+          const running = runScope.has(s.id);
+          return (
+            <div className="keyword-row" key={s.id} style={{ opacity: running ? 1 : 0.5 }}>
+              <span>
+                {s.name}{" "}
+                <span className="muted" style={{ fontSize: "0.85em" }}>
+                  {RELATIONSHIP_LABELS[s.relationship_type]}
+                </span>
+              </span>
+              <span className="keyword-sources" style={{ display: "flex", gap: 16 }}>
+                <span style={{ width: 40, textAlign: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={running}
+                    onChange={() => toggleRun(s.id)}
+                    aria-label={`Include ${s.name} in this run`}
+                  />
+                </span>
+                <span style={{ width: 72, textAlign: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={selected.has(s.id)}
+                    disabled={!running}
+                    onChange={() => toggleMine(s.id)}
+                    aria-label={`Deep-mine ${s.name}`}
+                    title={running ? undefined : "Only silos in the run can be deep-mined"}
+                  />
+                </span>
+              </span>
+            </div>
+          );
+        })}
       </div>
 
       <div className="toolbar" style={{ marginTop: 16 }}>
@@ -616,12 +673,16 @@ function DeepMineSelection(p: {
         <button
           className="btn btn-primary"
           style={{ width: "auto" }}
-          onClick={() => p.onRun([...selected])}
+          disabled={runScope.size === 0}
+          onClick={() => p.onRun([...selected], [...runScope])}
         >
-          Run keyword pipeline
-          {selected.size > 0 ? ` (mine ${selected.size + 1} silos)` : " (seed only)"}
+          {`Run keyword pipeline (${runScope.size} of ${silos.length} silos · `}
+          {selected.size > 0 ? `mine ${selected.size + 1})` : "seed-only mining)"}
         </button>
       </div>
+      {runScope.size === 0 && (
+        <p className="field-hint">Select at least one silo to run.</p>
+      )}
     </div>
   );
 }
