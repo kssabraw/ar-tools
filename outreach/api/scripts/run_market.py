@@ -321,6 +321,133 @@ def cmd_probe_dataforseo(args) -> int:
     return 0
 
 
+def cmd_scan(args) -> int:
+    """Post one geogrid: one submarket x one keyword, 81 points. BILLS.
+
+    Deliberately narrow. The owner's ruling for the first live run is one submarket and one
+    keyword, so that a wrong response envelope costs one batch rather than a market — the same
+    reasoning that left the review `task_get` envelope to be proven on a small first batch rather
+    than on a synthetic test that could only confirm the shape we already assumed.
+
+    A market-wide sweep is a later command, and it should be written after this one has run for
+    real, not before.
+    """
+    import asyncio as _asyncio
+
+    from api.services import scan_runner
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    settings = get_settings()
+    client = _client()
+
+    from api.services.dataforseo_client import missing_dataforseo_vars
+
+    absent = missing_dataforseo_vars(settings)
+    if absent:
+        print(f"REFUSED: missing credentials: {', '.join(absent)}", file=sys.stderr)
+        return 2
+
+    market_id = _market_id(client, definition.name)
+
+    submarkets = (
+        client.table("submarket").select("*").eq("market_id", market_id).execute().data or []
+    )
+    if args.submarket:
+        submarkets = [s for s in submarkets if s["name"].lower() == args.submarket.lower()]
+    if not submarkets:
+        names = ", ".join(
+            sorted(
+                s["name"]
+                for s in (
+                    client.table("submarket")
+                    .select("name")
+                    .eq("market_id", market_id)
+                    .execute()
+                    .data
+                    or []
+                )
+            )
+        )
+        print(f"REFUSED: no submarket matched --submarket. Known: {names}", file=sys.stderr)
+        return 2
+    if len(submarkets) > 1:
+        print(
+            "REFUSED: this command scans ONE submarket. Pass --submarket. Scanning a whole "
+            "market before the envelope has been proven once is what the one-submarket ruling "
+            "exists to prevent.",
+            file=sys.stderr,
+        )
+        return 2
+
+    keywords = (
+        client.table("keyword").select("*").eq("market_id", market_id).execute().data or []
+    )
+    if args.keyword:
+        keywords = [k for k in keywords if k["term"].lower() == args.keyword.lower()]
+    else:
+        keywords = [k for k in keywords if k.get("is_primary")] or keywords[:1]
+    if len(keywords) != 1:
+        terms = ", ".join(sorted(k["term"] for k in keywords))
+        print(f"REFUSED: pass --keyword to pick exactly one of: {terms}", file=sys.stderr)
+        return 2
+
+    report = _asyncio.run(
+        scan_runner.submit_scan(client, settings, submarkets[0], keywords[0])
+    )
+    print(
+        json.dumps(
+            {
+                "snapshot_id": report.snapshot_id,
+                "submarket": report.submarket,
+                "keyword": report.keyword,
+                "expected_points": report.expected_points,
+                "posted": report.posted,
+                "unposted": report.unposted,
+                "problems": report.problems,
+            },
+            indent=2,
+        )
+    )
+    # Posting nothing while believing a scan happened is the worst outcome available here: the
+    # snapshot exists, the collector will find no tasks, and it finalizes as complete-with-zero.
+    return 0 if report.posted else 1
+
+
+def cmd_collect(args) -> int:
+    """Drain the ready list and store whatever is done. FREE, and safe to run on any tick."""
+    import asyncio as _asyncio
+
+    from api.services import scan_runner
+    from api.services.dataforseo_client import missing_dataforseo_vars
+
+    settings = get_settings()
+    absent = missing_dataforseo_vars(settings)
+    if absent:
+        print(f"REFUSED: missing credentials: {', '.join(absent)}", file=sys.stderr)
+        return 2
+
+    report = _asyncio.run(scan_runner.collect_ready(_client(), settings))
+    print(
+        json.dumps(
+            {
+                "ready_seen": report.ready_seen,
+                "collected": report.collected,
+                "rows_written": report.rows_written,
+                "still_pending": report.still_pending,
+                "failed": report.failed,
+                "foreign_tasks": report.foreign,
+                "recovered_by_tag": report.recovered_by_tag,
+                "snapshots_finalized": report.snapshots_finalized,
+                "problems": report.problems,
+            },
+            indent=2,
+        )
+    )
+    # A collector that found nothing is the NORMAL case between cycles, so it exits zero. The
+    # failure worth reporting is one that saw work and could not do it.
+    return 1 if report.problems and not report.collected else 0
+
+
 def cmd_probe_ai_granularity(args) -> int:
     """The I-004 spike: does the place name in an AI prompt change the answer? BILLS a few cents.
 
@@ -438,7 +565,7 @@ _SHA_VARS = ("OUTREACH_BUILD_SHA", "RAILWAY_GIT_COMMIT_SHA", "SOURCE_COMMIT", "G
 # small amounts turns a mechanical test into a judgement about size — which is how a paid command
 # ends up unconfirmed once someone's estimate is wrong.
 PAID_COMMANDS = frozenset(
-    {"ingest", "run", "calibrate", "verify-reviews", "probe-ai-granularity"}
+    {"ingest", "run", "calibrate", "verify-reviews", "probe-ai-granularity", "scan"}
 )
 
 SAFE_COMMAND = "filter"
@@ -582,7 +709,7 @@ def main() -> int:
             dict(os.environ),
             [
                 "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-                "probe-dataforseo", "probe-ai-granularity",
+                "probe-dataforseo", "probe-ai-granularity", "scan", "collect",
             ],
         ),
         flush=True,
@@ -593,7 +720,7 @@ def main() -> int:
         "command",
         choices=[
             "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-            "probe-dataforseo", "probe-ai-granularity",
+            "probe-dataforseo", "probe-ai-granularity", "scan", "collect",
         ],
     )
     parser.add_argument("definition", help="path to a market definition JSON file")
@@ -641,6 +768,10 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--submarket", default=None,
+        help="scan: the ONE submarket to scan, by name. Required — see cmd_scan.",
+    )
+    parser.add_argument(
         "--allow-geometry-change",
         action="store_true",
         help="permit geometry edits to submarkets that have NOT been scanned",
@@ -654,6 +785,8 @@ def main() -> int:
         "verify-reviews": cmd_verify_reviews,
         "probe-dataforseo": cmd_probe_dataforseo,
         "probe-ai-granularity": cmd_probe_ai_granularity,
+        "scan": cmd_scan,
+        "collect": cmd_collect,
     }
 
     # Railway reports a crashed job as deployment status SUCCESS when restartPolicy is NEVER —

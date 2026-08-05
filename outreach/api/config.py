@@ -168,6 +168,34 @@ class Settings(BaseSettings):
     # --- Cadence -------------------------------------------------------------------------
     scan_interval_days: int = 15
 
+    # --- Maps geogrid scanning (PRD §B1) --------------------------------------------------
+    # Zoom is what makes a task a GEOGRID rather than 81 copies of a city-wide query: it sets how
+    # tightly the provider simulates standing at that coordinate. 13 matches the suite's proven
+    # geo-grid and the LeadOff scanner's reference implementation; changing it changes what every
+    # historical snapshot measured, so treat it like geometry rather than like a tuning knob.
+    scan_zoom: int = 13
+
+    # Results requested per point. The pipeline needs the FULL local pack at every point (~20) —
+    # that is the capability the whole provider choice rests on, because it is what lets one grid
+    # score every business in a submarket instead of one target.
+    scan_depth: int = 20
+    scan_device: str = "desktop"
+    dataforseo_default_language_code: str = "en"
+
+    # PRD §9a.3. Below this ratio of points collected to points expected, a snapshot is marked
+    # incomplete and excluded from scoring rather than quietly scored on partial evidence.
+    scan_completeness_threshold: float = 0.98
+
+    # The ready list holds a task ~3 days; results stay retrievable by id for 30. Past this age a
+    # task has aged off the list and is collected directly (PRD §B1.3) — a normal recovery.
+    scan_collect_fallback_days: int = 3
+    scan_collect_fallback_limit: int = 500
+
+    # PRD §B1.4. Past this age, something is wrong with the COLLECTOR'S SCHEDULE, not with the
+    # task — which is a distinction invisible from any single run, so it is alerted rather than
+    # retried silently.
+    scan_collect_alert_days: int = 5
+
 
 def missing_supabase_vars(settings: "Settings") -> list[str]:
     """Which Supabase credentials are absent, by env-var name.
