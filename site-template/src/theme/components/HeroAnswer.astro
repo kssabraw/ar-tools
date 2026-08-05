@@ -1,0 +1,46 @@
+---
+import { has } from '../../lib/site';
+
+/**
+ * Shared Component Library: H1 + a two-sentence plain-language answer paragraph
+ * + CTA. The answer paragraph is an AI Overview extraction target, so it is
+ * deliberately standalone — it must resolve the query without the surrounding
+ * page. Mobile: stack.
+ */
+interface Props {
+  eyebrow?: string;
+  title: string;
+  answer: string;
+  ctaLabel?: string;
+  ctaHref?: string;
+}
+const { eyebrow, title, answer, ctaLabel, ctaHref } = Astro.props;
+---
+
+<section class="hero-answer">
+  <div class="prose-wrap">
+    {has(eyebrow) && <p class="eyebrow">{eyebrow}</p>}
+    <h1 class="hero-answer__title">{title}</h1>
+    <p class="hero-answer__answer">{answer}</p>
+    {has(ctaHref) && <a class="button" href={ctaHref}>{ctaLabel}</a>}
+  </div>
+</section>
+
+<style>
+  .hero-answer {
+    padding-block: var(--space-8) var(--space-6);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .hero-answer__title {
+    font-size: var(--text-3xl);
+    font-weight: 700;
+    margin-top: var(--space-3);
+  }
+  /* Visually distinct so the extractable answer is obvious to a reader too. */
+  .hero-answer__answer {
+    font-size: var(--text-lg);
+    line-height: var(--leading-snug);
+    margin: var(--space-5) 0 var(--space-6);
+    max-width: 62ch;
+  }
+</style>

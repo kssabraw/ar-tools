@@ -1,0 +1,66 @@
+---
+import { site, has } from '../../lib/site';
+
+/**
+ * Shared Component Library: short form (name, contact, message/service) +
+ * submit. Mobile: full-width.
+ *
+ * Posts to Web3Forms so the site stays fully static with no backend of ours
+ * (PRD §4.8). Renders nothing without a key rather than shipping a dead form.
+ */
+interface Props {
+  heading?: string;
+}
+const { heading } = Astro.props;
+const key = site.forms.web3formsKey;
+---
+
+{has(key) && (
+  <form class="card lead-form" action="https://api.web3forms.com/submit" method="POST">
+    {heading && <h2 class="lead-form__heading">{heading}</h2>}
+    <input type="hidden" name="access_key" value={key} />
+    <input type="hidden" name="subject" value={`New enquiry from ${site.siteName}`} />
+    <input type="hidden" name="from_name" value={site.siteName} />
+    {/* Honeypot — bots fill it, humans never see it. */}
+    <input type="checkbox" name="botcheck" class="visually-hidden" tabindex="-1" autocomplete="off" />
+
+    <label class="field"><span>Name</span><input type="text" name="name" required autocomplete="name" /></label>
+    <label class="field"><span>Email</span><input type="email" name="email" required autocomplete="email" /></label>
+    <label class="field"><span>Phone</span><input type="tel" name="phone" autocomplete="tel" /></label>
+    <label class="field"><span>How can we help?</span><textarea name="message" rows="4" required></textarea></label>
+    <button class="button" type="submit">Send message</button>
+  </form>
+)}
+
+<style>
+  .lead-form {
+    padding: var(--space-6);
+    display: grid;
+    gap: var(--space-4);
+  }
+  .lead-form__heading {
+    font-size: var(--text-lg);
+  }
+  .field {
+    display: grid;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+    font-weight: 600;
+  }
+  .field input,
+  .field textarea {
+    font: inherit;
+    font-weight: 400;
+    padding: var(--space-3);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-md);
+    background: var(--color-bg);
+    color: inherit;
+    width: 100%;
+  }
+  .field input:focus-visible,
+  .field textarea:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+  }
+</style>

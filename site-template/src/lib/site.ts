@@ -25,9 +25,19 @@ export interface BusinessFacts {
   rating: string;
   reviewCount: string;
   reviews: Review[];
+  /** Structured, because §5.3 checks generated copy against them. A free-text
+   *  "licensed and insured" field would defeat that check. */
+  credentials: Credential[];
   /** Per-field `"user" | "gbp"` marks, so a later GBP sync fills gaps without
    *  clobbering anything typed by a human (plan §4.5). */
   provenance: Record<string, string>;
+}
+
+export interface Credential {
+  type: string;
+  issuingBody: string;
+  number?: string;
+  expires?: string;
 }
 
 export interface Review {

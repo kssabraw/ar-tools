@@ -1,0 +1,36 @@
+---
+/** Shared Component Library: callout for compliance notes, disclaimers and
+ *  freshness dates. Mobile: full-width. */
+interface Props {
+  tone?: 'info' | 'warning';
+  label?: string;
+}
+const { tone = 'info', label } = Astro.props;
+---
+
+<aside class={`alert alert--${tone}`}>
+  {label && <strong class="alert__label">{label}</strong>}
+  <div class="alert__body"><slot /></div>
+</aside>
+
+<style>
+  .alert {
+    border: 1px solid var(--color-border);
+    border-left-width: 3px;
+    border-left-color: var(--color-accent);
+    background: var(--color-surface-muted);
+    border-radius: var(--radius-md);
+    padding: var(--space-4) var(--space-5);
+    font-size: var(--text-sm);
+  }
+  .alert--warning {
+    border-left-color: #b4690e;
+  }
+  .alert__label {
+    display: block;
+    margin-bottom: var(--space-2);
+  }
+  .alert__body {
+    color: var(--color-text-muted);
+  }
+</style>

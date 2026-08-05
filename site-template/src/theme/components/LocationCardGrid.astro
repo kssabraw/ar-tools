@@ -1,0 +1,18 @@
+---
+import CardGridBase from './CardGridBase.astro';
+import CardBase from './CardBase.astro';
+
+/** Shared Component Library: card grid of locations — name + address/area +
+ *  link. Mobile: 1-column stack. */
+interface Props {
+  title?: string;
+  items: { href: string; title: string; excerpt?: string }[];
+}
+const { title, items } = Astro.props;
+---
+
+{items.length > 0 && (
+  <CardGridBase title={title} min="200px">
+    {items.map((i) => <CardBase href={i.href} title={i.title} excerpt={i.excerpt} />)}
+  </CardGridBase>
+)}

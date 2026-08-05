@@ -1,0 +1,55 @@
+---
+import { site } from '../../lib/site';
+
+/**
+ * Shared Component Library: licences, certifications, associations, review
+ * scores. Mobile: wrap.
+ *
+ * Renders NOTHING when no structured credentials are on file. That is a hard
+ * rule, not a quality choice (PRD §4.10/§5.3): credentials are checkable claims
+ * about the business, so a free-text "licensed and insured" is not an
+ * acceptable substitute and an absent one is never filled with a platitude.
+ */
+const credentials = site.business.credentials ?? [];
+---
+
+{credentials.length > 0 && (
+  <section class="trust">
+    <div class="wrap trust__row">
+      {credentials.map((c) => (
+        <div class="trust__badge">
+          <span class="trust__type">{c.type}</span>
+          <span class="trust__body">{c.issuingBody}</span>
+          {c.number && <span class="trust__number">#{c.number}</span>}
+        </div>
+      ))}
+    </div>
+  </section>
+)}
+
+<style>
+  .trust {
+    border-block: 1px solid var(--color-border);
+    background: var(--color-surface-muted);
+  }
+  .trust__row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-5);
+    padding-block: var(--space-5);
+  }
+  .trust__badge {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: var(--text-sm);
+  }
+  .trust__type {
+    font-weight: 700;
+  }
+  .trust__body,
+  .trust__number {
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+  }
+</style>

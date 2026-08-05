@@ -28,8 +28,19 @@ disappeared tomorrow, every site keeps building and shipping.
   case, only this file.**
 - `src/theme/base.css` — reset plus shared primitives (`.wrap`, `.card`,
   `.richtext`, `.button`). Not theme-specific.
-- `src/theme/components/*.astro` — the section components, each with named
-  content slots.
+- `src/theme/components/*.astro` — the section components, named from the
+  **Shared Component Library** (Page Type Reference v3.4 §4) so a page type
+  composes from named parts and any approved theme can render any page type
+  whose components it has.
+- `src/theme/manifest.ts` — what this theme **provides** and what it is
+  **missing**, in library vocabulary. The theme-coverage check reads this, not
+  the filesystem: a component that exists but is not wired counts as absent, and
+  planning a page type against a theme that lacks its components must fail at
+  **theme approval**, not at publish (PRD §4.5).
+
+A few files are compositions or primitives rather than library components —
+`Header`, `Footer`, `PageHeader`, `ContactBlock`, `ReviewStrip`, `CardBase`,
+`CardGridBase`. They are deliberately absent from the manifest.
 
 The compiler writes `src/theme/**` and `site.config.json`, and nothing else.
 

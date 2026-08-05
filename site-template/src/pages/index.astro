@@ -1,9 +1,11 @@
 ---
 import Layout from '../layouts/Layout.astro';
-import Hero from '../theme/components/Hero.astro';
-import CardGrid from '../theme/components/CardGrid.astro';
-import ArticleCard from '../theme/components/ArticleCard.astro';
-import CtaBand from '../theme/components/CtaBand.astro';
+import HeroStandard from '../theme/components/HeroStandard.astro';
+import ServiceCardGrid from '../theme/components/ServiceCardGrid.astro';
+import LocationCardGrid from '../theme/components/LocationCardGrid.astro';
+import RelatedPagesBlock from '../theme/components/RelatedPagesBlock.astro';
+import TrustBadgeRow from '../theme/components/TrustBadgeRow.astro';
+import CTABand from '../theme/components/CTABand.astro';
 import ReviewStrip from '../theme/components/ReviewStrip.astro';
 import { site, isLocal, has } from '../lib/site';
 import { allPosts, routedPages, corePage } from '../lib/content';
@@ -27,7 +29,7 @@ const latest = posts.slice(0, isLocal ? 3 : 6);
 ---
 
 <Layout title={site.siteName} description={site.description}>
-  <Hero
+  <HeroStandard
     eyebrow={heroEyebrow}
     title={heroTitle}
     lede={heroLede}
@@ -39,42 +41,32 @@ const latest = posts.slice(0, isLocal ? 3 : 6);
     imageAlt={home?.data.heroImageAlt}
   />
 
-  {services.length > 0 && (
-    <CardGrid title={s.servicesTitle || 'What we do'}>
-      {services.slice(0, 6).map((svc) => (
-        <ArticleCard href={svc.path} title={svc.title} excerpt={svc.teaser || svc.description} />
-      ))}
-    </CardGrid>
-  )}
+  <ServiceCardGrid
+    title={s.servicesTitle || 'What we do'}
+    items={services.slice(0, 6).map((svc) => ({ href: svc.path, title: svc.title, excerpt: svc.teaser || svc.description }))}
+  />
+
+  <TrustBadgeRow />
 
   <ReviewStrip />
 
-  {locations.length > 0 && (
-    <CardGrid title={s.locationsTitle || 'Areas we serve'} min="200px">
-      {locations.slice(0, 8).map((loc) => (
-        <ArticleCard href={loc.path} title={loc.title} excerpt={loc.teaser} />
-      ))}
-    </CardGrid>
-  )}
+  <LocationCardGrid
+    title={s.locationsTitle || 'Areas we serve'}
+    items={locations.slice(0, 8).map((loc) => ({ href: loc.path, title: loc.title, excerpt: loc.teaser }))}
+  />
 
-  {latest.length > 0 && (
-    <CardGrid title={isLocal ? 'From the blog' : s.latestTitle || 'Latest'}>
-      {latest.map((post) => (
-        <ArticleCard
-          href={`/blog/${post.id}/`}
-          title={post.data.title}
-          kicker={post.data.category}
-          excerpt={post.data.description}
-          meta={post.data.readingTime}
-          image={post.data.heroImage}
-          imageAlt={post.data.heroImageAlt}
-        />
-      ))}
-    </CardGrid>
-  )}
+  <RelatedPagesBlock
+    title={isLocal ? 'From the blog' : s.latestTitle || 'Latest'}
+    items={latest.map((post) => ({
+      href: `/blog/${post.id}/`,
+      title: post.data.title,
+      kicker: post.data.category,
+      meta: post.data.readingTime,
+    }))}
+  />
 
   {isLocal && (
-    <CtaBand
+    <CTABand
       title={s.ctaTitle || 'Ready to get started?'}
       body={s.ctaBody || (has(site.business.city) ? `Serving ${site.business.city} and nearby.` : undefined)}
     />

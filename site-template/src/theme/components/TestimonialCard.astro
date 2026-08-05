@@ -1,0 +1,46 @@
+---
+/**
+ * Shared Component Library: quote + attribution. Mobile: carousel.
+ *
+ * "Real persons only; no stock photos ever" is the library's own rule, and
+ * PRD §5.6 makes it a hard block with no override at any role. So this
+ * component takes no image and no generated content — it renders stored,
+ * attributed testimonials or nothing at all.
+ */
+interface Props {
+  quote: string;
+  author?: string;
+  rating?: number;
+}
+const { quote, author, rating } = Astro.props;
+const stars = (n: number) => '★'.repeat(Math.round(n)).padEnd(5, '☆');
+---
+
+<blockquote class="card testimonial">
+  {typeof rating === 'number' && (
+    <p class="testimonial__stars" aria-label={`${rating} out of 5`}>{stars(rating)}</p>
+  )}
+  <p class="testimonial__text">{quote}</p>
+  {author && <footer class="testimonial__author">— {author}</footer>}
+</blockquote>
+
+<style>
+  .testimonial {
+    margin: 0;
+    padding: var(--space-5);
+  }
+  .testimonial__stars {
+    color: var(--color-accent);
+    letter-spacing: 0.1em;
+    margin: 0 0 var(--space-3);
+  }
+  .testimonial__text {
+    margin: 0;
+    line-height: var(--leading-normal);
+  }
+  .testimonial__author {
+    margin-top: var(--space-3);
+    font-size: var(--text-sm);
+    color: var(--color-text-subtle);
+  }
+</style>

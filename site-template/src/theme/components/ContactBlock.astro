@@ -1,5 +1,10 @@
 ---
+import LeadForm from './LeadForm.astro';
+import MapEmbed from './MapEmbed.astro';
 import { site, displayPhone, has, hasAddress, formattedAddress } from '../../lib/site';
+
+// Composition, not a library component: it arranges LeadForm, MapEmbed and the
+// NAP block. The library owns the parts; this owns the contact-page layout.
 
 const b = site.business;
 const phone = displayPhone();
@@ -51,55 +56,13 @@ const mapQuery = b.mapPlaceId
     </div>
 
     <div class="contact__form-side stack">
-      {/* Web3Forms: a static-site-friendly endpoint, so the site stays fully
-          static with no backend of ours (plan §4.8). Without a key configured
-          the form is omitted rather than rendered dead. */}
-      {has(key) ? (
-        <form class="card contact__form" action="https://api.web3forms.com/submit" method="POST">
-          <input type="hidden" name="access_key" value={key} />
-          <input type="hidden" name="subject" value={`New enquiry from ${site.siteName}`} />
-          <input type="hidden" name="from_name" value={site.siteName} />
-          {/* Honeypot — bots fill it, humans never see it. */}
-          <input type="checkbox" name="botcheck" class="visually-hidden" tabindex="-1" autocomplete="off" />
-
-          <label class="field">
-            <span>Name</span>
-            <input type="text" name="name" required autocomplete="name" />
-          </label>
-          <label class="field">
-            <span>Email</span>
-            <input type="email" name="email" required autocomplete="email" />
-          </label>
-          <label class="field">
-            <span>Phone</span>
-            <input type="tel" name="phone" autocomplete="tel" />
-          </label>
-          <label class="field">
-            <span>How can we help?</span>
-            <textarea name="message" rows="4" required></textarea>
-          </label>
-          <button class="button" type="submit">Send message</button>
-        </form>
-      ) : (
-        has(b.email) && (
-          <div class="card contact__fallback">
-            <p>
-              Email us at <a href={`mailto:${b.email}`}>{b.email}</a> and we'll get back to you.
-            </p>
-          </div>
-        )
+      <LeadForm />
+      {!has(site.forms.web3formsKey) && has(b.email) && (
+        <div class="card contact__fallback">
+          <p>Email us at <a href={`mailto:${b.email}`}>{b.email}</a> and we'll get back to you.</p>
+        </div>
       )}
-
-      {/* The Maps embed is the one external frame the theme allows. */}
-      {has(mapQuery) && (
-        <iframe
-          class="contact__map"
-          title="Map"
-          loading="lazy"
-          referrerpolicy="no-referrer-when-downgrade"
-          src={`https://www.google.com/maps?q=${encodeURIComponent(mapQuery)}&output=embed`}
-        ></iframe>
-      )}
+      <MapEmbed />
     </div>
   </div>
 </section>

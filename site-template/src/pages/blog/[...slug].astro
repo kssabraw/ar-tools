@@ -2,8 +2,8 @@
 import type { GetStaticPaths } from 'astro';
 import { render } from 'astro:content';
 import Layout from '../../layouts/Layout.astro';
-import CardGrid from '../../theme/components/CardGrid.astro';
-import ArticleCard from '../../theme/components/ArticleCard.astro';
+import RelatedPagesBlock from '../../theme/components/RelatedPagesBlock.astro';
+import AuthorByline from '../../theme/components/AuthorByline.astro';
 import PageHeader from '../../theme/components/PageHeader.astro';
 import { allPosts, relatedTo } from '../../lib/content';
 import { article } from '../../lib/schema';
@@ -48,19 +48,16 @@ const ld = d
 {!d || !Content ? (
   <Layout title="Library" description="Every article, newest first.">
     <PageHeader title="Library" lede="Everything we've published, newest first." />
-    <CardGrid>
-      {posts.map((p) => (
-        <ArticleCard
-          href={`/blog/${p.id}/`}
-          title={p.data.title}
-          kicker={p.data.category}
-          excerpt={p.data.description}
-          meta={p.data.readingTime}
-          image={p.data.heroImage}
-          imageAlt={p.data.heroImageAlt}
-        />
-      ))}
-    </CardGrid>
+    <RelatedPagesBlock
+      title=""
+      limit={999}
+      items={posts.map((p) => ({
+        href: `/blog/${p.id}/`,
+        title: p.data.title,
+        kicker: p.data.category,
+        meta: p.data.readingTime,
+      }))}
+    />
   </Layout>
 ) : (
 <Layout title={d.title} description={d.description} image={d.heroImage} jsonld={ld}>
@@ -86,18 +83,15 @@ const ld = d
     </div>
   </article>
 
-  {related.length > 0 && (
-    <CardGrid title="Related reading">
-      {related.map((r) => (
-        <ArticleCard
-          href={`/blog/${r.id}/`}
-          title={r.data.title}
-          kicker={r.data.category}
-          meta={r.data.readingTime}
-        />
-      ))}
-    </CardGrid>
-  )}
+  <RelatedPagesBlock
+    title="Related reading"
+    items={related.map((r) => ({
+      href: `/blog/${r.id}/`,
+      title: r.data.title,
+      kicker: r.data.category,
+      meta: r.data.readingTime,
+    }))}
+  />
 </Layout>
 )}
 

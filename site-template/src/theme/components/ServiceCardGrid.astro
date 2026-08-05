@@ -1,0 +1,20 @@
+---
+import CardGridBase from './CardGridBase.astro';
+import CardBase from './CardBase.astro';
+
+/** Shared Component Library: card grid of services — icon/image + title +
+ *  blurb + link. Mobile: 1-column stack (handled by CardGridBase). */
+interface Props {
+  title?: string;
+  items: { href: string; title: string; excerpt?: string; image?: string; imageAlt?: string }[];
+}
+const { title, items } = Astro.props;
+---
+
+{items.length > 0 && (
+  <CardGridBase title={title} min="260px">
+    {items.map((i) => (
+      <CardBase href={i.href} title={i.title} excerpt={i.excerpt} image={i.image} imageAlt={i.imageAlt} />
+    ))}
+  </CardGridBase>
+)}

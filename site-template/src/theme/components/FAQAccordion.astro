@@ -1,0 +1,48 @@
+---
+/** Shared Component Library: expandable Q&A list, FAQPage schema bound.
+ *  Mobile: native accordion — <details> needs no JavaScript, which keeps the
+ *  site fully static. */
+interface Props {
+  title?: string;
+  items: { question: string; answer: string }[];
+}
+const { title = 'Common questions', items } = Astro.props;
+---
+
+{items.length > 0 && (
+  <section class="faq">
+    <div class="prose-wrap">
+      <h2 class="faq__title">{title}</h2>
+      {items.map((i) => (
+        <details class="faq__item">
+          <summary>{i.question}</summary>
+          <div class="faq__answer" set:html={i.answer} />
+        </details>
+      ))}
+    </div>
+  </section>
+)}
+
+<style>
+  .faq {
+    padding-block: var(--space-7);
+  }
+  .faq__title {
+    font-size: var(--text-2xl);
+    margin-bottom: var(--space-5);
+  }
+  .faq__item {
+    border-bottom: 1px solid var(--color-border);
+    padding-block: var(--space-4);
+  }
+  .faq__item summary {
+    cursor: pointer;
+    font-weight: 600;
+    font-size: var(--text-lg);
+  }
+  .faq__answer {
+    padding-top: var(--space-3);
+    color: var(--color-text-muted);
+    line-height: var(--leading-normal);
+  }
+</style>

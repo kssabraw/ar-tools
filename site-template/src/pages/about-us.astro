@@ -1,7 +1,7 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import PageHeader from '../theme/components/PageHeader.astro';
-import CtaBand from '../theme/components/CtaBand.astro';
+import CTABand from '../theme/components/CTABand.astro';
 import { site, isLocal } from '../lib/site';
 import { corePage } from '../lib/content';
 import { render } from 'astro:content';
@@ -19,5 +19,5 @@ const lede = entry?.data.description || site.tagline;
       <Content />
     </div>
   )}
-  {isLocal && <CtaBand title="Work with us" />}
+  {isLocal && <CTABand title="Work with us" />}
 </Layout>

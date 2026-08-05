@@ -1,0 +1,20 @@
+---
+import CardGridBase from './CardGridBase.astro';
+import CardBase from './CardBase.astro';
+
+/** Shared Component Library: 3–6 contextual internal links as cards.
+ *  Fed only from published pages, so it can never link to a held page. */
+interface Props {
+  title?: string;
+  items: { href: string; title: string; kicker?: string; meta?: string }[];
+  limit?: number;
+}
+const { title = 'Related', items, limit = 6 } = Astro.props;
+const shown = items.slice(0, limit);
+---
+
+{shown.length > 0 && (
+  <CardGridBase title={title} min="220px">
+    {shown.map((i) => <CardBase href={i.href} title={i.title} kicker={i.kicker} meta={i.meta} />)}
+  </CardGridBase>
+)}

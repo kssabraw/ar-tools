@@ -2,11 +2,12 @@
 import type { GetStaticPaths } from 'astro';
 import { render } from 'astro:content';
 import Layout from '../layouts/Layout.astro';
-import Breadcrumbs from '../theme/components/Breadcrumbs.astro';
+import BreadcrumbBar from '../theme/components/BreadcrumbBar.astro';
 import PageHeader from '../theme/components/PageHeader.astro';
-import CardGrid from '../theme/components/CardGrid.astro';
-import ArticleCard from '../theme/components/ArticleCard.astro';
-import CtaBand from '../theme/components/CtaBand.astro';
+import ServiceCardGrid from '../theme/components/ServiceCardGrid.astro';
+import LocationCardGrid from '../theme/components/LocationCardGrid.astro';
+import TrustBadgeRow from '../theme/components/TrustBadgeRow.astro';
+import CTABand from '../theme/components/CTABand.astro';
 import ReviewStrip from '../theme/components/ReviewStrip.astro';
 import { routedPages, breadcrumbsFor, structuralLinks, type RoutedPage } from '../lib/content';
 import { service } from '../lib/schema';
@@ -54,7 +55,7 @@ const eyebrow =
 ---
 
 <Layout title={page.title} description={page.description} image={d.heroImage} jsonld={ld}>
-  <Breadcrumbs crumbs={crumbs} />
+  <BreadcrumbBar crumbs={crumbs} />
   <PageHeader eyebrow={eyebrow} title={page.title} lede={page.teaser || page.description} />
 
   {d.heroImage && (
@@ -71,31 +72,24 @@ const eyebrow =
 
   {/* Structural links — derived from frontmatter, published pages only, so a
       page held by a quality gate is absent rather than linked and broken. */}
-  {links.children.length > 0 && (
-    <CardGrid title="Explore" min="220px">
-      {links.children.map((c) => (
-        <ArticleCard href={c.path} title={c.title} excerpt={c.teaser} />
-      ))}
-    </CardGrid>
-  )}
+  <TrustBadgeRow />
 
-  {links.siblingServices.length > 0 && (
-    <CardGrid title={`More in ${d.locationName ?? 'this area'}`} min="220px">
-      {links.siblingServices.slice(0, 8).map((c) => (
-        <ArticleCard href={c.path} title={c.title} />
-      ))}
-    </CardGrid>
-  )}
+  <ServiceCardGrid
+    title="Explore"
+    items={links.children.map((c) => ({ href: c.path, title: c.title, excerpt: c.teaser }))}
+  />
 
-  {links.sameServiceNearby.length > 0 && (
-    <CardGrid title="Nearby areas" min="200px">
-      {links.sameServiceNearby.slice(0, 8).map((c) => (
-        <ArticleCard href={c.path} title={c.title} />
-      ))}
-    </CardGrid>
-  )}
+  <ServiceCardGrid
+    title={`More in ${d.locationName ?? 'this area'}`}
+    items={links.siblingServices.slice(0, 8).map((c) => ({ href: c.path, title: c.title }))}
+  />
 
-  <CtaBand title={`Talk to us about ${page.title.toLowerCase()}`} />
+  <LocationCardGrid
+    title="Nearby areas"
+    items={links.sameServiceNearby.slice(0, 8).map((c) => ({ href: c.path, title: c.title }))}
+  />
+
+  <CTABand title={`Talk to us about ${page.title.toLowerCase()}`} />
 </Layout>
 
 <style>

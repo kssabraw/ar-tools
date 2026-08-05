@@ -51,7 +51,8 @@
     "rating": "",
     "reviewCount": "",
     "reviews": [],
-    "provenance": {}
+    "provenance": {},
+    "credentials": []
   },
   "forms": {
     "web3formsKey": ""

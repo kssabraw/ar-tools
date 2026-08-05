@@ -1,5 +1,9 @@
 ---
+import TestimonialCard from './TestimonialCard.astro';
 import { site, has } from '../../lib/site';
+
+// Composition: a section of library TestimonialCards. The no-fabrication rule
+// lives in the card itself (PRD §5.6).
 
 interface Props {
   title?: string;
@@ -13,7 +17,6 @@ const reviews = (b.reviews ?? []).slice(0, limit);
 // No reviews yet — a brand-new business, or a client with no GBP — so the
 // section renders nothing at all rather than an empty promise (plan §4.5).
 const show = reviews.length > 0;
-const stars = (n: number) => '★'.repeat(Math.round(n)).padEnd(5, '☆');
 ---
 
 {show && (
@@ -28,13 +31,7 @@ const stars = (n: number) => '★'.repeat(Math.round(n)).padEnd(5, '☆');
         )}
       </div>
       <div class="reviews__list">
-        {reviews.map((r) => (
-          <blockquote class="card review">
-            <p class="review__stars" aria-label={`${r.rating} out of 5`}>{stars(r.rating)}</p>
-            <p class="review__text">{r.text}</p>
-            {has(r.author) && <footer class="review__author">— {r.author}</footer>}
-          </blockquote>
-        ))}
+        {reviews.map((r) => <TestimonialCard quote={r.text} author={r.author} rating={r.rating} />)}
       </div>
     </div>
   </section>
