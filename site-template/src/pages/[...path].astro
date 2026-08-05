@@ -1,0 +1,107 @@
+---
+import type { GetStaticPaths } from 'astro';
+import { render } from 'astro:content';
+import Layout from '../layouts/Layout.astro';
+import BreadcrumbBar from '../theme/components/BreadcrumbBar.astro';
+import PageHeader from '../theme/components/PageHeader.astro';
+import ServiceCardGrid from '../theme/components/ServiceCardGrid.astro';
+import LocationCardGrid from '../theme/components/LocationCardGrid.astro';
+import TrustBadgeRow from '../theme/components/TrustBadgeRow.astro';
+import CTABand from '../theme/components/CTABand.astro';
+import ReviewStrip from '../theme/components/ReviewStrip.astro';
+import { routedPages, breadcrumbsFor, structuralLinks, type RoutedPage } from '../lib/content';
+import { service } from '../lib/schema';
+import { breadcrumbList } from '../lib/schema';
+import { site } from '../lib/site';
+
+/**
+ * The root namespace: services, cities, the service × city matrix, and their
+ * sub-pages. All of it lives here rather than in per-type route files because
+ * the reference (§1.2) puts several page types in one URL slot — /{city}/{x}/
+ * is a local landing, a neighborhood or a POI, and shape alone cannot tell them
+ * apart. Each entry declares its own `path` and `pageType`; nothing here infers
+ * a page type from segment count.
+ *
+ * Astro gives static routes priority, so /about-us/, /blog/ and the rest of the
+ * reserved slugs are matched before this catch-all ever sees them.
+ */
+export const getStaticPaths: GetStaticPaths = async () => {
+  const pages = await routedPages();
+  return pages.map((page) => ({
+    params: { path: page.path.replace(/^\/|\/$/g, '') },
+    props: { page, pages },
+  }));
+};
+
+const { page, pages } = Astro.props as { page: RoutedPage; pages: RoutedPage[] };
+const { Content } = await render(page.entry as never);
+const d = page.entry.data as Record<string, any>;
+
+const crumbs = breadcrumbsFor(page.path, pages, page.title);
+const links = structuralLinks(page, pages);
+
+const base = Astro.site ?? site.url;
+const ld = [
+  d.jsonld ?? service({ title: page.title, description: page.description, url: Astro.url.href }),
+  breadcrumbList(crumbs, base.toString()),
+].filter(Boolean) as Record<string, unknown>[];
+
+const eyebrow =
+  page.pageType === 'local_landing'
+    ? d.locationName
+    : page.pageType === 'location' || page.pageType === 'neighborhood'
+      ? 'Areas we serve'
+      : 'Service';
+---
+
+<Layout title={page.title} description={page.description} image={d.heroImage} jsonld={ld}>
+  <BreadcrumbBar crumbs={crumbs} />
+  <PageHeader eyebrow={eyebrow} title={page.title} lede={page.teaser || page.description} />
+
+  {d.heroImage && (
+    <div class="wrap media">
+      <img src={d.heroImage} alt={d.heroImageAlt} width="960" height="480" loading="eager" />
+    </div>
+  )}
+
+  <div class="prose-wrap richtext body">
+    <Content />
+  </div>
+
+  <ReviewStrip />
+
+  {/* Structural links — derived from frontmatter, published pages only, so a
+      page held by a quality gate is absent rather than linked and broken. */}
+  <TrustBadgeRow />
+
+  <ServiceCardGrid
+    title="Explore"
+    items={links.children.map((c) => ({ href: c.path, title: c.title, excerpt: c.teaser }))}
+  />
+
+  <ServiceCardGrid
+    title={`More in ${d.locationName ?? 'this area'}`}
+    items={links.siblingServices.slice(0, 8).map((c) => ({ href: c.path, title: c.title }))}
+  />
+
+  <LocationCardGrid
+    title="Nearby areas"
+    items={links.sameServiceNearby.slice(0, 8).map((c) => ({ href: c.path, title: c.title }))}
+  />
+
+  <CTABand title={`Talk to us about ${page.title.toLowerCase()}`} />
+</Layout>
+
+<style>
+  .media {
+    padding-block: var(--space-4);
+  }
+  .media img {
+    width: 100%;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--color-border);
+  }
+  .body {
+    padding-bottom: var(--space-7);
+  }
+</style>

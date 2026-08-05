@@ -63,6 +63,7 @@ from routers.sops import router as sops_router
 from routers.syndication import router as syndication_router
 from routers.tasks import router as tasks_router
 from routers.users import router as users_router
+from routers.websites import router as websites_router
 from services.gsc_scheduler import gsc_scheduler
 from services.job_worker import drain_inflight_jobs, job_worker
 from services.orchestrator import recover_stuck_runs
@@ -279,6 +280,8 @@ app.include_router(pulse_router)
 # so the prefix is the only thing separating them from the suite's own routes.
 _FANOUT_PREFIX = "/fanout"
 app.include_router(fanout_health.router, prefix=_FANOUT_PREFIX)
+app.include_router(websites_router)
+
 app.include_router(fanout_projects.router, prefix=_FANOUT_PREFIX)
 app.include_router(fanout_sessions.router, prefix=_FANOUT_PREFIX)
 app.include_router(fanout_exports.router, prefix=_FANOUT_PREFIX)

@@ -1,0 +1,18 @@
+---
+import Layout from '../layouts/Layout.astro';
+import PageHeader from '../theme/components/PageHeader.astro';
+import ContactBlock from '../theme/components/ContactBlock.astro';
+import { site } from '../lib/site';
+import { corePage } from '../lib/content';
+
+const entry = await corePage('contact-us');
+const title = entry?.data.title || 'Contact';
+// Nearly all of this page is deterministic: NAP, hours, form and map render
+// straight from the business facts. Only this intro line is generated.
+const lede = entry?.data.description || `Get in touch with ${site.business.name || site.siteName}.`;
+---
+
+<Layout title={title} description={lede} jsonld={{ '@type': 'ContactPage', name: title, url: Astro.url.href }}>
+  <PageHeader title={title} lede={lede} />
+  <ContactBlock />
+</Layout>

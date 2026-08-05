@@ -1,0 +1,61 @@
+---
+import { has } from '../../lib/site';
+
+/**
+ * Shared Component Library: author name, credential, reviewed-by line, dates.
+ *
+ * No photo slot. A generated or stock portrait is fabrication of a person
+ * (PRD §5.6), and this component is exactly where that temptation lives — so
+ * the affordance simply does not exist. A real photo arrives as an uploaded
+ * asset on a bio page, not here.
+ */
+interface Props {
+  author?: string;
+  credential?: string;
+  reviewedBy?: string;
+  published?: Date;
+  updated?: Date;
+  readingTime?: string;
+}
+const { author, credential, reviewedBy, published, updated, readingTime } = Astro.props;
+const fmt = (d?: Date) => d?.toLocaleDateString('en', { month: 'long', day: 'numeric', year: 'numeric' });
+const meta = [readingTime, published && `Published ${fmt(published)}`, updated && `Updated ${fmt(updated)}`]
+  .filter(Boolean)
+  .join(' · ');
+---
+
+{(has(author) || has(meta)) && (
+  <div class="byline">
+    {has(author) && (
+      <p class="byline__author">
+        By {author}{has(credential) && <span class="byline__credential">, {credential}</span>}
+      </p>
+    )}
+    {has(reviewedBy) && <p class="byline__reviewed">Reviewed by {reviewedBy}</p>}
+    {has(meta) && <p class="byline__meta">{meta}</p>}
+  </div>
+)}
+
+<style>
+  .byline {
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--color-border);
+    font-size: var(--text-sm);
+    display: grid;
+    gap: 2px;
+  }
+  .byline__author {
+    margin: 0;
+    font-weight: 700;
+  }
+  .byline__credential {
+    font-weight: 400;
+    color: var(--color-text-muted);
+  }
+  .byline__reviewed,
+  .byline__meta {
+    margin: 0;
+    color: var(--color-text-subtle);
+    font-size: var(--text-xs);
+  }
+</style>

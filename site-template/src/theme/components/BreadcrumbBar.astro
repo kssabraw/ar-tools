@@ -1,0 +1,49 @@
+---
+interface Props {
+  crumbs: { label: string; href: string }[];
+}
+const { crumbs } = Astro.props;
+// The last crumb is the current page: shown, never linked.
+const trail = crumbs.slice(0, -1);
+const current = crumbs[crumbs.length - 1];
+---
+
+{trail.length > 0 && (
+  <nav class="breadcrumbs" aria-label="Breadcrumb">
+    <div class="wrap">
+      <ol>
+        {trail.map((c) => (
+          <li><a href={c.href}>{c.label}</a></li>
+        ))}
+        <li aria-current="page">{current.label}</li>
+      </ol>
+    </div>
+  </nav>
+)}
+
+<style>
+  .breadcrumbs {
+    padding-top: var(--space-6);
+    font-size: var(--text-sm);
+    color: var(--color-text-subtle);
+  }
+  ol {
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+  }
+  li + li::before {
+    content: '·';
+    margin-right: var(--space-2);
+    color: var(--color-border-strong);
+  }
+  a {
+    color: var(--color-text-muted);
+  }
+  a:hover {
+    color: var(--color-accent);
+  }
+</style>

@@ -1,0 +1,23 @@
+---
+import Layout from '../layouts/Layout.astro';
+import PageHeader from '../theme/components/PageHeader.astro';
+import CTABand from '../theme/components/CTABand.astro';
+import { site, isLocal } from '../lib/site';
+import { corePage } from '../lib/content';
+import { render } from 'astro:content';
+
+const entry = await corePage('about-us');
+const Content = entry ? (await render(entry)).Content : null;
+const title = entry?.data.title || `About ${site.siteName}`;
+const lede = entry?.data.description || site.tagline;
+---
+
+<Layout title={title} description={lede} jsonld={{ '@type': 'AboutPage', name: title, url: Astro.url.href }}>
+  <PageHeader title={title} lede={lede} />
+  {Content && (
+    <div class="prose-wrap richtext">
+      <Content />
+    </div>
+  )}
+  {isLocal && <CTABand title="Work with us" />}
+</Layout>

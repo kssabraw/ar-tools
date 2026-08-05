@@ -1,0 +1,136 @@
+---
+import LeadForm from './LeadForm.astro';
+import MapEmbed from './MapEmbed.astro';
+import { site, displayPhone, has, hasAddress, formattedAddress } from '../../lib/site';
+
+// Composition, not a library component: it arranges LeadForm, MapEmbed and the
+// NAP block. The library owns the parts; this owns the contact-page layout.
+
+const b = site.business;
+const phone = displayPhone();
+const key = site.forms.web3formsKey;
+const mapQuery = b.mapPlaceId
+  ? `place_id:${b.mapPlaceId}`
+  : hasAddress()
+    ? formattedAddress()
+    : '';
+---
+
+<section class="contact">
+  <div class="wrap contact__inner">
+    <div class="contact__details stack">
+      {hasAddress() && (
+        <div>
+          <h2 class="contact__heading">Where to find us</h2>
+          <address class="contact__address">{formattedAddress()}</address>
+        </div>
+      )}
+
+      {!hasAddress() && b.areaServed.length > 0 && (
+        <div>
+          <h2 class="contact__heading">Areas we serve</h2>
+          <p class="muted">{b.areaServed.join(' · ')}</p>
+        </div>
+      )}
+
+      {(has(phone) || has(b.email)) && (
+        <div>
+          <h2 class="contact__heading">Get in touch</h2>
+          <ul class="contact__list">
+            {has(phone) && (
+              <li><a href={`tel:${phone.replace(/[^\d+]/g, '')}`}>{phone}</a></li>
+            )}
+            {has(b.email) && <li><a href={`mailto:${b.email}`}>{b.email}</a></li>}
+          </ul>
+        </div>
+      )}
+
+      {b.hours.length > 0 && (
+        <div>
+          <h2 class="contact__heading">Hours</h2>
+          <ul class="contact__list">
+            {b.hours.map((line) => <li>{line}</li>)}
+          </ul>
+        </div>
+      )}
+    </div>
+
+    <div class="contact__form-side stack">
+      <LeadForm />
+      {!has(site.forms.web3formsKey) && has(b.email) && (
+        <div class="card contact__fallback">
+          <p>Email us at <a href={`mailto:${b.email}`}>{b.email}</a> and we'll get back to you.</p>
+        </div>
+      )}
+      <MapEmbed />
+    </div>
+  </div>
+</section>
+
+<style>
+  .contact__inner {
+    display: grid;
+    grid-template-columns: 1fr 1.1fr;
+    gap: var(--space-7);
+    padding-block: var(--space-6) var(--space-8);
+    align-items: start;
+  }
+  .contact__heading {
+    font-size: var(--text-lg);
+    margin-bottom: var(--space-2);
+  }
+  .contact__address {
+    font-style: normal;
+    color: var(--color-text-muted);
+  }
+  .contact__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    color: var(--color-text-muted);
+    display: grid;
+    gap: var(--space-1);
+  }
+  .contact__form,
+  .contact__fallback {
+    padding: var(--space-6);
+  }
+  .contact__form {
+    display: grid;
+    gap: var(--space-4);
+  }
+  .field {
+    display: grid;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+    font-weight: 600;
+  }
+  .field input,
+  .field textarea {
+    font: inherit;
+    font-weight: 400;
+    padding: var(--space-3);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-md);
+    background: var(--color-bg);
+    color: inherit;
+    width: 100%;
+  }
+  .field input:focus-visible,
+  .field textarea:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+  }
+  .contact__map {
+    width: 100%;
+    height: 300px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+  }
+
+  @media (max-width: 860px) {
+    .contact__inner {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

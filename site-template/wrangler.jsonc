@@ -1,0 +1,7 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // `name` is rewritten per site by the provisioner (services/website_provision.py).
+  "name": "ar-site",
+  "compatibility_date": "2026-07-01",
+  "assets": { "directory": "./dist" }
+}

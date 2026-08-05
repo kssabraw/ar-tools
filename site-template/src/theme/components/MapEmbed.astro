@@ -1,0 +1,30 @@
+---
+import { site, has, hasAddress, formattedAddress } from '../../lib/site';
+
+/** Shared Component Library: service-area or location map. Mobile: full-width.
+ *
+ *  The Maps iframe is one of the few sanctioned exceptions to the theme's
+ *  "no external requests" rule (PRD §4.8). Renders nothing without a place id
+ *  or an address — a map of nowhere is worse than no map. */
+const b = site.business;
+const query = b.mapPlaceId ? `place_id:${b.mapPlaceId}` : hasAddress() ? formattedAddress() : '';
+---
+
+{has(query) && (
+  <iframe
+    class="map"
+    title="Map"
+    loading="lazy"
+    referrerpolicy="no-referrer-when-downgrade"
+    src={`https://www.google.com/maps?q=${encodeURIComponent(query)}&output=embed`}
+  ></iframe>
+)}
+
+<style>
+  .map {
+    width: 100%;
+    height: 300px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+  }
+</style>

@@ -1496,6 +1496,29 @@ class Settings(BaseSettings):
     leadoff_category_match_model: str = "claude-sonnet-4-6"
     leadoff_category_match_threshold: float = 0.85
 
+    # --- Website Builder (docs/modules/website-builder-module-plan-v1_0.md) ---
+    # Ships dark. While false the routes 503 and the scheduler hooks are inert.
+    website_builder_enabled: bool = False
+    # Deliberately NOT github_publish_token: that credential belongs to the blog
+    # publishing path. This one can create repos, which is a materially bigger
+    # capability and is scoped/rotated on its own.
+    github_sites_token: str = ""
+    github_sites_owner: str = ""
+    # The house template repo every site is generated from. Must have GitHub's
+    # "Template repository" flag set, or /generate returns 422.
+    website_template_repo: str = "ar-site-template"
+    website_default_branch: str = "main"
+    cloudflare_api_token: str = ""
+    cloudflare_account_id: str = ""
+    # Bulk publishing reuses the Local SEO stagger rationale: one job per page,
+    # spaced so a batch runs at background priority behind interactive work.
+    website_publish_job_spacing_seconds: int = 20
+    # Deploys are polled (GitHub does not call us). Give up marking a deploy
+    # in-flight after this long and record it as failed rather than hanging.
+    website_deploy_timeout_minutes: int = 20
+    website_theme_model: str = "claude-sonnet-4-6"
+    website_image_provider: str = "gemini"
+
     class Config:
         env_file = ".env"
 

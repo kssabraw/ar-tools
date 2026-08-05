@@ -1,0 +1,99 @@
+---
+import { site, isLocal, displayPhone, has, hasAddress, formattedAddress } from '../../lib/site';
+
+const phone = displayPhone();
+const year = new Date().getFullYear();
+const b = site.business;
+---
+
+<footer class="site-footer">
+  <div class="wrap site-footer__inner">
+    <div class="site-footer__brand">
+      <span class="brand__name">{site.siteName}</span>
+      {has(site.tagline) && <p class="muted site-footer__tagline">{site.tagline}</p>}
+
+      {/* NAP block — only the parts we actually know. A service-area business
+          with no street address shows its coverage instead. */}
+      {isLocal && (
+        <address class="site-footer__nap">
+          {hasAddress() && <div>{formattedAddress()}</div>}
+          {!hasAddress() && has(b.city) && <div>{[b.city, b.region].filter(has).join(', ')}</div>}
+          {has(phone) && (
+            <div><a href={`tel:${phone.replace(/[^\d+]/g, '')}`}>{phone}</a></div>
+          )}
+          {has(b.email) && (
+            <div><a href={`mailto:${b.email}`}>{b.email}</a></div>
+          )}
+          {!hasAddress() && b.areaServed.length > 0 && (
+            <div class="muted">Serving {b.areaServed.slice(0, 6).join(' · ')}</div>
+          )}
+        </address>
+      )}
+    </div>
+
+    <nav class="site-footer__nav" aria-label="Footer">
+      {site.footerNav.map((item) => <a href={item.href}>{item.label}</a>)}
+    </nav>
+  </div>
+
+  <div class="wrap site-footer__legal">
+    <span>© {year} {b.name || site.siteName}</span>
+    {has(site.agency.name) && <span class="muted">Site by {site.agency.name}</span>}
+  </div>
+</footer>
+
+<style>
+  .site-footer {
+    border-top: 1px solid var(--color-border);
+    background: var(--color-surface);
+    margin-top: var(--space-9);
+  }
+  .site-footer__inner {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-7);
+    padding-block: var(--space-7) var(--space-5);
+    flex-wrap: wrap;
+  }
+  .brand__name {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: var(--text-lg);
+  }
+  .site-footer__tagline {
+    margin: var(--space-2) 0 0;
+    font-size: var(--text-sm);
+    max-width: 42ch;
+  }
+  .site-footer__nap {
+    font-style: normal;
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+    margin-top: var(--space-4);
+    display: grid;
+    gap: var(--space-1);
+  }
+  .site-footer__nav {
+    display: flex;
+    gap: var(--space-5);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    flex-wrap: wrap;
+    align-content: start;
+  }
+  .site-footer__nav a {
+    color: var(--color-text-muted);
+  }
+  .site-footer__nav a:hover {
+    color: var(--color-accent);
+  }
+  .site-footer__legal {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-4);
+    padding-bottom: var(--space-6);
+    font-size: var(--text-xs);
+    color: var(--color-text-subtle);
+    flex-wrap: wrap;
+  }
+</style>

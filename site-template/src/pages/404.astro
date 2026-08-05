@@ -1,0 +1,16 @@
+---
+import Layout from '../layouts/Layout.astro';
+import PageHeader from '../theme/components/PageHeader.astro';
+---
+
+<Layout title="Page not found" noindex>
+  <PageHeader title="We couldn't find that page" lede="The link may be out of date, or the page may have moved." />
+  <div class="prose-wrap stack">
+    <p>
+      Try the <a href="/sitemap/">sitemap</a> — it lists every page on this site.
+    </p>
+    <div>
+      <a class="button" href="/">Back to home</a>
+    </div>
+  </div>
+</Layout>

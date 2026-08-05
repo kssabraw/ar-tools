@@ -1,0 +1,74 @@
+---
+import Layout from '../layouts/Layout.astro';
+import HeroStandard from '../theme/components/HeroStandard.astro';
+import ServiceCardGrid from '../theme/components/ServiceCardGrid.astro';
+import LocationCardGrid from '../theme/components/LocationCardGrid.astro';
+import RelatedPagesBlock from '../theme/components/RelatedPagesBlock.astro';
+import TrustBadgeRow from '../theme/components/TrustBadgeRow.astro';
+import CTABand from '../theme/components/CTABand.astro';
+import ReviewStrip from '../theme/components/ReviewStrip.astro';
+import { site, isLocal, has } from '../lib/site';
+import { allPosts, routedPages, corePage } from '../lib/content';
+
+const home = await corePage('home');
+const s = (home?.data.sections ?? {}) as Record<string, string>;
+
+// Copy precedence: generated section copy, then config, then a plain default.
+// Nothing here invents a business fact — only framing.
+const heroTitle = s.heroTitle || home?.data.title || site.siteName;
+const heroLede = s.heroLede || site.tagline || site.description;
+const heroEyebrow = s.heroEyebrow || (isLocal ? site.business.city : undefined);
+
+const posts = await allPosts();
+// One query, filtered by declared page type — the template never infers a page
+// type from the URL (reference §1.2).
+const pages = isLocal ? await routedPages() : [];
+const services = pages.filter((p) => p.pageType === 'service');
+const locations = pages.filter((p) => p.pageType === 'location');
+const latest = posts.slice(0, isLocal ? 3 : 6);
+---
+
+<Layout title={site.siteName} description={site.description}>
+  <HeroStandard
+    eyebrow={heroEyebrow}
+    title={heroTitle}
+    lede={heroLede}
+    ctaLabel={isLocal ? s.ctaLabel || 'Get a free quote' : undefined}
+    ctaHref={isLocal ? '/contact' : undefined}
+    secondaryLabel={isLocal && services.length > 0 ? 'Browse the site' : undefined}
+    secondaryHref={isLocal && services.length > 0 ? '/sitemap/' : undefined}
+    image={home?.data.heroImage}
+    imageAlt={home?.data.heroImageAlt}
+  />
+
+  <ServiceCardGrid
+    title={s.servicesTitle || 'What we do'}
+    items={services.slice(0, 6).map((svc) => ({ href: svc.path, title: svc.title, excerpt: svc.teaser || svc.description }))}
+  />
+
+  <TrustBadgeRow />
+
+  <ReviewStrip />
+
+  <LocationCardGrid
+    title={s.locationsTitle || 'Areas we serve'}
+    items={locations.slice(0, 8).map((loc) => ({ href: loc.path, title: loc.title, excerpt: loc.teaser }))}
+  />
+
+  <RelatedPagesBlock
+    title={isLocal ? 'From the blog' : s.latestTitle || 'Latest'}
+    items={latest.map((post) => ({
+      href: `/blog/${post.id}/`,
+      title: post.data.title,
+      kicker: post.data.category,
+      meta: post.data.readingTime,
+    }))}
+  />
+
+  {isLocal && (
+    <CTABand
+      title={s.ctaTitle || 'Ready to get started?'}
+      body={s.ctaBody || (has(site.business.city) ? `Serving ${site.business.city} and nearby.` : undefined)}
+    />
+  )}
+</Layout>
