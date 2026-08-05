@@ -1,6 +1,116 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-07-12 · **LeadOff v2 BUILT: paid tryout/scout, neighborhoods tab, SOP routing + the grants repair** (latest)
+## ⏩ Update — 2026-08-05 · **Website Builder module — slices 1–2 MERGED, slice 3 in flight** (latest)
+
+Design in Claude Design → upload → the suite compiles it to an Astro theme,
+provisions a private GitHub repo from a house template, generates pages with the
+suite's existing engines, and Cloudflare serves it. **Ships dark behind
+`website_builder_enabled` (default False)** — nothing can create a repo until
+that flag is on.
+
+**Docs (read these first, in this order):**
+- `docs/modules/website-builder-module-plan-v1_0.md` — engineering spec:
+  architecture, data model, phasing, locked infrastructure rulings.
+- `docs/modules/website-builder-prd-v1_0.md` — behaviour, permissions,
+  lifecycle, quality gates, acceptance criteria. **Vendored from the owner's
+  Google Doc; the Doc is the source of truth.** Owner rulings made after capture
+  live in an **amendments block at the top**, not edited into the body — read it
+  before trusting any section it names.
+- `docs/reference/page-type-reference-v3_4.md` — **authoritative** for page
+  types, planner triggers, URL patterns, page structure, the Shared Component
+  Library, and content specs. Also vendored; subordinate to the AR Site
+  Architecture SOP.
+
+### What is built and merged (PR #545, squash `5c3ef95`)
+
+- **`site-template/`** — the house Astro template, also published as the GitHub
+  **template repository `kssabraw/ar-site-template`** (private, `is_template:
+  true`). Astro 5 content collections with a zod frontmatter contract,
+  deterministic JSON-LD, SEO plumbing, token-driven theme layer, push-to-main
+  Actions → `wrangler` deploy to Cloudflare Workers static assets.
+  **`site-template/` in this repo is the source of truth** — edit here, publish
+  from here.
+- **Backend**: 4 tables, a resumable provisioning step machine
+  (`services/website_provision.py`), REST surface (`routers/websites.py`), job
+  wiring. Migrations `20260803190000` + `20260803210000`, both **applied live**.
+
+### What is in flight (PR #560, draft)
+
+`services/website_plan.py` (the site-plan inventory) and
+`services/website_content.py` (content → repo files + publish gates). Both pure
+and fully tested — **99 tests across the three modules**. Not yet wired to any
+route or job.
+
+**Remaining in slice 3:** the `website_page_publish` job committing via
+`github_publish.commit_files_to_github`, plan build/approve endpoints, and the
+nlp-api calls that generate body copy. That last part is where the module starts
+spending money per page.
+
+### Provisioned (all live on PLATFORM)
+
+`GITHUB_SITES_TOKEN`, `GITHUB_SITES_OWNER=kssabraw`, `CLOUDFLARE_API_TOKEN`,
+`CLOUDFLARE_ACCOUNT_ID`.
+
+### Owner rulings
+
+Site repos under **`kssabraw`** (personal account, not an org) · existing
+Cloudflare account · **Workers static assets**, not Pages · Namecheap domains
+with NS pointed at Cloudflare · every site belongs to a client row · info sites
+**auto-publish**, local sites get human review · themes reusable across
+industries · AI imagery including realistic jobsite scenes · Web3Forms (one
+shared key) · CallRail DNI · ~50 sites year one. Then **2026-08-04**: a lead-gen
+property's matrix **may ship before its informational layer** (overrules PRD
+§4.12.3b "neither ships alone"), and the **>40 links figure is too high** —
+advisory only, pending a ratified number.
+
+**v1 scope:** `local_business` + `lead_gen`, Tiers 1–3, `monetization: leads`.
+Deferred: `ads`/`affiliate` and the consent stack, informational properties, and
+the six unbuilt writers (§4.7).
+
+### ⚠ Gotchas that cost real time
+
+- **The root `.gitignore` has a Python `lib/` rule at line 13** that silently
+  swallowed `site-template/src/lib/` — three essential files were missing from a
+  commit with no warning, and the template would not have built. Fixed with
+  `!site-template/src/lib/` (negate the **directory**; git will not descend into
+  an ignored directory to re-include children). **Anything else added under a
+  `lib/` path will hit this again.**
+- **URL structure was wrong in slice 1** and had to be reworked. Reference §1.1
+  R1: local top-level pages sit at **root**, not under `/services/` or
+  `/locations/`, and the matrix is **location-first** `/{city}/{service}/`. The
+  plan's pre-ruling text illustrated the wrong shape.
+- **Page type is DECLARED, never inferred from the URL.** `/{city}/{x}/` may be
+  a local landing, a neighborhood or a POI. Every routed entry carries `path`
+  **and** `pageType`; one catch-all `[...path].astro` renders them. Do not add
+  per-type route files.
+- **PyNaCl is required** — GitHub's Actions-secrets API only accepts values
+  sealed with the repo's libsodium key. Imported lazily, so a deploy without it
+  starts and fails with `pynacl_not_installed` rather than an ImportError.
+- **This session's GitHub credential cannot create repos** (App installation
+  scoped to `ar-tools`; `POST /user/repos` → 403 "not accessible by
+  integration"). The template repo was created by hand. `GITHUB_SITES_TOKEN` is
+  a different credential and is what the provisioner uses — **whether it can
+  create repos is still unverified**; if it cannot, swap for a classic PAT with
+  `repo` + `workflow`.
+- **PRs here are squash-merged**, so the branch's commits are never ancestors of
+  `main`. After a merge, reset the branch from `origin/main` and
+  **force-with-lease** — but verify by **content diff** first, because
+  `git log branch ^main` will list every already-merged commit and look alarming.
+- **Verify by building BOTH site types.** A stale component reference behind the
+  `isLocal` branch passed the informational build and crashed the local one.
+
+### Open items
+
+- The **ratified links-per-index figure** (Kyle/Ryan) — advisory at 25 meanwhile.
+- **Component renaming is done**, but 13 library components remain unbuilt and
+  are listed in `site-template/src/theme/manifest.ts::MISSING_COMPONENTS`; each
+  gates a page type that has no writer anyway.
+- **Client-side 404 search** (Pagefind) not built; the 404 points at the HTML
+  sitemap.
+- Core-pages prompt copy, pilot clients, and a local-business design export as a
+  second compiler fixture are owner tasks.
+
+## ⏩ Update — 2026-07-12 · **LeadOff v2 BUILT: paid tryout/scout, neighborhoods tab, SOP routing + the grants repair**
 
 PRD §5 items 1/3/4 shipped (item 2, the create-client handoff, shipped earlier
 the same day in #339). Detail in the CLAUDE.md LeadOff paragraph.
