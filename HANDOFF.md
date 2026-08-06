@@ -81,10 +81,35 @@ The impure half is now built: `services/website_plan_store.py` (build / rebuild
 `routers/websites.py`. Migration `20260805120000` applied live. **206 tests
 across the seven modules** (was 99).
 
+**UI (built 2026-08-06).** Two entry points, per PRD §6.1, and **both are
+hidden until `website_builder_enabled=true` on PLATFORM** — the flag is unset,
+so the module is currently invisible in the dashboard by design:
+
+1. **Sidebar → Websites** (`pages/Websites.tsx`, route `/websites`) — the fleet
+   across every client, with status/domain/last-deploy columns, a filter, the
+   §7 counts, and Trash. Read-only apart from soft-delete and restore; rows link
+   into the client's workspace, which is where work happens.
+2. **Client workspace → Website Builder card** (route `clients/:id/website`).
+
+Both gate on the same `GET /websites/status` (the PACE/QA pattern — a card that
+503s on click is worse than no card), so the module appears in both places at
+once or in neither.
+
+`frontend/src/pages/WebsiteBuilder.tsx` + `components/website/*`. Four tabs:
+**Overview** (the provisioning step machine with per-step state and a Resume,
+URLs, repo, last deploy), **Plan** (catalog + cities editors, Build, the issue
+list split into blocking vs advisory with per-gate sign-off checkboxes,
+Approve), **Pages** (per-page status, engine, the gate reason in plain English,
+select → Generate/Publish, per-row retry, a leaveable batch bar), **Deploys**
+(history with `superseded`/`unknown` explained inline, Re-check, recorded gate
+overrides). Actions above the user's role render **disabled with the reason**
+rather than hidden, per §6.2.
+
 **Still unbuilt in the module:** the theme compiler, imagery, core-pages
-generator, custom domains, GSC auto-verify, and all UI. Generation covers the
-nlp-api page types only; a page type with no engine records
-`engine_unavailable:<type>` on its row rather than being silently skipped.
+generator, custom domains, GSC auto-verify, the suite-level fleet index and the
+Settings tab. Generation covers the nlp-api page types only; a page type with no
+engine records `engine_unavailable:<type>` on its row rather than being silently
+skipped.
 
 **⚠ Three things the build found that reading the docs did not:**
 
