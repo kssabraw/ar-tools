@@ -5,7 +5,7 @@ import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, CalendarClock, CalendarPlus,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
-  ClipboardList, BookOpen, Share2, Target, Swords, Link2, KanbanSquare, Radar, ShoppingBag, Megaphone,
+  ClipboardList, BookOpen, Share2, Target, Swords, Link2, KanbanSquare, Radar, ShoppingBag, Megaphone, Globe2,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 import { FreezeBanner } from '../components/FreezeBanner'
@@ -14,6 +14,14 @@ import { StrategistReview } from '../components/StrategistReview'
 
 export function ClientWorkspace() {
   const { id } = useParams<{ id: string }>()
+
+  // The Website Builder ships dark; hide its card until an admin turns the flag
+  // on, so we never surface an entry point every backend route refuses.
+  const { data: websiteStatus } = useQuery<{ enabled: boolean }>({
+    queryKey: ['website-status'],
+    queryFn: () => api.get<{ enabled: boolean }>('/websites/status'),
+    staleTime: 5 * 60_000,
+  })
 
   const { data: client, isLoading } = useQuery<Client>({
     queryKey: ['client', id],
@@ -264,6 +272,15 @@ export function ClientWorkspace() {
           to={id ? `/clients/${id}/syndication` : undefined}
           cta="Open"
         />
+        {websiteStatus?.enabled && (
+          <ActionCard
+            icon={<Globe2 size={22} />}
+            label="Website Builder"
+            description="Plan, generate and publish a site for this client. Publishing commits a page into the site's own GitHub repo, which builds and deploys itself."
+            to={id ? `/clients/${id}/website` : undefined}
+            cta="Open"
+          />
+        )}
         <ActionCard
           icon={<Megaphone size={22} />}
           label="GBP Posts"

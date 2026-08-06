@@ -5,6 +5,7 @@ import { getMe, getSession, getSummary, planArticles, regate, type Silo } from "
 import { AppShell } from "../shared/AppShell";
 import { CancelRunButton } from "../shared/CancelRunButton";
 import { CostBanner } from "../shared/CostBanner";
+import { friendlyError } from "../shared/errors";
 import { SessionIdChip } from "../shared/SessionIdChip";
 import { hasResults, isLiveStatus, statusClass, statusLabel } from "../shared/sessionStatus";
 
@@ -198,7 +199,7 @@ export function SessionWorkspace() {
           </div>
         )}
         {planMut.isError && (
-          <p className="form-error">Couldn’t start planning. Try again.</p>
+          <p className="form-error">{friendlyError(planMut.error, "Couldn’t start planning.")}</p>
         )}
 
         {role === "owner" && status && hasResults(status) && (
@@ -249,7 +250,9 @@ export function SessionWorkspace() {
           <p className="form-error">Threshold must be between 0 and 1 (e.g. 0.75).</p>
         )}
         {regateMut.isError && (
-          <p className="form-error">Couldn’t start the re-gate. Try again.</p>
+          <p className="form-error">
+            {friendlyError(regateMut.error, "Couldn’t start the re-gate.")}
+          </p>
         )}
 
         {status && hasResults(status) && session.data && (

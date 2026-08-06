@@ -4,7 +4,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { NotificationBell } from './NotificationBell'
-import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, ListTodo, Menu, X, Radar, Crosshair, Loader2, ShieldCheck, Globe } from 'lucide-react'
+import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, ListTodo, Menu, X, Radar, Crosshair, Loader2, ShieldCheck, Globe, Globe2 } from 'lucide-react'
 
 interface NavItem {
   label: string
@@ -84,6 +84,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
   // QA (quality-reviewer chat) is gated behind the server-side qa_chat_enabled
   // flag — same pattern as PACE, so the sidebar entry only appears once an admin
   // turns it on.
+  // The Website Builder ships dark; its sidebar entry and its workspace card
+  // both hang off this, so the module is never half-visible.
+  const { data: websiteStatus } = useQuery<{ enabled: boolean }>({
+    queryKey: ['website-status'],
+    queryFn: () => api.get<{ enabled: boolean }>('/websites/status'),
+    staleTime: 5 * 60_000,
+  })
+
   const { data: qaStatus } = useQuery<{ enabled: boolean }>({
     queryKey: ['qa-status'],
     queryFn: () => api.get<{ enabled: boolean }>('/qa/status'),
@@ -111,6 +119,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
       : []),
     ...(qaStatus?.enabled
       ? [{ label: 'QA', to: '/qa', icon: <ShieldCheck size={18} /> }]
+      : []),
+    // The fleet view. Gated on the same flag as the workspace card, so the
+    // module appears in both places at once or in neither.
+    ...(websiteStatus?.enabled
+      ? [{ label: 'Websites', to: '/websites', icon: <Globe2 size={18} /> }]
       : []),
     ...(clientId
       ? [{ label: 'Dashboard', to: `/clients/${clientId}`, icon: <LayoutDashboard size={18} /> }]

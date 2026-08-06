@@ -28,6 +28,7 @@ import {
 import { AppShell } from "../shared/AppShell";
 import { CancelRunButton } from "../shared/CancelRunButton";
 import { CostBanner } from "../shared/CostBanner";
+import { friendlyError } from "../shared/errors";
 import { RELATIONSHIP_LABELS, RELATIONSHIP_OPTIONS } from "../shared/relationshipTypes";
 
 // VA Mode (PRD §10): a linear, step-gated wizard. It's a restricted reskin of the
@@ -1012,8 +1013,24 @@ function ProgressStep(p: { sessionId: string; onDone: () => void }) {
     return (
       <div className="card">
         <h1 className="page-title">The run hit a problem</h1>
-        <p className="form-error">{summaryQ.data?.last_error ?? "The pipeline failed."}</p>
+        <p className="form-error">{friendlyError(summaryQ.data?.last_error, "The pipeline failed.")}</p>
         <p className="muted">Anything collected before the failure was saved. Try a new session.</p>
+      </div>
+    );
+  }
+
+  // Article planning is auto-chained, so a rejection here has no button to
+  // attach itself to — without this the VA sits on the progress spinner
+  // indefinitely with nothing said.
+  if (planMut.isError) {
+    return (
+      <div className="card">
+        <h1 className="page-title">Couldn’t start article planning</h1>
+        <p className="form-error">{friendlyError(planMut.error)}</p>
+        <p className="muted">
+          The keywords collected so far are saved — reopen this session from the
+          sessions list to pick planning back up.
+        </p>
       </div>
     );
   }
