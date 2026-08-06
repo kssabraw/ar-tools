@@ -206,6 +206,28 @@ async def submit_scan(
         if owns:
             await client.aclose()
 
+    # The ledger row this path never had (ISSUES I-086) — until 2026-08-06 the geogrid was the
+    # only paid path in the system that spent silently. Units are tasks POSTED, not points
+    # attempted: an unposted batch cost nothing. Best-effort in review_verify's style — a ledger
+    # failure must never cost a scan, and the provider dashboard remains the reconciliation
+    # ground truth (§7.1's lesson applies to this rate too: 1¢/request is a config guess).
+    if report.posted:
+        from .cost import build_ledger_row
+
+        try:
+            db.table("cost_ledger").insert(
+                build_ledger_row(
+                    market_id=submarket.get("market_id"),
+                    cycle_number=None,
+                    stage="b1_geogrid",
+                    provider="dataforseo",
+                    units=report.posted,
+                    cost_cents=report.posted * settings.dataforseo_cost_per_request_cents,
+                )
+            ).execute()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("could not write cost_ledger row", extra={"error": str(exc)[:500]})
+
     logger.info(
         "geogrid submitted",
         extra={

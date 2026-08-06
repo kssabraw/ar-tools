@@ -55,6 +55,13 @@ Phase 4 model's, and the reporting layer already reads it as one). `scan_snapsho
 its own grid centre now (I-078 resolved), which had to happen before the first snapshot was
 written rather than after.
 
+**The UI trigger is BUILT (2026-08-06, owner ruling — resolves I-072, supersedes HANDOFF §11a's
+default).** A `scan_request` signed order (placed admin-only from the suite SPA's `/outreach`
+page via platform-api) is the UI path's spend confirmation; the outreach `tick` command
+(collect + drain at most ONE order per heartbeat) executes it on the cron §11 already required.
+`tick` is deliberately NOT in `PAID_COMMANDS` — the order row is its confirmation — and `collect`
+stays free and never drains. The env token still gates every config-driven paid command.
+
 Still unbuilt downstream: the organic/AI layers and the heatmap — both of which need scan rows
 that now have a producer, a consumer, and no data yet.
 

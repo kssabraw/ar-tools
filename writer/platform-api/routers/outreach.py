@@ -11,6 +11,12 @@ Thin by design: auth and shape here, everything else in `services/outreach`.
 by `OUTREACH_COMMAND`, and every paid path stays there deliberately — a route that fires a paid
 Outscraper pull is one accidental click from a duplicate market ingest, which has already happened
 once (ISSUES I-035 correction). Read the pipeline here; run it there.
+
+The one qualification (outreach DECISIONS.md 2026-08-06): the scan-order routes AUTHORIZE spend
+without performing it. `POST /outreach/scan-requests` writes a signed order the outreach job's
+`tick` command executes on its own schedule — the row is the confirmation, this process never
+touches a provider, and the paid path stays exactly where it was. Admin-gated, because the click
+is the authorization.
 """
 from __future__ import annotations
 
@@ -21,7 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from config import settings
-from middleware.auth import require_auth, require_staff
+from middleware.auth import require_admin, require_auth, require_staff
 from services import outreach as outreach_service
 from services.outreach import OutreachError
 from services.outreach_db import outreach_configured
@@ -310,6 +316,88 @@ async def add_suppression(
         reason=payload.reason,
         actor_id=auth["user_id"],
     )
+
+
+# --- Scan orders (the UI trigger — outreach DECISIONS.md 2026-08-06) ---------------------------
+
+
+class ScanRequestCreate(BaseModel):
+    submarket_id: str
+    keyword_id: str
+    note: Optional[str] = None
+
+
+@router.get("/outreach/markets/{market_id}/keywords")
+async def list_keywords(market_id: str, auth: dict = Depends(require_outreach)) -> dict:
+    return {"keywords": _handle(outreach_service.list_keywords, market_id)}
+
+
+@router.post("/outreach/scan-requests")
+async def create_scan_request(
+    payload: ScanRequestCreate, auth: dict = Depends(require_admin)
+) -> dict:
+    """Place a signed scan order — the UI-path spend authorization.
+
+    ADMIN-gated, above the staff bar the CRM writes use: this row causes the outreach job to
+    post ~81 paid tasks (one per grid point) on its next tick. The click IS the confirmation,
+    so the role that can click is the role trusted with spend. Nothing is contacted here; the
+    money moves in the outreach service's `tick`, which refuses everything but the oldest
+    pending order per heartbeat.
+    """
+    _require_outreach_ready()
+    return {
+        "scan_request": _handle(
+            outreach_service.create_scan_request,
+            submarket_id=payload.submarket_id,
+            keyword_id=payload.keyword_id,
+            note=payload.note,
+            actor_id=auth["user_id"],
+        )
+    }
+
+
+@router.post("/outreach/scan-requests/{request_id}/cancel")
+async def cancel_scan_request(
+    request_id: str, auth: dict = Depends(require_admin)
+) -> dict:
+    """Withdraw a PENDING order. One the tick has claimed is already executing — it resolves on
+    its own and the outcome is the record; cancelling it would only orphan the spend."""
+    _require_outreach_ready()
+    return {"scan_request": _handle(outreach_service.cancel_scan_request, request_id, auth["user_id"])}
+
+
+@router.get("/outreach/scan-requests")
+async def list_scan_requests(
+    status: Optional[str] = None,
+    limit: int = Query(default=outreach_service.DEFAULT_PAGE_SIZE, ge=1),
+    offset: int = Query(default=0, ge=0),
+    auth: dict = Depends(require_outreach),
+) -> dict:
+    return _handle(outreach_service.list_scan_requests, status=status, limit=limit, offset=offset)
+
+
+@router.get("/outreach/scan-requests/{request_id}")
+async def scan_request_detail(request_id: str, auth: dict = Depends(require_outreach)) -> dict:
+    """The status screen's read: order + snapshot + per-status task counts + rollup marker."""
+    return _handle(outreach_service.scan_request_detail, request_id)
+
+
+@router.get("/outreach/submarkets/{submarket_id}/placeholder-scores")
+async def placeholder_scores(
+    submarket_id: str,
+    limit: int = Query(default=outreach_service.DEFAULT_PAGE_SIZE, ge=1),
+    offset: int = Query(default=0, ge=0),
+    auth: dict = Depends(require_outreach),
+) -> dict:
+    """Coverage-deficit scores for one submarket, worst first.
+
+    Empty means NOT MEASURED (no rollup marker → the view returns no rows), and the payload says
+    so explicitly — I-076's other half. Rendering an empty list as "no data" would read a
+    failed scan as total invisibility, which is the strongest pitch in the market, manufactured.
+    """
+    result = _handle(outreach_service.placeholder_scores, submarket_id, limit, offset)
+    result["measured"] = result["total"] > 0
+    return result
 
 
 def _require_outreach_ready() -> None:

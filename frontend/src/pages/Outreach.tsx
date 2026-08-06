@@ -1,0 +1,441 @@
+import { Fragment, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  Crosshair, Loader2, AlertTriangle, XCircle, CheckCircle2, Clock, Ban, RefreshCw,
+} from 'lucide-react'
+import { api } from '../lib/api'
+import { useAuth } from '../context/AuthContext'
+
+// ── Types (mirror routers/outreach.py's scan-order section) ──────────────────
+interface Market { id: string; name: string }
+interface Submarket { id: string; name: string }
+interface Keyword { id: string; term: string; is_primary: boolean }
+interface ScanRequest {
+  id: string
+  submarket_id: string
+  keyword_id: string
+  status: 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
+  snapshot_id: string | null
+  error: string | null
+  note: string | null
+  created_at: string
+  finished_at: string | null
+  submarket?: { name: string } | null
+  keyword?: { term: string } | null
+}
+interface TaskProgress {
+  counts: Record<string, number>
+  total: number
+  collected: number
+  outstanding: number
+  failed: number
+}
+interface ScanRequestDetail {
+  scan_request: ScanRequest
+  snapshot: {
+    id: string; expected_points: number; actual_points: number
+    complete: boolean; scanned_at: string; geometry_version: string
+  } | null
+  task_progress: TaskProgress | null
+  rolled_up: boolean
+}
+interface PlaceholderScore {
+  prospect_id: string
+  name: string
+  phone: string | null
+  excluded: boolean | null
+  keywords_measured: number
+  keywords_present: number
+  coverage_pct: number
+  coverage_deficit: number
+  best_rank: number | null
+  centroid_dist_at_loss: number | null
+  measured_at: string
+}
+
+const ACTIVE = new Set(['pending', 'running'])
+
+const STATUS_STYLE: Record<ScanRequest['status'], { color: string; bg: string; Icon: typeof Clock }> = {
+  pending: { color: '#92400e', bg: '#fef3c7', Icon: Clock },
+  running: { color: '#1d4ed8', bg: '#dbeafe', Icon: Loader2 },
+  done: { color: '#166534', bg: '#dcfce7', Icon: CheckCircle2 },
+  failed: { color: '#b91c1c', bg: '#fee2e2', Icon: XCircle },
+  cancelled: { color: '#475569', bg: '#f1f5f9', Icon: Ban },
+}
+
+function StatusChip({ status }: { status: ScanRequest['status'] }) {
+  const { color, bg, Icon } = STATUS_STYLE[status]
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px',
+      borderRadius: 999, fontSize: 11, fontWeight: 600, color, background: bg,
+    }}>
+      <Icon size={12} className={status === 'running' ? 'animate-spin' : undefined} />
+      {status}
+    </span>
+  )
+}
+
+// ── The page ─────────────────────────────────────────────────────────────────
+
+export function Outreach() {
+  const { isAdmin } = useAuth()
+
+  const { data: status } = useQuery<{ enabled: boolean; configured: boolean }>({
+    queryKey: ['outreach-status'],
+    queryFn: () => api.get('/outreach/status'),
+  })
+  const ready = status?.enabled && status?.configured
+
+  const { data: marketsData } = useQuery<{ markets: Market[] }>({
+    queryKey: ['outreach-markets'],
+    queryFn: () => api.get('/outreach/markets'),
+    enabled: !!ready,
+  })
+  const markets = marketsData?.markets ?? []
+  const [marketId, setMarketId] = useState('')
+  const market = markets.find(m => m.id === marketId) ?? markets[0]
+
+  if (status && !ready) {
+    return (
+      <div style={{ padding: 24 }}>
+        <h1 style={{ fontSize: 20, fontWeight: 700, display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Crosshair size={20} /> Outreach
+        </h1>
+        <p style={{ color: '#64748b', marginTop: 12, fontSize: 14 }}>
+          {status.enabled
+            ? 'The outreach module is enabled but not configured — the Outreacher project credentials are missing on platform-api.'
+            : 'The outreach module is not enabled on this deployment.'}
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ padding: 24, maxWidth: 1100 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <h1 style={{ fontSize: 20, fontWeight: 700, display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Crosshair size={20} /> Outreach — geogrid scans
+        </h1>
+        {markets.length > 1 && (
+          <select value={market?.id ?? ''} onChange={e => setMarketId(e.target.value)}
+            style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+            {markets.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        )}
+      </div>
+
+      {market && <QueueScanCard marketId={market.id} isAdmin={isAdmin} />}
+      <OrdersCard />
+      {market && <ResultsCard marketId={market.id} />}
+    </div>
+  )
+}
+
+// ── Queue a scan ─────────────────────────────────────────────────────────────
+
+function QueueScanCard({ marketId, isAdmin }: { marketId: string; isAdmin: boolean }) {
+  const queryClient = useQueryClient()
+  const [submarketId, setSubmarketId] = useState('')
+  const [keywordId, setKeywordId] = useState('')
+  const [confirming, setConfirming] = useState(false)
+
+  const { data: subsData } = useQuery<{ submarkets: Submarket[] }>({
+    queryKey: ['outreach-submarkets', marketId],
+    queryFn: () => api.get(`/outreach/markets/${marketId}/submarkets`),
+  })
+  const { data: kwData } = useQuery<{ keywords: Keyword[] }>({
+    queryKey: ['outreach-keywords', marketId],
+    queryFn: () => api.get(`/outreach/markets/${marketId}/keywords`),
+  })
+  const submarkets = subsData?.submarkets ?? []
+  const keywords = kwData?.keywords ?? []
+  const submarket = submarkets.find(s => s.id === submarketId)
+  const keyword = keywords.find(k => k.id === keywordId) ?? keywords.find(k => k.is_primary)
+
+  const place = useMutation({
+    mutationFn: () => api.post<{ scan_request: ScanRequest }>('/outreach/scan-requests', {
+      submarket_id: submarketId,
+      keyword_id: keyword?.id,
+    }),
+    onSuccess: () => {
+      setConfirming(false)
+      queryClient.invalidateQueries({ queryKey: ['outreach-scan-requests'] })
+    },
+  })
+
+  const errorText = place.error instanceof Error
+    ? (place.error.message === 'scan_request_already_active'
+      ? 'An order for this submarket × keyword is already pending or running.'
+      : place.error.message)
+    : null
+
+  return (
+    <div style={{ marginTop: 16, padding: 16, border: '1px solid #e2e8f0', borderRadius: 12 }}>
+      <div style={{ fontWeight: 600, fontSize: 14 }}>Queue a scan</div>
+      <p style={{ fontSize: 12, color: '#64748b', margin: '4px 0 12px' }}>
+        Placing an order posts one <strong>paid</strong> DataForSEO task per grid point
+        (81 on the standard 5-mile grid, ≈$0.81 at the configured rate). The engine picks orders
+        up on its next tick — within its cron interval, not instantly — and collection follows
+        over the next hours as the provider finishes each point.
+      </p>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <select value={submarketId} onChange={e => { setSubmarketId(e.target.value); place.reset() }}
+          style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+          <option value="">Choose a submarket…</option>
+          {submarkets.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+        <select value={keyword?.id ?? ''} onChange={e => { setKeywordId(e.target.value); place.reset() }}
+          style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+          {keywords.map(k => (
+            <option key={k.id} value={k.id}>{k.term}{k.is_primary ? ' (primary)' : ''}</option>
+          ))}
+        </select>
+        {!confirming ? (
+          <button
+            disabled={!isAdmin || !submarket || !keyword}
+            onClick={() => setConfirming(true)}
+            title={isAdmin ? undefined : 'Placing a scan order is admin-only — it authorizes spend'}
+            style={{
+              padding: '6px 14px', borderRadius: 8, border: 'none', fontWeight: 600, fontSize: 13,
+              background: isAdmin && submarket ? '#0f172a' : '#e2e8f0',
+              color: isAdmin && submarket ? '#fff' : '#94a3b8',
+              cursor: isAdmin && submarket ? 'pointer' : 'not-allowed',
+            }}>
+            Queue scan…
+          </button>
+        ) : (
+          <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+            <span style={{ fontSize: 12, color: '#b45309', fontWeight: 600 }}>
+              Spend ≈$0.81 scanning “{keyword?.term}” across {submarket?.name}?
+            </span>
+            <button onClick={() => place.mutate()} disabled={place.isPending}
+              style={{ padding: '6px 14px', borderRadius: 8, border: 'none', fontWeight: 600,
+                fontSize: 13, background: '#b45309', color: '#fff', cursor: 'pointer' }}>
+              {place.isPending ? <Loader2 size={13} className="animate-spin" /> : 'Confirm — place order'}
+            </button>
+            <button onClick={() => setConfirming(false)}
+              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0',
+                background: '#fff', fontSize: 13, cursor: 'pointer' }}>
+              Back
+            </button>
+          </span>
+        )}
+      </div>
+      {!isAdmin && (
+        <p style={{ fontSize: 11, color: '#94a3b8', marginTop: 8 }}>
+          Viewing only — placing a scan order is admin-only, because the click is the spend
+          authorization.
+        </p>
+      )}
+      {errorText && (
+        <p style={{ fontSize: 12, color: '#b91c1c', marginTop: 8, display: 'flex', gap: 6, alignItems: 'center' }}>
+          <AlertTriangle size={13} /> {errorText}
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ── Orders ───────────────────────────────────────────────────────────────────
+
+function OrdersCard() {
+  const queryClient = useQueryClient()
+  const [openId, setOpenId] = useState<string | null>(null)
+
+  const { data, isLoading } = useQuery<{ scan_requests: ScanRequest[]; total: number }>({
+    queryKey: ['outreach-scan-requests'],
+    queryFn: () => api.get('/outreach/scan-requests?limit=25'),
+    // Poll only while something is in flight — a settled queue is a cheap one-off read.
+    refetchInterval: q =>
+      (q.state.data?.scan_requests ?? []).some(r => ACTIVE.has(r.status)) ? 20_000 : false,
+  })
+  const orders = data?.scan_requests ?? []
+
+  const cancel = useMutation({
+    mutationFn: (id: string) => api.post(`/outreach/scan-requests/${id}/cancel`, {}),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['outreach-scan-requests'] }),
+  })
+
+  return (
+    <div style={{ marginTop: 16, padding: 16, border: '1px solid #e2e8f0', borderRadius: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ fontWeight: 600, fontSize: 14 }}>Scan orders</div>
+        <button onClick={() => queryClient.invalidateQueries({ queryKey: ['outreach-scan-requests'] })}
+          style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#64748b' }}
+          title="Refresh">
+          <RefreshCw size={14} />
+        </button>
+      </div>
+      {isLoading ? (
+        <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>Loading…</p>
+      ) : orders.length === 0 ? (
+        <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>
+          No orders yet. The first one placed here will be the pipeline's first live scan.
+        </p>
+      ) : (
+        <table style={{ width: '100%', marginTop: 8, fontSize: 13, borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ textAlign: 'left', color: '#64748b', fontSize: 11 }}>
+              <th style={{ padding: '4px 8px' }}>Placed</th>
+              <th style={{ padding: '4px 8px' }}>Submarket</th>
+              <th style={{ padding: '4px 8px' }}>Keyword</th>
+              <th style={{ padding: '4px 8px' }}>Status</th>
+              <th style={{ padding: '4px 8px' }} />
+            </tr>
+          </thead>
+          <tbody>
+            {orders.map(order => (
+              <Fragment key={order.id}>
+                <tr style={{ borderTop: '1px solid #f1f5f9', cursor: 'pointer' }}
+                  onClick={() => setOpenId(openId === order.id ? null : order.id)}>
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
+                    {new Date(order.created_at).toLocaleString()}
+                  </td>
+                  <td style={{ padding: '6px 8px' }}>{order.submarket?.name ?? order.submarket_id}</td>
+                  <td style={{ padding: '6px 8px' }}>{order.keyword?.term ?? order.keyword_id}</td>
+                  <td style={{ padding: '6px 8px' }}><StatusChip status={order.status} /></td>
+                  <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                    {order.status === 'pending' && (
+                      <button
+                        onClick={e => { e.stopPropagation(); cancel.mutate(order.id) }}
+                        style={{ fontSize: 12, border: '1px solid #e2e8f0', background: '#fff',
+                          borderRadius: 6, padding: '2px 8px', cursor: 'pointer', color: '#b91c1c' }}>
+                        Withdraw
+                      </button>
+                    )}
+                  </td>
+                </tr>
+                {order.status === 'failed' && order.error && (
+                  <tr>
+                    <td colSpan={5} style={{ padding: '0 8px 6px', fontSize: 12, color: '#b91c1c' }}>
+                      {order.error} — a failed order is never retried automatically; place a new
+                      one once the cause is fixed.
+                    </td>
+                  </tr>
+                )}
+                {openId === order.id && (order.status === 'running' || order.status === 'done') && (
+                  <tr>
+                    <td colSpan={5} style={{ padding: '4px 8px 10px' }}>
+                      <OrderProgress id={order.id} />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
+function OrderProgress({ id }: { id: string }) {
+  const { data } = useQuery<ScanRequestDetail>({
+    queryKey: ['outreach-scan-request', id],
+    queryFn: () => api.get(`/outreach/scan-requests/${id}`),
+    refetchInterval: q => {
+      const d = q.state.data
+      // Keep polling until every task is terminal AND the rollup marker exists.
+      if (!d?.task_progress) return 30_000
+      return d.task_progress.outstanding > 0 || !d.rolled_up ? 30_000 : false
+    },
+  })
+  if (!data?.task_progress || !data.snapshot) {
+    return <span style={{ fontSize: 12, color: '#64748b' }}>Waiting for the engine's next tick…</span>
+  }
+  const p = data.task_progress
+  const pct = p.total ? Math.round((p.collected / p.total) * 100) : 0
+  return (
+    <div style={{ fontSize: 12, color: '#334155' }}>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+        <div style={{ flex: 1, height: 8, background: '#f1f5f9', borderRadius: 4, overflow: 'hidden' }}>
+          <div style={{ width: `${pct}%`, height: '100%', background: '#0f172a' }} />
+        </div>
+        <span>{p.collected}/{p.total} points collected</span>
+      </div>
+      <div style={{ marginTop: 4, color: '#64748b' }}>
+        {p.outstanding > 0 && <>Results arrive over the next hours as the provider finishes each point. </>}
+        {p.failed > 0 && <span style={{ color: '#b91c1c' }}>{p.failed} point{p.failed > 1 ? 's' : ''} failed. </span>}
+        Snapshot {data.snapshot.complete ? 'complete' : 'incomplete'} ·{' '}
+        {data.rolled_up
+          ? 'coverage rolled up — results below.'
+          : 'coverage not rolled up yet.'}
+      </div>
+    </div>
+  )
+}
+
+// ── Results ──────────────────────────────────────────────────────────────────
+
+function ResultsCard({ marketId }: { marketId: string }) {
+  const [submarketId, setSubmarketId] = useState('')
+  const { data: subsData } = useQuery<{ submarkets: Submarket[] }>({
+    queryKey: ['outreach-submarkets', marketId],
+    queryFn: () => api.get(`/outreach/markets/${marketId}/submarkets`),
+  })
+  const submarkets = subsData?.submarkets ?? []
+
+  const { data, isLoading } = useQuery<{ scores: PlaceholderScore[]; total: number; measured: boolean }>({
+    queryKey: ['outreach-placeholder-scores', submarketId],
+    queryFn: () => api.get(`/outreach/submarkets/${submarketId}/placeholder-scores?limit=100`),
+    enabled: !!submarketId,
+  })
+
+  return (
+    <div style={{ marginTop: 16, padding: 16, border: '1px solid #e2e8f0', borderRadius: 12 }}>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+        <div style={{ fontWeight: 600, fontSize: 14 }}>Coverage results</div>
+        <select value={submarketId} onChange={e => setSubmarketId(e.target.value)}
+          style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13 }}>
+          <option value="">Choose a submarket…</option>
+          {submarkets.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+      </div>
+      {!submarketId ? null : isLoading ? (
+        <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>Loading…</p>
+      ) : !data?.measured ? (
+        <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>
+          Not measured yet — this submarket has no rolled-up scan. An empty result here means
+          “nothing measured”, never “nobody visible”.
+        </p>
+      ) : (
+        <>
+          <p style={{ fontSize: 11, color: '#94a3b8', margin: '6px 0 0' }}>
+            Placeholder score: raw coverage deficit from the latest rolled-up snapshot per keyword.
+            Not the Phase 4 model. A prospect absent at every measured point shows 100% deficit —
+            zero coverage, not unknown.
+          </p>
+          <table style={{ width: '100%', marginTop: 8, fontSize: 13, borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ textAlign: 'left', color: '#64748b', fontSize: 11 }}>
+                <th style={{ padding: '4px 8px' }}>Prospect</th>
+                <th style={{ padding: '4px 8px' }}>Phone</th>
+                <th style={{ padding: '4px 8px', textAlign: 'right' }}>Coverage</th>
+                <th style={{ padding: '4px 8px', textAlign: 'right' }}>Deficit</th>
+                <th style={{ padding: '4px 8px', textAlign: 'right' }}>Best rank</th>
+                <th style={{ padding: '4px 8px', textAlign: 'right' }}>Drops out at</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.scores.filter(s => !s.excluded).map(s => (
+                <tr key={s.prospect_id} style={{ borderTop: '1px solid #f1f5f9' }}>
+                  <td style={{ padding: '6px 8px' }}>{s.name}</td>
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{s.phone ?? '—'}</td>
+                  <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.coverage_pct?.toFixed(1)}%</td>
+                  <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>
+                    {s.coverage_deficit?.toFixed(1)}%
+                  </td>
+                  <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.best_rank ?? '—'}</td>
+                  <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                    {s.centroid_dist_at_loss != null ? `${s.centroid_dist_at_loss.toFixed(1)} mi` : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
+  )
+}

@@ -714,3 +714,290 @@ def add_suppression(
     if not written:
         raise OutreachError("suppression_not_created", "the suppression was not written")
     return written[0]
+
+
+# --- Scan orders (the UI trigger — outreach DECISIONS.md 2026-08-06) ---------------------------
+#
+# The one write surface in this module that leads to MONEY, and the reason it is safe is the
+# reason it exists: this service never spends. It writes a signed order (`scan_request`) that the
+# outreach Railway job's `tick` command executes on its own schedule. The order is the
+# confirmation — single-use, named to one submarket x keyword, attributed via `requested_by` —
+# so the spend-authorization evidence is created here and consumed there, and neither side can
+# spend without the other. platform-api holding the scan client, or calling Railway's API to
+# force a deploy, were both rejected (see the decision record) — splitting a spend gate across
+# two services is how it stops being one.
+
+SCAN_REQUEST_ACTIVE_STATUSES: tuple[str, ...] = ("pending", "running")
+
+
+def list_keywords(market_id: str) -> list[dict[str, Any]]:
+    """A market's keywords, primary first — the scan-order form's second dropdown."""
+    rows = (
+        get_outreach_client()
+        .table("keyword")
+        .select("id, term, is_primary")
+        .eq("market_id", market_id)
+        .order("is_primary", desc=True)
+        .order("term")
+        .execute()
+        .data
+        or []
+    )
+    return rows
+
+
+def create_scan_request(
+    *, submarket_id: str, keyword_id: str, note: str | None, actor_id: str
+) -> dict[str, Any]:
+    """Place a signed scan order. Admin-gated at the router — this row authorizes ~81 paid tasks.
+
+    Validation is a friendlier front door, not the gate: the database's FKs and the one-active
+    partial unique index remain authoritative. The duplicate check is read-then-insert for the
+    caller's sake (a named 422 beats a constraint string), with the racing insert still caught
+    and mapped — losing that race means the order EXISTS, which is not the failure it looks like:
+    somebody else just authorized the same scan first, and two orders for one pair is exactly
+    what the index refuses.
+    """
+    client = get_outreach_client()
+
+    submarket = (
+        client.table("submarket")
+        .select("id, name, market_id")
+        .eq("id", submarket_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not submarket:
+        raise OutreachError("submarket_not_found")
+    keyword = (
+        client.table("keyword")
+        .select("id, term, market_id")
+        .eq("id", keyword_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not keyword:
+        raise OutreachError("keyword_not_found")
+    if str(submarket[0]["market_id"]) != str(keyword[0]["market_id"]):
+        raise OutreachError(
+            "cross_market_order", "the submarket and keyword belong to different markets"
+        )
+
+    active = (
+        client.table("scan_request")
+        .select("id, status")
+        .eq("submarket_id", submarket_id)
+        .eq("keyword_id", keyword_id)
+        .in_("status", list(SCAN_REQUEST_ACTIVE_STATUSES))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if active:
+        raise OutreachError(
+            "scan_request_already_active",
+            "an order for this submarket x keyword is already pending or running",
+        )
+
+    row = {
+        "submarket_id": submarket_id,
+        "keyword_id": keyword_id,
+        "requested_by": actor_id,
+        "note": (note or "").strip() or None,
+    }
+    try:
+        written = client.table("scan_request").insert(row).execute().data or []
+    except Exception as exc:
+        # The racing case: the one-active index refused what our read missed. The caller's
+        # intent — "this pair should be scanned" — is already satisfied.
+        if "scan_request_one_active" in str(exc):
+            raise OutreachError(
+                "scan_request_already_active",
+                "an order for this submarket x keyword is already pending or running",
+            ) from exc
+        raise
+    if not written:
+        raise OutreachError("scan_request_not_created")
+    order = written[0]
+    order["submarket"] = {"name": submarket[0]["name"]}
+    order["keyword"] = {"term": keyword[0]["term"]}
+    return order
+
+
+def cancel_scan_request(request_id: str, actor_id: str) -> dict[str, Any]:
+    """Withdraw a PENDING order. Conditional on status, mirroring the drain's claim: a row the
+    tick has already claimed is being executed and cancelling its record would only orphan the
+    spend — past `pending`, the answer is to let it finish and read the outcome."""
+    from datetime import datetime, timezone
+
+    client = get_outreach_client()
+    hit = (
+        client.table("scan_request")
+        .update(
+            {
+                "status": "cancelled",
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "error": None,
+            }
+        )
+        .eq("id", request_id)
+        .eq("status", "pending")
+        .execute()
+        .data
+        or []
+    )
+    if hit:
+        return hit[0]
+    existing = (
+        client.table("scan_request").select("id, status").eq("id", request_id).limit(1).execute().data
+    )
+    if not existing:
+        raise OutreachError("scan_request_not_found")
+    raise OutreachError(
+        "scan_request_not_cancellable",
+        f"order is {existing[0]['status']!r}; only a pending order can be withdrawn",
+    )
+
+
+def list_scan_requests(
+    status: str | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
+) -> dict[str, Any]:
+    """Orders newest-first, with their target names embedded. The list is deliberately cheap —
+    per-order task progress lives on the detail read, not here, so the queue view costs one
+    query however long the history grows."""
+    size, start = clamp_page(limit, offset)
+    query = (
+        get_outreach_client()
+        .table("scan_request")
+        .select("*, submarket(name), keyword(term)", count="exact")
+        .order("created_at", desc=True)
+        .range(start, start + size - 1)
+    )
+    if status:
+        query = query.eq("status", status)
+    response = query.execute()
+    return {
+        "scan_requests": response.data or [],
+        "total": response.count or 0,
+        "limit": size,
+        "offset": start,
+    }
+
+
+def build_task_progress(tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Counts by status plus the two numbers the UI renders: collected/total and whether anything
+    is stuck. Pure, so the shape is testable without a database."""
+    counts: dict[str, int] = {}
+    for task in tasks:
+        counts[str(task.get("status"))] = counts.get(str(task.get("status")), 0) + 1
+    total = len(tasks)
+    return {
+        "counts": counts,
+        "total": total,
+        "collected": counts.get("collected", 0),
+        "outstanding": counts.get("pending", 0) + counts.get("submitted", 0),
+        "failed": counts.get("failed", 0),
+    }
+
+
+def scan_request_detail(request_id: str) -> dict[str, Any]:
+    """One order with everything the status screen needs: the row, its snapshot, per-status task
+    counts, and whether the rollup marker exists (I-069 — completeness is a recorded fact, and
+    the marker is also what gates the placeholder score's LEFT JOIN, I-076).
+
+    The task read is bounded by construction — one snapshot holds `expected_points` tasks (81 on
+    the standard grid), far under the PostgREST cap, so this is not an unbounded-read exception
+    to the module rule; it is a read whose bound is structural.
+    """
+    client = get_outreach_client()
+    rows = (
+        client.table("scan_request")
+        .select("*, submarket(name), keyword(term)")
+        .eq("id", request_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise OutreachError("scan_request_not_found")
+    order = rows[0]
+
+    snapshot = None
+    progress = None
+    rolled_up = False
+    if order.get("snapshot_id"):
+        snap_rows = (
+            client.table("scan_snapshot")
+            .select("id, expected_points, actual_points, complete, scanned_at, geometry_version")
+            .eq("id", order["snapshot_id"])
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        snapshot = snap_rows[0] if snap_rows else None
+        tasks = (
+            client.table("scan_task")
+            .select("status")
+            .eq("snapshot_id", order["snapshot_id"])
+            .execute()
+            .data
+            or []
+        )
+        progress = build_task_progress(tasks)
+        marker = (
+            client.table("snapshot_rollup")
+            .select("snapshot_id")
+            .eq("snapshot_id", order["snapshot_id"])
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        rolled_up = bool(marker)
+
+    return {
+        "scan_request": order,
+        "snapshot": snapshot,
+        "task_progress": progress,
+        "rolled_up": rolled_up,
+    }
+
+
+def placeholder_scores(
+    submarket_id: str,
+    limit: int | None = None,
+    offset: int | None = None,
+) -> dict[str, Any]:
+    """The placeholder score for one submarket, worst coverage first.
+
+    Reads `v_prospect_placeholder_score`, whose two I-076 properties this surface inherits and
+    must not undo: a prospect with no coverage row inside a ROLLED-UP submarket scores 100%
+    deficit (zero coverage, never unknown), and a submarket with no rollup marker returns NO rows
+    (nothing measured, no score to give). An empty result here therefore means "not measured
+    yet", and the router says so rather than rendering an empty table that reads as no data.
+    """
+    size, start = clamp_page(limit, offset)
+    response = (
+        get_outreach_client()
+        .table("v_prospect_placeholder_score")
+        .select("*", count="exact")
+        .eq("submarket_id", submarket_id)
+        .order("coverage_deficit", desc=True)
+        .range(start, start + size - 1)
+        .execute()
+    )
+    return {
+        "scores": response.data or [],
+        "total": response.count or 0,
+        "limit": size,
+        "offset": start,
+    }

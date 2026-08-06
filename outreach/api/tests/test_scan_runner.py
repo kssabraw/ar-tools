@@ -166,6 +166,7 @@ class _Settings:
     scan_collect_fallback_days = 3
     scan_collect_fallback_limit = 500
     scan_collect_alert_days = 5
+    dataforseo_cost_per_request_cents = 1  # the I-086 ledger write reads this
 
 
 def _submarket(radius=5.0, spacing=5.0):
@@ -240,6 +241,48 @@ def test_every_posted_point_is_marked_submitted_with_its_id():
     rows = db.tables["scan_task"]
     assert all(r["status"] == "submitted" for r in rows)
     assert all(r["provider_task_id"] for r in rows)
+
+
+def test_a_submission_writes_its_cost_to_the_ledger():
+    """I-086: the geogrid was the only paid path with no cost_ledger row. Units are tasks
+    POSTED — an unposted batch cost nothing and must not be billed to the ledger either."""
+    db = _FakeDB()
+    points = scan_runner.generate_points(34.16, -118.60, 5.0, 5.0)
+    bodies = [b for _, b in maps_scan.build_grid_tasks(
+        SNAP, "plumber", points, zoom=13, depth=20, language_code="en")]
+    http = _FakeHTTP(posts=[_post_ok(bodies)])
+
+    sub = dict(_submarket(), market_id="market-1")
+    report = asyncio.run(
+        scan_runner.submit_scan(db, _Settings(), sub, _keyword(), client=http)
+    )
+
+    rows = db.tables.get("cost_ledger", [])
+    assert len(rows) == 1
+    assert rows[0]["stage"] == "b1_geogrid"
+    assert rows[0]["provider"] == "dataforseo"
+    assert rows[0]["units"] == report.posted == len(points)
+    assert rows[0]["cost_cents"] == len(points) * _Settings.dataforseo_cost_per_request_cents
+    assert rows[0]["market_id"] == "market-1"
+
+
+def test_a_fully_failed_post_writes_no_ledger_row():
+    """Nothing posted, nothing billed, nothing to reconcile."""
+    class _Refuses:
+        async def post(self, url, headers=None, json=None):
+            import httpx
+            raise httpx.ConnectError("network")
+
+        async def aclose(self):
+            return None
+
+    db = _FakeDB()
+    report = asyncio.run(
+        scan_runner.submit_scan(db, _Settings(), _submarket(), _keyword(), client=_Refuses())
+    )
+
+    assert report.posted == 0
+    assert db.tables.get("cost_ledger", []) == []
 
 
 def test_a_failed_post_leaves_the_points_pending_rather_than_lost():

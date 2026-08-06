@@ -646,3 +646,50 @@ if the placeholder ever needs persisting, it gets a home that admits what it is.
 `scan_snapshot.complete` and not on "a snapshot exists". An incomplete snapshot has no coverage
 rows, so gating on existence would score every prospect in that submarket at maximum deficit
 because the scan failed. That is the measured-vs-found error again, in its fourth costume.
+
+---
+
+## 2026-08-06 — The UI triggers scans; the confirmation moves from config to a signed order (owner ruling; resolves I-072, supersedes §11a's default)
+
+Owner ruling: the module gets a UI, and not a read-only one — it must start scans. §11a said a
+trigger button "is an architectural change, and it needs deciding rather than assuming"; this is
+that decision, made by the person entitled to make it. The recommendation on record (run the
+first scan before adding a sixth unrun layer) was presented twice and overruled; the first scan
+will now also exercise the trigger path it arrives through. That cost is accepted, not unnoticed.
+
+**The constraint that shapes everything:** a button has no honest way to reach the deploy path.
+The spend gate (§7.2) works because `OUTREACH_CONFIRM_SPEND` rides a deliberate deploy; no MCP
+tool can create a fresh deployment for an existing service, platform-api must not run scan code
+(it is the reader over this database, and the scan client lives in the outreach image), and
+having the UI drive Railway's API would re-create the ~$0.11 incident with extra steps.
+
+**So the confirmation changes carrier, not principle.** The gate's principle is: money moves only
+on evidence the accidental path cannot supply. For config-driven runs that evidence is the
+name-matched env token, unchanged. For UI-triggered runs it becomes a **`scan_request` row** — a
+signed order carrying the exact submarket × keyword, the requesting AR Tools profile id, and a
+consumed-on-execution lifecycle. An order is *stronger* evidence than the token: single-use,
+named, attributed, and impossible for a replayed deploy, a leftover variable, or an unrelated
+merge to manufacture. What it is weaker against is a compromised or careless admin account —
+which is the same trust the token already places in whoever holds the Railway dashboard.
+
+**The shape:**
+
+- platform-api: `POST` creates an order (admin-gated, one active per submarket × keyword),
+  `GET`s list orders/status/results. platform-api itself still cannot spend — it writes a row.
+- outreach service: a new **`tick`** command = `collect` + drain **at most one** pending order.
+  The frequent cron §11 already demanded for collection now runs `tick` — double duty, no new
+  schedule. Click-to-scan latency is one cron interval; the UI says so instead of pretending the
+  button is instant.
+- `tick` is NOT in `PAID_COMMANDS`. Its spend is gated per-run by the order row. `collect` stays
+  free and never drains — §8a's invariant and its test are untouched. `scan` keeps the env token
+  for CLI/emergency use, exactly as today.
+- The one-submarket ruling survives structurally: an order IS one submarket × one keyword, and
+  the drain takes one per tick. A market sweep remains impossible from the UI in v1.
+- `submit_scan` gains the `cost_ledger` write it never had (closes I-086), on both paths — a UI
+  that spends money must show the ledger, and the sweep gate (`max_market_run_cost_cents`) is
+  checked before the drain posts anything.
+
+**Rejected:** draining from `collect` (makes the one command every doc promises is free into one
+that can spend); platform-api executing scans (duplicates the client, splits the spend gate
+across two services); triggering Railway deploys from the API (no supported path, and the config
+snapshot semantics that already cost money twice).
