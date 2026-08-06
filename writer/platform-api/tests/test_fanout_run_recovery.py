@@ -1,4 +1,4 @@
-"""Recovery of fanout pipeline runs orphaned by a process restart.
+"""Recovery of fanout pipeline runs interrupted by a process going away.
 
 Pipeline jobs run in a per-process executor while the session's status carries
 the claim, and a SIGKILL never reaches the job's `except` block — so a deploy
@@ -8,7 +8,10 @@ refuses to start a replacement because the session still looks live. On
 holding $7.18 of completed expansion hostage behind a progress bar that could
 never advance.
 
-These pin the recovery decision and the sweep's failure isolation.
+Recovery therefore runs from the DYING process, which knows what it owns. The
+first draft of this swept every live-looking session at startup instead, which
+would have reaped the outgoing container's still-running job during the ~15s
+deploy handover — the `test_owned_recovery_*` cases below pin that it can't.
 """
 
 from fanout import run_recovery
@@ -58,28 +61,87 @@ def test_every_recovery_target_is_a_status_the_user_can_act_on():
         assert note  # the reason is always recorded
 
 
-# ---- the sweep -------------------------------------------------------------
+# ---- test double -----------------------------------------------------------
 
 class _Store:
-    def __init__(self, sessions, fail_on=None):
-        self._sessions = sessions
+    """Stands in for storage/silo. `live` is the DB's live-status rows; the two
+    reads filter it the way the real queries do."""
+
+    def __init__(self, live, fail_on=None, refuse=()):
+        self.live = live
         self._fail_on = fail_on
+        self._refuse = set(refuse)
         self.calls: list[tuple[str, str, str]] = []
+        self.asked_for: list[str] | None = None
 
     def list_live_sessions(self):
-        return self._sessions
+        return list(self.live)
+
+    def get_live_sessions(self, session_ids):
+        self.asked_for = list(session_ids)
+        return [s for s in self.live if s["id"] in set(session_ids)]
 
     def recover_orphaned_session(self, session_id, status, note):
         if session_id == self._fail_on:
             raise RuntimeError("update failed")
+        if session_id in self._refuse:
+            return False  # the guarded UPDATE matched nothing — no longer live
         self.calls.append((session_id, status, note))
         return True
 
 
+_DONE_EXPANDING = {"topics": {"t": {}}}
+
+
+# ---- shutdown path (the primary) -------------------------------------------
+
+def test_owned_recovery_marks_only_this_process_runs():
+    """The race the design exists to avoid: during a deploy handover another
+    container's run is live in the DB, and must not be touched."""
+    store = _Store([
+        {"id": "mine", "status": "running", "statistical_clustering_log": _DONE_EXPANDING},
+        {"id": "theirs", "status": "running", "statistical_clustering_log": _DONE_EXPANDING},
+    ])
+    assert run_recovery.recover_owned_runs(store, owned_ids=["mine"]) == 1
+    assert [c[0] for c in store.calls] == ["mine"]
+    assert store.asked_for == ["mine"]
+
+
+def test_owned_recovery_does_nothing_when_the_process_owns_nothing():
+    """The common shutdown: no pipeline run in flight. Must not read or write."""
+    store = _Store([{"id": "theirs", "status": "running",
+                     "statistical_clustering_log": None}])
+    assert run_recovery.recover_owned_runs(store, owned_ids=[]) == 0
+    assert store.asked_for is None
+    assert store.calls == []
+
+
+def test_a_job_that_finished_in_the_grace_window_is_not_clobbered():
+    """The write is guarded on the row still being live. A run that completed
+    between the read and the write keeps its own terminal status."""
+    store = _Store(
+        [{"id": "s1", "status": "running", "statistical_clustering_log": _DONE_EXPANDING}],
+        refuse=["s1"],
+    )
+    assert run_recovery.recover_owned_runs(store, owned_ids=["s1"]) == 0
+    assert store.calls == []
+
+
+def test_owned_recovery_never_raises_when_the_read_fails():
+    """It runs while the process is already on its way out."""
+
+    class _Broken:
+        def get_live_sessions(self, _ids):
+            raise RuntimeError("supabase down")
+
+    assert run_recovery.recover_owned_runs(_Broken(), owned_ids=["s1"]) == 0
+
+
+# ---- fallback sweep (hard kills) -------------------------------------------
+
 def test_sweep_recovers_each_live_session():
     store = _Store([
-        {"id": "s1", "status": "running",
-         "statistical_clustering_log": {"topics": {"t": {}}}},
+        {"id": "s1", "status": "running", "statistical_clustering_log": _DONE_EXPANDING},
         {"id": "s2", "status": "queued", "statistical_clustering_log": None},
     ])
     assert run_recovery.recover_orphaned_runs(store) == 2
@@ -103,7 +165,7 @@ def test_one_failing_row_does_not_stop_the_others():
 
 
 def test_sweep_never_raises_when_the_read_fails():
-    """It runs in the app lifespan — it must never block startup."""
+    """It runs on a background task and must never take the app down."""
 
     class _Broken:
         def list_live_sessions(self):

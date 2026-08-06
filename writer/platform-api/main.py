@@ -95,6 +95,23 @@ def _new_request_id() -> str:
     return "req_" + "".join(secrets.choice(_REQUEST_ID_CHARS) for _ in range(12))
 
 
+async def _fanout_orphan_sweep_later() -> None:
+    """Run the fanout fallback sweep once, after the deploy handover window has
+    closed. Cancelled at shutdown, so a short-lived container simply never sweeps
+    — the shutdown hook covers it instead."""
+    from fanout.config import get_settings as _fanout_settings
+
+    try:
+        await asyncio.sleep(_fanout_settings().orphan_sweep_delay_s)
+        await asyncio.get_running_loop().run_in_executor(
+            None, fanout_run_recovery.recover_orphaned_runs
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # pragma: no cover - best-effort
+        logger.warning("fanout_orphan_sweep_failed", extra={"error": str(exc)})
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("platform-api starting up")
@@ -142,19 +159,14 @@ async def lifespan(app: FastAPI):
     # the vendored sub-app's lifespan, which is not invoked when its routers are
     # mounted into this app.
     await fanout_scheduler.start()
-    # Return Topic Fanout pipeline runs orphaned by the restart that just brought
-    # this process up. Those jobs live in a per-process executor while the session
-    # status carries the claim, so a deploy mid-run leaves a session stuck `running`
-    # with no worker and no way to restart it. Deliberately not gated on the
-    # content scheduler's flag — an orphaned pipeline run needs recovering whether
-    # or not scheduled publishing is on — and never allowed to block startup.
-    try:
-        await asyncio.get_running_loop().run_in_executor(
-            None, fanout_run_recovery.recover_orphaned_runs
-        )
-    except Exception as exc:  # pragma: no cover - startup best-effort
-        logger.warning("fanout_orphan_recovery_failed", extra={"error": str(exc)})
+    # Fallback recovery for Topic Fanout pipeline runs whose process died too hard
+    # to run its shutdown hook (OOM / SIGKILL). Deliberately DELAYED, not run at
+    # startup: a deploy leaves the outgoing container working for ~15s after this
+    # one boots, and a sweep that early would reap its still-live run. The normal
+    # case is handled from the dying side below. See fanout/run_recovery.py.
+    fanout_orphan_task = asyncio.create_task(_fanout_orphan_sweep_later())
     yield
+    fanout_orphan_task.cancel()
     try:
         await fanout_scheduler.stop()
     except Exception as exc:  # pragma: no cover - shutdown best-effort
@@ -177,6 +189,19 @@ async def lifespan(app: FastAPI):
         await drain_inflight_jobs()
     except Exception as exc:  # pragma: no cover - shutdown best-effort
         logger.warning("job_worker_drain_failed", extra={"error": str(exc)})
+    # Last, so anything that could still finish has: mark the Topic Fanout
+    # pipeline runs THIS process owns as interrupted. Those jobs run in a
+    # per-process executor with the session status as their claim, so without
+    # this they strand at `running` with no worker and no way to restart. Only
+    # this process's own runs are touched, and only if still live — so a deploy's
+    # incoming container can't disturb them, and a job that finished in the grace
+    # window keeps its own terminal status.
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            None, fanout_run_recovery.recover_owned_runs
+        )
+    except Exception as exc:  # pragma: no cover - shutdown best-effort
+        logger.warning("fanout_owned_recovery_failed", extra={"error": str(exc)})
     logger.info("platform-api shut down")
 
 

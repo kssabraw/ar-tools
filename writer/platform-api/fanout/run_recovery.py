@@ -1,4 +1,4 @@
-"""Recover pipeline runs orphaned by a process restart.
+"""Recover pipeline runs orphaned when the process holding them goes away.
 
 The pipeline jobs (expand / plan-articles / regate / recursive fanout /
 architecture) run in an in-process `ThreadPoolExecutor`, and the session's
@@ -6,30 +6,38 @@ status *is* the claim: `try_claim_run` refuses to start a run whose session is
 already `queued` or `running`. Each job owns its terminal status, setting
 `error` + `last_error` from its own `except` block.
 
-A SIGKILL never reaches that `except` block. So when the container is replaced —
+A SIGKILL never reaches that `except`. So when the container is replaced —
 routinely, on every deploy — an executing run dies with the session left at
 `running`: no error, no worker, and no way to restart it, because the claim guard
-correctly refuses to start a second run on a session that looks live. It shows in
-the UI as a progress bar that never advances. That happened on 2026-08-05: a
-deploy landed mid-write and killed an article-planning run one second after its
-last batch insert, stranding a session that had already spent $7.18 on expansion.
+correctly refuses a second run on a session that looks live. It shows in the UI
+as a progress bar that never advances. That happened on 2026-08-05: a deploy
+landed mid-write and killed an article-planning run one second after its last
+batch insert, stranding a session that had already spent $7.18 on expansion.
 
-`jobs.py` documented this as an accepted v1 caveat whose recovery was "a new
-session". That is more expensive than it needs to be: when the orphaned run was
-article planning, the expensive half (expansion + the gated keyword pool) is
-already durable in the DB, so the session can go back to `awaiting_article_planning`
-and re-plan for the cost of the planning step alone.
+Recovery runs from the DYING side, not the starting side
+--------------------------------------------------------
+The obvious placement — sweep every live-looking session at startup — is wrong,
+and dangerously so. Railway replaces containers with an overlap: in the incident
+above the new container was live at 00:18:10 while the old one kept working until
+00:18:23.9. A sweep in the new container's startup path would therefore reap a
+run that is genuinely still executing. Flipping that session out of `running`
+means the outgoing job can no longer record its result (`try_finalize_running` is
+conditional-on-running), so a *completed* plan would be mislabelled and re-planned
+at full cost — and worse, `try_claim_run` would then permit a second job to start
+writing to the same session while the first still is.
 
-**Startup-only, deliberately.** The tempting design is an age cutoff, like the
-content scheduler's `_recover_stuck`. It is wrong here: a recursive-fanout run is
-5-8x a base run, so no cutoff separates "stranded" from "legitimately slow", and
-reaping a live run would rewrite the status out from under a job that is still
-spending money. At startup the question doesn't arise — the executor is
-per-process, this process has just started and owns no jobs, so anything the DB
-still calls live was orphaned by definition. That does assume a single replica
-(Railway PLATFORM is `numReplicas: 1`); with two, a restarting replica would reap
-the other's live runs, and this would need a real claim (owner id + heartbeat)
-rather than a status flag.
+So the primary path is `recover_owned_runs`, called on shutdown: the process
+marks the sessions *it* owns, read from the cancellation registry. No race — it
+can only touch its own work — and it covers deploys, which is the actual cause.
+Every write is guarded on the session still being in a live status, so a job that
+finished inside the shutdown grace is never clobbered.
+
+`recover_orphaned_runs` remains as a fallback for kills too hard for a shutdown
+hook (OOM, SIGKILL without SIGTERM). It runs `orphan_sweep_delay_s` after
+startup rather than during it, so the handover window has closed before it looks.
+That still assumes a single replica (Railway PLATFORM is `numReplicas: 1`); with
+two, one replica's fallback sweep could reap another's live run, and this would
+need a real claim — owner id plus heartbeat — rather than a status flag.
 """
 
 import logging
@@ -47,7 +55,7 @@ _RESTART_NOTE = (
 
 
 def orphan_recovery_target(session: dict) -> tuple[str, str]:
-    """The status an orphaned session should be returned to, plus the note to
+    """The status an interrupted session should be returned to, plus the note to
     record. Pure.
 
     Expansion is the expensive half and it lands in the DB as a complete unit
@@ -77,47 +85,90 @@ def orphan_recovery_target(session: dict) -> tuple[str, str]:
     )
 
 
+def _recover(sessions: list[dict], store) -> int:
+    """Mark each still-live session. Best-effort per row: one row that fails to
+    update must not stop the rest. Returns how many were recovered."""
+    recovered = 0
+    for session in sessions:
+        status, note = orphan_recovery_target(session)
+        try:
+            # Guarded on the row still being live, so a job that finished between
+            # the read and this write keeps its own terminal status.
+            if not store.recover_orphaned_session(session["id"], status, note):
+                continue
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "fanout_recover_row_failed",
+                extra={"event": "fanout_recover_row_failed",
+                       "session_id": session.get("id"), "reason": repr(exc)},
+            )
+            continue
+        recovered += 1
+        logger.info(
+            "fanout_run_recovered",
+            extra={"event": "fanout_run_recovered", "session_id": session.get("id"),
+                   "was": session.get("status"), "now": status},
+        )
+    return recovered
+
+
+def recover_owned_runs(store=None, owned_ids=None) -> int:
+    """Shutdown path: mark this process's own in-flight runs as interrupted.
+
+    The primary recovery. Reads the sessions this process holds registrations for
+    rather than everything that looks live, so it cannot touch another container's
+    work during a deploy handover. Never raises — it runs while the process is
+    already on its way out.
+
+    `store` / `owned_ids` are injectable for testing; production passes neither.
+    """
+    if owned_ids is None:
+        from fanout import cancellation
+
+        owned_ids = cancellation.owned_sessions()
+    if not owned_ids:
+        return 0
+    if store is None:
+        from fanout.storage import silo as store
+
+    try:
+        sessions = store.get_live_sessions(list(owned_ids))
+    except Exception as exc:  # noqa: BLE001 — shutdown is best-effort
+        logger.warning(
+            "fanout_owned_recovery_failed",
+            extra={"event": "fanout_owned_recovery_failed", "reason": repr(exc)},
+        )
+        return 0
+
+    recovered = _recover(sessions, store)
+    if recovered:
+        logger.info(
+            "fanout_owned_recovery_complete",
+            extra={"event": "fanout_owned_recovery_complete", "count": recovered},
+        )
+    return recovered
+
+
 def recover_orphaned_runs(store=None) -> int:
-    """Return every session still marked live to a state a human can act on.
+    """Fallback path: mark every session that still looks live.
 
-    Called once at startup. Best-effort per row: one row that fails to update
-    must not stop the rest being recovered, and the sweep must never block
-    startup. Returns the number of sessions recovered.
-
-    `store` is injectable so this is testable without importing the pipeline's
-    heavy dependency chain; production passes nothing and gets the real one.
+    For kills too hard for the shutdown hook (OOM, SIGKILL). MUST NOT run during
+    startup — see the module docstring; the caller delays it past the deploy
+    handover window. Never raises.
     """
     if store is None:
         from fanout.storage import silo as store
 
     try:
         sessions = store.list_live_sessions()
-    except Exception as exc:  # noqa: BLE001 — never block startup on the sweep
+    except Exception as exc:  # noqa: BLE001
         logger.warning(
             "fanout_orphan_sweep_failed",
             extra={"event": "fanout_orphan_sweep_failed", "reason": repr(exc)},
         )
         return 0
 
-    recovered = 0
-    for session in sessions:
-        status, note = orphan_recovery_target(session)
-        try:
-            store.recover_orphaned_session(session["id"], status, note)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "fanout_orphan_recover_row_failed",
-                extra={"event": "fanout_orphan_recover_row_failed",
-                       "session_id": session.get("id"), "reason": repr(exc)},
-            )
-            continue
-        recovered += 1
-        logger.info(
-            "fanout_orphan_recovered",
-            extra={"event": "fanout_orphan_recovered",
-                   "session_id": session.get("id"),
-                   "was": session.get("status"), "now": status},
-        )
+    recovered = _recover(sessions, store)
     if recovered:
         logger.info(
             "fanout_orphan_sweep_complete",

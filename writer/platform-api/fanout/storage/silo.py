@@ -254,15 +254,35 @@ def try_claim_run(session_id: str) -> bool:
     return bool(res.data)
 
 
-def list_live_sessions() -> list[dict]:
-    """Every session the DB still marks as claimed by a worker. At startup these
-    are orphans by definition — the pipeline executor is per-process, so nothing
-    survived the restart that could still be working on them (see
-    `fanout/run_recovery.py`). Only the fields the recovery decision reads."""
+_RECOVERY_COLS = "id, status, seed_keyword, statistical_clustering_log"
+
+
+def get_live_sessions(session_ids: list[str]) -> list[dict]:
+    """The named sessions that are still in a live status. The shutdown hook's
+    read: it recovers only the runs this process owns, so it asks for those ids
+    rather than everything that looks live (see `fanout/run_recovery.py`)."""
+    if not session_ids:
+        return []
     res = (
         get_service_client()
         .table("sessions")
-        .select("id, status, seed_keyword, statistical_clustering_log")
+        .select(_RECOVERY_COLS)
+        .in_("id", session_ids)
+        .in_("status", ("queued", "running"))
+        .execute()
+    )
+    return res.data or []
+
+
+def list_live_sessions() -> list[dict]:
+    """Every session the DB still marks as claimed by a worker — the fallback
+    sweep's read, for runs whose process died too hard to run its shutdown hook.
+    Only safe to act on once the deploy handover window has closed; see
+    `fanout/run_recovery.py`."""
+    res = (
+        get_service_client()
+        .table("sessions")
+        .select(_RECOVERY_COLS)
         .in_("status", ("queued", "running"))
         .execute()
     )
