@@ -271,6 +271,13 @@ never a real disagreement, only two spellings of the same change. Verify with
 
 **DONE 2026-08-01: "Auto deploys when pushed to GitHub" is disabled.** Merges to `main` no longer deploy or run this job; it runs only on a deliberate Deploy click. The branch connection stays, so Railway still knows where to pull from.
 
+> **⚠ CONTRADICTED 2026-08-06 — I-088.** The five most recent deployments track commits merging to
+> `main`, two of them unrelated PRs. Either this was re-enabled or it never stuck (the same shape as
+> I-065). **Confirm in the dashboard before setting `OUTREACH_COMMAND=scan`** — the runbook asks you
+> to create exactly the state where every merge fires a paid run, and the spend gate does not cover
+> it because the token would be legitimately set. Nothing has been spent: all of 2026-08-06's
+> `cost_ledger` rows are `a2_filter / 0 cents` and the scan tables are still empty.
+
 **That narrows the trigger. It does not close this item.** Two ways the risk returns, both foreseeable:
 - **A manual Deploy while `OUTREACH_COMMAND` is `run` or `ingest`** still spends money — now the likeliest remaining path, because it is the same click used for a legitimate free `filter` run.
 - **Setting a `cronSchedule`**, which is the plan once the first real ingest is validated, re-arms it twice over: a Railway cron service runs its start command **on every deploy as well as on schedule** (noted in `railway.toml`). Whatever gates paid runs must exist *before* that schedule is set, not after.

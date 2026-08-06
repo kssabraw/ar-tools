@@ -1943,3 +1943,37 @@ by tag is `collected` like any other, so no query can tell the two apart.
 **Not fixed** — it is a change to the collector's write path, and the same reasoning applies as
 I-086. A durable version is a boolean on `scan_task` set where the counter increments. **For the
 first run, capture the `collect` output** rather than relying on being able to read it later.
+
+### I-088 · Auto-deploy on push appears to be BACK ON, contrary to §7.2
+Found 2026-08-06 while checking what a manual Deploy had run. The `outreach` service's five most
+recent deployments track commits merging to `main` — `01a6d42` (#570), `c1d7273` (#569) and
+`0883911` (#573), the last two unrelated to this module — at 00:52:01, 00:52:19 and 01:52:28.
+That is the signature of deploy-on-push, and HANDOFF §7.2 records auto-deploy as **disabled on
+2026-08-01**.
+
+Not confirmed from the API: `get-service-config` does not expose an auto-deploy field, so this is
+inference from the deployment pattern and needs a dashboard read (Settings → Source). It is
+recorded as suspected rather than established for exactly the reason I-065 exists — *a config
+change recorded in a document is not a config change* — and this is the same claim failing the
+same way, from the other direction.
+
+**Why it matters more than it did in §7.2.** That section reasoned about deploy-on-push while the
+command was `filter`: free but noisy. Two things have changed. The runbook (§11b) now asks an
+operator to set `OUTREACH_COMMAND=scan` with a matching confirm token, and **any merge by anyone,
+on any unrelated PR, would then fire a paid scan** — not once, but on every merge until the pair
+is cleared. And the planned hourly `collect` cron adds a third trigger path. Three ways to start
+this job, two of which nobody watching the service would attribute to themselves.
+
+**Evidence it has not cost anything yet:** every `cost_ledger` row on 2026-08-06 is
+`a2_filter / internal / 0 cents`, and `scan_snapshot`, `scan_task` and `grid_result` are all still
+empty. The re-runs are free filter passes that upsert over the same 1,388 prospects —
+`filter_result` is unchanged at 8,328.
+
+**Action before the first scan, not after:** confirm the setting in the dashboard and disable it if
+it is on. The spend gate (§7.2) bounds the damage to commands carrying a matching token, which is
+precisely the state the runbook asks you to create — so the gate does not cover this case.
+
+**Also unresolved:** the deployments at 01:46:57 and 01:52:38 wrote no `cost_ledger` row at all,
+where the 00:52 pair did. Their deploy logs come back empty through the API, so what command they
+ran is not knowable from here — consistent with a crash (§6.2 reports one as SUCCESS), with a
+`collect` run finding nothing to do, or with a refused command. Named rather than guessed at.
