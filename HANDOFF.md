@@ -135,6 +135,16 @@ advisory only, pending a ratified number.
 Deferred: `ads`/`affiliate` and the consent stack, informational properties, and
 the six unbuilt writers (§4.7).
 
+- **The global nav was 404s, on every page of every site.** `default_nav()`
+  wrote `/services`, `/locations`, `/about` and `/contact` into each site's
+  config, and `CTABand`'s default CTA pointed at `/contact` — none of which are
+  routes (the real ones are `/about-us/`, `/contact-us/`, and cities sit at
+  root). Astro does not fail a build on a bad `href`, so it shipped silently.
+  Fixed 2026-08-06: the template **derives** the SOP global nav/footer set from
+  published pages (`src/lib/hubs.ts`), config `nav` is an override, and the
+  provisioner writes none. **Verification now includes a link check** over the
+  built `dist` — it found 13 broken links on the pre-fix build and 0 after.
+
 ### ⚠ Gotchas that cost real time
 
 - **The root `.gitignore` has a Python `lib/` rule at line 13** that silently
@@ -186,14 +196,17 @@ the six unbuilt writers (§4.7).
 - **Component renaming is done**, but 13 library components remain unbuilt and
   are listed in `site-template/src/theme/manifest.ts::MISSING_COMPONENTS`; each
   gates a page type that has no writer anyway.
-- **Writer #6 (hub/index) now gates two CORE-conditional page types.** Areas We
-  Serve and the Services index have no writer *and* no route in the house
-  template, and reference v3.5 makes them auto-triggered infrastructure rather
-  than optional — so on a multi-city site the plan will always contain two pages
-  it cannot produce. They are reported at plan review (`missing_template`),
-  recorded as `engine_unavailable` at generation, and held at
-  `body_not_generated` rather than committed, so nothing ships broken; but the
-  gap is now on the critical path rather than beside it.
+- **The two CORE-conditional hubs now render** (2026-08-06). `/areas-we-serve/`
+  and `/services/` have routes in the template, built from the same
+  published-pages query as structural linking — so the listing half needs no
+  writer at all. Both are conditional on their reference triggers (>= 2 cities;
+  > 8 top-level services) via a `getStaticPaths` that returns `[]`, because
+  building a hub the reference says not to build would put a thin unlinked page
+  in the XML sitemap. **Writer #6 still owns the narrative copy** that brings
+  them up to the reference's depth band; until then they ship as accurate hubs
+  with a factual lede rather than as pages that cannot ship at all. Thresholds
+  live in `site-template/src/lib/hubs.ts` and mirror `website_plan.py` — the
+  same rule evaluated in two places, so a change to one needs the other.
 - **Client-side 404 search** (Pagefind) not built; the 404 points at the HTML
   sitemap.
 - Core-pages prompt copy, pilot clients, and a local-business design export as a

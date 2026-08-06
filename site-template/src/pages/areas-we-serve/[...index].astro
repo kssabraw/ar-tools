@@ -1,0 +1,81 @@
+---
+import type { GetStaticPaths } from 'astro';
+import Layout from '../../layouts/Layout.astro';
+import PageHeader from '../../theme/components/PageHeader.astro';
+import MapEmbed from '../../theme/components/MapEmbed.astro';
+import LocationCardGrid from '../../theme/components/LocationCardGrid.astro';
+import CTABand from '../../theme/components/CTABand.astro';
+import { routedPages, corePage } from '../../lib/content';
+import { cityPages, hasAreasWeServe } from '../../lib/hubs';
+import { site, isLocal, has } from '../../lib/site';
+import { breadcrumbList } from '../../lib/schema';
+
+/**
+ * Areas We Serve — the location hub (reference §5.1, CORE-conditional).
+ *
+ * A rest route with a single generated path, because this page must NOT exist
+ * on a single-city site: the reference's single-city rule gives those sites no
+ * location pages at all, and an unlinked hub listing nothing would still land
+ * in the XML sitemap. `getStaticPaths` returning `[]` is how a static route
+ * declines to be built.
+ *
+ * The listing is deterministic — the same published-pages query that drives
+ * structural linking, so it self-heals and never lists a page held by a quality
+ * gate. Only the narrative copy needs a writer: until Writer #6 exists this
+ * renders the list with a factual coverage line rather than nothing at all, and
+ * that copy comes from the core-pages collection or the config, never invented
+ * here.
+ */
+export const getStaticPaths: GetStaticPaths = async () => {
+  const pages = isLocal ? await routedPages() : [];
+  if (!hasAreasWeServe(pages)) return [];
+  return [{ params: { index: undefined }, props: { pages } }];
+};
+
+const { pages } = Astro.props;
+const cities = cityPages(pages);
+
+// Optional generated copy, keyed like the other core pages. Absent is normal.
+const entry = await corePage('areas-we-serve');
+const s = (entry?.data.sections ?? {}) as Record<string, string>;
+
+const title = entry?.data.title || `Areas ${site.siteName} serves`;
+// Deliberately factual and countable rather than a written claim — this is the
+// fallback for a site whose hub copy has not been generated, and a fallback
+// must not assert anything the business has not told us.
+const lede =
+  s.lede ||
+  entry?.data.description ||
+  `${site.siteName} works across ${cities.length} ${cities.length === 1 ? 'area' : 'areas'}.`;
+
+const crumbs = [
+  { label: 'Home', href: '/' },
+  { label: 'Areas We Serve', href: '/areas-we-serve/' },
+];
+---
+
+<Layout
+  title={title}
+  description={lede}
+  jsonld={[
+    { '@type': 'CollectionPage', name: title, description: lede, url: Astro.url.href },
+    ...(breadcrumbList(crumbs, site.url) ? [breadcrumbList(crumbs, site.url)!] : []),
+  ]}
+>
+  <PageHeader title={title} lede={lede} />
+
+  <MapEmbed />
+
+  <LocationCardGrid
+    title="Where we work"
+    items={cities.map((c) => ({ href: c.path, title: c.title, excerpt: c.teaser || c.description }))}
+  />
+
+  {has(s.coverageNotes) && (
+    <div class="prose-wrap richtext">
+      <p>{s.coverageNotes}</p>
+    </div>
+  )}
+
+  <CTABand title="Not sure if we cover your area?" ctaLabel="Ask us" ctaHref="/contact-us/" />
+</Layout>

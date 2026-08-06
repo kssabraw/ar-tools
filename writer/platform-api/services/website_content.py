@@ -57,17 +57,25 @@ _CORE_ENTRY_ID = {
 # Page types the house template renders from data alone — no generated body, so
 # nothing to gate and nothing to write.
 #
-# Deliberately narrower than "pages with no writer". A Services index and an
-# Areas We Serve page also need no LLM in principle, but the shipped template
-# has no route for either (they are Writer #6's page types — PRD §4.7's
-# load-bearing gap), so calling them template-rendered would mark them published
-# and promise a URL that 404s. Verified against the template by building it.
-TEMPLATE_ONLY_PAGE_TYPES = frozenset({"blog_archive", "sitemap"})
+# The two hubs joined this set once the template gained routes for them
+# (src/pages/services/ and src/pages/areas-we-serve/). Their *listing* is
+# deterministic — the same published-pages query that drives structural linking
+# — so no writer is needed for the page to exist and be correct. Writer #6 adds
+# the narrative copy that brings them up to the reference's depth band; until
+# then they ship as accurate hubs rather than as pages that cannot ship at all.
+TEMPLATE_ONLY_PAGE_TYPES = frozenset(
+    {"blog_archive", "sitemap", "services_index", "areas_we_serve"}
+)
 
 # Planned page types the house template cannot render at all — no route, no
 # collection entry, no writer. Reported at plan review (PRD §4.4) rather than
 # discovered at publish.
-UNRENDERABLE_PAGE_TYPES = frozenset({"services_index", "areas_we_serve"})
+#
+# Empty today, and deliberately kept rather than deleted: the ⭐ extension types
+# (cost, problem/symptom, brand × service, standalone FAQ, projects, comparison)
+# have ratified URLs and no templates, so the first plan that proposes one needs
+# this check to already exist.
+UNRENDERABLE_PAGE_TYPES: frozenset[str] = frozenset()
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -244,7 +252,15 @@ def publish_verdict(
     critical = [v for v in (voice.get("violations") or []) if v.get("severity") == "critical"]
 
     if page_type in {"service", "sub_service", "location", "neighborhood", "local_landing", "hyper_local"}:
-        if composite is not None and composite < SEO_COMPOSITE_THRESHOLD:
+        if composite is None:
+            # Scoring failed or never ran. "Unscored" and "scored 81" must not
+            # mean the same thing at the gate — the rest of this module holds
+            # when it does not know (a degraded run, an unwritten body), and a
+            # silent pass here is the one place the 75 bar could be skipped
+            # without anyone seeing it. Overridable, because a scoring outage
+            # should cost one click and not a day.
+            return PublishVerdict(False, "seo_composite_missing", overridable=True)
+        if composite < SEO_COMPOSITE_THRESHOLD:
             return PublishVerdict(
                 False, f"seo_composite_below_threshold:{composite:.1f}", overridable=True
             )

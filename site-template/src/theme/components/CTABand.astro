@@ -7,7 +7,9 @@ interface Props {
   ctaLabel?: string;
   ctaHref?: string;
 }
-const { title, body, ctaLabel = 'Get in touch', ctaHref = '/contact' } = Astro.props;
+// /contact-us/ is the real route (it is a reserved root slug); the old
+// '/contact' default was a 404 on every CTA it rendered.
+const { title, body, ctaLabel = 'Get in touch', ctaHref = '/contact-us/' } = Astro.props;
 ---
 
 <section class="cta-band">

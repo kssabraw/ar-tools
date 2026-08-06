@@ -190,7 +190,9 @@ class TestPublishPage:
         "content_source": "composed",
         "plan": {"frontmatter": {"citySlug": "anaheim", "serviceSlug": "roof-repair",
                                  "locationName": "Anaheim", "serviceName": "Roof Repair"}},
-        "content": {"body": "Body copy.", "title": "Roof Repair in Anaheim"},
+        # Scored, so these commit-mechanics tests exercise the commit rather
+        # than the gate. The unscored case has its own test below.
+        "content": {"body": "Body copy.", "title": "Roof Repair in Anaheim", "composite": 82.0},
         "commit_sha": None,
         "content_hash": None,
     }
@@ -246,6 +248,7 @@ class TestPublishPage:
             **self.PAGE,
             "content": {
                 "body": "B",
+                "composite": 82.0,
                 "voice": {"violations": [{"severity": "critical", "term": "we"}]},
             },
             "page_type": "service",
@@ -298,6 +301,30 @@ class TestPublishPage:
 
         assert result["reason"] == "body_not_generated"
         commit.assert_not_called()
+
+    async def test_an_unscored_geo_page_is_held_not_passed(self):
+        # "Unscored" and "scored 81" must not mean the same thing at the gate.
+        # Overridable, because a scoring outage should cost one click, not a day.
+        page = {**self.PAGE, "content": {"body": "B", "title": "T"}}
+        client, _ = _supabase_for(page, self.SITE)
+        with patch.object(wp, "get_supabase", return_value=client), patch.object(
+            wp, "commit_files_to_github", new=AsyncMock()
+        ) as commit, patch("services.notifications.emit"):
+            result = await wp.publish_page(page_id="p1")
+
+        assert result["reason"] == "seo_composite_missing"
+        commit.assert_not_called()
+
+    async def test_an_unscored_geo_page_can_be_forced(self):
+        page = {**self.PAGE, "content": {"body": "B", "title": "T"}}
+        client, _ = _supabase_for(page, self.SITE)
+        with patch.object(wp, "get_supabase", return_value=client), patch.object(
+            wp, "commit_files_to_github", new=AsyncMock(return_value={"commit_sha": "s"})
+        ), patch.object(wp.website_deploy, "record_deploy") as record:
+            result = await wp.publish_page(page_id="p1", user_id="kyle", force=True)
+
+        assert result["published"] is True
+        assert record.call_args.kwargs["meta"]["overrides"][0]["gate"] == "seo_composite_missing"
 
     async def test_an_unprovisioned_site_cannot_publish(self):
         client, _ = _supabase_for(self.PAGE, {**self.SITE, "github_repo": None})

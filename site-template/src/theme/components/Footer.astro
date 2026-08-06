@@ -1,9 +1,14 @@
 ---
 import { site, isLocal, displayPhone, has, hasAddress, formattedAddress } from '../../lib/site';
+import { routedPages, allPosts } from '../../lib/content';
+import { globalFooterNav } from '../../lib/hubs';
 
 const phone = displayPhone();
 const year = new Date().getFullYear();
 const b = site.business;
+// Derived like the header nav, so the footer's Privacy Policy and Sitemap
+// links (the SOP's mandatory footer set) cannot go missing from a config edit.
+const footerNav = globalFooterNav(isLocal ? await routedPages() : [], (await allPosts()).length > 0);
 ---
 
 <footer class="site-footer">
@@ -32,7 +37,7 @@ const b = site.business;
     </div>
 
     <nav class="site-footer__nav" aria-label="Footer">
-      {site.footerNav.map((item) => <a href={item.href}>{item.label}</a>)}
+      {footerNav.map((item) => <a href={item.href}>{item.label}</a>)}
     </nav>
   </div>
 
