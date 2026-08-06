@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from config import settings
@@ -26,6 +26,7 @@ from services import (
     website_plan_store,
     website_provision,
     website_publish,
+    website_theme,
 )
 from services.freeze import assert_not_frozen
 
@@ -89,6 +90,13 @@ class PageSelectionRequest(BaseModel):
     """
 
     page_ids: list[str] = Field(default_factory=list)
+
+
+class ThemeSelectRequest(BaseModel):
+    theme_id: str
+    # An unapproved theme can still be applied deliberately — that is how you
+    # look at one on a real site before signing it off — but never by default.
+    force: bool = False
 
 
 class PublishRequest(PageSelectionRequest):
@@ -588,6 +596,243 @@ async def recheck_deploys(website_id: str, auth: dict = Depends(require_auth)) -
     _load_site(website_id)
     job_id = website_deploy.enqueue_deploy_poll(website_id)
     return {"queued": bool(job_id), "job_id": job_id}
+
+
+# --------------------------------------------------------------------------
+# Themes
+# --------------------------------------------------------------------------
+#
+# Themes are fleet-level, not per-client: the same uploaded design is often the
+# starting point for several sites, and re-uploading it per client would produce
+# several themes that drift apart under separate compiles.
+
+
+@router.get("/website-themes")
+async def list_themes(auth: dict = Depends(require_auth)) -> dict:
+    _enabled()
+    rows = (
+        get_supabase()
+        .table("website_themes")
+        .select("*")
+        .order("created_at", desc=True)
+        .limit(100)
+        .execute()
+    ).data or []
+    return {"themes": rows}
+
+
+@router.get("/website-themes/{theme_id}")
+async def get_theme(theme_id: str, auth: dict = Depends(require_auth)) -> dict:
+    """The theme plus the CSS it compiled to.
+
+    The CSS is returned in full because reviewing a theme means reading the
+    values — a preview image would show what one design looks like, not what the
+    site will inherit.
+    """
+    _enabled()
+    rows = (
+        get_supabase().table("website_themes").select("*").eq("id", theme_id).limit(1).execute()
+    ).data
+    if not rows:
+        raise HTTPException(status_code=404, detail="theme_not_found")
+
+    css = ""
+    if rows[0].get("status") == "ready":
+        try:
+            css = website_theme.load_built(theme_id, ["tokens.css"])["tokens.css"].decode(
+                "utf-8", errors="replace"
+            )
+        except Exception as exc:  # noqa: BLE001 — a missing artefact is not a 500
+            logger.warning(
+                "websites.theme_css_unreadable",
+                extra={"theme_id": theme_id, "error": str(exc)[:200]},
+            )
+    return {"theme": rows[0], "tokens_css": css}
+
+
+@router.post("/website-themes")
+async def upload_theme(
+    file: UploadFile = File(...),
+    name: Optional[str] = Form(None),
+    auth: dict = Depends(require_staff),
+) -> dict:
+    """Upload a Claude Design export and start compiling it.
+
+    Accepts the `.dc.html` on its own or the whole export zip. The compile runs
+    as a job because it makes an LLM call and downloads fonts; the row appears
+    immediately as `compiling` so the upload is visibly not lost.
+    """
+    _enabled()
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty_upload")
+    if len(data) > settings.website_theme_max_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="upload_too_large")
+
+    supabase = get_supabase()
+    row = (
+        supabase.table("website_themes")
+        .insert(
+            {
+                "name": (name or file.filename or "Untitled design").strip()[:120],
+                "source_kind": "upload",
+                "status": "compiling",
+                "theme_source": "design_import",
+            }
+        )
+        .execute()
+    ).data
+    if not row:
+        raise HTTPException(status_code=500, detail="internal_error")
+    theme = row[0]
+
+    source_ref = f"{theme['id']}/source/{website_theme.safe_upload_name(file.filename)}"
+    try:
+        supabase.storage.from_(settings.website_theme_bucket).upload(
+            source_ref, data, {"content-type": "application/octet-stream", "upsert": "true"}
+        )
+    except Exception as exc:
+        # Leaving the row at 'compiling' with nothing to compile would look like
+        # a hung job forever.
+        supabase.table("website_themes").update(
+            {"status": "failed", "error": "upload_storage_failed"}
+        ).eq("id", theme["id"]).execute()
+        logger.error("websites.theme_upload_failed", extra={"error": str(exc)[:300]})
+        raise HTTPException(status_code=500, detail="upload_storage_failed") from exc
+
+    supabase.table("website_themes").update({"source_ref": source_ref}).eq(
+        "id", theme["id"]
+    ).execute()
+    job = (
+        supabase.table("async_jobs")
+        .insert(
+            {
+                "job_type": "website_theme_compile",
+                "entity_id": theme["id"],
+                "payload": {"theme_id": theme["id"]},
+            }
+        )
+        .execute()
+    ).data
+    return {"theme_id": theme["id"], "job_id": job[0]["id"] if job else None}
+
+
+@router.post("/website-themes/{theme_id}/recompile")
+async def recompile_theme(theme_id: str, auth: dict = Depends(require_staff)) -> dict:
+    """Re-run the compile on the design already uploaded.
+
+    The role assignment is a judgement call made by a model, so 'that accent is
+    the wrong colour' has to be answerable without asking for the file again.
+    """
+    _enabled()
+    rows = (
+        get_supabase()
+        .table("website_themes")
+        .select("id, source_ref")
+        .eq("id", theme_id)
+        .limit(1)
+        .execute()
+    ).data
+    if not rows:
+        raise HTTPException(status_code=404, detail="theme_not_found")
+    if not rows[0].get("source_ref"):
+        raise HTTPException(status_code=400, detail="theme_has_no_source")
+
+    get_supabase().table("website_themes").update(
+        {"status": "compiling", "error": None}
+    ).eq("id", theme_id).execute()
+    job = (
+        get_supabase()
+        .table("async_jobs")
+        .insert(
+            {
+                "job_type": "website_theme_compile",
+                "entity_id": theme_id,
+                "payload": {"theme_id": theme_id},
+            }
+        )
+        .execute()
+    ).data
+    return {"queued": True, "job_id": job[0]["id"] if job else None}
+
+
+@router.post("/website-themes/{theme_id}/approve")
+async def approve_theme(theme_id: str, auth: dict = Depends(require_staff)) -> dict:
+    """Sign a compiled theme off for use (PRD §4.14).
+
+    A theme is selectable only once someone has looked at it — the compile can
+    succeed and still be wrong, because 'which measured colour is the accent' is
+    a judgement.
+    """
+    _enabled()
+    rows = (
+        get_supabase()
+        .table("website_themes")
+        .select("id, status")
+        .eq("id", theme_id)
+        .limit(1)
+        .execute()
+    ).data
+    if not rows:
+        raise HTTPException(status_code=404, detail="theme_not_found")
+    if rows[0].get("status") != "ready":
+        raise HTTPException(status_code=409, detail="theme_not_ready")
+    updated = (
+        get_supabase()
+        .table("website_themes")
+        .update({"approved_at": "now()", "updated_at": "now()"})
+        .eq("id", theme_id)
+        .execute()
+    ).data
+    return {"theme": updated[0] if updated else None}
+
+
+@router.post("/websites/{website_id}/theme")
+async def set_site_theme(
+    website_id: str, body: ThemeSelectRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Point a site at a theme, and commit it if the repo already exists.
+
+    Committing here rather than enqueueing: it is one commit, and the caller is
+    the person who will look at the site to see whether the swap did what they
+    wanted.
+    """
+    _enabled()
+    site = _load_site(website_id)
+    assert_not_frozen(site["client_id"])
+
+    rows = (
+        get_supabase()
+        .table("website_themes")
+        .select("*")
+        .eq("id", body.theme_id)
+        .limit(1)
+        .execute()
+    ).data
+    if not rows:
+        raise HTTPException(status_code=404, detail="theme_not_found")
+    theme = rows[0]
+    if theme.get("status") != "ready":
+        raise HTTPException(status_code=409, detail="theme_not_ready")
+    if not theme.get("approved_at") and not body.force:
+        raise HTTPException(status_code=409, detail="theme_not_approved")
+
+    get_supabase().table("websites").update(
+        {"theme_id": theme["id"], "updated_at": "now()"}
+    ).eq("id", website_id).execute()
+
+    try:
+        sha = await website_theme.apply_theme_to_site(site, theme)
+    except Exception as exc:  # noqa: BLE001
+        # The selection stands — provisioning will carry the theme in on its
+        # next commit — but the caller must know the live site did not change.
+        logger.error(
+            "websites.theme_apply_failed",
+            extra={"website_id": website_id, "error": str(exc)[:300]},
+        )
+        raise HTTPException(status_code=502, detail="theme_commit_failed") from exc
+
+    return {"theme_id": theme["id"], "committed": bool(sha), "commit_sha": sha}
 
 
 @router.post("/websites/{website_id}/jobs/status")

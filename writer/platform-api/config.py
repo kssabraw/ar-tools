@@ -1519,6 +1519,13 @@ class Settings(BaseSettings):
     # being able to see the run, so the recovery is "re-check", not "re-push".
     website_deploy_timeout_minutes: int = 20
     website_theme_model: str = "claude-sonnet-4-6"
+    # Where uploaded design exports and their compiled tokens.css live. Private:
+    # a design is a client's brand before it is anyone else's business.
+    website_theme_bucket: str = "website-themes"
+    # A Claude Design export is a single HTML file plus a runtime; anything much
+    # larger than this is not one, and reading it into memory to find out is the
+    # part worth bounding.
+    website_theme_max_mb: int = 25
     website_image_provider: str = "gemini"
 
     class Config:

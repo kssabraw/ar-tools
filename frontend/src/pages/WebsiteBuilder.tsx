@@ -12,6 +12,7 @@ import { OverviewTab } from '../components/website/OverviewTab'
 import { PlanTab } from '../components/website/PlanTab'
 import { PagesTab } from '../components/website/PagesTab'
 import { DeploysTab } from '../components/website/DeploysTab'
+import { ThemeTab } from '../components/website/ThemeTab'
 
 // Website Builder — the per-client work surface (PRD §6.1).
 //
@@ -23,8 +24,11 @@ import { DeploysTab } from '../components/website/DeploysTab'
 // backend route 503s, so this page renders a plain notice rather than a screen
 // of dead buttons.
 
-type Tab = 'overview' | 'plan' | 'pages' | 'deploys'
-const TABS: Tab[] = ['overview', 'plan', 'pages', 'deploys']
+type Tab = 'overview' | 'theme' | 'plan' | 'pages' | 'deploys'
+// Theme sits second: it is the first thing done to a new site, before there
+// is a plan to look at, and a site provisioned without one builds in the
+// neutral house theme.
+const TABS: Tab[] = ['overview', 'theme', 'plan', 'pages', 'deploys']
 
 const SITE_TYPES: { value: SiteType; label: string; hint: string }[] = [
   { value: 'local_business', label: 'Local business', hint: 'Service pages, city pages and the service × city matrix.' },
@@ -140,6 +144,7 @@ export function WebsiteBuilder() {
               perms={perms}
             />
           )}
+          {tab === 'theme' && <ThemeTab website={detail?.website ?? site} perms={perms} />}
           {tab === 'plan' && <PlanTab website={detail?.website ?? site} plan={plan} perms={perms} />}
           {tab === 'pages' && (
             <PagesTab
