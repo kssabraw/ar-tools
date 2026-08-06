@@ -13,8 +13,8 @@ Status as of 2026-08-05:
 - **The LA `ai_region` candidates are drafted (I-073)** from evidence already in the data — 10 of 14 submarket names are unambiguous localities, 3 are not. No engine calls were needed. See ISSUES I-073.
 - **The maps geogrid client + `tasks_ready` collector is BUILT and MERGED (#557, `29914108`).** Migration `20260804120000_scan_task.sql` applied live. Two commands — `scan` (paid, one submarket × one keyword) and `collect` (free, never spend-gated). See §8.1a for what it does and §11 for the two things standing between it and real rows.
 - **The I-004 spike instrument is BUILT and MERGED (#556, `ccb7e912`)** — `probe-ai-granularity`, nine OpenAI calls, three place names × three samples. **It has not been run.** The key is set as a Railway reference; the run needs a Deploy plus `OUTREACH_CONFIRM_SPEND=probe-ai-granularity`.
-- **The `prospect_coverage` rollup is BUILT (migration `20260805120000`, applied live, 18/18 live checks passing).** Land masking (`grid_point_status`) and dead-point exclusion land with it, because both change the coverage DENOMINATOR. One plpgsql function per snapshot ending in `finalize_snapshot_rollup()`, so `rank_vector` cannot be separated from the numbers it belongs to. A free `rollup` command, and `collect` now rolls up what it finalizes. See §8.0b.
-- **The placeholder score is BUILT** — `v_prospect_placeholder_score` (migration `20260805150000`), a view over `prospect_coverage`. Deliberately NOT a `prospect_score` row: that table is the Phase 4 model's and `v_prospect_ranked` already reads it as a fitted score (ISSUES I-082). **I-078 is RESOLVED** — `scan_snapshot` now records its own grid centre, which had to land before the first snapshot rather than after.
+- **The `prospect_coverage` rollup is BUILT and MERGED (#559, `d802dbf`; migration `20260805120000`, applied live, 18/18 live checks passing).** Land masking (`grid_point_status`) and dead-point exclusion land with it, because both change the coverage DENOMINATOR. One plpgsql function per snapshot ending in `finalize_snapshot_rollup()`, so `rank_vector` cannot be separated from the numbers it belongs to. A free `rollup` command, and `collect` now rolls up what it finalizes. See §8.0b.
+- **The placeholder score is BUILT and MERGED (#561, `902be5f`)** — `v_prospect_placeholder_score` (migration `20260805150000`), a view over `prospect_coverage`. Deliberately NOT a `prospect_score` row: that table is the Phase 4 model's and `v_prospect_ranked` already reads it as a fitted score (ISSUES I-082). **I-078 is RESOLVED** — `scan_snapshot` now records its own grid centre, which had to land before the first snapshot rather than after.
 - **NOTHING HAS BEEN SCANNED.** The scan layer now has a producer, a consumer, and no data: `scan_snapshot`, `scan_task`, `grid_result`, `prospect_coverage`, `grid_point_status` are all empty. `OUTREACH_COMMAND` is `filter` and both spend variables are empty. **What is missing is no longer code — it is a deploy, a confirm token, and a second cron schedule** (§11).
 
 **Two things changed on 2026-08-03 that will mislead you if you read the older sections first.** The spend gate above supersedes the "set it back to `filter` afterwards" procedure this file used to rely on (§7.2), and the Railway configuration recorded in §1 was found to be **stale in two ways that each cost money** — read `get-service-config`, not this file, for live values.
@@ -34,7 +34,7 @@ Status as of 2026-08-05:
 | Database | Supabase project **Outreacher**, ref `fkwhgvcggvsricuinuqy` | Phase 1 + 1b + Phase 2 storage applied; LA ingested and filtered |
 | Job runner | Railway service **outreach**, id `928c84bc-d7ca-416a-bd61-39e91cc64872` in project `ar-tools` (`2c718e53-73c8-4de8-bef8-7136f06b6ead`) | no cron schedule; auto-deploy-on-push DISABLED (2026-08-01); source **actually** on `main` since 2026-08-03 (the 2026-08-01 repoint did not stick — I-065). Runs only on a manual Deploy |
 | platform-api integration | `routers/outreach.py` + `services/outreach{,_db}.py` | **built** — 14 routes, read-only over the pipeline, read/write over the CRM |
-| Suite UI | not built | nothing in `frontend/`. NOT the next build — see ISSUES I-072, which asks for a decision rather than a default |
+| Suite UI | not built | nothing in `frontend/`. NOT the next build, and **not a prerequisite for scanning** (§11a) — see ISSUES I-072, which asks for a decision rather than a default |
 | Grid geometry | `api/services/geometry.py` | **built**, version `v1`, **81 points** (I-025 resolved) |
 | Geogrid scan client | `api/services/maps_scan.py` (pure) + `scan_runner.py` (I/O) | **built** (#557) — `task_post` batching, `tasks_ready` collection, finalization. Never run |
 | Scan bookkeeping | `scan_task` table, migration `20260804120000` | **applied live**, empty |
@@ -393,8 +393,19 @@ implemented and the other must be chosen deliberately before it reaches a prospe
 2. ~~**The maps geogrid client + `tasks_ready` collector.**~~ **BUILT 2026-08-04 (#557)** — see §8.0a. Not run. The owner ruling stands: **first live run is ONE submarket × ONE keyword**, and `cmd_scan` refuses to do more.
 2a. ~~**THE NEXT BUILD: the `prospect_coverage` rollup.**~~ **BUILT 2026-08-05** — see §8.0b. Applied live and verified in both directions; never run against real data, because there is none.
 2b. ~~**THE NEXT BUILD: the placeholder score**~~ **BUILT 2026-08-05.** Was: (checklist §4 Phase 2, first item). "Raw geogrid coverage deficit, one SQL expression" — and it reads `prospect_coverage`, which now exists. It reads `prospect_coverage` through a LEFT JOIN gated on the `snapshot_rollup` marker, so a prospect present at zero grid points scores 100% deficit rather than vanishing (I-076), and an unrolled submarket produces no rows rather than reading as total invisibility. Both are asserted live.
-2c. **THE NEXT BUILD: organic SERP + AI Overview per submarket × keyword** (checklist §4 Phase 2). The AI half is still blocked on `ai_region` names (§7.4, §8.2); the organic half is not.
-3. **Suite SPA pages.** Nothing in `frontend/` exists. The read surface they need is built and verified. Open question, see I-072 — decide rather than inherit.
+2c. **THE NEXT THING IS NOT A BUILD — IT IS THE FIRST SCAN.** Recommended 2026-08-05, and the reasoning is about accumulated risk rather than about the queue.
+
+**Five components are now built and have never been exercised**: the geogrid client, the collector, the rollup, the placeholder score and the I-004 probe. Every one is verified against fixtures and against Postgres; not one has met a live provider response. Each additional unrun layer raises the chance the first run surfaces several faults at once, interacting, in a batch that has been paid for — and the whole point of the one-submarket ruling is to meet them one at a time.
+
+One submarket × one keyword exercises submission, collection, finalization, the rollup, land masking and the placeholder score in a single ~81-point pass. §11 has the three things it needs, none of which are code. **A sixth unrun layer is worth less than proving the five.**
+
+*The checklist under-reports this state, and the discrepancy is not an error to correct blindly.* Four unticked Phase 2 boxes are code-complete but unrun — geometry parameters are persisted, partitioning and retention are in place, completeness marking exists. They stay unticked deliberately: "built" and "proven" are the two facts §11 exists to keep apart, and the `tasks_ready` box in particular cannot be ticked while the cron it names does not exist.
+
+2d. **Then: organic SERP + AI Overview per submarket × keyword** (checklist §4 Phase 2) — the largest remaining Phase 2 build. `serp_result` already exists, partitioned. The AI half is blocked on `ai_region` names (§7.4, §8.2); the organic half is not. Free to build, paid to run, so it becomes the sixth unexercised component if it is built before the scan.
+
+2e. **Cheap and useful either way: I-070**, enforcing `scan_snapshot` append-only. Listed as a Phase 2 requirement, nothing currently stops an `UPDATE`, and a silently mutated snapshot re-interprets every coverage figure computed against it rather than corrupting anything visibly. A trigger and a test. No closing window.
+
+3. **Suite SPA pages.** Nothing in `frontend/` exists. The read surface they need is built and verified. Open question, see I-072 — decide rather than inherit. **NOT a prerequisite for the scan** — see §11a, which exists because that was asked directly and the file did not answer it.
 4. ~~**The coverage rollup** (`ISSUES` I-042)~~ — **DONE.** The retention job now gets past the rollup guard and stops at the next one: `audit_asset` and `slot` do not exist, so a partition whose citations cannot be checked is still never dropped. Verified live (check 15 of `tests/coverage_rollup.sql`). Fail-closed remains the posture; what changed is which guard is doing the refusing.
 
 ### 8.2 Blocked on a human
@@ -498,5 +509,35 @@ Three things stand in between, and none of them are code:
    **This schedule now carries the rollup too** (§8.0b), which raises the cost of skipping it a second time: no collection means no finalized snapshots, which means no completion markers, which means the retention job drops nothing — and the storage ceiling the whole partitioning policy exists to avoid arrives on schedule while every run reports clean. `rollup` standalone clears any backlog, so a missed tick is recoverable; a missing schedule is not noticed.
 
 3. **The owner's go-ahead on spend.** One submarket × one keyword is 81 points, ~1 batch, so a wrong envelope costs one batch rather than a market. `cmd_scan` refuses to do more than that.
+
+### 11a. What is NOT on this path — the UI
+
+Asked directly on 2026-08-05: *"we need to create the UI so we can do the run, correct?"* **No.**
+Recorded because §11 lists what is missing and never said what is not, which is what let the
+question form.
+
+The run is a **Railway job**. `scan` and `collect` are subcommands of `api.scripts.run_market`,
+executed by the service's start command with `OUTREACH_COMMAND`. Posting 81 tasks, collecting
+them, rolling them up and scoring them touches no frontend at any point, and the spend gate is
+built around the deploy path specifically — `OUTREACH_CONFIRM_SPEND` must match the command name
+before any credential is opened.
+
+The UI is for LOOKING at results, and even that is not the only way: `routers/outreach.py` is 14
+tested routes over this data, and SQL reaches the rest. Nothing in Phase 2 requires a page.
+
+**A UI that TRIGGERS a scan is not a convenience — it is an architectural change**, and it needs
+deciding rather than assuming. The gate that makes paid runs safe (§7.2) assumes a deploy carries
+the confirmation; a button would have to either replicate that or bypass it, and "bypass" is how
+the ~$0.11 incident happened with a gate that was merely procedural. If a trigger button is
+wanted, it gets its own decision.
+
+**What the UI IS blocked on is a choice, not a dependency** — ISSUES I-072. The operator/CRM board
+is buildable today against an API that already exists and has never been consumed. The valuable
+surfaces (coverage, heatmap, delta) need scan data and the Phase 3 renderer, so building the shell
+now means building the interesting half twice. I-072 asks the next session to *choose* between
+"operator board now" and "after Phase 3" and to write the answer down, because HANDOFF §1 has
+listed Suite UI as "the next build" across several sessions that each built something else.
+
+---
 
 **After the first real run, the thing to check is not "did it succeed"** — it is whether `scan_task` rows moved `pending → submitted → collected`, whether `actual_points` matches `expected_points`, and whether any row is sitting on `recovered_by_tag`. A run that posts nothing and collects nothing reports clean, because there is nothing to report.
