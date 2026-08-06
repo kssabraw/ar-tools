@@ -118,6 +118,108 @@ async def website_builder_status(auth: dict = Depends(require_auth)) -> dict:
     return {"enabled": bool(settings.website_builder_enabled)}
 
 
+@router.get("/websites")
+async def list_all_websites(
+    include_deleted: bool = False, auth: dict = Depends(require_staff)
+) -> dict:
+    """The fleet: every site across every client (PRD §6.1).
+
+    This exists because the module's unit of management is the fleet, not the
+    client — "what's live", "what failed to deploy last night", "how many
+    shipped this month" are unanswerable from inside one client's workspace,
+    and §7's throughput metrics are read straight off this screen.
+
+    Deliberately read-only. The index links into each site's workspace card,
+    which is where work happens; the only actions here are on the Trash.
+    """
+    _enabled()
+    supabase = get_supabase()
+    query = supabase.table("websites").select("*").order("created_at", desc=True)
+    query = (
+        query.not_.is_("deleted_at", "null") if include_deleted
+        else query.is_("deleted_at", "null")
+    )
+    sites = query.limit(200).execute().data or []
+
+    names: dict[str, str] = {}
+    kinds: dict[str, str] = {}
+    latest: dict[str, dict] = {}
+    if sites:
+        client_rows = (
+            supabase.table("clients")
+            .select("id, name, kind")
+            .in_("id", list({s["client_id"] for s in sites}))
+            .execute()
+        ).data or []
+        names = {c["id"]: c.get("name") or "" for c in client_rows}
+        kinds = {c["id"]: c.get("kind") or "client" for c in client_rows}
+
+        # One read for every site's newest deploy rather than N queries: the
+        # fleet view is a dashboard, and it should stay one round trip.
+        deploys = (
+            supabase.table("website_deploys")
+            .select("website_id, status, created_at, url")
+            .in_("website_id", [s["id"] for s in sites])
+            .order("created_at", desc=True)
+            .limit(1000)
+            .execute()
+        ).data or []
+        for row in deploys:
+            latest.setdefault(row["website_id"], row)
+
+    return {
+        "websites": [
+            {
+                **site,
+                "client_name": names.get(site["client_id"], ""),
+                "client_kind": kinds.get(site["client_id"], "client"),
+                "last_deploy": latest.get(site["id"]),
+            }
+            for site in sites
+        ]
+    }
+
+
+@router.delete("/websites/{website_id}")
+async def delete_website(website_id: str, auth: dict = Depends(require_staff)) -> dict:
+    """Soft-delete: removes the site from the module's lists and nothing else.
+
+    PRD §3.2 — the repo, the Worker, the domain and the live site are untouched.
+    That follows from the module's first principle: the repo IS the site, so
+    deleting our *record* must not destroy the artifact somebody was handed.
+    Purging the external resources is a separate, admin-only act and is not
+    built.
+    """
+    _enabled()
+    rows = (
+        get_supabase()
+        .table("websites")
+        .update({"deleted_at": "now()", "updated_at": "now()"})
+        .eq("id", website_id)
+        .execute()
+    ).data
+    if not rows:
+        raise HTTPException(status_code=404, detail="website_not_found")
+    logger.info("websites.soft_deleted", extra={"website_id": website_id})
+    return {"deleted": True}
+
+
+@router.post("/websites/{website_id}/restore")
+async def restore_website(website_id: str, auth: dict = Depends(require_staff)) -> dict:
+    """Clear the soft-delete flag. Nothing is re-provisioned — nothing was undone."""
+    _enabled()
+    rows = (
+        get_supabase()
+        .table("websites")
+        .update({"deleted_at": None, "updated_at": "now()"})
+        .eq("id", website_id)
+        .execute()
+    ).data
+    if not rows:
+        raise HTTPException(status_code=404, detail="website_not_found")
+    return {"restored": True}
+
+
 @router.get("/clients/{client_id}/websites")
 async def list_websites(client_id: str, auth: dict = Depends(require_auth)) -> dict:
     _enabled()
@@ -126,6 +228,7 @@ async def list_websites(client_id: str, auth: dict = Depends(require_auth)) -> d
         .table("websites")
         .select("*")
         .eq("client_id", client_id)
+        .is_("deleted_at", "null")
         .order("created_at", desc=True)
         .execute()
     ).data or []

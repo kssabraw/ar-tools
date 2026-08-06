@@ -27,6 +27,14 @@ class TestRouteOrdering:
         # answer is "no".
         assert _index("/websites/status") < _index("/websites/{website_id}")
 
+    def test_the_fleet_list_does_not_shadow_the_status_route(self):
+        # Both are one segment under /websites. Different shapes, so they cannot
+        # actually collide — asserted because the fleet route was added later
+        # and a future reorder is exactly how "status" starts being read as a
+        # website id.
+        assert _index("/websites/status") < _index("/websites/{website_id}")
+        assert "/websites" in _paths()
+
     def test_plan_approve_is_matched_before_plan(self):
         # Different segment counts, so this cannot actually collide — asserted
         # anyway because the sub-path is the kind of thing a later edit moves.
@@ -61,5 +69,7 @@ class TestRouteSurface:
             "/websites/{website_id}/pages/{page_id}/retry",
             "/websites/{website_id}/deploys/recheck",
             "/websites/{website_id}/jobs/status",
+            "/websites",
+            "/websites/{website_id}/restore",
         ):
             assert path in _paths(), path
