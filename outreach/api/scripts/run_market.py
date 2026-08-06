@@ -480,6 +480,50 @@ def cmd_collect(args) -> int:
     return 1 if report.problems and not report.collected else 0
 
 
+def cmd_tick(args) -> int:
+    """One heartbeat: collect (always, free) + execute at most ONE signed scan order.
+
+    This is what the §11 cron runs. It replaces nothing — `collect` remains the pure free
+    command — it adds the drain for `scan_request` orders the UI places (DECISIONS.md
+    2026-08-06). `tick` is deliberately NOT in PAID_COMMANDS: its spend is authorized per-run by
+    the order row (signed, single-use, named to one submarket x keyword), which is the evidence
+    an accidental deploy cannot manufacture. Requiring the env token here would make every cron
+    tick refuse, which is the §8a collect-gating mistake wearing a new name.
+
+    Collection runs FIRST: rescue the paid work already in flight before spending more, and a
+    freshly posted batch has nothing on the ready list yet anyway.
+    """
+    import asyncio as _asyncio
+
+    from api.services import scan_queue
+
+    code = cmd_collect(args)
+
+    settings = get_settings()
+    client = _client()
+    drained = _asyncio.run(scan_queue.drain_one(client, settings))
+    print(
+        json.dumps(
+            {
+                "orders_claimed": drained.claimed,
+                "order_id": drained.order_id,
+                "submarket": drained.submarket,
+                "keyword": drained.keyword,
+                "outcome": drained.outcome,
+                "snapshot_id": drained.snapshot_id,
+                "posted": drained.posted,
+                "error": drained.error,
+                "problems": drained.problems,
+            },
+            indent=2,
+        )
+    )
+    # A failed ORDER exits non-zero even though the tick itself survived: an unattended queue
+    # whose orders quietly fail is the "green badge over a crashed job" shape (§6.2), and the
+    # exit code is the only summary a cron run leaves behind besides its logs.
+    return 1 if drained.outcome == "failed" else code
+
+
 def cmd_rollup(args) -> int:
     """Roll finalized snapshots into `prospect_coverage`. FREE — no provider is contacted.
 
@@ -650,6 +694,14 @@ _SHA_VARS = ("OUTREACH_BUILD_SHA", "RAILWAY_GIT_COMMIT_SHA", "SOURCE_COMMIT", "G
 # rule is "spends money requires an affirmative confirmation", and carving out an exemption for
 # small amounts turns a mechanical test into a judgement about size — which is how a paid command
 # ends up unconfirmed once someone's estimate is wrong.
+#
+# `tick` is deliberately absent, and it is the one absence that is a DESIGN rather than a fact
+# about billing (DECISIONS.md 2026-08-06). A tick CAN spend — but only when a signed
+# `scan_request` order exists, and the order is the affirmative confirmation: single-use, named
+# to one submarket x keyword, attributed to the admin who clicked. The env token guards the
+# config-driven path; the order row guards the UI path; each is evidence its accidental
+# counterpart cannot manufacture. Listing `tick` here would make every cron heartbeat refuse,
+# which is the §8a collect-gating mistake with a different spelling.
 PAID_COMMANDS = frozenset(
     {"ingest", "run", "calibrate", "verify-reviews", "probe-ai-granularity", "scan"}
 )
@@ -795,7 +847,7 @@ def main() -> int:
             dict(os.environ),
             [
                 "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-                "probe-dataforseo", "probe-ai-granularity", "scan", "collect", "rollup",
+                "probe-dataforseo", "probe-ai-granularity", "scan", "collect", "rollup", "tick",
             ],
         ),
         flush=True,
@@ -806,7 +858,7 @@ def main() -> int:
         "command",
         choices=[
             "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-            "probe-dataforseo", "probe-ai-granularity", "scan", "collect", "rollup",
+            "probe-dataforseo", "probe-ai-granularity", "scan", "collect", "rollup", "tick",
         ],
     )
     parser.add_argument("definition", help="path to a market definition JSON file")
@@ -897,6 +949,7 @@ def main() -> int:
         "scan": cmd_scan,
         "collect": cmd_collect,
         "rollup": cmd_rollup,
+        "tick": cmd_tick,
     }
 
     # Railway reports a crashed job as deployment status SUCCESS when restartPolicy is NEVER —
