@@ -254,6 +254,38 @@ def try_claim_run(session_id: str) -> bool:
     return bool(res.data)
 
 
+def list_live_sessions() -> list[dict]:
+    """Every session the DB still marks as claimed by a worker. At startup these
+    are orphans by definition — the pipeline executor is per-process, so nothing
+    survived the restart that could still be working on them (see
+    `fanout/run_recovery.py`). Only the fields the recovery decision reads."""
+    res = (
+        get_service_client()
+        .table("sessions")
+        .select("id, status, seed_keyword, statistical_clustering_log")
+        .in_("status", ("queued", "running"))
+        .execute()
+    )
+    return res.data or []
+
+
+def recover_orphaned_session(session_id: str, status: str, note: str) -> bool:
+    """Return one orphaned session to an actionable status, recording why.
+
+    Guarded on the session still being live, so this can never overwrite a status
+    a real worker has since written — the sweep reads and writes as two steps, and
+    on the read side a row is only a candidate because no process owns it."""
+    res = (
+        get_service_client()
+        .table("sessions")
+        .update({"status": status, "last_error": note})
+        .eq("id", session_id)
+        .in_("status", ("queued", "running"))
+        .execute()
+    )
+    return bool(res.data)
+
+
 def try_mark_started(session_id: str) -> bool:
     """Flip a queued claim to running — called by the worker when it actually
     picks the job up. Returns False if the session is no longer queued (the user

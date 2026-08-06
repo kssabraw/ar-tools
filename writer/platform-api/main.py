@@ -80,6 +80,7 @@ from fanout.api import reports as fanout_reports
 from fanout.api import schedules as fanout_schedules
 from fanout.api import sessions as fanout_sessions
 from fanout.writer import scheduler as fanout_scheduler
+from fanout import run_recovery as fanout_run_recovery
 
 logging.basicConfig(
     level=settings.log_level.upper(),
@@ -141,6 +142,18 @@ async def lifespan(app: FastAPI):
     # the vendored sub-app's lifespan, which is not invoked when its routers are
     # mounted into this app.
     await fanout_scheduler.start()
+    # Return Topic Fanout pipeline runs orphaned by the restart that just brought
+    # this process up. Those jobs live in a per-process executor while the session
+    # status carries the claim, so a deploy mid-run leaves a session stuck `running`
+    # with no worker and no way to restart it. Deliberately not gated on the
+    # content scheduler's flag — an orphaned pipeline run needs recovering whether
+    # or not scheduled publishing is on — and never allowed to block startup.
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            None, fanout_run_recovery.recover_orphaned_runs
+        )
+    except Exception as exc:  # pragma: no cover - startup best-effort
+        logger.warning("fanout_orphan_recovery_failed", extra={"error": str(exc)})
     yield
     try:
         await fanout_scheduler.stop()

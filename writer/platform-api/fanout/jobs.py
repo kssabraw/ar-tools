@@ -13,10 +13,13 @@ A bounded pool caps concurrent pipeline runs per process; the per-session run
 guard (try_claim_run) prevents the same session running twice. Jobs use the
 service client (no user token — the request already authorized the caller).
 
-Caveat (accepted for v1, real fix = a durable queue): a process restart mid-job
-strands the session at status='running' (or 'queued' if it never started — that
-distinction now tells you whether any spend happened). Recovery is a new session
-until M7's resume lands.
+A process restart mid-job strands the session at status='running' (or 'queued' if
+it never started — that distinction tells you whether any spend happened), since
+a SIGKILL never reaches the job's own `except`. A startup sweep now recovers those
+rows: `fanout/run_recovery.py`, run from the app lifespan, returns a run killed
+after expansion to `awaiting_article_planning` (its keywords are durable, so only
+planning is re-spent) and records the rest as `error` with the reason. The durable
+queue that would remove the failure mode entirely is still the real fix.
 """
 
 import logging
