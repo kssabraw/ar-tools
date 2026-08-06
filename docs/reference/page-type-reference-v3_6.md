@@ -1,7 +1,18 @@
 <!--
-Vendored 2026-08-03 from the owner's Google Doc:
-"AR Content Platform — Page Type Reference & Site Planning Document v3" (v3.4)
-https://docs.google.com/document/d/1K6H0RQ90JS4h-1JnmOcUi7R9Bhbn02N6kq6AtVYMV2c/
+Vendored 2026-08-06 from the owner's Google Doc:
+"AR Content Platform — Page Type Reference & Site Planning Document v3" (v3.6)
+https://docs.google.com/document/d/1-PdVvUQkOV8T11ttPx4zBkx_2zWMu_GkyxGUsfl1954/
+
+Supersedes the v3.4 capture. What changed for this codebase:
+
+  * v3.6 — the link-equity threshold is RATIFIED at 25 outbound body links per
+    index page, binding rather than advisory, counting body-content links only
+    (the global nav/footer set is excluded). This matches the owner's ruling of
+    2026-08-05 and the implementation in services/website_plan.py.
+  * v3.5 — Areas We Serve and Services Index are promoted from optional to
+    CORE-conditional (auto-triggered): Areas We Serve on any multi-city site
+    (>= 2 location pages), Services Index above 8 top-level services. They are
+    infrastructure, not add-ons. See reconciliation note R6.
 
 WHY IT IS HERE. The Website Builder PRD (docs/modules/website-builder-prd-v1_0.md)
 binds its entire page inventory to this document as the authority for which page
@@ -12,15 +23,16 @@ PRD is unbuildable and untestable.
 AUTHORITY. This reference is subordinate to the AR *Site Architecture, URL
 Structure, and Internal Linking SOP* (see its §1.1). Note its own scope caveat:
 the §1.2 conventions are ratified into this reference and the tools that read it,
-NOT into the SOP body text — that remains an outstanding action.
+NOT into the SOP body text — that remains an outstanding action, and v3.5's
+Areas We Serve promotion is explicitly flagged for SOP ratification (R6).
 
 SYNC. The Google Doc is the source of truth. This is a captured copy; if the doc
-revises past v3.4, re-vendor it rather than editing here.
+revises past v3.6, re-vendor it rather than editing here.
 -->
 
-# AR Content Platform — Page Type Reference & Site Planning Document v3
+# AR Content Platform — Page Type Reference & Site Planning Document v3.6
 
-**Version:** 3.4 **Changed in 3.4:** Ratified the URL/namespace worklist into a new **§1.2 URL & Namespace Conventions** — reserved root slugs + precedence, shared-namespace rule (page type is declared by the planner, never inferred from the URL), breadcrumb-follows-path rule, single-city no-matrix rule, the eight extension URL patterns (ratifying a URL is NOT a commitment to build), the bio canonical path, and mechanical conventions (trailing slash, pagination, slug immutability/redirects). Fixed two namespace bugs: local Comparison → /compare/… (was root-level), bio → /bio/{person-slug}/ (variant retired). The 40-link threshold in planner rule 7 is now labeled UNRATIFIED pending a Kyle/Ryan decision. Reference doc only — the Site Architecture SOP itself is unchanged (see close of §1.2). **Changed in 3.3:** Blog posts expanded from a single entry into a five-format sub-family in §5.3 (Informational Cluster, Listicle/Roundup, Comparison/Vs, Local Geo, News/Commentary), each with its own content spec and structure. Added §5.1/§5.2 pointers so blog formats are discoverable from every family. Problem/symptom posts remain their own §5.1 entry (writer \#8), not duplicated here. **Changed in 3.2:** Every catalog entry now includes a **Content spec** field — the editorial angle, voice, must-cover topics, and target depth for the page's copy. Planning apps use it to brief writers; design apps use the depth targets to size content areas; writer systems treat it as the editorial brief baseline (angle-level guidance, not scripts — client brand guides still govern final voice). **Changed in 3.1:** Local Service family reconciled with the AR Site Architecture, URL Structure, and Internal Linking SOP (12 May 2026) — see §1.1. URL patterns corrected, SOP terminology adopted, missing SOP page types added, new page types flagged as SOP extensions pending ratification. **Purpose:** Machine-consumable reference covering every page type in the AR system. This document is designed to be uploaded to downstream apps:
+**Version:** 3.6 **Changed in 3.6:** Ratified the link-equity threshold at **25 outbound body links per index page** (was an unratified 40 heuristic). Now binding for planner rule 7 and downstream tools, counting body-content links only (global nav/footer excluded). **Changed in 3.5:** Promoted **Areas We Serve** and **Services Index** from "optional/conditional" to **CORE-conditional (auto-triggered)** with precise, machine-evaluable triggers — Areas We Serve on any multi-city site (≥2 location pages), Services Index above 8 top-level services. Both were already present in §5.1; this fixes their trigger framing, which understated that they fire on essentially every real multi-city / multi-service site. Added reconciliation note R6 and a planner note on auto-triggered infrastructure pages. The Areas We Serve promotion changes the SOP's current "case-by-case" stance and is flagged for SOP ratification. **Changed in 3.4:** Ratified the URL/namespace worklist into a new **§1.2 URL & Namespace Conventions** — reserved root slugs + precedence, shared-namespace rule (page type is declared by the planner, never inferred from the URL), breadcrumb-follows-path rule, single-city no-matrix rule, the eight extension URL patterns (ratifying a URL is NOT a commitment to build), the bio canonical path, and mechanical conventions (trailing slash, pagination, slug immutability/redirects). Fixed two namespace bugs: local Comparison → /compare/… (was root-level), bio → /bio/{person-slug}/ (variant retired). The 40-link threshold in planner rule 7 is now labeled UNRATIFIED pending a Kyle/Ryan decision. Reference doc only — the Site Architecture SOP itself is unchanged (see close of §1.2). **Changed in 3.3:** Blog posts expanded from a single entry into a five-format sub-family in §5.3 (Informational Cluster, Listicle/Roundup, Comparison/Vs, Local Geo, News/Commentary), each with its own content spec and structure. Added §5.1/§5.2 pointers so blog formats are discoverable from every family. Problem/symptom posts remain their own §5.1 entry (writer \#8), not duplicated here. **Changed in 3.2:** Every catalog entry now includes a **Content spec** field — the editorial angle, voice, must-cover topics, and target depth for the page's copy. Planning apps use it to brief writers; design apps use the depth targets to size content areas; writer systems treat it as the editorial brief baseline (angle-level guidance, not scripts — client brand guides still govern final voice). **Changed in 3.1:** Local Service family reconciled with the AR Site Architecture, URL Structure, and Internal Linking SOP (12 May 2026) — see §1.1. URL patterns corrected, SOP terminology adopted, missing SOP page types added, new page types flagged as SOP extensions pending ratification. **Purpose:** Machine-consumable reference covering every page type in the AR system. This document is designed to be uploaded to downstream apps:
 
   
 
@@ -55,6 +67,7 @@ This document is subordinate to the AR *Site Architecture, URL Structure, and In
   - **R3 — Missing SOP page types added.** Homepage, About Us, Bio, Contact Us, Privacy Policy, Services index (conditional), Sub-Service, Neighborhood (with the SOP's Google Maps entity test), POI, Hyper-Specific Local Landing (third level, escalation-only), and Blog Archive now have full catalog entries. The v3.0 "Service-Area Overview" entry was removed as redundant with Areas We Serve + per-city location pages under the SOP hierarchy.
   - **R4 — SOP extensions: URL patterns RATIFIED (v3.4).** The eight extension page types (cost, problem/symptom, brand × service, standalone FAQ, projects, comparison, offers, warranty) now have ratified URL patterns in §1.2. Ratifying a URL reserves the path; it is **not** a commitment to build the page type. The bio canonical-path ambiguity is resolved (/bio/{person-slug}/). Two items remain open and are NOT resolved by this document: (a) the actual **type definitions still need to be written into the SOP body text** — this reference doc reserving a path is not the same as the SOP defining the page type; (b) the link-equity threshold decision (§1.2, planner rule 7).
   - **R5 — SOP content rules imported and binding:** homepage optimized for brand, not the money keyword; top-level service pages never geo-targeted (single-city businesses excepted); location pages geo-only with major services as H2s; informational content never geo-targeted; local landing pages need only be geographically relevant, not otherwise unique (this supersedes v3.0's stricter uniqueness language for this page type); exact-match anchors for SOP-specified body links; the SOP global nav/footer set appears on every page; schema authority is the AR Single Schema Creator doc.
+  - **R6 — Areas We Serve and Services Index are auto-triggered infrastructure, not optional add-ons (v3.5).** Both are now **CORE-conditional**: the planner includes them automatically when their trigger is met, and their trigger is met on essentially every real site AR builds. Rationale mirrors the SOP's own logic — the SOP calls Areas We Serve "analogous to the blog archive," and the Blog Archive is CORE whenever a blog exists; by the same reasoning Areas We Serve is core whenever multiple location pages exist. **SOP-side implication (needs ratification):** the current SOP frames the Areas We Serve *page* as optional/case-by-case. Promoting it to auto-triggered on any multi-city site is a real change to the SOP text, not just a reference-doc edit — it belongs on the SOP ratification list. One threshold to confirm there: **auto-trigger at ≥2 cities** (adopted here per the multi-city directive) **vs. only when locations overflow the nav dropdown** (the SOP's current, looser implication). This doc uses ≥2; if the SOP settles on the nav-overflow threshold instead, update the trigger here to match.
 
 ## 1.2 URL & Namespace Conventions (ratified v3.4)
 
@@ -109,7 +122,7 @@ Ratified from the SOP-change worklist. **Ratifying a URL pattern is not a commit
 
   
 
-**Link-equity threshold — UNRATIFIED.** The "\> 40 outbound body links per index page" figure in planner rule 7 is a Page Type Reference heuristic, **not** an SOP-backed number. It needs either a real figure ratified into the SOP's PageRank/link-equity section, or an explicit statement that no numeric threshold exists. Downstream tools should treat rule 7 as **advisory** until this is decided. **\[Decision needed — Kyle/Ryan.\]**
+**Link-equity threshold — RATIFIED at 25.** An index/category page carrying **\> 25 outbound body links** is flagged for restructuring (sub-silos, additional hub layers, or more inbound equity) before its child pages are worth building. This figure is now binding for planner rule 7 and downstream tools (no longer advisory). The excluded global nav/footer link set does not count toward the 25 — this is **body-content links only**.
 
   
 
@@ -132,12 +145,12 @@ Given a site (its vertical, business model, competitors, service/product catalog
   
 
 1.  Identify the site's **family**: Local Service, Ecommerce, Informational/Authority, B2B Service, or SaaS. Hybrid sites (e.g., local business with ecommerce) inherit from multiple families.
-2.  Include that family's **core set** (marked CORE in catalog entries) unconditionally.
+2.  Include that family's **core set** (marked CORE in catalog entries) unconditionally. Also include **CORE-conditional** entries whenever their auto-trigger is met — these are infrastructure pages (Areas We Serve, Services Index) that fire on essentially every real multi-city / multi-service site; treat them as expected, not optional. They are built once their child pages exist (see priority tiers).
 3.  Evaluate each remaining entry's **Planner triggers** field against the site's facts. Include the page type only if a trigger matches. Never include a page type without a matched trigger.
 4.  For **matrix page types** (marked MATRIX), compute expected page count from the site's data (services × locations, brands × services, integrations, etc.) and flag counts \> 200 for human review before planning.
 5.  Output for each selected page type: the page type name, the specific page instances (e.g., which services, which locations, which competitors), estimated page count, and priority tier using §7.
 6.  Respect the **swap test** rule: segmentation and vertical pages (writer \#10) may only be planned if vertical-specific research inputs will be available; otherwise defer them.
-7.  **Budget link equity when sizing matrices.** Per the Site Architecture SOP's PageRank model: every page added under an index/category page divides that page's passable equity across more links, reducing the equity every sibling receives. When planning matrix page types, report the resulting links-per-index count and flag silos where an index page would carry \> 40 outbound body links — those need restructuring (sub-silos, additional hub layers) or additional inbound equity before the pages are worth building. **The 40-link figure is an UNRATIFIED reference-doc heuristic, not an SOP number (see §1.2) — treat as advisory pending a Kyle/Ryan decision.**
+7.  **Budget link equity when sizing matrices.** Per the Site Architecture SOP's PageRank model: every page added under an index/category page divides that page's passable equity across more links, reducing the equity every sibling receives. When planning matrix page types, report the resulting links-per-index count and flag silos where an index page would carry **\> 25 outbound body links** — those need restructuring (sub-silos, additional hub layers) or additional inbound equity before the pages are worth building. (Ratified threshold, §1.2; counts body-content links only, not the global nav/footer set.)
 
 ## 3\. Instructions for Design Apps
 
@@ -276,12 +289,12 @@ Every entry uses this template: **Family · Funnel · AIO · Writer \# · Flags*
   - **Required inputs:** legal-reviewed policy text
   - **Pitfalls:** Missing from footer (breaks the SOP global link set).
 
-#### Services Index Page (conditional)
+#### Services Index Page — CORE-conditional
 
-  - **Local Service · Mid · AIO: Low · Writer: \#6**
+  - **Local Service · Mid · AIO: Low · Writer: \#6 · Flags: CORE-conditional (auto-triggered)**
   - **What it is:** Per SOP: only exists when there are too many services to list in the nav/dropdown. Optimized for the service keywords collectively, never geo-targeted. Lists and links every service.
   - **Content spec:** *Angle:* the capability overview — breadth and mastery, framed as "everything we do and why we're good at it." *Voice:* authoritative. *Must cover:* every service with a 1–2 sentence expertise-signaling summary and EM link, plus a company-level authority section. *Depth:* 400–700 words plus the list.
-  - **Planner triggers:** Service count exceeds nav capacity (typically \> \~8).
+  - **Planner triggers:** **Auto-triggered when top-level service count \> 8** (too many for a nav dropdown). Near-universal on real multi-service sites — the planner should expect to include it, not treat it as optional. NOT built when ≤ 8 services (listed directly in the nav; building it anyway adds an unnecessary hierarchy layer).
   - **URL pattern:** /services/
   - **Page structure:** 1. HeroAnswer (what the company does, expertise/authority framing) → 2. ServiceCardGrid (every service, EM-anchored links) → 3. Benefits/authority section → 4. CTABand + LeadForm
   - **UI components:** HeroAnswer, ServiceCardGrid, LeadForm, CTABand
@@ -334,12 +347,12 @@ Every entry uses this template: **Family · Funnel · AIO · Writer \# · Flags*
   - **Required inputs:** city list, per-city local facts, service list
   - **Pitfalls:** Optimizing for service+geo here (that's the local landing page's job); city-swapped identical copy.
 
-#### Areas We Serve Page (Location Hub)
+#### Areas We Serve Page (Location Hub) — CORE-conditional
 
-  - **Local Service · Mid · AIO: Low · Writer: \#6**
+  - **Local Service · Mid · AIO: Low · Writer: \#6 · Flags: CORE-conditional (auto-triggered)**
   - **What it is:** Per SOP: repository/archive page for top-level location pages — analogous to the blog archive. Optimized only for "(brand) areas."
   - **Content spec:** *Angle:* brand coverage narrative — "where you'll find us and how far we'll come." *Must cover:* full location list with EM links, travel/coverage rules. *Depth:* 300–600 words; archive page, not a ranking play.
-  - **Planner triggers:** Location page count exceeds nav capacity (SOP: optional, case-by-case).
+  - **Planner triggers:** **Auto-triggered on any multi-city site (≥ 2 targeted cities / location pages).** Effectively core for multi-city local SEO — same rationale as the Blog Archive being core whenever a blog exists. Single-city businesses do NOT get it (see §1.2 single-city rule). *Threshold flagged for SOP ratification — see R6; the SOP currently implies a looser nav-overflow trigger.*
   - **URL pattern:** /areas-we-serve/
   - **Page structure:** 1. HeroAnswer (coverage statement, brand-framed) → 2. MapEmbed (all locations) → 3. LocationCardGrid grouped by region (EM-anchored links) → 4. Coverage notes → 5. CTABand
   - **UI components:** HeroAnswer, MapEmbed, LocationCardGrid, CTABand

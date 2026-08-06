@@ -1,6 +1,6 @@
 /**
  * What this theme provides, in Shared Component Library vocabulary
- * (Page Type Reference v3.4 §4).
+ * (Page Type Reference v3.6 §4).
  *
  * PRD §4.5: "A theme missing a component a planned page type needs is reported
  * at THEME APPROVAL, not discovered at publish." That check needs the theme to

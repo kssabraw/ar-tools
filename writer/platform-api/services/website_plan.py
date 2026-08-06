@@ -30,7 +30,7 @@ from typing import Iterable, Literal, Optional
 # that drifts between the two lists is a page that plans but never publishes.
 from services.website_content import TEMPLATE_ONLY_PAGE_TYPES, UNRENDERABLE_PAGE_TYPES
 
-# Reference §1.2. A service, city or pillar slug colliding with one of these is
+# Reference v3.6 §1.2. A service, city or pillar slug colliding with one of these is
 # a planning error to surface, never to silently resolve. Kept in sync with the
 # template's src/lib/routes.ts — the template fails the build on the same set,
 # which is the backstop for anything that slips past planning.
@@ -84,12 +84,13 @@ UTILITY_PAGE_TYPES = frozenset(
 
 # Scale gates (PRD §4.3).
 MATRIX_SIGNOFF_THRESHOLD = 200
-# **Ratified at 25 by the owner, 2026-08-05**, superseding the reference's
-# unratified >40 figure (ruled too high 2026-08-04). The number and what it
-# counts ratify together: **body links only**, excluding the SOP-mandated global
-# nav/footer set — see `links_per_index`. Now that it is ratified it BLOCKS
-# approval until acknowledged, per PRD §4.3/§8.D; while it was unratified it
-# could not, because a number that stops work has to be agreed first.
+# **Ratified at 25** — by the owner 2026-08-05, and upstream in the reference
+# itself at v3.6 §1.2 / planner rule 7, which supersedes the unratified >40
+# heuristic. The number and what it counts ratify together: **body links only**,
+# excluding the SOP-mandated global nav/footer set — see `links_per_index`.
+# Being ratified it BLOCKS approval until acknowledged (PRD §4.3/§8.D); while it
+# was advisory it could not, because a number that stops work has to be agreed
+# first.
 LINKS_PER_INDEX_MAX = 25
 # A Services index is triggered when the nav would otherwise overflow.
 SERVICES_INDEX_TRIGGER = 8
@@ -154,6 +155,17 @@ class PlannedPage:
     @property
     def is_core(self) -> bool:
         return self.trigger == "CORE"
+
+    @property
+    def is_core_conditional(self) -> bool:
+        """Auto-triggered infrastructure (reference v3.5, note R6).
+
+        Kept distinct from `is_core` rather than folded into it: the reference
+        draws the same line, and a reviewer reads "expected on this site" very
+        differently from "unconditional for the family". Both are different
+        again from an optional type that happened to match a trigger.
+        """
+        return self.trigger.startswith("CORE-conditional")
 
 
 @dataclass
@@ -305,7 +317,28 @@ def matrix_pages(
 def conditional_pages(
     catalog: Iterable[ServiceEntry], cities: Iterable[CityEntry], *, multi_city: bool
 ) -> list[PlannedPage]:
-    """Non-CORE pages, each carrying the trigger that matched it."""
+    """The **CORE-conditional** hubs: auto-triggered infrastructure, not add-ons.
+
+    Reference v3.5 (note R6) promoted both of these out of "optional /
+    case-by-case". They fire on essentially every real multi-city or
+    multi-service site, so the planner includes them automatically when their
+    trigger is met — planner rule 2, which is explicit that they are "expected,
+    not optional".
+
+    Two consequences worth stating, because both are easy to get wrong later:
+
+    * **Inclusion is not tier-gated.** They sit at Tier 4 ("hubs once children
+      exist"), but PRD Q12's "v1 proposes Tiers 1–3 by default" is about which
+      *optional* types get proposed. A CORE-conditional entry is included on its
+      trigger regardless of tier; a future tier filter must not drop them.
+    * **Their trigger is met long before a writer exists for them.** Both are
+      Writer #6 page types (§4.7's load-bearing gap) and the house template has
+      no route for either, so today they are planned, reported at plan review,
+      and neither generable nor publishable. That is deliberate: the SOP's
+      global nav/footer set requires Areas We Serve on a multi-city site, so
+      dropping it from the plan would hide a real structural requirement rather
+      than track it.
+    """
     out: list[PlannedPage] = []
     top_level = [s for s in catalog if not s.parent_slug]
 
@@ -315,18 +348,22 @@ def conditional_pages(
                 _path("services"),
                 "services_index",
                 "Services",
-                f"nav overflow: {len(top_level)} services > {SERVICES_INDEX_TRIGGER}",
-                tier=2,
+                f"CORE-conditional (auto): {len(top_level)} top-level services "
+                f"> {SERVICES_INDEX_TRIGGER}, too many for a nav dropdown",
+                tier=4,
             )
         )
+    # >= 2 targeted cities. The reference adopts this threshold and flags it for
+    # SOP ratification against a looser nav-overflow reading (R6) — if the SOP
+    # settles on nav overflow, this is the line that changes.
     if multi_city and len(list(cities)) > 1:
         out.append(
             PlannedPage(
                 _path("areas-we-serve"),
                 "areas_we_serve",
                 "Areas We Serve",
-                "multi-city business",
-                tier=2,
+                "CORE-conditional (auto): multi-city site (>= 2 location pages)",
+                tier=4,
             )
         )
     return out

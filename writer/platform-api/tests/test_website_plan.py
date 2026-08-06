@@ -1,6 +1,6 @@
 """Unit tests for the Website Builder's site-plan inventory.
 
-The rules under test come from the Page Type Reference v3.4 and the module PRD,
+The rules under test come from the Page Type Reference v3.6 and the module PRD,
 and the ones most likely to break silently are the exceptions: the single-city
 no-matrix rule, neighborhoods not multiplying the matrix, and the reserved-slug
 precedence that lets a CORE utility page occupy a reserved slug while a service
@@ -239,6 +239,54 @@ class TestLinkCounting:
         assert plan.links_per_index["/roof-repair/"] == 0
 
 
+class TestCoreConditionalHubs:
+    """Reference v3.5 note R6 — infrastructure, not optional add-ons."""
+
+    def test_areas_we_serve_auto_triggers_on_any_multi_city_site(self):
+        # >= 2 targeted cities, not nav overflow. The reference adopts this
+        # threshold and flags it for SOP ratification against the looser reading.
+        plan = wp.build_plan(site_type="local_business", catalog=CATALOG, cities=CITIES)
+        [page] = [p for p in plan.pages if p.page_type == "areas_we_serve"]
+        assert page.is_core_conditional
+        assert not page.is_core
+
+    def test_a_single_city_site_gets_no_areas_page(self):
+        plan = wp.build_plan(
+            site_type="local_business", catalog=CATALOG, cities=[city("Anaheim")]
+        )
+        assert not [p for p in plan.pages if p.page_type == "areas_we_serve"]
+
+    def test_services_index_auto_triggers_above_eight_services(self):
+        catalog = [svc(f"Service {i}", order=i) for i in range(9)]
+        plan = wp.build_plan(site_type="local_business", catalog=catalog, cities=CITIES)
+        [page] = [p for p in plan.pages if p.page_type == "services_index"]
+        assert page.is_core_conditional
+
+    def test_eight_services_is_not_enough(self):
+        # Building it anyway adds an unnecessary hierarchy layer; the services
+        # fit in the nav.
+        catalog = [svc(f"Service {i}", order=i) for i in range(8)]
+        plan = wp.build_plan(site_type="local_business", catalog=catalog, cities=CITIES)
+        assert not [p for p in plan.pages if p.page_type == "services_index"]
+
+    def test_hubs_sit_at_tier_4_but_are_still_included(self):
+        # Tier 4 is "hubs once children exist". Inclusion is by CORE-conditional
+        # trigger and is NOT subject to Q12's "propose Tiers 1-3 by default" —
+        # a future tier filter must not drop them.
+        plan = wp.build_plan(site_type="local_business", catalog=CATALOG, cities=CITIES)
+        [page] = [p for p in plan.pages if p.page_type == "areas_we_serve"]
+        assert page.tier == 4
+
+    def test_an_ordinary_triggered_page_is_neither_core_nor_core_conditional(self):
+        plan = wp.build_plan(
+            site_type="local_business",
+            catalog=CATALOG,
+            cities=[city("Overland Park", ["Deer Creek"]), city("Lees Summit")],
+        )
+        [hood] = [p for p in plan.pages if p.page_type == "neighborhood"]
+        assert not hood.is_core and not hood.is_core_conditional
+
+
 class TestTriggers:
     def test_every_page_records_why_it_was_proposed(self):
         plan = wp.build_plan(site_type="local_business", catalog=CATALOG, cities=CITIES)
@@ -251,7 +299,8 @@ class TestTriggers:
         catalog = [svc(f"Service {i}", order=i) for i in range(10)]
         big = wp.build_plan(site_type="local_business", catalog=catalog, cities=CITIES)
         index = [p for p in big.pages if p.page_type == "services_index"]
-        assert index and "nav overflow" in index[0].trigger
+        # The trigger records the threshold it cleared, so a reviewer sees why.
+        assert index and "> 8" in index[0].trigger
 
     def test_areas_we_serve_triggers_on_multi_city_only(self):
         single = wp.build_plan(site_type="local_business", catalog=CATALOG, cities=[city("Anaheim")])

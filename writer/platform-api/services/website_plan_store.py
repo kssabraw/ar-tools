@@ -252,6 +252,7 @@ def serialize(plan: SitePlan) -> dict:
                 "trigger": p.trigger,
                 "tier": p.tier,
                 "is_core": p.is_core,
+                "is_core_conditional": p.is_core_conditional,
             }
             for p in plan.pages
         ],
