@@ -316,24 +316,28 @@ class TestSingleServiceGate:
 
 
 class TestTemplateCoverage:
-    def test_a_page_type_the_template_cannot_render_is_named(self):
-        # PRD §4.4 — reported at plan review, not discovered at publish. Caught
-        # by building the template and diffing its routes against the plan.
+    def test_no_page_type_the_template_cannot_render_is_planned_today(self):
+        # The two hubs that used to trip this now have routes in the template,
+        # so a normal multi-city plan is fully renderable.
         plan = wpl.build_plan(
             site_type="local_business",
             catalog=store.parse_catalog(CATALOG),
             cities=store.parse_cities(CITIES),
         )
-        [issue] = [i for i in plan.issues if i.kind == "missing_template"]
-        assert "areas_we_serve" in issue.detail
-        # Advisory: §4.4's three recoveries (drop / re-upload / map) need a theme
-        # compiler and a plan editor, and neither exists yet.
-        assert issue.blocking is False
-
-    def test_a_single_city_plan_has_full_template_coverage(self):
-        plan = wpl.build_plan(
-            site_type="local_business",
-            catalog=store.parse_catalog(CATALOG),
-            cities=store.parse_cities([{"name": "Anaheim"}]),
-        )
         assert [i for i in plan.issues if i.kind == "missing_template"] == []
+
+    def test_an_unrenderable_type_blocks_but_can_be_signed_off(self):
+        # The check is kept for the extension page types, which have ratified
+        # URLs and no templates. Blocking per PRD §4.4, acknowledgeable because
+        # none of §4.4's three recoveries exists until the theme compiler does.
+        pages = [wpl.PlannedPage("/roof-repair/cost/", "cost", "Roof repair cost", "trigger")]
+        with patch.object(wpl, "UNRENDERABLE_PAGE_TYPES", frozenset({"cost"})):
+            [issue] = wpl.template_coverage_gate(pages)
+        assert issue.blocking is True
+        assert issue.acknowledgeable is True
+        assert "cost" in issue.detail
+
+    def test_a_renderable_plan_produces_no_coverage_issue(self):
+        pages = [wpl.PlannedPage("/roof-repair/", "service", "Roof Repair", "CORE")]
+        with patch.object(wpl, "UNRENDERABLE_PAGE_TYPES", frozenset({"cost"})):
+            assert wpl.template_coverage_gate(pages) == []

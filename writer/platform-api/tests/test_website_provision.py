@@ -108,11 +108,15 @@ class TestSiteConfig:
         site = self._site(staging_url="https://x.workers.dev")
         assert wp.build_site_config(site, {})["url"] == "https://x.workers.dev"
 
-    def test_nav_defaults_differ_by_site_type(self):
-        local = wp.build_site_config(self._site(), {})["nav"]
-        info = wp.build_site_config(self._site(site_type="informational"), {})["nav"]
-        assert {n["href"] for n in local} == {"/services", "/locations", "/about"}
-        assert {n["href"] for n in info} == {"/topics", "/about"}
+    def test_no_nav_is_guessed_at_provisioning_time(self):
+        # The template derives the SOP global nav set from published pages. The
+        # guess this replaced pointed at /services, /locations, /about and
+        # /contact — none of them routes, so every generated site carried a
+        # global nav of dead links on every page.
+        for site_type in ("local_business", "informational"):
+            config = wp.build_site_config(self._site(site_type=site_type), {})
+            assert config["nav"] == []
+            assert config["footerNav"] == []
 
     def test_existing_nav_is_preserved(self):
         site = self._site(config={"nav": [{"label": "Work", "href": "/work"}]})

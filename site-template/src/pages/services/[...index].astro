@@ -1,0 +1,79 @@
+---
+import type { GetStaticPaths } from 'astro';
+import Layout from '../../layouts/Layout.astro';
+import PageHeader from '../../theme/components/PageHeader.astro';
+import ServiceCardGrid from '../../theme/components/ServiceCardGrid.astro';
+import TrustBadgeRow from '../../theme/components/TrustBadgeRow.astro';
+import CTABand from '../../theme/components/CTABand.astro';
+import LeadForm from '../../theme/components/LeadForm.astro';
+import { routedPages, corePage } from '../../lib/content';
+import { topLevelServices, hasServicesIndex } from '../../lib/hubs';
+import { site, isLocal, has } from '../../lib/site';
+import { breadcrumbList } from '../../lib/schema';
+
+/**
+ * Services index (reference §5.1, CORE-conditional).
+ *
+ * Built only above the 8-service threshold. The reference is explicit that a
+ * smaller site should NOT have one — the services list directly in the nav, and
+ * a hub over seven links adds a hierarchy layer that only dilutes equity. A
+ * rest route with an empty `getStaticPaths` is how the page declines to exist.
+ *
+ * Note this page is NOT a breadcrumb ancestor of /{service-slug}/ — breadcrumbs
+ * follow the URL path, not the link hierarchy (reference §1.2), and services
+ * sit at root. It links down; nothing points back up through it.
+ */
+export const getStaticPaths: GetStaticPaths = async () => {
+  const pages = isLocal ? await routedPages() : [];
+  if (!hasServicesIndex(pages)) return [];
+  return [{ params: { index: undefined }, props: { pages } }];
+};
+
+const { pages } = Astro.props;
+const services = topLevelServices(pages);
+
+const entry = await corePage('services');
+const s = (entry?.data.sections ?? {}) as Record<string, string>;
+
+const title = entry?.data.title || `${site.siteName} services`;
+// Countable, not claimed: the fallback states what the site has, and asserts
+// nothing about how well it does any of it.
+const lede =
+  s.lede || entry?.data.description || `Everything ${site.siteName} does, in one place.`;
+
+const crumbs = [
+  { label: 'Home', href: '/' },
+  { label: 'Services', href: '/services/' },
+];
+---
+
+<Layout
+  title={title}
+  description={lede}
+  jsonld={[
+    { '@type': 'CollectionPage', name: title, description: lede, url: Astro.url.href },
+    ...(breadcrumbList(crumbs, site.url) ? [breadcrumbList(crumbs, site.url)!] : []),
+  ]}
+>
+  <PageHeader title={title} lede={lede} />
+
+  <ServiceCardGrid
+    items={services.map((svc) => ({
+      href: svc.path,
+      title: svc.title,
+      excerpt: svc.teaser || svc.description,
+    }))}
+  />
+
+  {has(s.authority) && (
+    <div class="prose-wrap richtext">
+      <p>{s.authority}</p>
+    </div>
+  )}
+
+  <TrustBadgeRow />
+
+  <CTABand title="Not sure which service you need?" ctaLabel="Talk to us" ctaHref="/contact-us/" />
+
+  <LeadForm />
+</Layout>

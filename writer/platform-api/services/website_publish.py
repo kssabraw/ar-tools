@@ -143,13 +143,20 @@ def source_from_local_seo(row: dict) -> SourceContent:
 
 
 def source_from_content(content: dict) -> SourceContent:
-    """A composed or static page, from the content stored on the page row."""
+    """A composed or static page, from the content stored on the page row.
+
+    `composite` is read here even though a core page has no target query and is
+    never scored: the row is the store for any page with no upstream record, so
+    if something did score one, that is where the number would be. Absent stays
+    absent — and for a geo page type, absent is a hold rather than a pass.
+    """
     content = content or {}
     return SourceContent(
         body=content.get("body") or "",
         title=(content.get("title") or "").strip(),
         description=(content.get("description") or "").strip(),
         jsonld=content.get("jsonld") if isinstance(content.get("jsonld"), dict) else None,
+        composite=content.get("composite"),
         voice=content.get("voice") if isinstance(content.get("voice"), dict) else None,
         facts_consistent=bool(content.get("facts_consistent", True)),
     )

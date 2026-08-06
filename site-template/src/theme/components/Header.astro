@@ -1,8 +1,18 @@
 ---
 import { site, isLocal, displayPhone, has } from '../../lib/site';
+import { routedPages, allPosts } from '../../lib/content';
+import { globalNav } from '../../lib/hubs';
 
+/**
+ * The SOP global nav set (PRD §4.1 rule 4) is derived from what is published,
+ * not read from stored config — an explicit `nav` in site.config.json still
+ * overrides it. Derived by default because the alternative ships 404s: a nav
+ * written at provisioning time cannot know which hubs a later plan built, and a
+ * broken link in the global nav is on every page of the site.
+ */
 const phone = displayPhone();
 const current = Astro.url.pathname.replace(/\/$/, '') || '/';
+const nav = globalNav(isLocal ? await routedPages() : [], (await allPosts()).length > 0);
 ---
 
 <header class="site-header">
@@ -13,7 +23,7 @@ const current = Astro.url.pathname.replace(/\/$/, '') || '/';
     </a>
 
     <nav class="site-nav" aria-label="Primary">
-      {site.nav.map((item) => (
+      {nav.map((item) => (
         <a
           href={item.href}
           aria-current={current === item.href.replace(/\/$/, '') ? 'page' : undefined}

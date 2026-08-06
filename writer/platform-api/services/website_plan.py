@@ -554,12 +554,17 @@ def template_coverage_gate(pages: Iterable[PlannedPage]) -> list[PlanIssue]:
     the one archetype that unlocks five page types across both site shapes
     (PRD §4.7, Q14).
 
-    Advisory, not blocking. §4.4 makes it a hard stop *against an approved
-    theme*, with three recoveries (drop the type, add the screen, map it onto an
-    existing template) — none of which exists yet: there is no theme compiler
-    and no plan editor, so blocking here would make every multi-city plan
-    unapprovable with nothing a user could do about it. The page is planned,
-    named, ungenerable and unpublishable; it simply cannot ship silently.
+    **Blocking, but acknowledgeable** (owner ruling 2026-08-06). §4.4 calls it a
+    hard stop and offers three recoveries — drop the type, add the screen in
+    Claude Design and re-upload, or map it onto an existing template — none of
+    which exists yet, so a bare hard stop would be a wall rather than a gate. A
+    named sign-off is the honest middle: somebody records that they know these
+    pages will not ship, and that record survives. When the theme compiler
+    lands, drop `acknowledgeable` and this becomes §4.4 as written.
+
+    Empty in practice today: the two hubs that used to trip it now have routes.
+    It stands ready for the ⭐ extension types, which have ratified URLs and no
+    templates.
     """
     missing = sorted({p.page_type for p in pages if p.page_type in UNRENDERABLE_PAGE_TYPES})
     if not missing:
@@ -567,9 +572,11 @@ def template_coverage_gate(pages: Iterable[PlannedPage]) -> list[PlanIssue]:
     return [
         PlanIssue(
             "missing_template",
-            False,
-            f"the house template has no template for: {', '.join(missing)} — these pages "
-            "cannot be generated or published until Writer #6 and their templates exist",
+            True,
+            f"the approved theme has no template for: {', '.join(missing)} — these pages "
+            "cannot be generated or published; drop them, add the screen to the design, "
+            "or map them onto an existing template",
+            acknowledgeable=True,
         )
     ]
 

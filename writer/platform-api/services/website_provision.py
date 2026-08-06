@@ -144,13 +144,14 @@ def build_site_config(website: dict, client: dict) -> dict:
         "tagline": stored.get("tagline", ""),
         "description": stored.get("description", ""),
         "locale": stored.get("locale", "en"),
+        # Empty means "let the template derive the SOP global nav/footer set
+        # from what is actually published" (PRD §4.1 rule 4). A nav written here
+        # would be written before any page exists, so it could only guess — and
+        # the previous hardcoded guess ('/about', '/contact', '/services',
+        # '/locations') was four 404s in the global nav of every page. A
+        # human-curated override still wins when one is stored.
         "nav": stored.get("nav") or default_nav(site_type),
-        "footerNav": stored.get("footerNav")
-        or [
-            {"label": "About", "href": "/about"},
-            {"label": "Privacy", "href": "/privacy"},
-            {"label": "Contact", "href": "/contact"},
-        ],
+        "footerNav": stored.get("footerNav") or [],
         "business": business,
         "forms": stored.get("forms") or {"web3formsKey": ""},
         "analytics": stored.get("analytics") or {"ga4": "", "callrailSnippet": ""},
@@ -159,16 +160,16 @@ def build_site_config(website: dict, client: dict) -> dict:
 
 
 def default_nav(site_type: str) -> list[dict[str, str]]:
-    if site_type == "local_business":
-        return [
-            {"label": "Services", "href": "/services"},
-            {"label": "Areas", "href": "/locations"},
-            {"label": "About", "href": "/about"},
-        ]
-    return [
-        {"label": "Topics", "href": "/topics"},
-        {"label": "About", "href": "/about"},
-    ]
+    """No default. The template derives the SOP nav from published pages.
+
+    Kept as a function because `config.nav` is still an honoured override, and
+    because the empty return is a decision worth being able to point at: at
+    provisioning time no page exists yet, so any nav written here is a guess
+    about a plan nobody has approved. The guess this replaced pointed at
+    /services, /locations, /about and /contact — none of which are routes on the
+    house template, so every generated site carried a global nav of dead links.
+    """
+    return []
 
 
 def build_wrangler(worker: str) -> str:
