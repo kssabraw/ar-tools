@@ -252,10 +252,21 @@ def serialize(plan: SitePlan) -> dict:
                 "trigger": p.trigger,
                 "tier": p.tier,
                 "is_core": p.is_core,
+                "is_core_conditional": p.is_core_conditional,
             }
             for p in plan.pages
         ],
-        "issues": [{"kind": i.kind, "blocking": i.blocking, "detail": i.detail} for i in plan.issues],
+        "issues": [
+            {
+                "kind": i.kind,
+                "blocking": i.blocking,
+                "detail": i.detail,
+                # The plan tab needs this to know whether to offer a sign-off
+                # button or send the user back to edit the catalog.
+                "acknowledgeable": i.acknowledgeable,
+            }
+            for i in plan.issues
+        ],
         "matrix_count": plan.matrix_count,
         "links_per_index": plan.links_per_index,
         "blocked": plan.blocked,
@@ -351,24 +362,43 @@ def conflict_issues(website: dict) -> list[PlanIssue]:
     )
 
 
-def approval_blockers(website: dict) -> list[dict]:
-    """Everything standing between this plan and approval."""
+def approval_blockers(
+    website: dict, *, acknowledged: Optional[list[str]] = None
+) -> list[dict]:
+    """Everything standing between this plan and approval.
+
+    `acknowledged` names issue kinds a human has signed off. Only an
+    `acknowledgeable` issue can be cleared that way — a scale gate is a
+    judgement about size, so it needs a decision; a reserved-slug collision is
+    simply wrong, and acknowledging it would ship a URL nobody can change later.
+    """
+    acked = set(acknowledged or [])
     plan = recompute(website)
     issues = [i for i in plan["issues"] if i["blocking"]]
     issues += [
-        {"kind": i.kind, "blocking": i.blocking, "detail": i.detail}
+        {
+            "kind": i.kind,
+            "blocking": i.blocking,
+            "detail": i.detail,
+            "acknowledgeable": i.acknowledgeable,
+        }
         for i in conflict_issues(website)
         if i.blocking
     ]
-    return issues
+    return [i for i in issues if not (i.get("acknowledgeable") and i["kind"] in acked)]
 
 
-def approve(website: dict, *, actor: str) -> dict:
+def approve(
+    website: dict, *, actor: str, acknowledged: Optional[list[str]] = None
+) -> dict:
     """Stamp the plan approved. Queues nothing — approval is a human's verdict."""
     config = dict(website.get("config") or {})
     plan_meta = dict(config.get("plan") or {})
     plan_meta["approved_at"] = _now_iso()
     plan_meta["approved_by"] = actor
+    # What was signed off, by whom. A sign-off nobody can find afterwards is
+    # indistinguishable from a gate that never fired.
+    plan_meta["acknowledged"] = sorted(set(acknowledged or []))
     config["plan"] = plan_meta
     get_supabase().table("websites").update(
         {"config": config, "updated_at": "now()"}

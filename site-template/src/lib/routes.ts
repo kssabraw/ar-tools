@@ -1,5 +1,5 @@
 /**
- * URL and namespace rules from the Page Type Reference v3.4 §1.2.
+ * URL and namespace rules from the Page Type Reference v3.6 §1.2.
  *
  * These are ratified conventions, not preferences: reserved paths, root
  * precedence, trailing slashes, and breadcrumbs that follow the URL path so

@@ -4,7 +4,7 @@ import { glob } from 'astro/loaders';
 /**
  * The frontmatter contract between this template and the suite's writers.
  *
- * Two rules from the Page Type Reference v3.4 §1.2 shape this file, and both
+ * Two rules from the Page Type Reference v3.6 §1.2 shape this file, and both
  * are easy to get wrong:
  *
  *  1. **Page type is declared by the planner, never inferred from the URL.**

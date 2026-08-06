@@ -49,7 +49,7 @@ deliberate act that nobody has taken.
   Google Doc; the Doc is the source of truth.** Owner rulings made after capture
   live in an **amendments block at the top**, not edited into the body — read it
   before trusting any section it names.
-- `docs/reference/page-type-reference-v3_4.md` — **authoritative** for page
+- `docs/reference/page-type-reference-v3_6.md` — **authoritative** for page
   types, planner triggers, URL patterns, page structure, the Shared Component
   Library, and content specs. Also vendored; subordinate to the AR Site
   Architecture SOP.
@@ -169,10 +169,31 @@ the six unbuilt writers (§4.7).
 
 ### Open items
 
-- The **ratified links-per-index figure** (Kyle/Ryan) — advisory at 25 meanwhile.
+- ~~The **ratified links-per-index figure**~~ — **ratified at 25** by the owner
+  2026-08-05 and upstream in **Page Type Reference v3.6** §1.2 (body links only,
+  excluding the global nav/footer set; the two agree). It now **blocks approval
+  until acknowledged**, like the >200 matrix gate; both clear via `acknowledge`
+  on the approve route, and planning errors never do. Remaining: fold the figure
+  into the **SOP's** link-equity section — the reference half is done.
+- **Reference is now v3.6** (`docs/reference/page-type-reference-v3_6.md`, the
+  v3.4 capture is retired). Besides the 25, **v3.5 promoted Areas We Serve and
+  Services Index to CORE-conditional (auto-triggered)** — Areas We Serve on any
+  multi-city site (≥2 cities), Services Index above 8 top-level services. The
+  planner already fired on exactly those thresholds; what changed is that they
+  are *infrastructure, not optional*, which sharpens the Writer #6 gap below.
+  Upstream open item: SOP ratification of the ≥2-cities threshold (reference R6
+  notes the SOP currently implies a looser nav-overflow trigger).
 - **Component renaming is done**, but 13 library components remain unbuilt and
   are listed in `site-template/src/theme/manifest.ts::MISSING_COMPONENTS`; each
   gates a page type that has no writer anyway.
+- **Writer #6 (hub/index) now gates two CORE-conditional page types.** Areas We
+  Serve and the Services index have no writer *and* no route in the house
+  template, and reference v3.5 makes them auto-triggered infrastructure rather
+  than optional — so on a multi-city site the plan will always contain two pages
+  it cannot produce. They are reported at plan review (`missing_template`),
+  recorded as `engine_unavailable` at generation, and held at
+  `body_not_generated` rather than committed, so nothing ships broken; but the
+  gap is now on the critical path rather than beside it.
 - **Client-side 404 search** (Pagefind) not built; the 404 points at the HTML
   sitemap.
 - Core-pages prompt copy, pilot clients, and a local-business design export as a

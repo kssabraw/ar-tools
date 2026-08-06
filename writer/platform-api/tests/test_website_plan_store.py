@@ -154,17 +154,48 @@ class TestApprovalGate:
         blocking = [i for i in plan.issues if i.blocking]
         assert blocking and blocking[0].kind == "reserved_slug"
 
-    def test_the_links_advisory_never_blocks(self):
-        # Ruled too high by the owner (2026-08-04) and unratified: a number that
-        # blocks work needs ratifying first.
+    def test_the_link_budget_blocks_at_the_ratified_25(self):
         catalog = store.parse_catalog([{"name": f"Service {i}", "order": i} for i in range(30)])
         plan = wpl.build_plan(
             site_type="local_business", catalog=catalog,
             cities=store.parse_cities([{"name": "Anaheim"}, {"name": "Brea"}]),
         )
-        advisories = [i for i in plan.issues if i.kind == "links_advisory"]
-        assert advisories
-        assert not any(i.blocking for i in advisories)
+        issues = [i for i in plan.issues if i.kind == "link_budget"]
+        assert issues and all(i.blocking for i in issues)
+
+    def test_a_scale_gate_clears_with_a_named_sign_off(self):
+        website = {"id": "w1", "site_type": "local_business", "config": {
+            "catalog": [{"name": f"Service {i}", "order": i} for i in range(30)],
+            "cities": [{"name": "Anaheim"}, {"name": "Brea"}],
+        }}
+        with patch.object(store, "get_supabase"):
+            assert store.approval_blockers(website)
+            assert store.approval_blockers(website, acknowledged=["link_budget"]) == []
+
+    def test_a_planning_error_cannot_be_acknowledged_away(self):
+        # A reserved-slug collision is wrong, not large. Waving it through ships
+        # a URL that is immutable once published.
+        website = {"id": "w1", "site_type": "local_business", "config": {
+            "catalog": [{"name": "Reviews"}],
+            "cities": [{"name": "Anaheim"}],
+        }}
+        with patch.object(store, "get_supabase"):
+            blockers = store.approval_blockers(website, acknowledged=["reserved_slug"])
+        assert [b["kind"] for b in blockers] == ["reserved_slug"]
+
+    def test_approval_records_what_was_signed_off(self):
+        # A sign-off nobody can find afterwards is indistinguishable from a gate
+        # that never fired.
+        supabase = MagicMock()
+        chain = supabase.table.return_value
+        chain.update.return_value = chain
+        chain.eq.return_value = chain
+        with patch.object(store, "get_supabase", return_value=supabase):
+            approval = store.approve(
+                {"id": "w1", "config": {}}, actor="kyle", acknowledged=["matrix_signoff"]
+            )
+        assert approval["approved_by"] == "kyle"
+        assert approval["acknowledged"] == ["matrix_signoff"]
 
     def test_is_approved_reads_the_stamp(self):
         assert store.is_approved({"config": {"plan": {"approved_at": "2026-08-05T00:00:00Z"}}})

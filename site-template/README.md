@@ -29,7 +29,7 @@ disappeared tomorrow, every site keeps building and shipping.
 - `src/theme/base.css` — reset plus shared primitives (`.wrap`, `.card`,
   `.richtext`, `.button`). Not theme-specific.
 - `src/theme/components/*.astro` — the section components, named from the
-  **Shared Component Library** (Page Type Reference v3.4 §4) so a page type
+  **Shared Component Library** (Page Type Reference v3.6 §4) so a page type
   composes from named parts and any approved theme can render any page type
   whose components it has.
 - `src/theme/manifest.ts` — what this theme **provides** and what it is
@@ -75,8 +75,8 @@ routes adapt:
 
 ## URL structure — read this before adding a route
 
-The paths come from the **Page Type Reference v3.4 §1.2**
-(`docs/reference/page-type-reference-v3_4.md`), which is subordinate to the AR
+The paths come from the **Page Type Reference v3.6 §1.2**
+(`docs/reference/page-type-reference-v3_6.md`), which is subordinate to the AR
 Site Architecture SOP. Three rules matter here:
 
 - **No `/services/` or `/locations/` prefixes.** Services sit at `/{service-slug}/`

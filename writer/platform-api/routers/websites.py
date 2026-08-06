@@ -69,6 +69,11 @@ class PlanBuildRequest(BaseModel):
 
 
 class PlanApproveRequest(BaseModel):
+    # Scale gates are "blocking until acknowledged" (PRD §4.3, §8.D): a matrix
+    # over 200 pages or an index over the ratified 25-link budget is a judgement
+    # about size, so it needs a named human decision rather than a wall. Names
+    # the issue kinds being signed off — 'matrix_signoff', 'link_budget'.
+    acknowledge: list[str] = Field(default_factory=list)
     # A property-vs-client cell overlap is admin-overridable and nothing else
     # is; the blocking planning errors (reserved slugs, duplicate paths) are
     # fixed by editing the catalog, not by waving them through.
@@ -304,14 +309,18 @@ async def approve_plan(
 ) -> dict:
     """Approve the plan. Refused while any blocking issue stands.
 
-    Blocking issues are planning errors the reference says to surface rather
-    than silently resolve — a reserved-slug collision or two entries claiming
-    one path. A published slug is immutable, so the cost of approving a wrong
-    URL is a permanent redirect rather than an edit.
+    Two kinds of blocker, and they clear differently. **Planning errors** — a
+    reserved-slug collision, two entries claiming one path — are wrong rather
+    than large, and are fixed by editing the catalog; a published slug is
+    immutable, so approving a wrong URL costs a permanent redirect rather than
+    an edit. **Scale gates** are judgements about size and clear with a named
+    sign-off in `acknowledge`.
     """
     _enabled()
     website = _load_site(website_id)
-    blockers = website_plan_store.approval_blockers(website)
+    blockers = website_plan_store.approval_blockers(
+        website, acknowledged=body.acknowledge
+    )
 
     conflicts = [b for b in blockers if b["kind"] == "portfolio_conflict"]
     if conflicts and body.override_conflicts:
@@ -325,7 +334,9 @@ async def approve_plan(
             detail={"error": "plan_blocked", "issues": blockers},
         )
 
-    approval = website_plan_store.approve(website, actor=auth.get("user_id") or "")
+    approval = website_plan_store.approve(
+        website, actor=auth.get("user_id") or "", acknowledged=body.acknowledge
+    )
     return {"approved": True, "approval": approval}
 
 
