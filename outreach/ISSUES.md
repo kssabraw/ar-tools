@@ -1837,3 +1837,109 @@ ALTER with nothing to backfill. After the first snapshot it becomes a backfill t
 submarket centre and asserts it was the centre used at scan time — exactly the unverifiable claim
 the column exists to make unnecessary. What stood between the pipeline and that first snapshot was
 a Railway deploy.
+
+---
+
+## Found while preparing the first scan (2026-08-06)
+
+Five findings, none of them fixed. All were discovered by reading the paths the first run is
+about to execute, rather than by running anything.
+
+### I-083 · The first snapshot is the likeliest one to be incomplete, and that pins its partition
+A dated instance of I-075 rather than a new mechanism, logged separately because it has a
+foreseeable trigger date and I-075 does not.
+
+`drop_cold_partitions` requires a `snapshot_rollup` marker for **every** snapshot in a partition,
+and an incomplete snapshot (below `scan_completeness_threshold`, 0.98) is excluded from rollup and
+therefore can never get one. The first live run is the single snapshot most likely to fall below
+that bar: it is the first time the submission path, the ready list and the fallback-by-id path
+have ever run against a real provider, and 2 uncollected points out of 81 is already 97.5%.
+
+If that happens, the `2026_08` `grid_result` partition is retained forever. The cost is bounded
+and small — one partition holding ~1,620 rows — and the direction is the right one to fail in
+(the alternative is dropping evidence nobody verified). It is recorded because the consequence is
+**permanent and silent**: nothing alerts, and the partition simply never appears in a drop log.
+
+**Not fixed.** The fix is I-075's — a "rolled up as excluded" marker variant — and it requires
+deciding what `prospect_count` means for a snapshot that legitimately has none. That is a schema
+question for whoever owns retention, not something to settle inside a scan runbook. **Watch for
+it** with check 7 of `queries/first-scan-verify.sql`, which prints the consequence beside the
+ratio rather than leaving it to be inferred from `complete`.
+
+### I-084 · How `serp_result` attaches to a grid-shaped `scan_snapshot` is undefined
+**Blocks the design of the organic SERP layer (HANDOFF §8.1 item 2d).**
+
+`serp_result.snapshot_id` is `NOT NULL`, and PRD §B1 requires one immutable `scan_snapshot` per
+submarket × keyword × cycle. So the organic layer does not get its own snapshot type — it must
+attach to the same row the geogrid writes. But every completeness column on that row is
+grid-shaped: `expected_points`, `actual_points`, `point_count`, and a `complete` flag computed by
+`scan_runner._maybe_finalize` purely from collected grid tasks.
+
+Three questions follow, and no document answers any of them:
+
+- **Who creates the snapshot** when an organic pull runs and a geogrid does not, given that
+  `expected_points` is `NOT NULL` and means nothing for a SERP pull?
+- **Does a missing or failed organic pull make the snapshot incomplete?** Today it cannot —
+  `complete` sees only grid tasks — so a snapshot can read complete while carrying no SERP result
+  at all. If that is intended it should be stated, because "complete" then means "complete for
+  the geogrid" in a column named for the snapshot.
+- **Does the organic pull have to wait for finalization**, or can it write against a snapshot
+  still collecting? The rollup's guarantees are transactional per snapshot; nothing scopes them
+  to a channel.
+
+**Not resolved here, deliberately.** Every answer is a claim about a lifecycle that has executed
+zero times. Cheapest to reverse is to decide it after the first run has shown what that lifecycle
+actually does, which is also the argument for running the scan before building 2d.
+
+### I-085 · I-071 has drifted — the completeness threshold IS in config now
+I-071 records that the 0.98 threshold "lives in a SQL comment, not in config". That is no longer
+true of the first half: `api/config.py:187` carries `scan_completeness_threshold: float = 0.98`,
+and `scan_runner._maybe_finalize` reads it through `maps_scan.is_complete`. It landed with the
+geogrid build (#557) without I-071 being updated.
+
+**What remains open is the second half**, and it is the half that matters for results: *"make
+every scoring consumer filter on `complete`."* Nothing scores yet, so nothing filters yet. The
+placeholder score reaches `complete` only indirectly — `v_prospect_placeholder_score` joins
+`snapshot_rollup`, and the rollup refuses incomplete snapshots, so the filter is real but is
+enforced one layer away and by a different table. That works and is worth knowing about before
+someone adds a consumer that reads `prospect_coverage` directly and inherits no such guard.
+
+Logged rather than edited into I-071 so the drift itself stays visible: an issue that quietly
+half-fixes is harder to notice than one that stays open.
+
+### I-086 · The geogrid scan spends money and writes no `cost_ledger` row
+**The only paid path in the system with no ledger entry.** `pipeline.py` (Outscraper ingest) and
+`review_verify.py` both write one; `scan_runner.py` writes none — the string `cost_ledger` does
+not appear in it. `dataforseo_cost_per_request_cents` exists in config (1¢) and nothing reads it
+for the scan.
+
+Two consequences, and the second is the larger one:
+
+- **Spend is invisible in-system.** The first run's cost exists only in the DataForSEO dashboard,
+  which is exactly the position §7.1 describes for Outscraper — a placeholder rate that was never
+  reconciled because nothing forced the comparison.
+- **The budget ceiling does not cover scans.** `max_market_run_cost_cents` (5000) is enforced by
+  `cost.py`'s pre-flight gate, and `cmd_scan` does not call it. Immaterial at 81 tasks; not
+  immaterial for the market sweep that HANDOFF §8a says comes after this run proves the envelope.
+  The gate should exist before the command that needs it, not after.
+
+**Not fixed.** It is a change to the paid write path, immediately before a paid run, and it is the
+owner's call whether to take it now (a best-effort insert in `review_verify.py`'s style, which
+logs on failure and cannot abort a scan) or after. Check 14 of `queries/first-scan-verify.sql`
+prints this as a defect rather than a pass so it is not read as "no cost, therefore free".
+
+### I-087 · `recovered_by_tag` is a counter in a log line, not durable state
+HANDOFF's post-run instruction says to check "whether any row is sitting on `recovered_by_tag`".
+There is no such row and no such column: it is a field on `scan_runner`'s in-memory `report`
+(line 70), incremented at line 331, and printed once in the `collect` command's JSON output.
+
+That makes it the least durable signal in the system and one of the most important. The tag is
+the recovery key that closes the one window ordering cannot cover — a request the provider
+accepted and billed whose response never reached us (§8.0a). If it fires, the fact lives only in
+a Railway log line, and this project already knows that the log stream lags (§6.3) and that
+nothing greps `OUTREACH_RESULT` (I-034). Nor is it reconstructible afterwards: a task recovered
+by tag is `collected` like any other, so no query can tell the two apart.
+
+**Not fixed** — it is a change to the collector's write path, and the same reasoning applies as
+I-086. A durable version is a boolean on `scan_task` set where the counter increments. **For the
+first run, capture the `collect` output** rather than relying on being able to read it later.

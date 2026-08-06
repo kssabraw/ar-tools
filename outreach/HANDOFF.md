@@ -15,6 +15,7 @@ Status as of 2026-08-05:
 - **The I-004 spike instrument is BUILT and MERGED (#556, `ccb7e912`)** — `probe-ai-granularity`, nine OpenAI calls, three place names × three samples. **It has not been run.** The key is set as a Railway reference; the run needs a Deploy plus `OUTREACH_CONFIRM_SPEND=probe-ai-granularity`.
 - **The `prospect_coverage` rollup is BUILT and MERGED (#559, `d802dbf`; migration `20260805120000`, applied live, 18/18 live checks passing).** Land masking (`grid_point_status`) and dead-point exclusion land with it, because both change the coverage DENOMINATOR. One plpgsql function per snapshot ending in `finalize_snapshot_rollup()`, so `rank_vector` cannot be separated from the numbers it belongs to. A free `rollup` command, and `collect` now rolls up what it finalizes. See §8.0b.
 - **The placeholder score is BUILT and MERGED (#561, `902be5f`)** — `v_prospect_placeholder_score` (migration `20260805150000`), a view over `prospect_coverage`. Deliberately NOT a `prospect_score` row: that table is the Phase 4 model's and `v_prospect_ranked` already reads it as a fitted score (ISSUES I-082). **I-078 is RESOLVED** — `scan_snapshot` now records its own grid centre, which had to land before the first snapshot rather than after.
+- **The first scan is PREPARED, not run** (2026-08-06). Live Railway config read and recorded, the target picked (`Van Nuys` × `plumber`, with reasoning), the runbook written and the post-run read built as `queries/first-scan-verify.sql` — 14 checks, every statement executed against the live schema so it parses. **See §11b.** The three things it waits on are still the three in §11, and all three are the owner's. Five findings came out of reading the paths the run is about to execute: **I-083** (the first snapshot is the likeliest to be incomplete, which pins its partition forever), **I-084** (how `serp_result` attaches to a grid-shaped `scan_snapshot` — this blocks 2d's design), **I-085** (I-071 has half-fixed itself), **I-086** (**the geogrid spends money and writes no `cost_ledger` row, and the budget ceiling does not cover scans**) and **I-087** (`recovered_by_tag` exists only in a log line). None are fixed.
 - **NOTHING HAS BEEN SCANNED.** The scan layer now has a producer, a consumer, and no data: `scan_snapshot`, `scan_task`, `grid_result`, `prospect_coverage`, `grid_point_status` are all empty. `OUTREACH_COMMAND` is `filter` and both spend variables are empty. **What is missing is no longer code — it is a deploy, a confirm token, and a second cron schedule** (§11).
 
 **Two things changed on 2026-08-03 that will mislead you if you read the older sections first.** The spend gate above supersedes the "set it back to `filter` afterwards" procedure this file used to rely on (§7.2), and the Railway configuration recorded in §1 was found to be **stale in two ways that each cost money** — read `get-service-config`, not this file, for live values.
@@ -41,6 +42,7 @@ Status as of 2026-08-05:
 | Coverage rollup | `rollup_snapshot_coverage()` + `grid_point_status`, migration `20260805120000`; `api/services/coverage_rollup.py` | **applied live**, verified by `tests/coverage_rollup.sql` (18 checks). Never run against real data — there is none |
 | Placeholder score | `v_prospect_placeholder_score`, migration `20260805150000` | **applied live**. A view; `prospect_score` stays empty until Phase 4 (I-082) |
 | I-004 spike | `api/services/ai_granularity.py` + `probe-ai-granularity` | **built** (#556), **never run** — needs a Deploy + confirm token |
+| First-scan runbook + read | `HANDOFF.md` §11b · `queries/first-scan-verify.sql` | **prepared 2026-08-06**, never executed. The scan itself still waits on the three owner-side steps in §11 |
 
 **This is a SEPARATE Supabase project from AR-Internal-Tools.** Do not point outreach code at the suite's database, and do not put outreach migrations in `writer/supabase/migrations/`.
 
@@ -475,7 +477,7 @@ outreach/
 ├── markets/                   one JSON per market-vertical; EXAMPLE-* is the template
 ├── migrations/                SQL, applied out-of-band via the Supabase MCP — never by the job
 ├── functions/lead-intake/     Supabase edge function (inbound leads)
-├── queries/                   phase1-dod.sql
+├── queries/                   phase1-dod.sql, first-scan-verify.sql (the post-run read, §11b)
 ├── tests/
 │   ├── lead_crm_rls.sql       17-check CRM verification (run in the SQL editor)
 │   ├── storage_partitioning.sql  14-check partitioning/retention verification
@@ -538,6 +540,94 @@ now means building the interesting half twice. I-072 asks the next session to *c
 "operator board now" and "after Phase 3" and to write the answer down, because HANDOFF §1 has
 listed Suite UI as "the next build" across several sessions that each built something else.
 
+### 11b. The runbook for the first scan (prepared 2026-08-06)
+
+Nothing here has been executed. This section exists so the three owner-side steps in §11 are a
+sequence to follow rather than a thing to reconstruct, and so the run is readable afterwards.
+
+**Live config, read 2026-08-06** — per CLAUDE.md, measured rather than inferred:
+
+| | |
+|---|---|
+| `source.branch` | `main` ✅ (the 2026-08-03 repoint held — I-065 has not recurred) |
+| `rootDirectory` / `railwayConfigFile` | `/outreach` · `outreach/railway.toml` ✅ |
+| `startCommand` | carries `${OUTREACH_ARGS:-}` ✅ — flags will reach the command (I-064's fix is still in place) |
+| `restartPolicyType` | `NEVER` ✅ |
+| **`cronSchedule`** | **absent — there is no schedule of any kind**, confirming §11 item 2 |
+| `builder` | reports `RAILPACK`; `railway.toml` says `DOCKERFILE` and is what actually builds. **Known-stale field — do not "fix" it** (§1) |
+
+> **The variable VALUES could not be read from here, and that is a gap in the "read the live
+> config" rule rather than an oversight.** `list-variables` returned `valuesRedacted: true` — an
+> OAuth-app connection receives variable *names* only. All ten expected names are present
+> (`OUTREACH_COMMAND`, `OUTREACH_CONFIRM_SPEND`, `OUTREACH_ARGS`, `OUTREACH_MARKET`, the two
+> DataForSEO references, the Supabase pair, Outscraper, OpenAI), but **what `OUTREACH_COMMAND` and
+> `OUTREACH_CONFIRM_SPEND` currently hold is unverified.** Check them in the dashboard before
+> deploying. The spend gate makes a stale pair fail safe in both directions (§7.2), so this is a
+> visibility limit, not an exposure.
+
+**The target: `Van Nuys` × `plumber`.** Chosen for the densest possible read of the response
+envelope — 152 prospects and 92 survivors, the most of any LA submarket, so grid results have the
+best chance of joining to businesses we already know. That matters beyond sample size: a snapshot
+whose grid contains **no** known prospect makes `finalize_snapshot_rollup()` raise, and the marker
+can never be written (I-075). Van Nuys is inland San Fernando Valley, so nearly every point should
+return a full pack — the happy path, which is what run one is for. `plumber` is the market's
+`is_primary` keyword and is what `cmd_scan` defaults to; pass it explicitly anyway, because every
+config incident in §6 has been a value someone assumed rather than set.
+
+**Step 1 — set the variables** (owner; do not let a session set these):
+
+```
+OUTREACH_COMMAND       = scan
+OUTREACH_CONFIRM_SPEND = scan                              ← must equal the command's own name
+OUTREACH_ARGS          = --submarket 'Van Nuys' --keyword plumber
+OUTREACH_MARKET        = markets/los-angeles-plumbing.json (unchanged)
+```
+
+**Step 2 — a fresh Deploy, NOT a redeploy.** A redeploy replays the previous deployment's config
+snapshot and would run whatever was set last time (§6.1, and the ~$0.11 it cost). Line one of the
+logs prints the resolved command, the confirm token and the commit SHA — read it before reading
+anything else. Expect `command=scan PAID confirm=scan`.
+
+Then **immediately set `OUTREACH_COMMAND` back to `filter` and blank `OUTREACH_CONFIRM_SPEND`.**
+The gate refuses rather than trusting this, but a manual Deploy while `scan` is still set is the
+likeliest remaining way to spend money by accident (§7.2).
+
+~81 tasks in one batch. At config's placeholder rate (`dataforseo_cost_per_request_cents`, 1¢)
+that is ~$0.81; **the real figure has to come from the DataForSEO dashboard, because the scan
+writes no `cost_ledger` row at all — I-086.**
+
+**Step 3 — the collector's schedule, before walking away.** `OUTREACH_COMMAND=collect` on a
+frequent `cronSchedule` (hourly is fine; `0 * * * *`). Free, never spend-gated, safe on any tick,
+and it carries the rollup. The ready list holds a task ~3 days against a 15-day scan cadence, so a
+collector that runs per scan cycle silently converts the normal path into the fallback-by-id path
+— which still works, which is exactly why nobody would notice (§11 item 2).
+
+> A Railway cron service runs its start command **on every deploy as well as on schedule**. With
+> `collect` set that is free and idempotent. It is also why the schedule must be set while the
+> command is `collect` and not while it is `scan`.
+
+**Step 4 — read the run.** `queries/first-scan-verify.sql`, 14 checks, read-only; every statement
+has been executed against the live schema so it parses. Run it after `scan` (checks 1–3) and again
+after the first `collect` tick (all of it). Checks 4, 6 and 8 are assertions — a non-empty result
+is a defect. The rest print what you want to see beside what you got, because a first run's
+expected values are not all knowable in advance.
+
+**Capture the `collect` command's JSON output.** `recovered_by_tag` is a counter in that output
+and nowhere else — not a column, not reconstructible afterwards (I-087).
+
+**What run one does NOT prove**, so it is not later assumed to have:
+
+- **The empty-pack path.** Van Nuys is inland; points returning zero businesses are what exercise
+  `result_count = 0`, the land-mask counter and the "measured, not found" denominator rule. A
+  coastal submarket (Santa Monica, Long Beach, Torrance) is the natural run two.
+- **Land masking itself**, which needs 3 consecutive null scans and therefore 3 cycles minimum.
+- **The fallback-by-id path**, which only runs when a task ages off `tasks_ready` after ~3 days.
+- **Tag recovery**, unless it happens to fire.
+
 ---
 
 **After the first real run, the thing to check is not "did it succeed"** — it is whether `scan_task` rows moved `pending → submitted → collected`, whether `actual_points` matches `expected_points`, and whether any row is sitting on `recovered_by_tag`. A run that posts nothing and collects nothing reports clean, because there is nothing to report.
+
+> **Corrected 2026-08-06:** there is no row and no column named `recovered_by_tag` — it is a
+> counter printed once in the `collect` command's output (I-087). The rest of this paragraph
+> stands, and `queries/first-scan-verify.sql` is the durable form of it.
