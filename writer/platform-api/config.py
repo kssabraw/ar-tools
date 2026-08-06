@@ -1519,6 +1519,11 @@ class Settings(BaseSettings):
     # being able to see the run, so the recovery is "re-check", not "re-push".
     website_deploy_timeout_minutes: int = 20
     website_theme_model: str = "claude-sonnet-4-6"
+    # Home/about/contact copy. Sonnet, not Haiku: this is the client's first
+    # impression in their own voice, not a categorization task — the same tier
+    # the service writer uses. No SERP or scoring loop, so it stays cheap.
+    website_core_pages_model: str = "claude-sonnet-4-6"
+    website_core_pages_max_tokens: int = 2000
     # Where uploaded design exports and their compiled tokens.css live. Private:
     # a design is a client's brand before it is anyone else's business.
     website_theme_bucket: str = "website-themes"

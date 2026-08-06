@@ -106,15 +106,67 @@ class TestGeneratePage:
         assert tables["website_pages"].update.call_args[0][0]["error"] == "engine_unavailable:cost"
 
     async def test_a_specified_but_unbuilt_engine_is_distinguishable(self):
-        # "The core-pages generator does not exist yet" and "nothing will ever
-        # write this" are different problems with different fixes.
-        page = {"id": "p1", "website_id": "w1", "page_type": "about",
-                "plan": {"engine": "core_pages"}}
+        # "This engine isn't built yet" and "nothing will ever write this" are
+        # different problems with different fixes. No engine name is unbuilt
+        # today, so this pins the *distinction* on a hypothetical one.
+        page = {"id": "p1", "website_id": "w1", "page_type": "cost",
+                "plan": {"engine": "some_future_engine"}}
         sb, _ = _supabase(page, SITE, CLIENT)
         with patch.object(wg, "get_supabase", return_value=sb):
             result = await wg.generate_page(page_id="p1", user_id="u1")
 
-        assert result["reason"] == "engine_not_built:core_pages"
+        assert result["reason"] == "engine_not_built:some_future_engine"
+
+    async def test_a_home_page_is_written_by_the_core_pages_writer(self):
+        page = {"id": "p1", "website_id": "w1", "page_type": "home", "title": "Home",
+                "plan": {"engine": "core_pages"}}
+        sb, tables = _supabase(page, SITE, CLIENT)
+        content = {"title": "Acme Roofing", "description": "Fast roof repair.",
+                   "body": "", "frontmatter": {"sections": {"heroTitle": "Roofs done right"}}}
+        gen = AsyncMock(return_value=content)
+        with patch.object(wg, "get_supabase", return_value=sb), patch(
+            "services.website_core_pages.generate_core_page", new=gen
+        ):
+            result = await wg.generate_page(page_id="p1", user_id="u1")
+
+        assert result == {"page_id": "p1", "generated": True, "page_kind": "home"}
+        assert gen.call_args.kwargs["page_kind"] == "home"
+        written = tables["website_pages"].update.call_args[0][0]
+        # A core page IS its own source — stored on the row, no upstream record.
+        assert written["content_source"] == "composed"
+        assert written["source_id"] is None
+        assert written["content"] == content
+        assert written["content_hash"] is None
+
+    async def test_privacy_is_deterministic_and_never_hits_the_writer(self):
+        # The template renders the policy from a legal template + business facts;
+        # sending it to an LLM would only invent a policy nobody asked for.
+        page = {"id": "p1", "website_id": "w1", "page_type": "privacy",
+                "plan": {"engine": "core_pages"}}
+        sb, _ = _supabase(page, SITE, CLIENT)
+        gen = AsyncMock()
+        with patch.object(wg, "get_supabase", return_value=sb), patch(
+            "services.website_core_pages.generate_core_page", new=gen
+        ):
+            result = await wg.generate_page(page_id="p1", user_id="u1")
+
+        assert result["reason"] == "template_rendered"
+        gen.assert_not_called()
+
+    async def test_a_core_page_is_refused_without_brand_context(self):
+        # A home page written with zero brand context is every visitor's first
+        # impression of the client in a generic voice — the same bar as a service
+        # page.
+        page = {"id": "p1", "website_id": "w1", "page_type": "home",
+                "plan": {"engine": "core_pages"}}
+        sb, _ = _supabase(page, SITE, {"id": "c1"})
+        gen = AsyncMock()
+        with patch.object(wg, "get_supabase", return_value=sb), patch(
+            "services.website_core_pages.generate_core_page", new=gen
+        ):
+            with pytest.raises(wg.GenerateError, match="content_no_brand_context"):
+                await wg.generate_page(page_id="p1", user_id="u1")
+        gen.assert_not_called()
 
     async def test_generation_is_refused_without_brand_context(self):
         page = {"id": "p1", "website_id": "w1", "page_type": "service",
