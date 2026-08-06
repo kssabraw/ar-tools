@@ -43,6 +43,7 @@ import { GscResearch } from './pages/GscResearch'
 import { LeadOff } from './pages/LeadOff'
 import { Syndication } from './pages/Syndication'
 import { GbpPosts } from './pages/GbpPosts'
+import { WebsiteBuilder } from './pages/WebsiteBuilder'
 import { Citations } from './pages/Citations'
 import { TaskPlan } from './pages/TaskPlan'
 import { AiVisibility } from './pages/AiVisibility'
@@ -105,6 +106,7 @@ export default function App() {
                       <Route path="/clients/:id/gsc-research" element={<GscResearch />} />
                       <Route path="/clients/:id/syndication" element={<Syndication />} />
                       <Route path="/clients/:id/gbp-posts" element={<GbpPosts />} />
+                      <Route path="/clients/:id/website" element={<WebsiteBuilder />} />
                       <Route path="/clients/:id/citations" element={<Citations />} />
                       <Route path="/clients/:id/task-plan" element={<TaskPlan />} />
                       <Route path="/clients/:id/action-plan" element={<ActionPlan />} />

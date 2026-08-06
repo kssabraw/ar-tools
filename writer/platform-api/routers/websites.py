@@ -106,6 +106,18 @@ def _load_site(website_id: str) -> dict:
     return rows[0]
 
 
+@router.get("/websites/status")
+async def website_builder_status(auth: dict = Depends(require_auth)) -> dict:
+    """Whether the module is switched on.
+
+    Deliberately NOT behind `_enabled()`: the frontend has to be able to ask
+    while the answer is "no" so it can hide the workspace card and 404 the
+    route. Same pattern as /pace/status and /qa/status — a dead card that 503s
+    on click is worse than no card.
+    """
+    return {"enabled": bool(settings.website_builder_enabled)}
+
+
 @router.get("/clients/{client_id}/websites")
 async def list_websites(client_id: str, auth: dict = Depends(require_auth)) -> dict:
     _enabled()
