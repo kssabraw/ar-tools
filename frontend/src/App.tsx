@@ -41,6 +41,7 @@ import { TaskLibrary } from './pages/TaskLibrary'
 import { ClientReports } from './pages/ClientReports'
 import { GscResearch } from './pages/GscResearch'
 import { LeadOff } from './pages/LeadOff'
+import { Outreach } from './pages/Outreach'
 import { Syndication } from './pages/Syndication'
 import { GbpPosts } from './pages/GbpPosts'
 import { Citations } from './pages/Citations'
@@ -87,6 +88,7 @@ export default function App() {
                           shares the suite sidebar. */}
                       <Route path="/fanout/*" element={<FanoutApp />} />
                       <Route path="/leadoff" element={<LeadOff />} />
+                      <Route path="/outreach" element={<Outreach />} />
                       <Route path="/runs" element={<Runs />} />
                       <Route path="/runs/:id" element={<RunDetail />} />
                       <Route path="/clients" element={<Clients />} />
