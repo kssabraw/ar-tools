@@ -1977,3 +1977,28 @@ precisely the state the runbook asks you to create — so the gate does not cove
 where the 00:52 pair did. Their deploy logs come back empty through the API, so what command they
 ran is not knowable from here — consistent with a crash (§6.2 reports one as SUCCESS), with a
 `collect` run finding nothing to do, or with a refused command. Named rather than guessed at.
+
+### I-072 RESOLVED (2026-08-06) — owner ruling: UI now, and it must TRIGGER scans, not only read
+The question this issue held open — operator board now vs after Phase 3 — was answered by the
+owner, and answered wider than asked: "we need a UI to start this, not just read the reports."
+That overturns §11a's working position (a trigger button "gets its own decision") by making that
+decision. The on-record recommendation (first scan before a sixth unrun layer, HANDOFF §8.1 2c)
+was raised twice and overruled twice; the first scan will now arrive through the trigger path it
+proves. Recorded, not relitigated.
+
+**v1 scope:** one suite-level page (like LeadOff — pre-client, not client-scoped): pick a
+submarket × keyword → confirm → scan queued; live status (order state, task progress x/81,
+snapshot completeness); results tables (coverage + placeholder score) once rolled up. The
+**heatmap stays Phase 3** — building the renderer now is the "interesting half twice" cost the
+original issue named, and nothing in this ruling requires it.
+
+**The mechanism — how a button spends money without gutting §7.2 — is in DECISIONS.md** (the
+confirmation moves from config to a signed order row). Summary: the UI writes a `scan_request`
+row through platform-api (admin-gated); the outreach service gains a `tick` command = `collect` +
+drain at most one pending order; the frequent cron §11 already required now runs `tick` and does
+double duty. `collect` itself stays free and never drains — the §8a invariant and its test are
+untouched. Closing I-086 (cost_ledger on scans) rides this build, because a UI that spends money
+must show what it spent.
+
+**What this does NOT remove:** the one-time Railway setup (the cron running `tick`) and the I-088
+auto-deploy question. A webpage cannot wake a server on a schedule; the engine still has to exist.
