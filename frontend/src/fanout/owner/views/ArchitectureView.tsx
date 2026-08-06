@@ -6,6 +6,7 @@ import {
   getSummary,
   type ArchitectureJson,
 } from "../../shared/api";
+import { friendlyError } from "../../shared/errors";
 import { useSession } from "../SessionWorkspace";
 
 // Architecture View (PRD §9.3): two-panel site map. Left = pillars → supporting
@@ -22,12 +23,20 @@ export function ArchitectureView() {
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
 
+  // The generate/regenerate POST has three real rejections the owner needs to
+  // read: 400 when no article plan exists yet (architecture organizes clusters,
+  // it never plans), 409 when a run is already in progress, and 403 for a VA.
+  // Without an onError the mutation swallowed all of them — the spinner blinked
+  // off and the button looked dead, which is exactly how it was reported.
+  const [genError, setGenError] = useState<string | null>(null);
   const regen = useMutation({
     mutationFn: () => generateArchitecture(sessionId),
     onSuccess: () => {
+      setGenError(null);
       setBusy(true);
       qc.invalidateQueries({ queryKey: ["summary", sessionId] });
     },
+    onError: (e) => setGenError(friendlyError(e, "Couldn't generate the architecture.")),
   });
 
   // While regenerating, the session goes status=queued (waiting for a worker
@@ -55,6 +64,7 @@ export function ArchitectureView() {
             <button className="btn btn-primary" style={{ width: "auto" }} disabled={busy || regen.isPending} onClick={() => regen.mutate()}>
               {busy || regen.isPending ? <><span className="spinner-sm" />Generating…</> : "Generate architecture"}
             </button>
+            {genError && <p className="form-error">{genError}</p>}
           </>
         )}
       </div>
@@ -90,6 +100,7 @@ export function ArchitectureView() {
           </button>
         )}
       </div>
+      {genError && <p className="form-error">{genError}</p>}
       <ArchPanels arch={a} selected={selected} onSelect={setSelected} />
     </div>
   );
