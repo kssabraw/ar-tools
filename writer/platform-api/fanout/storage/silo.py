@@ -255,6 +255,58 @@ def try_claim_run(session_id: str) -> bool:
     return bool(res.data)
 
 
+_RECOVERY_COLS = "id, status, seed_keyword, statistical_clustering_log"
+
+
+def get_live_sessions(session_ids: list[str]) -> list[dict]:
+    """The named sessions that are still in a live status. The shutdown hook's
+    read: it recovers only the runs this process owns, so it asks for those ids
+    rather than everything that looks live (see `fanout/run_recovery.py`)."""
+    if not session_ids:
+        return []
+    res = (
+        get_service_client()
+        .table("sessions")
+        .select(_RECOVERY_COLS)
+        .in_("id", session_ids)
+        .in_("status", ("queued", "running"))
+        .execute()
+    )
+    return res.data or []
+
+
+def list_live_sessions() -> list[dict]:
+    """Every session the DB still marks as claimed by a worker — the fallback
+    sweep's read, for runs whose process died too hard to run its shutdown hook.
+    Only safe to act on once the deploy handover window has closed; see
+    `fanout/run_recovery.py`."""
+    res = (
+        get_service_client()
+        .table("sessions")
+        .select(_RECOVERY_COLS)
+        .in_("status", ("queued", "running"))
+        .execute()
+    )
+    return res.data or []
+
+
+def recover_orphaned_session(session_id: str, status: str, note: str) -> bool:
+    """Return one orphaned session to an actionable status, recording why.
+
+    Guarded on the session still being live, so this can never overwrite a status
+    a real worker has since written — the sweep reads and writes as two steps, and
+    on the read side a row is only a candidate because no process owns it."""
+    res = (
+        get_service_client()
+        .table("sessions")
+        .update({"status": status, "last_error": note})
+        .eq("id", session_id)
+        .in_("status", ("queued", "running"))
+        .execute()
+    )
+    return bool(res.data)
+
+
 def try_mark_started(session_id: str) -> bool:
     """Flip a queued claim to running — called by the worker when it actually
     picks the job up. Returns False if the session is no longer queued (the user
