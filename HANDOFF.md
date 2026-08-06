@@ -190,9 +190,17 @@ the six unbuilt writers (§4.7).
   Services Index to CORE-conditional (auto-triggered)** — Areas We Serve on any
   multi-city site (≥2 cities), Services Index above 8 top-level services. The
   planner already fired on exactly those thresholds; what changed is that they
-  are *infrastructure, not optional*, which sharpens the Writer #6 gap below.
-  Upstream open item: SOP ratification of the ≥2-cities threshold (reference R6
-  notes the SOP currently implies a looser nav-overflow trigger).
+  are *infrastructure, not optional*.
+- **Areas We Serve triggers at ≥ 6 cities** (owner ruling 2026-08-06), settling
+  reference R6's open threshold and **superseding the ≥ 2 in the vendored v3.6
+  capture** — the capture is faithful, so the ruling lives in the PRD amendments
+  block until the Doc is revised. A 2–5 city site therefore has location pages
+  and a matrix but no location hub, and nothing in its global nav points at the
+  location silo (those cities are reached from the homepage grid, the matrix
+  pages' structural links, and the HTML sitemap). The number lives in
+  `website_plan.AREAS_WE_SERVE_TRIGGER` **and** `site-template/src/lib/hubs.ts`
+  — the planner decides whether to plan the hub, the template whether to render
+  it, and if they disagree the symptom is a 404 in the global nav.
 - **Component renaming is done**, but 13 library components remain unbuilt and
   are listed in `site-template/src/theme/manifest.ts::MISSING_COMPONENTS`; each
   gates a page type that has no writer anyway.

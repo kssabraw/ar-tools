@@ -195,8 +195,9 @@ class TestScaleGates:
         # Counting the SOP-mandated nav would put every legitimate city page
         # over the bar. The exclusion is half of what the 25 figure ratifies.
         plan = wp.build_plan(site_type="local_business", catalog=CATALOG, cities=CITIES)
-        # Two matrix cells + the Areas We Serve page this multi-city site gets.
-        assert plan.links_per_index["/overland-park/"] == 3
+        # Its two matrix cells only: a 2-city site is below the location-hub
+        # threshold, so there is no Areas We Serve page to link to.
+        assert plan.links_per_index["/overland-park/"] == 2
 
 
 class TestLinkCounting:
@@ -210,8 +211,8 @@ class TestLinkCounting:
         assert plan.links_per_index["/roof-repair/"] == 15
 
     def test_a_city_page_counts_services_neighborhoods_and_areas(self):
-        cities = [city("Overland Park", neighborhoods=("Nall Hills", "Deer Creek")),
-                  city("Lees Summit")]
+        cities = [city("Overland Park", neighborhoods=("Nall Hills", "Deer Creek"))]
+        cities += [city(f"City {i}") for i in range(5)]  # 6 cities → the hub exists
         plan = wp.build_plan(site_type="local_business", catalog=CATALOG, cities=cities)
         # 2 matrix cells + 2 neighborhoods + the Areas We Serve page.
         assert plan.links_per_index["/overland-park/"] == 5
@@ -242,13 +243,24 @@ class TestLinkCounting:
 class TestCoreConditionalHubs:
     """Reference v3.5 note R6 — infrastructure, not optional add-ons."""
 
-    def test_areas_we_serve_auto_triggers_on_any_multi_city_site(self):
-        # >= 2 targeted cities, not nav overflow. The reference adopts this
-        # threshold and flags it for SOP ratification against the looser reading.
-        plan = wp.build_plan(site_type="local_business", catalog=CATALOG, cities=CITIES)
+    def test_areas_we_serve_auto_triggers_at_six_cities(self):
+        # Ratified at 6 by the owner 2026-08-06, settling reference R6's open
+        # threshold — and superseding the >= 2 the v3.6 capture adopted.
+        cities = [city(f"City {i}") for i in range(6)]
+        plan = wp.build_plan(site_type="local_business", catalog=CATALOG, cities=cities)
         [page] = [p for p in plan.pages if p.page_type == "areas_we_serve"]
         assert page.is_core_conditional
         assert not page.is_core
+
+    def test_five_cities_is_not_enough(self):
+        # A 2-5 city site gets location pages and a matrix but no location hub;
+        # those cities are reached from the homepage grid, the matrix pages'
+        # structural links, and the HTML sitemap.
+        cities = [city(f"City {i}") for i in range(5)]
+        plan = wp.build_plan(site_type="local_business", catalog=CATALOG, cities=cities)
+        assert not [p for p in plan.pages if p.page_type == "areas_we_serve"]
+        # The location silo itself is unaffected — only the hub moved.
+        assert len([p for p in plan.pages if p.page_type == "location"]) == 5
 
     def test_a_single_city_site_gets_no_areas_page(self):
         plan = wp.build_plan(
@@ -273,7 +285,8 @@ class TestCoreConditionalHubs:
         # Tier 4 is "hubs once children exist". Inclusion is by CORE-conditional
         # trigger and is NOT subject to Q12's "propose Tiers 1-3 by default" —
         # a future tier filter must not drop them.
-        plan = wp.build_plan(site_type="local_business", catalog=CATALOG, cities=CITIES)
+        cities = [city(f"City {i}") for i in range(6)]
+        plan = wp.build_plan(site_type="local_business", catalog=CATALOG, cities=cities)
         [page] = [p for p in plan.pages if p.page_type == "areas_we_serve"]
         assert page.tier == 4
 
@@ -302,11 +315,14 @@ class TestTriggers:
         # The trigger records the threshold it cleared, so a reviewer sees why.
         assert index and "> 8" in index[0].trigger
 
-    def test_areas_we_serve_triggers_on_multi_city_only(self):
-        single = wp.build_plan(site_type="local_business", catalog=CATALOG, cities=[city("Anaheim")])
-        multi = wp.build_plan(site_type="local_business", catalog=CATALOG, cities=CITIES)
-        assert "/areas-we-serve/" not in {p.path for p in single.pages}
-        assert "/areas-we-serve/" in {p.path for p in multi.pages}
+    def test_areas_we_serve_triggers_only_at_the_ratified_city_count(self):
+        below = wp.build_plan(site_type="local_business", catalog=CATALOG, cities=CITIES)
+        at = wp.build_plan(
+            site_type="local_business", catalog=CATALOG,
+            cities=[city(f"City {i}") for i in range(wp.AREAS_WE_SERVE_TRIGGER)],
+        )
+        assert "/areas-we-serve/" not in {p.path for p in below.pages}
+        assert "/areas-we-serve/" in {p.path for p in at.pages}
 
     def test_neighborhood_trigger_names_the_entity_test(self):
         cities = [city("Overland Park", ["Deer Creek"]), city("Lees Summit")]

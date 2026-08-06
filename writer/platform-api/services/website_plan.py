@@ -94,6 +94,19 @@ MATRIX_SIGNOFF_THRESHOLD = 200
 LINKS_PER_INDEX_MAX = 25
 # A Services index is triggered when the nav would otherwise overflow.
 SERVICES_INDEX_TRIGGER = 8
+# Areas We Serve — **ratified at 6 by the owner, 2026-08-06**, settling the open
+# threshold in reference note R6. R6 offered two candidates (>= 2 cities, which
+# v3.5 adopted, versus the SOP's looser nav-overflow implication); 6 is a third
+# answer and supersedes the >= 2 in the vendored v3.6 capture, which needs
+# re-vendoring once the Doc is updated.
+#
+# The consequence worth knowing: a 2-5 city site gets location pages and a
+# matrix but no location hub, so nothing in the global nav points at the
+# location silo. Those cities are still reached from the homepage's
+# LocationCardGrid, from every matrix page's structural links, and from the HTML
+# sitemap — §4.1 rule 4 lists Areas We Serve as "where applicable", so a site
+# under the threshold is conformant without one.
+AREAS_WE_SERVE_TRIGGER = 6
 
 PageType = Literal[
     "home",
@@ -353,16 +366,15 @@ def conditional_pages(
                 tier=4,
             )
         )
-    # >= 2 targeted cities. The reference adopts this threshold and flags it for
-    # SOP ratification against a looser nav-overflow reading (R6) — if the SOP
-    # settles on nav overflow, this is the line that changes.
-    if multi_city and len(list(cities)) > 1:
+    city_count = len(list(cities))
+    if multi_city and city_count >= AREAS_WE_SERVE_TRIGGER:
         out.append(
             PlannedPage(
                 _path("areas-we-serve"),
                 "areas_we_serve",
                 "Areas We Serve",
-                "CORE-conditional (auto): multi-city site (>= 2 location pages)",
+                f"CORE-conditional (auto): {city_count} location pages "
+                f">= {AREAS_WE_SERVE_TRIGGER}",
                 tier=4,
             )
         )
