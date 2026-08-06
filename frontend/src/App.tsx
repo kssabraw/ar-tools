@@ -42,6 +42,7 @@ import { ClientReports } from './pages/ClientReports'
 import { GscResearch } from './pages/GscResearch'
 import { LeadOff } from './pages/LeadOff'
 import { Outreach } from './pages/Outreach'
+import { OutreachLeads } from './pages/OutreachLeads'
 import { Syndication } from './pages/Syndication'
 import { GbpPosts } from './pages/GbpPosts'
 import { WebsiteBuilder } from './pages/WebsiteBuilder'
@@ -91,6 +92,7 @@ export default function App() {
                       <Route path="/fanout/*" element={<FanoutApp />} />
                       <Route path="/leadoff" element={<LeadOff />} />
                       <Route path="/outreach" element={<Outreach />} />
+                      <Route path="/outreach/leads" element={<OutreachLeads />} />
                       <Route path="/runs" element={<Runs />} />
                       <Route path="/runs/:id" element={<RunDetail />} />
                       <Route path="/clients" element={<Clients />} />

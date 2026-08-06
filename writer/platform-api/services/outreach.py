@@ -1001,3 +1001,73 @@ def placeholder_scores(
         "limit": size,
         "offset": start,
     }
+
+
+def promote_prospect(prospect_id: str, actor_id: str) -> dict[str, Any]:
+    """Turn a scanned prospect into a lead, prefilled — the scan-results "Send to CRM" click.
+
+    Owner ruling 2026-08-06 (outreach DECISIONS.md): a hand-picked lead IS `outbound_scan`.
+    `source` records provenance, not automation, and the `lead.unique (prospect_id, source)`
+    constraint makes the promotion idempotent against both a second click and Phase 3's future
+    emit path — either finding the lead already exists means somebody got there first, so the
+    existing lead comes back with `already_existed` rather than an error. A button that 422s on
+    its second press teaches people to distrust the first.
+    """
+    client = get_outreach_client()
+    rows = (
+        client.table("prospect")
+        .select("id,name,phone,website,category")
+        .eq("id", prospect_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise OutreachError("prospect_not_found")
+    prospect = rows[0]
+
+    existing = (
+        client.table("lead")
+        .select(_LEAD_LIST_COLUMNS)
+        .eq("prospect_id", prospect_id)
+        .eq("source", "outbound_scan")
+        .is_("deleted_at", "null")
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if existing:
+        return dict(existing[0], already_existed=True)
+
+    payload = {
+        "source": "outbound_scan",
+        "prospect_id": prospect_id,
+        "company_name": prospect.get("name"),
+        "phone": prospect.get("phone"),
+        "website": prospect.get("website"),
+        "category": prospect.get("category"),
+    }
+    try:
+        lead = create_lead(payload, actor_id)
+    except OutreachError:
+        raise
+    except Exception:
+        # Lost a race against a concurrent promotion (the unique constraint refused). The row
+        # exists, which is the outcome the caller wanted — same shape as add_suppression.
+        raced = (
+            client.table("lead")
+            .select(_LEAD_LIST_COLUMNS)
+            .eq("prospect_id", prospect_id)
+            .eq("source", "outbound_scan")
+            .is_("deleted_at", "null")
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if raced:
+            return dict(raced[0], already_existed=True)
+        raise
+    return dict(lead, already_existed=False)
