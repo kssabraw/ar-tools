@@ -31,6 +31,10 @@ export interface Silo {
   source: "llm_proposed" | "user_added" | "llm_proposed_then_user_edited";
   is_broader_class: boolean;
   is_gated_for_competitor_mining: boolean;
+  // Whether the silo takes part in the run at all (expansion, clustering,
+  // article planning). Absent on responses predating the run-scope control —
+  // read a missing value as in-scope.
+  is_in_run_scope?: boolean;
   created_at: string;
 }
 
@@ -516,11 +520,23 @@ export const patchSession = (sessionId: string, body: SessionPatch) =>
 export const deleteSession = (sessionId: string) =>
   request<void>(`/sessions/${sessionId}`, { method: "DELETE" });
 
-export const setDeepMine = (id: string, topic_ids: string[]) =>
-  request<{ gated_topic_ids: string[]; topics: Silo[] }>(`/sessions/${id}/deep-mine`, {
-    method: "POST",
-    body: JSON.stringify({ topic_ids }),
-  });
+// Records the run's two independent selections: `topic_ids` are the silos to
+// deep-mine for competitor keywords, `run_topic_ids` the silos the run covers at
+// all. Omit run_topic_ids to run every silo (what the VA wizard sends).
+export const setDeepMine = (
+  id: string,
+  topic_ids: string[],
+  run_topic_ids?: string[],
+) =>
+  request<{ gated_topic_ids: string[]; run_topic_ids: string[]; topics: Silo[] }>(
+    `/sessions/${id}/deep-mine`,
+    {
+      method: "POST",
+      body: JSON.stringify(
+        run_topic_ids ? { topic_ids, run_topic_ids } : { topic_ids },
+      ),
+    },
+  );
 
 export const expandSession = (id: string) =>
   request<AsyncAck>(`/sessions/${id}/expand`, { method: "POST" });

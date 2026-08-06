@@ -56,7 +56,8 @@ _DELETE_BATCH = 500
 # Columns returned to the API — never the raw embedding vector.
 _TOPIC_COLS = (
     "id, session_id, name, rationale, relationship_type, supporting_evidence, "
-    "source, is_broader_class, is_gated_for_competitor_mining, created_at"
+    "source, is_broader_class, is_gated_for_competitor_mining, is_in_run_scope, "
+    "created_at"
 )
 
 
@@ -351,6 +352,20 @@ def list_topics(session_id: str) -> list[dict]:
         .execute()
     )
     return res.data
+
+
+def in_run_scope(topic: dict) -> bool:
+    """Whether a silo takes part in the run. Missing/None reads as in-scope so a
+    row written before the run-scope column existed behaves as it always did."""
+    value = topic.get("is_in_run_scope")
+    return True if value is None else bool(value)
+
+
+def list_run_topics(session_id: str) -> list[dict]:
+    """The silos the run actually covers — expansion, relevance gate, clustering
+    and article planning. Excludes silos the user left out of the run scope; the
+    deep-mine gate is a separate, narrower selection on top of this one."""
+    return [t for t in list_topics(session_id) if in_run_scope(t)]
 
 
 def insert_custom_topic(
@@ -685,6 +700,25 @@ def set_topics_gating(session_id: str, gated_topic_ids: list[str]) -> None:
         client.table("topics").update({"is_gated_for_competitor_mining": True}).eq(
             "session_id", session_id
         ).in_("id", gated_topic_ids).execute()
+
+
+def set_run_scope(session_id: str, run_topic_ids: list[str]) -> None:
+    """Mark which silos the run covers. Clears the flag on all of the session's
+    topics, then sets it on the selected ones. An empty list means "no explicit
+    scope" and restores every silo to in-scope, so a caller that doesn't use the
+    control can never silently empty the run."""
+    client = get_service_client()
+    if not run_topic_ids:
+        client.table("topics").update({"is_in_run_scope": True}).eq(
+            "session_id", session_id
+        ).execute()
+        return
+    client.table("topics").update({"is_in_run_scope": False}).eq(
+        "session_id", session_id
+    ).execute()
+    client.table("topics").update({"is_in_run_scope": True}).eq(
+        "session_id", session_id
+    ).in_("id", run_topic_ids).execute()
 
 
 def get_topic_embeddings(session_id: str) -> dict[str, list[float] | None]:

@@ -255,7 +255,10 @@ def run_expand_job(session_id: str) -> None:
     bind_session_id(session_id)
     try:
         session = store.get_session(session_id)
-        topics = store.list_topics(session_id)
+        # Run scope, not every finalized silo: a silo the user left out of the run
+        # is never expanded, gated or clustered (the deep-mine gate below is the
+        # narrower, mining-only selection on top of this one).
+        topics = store.list_run_topics(session_id)
         embeddings = store.get_topic_embeddings(session_id)
         s = get_settings()
         coverage_mode = (session.get("settings") or {}).get("coverage_mode", "standard")
@@ -338,7 +341,7 @@ def run_plan_job(session_id: str, direct: bool = False) -> None:
     try:
         session = store.get_session(session_id)
         log_topics = (session.get("statistical_clustering_log") or {}).get("topics") or {}
-        topics_meta = {t["id"]: t for t in store.list_topics(session_id)}
+        topics_meta = {t["id"]: t for t in store.list_run_topics(session_id)}
         embeddings = store.get_topic_embeddings(session_id)
         relevance_by_topic = store.get_active_keyword_relevance(session_id)
         topic_inputs = [
@@ -435,7 +438,7 @@ def run_regate_job(
     try:
         session = store.get_session(session_id)
         pool = store.list_all_keyword_pool(session_id)
-        topics = store.list_topics(session_id)
+        topics = store.list_run_topics(session_id)
         topic_names = {t["id"]: t["name"] for t in topics}
         topic_embeddings = store.get_topic_embeddings(session_id)
         s = get_settings()
@@ -498,7 +501,7 @@ def run_fanout_job(
     bind_session_id(session_id)
     try:
         session = store.get_session(session_id)
-        topics = store.list_topics(session_id)
+        topics = store.list_run_topics(session_id)
         topic_names = {t["id"]: t["name"] for t in topics}
         topic_ids = [t["id"] for t in topics]
         s = get_settings()
@@ -590,7 +593,10 @@ def run_architecture_job(session_id: str) -> None:
     try:
         session = store.get_session(session_id)
         clusters = store.list_clusters(session_id)
-        topics = store.list_topics(session_id)
+        # Run scope only: a silo excluded from the run has no articles by
+        # construction, and reporting it as "skipped for lack of articles" would
+        # misdescribe why it isn't a pillar.
+        topics = store.list_run_topics(session_id)
         kw_texts = store.get_keyword_texts(
             [c["primary_keyword_id"] for c in clusters if c.get("primary_keyword_id")]
         )

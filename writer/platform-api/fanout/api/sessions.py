@@ -29,6 +29,7 @@ from fanout.pipeline.orchestrate import (
 from fanout.pipeline.recursive_fanout import count_sub_anchors, derive_sub_anchors
 from fanout.pipeline.silo_anchor import build_enriched_anchors
 from fanout.pipeline.silo_discovery import run_silo_discovery
+from fanout.run_scope import SelectionError, resolve_selection
 from fanout.storage import silo as store
 
 logger = logging.getLogger(__name__)
@@ -143,6 +144,11 @@ class DeepMineBody(BaseModel):
     # Silos the user chose to mine for competitor keywords (PRD §7.2). The seed
     # is always mined regardless; an empty list means "seed only".
     topic_ids: list[str] = Field(default_factory=list)
+    # Silos the run itself covers — expansion, relevance gate, clustering and
+    # article planning. A separate, wider selection than the deep-mine gate above
+    # (a silo can be in the run without being mined). None means "every silo",
+    # which is what every caller predating this control sends.
+    run_topic_ids: list[str] | None = None
 
 
 class ApprovalDecisionBody(BaseModel):
@@ -263,7 +269,9 @@ def _estimate_for_session(
     settings = session.get("settings") or {}
     if topics is None:
         topics = store.list_topics(session["id"])
-    silo_count = len(topics)
+    # Per-silo costs (expansion, article orchestrator, metrics) only apply to the
+    # silos the run covers, so a narrowed run scope must quote — and gate — lower.
+    silo_count = len([t for t in topics if store.in_run_scope(t)])
     gated = (
         gated_count
         if gated_count is not None
@@ -559,18 +567,22 @@ def finalize_silos(session_id: str, user: AuthedUser = Depends(require_user)) ->
 def set_deep_mine(
     session_id: str, body: DeepMineBody, user: AuthedUser = Depends(require_user)
 ) -> dict:
-    """Record which silos to mine for competitor keywords. The seed is always
-    mined; this only gates the additional silos."""
+    """Record the run's two independent silo selections: which silos the run
+    covers at all (`run_topic_ids`), and which of those to additionally mine for
+    competitor keywords (`topic_ids`). The seed is always mined."""
     _require_session(user, session_id)
     bind_session_id(session_id)
-    valid_ids = {t["id"] for t in store.list_topics(session_id)}
-    requested = list(dict.fromkeys(body.topic_ids))  # dedupe, preserve order
-    invalid = [tid for tid in requested if tid not in valid_ids]
-    if invalid:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Topics do not belong to this session: {', '.join(invalid)}",
+    try:
+        selection = resolve_selection(
+            all_topic_ids=[t["id"] for t in store.list_topics(session_id)],
+            topic_ids=body.topic_ids,
+            run_topic_ids=body.run_topic_ids,
         )
+    except SelectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=exc.detail
+        ) from exc
+    requested = selection.gated_topic_ids
     # VA deep-mine cap (PRD §10.2 step 6 / §15.2 §7.2 #3): seed + N additional
     # silos. The seed is always mined and isn't in `requested`, so cap the list.
     if get_role(user) != "owner":
@@ -580,8 +592,14 @@ def set_deep_mine(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"VA mode can deep-mine at most the seed plus {cap} silos.",
             )
+    # Scope first: the gate is only meaningful against a settled run scope.
+    store.set_run_scope(session_id, selection.run_topic_ids)
     store.set_topics_gating(session_id, requested)
-    return {"gated_topic_ids": requested, "topics": store.list_topics(session_id)}
+    return {
+        "gated_topic_ids": requested,
+        "run_topic_ids": selection.run_topic_ids,
+        "topics": store.list_topics(session_id),
+    }
 
 
 # ---- M3 expansion + M4 mining/relevance/clustering ------------------------
@@ -599,6 +617,11 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No silos to expand. Finalize at least one silo first.",
+        )
+    if not any(store.in_run_scope(t) for t in topics):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Every silo is excluded from the run. Select at least one to run.",
         )
     # Cost estimate (PRD §8.1), computed for every run path: it both enforces the
     # VA approval gate (below) and is persisted for the §8.4 cost banner. Reuse the
@@ -946,7 +969,9 @@ def fanout_session(
     _assert_embedding_current(session)
     bind_session_id(session_id)
     clustering_log = session.get("statistical_clustering_log") or {}
-    topics = store.list_topics(session_id)
+    # Run scope, so the previewed sub-anchor plan matches what run_fanout_job
+    # will actually re-expand.
+    topics = store.list_run_topics(session_id)
     topic_ids = [t["id"] for t in topics]
     sub_anchors = derive_sub_anchors(
         clustering_log=clustering_log,
