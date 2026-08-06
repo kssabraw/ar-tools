@@ -232,3 +232,56 @@ def test_jsonb_payload_columns_never_appear_in_a_list_projection():
     source = _service_source()
     for name in ("_PROSPECT_COLUMNS", "_LEAD_LIST_COLUMNS", "_ACTIVITY_COLUMNS"):
         assert source.count(name) >= 2, f"{name} is defined but nothing reads through it"
+
+
+# --- scan orders (the UI trigger — outreach DECISIONS.md 2026-08-06) ----------------------------
+
+
+def test_task_progress_counts_and_derived_numbers():
+    progress = svc.build_task_progress(
+        [
+            {"status": "collected"}, {"status": "collected"}, {"status": "collected"},
+            {"status": "submitted"}, {"status": "pending"}, {"status": "failed"},
+        ]
+    )
+    assert progress["total"] == 6
+    assert progress["collected"] == 3
+    assert progress["outstanding"] == 2  # pending + submitted — both still owed a result
+    assert progress["failed"] == 1
+    assert progress["counts"] == {"collected": 3, "submitted": 1, "pending": 1, "failed": 1}
+
+
+def test_task_progress_of_nothing_is_zero_not_an_error():
+    """An order that has not executed yet has no snapshot and no tasks; the status screen renders
+    zeros, not a crash."""
+    progress = svc.build_task_progress([])
+    assert progress == {"counts": {}, "total": 0, "collected": 0, "outstanding": 0, "failed": 0}
+
+
+def test_active_statuses_mirror_the_one_active_index():
+    """The service's duplicate pre-check and the database's partial unique index must agree on
+    what "active" means, or the friendly 422 and the constraint refuse different things. The
+    index predicate is `status in ('pending', 'running')` — migration 20260806120000."""
+    assert svc.SCAN_REQUEST_ACTIVE_STATUSES == ("pending", "running")
+
+
+def test_the_spend_authorizing_routes_are_admin_gated():
+    """The click IS the spend confirmation (outreach DECISIONS.md 2026-08-06), so the role that
+    can click is the role trusted with spend — admin, above the staff bar the CRM writes use.
+    Checked at the source level because a Depends() swap is one autocomplete away and invisible
+    at runtime until the wrong person spends money."""
+    import pathlib
+
+    # By path, not import — the module pulls in fastapi, which the source check does not need.
+    source = (
+        pathlib.Path(svc.__file__).resolve().parents[1] / "routers" / "outreach.py"
+    ).read_text()
+    for route in ("create_scan_request", "cancel_scan_request"):
+        head = source.split(f"async def {route}", 1)[1].split(") -> dict")[0]
+        assert "require_admin" in head, f"{route} must be admin-gated"
+
+    # And the reads stay reads: nothing else in the scan-order section may take require_admin,
+    # or the board becomes invisible to the staff who work it.
+    for route in ("list_scan_requests", "scan_request_detail", "placeholder_scores"):
+        head = source.split(f"async def {route}", 1)[1].split(") -> dict")[0]
+        assert "require_outreach" in head, f"{route} should be readable by any authed staff"
