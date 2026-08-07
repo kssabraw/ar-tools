@@ -18,6 +18,11 @@ class MapsConfig(BaseModel):
     shape: Literal["circle", "square"] = "circle"
     resource_category: Literal["googleMaps", "googleLocalFinder"] = "googleMaps"
     serp_device: Literal["desktop", "mobile", "both"] = "desktop"
+    # Data source for NEW scans. None = inherit the global MAPS_SCAN_PROVIDER.
+    provider: Optional[Literal["local_dominator", "dataforseo"]] = None
+    # Read-only: what `provider` resolves to when unset (the global default), so
+    # the UI can show the effective source for a never-configured client.
+    provider_default: Optional[str] = None
     cadence: Literal["off", "weekly"] = "weekly"
     weekday: int = 1
     # Hour-of-day (0-23) the scheduled scan fires at, in the client's LOCAL time.
@@ -40,6 +45,7 @@ class MapsConfigUpdate(BaseModel):
     shape: Optional[Literal["circle", "square"]] = None
     resource_category: Optional[Literal["googleMaps", "googleLocalFinder"]] = None
     serp_device: Optional[Literal["desktop", "mobile", "both"]] = None
+    provider: Optional[Literal["local_dominator", "dataforseo"]] = None
     cadence: Optional[Literal["off", "weekly"]] = None
     # 0=Mon..6=Sun. Bounded here so an out-of-range day can't be stored and then
     # silently ignored by the scheduler (which falls back to the global default).

@@ -288,16 +288,23 @@ async def get_scan_results(scan_uuid: str) -> Optional[list[dict]]:
 # ----------------------------------------------------------------------------
 # Orchestration
 # ----------------------------------------------------------------------------
+def resolve_scan_provider(config: Optional[dict]) -> str:
+    """The data source a NEW scan should use for this client: the per-client
+    maps_scan_configs.provider when set, else the global MAPS_SCAN_PROVIDER
+    flag. Pure — the single place that decides Local Dominator vs DataForSEO."""
+    provider = (config or {}).get("provider")
+    return provider or settings.maps_scan_provider
+
+
 async def start_client_scan(client_id: str, trigger: str = "scheduled") -> dict:
     """Validate a client's grid config, POST a scan, and record it as 'polling'.
 
-    The single provider branch point: when maps_scan_provider is 'dataforseo',
-    new scans go through the DataForSEO grid builder instead of Local Dominator.
-    (In-flight/historic scans keep finishing on their own provider — the poller
-    routes by the stored maps_scans.provider column, not this flag.)"""
-    if settings.maps_scan_provider == "dataforseo":
-        from services import maps_dataforseo
-        return await maps_dataforseo.start_client_scan_dfs(client_id, trigger)
+    The single provider branch point: each client picks its data source
+    (maps_scan_configs.provider, falling back to the global MAPS_SCAN_PROVIDER
+    flag). When it resolves to 'dataforseo', new scans go through the DataForSEO
+    grid builder instead of Local Dominator. (In-flight/historic scans keep
+    finishing on their own provider — the poller routes by the stored
+    maps_scans.provider column, not this setting.)"""
     supabase = get_supabase()
     config = (
         supabase.table("maps_scan_configs").select("*").eq("client_id", client_id).limit(1).execute()
@@ -305,6 +312,11 @@ async def start_client_scan(client_id: str, trigger: str = "scheduled") -> dict:
     if not config:
         return {"status": "failed", "error": "no_config"}
     config = config[0]
+
+    if resolve_scan_provider(config) == "dataforseo":
+        from services import maps_dataforseo
+        return await maps_dataforseo.start_client_scan_dfs(client_id, trigger)
+
     if not config.get("google_place_id") or config.get("center_lat") is None or config.get("center_lng") is None:
         return {"status": "failed", "error": "config_incomplete"}
 
