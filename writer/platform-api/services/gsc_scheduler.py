@@ -522,7 +522,6 @@ async def gsc_scheduler() -> None:
     state = load_scheduler_state()
     last_run_date = parse_marker_date(state.get("daily"))
     last_df_date = parse_marker_date(state.get("df_weekly"))
-    last_maps_date = parse_marker_date(state.get("maps_weekly"))
     last_reopt_date = parse_marker_date(state.get("reopt_weekly"))
     last_strategist_date = parse_marker_date(state.get("strategist_daily"))
     last_rank_analysis_date = parse_marker_date(state.get("rank_analysis_weekly"))
@@ -654,19 +653,14 @@ async def gsc_scheduler() -> None:
                 if ok:
                     last_df_date = now.date()
                     save_marker("df_weekly", last_df_date.isoformat())
-            # Maps geo-grid scans (Module #5) — now per-client staggered: each
-            # client has its own scan weekday (maps_scan_configs.weekday, unset →
-            # settings.maps_scan_weekday), so the due-check runs DAILY and the
-            # enqueue helper filters to the clients due today. It also carries the
-            # per-client overdue catch-up, so a missed window no longer costs a
-            # full week of grids. `enqueue_due_maps_scans` guards each client
-            # against a second scan the same day, so a daily sweep is safe.
-            # The marker still advances only on success (_safe catches errors, not
-            # the return count), so a transient failure retries on the next tick.
-            if should_run(now, last_maps_date, hour):
-                if _safe("maps_scans", enqueue_due_maps_scans):
-                    last_maps_date = now.date()
-                    save_marker("maps_weekly", last_maps_date.isoformat())
+            # Maps geo-grid scans (Module #5) — evaluated EVERY cycle (like the
+            # GBP-posts schedules) so each client fires near its OWN local scan
+            # time (maps_scan_configs.weekday + scan_hour, in the client's
+            # timezone), not once a day at a global UTC hour. `enqueue_due_maps_scans`
+            # holds a client back until its local hour arrives and then bounds it to
+            # one scan/client/day (scan_due's same-day guard + the pending-job dedup),
+            # so per-cycle evaluation is safe and needs no daily marker.
+            _safe("maps_scans", enqueue_due_maps_scans)
             # Weekly reoptimization action-plan digest on its own weekday.
             if now.weekday() == reopt_weekday and should_run(now, last_reopt_date, hour):
                 if _safe("reopt_plans", enqueue_due_reopt_plans):

@@ -578,6 +578,13 @@ function Legend() {
 }
 
 // ── Setup (config + keywords) ───────────────────────────────────────────────
+// 0-23 → a friendly 12-hour label (e.g. 8 → "8:00 AM", 0 → "12:00 AM").
+function fmtHour(h: number): string {
+  const period = h < 12 ? 'AM' : 'PM'
+  const twelve = h % 12 === 0 ? 12 : h % 12
+  return `${twelve}:00 ${period}`
+}
+
 function Setup({ clientId }: { clientId: string }) {
   const queryClient = useQueryClient()
   const { data: config } = useQuery<MapsConfig>({
@@ -611,6 +618,7 @@ function Setup({ clientId }: { clientId: string }) {
       serp_device: form.serp_device ?? 'desktop',
       cadence: form.cadence ?? 'weekly',
       weekday: form.weekday ?? 1,
+      scan_hour: form.scan_hour ?? 8,
     }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['maps-config', clientId] }),
   })
@@ -693,14 +701,29 @@ function Setup({ clientId }: { clientId: string }) {
             </select>
           </Field>
           {(form.cadence ?? 'weekly') === 'weekly' && (
-            <Field label="Scan day">
-              <select style={input} value={form.weekday ?? 1} onChange={e => set({ weekday: Number(e.target.value) })}>
-                {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-                  .map((d, i) => <option key={i} value={i}>{d}</option>)}
-              </select>
-            </Field>
+            <>
+              <Field label="Scan day">
+                <select style={input} value={form.weekday ?? 1} onChange={e => set({ weekday: Number(e.target.value) })}>
+                  {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+                    .map((d, i) => <option key={i} value={i}>{d}</option>)}
+                </select>
+              </Field>
+              <Field label="Scan time">
+                <select style={input} value={form.scan_hour ?? 8} onChange={e => set({ scan_hour: Number(e.target.value) })}>
+                  {Array.from({ length: 24 }, (_, h) => (
+                    <option key={h} value={h}>{fmtHour(h)}</option>
+                  ))}
+                </select>
+              </Field>
+            </>
           )}
         </div>
+        {(form.cadence ?? 'weekly') === 'weekly' && (
+          <p style={{ ...muted, marginTop: 0, fontSize: 12 }}>
+            Scans run at this time in the client&apos;s local time
+            {config?.timezone ? ` (${config.timezone})` : ' (timezone not set — defaults to UTC)'}.
+          </p>
+        )}
         <button style={primaryBtn} onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>
           {saveMut.isPending ? 'Saving…' : 'Save setup'}
         </button>

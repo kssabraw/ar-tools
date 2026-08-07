@@ -642,6 +642,55 @@ def resolve_weekday(value) -> int:
     return settings.maps_scan_weekday
 
 
+def resolve_scan_hour(value) -> int:
+    """A config's scan hour (0-23, client-local), falling back to the global
+    default. Out-of-range / non-int (incl. bool) → unset. Pure."""
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 23:
+        return value
+    return settings.maps_scan_hour
+
+
+def _zone(tz: Optional[str]):
+    """tzinfo for an IANA name; UTC when unset or unknown (never raises)."""
+    if not tz:
+        return timezone.utc
+    try:
+        from zoneinfo import ZoneInfo  # noqa: PLC0415
+
+        return ZoneInfo(tz)
+    except Exception:  # noqa: BLE001 — a bad name degrades to UTC, never breaks
+        return timezone.utc
+
+
+def hour_reached(now_local: datetime, scan_hour: int) -> bool:
+    """True once the client's local wall-clock has reached its scan hour today.
+
+    The gate that lets a per-client local scan time be honored: the daily sweep
+    runs every scheduler cycle, so a client is held back until its own local hour
+    arrives, then released (once — `scan_due` blocks the rest of the day). Pure."""
+    return now_local.hour >= scan_hour
+
+
+def _parse_ts(value) -> Optional[datetime]:
+    """A Supabase timestamptz string → a UTC-aware datetime; None on garbage.
+
+    Naive/offset-less values are read as UTC (that is how the column is stored).
+    Pure."""
+    if not value:
+        return None
+    s = str(value).strip().replace(" ", "T")
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        try:
+            dt = datetime.fromisoformat(s[:19])  # date+time, drop any offset we can't parse
+        except ValueError:
+            return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 def scan_due(
     today: date, weekday: int,
     last_attempt: Optional[date], last_good: Optional[date],
@@ -679,46 +728,55 @@ def scan_due(
     )
 
 
-def _scan_history(supabase, today: date) -> tuple[dict[str, date], dict[str, date]]:
-    """(last_attempt, last_good): per-client dates of the most recent SCHEDULED
-    scan of any status / of non-failed status, over a 60-day window.
+def _scan_history(
+    supabase, now: datetime
+) -> tuple[dict[str, datetime], dict[str, datetime]]:
+    """(last_attempt, last_good): per-client UTC timestamps of the most recent
+    SCHEDULED scan of any status / of non-failed status, over a 60-day window.
+
+    Returns timestamps (not dates) so the caller can convert each to the CLIENT'S
+    local date — the "already scanned today" de-dup has to be in the same frame as
+    the client-local scheduling day, or a far-from-UTC client could double-scan
+    across the UTC-midnight boundary.
 
     Deliberately ignores manual scans: a one-off "Run scan now" must not suppress
     or shift the client's weekly cadence. Clients with nothing in the window are
     absent, which `scan_due` reads as "wait for your weekday"."""
-    since = (today - timedelta(days=60)).isoformat()
+    since = (now - timedelta(days=60)).isoformat()
     rows = (
         supabase.table("maps_scans").select("client_id, created_at, status")
         .eq("trigger", "scheduled").gte("created_at", since)
         .order("created_at", desc=True).limit(2000).execute()
     ).data or []
-    attempts: dict[str, date] = {}
-    good: dict[str, date] = {}
+    attempts: dict[str, datetime] = {}
+    good: dict[str, datetime] = {}
     for row in rows:
         client_id, created = row.get("client_id"), row.get("created_at")
-        if not client_id or not created:
+        ts = _parse_ts(created)
+        if not client_id or ts is None:
             continue
-        try:
-            day = date.fromisoformat(str(created)[:10])  # created_at is UTC
-        except ValueError:
-            continue
-        if client_id not in attempts or day > attempts[client_id]:
-            attempts[client_id] = day
-        if row.get("status") != "failed" and (client_id not in good or day > good[client_id]):
-            good[client_id] = day
+        if client_id not in attempts or ts > attempts[client_id]:
+            attempts[client_id] = ts
+        if row.get("status") != "failed" and (client_id not in good or ts > good[client_id]):
+            good[client_id] = ts
     return attempts, good
 
 
 def enqueue_due_maps_scans() -> int:
-    """Daily: enqueue a scan for each client whose own scan weekday is today.
+    """Enqueue a scan for each client due right now, in its OWN local time.
 
-    Runs DAILY and filters per client (the pattern the strategist sweep already
-    uses). It used to run on ONE global weekday and select only `client_id` —
-    `maps_scan_configs.weekday` is a real per-client column, settable through the
-    API and returned by `GET /maps/config`, but the scheduler never read it, so
-    every client scanned on `settings.maps_scan_weekday` regardless of its own
-    row. Per-client due-ness (own weekday, overdue catch-up, and the same-day
-    guard that keeps a daily sweep from re-scanning) is decided by `scan_due`.
+    Evaluated every scheduler cycle (not once a day): each client has its own scan
+    weekday AND hour-of-day (`maps_scan_configs.weekday`/`scan_hour`), interpreted
+    in the client's timezone, so a client fires near its chosen local time instead
+    of at one global UTC hour. `hour_reached` holds a client back until its local
+    hour arrives; `scan_due` (fed the client's LOCAL dates) then bounds it to one
+    scan/day and carries the overdue catch-up. Per-cycle evaluation is safe: that
+    same-day guard plus the pending-job dedup in `enqueue_maps_scan` keep it to one
+    paid scan per client per day.
+
+    (History: this used to run on ONE global weekday and select only `client_id`,
+    so every client scanned on `settings.maps_scan_weekday` at 08:00 UTC regardless
+    of its own row.)
 
     A client whose weekly config is still `active` but has lost every active
     keyword produces no scan. That used to be a silent `continue`: the Setup tab
@@ -726,23 +784,44 @@ def enqueue_due_maps_scans() -> int:
     nothing anywhere said why (First Class Roofing sat like that from 2026-06-23).
     Such a client is now warned about + notified once per ISO week, so a stalled
     tracker announces itself instead of having to be noticed."""
+    from services import gbp_timezone  # noqa: PLC0415 — avoid a module-load cycle
+
     supabase = get_supabase()
     configs = (
         supabase.table("maps_scan_configs")
-        .select("client_id, weekday, google_place_id, center_lat, center_lng")
+        .select("client_id, weekday, scan_hour, google_place_id, center_lat, center_lng")
         .eq("active", True).eq("cadence", "weekly").execute()
     ).data or []
     if not configs:
         return 0
-    today = datetime.now(timezone.utc).date()
-    attempts, good = _scan_history(supabase, today)
+    now = datetime.now(timezone.utc)
+    attempts, good = _scan_history(supabase, now)
     enqueued = 0
     starved: list[str] = []
     incomplete: list[str] = []
     for cfg in configs:
         client_id = cfg["client_id"]
         weekday = resolve_weekday(cfg.get("weekday"))
-        if not scan_due(today, weekday, attempts.get(client_id), good.get(client_id)):
+        scan_hour = resolve_scan_hour(cfg.get("scan_hour"))
+        # The weekday + hour are the client's LOCAL time. Resolve its timezone
+        # (cached on clients.timezone; falls back to the grid center's coordinates
+        # so a Maps-only client without GBP lat/lng still schedules locally), then
+        # everything below is decided in that local frame. None → UTC (best-effort).
+        tz = gbp_timezone.resolve_client_timezone(
+            client_id, cfg.get("center_lat"), cfg.get("center_lng")
+        )
+        zone = _zone(tz)
+        now_local = now.astimezone(zone)
+        today = now_local.date()
+        # Hold the client back until its own local hour arrives (then scan_due
+        # bounds it to one scan that day).
+        if not hour_reached(now_local, scan_hour):
+            continue
+        la = attempts.get(client_id)
+        lg = good.get(client_id)
+        last_attempt = la.astimezone(zone).date() if la else None
+        last_good = lg.astimezone(zone).date() if lg else None
+        if not scan_due(today, weekday, last_attempt, last_good):
             continue
         # An incomplete config (Setup saved before Place ID / center were filled
         # in — the upsert allows it) makes `start_client_scan` fail BEFORE any

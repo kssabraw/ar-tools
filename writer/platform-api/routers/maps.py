@@ -68,8 +68,19 @@ router = APIRouter(tags=["maps"])
 _CONFIG_FIELDS = (
     "client_id", "google_place_id", "business_name", "center_lat", "center_lng",
     "radius_miles", "shape", "resource_category", "serp_device", "cadence",
-    "weekday", "active", "last_scanned_at",
+    "weekday", "scan_hour", "active", "last_scanned_at",
 )
+
+
+def _config_timezone(client_id: UUID, lat=None, lng=None) -> str | None:
+    """The IANA timezone the client's local scan time is interpreted in (for
+    display). Best-effort — None degrades scheduling to UTC, never breaks it."""
+    from services import gbp_timezone
+
+    try:
+        return gbp_timezone.resolve_client_timezone(str(client_id), lat, lng)
+    except Exception:  # noqa: BLE001 — display-only, must not fail the config read
+        return None
 
 
 def _prefill_center(gbp: dict | None) -> tuple[float | None, float | None]:
@@ -96,7 +107,12 @@ async def get_config(client_id: UUID, auth: dict = Depends(require_auth)) -> Map
         supabase.table("maps_scan_configs").select("*").eq("client_id", str(client_id)).limit(1).execute()
     ).data
     if existing:
-        return MapsConfig(**{k: existing[0].get(k) for k in _CONFIG_FIELDS}, configured=True)
+        row = existing[0]
+        return MapsConfig(
+            **{k: row.get(k) for k in _CONFIG_FIELDS},
+            timezone=_config_timezone(client_id, row.get("center_lat"), row.get("center_lng")),
+            configured=True,
+        )
 
     client = (
         supabase.table("clients").select("name, gbp_place_id, gbp").eq("id", str(client_id)).limit(1).execute()
@@ -111,6 +127,7 @@ async def get_config(client_id: UUID, auth: dict = Depends(require_auth)) -> Map
         business_name=c.get("name"),
         center_lat=lat,
         center_lng=lng,
+        timezone=_config_timezone(client_id, lat, lng),
         configured=False,
     )
 
@@ -127,7 +144,11 @@ async def put_config(
     row = (
         supabase.table("maps_scan_configs").select("*").eq("client_id", str(client_id)).limit(1).execute()
     ).data[0]
-    return MapsConfig(**{k: row.get(k) for k in _CONFIG_FIELDS}, configured=True)
+    return MapsConfig(
+        **{k: row.get(k) for k in _CONFIG_FIELDS},
+        timezone=_config_timezone(client_id, row.get("center_lat"), row.get("center_lng")),
+        configured=True,
+    )
 
 
 @router.get("/clients/{client_id}/maps/keywords", response_model=list[MapsKeyword])

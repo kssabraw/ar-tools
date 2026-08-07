@@ -89,11 +89,21 @@ def ensure_client_timezone(client: dict) -> Optional[str]:
     return tz
 
 
-def resolve_client_timezone(client_id: str) -> Optional[str]:
+def resolve_client_timezone(
+    client_id: str,
+    fallback_lat: Optional[float] = None,
+    fallback_lng: Optional[float] = None,
+) -> Optional[str]:
     """Fetch the client and return its timezone (deriving + caching if needed).
 
     The convenience entry point for the scheduling code, which usually holds only
-    a client_id. Best-effort — None on any failure or when the client is gone."""
+    a client_id. Best-effort — None on any failure or when the client is gone.
+
+    ``fallback_lat``/``fallback_lng`` are a secondary coordinate source (e.g. the
+    Maps geo-grid center) used only when the client has no cached timezone AND no
+    usable GBP coordinates — so a client tracked in Maps but without GBP lat/lng
+    still gets local-time scheduling. A derived timezone is cached on
+    ``clients.timezone`` so later reads are a plain column lookup."""
     try:
         rows = (
             get_supabase()
@@ -109,4 +119,16 @@ def resolve_client_timezone(client_id: str) -> Optional[str]:
         return None
     if not rows:
         return None
-    return ensure_client_timezone(rows[0])
+    tz = ensure_client_timezone(rows[0])
+    if tz:
+        return tz
+    # GBP-based derivation came up empty — try the caller-supplied coordinates.
+    tz = resolve_timezone(fallback_lat, fallback_lng)
+    if tz:
+        try:
+            get_supabase().table("clients").update({"timezone": tz}).eq(
+                "id", client_id
+            ).execute()
+        except Exception as exc:  # noqa: BLE001 — caching failure must not break scheduling
+            logger.warning("gbp_timezone.cache_failed", extra={"error": str(exc)})
+    return tz

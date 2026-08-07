@@ -446,6 +446,11 @@ class Settings(BaseSettings):
     # Weekly geo-grid scans fire on this weekday (0=Mon..6=Sun) via the shared
     # scheduler; the scheduler also polls in-flight scans each tick until done.
     maps_scan_weekday: int = 1
+    # Default hour-of-day (0-23) a scheduled scan fires at, expressed in the
+    # CLIENT'S local timezone. Used when a config's own maps_scan_configs.scan_hour
+    # is unset/out-of-range. The scheduler evaluates maps due-ness every cycle so a
+    # client fires near this local hour rather than at a single global UTC time.
+    maps_scan_hour: int = 8
     # How long (minutes) to keep polling a scan before marking it failed.
     maps_scan_poll_timeout_minutes: int = 30
     # ── Maps geo-grid provider switch (Local Dominator → DataForSEO) ──────────

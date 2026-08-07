@@ -20,8 +20,13 @@ class MapsConfig(BaseModel):
     serp_device: Literal["desktop", "mobile", "both"] = "desktop"
     cadence: Literal["off", "weekly"] = "weekly"
     weekday: int = 1
+    # Hour-of-day (0-23) the scheduled scan fires at, in the client's LOCAL time.
+    scan_hour: int = 8
     active: bool = True
     last_scanned_at: Optional[str] = None
+    # The IANA timezone `scan_hour`/`weekday` are interpreted in (read-only, derived
+    # from the client's location). None → the scheduler falls back to UTC.
+    timezone: Optional[str] = None
     # True when the row is persisted; False = a default prefilled from the client.
     configured: bool = False
 
@@ -39,6 +44,8 @@ class MapsConfigUpdate(BaseModel):
     # 0=Mon..6=Sun. Bounded here so an out-of-range day can't be stored and then
     # silently ignored by the scheduler (which falls back to the global default).
     weekday: Optional[int] = Field(default=None, ge=0, le=6)
+    # 0-23, in the client's local time. Bounded like weekday.
+    scan_hour: Optional[int] = Field(default=None, ge=0, le=23)
     active: Optional[bool] = None
 
 
