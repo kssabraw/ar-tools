@@ -337,6 +337,9 @@ def run_expand_job(session_id: str) -> None:
             llm_router=_maybe_llm_router(seed, topics),
             llm_router_margin=s.llm_routing_margin_threshold,
             language_filter=_maybe_language_filter(),
+            source_guard_enabled=s.fanout_source_guard_enabled,
+            source_guard_min_score=s.fanout_source_guard_min_score,
+            source_guard_min_seed_tokens=s.fanout_source_guard_min_seed_tokens,
         )
         store.delete_keywords_for_session(session_id)
         store.insert_classified_keywords(session_id, result.per_topic_gated)
@@ -490,6 +493,10 @@ def run_regate_job(
             llm_router=_maybe_llm_router(session["seed_keyword"], topics),
             llm_router_margin=s.llm_routing_margin_threshold,
             language_filter=_maybe_language_filter(),
+            seed=session["seed_keyword"],
+            source_guard_enabled=s.fanout_source_guard_enabled,
+            source_guard_min_score=s.fanout_source_guard_min_score,
+            source_guard_min_seed_tokens=s.fanout_source_guard_min_seed_tokens,
         )
         store.reset_article_planning(session_id)
         store.delete_keywords_for_session(session_id)
@@ -581,6 +588,10 @@ def run_fanout_job(
             llm_router=_maybe_llm_router(session["seed_keyword"], topics),
             llm_router_margin=s.llm_routing_margin_threshold,
             language_filter=_maybe_language_filter(),
+            seed=session["seed_keyword"],
+            source_guard_enabled=s.fanout_source_guard_enabled,
+            source_guard_min_score=s.fanout_source_guard_min_score,
+            source_guard_min_seed_tokens=s.fanout_source_guard_min_seed_tokens,
         )
         store.reset_article_planning(session_id)
         store.delete_keywords_for_session(session_id)
