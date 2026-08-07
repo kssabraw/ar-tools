@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, CalendarPlus, Download, FileText, HelpCircle, RefreshCw, Search, Trash2 } from 'lucide-react'
+import { ArrowLeft, CalendarPlus, Download, FileText, HelpCircle, Lightbulb, Plus, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 
@@ -113,6 +113,20 @@ export function KeywordResearch() {
     mutationFn: (raw: string) =>
       api.post<{ job_id: string; seeds: string[] }>(`/clients/${id}/keyword-research`, { seeds: raw }),
     onSuccess: (r) => setJob(r.job_id),
+  })
+
+  const [suggested, setSuggested] = useState<string[] | null>(null)
+  const suggest = useMutation({
+    mutationFn: () =>
+      api.get<{ seeds: string[]; grounded: boolean; source: string }>(
+        `/clients/${id}/keyword-research/seed-suggestions`),
+    onSuccess: (r) => setSuggested(r.seeds),
+  })
+  // Append a suggested seed to the textarea (one per line), skipping duplicates.
+  const addSeed = (kw: string) => setSeeds((prev) => {
+    const lines = prev.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean)
+    if (lines.some((l) => l.toLowerCase() === kw.toLowerCase())) return prev
+    return prev.trim() ? `${prev.trim()}\n${kw}` : kw
   })
 
   const clearAll = useMutation({
@@ -257,11 +271,45 @@ export function KeywordResearch() {
           rows={2}
           style={{ ...inputStyle, flex: 1, minWidth: 260, resize: 'vertical', fontFamily: 'inherit' }}
         />
-        <button style={primaryBtn} disabled={running || research.isPending || budget <= 0 || !seeds.trim()} onClick={submit}>
-          <RefreshCw size={14} style={running ? { animation: 'spin 1s linear infinite' } : undefined} />
-          {running ? 'Researching…' : 'Research keywords'}
-        </button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <button style={primaryBtn} disabled={running || research.isPending || budget <= 0 || !seeds.trim()} onClick={submit}>
+            <RefreshCw size={14} style={running ? { animation: 'spin 1s linear infinite' } : undefined} />
+            {running ? 'Researching…' : 'Research keywords'}
+          </button>
+          <button
+            style={ghostBtn}
+            onClick={() => suggest.mutate()}
+            disabled={suggest.isPending}
+            title="Suggest seed topics from this client's business, services and location"
+          >
+            <Lightbulb size={14} /> {suggest.isPending ? 'Thinking…' : 'Suggest topics'}
+          </button>
+        </div>
       </div>
+
+      {/* Seed suggestions */}
+      {suggest.isError && <div style={errBox}>{(suggest.error as Error)?.message ?? 'Could not suggest topics.'}</div>}
+      {suggested !== null && (
+        suggested.length ? (
+          <div style={{ ...warnBox, background: '#f0f9ff', color: '#0c4a6e', borderColor: '#bae6fd', flexDirection: 'column', alignItems: 'stretch' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, marginBottom: 8 }}>
+              <Lightbulb size={14} /> Suggested topics to research — click to add a seed
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {suggested.map((s) => (
+                <button key={s} style={suggestChip} onClick={() => addSeed(s)} title="Add to seeds">
+                  <Plus size={12} /> {s}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div style={warnBox}>
+            <HelpCircle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+            <span>No topic suggestions yet — add this client's website, GBP category, or business location on their Setup page, then try again.</span>
+          </div>
+        )
+      )}
       {research.isError && <div style={errBox}>{(research.error as Error)?.message ?? 'Failed to start research.'}</div>}
       {jobStatus?.status === 'failed' && (
         <div style={errBox}>Research failed{jobStatus.error ? `: ${jobStatus.error === 'budget_exceeded' ? ' daily budget reached' : ` ${jobStatus.error}`}` : ''}.</div>
@@ -450,6 +498,7 @@ const linkBtn: React.CSSProperties = { background: 'none', border: 'none', color
 const chip: React.CSSProperties = { padding: '5px 12px', background: '#f1f5f9', color: '#475569', border: '1px solid transparent', borderRadius: 999, fontSize: 12, cursor: 'pointer' }
 const chipActive: React.CSSProperties = { background: '#dbeafe', color: '#1d4ed8', borderColor: '#93c5fd' }
 const clusterChip: React.CSSProperties = { padding: '5px 12px', background: '#fff', color: '#475569', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 12, cursor: 'pointer' }
+const suggestChip: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '5px 10px', background: '#fff', color: '#0369a1', border: '1px solid #bae6fd', borderRadius: 999, fontSize: 12, fontWeight: 500, cursor: 'pointer' }
 const clusterChipActive: React.CSSProperties = { background: '#eff6ff', color: '#1d4ed8', borderColor: '#93c5fd', fontWeight: 600 }
 const th: React.CSSProperties = { textAlign: 'left', padding: '9px 12px', background: '#f8fafc', color: '#475569', fontWeight: 600, fontSize: 12, whiteSpace: 'nowrap' }
 const td: React.CSSProperties = { padding: '8px 12px', color: '#334155' }

@@ -872,6 +872,11 @@ class Settings(BaseSettings):
     # summary when no key is set).
     keyword_research_report_model: str = "claude-sonnet-4-6"
     keyword_research_report_max_tokens: int = 600
+    # Seed/topic suggestions ("give me seeds to start with"): a cheap LLM call
+    # (Haiku — categorization only) grounded on the client's business context,
+    # with a deterministic GBP-derived fallback when no key is set.
+    keyword_research_seed_model: str = "claude-haiku-4-5-20251001"
+    keyword_research_seed_max_tokens: int = 400
 
     # On-site content comparison (Tier B / B5): how many competitor pages to
     # scrape per keyword, and the thresholds to flag a content gap (words thinner

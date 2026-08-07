@@ -19,7 +19,12 @@ from pydantic import BaseModel
 from config import settings
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
-from services import keyword_research, keyword_research_handoff, keyword_research_report
+from services import (
+    keyword_research,
+    keyword_research_handoff,
+    keyword_research_report,
+    keyword_research_seeds,
+)
 
 router = APIRouter(tags=["keyword-research"])
 logger = logging.getLogger(__name__)
@@ -56,6 +61,20 @@ async def clear_research(client_id: UUID, auth: dict = Depends(require_auth)) ->
         logger.error("keyword_research_clear_failed", extra={"client_id": str(client_id), "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
     return {"deleted": deleted}
+
+
+@router.get("/clients/{client_id}/keyword-research/seed-suggestions")
+async def seed_suggestions(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Suggest seed keywords/topics to start research from, grounded in the
+    client's business context (GBP category, location, ICP, website). Best-effort:
+    falls back to a deterministic GBP-derived set when no LLM key is configured.
+    Returns {seeds, grounded, source}."""
+    try:
+        return keyword_research_seeds.suggest_seeds(str(client_id))
+    except Exception as exc:
+        logger.error("keyword_research_seed_suggestions_failed",
+                     extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
 
 
 @router.get("/clients/{client_id}/keyword-research/runs/{run_id}")
