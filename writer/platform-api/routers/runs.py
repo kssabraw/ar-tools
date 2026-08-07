@@ -420,7 +420,9 @@ async def score_service_page(
     auth: dict = Depends(require_auth),
 ):
     """Score a service_page run's current page (nlp-api national mode). SSE
-    heartbeat stream → the ScoreResult (composite + per-engine + deficiencies)."""
+    heartbeat stream → the ScoreResult (composite + per-engine + deficiencies).
+    Legacy in-request path — kept for frontends predating the async twin below
+    (a deploy kills this stream; the async path survives it)."""
     return sse_response(service_page_score.score_run(str(run_id), user_id=auth["user_id"]))
 
 
@@ -431,10 +433,48 @@ async def reoptimize_service_page(
     auth: dict = Depends(require_auth),
 ):
     """Reoptimize a service_page run via the Service Page Writer (fed the given
-    deficiencies), persist a new attempt, then re-score. SSE → {page, score}."""
+    deficiencies), persist a new attempt, then re-score. SSE → {page, score}.
+    Legacy in-request path — see score above."""
     return sse_response(
         service_page_score.reoptimize_run(str(run_id), body.deficiencies, user_id=auth["user_id"])
     )
+
+
+@router.post("/runs/{run_id}/score-async", status_code=202)
+async def score_service_page_async(
+    run_id: UUID,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Deploy-proof score: enqueue a `service_page_score` job and poll
+    `GET /runs/{run_id}/score-jobs/{job_id}` — the work runs server-side, so a
+    deploy (or a closed tab) can't lose it."""
+    job_id = await service_page_score.enqueue_score(str(run_id), user_id=auth["user_id"])
+    return {"job_id": job_id, "status": "pending"}
+
+
+@router.post("/runs/{run_id}/reoptimize-async", status_code=202)
+async def reoptimize_service_page_async(
+    run_id: UUID,
+    body: ServicePageReoptimizeRequest,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Deploy-proof reoptimize: enqueue a `service_page_reoptimize` job; poll
+    the same score-jobs endpoint (its completion carries the new page too)."""
+    job_id = await service_page_score.enqueue_reoptimize(
+        str(run_id), body.deficiencies, user_id=auth["user_id"]
+    )
+    return {"job_id": job_id, "status": "pending"}
+
+
+@router.get("/runs/{run_id}/score-jobs/{job_id}")
+async def get_score_job(
+    run_id: UUID,
+    job_id: UUID,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Poll a score/reoptimize job. Complete → {status, score, page?} read from
+    module_outputs (the authoritative store); failed → {status, error}."""
+    return service_page_score.get_score_job(str(job_id), str(run_id))
 
 
 @router.post(

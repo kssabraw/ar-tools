@@ -128,6 +128,10 @@ class Settings(BaseSettings):
         # User-awaited GitHub publish with image generation (minutes-long, like
         # local_seo_generate) — must not queue behind the daily scheduler burst.
         "blog_github_publish",
+        # Service-page score / reoptimize — the user is watching the run screen
+        # while these execute (formerly in-request SSE; jobs so a deploy can't
+        # kill them). Same must-not-queue rationale as local_seo_action.
+        "service_page_score", "service_page_reoptimize",
     ]
     # Freeze Protocol: daily homepage-indexation check (GSC URL Inspection with a
     # DataForSEO site: warn-only fallback) that can auto-open a deindexing freeze.
