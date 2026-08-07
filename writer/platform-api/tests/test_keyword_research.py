@@ -567,3 +567,95 @@ def test_brand_flood_disabled_returns_empty():
         _mitchell_related(), ["third party claims adjuster"], enabled=False,
     )
     assert flood == set() and report["gate"] == "off"
+
+
+# --- detect_generic_drift_tokens (bleached filler-token drift gate) -------------
+def _tpa_related():
+    """The real "third party claims administrator" shape: the related graph
+    wandered from the legal compound "third party" into the event sense of the
+    bleached filler "party", mixed with the on-topic compound, legit
+    distinctive-token adjacency, and true adjacency."""
+    party_drift = [  # solo overlap = {"party"} — false-friend drift
+        "party rentals", "party supplies", "birthday party ideas",
+        "party planning checklist", "party bus", "party city near me",
+    ]
+    third_drift = ["third grade math", "third eye chakra"]  # solo {"third"} — below min
+    compound = ["third party administrator", "third party claims process"]  # overlap >= 2
+    distinctive_solo = ["claims adjuster salary", "insurance claims process"]  # solo {"claim"}
+    adjacency = ["first notice of loss", "subrogation basics"]  # overlap 0
+    return party_drift + third_drift + compound + distinctive_solo + adjacency
+
+
+def test_generic_drift_flags_bleached_filler_token():
+    drift, report = kr.detect_generic_drift_tokens(
+        _tpa_related(), ["third party claims administrator"], min_count=5,
+    )
+    assert "party" in drift            # 6 solo-"party" keywords clears the floor
+    assert "third" not in drift        # only 2 solo-"third" — below min_count
+    assert report["gate"] == "drift"
+    assert report["dropped"] == 6
+
+
+def test_generic_drift_keeps_compound_distinctive_solo_and_adjacency():
+    drift, _ = kr.detect_generic_drift_tokens(
+        _tpa_related(), ["third party claims administrator"], min_count=5,
+    )
+    seed_toks = kr.token_set("third party claims administrator")
+    # bleached-filler drift dropped...
+    assert kr.is_generic_drift("party rentals", seed_toks, drift)
+    assert kr.is_generic_drift("birthday party ideas", seed_toks, drift)
+    # ...on-topic compound kept (shares >= 2 seed tokens)...
+    assert not kr.is_generic_drift("third party administrator", seed_toks, drift)
+    # ...single-token adjacency on a DISTINCTIVE token kept...
+    assert not kr.is_generic_drift("claims adjuster salary", seed_toks, drift)
+    # ...and true adjacency (no seed overlap) kept.
+    assert not kr.is_generic_drift("first notice of loss", seed_toks, drift)
+
+
+def test_generic_drift_inert_when_seed_is_about_the_filler():
+    # "party rental company": only ONE distinctive token ("rental" — "party" and
+    # "company" are fillers), so the topic could BE the filler. Never gate it,
+    # even though solo-"party" keywords dominate.
+    related = [
+        "party favors", "party venue", "party decorations", "party themes",
+        "party games", "party hire", "party ideas",
+    ]
+    drift, report = kr.detect_generic_drift_tokens(related, ["party rental company"])
+    assert drift == set()
+    assert report["gate"] == "off"
+    assert report["distinctive"] == 1
+
+
+def test_generic_drift_inert_for_short_topic_seed():
+    # "party planning": distinctive tokens < 2 → gate never engages.
+    drift, report = kr.detect_generic_drift_tokens(
+        ["party favors", "party venue", "party games", "party ideas", "party bus"],
+        ["party planning"],
+    )
+    assert drift == set() and report["gate"] == "off"
+
+
+def test_generic_drift_below_min_count_never_fires():
+    related = ["party rentals", "party supplies", "third party administrator",
+               "claims adjuster salary"]
+    drift, report = kr.detect_generic_drift_tokens(
+        related, ["third party claims administrator"], min_count=5,
+    )
+    assert drift == set()
+    assert report["gate"] == "none"
+
+
+def test_generic_drift_disabled_returns_empty():
+    drift, report = kr.detect_generic_drift_tokens(
+        _tpa_related(), ["third party claims administrator"], enabled=False,
+    )
+    assert drift == set() and report["gate"] == "off"
+
+
+def test_generic_drift_no_filler_in_seed_is_inert():
+    # A clean distinctive seed with no bleached filler token → gate never engages.
+    drift, report = kr.detect_generic_drift_tokens(
+        ["roof cleaning", "metal roof cost", "gutter guards"],
+        ["roof repair contractor"],
+    )
+    assert drift == set() and report["gate"] == "off"

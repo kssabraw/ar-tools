@@ -853,6 +853,20 @@ class Settings(BaseSettings):
     keyword_research_brand_flood_filter: bool = True
     keyword_research_brand_flood_fraction: float = 0.4
     keyword_research_brand_flood_min: int = 8
+    # Generic filler-token drift gate on the same related_keywords layer. A
+    # multi-word entity seed can carry a bleached filler word that is a huge
+    # standalone category — "third PARTY claims administrator" — and the related
+    # graph wanders into the filler's own sense ("party" → "party rentals",
+    # "birthday party"). Those share the filler SEED token, so the brand-flood
+    # gate (non-seed tokens only) and the ≥2-overlap coherence gate (withheld from
+    # the trusted related layer) both miss them. This gate drops a related keyword
+    # whose ONLY seed overlap is a single filler token, but ONLY when the seed has
+    # ≥2 DISTINCTIVE (non-filler) tokens carrying the topic — so a seed genuinely
+    # ABOUT the filler ("party rental company", "party planning") is never gated.
+    # A filler needs >= _min such solo-overlap keywords to be flagged. Set False
+    # to disable.
+    keyword_research_generic_drift_filter: bool = True
+    keyword_research_generic_drift_min: int = 5
     # related_keywords expansion hops (0 = seed only, 1 = its related searches,
     # 2 = related-of-related; higher = broader but more wander) + per-seed cap.
     keyword_research_related_depth: int = 2

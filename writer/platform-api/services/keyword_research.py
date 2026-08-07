@@ -420,6 +420,112 @@ def is_brand_flooded(keyword: Optional[str], seed_toks: set[str], flood_tokens: 
     return bool(kt & flood_tokens) and not (kt & seed_toks)
 
 
+# ---------------------------------------------------------------------------
+# Generic filler-token drift gate (pure) — the companion to the brand-flood
+# gate for the trusted related layer.
+#
+# A multi-word ENTITY seed often carries a semantically-BLEACHED filler word
+# that is a huge standalone category — "third PARTY claims administrator",
+# "FIRST party data". The related-searches graph wanders from the compound sense
+# ("third party", legal) into the filler's own sense ("party" → "party rentals",
+# "birthday party"). Those drift keywords share the filler SEED token, so:
+#   * the brand-flood gate misses them (it inspects only the seedless subset and
+#     flags NON-seed tokens), and
+#   * the ≥2-overlap coherence gate — which KR deliberately withholds from the
+#     trusted related layer to preserve legit adjacency — never runs on them.
+# The result is a run full of "party ..." keywords for a claims-administration
+# seed (reported 2026-08-07).
+#
+# The fix stays token-based (no embeddings) and mirrors the brand-flood gate's
+# conservatism. A curated list names the words that are bleached-in-compound and
+# carry no topical meaning ALONE; the gate then engages ONLY when the seed's
+# topic is clearly carried by ≥2 DISTINCTIVE (non-filler) tokens — so a seed that
+# is genuinely ABOUT the filler word ("party rental company", "party planning")
+# is never gated — and drops a related keyword whose ONLY tie to the seed is one
+# flagged filler token, keeping the on-topic compound ("third party
+# administrator", overlap ≥2) and true adjacency (overlap 0).
+# ---------------------------------------------------------------------------
+# Stemmed forms (token_set stems trailing plurals): relational / ordinal /
+# structural filler + generic business-suffix words. A seed token here counts as
+# "distinctive" only when it is NOT in this set.
+_GENERIC_SEED_MODIFIERS = frozenset({
+    "third", "first", "second", "fourth", "fifth",
+    "party", "general", "public", "private", "local", "national", "regional",
+    "personal", "professional", "direct", "indirect", "mutual", "joint",
+    "single", "multiple", "full", "main", "basic", "standard", "premium",
+    "various", "several", "certain", "same", "different",
+    "company", "companie", "service", "group", "business",
+    "inc", "llc", "corp", "ltd", "co",
+})
+_GENERIC_DRIFT_MIN_COUNT = 5        # solo-overlap keywords a filler token needs to be a drift anchor
+_GENERIC_DRIFT_MIN_DISTINCTIVE = 2  # distinctive seed tokens required for the gate to engage at all
+
+
+def detect_generic_drift_tokens(
+    related_keywords: list[str],
+    seeds: list[str],
+    *,
+    enabled: bool = True,
+    min_count: int = _GENERIC_DRIFT_MIN_COUNT,
+) -> tuple[set[str], dict]:
+    """Detect false-friend drift on a bleached FILLER seed token in the related
+    adjacency layer (KR's ungated broadener).
+
+    Engages only when the seed pairs a filler word (``_GENERIC_SEED_MODIFIERS``)
+    with ≥ ``_GENERIC_DRIFT_MIN_DISTINCTIVE`` distinctive tokens — i.e. the topic
+    is clearly elsewhere, so the filler is genuinely peripheral. Among the related
+    keywords whose ONLY seed overlap is a single filler token, a filler with
+    ≥ ``min_count`` such solo keywords is flagged as a drift anchor.
+
+    Returns (drift_tokens, report). ``report`` = {gate, distinctive, drift_tokens,
+    dropped}. ``gate`` is 'off' (disabled / not engaged), 'none' (engaged, no
+    anchor), or 'drift'. Pure."""
+    report = {"gate": "off", "distinctive": 0, "drift_tokens": [], "dropped": 0}
+    if not enabled:
+        return set(), report
+    seed_toks: set[str] = set()
+    for s in seeds or []:
+        seed_toks |= token_set(s)
+    filler = seed_toks & _GENERIC_SEED_MODIFIERS
+    distinctive = seed_toks - _GENERIC_SEED_MODIFIERS
+    report["distinctive"] = len(distinctive)
+    if not filler or len(distinctive) < _GENERIC_DRIFT_MIN_DISTINCTIVE:
+        # Topic not carried by ≥2 distinctive tokens (or no filler at all) → a
+        # solo filler match could be the real subject; leave the layer untouched.
+        return set(), report
+
+    # Count, per filler token, the UNIQUE related keywords whose seed overlap is
+    # exactly that one filler token — the false-friend zone. Keywords sharing ≥2
+    # seed tokens (the on-topic compound) or 0 (true adjacency) are never counted.
+    solo_counts: dict[str, int] = {}
+    seen: set[str] = set()
+    for kw in related_keywords:
+        nk = normalize_keyword(kw)
+        if not nk or nk in seen:
+            continue
+        seen.add(nk)
+        overlap = token_set(nk) & seed_toks
+        if len(overlap) == 1:
+            (t,) = tuple(overlap)
+            if t in filler:
+                solo_counts[t] = solo_counts.get(t, 0) + 1
+    drift = {t for t, c in solo_counts.items() if c >= min_count}
+    dropped = sum(c for t, c in solo_counts.items() if t in drift)
+    report.update({"gate": "drift" if drift else "none",
+                   "drift_tokens": sorted(drift), "dropped": dropped})
+    return drift, report
+
+
+def is_generic_drift(keyword: Optional[str], seed_toks: set[str], drift_tokens: set[str]) -> bool:
+    """A related keyword is dropped when its ONLY seed overlap is a single flagged
+    filler/drift token — so a keyword also sharing a distinctive seed token (the
+    compound), or sharing no seed token (true adjacency), is kept. Pure."""
+    if not drift_tokens:
+        return False
+    overlap = token_set(keyword) & seed_toks
+    return len(overlap) == 1 and next(iter(overlap)) in drift_tokens
+
+
 def looks_like_brand_seed(
     seed: str, client_name: Optional[str], ratio_threshold: float = 0.6
 ) -> bool:
@@ -806,9 +912,15 @@ async def run_keyword_research(
                     "search_intent": m.get("search_intent"),
                 })
 
-    # Brand-flood gate: drop a competitor-brand / homonym namespace that flooded the
-    # related adjacency layer (e.g. a "mitchell ..." cluster), keeping legit
-    # seed-anchored and diverse adjacency. Then merge the survivors as trusted rows.
+    # Two conservative gates clean the trusted related adjacency layer before it
+    # merges. Both key off the seed token set, so compute it once.
+    seed_toks: set[str] = set()
+    for s in seed_list:
+        seed_toks |= token_set(s)
+
+    # (1) Brand-flood gate: drop a competitor-brand / homonym namespace that
+    # flooded the layer (e.g. a "mitchell ..." cluster), keeping legit
+    # seed-anchored and diverse adjacency.
     flood_tokens, flood_report = detect_brand_flood_tokens(
         [r.get("keyword") for r in related_rows], seed_list,
         enabled=settings.keyword_research_brand_flood_filter,
@@ -816,12 +928,23 @@ async def run_keyword_research(
         min_count=settings.keyword_research_brand_flood_min,
     )
     if flood_tokens:
-        seed_toks: set[str] = set()
-        for s in seed_list:
-            seed_toks |= token_set(s)
         related_rows = [
             r for r in related_rows
             if not is_brand_flooded(r.get("keyword"), seed_toks, flood_tokens)
+        ]
+
+    # (2) Generic filler-token drift gate: drop keywords whose only tie to a
+    # multi-word entity seed is a bleached filler word ("party" from "third party
+    # claims administrator"), keeping the on-topic compound and true adjacency.
+    drift_tokens, drift_report = detect_generic_drift_tokens(
+        [r.get("keyword") for r in related_rows], seed_list,
+        enabled=settings.keyword_research_generic_drift_filter,
+        min_count=settings.keyword_research_generic_drift_min,
+    )
+    if drift_tokens:
+        related_rows = [
+            r for r in related_rows
+            if not is_generic_drift(r.get("keyword"), seed_toks, drift_tokens)
         ]
     trusted_rows += related_rows
 
@@ -854,11 +977,17 @@ async def run_keyword_research(
             f"Filtered {flood_report['dropped']} related keyword(s) that looked "
             f"like an unrelated brand/namespace ({', '.join(flood_report['flood_tokens'])})."
         )
+    if drift_report.get("dropped"):
+        drift_words = ", ".join(f"“{t}”" for t in drift_report["drift_tokens"])
+        warnings.append(
+            f"Filtered {drift_report['dropped']} related keyword(s) that only matched "
+            f"a generic word in your seed ({drift_words}) rather than the actual topic."
+        )
     if warnings:
         logger.info("keyword_research.seed_warnings",
                     extra={"client_id": client_id, "seeds": seed_list,
                            "filter": filter_report, "brand_flood": flood_report,
-                           "warnings": warnings})
+                           "generic_drift": drift_report, "warnings": warnings})
     clusters = cluster_keywords(rows)
     label_for = {kw: c["label"] for c in clusters for kw in c["keywords"]}
 
