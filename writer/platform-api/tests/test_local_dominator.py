@@ -68,8 +68,71 @@ def test_build_scan_request_defaults_shape_and_surface():
     assert body["serp_device"] == "desktop"
 
 
+
 # ---------------------------------------------------------------------------
-# enqueue_due_maps_scans — the "active config, no keywords" starvation case
+# resolve_weekday / scan_due — per-client scan scheduling (pure)
+# ---------------------------------------------------------------------------
+from datetime import date  # noqa: E402
+
+from config import settings  # noqa: E402
+
+MON, TUE, THU = 0, 1, 3
+
+
+def test_resolve_weekday_uses_the_config_value():
+    assert local_dominator.resolve_weekday(THU) == THU
+    assert local_dominator.resolve_weekday(0) == 0
+    assert local_dominator.resolve_weekday(6) == 6
+
+
+def test_resolve_weekday_falls_back_on_unset_or_nonsense():
+    default = settings.maps_scan_weekday
+    assert local_dominator.resolve_weekday(None) == default
+    assert local_dominator.resolve_weekday(7) == default      # out of range
+    assert local_dominator.resolve_weekday(-1) == default
+    assert local_dominator.resolve_weekday("tue") == default
+    # bool is an int subclass — must not be read as weekday 1
+    assert local_dominator.resolve_weekday(True) == default
+
+
+def test_scan_due_on_the_clients_own_weekday():
+    # Last scan is recent enough that the overdue catch-up CANNOT fire, so this
+    # isolates the weekday rule itself.
+    thu, recent = date(2026, 8, 6), date(2026, 8, 2)
+    assert thu.weekday() == THU
+    assert (thu - recent).days < 7
+    assert local_dominator.scan_due(thu, THU, recent) is True
+    # ...and NOT on the old global Tuesday, which is the whole point of the fix.
+    assert local_dominator.scan_due(date(2026, 8, 4), THU, recent) is False
+
+
+def test_scan_due_blocks_a_second_scan_the_same_day():
+    """The guard that makes a DAILY sweep safe: enqueue_maps_scan only dedupes
+    pending/running jobs, so a completed scan would otherwise be re-enqueued on
+    the very next tick — 7x the paid scans."""
+    tue = date(2026, 8, 4)
+    assert local_dominator.scan_due(tue, TUE, tue) is False
+
+
+def test_scan_due_is_quiet_between_weekdays():
+    # Wednesday, scanned yesterday on its Tuesday — not due, not yet overdue.
+    assert local_dominator.scan_due(date(2026, 8, 5), TUE, date(2026, 8, 4)) is False
+
+
+def test_scan_due_catches_up_when_a_window_was_missed():
+    """Per-client catch-up: the Tuesday window was missed entirely, so by the
+    following Wednesday a full week has elapsed and the scan must fire rather
+    than silently wait another seven days."""
+    assert local_dominator.scan_due(date(2026, 8, 5), TUE, date(2026, 7, 28)) is True
+
+
+def test_scan_due_never_scanned_waits_for_its_weekday():
+    assert local_dominator.scan_due(date(2026, 8, 5), TUE, None) is False   # Wed
+    assert local_dominator.scan_due(date(2026, 8, 4), TUE, None) is True    # Tue
+
+
+# ---------------------------------------------------------------------------
+# enqueue_due_maps_scans — per-client weekday routing + starvation reporting
 # ---------------------------------------------------------------------------
 class _FakeQuery:
     """Minimal chainable stub of the supabase-py table query builder."""
@@ -83,6 +146,12 @@ class _FakeQuery:
     def eq(self, *_a, **_kw):
         return self
 
+    def gte(self, *_a, **_kw):
+        return self
+
+    def order(self, *_a, **_kw):
+        return self
+
     def limit(self, *_a, **_kw):
         return self
 
@@ -91,41 +160,140 @@ class _FakeQuery:
 
 
 class _FakeSupabase:
-    def __init__(self, configs, keywords_by_client):
+    def __init__(self, configs, scans, keywords_by_client):
         self._configs = configs
+        self._scans = scans
         self._keywords = keywords_by_client
-        self.last_client_id = None
+        self.keyword_lookups = []
 
     def table(self, name):
         if name == "maps_scan_configs":
             return _FakeQuery(self._configs)
+        if name == "maps_scans":
+            return _FakeQuery(self._scans)
         if name == "maps_keywords":
-            # eq() is chained, so key off the configs order via a side channel:
-            # each call returns the rows for the next client in sequence.
-            return _FakeQuery(self._keywords.pop(0))
+            # Keyword lookups happen in config order, only for due clients.
+            client_id = self._due_order.pop(0)
+            self.keyword_lookups.append(client_id)
+            return _FakeQuery(self._keywords.get(client_id, []))
         raise AssertionError(f"unexpected table {name}")
 
 
-def test_enqueue_due_maps_scans_notifies_when_config_active_but_no_keywords(monkeypatch):
-    """A client whose weekly config is active but has zero active keywords must
-    be skipped AND surfaced — it used to stop scanning silently."""
-    fake = _FakeSupabase(
-        configs=[{"client_id": "has-kw"}, {"client_id": "no-kw"}],
-        keywords_by_client=[[{"id": "k1"}], []],   # first client has one, second none
-    )
+def _run_sweep(monkeypatch, configs, scans, keywords, due_order, today):
+    fake = _FakeSupabase(configs, scans, keywords)
+    fake._due_order = list(due_order)
     monkeypatch.setattr(local_dominator, "get_supabase", lambda: fake)
 
-    enqueued_for = []
+    enqueued = []
     monkeypatch.setattr(
         local_dominator, "enqueue_maps_scan",
-        lambda client_id, trigger=None: enqueued_for.append(client_id) or True,
+        lambda client_id, trigger=None: enqueued.append(client_id) or True,
     )
-
     starved = []
     monkeypatch.setattr(local_dominator, "_notify_starved_configs", starved.extend)
 
-    count = local_dominator.enqueue_due_maps_scans()
+    class _FixedDatetime(local_dominator.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return local_dominator.datetime(today.year, today.month, today.day, 9, tzinfo=tz)
 
-    assert count == 1                    # only the keyworded client scanned
-    assert enqueued_for == ["has-kw"]     # the starved one is never enqueued
-    assert starved == ["no-kw"]           # ...but it IS reported, not swallowed
+    monkeypatch.setattr(local_dominator, "datetime", _FixedDatetime)
+    count = local_dominator.enqueue_due_maps_scans()
+    return count, enqueued, starved, fake
+
+
+def test_enqueue_due_maps_scans_routes_each_client_to_its_own_weekday(monkeypatch):
+    """The fix: a client set to Thursday must scan on Thursday, and the Tuesday
+    client must be left alone that day.
+
+    Both clients' last scans are <7 days old so the overdue catch-up cannot fire
+    — this must pass on the weekday routing alone."""
+    thursday = date(2026, 8, 6)
+    count, enqueued, _starved, fake = _run_sweep(
+        monkeypatch,
+        configs=[{"client_id": "tue-client", "weekday": TUE},
+                 {"client_id": "thu-client", "weekday": THU}],
+        scans=[{"client_id": "tue-client", "created_at": "2026-08-04 08:00:00+00"},
+               {"client_id": "thu-client", "created_at": "2026-08-02 08:00:00+00"}],
+        keywords={"thu-client": [{"id": "k1"}]},
+        due_order=["thu-client"],
+        today=thursday,
+    )
+    assert count == 1
+    assert enqueued == ["thu-client"]
+    assert fake.keyword_lookups == ["thu-client"]  # the Tuesday client isn't touched
+
+
+def test_enqueue_due_maps_scans_does_not_rescan_the_same_day(monkeypatch):
+    """A daily sweep must not re-enqueue a client that already scanned today."""
+    tuesday = date(2026, 8, 4)
+    count, enqueued, _starved, _fake = _run_sweep(
+        monkeypatch,
+        configs=[{"client_id": "c1", "weekday": TUE}],
+        scans=[{"client_id": "c1", "created_at": "2026-08-04 08:00:00+00"}],
+        keywords={"c1": [{"id": "k1"}]},
+        due_order=[],
+        today=tuesday,
+    )
+    assert count == 0
+    assert enqueued == []
+
+
+def test_enqueue_due_maps_scans_reports_starvation_on_the_clients_weekday(monkeypatch):
+    """A client with an active config but no keywords is skipped AND surfaced --
+    it used to stop scanning silently."""
+    tuesday = date(2026, 8, 4)
+    count, enqueued, starved, _fake = _run_sweep(
+        monkeypatch,
+        configs=[{"client_id": "no-kw", "weekday": TUE}],
+        scans=[{"client_id": "no-kw", "created_at": "2026-07-28 08:00:00+00"}],
+        keywords={},
+        due_order=["no-kw"],
+        today=tuesday,
+    )
+    assert count == 0
+    assert enqueued == []
+    assert starved == ["no-kw"]
+
+
+def test_enqueue_due_maps_scans_does_not_renotify_starvation_on_catch_up_days(monkeypatch):
+    """A starved client is permanently overdue, so it comes up due every day.
+    It must only be REPORTED on its own weekday, not logged daily forever."""
+    wednesday = date(2026, 8, 5)
+    count, enqueued, starved, _fake = _run_sweep(
+        monkeypatch,
+        configs=[{"client_id": "no-kw", "weekday": TUE}],
+        scans=[{"client_id": "no-kw", "created_at": "2026-06-23 08:00:00+00"}],
+        keywords={},
+        due_order=["no-kw"],
+        today=wednesday,
+    )
+    assert count == 0
+    assert enqueued == []
+    assert starved == []   # due (overdue) but NOT re-reported off its weekday
+
+
+def test_enqueue_due_maps_scans_unset_weekday_uses_the_global_default(monkeypatch):
+    """A config with no weekday must still scan, on settings.maps_scan_weekday.
+
+    Last scan is 3 days old so the catch-up cannot fire — this must pass on the
+    global-default weekday alone."""
+    from datetime import timedelta
+
+    default = settings.maps_scan_weekday
+    # Pick a real date whose weekday matches the configured global default.
+    today = next(
+        d for d in (date(2026, 8, 3) + timedelta(days=i) for i in range(7))
+        if d.weekday() == default
+    )
+    last = (today - timedelta(days=3)).isoformat()
+    count, enqueued, _starved, _fake = _run_sweep(
+        monkeypatch,
+        configs=[{"client_id": "c1", "weekday": None}],
+        scans=[{"client_id": "c1", "created_at": f"{last} 08:00:00+00"}],
+        keywords={"c1": [{"id": "k1"}]},
+        due_order=["c1"],
+        today=today,
+    )
+    assert count == 1
+    assert enqueued == ["c1"]

@@ -598,6 +598,7 @@ function Setup({ clientId }: { clientId: string }) {
       resource_category: form.resource_category ?? 'googleMaps',
       serp_device: form.serp_device ?? 'desktop',
       cadence: form.cadence ?? 'weekly',
+      weekday: form.weekday ?? 1,
     }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['maps-config', clientId] }),
   })
@@ -675,6 +676,14 @@ function Setup({ clientId }: { clientId: string }) {
               <option value="off">Manual only</option>
             </select>
           </Field>
+          {(form.cadence ?? 'weekly') === 'weekly' && (
+            <Field label="Scan day">
+              <select style={input} value={form.weekday ?? 1} onChange={e => set({ weekday: Number(e.target.value) })}>
+                {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+                  .map((d, i) => <option key={i} value={i}>{d}</option>)}
+              </select>
+            </Field>
+          )}
         </div>
         <button style={primaryBtn} onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>
           {saveMut.isPending ? 'Saving…' : 'Save setup'}

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from statistics import mean
 from typing import Optional
 
@@ -631,8 +631,75 @@ def cancel_scan(scan_id: str) -> dict:
     return {"status": "cancelled", "cancelled": True}
 
 
+def resolve_weekday(value) -> int:
+    """A config's scan weekday (0=Mon..6=Sun), falling back to the global default.
+
+    Anything out of range or non-integer (including a bool, which is an int in
+    Python) is treated as unset rather than silently scheduling a client onto a
+    nonsense day. Pure."""
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 6:
+        return value
+    return settings.maps_scan_weekday
+
+
+def scan_due(today: date, weekday: int, last_scheduled: Optional[date]) -> bool:
+    """Is a scheduled geo-grid scan due for this client today? Pure.
+
+    Three rules, in order:
+      - already scanned today  -> not due. `enqueue_maps_scan` only dedupes
+        against PENDING/RUNNING jobs, so once a scan completes there is nothing
+        stopping the next tick re-enqueueing it. Without this guard, moving the
+        sweep to a daily cadence would scan every client every tick.
+      - a full week overdue    -> due, whatever weekday it is. Per-client
+        catch-up: a client whose weekday window was missed self-heals instead of
+        waiting another seven days.
+      - otherwise              -> due only on the client's own weekday.
+
+    `last_scheduled` of None (never scanned, or older than the lookback window)
+    waits for the client's weekday — the catch-up is for a gap we can measure."""
+    if last_scheduled is not None and last_scheduled >= today:
+        return False
+    if last_scheduled is not None and (today - last_scheduled).days >= 7:
+        return True
+    return today.weekday() == weekday
+
+
+def _last_scheduled_scan_dates(supabase, today: date) -> dict[str, date]:
+    """{client_id: date of its most recent SCHEDULED scan} over a 60-day window.
+
+    Deliberately ignores manual scans: a one-off "Run scan now" must not suppress
+    or shift the client's weekly cadence. Clients with nothing in the window are
+    absent, which `scan_due` reads as "wait for your weekday"."""
+    since = (today - timedelta(days=60)).isoformat()
+    rows = (
+        supabase.table("maps_scans").select("client_id, created_at")
+        .eq("trigger", "scheduled").gte("created_at", since)
+        .order("created_at", desc=True).limit(2000).execute()
+    ).data or []
+    out: dict[str, date] = {}
+    for row in rows:
+        client_id, created = row.get("client_id"), row.get("created_at")
+        if not client_id or not created:
+            continue
+        try:
+            day = date.fromisoformat(str(created)[:10])  # created_at is UTC
+        except ValueError:
+            continue
+        if client_id not in out or day > out[client_id]:
+            out[client_id] = day
+    return out
+
+
 def enqueue_due_maps_scans() -> int:
-    """Weekly: enqueue a scan for each client with an active weekly config + keywords.
+    """Daily: enqueue a scan for each client whose own scan weekday is today.
+
+    Runs DAILY and filters per client (the pattern the strategist sweep already
+    uses). It used to run on ONE global weekday and select only `client_id` —
+    `maps_scan_configs.weekday` is a real per-client column, settable through the
+    API and returned by `GET /maps/config`, but the scheduler never read it, so
+    every client scanned on `settings.maps_scan_weekday` regardless of its own
+    row. Per-client due-ness (own weekday, overdue catch-up, and the same-day
+    guard that keeps a daily sweep from re-scanning) is decided by `scan_due`.
 
     A client whose weekly config is still `active` but has lost every active
     keyword produces no scan. That used to be a silent `continue`: the Setup tab
@@ -642,20 +709,32 @@ def enqueue_due_maps_scans() -> int:
     tracker announces itself instead of having to be noticed."""
     supabase = get_supabase()
     configs = (
-        supabase.table("maps_scan_configs").select("client_id")
+        supabase.table("maps_scan_configs").select("client_id, weekday")
         .eq("active", True).eq("cadence", "weekly").execute()
     ).data or []
+    if not configs:
+        return 0
+    today = datetime.now(timezone.utc).date()
+    last_scans = _last_scheduled_scan_dates(supabase, today)
     enqueued = 0
     starved: list[str] = []
     for cfg in configs:
+        client_id = cfg["client_id"]
+        weekday = resolve_weekday(cfg.get("weekday"))
+        if not scan_due(today, weekday, last_scans.get(client_id)):
+            continue
         kw = (
             supabase.table("maps_keywords").select("id")
-            .eq("client_id", cfg["client_id"]).eq("active", True).limit(1).execute()
+            .eq("client_id", client_id).eq("active", True).limit(1).execute()
         ).data
         if not kw:
-            starved.append(cfg["client_id"])
+            # Report on the client's OWN weekday only. A starved client never
+            # scans, so it is permanently "overdue" — reporting on every catch-up
+            # day would log it daily instead of once a week.
+            if today.weekday() == weekday:
+                starved.append(client_id)
             continue
-        if enqueue_maps_scan(cfg["client_id"], trigger="scheduled"):
+        if enqueue_maps_scan(client_id, trigger="scheduled"):
             enqueued += 1
     if enqueued:
         logger.info("maps_scans_enqueued", extra={"clients": enqueued})
