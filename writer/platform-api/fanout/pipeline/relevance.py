@@ -61,6 +61,70 @@ _MAX_WORDS = 12
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
+# Source-aware relevance guard (PRD §7.6 follow-up). Trusted sources are the
+# phrase/seed-match endpoints — keyword_suggestions/query_fanouts only return
+# volume on a keyword that literally contains the seed, and PAA questions come
+# from the seed's own SERP — so they're on-topic by construction and never
+# source-guarded. Every other source (keyword_ideas category ideation, whole-
+# domain competitor mining, autocomplete) is "broad": it can drift off-niche,
+# and gemini-embedding-2's cosine can't reliably separate that drift, so the
+# guard requires a broad-only keyword to prove topicality another way (a shared
+# seed/alias token, or an elevated cosine). Robust to new broad source tags
+# (recursive-fanout etc.): anything not in this set is treated as broad.
+_TRUSTED_SOURCES = frozenset({
+    "keyword_suggestions", "query_fanouts", "paa_t1", "paa_t2",
+})
+
+# Minimal stopword + naive-plural-stem tokenizer, mirroring the sibling Keyword
+# Research module's token_set (services/keyword_research.py) so "did it stay on
+# topic" means the same thing across both tools. Kept local (no cross-package
+# import) to keep this pure pipeline module dependency-light.
+_STOPWORDS = frozenset({
+    "a", "an", "and", "or", "the", "of", "for", "to", "in", "on", "at", "by",
+    "with", "from", "near", "vs", "is", "are", "my", "your", "you", "me", "i",
+    "it", "its", "this", "that", "best", "top", "get", "do", "does",
+})
+
+
+def _stem(token: str) -> str:
+    """Naive plural fold: 'claims' -> 'claim'. Only trims a trailing 's' on
+    tokens long enough that it's a plural, not the whole word ('is'/'gas')."""
+    return token[:-1] if len(token) > 3 and token.endswith("s") else token
+
+
+def _sig_tokens(text: str) -> set[str]:
+    """Stemmed significant (non-stopword, >=2 char) token set of a string."""
+    return {
+        _stem(w) for w in _WORD_RE.findall((text or "").lower())
+        if len(w) >= 2 and w not in _STOPWORDS
+    }
+
+
+def _topical_vocabulary(seed_terms: list[str] | None) -> set[str]:
+    """The seed + aliases token vocabulary a broad-source keyword must intersect
+    to prove topicality. Deliberately NOT built from silo names — a generic silo
+    name (e.g. "Performance and Outcomes") would re-admit the very drift the guard
+    exists to remove — nor from peer terms (competitors aren't the topic)."""
+    vocab: set[str] = set()
+    for t in seed_terms or []:
+        vocab |= _sig_tokens(t)
+    return vocab
+
+
+def _source_guard_demotes(
+    sources: list[str], keyword: str, score: float,
+    vocab: set[str], min_score: float,
+) -> bool:
+    """True when a keyword that otherwise passed the cosine gate should be demoted
+    to filtered_relevance: it came only from broad sources, shares no topical token
+    with the seed/alias vocabulary, and didn't clear the elevated cosine bar. A
+    single trusted source, a topical-token hit, or a high cosine each exempt it."""
+    if any(s in _TRUSTED_SOURCES for s in sources):
+        return False  # trusted phrase/seed-match source — on-topic by construction
+    if score >= min_score:
+        return False  # high-confidence rescue for legit token-disjoint long-tail
+    return not (_sig_tokens(keyword) & vocab)
+
 
 @dataclass
 class GatedKeyword:
@@ -194,6 +258,10 @@ def run_relevance_gate(
     llm_router_margin: float = 0.04,
     current_year: int | None = None,
     language_filter: Callable[[str], bool] | None = None,
+    seed: str | None = None,
+    source_guard_enabled: bool = False,
+    source_guard_min_score: float = 0.80,
+    source_guard_min_seed_tokens: int = 2,
 ) -> RelevanceResult:
     """Classify every keyword in `per_topic` as active / filtered_relevance /
     filtered_junk. `embed_fn(list[str]) -> list[list[float]]` embeds keywords.
@@ -202,7 +270,15 @@ def run_relevance_gate(
 
     `seed_terms` (seed + aliases) and `peer_terms` (competitor/sibling entities)
     drive the generic peer-entity filter: a keyword naming a peer but not the
-    seed is tagged filtered_junk (off-niche). Both are seed-agnostic lists."""
+    seed is tagged filtered_junk (off-niche). Both are seed-agnostic lists.
+
+    When `source_guard_enabled` and the `seed` is multi-token (>=
+    `source_guard_min_seed_tokens` significant tokens), a keyword that passed the
+    cosine gate but came only from broad sources (not keyword_suggestions/
+    query_fanouts/PAA), shares no seed/alias token, and scored below
+    `source_guard_min_score` is demoted to filtered_relevance — trimming the
+    off-niche drift the embedding cosine can't separate. `seed_terms` supplies the
+    topical vocabulary; `seed` supplies the activation token count."""
     result = RelevanceResult()
     topic_names = topic_names or {}
     seed_pat = _term_pattern(seed_terms)
@@ -212,6 +288,19 @@ def run_relevance_gate(
     # worker spanning a year boundary sees the new year on its next run).
     if current_year is None:
         current_year = datetime.now(timezone.utc).year
+
+    # Source-aware relevance guard: active only for a broad, multi-token seed
+    # (single-token entity seeds are left to the embedding + peer gate). The
+    # activation keys on the SEED's significant-token count, not the alias-enriched
+    # vocabulary (aliases can be many even for a one-word seed).
+    guard_vocab = _topical_vocabulary(seed_terms) if source_guard_enabled else set()
+    guard_active = bool(
+        source_guard_enabled
+        and guard_vocab
+        and seed
+        and len(_sig_tokens(seed)) >= source_guard_min_seed_tokens
+    )
+    source_guard_dropped = 0
 
     # 1. Junk + language filter per topic; collect the unique non-filtered
     #    keywords to embed. Only embed keywords that belong to at least one topic
@@ -358,10 +447,19 @@ def run_relevance_gate(
                         GatedKeyword(kw, src, "filtered_relevance", relevance_score=score)
                     )
                 elif score >= threshold:
-                    classified.append(
-                        GatedKeyword(kw, src, "active",
-                                     relevance_score=score, embedding=emb.tolist())
-                    )
+                    if guard_active and _source_guard_demotes(
+                        src, kw, score, guard_vocab, source_guard_min_score
+                    ):
+                        source_guard_dropped += 1
+                        classified.append(
+                            GatedKeyword(kw, src, "filtered_relevance",
+                                         relevance_score=score)
+                        )
+                    else:
+                        classified.append(
+                            GatedKeyword(kw, src, "active",
+                                         relevance_score=score, embedding=emb.tolist())
+                        )
                 else:
                     classified.append(
                         GatedKeyword(kw, src, "filtered_relevance", relevance_score=score)
@@ -378,6 +476,8 @@ def run_relevance_gate(
                "filtered_language": counts["filtered_language"],
                "unique_embedded": len(emb_by_kw),
                "language_filter": language_filter is not None,
+               "source_guard": guard_active,
+               "source_guard_dropped": source_guard_dropped,
                "threshold": threshold},
     )
     return result

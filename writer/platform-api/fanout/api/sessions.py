@@ -1131,6 +1131,10 @@ def cluster_preview_endpoint(
         seed_terms=seed_terms,
         peer_terms=peer_terms,
         language_filter=jobs._maybe_language_filter(),
+        seed=session["seed_keyword"],
+        source_guard_enabled=s.fanout_source_guard_enabled,
+        source_guard_min_score=s.fanout_source_guard_min_score,
+        source_guard_min_seed_tokens=s.fanout_source_guard_min_seed_tokens,
     )
 
 

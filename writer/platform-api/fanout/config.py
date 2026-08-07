@@ -181,6 +181,28 @@ class Settings(BaseSettings):
     # (RELEVANCE_THRESHOLD) or a per-run /regate without redeploying.
     relevance_threshold: float = 0.65        # cosine cutoff vs parent topic embedding
 
+    # Source-aware relevance guard (fan-out relevance-quality fix, 2026-08-07).
+    # The embedding cosine gate alone lets ~half the active pool drift off-topic on
+    # broad multi-token seeds: the two noisiest sources (keyword_ideas category
+    # drift + whole-domain competitor mining) dominate the pool, and
+    # gemini-embedding-2 can't separate their drift from real signal (junk and
+    # on-topic keywords land in the same ~0.06 cosine band, so no single threshold
+    # divides them — measured on the "third party claims administrator" session:
+    # 47% of the active pool contained none of the seed's own terms). This guard
+    # keeps a keyword from a NON-trusted source only when it EITHER shares a topical
+    # token with the seed+aliases vocabulary OR clears an elevated cosine bar (which
+    # rescues legitimate token-disjoint long-tail like "subrogated recoveries" /
+    # "first notice of loss"). A keyword that also surfaced from a trusted
+    # phrase/seed-match source (keyword_suggestions / query_fanouts / PAA) is always
+    # exempt. Deterministic — no new model, no paid call. Only activates for seeds
+    # with >= min_seed_tokens significant tokens; single-token entity seeds
+    # ("retatrutide") are left to the embedding + peer-entity gate, which already
+    # produce tight pools there. The bar is calibrated to gemini-embedding-2's
+    # cosine distribution — recalibrate it if the embedding model changes.
+    fanout_source_guard_enabled: bool = True
+    fanout_source_guard_min_score: float = 0.80
+    fanout_source_guard_min_seed_tokens: int = 2
+
     # Pre-embedding language ID filter (PRD §7.6 follow-up). DataForSEO is
     # locked to en/US but its related/autocomplete endpoints occasionally
     # surface non-English Latin-script phrases when the dominant terms share
