@@ -772,6 +772,21 @@ async def run_keyword_research(
     }
 
 
+def clear_runs(client_id: str) -> int:
+    """Delete ALL keyword research runs for a client (child keyword + report rows
+    cascade), so the team can start over. Returns the number of runs deleted."""
+    supabase = get_supabase()
+    ids = [
+        r["id"] for r in (
+            supabase.table("keyword_research_runs").select("id")
+            .eq("client_id", client_id).execute()
+        ).data or []
+    ]
+    if ids:
+        supabase.table("keyword_research_runs").delete().eq("client_id", client_id).execute()
+    return len(ids)
+
+
 def _prune_runs(client_id: str) -> None:
     """Keep the newest _RUNS_KEEP runs per client (child rows cascade). Best-effort."""
     try:

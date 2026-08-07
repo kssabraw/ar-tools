@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, CalendarPlus, Download, FileText, HelpCircle, RefreshCw, Search } from 'lucide-react'
+import { ArrowLeft, CalendarPlus, Download, FileText, HelpCircle, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 
@@ -113,6 +113,18 @@ export function KeywordResearch() {
     mutationFn: (raw: string) =>
       api.post<{ job_id: string; seeds: string[] }>(`/clients/${id}/keyword-research`, { seeds: raw }),
     onSuccess: (r) => setJob(r.job_id),
+  })
+
+  const clearAll = useMutation({
+    mutationFn: () => api.delete<{ deleted: number }>(`/clients/${id}/keyword-research`),
+    onSuccess: () => {
+      setRunId(null)
+      setJob(null)
+      setActiveCluster(null)
+      setPickedInitial(true) // don't auto-reopen a run after clearing
+      queryClient.invalidateQueries({ queryKey: ['keyword-research', id] })
+      queryClient.invalidateQueries({ queryKey: ['keyword-research-reports', id] })
+    },
   })
 
   const { data: jobStatus } = useQuery<{ status: string; error?: string; result?: { run_id?: string } }>({
@@ -257,7 +269,7 @@ export function KeywordResearch() {
 
       {/* Run history chips */}
       {(history?.runs?.length ?? 0) > 0 && (
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
           {history!.runs.map((r) => (
             <button
               key={r.id}
@@ -268,8 +280,21 @@ export function KeywordResearch() {
               {(r.seeds ?? []).join(', ') || 'run'} · {num(r.keyword_count)}
             </button>
           ))}
+          <button
+            style={{ ...ghostBtn, height: 28, padding: '3px 10px', fontSize: 12, color: '#b91c1c', borderColor: '#fecaca' }}
+            onClick={() => {
+              if (window.confirm('Clear ALL keyword research runs for this client? This removes every saved run, its keywords, and its reports. This cannot be undone.')) {
+                clearAll.mutate()
+              }
+            }}
+            disabled={clearAll.isPending}
+            title="Delete all research runs and start over"
+          >
+            <Trash2 size={13} /> {clearAll.isPending ? 'Clearing…' : 'Clear all'}
+          </button>
         </div>
       )}
+      {clearAll.isError && <div style={errBox}>{(clearAll.error as Error)?.message ?? 'Could not clear runs.'}</div>}
 
       {!runId && !running && (
         <div style={emptyBox}>Enter a seed keyword above to run your first research.</div>

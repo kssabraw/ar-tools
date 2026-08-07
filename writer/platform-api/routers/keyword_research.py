@@ -46,6 +46,18 @@ async def list_research(client_id: UUID, auth: dict = Depends(require_auth)) -> 
         raise HTTPException(status_code=500, detail="internal_error") from exc
 
 
+@router.delete("/clients/{client_id}/keyword-research")
+async def clear_research(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Clear ALL keyword research runs for the client (start over). Child keyword
+    and report rows cascade-delete. Returns the number of runs removed."""
+    try:
+        deleted = keyword_research.clear_runs(str(client_id))
+    except Exception as exc:
+        logger.error("keyword_research_clear_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    return {"deleted": deleted}
+
+
 @router.get("/clients/{client_id}/keyword-research/runs/{run_id}")
 async def get_research_run(
     client_id: UUID, run_id: UUID, auth: dict = Depends(require_auth)
