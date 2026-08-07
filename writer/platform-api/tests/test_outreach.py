@@ -285,3 +285,31 @@ def test_the_spend_authorizing_routes_are_admin_gated():
     for route in ("list_scan_requests", "scan_request_detail", "placeholder_scores"):
         head = source.split(f"async def {route}", 1)[1].split(") -> dict")[0]
         assert "require_outreach" in head, f"{route} should be readable by any authed staff"
+
+
+# --- promotion (scan results -> CRM board, owner ruling 2026-08-06) -----------------------------
+
+
+def test_promoted_leads_are_outbound_scan_with_the_prospect_attached():
+    """The ruling: hand-picked leads ARE outbound_scan — source records provenance, not
+    automation. The payload shape is what validate_lead_write requires of that source, so the
+    coupling is checked here at the seam rather than discovered as a 422 in the UI."""
+    source = _service_source()
+    section = source.split("def promote_prospect", 1)[1]
+    assert '"source": "outbound_scan"' in section
+    assert '"prospect_id": prospect_id' in section
+    # And the validator accepts exactly that shape.
+    fields = svc.validate_lead_write(
+        {"source": "outbound_scan", "prospect_id": "p-1", "company_name": "Acme"},
+        creating=True,
+    )
+    assert fields["source"] == "outbound_scan"
+
+
+def test_promotion_is_idempotent_not_an_error():
+    """A button that 422s on its second press teaches people to distrust the first. Both the
+    pre-check and the lost-race path must return the existing lead flagged already_existed."""
+    source = _service_source()
+    section = source.split("def promote_prospect", 1)[1]
+    assert section.count("already_existed=True") == 2, "pre-check AND race path must both return it"
+    assert "already_existed=False" in section

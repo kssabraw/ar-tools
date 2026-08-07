@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
+import { Tabs } from './OutreachLeads'
 
 // ── Types (mirror routers/outreach.py's scan-order section) ──────────────────
 interface Market { id: string; name: string }
@@ -124,6 +125,8 @@ export function Outreach() {
           </select>
         )}
       </div>
+
+      <Tabs active="scans" />
 
       {market && <QueueScanCard marketId={market.id} isAdmin={isAdmin} />}
       <OrdersCard />
@@ -370,6 +373,13 @@ function OrderProgress({ id }: { id: string }) {
 
 function ResultsCard({ marketId }: { marketId: string }) {
   const [submarketId, setSubmarketId] = useState('')
+  const [promoted, setPromoted] = useState<Record<string, boolean>>({})
+  const promote = useMutation({
+    mutationFn: (prospectId: string) =>
+      api.post<{ lead: { id: string; already_existed: boolean } }>(
+        `/outreach/prospects/${prospectId}/promote`, {}),
+    onSuccess: (_data, prospectId) => setPromoted(p => ({ ...p, [prospectId]: true })),
+  })
   const { data: subsData } = useQuery<{ submarkets: Submarket[] }>({
     queryKey: ['outreach-submarkets', marketId],
     queryFn: () => api.get(`/outreach/markets/${marketId}/submarkets`),
@@ -415,6 +425,7 @@ function ResultsCard({ marketId }: { marketId: string }) {
                 <th style={{ padding: '4px 8px', textAlign: 'right' }}>Deficit</th>
                 <th style={{ padding: '4px 8px', textAlign: 'right' }}>Best rank</th>
                 <th style={{ padding: '4px 8px', textAlign: 'right' }}>Drops out at</th>
+                <th style={{ padding: '4px 8px' }} />
               </tr>
             </thead>
             <tbody>
@@ -429,6 +440,19 @@ function ResultsCard({ marketId }: { marketId: string }) {
                   <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.best_rank ?? '—'}</td>
                   <td style={{ padding: '6px 8px', textAlign: 'right' }}>
                     {s.centroid_dist_at_loss != null ? `${s.centroid_dist_at_loss.toFixed(1)} mi` : '—'}
+                  </td>
+                  <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {promoted[s.prospect_id] ? (
+                      <span style={{ fontSize: 12, color: '#166534' }}>✓ on board</span>
+                    ) : (
+                      <button
+                        onClick={() => promote.mutate(s.prospect_id)}
+                        disabled={promote.isPending}
+                        style={{ fontSize: 12, border: '1px solid #e2e8f0', background: '#fff',
+                          borderRadius: 6, padding: '2px 10px', cursor: 'pointer' }}>
+                        Send to CRM
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

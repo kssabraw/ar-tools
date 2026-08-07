@@ -289,6 +289,21 @@ async def add_activity(
     )
 
 
+@router.post("/outreach/prospects/{prospect_id}/promote")
+async def promote_prospect(
+    prospect_id: str, auth: dict = Depends(require_staff)
+) -> dict:
+    """Send a scanned prospect to the CRM board — a lead prefilled from the prospect row.
+
+    Owner ruling 2026-08-06: a hand-picked lead IS `outbound_scan` (outreach DECISIONS.md).
+    Idempotent: a second click, or Phase 3's future emit for the same prospect, gets the existing
+    lead back with `already_existed: true` rather than an error. Staff-gated like create_lead —
+    picking a target spends nothing; it is a commitment to contact a real business.
+    """
+    _require_outreach_ready()
+    return {"lead": _handle(outreach_service.promote_prospect, prospect_id, auth["user_id"])}
+
+
 @router.get("/outreach/suppressions")
 async def list_suppressions(
     limit: int = Query(default=outreach_service.DEFAULT_PAGE_SIZE, ge=1),

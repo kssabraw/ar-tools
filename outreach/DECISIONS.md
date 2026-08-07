@@ -693,3 +693,26 @@ which is the same trust the token already places in whoever holds the Railway da
 that can spend); platform-api executing scans (duplicates the client, splits the spend gate
 across two services); triggering Railway deploys from the API (no supported path, and the config
 snapshot semantics that already cost money twice).
+
+---
+
+## 2026-08-06 — Hand-picked leads ARE `outbound_scan` (owner ruling)
+
+Asked while scoping the CRM board, because the docs reserved `outbound_scan` for Phase 3's emit
+webhook and a human clicking "Send to CRM" on a scan-results row is neither automated nor
+emitted. The owner's answer: **hand-picked leads count as outbound.**
+
+What this settles: a lead promoted from a prospect carries `source = 'outbound_scan'` +
+`prospect_id`, exactly like an emitted one will — it is factually a lead sourced from the scan,
+and `source` records provenance, not automation. The `lead.unique (prospect_id, source)`
+constraint therefore also dedupes hand-picks against future emits for the same prospect, which
+is the correct collision: the emit path finding the lead already exists means a human got there
+first, not an error.
+
+What this deliberately does NOT settle: `outcome` rows. Phase 3's emit writes an `outcome` per
+emitted prospect; a hand-picked lead has no emit event, so nothing writes its outcome row today.
+`PHASE3-outcome-constraint.md`'s FK targets `lead (prospect_id, source)`, so outcomes can attach
+to these leads retroactively when Phase 3 lands — whoever builds it must decide whether the
+emit-time write also backfills outcomes for pre-existing hand-picked outbound leads, or the
+model simply doesn't see them until they are re-emitted. Left to Phase 3, where the emit
+machinery gives the question a concrete shape.
