@@ -1,6 +1,102 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-05 · **Website Builder module — slices 1–2 MERGED, slice 3 in flight** (latest)
+## ⏩ Update — 2026-08-07 · **Website Builder — theme compiler + core-pages writer + imagery (PR #575, open/draft)** (latest)
+
+Closes the owner's four-step arc — *upload a Claude design → write the pages →
+generate images → push to a repo*. Three slices on **`claude/website-builder-slice-3-9an50d`**,
+three commits, CI green, **not yet merged**. Still dark behind
+`website_builder_enabled`; imagery additionally behind `website_images_enabled`
+(both default False — unchanged, nothing has run).
+
+**Read the earlier 2026-08-05/06 section below for the module's base state; this
+is what those three "still unbuilt" items became.**
+
+### 1 · Theme compiler (`services/website_theme.py` + `_precompile.py` + `_fonts.py`)
+
+Upload a Claude Design export (`.dc.html` or the zip) → a compiled `tokens.css`
+the template's `src/theme/` reads. **Split so the LLM only does the part it's
+good at:** the precompile pass MEASURES everything countable (colour frequencies,
+font families/sizes/weights/radii/spacing, the design's screens/collections/
+image-slot seeds) with no network; the LLM pass NAMES — one forced tool call
+answering *which measured value is which role*, shown a frequency table, never
+the markup. **`validate_roles` refuses any value the census didn't see**, so a
+hallucinated brand colour fails the compile instead of shipping as a client's
+identity. **Fonts are self-hosted** (downloaded at the design's own measured
+weights, committed beside `tokens.css`) so a site makes no third-party request;
+best-effort — a font-CDN outage degrades to naming the family.
+
+Themes are **fleet-level** (a design starts several sites): `GET/POST
+/website-themes`, `…/{id}`, `…/recompile`, `…/approve`, `POST /websites/{id}/theme`.
+Compiled bytes are stored and committed **verbatim** (what's approved is what
+ships). Applying to a provisioned site commits `src/theme/*` + records a
+`theme` deploy; applying before provisioning rides in with the **configure**
+commit so the first build never deploys the house theme to a watched URL. Job
+`website_theme_compile` (type already in the live CHECK). **Private
+`website-themes` bucket** — migration `20260806120000_website_theme_bucket.sql`
+**applied live**. Frontend: a **Theme** tab (upload / swatches / compiled CSS /
+approve / use-on-site / recompile). Config `website_theme_model` (Sonnet),
+`website_theme_max_mb` (25). *Build verification caught a bug unit tests
+couldn't: variable fonts serve one file per subset with a `@font-face` per
+weight, so naming files by weight downloaded the same bytes 3× under 3 names —
+`resolve_filenames` now names a shared file without a weight (12→4 on the
+reference design).*
+
+### 2 · Core-pages writer (`services/website_core_pages.py`)
+
+Home / about / contact — the pages no keyword targets, so **no SERP, no scoring
+loop**: one Anthropic call each, in platform-api (nlp would only add its
+brand-voice prose builder, which the suite already renders here). Each produces
+exactly what its template slot reads: **home** → a `sections` frontmatter map
+(hero copy + headings), no body; **about** → a Markdown narrative; **contact**
+→ title + intro line only (NAP/hours/form render from verified data). **Privacy
+is deterministic** — a legal template merged with business facts, recorded
+`template_rendered`, never sent to an LLM. **The forced schema has no
+phone/address/price field, so an invented business fact is structurally
+impossible;** home draws real services/cities from the site's own planned pages.
+Same brand-context gate as the service writer (refuses without a voice on file).
+Wired into `website_generate.generate_page` (the `core_pages` engine, previously
+`engine_not_built`). Config `website_core_pages_model` (Sonnet) / `_max_tokens`.
+*Fix found while verifying: `sections` wasn't in `website_content`'s frontmatter
+key order, so a home page's section copy would have been silently dropped —
+added, with a round-trip test.*
+
+### 3 · Imagery (`services/website_images.py`)
+
+A hero image per hero-eligible page (home + service/location/matrix/post; about/
+contact/privacy excluded) during the same generate job, landing in the page's
+`heroImage`/`heroImageAlt` frontmatter — **already committed by `build_files`,
+so publish needed no change.** Reuses the suite's one proven renderer
+(`illustration.py`'s gpt-image-1); prompt art-directed from the page's own
+subject + a photographic brand-style tail forbidding text/logos (no fake signs);
+client tone rides along. **Delivered as a public-bucket URL, NOT committed to the
+repo** — a 20 KB shared font earned self-hosting, a 1–2 MB hero × dozens of pages
+would bloat every repo and re-upload to Cloudflare each deploy. Additive +
+best-effort: double-gated on `website_images_enabled` (default off, its own axis
+so enabling the builder never starts spending — a 40-page bulk-create is 40
+renders) + an image key; every failure path returns None and ships the page
+heroless. `website_image_provider` default corrected **gemini→openai** (gemini
+names a renderer that doesn't exist yet).
+
+### Inputs (where the four pages' content comes from)
+
+Contact NAP auto-fills from the client's **GBP** into `site.config` (human-entered
+values win, §4.5). Brand voice + ICP come from the client's auto-scan of
+website/GBP at creation, or a typed guide (user-authored supersedes). **Not yet
+built:** a dedicated per-site business-facts editor (the deferred Settings tab) —
+today a per-site NAP override goes through the config, not a form.
+
+### To run it end-to-end
+
+Flip `website_builder_enabled=true` (and `website_images_enabled=true` for art)
+on PLATFORM — **both currently unset**. Then the normal lifecycle: create a
+`websites` row → upload+approve a theme → provision → build+approve a plan →
+generate (now covers home/about/contact + hero images, not just nlp pages) →
+publish. Testing: ~160 new unit tests across the three modules; full backend
+suite 3288 passed (same 13 pre-existing sandbox failures as main).
+
+---
+
+## ⏩ Update — 2026-08-05 · **Website Builder module — slices 1–2 MERGED, slice 3 in flight**
 
 Design in Claude Design → upload → the suite compiles it to an Astro theme,
 provisions a private GitHub repo from a house template, generates pages with the
@@ -105,10 +201,12 @@ select → Generate/Publish, per-row retry, a leaveable batch bar), **Deploys**
 overrides). Actions above the user's role render **disabled with the reason**
 rather than hidden, per §6.2.
 
-**Still unbuilt in the module:** the theme compiler, imagery, core-pages
-generator, custom domains, GSC auto-verify, the suite-level fleet index and the
-Settings tab. Generation covers the nlp-api page types only; a page type with no
-engine records `engine_unavailable:<type>` on its row rather than being silently
+**Still unbuilt in the module** *(as of this 2026-08-05 section; the theme
+compiler, core-pages generator and imagery were built 2026-08-07 — see the top
+section)*: custom domains, GSC auto-verify, and the Settings tab. The
+suite-level fleet index shipped 2026-08-06 (Sidebar → Websites). Generation
+originally covered the nlp-api page types only; a page type with no engine still
+records `engine_unavailable:<type>` on its row rather than being silently
 skipped.
 
 **⚠ Three things the build found that reading the docs did not:**

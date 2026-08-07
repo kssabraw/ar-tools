@@ -185,6 +185,7 @@ def render_frontmatter(fields: dict[str, Any]) -> str:
         "heroImageAlt",
         "draft",
         "sourceId",
+        "sections",
         "jsonld",
     ]
     lines = ["---"]

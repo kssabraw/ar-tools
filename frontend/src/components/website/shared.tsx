@@ -21,6 +21,7 @@ export interface Website {
   name: string
   slug: string
   site_type: SiteType
+  theme_id: string | null
   status: SiteStatus
   github_repo: string | null
   cf_project: string | null

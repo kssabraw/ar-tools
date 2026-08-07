@@ -375,6 +375,36 @@ def _save(website_id: str, patch: dict) -> None:
     get_supabase().table("websites").update(patch).eq("id", website_id).execute()
 
 
+def theme_files(theme_id: Optional[str]) -> dict[str, bytes]:
+    """The `src/theme/*` files for a site's selected theme, if it has one.
+
+    Best-effort: a theme whose compiled files have gone missing must not block
+    provisioning, because the site still builds — it builds in the house theme,
+    which is visible and fixable, whereas a failed provision leaves a repo
+    nobody can reach.
+    """
+    if not theme_id:
+        return {}
+    from services import website_theme
+
+    try:
+        rows = (
+            get_supabase()
+            .table("website_themes")
+            .select("*")
+            .eq("id", theme_id)
+            .limit(1)
+            .execute()
+        ).data
+        return website_theme.theme_files_for_repo(rows[0]) if rows else {}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "website_provision.theme_files_failed",
+            extra={"theme_id": theme_id, "error": str(exc)[:200]},
+        )
+        return {}
+
+
 async def run_provision_job(payload: dict) -> dict:
     """Async job entrypoint. Idempotent: completed steps are skipped on re-run."""
     website_id = payload.get("website_id")
@@ -408,6 +438,15 @@ async def run_provision_job(payload: dict) -> dict:
                 url = staging_url(worker, subdomain)
                 website["staging_url"] = url
                 config = build_site_config(website, client)
+                files = {
+                    "site.config.json": (json.dumps(config, indent=2) + "\n").encode(),
+                    "wrangler.jsonc": build_wrangler(worker).encode(),
+                }
+                # The theme rides in with the configure commit rather than
+                # following it: a second push means a second build, and the
+                # first one would deploy the house theme to a URL someone is
+                # already watching.
+                files.update(theme_files(website.get("theme_id")))
                 # One commit: the push is what triggers the deploy, so config and
                 # wrangler name must land together or the first build deploys
                 # under the wrong worker name.
@@ -415,10 +454,7 @@ async def run_provision_job(payload: dict) -> dict:
                     repo=repo,
                     branch=settings.website_default_branch,
                     token=_token(),
-                    files={
-                        "site.config.json": (json.dumps(config, indent=2) + "\n").encode(),
-                        "wrangler.jsonc": build_wrangler(worker).encode(),
-                    },
+                    files=files,
                     message="Configure site",
                 )
                 _save(website_id, {"staging_url": url, "config": config})

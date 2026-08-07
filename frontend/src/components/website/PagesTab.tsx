@@ -60,8 +60,11 @@ export function PagesTab({ website, pages, approved, perms }: Props) {
     : null
   const publishDeny = denyReason('staff', perms)
 
+  // Both writing engines: nlp (service/location/matrix, with SERP + scoring) and
+  // core_pages (home/about/contact, a light single call). 'template' and null
+  // are not generable — the template renders one and nothing writes the other.
   const generable = useMemo(
-    () => pages.filter((p) => p.plan?.engine === 'nlp' && selected.has(p.id)),
+    () => pages.filter((p) => (p.plan?.engine === 'nlp' || p.plan?.engine === 'core_pages') && selected.has(p.id)),
     [pages, selected],
   )
   const publishable = useMemo(
@@ -126,7 +129,7 @@ export function PagesTab({ website, pages, approved, perms }: Props) {
         <button
           onClick={() => generate.mutate()}
           disabled={generable.length === 0 || Boolean(generateDeny) || generate.isPending}
-          title={generateDeny ?? (generable.length === 0 ? 'Select pages an engine can write.' : `Costs one nlp-api call plus its SERP analysis per page (${generable.length}).`)}
+          title={generateDeny ?? (generable.length === 0 ? 'Select pages an engine can write.' : `Writes ${generable.length} page(s). Service/location pages cost a SERP analysis each; home/about/contact are a single cheap call.`)}
           style={{ ...btn(generable.length === 0 || generateDeny ? '#e2e8f0' : ACCENT, generable.length === 0 || generateDeny ? '#94a3b8' : '#fff') }}
         >
           {generate.isPending ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}

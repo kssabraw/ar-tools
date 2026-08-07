@@ -137,10 +137,13 @@ async def generate_page(*, page_id: str, user_id: str) -> dict:
         ).eq("id", page_id).execute()
         return {"page_id": page_id, "generated": False, "reason": reason}
 
+    if engine == "core_pages":
+        return await _generate_core_page(page=page, website=website, supabase=supabase)
+
     if engine != "nlp":
-        # core_pages is specified but unbuilt (plan §4.6, Phase 3). Saying so is
-        # the point: the alternative is a page that sits at draft forever with
-        # nobody able to tell why.
+        # A page type whose engine name we recognise but haven't built. None is
+        # left today, but saying so is the point: a page sitting at draft forever
+        # with nobody able to tell why is the failure this guards against.
         reason = f"engine_not_built:{engine}"
         supabase.table("website_pages").update(
             {"error": reason, "updated_at": "now()"}
@@ -169,25 +172,135 @@ async def generate_page(*, page_id: str, user_id: str) -> dict:
         user_id=user_id,
     )
 
-    supabase.table("website_pages").update(
-        {
-            "content_source": "local_seo_page",
-            "source_id": generated["id"],
-            "title": generated.get("page_title") or page.get("title") or "",
-            "status": "draft",
-            "error": None,
-            # A new body invalidates whatever was last committed, so the next
-            # publish must not short-circuit on an unchanged hash.
-            "content_hash": None,
-            "updated_at": "now()",
-        }
-    ).eq("id", page_id).execute()
+    update = {
+        "content_source": "local_seo_page",
+        "source_id": generated["id"],
+        "title": generated.get("page_title") or page.get("title") or "",
+        "status": "draft",
+        "error": None,
+        # A new body invalidates whatever was last committed, so the next
+        # publish must not short-circuit on an unchanged hash.
+        "content_hash": None,
+        "updated_at": "now()",
+    }
+    # A hero image rides in the page's own frontmatter (build_files merges it), so
+    # a local_seo_page's image lives here rather than on its local_seo_pages row.
+    hero = await _hero_for(page, client[0], website)
+    if hero:
+        update["content"] = {**(page.get("content") or {}),
+                             "frontmatter": {**((page.get("content") or {}).get("frontmatter") or {}), **hero}}
+
+    supabase.table("website_pages").update(update).eq("id", page_id).execute()
 
     logger.info(
         "website_generate.page_written",
         extra={"page_id": page_id, "source_id": generated["id"], "keyword": keyword},
     )
     return {"page_id": page_id, "generated": True, "source_id": generated["id"]}
+
+
+def _hero_business_city(client: dict, website: dict) -> tuple[str, str]:
+    config = website.get("config") or {}
+    business_cfg = config.get("business") or {}
+    gbp = client.get("gbp") if isinstance(client.get("gbp"), dict) else {}
+    business = (
+        business_cfg.get("name") or website.get("name")
+        or gbp.get("business_name") or client.get("name") or ""
+    )
+    city = business_cfg.get("city") or gbp.get("city") or client.get("business_location") or ""
+    return business.strip(), city.strip()
+
+
+async def _hero_for(page: dict, client: dict, website: dict) -> Optional[dict]:
+    """A hero image's frontmatter for this page, or None. Never raises.
+
+    Best-effort by construction — imagery being off, unsupported for the page
+    type, or a render failure all return None, and the page ships without a hero
+    (a state the template renders cleanly).
+    """
+    from services import website_images
+
+    business, city = _hero_business_city(client, website)
+    return await website_images.generate_hero(
+        page=page, client=client, website=website, business=business, city=city
+    )
+
+
+async def _generate_core_page(*, page: dict, website: dict, supabase) -> dict:
+    """Home / about / contact via the light core-pages writer; privacy is deterministic.
+
+    Privacy is planned with the `core_pages` engine but the template renders it
+    from a legal template merged with business facts — there is nothing for an
+    LLM to write, so it is recorded as template-rendered (published straight from
+    the template) rather than sent to a writer that would only invent a policy.
+    """
+    from services import website_core_pages
+
+    page_type = page.get("page_type") or ""
+    page_id = page["id"]
+
+    if page_type not in website_core_pages.GENERATED_KINDS:
+        # privacy (or any future deterministic core page): the template owns it.
+        supabase.table("website_pages").update(
+            {"error": "template_rendered", "updated_at": "now()"}
+        ).eq("id", page_id).execute()
+        return {"page_id": page_id, "generated": False, "reason": "template_rendered"}
+
+    client = (
+        supabase.table("clients").select("*").eq("id", website["client_id"]).limit(1).execute()
+    ).data
+    if not client:
+        raise GenerateError("client_not_found")
+    # The same bar the service writer holds: the suite has shipped one article
+    # with zero brand context, and a home page written that way is every visitor's
+    # first impression of the client in a generic voice.
+    if not has_brand_context(client[0]):
+        raise GenerateError("content_no_brand_context")
+
+    # The site's own planned pages seed the copy with the real services and cities
+    # — a home page must not list services the site does not have.
+    site_pages = (
+        supabase.table("website_pages")
+        .select("page_type, title")
+        .eq("website_id", website["id"])
+        .execute()
+    ).data or []
+
+    content = await website_core_pages.generate_core_page(
+        page_kind=page_type,
+        client=client[0],
+        website=website,
+        pages=site_pages,
+    )
+
+    # Home is hero-eligible; about/contact are not, so this is None for them.
+    hero = await _hero_for(page, client[0], website)
+    if hero:
+        content["frontmatter"] = {**(content.get("frontmatter") or {}), **hero}
+
+    supabase.table("website_pages").update(
+        {
+            # Stored on the row (not a separate record): a core page has no
+            # keyword and no upstream local_seo_pages row, so the page IS its
+            # own source. `source_from_content` reads exactly this shape.
+            "content_source": "composed",
+            "source_id": None,
+            "content": content,
+            "title": content.get("title") or page.get("title") or "",
+            "status": "draft",
+            "error": None,
+            # A fresh body invalidates any prior commit, so the next publish must
+            # not short-circuit on an unchanged hash.
+            "content_hash": None,
+            "updated_at": "now()",
+        }
+    ).eq("id", page_id).execute()
+
+    logger.info(
+        "website_generate.core_page_written",
+        extra={"page_id": page_id, "page_kind": page_type},
+    )
+    return {"page_id": page_id, "generated": True, "page_kind": page_type}
 
 
 async def run_generate_job(job: dict) -> None:

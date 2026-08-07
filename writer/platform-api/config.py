@@ -1519,7 +1519,26 @@ class Settings(BaseSettings):
     # being able to see the run, so the recovery is "re-check", not "re-push".
     website_deploy_timeout_minutes: int = 20
     website_theme_model: str = "claude-sonnet-4-6"
-    website_image_provider: str = "gemini"
+    # Home/about/contact copy. Sonnet, not Haiku: this is the client's first
+    # impression in their own voice, not a categorization task — the same tier
+    # the service writer uses. No SERP or scoring loop, so it stays cheap.
+    website_core_pages_model: str = "claude-sonnet-4-6"
+    website_core_pages_max_tokens: int = 2000
+    # Where uploaded design exports and their compiled tokens.css live. Private:
+    # a design is a client's brand before it is anyone else's business.
+    website_theme_bucket: str = "website-themes"
+    # A Claude Design export is a single HTML file plus a runtime; anything much
+    # larger than this is not one, and reading it into memory to find out is the
+    # part worth bounding.
+    website_theme_max_mb: int = 25
+    # A hero image per hero-eligible page (home + service/location/post). Ships
+    # dark and on its own axis from the builder flag: turning the builder on must
+    # not start spending on images, and a 40-page bulk-create is 40 renders.
+    website_images_enabled: bool = False
+    # v1 renders through the suite's proven gpt-image-1 path (services/illustration
+    # .py); 'gemini' is reserved for a future renderer that isn't built yet, so the
+    # effective provider today is openai regardless of this value.
+    website_image_provider: str = "openai"
 
     class Config:
         env_file = ".env"

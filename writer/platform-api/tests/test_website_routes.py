@@ -71,5 +71,27 @@ class TestRouteSurface:
             "/websites/{website_id}/jobs/status",
             "/websites",
             "/websites/{website_id}/restore",
+            "/website-themes",
+            "/website-themes/{theme_id}/recompile",
+            "/website-themes/{theme_id}/approve",
+            "/websites/{website_id}/theme",
         ):
             assert path in _paths(), path
+
+
+class TestThemeRoutes:
+    def test_themes_live_outside_the_website_id_space(self):
+        # /website-themes is a sibling of /websites, not a child: the same
+        # uploaded design starts several sites, and nesting it under one would
+        # push people to re-upload per site and end up with themes that drift.
+        assert all(not p.startswith("/websites/{website_id}/themes") for p in _paths())
+
+    def test_selecting_a_theme_is_a_website_route(self):
+        # The selection belongs to the site even though the theme does not.
+        assert "/websites/{website_id}/theme" in _paths()
+
+    def test_theme_sub_paths_are_matched_before_the_theme_id_parameter(self):
+        # Same trap as /websites/status: 'approve' read as a theme id.
+        for sub in ("approve", "recompile"):
+            assert _index(f"/website-themes/{{theme_id}}/{sub}") < len(_paths())
+        assert _index("/website-themes") < _index("/website-themes/{theme_id}")
