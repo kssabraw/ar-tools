@@ -831,7 +831,7 @@ class Settings(BaseSettings):
     # facts"), and the phrase-containment suggestions alone give a rich, on-topic
     # set. Turn on for extra cross-topic reach at the cost of some noise. When
     # suggestions are off, ideas run regardless (there must be at least one source).
-    keyword_research_broaden_with_ideas: bool = False
+    keyword_research_broaden_with_ideas: bool = True
     # Broaden with related_keywords (Google's "searches related to" graph). ON by
     # default: unlike keyword_ideas it surfaces adjacent terms that don't contain
     # the seed phrase ("historic preservation" → "adaptive reuse") while staying
@@ -867,11 +867,26 @@ class Settings(BaseSettings):
     # scheduled articles (one article per keyword) — bounds the batch a user can
     # queue in one click.
     keyword_research_scheduler_max: int = 100
+    # SERP enrichment pass (People Also Ask + competitive intelligence). For the
+    # first _serp_max_seeds seeds, one live Google SERP call each yields BOTH the
+    # PAA questions (folded into the keyword universe AND surfaced as a list) and
+    # the SERP-competitor landscape (top organic domains across the seeds + who's
+    # cited in the AI Overview). One paid call per analyzed seed (~$0.002 each),
+    # metered against the daily budget. Set False to skip the pass entirely.
+    keyword_research_serp_enrichment: bool = True
+    keyword_research_serp_depth: int = 20          # SERP depth (top organic + PAA + AIO)
+    keyword_research_serp_max_seeds: int = 5       # cap SERP calls (first N seeds only)
+    keyword_research_serp_top_competitors: int = 10  # competitor domains surfaced
     # Client-facing keyword research PDF report: the exec-summary LLM (best-effort,
     # Anthropic with OpenAI→Gemini fallback via report_llm; deterministic fallback
     # summary when no key is set).
     keyword_research_report_model: str = "claude-sonnet-4-6"
     keyword_research_report_max_tokens: int = 600
+    # Seed/topic suggestions ("give me seeds to start with"): a cheap LLM call
+    # (Haiku — categorization only) grounded on the client's business context,
+    # with a deterministic GBP-derived fallback when no key is set.
+    keyword_research_seed_model: str = "claude-haiku-4-5-20251001"
+    keyword_research_seed_max_tokens: int = 400
 
     # On-site content comparison (Tier B / B5): how many competitor pages to
     # scrape per keyword, and the thresholds to flag a content gap (words thinner
