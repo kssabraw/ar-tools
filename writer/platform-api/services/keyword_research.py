@@ -42,7 +42,7 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import dataforseo_labs
+from services import dataforseo_labs, keyword_research_serp
 
 logger = logging.getLogger(__name__)
 
@@ -551,7 +551,8 @@ def _client_context(client_id: str) -> dict:
     gate/brand guard). Best-effort — an empty dict on failure."""
     try:
         rows = (
-            get_supabase().table("clients").select("name, rank_tracking_location_code")
+            get_supabase().table("clients")
+            .select("name, website_url, rank_tracking_location_code")
             .eq("id", client_id).limit(1).execute()
         ).data
     except Exception as exc:
@@ -562,6 +563,67 @@ def _client_context(client_id: str) -> dict:
 
 def _client_location_code(client_id: str) -> Optional[int]:
     return _client_context(client_id).get("rank_tracking_location_code")
+
+
+# Estimated DataForSEO cost per live SERP (organic/live/advanced) call — used
+# only to keep the run's best-effort cost_usd honest (fetch_serp returns items,
+# not the billed cost).
+_SERP_CALL_COST = 0.002
+
+
+async def _fetch_serp_intel(
+    seed_list: list[str],
+    location_code: Optional[int],
+    language_code: Optional[str],
+    client_domain: Optional[str],
+) -> tuple[list[str], dict, float]:
+    """SERP-enrichment pass: for the first N seeds, one live Google SERP call each
+    → PAA questions + competitive landscape (top organic domains + AIO sources).
+
+    Reuses serp_snapshot's fetch + parsers so there's one SERP parser in the
+    suite. Returns (paa_questions, serp_intel_blob, cost). Best-effort — a failed
+    seed is skipped; an all-empty pass returns ([], {}, cost)."""
+    from services import serp_snapshot
+
+    seeds = seed_list[: settings.keyword_research_serp_max_seeds]
+    loc = int(location_code) if location_code else settings.dataforseo_default_location_code
+    lang = language_code or settings.dataforseo_default_language_code
+    depth = settings.keyword_research_serp_depth
+
+    async def _one(seed: str):
+        items = await serp_snapshot.fetch_serp(seed, loc, lang, depth)
+        organic = serp_snapshot.extract_organic_results(
+            items, settings.keyword_research_serp_top_competitors)
+        features = serp_snapshot.extract_serp_features(items)
+        aio = serp_snapshot.extract_aio(items)
+        return seed, organic, features.get("people_also_ask") or [], aio
+
+    results = await asyncio.gather(*[_one(s) for s in seeds], return_exceptions=True)
+
+    per_seed_organic: list[dict] = []
+    per_seed_aio: list[dict] = []
+    paa_lists: list[list[str]] = []
+    analyzed: list[str] = []
+    cost = 0.0
+    for res in results:
+        if isinstance(res, Exception):
+            logger.warning("keyword_research.serp_failed", extra={"error": str(res)})
+            continue
+        seed, organic, paa, aio = res
+        cost += _SERP_CALL_COST
+        analyzed.append(seed)
+        per_seed_organic.append({"seed": seed, "organic": organic})
+        per_seed_aio.append({"seed": seed, "present": aio.get("present"),
+                             "sources": aio.get("sources") or []})
+        paa_lists.append(paa)
+
+    if not analyzed:
+        return [], {}, cost
+    intel = keyword_research_serp.build_serp_intel(
+        analyzed, per_seed_organic, per_seed_aio, paa_lists, client_domain,
+        top_competitors=settings.keyword_research_serp_top_competitors,
+    )
+    return intel.get("paa") or [], intel, cost
 
 
 async def run_keyword_research(
@@ -588,14 +650,37 @@ async def run_keyword_research(
     # keyword_ideas stays available but off by default (category drift). Fall back
     # to it only if it's the sole enabled source, so a run always has one.
     use_ideas = settings.keyword_research_broaden_with_ideas or not (use_suggestions or use_related)
+    use_serp = settings.keyword_research_serp_enrichment
+    n_serp = min(len(seed_list), settings.keyword_research_serp_max_seeds) if use_serp else 0
     n_calls = (
         (len(seed_list) if use_suggestions else 0)
         + (len(seed_list) if use_related else 0)
         + (1 if use_ideas else 0)
+        + n_serp
     )
     reserve_budget(max(1, n_calls))
 
     cost = 0.0
+
+    # SERP-enrichment pass (People Also Ask + competitive intelligence): one live
+    # SERP call per analyzed seed → PAA questions folded into the keyword universe
+    # (below) and the competitor/AIO landscape persisted as serp_intel. Best-effort
+    # — a failure leaves the run otherwise unaffected.
+    serp_paa: list[str] = []
+    serp_intel: dict = {}
+    if use_serp:
+        try:
+            client_domain = None
+            website = ctx.get("website_url")
+            if website:
+                from services.dataforseo_rank import extract_domain
+                client_domain = extract_domain(website) or None
+            serp_paa, serp_intel, serp_cost = await _fetch_serp_intel(
+                seed_list, location_code, language_code, client_domain)
+            cost += serp_cost or 0.0
+        except Exception as exc:  # noqa: BLE001 — enrichment is best-effort
+            logger.warning("keyword_research.serp_enrichment_failed",
+                           extra={"client_id": client_id, "error": str(exc)})
 
     async def _gather_per_seed(fetch, label):
         """Run a per-seed fetch across all seeds concurrently; collect rows + cost."""
@@ -649,6 +734,13 @@ async def run_keyword_research(
             related_rows += node_rows
             related_neighbors += neighbors
             cost += cost_i or 0.0
+
+    # People Also Ask questions (from the SERP pass) enter the keyword universe
+    # via the same neighbour-enrichment path (bare strings → keyword_overview
+    # metrics → rows), so they cluster, export and tag as questions. Prepended so
+    # the neighbour cap never truncates them.
+    if serp_paa:
+        related_neighbors = serp_paa + related_neighbors
 
     # Enrich the adjacency neighbours (bare strings) that aren't already present,
     # then add them to related_rows — this is where cross-topic terms like
@@ -745,6 +837,7 @@ async def run_keyword_research(
             "cluster_count": len(clusters),
             "status": "complete",
             "cost_usd": round(cost or 0.0, 4),
+            "serp_intel": serp_intel or None,
         }).execute()
     ).data[0]
 

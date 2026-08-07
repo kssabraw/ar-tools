@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, CalendarPlus, Download, FileText, HelpCircle, Lightbulb, Plus, RefreshCw, Search, Trash2 } from 'lucide-react'
+import { ArrowLeft, CalendarPlus, Download, FileText, HelpCircle, Lightbulb, MessageCircleQuestion, Plus, RefreshCw, Search, Sparkles, Trash2, Trophy } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 
@@ -41,8 +41,25 @@ interface HistoryResponse {
   budget_remaining: number
   runs: RunSummary[]
 }
+interface SerpCompetitor {
+  domain: string
+  appearances: number
+  best_position: number | null
+  seeds: string[]
+  sample_title: string | null
+  sample_url: string | null
+  aio_cited: boolean
+  is_client: boolean
+}
+interface SerpIntel {
+  enabled: boolean
+  seeds_analyzed: string[]
+  competitors: SerpCompetitor[]
+  aio: { seeds_with_aio: number; seeds_analyzed: number; sources: { domain: string; url: string | null; title: string | null; count: number }[] }
+  paa: string[]
+}
 interface RunResponse {
-  run: (RunSummary & { location_code: number | null; language_code: string | null }) | null
+  run: (RunSummary & { location_code: number | null; language_code: string | null; serp_intel: SerpIntel | null }) | null
   keywords: ResearchKeyword[]
   clusters: ClusterSummary[]
   warnings?: string[]
@@ -158,6 +175,7 @@ export function KeywordResearch() {
   const budget = history?.budget_remaining ?? 0
   const keywords = useMemo(() => runData?.keywords ?? [], [runData])
   const clusters = useMemo(() => runData?.clusters ?? [], [runData])
+  const serpIntel = runData?.run?.serp_intel ?? null
 
   const filtered = useMemo(() => {
     let ks = keywords
@@ -366,6 +384,56 @@ export function KeywordResearch() {
             </div>
           )}
 
+          {/* Competitive intelligence + People Also Ask (SERP enrichment) */}
+          {serpIntel?.enabled && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12, marginBottom: 16 }}>
+              {/* Competitors */}
+              {serpIntel.competitors.length > 0 && (
+                <div style={intelCard}>
+                  <div style={intelHead}><Trophy size={14} /> Top competitors in these SERPs</div>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
+                    Domains ranking across {serpIntel.seeds_analyzed.length} analyzed seed{serpIntel.seeds_analyzed.length === 1 ? '' : 's'}
+                    {serpIntel.aio.seeds_with_aio > 0 && ` · AI Overview on ${serpIntel.aio.seeds_with_aio}/${serpIntel.aio.seeds_analyzed}`}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {serpIntel.competitors.map((c) => (
+                      <div key={c.domain} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '3px 0' }}>
+                        <span style={{ width: 30, color: '#64748b', flexShrink: 0 }}>#{c.best_position ?? '—'}</span>
+                        <a href={c.sample_url ?? `https://${c.domain}`} target="_blank" rel="noreferrer"
+                          style={{ color: c.is_client ? '#059669' : '#0f172a', fontWeight: c.is_client ? 700 : 500, textDecoration: 'none', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                          title={c.sample_title ?? c.domain}>
+                          {c.domain}{c.is_client && ' (you)'}
+                        </a>
+                        {c.aio_cited && <Sparkles size={12} color="#7c3aed" aria-label="Cited in AI Overview" />}
+                        <span style={{ color: '#94a3b8', flexShrink: 0 }} title={`Ranks for ${c.seeds.length} seed(s)`}>×{c.appearances}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {serpIntel.competitors.some((c) => c.aio_cited) && (
+                    <div style={{ fontSize: 10, color: '#a78bfa', marginTop: 6 }}><Sparkles size={9} /> = cited in Google's AI Overview</div>
+                  )}
+                </div>
+              )}
+              {/* People Also Ask */}
+              {serpIntel.paa.length > 0 && (
+                <div style={intelCard}>
+                  <div style={intelHead}><MessageCircleQuestion size={14} /> People Also Ask ({serpIntel.paa.length})</div>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
+                    Questions Google shows for your seeds — also included in the keyword table below.
+                  </div>
+                  <ul style={{ margin: 0, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {serpIntel.paa.map((q) => (
+                      <li key={q} style={{ fontSize: 12, color: '#334155' }}>
+                        {q}
+                        <button style={{ ...linkBtn, marginLeft: 8 }} onClick={() => addSeed(q)} title="Add as a seed">+ seed</button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Cluster rail */}
           {clusters.length > 0 && (
             <div style={{ marginBottom: 16 }}>
@@ -499,6 +567,8 @@ const chip: React.CSSProperties = { padding: '5px 12px', background: '#f1f5f9', 
 const chipActive: React.CSSProperties = { background: '#dbeafe', color: '#1d4ed8', borderColor: '#93c5fd' }
 const clusterChip: React.CSSProperties = { padding: '5px 12px', background: '#fff', color: '#475569', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 12, cursor: 'pointer' }
 const suggestChip: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '5px 10px', background: '#fff', color: '#0369a1', border: '1px solid #bae6fd', borderRadius: 999, fontSize: 12, fontWeight: 500, cursor: 'pointer' }
+const intelCard: React.CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 10, padding: '12px 14px', background: '#fff' }
+const intelHead: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: '#334155', marginBottom: 4 }
 const clusterChipActive: React.CSSProperties = { background: '#eff6ff', color: '#1d4ed8', borderColor: '#93c5fd', fontWeight: 600 }
 const th: React.CSSProperties = { textAlign: 'left', padding: '9px 12px', background: '#f8fafc', color: '#475569', fontWeight: 600, fontSize: 12, whiteSpace: 'nowrap' }
 const td: React.CSSProperties = { padding: '8px 12px', color: '#334155' }
