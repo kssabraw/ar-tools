@@ -172,25 +172,58 @@ async def generate_page(*, page_id: str, user_id: str) -> dict:
         user_id=user_id,
     )
 
-    supabase.table("website_pages").update(
-        {
-            "content_source": "local_seo_page",
-            "source_id": generated["id"],
-            "title": generated.get("page_title") or page.get("title") or "",
-            "status": "draft",
-            "error": None,
-            # A new body invalidates whatever was last committed, so the next
-            # publish must not short-circuit on an unchanged hash.
-            "content_hash": None,
-            "updated_at": "now()",
-        }
-    ).eq("id", page_id).execute()
+    update = {
+        "content_source": "local_seo_page",
+        "source_id": generated["id"],
+        "title": generated.get("page_title") or page.get("title") or "",
+        "status": "draft",
+        "error": None,
+        # A new body invalidates whatever was last committed, so the next
+        # publish must not short-circuit on an unchanged hash.
+        "content_hash": None,
+        "updated_at": "now()",
+    }
+    # A hero image rides in the page's own frontmatter (build_files merges it), so
+    # a local_seo_page's image lives here rather than on its local_seo_pages row.
+    hero = await _hero_for(page, client[0], website)
+    if hero:
+        update["content"] = {**(page.get("content") or {}),
+                             "frontmatter": {**((page.get("content") or {}).get("frontmatter") or {}), **hero}}
+
+    supabase.table("website_pages").update(update).eq("id", page_id).execute()
 
     logger.info(
         "website_generate.page_written",
         extra={"page_id": page_id, "source_id": generated["id"], "keyword": keyword},
     )
     return {"page_id": page_id, "generated": True, "source_id": generated["id"]}
+
+
+def _hero_business_city(client: dict, website: dict) -> tuple[str, str]:
+    config = website.get("config") or {}
+    business_cfg = config.get("business") or {}
+    gbp = client.get("gbp") if isinstance(client.get("gbp"), dict) else {}
+    business = (
+        business_cfg.get("name") or website.get("name")
+        or gbp.get("business_name") or client.get("name") or ""
+    )
+    city = business_cfg.get("city") or gbp.get("city") or client.get("business_location") or ""
+    return business.strip(), city.strip()
+
+
+async def _hero_for(page: dict, client: dict, website: dict) -> Optional[dict]:
+    """A hero image's frontmatter for this page, or None. Never raises.
+
+    Best-effort by construction — imagery being off, unsupported for the page
+    type, or a render failure all return None, and the page ships without a hero
+    (a state the template renders cleanly).
+    """
+    from services import website_images
+
+    business, city = _hero_business_city(client, website)
+    return await website_images.generate_hero(
+        page=page, client=client, website=website, business=business, city=city
+    )
 
 
 async def _generate_core_page(*, page: dict, website: dict, supabase) -> dict:
@@ -239,6 +272,11 @@ async def _generate_core_page(*, page: dict, website: dict, supabase) -> dict:
         website=website,
         pages=site_pages,
     )
+
+    # Home is hero-eligible; about/contact are not, so this is None for them.
+    hero = await _hero_for(page, client[0], website)
+    if hero:
+        content["frontmatter"] = {**(content.get("frontmatter") or {}), **hero}
 
     supabase.table("website_pages").update(
         {
