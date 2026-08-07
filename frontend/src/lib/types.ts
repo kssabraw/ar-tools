@@ -624,8 +624,10 @@ export interface MapsConfig {
   serp_device: 'desktop' | 'mobile' | 'both'
   cadence: 'off' | 'weekly'
   weekday: number
+  scan_hour: number
   active: boolean
   last_scanned_at: string | null
+  timezone: string | null
   configured: boolean
 }
 

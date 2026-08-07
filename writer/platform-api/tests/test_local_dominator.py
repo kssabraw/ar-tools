@@ -72,11 +72,12 @@ def test_build_scan_request_defaults_shape_and_surface():
 # ---------------------------------------------------------------------------
 # resolve_weekday / scan_due — per-client scan scheduling (pure)
 # ---------------------------------------------------------------------------
-from datetime import date  # noqa: E402
+from datetime import date, datetime, timezone  # noqa: E402
 
 from config import settings  # noqa: E402
 
 MON, TUE, THU = 0, 1, 3
+UTC = timezone.utc
 
 
 def test_resolve_weekday_uses_the_config_value():
@@ -185,16 +186,18 @@ def test_scan_due_never_scanned_waits_for_its_weekday():
 
 def test_scan_history_splits_attempts_from_good_scans():
     """'failed' rows count as attempts only; anything else (complete, polling,
-    cancelled) is also a good scan. The newest date wins per client."""
+    cancelled) is also a good scan. The newest UTC timestamp wins per client
+    (timestamps, not dates, so the caller can convert to each client's local
+    date)."""
     rows = [
         {"client_id": "c1", "created_at": "2026-08-04 08:00:00+00", "status": "failed"},
         {"client_id": "c1", "created_at": "2026-07-28 08:00:00+00", "status": "complete"},
         {"client_id": "c2", "created_at": "2026-08-04 08:00:00+00", "status": "cancelled"},
     ]
     fake = _FakeSupabase(configs=[], scans=rows, keywords_by_client={})
-    attempts, good = local_dominator._scan_history(fake, date(2026, 8, 5))
-    assert attempts == {"c1": date(2026, 8, 4), "c2": date(2026, 8, 4)}
-    assert good == {"c1": date(2026, 7, 28), "c2": date(2026, 8, 4)}
+    attempts, good = local_dominator._scan_history(fake, datetime(2026, 8, 5, tzinfo=UTC))
+    assert attempts == {"c1": datetime(2026, 8, 4, 8, tzinfo=UTC), "c2": datetime(2026, 8, 4, 8, tzinfo=UTC)}
+    assert good == {"c1": datetime(2026, 7, 28, 8, tzinfo=UTC), "c2": datetime(2026, 8, 4, 8, tzinfo=UTC)}
 
 
 # ---------------------------------------------------------------------------
@@ -255,10 +258,18 @@ def _cfg(client_id, weekday, **overrides):
     return row
 
 
-def _run_sweep(monkeypatch, configs, scans, keywords, due_order, today):
+def _run_sweep(monkeypatch, configs, scans, keywords, due_order, today, hour=9, tz_map=None):
     fake = _FakeSupabase(configs, scans, keywords)
     fake._due_order = list(due_order)
     monkeypatch.setattr(local_dominator, "get_supabase", lambda: fake)
+
+    # Timezone resolution is stubbed so these sweep tests stay in the UTC frame
+    # (None → UTC); tz_map lets a test place a client in a specific zone.
+    import services.gbp_timezone as _gbp_tz
+    monkeypatch.setattr(
+        _gbp_tz, "resolve_client_timezone",
+        lambda client_id, *a, **k: (tz_map or {}).get(client_id),
+    )
 
     enqueued = []
     monkeypatch.setattr(
@@ -271,7 +282,7 @@ def _run_sweep(monkeypatch, configs, scans, keywords, due_order, today):
     class _FixedDatetime(local_dominator.datetime):
         @classmethod
         def now(cls, tz=None):
-            return local_dominator.datetime(today.year, today.month, today.day, 9, tzinfo=tz)
+            return local_dominator.datetime(today.year, today.month, today.day, hour, tzinfo=tz)
 
     monkeypatch.setattr(local_dominator, "datetime", _FixedDatetime)
     count = local_dominator.enqueue_due_maps_scans()
@@ -392,3 +403,66 @@ def test_enqueue_due_maps_scans_skips_incomplete_config_without_enqueue(monkeypa
     assert enqueued == []
     assert starved == []            # incomplete is not the starved (no-keywords) case
     assert fake.keyword_lookups == []
+
+
+# ---------------------------------------------------------------------------
+# resolve_scan_hour / hour_reached — local-time scan scheduling (pure)
+# ---------------------------------------------------------------------------
+def test_resolve_scan_hour_uses_the_config_value():
+    assert local_dominator.resolve_scan_hour(0) == 0
+    assert local_dominator.resolve_scan_hour(6) == 6
+    assert local_dominator.resolve_scan_hour(23) == 23
+
+
+def test_resolve_scan_hour_falls_back_on_unset_or_nonsense():
+    default = settings.maps_scan_hour
+    assert local_dominator.resolve_scan_hour(None) == default
+    assert local_dominator.resolve_scan_hour(24) == default     # out of range
+    assert local_dominator.resolve_scan_hour(-1) == default
+    assert local_dominator.resolve_scan_hour("8") == default
+    # bool is an int subclass — must not be read as hour 1
+    assert local_dominator.resolve_scan_hour(True) == default
+
+
+def test_hour_reached():
+    assert local_dominator.hour_reached(datetime(2026, 8, 4, 7, tzinfo=UTC), 8) is False
+    assert local_dominator.hour_reached(datetime(2026, 8, 4, 8, tzinfo=UTC), 8) is True
+    assert local_dominator.hour_reached(datetime(2026, 8, 4, 8, tzinfo=UTC), 6) is True
+
+
+def test_enqueue_due_maps_scans_holds_until_the_local_hour(monkeypatch):
+    """A client is not scanned before its local scan_hour, then is once reached.
+    The sweep runs every cycle, so 'too early' must simply wait, not lose the day."""
+    tuesday = date(2026, 8, 4)   # weekday TUE
+    common = dict(
+        configs=[_cfg("c1", TUE, scan_hour=8)],
+        scans=[{"client_id": "c1", "created_at": "2026-07-28 08:00:00+00"}],
+        keywords={"c1": [{"id": "k1"}]},
+        today=tuesday,
+    )
+    # 07:00 local — before the 8am scan hour: not due (no keyword lookup either).
+    count, enqueued, _s, _f = _run_sweep(monkeypatch, due_order=[], hour=7, **common)
+    assert count == 0 and enqueued == []
+    # 08:00 local — due.
+    count, enqueued, _s, _f = _run_sweep(monkeypatch, due_order=["c1"], hour=8, **common)
+    assert count == 1 and enqueued == ["c1"]
+
+
+def test_enqueue_due_maps_scans_honors_client_timezone(monkeypatch):
+    """weekday + scan_hour are the CLIENT's local time. A client in
+    America/New_York set to Tuesday 8am is due at UTC 13:00 (= 9am EDT) but not
+    at UTC 11:00 (= 7am EDT) — the whole point of local-time scheduling."""
+    tuesday = date(2026, 8, 4)
+    common = dict(
+        configs=[_cfg("nyc", TUE, scan_hour=8)],
+        scans=[{"client_id": "nyc", "created_at": "2026-07-28 12:00:00+00"}],
+        keywords={"nyc": [{"id": "k1"}]},
+        today=tuesday,
+        tz_map={"nyc": "America/New_York"},
+    )
+    # UTC 11:00 = 07:00 EDT — before 8am local: not due.
+    count, enqueued, _s, _f = _run_sweep(monkeypatch, due_order=[], hour=11, **common)
+    assert count == 0 and enqueued == []
+    # UTC 13:00 = 09:00 EDT — past 8am local: due.
+    count, enqueued, _s, _f = _run_sweep(monkeypatch, due_order=["nyc"], hour=13, **common)
+    assert count == 1 and enqueued == ["nyc"]
