@@ -31,6 +31,36 @@ def should_run(now: datetime, last_run_date: Optional[date], hour_utc: int) -> b
     return last_run_date is None or last_run_date < now.date()
 
 
+def weekly_due(
+    now: datetime, last_run_date: Optional[date], target_weekday: int, hour_utc: int
+) -> bool:
+    """True when a weekly block should fire — target weekday, OR overdue catch-up.
+
+    The weekday blocks used to gate purely on `now.weekday() == target and
+    should_run(...)`, which has no memory of a MISSED window. The loop only gets
+    to fire between `hour_utc` and midnight UTC on one specific weekday, so a
+    scheduler that wasn't alive across that window (a deploy, a crash, a Railway
+    restart) skipped the whole week silently and waited another seven days — with
+    the durable marker still showing the run before it, and nothing anywhere
+    saying a week had been dropped.
+
+    A run is now also due once a full week has elapsed since the last one,
+    whatever weekday that lands on, so a missed window self-heals on the next
+    tick instead of costing a week of data. The normal path is unchanged: on the
+    target weekday it still fires once, after `hour_utc`.
+
+    A `last_run_date` of None (fresh install / unreadable marker) deliberately
+    still waits for the target weekday rather than firing immediately — the
+    catch-up is for a gap we can actually measure, not an unknown one."""
+    if now.hour < hour_utc:
+        return False
+    if last_run_date is not None and (now.date() - last_run_date).days >= 7:
+        return True  # overdue — the weekday window was missed
+    return now.weekday() == target_weekday and (
+        last_run_date is None or last_run_date < now.date()
+    )
+
+
 # ---------------------------------------------------------------------------
 # Durable run markers (ops fix 2026-07-12)
 #
@@ -655,8 +685,9 @@ async def gsc_scheduler() -> None:
                 if ok:
                     last_df_date = now.date()
                     save_marker("df_weekly", last_df_date.isoformat())
-            # Weekly Maps geo-grid scans (Module #5) on their own weekday.
-            if now.weekday() == maps_weekday and should_run(now, last_maps_date, hour):
+            # Weekly Maps geo-grid scans (Module #5) on their own weekday, with
+            # catch-up: a missed Tuesday window used to cost a full week of grids.
+            if weekly_due(now, last_maps_date, maps_weekday, hour):
                 if _safe("maps_scans", enqueue_due_maps_scans):
                     last_maps_date = now.date()
                     save_marker("maps_weekly", last_maps_date.isoformat())

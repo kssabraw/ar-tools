@@ -92,3 +92,56 @@ def test_marker_roundtrip_prevents_rerun():
     # Next day it runs again.
     tomorrow = datetime(2026, 7, 13, 9, 0, tzinfo=timezone.utc)
     assert S.should_run(tomorrow, restored, hour_utc=6) is True
+
+
+# ── weekly_due: the missed-window catch-up ────────────────────────────────────
+# A weekly block can only fire between `hour_utc` and midnight UTC on ONE
+# weekday. A scheduler not alive across that window used to drop the whole week
+# silently and wait another seven days (the Maps geo-grid lost its Tuesday
+# grids that way). `weekly_due` keeps the normal path identical and adds a
+# self-healing catch-up once a full week has elapsed.
+from datetime import datetime, timezone  # noqa: E402
+
+TUE = 1
+
+
+def _now(y, m, d, hour):
+    return datetime(y, m, d, hour, tzinfo=timezone.utc)
+
+
+def test_weekly_due_fires_on_target_weekday_after_hour():
+    # Tue 2026-08-04 at 08:00, last run the previous Tuesday.
+    assert S.weekly_due(_now(2026, 8, 4, 8), date(2026, 7, 28), TUE, 8) is True
+
+
+def test_weekly_due_waits_until_the_target_hour():
+    assert S.weekly_due(_now(2026, 8, 4, 7), date(2026, 7, 28), TUE, 8) is False
+
+
+def test_weekly_due_only_once_per_day():
+    # Already ran today — a later tick the same day must not re-fire.
+    assert S.weekly_due(_now(2026, 8, 4, 20), date(2026, 8, 4), TUE, 8) is False
+
+
+def test_weekly_due_quiet_on_a_non_target_weekday():
+    # Wed, ran yesterday (Tue) — not due, and not yet overdue.
+    assert S.weekly_due(_now(2026, 8, 5, 9), date(2026, 8, 4), TUE, 8) is False
+
+
+def test_weekly_due_catches_up_after_a_missed_window():
+    """The regression: the scheduler was down all Tuesday, so the run never
+    happened. By Wednesday a full week has elapsed and it must fire rather than
+    silently wait for the next Tuesday."""
+    # Last run Tue 2026-07-28; the Tue 2026-08-04 window was missed entirely.
+    assert S.weekly_due(_now(2026, 8, 5, 9), date(2026, 7, 28), TUE, 8) is True
+
+
+def test_weekly_due_catch_up_still_respects_the_hour():
+    assert S.weekly_due(_now(2026, 8, 5, 3), date(2026, 7, 28), TUE, 8) is False
+
+
+def test_weekly_due_no_marker_waits_for_the_target_weekday():
+    """A fresh install / unreadable marker must not fire on an arbitrary day —
+    the catch-up is for a gap we can measure, not an unknown one."""
+    assert S.weekly_due(_now(2026, 8, 5, 9), None, TUE, 8) is False      # Wed
+    assert S.weekly_due(_now(2026, 8, 4, 9), None, TUE, 8) is True       # Tue
