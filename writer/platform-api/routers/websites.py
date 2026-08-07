@@ -26,6 +26,7 @@ from services import (
     website_plan_store,
     website_provision,
     website_publish,
+    website_settings,
     website_theme,
 )
 from services.freeze import assert_not_frozen
@@ -90,6 +91,21 @@ class PageSelectionRequest(BaseModel):
     """
 
     page_ids: list[str] = Field(default_factory=list)
+
+
+class FactsUpdateRequest(BaseModel):
+    """A partial edit of a site's business facts.
+
+    Every group is optional and only sent groups are applied (the router uses
+    `exclude_unset`), so the tab can save one section without disturbing the
+    rest. Within `business`, a present-but-empty field clears it back to GBP.
+    """
+
+    business: Optional[dict] = None
+    tagline: Optional[str] = None
+    description: Optional[str] = None
+    forms: Optional[dict] = None
+    analytics: Optional[dict] = None
 
 
 class ThemeSelectRequest(BaseModel):
@@ -322,6 +338,52 @@ async def update_website(
         get_supabase().table("websites").update(patch).eq("id", website_id).execute()
     ).data
     return {"website": rows[0] if rows else None}
+
+
+@router.get("/websites/{website_id}/facts")
+async def get_website_facts(website_id: str, auth: dict = Depends(require_auth)) -> dict:
+    """The site's business facts as it would actually use them (GBP-filled),
+    each labelled `user`/`gbp`/unset so the editor shows what came from where."""
+    _enabled()
+    _load_site(website_id)  # 404s if the site is gone
+    try:
+        return website_settings.get_facts(website_id)
+    except website_settings.SettingsError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put("/websites/{website_id}/facts")
+async def update_website_facts(
+    website_id: str, body: FactsUpdateRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Save edited business facts. On a provisioned site this re-commits
+    site.config.json and records a `config` deploy so the live site updates;
+    on an unprovisioned one the facts wait for the provision commit.
+
+    Not freeze-gated: correcting a phone number is not content output, and a
+    frozen client may well need its NAP fixed. Staff-gated like every write."""
+    _enabled()
+    site = _load_site(website_id)
+    # Only send fields the caller actually set, so an omitted group is left
+    # untouched rather than cleared.
+    edits = body.model_dump(exclude_unset=True)
+    if not edits:
+        return {"updated": False}
+    try:
+        result = await website_settings.save_facts(website_id, edits)
+    except website_settings.SettingsError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    logger.info(
+        "websites.facts_updated",
+        extra={"website_id": website_id, "committed": result.get("committed"),
+               "client_id": site.get("client_id")},
+    )
+    return {
+        "updated": True,
+        "committed": result.get("committed", False),
+        "deploy_id": result.get("deploy_id"),
+        "facts": website_settings.get_facts(website_id),
+    }
 
 
 @router.post("/websites/{website_id}/provision")

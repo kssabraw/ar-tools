@@ -88,6 +88,15 @@ class TestSiteConfig:
         # either way, but absent keeps "we never learned this" distinguishable.
         assert "street" not in b and "postalCode" not in b
 
+    def test_array_facts_are_always_arrays(self):
+        # The contact block reads `business.hours.length` and
+        # `business.areaServed.length`; an omitted key crashes the page's build,
+        # so these two are guaranteed to be arrays even when no source supplied
+        # them. Regression for the crash the first real provision would have hit.
+        b = wp.build_site_config(self._site(), {"name": "Acme"})["business"]
+        assert b["hours"] == []
+        assert b["areaServed"] == []
+
     def test_service_area_places_become_area_served(self):
         cfg = wp.build_site_config(
             self._site(), {"gbp": {"service_area_places": ["Olathe", "Lenexa"]}}
