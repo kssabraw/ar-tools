@@ -739,6 +739,18 @@ async def run_maps_report_job(job: dict) -> None:
         logger.info("maps_report_complete", extra={"scan_id": scan_id, "keywords": len(generated)})
     except Exception as exc:
         logger.error("maps_report_job_failed", extra={"scan_id": scan_id, "error": str(exc)})
+        # A whole-job failure (as opposed to the per-keyword failures handled
+        # above) used to leave every unprocessed row at report_status='pending' —
+        # indistinguishable in the UI from "still generating", forever. Flip the
+        # still-pending rows to failed so the state is honest; best-effort, since
+        # if the DB itself is down this update fails like everything else and the
+        # job-failed marking below must still be attempted.
+        try:
+            supabase.table("maps_scan_results").update(
+                {"report_status": "failed", "report_error": str(exc)[:500]}
+            ).eq("scan_id", scan_id).eq("report_status", "pending").execute()
+        except Exception:  # noqa: BLE001
+            logger.warning("maps_report_pending_rows_not_flipped", extra={"scan_id": scan_id})
         supabase.table("async_jobs").update(
             {"status": "failed", "error": str(exc)[:500], "completed_at": "now()"}
         ).eq("id", job_id).execute()

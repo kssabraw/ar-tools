@@ -515,7 +515,6 @@ async def gsc_scheduler() -> None:
     interval = settings.gsc_scheduler_poll_interval_seconds
     hour = settings.gsc_ingest_hour_utc
     weekday = settings.dataforseo_rank_weekday
-    maps_weekday = settings.maps_scan_weekday
     reopt_weekday = settings.reopt_plan_weekday
     rank_analysis_weekday = settings.rank_analysis_weekly_weekday
     # Durable markers: survive deploys so the daily/weekly blocks don't re-fire

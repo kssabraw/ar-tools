@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Gauge, Map, Play, Trash2, MapPin, Download, Printer, Square, ToggleLeft, ToggleRight, Bell, Check, X, ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react'
@@ -121,6 +121,12 @@ export function MapsGeogrid() {
 // ── Heatmap (latest completed scan) ─────────────────────────────────────────
 function Heatmap({ clientId, scanning, onRan, onStopped }: { clientId: string; scanning: boolean; onRan: () => void; onStopped: () => void }) {
   const queryClient = useQueryClient()
+  // When we FIRST observed a report in 'pending' (null = none pending). Bounds
+  // the report polling below: a row stuck at pending (report job dead, worker
+  // down) must not poll every 8s for the life of the tab. Keyed on observation
+  // time — not scan age — so "Regenerate report" on an old scan still polls.
+  const reportPendingSince = useRef<number | null>(null)
+  const REPORT_POLL_MAX_MS = 3 * 60 * 60 * 1000 // observed worst: ~40 min behind a busy queue
   const { data: latest, error, isLoading } = useQuery<MapsScanDetail>({
     queryKey: ['maps-latest', clientId],
     queryFn: () => api.get<MapsScanDetail>(`/clients/${clientId}/maps/latest`),
@@ -133,7 +139,13 @@ function Heatmap({ clientId, scanning, onRan, onStopped }: { clientId: string; s
     // stuck on "Generating…" until the user manually reloaded the page.
     refetchInterval: (q) => {
       const reportPending = (q.state.data?.results ?? []).some(r => r.report_status === 'pending')
-      return scanning || reportPending ? 8000 : false
+      // A running scan restarts the budget: its fresh reports deserve a full
+      // window even if an older stuck-pending row had already expired it.
+      if (!reportPending || scanning) reportPendingSince.current = null
+      else if (reportPendingSince.current === null) reportPendingSince.current = Date.now()
+      const reportPollExpired =
+        reportPendingSince.current !== null && Date.now() - reportPendingSince.current > REPORT_POLL_MAX_MS
+      return scanning || (reportPending && !reportPollExpired) ? 8000 : false
     },
   })
   const runMut = useMutation({
@@ -619,9 +631,13 @@ function Setup({ clientId }: { clientId: string }) {
 
   // Weekly scanning on + zero active keywords = the scheduler skips this client
   // entirely, so the geo-grid quietly stops updating while this tab still reads
-  // "Weekly". Say so here, where the schedule is set.
+  // "Weekly". Say so here, where the schedule is set. `configured` matters: an
+  // unconfigured client gets a PREFILLED default (active/weekly) from the API,
+  // and it must not be told that scans are "being skipped" when none were ever
+  // set up.
   const activeKeywords = (keywords ?? []).filter(k => k.active).length
-  const scanningStalled = config?.active && (config?.cadence ?? form.cadence) === 'weekly' && keywords && activeKeywords === 0
+  const scanningStalled =
+    config?.configured && config.active && config.cadence === 'weekly' && keywords && activeKeywords === 0
 
   return (
     <div>
