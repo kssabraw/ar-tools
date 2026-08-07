@@ -345,6 +345,81 @@ def filter_relevant_ideas(
     return kept, report
 
 
+_BRAND_FLOOD_MIN_FRACTION = 0.4   # a flood token must dominate >= this share of the seedless subset
+_BRAND_FLOOD_MIN_COUNT = 8        # ...and appear in >= this many seedless keywords (protects tiny subsets)
+
+
+def detect_brand_flood_tokens(
+    related_keywords: list[str],
+    seeds: list[str],
+    *,
+    enabled: bool = True,
+    min_fraction: float = _BRAND_FLOOD_MIN_FRACTION,
+    min_count: int = _BRAND_FLOOD_MIN_COUNT,
+) -> tuple[set[str], dict]:
+    """Detect competitor-brand / homonym namespace floods in the related_keywords
+    adjacency layer — the one broadener KR trusts ungated (suggestions are
+    phrase-containment; keyword_ideas has its own gate). A flood is a single
+    NON-seed token that dominates the SEEDLESS neighbours (those sharing no seed
+    token): e.g. related_keywords for "third party claims adjuster" surfaced the
+    claims-software vendor "Mitchell" and then flooded with "mitchell connect" /
+    "mitchell prodemand" plus homonym "mitchell usa serum".
+
+    Restricting to the seedless subset means legit seed-anchored adjacency
+    ("historic preservation office") is never a candidate, and requiring ONE token
+    to dominate means diverse legit adjacency ("adaptive reuse", "national trust")
+    survives — no single token dominates a healthy related set. Deliberately
+    conservative: a small seedless subset (< min_count) can't flood, and the
+    fraction bar is high enough that a namespace repeating its brand token clears
+    it while topical adjacency does not.
+
+    Returns (flood_tokens, report). ``report`` = {gate, seedless, flood_tokens,
+    dropped}. `gate` is 'off' (disabled / no seeds), 'none' (no flood), or 'flood'.
+    Pure."""
+    report = {"gate": "off", "seedless": 0, "flood_tokens": [], "dropped": 0}
+    if not enabled:
+        return set(), report
+    seed_toks: set[str] = set()
+    for s in seeds or []:
+        seed_toks |= token_set(s)
+    if not seed_toks:
+        return set(), report
+
+    # Seedless subset: unique candidate keywords sharing no seed token.
+    seedless: dict[str, set[str]] = {}
+    for kw in related_keywords:
+        nk = normalize_keyword(kw)
+        if not nk or nk in seedless:
+            continue
+        kt = token_set(nk)
+        if kt and not (kt & seed_toks):
+            seedless[nk] = kt
+    n = len(seedless)
+    report["seedless"] = n
+    if n < min_count:
+        return set(), report  # too few seedless neighbours for a flood to be meaningful
+
+    counts: dict[str, int] = {}
+    for kt in seedless.values():
+        for t in kt:
+            counts[t] = counts.get(t, 0) + 1
+    flood = {t for t, c in counts.items() if c >= min_count and c / n >= min_fraction}
+    dropped = sum(1 for kt in seedless.values() if kt & flood)
+    report.update({"gate": "flood" if flood else "none",
+                   "flood_tokens": sorted(flood), "dropped": dropped})
+    return flood, report
+
+
+def is_brand_flooded(keyword: Optional[str], seed_toks: set[str], flood_tokens: set[str]) -> bool:
+    """A related keyword is dropped when it carries a flood token AND shares no
+    seed token (so a legit seed-anchored keyword that happens to contain a flood
+    token is kept). Pure."""
+    if not flood_tokens:
+        return False
+    kt = token_set(keyword)
+    return bool(kt & flood_tokens) and not (kt & seed_toks)
+
+
 def looks_like_brand_seed(
     seed: str, client_name: Optional[str], ratio_threshold: float = 0.6
 ) -> bool:
@@ -552,7 +627,10 @@ async def run_keyword_research(
             ), "suggestions")
 
     # related_keywords returns enriched graph nodes PLUS bare "searches related to"
-    # neighbour strings (Google's adjacency layer). Collect both across seeds.
+    # neighbour strings (Google's adjacency layer). Collect both across seeds —
+    # kept in `related_rows` (separate from suggestions) so the brand-flood gate can
+    # filter this ungated layer before it merges.
+    related_rows: list[dict] = []
     related_neighbors: list[str] = []
     if use_related:
         results = await asyncio.gather(*[
@@ -568,15 +646,16 @@ async def run_keyword_research(
                                extra={"client_id": client_id, "error": str(res)})
                 continue
             node_rows, neighbors, cost_i = res
-            trusted_rows += node_rows
+            related_rows += node_rows
             related_neighbors += neighbors
             cost += cost_i or 0.0
 
     # Enrich the adjacency neighbours (bare strings) that aren't already present,
-    # then merge them as trusted rows — this is where cross-topic terms like
+    # then add them to related_rows — this is where cross-topic terms like
     # "adaptive reuse" enter. One keyword_overview call per ≤700, capped.
     if related_neighbors:
         have = {normalize_keyword(r.get("keyword")) for r in trusted_rows}
+        have |= {normalize_keyword(r.get("keyword")) for r in related_rows}
         fresh, seen_fresh = [], set()
         for k in related_neighbors:
             nk = normalize_keyword(k)
@@ -593,12 +672,31 @@ async def run_keyword_research(
             ov_lower = {kw.lower(): m for kw, m in overview.items()}
             for k in fresh:
                 m = ov_lower.get(k.lower()) or {}
-                trusted_rows.append({
+                related_rows.append({
                     "keyword": k, "volume": m.get("volume"), "cpc_usd": m.get("cpc_usd"),
                     "competition_index": m.get("competition_index"),
                     "keyword_difficulty": m.get("keyword_difficulty"),
                     "search_intent": m.get("search_intent"),
                 })
+
+    # Brand-flood gate: drop a competitor-brand / homonym namespace that flooded the
+    # related adjacency layer (e.g. a "mitchell ..." cluster), keeping legit
+    # seed-anchored and diverse adjacency. Then merge the survivors as trusted rows.
+    flood_tokens, flood_report = detect_brand_flood_tokens(
+        [r.get("keyword") for r in related_rows], seed_list,
+        enabled=settings.keyword_research_brand_flood_filter,
+        min_fraction=settings.keyword_research_brand_flood_fraction,
+        min_count=settings.keyword_research_brand_flood_min,
+    )
+    if flood_tokens:
+        seed_toks: set[str] = set()
+        for s in seed_list:
+            seed_toks |= token_set(s)
+        related_rows = [
+            r for r in related_rows
+            if not is_brand_flooded(r.get("keyword"), seed_toks, flood_tokens)
+        ]
+    trusted_rows += related_rows
 
     # OPT-IN BROADENER — category-based ideas, passed through the relevance gate to
     # drop brand-homonym / generic-token drift before merging.
@@ -624,10 +722,16 @@ async def run_keyword_research(
         ratio_threshold=settings.keyword_research_brand_seed_ratio,
         total_results=len(rows),
     )
+    if flood_report.get("dropped"):
+        warnings.append(
+            f"Filtered {flood_report['dropped']} related keyword(s) that looked "
+            f"like an unrelated brand/namespace ({', '.join(flood_report['flood_tokens'])})."
+        )
     if warnings:
         logger.info("keyword_research.seed_warnings",
                     extra={"client_id": client_id, "seeds": seed_list,
-                           "filter": filter_report, "warnings": warnings})
+                           "filter": filter_report, "brand_flood": flood_report,
+                           "warnings": warnings})
     clusters = cluster_keywords(rows)
     label_for = {kw: c["label"] for c in clusters for kw in c["keywords"]}
 

@@ -501,3 +501,69 @@ def test_render_report_html_is_escaped_and_self_contained():
     assert "<b>inject" not in html                   # no raw injection
     assert "Bob &amp; Co" in html
     assert "Acme SEO" in html
+
+
+# --- detect_brand_flood_tokens (related-layer brand/homonym flood gate) --------
+def _mitchell_related():
+    """The real "third party claims adjuster" flood shape: a competitor-brand
+    namespace ("mitchell ...") dominating the seedless neighbours, mixed with a
+    few legit seed-anchored terms and diverse legit adjacency."""
+    brand = [
+        "mitchell connect", "mitchell community", "mitchell prodemand",
+        "mitchell connect login", "mitchell international", "mitchell 1 login",
+        "mitchell collision", "mitchell cloud", "mitchell usa serum",
+        "mitchell cream",  # homonym skincare brand — pure off-niche
+    ]
+    seed_anchored = ["third-party payer examples", "claims adjuster salary"]
+    legit_adjacent = ["first notice of loss", "subrogation basics"]
+    return brand + seed_anchored + legit_adjacent
+
+
+def test_brand_flood_detects_dominant_namespace():
+    flood, report = kr.detect_brand_flood_tokens(
+        _mitchell_related(), ["third party claims adjuster"], min_count=8, min_fraction=0.4,
+    )
+    assert "mitchell" in flood
+    assert report["gate"] == "flood"
+    assert report["dropped"] >= 10
+
+
+def test_brand_flood_keeps_seed_anchored_and_diverse_adjacency():
+    flood, _ = kr.detect_brand_flood_tokens(
+        _mitchell_related(), ["third party claims adjuster"], min_count=8, min_fraction=0.4,
+    )
+    seed_toks = kr.token_set("third party claims adjuster")
+    # brand namespace dropped...
+    assert kr.is_brand_flooded("mitchell connect", seed_toks, flood)
+    assert kr.is_brand_flooded("mitchell usa serum", seed_toks, flood)
+    # ...seed-anchored kept even though unrelated otherwise...
+    assert not kr.is_brand_flooded("third-party payer examples", seed_toks, flood)
+    # ...and diverse legit adjacency (no dominant token) kept.
+    assert not kr.is_brand_flooded("first notice of loss", seed_toks, flood)
+
+
+def test_brand_flood_inert_on_clean_diverse_related_set():
+    # The "historic preservation" shape: a tiny, diverse seedless subset — no flood.
+    related = [
+        "historic preservation office", "national historic preservation act",
+        "adaptive reuse", "national trust", "state historic tax credit",
+        "preservation grants", "architecture salary",
+    ]
+    flood, report = kr.detect_brand_flood_tokens(related, ["historic preservation"])
+    assert flood == set()
+    assert report["gate"] in ("none", "off")
+
+
+def test_brand_flood_below_min_count_never_fires():
+    # A handful of same-brand seedless terms below the absolute floor is left alone.
+    related = ["acme one", "acme two", "acme three", "roof repair guide"]
+    flood, report = kr.detect_brand_flood_tokens(related, ["roof repair"], min_count=8)
+    assert flood == set()
+    assert report["seedless"] < 8
+
+
+def test_brand_flood_disabled_returns_empty():
+    flood, report = kr.detect_brand_flood_tokens(
+        _mitchell_related(), ["third party claims adjuster"], enabled=False,
+    )
+    assert flood == set() and report["gate"] == "off"
