@@ -2,8 +2,24 @@
 
 **Read this first, then `CLAUDE.md` → `START-HERE.md` → `ISSUES.md` → `DECISIONS.md`.**
 
-Status as of 2026-08-05 (Phase 3 slice 1 added 2026-08-07):
+Status as of 2026-08-05 (Phase 3 slices 1–2 added 2026-08-07):
 
+- **Phase 3 slice 2 — the comparison renderers — is BUILT (2026-08-07), on branch
+  `claude/outreach-first-scan-m4d7jb`, draft PR.** `heatmap_pair` (before/after side by side,
+  shared colour scale + extent, both panels dated) and `heatmap_delta` (per-point change) —
+  reporting §4.3 — added to `api/services/heatmap.py` on slice 1's deterministic footing. The
+  delta's inverted-rank trap is handled: `delta_band` treats "not found" as worse than any real
+  rank so `absent→ranking` is green and `ranking→absent` is red, but **absent-in-both renders
+  neutral, never red**; the legend is directional words only (no numbers), and the view is made
+  visually distinct from a state heatmap (tinted field + dashed frame). Guards
+  (`assert_delta_renderable`, `DeltaNotRenderable`): **span enforced now** (both `scanned_at` +
+  new `max_delta_span_days`=45 config); provider-boundary + drift-suppression are built seams
+  awaiting a 2nd provider and `prospect_delta` (I-091). Slice-1 `render_heatmap` bytes proven
+  **unchanged** across the shared-primitive extraction (reference hashes captured before the
+  refactor). Free `render-delta` CLI command (explicit `--snapshot` after + `--compare-snapshot`
+  before; writes `heatmap_delta` artifacts with `compare_snapshot_id`; refusals reported
+  per-prospect, never a blank picture). +33 unit tests (suite **351**). Renders nothing until two
+  scans of one submarket both roll up coverage. Interpretation choices in DECISIONS 2026-08-07.
 - **Phase 3 slice 1 — the heatmap renderer — is BUILT (2026-08-07), on branch `claude/outreach-first-scan-m4d7jb`, draft PR.** `api/services/heatmap.py` renders a **deterministic** SVG from `prospect_coverage.rank_vector` + the snapshot's stored geometry alone (no `grid_result`), with the §4.2 colour scale, dead points as hollow grey rings distinct from red "not found", the business's own diamond pin, a legend and a 1-mile scale bar. `report_artifact` provenance table added (migration `20260807130000`, **applied live** — RLS-on/zero-policy, unique on `content_hash` = the §6 cache contract). A free `render-heatmap` CLI command (not in `PAID_COMMANDS`) renders one prospect or a whole snapshot. 25 new unit tests (suite at **318**), determinism pinned (identical inputs → identical hash; input reordering can't change it). **Phase 3 is sliced — renderer first, then call hook → outcome/touch + emit webhook → approval gate + PDF → signed URLs/R2 + client views; see DECISIONS 2026-08-07.** Two spec gaps logged not resolved: rank >20 folds to "found, far down" never red (I-089); `score_run_id` FK deferred to Phase 4 (I-090). **It renders nothing until the first scan's rollup writes coverage rows — it is ready and waiting, exactly like everything else in §11.**
 - **Phase 1 (ingest + filter) is COMPLETE, verified against a real market, and MERGED to `main`** (#528, squashed as `67f235b`).
 - **Phase 1b (lead CRM) is COMPLETE, applied live, and MERGED to `main`** (#534, squashed as `452a726`).
