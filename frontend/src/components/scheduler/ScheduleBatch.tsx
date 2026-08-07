@@ -68,12 +68,15 @@ function segStyle(active: boolean): React.CSSProperties {
 
 const TODAY_ISO = new Date().toISOString().slice(0, 10)
 
-export function ScheduleBatch({ clientId, fixedType, githubReady, onCreated }: {
+export function ScheduleBatch({ clientId, fixedType, githubReady, initialTerms, onCreated }: {
   clientId: string
   fixedType?: ContentType
   // The client has a GitHub repo configured — unlocks the "auto-publish to
   // GitHub" toggle for blog posts (so scheduled posts go live automatically).
   githubReady?: boolean
+  // Seed the draft list with these head terms (e.g. keywords handed off from the
+  // Keyword Research tool). Applied once, on mount.
+  initialTerms?: string[]
   onCreated?: () => void
 }) {
   const queryClient = useQueryClient()
@@ -81,7 +84,11 @@ export function ScheduleBatch({ clientId, fixedType, githubReady, onCreated }: {
   // Auto-publish finished blog posts to GitHub (per the image SOP). Default ON
   // when the client is GitHub-ready — the common case is "generate AND publish".
   const [githubPublish, setGithubPublish] = useState(true)
-  const [rows, setRows] = useState<DraftRow[]>([])
+  const [rows, setRows] = useState<DraftRow[]>(() =>
+    (initialTerms ?? [])
+      .map(t => (t ?? '').trim())
+      .filter(Boolean)
+      .map((term, i) => ({ key: `init-${i}`, term, service: '', notes: '', date: '' })))
   const [bulk, setBulk] = useState('')
   const [when, setWhen] = useState<'now' | 'schedule'>('now')
   const fileRef = useRef<HTMLInputElement>(null)
