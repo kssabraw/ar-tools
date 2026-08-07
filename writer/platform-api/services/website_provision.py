@@ -131,6 +131,11 @@ def build_site_config(website: dict, client: dict) -> dict:
     if not business.get("areaServed") and gbp.get("service_area_places"):
         business["areaServed"] = list(gbp["service_area_places"])[:12]
         provenance["areaServed"] = "gbp"
+    # The template's contact block reads `business.hours.length` and
+    # `business.areaServed.length`, so these must always be arrays even when no
+    # source supplied them — an omitted key crashes the contact page's build.
+    business.setdefault("areaServed", [])
+    business.setdefault("hours", [])
     business["provenance"] = provenance
 
     site_type = website.get("site_type") or "informational"

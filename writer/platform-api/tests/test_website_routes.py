@@ -75,8 +75,20 @@ class TestRouteSurface:
             "/website-themes/{theme_id}/recompile",
             "/website-themes/{theme_id}/approve",
             "/websites/{website_id}/theme",
+            "/websites/{website_id}/facts",
         ):
             assert path in _paths(), path
+
+
+class TestFactsRoutes:
+    def test_facts_is_readable_and_writable(self):
+        # GET (any authed user) reads the GBP-filled facts; PUT (staff) saves.
+        assert "/websites/{website_id}/facts" in _paths()
+        methods = {
+            m for r in websites.router.routes if r.path == "/websites/{website_id}/facts"
+            for m in r.methods
+        }
+        assert {"GET", "PUT"} <= methods
 
 
 class TestThemeRoutes:

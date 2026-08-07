@@ -61,7 +61,19 @@ export interface SiteConfig {
   agency: { name: string };
 }
 
-export const site = raw as unknown as SiteConfig;
+const parsed = raw as unknown as SiteConfig;
+
+// Guarantee the array-typed business facts actually ARE arrays at runtime. The
+// config is cast, not validated, and a generated config only carries the keys a
+// business had — so a site with no hours or no service-area list omits them
+// entirely, and a component reading `business.hours.length` would crash the
+// build. The BusinessFacts type says these are string[]; this makes that true.
+if (parsed.business) {
+  parsed.business.hours = Array.isArray(parsed.business.hours) ? parsed.business.hours : [];
+  parsed.business.areaServed = Array.isArray(parsed.business.areaServed) ? parsed.business.areaServed : [];
+}
+
+export const site = parsed;
 
 export const isLocal = site.siteType === 'local_business';
 
