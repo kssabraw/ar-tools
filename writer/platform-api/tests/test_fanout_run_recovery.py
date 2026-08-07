@@ -81,12 +81,12 @@ class _Store:
         self.asked_for = list(session_ids)
         return [s for s in self.live if s["id"] in set(session_ids)]
 
-    def recover_orphaned_session(self, session_id, status, note):
+    def recover_orphaned_session(self, session_id, status, note, active_job=None):
         if session_id == self._fail_on:
             raise RuntimeError("update failed")
         if session_id in self._refuse:
             return False  # the guarded UPDATE matched nothing — no longer live
-        self.calls.append((session_id, status, note))
+        self.calls.append((session_id, status, note, active_job))
         return True
 
 
@@ -178,6 +178,150 @@ def test_nothing_to_do_is_silent():
     store = _Store([])
     assert run_recovery.recover_orphaned_runs(store) == 0
     assert store.calls == []
+
+
+# ---- auto-resume: the directive decision (pure) -----------------------------
+
+def test_interrupted_planning_run_gets_a_resume_directive():
+    """The 2026-08-05 case, closed: a deploy killing an article-planning run now
+    schedules its own restart instead of waiting for a human to notice."""
+    d = run_recovery.resume_directive(
+        {"id": "s1", "status": "running",
+         "statistical_clustering_log": _DONE_EXPANDING,
+         "active_job": {"kind": "plan", "direct": True, "resumes": 0}},
+        max_resumes=2,
+    )
+    assert d == {"kind": "plan", "direct": True, "resumes": 1,
+                 "resume_pending": True}
+
+
+def test_only_planning_runs_auto_resume():
+    """A killed regate/fanout/architecture run also lands at
+    awaiting_article_planning (it has a clustering log), but auto-replanning it
+    would wipe a completed plan or run a step nobody asked for. And a session
+    with no recorded job (pre-upgrade rows) must keep the manual path."""
+    for active_job in ({"kind": "regate"}, {"kind": "fanout"},
+                       {"kind": "architecture"}, {"kind": "expand"}, None):
+        session = {"id": "s1", "statistical_clustering_log": _DONE_EXPANDING,
+                   "active_job": active_job}
+        assert run_recovery.resume_directive(session, 2) is None
+
+
+def test_resume_budget_is_bounded():
+    """A run that keeps dying (planning itself crashes the process) must stop
+    auto-resuming instead of crash-looping through every deploy."""
+    session = {"id": "s1", "statistical_clustering_log": _DONE_EXPANDING,
+               "active_job": {"kind": "plan", "resumes": 2}}
+    assert run_recovery.resume_directive(session, 2) is None
+    assert run_recovery.resume_directive(session, 3) is not None
+
+
+def test_a_planning_claim_without_expansion_never_resumes():
+    """kind=plan with no clustering log is an inconsistent row — plan_articles
+    refuses to start without topics, so never auto-submit into that wall."""
+    assert run_recovery.resume_directive(
+        {"id": "s1", "statistical_clustering_log": None,
+         "active_job": {"kind": "plan"}}, 2,
+    ) is None
+
+
+# ---- auto-resume: the recovery write carries the directive -------------------
+
+def test_recovering_a_planning_run_marks_it_resume_pending(monkeypatch):
+    monkeypatch.setattr(run_recovery, "_max_resumes", lambda: 2)
+    store = _Store([{
+        "id": "s1", "status": "running",
+        "statistical_clustering_log": _DONE_EXPANDING,
+        "active_job": {"kind": "plan", "direct": False, "resumes": 0},
+    }])
+    assert run_recovery.recover_owned_runs(store, owned_ids=["s1"]) == 1
+    _sid, status, note, active_job = store.calls[0]
+    assert status == "awaiting_article_planning"
+    assert active_job["resume_pending"] is True
+    assert "restart automatically" in note
+
+
+def test_recovering_a_non_planning_run_keeps_the_manual_note(monkeypatch):
+    monkeypatch.setattr(run_recovery, "_max_resumes", lambda: 2)
+    store = _Store([{
+        "id": "s1", "status": "running",
+        "statistical_clustering_log": _DONE_EXPANDING,
+        "active_job": {"kind": "architecture"},
+    }])
+    assert run_recovery.recover_owned_runs(store, owned_ids=["s1"]) == 1
+    _sid, _status, note, active_job = store.calls[0]
+    assert active_job is None
+    assert "restart automatically" not in note
+
+
+# ---- auto-resume: the startup executor ---------------------------------------
+
+class _ResumeStore:
+    def __init__(self, rows, refuse_claim=(), fail_read=False):
+        self.rows = rows
+        self._refuse = set(refuse_claim)
+        self._fail_read = fail_read
+        self.claimed: list[str] = []
+
+    def list_resume_pending(self):
+        if self._fail_read:
+            raise RuntimeError("supabase down")
+        return list(self.rows)
+
+    def try_claim_run(self, session_id):
+        if session_id in self._refuse:
+            return False
+        self.claimed.append(session_id)
+        return True
+
+
+def test_resume_executor_replans_each_pending_session():
+    store = _ResumeStore([
+        {"id": "s1", "active_job": {"kind": "plan", "direct": True, "resumes": 1,
+                                    "resume_pending": True}},
+        {"id": "s2", "active_job": {"kind": "plan", "direct": False, "resumes": 2,
+                                    "resume_pending": True}},
+    ])
+    submits: list[tuple] = []
+    n = run_recovery.resume_interrupted_runs(
+        store, submit=lambda sid, direct, resumes: submits.append((sid, direct, resumes)),
+    )
+    assert n == 2
+    # direct + the attempt count survive the round-trip, so the re-run is the
+    # run that was killed — and the crash-loop budget keeps counting.
+    assert submits == [("s1", True, 1), ("s2", False, 2)]
+
+
+def test_resume_skips_a_session_a_human_already_claimed():
+    """If the user clicked "Plan articles" before the delayed pass fired, their
+    claim wins and the executor must not queue a second run."""
+    store = _ResumeStore(
+        [{"id": "s1", "active_job": {"kind": "plan", "resume_pending": True}}],
+        refuse_claim=["s1"],
+    )
+    submits: list = []
+    assert run_recovery.resume_interrupted_runs(
+        store, submit=lambda *a, **k: submits.append(a)) == 0
+    assert submits == []
+
+
+def test_one_bad_resume_does_not_stop_the_rest():
+    store = _ResumeStore([
+        {"id": "bad", "active_job": {"kind": "plan", "resume_pending": True}},
+        {"id": "good", "active_job": {"kind": "plan", "resume_pending": True}},
+    ])
+
+    def submit(sid, direct, resumes):
+        if sid == "bad":
+            raise RuntimeError("executor unavailable")
+
+    assert run_recovery.resume_interrupted_runs(store, submit=submit) == 1
+
+
+def test_resume_never_raises_when_the_read_fails():
+    """It runs on a background startup task and must never take the app down."""
+    store = _ResumeStore([], fail_read=True)
+    assert run_recovery.resume_interrupted_runs(store, submit=lambda *a, **k: None) == 0
 
 
 # Guard: the module must stay importable without the pipeline's heavy dependency

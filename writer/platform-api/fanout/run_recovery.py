@@ -85,16 +85,67 @@ def orphan_recovery_target(session: dict) -> tuple[str, str]:
     )
 
 
-def _recover(sessions: list[dict], store) -> int:
+def resume_directive(session: dict, max_resumes: int) -> dict | None:
+    """The active_job payload to store alongside an awaiting_article_planning
+    recovery when the interrupted run can restart itself — or None for the
+    manual path. Pure.
+
+    Only an interrupted *planning* run qualifies: expansion's keywords are
+    durable and `reset_article_planning` clears any partial clusters at the
+    start of the re-run, so re-submitting planning replays exactly what was
+    lost. A killed regate/fanout/architecture run also lands at
+    awaiting_article_planning (it has a clustering log), but auto-planning
+    there would wipe a completed article plan or run a step the user didn't
+    ask for — those keep the manual path. `resumes` counts auto-resume
+    attempts so a run that keeps dying stops at `max_resumes` instead of
+    crash-looping through every deploy (mirrors the Blog Writer orchestrator's
+    run_auto_resume_max)."""
+    job = session.get("active_job") or {}
+    if job.get("kind") != "plan":
+        return None
+    log = session.get("statistical_clustering_log") or {}
+    if not log.get("topics"):
+        return None
+    resumes = int(job.get("resumes") or 0)
+    if resumes >= max_resumes:
+        return None
+    return {
+        "kind": "plan",
+        "direct": bool(job.get("direct")),
+        "resumes": resumes + 1,
+        "resume_pending": True,
+    }
+
+
+def _max_resumes() -> int:
+    """plan_auto_resume_max from settings — lazily, so this module stays
+    importable without the config dependency chain (and recovery still works,
+    manual-path-only, if settings can't load)."""
+    try:
+        from fanout.config import get_settings
+
+        return int(get_settings().plan_auto_resume_max)
+    except Exception:  # noqa: BLE001 — recovery must never depend on config
+        return 0
+
+
+def _recover(sessions: list[dict], store, max_resumes: int = 0) -> int:
     """Mark each still-live session. Best-effort per row: one row that fails to
     update must not stop the rest. Returns how many were recovered."""
     recovered = 0
     for session in sessions:
         status, note = orphan_recovery_target(session)
+        directive = None
+        if status == "awaiting_article_planning":
+            directive = resume_directive(session, max_resumes)
+            if directive:
+                note += " Article planning will restart automatically."
         try:
             # Guarded on the row still being live, so a job that finished between
             # the read and this write keeps its own terminal status.
-            if not store.recover_orphaned_session(session["id"], status, note):
+            if not store.recover_orphaned_session(
+                session["id"], status, note, active_job=directive
+            ):
                 continue
         except Exception as exc:  # noqa: BLE001
             logger.warning(
@@ -140,7 +191,7 @@ def recover_owned_runs(store=None, owned_ids=None) -> int:
         )
         return 0
 
-    recovered = _recover(sessions, store)
+    recovered = _recover(sessions, store, max_resumes=_max_resumes())
     if recovered:
         logger.info(
             "fanout_owned_recovery_complete",
@@ -168,10 +219,69 @@ def recover_orphaned_runs(store=None) -> int:
         )
         return 0
 
-    recovered = _recover(sessions, store)
+    recovered = _recover(sessions, store, max_resumes=_max_resumes())
     if recovered:
         logger.info(
             "fanout_orphan_sweep_complete",
             extra={"event": "fanout_orphan_sweep_complete", "count": recovered},
         )
     return recovered
+
+
+def resume_interrupted_runs(store=None, submit=None) -> int:
+    """Re-submit article planning on sessions a recovery left resume-pending.
+
+    Runs on the NEW container's delayed startup task, after the orphan sweep —
+    the same `orphan_sweep_delay_s` wait that keeps the sweep out of the deploy
+    handover window also guarantees the outgoing container's threads are long
+    gone before a re-plan starts writing (reset_article_planning clears any
+    partial clusters, so a re-plan must never overlap the killed writer).
+
+    Races with a human are settled by the existing machinery: if the user
+    clicked "Plan articles" first, their submit overwrote active_job (clearing
+    resume_pending) and `try_claim_run` refuses a second claim — we skip
+    silently. Never raises; a session that fails to resume keeps its
+    resume_pending directive and is retried by the next deploy's pass, or the
+    user just clicks the button the note pointed at all along.
+
+    `store` / `submit` are injectable for testing; production passes neither."""
+    if store is None:
+        from fanout.storage import silo as store
+    if submit is None:
+        from fanout.jobs import submit_plan as submit
+
+    try:
+        rows = store.list_resume_pending()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "fanout_resume_read_failed",
+            extra={"event": "fanout_resume_read_failed", "reason": repr(exc)},
+        )
+        return 0
+
+    resumed = 0
+    for row in rows:
+        job = row.get("active_job") or {}
+        try:
+            if not store.try_claim_run(row["id"]):
+                continue  # a human (or another path) beat us to it
+            submit(
+                row["id"],
+                direct=bool(job.get("direct")),
+                resumes=int(job.get("resumes") or 1),
+            )
+        except Exception as exc:  # noqa: BLE001 — one bad row must not stop the rest
+            logger.warning(
+                "fanout_resume_row_failed",
+                extra={"event": "fanout_resume_row_failed",
+                       "session_id": row.get("id"), "reason": repr(exc)},
+            )
+            continue
+        resumed += 1
+        logger.info(
+            "fanout_run_auto_resumed",
+            extra={"event": "fanout_run_auto_resumed",
+                   "session_id": row.get("id"),
+                   "attempt": int(job.get("resumes") or 1)},
+        )
+    return resumed
