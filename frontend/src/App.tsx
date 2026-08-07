@@ -20,6 +20,7 @@ import { InternalLinks } from './pages/InternalLinks'
 import { LocalSeoContent } from './pages/LocalSeoContent'
 import { EcommerceProduct } from './pages/EcommerceProduct'
 import { ContentScheduler } from './pages/ContentScheduler'
+import { ContentCalendar } from './pages/ContentCalendar'
 import { ServicePages } from './pages/ServicePages'
 import { LocationPages } from './pages/LocationPages'
 import { Rankings } from './pages/Rankings'
@@ -93,6 +94,7 @@ export default function App() {
                       <Route path="/leadoff" element={<LeadOff />} />
                       <Route path="/outreach" element={<Outreach />} />
                       <Route path="/outreach/leads" element={<OutreachLeads />} />
+                      <Route path="/content-calendar" element={<ContentCalendar />} />
                       <Route path="/runs" element={<Runs />} />
                       <Route path="/runs/:id" element={<RunDetail />} />
                       <Route path="/clients" element={<Clients />} />
