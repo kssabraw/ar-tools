@@ -30,6 +30,15 @@ interface ResearchKeyword {
   search_intent: string | null
   is_question: boolean
   opportunity_score: number | null
+  relevance_score: number | null
+}
+interface TopicResearch {
+  enabled: boolean
+  site: { source: string; topics: string[] }
+  intents: string[]
+  expansion_seeds: string[]
+  anchors: string[]
+  relevance?: { gate: string; floor?: number; scored?: number; kept?: number; dropped?: number }
 }
 interface ClusterSummary {
   label: string
@@ -59,7 +68,7 @@ interface SerpIntel {
   paa: string[]
 }
 interface RunResponse {
-  run: (RunSummary & { location_code: number | null; language_code: string | null; serp_intel: SerpIntel | null }) | null
+  run: (RunSummary & { location_code: number | null; language_code: string | null; serp_intel: SerpIntel | null; topic_research: TopicResearch | null }) | null
   keywords: ResearchKeyword[]
   clusters: ClusterSummary[]
   warnings?: string[]
@@ -184,6 +193,7 @@ export function KeywordResearch() {
   const keywords = useMemo(() => runData?.keywords ?? [], [runData])
   const clusters = useMemo(() => runData?.clusters ?? [], [runData])
   const serpIntel = runData?.run?.serp_intel ?? null
+  const topicResearch = runData?.run?.topic_research ?? null
 
   const filtered = useMemo(() => {
     let ks = keywords
@@ -248,10 +258,10 @@ export function KeywordResearch() {
 
   const exportCsv = () => {
     if (!filtered.length) return
-    const header = ['keyword', 'cluster', 'volume', 'cpc_usd', 'competition_index', 'keyword_difficulty', 'search_intent', 'is_question', 'opportunity_score']
+    const header = ['keyword', 'cluster', 'volume', 'cpc_usd', 'competition_index', 'keyword_difficulty', 'search_intent', 'is_question', 'relevance_score', 'opportunity_score']
     const rows = filtered.map((k) => [
       k.keyword, k.cluster_label ?? '', k.volume ?? '', k.cpc_usd ?? '', k.competition_index ?? '',
-      k.keyword_difficulty ?? '', k.search_intent ?? '', k.is_question ? 'yes' : 'no', k.opportunity_score ?? '',
+      k.keyword_difficulty ?? '', k.search_intent ?? '', k.is_question ? 'yes' : 'no', k.relevance_score ?? '', k.opportunity_score ?? '',
     ])
     const csv = [header, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
@@ -412,6 +422,39 @@ export function KeywordResearch() {
           )}
           {removeSeed.isError && <div style={errBox}>{((removeSeed.error as Error)?.message === 'min_two_seeds') ? 'A run must keep at least two seeds.' : (removeSeed.error as Error)?.message ?? 'Could not remove that seed.'}</div>}
 
+          {/* Client-grounded topical research: the intents we fanned out + the
+              client's own site topics that grounded relevance and broadened the run. */}
+          {topicResearch?.enabled && ((topicResearch.intents?.length ?? 0) > 0 || (topicResearch.site?.topics?.length ?? 0) > 0) && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12, marginBottom: 16 }}>
+              {topicResearch.intents.length > 0 && (
+                <div style={intelCard}>
+                  <div style={intelHead}><Sparkles size={14} /> Topics behind your seeds</div>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
+                    Sub-intents we researched beyond the literal seed{topicResearch.expansion_seeds.length > 0 && ` · also researched ${topicResearch.expansion_seeds.length} extra seed${topicResearch.expansion_seeds.length === 1 ? '' : 's'}`}
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {topicResearch.intents.map((t) => (
+                      <span key={t} style={{ padding: '4px 10px', background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe', borderRadius: 999, fontSize: 12 }}>{t}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {topicResearch.site.topics.length > 0 && (
+                <div style={intelCard}>
+                  <div style={intelHead}><FileText size={14} /> Topics on the client's site</div>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
+                    From their {topicResearch.site.source === 'google_index' ? 'indexed pages' : 'sitemap'} — used to keep results relevant to the business
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {topicResearch.site.topics.slice(0, 30).map((t) => (
+                      <span key={t} style={{ padding: '4px 10px', background: '#f8fafc', color: '#475569', border: '1px solid #e2e8f0', borderRadius: 999, fontSize: 12 }}>{t}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Competitive intelligence + People Also Ask (SERP enrichment) */}
           {serpIntel?.enabled && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12, marginBottom: 16 }}>
@@ -543,7 +586,7 @@ export function KeywordResearch() {
                       title={allShownSelected ? 'Clear shown' : 'Select all shown'}
                       style={{ cursor: 'pointer' }} />
                   </th>
-                  {['Keyword', 'Cluster', 'Volume', 'CPC', 'Comp', 'KD', 'Intent', 'Opportunity'].map((h) => (
+                  {['Keyword', 'Cluster', 'Volume', 'CPC', 'Comp', 'KD', 'Intent', 'Relevance', 'Opportunity'].map((h) => (
                     <th key={h} style={th}>{h}</th>
                   ))}
                 </tr>
@@ -564,11 +607,12 @@ export function KeywordResearch() {
                     <td style={td}>{k.competition_index === null ? '—' : num(k.competition_index)}</td>
                     <td style={td}>{k.keyword_difficulty === null ? '—' : num(k.keyword_difficulty)}</td>
                     <td style={{ ...td, color: '#64748b' }}>{k.search_intent ?? '—'}</td>
+                    <td style={td}>{k.relevance_score === null || k.relevance_score === undefined ? '—' : `${Math.round(k.relevance_score * 100)}%`}</td>
                     <td style={{ ...td, fontWeight: 600, color: '#0f172a' }}>{num(k.opportunity_score)}</td>
                   </tr>
                 ))}
                 {!filtered.length && (
-                  <tr><td style={{ ...td, color: '#94a3b8' }} colSpan={9}>No keywords match this filter.</td></tr>
+                  <tr><td style={{ ...td, color: '#94a3b8' }} colSpan={10}>No keywords match this filter.</td></tr>
                 )}
               </tbody>
             </table>

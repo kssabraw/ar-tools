@@ -675,7 +675,8 @@ def _client_context(client_id: str) -> dict:
     try:
         rows = (
             get_supabase().table("clients")
-            .select("name, website_url, rank_tracking_location_code")
+            .select("name, website_url, business_location, gbp, detected_icp, "
+                    "differentiators, icp_text, rank_tracking_location_code")
             .eq("id", client_id).limit(1).execute()
         ).data
     except Exception as exc:
@@ -771,6 +772,14 @@ async def run_keyword_research(
     if location_code is None:
         location_code = ctx.get("rank_tracking_location_code")
 
+    # Client-grounded topical research (best-effort): read the client's site topics
+    # + fan out the seed intent. Produces the relevance anchors AND a few extra
+    # on-topic expansion seeds that broaden the run in relevant directions (fed to
+    # the phrase-containment suggestions only, so they can't drift).
+    from services import keyword_research_topics
+    topic_research = await keyword_research_topics.research_topics(ctx, seed_list, location_code)
+    expansion_seeds = topic_research.get("expansion_seeds") or []
+
     use_suggestions = settings.keyword_research_use_suggestions
     use_related = settings.keyword_research_broaden_with_related
     # keyword_ideas stays available but off by default (category drift). Fall back
@@ -780,6 +789,7 @@ async def run_keyword_research(
     n_serp = min(len(seed_list), settings.keyword_research_serp_max_seeds) if use_serp else 0
     n_calls = (
         (len(seed_list) if use_suggestions else 0)
+        + (len(expansion_seeds) if use_suggestions else 0)
         + (len(seed_list) if use_related else 0)
         + (1 if use_ideas else 0)
         + n_serp
@@ -864,6 +874,22 @@ async def run_keyword_research(
                 s, location_code, language_code,
                 limit=settings.keyword_research_suggestion_limit,
             ), "suggestions")
+
+        # Topic-derived expansion seeds → phrase-containment suggestions too. These
+        # broaden the run along the client's real intents (never drifting, since
+        # suggestions contain the seed phrase). Left UNATTRIBUTED (run-level, not a
+        # user seed) so per-seed removal never touches them.
+        for exp_seed in expansion_seeds:
+            try:
+                rows_i, cost_i = await dataforseo_labs.fetch_keyword_suggestions(
+                    exp_seed, location_code, language_code,
+                    limit=settings.keyword_research_suggestion_limit,
+                )
+                trusted_rows += rows_i
+                cost += cost_i or 0.0
+            except Exception as exc:  # noqa: BLE001 — best-effort broadening
+                logger.warning("keyword_research.expansion_suggestions_failed",
+                               extra={"client_id": client_id, "seed": exp_seed, "error": str(exc)})
 
     # related_keywords returns enriched graph nodes PLUS bare "searches related to"
     # neighbour strings (Google's adjacency layer). Collect both across seeds —
@@ -984,6 +1010,22 @@ async def run_keyword_research(
     # Merge + dedupe (build_research_rows keeps the highest-volume instance per
     # normalized keyword, so a keyword in several sources collapses to one row).
     rows = build_research_rows(trusted_rows + idea_rows)
+
+    # Gemini semantic relevance gate: score each merged keyword by cosine to the
+    # anchor set (seeds + fanned-out intents + the client's site topics) and drop
+    # the semantically off-topic ones, keeping phrase-containment keywords. Runs
+    # on the DEDUPED rows (one embedding per unique keyword), best-effort — skipped
+    # (rows untouched) when disabled or no Gemini key. Attaches relevance_score to
+    # every surviving row.
+    relevance_report = {"gate": "off"}
+    if settings.keyword_research_semantic_relevance:
+        from services import keyword_research_relevance
+        anchors = topic_research.get("anchors") or list(seed_list)
+        rows, relevance_report = await keyword_research_relevance.score_relevance(
+            rows, anchors, seed_list, settings.keyword_research_relevance_floor,
+        )
+    topic_research["relevance"] = relevance_report
+
     warnings = seed_warnings(
         seed_list, client_name, filter_report,
         ratio_threshold=settings.keyword_research_brand_seed_ratio,
@@ -1000,11 +1042,17 @@ async def run_keyword_research(
             f"Filtered {drift_report['dropped']} related keyword(s) that only matched "
             f"a generic word in your seed ({drift_words}) rather than the actual topic."
         )
+    if relevance_report.get("dropped"):
+        warnings.append(
+            f"Filtered {relevance_report['dropped']} keyword(s) that weren't topically "
+            "relevant to the seeds or the client's business."
+        )
     if warnings:
         logger.info("keyword_research.seed_warnings",
                     extra={"client_id": client_id, "seeds": seed_list,
                            "filter": filter_report, "brand_flood": flood_report,
-                           "generic_drift": drift_report, "warnings": warnings})
+                           "generic_drift": drift_report, "relevance": relevance_report,
+                           "warnings": warnings})
     clusters = cluster_keywords(rows)
     label_for = {kw: c["label"] for c in clusters for kw in c["keywords"]}
 
@@ -1019,6 +1067,7 @@ async def run_keyword_research(
             "status": "complete",
             "cost_usd": round(cost or 0.0, 4),
             "serp_intel": serp_intel or None,
+            "topic_research": topic_research or None,
         }).execute()
     ).data[0]
 
@@ -1033,6 +1082,7 @@ async def run_keyword_research(
         "search_intent": r.get("search_intent"),
         "is_question": r.get("is_question"),
         "opportunity_score": r.get("opportunity_score"),
+        "relevance_score": r.get("relevance_score"),
         "source_seeds": sorted(seed_attr.get(normalize_keyword(r["keyword"]), set())) or None,
     } for r in rows]
     for group in dataforseo_labs.chunk(child, 500):

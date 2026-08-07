@@ -901,6 +901,30 @@ class Settings(BaseSettings):
     # with a deterministic GBP-derived fallback when no key is set.
     keyword_research_seed_model: str = "claude-haiku-4-5-20251001"
     keyword_research_seed_max_tokens: int = 400
+    # Client-grounded topical research (keyword_research_topics): read the client's
+    # site topics + fan out the seed INTENT, so the run researches the client's
+    # real topics (not just the literal seed string) and the relevance gate anchors
+    # on a rich on-topic set. Master switch + its parts (each best-effort — a
+    # missing site/LLM/key degrades to the token gates, never aborts the run).
+    keyword_research_topical: bool = True
+    keyword_research_site_topics: bool = True          # read the client's site pages for topics
+    keyword_research_site_topic_cap: int = 40          # max site topics harvested
+    keyword_research_intent_fanout: bool = True        # LLM fan-out of the seed intent
+    keyword_research_intent_model: str = "claude-haiku-4-5-20251001"
+    keyword_research_intent_max_tokens: int = 500
+    keyword_research_intent_max: int = 12              # max sub-intents surfaced/anchored
+    keyword_research_intent_expansion_cap: int = 4     # extra expansion seeds fed to suggestions
+    # Gemini semantic relevance gate (keyword_research_relevance): score each merged
+    # keyword by max cosine similarity to the anchor set (seeds + intents + site
+    # topics) and drop those below the floor (phrase-containment keywords are always
+    # kept). Best-effort — skipped when GEMINI_API_KEY is unset. The floor is
+    # calibrated conservatively for gemini-embedding-2 SEMANTIC_SIMILARITY cosine;
+    # every keyword keeps its score (relevance_score) so it's sortable and the floor
+    # is tunable from real runs. Set False to disable the semantic layer entirely.
+    keyword_research_semantic_relevance: bool = True
+    keyword_research_relevance_floor: float = 0.55
+    keyword_research_relevance_anchor_cap: int = 60    # bound the embedded anchor set
+    keyword_research_embedding_model: str = "gemini-embedding-2"
 
     # On-site content comparison (Tier B / B5): how many competitor pages to
     # scrape per keyword, and the thresholds to flag a content gap (words thinner
