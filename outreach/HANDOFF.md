@@ -639,3 +639,74 @@ and nowhere else — not a column, not reconstructible afterwards (I-087).
 > **Corrected 2026-08-06:** there is no row and no column named `recovered_by_tag` — it is a
 > counter printed once in the `collect` command's output (I-087). The rest of this paragraph
 > stands, and `queries/first-scan-verify.sql` is the durable form of it.
+
+---
+
+## 12. What is left to build (owner briefing, 2026-08-06)
+
+Written for a non-engineer reading, at the owner's request, after the UI + CRM shipped and the
+scan engine went live. `START-HERE.md` §4 is the authoritative phase list with the acceptance
+criteria; this section is the plain-English map of what those phases mean and the order they pay
+off in. **Where they disagree, START-HERE wins.**
+
+**The core loop is COMPLETE and running:** scan a submarket → rank the businesses by coverage
+deficit (the placeholder score) → "Send to CRM" onto the seven-stage board → work the board →
+Won leads become AR Tools clients. Everything below makes that loop *more persuasive* or
+*smarter*; none of it is a prerequisite for using it.
+
+**The standing recommendation (repeated from §8.1 2c, still true): the highest-value next thing
+is NOT a build — it is running the first scan and making the first calls.** Items 2, 4 and 5
+below are all tuned by outcomes that do not exist until real prospects have been contacted; the
+whole project's stated posture is "treat rank order as a strong prior, not a prediction, until
+~100 prospects have been contacted" (CLAUDE.md → What is unvalidated). Building the scoring model
+or the email track before there is a single reply is dressing up a guess.
+
+In rough value order:
+
+1. **The audit / heatmap — Phase 3, and the one build worth doing BEFORE call data exists.**
+   Today a prospect's invisibility is a *number*. Phase 3 turns it into a *picture you hand
+   them*: render `prospect_coverage.rank_vector` + geometry into a heatmap, assemble the audit
+   PDF (WeasyPrint is already a dependency), and a phone-call hook generated from the prospect's
+   own data. START-HERE §4 Phase 3 calls this "the first phase that produces revenue" and says
+   ship the **phone track first** (zero enrichment cost). It also lands the `outcome` row per
+   emitted prospect — the learning substrate everything downstream fits against — and the emit
+   webhook that writes `lead` rows with `source='outbound_scan'`. `reporting-layer-spec.md` is
+   the authority; the renderer must be deterministic (identical inputs → identical
+   `content_hash`).
+
+2. **The real scoring model — Phase 4. Do NOT start before Phase 3 is producing audits.** Today
+   the list is ranked "most invisible first," a deliberate placeholder (`v_prospect_placeholder_score`,
+   ISSUES I-082). Phase 4 replaces it with the sabermetric scorecard in `docs/scoring-spec.md`:
+   ranked by *who is worth calling* (reply probability × value), all coefficients config-driven,
+   `score_factors` fully replayable, golden fixtures green in CI, per-channel offsets never pooled
+   (phone 579.3 / email 705.0). The coefficients are elicited estimates until real replies exist —
+   which is why this waits on Phase 3.
+
+3. **The other scan signals — the rest of Phase 2.** The Maps geo-grid is the built half. The
+   **organic-search** and **AI-answer** visibility layers are not (`serp_result` exists,
+   partitioned; the AI half is blocked on `ai_region` names — §7.4, I-073). These add more
+   "here's another place you're invisible" evidence to the audit. Note I-084: how `serp_result`
+   attaches to a grid-shaped `scan_snapshot` is undefined and must be settled before the organic
+   layer is designed.
+
+4. **Email outreach + enrichment — Phase 5.** The whole design is phone-first; Phase 5 opens
+   email as a second channel (find addresses, ESP integration, suppression sync). Its long pole
+   is **not code**: a sending domain needs 3–4 weeks of warming that cannot be compressed, and
+   the vendor is undecided (GetResponse likely disqualified — I-001). If email is ever wanted,
+   that calendar clock should start early, independent of everything else.
+
+5. **The learning loop — Phase 6.** Once ~30–50 outcomes exist, a recalibration job looks at who
+   actually replied and re-tunes the model; evidence randomization and `sequence_version` /
+   `template_version` stamping must be in place from Phase 3 or the early data is lost. Months
+   out; pays off only after real outreach.
+
+**Also outstanding, small and independent of the above:** I-070 (enforce `scan_snapshot`
+append-only — a trigger + a test; cheap, do it after the first scan proves the finalize UPDATE),
+I-086/I-087 (the geogrid cost_ledger row now EXISTS via the tick build, but the budget-ceiling
+check on the scan path and a durable `recovered_by_tag` are still worth revisiting), and the
+`ai_region` naming (§7.4, a manual afternoon that unblocks the AI half of item 3).
+
+**Not on the list, because it is done:** ingest + filter (Phase 1), the lead CRM board and
+one-click promote (Phase 1b, #574), the scan producer/consumer/rollup/placeholder-score, and the
+UI that triggers scans (#571). The scan engine (`tick`) is live on a 15-minute cron as of
+2026-08-07 00:13 UTC and verified idle-healthy.
