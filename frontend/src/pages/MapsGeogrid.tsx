@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Gauge, Map, Play, Trash2, MapPin, Download, Printer, Square, ToggleLeft, ToggleRight, Bell, Check, X, ChevronDown, ChevronRight } from 'lucide-react'
+import { ArrowLeft, Gauge, Map, Play, Trash2, MapPin, Download, Printer, Square, ToggleLeft, ToggleRight, Bell, Check, X, ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react'
 import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
 import type {
@@ -125,8 +125,16 @@ function Heatmap({ clientId, scanning, onRan, onStopped }: { clientId: string; s
     queryKey: ['maps-latest', clientId],
     queryFn: () => api.get<MapsScanDetail>(`/clients/${clientId}/maps/latest`),
     retry: false,
-    // Refresh while a scan runs so the heatmap appears as soon as it completes.
-    refetchInterval: scanning ? 8000 : false,
+    // Refresh while a scan runs so the heatmap appears as soon as it completes,
+    // AND while any per-keyword report is still generating. The narrative is a
+    // SEPARATE async job that lands minutes after the scan itself (observed: 1.7
+    // min on an idle worker, 37 min behind a busy queue). Polling keyed only on
+    // scan status stopped the moment the grid landed, leaving every report card
+    // stuck on "Generating…" until the user manually reloaded the page.
+    refetchInterval: (q) => {
+      const reportPending = (q.state.data?.results ?? []).some(r => r.report_status === 'pending')
+      return scanning || reportPending ? 8000 : false
+    },
   })
   const runMut = useMutation({
     mutationFn: () => api.post<MapsRunResponse>(`/clients/${clientId}/maps/scan`, {}),
@@ -608,8 +616,28 @@ function Setup({ clientId }: { clientId: string }) {
 
   const pins = ({ 3: 49, 5: 121, 7: 225 } as Record<number, number>)[form.radius_miles ?? 5]
 
+  // Weekly scanning on + zero active keywords = the scheduler skips this client
+  // entirely, so the geo-grid quietly stops updating while this tab still reads
+  // "Weekly". Say so here, where the schedule is set.
+  const activeKeywords = (keywords ?? []).filter(k => k.active).length
+  const scanningStalled = config?.active && (config?.cadence ?? form.cadence) === 'weekly' && keywords && activeKeywords === 0
+
   return (
     <div>
+      {scanningStalled && (
+        <div style={{ ...card, marginBottom: 16, background: '#fef3c7', border: '1px solid #fcd34d' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            <AlertTriangle size={16} color="#b45309" style={{ flexShrink: 0, marginTop: 1 }} />
+            <div>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: '#92400e' }}>Weekly scanning is on, but there are no active keywords</div>
+              <p style={{ fontSize: 12.5, color: '#b45309', margin: '4px 0 0' }}>
+                Scheduled scans are being skipped, so the heatmap and Local Rank Analysis reports will not update.
+                Add a keyword below to resume weekly scanning.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
       <div style={{ ...card, marginBottom: 16 }}>
         <h2 style={sectionTitle}>Business &amp; grid</h2>
         <p style={{ ...muted, marginTop: 0 }}>

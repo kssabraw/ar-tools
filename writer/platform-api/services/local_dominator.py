@@ -632,20 +632,62 @@ def cancel_scan(scan_id: str) -> dict:
 
 
 def enqueue_due_maps_scans() -> int:
-    """Weekly: enqueue a scan for each client with an active weekly config + keywords."""
+    """Weekly: enqueue a scan for each client with an active weekly config + keywords.
+
+    A client whose weekly config is still `active` but has lost every active
+    keyword produces no scan. That used to be a silent `continue`: the Setup tab
+    kept reading "weekly scanning on", the geo-grid simply stopped updating, and
+    nothing anywhere said why (First Class Roofing sat like that from 2026-06-23).
+    Such a client is now warned about + notified once per ISO week, so a stalled
+    tracker announces itself instead of having to be noticed."""
     supabase = get_supabase()
     configs = (
         supabase.table("maps_scan_configs").select("client_id")
         .eq("active", True).eq("cadence", "weekly").execute()
     ).data or []
     enqueued = 0
+    starved: list[str] = []
     for cfg in configs:
         kw = (
             supabase.table("maps_keywords").select("id")
             .eq("client_id", cfg["client_id"]).eq("active", True).limit(1).execute()
         ).data
-        if kw and enqueue_maps_scan(cfg["client_id"], trigger="scheduled"):
+        if not kw:
+            starved.append(cfg["client_id"])
+            continue
+        if enqueue_maps_scan(cfg["client_id"], trigger="scheduled"):
             enqueued += 1
     if enqueued:
         logger.info("maps_scans_enqueued", extra={"clients": enqueued})
+    if starved:
+        logger.warning("maps_scans_skipped_no_keywords", extra={"clients": starved})
+        _notify_starved_configs(starved)
     return enqueued
+
+
+def _notify_starved_configs(client_ids: list[str]) -> None:
+    """Tell the team about active weekly configs that have no active keywords.
+
+    Best-effort and deduped per client per ISO week (the sweep runs weekly, so a
+    re-run inside the same week is a clean no-op rather than a repeat ping)."""
+    try:
+        from services import notifications
+
+        year, week, _ = datetime.now(timezone.utc).isocalendar()
+        for client_id in client_ids:
+            notifications.emit(
+                client_id=client_id,
+                kind="maps_scan_no_keywords",
+                title="Geo-grid scanning is on but has no keywords",
+                summary=(
+                    "Weekly Maps geo-grid scanning is active for this client, but every "
+                    "tracked keyword is inactive or removed — so no scan ran and the "
+                    "heatmap and Local Rank Analysis reports will not update. Add a "
+                    "keyword in the Maps Geo-Grid Setup tab to resume."
+                ),
+                severity="warning",
+                payload={"link": f"clients/{client_id}/maps"},
+                dedupe_key=f"maps_scan_no_keywords:{client_id}:{year}-W{week:02d}",
+            )
+    except Exception as exc:  # noqa: BLE001 — notifications never sink the sweep
+        logger.warning("maps_scan_starved_notify_failed", extra={"error": str(exc)})

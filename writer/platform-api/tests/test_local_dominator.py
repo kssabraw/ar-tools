@@ -66,3 +66,66 @@ def test_build_scan_request_defaults_shape_and_surface():
     assert body["shape"] == "square"  # square lattice, masked to a circle in the UI
     assert body["resource_category"] == "googleMaps"
     assert body["serp_device"] == "desktop"
+
+
+# ---------------------------------------------------------------------------
+# enqueue_due_maps_scans — the "active config, no keywords" starvation case
+# ---------------------------------------------------------------------------
+class _FakeQuery:
+    """Minimal chainable stub of the supabase-py table query builder."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def select(self, *_a, **_kw):
+        return self
+
+    def eq(self, *_a, **_kw):
+        return self
+
+    def limit(self, *_a, **_kw):
+        return self
+
+    def execute(self):
+        return type("Res", (), {"data": self._rows})()
+
+
+class _FakeSupabase:
+    def __init__(self, configs, keywords_by_client):
+        self._configs = configs
+        self._keywords = keywords_by_client
+        self.last_client_id = None
+
+    def table(self, name):
+        if name == "maps_scan_configs":
+            return _FakeQuery(self._configs)
+        if name == "maps_keywords":
+            # eq() is chained, so key off the configs order via a side channel:
+            # each call returns the rows for the next client in sequence.
+            return _FakeQuery(self._keywords.pop(0))
+        raise AssertionError(f"unexpected table {name}")
+
+
+def test_enqueue_due_maps_scans_notifies_when_config_active_but_no_keywords(monkeypatch):
+    """A client whose weekly config is active but has zero active keywords must
+    be skipped AND surfaced — it used to stop scanning silently."""
+    fake = _FakeSupabase(
+        configs=[{"client_id": "has-kw"}, {"client_id": "no-kw"}],
+        keywords_by_client=[[{"id": "k1"}], []],   # first client has one, second none
+    )
+    monkeypatch.setattr(local_dominator, "get_supabase", lambda: fake)
+
+    enqueued_for = []
+    monkeypatch.setattr(
+        local_dominator, "enqueue_maps_scan",
+        lambda client_id, trigger=None: enqueued_for.append(client_id) or True,
+    )
+
+    starved = []
+    monkeypatch.setattr(local_dominator, "_notify_starved_configs", starved.extend)
+
+    count = local_dominator.enqueue_due_maps_scans()
+
+    assert count == 1                    # only the keyworded client scanned
+    assert enqueued_for == ["has-kw"]     # the starved one is never enqueued
+    assert starved == ["no-kw"]           # ...but it IS reported, not swallowed
