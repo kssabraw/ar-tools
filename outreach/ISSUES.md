@@ -2002,3 +2002,38 @@ must show what it spent.
 
 **What this does NOT remove:** the one-time Railway setup (the cron running `tick`) and the I-088
 auto-deploy question. A webpage cannot wake a server on a schedule; the engine still has to exist.
+
+---
+
+### I-089 (open, low) — the heatmap colour scale has no band for a rank past 20
+Reporting spec §4.2 defines four rank bands — `1–3` green, `4–10` yellow, `11–20` orange, `0` red
+(not found) — and `255` grey (dead). It says nothing about a byte in **21–254**. That byte is a
+genuine encoding: `coverage_rollup` stores each point's `rank_absolute` as the byte, and while
+`scan_depth = 20` today (so the provider returns at most 20 results and ranks never exceed 20), the
+depth is config-tunable and a deeper scan would produce ranks past 20.
+
+**Interpretation chosen (cheapest to reverse, per CLAUDE.md session protocol #6):** the renderer
+(`api/services/heatmap.band_for_byte`) folds 11–254 into the single `far_down` band. The load-
+bearing property is that a found ranking, however deep, is **never** coloured red — conflating
+"ranked #40" with "not ranking at all" is exactly the overstatement §4.2 warns a prospect can
+catch. The legend reads "Found, far down (11+)" rather than "11–20" so it stays honest if the depth
+is ever raised.
+
+**If 11–20 vs 21+ ever needs to be visually split**, it is a new band plus a `GENERATOR_VERSION`
+bump — never a silent recolour of history, since a cached March artifact must keep rendering the
+way it was cited. Unreachable at the current depth, so no action needed now; recorded so the
+decision is visible if `scan_depth` changes.
+
+---
+
+### I-090 (open, low) — `report_artifact.score_run_id` has no foreign key yet
+Reporting spec §2 defines `score_run_id uuid references score_run(id)`. `score_run` is the Phase 4
+model's table (START-HERE §3a) and does not exist, so migration `20260807130000_report_artifact.sql`
+creates `score_run_id` as a nullable, **unconstrained** uuid. A heatmap needs no score run, so
+nothing is lost today.
+
+**Adopt when Phase 4 lands `score_run`:** add the FK in the same migration that creates the table —
+`alter table report_artifact add constraint report_artifact_score_run_fk foreign key
+(score_run_id) references score_run(id)`. Check for orphans first (there will be none until a
+renderer starts writing the column). Same shape as the `lead_activity.touch_id` FK deferral in
+PHASE3-outcome-constraint.md §2 — a column waiting for the table it points at.
