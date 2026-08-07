@@ -255,7 +255,7 @@ def try_claim_run(session_id: str) -> bool:
     return bool(res.data)
 
 
-_RECOVERY_COLS = "id, status, seed_keyword, statistical_clustering_log"
+_RECOVERY_COLS = "id, status, seed_keyword, statistical_clustering_log, active_job"
 
 
 def get_live_sessions(session_ids: list[str]) -> list[dict]:
@@ -290,21 +290,59 @@ def list_live_sessions() -> list[dict]:
     return res.data or []
 
 
-def recover_orphaned_session(session_id: str, status: str, note: str) -> bool:
+def recover_orphaned_session(
+    session_id: str, status: str, note: str, active_job: dict | None = None
+) -> bool:
     """Return one orphaned session to an actionable status, recording why.
+    `active_job`, when given, carries the resume directive (run_recovery decided
+    the interrupted job can restart automatically) — written in the same guarded
+    UPDATE so the directive can never land on a row a worker has since finished.
 
     Guarded on the session still being live, so this can never overwrite a status
     a real worker has since written — the sweep reads and writes as two steps, and
     on the read side a row is only a candidate because no process owns it."""
+    fields: dict = {"status": status, "last_error": note}
+    if active_job is not None:
+        fields["active_job"] = active_job
     res = (
         get_service_client()
         .table("sessions")
-        .update({"status": status, "last_error": note})
+        .update(fields)
         .eq("id", session_id)
         .in_("status", ("queued", "running"))
         .execute()
     )
     return bool(res.data)
+
+
+def set_active_job(session_id: str, payload: dict) -> None:
+    """Record which pipeline job holds the session's run claim (kind + its
+    replayable args). Written at submit time and overwritten by every subsequent
+    submit, so for a session stuck in a live status it always describes the
+    interrupted job — which is what run_recovery needs to decide whether the run
+    can auto-resume."""
+    (
+        get_service_client()
+        .table("sessions")
+        .update({"active_job": payload})
+        .eq("id", session_id)
+        .execute()
+    )
+
+
+def list_resume_pending() -> list[dict]:
+    """Sessions an interrupted run left at awaiting_article_planning with a
+    resume directive (active_job.resume_pending) — the delayed startup executor
+    re-runs article planning on these (see fanout/run_recovery.py)."""
+    res = (
+        get_service_client()
+        .table("sessions")
+        .select(_RECOVERY_COLS)
+        .eq("status", "awaiting_article_planning")
+        .eq("active_job->>resume_pending", "true")
+        .execute()
+    )
+    return res.data or []
 
 
 def try_mark_started(session_id: str) -> bool:

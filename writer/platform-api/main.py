@@ -97,14 +97,21 @@ def _new_request_id() -> str:
 
 async def _fanout_orphan_sweep_later() -> None:
     """Run the fanout fallback sweep once, after the deploy handover window has
-    closed. Cancelled at shutdown, so a short-lived container simply never sweeps
-    — the shutdown hook covers it instead."""
+    closed, then auto-resume any interrupted planning runs the recovery (either
+    path) marked resume-pending. Ordered after the sweep so hard-killed runs are
+    marked and resumed in the same pass; the shared delay also guarantees the
+    outgoing container's threads are gone before a re-plan starts writing.
+    Cancelled at shutdown, so a short-lived container simply never sweeps — the
+    shutdown hook covers marking, and the next boot's pass picks up the resume."""
     from fanout.config import get_settings as _fanout_settings
 
     try:
         await asyncio.sleep(_fanout_settings().orphan_sweep_delay_s)
         await asyncio.get_running_loop().run_in_executor(
             None, fanout_run_recovery.recover_orphaned_runs
+        )
+        await asyncio.get_running_loop().run_in_executor(
+            None, fanout_run_recovery.resume_interrupted_runs
         )
     except asyncio.CancelledError:
         raise

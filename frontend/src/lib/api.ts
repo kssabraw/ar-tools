@@ -34,6 +34,13 @@ async function request<T>(
   return (text ? JSON.parse(text) : undefined) as T
 }
 
+// What the user sees when a long-running stream dies without delivering its
+// result — almost always a deploy replacing the server mid-operation. Named
+// plainly so nobody is left staring at a spinner wondering what happened.
+const STREAM_INTERRUPTED_MSG =
+  'The connection was interrupted before this finished — the server restarted ' +
+  '(usually a deploy going out). The operation did not complete; please run it again.'
+
 // POST to a heartbeat-SSE endpoint and resolve with the final `done` result.
 // Used for long-running Local SEO operations that stream keepalives so a
 // multi-minute request isn't killed by a load-balancer idle timeout.
@@ -58,30 +65,40 @@ async function streamJson<T>(path: string, body: unknown, signal?: AbortSignal):
   let result: T | undefined
   let failure: string | undefined
 
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    let nl: number
-    while ((nl = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, nl).trimEnd()
-      buffer = buffer.slice(nl + 1)
-      if (!line.startsWith('data:')) continue // skip heartbeats / comments
-      const payload = line.slice(5).trim()
-      if (!payload) continue
-      let evt: { step?: string; result?: unknown; detail?: string }
-      try {
-        evt = JSON.parse(payload)
-      } catch {
-        continue
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let nl: number
+      while ((nl = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, nl).trimEnd()
+        buffer = buffer.slice(nl + 1)
+        if (!line.startsWith('data:')) continue // skip heartbeats / comments
+        const payload = line.slice(5).trim()
+        if (!payload) continue
+        let evt: { step?: string; result?: unknown; detail?: string }
+        try {
+          evt = JSON.parse(payload)
+        } catch {
+          continue
+        }
+        if (evt.step === 'error') failure = evt.detail ?? 'local_seo_error'
+        else if (evt.step === 'done') result = evt.result as T
       }
-      if (evt.step === 'error') failure = evt.detail ?? 'local_seo_error'
-      else if (evt.step === 'done') result = evt.result as T
     }
+  } catch (err) {
+    // A deliberate cancel keeps its AbortError; anything else mid-stream is the
+    // connection dying under us (deploy, network) — say so in plain words.
+    if (signal?.aborted) throw err
+    throw new Error(STREAM_INTERRUPTED_MSG)
   }
 
   if (failure !== undefined) throw new Error(failure)
-  if (result === undefined) throw new Error('local_seo_no_result')
+  // The stream closed cleanly but never delivered a `done` frame: the server
+  // went away mid-operation (a deploy's graceful shutdown ends streams this
+  // way). Surface what happened instead of a cryptic internal code.
+  if (result === undefined) throw new Error(STREAM_INTERRUPTED_MSG)
   return result
 }
 

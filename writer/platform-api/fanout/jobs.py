@@ -212,11 +212,36 @@ def _cancellable(fn):
     return wrapper
 
 
+def _record_active_job(session_id: str, kind: str, **params) -> None:
+    """Best-effort note of which job holds the session's run claim (+ its
+    replayable args), so run_recovery can tell an interrupted planning run
+    (safe to auto-resume — expansion is durable, planning replayable) from an
+    interrupted regate/fanout/architecture run (not: auto-replanning those
+    would wipe a completed plan or run a step the user didn't ask for). A
+    write failure must never block the submit — recovery then just degrades
+    to the manual path."""
+    try:
+        store.set_active_job(session_id, {"kind": kind, **params})
+    except Exception as exc:  # noqa: BLE001 — advisory metadata only
+        logger.warning(
+            "active_job_record_failed",
+            extra={"event": "active_job_record_failed",
+                   "session_id": session_id, "reason": repr(exc)},
+        )
+
+
 def submit_expand(session_id: str) -> None:
+    _record_active_job(session_id, "expand")
     _EXECUTOR.submit(run_expand_job, session_id)
 
 
-def submit_plan(session_id: str, direct: bool = False) -> None:
+def submit_plan(session_id: str, direct: bool = False, resumes: int = 0) -> None:
+    """`resumes` is the auto-resume attempt this submit represents — 0 for a
+    human click (a fresh click resets the crash-loop budget, mirroring the
+    orchestrator's resume_count semantics), N when run_recovery re-submits an
+    interrupted planning run. Recorded on active_job so a run that keeps dying
+    stops auto-resuming past plan_auto_resume_max instead of crash-looping."""
+    _record_active_job(session_id, "plan", direct=direct, resumes=resumes)
     _EXECUTOR.submit(run_plan_job, session_id, direct)
 
 
@@ -229,6 +254,7 @@ def submit_regate(
     seed_terms: list[str],
     peer_terms: list[str],
 ) -> None:
+    _record_active_job(session_id, "regate")
     _EXECUTOR.submit(run_regate_job, session_id, threshold, edge_threshold,
                      resolution, active_per_silo_cap, seed_terms, peer_terms)
 
@@ -242,11 +268,13 @@ def submit_fanout(
     seed_terms: list[str],
     peer_terms: list[str],
 ) -> None:
+    _record_active_job(session_id, "fanout")
     _EXECUTOR.submit(run_fanout_job, session_id, threshold, edge_threshold,
                      resolution, active_per_silo_cap, seed_terms, peer_terms)
 
 
 def submit_architecture(session_id: str) -> None:
+    _record_active_job(session_id, "architecture")
     _EXECUTOR.submit(run_architecture_job, session_id)
 
 
