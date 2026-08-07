@@ -27,6 +27,7 @@ from config import settings
 from db.supabase_client import get_supabase
 from services import maps_analytics, maps_geocode, maps_image, maps_octants
 from services.google_docs import GoogleDocError, create_google_doc
+from services.markdown_html import markdown_to_html
 
 logger = logging.getLogger(__name__)
 
@@ -593,10 +594,12 @@ async def _maybe_publish_doc(
     """Publish one combined Google Doc (all keyword reports) if the client has a
     Drive folder + the webhook is configured. Returns the doc_url or None.
 
-    Each keyword's section gets a "Local Rank Map" image embedded via markdown —
-    the Apps Script webhook fetches the URL and inserts a real Doc image (needs
-    the image-aware markdown renderer in writer/apps-script/publish_webhook.gs; an
-    older deployment renders the line as text until it's redeployed)."""
+    The report Markdown is rendered to HTML in Python and published with
+    format="html" — the ONLY publish path the live Apps Script deployment
+    actually creates a Doc on (every markdown-format publish silently failed;
+    the html path has 100+ live successes from the Local SEO / blog modules).
+    Each keyword's section gets a "Local Rank Map" image (an <img> after
+    conversion, which Drive's HTML importer fetches like the Local SEO hero)."""
     folder_id = client.get("google_drive_folder_id")
     if not folder_id or not settings.google_apps_script_url or not reports:
         return None
@@ -612,9 +615,9 @@ async def _maybe_publish_doc(
         sections.append(section)
     if not sections:
         return None
-    body = "\n\n---\n\n".join(sections)
+    body = markdown_to_html("\n\n---\n\n".join(sections))
     try:
-        result = await create_google_doc(folder_id, title, body)
+        result = await create_google_doc(folder_id, title, body, content_format="html")
         return result.get("doc_url")
     except GoogleDocError as exc:
         logger.warning("maps_report_doc_publish_failed", extra={"scan_id": scan_row.get("id"), "error": str(exc)})

@@ -170,3 +170,49 @@ def test_summarize_report_failures_truncates_keyword_list():
     d = mr.summarize_report_failures("Acme", failures, total=20)
     assert "+4 more" in d["summary"]  # 12 failures, first 8 shown
     assert d["title"] == "Local Rank report generation failed (12/20)"
+
+
+# ── Doc publishing: html-format contract (regression) ───────────────────────
+# The live Apps Script deployment only creates a Doc on the html path; every
+# markdown-format publish silently failed (report_doc_url null on all 290
+# historical reports). These pin that reports render to HTML and publish with
+# content_format="html", and that the map image survives as an <img>.
+async def test_maybe_publish_doc_sends_html_format(monkeypatch):
+    captured = {}
+
+    async def _fake_create(folder_id, title, content, *, content_format="markdown", share="private"):
+        captured.update(folder_id=folder_id, title=title, content=content, content_format=content_format)
+        return {"doc_url": "https://docs.google.com/document/d/abc/edit"}
+
+    monkeypatch.setattr(mr, "create_google_doc", _fake_create)
+    monkeypatch.setattr(mr.settings, "google_apps_script_url", "https://script.example/exec")
+
+    client = {"google_drive_folder_id": "folder123", "name": "Acme Roofing"}
+    scan_row = {"id": "s1", "completed_at": "2026-08-07T10:00:00+00"}
+    reports = [("roofing near me", "# Report\n\n**Bold** text\n\n| A | B |\n|---|---|\n| 1 | 2 |",
+                "https://img.example/grid.png")]
+
+    url = await mr._maybe_publish_doc(client, scan_row, reports)
+
+    assert url == "https://docs.google.com/document/d/abc/edit"
+    assert captured["content_format"] == "html"            # the whole point of the fix
+    assert "<strong>Bold</strong>" in captured["content"]  # markdown was rendered
+    assert "<table>" in captured["content"]                # tables survive
+    assert '<img src="https://img.example/grid.png"' in captured["content"]  # map image → <img>
+    assert "**Bold**" not in captured["content"]           # no raw markdown leaked
+
+
+async def test_maybe_publish_doc_no_folder_returns_none(monkeypatch):
+    # Unchanged best-effort behaviour: no Drive folder → no publish, no error.
+    called = False
+
+    async def _fake_create(*a, **k):
+        nonlocal called
+        called = True
+        return {"doc_url": "x"}
+
+    monkeypatch.setattr(mr, "create_google_doc", _fake_create)
+    monkeypatch.setattr(mr.settings, "google_apps_script_url", "https://script.example/exec")
+    url = await mr._maybe_publish_doc({"name": "No Folder"}, {"id": "s1"}, [("k", "# x", None)])
+    assert url is None
+    assert called is False
