@@ -66,6 +66,17 @@ _QUESTION_LEADS = frozenset({
     "how", "what", "why", "when", "where", "which", "who", "whom", "whose",
     "can", "could", "should", "will", "would", "is", "are", "do", "does",
 })
+# Pure interrogatives — dropped from tokenization entirely so a QUESTION-form seed
+# ("what is a third party claims administrator?") never contributes "what"/"how"
+# as a topical token. Without this, a multi-seed run of questions makes "what" a
+# seed token, and the keyword_ideas coherence gate (≥2 seed-token overlap) is
+# then satisfied by "what" + any one other generic token, flooding the run with
+# "what is <anything>" drift ("what is supply chain management", "what is a hen
+# party"). Only the unambiguous interrogatives are here — "will"/"can"/"do" can be
+# real topic words ("last will and testament", "trash can"), so they stay tokens.
+_INTERROGATIVES = frozenset({
+    "how", "what", "why", "when", "where", "which", "who", "whom", "whose",
+})
 _INTENT_WEIGHT = {
     "transactional": 1.0,
     "commercial": 0.9,
@@ -84,9 +95,15 @@ def normalize_keyword(keyword: Optional[str]) -> str:
 
 def tokenize(keyword: str) -> list[str]:
     """Significant tokens of a keyword: lower-cased alphanumeric words, minus
-    stopwords, length ≥ 2. Preserves order. Pure."""
+    stopwords and pure interrogatives, length ≥ 2. Preserves order. Pure.
+
+    Interrogatives are dropped here (not just flagged by is_question) so a
+    question keyword/seed anchors on its real topic in EVERY consumer — clustering
+    (no "what" mega-cluster), the relevance/drift gates (no "what"/"how" inflating
+    seed-token overlap), and the brand guard alike."""
     words = re.findall(r"[a-z0-9]+", normalize_keyword(keyword))
-    return [w for w in words if len(w) >= 2 and w not in _STOPWORDS]
+    return [w for w in words
+            if len(w) >= 2 and w not in _STOPWORDS and w not in _INTERROGATIVES]
 
 
 def _stem(token: str) -> str:

@@ -31,6 +31,48 @@ def test_tokenize_alphanumeric_only():
     assert kr.tokenize("24/7 emergency plumber!") == ["24", "emergency", "plumber"]
 
 
+def test_tokenize_drops_interrogatives():
+    # Pure interrogatives are dropped so a question seed anchors on its real topic
+    # (no "what"/"how" seed token inflating the relevance gate or hijacking clusters).
+    assert kr.tokenize("what is a third party claims administrator") == [
+        "third", "party", "claims", "administrator"]
+    assert kr.tokenize("how does a claims adjuster get paid") == [
+        "claims", "adjuster", "paid"]
+    # ...but ambiguous words that can be real topics are kept.
+    assert "will" in kr.tokenize("last will and testament")
+
+
+def test_question_seed_tokens_exclude_interrogatives():
+    # is_question still fires on the raw string even though the token is gone.
+    assert kr.is_question("what is a third party claims administrator")
+    assert kr.token_set("what is a third party claims administrator") == {
+        "third", "party", "claim", "administrator"}
+
+
+def test_filter_question_seeds_reject_interrogative_only_overlap():
+    # The reported BSA Claims failure: question seeds made "what" a seed token, so
+    # keyword_ideas "what is X" drift cleared the >=2 coherence gate via what + one
+    # generic token. With interrogatives gone, those match on <2 topical tokens.
+    seeds = ["what is a third party claims administrator?",
+             "how does a third party claims administrator get paid?",
+             "catastrophe claims management"]
+    rows = [
+        {"keyword": "what is supply chain management"},   # {supply, chain, management} -> 1 (management)
+        {"keyword": "what is a hen party"},               # {hen, party} -> 1 (party)
+        {"keyword": "what is an independent variable"},   # {independent, variable} -> 0
+        {"keyword": "third party administrator health insurance"},  # -> 3, kept
+        {"keyword": "catastrophe claims management software"},      # -> 3, kept
+    ]
+    kept, report = kr.filter_relevant_ideas(rows, seeds, "BSA Claims")
+    kept_kw = {r["keyword"] for r in kept}
+    assert "what is supply chain management" not in kept_kw
+    assert "what is a hen party" not in kept_kw
+    assert "what is an independent variable" not in kept_kw
+    assert "third party administrator health insurance" in kept_kw
+    assert "catastrophe claims management software" in kept_kw
+    assert report["gate"] == "coherence"
+
+
 # --- opportunity_score --------------------------------------------------------
 def test_opportunity_score_rewards_value_ease_intent():
     # High volume, high CPC, low difficulty, transactional → high score.
