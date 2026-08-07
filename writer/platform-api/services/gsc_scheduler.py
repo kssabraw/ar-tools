@@ -515,7 +515,6 @@ async def gsc_scheduler() -> None:
     interval = settings.gsc_scheduler_poll_interval_seconds
     hour = settings.gsc_ingest_hour_utc
     weekday = settings.dataforseo_rank_weekday
-    maps_weekday = settings.maps_scan_weekday
     reopt_weekday = settings.reopt_plan_weekday
     rank_analysis_weekday = settings.rank_analysis_weekly_weekday
     # Durable markers: survive deploys so the daily/weekly blocks don't re-fire
@@ -655,8 +654,16 @@ async def gsc_scheduler() -> None:
                 if ok:
                     last_df_date = now.date()
                     save_marker("df_weekly", last_df_date.isoformat())
-            # Weekly Maps geo-grid scans (Module #5) on their own weekday.
-            if now.weekday() == maps_weekday and should_run(now, last_maps_date, hour):
+            # Maps geo-grid scans (Module #5) — now per-client staggered: each
+            # client has its own scan weekday (maps_scan_configs.weekday, unset →
+            # settings.maps_scan_weekday), so the due-check runs DAILY and the
+            # enqueue helper filters to the clients due today. It also carries the
+            # per-client overdue catch-up, so a missed window no longer costs a
+            # full week of grids. `enqueue_due_maps_scans` guards each client
+            # against a second scan the same day, so a daily sweep is safe.
+            # The marker still advances only on success (_safe catches errors, not
+            # the return count), so a transient failure retries on the next tick.
+            if should_run(now, last_maps_date, hour):
                 if _safe("maps_scans", enqueue_due_maps_scans):
                     last_maps_date = now.date()
                     save_marker("maps_weekly", last_maps_date.isoformat())

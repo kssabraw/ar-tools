@@ -36,7 +36,9 @@ class MapsConfigUpdate(BaseModel):
     resource_category: Optional[Literal["googleMaps", "googleLocalFinder"]] = None
     serp_device: Optional[Literal["desktop", "mobile", "both"]] = None
     cadence: Optional[Literal["off", "weekly"]] = None
-    weekday: Optional[int] = None
+    # 0=Mon..6=Sun. Bounded here so an out-of-range day can't be stored and then
+    # silently ignored by the scheduler (which falls back to the global default).
+    weekday: Optional[int] = Field(default=None, ge=0, le=6)
     active: Optional[bool] = None
 
 

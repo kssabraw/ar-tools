@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from statistics import mean
 from typing import Optional
 
@@ -631,21 +631,179 @@ def cancel_scan(scan_id: str) -> dict:
     return {"status": "cancelled", "cancelled": True}
 
 
+def resolve_weekday(value) -> int:
+    """A config's scan weekday (0=Mon..6=Sun), falling back to the global default.
+
+    Anything out of range or non-integer (including a bool, which is an int in
+    Python) is treated as unset rather than silently scheduling a client onto a
+    nonsense day. Pure."""
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 6:
+        return value
+    return settings.maps_scan_weekday
+
+
+def scan_due(
+    today: date, weekday: int,
+    last_attempt: Optional[date], last_good: Optional[date],
+) -> bool:
+    """Is a scheduled geo-grid scan due for this client today? Pure.
+
+    `last_attempt` is the client's most recent scheduled scan of ANY status;
+    `last_good` is its most recent that didn't FAIL (complete / in-flight /
+    cancelled — a user-cancelled scan must not auto-retry). Three rules:
+
+      - attempted today        -> not due. `enqueue_maps_scan` only dedupes
+        against PENDING/RUNNING jobs, so once a scan finishes (or fails) there
+        is nothing stopping the next tick re-enqueueing it. This is the guard
+        that bounds a daily sweep — and a failing provider — to ONE paid
+        attempt per client per day instead of one per 5-minute tick.
+      - good scan overdue      -> due, whatever weekday it is. Per-client
+        catch-up: a missed weekday window (scheduler down) or a FAILED attempt
+        (provider down) self-heals the next day instead of waiting a week.
+        Strictly MORE than 7 days: at exactly 7 the client is on cadence.
+      - otherwise              -> due on the client's own weekday, UNLESS a
+        good scan already landed within the last 2 days. Without that, the
+        week after a weekday change double-scans: moving Tue->Thu leaves the
+        Wednesday catch-up firing at day 8 and the new Thursday weekday firing
+        again the very next day. With it, the transition is a single scan and
+        the cadence settles on the new day.
+
+    Both dates None (never scanned, or older than the lookback window) waits
+    for the client's weekday — the catch-up is for a gap we can measure."""
+    if last_attempt is not None and last_attempt >= today:
+        return False
+    if last_good is not None and (today - last_good).days > 7:
+        return True
+    return today.weekday() == weekday and (
+        last_good is None or (today - last_good).days >= 3
+    )
+
+
+def _scan_history(supabase, today: date) -> tuple[dict[str, date], dict[str, date]]:
+    """(last_attempt, last_good): per-client dates of the most recent SCHEDULED
+    scan of any status / of non-failed status, over a 60-day window.
+
+    Deliberately ignores manual scans: a one-off "Run scan now" must not suppress
+    or shift the client's weekly cadence. Clients with nothing in the window are
+    absent, which `scan_due` reads as "wait for your weekday"."""
+    since = (today - timedelta(days=60)).isoformat()
+    rows = (
+        supabase.table("maps_scans").select("client_id, created_at, status")
+        .eq("trigger", "scheduled").gte("created_at", since)
+        .order("created_at", desc=True).limit(2000).execute()
+    ).data or []
+    attempts: dict[str, date] = {}
+    good: dict[str, date] = {}
+    for row in rows:
+        client_id, created = row.get("client_id"), row.get("created_at")
+        if not client_id or not created:
+            continue
+        try:
+            day = date.fromisoformat(str(created)[:10])  # created_at is UTC
+        except ValueError:
+            continue
+        if client_id not in attempts or day > attempts[client_id]:
+            attempts[client_id] = day
+        if row.get("status") != "failed" and (client_id not in good or day > good[client_id]):
+            good[client_id] = day
+    return attempts, good
+
+
 def enqueue_due_maps_scans() -> int:
-    """Weekly: enqueue a scan for each client with an active weekly config + keywords."""
+    """Daily: enqueue a scan for each client whose own scan weekday is today.
+
+    Runs DAILY and filters per client (the pattern the strategist sweep already
+    uses). It used to run on ONE global weekday and select only `client_id` —
+    `maps_scan_configs.weekday` is a real per-client column, settable through the
+    API and returned by `GET /maps/config`, but the scheduler never read it, so
+    every client scanned on `settings.maps_scan_weekday` regardless of its own
+    row. Per-client due-ness (own weekday, overdue catch-up, and the same-day
+    guard that keeps a daily sweep from re-scanning) is decided by `scan_due`.
+
+    A client whose weekly config is still `active` but has lost every active
+    keyword produces no scan. That used to be a silent `continue`: the Setup tab
+    kept reading "weekly scanning on", the geo-grid simply stopped updating, and
+    nothing anywhere said why (First Class Roofing sat like that from 2026-06-23).
+    Such a client is now warned about + notified once per ISO week, so a stalled
+    tracker announces itself instead of having to be noticed."""
     supabase = get_supabase()
     configs = (
-        supabase.table("maps_scan_configs").select("client_id")
+        supabase.table("maps_scan_configs")
+        .select("client_id, weekday, google_place_id, center_lat, center_lng")
         .eq("active", True).eq("cadence", "weekly").execute()
     ).data or []
+    if not configs:
+        return 0
+    today = datetime.now(timezone.utc).date()
+    attempts, good = _scan_history(supabase, today)
     enqueued = 0
+    starved: list[str] = []
+    incomplete: list[str] = []
     for cfg in configs:
+        client_id = cfg["client_id"]
+        weekday = resolve_weekday(cfg.get("weekday"))
+        if not scan_due(today, weekday, attempts.get(client_id), good.get(client_id)):
+            continue
+        # An incomplete config (Setup saved before Place ID / center were filled
+        # in — the upsert allows it) makes `start_client_scan` fail BEFORE any
+        # maps_scans row is inserted, so nothing would record the attempt and the
+        # daily sweep would re-enqueue a failing job every tick. Skip it here —
+        # never enqueued, no storm — and log on the client's own weekday only,
+        # same weekly rhythm as the starved report below.
+        if (
+            not cfg.get("google_place_id")
+            or cfg.get("center_lat") is None
+            or cfg.get("center_lng") is None
+        ):
+            if today.weekday() == weekday:
+                incomplete.append(client_id)
+            continue
         kw = (
             supabase.table("maps_keywords").select("id")
-            .eq("client_id", cfg["client_id"]).eq("active", True).limit(1).execute()
+            .eq("client_id", client_id).eq("active", True).limit(1).execute()
         ).data
-        if kw and enqueue_maps_scan(cfg["client_id"], trigger="scheduled"):
+        if not kw:
+            # Report on the client's OWN weekday only. A starved client never
+            # scans, so it is permanently "overdue" — reporting on every catch-up
+            # day would log it daily instead of once a week.
+            if today.weekday() == weekday:
+                starved.append(client_id)
+            continue
+        if enqueue_maps_scan(client_id, trigger="scheduled"):
             enqueued += 1
     if enqueued:
         logger.info("maps_scans_enqueued", extra={"clients": enqueued})
+    if incomplete:
+        logger.warning("maps_scans_skipped_config_incomplete", extra={"clients": incomplete})
+    if starved:
+        logger.warning("maps_scans_skipped_no_keywords", extra={"clients": starved})
+        _notify_starved_configs(starved)
     return enqueued
+
+
+def _notify_starved_configs(client_ids: list[str]) -> None:
+    """Tell the team about active weekly configs that have no active keywords.
+
+    Best-effort and deduped per client per ISO week (the sweep runs weekly, so a
+    re-run inside the same week is a clean no-op rather than a repeat ping)."""
+    try:
+        from services import notifications
+
+        year, week, _ = datetime.now(timezone.utc).isocalendar()
+        for client_id in client_ids:
+            notifications.emit(
+                client_id=client_id,
+                kind="maps_scan_no_keywords",
+                title="Geo-grid scanning is on but has no keywords",
+                summary=(
+                    "Weekly Maps geo-grid scanning is active for this client, but every "
+                    "tracked keyword is inactive or removed — so no scan ran and the "
+                    "heatmap and Local Rank Analysis reports will not update. Add a "
+                    "keyword in the Maps Geo-Grid Setup tab to resume."
+                ),
+                severity="warning",
+                payload={"link": f"clients/{client_id}/maps"},
+                dedupe_key=f"maps_scan_no_keywords:{client_id}:{year}-W{week:02d}",
+            )
+    except Exception as exc:  # noqa: BLE001 — notifications never sink the sweep
+        logger.warning("maps_scan_starved_notify_failed", extra={"error": str(exc)})
