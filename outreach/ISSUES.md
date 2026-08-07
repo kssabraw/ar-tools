@@ -2037,3 +2037,29 @@ nothing is lost today.
 (score_run_id) references score_run(id)`. Check for orphans first (there will be none until a
 renderer starts writing the column). Same shape as the `lead_activity.touch_id` FK deferral in
 PHASE3-outcome-constraint.md §2 — a column waiting for the table it points at.
+
+---
+
+### I-091 (open, low) — the delta guard's provider-boundary and drift-suppression halves are seams awaiting their data
+Reporting spec §4.3 requires a delta heatmap to refuse to render across three conditions: a
+**provider boundary**, a **span** wider than `max_delta_span_days`, and where **drift suppression**
+fired (PRD §9a.2). `heatmap.assert_delta_renderable` implements all three, but only the span guard
+is sourced from live data today:
+
+- **Span** — fully enforced. Both snapshots carry `scanned_at`; `max_delta_span_days` (default 45)
+  is now in config. This guard is real now.
+- **Provider boundary** — the mechanism exists (`provider_before != provider_after`), but
+  `scan_snapshot` carries no provider column and DataForSEO is the only provider, so it is
+  vacuously satisfied. `build_delta_inputs` defaults both providers to `"dataforseo"`. When a
+  second provider is ever added, store it per snapshot and pass it through — the guard then bites
+  with no renderer change.
+- **Drift suppression** — `build_delta_inputs` takes an explicit `drift_suppressed: bool`,
+  defaulting False, because `prospect_delta` (the table that would source it, PRD §9a.2) does not
+  exist yet — the `coverage_rollup` migration notes this at its own tail. Building the drift
+  subsystem now would be pulling Phase-later work forward (session protocol §3); the renderer is
+  built as its correct *consumer* instead, with the seam documented here.
+
+**Adopt when:** a second SERP provider lands (wire the provider column) and/or `prospect_delta` +
+drift suppression are built (pass the real flag). Neither is a renderer change — both are one-line
+call-site edits in `build_delta_inputs`. Until then the delta is honest: it refuses on span, and
+the other two conditions cannot occur.

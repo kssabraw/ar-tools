@@ -219,6 +219,15 @@ class Settings(BaseSettings):
     # instead of turning one tick into an unbounded job that the platform may kill halfway.
     rollup_batch_limit: int = 50
 
+    # --- Delta heatmaps (reporting spec §4.3, PRD §9a.2) -----------------------------------
+    # A before/after delta MUST NOT be rendered across a gap wider than this — a gap means missed
+    # cycles, and a two-snapshot comparison spanning them attributes to one interval what really
+    # happened over several (PRD §9a.2). Default 45 per PRD §9a.2. The guard is enforced from the
+    # two snapshots' `scanned_at`, which exist today; the provider-boundary and drift-suppression
+    # halves of the same guard are wired in `heatmap.assert_delta_renderable` and land fully when a
+    # second provider and `prospect_delta` exist (ISSUES I-091).
+    max_delta_span_days: int = 45
+
 
 def missing_supabase_vars(settings: "Settings") -> list[str]:
     """Which Supabase credentials are absent, by env-var name.

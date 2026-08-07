@@ -752,3 +752,37 @@ cache contract made structural.
 The one spec gap hit — no colour band for a rank past position 20 — was resolved the
 cheapest-to-reverse way (fold into "found, far down", never red) and logged as I-089 rather than
 resolved in the spec. The deferred `score_run_id` FK is I-090.
+
+---
+
+## 2026-08-07 — Phase 3 slice 2: the comparison renderers, and how "improved" is decided
+
+Slice 2 adds `heatmap_pair` (before/after side by side) and `heatmap_delta` (per-point change) —
+reporting spec §4.3 — on the same deterministic, golden-fixture-tested footing as slice 1's single
+heatmap. Three genuine choices, none of them in the spec verbatim:
+
+**Absent (byte 0) is the worst rank, so it participates in the delta.** Rank is inverted (lower =
+better) and "not found" is a real, meaningful outcome — the strongest pitch state. The classifier
+maps absent to an effective rank of 1000 (larger than any real byte, 254), so `absent → ranking`
+is an **improvement** (green) and `ranking → absent` is the sharpest **decline** (red). The one
+exception the spec calls out explicitly is honoured: **absent in BOTH snapshots renders neutral,
+never red** — "still not ranking" is not a decline. A pure `delta_band(before, after)` encodes all
+of this and is hand-tested against a table reasoned from the inversion, not read off the code.
+
+**The delta legend is directional words only — no numbers.** Spec §7a's trap: a numeric legend on
+an inverted-rank view reads backwards to anyone who glances at it. The legend says "Rank improved /
+Rank worsened / No change / No data" and a test asserts no digit appears in any delta legend label.
+The delta view is also made visually distinct from a state heatmap (a tinted plot field + a dashed
+frame) so the two are never confused when a page carries both.
+
+**The renderer stayed byte-frozen while its drawing code was shared.** Slice 1's `render_heatmap`
+output is already citable (its `content_hash` is the cache key), so the shared-primitive extraction
+(`_draw_marks`/`_draw_legend`/`_draw_scale_bar`/`_projector`) that the pair and delta renderers now
+reuse was proven byte-identical against reference hashes captured *before* the refactor — not merely
+assumed from a green test suite. This is the lazy-split refactoring policy applied exactly: the
+seam opened because the next feature (comparison renderers) landed in the file, and the frozen
+output was protected empirically.
+
+The guard mechanism is fuller than its current data (span enforced now; provider-boundary and
+drift-suppression are seams awaiting a second provider and `prospect_delta`) — logged as I-091
+rather than resolved by building those subsystems ahead of their phase.

@@ -157,6 +157,13 @@ is needed for inspection.
 - [x] Renderer deterministic — identical inputs produce identical `content_hash`
       (no `now()`/ids/random; sorted iteration; fixed-precision coords. Pinned by
       `tests/test_heatmap.py`; unique index on `report_artifact.content_hash` = the §6 cache.)
+- [x] `heatmap_pair` + `heatmap_delta` renderers (§4.3) — before/after and per-point change
+      (2026-08-07. Shared plot primitives, slice-1 bytes proven unchanged. Inverted-rank delta:
+      absent = worst rank, absent-in-both neutral never red, directional-only legend, distinct
+      frame treatment. `render-delta` CLI. `tests/test_heatmap_compare.py`, +33 tests.)
+- [~] Delta guards (§4.3): refuse across span limit / provider boundary / suppressed drift
+      (span enforced now via `max_delta_span_days`=45; provider + drift are built guard seams
+      awaiting a 2nd provider and `prospect_delta` — I-091.)
 - [ ] Audit PDF assembled; generation gated on explicit approval, never on cycle completion
 - [ ] Send-time LLM verification runs at generation for any engine-specific claim
 - [ ] Call hook rendered from persisted evidence

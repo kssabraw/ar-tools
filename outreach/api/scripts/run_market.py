@@ -858,6 +858,156 @@ def cmd_render_heatmap(args) -> int:
     return 1 if problems and not artifacts else 0
 
 
+def _snapshot_by_id(client, snapshot_id: str) -> dict | None:
+    """One snapshot row with the geometry the renderer needs, or None."""
+    rows = (
+        client.table("scan_snapshot")
+        .select(
+            "id, submarket_id, keyword_id, center_lat, center_lng, grid_radius_miles, "
+            "grid_spacing_miles, geometry_version, scanned_at"
+        )
+        .eq("id", snapshot_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    return rows[0] if rows else None
+
+
+def cmd_render_delta(args) -> int:
+    """Render the per-point CHANGE heatmap between two snapshots. FREE — no provider is contacted.
+
+    Reporting-layer-spec §4.3. Takes an explicit AFTER (`--snapshot`) and BEFORE
+    (`--compare-snapshot`) — no auto-resolution, so the operator names exactly which two scans the
+    before/after compares. Renders a `heatmap_delta` per prospect holding a coverage row in BOTH
+    snapshots, enforcing every delta guard first (span / provider / drift / matching geometry). A
+    guard refusal is reported per prospect, never a blank picture.
+    """
+    import os
+
+    from api.services import heatmap
+    from api.services.paging import fetch_all
+
+    settings = get_settings()
+    client = _client()
+
+    if not args.snapshot or not args.compare_snapshot:
+        print(
+            json.dumps(
+                {"error": "render-delta requires --snapshot (after) and --compare-snapshot (before)"}
+            )
+        )
+        return 2
+
+    after = _snapshot_by_id(client, args.snapshot)
+    before = _snapshot_by_id(client, args.compare_snapshot)
+    if after is None or before is None:
+        missing = args.snapshot if after is None else args.compare_snapshot
+        print(json.dumps({"error": f"snapshot not found: {missing}"}))
+        return 2
+
+    sub = (
+        client.table("submarket").select("name").eq("id", after["submarket_id"]).limit(1).execute().data
+    )
+    kw = client.table("keyword").select("term").eq("id", after["keyword_id"]).limit(1).execute().data
+    sub_name = sub[0]["name"] if sub else "?"
+    kw_term = kw[0]["term"] if kw else "?"
+    before_day = str(before.get("scanned_at") or "")[:10]
+    after_day = str(after.get("scanned_at") or "")[:10]
+    subtitle = f"{kw_term} · {sub_name} · {before_day} → {after_day}"
+
+    # A prospect needs coverage in BOTH snapshots to have a change to show.
+    def _coverage(snapshot_id: str) -> dict[str, dict]:
+        return {
+            r["prospect_id"]: r
+            for r in fetch_all(
+                lambda: client.table("prospect_coverage")
+                .select("prospect_id, rank_vector")
+                .eq("snapshot_id", snapshot_id)
+            )
+        }
+
+    cov_before = _coverage(before["id"])
+    cov_after = _coverage(after["id"])
+    shared_ids = sorted(set(cov_before) & set(cov_after))
+    if args.prospect:
+        shared_ids = [pid for pid in shared_ids if pid == args.prospect]
+
+    prospects: dict[str, dict] = {}
+    if shared_ids:
+        for row in fetch_all(
+            lambda: client.table("prospect").select("id, name, lat, lng").in_("id", shared_ids)
+        ):
+            prospects[row["id"]] = row
+
+    out_dir = settings.artifact_dir
+    os.makedirs(out_dir, exist_ok=True)
+
+    artifacts: list[dict] = []
+    problems: list[str] = []
+    for pid in shared_ids:
+        pr = prospects.get(pid, {})
+        try:
+            inputs = heatmap.build_delta_inputs(
+                snapshot_before=before,
+                coverage_before=cov_before[pid],
+                snapshot_after=after,
+                coverage_after=cov_after[pid],
+                title=f"{pr.get('name') or 'This business'} — change in Google Maps coverage",
+                subtitle=subtitle,
+                max_span_days=settings.max_delta_span_days,
+                business_lat=pr.get("lat"),
+                business_lng=pr.get("lng"),
+            )
+            svg = heatmap.render_delta(inputs)
+            digest = heatmap.content_hash(svg)
+            path = os.path.join(out_dir, f"{digest}.svg")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(svg)
+
+            client.table("report_artifact").upsert(
+                {
+                    "kind": "heatmap_delta",
+                    "subject_type": "prospect",
+                    "subject_id": pid,
+                    "snapshot_id": after["id"],
+                    "compare_snapshot_id": before["id"],
+                    "generator_version": heatmap.GENERATOR_VERSION,
+                    "geometry_version": after["geometry_version"],
+                    "storage_path": path,
+                    "content_hash": digest,
+                },
+                on_conflict="content_hash",
+                ignore_duplicates=True,
+            ).execute()
+
+            artifacts.append({"prospect_id": pid, "name": pr.get("name"),
+                              "content_hash": digest, "path": path})
+        except heatmap.DeltaNotRenderable as exc:
+            # A refused delta is a real, expected outcome (guard fired), not a crash — report the
+            # machine-readable reason so the operator sees WHY the picture was withheld.
+            problems.append(f"prospect {pid}: refused ({exc.reason})")
+        except Exception as exc:  # noqa: BLE001 — one bad row must not stop the batch
+            problems.append(f"prospect {pid}: {exc}")
+
+    print(
+        json.dumps(
+            {
+                "after_snapshot_id": after["id"],
+                "before_snapshot_id": before["id"],
+                "submarket": sub_name,
+                "keyword": kw_term,
+                "shared_prospects": len(shared_ids),
+                "rendered": len(artifacts),
+                "artifacts": artifacts,
+                "problems": problems,
+            },
+            indent=2,
+        )
+    )
+    return 1 if problems and not artifacts else 0
+
+
 def cmd_run(args) -> int:
     for step in (cmd_seed, cmd_ingest, cmd_filter):
         code = step(args)
@@ -1034,7 +1184,7 @@ def main() -> int:
             [
                 "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
                 "probe-dataforseo", "probe-ai-granularity", "scan", "collect", "rollup", "tick",
-                "render-heatmap",
+                "render-heatmap", "render-delta",
             ],
         ),
         flush=True,
@@ -1046,7 +1196,7 @@ def main() -> int:
         choices=[
             "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
             "probe-dataforseo", "probe-ai-granularity", "scan", "collect", "rollup", "tick",
-            "render-heatmap",
+            "render-heatmap", "render-delta",
         ],
     )
     parser.add_argument("definition", help="path to a market definition JSON file")
@@ -1108,11 +1258,21 @@ def main() -> int:
     )
     parser.add_argument(
         "--snapshot", default=None,
-        help="rollup / render-heatmap: one snapshot id, instead of everything awaiting a rollup",
+        help=(
+            "rollup / render-heatmap: one snapshot id, instead of everything awaiting a rollup. "
+            "render-delta: the AFTER snapshot (required)."
+        ),
+    )
+    parser.add_argument(
+        "--compare-snapshot", default=None,
+        help=(
+            "render-delta: the BEFORE snapshot to compare against (required). Must share the "
+            "after snapshot's geometry — a before/after across different grids is refused."
+        ),
     )
     parser.add_argument(
         "--prospect", default=None,
-        help="render-heatmap: one prospect id, instead of every prospect in the snapshot",
+        help="render-heatmap / render-delta: one prospect id, instead of every prospect in scope",
     )
     parser.add_argument(
         "--verify", action="store_true",
@@ -1143,6 +1303,7 @@ def main() -> int:
         "rollup": cmd_rollup,
         "tick": cmd_tick,
         "render-heatmap": cmd_render_heatmap,
+        "render-delta": cmd_render_delta,
     }
 
     # Railway reports a crashed job as deployment status SUCCESS when restartPolicy is NEVER —
