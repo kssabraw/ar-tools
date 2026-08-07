@@ -205,13 +205,16 @@ export function KeywordResearch() {
     if (next.has(kw)) next.delete(kw); else next.add(kw)
     return next
   })
-  // Open the SUITE Content Scheduler (not the Topic Fan-out) with the selected
-  // keywords prefilled, so the user picks page type + cadence there. The keywords
-  // ride in router navigation state; ContentScheduler seeds the batch form from it.
-  const sendToScheduler = (kws: string[]) => {
-    if (!kws.length) return
-    navigate(`/clients/${id}/content-scheduler`, { state: { keywords: kws } })
-  }
+  // Send selected keywords to the SUITE Content Scheduler (not the Topic Fan-out).
+  // They're persisted server-side as a per-client draft first, so they survive a
+  // refresh / navigation and can't be lost before the batch is created; the
+  // Content Scheduler seeds its form from that draft. The user picks the page type
+  // + cadence there and clicks Create/Schedule to actually create the pages.
+  const sendToScheduler = useMutation({
+    mutationFn: (kws: string[]) =>
+      api.post(`/clients/${id}/content-scheduler-draft`, { keywords: kws }),
+    onSuccess: () => navigate(`/clients/${id}/content-scheduler`),
+  })
 
   // --- Client-facing PDF report ---
   const { data: reportsData } = useQuery<{ reports: ReportRow[] }>({
@@ -506,12 +509,12 @@ export function KeywordResearch() {
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button
                 style={{ ...primaryBtn, height: 34, padding: '7px 14px', fontSize: 13, opacity: selected.size === 0 ? 0.5 : 1 }}
-                onClick={() => sendToScheduler([...selected])}
-                disabled={selected.size === 0}
-                title="Open the Content Scheduler with these keywords ready to schedule"
+                onClick={() => sendToScheduler.mutate([...selected])}
+                disabled={selected.size === 0 || sendToScheduler.isPending}
+                title="Save these keywords to the Content Scheduler, ready to pick a page type and schedule"
               >
                 <CalendarPlus size={14} />
-                Send{selected.size ? ` ${selected.size}` : ''} to Content Scheduler
+                {sendToScheduler.isPending ? 'Sending…' : `Send${selected.size ? ` ${selected.size}` : ''} to Content Scheduler`}
               </button>
               <button style={ghostBtn} onClick={() => runId && genReport.mutate(runId)} disabled={!keywords.length || genReport.isPending}>
                 <FileText size={14} /> {genReport.isPending ? 'Building…' : 'Client PDF report'}
@@ -521,6 +524,7 @@ export function KeywordResearch() {
               </button>
             </div>
           </div>
+          {sendToScheduler.isError && <div style={errBox}>{(sendToScheduler.error as Error)?.message ?? 'Could not send to the Content Scheduler.'}</div>}
           {genReport.isError && <div style={errBox}>{(genReport.error as Error)?.message ?? 'Report failed.'}</div>}
           {downloadErr && <div style={errBox}>{downloadErr}</div>}
           {runReports.length > 0 && (

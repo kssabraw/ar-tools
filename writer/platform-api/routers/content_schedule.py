@@ -16,6 +16,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from config import settings
 from db.supabase_client import get_supabase
@@ -175,6 +176,35 @@ async def create_batch(
         status="created", created=True, batch_id=batch["id"], count=len(items),
         skipped=skipped, enqueued=enqueued, estimate=est_resp,
     )
+
+
+class SchedulerDraftRequest(BaseModel):
+    keywords: list[str] = []
+    content_type: Optional[str] = None
+
+
+@router.get("/clients/{client_id}/content-scheduler-draft")
+async def get_scheduler_draft(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """The client's pending Content Scheduler draft — the handed-off keyword list
+    (e.g. from Keyword Research) the batch form seeds from. {terms, content_type}."""
+    return store.get_draft(str(client_id))
+
+
+@router.post("/clients/{client_id}/content-scheduler-draft")
+async def save_scheduler_draft(
+    client_id: UUID, body: SchedulerDraftRequest, auth: dict = Depends(require_auth)
+) -> dict:
+    """Merge keywords into the client's Content Scheduler draft so they persist
+    across a refresh / navigation until a batch is created from them."""
+    _require_client(str(client_id))
+    return store.merge_draft(str(client_id), body.keywords, body.content_type)
+
+
+@router.delete("/clients/{client_id}/content-scheduler-draft")
+async def clear_scheduler_draft(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Clear the client's pending Content Scheduler draft."""
+    store.clear_draft(str(client_id))
+    return {"cleared": True}
 
 
 @router.get("/clients/{client_id}/scheduled-content")
