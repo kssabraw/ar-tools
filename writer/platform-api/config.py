@@ -832,6 +832,22 @@ class Settings(BaseSettings):
     # the seed phrase ("historic preservation" → "adaptive reuse") while staying
     # on Google's related graph, so it broadens without the category drift.
     keyword_research_broaden_with_related: bool = True
+    # Brand-flood gate on the related_keywords adjacency layer (KR's one ungated
+    # broadener). related_keywords can surface a competitor brand or homonym and
+    # then flood the run with its namespace — e.g. "third party claims adjuster"
+    # pulled a "Mitchell" (claims-software vendor) cluster of ~45 keywords
+    # ("mitchell connect", "mitchell prodemand") including homonym skincare
+    # ("mitchell usa serum"), ~14% of the whole run. The gate looks only at the
+    # SEEDLESS neighbours (those sharing no seed token — legit seed-anchored
+    # adjacency like "historic preservation office" is never a candidate) and
+    # drops any dominated by a single non-seed token that appears in >= _fraction
+    # AND >= _min of them; diverse legit adjacency ("adaptive reuse") has no
+    # dominant token and survives. Deliberately conservative (validated on live
+    # runs: catches Mitchell 73%/Frontline 76%, leaves lower-concentration topical
+    # drift and clean runs untouched). Set False to disable.
+    keyword_research_brand_flood_filter: bool = True
+    keyword_research_brand_flood_fraction: float = 0.4
+    keyword_research_brand_flood_min: int = 8
     # related_keywords expansion hops (0 = seed only, 1 = its related searches,
     # 2 = related-of-related; higher = broader but more wander) + per-seed cap.
     keyword_research_related_depth: int = 2
