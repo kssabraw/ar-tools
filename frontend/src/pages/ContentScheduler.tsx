@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useLocation, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, CalendarDays, List } from 'lucide-react'
 import { api } from '../lib/api'
@@ -17,6 +17,10 @@ import { ContentCalendar } from '../components/scheduler/ContentCalendar'
 
 export function ContentScheduler() {
   const { id } = useParams<{ id: string }>()
+  const location = useLocation()
+  // Keywords handed off from another tool (e.g. "Send to Content Scheduler" in
+  // Keyword Research) ride in navigation state and seed the batch form.
+  const handoffKeywords = (location.state as { keywords?: string[] } | null)?.keywords
   const [view, setView] = useState<'list' | 'calendar'>('list')
   const { data: client } = useQuery<Client>({
     queryKey: ['client', id],
@@ -41,7 +45,7 @@ export function ContentScheduler() {
         per line. Create now, or drip them out on a schedule.
       </p>
 
-      <ScheduleBatch clientId={id} githubReady={Boolean(client?.github_repo)} />
+      <ScheduleBatch clientId={id} githubReady={Boolean(client?.github_repo)} initialTerms={handoffKeywords} />
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '28px 0 12px', gap: 12 }}>
         <h2 style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', margin: 0 }}>
