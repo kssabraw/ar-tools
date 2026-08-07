@@ -2,8 +2,9 @@
 
 **Read this first, then `CLAUDE.md` → `START-HERE.md` → `ISSUES.md` → `DECISIONS.md`.**
 
-Status as of 2026-08-05:
+Status as of 2026-08-05 (Phase 3 slice 1 added 2026-08-07):
 
+- **Phase 3 slice 1 — the heatmap renderer — is BUILT (2026-08-07), on branch `claude/outreach-first-scan-m4d7jb`, draft PR.** `api/services/heatmap.py` renders a **deterministic** SVG from `prospect_coverage.rank_vector` + the snapshot's stored geometry alone (no `grid_result`), with the §4.2 colour scale, dead points as hollow grey rings distinct from red "not found", the business's own diamond pin, a legend and a 1-mile scale bar. `report_artifact` provenance table added (migration `20260807130000`, **applied live** — RLS-on/zero-policy, unique on `content_hash` = the §6 cache contract). A free `render-heatmap` CLI command (not in `PAID_COMMANDS`) renders one prospect or a whole snapshot. 25 new unit tests (suite at **318**), determinism pinned (identical inputs → identical hash; input reordering can't change it). **Phase 3 is sliced — renderer first, then call hook → outcome/touch + emit webhook → approval gate + PDF → signed URLs/R2 + client views; see DECISIONS 2026-08-07.** Two spec gaps logged not resolved: rank >20 folds to "found, far down" never red (I-089); `score_run_id` FK deferred to Phase 4 (I-090). **It renders nothing until the first scan's rollup writes coverage rows — it is ready and waiting, exactly like everything else in §11.**
 - **Phase 1 (ingest + filter) is COMPLETE, verified against a real market, and MERGED to `main`** (#528, squashed as `67f235b`).
 - **Phase 1b (lead CRM) is COMPLETE, applied live, and MERGED to `main`** (#534, squashed as `452a726`).
 - **The platform-api `outreach` router, Phase 2 storage/partitioning and the pinned grid-geometry generator are MERGED** (#538, squashed as `a7acc05`). Migrations applied live.

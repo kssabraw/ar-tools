@@ -672,6 +672,192 @@ def cmd_probe_ai_granularity(args) -> int:
     return 0
 
 
+def _resolve_rollup_snapshot(client, market_id: str, args):
+    """The snapshot to render, or None with a printed reason. It MUST be rolled up.
+
+    A snapshot with no `snapshot_rollup` marker has no `prospect_coverage` rows to read (the rollup
+    writes them), so rendering one would produce nothing — refused rather than drawn blank.
+    """
+    from api.services.paging import fetch_all
+
+    rolled = {
+        r["snapshot_id"]
+        for r in fetch_all(lambda: client.table("snapshot_rollup").select("snapshot_id"))
+    }
+
+    if args.snapshot:
+        rows = (
+            client.table("scan_snapshot").select("*").eq("id", args.snapshot).limit(1).execute().data
+        )
+        if not rows:
+            print(f"REFUSED: snapshot {args.snapshot} not found", file=sys.stderr)
+            return None
+        if rows[0]["id"] not in rolled:
+            print(
+                f"REFUSED: snapshot {args.snapshot} has no rollup marker — nothing to render. "
+                f"Run `rollup` first.",
+                file=sys.stderr,
+            )
+            return None
+        return rows[0]
+
+    if not args.submarket:
+        print(
+            "REFUSED: pass --snapshot <id>, or --submarket (+ optional --keyword) to render that "
+            "submarket's latest rolled-up snapshot.",
+            file=sys.stderr,
+        )
+        return None
+
+    subs = (
+        client.table("submarket").select("id, name").eq("market_id", market_id).execute().data or []
+    )
+    match = [s for s in subs if s["name"].lower() == args.submarket.lower()]
+    if not match:
+        print(f"REFUSED: no submarket named {args.submarket!r}", file=sys.stderr)
+        return None
+
+    snaps = [
+        s
+        for s in (
+            client.table("scan_snapshot").select("*").eq("submarket_id", match[0]["id"]).execute().data
+            or []
+        )
+        if s["id"] in rolled
+    ]
+    if args.keyword:
+        kws = (
+            client.table("keyword").select("id, term").eq("market_id", market_id).execute().data or []
+        )
+        wanted = {k["id"] for k in kws if k["term"].lower() == args.keyword.lower()}
+        snaps = [s for s in snaps if s["keyword_id"] in wanted]
+    if not snaps:
+        print("REFUSED: no rolled-up snapshot for that submarket/keyword yet", file=sys.stderr)
+        return None
+
+    # scanned_at then id, so a tie between two snapshots written in one transaction is broken
+    # deterministically (now() is transaction time — HANDOFF §6.14), the same tie-break the
+    # placeholder-score view uses.
+    snaps.sort(key=lambda s: (str(s.get("scanned_at") or ""), s["id"]), reverse=True)
+    return snaps[0]
+
+
+def cmd_render_heatmap(args) -> int:
+    """Render the coverage heatmap for prospects in one snapshot. FREE — no provider is contacted.
+
+    Reporting-layer-spec §4. Reads `prospect_coverage.rank_vector` + the snapshot's STORED geometry
+    (never the current default — CLAUDE.md) and writes one deterministic SVG per prospect to
+    `artifact_dir`, keyed by content_hash, with a `report_artifact` provenance row. Renders one
+    business with --prospect, or every business holding a coverage row in the snapshot otherwise.
+    """
+    import os
+
+    from api.services import heatmap
+    from api.services.paging import fetch_all
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    settings = get_settings()
+    client = _client()
+    market_id = _market_id(client, definition.name)
+
+    snapshot = _resolve_rollup_snapshot(client, market_id, args)
+    if snapshot is None:
+        return 2
+
+    sub = (
+        client.table("submarket").select("name").eq("id", snapshot["submarket_id"]).limit(1).execute().data
+    )
+    kw = (
+        client.table("keyword").select("term").eq("id", snapshot["keyword_id"]).limit(1).execute().data
+    )
+    sub_name = sub[0]["name"] if sub else "?"
+    kw_term = kw[0]["term"] if kw else "?"
+    subtitle = f"{kw_term} · {sub_name} · scanned {str(snapshot.get('scanned_at') or '')[:10]}"
+
+    coverage_rows = fetch_all(
+        lambda: client.table("prospect_coverage")
+        .select("prospect_id, coverage_pct, rank_vector")
+        .eq("snapshot_id", snapshot["id"])
+    )
+    if args.prospect:
+        coverage_rows = [r for r in coverage_rows if r["prospect_id"] == args.prospect]
+
+    prospects: dict[str, dict] = {}
+    ids = [r["prospect_id"] for r in coverage_rows]
+    if ids:
+        for row in fetch_all(
+            lambda: client.table("prospect").select("id, name, phone, lat, lng").in_("id", ids)
+        ):
+            prospects[row["id"]] = row
+
+    out_dir = settings.artifact_dir
+    os.makedirs(out_dir, exist_ok=True)
+
+    artifacts: list[dict] = []
+    problems: list[str] = []
+    for cov in coverage_rows:
+        pr = prospects.get(cov["prospect_id"], {})
+        try:
+            inputs = heatmap.build_inputs(
+                snapshot=snapshot,
+                coverage=cov,
+                title=f"{pr.get('name') or 'This business'} — Google Maps coverage",
+                subtitle=subtitle,
+                business_lat=pr.get("lat"),
+                business_lng=pr.get("lng"),
+            )
+            svg = heatmap.render_heatmap(inputs)
+            digest = heatmap.content_hash(svg)
+            path = os.path.join(out_dir, f"{digest}.svg")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(svg)
+
+            # Idempotent by content_hash (reporting §6): re-rendering identical inputs is a no-op
+            # rather than a duplicate provenance row.
+            client.table("report_artifact").upsert(
+                {
+                    "kind": "heatmap",
+                    "subject_type": "prospect",
+                    "subject_id": cov["prospect_id"],
+                    "snapshot_id": snapshot["id"],
+                    "generator_version": heatmap.GENERATOR_VERSION,
+                    "geometry_version": snapshot["geometry_version"],
+                    "storage_path": path,
+                    "content_hash": digest,
+                },
+                on_conflict="content_hash",
+                ignore_duplicates=True,
+            ).execute()
+
+            artifacts.append(
+                {
+                    "prospect_id": cov["prospect_id"],
+                    "name": pr.get("name"),
+                    "coverage_pct": cov.get("coverage_pct"),
+                    "content_hash": digest,
+                    "path": path,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 — one bad row must not stop the batch
+            problems.append(f"prospect {cov['prospect_id']}: {exc}")
+
+    print(
+        json.dumps(
+            {
+                "snapshot_id": snapshot["id"],
+                "submarket": sub_name,
+                "keyword": kw_term,
+                "coverage_rows": len(coverage_rows),
+                "rendered": len(artifacts),
+                "artifacts": artifacts,
+                "problems": problems,
+            },
+            indent=2,
+        )
+    )
+    return 1 if problems and not artifacts else 0
+
+
 def cmd_run(args) -> int:
     for step in (cmd_seed, cmd_ingest, cmd_filter):
         code = step(args)
@@ -848,6 +1034,7 @@ def main() -> int:
             [
                 "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
                 "probe-dataforseo", "probe-ai-granularity", "scan", "collect", "rollup", "tick",
+                "render-heatmap",
             ],
         ),
         flush=True,
@@ -859,6 +1046,7 @@ def main() -> int:
         choices=[
             "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
             "probe-dataforseo", "probe-ai-granularity", "scan", "collect", "rollup", "tick",
+            "render-heatmap",
         ],
     )
     parser.add_argument("definition", help="path to a market definition JSON file")
@@ -920,7 +1108,11 @@ def main() -> int:
     )
     parser.add_argument(
         "--snapshot", default=None,
-        help="rollup: one snapshot id, instead of everything awaiting a rollup",
+        help="rollup / render-heatmap: one snapshot id, instead of everything awaiting a rollup",
+    )
+    parser.add_argument(
+        "--prospect", default=None,
+        help="render-heatmap: one prospect id, instead of every prospect in the snapshot",
     )
     parser.add_argument(
         "--verify", action="store_true",
@@ -950,6 +1142,7 @@ def main() -> int:
         "collect": cmd_collect,
         "rollup": cmd_rollup,
         "tick": cmd_tick,
+        "render-heatmap": cmd_render_heatmap,
     }
 
     # Railway reports a crashed job as deployment status SUCCESS when restartPolicy is NEVER —

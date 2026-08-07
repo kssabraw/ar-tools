@@ -716,3 +716,39 @@ to these leads retroactively when Phase 3 lands — whoever builds it must decid
 emit-time write also backfills outcomes for pre-existing hand-picked outbound leads, or the
 model simply doesn't see them until they are re-emitted. Left to Phase 3, where the emit
 machinery gives the question a concrete shape.
+
+---
+
+## 2026-08-07 — Phase 3 is sliced, the heatmap renderer ships first, no map background in v1
+
+Phase 3 (reporting-layer-spec) is ~six discrete pieces: the heatmap renderer, the call hook, the
+`outcome`/`touch` tables + emit webhook, the approval gate + audit PDF, signed-URL sharing/R2, and
+client views/RLS. It ships as **separate reviewable draft PRs, renderer first**, rather than one
+Phase-3 PR — matching how every prior phase here was merged, and letting each paid-data-dependent
+piece land after the first scan makes its behaviour observable.
+
+**Why the renderer first.** It is spec §4's "only genuinely new component" and the keystone the
+audit PDF, the delta view and the client report all render through. It is also the one piece that
+is fully **deterministic** and therefore golden-fixture testable with no live data, no provider
+call and no money — so it is buildable and provable in parallel with the owner's first scan, and
+is *ready* the instant that scan's rollup writes `prospect_coverage`. The emit webhook, `outcome`
+table and approval gate all want real scanned prospects to be validated against, so they wait.
+
+**No map background in v1.** Spec §4.5 makes a map background the DEFAULT for prospect-facing
+renders, but the tile provider is an OPEN decision (spec §8 — the blocker is licensing, not cost),
+and §4.5 itself requires tile-fetch failure to fall back to the no-background render. So the
+no-background point layer is a correct shippable starting point, not a shortcut: the tile layer
+slots in behind the same immutable geometry later without touching the point layer or the render
+determinism. Internal/operator renders default to no background anyway (§4.5), so this half is
+final regardless.
+
+**Determinism is enforced, not hoped for.** The renderer has no `now()`, no element ids, no random
+values, sorted point_seq iteration and fixed-precision coordinates (sign-of-zero normalised). A
+unit test renders the same inputs twice and asserts byte-identical output and identical
+`content_hash`; another asserts input reordering does not change the hash. `report_artifact` has a
+unique index on `content_hash`, so re-rendering identical inputs is a no-op upsert — the spec §6
+cache contract made structural.
+
+The one spec gap hit — no colour band for a rank past position 20 — was resolved the
+cheapest-to-reverse way (fold into "found, far down", never red) and logged as I-089 rather than
+resolved in the spec. The deferred `score_run_id` FK is I-090.

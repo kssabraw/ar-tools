@@ -101,6 +101,11 @@ class Settings(BaseSettings):
     # for a smoke test and unwise for a real market run. Moves to R2 in Phase 2 (ISSUES I-024).
     raw_landing_dir: str | None = None
 
+    # Where the `render-heatmap` command writes rendered SVGs, keyed by content_hash. Local-disk
+    # for now; R2 + signed prospect URLs are a later Phase 3 slice (reporting §5). Defaults to a
+    # working dir so a render never fails for want of a configured path.
+    artifact_dir: str = "artifacts"
+
     # --- DataForSEO ----------------------------------------------------------------------
     # The independent second opinion for I-041, and the sole provider for Phase 2 scanning.
     # Set on Railway as REFERENCE variables (${{PLATFORM.DATAFORSEO_LOGIN}}) rather than copies,

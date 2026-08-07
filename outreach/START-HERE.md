@@ -148,9 +148,15 @@ is needed for inspection.
 
 **Goal: a real conversation with a real prospect.** This is the first phase that produces revenue.
 
-- [ ] Heatmap renders from `prospect_coverage.rank_vector` + geometry alone
-- [ ] Dead points visually distinct from "not found"; legend and scale bar present
-- [ ] Renderer deterministic — identical inputs produce identical `content_hash`
+- [x] Heatmap renders from `prospect_coverage.rank_vector` + geometry alone
+      (`api/services/heatmap.py`, 2026-08-07. Regenerates coordinates through the pinned generator
+      using the snapshot's STORED `geometry_version`; no `grid_result` touched. `report_artifact`
+      provenance table, migration `20260807130000`.)
+- [x] Dead points visually distinct from "not found"; legend and scale bar present
+      (dead = hollow grey ring, not-found = solid red disc; business = diamond pin; 1-mile bar.)
+- [x] Renderer deterministic — identical inputs produce identical `content_hash`
+      (no `now()`/ids/random; sorted iteration; fixed-precision coords. Pinned by
+      `tests/test_heatmap.py`; unique index on `report_artifact.content_hash` = the §6 cache.)
 - [ ] Audit PDF assembled; generation gated on explicit approval, never on cycle completion
 - [ ] Send-time LLM verification runs at generation for any engine-specific claim
 - [ ] Call hook rendered from persisted evidence
