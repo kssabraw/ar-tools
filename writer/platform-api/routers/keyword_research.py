@@ -113,6 +113,29 @@ async def start_research(
     return {"job_id": job_id, "seeds": seeds}
 
 
+class RemoveSeedRequest(BaseModel):
+    seed: str
+
+
+@router.post("/clients/{client_id}/keyword-research/runs/{run_id}/remove-seed")
+async def remove_seed(
+    client_id: UUID, run_id: UUID, body: RemoveSeedRequest,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Remove one seed from a multi-seed run and delete the keywords it solely
+    produced (keywords also from another seed are kept). The run must keep at
+    least two seeds. Returns the updated {seeds, removed_keywords, keyword_count,
+    cluster_count}."""
+    try:
+        return keyword_research.remove_seed(str(client_id), str(run_id), body.seed)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("keyword_research_remove_seed_failed",
+                     extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
 class ToSchedulerRequest(BaseModel):
     keywords: list[str]
 

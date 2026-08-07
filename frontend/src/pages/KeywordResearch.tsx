@@ -158,6 +158,26 @@ export function KeywordResearch() {
     },
   })
 
+  // Remove one seed (and the keywords it solely produced) from the open run.
+  const removeSeed = useMutation({
+    mutationFn: (seed: string) =>
+      api.post<{ seeds: string[]; removed_keywords: number }>(
+        `/clients/${id}/keyword-research/runs/${runId}/remove-seed`, { seed }),
+    onSuccess: () => {
+      setActiveCluster(null)
+      queryClient.invalidateQueries({ queryKey: ['keyword-research-run', id, runId] })
+      queryClient.invalidateQueries({ queryKey: ['keyword-research', id] })
+    },
+  })
+  // Append every listed keyword to the seed box (dedup-aware) — used to promote
+  // People Also Ask questions into seeds for a follow-up run.
+  const addSeeds = (kws: string[]) => setSeeds((prev) => {
+    const have = new Set(prev.split(/[\n,]+/).map((s) => s.trim().toLowerCase()).filter(Boolean))
+    const fresh = kws.filter((k) => { const key = k.trim().toLowerCase(); if (have.has(key)) return false; have.add(key); return true })
+    if (!fresh.length) return prev
+    return prev.trim() ? `${prev.trim()}\n${fresh.join('\n')}` : fresh.join('\n')
+  })
+
   const { data: jobStatus } = useQuery<{ status: string; error?: string; result?: { run_id?: string } }>({
     queryKey: ['keyword-research-job', id, job],
     queryFn: () => api.get(`/clients/${id}/keyword-research/jobs/${job}`),
@@ -384,6 +404,37 @@ export function KeywordResearch() {
             </div>
           )}
 
+          {/* Seeds in this run — removable when the run has more than 2 seeds */}
+          {(runData?.run?.seeds?.length ?? 0) > 1 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 16 }}>
+              <span style={{ fontSize: 12, color: '#94a3b8', marginRight: 2 }}>Seeds:</span>
+              {(runData!.run!.seeds ?? []).map((s) => {
+                const canRemove = (runData!.run!.seeds?.length ?? 0) > 2
+                return (
+                  <span key={s} style={seedChip}>
+                    {s}
+                    {canRemove && (
+                      <button
+                        style={seedRemoveBtn}
+                        title={`Remove "${s}" and the keywords only it produced`}
+                        disabled={removeSeed.isPending}
+                        onClick={() => {
+                          if (window.confirm(`Remove seed "${s}" and the keywords only it produced from this run?`)) {
+                            removeSeed.mutate(s)
+                          }
+                        }}
+                      >×</button>
+                    )}
+                  </span>
+                )
+              })}
+              {(runData!.run!.seeds?.length ?? 0) > 2 && (
+                <span style={{ fontSize: 11, color: '#cbd5e1' }}>· click × to drop a seed (keeps ≥2)</span>
+              )}
+            </div>
+          )}
+          {removeSeed.isError && <div style={errBox}>{((removeSeed.error as Error)?.message === 'min_two_seeds') ? 'A run must keep at least two seeds.' : (removeSeed.error as Error)?.message ?? 'Could not remove that seed.'}</div>}
+
           {/* Competitive intelligence + People Also Ask (SERP enrichment) */}
           {serpIntel?.enabled && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12, marginBottom: 16 }}>
@@ -417,7 +468,13 @@ export function KeywordResearch() {
               {/* People Also Ask */}
               {serpIntel.paa.length > 0 && (
                 <div style={intelCard}>
-                  <div style={intelHead}><MessageCircleQuestion size={14} /> People Also Ask ({serpIntel.paa.length})</div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                    <div style={intelHead}><MessageCircleQuestion size={14} /> People Also Ask ({serpIntel.paa.length})</div>
+                    <button style={{ ...linkBtn, display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                      onClick={() => addSeeds(serpIntel.paa)} title="Add every question to the seed box for a follow-up run">
+                      <Plus size={12} /> Add all as seeds
+                    </button>
+                  </div>
                   <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
                     Questions Google shows for your seeds — also included in the keyword table below.
                   </div>
@@ -567,6 +624,8 @@ const chip: React.CSSProperties = { padding: '5px 12px', background: '#f1f5f9', 
 const chipActive: React.CSSProperties = { background: '#dbeafe', color: '#1d4ed8', borderColor: '#93c5fd' }
 const clusterChip: React.CSSProperties = { padding: '5px 12px', background: '#fff', color: '#475569', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 12, cursor: 'pointer' }
 const suggestChip: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '5px 10px', background: '#fff', color: '#0369a1', border: '1px solid #bae6fd', borderRadius: 999, fontSize: 12, fontWeight: 500, cursor: 'pointer' }
+const seedChip: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px 4px 12px', background: '#eef2ff', color: '#3730a3', border: '1px solid #c7d2fe', borderRadius: 999, fontSize: 12, fontWeight: 500 }
+const seedRemoveBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, marginLeft: 2, padding: 0, background: 'transparent', color: '#6366f1', border: 'none', borderRadius: 999, fontSize: 14, lineHeight: 1, cursor: 'pointer' }
 const intelCard: React.CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 10, padding: '12px 14px', background: '#fff' }
 const intelHead: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: '#334155', marginBottom: 4 }
 const clusterChipActive: React.CSSProperties = { background: '#eff6ff', color: '#1d4ed8', borderColor: '#93c5fd', fontWeight: 600 }

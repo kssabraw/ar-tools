@@ -576,13 +576,15 @@ async def _fetch_serp_intel(
     location_code: Optional[int],
     language_code: Optional[str],
     client_domain: Optional[str],
-) -> tuple[list[str], dict, float]:
+) -> tuple[list[tuple[str, str]], dict, float]:
     """SERP-enrichment pass: for the first N seeds, one live Google SERP call each
     → PAA questions + competitive landscape (top organic domains + AIO sources).
 
     Reuses serp_snapshot's fetch + parsers so there's one SERP parser in the
-    suite. Returns (paa_questions, serp_intel_blob, cost). Best-effort — a failed
-    seed is skipped; an all-empty pass returns ([], {}, cost)."""
+    suite. Returns (paa_pairs, serp_intel_blob, cost) where paa_pairs is a list of
+    (question, seed) across the analyzed seeds — the caller dedupes for folding
+    and uses the seed for per-keyword attribution. Best-effort — a failed seed is
+    skipped; an all-empty pass returns ([], {}, cost)."""
     from services import serp_snapshot
 
     seeds = seed_list[: settings.keyword_research_serp_max_seeds]
@@ -623,7 +625,8 @@ async def _fetch_serp_intel(
         analyzed, per_seed_organic, per_seed_aio, paa_lists, client_domain,
         top_competitors=settings.keyword_research_serp_top_competitors,
     )
-    return intel.get("paa") or [], intel, cost
+    paa_pairs = [(q, seed) for seed, lst in zip(analyzed, paa_lists) for q in (lst or [])]
+    return paa_pairs, intel, cost
 
 
 async def run_keyword_research(
@@ -662,10 +665,26 @@ async def run_keyword_research(
 
     cost = 0.0
 
+    # Per-keyword seed attribution: which of the run's seeds produced each keyword,
+    # so a user can later remove ONE seed and take its keywords with it (see
+    # remove_seed). A keyword can come from several seeds (the pipeline dedupes
+    # across sources), so we accumulate a SET per normalized keyword. Only the
+    # per-seed sources (suggestions / related nodes + neighbours / PAA) attribute;
+    # the batched keyword_ideas call has no per-seed origin from DataForSEO, so
+    # ideas-only keywords stay unattributed (source_seeds NULL = run-level, never
+    # removed by a single-seed removal — the safe default).
+    seed_attr: dict[str, set[str]] = {}
+
+    def _attr(kw: Optional[str], seed: str) -> None:
+        nk = normalize_keyword(kw)
+        if nk:
+            seed_attr.setdefault(nk, set()).add(seed)
+
     # SERP-enrichment pass (People Also Ask + competitive intelligence): one live
     # SERP call per analyzed seed → PAA questions folded into the keyword universe
-    # (below) and the competitor/AIO landscape persisted as serp_intel. Best-effort
-    # — a failure leaves the run otherwise unaffected.
+    # (below, attributed to the seed whose SERP produced them) and the
+    # competitor/AIO landscape persisted as serp_intel. Best-effort — a failure
+    # leaves the run otherwise unaffected.
     serp_paa: list[str] = []
     serp_intel: dict = {}
     if use_serp:
@@ -675,27 +694,39 @@ async def run_keyword_research(
             if website:
                 from services.dataforseo_rank import extract_domain
                 client_domain = extract_domain(website) or None
-            serp_paa, serp_intel, serp_cost = await _fetch_serp_intel(
+            serp_paa_pairs, serp_intel, serp_cost = await _fetch_serp_intel(
                 seed_list, location_code, language_code, client_domain)
             cost += serp_cost or 0.0
+            # Attribute each PAA question to its seed; build the flat unique list
+            # (order-preserving) that folds into the neighbour-enrichment path.
+            _seen_paa: set[str] = set()
+            for q, s in serp_paa_pairs:
+                _attr(q, s)
+                nk = normalize_keyword(q)
+                if nk and nk not in _seen_paa:
+                    _seen_paa.add(nk)
+                    serp_paa.append(q)
         except Exception as exc:  # noqa: BLE001 — enrichment is best-effort
             logger.warning("keyword_research.serp_enrichment_failed",
                            extra={"client_id": client_id, "error": str(exc)})
 
     async def _gather_per_seed(fetch, label):
-        """Run a per-seed fetch across all seeds concurrently; collect rows + cost."""
+        """Run a per-seed fetch across all seeds concurrently; collect rows + cost,
+        attributing each row to the seed that produced it (gather preserves order)."""
         nonlocal cost
         out: list[dict] = []
         results = await asyncio.gather(
             *[fetch(s) for s in seed_list], return_exceptions=True
         )
-        for res in results:
+        for s, res in zip(seed_list, results):
             if isinstance(res, Exception):
                 logger.warning(f"keyword_research.{label}_failed",
                                extra={"client_id": client_id, "error": str(res)})
                 continue
             rows_i, cost_i = res
-            out.extend(rows_i)
+            for r in rows_i:
+                out.append(r)
+                _attr(r.get("keyword"), s)
             cost += cost_i or 0.0
         return out
 
@@ -725,7 +756,7 @@ async def run_keyword_research(
                 limit=settings.keyword_research_related_limit,
             ) for s in seed_list
         ], return_exceptions=True)
-        for res in results:
+        for s, res in zip(seed_list, results):
             if isinstance(res, Exception):
                 logger.warning("keyword_research.related_failed",
                                extra={"client_id": client_id, "error": str(res)})
@@ -733,6 +764,10 @@ async def run_keyword_research(
             node_rows, neighbors, cost_i = res
             related_rows += node_rows
             related_neighbors += neighbors
+            for r in node_rows:
+                _attr(r.get("keyword"), s)
+            for nb in neighbors:
+                _attr(nb, s)
             cost += cost_i or 0.0
 
     # People Also Ask questions (from the SERP pass) enter the keyword universe
@@ -852,6 +887,7 @@ async def run_keyword_research(
         "search_intent": r.get("search_intent"),
         "is_question": r.get("is_question"),
         "opportunity_score": r.get("opportunity_score"),
+        "source_seeds": sorted(seed_attr.get(normalize_keyword(r["keyword"]), set())) or None,
     } for r in rows]
     for group in dataforseo_labs.chunk(child, 500):
         if group:
@@ -862,6 +898,86 @@ async def run_keyword_research(
         "run_id": run["id"], "keyword_count": len(rows),
         "cluster_count": len(clusters), "cost_usd": round(cost or 0.0, 4),
         "warnings": warnings,
+    }
+
+
+_MIN_SEEDS_TO_REMOVE = 2  # a run must keep at least this many seeds (owner rule)
+
+
+def remove_seed(client_id: str, run_id: str, seed: str) -> dict:
+    """Remove ONE seed from a multi-seed run and take its keywords with it, with
+    no re-run / re-bill.
+
+    A keyword is deleted only when the removed seed was its SOLE source (its
+    source_seeds becomes empty); a keyword also produced by another seed keeps
+    that attribution and stays. Keywords with no attribution (NULL source_seeds —
+    the batched keyword_ideas source, or pre-migration rows) are never touched.
+    The run's seeds array and rollup counts are recomputed.
+
+    Guards: the run must exist for this client and must have MORE than
+    _MIN_SEEDS_TO_REMOVE seeds (so a removal always leaves at least two). Returns
+    {seeds, removed_keywords, keyword_count, cluster_count}."""
+    supabase = get_supabase()
+    runs = (
+        supabase.table("keyword_research_runs").select("id, seeds")
+        .eq("id", run_id).eq("client_id", client_id).limit(1).execute()
+    ).data
+    if not runs:
+        raise ValueError("run_not_found")
+    seeds = list(runs[0].get("seeds") or [])
+    if len(seeds) <= _MIN_SEEDS_TO_REMOVE:
+        raise ValueError("min_two_seeds")
+
+    target = (seed or "").strip().lower()
+    match = next((s for s in seeds if (s or "").strip().lower() == target), None)
+    if match is None:
+        raise ValueError("seed_not_found")
+
+    kws = (
+        supabase.table("keyword_research_keywords")
+        .select("id, source_seeds, cluster_label")
+        .eq("run_id", run_id).execute()
+    ).data or []
+
+    to_delete: list[str] = []
+    to_trim: list[tuple[str, list[str]]] = []
+    for k in kws:
+        srcs = k.get("source_seeds")
+        if not srcs:
+            continue  # unattributed (ideas / legacy) → never removed by a seed removal
+        if not any((x or "").strip().lower() == target for x in srcs):
+            continue  # not from this seed
+        remaining = [x for x in srcs if (x or "").strip().lower() != target]
+        if remaining:
+            to_trim.append((k["id"], remaining))
+        else:
+            to_delete.append(k["id"])
+
+    for group in dataforseo_labs.chunk(to_delete, 200):
+        if group:
+            supabase.table("keyword_research_keywords").delete().in_("id", group).execute()
+    for kid, remaining in to_trim:
+        supabase.table("keyword_research_keywords").update(
+            {"source_seeds": remaining}).eq("id", kid).execute()
+
+    new_seeds = [s for s in seeds if (s or "").strip().lower() != target]
+    remaining_rows = (
+        supabase.table("keyword_research_keywords").select("cluster_label")
+        .eq("run_id", run_id).execute()
+    ).data or []
+    keyword_count = len(remaining_rows)
+    cluster_count = len({(r.get("cluster_label") or "other") for r in remaining_rows})
+    supabase.table("keyword_research_runs").update({
+        "seeds": new_seeds,
+        "keyword_count": keyword_count,
+        "cluster_count": cluster_count,
+    }).eq("id", run_id).execute()
+
+    return {
+        "seeds": new_seeds,
+        "removed_keywords": len(to_delete),
+        "keyword_count": keyword_count,
+        "cluster_count": cluster_count,
     }
 
 
