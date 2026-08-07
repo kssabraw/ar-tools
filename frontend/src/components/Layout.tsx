@@ -4,7 +4,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { NotificationBell } from './NotificationBell'
-import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, ListTodo, Menu, X, Radar, Crosshair, Loader2, ShieldCheck, Globe, Globe2 } from 'lucide-react'
+import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, ListTodo, Menu, X, Radar, Crosshair, Loader2, ShieldCheck, Globe, Globe2, CalendarDays } from 'lucide-react'
 
 interface NavItem {
   label: string
@@ -17,6 +17,7 @@ const nav: NavItem[] = [
   { label: 'Runs', to: '/runs', icon: <LayoutDashboard size={18} /> },
   { label: 'Articles', to: '/articles', icon: <BookOpen size={18} /> },
   { label: 'Silos', to: '/silos', icon: <Layers size={18} /> },
+  { label: 'Content Calendar', to: '/content-calendar', icon: <CalendarDays size={18} /> },
   { label: 'Clients', to: '/clients', icon: <Users size={18} /> },
   { label: 'LeadOff', to: '/leadoff', icon: <Radar size={18} /> },
   { label: 'Outreach', to: '/outreach', icon: <Crosshair size={18} /> },

@@ -1,11 +1,13 @@
+import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, CalendarDays, List } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import { backLink } from '../components/localseo/shared'
 import { ScheduleBatch } from '../components/scheduler/ScheduleBatch'
 import { ScheduledContent } from '../components/scheduler/ScheduledContent'
+import { ContentCalendar } from '../components/scheduler/ContentCalendar'
 
 // The suite Content Scheduler: paste/upload a keyword list, choose a page type
 // (blog / service / location / local SEO / ecommerce), then create every page now
@@ -15,6 +17,7 @@ import { ScheduledContent } from '../components/scheduler/ScheduledContent'
 
 export function ContentScheduler() {
   const { id } = useParams<{ id: string }>()
+  const [view, setView] = useState<'list' | 'calendar'>('list')
   const { data: client } = useQuery<Client>({
     queryKey: ['client', id],
     queryFn: () => api.get<Client>(`/clients/${id}`),
@@ -40,10 +43,30 @@ export function ContentScheduler() {
 
       <ScheduleBatch clientId={id} githubReady={Boolean(client?.github_repo)} />
 
-      <h2 style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', margin: '28px 0 12px' }}>
-        Scheduled content
-      </h2>
-      <ScheduledContent clientId={id} />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '28px 0 12px', gap: 12 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', margin: 0 }}>
+          Scheduled content
+        </h2>
+        <div style={{ display: 'inline-flex', border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' }}>
+          {([['list', 'List', <List size={14} key="l" />], ['calendar', 'Calendar', <CalendarDays size={14} key="c" />]] as const).map(([v, label, icon]) => (
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px',
+                border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                background: view === v ? '#eef2ff' : '#fff',
+                color: view === v ? '#4338ca' : '#64748b',
+              }}
+            >
+              {icon} {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {view === 'list'
+        ? <ScheduledContent clientId={id} />
+        : <ContentCalendar scope="client" clientId={id} />}
     </div>
   )
 }

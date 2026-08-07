@@ -132,6 +132,28 @@ export interface ScheduledContentItem {
   progress: BatchProgress
 }
 
+// One flattened, concrete-dated scheduled content item — the calendar row shape.
+// `scheduled_at` is the day/time this piece of content is set to generate.
+export interface CalendarItem {
+  source: 'content_scheduler' | 'fanout'
+  parent_id: string | null
+  item_id: string
+  client_id: string | null
+  client_name?: string | null
+  content_type: string
+  mode?: string | null
+  label: string
+  location?: string | null
+  scheduled_at: string | null
+  status: ItemStatus
+}
+
+export interface CalendarResponse {
+  items: CalendarItem[]
+  start: string
+  end: string
+}
+
 export const schedulerApi = {
   estimate: (clientId: string, body: EstimateBody) =>
     api.post<EstimateResponse>(`/clients/${clientId}/content-batches/estimate`, body),
@@ -143,6 +165,11 @@ export const schedulerApi = {
     api.get<ContentBatchDetail>(`/clients/${clientId}/content-batches/${batchId}`),
   scheduledContent: (clientId: string) =>
     api.get<{ items: ScheduledContentItem[] }>(`/clients/${clientId}/scheduled-content`),
+  clientCalendar: (clientId: string, start: string, end: string) =>
+    api.get<CalendarResponse>(
+      `/clients/${clientId}/content-calendar?start=${start}&end=${end}`),
+  agencyCalendar: (start: string, end: string) =>
+    api.get<CalendarResponse>(`/content-calendar?start=${start}&end=${end}`),
   pauseBatch: (clientId: string, batchId: string) =>
     api.post<{ status: string }>(`/clients/${clientId}/content-batches/${batchId}/pause`, {}),
   resumeBatch: (clientId: string, batchId: string) =>

@@ -11,11 +11,11 @@ shared scheduler when each item comes due.
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from config import settings
 from db.supabase_client import get_supabase
@@ -26,7 +26,12 @@ from models.content_batch import (
     ContentBatchEstimateRequest,
     ContentBatchEstimateResponse,
 )
-from services import content_batch, content_schedule_feed, content_schedule_store as store
+from services import (
+    content_batch,
+    content_calendar,
+    content_schedule_feed,
+    content_schedule_store as store,
+)
 from services.freeze import assert_not_frozen
 
 router = APIRouter(tags=["content-scheduler"])
@@ -178,6 +183,47 @@ async def scheduled_content(client_id: UUID, auth: dict = Depends(require_auth))
     suite Content Scheduler batches + client-linked Fanout schedules, normalized
     and newest-first. Read-only; the Fanout half degrades to empty on any error."""
     return {"items": content_schedule_feed.unified_feed(str(client_id))}
+
+
+@router.get("/clients/{client_id}/content-calendar")
+async def client_content_calendar(
+    client_id: UUID,
+    start: Optional[str] = Query(None, description="Window start (YYYY-MM-DD)"),
+    end: Optional[str] = Query(None, description="Window end (YYYY-MM-DD)"),
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """One flattened row per scheduled content item for this client in the
+    [start, end] window — suite Content Scheduler items + the client's Fanout runs,
+    each with a concrete `scheduled_at` — for the workspace's day-by-day calendar.
+    Read-only; the Fanout half degrades to empty on any error."""
+    start_iso, end_iso = content_calendar.resolve_range(
+        start, end, now=datetime.now(timezone.utc)
+    )
+    return {
+        "items": content_calendar.client_calendar(str(client_id), start_iso, end_iso),
+        "start": start_iso,
+        "end": end_iso,
+    }
+
+
+@router.get("/content-calendar")
+async def agency_content_calendar(
+    start: Optional[str] = Query(None, description="Window start (YYYY-MM-DD)"),
+    end: Optional[str] = Query(None, description="Window end (YYYY-MM-DD)"),
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """The agency-wide content calendar: one flattened row per scheduled item
+    across ALL clients in the [start, end] window (suite batches + every
+    client-linked Fanout run), each row carrying its client's id + name. Feeds the
+    sidebar Content Calendar page. Read-only."""
+    start_iso, end_iso = content_calendar.resolve_range(
+        start, end, now=datetime.now(timezone.utc)
+    )
+    return {
+        "items": content_calendar.agency_calendar(start_iso, end_iso),
+        "start": start_iso,
+        "end": end_iso,
+    }
 
 
 @router.get("/clients/{client_id}/content-batches")
