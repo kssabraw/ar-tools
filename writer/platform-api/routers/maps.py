@@ -15,6 +15,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
+from config import settings
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth, require_staff
 from models.maps import (
@@ -67,7 +68,7 @@ router = APIRouter(tags=["maps"])
 
 _CONFIG_FIELDS = (
     "client_id", "google_place_id", "business_name", "center_lat", "center_lng",
-    "radius_miles", "shape", "resource_category", "serp_device", "cadence",
+    "radius_miles", "shape", "resource_category", "serp_device", "provider", "cadence",
     "weekday", "scan_hour", "active", "last_scanned_at",
 )
 
@@ -110,6 +111,7 @@ async def get_config(client_id: UUID, auth: dict = Depends(require_auth)) -> Map
         row = existing[0]
         return MapsConfig(
             **{k: row.get(k) for k in _CONFIG_FIELDS},
+            provider_default=settings.maps_scan_provider,
             timezone=_config_timezone(client_id, row.get("center_lat"), row.get("center_lng")),
             configured=True,
         )
@@ -127,6 +129,7 @@ async def get_config(client_id: UUID, auth: dict = Depends(require_auth)) -> Map
         business_name=c.get("name"),
         center_lat=lat,
         center_lng=lng,
+        provider_default=settings.maps_scan_provider,
         timezone=_config_timezone(client_id, lat, lng),
         configured=False,
     )
@@ -146,6 +149,7 @@ async def put_config(
     ).data[0]
     return MapsConfig(
         **{k: row.get(k) for k in _CONFIG_FIELDS},
+        provider_default=settings.maps_scan_provider,
         timezone=_config_timezone(client_id, row.get("center_lat"), row.get("center_lng")),
         configured=True,
     )

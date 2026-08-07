@@ -622,6 +622,8 @@ export interface MapsConfig {
   shape: 'circle' | 'square'
   resource_category: 'googleMaps' | 'googleLocalFinder'
   serp_device: 'desktop' | 'mobile' | 'both'
+  provider: 'local_dominator' | 'dataforseo' | null
+  provider_default: string | null
   cadence: 'off' | 'weekly'
   weekday: number
   scan_hour: number

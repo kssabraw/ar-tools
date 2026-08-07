@@ -616,6 +616,7 @@ function Setup({ clientId }: { clientId: string }) {
       radius_miles: form.radius_miles ?? 5,
       resource_category: form.resource_category ?? 'googleMaps',
       serp_device: form.serp_device ?? 'desktop',
+      provider: form.provider ?? config?.provider_default ?? 'local_dominator',
       cadence: form.cadence ?? 'weekly',
       weekday: form.weekday ?? 1,
       scan_hour: form.scan_hour ?? 8,
@@ -692,6 +693,16 @@ function Setup({ clientId }: { clientId: string }) {
             <select style={input} value={form.resource_category ?? 'googleMaps'} onChange={e => set({ resource_category: e.target.value as MapsConfig['resource_category'] })}>
               <option value="googleMaps">Google Maps</option>
               <option value="googleLocalFinder">Local Finder (local pack)</option>
+            </select>
+          </Field>
+          <Field label="Data source">
+            <select
+              style={input}
+              value={form.provider ?? config?.provider_default ?? 'local_dominator'}
+              onChange={e => set({ provider: e.target.value as NonNullable<MapsConfig['provider']> })}
+            >
+              <option value="local_dominator">Local Dominator</option>
+              <option value="dataforseo">DataForSEO</option>
             </select>
           </Field>
           <Field label="Schedule">
