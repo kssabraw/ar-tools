@@ -77,3 +77,94 @@ def test_render_markdown_dataforseo_mode_drops_gsc_columns():
     md = render_report_markdown(snap)
     assert "| Keyword | Status | Today |" in md
     assert "Clicks (30d)" not in md
+
+
+# ── Doc publishing: html-format contract (regression) ───────────────────────
+# publish_report_doc posted markdown to the Apps Script webhook, which silently
+# failed on the live deployment (doc_url null on every rank_report). It now
+# renders to HTML and sends format="html". This pins that contract.
+import json  # noqa: E402
+
+import pytest  # noqa: E402
+
+from services import rank_report as rr  # noqa: E402
+
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._p = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._p
+
+
+class _FakeHttp:
+    def __init__(self, capture, payload):
+        self._capture = capture
+        self._payload = payload
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def post(self, url, json=None):
+        self._capture["url"] = url
+        self._capture["body"] = json
+        return _FakeResp(self._payload)
+
+
+class _FakeTable:
+    def __init__(self, store, name):
+        self._store, self._name = store, name
+
+    def select(self, *a, **k):
+        return self
+
+    def update(self, patch):
+        self._store["updated"] = patch
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def single(self):
+        return self
+
+    def execute(self):
+        if self._name == "clients":
+            return type("R", (), {"data": {"name": "Acme", "google_drive_folder_id": "fold1"}})()
+        return type("R", (), {"data": [{}]})()
+
+
+class _FakeSupabase:
+    def __init__(self, store):
+        self._store = store
+
+    def table(self, name):
+        return _FakeTable(self._store, name)
+
+
+async def test_publish_report_doc_sends_html(monkeypatch):
+    capture, store = {}, {}
+    monkeypatch.setattr(rr.settings, "google_apps_script_url", "https://script.example/exec")
+    monkeypatch.setattr(rr, "render_report_markdown", lambda snap: "# Title\n\n**Bold** and a list:\n\n- one\n- two")
+
+    def _factory(*a, **k):
+        return _FakeHttp(capture, {"success": True, "doc_id": "d1", "doc_url": "https://docs/d1"})
+
+    monkeypatch.setattr(rr.httpx, "AsyncClient", _factory)
+
+    report = {"id": "r1", "client_id": "c1", "title": "Monthly Report", "snapshot": {}}
+    out = await rr.publish_report_doc(_FakeSupabase(store), report)
+
+    assert out == {"doc_id": "d1", "doc_url": "https://docs/d1"}
+    assert capture["body"]["format"] == "html"              # the fix
+    assert "<strong>Bold</strong>" in capture["body"]["content"]
+    assert "<ul>" in capture["body"]["content"]
+    assert "**Bold**" not in capture["body"]["content"]     # no raw markdown
+    assert store["updated"]["doc_url"] == "https://docs/d1"  # persisted

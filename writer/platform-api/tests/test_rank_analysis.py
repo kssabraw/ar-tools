@@ -166,3 +166,29 @@ def test_work_order_topical_opening():
         _traj(6), {}, comps, {"client_topical_focus": "specialist"}, False, [], 6, 1, None,
     )
     assert any(i["type"] == "topical_opening" for i in order)
+
+
+# ── Doc publishing: html-format contract (regression) ───────────────────────
+# The per-keyword Organic Rank Analysis Doc published markdown, which silently
+# failed on the live Apps Script deployment. It now renders to HTML + format=html.
+from services import rank_analysis_report as rar  # noqa: E402
+
+
+async def test_rank_analysis_publish_doc_sends_html(monkeypatch):
+    captured = {}
+
+    async def _fake_create(folder_id, title, content, *, content_format="markdown", share="private"):
+        captured.update(content=content, content_format=content_format, title=title)
+        return {"doc_url": "https://docs/x"}
+
+    monkeypatch.setattr(rar, "create_google_doc", _fake_create)
+    monkeypatch.setattr(rar.settings, "google_apps_script_url", "https://script.example/exec")
+
+    client = {"google_drive_folder_id": "f1", "name": "Acme"}
+    url = await rar._maybe_publish_doc(
+        client, "roof repair", "# Analysis\n\n**Climbing** three spots.", [], None,
+    )
+    assert url == "https://docs/x"
+    assert captured["content_format"] == "html"
+    assert "<strong>Climbing</strong>" in captured["content"]
+    assert "**Climbing**" not in captured["content"]

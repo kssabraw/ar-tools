@@ -20,6 +20,7 @@ import httpx
 from config import settings
 from db.supabase_client import get_supabase
 from services import dataforseo_rank, keyword_market, rank_status
+from services.markdown_html import markdown_to_html
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +229,14 @@ async def publish_report_doc(supabase, report: dict) -> dict:
         raise RuntimeError("missing_google_drive_folder_id")
 
     markdown = render_report_markdown(report["snapshot"])
-    body = {"folder_id": folder_id, "title": report["title"], "content": markdown}
+    # Publish as HTML: the live Apps Script deployment only creates Docs on the
+    # html path (markdown-format publishes have silently failed for every report).
+    body = {
+        "folder_id": folder_id,
+        "title": report["title"],
+        "content": markdown_to_html(markdown),
+        "format": "html",
+    }
     async with httpx.AsyncClient(timeout=60, follow_redirects=True) as http:
         resp = await http.post(settings.google_apps_script_url, json=body)
         resp.raise_for_status()
