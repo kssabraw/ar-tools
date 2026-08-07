@@ -29,6 +29,7 @@ from services.local_seo_silo import run_silo_plan_job
 from services import ecommerce_service
 from services.rank_location import run_rank_location_derive_job
 from services.service_page_plan import run_service_plan_job
+from services import service_page_score
 from services.rank_analysis_report import run_rank_keyword_report_job
 from services.rank_report import run_rank_report_job
 from services.rank_materialize import run_gsc_materialize_job
@@ -805,6 +806,10 @@ async def _process_job(job: dict) -> None:
         await ecommerce_service.run_ecommerce_action_job(job)
     elif job_type == "service_page_plan":
         await run_service_plan_job(job)
+    elif job_type == "service_page_score":
+        await service_page_score.run_score_job(job)
+    elif job_type == "service_page_reoptimize":
+        await service_page_score.run_reoptimize_job(job)
     elif job_type == "rank_location_derive":
         await run_rank_location_derive_job(job)
     elif job_type == "brand_scan":

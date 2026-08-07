@@ -3,8 +3,14 @@ import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Copy, Check, Download, ExternalLink, Ban, CheckCircle, XCircle, Loader, Gauge, Sparkles } from 'lucide-react'
 import { api } from '../lib/api'
+import { useResumableJob } from '../lib/useResumableJob'
 import type { RunDetail as RunDetailType, ServiceWriterOutput } from '../lib/types'
 import type { ScoreResult } from './localseo/types'
+
+// What the score-jobs poll endpoint returns on completion: the score (both job
+// kinds) and, for a reoptimize, the new page — both read server-side from
+// module_outputs, the authoritative store.
+type ScoreJobResult = { score?: ScoreResult | null; page?: unknown }
 
 function scoreColor(s: number) {
   return s >= 90 ? '#16a34a' : s >= 70 ? '#ca8a04' : '#dc2626'
@@ -100,23 +106,65 @@ export function ServicePageRunView({ run }: { run: RunDetailType }) {
     if (!score && persistedScore) setScore(persistedScore)
   }, [persistedScore, score])
 
-  const scoreMutation = useMutation({
-    mutationFn: () => api.stream<ScoreResult>(`/runs/${run.id}/score`, {}),
-    onSuccess: (data) => { setScore(data); setSelected(new Set()) },
+  // Score / reoptimize run as background async_jobs — the work finishes
+  // server-side even if the server restarts mid-way (a deploy) or the tab
+  // closes, and the UI reconnects on remount via the persisted job id instead
+  // of losing the operation. `opKind` drives the busy labels; seeded from the
+  // persisted job so a resumed operation keeps the right label.
+  const scoreJobKey = `svcpage:score:${run.id}`
+  const [opKind, setOpKind] = useState<'score' | 'reopt' | null>(() => {
+    try {
+      const raw = localStorage.getItem(scoreJobKey)
+      const kind = raw ? (JSON.parse(raw) as { meta?: { kind?: string } }).meta?.kind : null
+      return kind === 'score' || kind === 'reopt' ? kind : null
+    } catch {
+      return null
+    }
   })
-  const reoptMutation = useMutation({
-    mutationFn: () => {
-      const defs = (score?.deficiencies ?? []).filter(
-        (d) => selected.size === 0 || selected.has(d.engine_key),
+  const [jobError, setJobError] = useState<string | null>(null)
+  const scoreJob = useResumableJob<ScoreJobResult, { kind: 'score' | 'reopt' }>({
+    storageKey: scoreJobKey,
+    poll: async (jobId) => {
+      const r = await api.get<{ status: string; error?: string | null } & ScoreJobResult>(
+        `/runs/${run.id}/score-jobs/${jobId}`,
       )
-      return api.stream<{ score: ScoreResult }>(`/runs/${run.id}/reoptimize`, { deficiencies: defs })
+      return { status: r.status, error: r.error, result: { score: r.score, page: r.page } }
     },
-    onSuccess: (data) => {
-      if (data?.score) setScore(data.score)
+    onComplete: (result, meta) => {
+      setOpKind(null)
+      if (result?.score) setScore(result.score)
       setSelected(new Set())
-      queryClient.invalidateQueries({ queryKey: ['run', run.id] })
+      if (meta.kind === 'reopt') queryClient.invalidateQueries({ queryKey: ['run', run.id] })
+    },
+    onError: (error, meta) => {
+      setOpKind(null)
+      setJobError(
+        `${meta.kind === 'reopt' ? 'Could not reoptimize.' : 'Could not score the page.'} ${error}`,
+      )
     },
   })
+  const scoring = scoreJob.running && opKind === 'score'
+  const reoptimizing = scoreJob.running && opKind === 'reopt'
+  const startScore = () => {
+    setJobError(null)
+    setOpKind('score')
+    void scoreJob.start(
+      async () => (await api.post<{ job_id: string }>(`/runs/${run.id}/score-async`, {})).job_id,
+      { kind: 'score' },
+    )
+  }
+  const startReoptimize = () => {
+    const defs = (score?.deficiencies ?? []).filter(
+      (d) => selected.size === 0 || selected.has(d.engine_key),
+    )
+    setJobError(null)
+    setOpKind('reopt')
+    void scoreJob.start(
+      async () =>
+        (await api.post<{ job_id: string }>(`/runs/${run.id}/reoptimize-async`, { deficiencies: defs })).job_id,
+      { kind: 'reopt' },
+    )
+  }
 
   const sw = (run.module_outputs?.service_writer?.output_payload ?? null) as unknown as ServiceWriterOutput | null
   const isLive = !TERMINAL.includes(run.status)
@@ -233,23 +281,24 @@ export function ServicePageRunView({ run }: { run: RunDetailType }) {
           <div style={{ marginTop: 28, borderTop: '1px solid #e2e8f0', paddingTop: 18 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <h3 style={{ fontSize: 15, fontWeight: 700, color: '#0f172a', margin: 0 }}>Page score</h3>
-              <button type="button" onClick={() => scoreMutation.mutate()}
-                disabled={scoreMutation.isPending || reoptMutation.isPending} style={btnStyle}>
-                <Gauge size={14} /> {scoreMutation.isPending ? 'Scoring…' : score ? 'Re-score' : 'Score'}
+              <button type="button" onClick={startScore}
+                disabled={scoreJob.running} style={btnStyle}>
+                <Gauge size={14} /> {scoring ? 'Scoring…' : score ? 'Re-score' : 'Score'}
               </button>
               {score && (
-                <button type="button" onClick={() => reoptMutation.mutate()}
-                  disabled={reoptMutation.isPending || scoreMutation.isPending}
+                <button type="button" onClick={startReoptimize}
+                  disabled={scoreJob.running}
                   style={{ ...btnStyle, color: '#fff', background: '#6366f1', borderColor: '#6366f1' }}>
-                  <Sparkles size={14} /> {reoptMutation.isPending ? 'Reoptimizing…' : selected.size ? `Reoptimize (${selected.size})` : 'Reoptimize'}
+                  <Sparkles size={14} /> {reoptimizing ? 'Reoptimizing…' : selected.size ? `Reoptimize (${selected.size})` : 'Reoptimize'}
                 </button>
               )}
             </div>
-            {scoreMutation.isError && <div style={errStyle}>Could not score the page. {(scoreMutation.error as Error)?.message}</div>}
-            {reoptMutation.isError && <div style={errStyle}>Could not reoptimize. {(reoptMutation.error as Error)?.message}</div>}
-            {reoptMutation.isPending && (
+            {jobError && <div style={errStyle}>{jobError}</div>}
+            {reoptimizing && (
               <div style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>
-                Rewriting the page to fix the selected issues — this can take a minute, then it re-scores.
+                Rewriting the page to fix the selected issues — this can take a minute, then it
+                re-scores. It runs in the background, so navigating away (or a server update)
+                won&apos;t lose it.
               </div>
             )}
             {score ? (
@@ -289,7 +338,7 @@ export function ServicePageRunView({ run }: { run: RunDetailType }) {
                 )}
               </div>
             ) : (
-              !scoreMutation.isPending && (
+              !scoring && (
                 <p style={{ fontSize: 13, color: '#64748b', marginTop: 10 }}>
                   Score this page against the SEO/AEO engines ({scoreNote}) to see per-engine deficiencies, then reoptimize.
                 </p>
