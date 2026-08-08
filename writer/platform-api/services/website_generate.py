@@ -114,7 +114,12 @@ async def generate_page(*, page_id: str, user_id: str) -> dict:
 
     sites = (
         supabase.table("websites")
-        .select("id, client_id, name")
+        # Whole row, not a column list: the writers downstream read `config`
+        # (the human-entered business facts that outrank GBP) and `site_type`.
+        # A narrowed select silently handed them an empty config, so a fact a
+        # person set in the Settings tab was ignored in favour of GBP — the one
+        # thing that editor exists to prevent.
+        .select("*")
         .eq("id", page["website_id"])
         .limit(1)
         .execute()

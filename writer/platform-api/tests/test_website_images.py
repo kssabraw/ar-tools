@@ -16,7 +16,10 @@ from services import website_images as wi
 from services import website_content
 
 
-CLIENT = {"id": "c1", "name": "Acme Roofing", "brand_voice": {"tone": "warm, trustworthy"}}
+# The realistic blob shape — the structured voice is nested under current_voice,
+# not flat. A flat fixture is what let a top-level-only tone lookup look correct.
+CLIENT = {"id": "c1", "name": "Acme Roofing",
+          "brand_voice": {"current_voice": {"tone": "warm, trustworthy"}}}
 WEBSITE = {"id": "w1", "config": {"business": {"name": "Acme Roofing", "city": "Anaheim"}}}
 
 
@@ -53,6 +56,23 @@ class TestPrompt:
             business="Acme", city="Anaheim", style="S",
         )
         assert "Anaheim" not in prompt
+
+    def test_the_tone_is_read_from_where_the_blob_actually_keeps_it(self):
+        # brand_voice nests the structured voice under current_voice. Reading
+        # brand_voice["tone"] off the top level found nothing for every real
+        # client, so the tone never reached the prompt.
+        nested = {"brand_voice": {"current_voice": {"tone": "warm, plain-spoken"},
+                                  "raw_text": "..."}}
+        assert wi.brand_tone(nested) == "warm, plain-spoken"
+        assert "warm, plain-spoken" in wi.brand_style_suffix(nested)
+
+    def test_a_recommended_voice_is_used_when_there_is_no_current_one(self):
+        assert wi.brand_tone({"brand_voice": {"recommended_voice": {"tone": "bold"}}}) == "bold"
+
+    def test_a_guide_with_no_structured_tone_degrades_quietly(self):
+        # A typed freeform guide has raw_text and no tone; that is not an error.
+        assert wi.brand_tone({"brand_voice": {"raw_text": "Plain and direct."}}) == ""
+        assert wi.brand_tone({}) == ""
 
     def test_the_style_forbids_text_and_logos(self):
         # A render inventing a fake sign or garbled brand mark is the classic
