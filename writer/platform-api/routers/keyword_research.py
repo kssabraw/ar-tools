@@ -25,6 +25,7 @@ from services import (
     keyword_research_handoff,
     keyword_research_report,
     keyword_research_seeds,
+    keyword_topic_research,
 )
 
 router = APIRouter(tags=["keyword-research"])
@@ -178,6 +179,57 @@ async def create_report(
     except Exception as exc:
         logger.error("keyword_research_report_failed", extra={"client_id": str(client_id), "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.post("/clients/{client_id}/topic-research")
+async def start_topic_research(
+    client_id: UUID, body: ResearchRequest, auth: dict = Depends(require_auth)
+) -> dict:
+    """Start a problem-first Topic Research run (async): buyer problem-themes →
+    real demand (PAA + suggestions) → competitor mining → ranked topic cards.
+    Seeds are optional context (the engine works from the ICP + site themes)."""
+    try:
+        seeds = keyword_research.parse_seeds(body.seeds)
+        job_id = keyword_topic_research.enqueue_topic_research(
+            str(client_id), seeds, location_code=body.location_code,
+            language_code=body.language_code)
+        return {"job_id": job_id, "seeds": seeds}
+    except Exception as exc:
+        logger.error("topic_research_start_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.get("/clients/{client_id}/topic-research")
+async def topic_research_history(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Topic-research run history + the latest run's topic cards."""
+    try:
+        return {
+            "runs": keyword_topic_research.list_runs(str(client_id)),
+            "latest": keyword_topic_research.latest_run(str(client_id)),
+            "budget_remaining": keyword_research.budget_remaining(),
+        }
+    except Exception as exc:
+        logger.error("topic_research_history_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.get("/clients/{client_id}/topic-research/runs/{run_id}")
+async def topic_research_run(client_id: UUID, run_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """One topic-research run (its topic cards + competitors)."""
+    run = keyword_topic_research.get_run(str(client_id), str(run_id))
+    if not run:
+        raise HTTPException(status_code=404, detail="run_not_found")
+    return {"run": run}
+
+
+@router.get("/clients/{client_id}/topic-research/jobs/{job_id}")
+async def topic_research_job(client_id: UUID, job_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Poll a topic-research async job."""
+    rows = (get_supabase().table("async_jobs").select("id, status, error, result")
+            .eq("id", str(job_id)).limit(1).execute()).data
+    if not rows:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    return rows[0]
 
 
 @router.post("/clients/{client_id}/keyword-research/runs/{run_id}/blog-topics")

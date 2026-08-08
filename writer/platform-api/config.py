@@ -960,6 +960,31 @@ class Settings(BaseSettings):
     keyword_research_topic_max_tokens: int = 1500
     keyword_research_topic_count: int = 12             # blog ideas per generation
     keyword_research_topic_keyword_cap: int = 60       # buyer-fit keywords fed to the LLM
+    # Problem-first Topic Research (keyword_topic_research): start from the buyer's
+    # PROBLEMS (ICP + differentiators + the client's own site themes), validate each
+    # theme with real demand (a live SERP → People Also Ask + suggestions), and mine
+    # the top competitors' informational keywords → ranked topic cards. Paid calls
+    # per run ≈ themes×2 + competitors, budget-metered on the shared keyword_research
+    # meter. Distinct from keyword expansion (which researches the seed's variations).
+    keyword_topic_model: str = "claude-sonnet-4-6"
+    keyword_topic_max_tokens: int = 2000
+    keyword_topic_max_themes: int = 8                  # buyer problem-themes per run
+    keyword_topic_serp_depth: int = 20                 # SERP depth per theme (PAA + organic)
+    keyword_topic_serp_top: int = 10                   # top organic results kept per theme
+    keyword_topic_suggestion_limit: int = 200          # suggestions fetched per theme
+    keyword_topic_max_competitors: int = 3             # competitor domains mined
+    keyword_topic_competitor_kw_limit: int = 300       # ranked keywords pulled per competitor
+    keyword_topic_competitor_sample: int = 15          # informational competitor kws kept
+    # Strategist-grade Topic Research (keyword_topic_strategist): a bounded tool-use
+    # reasoning loop that grounds the plan on the agency content SOPs (Seed Keyword /
+    # On-Page Coverage / AEO / Site Architecture) + the client's REAL position (from
+    # the shared context providers) and emits a topical-authority plan (pillars →
+    # clusters). Falls back to the deterministic topic cards when disabled/unavailable.
+    keyword_topic_strategist_enabled: bool = True
+    keyword_topic_strategist_max_tokens: int = 4000
+    keyword_topic_max_drilldowns: int = 4              # investigation tool calls per run
+    keyword_topic_sop_char_budget: int = 16000         # SOP grounding block size
+    keyword_topic_context_char_budget: int = 12000     # client-position JSON size
 
     # On-site content comparison (Tier B / B5): how many competitor pages to
     # scrape per keyword, and the thresholds to flag a content gap (words thinner
