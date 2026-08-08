@@ -30,11 +30,14 @@ export function MapsReport() {
     queryKey: ['client', clientId],
     queryFn: () => api.get<Client>(`/clients/${clientId}`),
   })
+  // Unpinned, this is a client deliverable, so it shows the latest SCHEDULED
+  // scan — never a one-off the team ran to check something (scope=reporting).
+  // An explicit ?scan_id= still opens exactly that scan, one-off included.
   const { data: latest, error } = useQuery<MapsScanDetail>({
-    queryKey: scanId ? ['maps-scan', scanId] : ['maps-latest', clientId],
+    queryKey: scanId ? ['maps-scan', scanId] : ['maps-latest-reporting', clientId],
     queryFn: () => scanId
       ? api.get<MapsScanDetail>(`/maps-scans/${scanId}`)
-      : api.get<MapsScanDetail>(`/clients/${clientId}/maps/latest`),
+      : api.get<MapsScanDetail>(`/clients/${clientId}/maps/latest?scope=reporting`),
     retry: false,
   })
   const { data: trends } = useQuery<MapsTrendsResponse>({

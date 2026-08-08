@@ -16,6 +16,7 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import maps_reporting
 from services.slack_assistant.helpers import (
     build_maps_trend,
     group_maps_series,
@@ -215,10 +216,13 @@ def _ctx_organic_rank(supabase, client_id: str, today: date) -> Optional[dict]:
 
 
 def _ctx_maps(supabase, client_id: str, today: date) -> Optional[dict]:
-    """Maps geo-grid: latest scan status + per-keyword average rank / pin coverage."""
+    """Maps geo-grid: latest scheduled scan's status + per-keyword average rank /
+    pin coverage. One-off runs are excluded (services.maps_reporting) so the
+    assistant reports the campaign's series, not an ad-hoc spot check."""
     scan = (
-        supabase.table("maps_scans")
-        .select("id, status, created_at")
+        maps_reporting.only_reporting(
+            supabase.table("maps_scans").select("id, status, created_at")
+        )
         .eq("client_id", client_id)
         .order("created_at", desc=True)
         .limit(1)
@@ -256,8 +260,9 @@ def _ctx_maps(supabase, client_id: str, today: date) -> Optional[dict]:
     # the assistant can see movement, not just the latest snapshot. The full
     # series lives behind the maps_history tool; this is the at-a-glance read.
     completed = (
-        supabase.table("maps_scans")
-        .select("id, completed_at")
+        maps_reporting.only_reporting(
+            supabase.table("maps_scans").select("id, completed_at")
+        )
         .eq("client_id", client_id)
         .eq("status", "complete")
         .order("completed_at", desc=True)

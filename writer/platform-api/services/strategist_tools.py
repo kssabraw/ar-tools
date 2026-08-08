@@ -21,11 +21,13 @@ from typing import Awaitable, Callable, Optional
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import maps_reporting
 from services import sop_library
 
 logger = logging.getLogger(__name__)
 
 _LLM_TIMEOUT = 90.0
+_GEOGRID_POINTS = 8  # scheduled scans folded into one geogrid_history narration
 
 
 def _clip(text: str) -> str:
@@ -294,11 +296,14 @@ async def _run_geogrid_history(client_id: str, args: dict) -> str:
     if not keyword:
         return "geogrid_history needs a keyword."
     supabase = get_supabase()
+    # Over-fetch, then keep the newest _GEOGRID_POINTS results that belong to a
+    # SCHEDULED scan — one-off runs are excluded from reporting reads, and the
+    # results table has no trigger of its own to filter on.
     results = (
         supabase.table("maps_scan_results")
         .select("scan_id, average_rank, found_pins, total_pins, top3_pins, created_at")
         .eq("client_id", client_id).ilike("keyword", keyword)
-        .order("created_at", desc=True).limit(8).execute()
+        .order("created_at", desc=True).limit(_GEOGRID_POINTS * 2).execute()
     ).data or []
     if not results:
         return f"No geo-grid scans recorded for '{keyword}'."
@@ -310,6 +315,12 @@ async def _run_geogrid_history(client_id: str, args: dict) -> str:
             .in_("id", scan_ids).execute()
         ).data or []:
             scan_meta[s["id"]] = s
+    results = [
+        r for r in results
+        if maps_reporting.is_reporting_scan(scan_meta.get(r.get("scan_id"), {}))
+    ][:_GEOGRID_POINTS]
+    if not results:
+        return f"No scheduled geo-grid scans recorded for '{keyword}' (one-off runs are not reported on)."
     series = []
     for r in reversed(results):  # oldest → newest
         meta = scan_meta.get(r.get("scan_id"), {})

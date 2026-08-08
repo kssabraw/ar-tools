@@ -455,7 +455,9 @@ def test_run_maps_history_no_scans(monkeypatch):
     fake = _FakeSupabase({"maps_scans": [[]]})
     monkeypatch.setattr(slack_assistant.llm, "get_supabase", lambda: fake)
     out = asyncio.run(slack_assistant._run_maps_history("c1", {}))
-    assert "No completed geo-grid scans" in out
+    # "scheduled" is load-bearing: the tool reads the reporting series only, so
+    # a client with nothing but one-off runs correctly reports having none.
+    assert "No completed scheduled geo-grid scans" in out
 
 
 def test_ctx_maps_includes_trend_over_completed_scans():

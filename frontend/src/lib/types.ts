@@ -798,6 +798,8 @@ export interface MapsRunResponse {
   client_id: string
   status: string
   error: string | null
+  /** Keywords the enqueued scan will cover — all active ones unless a subset was picked. */
+  keywords?: string[] | null
 }
 
 export interface MapsTrendPoint {

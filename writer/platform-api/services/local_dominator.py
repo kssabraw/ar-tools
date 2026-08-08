@@ -30,6 +30,7 @@ import httpx
 from config import settings
 from db.supabase_client import get_supabase
 from services import maps_grid
+from services import maps_reporting
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +215,35 @@ def build_competitors_above(result_element: dict, our_place_id: Optional[str]) -
     return {"directory": directory, "grid": out_grid}
 
 
+def resolve_scan_keywords(
+    active: list[str], requested: Optional[list[str]]
+) -> tuple[list[str], list[str]]:
+    """Which keywords a scan should cover. Pure.
+
+    Returns ``(to_scan, unknown)``. ``requested`` of None/empty means the whole
+    active set (the scheduled behaviour, unchanged). A subset is matched
+    case-insensitively and returned in the client's own keyword order rather
+    than the order it was requested in, so two runs of the same subset produce
+    identically-ordered scans. Anything requested that isn't an active keyword
+    comes back in ``unknown`` for the caller to reject — silently dropping it
+    would start a narrower scan than the user asked for.
+    """
+    if not requested:
+        return list(active), []
+    by_lower = {k.strip().lower(): k for k in active}
+    wanted: set[str] = set()
+    unknown: list[str] = []
+    for raw in requested:
+        key = (raw or "").strip().lower()
+        if not key:
+            continue
+        if key in by_lower:
+            wanted.add(key)
+        elif raw not in unknown:
+            unknown.append(raw)
+    return [k for k in active if k.strip().lower() in wanted], unknown
+
+
 def build_scan_request(config: dict, keywords: list[str]) -> dict:
     """The POST /v1/scans body for a client's grid config + active keywords."""
     radius = config["radius_miles"]
@@ -296,8 +326,15 @@ def resolve_scan_provider(config: Optional[dict]) -> str:
     return provider or settings.maps_scan_provider
 
 
-async def start_client_scan(client_id: str, trigger: str = "scheduled") -> dict:
+async def start_client_scan(
+    client_id: str, trigger: str = "scheduled", keywords: Optional[list[str]] = None
+) -> dict:
     """Validate a client's grid config, POST a scan, and record it as 'polling'.
+
+    ``keywords`` (on-demand runs only) narrows the scan to a subset of the
+    client's active keywords; None scans them all. It is re-resolved here rather
+    than trusted from the job payload, so a keyword deactivated between enqueue
+    and run is dropped instead of scanned.
 
     The single provider branch point: each client picks its data source
     (maps_scan_configs.provider, falling back to the global MAPS_SCAN_PROVIDER
@@ -315,12 +352,12 @@ async def start_client_scan(client_id: str, trigger: str = "scheduled") -> dict:
 
     if resolve_scan_provider(config) == "dataforseo":
         from services import maps_dataforseo
-        return await maps_dataforseo.start_client_scan_dfs(client_id, trigger)
+        return await maps_dataforseo.start_client_scan_dfs(client_id, trigger, keywords)
 
     if not config.get("google_place_id") or config.get("center_lat") is None or config.get("center_lng") is None:
         return {"status": "failed", "error": "config_incomplete"}
 
-    keywords = [
+    active = [
         k["keyword"]
         for k in (
             supabase.table("maps_keywords")
@@ -331,6 +368,7 @@ async def start_client_scan(client_id: str, trigger: str = "scheduled") -> dict:
         ).data
         or []
     ]
+    keywords, _unknown = resolve_scan_keywords(active, keywords)
     if not keywords:
         return {"status": "failed", "error": "no_keywords"}
 
@@ -507,10 +545,15 @@ async def poll_scan(scan_row: dict) -> str:
 def enqueue_completion_hooks(scan_id: str, trigger: Optional[str] = None) -> None:
     """Enqueue the per-scan completion jobs (Local Rank Analysis report +
     scan-over-scan analyzer). Provider-agnostic; both best-effort so a failure
-    never fails the scan. Test scans (trigger='parallel_test', §7 quarantine)
-    skip both hooks — no LLM report spend, no alerts / Action Plan rebuilds from
-    throwaway comparison data."""
-    if trigger == "parallel_test":
+    never fails the scan.
+
+    Only reporting scans get the hooks. Test scans (trigger='parallel_test', §7
+    quarantine) and one-off manual runs skip both — no LLM report spend and no
+    Drive doc for a scan that isn't part of the client's record, and no alerts /
+    Action Plan rebuilds off a scan that may be a partial keyword set or a
+    just-changed grid config. The "Generate report" button still works on any
+    scan, so a one-off can be written up deliberately."""
+    if not maps_reporting.is_reporting_scan(trigger):
         return
     try:
         from services.maps_report import enqueue_maps_report
@@ -568,8 +611,13 @@ async def poll_client_scans(client_id: str) -> int:
 # ----------------------------------------------------------------------------
 # Jobs + scheduler enqueue
 # ----------------------------------------------------------------------------
-def enqueue_maps_scan(client_id: str, trigger: str = "scheduled") -> bool:
-    """Enqueue a maps_scan create job (deduped against pending/running ones)."""
+def enqueue_maps_scan(
+    client_id: str, trigger: str = "scheduled", keywords: Optional[list[str]] = None
+) -> bool:
+    """Enqueue a maps_scan create job (deduped against pending/running ones).
+
+    ``keywords`` narrows an on-demand scan to a subset of the client's active
+    keywords; None (the scheduled path) scans them all."""
     supabase = get_supabase()
     existing = (
         supabase.table("async_jobs").select("id")
@@ -578,8 +626,11 @@ def enqueue_maps_scan(client_id: str, trigger: str = "scheduled") -> bool:
     )
     if existing.data:
         return False
+    payload: dict = {"client_id": client_id, "trigger": trigger}
+    if keywords:
+        payload["keywords"] = keywords
     supabase.table("async_jobs").insert(
-        {"job_type": "maps_scan", "entity_id": client_id, "payload": {"client_id": client_id, "trigger": trigger}}
+        {"job_type": "maps_scan", "entity_id": client_id, "payload": payload}
     ).execute()
     return True
 
@@ -595,7 +646,11 @@ async def run_maps_scan_job(job: dict) -> None:
             {"status": "failed", "error": "missing client_id", "completed_at": "now()"}
         ).eq("id", job_id).execute()
         return
-    result = await start_client_scan(client_id, trigger=payload.get("trigger", "scheduled"))
+    result = await start_client_scan(
+        client_id,
+        trigger=payload.get("trigger", "scheduled"),
+        keywords=payload.get("keywords"),
+    )
     supabase.table("async_jobs").update(
         {
             "status": "complete" if result.get("status") in ("polling", "complete") else "failed",

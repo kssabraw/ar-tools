@@ -445,11 +445,17 @@ async def fetch_task_result(task_id: str) -> tuple[str, Optional[list]]:
 # ----------------------------------------------------------------------------
 # Orchestration (I/O)
 # ----------------------------------------------------------------------------
-async def start_client_scan_dfs(client_id: str, trigger: str = "scheduled") -> dict:
+async def start_client_scan_dfs(
+    client_id: str, trigger: str = "scheduled", keywords: Optional[list[str]] = None
+) -> dict:
     """Validate a client's grid config, insert the scan + its in-circle pin
     bookkeeping, and post the pin tasks. Mirrors `local_dominator.start_client_scan`
     but records provider='dataforseo'. Restart-safe: pins are inserted 'pending'
-    BEFORE posting, so a crash mid-post just leaves them for the tick to post."""
+    BEFORE posting, so a crash mid-post just leaves them for the tick to post.
+
+    ``keywords`` narrows an on-demand scan to a subset of the active set (None =
+    all), resolved by the same pure helper the Local Dominator path uses. Fewer
+    keywords means proportionally fewer pin tasks, so a subset run is cheaper."""
     supabase = get_supabase()
     config = (
         supabase.table("maps_scan_configs").select("*").eq("client_id", client_id).limit(1).execute()
@@ -460,13 +466,18 @@ async def start_client_scan_dfs(client_id: str, trigger: str = "scheduled") -> d
     if not config.get("google_place_id") or config.get("center_lat") is None or config.get("center_lng") is None:
         return {"status": "failed", "error": "config_incomplete"}
 
-    keywords = [
+    active = [
         k["keyword"]
         for k in (
             supabase.table("maps_keywords").select("keyword")
             .eq("client_id", client_id).eq("active", True).execute()
         ).data or []
     ]
+    # Local import, matching this module's convention for the local_dominator
+    # pair (it lazily imports this one to branch on provider).
+    from services.local_dominator import resolve_scan_keywords
+
+    keywords, _unknown = resolve_scan_keywords(active, keywords)
     if not keywords:
         return {"status": "failed", "error": "no_keywords"}
 

@@ -31,6 +31,7 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import maps_reporting
 
 logger = logging.getLogger(__name__)
 
@@ -518,9 +519,12 @@ def _prov_episodes(supabase, client_id: str, today: date, now: datetime) -> Opti
 
 
 def _prov_maps(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:
+    # Scheduled series only — the strategist reads this as the campaign's
+    # local-pack truth, and a one-off run is a scratchpad (services.maps_reporting).
     scans = (
-        supabase.table("maps_scans")
-        .select("id, completed_at")
+        maps_reporting.only_reporting(
+            supabase.table("maps_scans").select("id, completed_at")
+        )
         .eq("client_id", client_id).eq("status", "complete")
         .order("completed_at", desc=True).limit(2).execute()
     ).data or []
