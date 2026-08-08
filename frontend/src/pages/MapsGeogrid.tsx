@@ -20,7 +20,12 @@ import { rankColor, TREND_METRICS } from '../components/maps/rank'
 import type { TrendMetric } from '../components/maps/rank'
 import { backLink, card, errorBox, outlineBtn, primaryBtn, relativeTime } from '../components/localseo/shared'
 
-type Tab = 'heatmap' | 'changes' | 'setup' | 'history'
+type Tab = 'heatmap' | 'changes' | 'setup' | 'history' | 'oneoffs'
+
+// Mirrors services/maps_reporting.REPORTING_TRIGGERS: only scheduled scans are
+// the client's record. Kept as one predicate so the two tabs partition the scan
+// list between them with no gap and no overlap.
+const isScheduledScan = (s: MapsScanSummary) => s.trigger === 'scheduled'
 
 // Maps / local-pack geo-grid ranker (Module #5). A separate per-client module:
 // configure a 3/5/7-mile grid around the business, track keywords, and see the
@@ -103,12 +108,15 @@ export function MapsGeogrid() {
         <TabButton active={tab === 'changes'} onClick={() => setTab('changes')} label="What changed" badge={alertsUnread} />
         <TabButton active={tab === 'setup'} onClick={() => setTab('setup')} label="Setup" />
         <TabButton active={tab === 'history'} onClick={() => setTab('history')} label="History" />
+        <TabButton active={tab === 'oneoffs'} onClick={() => setTab('oneoffs')} label="One-offs" />
       </div>
 
       {tab === 'setup' ? (
         <Setup clientId={clientId} />
       ) : tab === 'history' ? (
         <History clientId={clientId} scans={scans ?? []} onOpen={() => setTab('heatmap')} />
+      ) : tab === 'oneoffs' ? (
+        <OneOffs clientId={clientId} scans={scans ?? []} scanning={scanning} onRan={markRun} onStopped={stopRun} />
       ) : tab === 'changes' ? (
         <WhatChanged clientId={clientId} />
       ) : (
@@ -120,7 +128,6 @@ export function MapsGeogrid() {
 
 // ── Heatmap (latest completed scan) ─────────────────────────────────────────
 function Heatmap({ clientId, scanning, onRan, onStopped }: { clientId: string; scanning: boolean; onRan: () => void; onStopped: () => void }) {
-  const queryClient = useQueryClient()
   // When we FIRST observed a report in 'pending' (null = none pending). Bounds
   // the report polling below: a row stuck at pending (report job dead, worker
   // down) must not poll every 8s for the life of the tab. Keyed on observation
@@ -148,42 +155,9 @@ function Heatmap({ clientId, scanning, onRan, onStopped }: { clientId: string; s
       return scanning || (reportPending && !reportPollExpired) ? 8000 : false
     },
   })
-  // Which keywords the next on-demand run covers. null = all active ones.
-  const [scope, setScope] = useState<Set<string> | null>(null)
-  const { data: keywords } = useQuery<MapsKeyword[]>({
-    queryKey: ['maps-keywords', clientId],
-    queryFn: () => api.get<MapsKeyword[]>(`/clients/${clientId}/maps/keywords`),
-  })
-  const activeKeywords = (keywords ?? []).filter(k => k.active)
-
-  const runMut = useMutation({
-    // Omit `keywords` entirely for a full run, so the request is identical to
-    // what it was before the picker existed.
-    mutationFn: () => api.post<MapsRunResponse>(
-      `/clients/${clientId}/maps/scan`,
-      scope ? { keywords: [...scope] } : {},
-    ),
-    onSuccess: () => {
-      onRan()
-      queryClient.invalidateQueries({ queryKey: ['maps-scans', clientId] })
-    },
-  })
-  const cancelMut = useMutation({
-    mutationFn: () => api.post(`/clients/${clientId}/maps/scan/cancel`, {}),
-    onSuccess: () => {
-      onStopped()
-      queryClient.invalidateQueries({ queryKey: ['maps-scans', clientId] })
-    },
-  })
-
-  const busy = scanning || runMut.isPending
+  const runner = useScanRunner(clientId, onRan, onStopped)
+  const busy = scanning || runner.runMut.isPending
   const [authorityOpen, setAuthorityOpen] = useState(false)
-  // An explicitly empty selection can't be scanned — block the run rather than
-  // silently falling back to all keywords.
-  const noKeywordsPicked = scope !== null && scope.size === 0
-  const runLabel = scope === null
-    ? 'Run scan now'
-    : `Run scan (${scope.size} keyword${scope.size === 1 ? '' : 's'})`
   // One-off run + its keyword scope + a stop control (while a scan is in flight)
   // + the quick weekly schedule toggle, grouped so they sit together above the
   // heatmap.
@@ -194,25 +168,7 @@ function Heatmap({ clientId, scanning, onRan, onStopped }: { clientId: string; s
         title="DR · UR · referring domains for the local-pack leaderboard vs you (2 paid calls)">
         <Gauge size={13} /> Authority report
       </button>
-      {busy && (
-        <button style={{ ...outlineBtn, color: '#dc2626', borderColor: '#fecaca' }} onClick={() => cancelMut.mutate()} disabled={cancelMut.isPending}>
-          <Square size={13} /> {cancelMut.isPending ? 'Stopping…' : 'Stop scan'}
-        </button>
-      )}
-      <KeywordScope
-        keywords={activeKeywords}
-        selected={scope}
-        onChange={setScope}
-        disabled={runMut.isPending}
-      />
-      <button
-        style={{ ...primaryBtn, ...(noKeywordsPicked ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
-        onClick={() => runMut.mutate()}
-        disabled={runMut.isPending || noKeywordsPicked}
-        title={noKeywordsPicked ? 'Pick at least one keyword to scan' : undefined}
-      >
-        <Play size={14} /> {runMut.isPending ? 'Starting…' : runLabel}
-      </button>
+      <RunScanControls runner={runner} scanning={scanning} />
     </div>
   )
 
@@ -227,11 +183,11 @@ function Heatmap({ clientId, scanning, onRan, onStopped }: { clientId: string; s
               No completed scans yet. Set the business location &amp; keywords in <strong>Setup</strong>, then run a scan.
             </p>
           )}
-          {runMut.error && <div style={errorBox}>{(runMut.error as Error).message}</div>}
-          {runMut.data?.status === 'failed' && (
-            <div style={{ ...errorBox, marginTop: 10 }}>Couldn’t start: {runMut.data.error}. Check Setup is complete (Place ID, center lat/lng, and at least one keyword).</div>
+          {runner.runMut.error && <div style={errorBox}>{(runner.runMut.error as Error).message}</div>}
+          {runner.runMut.data?.status === 'failed' && (
+            <div style={{ ...errorBox, marginTop: 10 }}>Couldn’t start: {runner.runMut.data.error}. Check Setup is complete (Place ID, center lat/lng, and at least one keyword).</div>
           )}
-          {cancelMut.error && <div style={{ ...errorBox, marginTop: 10 }}>{(cancelMut.error as Error).message}</div>}
+          {runner.cancelMut.error && <div style={{ ...errorBox, marginTop: 10 }}>{(runner.cancelMut.error as Error).message}</div>}
           <div style={{ marginTop: busy ? 0 : 4 }}>{controls}</div>
         </div>
       </div>
@@ -264,7 +220,7 @@ function Heatmap({ clientId, scanning, onRan, onStopped }: { clientId: string; s
           endpoint={`/clients/${clientId}/authority/maps`}
           onClose={() => setAuthorityOpen(false)} />
       )}
-      {(scanning || runMut.isPending) && <InProgressBanner />}
+      {busy && <InProgressBanner />}
 
       {latest.results.length === 0 ? (
         <div style={card}><p style={muted}>This scan returned no keyword results.</p></div>
@@ -645,6 +601,80 @@ function KeywordScope({
   )
 }
 
+/**
+ * Everything needed to start (or stop) an on-demand scan. A hook rather than a
+ * component because two screens run scans — the Heatmap and the One-offs tab —
+ * and each needs its own keyword selection while sharing the request shape.
+ */
+function useScanRunner(clientId: string, onRan: () => void, onStopped: () => void) {
+  const queryClient = useQueryClient()
+  // Which keywords the next on-demand run covers. null = all active ones.
+  const [scope, setScope] = useState<Set<string> | null>(null)
+  const { data: keywords } = useQuery<MapsKeyword[]>({
+    queryKey: ['maps-keywords', clientId],
+    queryFn: () => api.get<MapsKeyword[]>(`/clients/${clientId}/maps/keywords`),
+  })
+  const activeKeywords = (keywords ?? []).filter(k => k.active)
+
+  const runMut = useMutation({
+    // Omit `keywords` entirely for a full run, so the request is identical to
+    // what it was before the picker existed.
+    mutationFn: () => api.post<MapsRunResponse>(
+      `/clients/${clientId}/maps/scan`,
+      scope ? { keywords: [...scope] } : {},
+    ),
+    onSuccess: () => {
+      onRan()
+      queryClient.invalidateQueries({ queryKey: ['maps-scans', clientId] })
+    },
+  })
+  const cancelMut = useMutation({
+    mutationFn: () => api.post(`/clients/${clientId}/maps/scan/cancel`, {}),
+    onSuccess: () => {
+      onStopped()
+      queryClient.invalidateQueries({ queryKey: ['maps-scans', clientId] })
+    },
+  })
+  return { scope, setScope, activeKeywords, runMut, cancelMut }
+}
+
+type ScanRunner = ReturnType<typeof useScanRunner>
+
+/** The keyword picker + Run/Stop buttons, shared by the Heatmap and One-offs tabs. */
+function RunScanControls({ runner, scanning }: { runner: ScanRunner; scanning: boolean }) {
+  const { scope, setScope, activeKeywords, runMut, cancelMut } = runner
+  const busy = scanning || runMut.isPending
+  // An explicitly empty selection can't be scanned — block the run rather than
+  // silently falling back to all keywords.
+  const noKeywordsPicked = scope !== null && scope.size === 0
+  const runLabel = scope === null
+    ? 'Run scan now'
+    : `Run scan (${scope.size} keyword${scope.size === 1 ? '' : 's'})`
+  return (
+    <>
+      {busy && (
+        <button style={{ ...outlineBtn, color: '#dc2626', borderColor: '#fecaca' }} onClick={() => cancelMut.mutate()} disabled={cancelMut.isPending}>
+          <Square size={13} /> {cancelMut.isPending ? 'Stopping…' : 'Stop scan'}
+        </button>
+      )}
+      <KeywordScope
+        keywords={activeKeywords}
+        selected={scope}
+        onChange={setScope}
+        disabled={runMut.isPending}
+      />
+      <button
+        style={{ ...primaryBtn, ...(noKeywordsPicked ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+        onClick={() => runMut.mutate()}
+        disabled={runMut.isPending || noKeywordsPicked}
+        title={noKeywordsPicked ? 'Pick at least one keyword to scan' : undefined}
+      >
+        <Play size={14} /> {runMut.isPending ? 'Starting…' : runLabel}
+      </button>
+    </>
+  )
+}
+
 function InProgressBanner() {
   const [secs, setSecs] = useState(0)
   useEffect(() => {
@@ -923,12 +953,25 @@ function Setup({ clientId }: { clientId: string }) {
 }
 
 // ── History (trend over time + scan list) ───────────────────────────────────
-function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary[]; onOpen: () => void }) {
+/**
+ * A list of scans with their per-row controls. Rendered twice with different
+ * slices: the History tab shows the SCHEDULED series (the client's record), the
+ * One-offs tab shows manual runs. `clearScope` keeps each list's "Clear all"
+ * bounded to its own rows, so clearing one-off clutter can't take the reporting
+ * history with it.
+ */
+function ScanList({
+  clientId, scans, title, note, emptyText, clearScope, clearConfirm,
+}: {
+  clientId: string
+  scans: MapsScanSummary[]
+  title: string
+  note?: React.ReactNode
+  emptyText: string
+  clearScope: 'scheduled' | 'manual'
+  clearConfirm: string
+}) {
   const queryClient = useQueryClient()
-  const { data: trends } = useQuery<MapsTrendsResponse>({
-    queryKey: ['maps-trends', clientId],
-    queryFn: () => api.get<MapsTrendsResponse>(`/clients/${clientId}/maps/trends`),
-  })
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['maps-scans', clientId] })
     queryClient.invalidateQueries({ queryKey: ['maps-trends', clientId] })
@@ -942,7 +985,7 @@ function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary
     onSuccess: invalidate,
   })
   const clearMut = useMutation({
-    mutationFn: () => api.delete(`/clients/${clientId}/maps/scans`),
+    mutationFn: () => api.delete(`/clients/${clientId}/maps/scans?scope=${clearScope}`),
     onSuccess: () => { invalidate(); queryClient.invalidateQueries({ queryKey: ['maps-latest', clientId] }) },
   })
   const [queued, setQueued] = useState<string | null>(null)
@@ -954,6 +997,91 @@ function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary
     const iso = s.completed_at || s.requested_at
     return iso ? new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—'
   }
+  const err = stopMut.error || delMut.error || clearMut.error || genMut.error
+  return (
+    <div style={card}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+        <h2 style={{ ...sectionTitle, margin: 0 }}>
+          {title}{scans.length ? ` (${scans.length})` : ''}
+        </h2>
+        {scans.length > 0 && (
+          <button
+            style={{ ...outlineBtn, padding: '5px 9px', fontSize: 12, color: '#dc2626', borderColor: '#fecaca' }}
+            onClick={() => { if (confirm(clearConfirm)) clearMut.mutate() }}
+            disabled={clearMut.isPending}
+            title="Delete every finished scan in this list (keeps any in-flight scan)"
+          >
+            <Trash2 size={13} /> {clearMut.isPending ? 'Clearing…' : 'Clear all'}
+          </button>
+        )}
+      </div>
+      {note && <p style={{ ...muted, fontSize: 12, margin: '0 0 10px' }}>{note}</p>}
+      {scans.length === 0 ? (
+        <p style={{ ...muted, margin: 0 }}>{emptyText}</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          {scans.map((s, i) => {
+            const inFlight = s.status === 'polling' || s.status === 'pending'
+            const keywords = (s.search_terms ?? []).join(', ') || '—'
+            const generating = genMut.isPending && genMut.variables === s.id
+            // Partial runs only happen on one-offs; naming the count makes it
+            // obvious why a scan covers fewer keywords than the client tracks.
+            const kwCount = s.search_terms?.length
+            return (
+              <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 2px', borderTop: i ? '1px solid #f1f5f9' : 'none', flexWrap: 'wrap' }}>
+                <span style={{ ...statusDot(s.status), alignSelf: 'flex-start', marginTop: 5 }} />
+                <div style={{ flex: '1 1 200px', minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: '#0f172a' }}>{keywords}</div>
+                  <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 1 }}>
+                    {fmtScanDate(s)} · {s.radius_miles}-mile
+                    {kwCount ? ` · ${kwCount} keyword${kwCount === 1 ? '' : 's'}` : ''}
+                  </div>
+                </div>
+                <span style={{ fontSize: 12, color: '#64748b', minWidth: 70 }}>{cap(s.status)}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {s.status === 'complete' && (
+                    <>
+                      <button style={{ ...outlineBtn, padding: '4px 9px', fontSize: 12 }}
+                        onClick={() => genMut.mutate(s.id)} disabled={generating} title="Generate the Local Rank Analysis report for this scan">
+                        {generating ? 'Queuing…' : queued === s.id ? 'Report queued ✓' : 'Generate report'}
+                      </button>
+                      <Link to={`/clients/${clientId}/maps/report?scan_id=${s.id}`} target="_blank" rel="noreferrer"
+                        style={{ ...outlineBtn, padding: '4px 9px', fontSize: 12, textDecoration: 'none' }} title="Open this scan's report">
+                        Open ↗
+                      </Link>
+                    </>
+                  )}
+                  {inFlight ? (
+                    <button style={{ ...outlineBtn, padding: '4px 7px', fontSize: 12, color: '#dc2626' }}
+                      onClick={() => stopMut.mutate(s.id)} disabled={stopMut.isPending} title="Stop this scan">
+                      <Square size={12} /> Stop
+                    </button>
+                  ) : (
+                    <button style={{ ...outlineBtn, padding: '4px 7px', color: '#dc2626' }}
+                      onClick={() => { if (confirm('Delete this scan and its results?')) delMut.mutate(s.id) }}
+                      disabled={delMut.isPending} title="Delete this scan">
+                      <Trash2 size={13} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+      {err && <div style={{ ...errorBox, marginTop: 10 }}>{(err as Error).message}</div>}
+    </div>
+  )
+}
+
+// The scheduled record: reporting panels over the weekly series, then the
+// scheduled scans themselves. One-off runs live on their own tab.
+function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary[]; onOpen: () => void }) {
+  const { data: trends } = useQuery<MapsTrendsResponse>({
+    queryKey: ['maps-trends', clientId],
+    queryFn: () => api.get<MapsTrendsResponse>(`/clients/${clientId}/maps/trends`),
+  })
+  const scheduled = scans.filter(isScheduledScan)
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
@@ -970,77 +1098,56 @@ function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary
       <BacklinkIntel clientId={clientId} />
       <ContentIntel clientId={clientId} />
       <GbpAudit clientId={clientId} />
-      {scans.length === 0 ? (
-        <div style={card}><p style={muted}>No scans yet.</p></div>
-      ) : (
-        <div style={card}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
-            <h2 style={{ ...sectionTitle, margin: 0 }}>Scan history</h2>
-            <button
-              style={{ ...outlineBtn, padding: '5px 9px', fontSize: 12, color: '#dc2626', borderColor: '#fecaca' }}
-              onClick={() => { if (confirm('Delete all finished scans for this client? This removes their heatmaps and results and can’t be undone.')) clearMut.mutate() }}
-              disabled={clearMut.isPending}
-              title="Delete all finished scans (keeps any in-flight scan)"
-            >
-              <Trash2 size={13} /> {clearMut.isPending ? 'Clearing…' : 'Clear all'}
-            </button>
-          </div>
-          <p style={{ ...muted, fontSize: 12, margin: '0 0 10px' }}>
-            Every run is listed here. The trends above, client reports and geo-grid
-            alerts use <strong>scheduled</strong> scans only — one-off runs are for
-            checking something now, so they stay out of reporting.
-          </p>
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {scans.map((s, i) => {
-              const inFlight = s.status === 'polling' || s.status === 'pending'
-              const keywords = (s.search_terms ?? []).join(', ') || '—'
-              const triggerLabel = s.trigger === 'scheduled' ? 'Scheduled' : 'One-off'
-              const generating = genMut.isPending && genMut.variables === s.id
-              return (
-                <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 2px', borderTop: i ? '1px solid #f1f5f9' : 'none', flexWrap: 'wrap' }}>
-                  <span style={{ ...statusDot(s.status), alignSelf: 'flex-start', marginTop: 5 }} />
-                  <div style={{ flex: '1 1 200px', minWidth: 0 }}>
-                    <div style={{ fontSize: 14, fontWeight: 600, color: '#0f172a' }}>{keywords}</div>
-                    <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 1 }}>
-                      {fmtScanDate(s)} · {s.radius_miles}-mile · {triggerLabel}
-                    </div>
-                  </div>
-                  <span style={{ fontSize: 12, color: '#64748b', minWidth: 70 }}>{cap(s.status)}</span>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    {s.status === 'complete' && (
-                      <>
-                        <button style={{ ...outlineBtn, padding: '4px 9px', fontSize: 12 }}
-                          onClick={() => genMut.mutate(s.id)} disabled={generating} title="Generate the Local Rank Analysis report for this scan">
-                          {generating ? 'Queuing…' : queued === s.id ? 'Report queued ✓' : 'Generate report'}
-                        </button>
-                        <Link to={`/clients/${clientId}/maps/report?scan_id=${s.id}`} target="_blank" rel="noreferrer"
-                          style={{ ...outlineBtn, padding: '4px 9px', fontSize: 12, textDecoration: 'none' }} title="Open this scan's report">
-                          Open ↗
-                        </Link>
-                      </>
-                    )}
-                    {inFlight ? (
-                      <button style={{ ...outlineBtn, padding: '4px 7px', fontSize: 12, color: '#dc2626' }}
-                        onClick={() => stopMut.mutate(s.id)} disabled={stopMut.isPending} title="Stop this scan">
-                        <Square size={12} /> Stop
-                      </button>
-                    ) : (
-                      <button style={{ ...outlineBtn, padding: '4px 7px', color: '#dc2626' }}
-                        onClick={() => { if (confirm('Delete this scan and its results?')) delMut.mutate(s.id) }}
-                        disabled={delMut.isPending} title="Delete this scan">
-                        <Trash2 size={13} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-          {(stopMut.error || delMut.error || clearMut.error || genMut.error) && (
-            <div style={{ ...errorBox, marginTop: 10 }}>{((stopMut.error || delMut.error || clearMut.error || genMut.error) as Error).message}</div>
-          )}
-        </div>
-      )}
+      <ScanList
+        clientId={clientId}
+        scans={scheduled}
+        title="Scheduled scans"
+        clearScope="scheduled"
+        clearConfirm="Delete all finished SCHEDULED scans for this client? This removes their heatmaps and results and can’t be undone. One-off checks are not affected."
+        emptyText="No scheduled scans yet. Turn on the weekly schedule from the Heatmap tab."
+        note={<>
+          The client’s local-pack record. Everything on this page — the trends above,
+          client reports and geo-grid alerts — is built from these scans. One-off
+          checks live on the <strong>One-offs</strong> tab and are excluded.
+        </>}
+      />
+    </div>
+  )
+}
+
+// Manual spot checks: run one now, and see the ones already run. Kept apart from
+// the scheduled record so ad-hoc runs never read as campaign history.
+function OneOffs({ clientId, scans, scanning, onRan, onStopped }: {
+  clientId: string
+  scans: MapsScanSummary[]
+  scanning: boolean
+  onRan: () => void
+  onStopped: () => void
+}) {
+  const runner = useScanRunner(clientId, onRan, onStopped)
+  const oneOffs = scans.filter(s => !isScheduledScan(s))
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end', marginBottom: 14 }}>
+        <RunScanControls runner={runner} scanning={scanning} />
+      </div>
+      {scanning && <InProgressBanner />}
+      {runner.runMut.error && <div style={{ ...errorBox, marginBottom: 12 }}>{(runner.runMut.error as Error).message}</div>}
+      <ScanList
+        clientId={clientId}
+        scans={oneOffs}
+        title="One-off checks"
+        clearScope="manual"
+        clearConfirm="Delete all finished one-off checks for this client? Scheduled scans are not affected."
+        emptyText="No one-off checks yet. Run one above to spot-check a keyword right now."
+        note={<>
+          Spot checks you ran by hand. They’re <strong>not part of reporting</strong> —
+          excluded from trends, client reports and geo-grid alerts, and they don’t
+          auto-generate a Local Rank Analysis doc. Use “Generate report” on a row if
+          you want one. Pick a subset of keywords to keep the cost down; the grid is
+          billed per keyword.
+        </>}
+      />
     </div>
   )
 }
