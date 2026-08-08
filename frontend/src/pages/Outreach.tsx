@@ -60,6 +60,7 @@ interface Subarea { name: string; lat: number; lng: number; place_id?: string | 
 interface SubareasResponse { city: ResolvedCity; subareas: Subarea[]; note: string | null }
 interface OnboardRequest {
   id: string
+  submarket_id: string
   category: string
   region: string | null
   status: 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
@@ -391,14 +392,18 @@ function OnboardOrdersCard() {
                     {order.prospects_survived != null && <> · {order.prospects_survived} kept</>}
                   </td>
                   <td style={{ padding: '6px 8px' }}><StatusChip status={order.status} /></td>
-                  <td style={{ padding: '6px 8px', textAlign: 'right' }}>
-                    {order.status === 'pending' && (
+                  <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {order.status === 'pending' ? (
                       <button onClick={e => { e.stopPropagation(); cancel.mutate(order.id) }}
                         style={{ fontSize: 12, border: '1px solid #e2e8f0', background: '#fff',
                           borderRadius: 6, padding: '2px 8px', cursor: 'pointer', color: '#b91c1c' }}>
                         Withdraw
                       </button>
-                    )}
+                    ) : order.snapshot_id ? (
+                      <span style={{ fontSize: 12, color: '#2563eb', fontWeight: 600 }}>
+                        {openId === order.id ? 'Hide ▲' : 'View results ▾'}
+                      </span>
+                    ) : null}
                   </td>
                 </tr>
                 {order.status === 'failed' && order.error && (
@@ -413,6 +418,10 @@ function OnboardOrdersCard() {
                   <tr>
                     <td colSpan={6} style={{ padding: '4px 8px 10px' }}>
                       <OnboardProgress id={order.id} />
+                      <div style={{ fontWeight: 600, fontSize: 13, margin: '12px 0 0' }}>
+                        Results for this scan
+                      </div>
+                      <CoverageTable submarketId={order.submarket_id} />
                     </td>
                   </tr>
                 )}
@@ -776,8 +785,9 @@ function OrderProgress({ id }: { id: string }) {
 
 // ── Results ──────────────────────────────────────────────────────────────────
 
-function ResultsCard({ marketId }: { marketId: string }) {
-  const [submarketId, setSubmarketId] = useState('')
+// The ranked coverage table for ONE submarket — reused by the Coverage results card (with a
+// submarket picker) and by an onboard row's inline results (submarket fixed to that scan).
+function CoverageTable({ submarketId }: { submarketId: string }) {
   const [promoted, setPromoted] = useState<Record<string, boolean>>({})
   const promote = useMutation({
     mutationFn: (prospectId: string) =>
@@ -785,17 +795,81 @@ function ResultsCard({ marketId }: { marketId: string }) {
         `/outreach/prospects/${prospectId}/promote`, {}),
     onSuccess: (_data, prospectId) => setPromoted(p => ({ ...p, [prospectId]: true })),
   })
+  const { data, isLoading } = useQuery<{ scores: PlaceholderScore[]; total: number; measured: boolean }>({
+    queryKey: ['outreach-placeholder-scores', submarketId],
+    queryFn: () => api.get(`/outreach/submarkets/${submarketId}/placeholder-scores?limit=200`),
+    enabled: !!submarketId,
+  })
+
+  if (!submarketId) return null
+  if (isLoading) return <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>Loading…</p>
+  if (!data?.measured) {
+    return (
+      <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>
+        Not measured yet — coverage appears once the scan finishes collecting and rolls up. An empty
+        result here means “nothing measured”, never “nobody visible”.
+      </p>
+    )
+  }
+  return (
+    <>
+      <p style={{ fontSize: 11, color: '#94a3b8', margin: '6px 0 0' }}>
+        Ranked by coverage deficit — a business absent at every measured point shows 100% deficit
+        (zero coverage, not unknown). Send the most invisible ones to your CRM.
+      </p>
+      <table style={{ width: '100%', marginTop: 8, fontSize: 13, borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ textAlign: 'left', color: '#64748b', fontSize: 11 }}>
+            <th style={{ padding: '4px 8px' }}>Prospect</th>
+            <th style={{ padding: '4px 8px' }}>Phone</th>
+            <th style={{ padding: '4px 8px', textAlign: 'right' }}>Coverage</th>
+            <th style={{ padding: '4px 8px', textAlign: 'right' }}>Deficit</th>
+            <th style={{ padding: '4px 8px', textAlign: 'right' }}>Best rank</th>
+            <th style={{ padding: '4px 8px', textAlign: 'right' }}>Drops out at</th>
+            <th style={{ padding: '4px 8px' }} />
+          </tr>
+        </thead>
+        <tbody>
+          {data.scores.filter(s => !s.excluded).map(s => (
+            <tr key={s.prospect_id} style={{ borderTop: '1px solid #f1f5f9' }}>
+              <td style={{ padding: '6px 8px' }}>{s.name}</td>
+              <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{s.phone ?? '—'}</td>
+              <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.coverage_pct?.toFixed(1)}%</td>
+              <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>
+                {s.coverage_deficit?.toFixed(1)}%
+              </td>
+              <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.best_rank ?? '—'}</td>
+              <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                {s.centroid_dist_at_loss != null ? `${s.centroid_dist_at_loss.toFixed(1)} mi` : '—'}
+              </td>
+              <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                {promoted[s.prospect_id] ? (
+                  <span style={{ fontSize: 12, color: '#166534' }}>✓ on board</span>
+                ) : (
+                  <button
+                    onClick={() => promote.mutate(s.prospect_id)}
+                    disabled={promote.isPending}
+                    style={{ fontSize: 12, border: '1px solid #e2e8f0', background: '#fff',
+                      borderRadius: 6, padding: '2px 10px', cursor: 'pointer' }}>
+                    Send to CRM
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
+  )
+}
+
+function ResultsCard({ marketId }: { marketId: string }) {
+  const [submarketId, setSubmarketId] = useState('')
   const { data: subsData } = useQuery<{ submarkets: Submarket[] }>({
     queryKey: ['outreach-submarkets', marketId],
     queryFn: () => api.get(`/outreach/markets/${marketId}/submarkets`),
   })
   const submarkets = subsData?.submarkets ?? []
-
-  const { data, isLoading } = useQuery<{ scores: PlaceholderScore[]; total: number; measured: boolean }>({
-    queryKey: ['outreach-placeholder-scores', submarketId],
-    queryFn: () => api.get(`/outreach/submarkets/${submarketId}/placeholder-scores?limit=100`),
-    enabled: !!submarketId,
-  })
 
   return (
     <div style={{ marginTop: 16, padding: 16, border: '1px solid #e2e8f0', borderRadius: 12 }}>
@@ -807,64 +881,7 @@ function ResultsCard({ marketId }: { marketId: string }) {
           {submarkets.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
       </div>
-      {!submarketId ? null : isLoading ? (
-        <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>Loading…</p>
-      ) : !data?.measured ? (
-        <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>
-          Not measured yet — this submarket has no rolled-up scan. An empty result here means
-          “nothing measured”, never “nobody visible”.
-        </p>
-      ) : (
-        <>
-          <p style={{ fontSize: 11, color: '#94a3b8', margin: '6px 0 0' }}>
-            Placeholder score: raw coverage deficit from the latest rolled-up snapshot per keyword.
-            Not the Phase 4 model. A prospect absent at every measured point shows 100% deficit —
-            zero coverage, not unknown.
-          </p>
-          <table style={{ width: '100%', marginTop: 8, fontSize: 13, borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ textAlign: 'left', color: '#64748b', fontSize: 11 }}>
-                <th style={{ padding: '4px 8px' }}>Prospect</th>
-                <th style={{ padding: '4px 8px' }}>Phone</th>
-                <th style={{ padding: '4px 8px', textAlign: 'right' }}>Coverage</th>
-                <th style={{ padding: '4px 8px', textAlign: 'right' }}>Deficit</th>
-                <th style={{ padding: '4px 8px', textAlign: 'right' }}>Best rank</th>
-                <th style={{ padding: '4px 8px', textAlign: 'right' }}>Drops out at</th>
-                <th style={{ padding: '4px 8px' }} />
-              </tr>
-            </thead>
-            <tbody>
-              {data.scores.filter(s => !s.excluded).map(s => (
-                <tr key={s.prospect_id} style={{ borderTop: '1px solid #f1f5f9' }}>
-                  <td style={{ padding: '6px 8px' }}>{s.name}</td>
-                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{s.phone ?? '—'}</td>
-                  <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.coverage_pct?.toFixed(1)}%</td>
-                  <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>
-                    {s.coverage_deficit?.toFixed(1)}%
-                  </td>
-                  <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.best_rank ?? '—'}</td>
-                  <td style={{ padding: '6px 8px', textAlign: 'right' }}>
-                    {s.centroid_dist_at_loss != null ? `${s.centroid_dist_at_loss.toFixed(1)} mi` : '—'}
-                  </td>
-                  <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    {promoted[s.prospect_id] ? (
-                      <span style={{ fontSize: 12, color: '#166534' }}>✓ on board</span>
-                    ) : (
-                      <button
-                        onClick={() => promote.mutate(s.prospect_id)}
-                        disabled={promote.isPending}
-                        style={{ fontSize: 12, border: '1px solid #e2e8f0', background: '#fff',
-                          borderRadius: 6, padding: '2px 10px', cursor: 'pointer' }}>
-                        Send to CRM
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      )}
+      <CoverageTable submarketId={submarketId} />
     </div>
   )
 }
