@@ -800,12 +800,35 @@ In rough value order:
    (phone 579.3 / email 705.0). The coefficients are elicited estimates until real replies exist —
    which is why this waits on Phase 3.
 
-3. **The other scan signals — the rest of Phase 2.** The Maps geo-grid is the built half. The
-   **organic-search** and **AI-answer** visibility layers are not (`serp_result` exists,
-   partitioned; the AI half is blocked on `ai_region` names — §7.4, I-073). These add more
-   "here's another place you're invisible" evidence to the audit. Note I-084: how `serp_result`
-   attaches to a grid-shaped `scan_snapshot` is undefined and must be settled before the organic
-   layer is designed.
+3. **The other scan signals — organic + AI are now BUILT (2026-08-08); paid placement is the gap.**
+   The Maps geo-grid, the **organic-search** layer (`scan-organic`) and the **AI-answer** layer
+   (`scan-ai` — ChatGPT + Google AIO) are all built — they are the report's three signals. What every
+   one of them measures is ORGANIC / earned visibility. The one channel none of them capture is
+   **paid placement** — see 3a, the owner-requested next build.
+
+3a. **PAID PLACEMENT — is the business (and its competitors) BUYING ads? — OWNER-REQUESTED NEXT BUILD
+    (2026-08-08).** The single highest-value lead signal in the model, and currently unmeasured.
+    `docs/scoring-spec.md` rates it above every organic signal: **LSA active +57, LSA present + absent
+    from the pack +50, Google Ads + no organic/pack +46, est. ad spend >$2k/mo +66** — because a
+    business *paying to solve the visibility problem while still losing organically* has proven budget
+    AND intent, which is the ideal cold-outreach target. Two slices, cheapest first:
+    - **Slice A — paid-placement PRESENCE (cheap; reuses data we already pay for).** The `scan-organic`
+      capture already stores the FULL DataForSEO SERP response in `serp_result.payload`, and that
+      response CONTAINS the paid-ads items — the parser (`organic_scan.parse_organic_serp`) simply
+      discards everything that is not `type=="organic"`/`"ai_overview"`. So "is this business / are its
+      competitors running **Google Ads** for this keyword" is parseable from data already on disk, with
+      NO new call. **LSA / Google Guaranteed** is a distinct DataForSEO SERP element (its item type must
+      be confirmed against a live response — measure-don't-infer); it may ride the same organic call or
+      need a targeted one. Surface as a **fourth report signal ("Paid placement")** in the report + the
+      call hook, and persist the presence flags so the Phase-4 scorer can read them.
+    - **Slice B — the MONEY SIGNAL (bigger; the site-fetch enrichment layer).** Ad-spend MAGNITUDE
+      (>$2k/mo bands) and pixel/tag detection (Meta pixel, `AW-` conversion tags, GTM container contents
+      — PRD §B3, §16a.1) need fetching the prospect's site and reading its tags. A genuine unbuilt
+      component (the "money signal"); I-003/§16a.1 flag the open question of whether GTM-injected pixels
+      require the container fetch. Do Slice A first; Slice B is its own build.
+    Both are Phase-4 scoring inputs; until the scorer exists they are stored + shown, not scored. Same
+    invariants as the three signals it joins: deterministic + fact-grounded (never assert an ad that is
+    not in the response), paid runs gated, tests, DECISIONS/ISSUES entries.
 
 4. **Email outreach + enrichment — Phase 5.** The whole design is phone-first; Phase 5 opens
    email as a second channel (find addresses, ESP integration, suppression sync). Its long pole
@@ -821,8 +844,11 @@ In rough value order:
 **Also outstanding, small and independent of the above:** I-070 (enforce `scan_snapshot`
 append-only — a trigger + a test; cheap, do it after the first scan proves the finalize UPDATE),
 I-086/I-087 (the geogrid cost_ledger row now EXISTS via the tick build, but the budget-ceiling
-check on the scan path and a durable `recovered_by_tag` are still worth revisiting), and the
-`ai_region` naming (§7.4, a manual afternoon that unblocks the AI half of item 3).
+check on the scan path and a durable `recovered_by_tag` are still worth revisiting). (The
+`ai_region` naming is DONE — 11 LA regions seeded from I-073; and the two scan-signal builds it used
+to block, organic + AI, are merged.)
+
+**The owner's stated next build is 3a — paid placement (Google Ads / LSA).** Requested 2026-08-08.
 
 **Not on the list, because it is done:** ingest + filter (Phase 1), the lead CRM board and
 one-click promote (Phase 1b, #574), the scan producer/consumer/rollup/placeholder-score, the
