@@ -1,11 +1,13 @@
 import { Fragment, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Crosshair, Loader2, AlertTriangle, XCircle, CheckCircle2, Clock, Ban, RefreshCw,
+  Crosshair, Loader2, AlertTriangle, XCircle, CheckCircle2, Clock, Ban, RefreshCw, Phone,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import { Tabs } from './OutreachLeads'
+import { Justification } from '../components/outreach/Justification'
+import { ProspectReportButtons } from '../components/outreach/ProspectReport'
 
 // ── Types (mirror routers/outreach.py's scan-order section) ──────────────────
 interface Market { id: string; name: string }
@@ -789,6 +791,7 @@ function OrderProgress({ id }: { id: string }) {
 // submarket picker) and by an onboard row's inline results (submarket fixed to that scan).
 function CoverageTable({ submarketId }: { submarketId: string }) {
   const [promoted, setPromoted] = useState<Record<string, boolean>>({})
+  const [openHook, setOpenHook] = useState<string | null>(null)
   const promote = useMutation({
     mutationFn: (prospectId: string) =>
       api.post<{ lead: { id: string; already_existed: boolean } }>(
@@ -831,31 +834,51 @@ function CoverageTable({ submarketId }: { submarketId: string }) {
         </thead>
         <tbody>
           {data.scores.filter(s => !s.excluded).map(s => (
-            <tr key={s.prospect_id} style={{ borderTop: '1px solid #f1f5f9' }}>
-              <td style={{ padding: '6px 8px' }}>{s.name}</td>
-              <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{s.phone ?? '—'}</td>
-              <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.coverage_pct?.toFixed(1)}%</td>
-              <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>
-                {s.coverage_deficit?.toFixed(1)}%
-              </td>
-              <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.best_rank ?? '—'}</td>
-              <td style={{ padding: '6px 8px', textAlign: 'right' }}>
-                {s.centroid_dist_at_loss != null ? `${s.centroid_dist_at_loss.toFixed(1)} mi` : '—'}
-              </td>
-              <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                {promoted[s.prospect_id] ? (
-                  <span style={{ fontSize: 12, color: '#166534' }}>✓ on board</span>
-                ) : (
+            <Fragment key={s.prospect_id}>
+              <tr style={{ borderTop: '1px solid #f1f5f9' }}>
+                <td style={{ padding: '6px 8px' }}>{s.name}</td>
+                <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{s.phone ?? '—'}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.coverage_pct?.toFixed(1)}%</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>
+                  {s.coverage_deficit?.toFixed(1)}%
+                </td>
+                <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.best_rank ?? '—'}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                  {s.centroid_dist_at_loss != null ? `${s.centroid_dist_at_loss.toFixed(1)} mi` : '—'}
+                </td>
+                <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', marginRight: 6 }}>
+                    <ProspectReportButtons prospectId={s.prospect_id} compact />
+                  </span>
                   <button
-                    onClick={() => promote.mutate(s.prospect_id)}
-                    disabled={promote.isPending}
-                    style={{ fontSize: 12, border: '1px solid #e2e8f0', background: '#fff',
-                      borderRadius: 6, padding: '2px 10px', cursor: 'pointer' }}>
-                    Send to CRM
+                    onClick={() => setOpenHook(openHook === s.prospect_id ? null : s.prospect_id)}
+                    title="Why this business is worth calling"
+                    style={{ fontSize: 12, border: '1px solid #e2e8f0', background: openHook === s.prospect_id ? '#eff6ff' : '#fff',
+                      borderRadius: 6, padding: '2px 8px', cursor: 'pointer', marginRight: 6,
+                      display: 'inline-flex', gap: 4, alignItems: 'center', color: '#0369a1' }}>
+                    <Phone size={12} /> Why call?
                   </button>
-                )}
-              </td>
-            </tr>
+                  {promoted[s.prospect_id] ? (
+                    <span style={{ fontSize: 12, color: '#166534' }}>✓ on board</span>
+                  ) : (
+                    <button
+                      onClick={() => promote.mutate(s.prospect_id)}
+                      disabled={promote.isPending}
+                      style={{ fontSize: 12, border: '1px solid #e2e8f0', background: '#fff',
+                        borderRadius: 6, padding: '2px 10px', cursor: 'pointer' }}>
+                      Send to CRM
+                    </button>
+                  )}
+                </td>
+              </tr>
+              {openHook === s.prospect_id && (
+                <tr>
+                  <td colSpan={7} style={{ padding: '2px 8px 10px' }}>
+                    <Justification prospectId={s.prospect_id} />
+                  </td>
+                </tr>
+              )}
+            </Fragment>
           ))}
         </tbody>
       </table>

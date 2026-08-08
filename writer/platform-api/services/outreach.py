@@ -1257,6 +1257,332 @@ def placeholder_scores(
     }
 
 
+# --- Call-hook justification (the caller's "why this is a lead" talking points) ----------------
+#
+# Reads existing scan data only — coverage, the geogrid pack, the prospect and its submarket field
+# — and assembles a deterministic set of phone-call talking points via `outreach_justification`
+# (pure). Spends nothing, writes nothing: it is a read-time surface generated when a caller opens a
+# prospect to dial (reporting-layer-spec §4a "Call hooks are exempt"). See that pure module for the
+# design-fork reasoning (deterministic assembly, not an LLM pass).
+
+
+def _latest_rolled_up_snapshot(
+    client: Any, submarket_id: str | None, snapshot_id: str | None
+) -> dict[str, Any] | None:
+    """The snapshot a justification reads from: a specific one if named, else the newest COMPLETE
+    snapshot for the submarket that also carries a rollup marker.
+
+    The marker gate matches `v_prospect_placeholder_score` exactly (outreach ISSUES I-076): an
+    incomplete or unrolled snapshot has no coverage rows, so reading one would score every prospect
+    as invisible purely because the scan hadn't finished. Bounded — a submarket holds a handful of
+    snapshots per cycle, far under the PostgREST cap.
+    """
+    if not submarket_id:
+        return None
+    snaps = (
+        client.table("scan_snapshot")
+        .select("id, keyword_id, scanned_at, geometry_version, actual_points")
+        .eq("submarket_id", submarket_id)
+        .eq("complete", True)
+        .order("scanned_at", desc=True)
+        .order("id", desc=True)
+        .range(0, MAX_PAGE_SIZE - 1)
+        .execute()
+        .data
+        or []
+    )
+    if not snaps:
+        return None
+    marker_rows = (
+        client.table("snapshot_rollup")
+        .select("snapshot_id")
+        .in_("snapshot_id", [s["id"] for s in snaps])
+        .execute()
+        .data
+        or []
+    )
+    rolled = {m["snapshot_id"] for m in marker_rows}
+    if snapshot_id:
+        return next((s for s in snaps if s["id"] == snapshot_id and s["id"] in rolled), None)
+    return next((s for s in snaps if s["id"] in rolled), None)
+
+
+def _fetch_pack_rows(client: Any, snapshot_id: str, pack_size: int) -> list[dict[str, Any]]:
+    """Every map-pack `grid_result` row for one snapshot: `rank <= pack_size`, so at most
+    `pack_size` per grid point (~243 on the 81-point grid at pack 3) — one bounded query, well
+    under the 1000-row cap, no paging. Deliberately reads only the pack, not the full ~1,600-row
+    result set, because who holds the top few spots is the whole competitive signal."""
+    return (
+        client.table("grid_result")
+        .select("point_seq, place_id, rank")
+        .eq("snapshot_id", snapshot_id)
+        .lte("rank", pack_size)
+        .range(0, MAX_PAGE_SIZE * 5 - 1)
+        .execute()
+        .data
+        or []
+    )
+
+
+def _resolve_place_names(client: Any, place_ids: list[str]) -> dict[str, str]:
+    """Map competitor place_ids to business names, for the ones we actually know. A place_id with
+    no matching prospect row stays unnamed — never invent a competitor (outreach/CLAUDE.md)."""
+    names: dict[str, str] = {}
+    for start in range(0, len(place_ids), 100):
+        chunk = place_ids[start : start + 100]
+        if not chunk:
+            continue
+        for row in (
+            client.table("prospect").select("place_id, name").in_("place_id", chunk).execute().data
+            or []
+        ):
+            if row.get("place_id") and row.get("name"):
+                names[row["place_id"]] = row["name"]
+    return names
+
+
+def prospect_justification(prospect_id: str, snapshot_id: str | None = None) -> dict[str, Any]:
+    """Assemble the deterministic call-hook justification for one prospect.
+
+    Reads-only: the prospect + submarket, the latest rolled-up coverage, the map-pack competitors
+    from `grid_result`, and the submarket's review field — then hands them to the pure assembler.
+    Returns `{measured: False, …}` when the area has no rolled-up scan (nothing to point at), and
+    degrades gracefully when the competitive detail can't be read (a cold-dropped `grid_result`
+    partition — outreach ISSUES I-094): coverage, reviews and gaps still stand.
+    """
+    from config import settings
+    from services import outreach_justification as oj
+
+    client = get_outreach_client()
+
+    rows = (
+        client.table("prospect")
+        .select(
+            "id, name, submarket_id, place_id, phone, website, category, rating, "
+            "review_count, review_count_inferred_zero, business_status"
+        )
+        .eq("id", prospect_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise OutreachError("prospect_not_found", "no such prospect")
+    prospect = rows[0]
+    submarket_id = prospect.get("submarket_id")
+
+    submarket_name = "their area"
+    if submarket_id:
+        sub = (
+            client.table("submarket").select("name").eq("id", submarket_id).limit(1).execute().data
+            or []
+        )
+        if sub:
+            submarket_name = sub[0]["name"]
+
+    snapshot = _latest_rolled_up_snapshot(client, submarket_id, snapshot_id)
+    if snapshot is None:
+        return oj.not_measured(prospect_id, prospect.get("name"))
+
+    keyword = "this service"
+    kw = (
+        client.table("keyword").select("term").eq("id", snapshot["keyword_id"]).limit(1).execute().data
+        or []
+    )
+    if kw:
+        keyword = kw[0]["term"]
+
+    coverage_rows = (
+        client.table("prospect_coverage")
+        .select(
+            "coverage_pct, points_present, live_points, best_rank, worst_rank, avg_rank, "
+            "centroid_dist_at_loss, rank_vector"
+        )
+        .eq("snapshot_id", snapshot["id"])
+        .eq("prospect_id", prospect_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    coverage = coverage_rows[0] if coverage_rows else None
+
+    # The measured-point denominator is a property of the snapshot's land mask — the same for every
+    # prospect in it — so a zero-coverage prospect (no row of its own, I-076) still learns how many
+    # points "invisible everywhere" spans by reading any sibling row.
+    if coverage:
+        live_points = coverage.get("live_points")
+        vector = oj.decode_rank_vector(coverage.get("rank_vector"))
+    else:
+        sibling = (
+            client.table("prospect_coverage")
+            .select("live_points")
+            .eq("snapshot_id", snapshot["id"])
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        live_points = sibling[0]["live_points"] if sibling else snapshot.get("actual_points")
+        vector = None
+    absent_seqs = oj.absent_point_seqs(vector)
+
+    pack_size = settings.outreach_call_hook_pack_size
+    try:
+        pack_rows = _fetch_pack_rows(client, snapshot["id"], pack_size)
+        place_ids = sorted(
+            {r["place_id"] for r in pack_rows if r.get("place_id") and r["place_id"] != prospect.get("place_id")}
+        )
+        competitors = oj.summarize_competitors(
+            prospect_place_id=prospect.get("place_id"),
+            absent_seqs=absent_seqs,
+            pack_rows=pack_rows,
+            name_by_place_id=_resolve_place_names(client, place_ids),
+            max_named=settings.outreach_justification_max_competitors,
+        )
+    except Exception as exc:  # noqa: BLE001 — a cold-dropped grid partition must not lose the hook
+        logger.warning("outreach_justification_competitors_unavailable", extra={"error": str(exc)})
+        competitors = {"available": False, "named": [], "total": 0, "invisible_points": 0}
+
+    field_rows = (
+        client.table("prospect")
+        .select("review_count, review_count_inferred_zero")
+        .eq("submarket_id", submarket_id)
+        .neq("id", prospect_id)
+        .range(0, 999)
+        .execute()
+        .data
+        or []
+    ) if submarket_id else []
+    field_reviews = oj.field_review_stats(field_rows)
+
+    return oj.build_justification(
+        prospect=prospect,
+        keyword=keyword,
+        submarket=submarket_name,
+        snapshot=snapshot,
+        coverage=coverage,
+        live_points=live_points,
+        competitors=competitors,
+        field_reviews=field_reviews,
+        field_min_sample=settings.outreach_field_review_min_sample,
+        pack_size=pack_size,
+    )
+
+
+def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[str, Any]:
+    """Assemble the per-prospect competitive report — the internal brief and the client-facing
+    draft, over one shared document.
+
+    Read-only, spends nothing. Reuses `prospect_justification` verbatim for the call hook (so the
+    report and the "Why call?" panel never disagree) and adds a maps rankings-vs-competitors table.
+    The organic and LLM sections are explicit `not_scanned` blocks until those paid scan layers land
+    (outreach ISSUES I-095) — never an empty table that would read as "no competitors".
+    """
+    from config import settings
+    from services import outreach_justification as oj
+    from services import outreach_report as orep
+
+    client = get_outreach_client()
+
+    rows = (
+        client.table("prospect")
+        .select(
+            "id, name, submarket_id, place_id, phone, website, address, category, rating, "
+            "review_count, review_count_inferred_zero, business_status"
+        )
+        .eq("id", prospect_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise OutreachError("prospect_not_found", "no such prospect")
+    prospect = rows[0]
+    submarket_id = prospect.get("submarket_id")
+
+    submarket_name = "their area"
+    if submarket_id:
+        sub = (
+            client.table("submarket").select("name").eq("id", submarket_id).limit(1).execute().data
+            or []
+        )
+        if sub:
+            submarket_name = sub[0]["name"]
+
+    justification = prospect_justification(prospect_id, snapshot_id)
+
+    organic = orep.not_scanned_section(
+        orep.SIGNAL_ORGANIC,
+        "The organic-search scan hasn't run for this prospect yet.",
+    )
+    llm = orep.not_scanned_section(
+        orep.SIGNAL_LLM,
+        "The AI-visibility scan hasn't run for this prospect yet.",
+    )
+
+    if not justification.get("measured"):
+        maps_section = {"status": orep.STATUS_NOT_MEASURED, "signal": orep.SIGNAL_MAPS}
+        return orep.build_report(
+            prospect=prospect,
+            keyword="this service",
+            submarket=submarket_name,
+            justification=justification,
+            maps_section=maps_section,
+            organic_section=organic,
+            llm_section=llm,
+            heatmap_available=False,
+        )
+
+    prov = justification["provenance"]
+    snap_id = prov["snapshot_id"]
+    keyword = prov["keyword"]
+    live_points = prov["live_points"]
+
+    coverage_rows = (
+        client.table("prospect_coverage")
+        .select("coverage_pct, points_present, live_points, best_rank, worst_rank, avg_rank")
+        .eq("snapshot_id", snap_id)
+        .eq("prospect_id", prospect_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    coverage = coverage_rows[0] if coverage_rows else None
+
+    pack_size = settings.outreach_call_hook_pack_size
+    try:
+        pack_rows = _fetch_pack_rows(client, snap_id, pack_size)
+        place_ids = sorted({r["place_id"] for r in pack_rows if r.get("place_id")})
+        maps_section = orep.build_maps_comparison(
+            prospect_place_id=prospect.get("place_id"),
+            pack_rows=pack_rows,
+            name_by_place_id=_resolve_place_names(client, place_ids),
+            coverage=coverage,
+            live_points=live_points,
+            max_competitors=settings.outreach_justification_max_competitors,
+        )
+    except Exception as exc:  # noqa: BLE001 — a cold-dropped grid partition must not lose the report
+        logger.warning("outreach_report_maps_unavailable", extra={"error": str(exc)})
+        maps_section = orep.not_scanned_section(
+            orep.SIGNAL_MAPS, "The raw ranking data for this scan has aged out."
+        )
+
+    return orep.build_report(
+        prospect=prospect,
+        keyword=keyword,
+        submarket=prov.get("submarket") or submarket_name,
+        justification=justification,
+        maps_section=maps_section,
+        organic_section=organic,
+        llm_section=llm,
+        heatmap_available=coverage is not None,
+    )
+
+
 def promote_prospect(prospect_id: str, actor_id: str) -> dict[str, Any]:
     """Turn a scanned prospect into a lead, prefilled — the scan-results "Send to CRM" click.
 

@@ -1652,6 +1652,17 @@ class Settings(BaseSettings):
     outreach_onboard_grid_radius_miles: float = 5.0
     outreach_onboard_grid_spacing_miles: float = 1.0
 
+    # --- Call-hook justification (the caller's "why this is a lead" talking points) ------------
+    # The per-prospect phone-call hook (outreach PRD §716; HANDOFF §12 item 1) — deterministic
+    # talking points assembled from scan data a caller reads before dialing. Read-only; spends
+    # nothing. `pack_size` is the Google map-pack depth used to decide "who is beating you here"
+    # (the pack is 3 spots); `max_competitors` caps how many rivals the hook names; the review
+    # comparison is withheld unless at least `field_review_min_sample` businesses in the submarket
+    # have a known review count, so a thin sample never invents a field median to pitch against.
+    outreach_call_hook_pack_size: int = 3
+    outreach_justification_max_competitors: int = 3
+    outreach_field_review_min_sample: int = 5
+
     leadoff_income_acs_year: int = 2023
     leadoff_income_refresh_days: int = 365
     # Per-city county map (public.city_counties) — reverse-geocoded from each
