@@ -54,6 +54,26 @@ interface PlaceholderScore {
   measured_at: string
 }
 
+// Any-city onboarding (mirror routers/outreach.py's geo + onboard section)
+interface ResolvedCity { name: string; city?: string | null; region?: string | null; lat: number; lng: number; place_id?: string | null }
+interface Subarea { name: string; lat: number; lng: number; place_id?: string | null }
+interface SubareasResponse { city: ResolvedCity; subareas: Subarea[]; note: string | null }
+interface OnboardRequest {
+  id: string
+  category: string
+  region: string | null
+  status: 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
+  stage: string | null
+  prospects_ingested: number | null
+  prospects_survived: number | null
+  snapshot_id: string | null
+  error: string | null
+  created_at: string
+  finished_at: string | null
+  submarket?: { name: string } | null
+  keyword?: { term: string } | null
+}
+
 const ACTIVE = new Set(['pending', 'running'])
 
 const STATUS_STYLE: Record<ScanRequest['status'], { color: string; bg: string; Icon: typeof Clock }> = {
@@ -128,9 +148,239 @@ export function Outreach() {
 
       <Tabs active="scans" />
 
+      <OnboardCityCard isAdmin={isAdmin} />
+      <OnboardOrdersCard />
       {market && <QueueScanCard marketId={market.id} isAdmin={isAdmin} />}
       <OrdersCard />
       {market && <ResultsCard marketId={market.id} />}
+    </div>
+  )
+}
+
+// ── Scan any city: City + Business type ──────────────────────────────────────
+
+function OnboardCityCard({ isAdmin }: { isAdmin: boolean }) {
+  const queryClient = useQueryClient()
+  const [cityQuery, setCityQuery] = useState('')
+  const [businessType, setBusinessType] = useState('')
+  const [subIdx, setSubIdx] = useState(-1)
+  const [confirming, setConfirming] = useState(false)
+
+  const find = useMutation({
+    mutationFn: () =>
+      api.get<SubareasResponse>(`/outreach/geo/subareas?q=${encodeURIComponent(cityQuery.trim())}`),
+    onSuccess: () => { setSubIdx(-1); setConfirming(false) },
+  })
+  const result = find.data
+  const city = result?.city
+  const subareas = result?.subareas ?? []
+  const subarea = subIdx >= 0 ? subareas[subIdx] : undefined
+
+  const place = useMutation({
+    mutationFn: () =>
+      api.post<{ onboard_request: OnboardRequest }>('/outreach/onboard-requests', {
+        city: { name: city!.name, region: city!.region, lat: city!.lat, lng: city!.lng },
+        subarea: { name: subarea!.name, lat: subarea!.lat, lng: subarea!.lng, place_id: subarea!.place_id },
+        business_type: businessType.trim(),
+      }),
+    onSuccess: () => {
+      setConfirming(false)
+      queryClient.invalidateQueries({ queryKey: ['outreach-onboard-requests'] })
+    },
+  })
+
+  const findError = find.error instanceof Error
+    ? (find.error.message === 'city_not_found' ? `Couldn't find a city matching “${cityQuery}”.` : find.error.message)
+    : null
+  const placeError = place.error instanceof Error
+    ? (place.error.message === 'onboard_request_already_active'
+      ? 'This city sub-area × business type is already discovering or queued.'
+      : place.error.message)
+    : null
+
+  const canQueue = isAdmin && !!subarea && businessType.trim().length > 0
+
+  return (
+    <div style={{ marginTop: 16, padding: 16, border: '1px solid #e2e8f0', borderRadius: 12 }}>
+      <div style={{ fontWeight: 600, fontSize: 14 }}>Scan a city</div>
+      <p style={{ fontSize: 12, color: '#64748b', margin: '4px 0 12px' }}>
+        Type any city and a business type. The engine <strong>discovers</strong> those businesses
+        (a paid data pull), filters them, then <strong>scans</strong> the sub-area you pick — so the
+        results are real coverage, not an empty grid. This spends at two points and runs over
+        several minutes; you can leave the page and check back on the order below.
+      </p>
+
+      {/* Step 1 — city + business type */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <input
+          value={cityQuery}
+          onChange={e => { setCityQuery(e.target.value); find.reset(); place.reset() }}
+          onKeyDown={e => { if (e.key === 'Enter' && cityQuery.trim()) find.mutate() }}
+          placeholder="City, e.g. Van Nuys, CA"
+          style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', minWidth: 200 }}
+        />
+        <input
+          value={businessType}
+          onChange={e => { setBusinessType(e.target.value); place.reset() }}
+          placeholder="Business type, e.g. plumber"
+          style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', minWidth: 180 }}
+        />
+        <button
+          onClick={() => find.mutate()}
+          disabled={!cityQuery.trim() || find.isPending}
+          style={{ padding: '6px 14px', borderRadius: 8, border: '1px solid #e2e8f0',
+            background: '#fff', fontWeight: 600, fontSize: 13,
+            cursor: cityQuery.trim() ? 'pointer' : 'not-allowed' }}>
+          {find.isPending ? <Loader2 size={13} className="animate-spin" /> : 'Find sub-areas'}
+        </button>
+      </div>
+      {findError && (
+        <p style={{ fontSize: 12, color: '#b91c1c', marginTop: 8, display: 'flex', gap: 6, alignItems: 'center' }}>
+          <AlertTriangle size={13} /> {findError}
+        </p>
+      )}
+
+      {/* Step 2 — pick a verified sub-area */}
+      {result && (
+        <div style={{ marginTop: 12 }}>
+          {city && (
+            <div style={{ fontSize: 12, color: '#334155', marginBottom: 6 }}>
+              Resolved <strong>{city.name}</strong> — {subareas.length} Google-verified sub-area{subareas.length === 1 ? '' : 's'}.
+            </div>
+          )}
+          {subareas.length === 0 ? (
+            <p style={{ fontSize: 12, color: '#64748b' }}>{result.note ?? 'No sub-areas found.'}</p>
+          ) : (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <select value={subIdx} onChange={e => { setSubIdx(Number(e.target.value)); place.reset() }}
+                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', minWidth: 200 }}>
+                <option value={-1}>Choose a sub-area…</option>
+                {subareas.map((s, i) => <option key={s.place_id ?? s.name} value={i}>{s.name}</option>)}
+              </select>
+              {!confirming ? (
+                <button
+                  disabled={!canQueue}
+                  onClick={() => setConfirming(true)}
+                  title={isAdmin ? undefined : 'Placing an order is admin-only — it authorizes spend'}
+                  style={{ padding: '6px 14px', borderRadius: 8, border: 'none', fontWeight: 600, fontSize: 13,
+                    background: canQueue ? '#0f172a' : '#e2e8f0', color: canQueue ? '#fff' : '#94a3b8',
+                    cursor: canQueue ? 'pointer' : 'not-allowed' }}>
+                  Discover &amp; scan…
+                </button>
+              ) : (
+                <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 12, color: '#b45309', fontWeight: 600 }}>
+                    Discover “{businessType.trim()}” across {subarea?.name}, then scan it? Spends on the
+                    data pull + ≈$0.81 scan.
+                  </span>
+                  <button onClick={() => place.mutate()} disabled={place.isPending}
+                    style={{ padding: '6px 14px', borderRadius: 8, border: 'none', fontWeight: 600,
+                      fontSize: 13, background: '#b45309', color: '#fff', cursor: 'pointer' }}>
+                    {place.isPending ? <Loader2 size={13} className="animate-spin" /> : 'Confirm — place order'}
+                  </button>
+                  <button onClick={() => setConfirming(false)}
+                    style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0',
+                      background: '#fff', fontSize: 13, cursor: 'pointer' }}>
+                    Back
+                  </button>
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      {!isAdmin && (
+        <p style={{ fontSize: 11, color: '#94a3b8', marginTop: 8 }}>
+          Viewing only — placing an order is admin-only, because the click is the spend authorization.
+        </p>
+      )}
+      {placeError && (
+        <p style={{ fontSize: 12, color: '#b91c1c', marginTop: 8, display: 'flex', gap: 6, alignItems: 'center' }}>
+          <AlertTriangle size={13} /> {placeError}
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ── Onboard orders (discover → filter → scan) ────────────────────────────────
+
+function OnboardOrdersCard() {
+  const queryClient = useQueryClient()
+
+  const { data, isLoading } = useQuery<{ onboard_requests: OnboardRequest[]; total: number }>({
+    queryKey: ['outreach-onboard-requests'],
+    queryFn: () => api.get('/outreach/onboard-requests?limit=25'),
+    refetchInterval: q =>
+      (q.state.data?.onboard_requests ?? []).some(r => ACTIVE.has(r.status)) ? 20_000 : false,
+  })
+  const orders = data?.onboard_requests ?? []
+
+  const cancel = useMutation({
+    mutationFn: (id: string) => api.post(`/outreach/onboard-requests/${id}/cancel`, {}),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['outreach-onboard-requests'] }),
+  })
+
+  if (!isLoading && orders.length === 0) return null
+
+  return (
+    <div style={{ marginTop: 16, padding: 16, border: '1px solid #e2e8f0', borderRadius: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ fontWeight: 600, fontSize: 14 }}>City onboards (discover → filter → scan)</div>
+        <button onClick={() => queryClient.invalidateQueries({ queryKey: ['outreach-onboard-requests'] })}
+          style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#64748b' }} title="Refresh">
+          <RefreshCw size={14} />
+        </button>
+      </div>
+      {isLoading ? (
+        <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>Loading…</p>
+      ) : (
+        <table style={{ width: '100%', marginTop: 8, fontSize: 13, borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ textAlign: 'left', color: '#64748b', fontSize: 11 }}>
+              <th style={{ padding: '4px 8px' }}>Placed</th>
+              <th style={{ padding: '4px 8px' }}>Sub-area</th>
+              <th style={{ padding: '4px 8px' }}>Business type</th>
+              <th style={{ padding: '4px 8px' }}>Stage</th>
+              <th style={{ padding: '4px 8px' }}>Status</th>
+              <th style={{ padding: '4px 8px' }} />
+            </tr>
+          </thead>
+          <tbody>
+            {orders.map(order => (
+              <Fragment key={order.id}>
+                <tr style={{ borderTop: '1px solid #f1f5f9' }}>
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{new Date(order.created_at).toLocaleString()}</td>
+                  <td style={{ padding: '6px 8px' }}>{order.submarket?.name ?? '—'}</td>
+                  <td style={{ padding: '6px 8px' }}>{order.keyword?.term ?? order.category}</td>
+                  <td style={{ padding: '6px 8px', color: '#475569' }}>
+                    {order.status === 'running' ? (order.stage ?? 'starting…') : (order.stage ?? '—')}
+                    {order.prospects_survived != null && <> · {order.prospects_survived} kept</>}
+                  </td>
+                  <td style={{ padding: '6px 8px' }}><StatusChip status={order.status} /></td>
+                  <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                    {order.status === 'pending' && (
+                      <button onClick={() => cancel.mutate(order.id)}
+                        style={{ fontSize: 12, border: '1px solid #e2e8f0', background: '#fff',
+                          borderRadius: 6, padding: '2px 8px', cursor: 'pointer', color: '#b91c1c' }}>
+                        Withdraw
+                      </button>
+                    )}
+                  </td>
+                </tr>
+                {order.status === 'failed' && order.error && (
+                  <tr>
+                    <td colSpan={6} style={{ padding: '0 8px 6px', fontSize: 12, color: '#b91c1c' }}>
+                      {order.stage ? `Failed at ${order.stage}: ` : ''}{order.error} — a failed order is never
+                      retried automatically; place a new one once the cause is fixed.
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   )
 }

@@ -481,47 +481,69 @@ def cmd_collect(args) -> int:
 
 
 def cmd_tick(args) -> int:
-    """One heartbeat: collect (always, free) + execute at most ONE signed scan order.
+    """One heartbeat: collect (always, free) + execute at most ONE scan order + at most ONE
+    onboard order.
 
     This is what the §11 cron runs. It replaces nothing — `collect` remains the pure free
-    command — it adds the drain for `scan_request` orders the UI places (DECISIONS.md
-    2026-08-06). `tick` is deliberately NOT in PAID_COMMANDS: its spend is authorized per-run by
-    the order row (signed, single-use, named to one submarket x keyword), which is the evidence
-    an accidental deploy cannot manufacture. Requiring the env token here would make every cron
-    tick refuse, which is the §8a collect-gating mistake wearing a new name.
+    command — it drains the `scan_request` orders the UI places (DECISIONS.md 2026-08-06) and the
+    `onboard_request` orders the "City + Business type" form places (DECISIONS.md 2026-08-08:
+    discover → filter → scan for a typed city). `tick` is deliberately NOT in PAID_COMMANDS: its
+    spend is authorized per-run by the order row (signed, single-use), the evidence an accidental
+    deploy cannot manufacture. Requiring the env token here would make every cron tick refuse —
+    the §8a collect-gating mistake wearing a new name.
 
-    Collection runs FIRST: rescue the paid work already in flight before spending more, and a
-    freshly posted batch has nothing on the ready list yet anyway.
+    Order within the tick: collect FIRST (rescue paid work already in flight), then the quick scan
+    drain, then the onboard drain LAST because it runs a multi-minute Outscraper pull — the newly
+    posted scan it opens is collected on the NEXT tick, exactly like a scan order's. The claim on
+    each queue is conditional, so an onboard tick that runs long cannot be double-processed by the
+    next heartbeat starting before it finishes.
     """
     import asyncio as _asyncio
 
-    from api.services import scan_queue
+    from api.services import onboard_queue, scan_queue
 
     code = cmd_collect(args)
 
     settings = get_settings()
     client = _client()
     drained = _asyncio.run(scan_queue.drain_one(client, settings))
+    onboarded = _asyncio.run(onboard_queue.drain_one(client, settings))
     print(
         json.dumps(
             {
-                "orders_claimed": drained.claimed,
-                "order_id": drained.order_id,
-                "submarket": drained.submarket,
-                "keyword": drained.keyword,
-                "outcome": drained.outcome,
-                "snapshot_id": drained.snapshot_id,
-                "posted": drained.posted,
-                "error": drained.error,
-                "problems": drained.problems,
+                "scan": {
+                    "orders_claimed": drained.claimed,
+                    "order_id": drained.order_id,
+                    "submarket": drained.submarket,
+                    "keyword": drained.keyword,
+                    "outcome": drained.outcome,
+                    "snapshot_id": drained.snapshot_id,
+                    "posted": drained.posted,
+                    "error": drained.error,
+                    "problems": drained.problems,
+                },
+                "onboard": {
+                    "orders_claimed": onboarded.claimed,
+                    "order_id": onboarded.order_id,
+                    "submarket": onboarded.submarket,
+                    "keyword": onboarded.keyword,
+                    "category": onboarded.category,
+                    "stage": onboarded.stage,
+                    "outcome": onboarded.outcome,
+                    "prospects_ingested": onboarded.prospects_ingested,
+                    "prospects_survived": onboarded.prospects_survived,
+                    "snapshot_id": onboarded.snapshot_id,
+                    "posted": onboarded.posted,
+                    "error": onboarded.error,
+                },
             },
             indent=2,
         )
     )
-    # A failed ORDER exits non-zero even though the tick itself survived: an unattended queue
-    # whose orders quietly fail is the "green badge over a crashed job" shape (§6.2), and the
-    # exit code is the only summary a cron run leaves behind besides its logs.
-    return 1 if drained.outcome == "failed" else code
+    # A failed ORDER (either queue) exits non-zero even though the tick itself survived: an
+    # unattended queue whose orders quietly fail is the "green badge over a crashed job" shape
+    # (§6.2), and the exit code is the only summary a cron run leaves besides its logs.
+    return 1 if "failed" in (drained.outcome, onboarded.outcome) else code
 
 
 def cmd_rollup(args) -> int:

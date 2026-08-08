@@ -786,3 +786,80 @@ output was protected empirically.
 The guard mechanism is fuller than its current data (span enforced now; provider-boundary and
 drift-suppression are seams awaiting a second provider and `prospect_delta`) — logged as I-091
 rather than resolved by building those subsystems ahead of their phase.
+
+---
+
+## 2026-08-08 — Any-city scan onboarding: type "City + Business type", built in stages
+
+The scan form only let an operator pick a PRE-SEEDED submarket from a dropdown (submarkets ship
+from a market definition file). Owner request: type any city and scan it. Two findings shaped how
+this is built.
+
+**"Google-recognised submarkets" can't be sourced from Google.** Google resolves a place you name
+but has no endpoint that LISTS a city's neighbourhoods. So sub-areas are OSM-enumerated (Overpass
+`place=suburb|neighbourhood|…` nodes) and each is then VERIFIED against Google geocoding and kept
+only if it resolves inside the city — every option shown is Google-recognised, the list just isn't
+Google-sourced. This is the exact pipeline the Local SEO neighbourhood silo already rides; the
+primitives (`maps_geocode.forward_geocode_places`, `place_is_within_city`, `overpass`) are reused,
+not reinvented. Owner picked this over a Google-Places-Nearby-only list (patchy coverage). Owner
+also fixed scope at ONE sub-area per scan (keeps the one-submarket first-run rule).
+
+**A scan of a city that hasn't been INGESTED produces nothing.** `prospect_coverage` is
+`grid_result` joined to `prospect` on place_id, and `prospect` rows come only from the paid
+Outscraper `ingest` pass. So "scan a typed city" is really discover (ingest) → filter → scan —
+the business type the operator types is exactly the ingest CATEGORY. That's why the form is "City +
+Business type" and not just a place picker (I-092).
+
+**Staged build (this is why the first PR is backend-only).** The geo READ layer ships first:
+`services/outreach_geo.py` (resolve city + enumerate verified sub-areas, pure helpers unit-tested)
++ read-only routes (`GET /outreach/geo/resolve-city`, `/outreach/geo/subareas`, staff-gated,
+geocoding-only — they cannot reach the ~$0.81 scan spend). The "City + Business type" FORM and the
+discovery-execution (create market/submarket/keyword + run ingest→filter→scan on demand in the
+outreach service) land together in the next slice, so the form's Queue button is never a dead end
+that produces empty scans. The execution layer changes the outreach service's guarded spend/
+execution model (a new paid job beyond the one-scan drain) and can't be tested from the build
+sandbox, so it is deliberately verified live rather than merged blind.
+
+Refactor rider: `place_is_within_city` moved from `local_seo_silo` (imports FastAPI) to
+`maps_geocode` (pure), re-exported for existing callers — so the outreach geo layer reuses it
+without importing a web-framework-bound module.
+
+---
+
+## 2026-08-08 — Any-city onboarding slice 2: the discover→filter→scan order + form
+
+Slice 1 gave a read-only geo layer (resolve city + verified sub-areas). Slice 2 makes "City +
+Business type → Go" actually run, and it required a genuinely new order type because a typed city
+has never been ingested (I-092: a scan of it rolls up zero prospects).
+
+**A SEPARATE `onboard_request` table, not a flag on `scan_request`.** `scan_request` authorizes one
+thing — a scan of an already-ingested submarket — and its drain, its budget check, and its
+one-active guard are all built around exactly that one paid step. An onboard order spends
+differently: a variable Outscraper discovery pull PLUS a scan, across three stages. Bolting an
+"ingest first" flag onto `scan_request` would bend its invariants around a second spend it was
+never scoped for. A separate table + a separate drain (`onboard_queue`) keeps each order type's
+guarantees intact; the claim/budget primitives are reused from `scan_queue`, not re-derived.
+
+**Where each half runs.** platform-api owns the geo + row creation (resolve city, create-or-get
+market/submarket/keyword — all free) and writes the signed order; the outreach service owns the
+paid pipeline, because the Outscraper + scan clients live in its image. Same split, same reason, as
+`scan_request` (a spend gate stops being one if both halves live in one service). The business type
+the operator types is the Outscraper **category** AND the scan **keyword** — one input, both roles.
+
+**The drain runs inside `tick`, staged, and fails asymmetrically.** `cmd_tick` now drains at most
+one onboard order per heartbeat (after the quick scan drain, since discovery is multi-minute). The
+order records which STAGE it reached; a budget refusal or the ingest cost-gate firing spends
+nothing, an ingest/filter failure never reaches the scan (and records what discovery cost), and a
+scan failure keeps its snapshot findable — `scan_queue`'s rule extended to a multi-step run. The
+conditional claim means an onboard tick that runs past the next heartbeat cannot be
+double-processed. One replica assumed (as everywhere in the outreach service).
+
+**Create-or-get, never update.** Grid geometry is immutable once scanned, so a repeat pick of the
+same city/sub-area reuses the existing rows (dedup by canonical Google name, scoped to parent)
+rather than minting a second submarket with a drifted centre.
+
+**Can't be tested from the build sandbox** (no Outscraper / Google / outreach DB), so the pure
+logic — the staged drain's claim/budget/stage-failure decisions, the create-or-get dedup — is
+unit-tested (`test_onboard_queue.py` 15 cases, `test_outreach_onboard.py` 6 cases), and the paid
+execution is verified LIVE on the first real run (which is also the pipeline's first real scan).
+Migration `20260808120000_onboard_request.sql`.

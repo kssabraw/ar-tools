@@ -66,15 +66,6 @@ logger = logging.getLogger(__name__)
 # Neighborhood discovery. The seed service is paired with each verified
 # neighborhood ("<service> <neighborhood>") as a page target under this silo.
 _NEIGHBORHOOD_SILO = "Neighborhoods"
-# Google place types too big to be a within-city sub-area. A candidate that
-# geocodes to one of these (e.g. an LLM proposed a county/state) is rejected even
-# if its centre happens to fall inside the city box. Everything smaller —
-# locality (AU/UK suburb), sublocality, neighborhood, postal_town, etc. — is
-# allowed and gated geographically instead (see `place_is_within_city`).
-_TOO_BIG_TYPES = frozenset({
-    "administrative_area_level_1", "administrative_area_level_2",
-    "administrative_area_level_3", "country", "continent",
-})
 
 
 def _get_client(client_id: str) -> dict:
@@ -528,41 +519,11 @@ def _parse_area(location: str) -> tuple[str, str, str]:
     return city, state, country
 
 
-def place_is_within_city(candidate: dict, city_geo: dict) -> bool:
-    """True when a forward-geocoded candidate is a real sub-area geographically
-    INSIDE the target city — country-agnostic. Works for a US neighborhood
-    (nested in the city's locality) and an AU/UK suburb (its own locality) alike,
-    because it checks geography, not name nesting:
-
-      1. it resolved to a place that isn't the city itself / a centroid fallback
-         (distinct place_id), and
-      2. it isn't a region bigger than a town (no county/state/country type), and
-      3. its centre falls inside the city's geocoded footprint (bounds, padded),
-         or — when the city has no footprint — within a radius of the city centre.
-
-    Pure; unit-tested."""
-    import services.maps_geocode as mg
-
-    if not candidate or not candidate.get("matched"):
-        return False
-    if not city_geo or not city_geo.get("matched"):
-        return False
-    cpid, citypid = candidate.get("place_id"), city_geo.get("place_id")
-    if cpid and citypid and cpid == citypid:
-        return False  # snapped to the city itself — a bogus / centroid-fallback name
-    types = {str(t).lower() for t in (candidate.get("result_types") or [])}
-    if types & _TOO_BIG_TYPES:
-        return False  # a county / state / country, not a sub-area
-    lat, lng = candidate.get("lat"), candidate.get("lng")
-    if lat is None or lng is None:
-        return False
-    bounds = city_geo.get("bounds")
-    if bounds:
-        return mg.point_in_bounds(lat, lng, bounds, pad=settings.local_seo_city_bounds_pad)
-    clat, clng = city_geo.get("lat"), city_geo.get("lng")
-    if clat is None or clng is None:
-        return False
-    return mg.haversine_km(lat, lng, clat, clng) <= settings.local_seo_neighborhood_radius_km
+# `place_is_within_city` moved to `services.maps_geocode` (2026-08-08) — it is pure geography over
+# that module's primitives, so the outreach any-city sub-area enumeration can reuse it without
+# importing this web-framework-bound module. Re-exported here so existing callers and tests
+# (`silo.place_is_within_city`) are unchanged.
+from services.maps_geocode import place_is_within_city  # noqa: E402,F401
 
 
 def _propose_neighborhoods(city: str, state: str, country: str, max_n: int) -> list[str]:

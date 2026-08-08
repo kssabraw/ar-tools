@@ -2063,3 +2063,21 @@ is sourced from live data today:
 drift suppression are built (pass the real flag). Neither is a renderer change — both are one-line
 call-site edits in `build_delta_inputs`. Until then the delta is honest: it refuses on span, and
 the other two conditions cannot occur.
+
+---
+
+### I-092 (open, by design) — a scan of a non-ingested city yields empty coverage; discovery must precede the scan
+`prospect_coverage` is produced by `finalize_snapshot_rollup()` joining `grid_result` to
+`prospect` on `place_id` (migration `20260805120000`). `prospect` rows are written ONLY by the
+paid Outscraper `ingest` pass (`cmd_ingest` → `pipeline.run_ingest`, driven by a market's
+`categories` + submarket tiles). So scanning a submarket whose city was never ingested captures a
+grid but rolls up ZERO prospect coverage — a successful-but-empty result, and exactly the
+"manufactured total invisibility" the I-076 invariant warns against if misread.
+
+**Consequence for the any-city scan form (DECISIONS 2026-08-08):** "type a city and scan it" is not
+a scan-only action — it is discover (ingest, paid) → filter → scan. The business type the operator
+types IS the ingest category, which is why the form is "City + Business type". The geo read layer
+(built) resolves the city + its sub-areas; the discovery-execution layer (next slice) must run
+ingest+filter for the city BEFORE the scan, or reuse an already-ingested city's prospects. Not a
+bug — the pipeline order — recorded so the execution slice is built with it front of mind and no
+one wires a "scan a fresh city" button that silently returns nothing.
