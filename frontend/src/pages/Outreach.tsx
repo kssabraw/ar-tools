@@ -340,7 +340,7 @@ function OnboardOrdersCard() {
   const queryClient = useQueryClient()
   const [openId, setOpenId] = useState<string | null>(null)
 
-  const { data, isLoading } = useQuery<{ onboard_requests: OnboardRequest[]; total: number }>({
+  const { data, isLoading, isFetching } = useQuery<{ onboard_requests: OnboardRequest[]; total: number }>({
     queryKey: ['outreach-onboard-requests'],
     queryFn: () => api.get('/outreach/onboard-requests?limit=25'),
     refetchInterval: q =>
@@ -361,7 +361,7 @@ function OnboardOrdersCard() {
         <div style={{ fontWeight: 600, fontSize: 14 }}>City onboards (discover → filter → scan)</div>
         <button onClick={() => queryClient.invalidateQueries({ queryKey: ['outreach-onboard-requests'] })}
           style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#64748b' }} title="Refresh">
-          <RefreshCw size={14} />
+          <RefreshCw size={14} style={isFetching ? { animation: 'spin 1s linear infinite' } : undefined} />
         </button>
       </div>
       {isLoading ? (
@@ -651,7 +651,7 @@ function OrdersCard() {
   const queryClient = useQueryClient()
   const [openId, setOpenId] = useState<string | null>(null)
 
-  const { data, isLoading } = useQuery<{ scan_requests: ScanRequest[]; total: number }>({
+  const { data, isLoading, isFetching } = useQuery<{ scan_requests: ScanRequest[]; total: number }>({
     queryKey: ['outreach-scan-requests'],
     queryFn: () => api.get('/outreach/scan-requests?limit=25'),
     // Poll only while something is in flight — a settled queue is a cheap one-off read.
@@ -672,7 +672,7 @@ function OrdersCard() {
         <button onClick={() => queryClient.invalidateQueries({ queryKey: ['outreach-scan-requests'] })}
           style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#64748b' }}
           title="Refresh">
-          <RefreshCw size={14} />
+          <RefreshCw size={14} style={isFetching ? { animation: 'spin 1s linear infinite' } : undefined} />
         </button>
       </div>
       {isLoading ? (
