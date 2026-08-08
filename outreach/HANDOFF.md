@@ -2,10 +2,57 @@
 
 **Read this first, then `CLAUDE.md` → `START-HERE.md` → `ISSUES.md` → `DECISIONS.md`.**
 
-Status as of 2026-08-05 (Phase 3 slices 1–2 added 2026-08-07):
+Status as of 2026-08-08 (the first live scan is DONE; heatmap slices 1–2 and the any-city scan feature all MERGED to `main`):
 
-- **Phase 3 slice 2 — the comparison renderers — is BUILT (2026-08-07), on branch
-  `claude/outreach-first-scan-m4d7jb`, draft PR.** `heatmap_pair` (before/after side by side,
+- **THE FIRST LIVE SCAN IS COMPLETE AND VERIFIED (2026-08-08).** `emergency plumber` × the whole
+  city of Los Angeles, run through the new **any-city onboard** path (not the seeded market): **122
+  businesses discovered, 83 survived the filter, 81/81 grid points collected, snapshot rolled up,
+  119 `prospect_coverage` rows.** onboard_request `91bde3cb-082f-478f-ab3c-d504fc03bca3` · snapshot
+  `30455295-90a7-46ce-aae6-1845f3a856de` · submarket "Los Angeles, CA, USA" (the whole-city centre).
+  This exercised submission → collection → finalization → rollup → placeholder score in one live
+  pass. The scan tables are no longer empty: `scan_snapshot` 1, `scan_task` 81, `grid_result` 1,620,
+  `prospect_coverage` 119, `snapshot_rollup` 1, `grid_point_status` 81. Top invisible businesses
+  (0% coverage) surfaced for outreach: Major League Plumbing, USA Plumbing, Koreatown Handyman, and
+  others. **The core loop is proven end-to-end against a live provider for the first time.**
+  - **What run one still did NOT prove** (unchanged from §11b): the empty-pack path at scale (LA
+    whole-city is dense — a coastal submarket is run two), land masking (needs 3 cycles), the
+    fallback-by-id path (needs a task to age off `tasks_ready`), and tag recovery.
+- **THE ANY-CITY SCAN IS BUILT AND MERGED — "City + what a customer searches" → discover → filter →
+  scan** (2026-08-08). The scan is no longer confined to the pre-seeded LA market. A user types **any
+  city** (Google-resolved) + an optional **Google-recognized sub-area** + a **free-text consumer
+  search** (the phrase a real customer types — NOT a GBP category), and the platform discovers →
+  filters → scans it. The consumer search drives BOTH the Outscraper ingest category AND the geogrid
+  scan keyword. This closes I-092: `prospect_coverage` joins `grid_result` to *pre-ingested*
+  `prospect` rows on place_id, so scanning a city nobody has ingested yields zero coverage — the
+  onboard path therefore ingests-then-scans in one staged order.
+  - **Signed-order model:** a new **`onboard_request`** row (migration `20260808120000_onboard_request.sql`,
+    **applied live**; one-active partial-unique guard; RLS-on/zero-policy) is a single-use, admin-placed
+    order whose existence is its spend confirmation — the same pattern as `scan_request`. The outreach
+    `tick` cron drains **at most one `onboard_request` per heartbeat** (after collect + the scan-order
+    drain), running ingest → filter → scan with staged asymmetric failure (`api/services/onboard_queue.py`,
+    `OnboardDrainReport`, 15 tests). `tick` stays out of `PAID_COMMANDS` — the order row is the confirmation.
+  - **Geo enumeration (platform-api side):** Google has no "list a city's neighborhoods" endpoint, so
+    `services/outreach_geo.py` **OSM-enumerates** sub-areas (Overpass `place=suburb/neighbourhood/…` via
+    the new generic `overpass.places_near`) then **Google-verifies** each with `place_is_within_city`
+    (moved to the FastAPI-free `services/maps_geocode.py` so the sandbox can import it). `create_onboard_from_place`
+    is get-or-create for market/submarket/keyword (geometry is immutable — a repeat pick reuses rows, never
+    mints a drifted centre); `subarea=None` scans the whole-city centre. Routes: geo (`resolve-city`, `subareas`,
+    staff-gated) + onboard (POST/GET/cancel, admin-gated) in `routers/outreach.py`. Tests in
+    `tests/test_outreach_onboard.py`.
+  - **UI (`frontend/src/pages/Outreach.tsx`):** `OnboardCityCard` (city + "What a customer searches" +
+    Find city + sub-area / Whole-city select + Discover & scan), `OnboardOrdersCard` (expandable rows with
+    live `OnboardProgress` X/81 and an inline "View results ▾" → `CoverageTable`), `BusinessesCard`. The
+    two-market friction (the onboard mints its own market, distinct from the seeded LA-Plumbing one) is
+    resolved by viewing a scan's results **inline from its City onboards row** rather than a second market
+    selector (#611).
+  - **platform-api is now CONFIGURED** — the Outreacher project's `OUTREACH_SUPABASE_URL` /
+    `_SERVICE_ROLE_KEY` were set on the PLATFORM Railway service via cross-service **reference variables**
+    (`${{outreach.VAR}}`, no secret exposed), so `/outreach` answers instead of `503 outreach_not_configured`.
+  - **Merged:** #601 (`28f224c`, city+business-type → discover/filter/scan), #603 (`9cfeb12`, consumer
+    search + optional sub-area), #606 (`0229e34`, live collection progress + "Businesses found" view),
+    #611 (`2710729`, inline results). Migration applied live.
+- **Phase 3 slice 2 — the comparison renderers — is BUILT and MERGED (#589, `c3b1b50`).**
+  `heatmap_pair` (before/after side by side,
   shared colour scale + extent, both panels dated) and `heatmap_delta` (per-point change) —
   reporting §4.3 — added to `api/services/heatmap.py` on slice 1's deterministic footing. The
   delta's inverted-rank trap is handled: `delta_band` treats "not found" as worse than any real
@@ -20,7 +67,7 @@ Status as of 2026-08-05 (Phase 3 slices 1–2 added 2026-08-07):
   before; writes `heatmap_delta` artifacts with `compare_snapshot_id`; refusals reported
   per-prospect, never a blank picture). +33 unit tests (suite **351**). Renders nothing until two
   scans of one submarket both roll up coverage. Interpretation choices in DECISIONS 2026-08-07.
-- **Phase 3 slice 1 — the heatmap renderer — is BUILT (2026-08-07), on branch `claude/outreach-first-scan-m4d7jb`, draft PR.** `api/services/heatmap.py` renders a **deterministic** SVG from `prospect_coverage.rank_vector` + the snapshot's stored geometry alone (no `grid_result`), with the §4.2 colour scale, dead points as hollow grey rings distinct from red "not found", the business's own diamond pin, a legend and a 1-mile scale bar. `report_artifact` provenance table added (migration `20260807130000`, **applied live** — RLS-on/zero-policy, unique on `content_hash` = the §6 cache contract). A free `render-heatmap` CLI command (not in `PAID_COMMANDS`) renders one prospect or a whole snapshot. 25 new unit tests (suite at **318**), determinism pinned (identical inputs → identical hash; input reordering can't change it). **Phase 3 is sliced — renderer first, then call hook → outcome/touch + emit webhook → approval gate + PDF → signed URLs/R2 + client views; see DECISIONS 2026-08-07.** Two spec gaps logged not resolved: rank >20 folds to "found, far down" never red (I-089); `score_run_id` FK deferred to Phase 4 (I-090). **It renders nothing until the first scan's rollup writes coverage rows — it is ready and waiting, exactly like everything else in §11.**
+- **Phase 3 slice 1 — the heatmap renderer — is BUILT and MERGED (#580, `7f7dd3c`).** `api/services/heatmap.py` renders a **deterministic** SVG from `prospect_coverage.rank_vector` + the snapshot's stored geometry alone (no `grid_result`), with the §4.2 colour scale, dead points as hollow grey rings distinct from red "not found", the business's own diamond pin, a legend and a 1-mile scale bar. `report_artifact` provenance table added (migration `20260807130000`, **applied live** — RLS-on/zero-policy, unique on `content_hash` = the §6 cache contract). A free `render-heatmap` CLI command (not in `PAID_COMMANDS`) renders one prospect or a whole snapshot. 25 new unit tests, determinism pinned (identical inputs → identical hash; input reordering can't change it). **Phase 3 is sliced — renderer first, then call hook → outcome/touch + emit webhook → approval gate + PDF → signed URLs/R2 + client views; see DECISIONS 2026-08-07.** Two spec gaps logged not resolved: rank >20 folds to "found, far down" never red (I-089); `score_run_id` FK deferred to Phase 4 (I-090). **No `report_artifact` rows exist yet — the renderer has a live snapshot to draw from now, but nothing has called it.**
 - **Phase 1 (ingest + filter) is COMPLETE, verified against a real market, and MERGED to `main`** (#528, squashed as `67f235b`).
 - **Phase 1b (lead CRM) is COMPLETE, applied live, and MERGED to `main`** (#534, squashed as `452a726`).
 - **The platform-api `outreach` router, Phase 2 storage/partitioning and the pinned grid-geometry generator are MERGED** (#538, squashed as `a7acc05`). Migrations applied live.
@@ -34,7 +81,7 @@ Status as of 2026-08-05 (Phase 3 slices 1–2 added 2026-08-07):
 - **The placeholder score is BUILT and MERGED (#561, `902be5f`)** — `v_prospect_placeholder_score` (migration `20260805150000`), a view over `prospect_coverage`. Deliberately NOT a `prospect_score` row: that table is the Phase 4 model's and `v_prospect_ranked` already reads it as a fitted score (ISSUES I-082). **I-078 is RESOLVED** — `scan_snapshot` now records its own grid centre, which had to land before the first snapshot rather than after.
 - **THE UI IS BUILT (2026-08-06, owner ruling — see the DECISIONS.md signed-order entry; resolves I-072).** Three slices, all merged to the working branch: the `scan_request` signed-order table + the outreach `tick` command (collect + drain at most one order; NOT env-gated — the order row is its confirmation; closes I-086 with a `cost_ledger` write in `submit_scan`); six platform-api routes (place/cancel/list/detail/keywords/placeholder-scores — place and cancel are ADMIN-gated, the click is the spend authorization); and the suite SPA page `frontend/src/pages/Outreach.tsx` at `/outreach` (queue-a-scan with an explicit confirm step, order list with live progress x/81, coverage results honouring I-076's empty-means-not-measured). **What the Railway service needs now is ONE one-time change:** `OUTREACH_COMMAND=collect` replaced by `OUTREACH_COMMAND=tick` and a frequent `cronSchedule` (`*/15 * * * *`) — after which the §11b variable dance is never needed for a scan again; the env spend gate remains for CLI/emergency use. I-088 (auto-deploy suspected re-enabled) still wants a dashboard answer, though under `tick` an extra deploy is a free heartbeat.
 - **The first scan is PREPARED, not run** (2026-08-06). Live Railway config read and recorded, the target picked (`Van Nuys` × `plumber`, with reasoning), the runbook written and the post-run read built as `queries/first-scan-verify.sql` — 14 checks, every statement executed against the live schema so it parses. **See §11b.** The three things it waits on are still the three in §11, and all three are the owner's. Five findings came out of reading the paths the run is about to execute: **I-083** (the first snapshot is the likeliest to be incomplete, which pins its partition forever), **I-084** (how `serp_result` attaches to a grid-shaped `scan_snapshot` — this blocks 2d's design), **I-085** (I-071 has half-fixed itself), **I-086** (**the geogrid spends money and writes no `cost_ledger` row, and the budget ceiling does not cover scans**) and **I-087** (`recovered_by_tag` exists only in a log line). None are fixed.
-- **NOTHING HAS BEEN SCANNED.** The scan layer now has a producer, a consumer, and no data: `scan_snapshot`, `scan_task`, `grid_result`, `prospect_coverage`, `grid_point_status` are all empty. `OUTREACH_COMMAND` is `filter` and both spend variables are empty. **What is missing is no longer code — it is a deploy, a confirm token, and a second cron schedule** (§11).
+- ~~**NOTHING HAS BEEN SCANNED.**~~ **SUPERSEDED 2026-08-08 — the first scan is done (top of file).** The scan layer now has a producer, a consumer, AND data. The `tick` command is live on a 15-minute cron (since 2026-08-07) and drains scan + onboard orders; the env spend gate remains for CLI/emergency use only. The `filter`-then-set-back procedure this bullet described no longer governs the normal path — the signed-order model does (§11 note below).
 
 **Two things changed on 2026-08-03 that will mislead you if you read the older sections first.** The spend gate above supersedes the "set it back to `filter` afterwards" procedure this file used to rely on (§7.2), and the Railway configuration recorded in §1 was found to be **stale in two ways that each cost money** — read `get-service-config`, not this file, for live values.
 
@@ -53,18 +100,20 @@ Status as of 2026-08-05 (Phase 3 slices 1–2 added 2026-08-07):
 | Database | Supabase project **Outreacher**, ref `fkwhgvcggvsricuinuqy` | Phase 1 + 1b + Phase 2 storage applied; LA ingested and filtered |
 | Job runner | Railway service **outreach**, id `928c84bc-d7ca-416a-bd61-39e91cc64872` in project `ar-tools` (`2c718e53-73c8-4de8-bef8-7136f06b6ead`) | no cron schedule; auto-deploy-on-push DISABLED (2026-08-01); source **actually** on `main` since 2026-08-03 (the 2026-08-01 repoint did not stick — I-065). Runs only on a manual Deploy |
 | platform-api integration | `routers/outreach.py` + `services/outreach{,_db}.py` | **built** — 14 routes, read-only over the pipeline, read/write over the CRM |
-| Suite UI | not built | nothing in `frontend/`. NOT the next build, and **not a prerequisite for scanning** (§11a) — see ISSUES I-072, which asks for a decision rather than a default |
+| Suite UI | `frontend/src/pages/Outreach.tsx` at `/outreach` | **built + merged** (#571 scan trigger, #574 CRM board, #601/#603/#606/#611 any-city onboard). Queue a scan by city + consumer search; live progress; coverage + businesses views; CRM board with one-click promote |
 | Grid geometry | `api/services/geometry.py` | **built**, version `v1`, **81 points** (I-025 resolved) |
-| Geogrid scan client | `api/services/maps_scan.py` (pure) + `scan_runner.py` (I/O) | **built** (#557) — `task_post` batching, `tasks_ready` collection, finalization. Never run |
-| Scan bookkeeping | `scan_task` table, migration `20260804120000` | **applied live**, empty |
-| Coverage rollup | `rollup_snapshot_coverage()` + `grid_point_status`, migration `20260805120000`; `api/services/coverage_rollup.py` | **applied live**, verified by `tests/coverage_rollup.sql` (18 checks). Never run against real data — there is none |
-| Placeholder score | `v_prospect_placeholder_score`, migration `20260805150000` | **applied live**. A view; `prospect_score` stays empty until Phase 4 (I-082) |
+| Geogrid scan client | `api/services/maps_scan.py` (pure) + `scan_runner.py` (I/O) | **built** (#557), **RUN LIVE 2026-08-08** — first scan collected 81/81 points |
+| Scan bookkeeping | `scan_task` table, migration `20260804120000` | **applied live**; 81 rows (all `collected`) from the first scan |
+| Coverage rollup | `rollup_snapshot_coverage()` + `grid_point_status`, migration `20260805120000`; `api/services/coverage_rollup.py` | **applied live**, verified by `tests/coverage_rollup.sql` (18 checks). **Run live 2026-08-08** — 1 snapshot rolled up, 119 coverage rows |
+| Any-city onboard | `onboard_request` table (`20260808120000`) + `api/services/onboard_queue.py` + platform-api `services/outreach_geo.py` | **built + merged + run live** — discover→filter→scan any Google city + consumer search; drained by `tick` |
+| Placeholder score | `v_prospect_placeholder_score`, migration `20260805150000` | **applied live**, **producing real rows** over the first scan's coverage. `prospect_score` stays empty until Phase 4 (I-082) |
+| Report artifacts | `report_artifact` table (`20260807130000`) + `api/services/heatmap.py` | **built + merged** (#580/#589). Renderer has a live snapshot to draw from; **no artifacts rendered yet** |
 | I-004 spike | `api/services/ai_granularity.py` + `probe-ai-granularity` | **built** (#556), **never run** — needs a Deploy + confirm token |
 | First-scan runbook + read | `HANDOFF.md` §11b · `queries/first-scan-verify.sql` | **prepared 2026-08-06**, never executed. The scan itself still waits on the three owner-side steps in §11 |
 
 **This is a SEPARATE Supabase project from AR-Internal-Tools.** Do not point outreach code at the suite's database, and do not put outreach migrations in `writer/supabase/migrations/`.
 
-Live row counts (2026-08-04, unchanged 2026-08-05): `prospect` 1,388 (**105 carrying `review_count_inferred_zero`**, §9) · `filter_result` 8,328 · `submarket` 14 · `keyword` 5 · `market` 1 · `cost_ledger` 33 · `storage_retention_log` 8 · `lead` 0 · `lead_stage` 7 · `suppression` 0 · `review_inferred_zero_audit` 0 · **`scan_snapshot` 0 · `scan_task` 0 · `grid_result` 0 · `prospect_coverage` 0 · `snapshot_rollup` 0 · `grid_point_status` 0** — the scan layer now has a producer and has still produced nothing. Those two facts are easy to conflate and §11 exists to keep them apart.
+Live row counts (2026-08-08, after the first scan): `prospect` **1,407** (105 carrying `review_count_inferred_zero`, §9) · `submarket` **15** · `keyword` **6** · `market` **2** (the seeded LA-Plumbing market + the any-city onboard's "Los Angeles, CA, USA") · **`scan_snapshot` 1 · `scan_task` 81 · `grid_result` 1,620 · `prospect_coverage` 119 · `snapshot_rollup` 1 · `grid_point_status` 81** · `onboard_request` 1 (done) · `scan_request` 0 · `report_artifact` 0. **The scan layer has a producer, a consumer, and — for the first time — data.**
 
 ### Railway service configuration
 
@@ -521,13 +570,19 @@ outreach/
 
 ---
 
-## 11. The scan layer has a producer and no data — the gap is not code
+## 11. The scan layer has run — this section is kept for the mechanics, no longer the status
+
+> **UPDATED 2026-08-08.** The three owner-side steps below have all been taken: `tick` is live on a
+> 15-minute cron, the collector schedule is that same tick, and the owner ran the first scan through
+> the any-city UI. This section is now a record of the mechanics (the deploy/confirm/cron model, the
+> collector-cadence trap) rather than a to-do list. The "nothing has been scanned" framing it opens
+> with is historical — see the top of the file for live state.
 
 This section exists because the previous version of this file said "Phase 2 scanning has not started" and that sentence covered two very different situations. It now means only one thing, and conflating them would send the next session to write code that already exists.
 
-**What is built:** the geogrid submission and collection path, end to end, with 42 tests (§8.0a). **What has happened:** nothing. Zero tasks posted, zero rows collected, zero snapshots.
+**What is built:** the geogrid submission and collection path, end to end, with 42 tests (§8.0a). **What has happened (as of 2026-08-08):** the first scan ran — 81/81 points collected, rolled up. The three owner-side steps below are done; they are kept as the mechanics of *how* a scan is triggered, which the any-city onboard path now automates through `tick`.
 
-Three things stand in between, and none of them are code:
+Three things stood in between, and none of them were code:
 
 1. **A Railway deploy with the scan variables set.** `OUTREACH_COMMAND=scan`, `OUTREACH_CONFIRM_SPEND=scan`, `OUTREACH_ARGS=--submarket '<name>'`. It must be a **fresh Deploy, not a redeploy** — a redeploy replays the previous deployment's config snapshot (§6.1, and the ~$0.11 it cost). Line one of the logs prints the resolved command and the confirm token, so what a run is about to do is visible before it does it.
 
@@ -724,6 +779,15 @@ check on the scan path and a durable `recovered_by_tag` are still worth revisiti
 `ai_region` naming (§7.4, a manual afternoon that unblocks the AI half of item 3).
 
 **Not on the list, because it is done:** ingest + filter (Phase 1), the lead CRM board and
-one-click promote (Phase 1b, #574), the scan producer/consumer/rollup/placeholder-score, and the
-UI that triggers scans (#571). The scan engine (`tick`) is live on a 15-minute cron as of
-2026-08-07 00:13 UTC and verified idle-healthy.
+one-click promote (Phase 1b, #574), the scan producer/consumer/rollup/placeholder-score, the
+UI that triggers scans (#571), the **any-city onboard** path (#601/#603/#606/#611 — discover→filter→scan
+any Google city by consumer search), the **Phase 3 heatmap renderers** (#580/#589), and — as of
+2026-08-08 — **the first live scan itself** (emergency plumber × whole-city LA: 122 discovered / 83
+survived / 81 collected / rolled up / 119 coverage rows). The scan engine (`tick`) is live on a
+15-minute cron since 2026-08-07 00:13 UTC and has now drained a real onboard order end-to-end.
+
+**The standing recommendation stands, sharpened:** the highest-value next thing is still not a build
+— it is **making the first calls** off the invisible businesses this scan surfaced (Major League
+Plumbing, USA Plumbing, Koreatown Handyman, others at 0% coverage), then Phase 3's audit/heatmap PDF
+so a prospect's invisibility becomes a picture you hand them. Everything downstream (Phase 4 scoring,
+email) is tuned by outcomes that don't exist until real prospects have been contacted.
