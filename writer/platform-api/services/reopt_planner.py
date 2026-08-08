@@ -28,7 +28,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from db.supabase_client import get_supabase
-from services import notifications, rankability, sop_store
+from services import maps_reporting, notifications, rankability, sop_store
 
 logger = logging.getLogger(__name__)
 
@@ -802,9 +802,12 @@ def _fetch_maps_signals(supabase, client_id: str) -> "tuple[list[dict], list[dic
     weak_areas: list[dict] = []
     solv_drop: "dict | None" = None
     try:
+        # Weak areas + the SoLV drop become client-facing Action Plan items, so
+        # they read the scheduled series only (services.maps_reporting).
         scans = (
-            supabase.table("maps_scans")
-            .select("id")
+            maps_reporting.only_reporting(
+                supabase.table("maps_scans").select("id")
+            )
             .eq("client_id", client_id)
             .eq("status", "complete")
             .order("completed_at", desc=True)

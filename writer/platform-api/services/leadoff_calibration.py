@@ -23,6 +23,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from db.supabase_client import get_supabase
+from services import maps_reporting
 
 logger = logging.getLogger(__name__)
 
@@ -312,7 +313,9 @@ def _gather_sources(supabase, prediction: dict[str, Any]) -> dict[str, Any]:
                 counts.append(int(v))
     sources["competitor_review_counts"] = counts
 
-    scans = (supabase.table("maps_scans").select("id")
+    # The measured outcome a prediction is scored against — read the scheduled
+    # series so an ad-hoc one-off can't skew the calibration weights.
+    scans = (maps_reporting.only_reporting(supabase.table("maps_scans").select("id"))
              .eq("client_id", client_id).eq("status", "complete")
              .order("completed_at", desc=True).limit(1).execute().data or [])
     if scans:

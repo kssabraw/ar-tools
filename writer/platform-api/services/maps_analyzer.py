@@ -33,6 +33,7 @@ from statistics import mean
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import maps_reporting
 from services.maps_analytics import OCTANT_FULL, build_geogrid_analytics
 
 logger = logging.getLogger(__name__)
@@ -752,9 +753,11 @@ def reconcile_alerts(
 # Orchestration (I/O) + async job.
 # ----------------------------------------------------------------------------
 def _previous_completed_scan(supabase, client_id: str, completed_at: Optional[str], scan_id: str) -> Optional[dict]:
-    """The most recent completed scan strictly older than this one (by
-    completed_at). Excludes failed/cancelled so a retry isn't a bogus baseline."""
-    query = (
+    """The most recent completed SCHEDULED scan strictly older than this one (by
+    completed_at). Excludes failed/cancelled so a retry isn't a bogus baseline,
+    and excludes one-off runs so an ad-hoc scan can't become the baseline the
+    next scheduled scan is diffed against (services.maps_reporting)."""
+    query = maps_reporting.only_reporting(
         supabase.table("maps_scans")
         .select("id, completed_at")
         .eq("client_id", client_id)
@@ -778,7 +781,7 @@ def analyze_scan(scan_id: str) -> dict:
     resolve alerts and emit a notification for the batch of newly-opened ones."""
     supabase = get_supabase()
     scan = (
-        supabase.table("maps_scans").select("id, client_id, status, completed_at")
+        supabase.table("maps_scans").select("id, client_id, status, completed_at, trigger")
         .eq("id", scan_id).limit(1).execute()
     ).data
     if not scan:
@@ -786,6 +789,11 @@ def analyze_scan(scan_id: str) -> dict:
     scan = scan[0]
     if scan.get("status") != "complete":
         return {"skipped": "scan_not_complete"}
+    # Alerts drive notifications and Action Plan items, so they are reporting:
+    # a one-off run never opens or resolves one. The completion hook already
+    # skips these, but analyze_scan is also callable directly.
+    if not maps_reporting.is_reporting_scan(scan):
+        return {"skipped": "scan_not_in_reporting", "opened": 0}
     client_id = scan["client_id"]
 
     curr_results = (

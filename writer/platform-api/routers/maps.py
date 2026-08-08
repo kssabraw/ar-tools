@@ -43,6 +43,7 @@ from models.maps import (
     MapsAreaTrendsResponse,
     MapsOctantChange,
     MapsPeriodsResponse,
+    MapsRunRequest,
     MapsRunResponse,
     MapsScanDetail,
     MapsScanResultRow,
@@ -59,6 +60,7 @@ from services import content_intel
 from services import gbp_audit as gbp_audit_service
 from services import local_relevance
 from services import local_dominator
+from services import maps_reporting
 from services import review_analytics
 from services import maps_solv as maps_solv_service
 
@@ -196,8 +198,19 @@ async def delete_keyword(keyword_id: UUID, auth: dict = Depends(require_auth)) -
 
 
 @router.post("/clients/{client_id}/maps/scan", response_model=MapsRunResponse)
-async def run_scan(client_id: UUID, auth: dict = Depends(require_auth)) -> MapsRunResponse:
-    """Enqueue an on-demand geo-grid scan. Validates the config + keywords first."""
+async def run_scan(
+    client_id: UUID,
+    body: Optional[MapsRunRequest] = None,
+    auth: dict = Depends(require_auth),
+) -> MapsRunResponse:
+    """Enqueue an on-demand geo-grid scan. Validates the config + keywords first.
+
+    An empty body scans every active keyword. `keywords` scans only those — the
+    grid is billed per keyword, so re-checking one keyword after a fix costs a
+    fraction of a full run. On-demand scans are recorded as one-offs
+    (trigger='manual') and therefore stay out of reporting, which is also what
+    makes a partial keyword set safe: it can never land in a series that assumes
+    the full set."""
     supabase = get_supabase()
     config = (
         supabase.table("maps_scan_configs").select("google_place_id, center_lat, center_lng")
@@ -208,11 +221,26 @@ async def run_scan(client_id: UUID, auth: dict = Depends(require_auth)) -> MapsR
     c = config[0]
     if not c.get("google_place_id") or c.get("center_lat") is None or c.get("center_lng") is None:
         return MapsRunResponse(client_id=client_id, status="failed", error="config_incomplete")
-    if not supabase_keywords(client_id):
+
+    active = [k["keyword"] for k in supabase_keywords(client_id) if k.get("active")]
+    if not active:
         return MapsRunResponse(client_id=client_id, status="failed", error="no_keywords")
 
-    local_dominator.enqueue_maps_scan(str(client_id), trigger="manual")
-    return MapsRunResponse(client_id=client_id, status="enqueued")
+    requested = (body.keywords if body else None) or None
+    keywords, unknown = local_dominator.resolve_scan_keywords(active, requested)
+    if unknown:
+        # Reject rather than quietly scanning the subset we recognised — the
+        # caller asked for keywords we'd otherwise never run.
+        raise HTTPException(
+            status_code=400, detail=f"unknown_keywords: {', '.join(unknown[:5])}"
+        )
+    if not keywords:
+        return MapsRunResponse(client_id=client_id, status="failed", error="no_keywords")
+
+    # Only pass a subset through; None keeps the scheduled full-set behaviour.
+    subset = keywords if requested else None
+    local_dominator.enqueue_maps_scan(str(client_id), trigger="manual", keywords=subset)
+    return MapsRunResponse(client_id=client_id, status="enqueued", keywords=keywords)
 
 
 @router.post("/clients/{client_id}/maps/poll")
@@ -351,11 +379,20 @@ async def backfill_maps_images_all(
 
 
 @router.get("/clients/{client_id}/maps/latest", response_model=MapsScanDetail)
-async def latest_scan(client_id: UUID, auth: dict = Depends(require_auth)) -> MapsScanDetail:
-    """The most recent completed scan's detail (the module's landing view)."""
+async def latest_scan(
+    client_id: UUID, scope: str = "any", auth: dict = Depends(require_auth)
+) -> MapsScanDetail:
+    """The most recent completed scan's detail (the module's landing view).
+
+    ``scope=any`` (default) is the Heatmap tab: it shows whatever ran last,
+    including a one-off — looking at the grid you just ran by hand is the point
+    of running one. ``scope=reporting`` is the printable client report, which
+    must show the scheduled series (services.maps_reporting)."""
+    query = get_supabase().table("maps_scans").select("id")
+    if scope == "reporting":
+        query = maps_reporting.only_reporting(query)
     rows = (
-        get_supabase().table("maps_scans").select("id")
-        .eq("client_id", str(client_id)).eq("status", "complete")
+        query.eq("client_id", str(client_id)).eq("status", "complete")
         .order("completed_at", desc=True).limit(1).execute()
     ).data
     if not rows:
@@ -409,11 +446,14 @@ def build_maps_trends(scans: list[dict], results: list[dict]) -> MapsTrendsRespo
 async def maps_trends(
     client_id: UUID, limit: int = 52, auth: dict = Depends(require_auth)
 ) -> MapsTrendsResponse:
-    """Per-keyword trend across the client's completed scans — Top-3 %, Top-10 %,
-    Found %, and average rank over time — for charting in History/reporting."""
+    """Per-keyword trend across the client's completed SCHEDULED scans — Top-3 %,
+    Top-10 %, Found %, and average rank over time — for charting in
+    History/reporting. One-off runs are excluded (see services.maps_reporting)."""
     supabase = get_supabase()
     scans = (
-        supabase.table("maps_scans").select("id, completed_at, trigger")
+        maps_reporting.only_reporting(
+            supabase.table("maps_scans").select("id, completed_at, trigger")
+        )
         .eq("client_id", str(client_id)).eq("status", "complete")
         .order("completed_at", desc=True).limit(max(1, min(limit, 200))).execute()
     ).data or []
@@ -506,10 +546,12 @@ async def maps_competitor_trends(
     client_id: UUID, limit: int = 52, auth: dict = Depends(require_auth)
 ) -> MapsCompetitorTrendsResponse:
     """Per-competitor "are they gaining on us?" trend across the client's
-    completed scans, from the per-pin above-us capture."""
+    completed scheduled scans, from the per-pin above-us capture."""
     supabase = get_supabase()
     scans = (
-        supabase.table("maps_scans").select("id, completed_at")
+        maps_reporting.only_reporting(
+            supabase.table("maps_scans").select("id, completed_at")
+        )
         .eq("client_id", str(client_id)).eq("status", "complete")
         .order("completed_at", desc=True).limit(max(1, min(limit, 200))).execute()
     ).data or []
@@ -527,10 +569,13 @@ async def maps_solv(
     client_id: UUID, limit: int = 52, auth: dict = Depends(require_auth)
 ) -> MapsSolvResponse:
     """Share of Local Voice — the client's Top-3 local-pack coverage over time
-    plus per-competitor presence share, derived from stored scans (no new fetch)."""
+    plus per-competitor presence share, derived from stored scheduled scans (no
+    new fetch)."""
     supabase = get_supabase()
     scans = (
-        supabase.table("maps_scans").select("id, completed_at, trigger")
+        maps_reporting.only_reporting(
+            supabase.table("maps_scans").select("id, completed_at, trigger")
+        )
         .eq("client_id", str(client_id)).eq("status", "complete")
         .order("completed_at", desc=True).limit(max(1, min(limit, 200))).execute()
     ).data or []
@@ -669,7 +714,9 @@ async def maps_dashboard_threats(top_n: int = 3, auth: dict = Depends(require_au
     the same build_competitor_trends used by the per-client view."""
     supabase = get_supabase()
     scans = (
-        supabase.table("maps_scans").select("id, client_id, completed_at")
+        maps_reporting.only_reporting(
+            supabase.table("maps_scans").select("id, client_id, completed_at")
+        )
         .eq("status", "complete").order("completed_at", desc=True).limit(300).execute()
     ).data or []
     if not scans:
@@ -703,9 +750,13 @@ async def maps_dashboard_threats(top_n: int = 3, auth: dict = Depends(require_au
 # Scan-over-scan analyzer ("What changed") + in-app geo-grid alerts.
 # ---------------------------------------------------------------------------
 def _two_latest_completed_scans(client_id: UUID) -> tuple[Optional[dict], Optional[dict]]:
-    """The client's latest completed scan and the one before it (None if absent)."""
+    """The client's latest completed SCHEDULED scan and the one before it (None if
+    absent). "What changed" is a week-over-week reporting read, so a one-off run
+    is neither the thing compared nor the baseline it is compared against."""
     rows = (
-        get_supabase().table("maps_scans").select("id, completed_at")
+        maps_reporting.only_reporting(
+            get_supabase().table("maps_scans").select("id, completed_at")
+        )
         .eq("client_id", str(client_id)).eq("status", "complete")
         .order("completed_at", desc=True).limit(2).execute()
     ).data or []
@@ -727,11 +778,15 @@ async def maps_changes(
     supabase = get_supabase()
     if scan_id is not None:
         found = (
-            supabase.table("maps_scans").select("id, completed_at, status")
+            supabase.table("maps_scans").select("id, completed_at, status, trigger")
             .eq("id", str(scan_id)).eq("client_id", str(client_id)).limit(1).execute()
         ).data
         if not found or found[0].get("status") != "complete":
             raise HTTPException(status_code=404, detail="scan_not_found")
+        # A one-off has no place in the week-over-week series, so it has no
+        # "previous week" to be read against either.
+        if not maps_reporting.is_reporting_scan(found[0]):
+            raise HTTPException(status_code=404, detail="scan_not_in_reporting")
         curr = {"id": found[0]["id"], "completed_at": found[0].get("completed_at")}
         prev = _previous_completed_scan(supabase, str(client_id), curr["completed_at"], curr["id"])
     else:
@@ -766,14 +821,16 @@ async def maps_periods(
 ) -> MapsPeriodsResponse:
     """Last 7 / 30 / 90-day + since-start deltas for the visibility metrics
     (avg rank, Top-3 %, Top-10 %, Found %), overall + per-keyword. Computed from
-    the client's completed-scan time series."""
+    the client's completed SCHEDULED-scan time series."""
     from datetime import datetime, timezone
 
     from services.maps_analyzer import build_maps_periods
 
     supabase = get_supabase()
     scans = (
-        supabase.table("maps_scans").select("id, completed_at")
+        maps_reporting.only_reporting(
+            supabase.table("maps_scans").select("id, completed_at")
+        )
         .eq("client_id", str(client_id)).eq("status", "complete")
         .order("completed_at", desc=True).limit(max(1, min(limit, 200))).execute()
     ).data or []

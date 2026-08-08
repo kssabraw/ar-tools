@@ -117,10 +117,21 @@ class MapsScanDetail(MapsScanSummary):
     results: list[MapsScanResultRow] = Field(default_factory=list)
 
 
+class MapsRunRequest(BaseModel):
+    """Body for an on-demand scan. ``keywords`` omitted/empty scans every active
+    keyword (the default); pass a subset to scan only those — useful when you
+    only want to re-check the one keyword you just worked on, and cheaper,
+    since a geo-grid is billed per keyword × pin."""
+    keywords: Optional[list[str]] = None
+
+
 class MapsRunResponse(BaseModel):
     client_id: UUID
     status: str  # 'enqueued' | 'failed'
     error: Optional[str] = None
+    # Which keywords the enqueued scan will cover (all active ones unless a
+    # subset was requested), so the UI can confirm the scope it just started.
+    keywords: Optional[list[str]] = None
 
 
 class MapsTrendPoint(BaseModel):

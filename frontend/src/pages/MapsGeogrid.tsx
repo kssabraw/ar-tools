@@ -148,8 +148,21 @@ function Heatmap({ clientId, scanning, onRan, onStopped }: { clientId: string; s
       return scanning || (reportPending && !reportPollExpired) ? 8000 : false
     },
   })
+  // Which keywords the next on-demand run covers. null = all active ones.
+  const [scope, setScope] = useState<Set<string> | null>(null)
+  const { data: keywords } = useQuery<MapsKeyword[]>({
+    queryKey: ['maps-keywords', clientId],
+    queryFn: () => api.get<MapsKeyword[]>(`/clients/${clientId}/maps/keywords`),
+  })
+  const activeKeywords = (keywords ?? []).filter(k => k.active)
+
   const runMut = useMutation({
-    mutationFn: () => api.post<MapsRunResponse>(`/clients/${clientId}/maps/scan`, {}),
+    // Omit `keywords` entirely for a full run, so the request is identical to
+    // what it was before the picker existed.
+    mutationFn: () => api.post<MapsRunResponse>(
+      `/clients/${clientId}/maps/scan`,
+      scope ? { keywords: [...scope] } : {},
+    ),
     onSuccess: () => {
       onRan()
       queryClient.invalidateQueries({ queryKey: ['maps-scans', clientId] })
@@ -165,8 +178,15 @@ function Heatmap({ clientId, scanning, onRan, onStopped }: { clientId: string; s
 
   const busy = scanning || runMut.isPending
   const [authorityOpen, setAuthorityOpen] = useState(false)
-  // One-off run + a stop control (while a scan is in flight) + the quick weekly
-  // schedule toggle, grouped so they sit together above the heatmap.
+  // An explicitly empty selection can't be scanned — block the run rather than
+  // silently falling back to all keywords.
+  const noKeywordsPicked = scope !== null && scope.size === 0
+  const runLabel = scope === null
+    ? 'Run scan now'
+    : `Run scan (${scope.size} keyword${scope.size === 1 ? '' : 's'})`
+  // One-off run + its keyword scope + a stop control (while a scan is in flight)
+  // + the quick weekly schedule toggle, grouped so they sit together above the
+  // heatmap.
   const controls = (
     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
       <ScheduleToggle clientId={clientId} />
@@ -179,8 +199,19 @@ function Heatmap({ clientId, scanning, onRan, onStopped }: { clientId: string; s
           <Square size={13} /> {cancelMut.isPending ? 'Stopping…' : 'Stop scan'}
         </button>
       )}
-      <button style={primaryBtn} onClick={() => runMut.mutate()} disabled={runMut.isPending}>
-        <Play size={14} /> {runMut.isPending ? 'Starting…' : 'Run scan now'}
+      <KeywordScope
+        keywords={activeKeywords}
+        selected={scope}
+        onChange={setScope}
+        disabled={runMut.isPending}
+      />
+      <button
+        style={{ ...primaryBtn, ...(noKeywordsPicked ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+        onClick={() => runMut.mutate()}
+        disabled={runMut.isPending || noKeywordsPicked}
+        title={noKeywordsPicked ? 'Pick at least one keyword to scan' : undefined}
+      >
+        <Play size={14} /> {runMut.isPending ? 'Starting…' : runLabel}
       </button>
     </div>
   )
@@ -212,6 +243,19 @@ function Heatmap({ clientId, scanning, onRan, onStopped }: { clientId: string; s
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
         <div style={{ fontSize: 13, color: '#64748b' }}>
           Last scan {latest.completed_at ? relativeTime(latest.completed_at) : ''} · {latest.radius_miles}-mile radius · {latest.grid_size}×{latest.grid_size} grid · {latest.resource_category === 'googleLocalFinder' ? 'Local Finder' : 'Google Maps'}
+          {latest.trigger !== 'scheduled' && (
+            // The heatmap deliberately shows one-offs — but say so, since this
+            // grid is absent from trends, reports and alerts.
+            <span
+              style={{
+                marginLeft: 8, fontSize: 11, fontWeight: 600, color: '#4f46e5',
+                background: '#eef2ff', borderRadius: 999, padding: '2px 8px',
+              }}
+              title="A one-off run: shown here, but excluded from trends, alerts and client reports. The weekly scheduled scan is the reporting series."
+            >
+              One-off{latest.search_terms?.length ? ` · ${latest.search_terms.length} keyword${latest.search_terms.length === 1 ? '' : 's'}` : ''} · not in reporting
+            </span>
+          )}
         </div>
         {controls}
       </div>
@@ -504,6 +548,100 @@ function ScheduleToggle({ clientId }: { clientId: string }) {
       {on ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
       {toggleMut.isPending ? 'Saving…' : on ? 'Weekly: On' : 'Weekly: Off'}
     </button>
+  )
+}
+
+/**
+ * Picks which keywords an on-demand scan covers. `null` = every active keyword
+ * (the default, and what the weekly scheduled scan always does); a Set = just
+ * those. Worth having because a geo-grid is billed per keyword × pin, so
+ * re-checking the one keyword you just worked on costs a fraction of a full run.
+ */
+function KeywordScope({
+  keywords, selected, onChange, disabled,
+}: {
+  keywords: MapsKeyword[]
+  selected: Set<string> | null
+  onChange: (next: Set<string> | null) => void
+  disabled?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const wrap = useRef<HTMLDivElement>(null)
+
+  // Close on an outside click, so the panel doesn't sit over the heatmap.
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (e: MouseEvent) => {
+      if (wrap.current && !wrap.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [open])
+
+  if (keywords.length === 0) return null
+  const count = selected ? selected.size : keywords.length
+  const all = selected === null
+
+  const toggle = (kw: string) => {
+    // Materialise "all" into a real set on first uncheck, so unticking one
+    // keyword out of five leaves the other four selected.
+    const next = new Set(selected ?? keywords.map(k => k.keyword))
+    if (next.has(kw)) next.delete(kw)
+    else next.add(kw)
+    // Back to every keyword → return to the "all" default rather than an
+    // equivalent explicit set, so the request stays a plain full-set scan.
+    onChange(next.size === keywords.length ? null : next)
+  }
+
+  return (
+    <div ref={wrap} style={{ position: 'relative' }}>
+      <button
+        style={{ ...outlineBtn, color: all ? '#64748b' : '#4f46e5', borderColor: all ? undefined : '#c7d2fe' }}
+        onClick={() => setOpen(v => !v)}
+        disabled={disabled}
+        title="Choose which keywords this scan covers (each keyword is billed separately)"
+      >
+        <ChevronDown size={13} /> {all ? `All ${keywords.length} keywords` : `${count} of ${keywords.length} keywords`}
+      </button>
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 20, minWidth: 260, maxWidth: 340,
+          maxHeight: 300, overflowY: 'auto', background: '#fff', border: '1px solid #e2e8f0',
+          borderRadius: 8, boxShadow: '0 8px 24px rgba(15,23,42,0.12)', padding: 10, textAlign: 'left',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#0f172a' }}>Scan these keywords</span>
+            <button
+              style={{ ...outlineBtn, padding: '3px 8px', fontSize: 11 }}
+              onClick={() => onChange(null)}
+              disabled={all}
+            >
+              Select all
+            </button>
+          </div>
+          {keywords.map(k => {
+            const checked = all || !!selected?.has(k.keyword)
+            return (
+              <label key={k.id} style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '5px 2px',
+                fontSize: 13, color: '#0f172a', cursor: 'pointer',
+              }}>
+                <input type="checkbox" checked={checked} onChange={() => toggle(k.keyword)} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.keyword}</span>
+              </label>
+            )
+          })}
+          {selected?.size === 0 && (
+            <p style={{ ...muted, fontSize: 11, margin: '6px 2px 0', color: '#b45309' }}>
+              Pick at least one keyword to run a scan.
+            </p>
+          )}
+          <p style={{ ...muted, fontSize: 11, margin: '8px 2px 0' }}>
+            One-off runs stay out of reporting — the weekly scheduled scan always covers every keyword.
+          </p>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -847,6 +985,11 @@ function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary
               <Trash2 size={13} /> {clearMut.isPending ? 'Clearing…' : 'Clear all'}
             </button>
           </div>
+          <p style={{ ...muted, fontSize: 12, margin: '0 0 10px' }}>
+            Every run is listed here. The trends above, client reports and geo-grid
+            alerts use <strong>scheduled</strong> scans only — one-off runs are for
+            checking something now, so they stay out of reporting.
+          </p>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             {scans.map((s, i) => {
               const inFlight = s.status === 'polling' || s.status === 'pending'

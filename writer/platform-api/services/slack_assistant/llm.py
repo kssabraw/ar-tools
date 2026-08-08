@@ -16,6 +16,7 @@ import httpx
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import maps_reporting
 from services.slack_assistant.actions import _ACTION_TOOLS, _ACTIONS, _pending
 from services.slack_assistant.context import (
     _MEMORY_TOOL,
@@ -583,8 +584,9 @@ async def _run_maps_history(client_id: str, args: dict) -> str:
 
     supabase = get_supabase()
     scans = (
-        supabase.table("maps_scans")
-        .select("id, completed_at, trigger")
+        maps_reporting.only_reporting(
+            supabase.table("maps_scans").select("id, completed_at, trigger")
+        )
         .eq("client_id", client_id)
         .eq("status", "complete")
         .order("completed_at", desc=True)
@@ -592,7 +594,7 @@ async def _run_maps_history(client_id: str, args: dict) -> str:
         .execute()
     ).data or []
     if not scans:
-        return "No completed geo-grid scans recorded for this client yet."
+        return "No completed scheduled geo-grid scans recorded for this client yet."
     keyword = (args.get("keyword") or "").strip()
     q = (
         supabase.table("maps_scan_results")

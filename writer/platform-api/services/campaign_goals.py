@@ -26,6 +26,7 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from db.supabase_client import get_supabase
+from services import maps_reporting
 
 logger = logging.getLogger(__name__)
 
@@ -243,9 +244,11 @@ def _measure_ai_visibility(supabase, client_id: str, goal: dict, today: date) ->
 
 
 def _measure_maps_pack(supabase, client_id: str, goal: dict, today: date) -> Optional[float]:
+    # Goal progress is reporting: measure against the scheduled series, not
+    # whatever one-off happens to be the newest scan.
     scans = (
-        supabase.table("maps_scans")
-        .select("id").eq("client_id", client_id).eq("status", "complete")
+        maps_reporting.only_reporting(supabase.table("maps_scans").select("id"))
+        .eq("client_id", client_id).eq("status", "complete")
         .order("completed_at", desc=True).limit(1).execute()
     ).data
     if not scans:

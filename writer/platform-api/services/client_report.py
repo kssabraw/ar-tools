@@ -38,6 +38,7 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import maps_reporting
 
 logger = logging.getLogger(__name__)
 
@@ -739,9 +740,12 @@ def _gather_organic(supabase, client_id: str, today: date) -> Optional[dict]:
 
 
 def _gather_geogrid(supabase, client_id: str) -> Optional[dict]:
+    # The client-facing PDF reports the scheduled series only — a one-off run the
+    # team did to check something is not this client's local-pack record.
     scan = (
-        supabase.table("maps_scans")
-        .select("id, created_at")
+        maps_reporting.only_reporting(
+            supabase.table("maps_scans").select("id, created_at")
+        )
         .eq("client_id", client_id)
         .eq("status", "complete")
         .order("created_at", desc=True)
