@@ -7,6 +7,7 @@ import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import { Tabs } from './OutreachLeads'
 import { Justification } from '../components/outreach/Justification'
+import { ProspectReportButtons } from '../components/outreach/ProspectReport'
 
 // ── Types (mirror routers/outreach.py's scan-order section) ──────────────────
 interface Market { id: string; name: string }
@@ -846,6 +847,9 @@ function CoverageTable({ submarketId }: { submarketId: string }) {
                   {s.centroid_dist_at_loss != null ? `${s.centroid_dist_at_loss.toFixed(1)} mi` : '—'}
                 </td>
                 <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', marginRight: 6 }}>
+                    <ProspectReportButtons prospectId={s.prospect_id} compact />
+                  </span>
                   <button
                     onClick={() => setOpenHook(openHook === s.prospect_id ? null : s.prospect_id)}
                     title="Why this business is worth calling"

@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { Justification } from '../components/outreach/Justification'
+import { ProspectReportButtons } from '../components/outreach/ProspectReport'
 
 // ── Types (mirror the CRM half of routers/outreach.py) ───────────────────────
 interface LeadStage { key: string; label: string; sort_order: number; is_terminal: boolean }
@@ -322,12 +323,15 @@ function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; 
 
           {lead.prospect_id && (
             <div style={{ marginTop: 14 }}>
-              <button onClick={() => setShowHook(h => !h)}
-                style={{ display: 'inline-flex', gap: 6, alignItems: 'center', border: '1px solid #e2e8f0',
-                  background: showHook ? '#eff6ff' : '#fff', borderRadius: 8, padding: '6px 10px',
-                  fontSize: 12, fontWeight: 600, color: '#0369a1', cursor: 'pointer' }}>
-                <Phone size={13} /> {showHook ? 'Hide call hook' : 'Why call? — call hook'}
-              </button>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                <button onClick={() => setShowHook(h => !h)}
+                  style={{ display: 'inline-flex', gap: 6, alignItems: 'center', border: '1px solid #e2e8f0',
+                    background: showHook ? '#eff6ff' : '#fff', borderRadius: 8, padding: '6px 10px',
+                    fontSize: 12, fontWeight: 600, color: '#0369a1', cursor: 'pointer' }}>
+                  <Phone size={13} /> {showHook ? 'Hide call hook' : 'Why call?'}
+                </button>
+                <ProspectReportButtons prospectId={lead.prospect_id} />
+              </div>
               {showHook && (
                 <div style={{ marginTop: 8 }}>
                   <Justification prospectId={lead.prospect_id} />

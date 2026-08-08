@@ -2128,3 +2128,32 @@ option is for the rollup (or a later phase) to persist the top-N pack holders' `
 prospect alongside coverage — a handful of ids, negligible storage — so the hook reads them from a
 permanent row. Not built now: it touches the rollup, and the hot-window read covers the actual
 use (dialing a fresh shortlist).
+
+---
+
+### I-095 (open, staged) — the report's organic + LLM sections, and the client-facing PDF, are staged builds
+
+The per-prospect report (DECISIONS 2026-08-08) ships its spine now — identity + the Maps
+rankings-vs-competitors table + the call hook, in an internal brief and a client-facing draft. Three
+pieces are deliberately staged, because each is a real build (two of them paid, one blocked), and the
+report renders them as explicit `not_scanned` blocks until they land — never an empty table:
+
+- **Organic-SERP scan (increment 2, unblocked, PAID).** A new producer in the outreach Railway job:
+  a DataForSEO organic SERP for the prospect's keyword+location, the prospect's rank + top
+  competitors, written to `serp_result` against the maps `scan_snapshot` (I-084 resolved — single
+  location per keyword×submarket). Authorized through the `scan_request`/`tick` order mechanism, not a
+  platform-api call. Then `outreach_report.build_report`'s `organic` section fills from it.
+
+- **LLM-visibility scan (increment 3, BLOCKED + PAID).** Blocked on `ai_region` names (§7.4 — a human
+  "which place names does an LLM recognise" task; a candidate LA list is drafted in I-073) and an
+  engine choice (the suite AI-visibility uses six; a prospect scan likely wants a cheap subset —
+  DataForSEO's Google AI Overview/AI Mode needs no per-engine key, plus optionally ChatGPT). Same
+  order-gated spend path. Fills the report's `llm` section.
+
+- **Client-facing PDF + approval gate (increment 4).** Today the client face is a print-preview DRAFT
+  marked `approved:false`. Turning it into a sendable asset needs the Phase 3 audit path: WeasyPrint
+  render + signed R2 URL + the explicit-approval gate (reporting §4a; the no-unapproved-asset
+  invariant). Build order: after the data layers, so the PDF has all three signals to show.
+
+None is a restructure of the report — each fills a section shape that exists now. Build order
+2 → 3 → 4; increment 3 needs the two human inputs above before it starts.

@@ -1,0 +1,269 @@
+import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { Loader2, X, FileText, Users, Phone, Printer, AlertTriangle } from 'lucide-react'
+import { api } from '../../lib/api'
+
+// Mirrors services/outreach_report.build_report. Deterministic, read-only — assembled from scan
+// data already captured (outreach report-assembly module). Two faces over ONE document: an internal
+// competitive brief and a client-facing DRAFT (approval-gated before it's ever a real asset).
+interface MapsCompetitor {
+  place_id: string
+  name: string | null
+  pack_points: number
+  pack_share_pct: number | null
+  best_rank: number | null
+}
+interface Section {
+  status: 'measured' | 'not_scanned' | 'not_measured'
+  signal: string
+  reason?: string
+  prospect?: {
+    coverage_pct: number; points_present: number; live_points: number | null
+    best_rank: number | null; avg_rank: number | null
+    pack_points: number; pack_best_rank: number | null
+  }
+  competitors?: MapsCompetitor[]
+  total_competitors?: number
+}
+interface TalkingPoint { element: string; text: string }
+interface ReportData {
+  prospect_id: string
+  measured: boolean
+  identity: {
+    name: string | null; category: string | null; phone: string | null; website: string | null
+    address: string | null; rating: number | null; review_count: number | null
+  }
+  keyword: string
+  submarket: string
+  signals: { maps: Section; organic: Section; llm: Section }
+  heatmap_available: boolean
+  justification: {
+    measured: boolean; headline?: string; hook?: string; talking_points: TalkingPoint[]
+    caveats?: string[]; message?: string
+  }
+  client_facing: { status: string; approved: boolean; note: string }
+}
+
+type Face = 'internal' | 'client'
+
+// ── Entry: two buttons, one per report face ──────────────────────────────────
+export function ProspectReportButtons({ prospectId, compact }: { prospectId: string; compact?: boolean }) {
+  const [face, setFace] = useState<Face | null>(null)
+  const btn = (f: Face, label: string, Icon: typeof FileText) => (
+    <button
+      onClick={() => setFace(f)}
+      style={{ fontSize: 12, border: '1px solid #e2e8f0', background: '#fff', borderRadius: 6,
+        padding: compact ? '2px 8px' : '4px 10px', cursor: 'pointer', display: 'inline-flex',
+        gap: 4, alignItems: 'center', color: '#334155' }}>
+      <Icon size={12} /> {label}
+    </button>
+  )
+  return (
+    <>
+      {btn('internal', 'Internal report', FileText)}
+      {btn('client', 'Client report', Users)}
+      {face && <ReportModal prospectId={prospectId} face={face} onClose={() => setFace(null)} />}
+    </>
+  )
+}
+
+// ── The modal ────────────────────────────────────────────────────────────────
+function ReportModal({ prospectId, face: initialFace, onClose }: {
+  prospectId: string; face: Face; onClose: () => void
+}) {
+  const [face, setFace] = useState<Face>(initialFace)
+  const { data, isLoading, error } = useQuery<ReportData>({
+    queryKey: ['outreach-report', prospectId],
+    queryFn: () => api.get(`/outreach/prospects/${prospectId}/report`),
+  })
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)',
+      zIndex: 50, display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: 24, overflowY: 'auto' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: 760,
+        maxWidth: '96vw', boxShadow: '0 20px 60px rgba(15,23,42,0.25)', padding: 22 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'inline-flex', background: '#f1f5f9', borderRadius: 999, padding: 3 }}>
+            {(['internal', 'client'] as Face[]).map(f => (
+              <button key={f} onClick={() => setFace(f)}
+                style={{ border: 'none', borderRadius: 999, padding: '5px 14px', fontSize: 12.5,
+                  fontWeight: 600, cursor: 'pointer',
+                  background: face === f ? '#fff' : 'transparent',
+                  color: face === f ? '#0f172a' : '#64748b',
+                  boxShadow: face === f ? '0 1px 3px rgba(15,23,42,0.12)' : 'none' }}>
+                {f === 'internal' ? 'Internal brief' : 'Client-facing draft'}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => window.print()} title="Print / save as PDF"
+              style={{ border: '1px solid #e2e8f0', background: '#fff', borderRadius: 8, padding: '5px 10px',
+                cursor: 'pointer', display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: 12 }}>
+              <Printer size={13} /> Print
+            </button>
+            <button onClick={onClose} style={{ border: 'none', background: 'none', cursor: 'pointer' }}><X size={18} /></button>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 16 }}>
+          {isLoading ? (
+            <div style={{ fontSize: 13, color: '#64748b', display: 'flex', gap: 6, alignItems: 'center', padding: 20 }}>
+              <Loader2 size={14} className="animate-spin" /> Assembling the report…
+            </div>
+          ) : error instanceof Error ? (
+            <div style={{ fontSize: 13, color: '#b91c1c', padding: 12 }}>Couldn’t build the report: {error.message}</div>
+          ) : !data ? null : !data.measured ? (
+            <div style={{ fontSize: 13, color: '#64748b', padding: '12px 14px', background: '#f8fafc', borderRadius: 10 }}>
+              {data.justification.message ?? 'Not measured yet — no rolled-up scan for this business’s area.'}
+            </div>
+          ) : face === 'internal' ? (
+            <InternalBrief data={data} />
+          ) : (
+            <ClientDraft data={data} />
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Shared section pieces ────────────────────────────────────────────────────
+function NotScanned({ label, reason }: { label: string; reason?: string }) {
+  return (
+    <div style={{ padding: '10px 12px', background: '#f8fafc', borderRadius: 10, border: '1px dashed #e2e8f0',
+      fontSize: 12.5, color: '#64748b' }}>
+      <strong style={{ color: '#475569' }}>{label}:</strong> not scanned yet. {reason}
+    </div>
+  )
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase',
+    letterSpacing: 0.4, margin: '18px 0 6px' }}>{children}</div>
+}
+
+function MapsTable({ s, name, keyword, submarket, clientTone }: {
+  s: Section; name: string; keyword: string; submarket: string; clientTone?: boolean
+}) {
+  if (s.status !== 'measured' || !s.prospect) {
+    return <NotScanned label="Google Maps" reason={s.reason ?? 'the raw ranking data has aged out.'} />
+  }
+  const p = s.prospect
+  return (
+    <>
+      <div style={{ fontSize: 12.5, color: '#334155', marginBottom: 6 }}>
+        {clientTone
+          ? `For “${keyword}” across ${submarket}, you appear in the Google map results at ${p.points_present} of ${p.live_points ?? '—'} points (${p.coverage_pct}%). Here’s how the businesses winning that search compare:`
+          : `“${keyword}” · ${submarket} — coverage ${p.coverage_pct}% (${p.points_present}/${p.live_points ?? '—'} points), best rank ${p.best_rank ?? '—'}, avg ${p.avg_rank ?? '—'}.`}
+      </div>
+      <table style={{ width: '100%', fontSize: 12.5, borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ textAlign: 'left', color: '#64748b', fontSize: 11 }}>
+            <th style={{ padding: '4px 8px' }}>Business</th>
+            <th style={{ padding: '4px 8px', textAlign: 'right' }}>Map-pack points</th>
+            <th style={{ padding: '4px 8px', textAlign: 'right' }}>Share</th>
+            <th style={{ padding: '4px 8px', textAlign: 'right' }}>Best rank</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style={{ borderTop: '1px solid #f1f5f9', background: '#eff6ff', fontWeight: 600 }}>
+            <td style={{ padding: '6px 8px' }}>{name} {clientTone ? '(you)' : '(prospect)'}</td>
+            <td style={{ padding: '6px 8px', textAlign: 'right' }}>{p.pack_points}</td>
+            <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+              {p.live_points ? `${Math.round((p.pack_points / p.live_points) * 100)}%` : '—'}
+            </td>
+            <td style={{ padding: '6px 8px', textAlign: 'right' }}>{p.pack_best_rank ?? '—'}</td>
+          </tr>
+          {(s.competitors ?? []).map(c => (
+            <tr key={c.place_id} style={{ borderTop: '1px solid #f1f5f9' }}>
+              <td style={{ padding: '6px 8px' }}>{c.name}</td>
+              <td style={{ padding: '6px 8px', textAlign: 'right' }}>{c.pack_points}</td>
+              <td style={{ padding: '6px 8px', textAlign: 'right' }}>{c.pack_share_pct != null ? `${c.pack_share_pct}%` : '—'}</td>
+              <td style={{ padding: '6px 8px', textAlign: 'right' }}>{c.best_rank ?? '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {(s.total_competitors ?? 0) > (s.competitors?.length ?? 0) && (
+        <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+          {s.total_competitors} competitors hold the map pack in all; showing the top {s.competitors?.length}.
+        </div>
+      )}
+    </>
+  )
+}
+
+// ── Internal brief ───────────────────────────────────────────────────────────
+function InternalBrief({ data }: { data: ReportData }) {
+  const j = data.justification
+  return (
+    <div>
+      <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a' }}>{data.identity.name}</div>
+      <div style={{ fontSize: 12, color: '#64748b' }}>
+        {[data.identity.category, data.identity.address, data.identity.phone].filter(Boolean).join(' · ')}
+        {data.identity.rating != null && ` · ${data.identity.rating}★`}
+        {data.identity.review_count != null && ` · ${data.identity.review_count} reviews`}
+      </div>
+      {j.headline && <div style={{ fontSize: 13.5, fontWeight: 600, color: '#0f172a', marginTop: 10 }}>{j.headline}</div>}
+
+      <SectionTitle>Maps rankings vs competitors</SectionTitle>
+      <MapsTable s={data.signals.maps} name={data.identity.name ?? 'This business'} keyword={data.keyword} submarket={data.submarket} />
+
+      <SectionTitle>Organic rankings vs competitors</SectionTitle>
+      <NotScanned label="Organic search" reason={data.signals.organic.reason} />
+
+      <SectionTitle>AI / LLM visibility</SectionTitle>
+      <NotScanned label="AI answers" reason={data.signals.llm.reason} />
+
+      {j.hook && (
+        <>
+          <SectionTitle>Call hook</SectionTitle>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            <Phone size={14} style={{ color: '#0369a1', flexShrink: 0, marginTop: 2 }} />
+            <div style={{ fontSize: 13, color: '#0c4a6e', fontStyle: 'italic' }}>“{j.hook}”</div>
+          </div>
+          {j.talking_points.length > 0 && (
+            <ul style={{ margin: '8px 0 0', paddingLeft: 18, display: 'grid', gap: 4, fontSize: 12.5, color: '#334155' }}>
+              {j.talking_points.map((p, i) => <li key={i}>{p.text}</li>)}
+            </ul>
+          )}
+        </>
+      )}
+      {j.caveats && j.caveats.length > 0 && (
+        <div style={{ marginTop: 12, fontSize: 11, color: '#94a3b8' }}>
+          {j.caveats.map((c, i) => <div key={i}>· {c}</div>)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Client-facing draft ──────────────────────────────────────────────────────
+function ClientDraft({ data }: { data: ReportData }) {
+  return (
+    <div>
+      <div style={{ padding: '8px 12px', borderRadius: 10, background: '#fffbeb', border: '1px solid #fde68a',
+        color: '#92400e', fontSize: 12, display: 'flex', gap: 6, alignItems: 'center', marginBottom: 14 }}>
+        <AlertTriangle size={14} /> <strong>Draft.</strong> {data.client_facing.note}
+      </div>
+
+      <div style={{ fontSize: 18, fontWeight: 700, color: '#0f172a' }}>
+        Your Google visibility for “{data.keyword}” in {data.submarket}
+      </div>
+      <div style={{ fontSize: 12.5, color: '#64748b', marginTop: 2 }}>Prepared for {data.identity.name}</div>
+
+      <SectionTitle>Google Maps — where customers do (and don’t) find you</SectionTitle>
+      <MapsTable s={data.signals.maps} name={data.identity.name ?? 'You'} keyword={data.keyword} submarket={data.submarket} clientTone />
+
+      <SectionTitle>Google search results</SectionTitle>
+      <NotScanned label="Organic search" reason="This section will be added when the search scan is run." />
+
+      <SectionTitle>AI assistants (ChatGPT, Google AI, and more)</SectionTitle>
+      <NotScanned label="AI answers" reason="This section will be added when the AI-visibility scan is run." />
+
+      <div style={{ marginTop: 16, fontSize: 11, color: '#94a3b8' }}>
+        Based on a live scan of the Google map results across {data.submarket}. Figures are a point-in-time snapshot.
+      </div>
+    </div>
+  )
+}

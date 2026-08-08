@@ -1471,6 +1471,118 @@ def prospect_justification(prospect_id: str, snapshot_id: str | None = None) -> 
     )
 
 
+def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[str, Any]:
+    """Assemble the per-prospect competitive report — the internal brief and the client-facing
+    draft, over one shared document.
+
+    Read-only, spends nothing. Reuses `prospect_justification` verbatim for the call hook (so the
+    report and the "Why call?" panel never disagree) and adds a maps rankings-vs-competitors table.
+    The organic and LLM sections are explicit `not_scanned` blocks until those paid scan layers land
+    (outreach ISSUES I-095) — never an empty table that would read as "no competitors".
+    """
+    from config import settings
+    from services import outreach_justification as oj
+    from services import outreach_report as orep
+
+    client = get_outreach_client()
+
+    rows = (
+        client.table("prospect")
+        .select(
+            "id, name, submarket_id, place_id, phone, website, address, category, rating, "
+            "review_count, review_count_inferred_zero, business_status"
+        )
+        .eq("id", prospect_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise OutreachError("prospect_not_found", "no such prospect")
+    prospect = rows[0]
+    submarket_id = prospect.get("submarket_id")
+
+    submarket_name = "their area"
+    if submarket_id:
+        sub = (
+            client.table("submarket").select("name").eq("id", submarket_id).limit(1).execute().data
+            or []
+        )
+        if sub:
+            submarket_name = sub[0]["name"]
+
+    justification = prospect_justification(prospect_id, snapshot_id)
+
+    organic = orep.not_scanned_section(
+        orep.SIGNAL_ORGANIC,
+        "The organic-search scan hasn't run for this prospect yet.",
+    )
+    llm = orep.not_scanned_section(
+        orep.SIGNAL_LLM,
+        "The AI-visibility scan hasn't run for this prospect yet.",
+    )
+
+    if not justification.get("measured"):
+        maps_section = {"status": orep.STATUS_NOT_MEASURED, "signal": orep.SIGNAL_MAPS}
+        return orep.build_report(
+            prospect=prospect,
+            keyword="this service",
+            submarket=submarket_name,
+            justification=justification,
+            maps_section=maps_section,
+            organic_section=organic,
+            llm_section=llm,
+            heatmap_available=False,
+        )
+
+    prov = justification["provenance"]
+    snap_id = prov["snapshot_id"]
+    keyword = prov["keyword"]
+    live_points = prov["live_points"]
+
+    coverage_rows = (
+        client.table("prospect_coverage")
+        .select("coverage_pct, points_present, live_points, best_rank, worst_rank, avg_rank")
+        .eq("snapshot_id", snap_id)
+        .eq("prospect_id", prospect_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    coverage = coverage_rows[0] if coverage_rows else None
+
+    pack_size = settings.outreach_call_hook_pack_size
+    try:
+        pack_rows = _fetch_pack_rows(client, snap_id, pack_size)
+        place_ids = sorted({r["place_id"] for r in pack_rows if r.get("place_id")})
+        maps_section = orep.build_maps_comparison(
+            prospect_place_id=prospect.get("place_id"),
+            pack_rows=pack_rows,
+            name_by_place_id=_resolve_place_names(client, place_ids),
+            coverage=coverage,
+            live_points=live_points,
+            max_competitors=settings.outreach_justification_max_competitors,
+        )
+    except Exception as exc:  # noqa: BLE001 — a cold-dropped grid partition must not lose the report
+        logger.warning("outreach_report_maps_unavailable", extra={"error": str(exc)})
+        maps_section = orep.not_scanned_section(
+            orep.SIGNAL_MAPS, "The raw ranking data for this scan has aged out."
+        )
+
+    return orep.build_report(
+        prospect=prospect,
+        keyword=keyword,
+        submarket=prov.get("submarket") or submarket_name,
+        justification=justification,
+        maps_section=maps_section,
+        organic_section=organic,
+        llm_section=llm,
+        heatmap_available=coverage is not None,
+    )
+
+
 def promote_prospect(prospect_id: str, actor_id: str) -> dict[str, Any]:
     """Turn a scanned prospect into a lead, prefilled — the scan-results "Send to CRM" click.
 

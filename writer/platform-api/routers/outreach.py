@@ -158,6 +158,22 @@ async def prospect_justification(
     return _handle(outreach_service.prospect_justification, prospect_id, snapshot_id)
 
 
+@router.get("/outreach/prospects/{prospect_id}/report")
+async def prospect_report(
+    prospect_id: str,
+    snapshot_id: Optional[str] = None,
+    auth: dict = Depends(require_outreach),
+) -> dict:
+    """The per-prospect competitive report — the internal brief and the client-facing draft over one
+    shared document (maps rankings vs competitors + the call hook now; organic + LLM sections are
+    explicit `not_scanned` blocks until those paid scan layers land — outreach ISSUES I-095).
+
+    Deterministic and read-only: spends nothing, writes nothing. The client-facing face is always a
+    DRAFT — a prospect-facing asset requires explicit approval before it is sent (a hard module
+    invariant), which a later slice wires."""
+    return _handle(outreach_service.prospect_report, prospect_id, snapshot_id)
+
+
 # --- Lead CRM ----------------------------------------------------------------------------------
 
 

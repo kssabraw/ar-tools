@@ -942,3 +942,39 @@ order it mattered:
 
 Pure logic unit-tested (`writer/platform-api/tests/test_outreach_justification.py`, 16 cases);
 config knobs `outreach_call_hook_pack_size`/`_justification_max_competitors`/`_field_review_min_sample`.
+
+---
+
+## 2026-08-08 — Per-prospect reports: two faces over one document, signals staged, spend stays gated
+
+Owner asked for two per-prospect report buttons: an internal stripped-down competitive read (organic
++ maps + LLM visibility, each vs top competitors) and a client-facing report. Built the **report
+spine** (`services/outreach_report.py` pure + `services/outreach.prospect_report` I/O +
+`GET /outreach/prospects/{id}/report` + `components/outreach/ProspectReport.tsx` — two buttons in the
+coverage table and the CRM drawer, a modal with an Internal-brief / Client-facing-draft toggle and
+print). The organic + LLM scan layers and the client-facing PDF+approval are staged as increments 2–4
+(ISSUES I-095). Decisions made here:
+
+- **Two faces, ONE document.** The internal brief and the client-facing draft render the SAME
+  assembled facts with different copy, so they can never disagree — the same reason the justification
+  and the report share the call-hook object verbatim.
+- **Deterministic, same as the justification/heatmap.** No LLM, no clock; never a fabricated fact,
+  competitor, or number. Signals feed from the same bounded scan reads.
+- **A signal with no scan is an explicit `not_scanned` block, never an empty table.** Only the Maps
+  geo-grid has a producer today; organic and LLM render "not scanned yet" with the reason. Showing
+  "no organic competitors" for a scan that never ran would manufacture the exact false picture the
+  module guards against — the I-076 lesson, applied to sections.
+- **Spend stays gated (for the paid layers, increments 2–3).** platform-api cannot spend. Generating
+  a report with FRESH organic/LLM data will place an admin-authorized scan order (the existing
+  `scan_request`/`tick` mechanism), which the Railway job runs; the report assembles once it lands. No
+  report button will ever fire a paid provider directly.
+- **I-084 resolved (organic ↔ snapshot):** the organic SERP will attach to the maps `scan_snapshot`
+  for that submarket×keyword as a single-location capture into `serp_result` (the natural join key),
+  rather than a new snapshot type. Chosen now so increment 2 is built against a decided shape;
+  cheapest-to-reverse (one location per keyword×submarket, the same unit the maps scan already keys).
+- **The client-facing face is always a DRAFT until an approval slice exists.** "No prospect-facing
+  asset without explicit human approval" is a hard invariant (CLAUDE.md; reporting §4a), so the
+  client face carries `approved:false` + a draft banner and the print is an internal preview. The
+  WeasyPrint PDF + approval gate + signed R2 URL is increment 4.
+
+Pure builders unit-tested (`writer/platform-api/tests/test_outreach_report.py`, 6 cases).
