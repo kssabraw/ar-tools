@@ -194,6 +194,92 @@ def test_build_llm_section_engine_present_false_is_never_visible():
     assert section["engines"][0]["visible"] is False
 
 
+# --- paid placement (the fourth signal) -------------------------------------------------------
+
+
+def _paid_block(advertisers=None, lsa=None):
+    ads = advertisers or []
+    ls = lsa or []
+    return {
+        "ads_present": bool(ads), "lsa_present": bool(ls),
+        "advertisers": ads, "lsa_advertisers": ls, "seen_item_types": ["organic"],
+    }
+
+
+def test_derive_paid_signal_competitor_gap_is_the_pitch():
+    # Rivals paying, prospect not — the highest-value cold-outreach signal (scoring-spec §Buying intent).
+    block = _paid_block(
+        advertisers=[{"domain": "ace.com", "rank": 1, "title": "Ace"},
+                     {"domain": "ace.com", "rank": 2, "title": "Ace dup"},   # deduped by domain
+                     {"domain": "bolt.com", "rank": 3, "title": "Bolt"}],
+        lsa=[{"name": "Reliable Rooter", "rank": 1}],
+    )
+    sig = orep.derive_paid_signal(block, prospect_website="drips.com", prospect_name="Drips Plumbing", max_named=3)
+    assert sig["ads_present"] is True and sig["lsa_present"] is True
+    assert sig["prospect_running_ads"] is False and sig["prospect_running_any"] is False
+    assert [a["domain"] for a in sig["competitor_advertisers"]] == ["ace.com", "bolt.com"]  # deduped, rank-sorted
+    assert sig["advertiser_count"] == 2 and sig["lsa_count"] == 1
+    assert sig["competitors_advertising_gap"] is True
+
+
+def test_derive_paid_signal_prospect_is_the_advertiser_no_gap():
+    # The prospect's OWN domain/name in the ad lists — proven budget, but not the "rivals only" pitch.
+    block = _paid_block(
+        advertisers=[{"domain": "www.drips.com", "rank": 1, "title": "Drips"}],
+        lsa=[{"name": "Drips Plumbing", "rank": 1}],
+    )
+    sig = orep.derive_paid_signal(block, prospect_website="https://drips.com", prospect_name="Drips Plumbing", max_named=3)
+    assert sig["prospect_running_ads"] is True and sig["prospect_running_lsa"] is True
+    assert sig["prospect_running_any"] is True
+    assert sig["competitor_advertisers"] == [] and sig["competitor_lsa"] == []
+    assert sig["competitors_advertising_gap"] is False   # no rival-only gap when the prospect advertises
+
+
+def test_derive_paid_signal_absent_never_manufactures_a_claim():
+    sig = orep.derive_paid_signal(_paid_block(), prospect_website="drips.com", prospect_name="Drips", max_named=3)
+    assert sig["ads_present"] is False and sig["lsa_present"] is False
+    assert sig["competitors_advertising_gap"] is False
+
+
+def test_build_paid_section_not_scanned_when_no_summary_or_no_paid_block():
+    # No organic capture at all.
+    s0 = orep.build_paid_section(None, prospect_website="x.com", prospect_name="X", max_competitors=3)
+    assert s0["status"] == orep.STATUS_NOT_SCANNED and s0["signal"] == orep.SIGNAL_PAID
+    # A capture that predates paid parsing (no "paid" key) is honestly not_scanned, never "no ads".
+    s1 = orep.build_paid_section({"results": []}, prospect_website="x.com", prospect_name="X", max_competitors=3)
+    assert s1["status"] == orep.STATUS_NOT_SCANNED
+
+
+def test_build_paid_section_measured_carries_the_signal():
+    summary = {"results": [], "paid": _paid_block(advertisers=[{"domain": "ace.com", "rank": 1, "title": "Ace"}])}
+    section = orep.build_paid_section(summary, prospect_website="drips.com", prospect_name="Drips", max_competitors=3)
+    assert section["status"] == orep.STATUS_MEASURED and section["signal"] == orep.SIGNAL_PAID
+    assert section["competitors_advertising_gap"] is True
+
+
+def test_client_paid_html_states_the_gap_and_escapes():
+    section = orep.build_paid_section(
+        {"results": [], "paid": _paid_block(advertisers=[{"domain": "ace.com", "rank": 1, "title": "Ace"}])},
+        prospect_website="drips.com", prospect_name="Drips", max_competitors=3,
+    )
+    doc = _report_doc({"status": "not_measured", "signal": "maps"},
+                      orep.not_scanned_section(orep.SIGNAL_ORGANIC, "x"),
+                      orep.not_scanned_section(orep.SIGNAL_LLM, "x"), paid=section)
+    html = orep.render_client_report_html(doc, agency_name="Amazing Rankings")
+    assert "buying the customers you" in html   # the competitor-gap pitch copy
+    assert "ace.com" in html and "Google Ads" in html
+
+
+def test_client_paid_html_no_ads_is_a_finding():
+    section = orep.build_paid_section({"results": [], "paid": _paid_block()},
+                                      prospect_website="drips.com", prospect_name="Drips", max_competitors=3)
+    doc = _report_doc({"status": "not_measured", "signal": "maps"},
+                      orep.not_scanned_section(orep.SIGNAL_ORGANIC, "x"),
+                      orep.not_scanned_section(orep.SIGNAL_LLM, "x"), paid=section)
+    html = orep.render_client_report_html(doc, agency_name="Amazing Rankings")
+    assert "still won on merit" in html
+
+
 def _prospect():
     return {"id": "p1", "name": "Drips Plumbing", "category": "plumber", "phone": "+1",
             "website": "", "address": "1 Main St", "rating": 4.1, "review_count": 4}
@@ -211,14 +297,16 @@ def test_build_report_shape_and_client_draft_gate():
         justification=justification, maps_section=maps,
         organic_section=orep.not_scanned_section(orep.SIGNAL_ORGANIC, "staged"),
         llm_section=orep.not_scanned_section(orep.SIGNAL_LLM, "staged"),
+        paid_section=orep.not_scanned_section(orep.SIGNAL_PAID, "staged"),
         heatmap_available=True,
     )
     assert report["measured"] is True
     assert report["identity"]["name"] == "Drips Plumbing"
     assert report["signals"]["maps"]["status"] == orep.STATUS_MEASURED
-    # Organic and LLM are explicit not_scanned blocks — never an empty table.
+    # Organic, LLM and paid are explicit not_scanned blocks — never an empty table.
     assert report["signals"]["organic"]["status"] == orep.STATUS_NOT_SCANNED
     assert report["signals"]["llm"]["status"] == orep.STATUS_NOT_SCANNED
+    assert report["signals"]["paid"]["status"] == orep.STATUS_NOT_SCANNED
     # The client-facing face is a DRAFT, unapproved, until the approval slice lands.
     assert report["client_facing"]["approved"] is False
     # The hook is reused verbatim from the justification, not re-derived.
@@ -232,6 +320,7 @@ def test_build_report_reflects_approval():
         maps_section={"status": "measured"},
         organic_section=orep.not_scanned_section(orep.SIGNAL_ORGANIC, "x"),
         llm_section=orep.not_scanned_section(orep.SIGNAL_LLM, "x"),
+        paid_section=orep.not_scanned_section(orep.SIGNAL_PAID, "x"),
         heatmap_available=False,
     )
     draft = orep.build_report(**base)
@@ -246,10 +335,11 @@ def test_build_report_reflects_approval():
 # --- render_client_report_html ----------------------------------------------------------------
 
 
-def _report_doc(maps, organic, llm, name="Drips Plumbing"):
+def _report_doc(maps, organic, llm, name="Drips Plumbing", paid=None):
     return {
         "identity": {"name": name}, "keyword": "plumber", "submarket": "Van Nuys",
-        "signals": {"maps": maps, "organic": organic, "llm": llm},
+        "signals": {"maps": maps, "organic": organic, "llm": llm,
+                    "paid": paid if paid is not None else orep.not_scanned_section(orep.SIGNAL_PAID, "x")},
     }
 
 
@@ -291,8 +381,8 @@ def test_render_client_report_html_not_scanned_blocks_never_empty_tables():
         ),
         agency_name="Amazing Rankings",
     )
-    # Three "will be added" placeholders, no fabricated competitor rows.
-    assert html.count("will be added") == 3
+    # Four "will be added" placeholders (maps, organic, llm, paid), no fabricated competitor rows.
+    assert html.count("will be added") == 4
     assert "<tbody>" not in html
 
 
@@ -303,6 +393,7 @@ def test_build_report_deterministic():
         maps_section={"status": "measured"},
         organic_section=orep.not_scanned_section(orep.SIGNAL_ORGANIC, "x"),
         llm_section=orep.not_scanned_section(orep.SIGNAL_LLM, "x"),
+        paid_section=orep.not_scanned_section(orep.SIGNAL_PAID, "x"),
         heatmap_available=False,
     )
     assert orep.build_report(**kwargs) == orep.build_report(**kwargs)

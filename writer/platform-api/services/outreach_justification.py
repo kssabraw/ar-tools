@@ -51,6 +51,7 @@ BYTE_DEAD = 255
 # stable vocabulary and not a free-text label.
 ELEM_COVERAGE = "coverage"
 ELEM_COMPETITOR = "competitor"
+ELEM_PAID = "paid"
 ELEM_GEOGRAPHY = "geography"
 ELEM_REVIEWS = "reviews"
 ELEM_NO_WEBSITE = "no_website"
@@ -66,6 +67,7 @@ ELEM_LISTING_STATUS = "listing_status"
 HOOK_PRIORITY = (
     ELEM_COVERAGE,
     ELEM_COMPETITOR,
+    ELEM_PAID,
     ELEM_GEOGRAPHY,
     ELEM_REVIEWS,
     ELEM_NO_WEBSITE,
@@ -248,6 +250,7 @@ def build_justification(
     field_reviews: dict[str, Any],
     field_min_sample: int,
     pack_size: int,
+    paid: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Assemble the whole justification for one prospect. Pure — every input is already resolved.
 
@@ -255,7 +258,10 @@ def build_justification(
     grid point inside a rolled-up submarket (zero coverage, not unknown — outreach ISSUES I-076).
     `live_points` is the snapshot's measured-point denominator (shared across the snapshot), passed
     separately so the zero-coverage case still knows how many points "invisible everywhere" spans.
-    `competitors` / `field_reviews` come from the summarizers above.
+    `competitors` / `field_reviews` come from the summarizers above. `paid` is the derived
+    paid-placement signal (`outreach_report.derive_paid_signal`, or None when the organic/paid scan
+    hasn't run) — a talking point fires only when rivals are paying for this search and the prospect
+    is not (the scoring-spec.md §Buying-intent pitch).
 
     Returns a dict with a stable shape: a headline, the single spoken `hook` (+ `hook_element` and
     the `available_elements` it was chosen from — PRD §14a), the ordered `talking_points` each
@@ -323,6 +329,37 @@ def build_justification(
                 },
             )
         )
+
+    # --- paid placement: rivals buying the search this prospect is losing ---------------------
+    # The scoring-spec.md §Buying-intent pitch — a competitor paying to appear at the top while the
+    # prospect is invisible. Fires only on the gap (rivals advertising, prospect not); a prospect
+    # who IS advertising is a different, scorer-owned signal, not a cold-call talking point here.
+    if paid and paid.get("competitors_advertising_gap"):
+        ad_names = [a.get("domain") for a in (paid.get("competitor_advertisers") or []) if a.get("domain")]
+        lsa_names = [a.get("name") for a in (paid.get("competitor_lsa") or []) if a.get("name")]
+        display = lsa_names + ad_names  # LSA names read better than bare domains, so lead with them
+        count = int(paid.get("advertiser_count") or 0) + int(paid.get("lsa_count") or 0)
+        if display:
+            lead = display[0]
+            channel = "Local Services ad" if lsa_names else "Google Ad"
+            text = f"{lead} is running a {channel} for “{keyword}” — paying to sit at the top of a search {name} is invisible on"
+            if count > 1:
+                text += f", and they're not the only one ({count} competitors are buying this search)"
+            text += "."
+            points.append(
+                _point(
+                    ELEM_PAID,
+                    text,
+                    {
+                        "competitor_advertisers": paid.get("competitor_advertisers"),
+                        "competitor_lsa": paid.get("competitor_lsa"),
+                        "advertiser_count": paid.get("advertiser_count"),
+                        "lsa_count": paid.get("lsa_count"),
+                        "prospect_running_ads": paid.get("prospect_running_ads"),
+                        "prospect_running_lsa": paid.get("prospect_running_lsa"),
+                    },
+                )
+            )
 
     # --- geography: the radial pattern of where they drop off ---------------------------------
     # From the stored, geometry-derived scalars only (centroid_dist_at_loss, avg_rank) — no compass

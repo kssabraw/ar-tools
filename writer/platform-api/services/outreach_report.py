@@ -33,10 +33,15 @@ STATUS_MEASURED = "measured"
 STATUS_NOT_SCANNED = "not_scanned"
 STATUS_NOT_MEASURED = "not_measured"
 
-# The three competitive signals, in report order. Maps first because it is the one with data today.
+# The competitive signals, in report order. Maps first because it is the one with data today.
 SIGNAL_MAPS = "maps"
 SIGNAL_ORGANIC = "organic"
 SIGNAL_LLM = "llm"
+# Paid placement — the fourth signal (outreach HANDOFF §12 item 3a). Is the business (or its
+# competitors) buying Google Ads / Local Services Ads for this keyword. The single highest-value
+# lead signal in scoring-spec.md (LSA active +57, Google Ads + no organic/pack +46) — a business
+# paying to solve the visibility problem while still losing organically has proven budget AND intent.
+SIGNAL_PAID = "paid"
 
 
 def build_maps_comparison(
@@ -192,6 +197,118 @@ def _normalize_name(text: Optional[str]) -> str:
     """Lower-case, alnum-and-spaces-only — the loose comparison `ai_granularity.normalize` uses on
     the producer side, so both sides judge "same business" the same way."""
     return re.sub(r"[^a-z0-9 ]", "", (text or "").lower()).strip()
+
+
+def derive_paid_signal(
+    paid: Optional[dict[str, Any]],
+    *,
+    prospect_website: Optional[str],
+    prospect_name: Optional[str],
+    max_named: int,
+) -> dict[str, Any]:
+    """The paid-placement facts for ONE prospect, from the snapshot's stored `payload_summary.paid`.
+    Pure and deterministic — never asserts an ad, advertiser or spend that is not in the captured
+    response (the module's governing invariant).
+
+    `paid` is the block `organic_scan.summarize_paid` wrote (advertisers by domain, LSA advertisers
+    by name). This does the SAME kind of read-time match the organic section does for `prospect_rank`
+    and the LLM section does for a mention: is the prospect's OWN domain among the ad advertisers, and
+    is its name among the LSA advertisers. Competitors are the advertisers that are NOT the prospect.
+
+    `competitors_advertising_gap` is the pitch (scoring-spec.md §Buying intent): a rival is paying for
+    the top of this search and the prospect is not. Absence never manufactures a claim — no ads in the
+    capture means `ads_present: False`, which is a finding, not a gap.
+    """
+    block = paid or {}
+    advertisers = block.get("advertisers") or []
+    lsa_advertisers = block.get("lsa_advertisers") or []
+    ads_present = bool(block.get("ads_present")) or bool(advertisers)
+    lsa_present = bool(block.get("lsa_present")) or bool(lsa_advertisers)
+
+    prospect_domain = domain_of(prospect_website)
+    prospect_norm = _normalize_name(prospect_name)
+
+    def _is_prospect_ad(ad: dict[str, Any]) -> bool:
+        return bool(prospect_domain) and domain_of(ad.get("domain")) == prospect_domain
+
+    def _is_prospect_lsa(ad: dict[str, Any]) -> bool:
+        # Name match, same conservative rule as detect_ai_mention: ≥4 chars so a two-letter shop
+        # name can't trivially collide, and a miss understates (never manufactures) a claim.
+        name = _normalize_name(ad.get("name"))
+        return len(prospect_norm) >= 4 and bool(name) and (prospect_norm in name or name in prospect_norm)
+
+    prospect_running_ads = any(_is_prospect_ad(a) for a in advertisers)
+    prospect_running_lsa = any(_is_prospect_lsa(a) for a in lsa_advertisers)
+
+    # Competitor advertisers, prospect excluded, deduped by domain (an advertiser can appear twice).
+    seen: set[str] = set()
+    competitor_ads: list[dict[str, Any]] = []
+    for a in advertisers:
+        dom = domain_of(a.get("domain"))
+        if not dom or _is_prospect_ad(a) or dom in seen:
+            continue
+        seen.add(dom)
+        competitor_ads.append({"domain": dom, "rank": a.get("rank"), "title": a.get("title")})
+    competitor_ads.sort(key=lambda a: (a["rank"] if isinstance(a.get("rank"), int) else 10**6, a["domain"]))
+
+    seen_names: set[str] = set()
+    competitor_lsa: list[dict[str, Any]] = []
+    for a in lsa_advertisers:
+        norm = _normalize_name(a.get("name"))
+        if not norm or _is_prospect_lsa(a) or norm in seen_names:
+            continue
+        seen_names.add(norm)
+        competitor_lsa.append({"name": a.get("name"), "rank": a.get("rank")})
+    competitor_lsa.sort(key=lambda a: (a["rank"] if isinstance(a.get("rank"), int) else 10**6, str(a["name"])))
+
+    competitors_advertising = bool(competitor_ads) or bool(competitor_lsa)
+    return {
+        "ads_present": ads_present,
+        "lsa_present": lsa_present,
+        "prospect_running_ads": prospect_running_ads,
+        "prospect_running_lsa": prospect_running_lsa,
+        "prospect_running_any": prospect_running_ads or prospect_running_lsa,
+        "competitor_advertisers": competitor_ads[:max_named],
+        "competitor_lsa": competitor_lsa[:max_named],
+        "advertiser_count": len(competitor_ads),
+        "lsa_count": len(competitor_lsa),
+        # THE pitch: rivals are paying to appear for this search and the prospect is not.
+        "competitors_advertising_gap": competitors_advertising
+        and not (prospect_running_ads or prospect_running_lsa),
+    }
+
+
+def build_paid_section(
+    summary: Optional[dict[str, Any]],
+    *,
+    prospect_website: Optional[str],
+    prospect_name: Optional[str],
+    max_competitors: int,
+) -> dict[str, Any]:
+    """The "paid placement" report section. Pure.
+
+    `summary` is the stored `serp_result.payload_summary` (from `organic_scan.summarize_serp`). Paid
+    placement rides the SAME organic capture, so:
+      * `summary is None` → the organic/paid scan hasn't run → `not_scanned`.
+      * `summary` present but with no `paid` block → captured before paid parsing existed → also
+        `not_scanned` (honest: we didn't measure ads, which must not read as "no ads").
+      * otherwise → `measured`, with the derived per-prospect facts.
+    """
+    if not summary:
+        return not_scanned_section(
+            SIGNAL_PAID, "The paid-placement scan hasn't run for this prospect yet."
+        )
+    if "paid" not in summary:
+        return not_scanned_section(
+            SIGNAL_PAID, "This scan predates paid-placement detection — re-run the search scan."
+        )
+    signal = derive_paid_signal(
+        summary.get("paid"),
+        prospect_website=prospect_website,
+        prospect_name=prospect_name,
+        max_named=max_competitors,
+    )
+    return {"status": STATUS_MEASURED, "signal": SIGNAL_PAID, **signal}
 
 
 def detect_ai_mention(
@@ -351,6 +468,42 @@ def _client_llm_html(section: dict[str, Any]) -> str:
     )
 
 
+def _client_paid_html(section: dict[str, Any], keyword: str) -> str:
+    if section.get("status") != STATUS_MEASURED:
+        return "<p class='muted'>This section will be added when the search scan is available.</p>"
+    ads = section.get("competitor_advertisers") or []
+    lsa = section.get("competitor_lsa") or []
+    if not section.get("ads_present") and not section.get("lsa_present"):
+        return (
+            f"<p>No businesses are currently paying for Google Ads on “{_esc(keyword)}” in your area "
+            "— the top of this search is still won on merit, not budget.</p>"
+        )
+    if section.get("prospect_running_any"):
+        lead = (
+            f"<p>You’re currently running paid ads for “{_esc(keyword)}”. Here’s who else is bidding "
+            "for the same customers:</p>"
+        )
+    elif section.get("competitors_advertising_gap"):
+        lead = (
+            f"<p>Competitors are paying Google to appear at the top for “{_esc(keyword)}”, and you’re "
+            "not — they’re buying the customers you’re invisible to.</p>"
+        )
+    else:
+        lead = f"<p>Paid advertising is active on “{_esc(keyword)}” in your area.</p>"
+    rows = "".join(
+        f"<tr><td>{_esc(a.get('domain'))}</td><td>Google Ads</td></tr>" for a in ads
+    ) + "".join(
+        f"<tr><td>{_esc(a.get('name'))}</td><td>Local Services Ad</td></tr>" for a in lsa
+    )
+    table = (
+        "<table><thead><tr><th>Advertiser</th><th>Type</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
+        if rows
+        else ""
+    )
+    return lead + table
+
+
 def render_client_report_html(report: dict[str, Any], *, agency_name: str) -> str:
     """The client-facing report as a standalone HTML document, for WeasyPrint → PDF.
 
@@ -387,6 +540,8 @@ def render_client_report_html(report: dict[str, Any], *, agency_name: str) -> st
         f"{_client_organic_html(signals.get('organic', {}), keyword, submarket)}"
         "<h2>AI assistants (ChatGPT, Google AI Overview)</h2>"
         f"{_client_llm_html(signals.get('llm', {}))}"
+        "<h2>Paid advertising</h2>"
+        f"{_client_paid_html(signals.get('paid', {}), keyword)}"
         f"<div class='footer'>Based on a live scan of {_esc(submarket)}. Figures are a point-in-time "
         f"snapshot. Prepared by {_esc(agency_name)}.</div>"
         "</body></html>"
@@ -402,6 +557,7 @@ def build_report(
     maps_section: dict[str, Any],
     organic_section: dict[str, Any],
     llm_section: dict[str, Any],
+    paid_section: dict[str, Any],
     heatmap_available: bool,
     approval: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
@@ -433,6 +589,7 @@ def build_report(
             SIGNAL_MAPS: maps_section,
             SIGNAL_ORGANIC: organic_section,
             SIGNAL_LLM: llm_section,
+            SIGNAL_PAID: paid_section,
         },
         "heatmap_available": heatmap_available,
         "justification": justification,

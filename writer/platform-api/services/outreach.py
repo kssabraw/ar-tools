@@ -1341,6 +1341,45 @@ def _resolve_place_names(client: Any, place_ids: list[str]) -> dict[str, str]:
     return names
 
 
+def _organic_summary_for(client: Any, snapshot_id: str) -> dict[str, Any] | None:
+    """The stored `serp_result.payload_summary` for a snapshot's organic capture, or None. This is
+    the read the organic AND paid-placement signals both come off (paid rides the organic capture —
+    outreach HANDOFF §12 item 3a). Best-effort: a missing table / cold-dropped row returns None so
+    the report and hook still assemble without those sections."""
+    try:
+        rows = (
+            client.table("serp_result")
+            .select("payload_summary")
+            .eq("snapshot_id", snapshot_id)
+            .eq("engine", "google_organic")
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return rows[0].get("payload_summary") if rows else None
+    except Exception as exc:  # noqa: BLE001 — the report stands without the organic/paid section
+        logger.warning("outreach_report_organic_unavailable", extra={"error": str(exc)})
+        return None
+
+
+def _paid_signal_for(
+    client: Any, orep: Any, snapshot_id: str, prospect: dict[str, Any], *, max_named: int
+) -> dict[str, Any] | None:
+    """The derived paid-placement facts for one prospect, or None when no organic scan has run.
+    Threads the stored SERP summary through the pure `derive_paid_signal`, so a justification's
+    paid talking point and the report's paid section read one source of truth."""
+    summary = _organic_summary_for(client, snapshot_id)
+    if not summary or "paid" not in summary:
+        return None
+    return orep.derive_paid_signal(
+        summary.get("paid"),
+        prospect_website=prospect.get("website"),
+        prospect_name=prospect.get("name"),
+        max_named=max_named,
+    )
+
+
 def prospect_justification(prospect_id: str, snapshot_id: str | None = None) -> dict[str, Any]:
     """Assemble the deterministic call-hook justification for one prospect.
 
@@ -1352,6 +1391,7 @@ def prospect_justification(prospect_id: str, snapshot_id: str | None = None) -> 
     """
     from config import settings
     from services import outreach_justification as oj
+    from services import outreach_report as orep
 
     client = get_outreach_client()
 
@@ -1457,6 +1497,13 @@ def prospect_justification(prospect_id: str, snapshot_id: str | None = None) -> 
     ) if submarket_id else []
     field_reviews = oj.field_review_stats(field_rows)
 
+    # Paid-placement signal (outreach HANDOFF §12 item 3a): the organic capture for this snapshot
+    # already carries the paid ads. Derive the prospect's paid facts so a "competitors are buying
+    # this search and you're not" talking point can fire. Best-effort — no organic scan / no serp
+    # row → no paid talking point (never a fabricated ad).
+    paid_signal = _paid_signal_for(client, orep, snapshot["id"], prospect,
+                                   max_named=settings.outreach_justification_max_competitors)
+
     return oj.build_justification(
         prospect=prospect,
         keyword=keyword,
@@ -1468,6 +1515,7 @@ def prospect_justification(prospect_id: str, snapshot_id: str | None = None) -> 
         field_reviews=field_reviews,
         field_min_sample=settings.outreach_field_review_min_sample,
         pack_size=pack_size,
+        paid=paid_signal,
     )
 
 
@@ -1710,6 +1758,9 @@ def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[st
         organic = orep.not_scanned_section(
             orep.SIGNAL_ORGANIC, "The organic-search scan hasn't run for this prospect yet."
         )
+        paid = orep.not_scanned_section(
+            orep.SIGNAL_PAID, "The paid-placement scan hasn't run for this prospect yet."
+        )
         maps_section = {"status": orep.STATUS_NOT_MEASURED, "signal": orep.SIGNAL_MAPS}
         return orep.build_report(
             prospect=prospect,
@@ -1719,6 +1770,7 @@ def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[st
             maps_section=maps_section,
             organic_section=organic,
             llm_section=llm,
+            paid_section=paid,
             heatmap_available=False,
             approval=approval,
         )
@@ -1732,27 +1784,20 @@ def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[st
     # the primary keyword for the not-measured path).
     llm = _llm_section(client, orep, prospect, prov.get("submarket") or submarket_name, keyword=keyword)
 
-    # Organic-SERP signal (increment 2): the stored capture for this snapshot, if the organic scan
-    # has run for it. Absent → the builder returns a not_scanned block (never an empty table).
-    organic_summary = None
-    try:
-        serp_rows = (
-            client.table("serp_result")
-            .select("payload_summary")
-            .eq("snapshot_id", snap_id)
-            .eq("engine", "google_organic")
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-        if serp_rows:
-            organic_summary = serp_rows[0].get("payload_summary")
-    except Exception as exc:  # noqa: BLE001 — the report stands without the organic section
-        logger.warning("outreach_report_organic_unavailable", extra={"error": str(exc)})
+    # Organic-SERP signal (increment 2) + paid-placement signal (increment/slice A): the stored
+    # capture for this snapshot, if the organic scan has run for it. The paid ads ride the SAME
+    # capture (outreach HANDOFF §12 item 3a), so one read feeds both. Absent → each builder returns
+    # a not_scanned block (never an empty table that would read as "no competitors / no ads").
+    organic_summary = _organic_summary_for(client, snap_id)
     organic = orep.build_organic_section(
         organic_summary,
         prospect_website=prospect.get("website"),
+        max_competitors=settings.outreach_justification_max_competitors,
+    )
+    paid = orep.build_paid_section(
+        organic_summary,
+        prospect_website=prospect.get("website"),
+        prospect_name=prospect.get("name"),
         max_competitors=settings.outreach_justification_max_competitors,
     )
 
@@ -1794,6 +1839,7 @@ def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[st
         maps_section=maps_section,
         organic_section=organic,
         llm_section=llm,
+        paid_section=paid,
         heatmap_available=coverage is not None,
         approval=approval,
     )

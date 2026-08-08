@@ -29,6 +29,7 @@ export interface JustificationData {
 const ELEMENT_LABEL: Record<string, string> = {
   coverage: 'Invisibility',
   competitor: 'Who’s winning',
+  paid: 'Paying to win',
   geography: 'Where they drop off',
   reviews: 'Reviews',
   no_website: 'No website',

@@ -2157,3 +2157,39 @@ report renders them as explicit `not_scanned` blocks until they land — never a
 
 None is a restructure of the report — each fills a section shape that exists now. Build order
 2 → 3 → 4; increment 3 needs the two human inputs above before it starts.
+
+---
+
+### I-096 (open, cheapest-to-reverse reading taken) — the LSA / Google-Guaranteed item type is unconfirmed against this account's organic response
+
+Paid-placement PRESENCE (HANDOFF §12 item 3a, Slice A) is parsed from the organic SERP response
+`scan-organic` already captures — no new paid call. Two item types feed it:
+
+- **Google Ads** — DataForSEO's `type == "paid"`. High confidence (it is the standard label), and
+  the parse is tolerant (domain recovered from the ad URL when `domain` is absent).
+- **Local Services Ads ("Google Guaranteed")** — parsed from `type ∈ {local_services,
+  google_local_services, local_service_ads}` in the SAME response.
+
+**The ambiguity:** whether LSA actually rides the organic `/serp/google/organic/live/advanced`
+response for THIS account, and under which exact item type, is UNMEASURED — the organic scan has
+never run (I-095), so there is no stored sample to read. The spec is explicit that this is a
+measure-don't-infer point ("confirm its item type against a live response before parsing").
+
+**The reading taken (cheapest to reverse, per the session protocol):** parse LSA from the
+already-captured organic response with a tolerant type set, and DO NOT add a speculative new paid
+LSA call in Slice A. Two guards make the reading recoverable:
+
+- `parse_organic_serp` records every distinct top-level item `type` it saw (`seen_item_types`), and
+  `capture_organic` logs it plus the paid/LSA counts on the first run, so the exact envelope is
+  confirmable from the log (and from `serp_result.payload_summary.paid.seen_item_types`) rather than
+  a second paid run.
+- Presence-absent is a finding, not a gap — `ads_present:false`/`lsa_present:false` never
+  manufacture a claim, so a wrong LSA type reads as "no LSA detected" (understates, the safe
+  direction), never a fabricated advertiser.
+
+**Resolve after the first `scan-organic` run:** read `seen_item_types` from the log / stored summary.
+If LSA does NOT appear in the organic response for local-service queries, the follow-up is a
+dedicated `/v3/serp/google/local_services/live/advanced` capture — its own PAID, token/order-gated
+command (`scan-lsa`), a `cost_ledger` row, and the path added to the free probe set first. Parsing an
+existing field costs nothing and adds no paid call; a speculative new paid call on a wrong envelope
+is what this reading avoids.

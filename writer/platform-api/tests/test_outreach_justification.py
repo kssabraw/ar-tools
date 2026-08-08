@@ -239,6 +239,53 @@ def test_build_listing_gaps():
     assert "closed temporarily" in status["text"]
 
 
+def test_build_paid_talking_point_fires_on_the_competitor_gap():
+    # Rivals paying for the search the prospect is invisible on — the scoring-spec §Buying-intent pitch.
+    paid = {
+        "ads_present": True, "lsa_present": True, "prospect_running_ads": False,
+        "prospect_running_lsa": False, "prospect_running_any": False,
+        "competitor_advertisers": [{"domain": "ace.com", "rank": 1, "title": "Ace"}],
+        "competitor_lsa": [{"name": "Reliable Rooter", "rank": 1}],
+        "advertiser_count": 1, "lsa_count": 1, "competitors_advertising_gap": True,
+    }
+    result = oj.build_justification(
+        prospect=_prospect(), keyword="plumber", submarket="Van Nuys", snapshot=_SNAP,
+        coverage=None, live_points=10, competitors=_NO_COMP,
+        field_reviews={"median": None, "sample": 0}, field_min_sample=5, pack_size=3, paid=paid,
+    )
+    assert oj.ELEM_PAID in result["available_elements"]
+    point = next(p for p in result["talking_points"] if p["element"] == oj.ELEM_PAID)
+    # LSA names lead over bare ad domains; the "2 in all" count is stated.
+    assert "Reliable Rooter" in point["text"]
+    assert "2 competitors" in point["text"]
+    assert point["facts"]["advertiser_count"] == 1
+
+
+def test_build_no_paid_point_when_prospect_is_the_advertiser():
+    # A prospect who IS advertising has no "rivals only" gap — the scorer owns that signal, not the hook.
+    paid = {
+        "ads_present": True, "lsa_present": False, "prospect_running_ads": True,
+        "prospect_running_lsa": False, "prospect_running_any": True,
+        "competitor_advertisers": [], "competitor_lsa": [],
+        "advertiser_count": 0, "lsa_count": 0, "competitors_advertising_gap": False,
+    }
+    result = oj.build_justification(
+        prospect=_prospect(), keyword="plumber", submarket="Van Nuys", snapshot=_SNAP,
+        coverage=None, live_points=10, competitors=_NO_COMP,
+        field_reviews={"median": None, "sample": 0}, field_min_sample=5, pack_size=3, paid=paid,
+    )
+    assert oj.ELEM_PAID not in result["available_elements"]
+
+
+def test_build_no_paid_point_when_signal_absent():
+    result = oj.build_justification(
+        prospect=_prospect(), keyword="plumber", submarket="Van Nuys", snapshot=_SNAP,
+        coverage=None, live_points=10, competitors=_NO_COMP,
+        field_reviews={"median": None, "sample": 0}, field_min_sample=5, pack_size=3, paid=None,
+    )
+    assert oj.ELEM_PAID not in result["available_elements"]
+
+
 def test_build_is_deterministic():
     coverage = {"coverage_pct": 30.0, "points_present": 3, "live_points": 10,
                 "best_rank": 2, "worst_rank": 8, "avg_rank": 4.67, "centroid_dist_at_loss": 2.5}

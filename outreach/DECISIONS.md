@@ -1111,3 +1111,52 @@ Frontend: the client face shows the shareable link (copy / open) + the expiry no
 
 **I-095 is now fully resolved** — the per-prospect report is complete end to end (shell, organic,
 LLM, approved client PDF, signed-URL delivery).
+
+---
+
+## 2026-08-08 — Paid-placement PRESENCE (Slice A): parse it from the response we already pay for; persist in payload_summary
+
+HANDOFF §12 item 3a, the owner's stated next build — the fourth competitive signal: is the business
+(and are its competitors) BUYING Google Ads / Local Services Ads for its keyword. scoring-spec.md
+rates it above every organic signal (LSA active +57, Google Ads + no organic/pack +46) because a
+business paying to solve the visibility problem while still losing organically has proven budget AND
+intent. Slice A is PRESENCE only (built); the money signal — spend magnitude + pixel/tag detection —
+is Slice B, its own later build.
+
+**The paid items ride the organic capture — no new paid call for Google Ads.** `scan-organic` already
+stores the FULL DataForSEO SERP response in `serp_result.payload`, and that response carries the paid
+items; the old parser discarded everything that was not `organic`/`ai_overview`. So `parse_organic_serp`
+now also collects `type=="paid"` (Google Ads) and `type∈{local_services,…}` (LSA), and `summarize_serp`
+emits a `paid` block in `payload_summary`. Deriving Google-Ads presence from data already on disk with
+ZERO new spend is the cheapest possible reading, and it is exactly the discipline the module already
+follows for the organic prospect-rank (parsed once, matched at read).
+
+**LSA item type is unconfirmed and taken cheapest-to-reverse — logged as I-096, not resolved in specs.**
+The exact DataForSEO type for Local Services Ads in THIS account's organic response is unmeasured (the
+organic scan has never run). Rather than build a speculative NEW paid LSA call that might hit a wrong
+envelope, Slice A parses LSA tolerantly from the already-captured response and records `seen_item_types`
+(logged on first run + stored in the summary) so the shape is confirmable from the log. If the first
+live run shows LSA needs its own endpoint, a gated `scan-lsa` call is the additive follow-up. Parsing
+an existing field is free to reverse; a wrong paid call is not.
+
+**Persistence: `serp_result.payload_summary.paid`, keyed to the snapshot — NO new column/table/migration.**
+This mirrors the organic signal exactly: the per-snapshot advertiser lists persist in the summary, and
+the per-prospect question ("is THIS business advertising") is DERIVED at read time by matching the
+prospect's website domain (Ads) / name (LSA) against the stored lists — the same read-time match the
+organic `prospect_rank` and the LLM mention use. That derivation (`outreach_report.derive_paid_signal`,
+pure) feeds both the report's fourth "Paid placement" section AND the call-hook justification's
+`ELEM_PAID` talking point ("rivals are paying for this search and you're not" — the §Buying-intent
+pitch), so the two never disagree. The Phase-4 scorer reads the same per-snapshot summary + prospect to
+compute its bins; the per-snapshot lists also support the future `ads_state_change` delta (diff two
+summaries). A per-prospect table was rejected for the same reason the organic signal has none — the fact
+is per-snapshot, the flag is a deterministic read-time match, and duplicating it per prospect invites
+drift. Until the Phase-4 scorer exists the signal is STORED + SHOWN, not scored (HANDOFF §12 item 3a).
+
+**Deterministic + fact-grounded, same as the three signals it joins.** Absence of ads is a FINDING
+(`ads_present:false`), never a gap that manufactures a claim; a competitor is named only from a real
+advertiser domain/name; the prospect's own ad presence excludes it from its own competitor list. The
+paid talking point fires ONLY on the rivals-advertising-and-prospect-not gap — a prospect who IS
+advertising is a scorer-owned signal, not a cold-call hook.
+
+*Revisit:* Slice B (site-fetch money signal) and the Phase-4 scorer, which consume this. If the first
+`scan-organic` run proves LSA needs a dedicated endpoint, add the gated `scan-lsa` command (I-096).

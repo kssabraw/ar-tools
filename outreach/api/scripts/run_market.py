@@ -468,6 +468,8 @@ def cmd_scan_organic(args) -> int:
                 "already_captured": report.already_captured,
                 "results": report.results,
                 "ai_overview_present": report.ai_overview_present,
+                "ads_present": report.ads_present,
+                "lsa_present": report.lsa_present,
                 "problems": report.problems,
             },
             indent=2,
