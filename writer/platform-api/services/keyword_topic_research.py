@@ -329,6 +329,32 @@ async def gather_evidence(
             "site_topics": site_topics, "cost": cost}
 
 
+async def _verify_plan_volumes(plan: dict, loc: int, lang: str) -> tuple[dict, float]:
+    """Look up real search volume for the plan's (often model-composed) target
+    keywords in one keyword_overview batch, so the cards' volumes/priorities are
+    demand-true. Returns ({normalized keyword: volume}, cost). Best-effort — ({}, 0)
+    on failure or when there are no keywords."""
+    kws: list[str] = []
+    seen: set[str] = set()
+    for p in plan.get("pillars") or []:
+        for c in p.get("clusters") or []:
+            for k in c.get("target_keywords") or []:
+                nk = keyword_research.normalize_keyword(k)
+                if nk and nk not in seen:
+                    seen.add(nk)
+                    kws.append(k)
+    if not kws:
+        return {}, 0.0
+    try:
+        keyword_research.reserve_budget(max(1, len(kws) // 700 + 1))
+        overview, cost = await dataforseo_labs.fetch_keyword_overview(kws, loc, lang)
+    except Exception as exc:  # noqa: BLE001 — verification is best-effort
+        logger.warning("keyword_topic_research.volume_verify_failed", extra={"error": str(exc)})
+        return {}, 0.0
+    vols = {keyword_research.normalize_keyword(k): (m or {}).get("volume") for k, m in overview.items()}
+    return vols, cost or 0.0
+
+
 def _cards_from_evidence(evidence: dict) -> list[dict]:
     """The deterministic topic cards (fallback path when the strategist is off/
     unavailable). Pure over gathered evidence."""
@@ -377,8 +403,21 @@ async def run_topic_research(
             logger.warning("keyword_topic_research.strategist_failed", extra={"error": str(exc)})
         if plan:
             assessment = plan.get("assessment")
-            flat = keyword_topic_strategist.flatten_plan_to_cards(plan, evidence)
+            # Volume-verify the plan's model-composed keywords (one keyword_overview
+            # batch) so priorities/volumes are demand-true, not just evidence-carried.
+            verified, vcost = await _verify_plan_volumes(plan, loc, lang)
+            cost += vcost
+            flat = keyword_topic_strategist.flatten_plan_to_cards(plan, evidence, verified)
             if flat:
+                # Coverage: tag each topic gap vs already-covered by the client's
+                # existing content, so a re-run surfaces the gaps (best-effort).
+                try:
+                    from services import keyword_topic_coverage
+                    existing = keyword_topic_coverage.gather_existing_content(
+                        client_id, evidence.get("site_topics"))
+                    flat, _ = keyword_topic_coverage.tag_coverage(flat, existing)
+                except Exception as exc:  # noqa: BLE001 — advisory only
+                    logger.warning("keyword_topic_research.coverage_failed", extra={"error": str(exc)})
                 topics = flat
 
     run = supabase.table("keyword_topic_research_runs").insert({

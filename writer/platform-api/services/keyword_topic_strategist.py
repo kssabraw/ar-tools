@@ -383,11 +383,19 @@ def _volume_lookup(evidence: dict) -> dict:
     return vol
 
 
-def flatten_plan_to_cards(plan: dict, evidence: dict) -> list[dict]:
+def flatten_plan_to_cards(
+    plan: dict, evidence: dict, extra_volumes: Optional[dict] = None
+) -> list[dict]:
     """Flatten the pillar/cluster plan into the flat topic cards the existing UI
-    renders, enriching keyword volumes from the gathered evidence and carrying the
-    pillar / intent / funnel-stage / rationale. Ordered by priority. Pure."""
+    renders, enriching keyword volumes from the gathered evidence (and any
+    ``extra_volumes`` looked up specifically to verify the plan's model-composed
+    keywords), and carrying the pillar / intent / funnel-stage / rationale. Ordered
+    by priority. Pure."""
     vol = _volume_lookup(evidence)
+    if extra_volumes:
+        for k, v in extra_volumes.items():
+            if v is not None:
+                vol[keyword_research.normalize_keyword(k)] = max(vol.get(keyword_research.normalize_keyword(k), 0), v)
     cards: list[dict] = []
     for p in plan.get("pillars") or []:
         for c in p.get("clusters") or []:

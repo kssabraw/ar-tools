@@ -421,10 +421,35 @@ def detect_brand_flood_tokens(
         for t in kt:
             counts[t] = counts.get(t, 0) + 1
     flood = {t for t, c in counts.items() if c >= min_count and c / n >= min_fraction}
+    # Exonerate a token that is the ACRONYM of the seed phrase — it's the seed's own
+    # synonym, not a competitor brand (e.g. "tpa" for "third party ... administrator";
+    # "tpa companies"/"tpa software" share no seed token so they look like a flood).
+    flood = {t for t in flood if not is_seed_acronym(t, seeds)}
     dropped = sum(1 for kt in seedless.values() if kt & flood)
     report.update({"gate": "flood" if flood else "none",
                    "flood_tokens": sorted(flood), "dropped": dropped})
     return flood, report
+
+
+def _is_subsequence(sub: str, seq: str) -> bool:
+    """Whether ``sub`` is a subsequence of ``seq`` (chars in order, gaps allowed). Pure."""
+    it = iter(seq)
+    return all(ch in it for ch in sub)
+
+
+def is_seed_acronym(token: Optional[str], seeds: list[str]) -> bool:
+    """Whether ``token`` reads as an acronym of a seed phrase — its letters are an
+    in-order subsequence of the seed's word-initials, starting at the first word
+    (e.g. "tpa" for "third party claims administrator", initials "tpca"). Used to
+    keep the seed's own acronym out of the brand-flood gate. Pure."""
+    t = (token or "").lower()
+    if len(t) < 2:
+        return False
+    for s in seeds or []:
+        initials = "".join(w[0] for w in tokenize(s))
+        if len(initials) >= 2 and initials[0] == t[0] and _is_subsequence(t, initials):
+            return True
+    return False
 
 
 def is_brand_flooded(keyword: Optional[str], seed_toks: set[str], flood_tokens: set[str]) -> bool:

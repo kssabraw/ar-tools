@@ -59,6 +59,17 @@ def test_flatten_plan_to_cards_enriches_volume_and_carries_metadata():
     assert c["title"] == "Cut claims leakage"
 
 
+def test_flatten_applies_verified_volumes():
+    plan = {"assessment": "a", "pillars": [{"pillar": "P", "clusters": [
+        {"title": "T", "target_keywords": ["tpa vendor selection", "claims leakage"],
+         "priority": "high"}]}]}
+    # extra_volumes (a real keyword_overview lookup) fills model-composed keywords the
+    # gathered evidence didn't have.
+    cards = ks.flatten_plan_to_cards(plan, {"mined": []},
+                                     {"tpa vendor selection": 90, "claims leakage": 320})
+    assert cards[0]["volume_total"] == 410
+
+
 def test_flatten_orders_by_priority():
     plan = {"assessment": "a", "pillars": [{"pillar": "P", "clusters": [
         {"title": "low one", "target_keywords": [], "priority": "low"},
