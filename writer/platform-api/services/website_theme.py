@@ -235,13 +235,20 @@ def validate_roles(assigned: dict, pre: Precompiled) -> ThemeTokens:
             raise ThemeError(f"token_not_measured:{role}")
         colors[role] = raw
 
+    # Fonts are held to the same bar as colours. This used to skip the check when
+    # the census found no families at all (`if families and ...`), which meant the
+    # one case where the model has nothing to copy from was the one case it was
+    # free to invent — exactly backwards. A design with no measurable family is a
+    # design we cannot honestly theme, so it fails the compile.
     families = {value for value, _ in pre.tokens.font_families}
+    if not families:
+        raise ThemeError("no_fonts_measured")
     display = (assigned.get("font_display") or "").strip()
     body = (assigned.get("font_body") or "").strip()
     for name, value in (("font_display", display), ("font_body", body)):
         if not value:
             raise ThemeError(f"token_role_missing:{name}")
-        if families and value not in families:
+        if value not in families:
             raise ThemeError(f"token_not_measured:{name}")
 
     return ThemeTokens(
@@ -613,12 +620,11 @@ async def apply_theme_to_site(website: dict, theme: dict) -> Optional[str]:
         message=f"Apply theme: {theme.get('name') or theme['id']}",
     )
     sha = result.get("commit_sha")
-    get_supabase().table("website_deploys").insert(
-        {
-            "website_id": website["id"],
-            "trigger": "theme",
-            "status": "queued",
-            "commit_sha": sha,
-        }
-    ).execute()
+    # Through record_deploy, not a raw insert: it also enqueues the poll that
+    # resolves the row. Inserting directly left the deploy at 'queued' until the
+    # scheduler's next sweep, so a theme swap looked stuck next to a publish that
+    # settles immediately.
+    from services.website_deploy import record_deploy
+
+    record_deploy(website_id=website["id"], commit_sha=sha, trigger="theme")
     return sha

@@ -30,20 +30,44 @@ class TestBrandContextGate:
 
 
 def _supabase(page, website, client=None):
+    """A fake Supabase that HONOURS column projection.
+
+    `.select("a, b")` really does hand back only those keys. The old fake ignored
+    the projection and returned the whole row no matter what was asked for, which
+    is why a narrowed `.select("id, client_id, name")` — one that starved the
+    page writers of `config` and `site_type` — passed every test in this file.
+    A fake that is more generous than the database cannot catch that class of bug.
+    """
+    rows_by_table = {
+        "website_pages": [page],
+        "websites": [website],
+        "clients": [client] if client else [],
+        "async_jobs": [{"id": "job-1"}],
+    }
     tables = {}
 
     def table(name):
         if name not in tables:
             mock = MagicMock()
-            for method in ("select", "eq", "limit", "in_", "order", "update", "insert"):
+            state = {"cols": "*"}
+
+            def _select(cols="*", *_a, **_k):
+                state["cols"] = cols
+                return mock
+
+            mock.select.side_effect = _select
+            for method in ("eq", "limit", "in_", "order", "update", "insert"):
                 getattr(mock, method).return_value = mock
-            data = {
-                "website_pages": [page],
-                "websites": [website],
-                "clients": [client] if client else [],
-                "async_jobs": [{"id": "job-1"}],
-            }[name]
-            mock.execute.return_value = MagicMock(data=data)
+
+            def _execute(*_a, **_k):
+                rows = rows_by_table[name]
+                cols = state["cols"]
+                if isinstance(cols, str) and cols.strip() != "*":
+                    keep = {c.strip() for c in cols.split(",")}
+                    rows = [{k: v for k, v in r.items() if k in keep} for r in rows]
+                return MagicMock(data=rows)
+
+            mock.execute.side_effect = _execute
             tables[name] = mock
         return tables[name]
 
@@ -116,6 +140,29 @@ class TestGeneratePage:
             result = await wg.generate_page(page_id="p1", user_id="u1")
 
         assert result["reason"] == "engine_not_built:some_future_engine"
+
+    async def test_the_writer_receives_the_sites_config_and_type(self):
+        # Regression: the websites row was fetched with .select("id, client_id,
+        # name"), so every consumer of website["config"] saw {} — a business fact
+        # a person set in the Settings tab was silently ignored in favour of GBP,
+        # and site_type always read "informational". Asserted on the row the
+        # writer is actually handed, since hand-built fixtures hid this.
+        page = {"id": "p1", "website_id": "w1", "page_type": "home", "title": "Home",
+                "plan": {"engine": "core_pages"}}
+        site = {**SITE, "site_type": "local_business",
+                "config": {"tagline": "Roofs done right",
+                           "business": {"city": "Anaheim", "provenance": {"city": "user"}}}}
+        sb, _ = _supabase(page, site, CLIENT)
+        gen = AsyncMock(return_value={"title": "t", "description": "d", "body": "",
+                                      "frontmatter": {"sections": {"heroTitle": "x"}}})
+        with patch.object(wg, "get_supabase", return_value=sb), patch(
+            "services.website_core_pages.generate_core_page", new=gen
+        ):
+            await wg.generate_page(page_id="p1", user_id="u1")
+
+        handed = gen.call_args.kwargs["website"]
+        assert handed.get("config", {}).get("tagline") == "Roofs done right"
+        assert handed.get("site_type") == "local_business"
 
     async def test_a_home_page_is_written_by_the_core_pages_writer(self):
         page = {"id": "p1", "website_id": "w1", "page_type": "home", "title": "Home",

@@ -51,6 +51,20 @@ class TestBusinessFacts:
         assert facts["business_name"] == "Acme Roofing"
         assert facts["city"] == "Anaheim"
 
+    def test_the_site_type_reaches_the_prompt(self):
+        # It used to be computed into the facts dict and then read by nobody —
+        # dead data that was also wrong (the row it came from never carried
+        # site_type). A content property and a service business want genuinely
+        # different copy from the same three templates.
+        local = cp._facts_block({"site_type": "local_business", "business_name": "Acme"})
+        info = cp._facts_block({"site_type": "informational", "business_name": "Acme"})
+        assert "local service business" in local
+        assert "NOT a business selling a service" in info
+        assert local != info
+
+    def test_an_unknown_site_type_adds_no_framing_line(self):
+        assert cp._facts_block({"site_type": "", "business_name": "Acme"}) == "Business name: Acme"
+
     def test_the_facts_block_omits_what_is_missing(self):
         # An unconfigured site must not hand the model a page of blank labels to
         # fill — that is exactly how a fact gets invented.

@@ -1734,10 +1734,10 @@ class Settings(BaseSettings):
     # dark and on its own axis from the builder flag: turning the builder on must
     # not start spending on images, and a 40-page bulk-create is 40 renders.
     website_images_enabled: bool = False
-    # v1 renders through the suite's proven gpt-image-1 path (services/illustration
-    # .py); 'gemini' is reserved for a future renderer that isn't built yet, so the
-    # effective provider today is openai regardless of this value.
-    website_image_provider: str = "openai"
+    # No provider key here on purpose: heroes render through the suite's one
+    # image path (services/illustration.py) and are tuned by its
+    # illustration_image_* settings. A second knob that nothing reads only
+    # invites someone to set it and expect a different renderer.
 
     class Config:
         env_file = ".env"
