@@ -38,6 +38,24 @@ interface BlogTopic {
   angle: string
   target_keywords?: string[]
 }
+interface TopicCard {
+  theme: string
+  problem: string | null
+  title: string
+  supporting_keywords: { keyword: string; volume: number | null }[]
+  questions: string[]
+  competitor_examples: string[]
+  volume_total: number
+  priority: number
+}
+interface TopicRun {
+  id: string
+  topic_count: number
+  topics: TopicCard[] | null
+  competitors: { domain: string; informational_keywords: number; sample: { keyword: string; volume: number | null }[] }[] | null
+  cost_usd: number | null
+  created_at: string
+}
 interface TopicResearch {
   enabled: boolean
   site: { source: string; topics: string[] }
@@ -148,6 +166,32 @@ export function KeywordResearch() {
     if (lines.some((l) => l.toLowerCase() === kw.toLowerCase())) return prev
     return prev.trim() ? `${prev.trim()}\n${kw}` : kw
   })
+
+  // --- Problem-first Topic Research (distinct from keyword expansion) ---
+  const { data: topicData } = useQuery<{ runs: unknown[]; latest: TopicRun | null; budget_remaining: number }>({
+    queryKey: ['topic-research', id],
+    queryFn: () => api.get(`/clients/${id}/topic-research`),
+    enabled: Boolean(id),
+  })
+  const [topicJob, setTopicJob] = useState<string | null>(null)
+  const researchTopics = useMutation({
+    mutationFn: () => api.post<{ job_id: string }>(`/clients/${id}/topic-research`, { seeds }),
+    onSuccess: (r) => setTopicJob(r.job_id),
+  })
+  const { data: topicJobStatus } = useQuery<{ status: string; error?: string }>({
+    queryKey: ['topic-research-job', id, topicJob],
+    queryFn: () => api.get(`/clients/${id}/topic-research/jobs/${topicJob}`),
+    enabled: Boolean(topicJob),
+    refetchInterval: (q) => (['complete', 'failed'].includes(q.state.data?.status ?? '') ? false : 3000),
+  })
+  useEffect(() => {
+    if (topicJobStatus?.status === 'complete') {
+      setTopicJob(null)
+      queryClient.invalidateQueries({ queryKey: ['topic-research', id] })
+    }
+  }, [topicJobStatus?.status]) // eslint-disable-line react-hooks/exhaustive-deps
+  const topicRunning = Boolean(topicJob) && !['complete', 'failed'].includes(topicJobStatus?.status ?? '')
+  const topics = useMemo<TopicCard[]>(() => topicData?.latest?.topics ?? [], [topicData])
 
   const clearAll = useMutation({
     mutationFn: () => api.delete<{ deleted: number }>(`/clients/${id}/keyword-research`),
@@ -387,6 +431,64 @@ export function KeywordResearch() {
         </div>
       )}
       {clearAll.isError && <div style={errBox}>{(clearAll.error as Error)?.message ?? 'Could not clear runs.'}</div>}
+
+      {/* Problem-first Topic Research — buyer problems (ICP + your site) → real
+          demand (People Also Ask + suggestions) + competitor topics. Distinct from
+          keyword expansion below: this researches TOPICS, not seed variations. */}
+      <div style={{ border: '1px solid #ddd6fe', borderRadius: 12, padding: '16px 18px', marginBottom: 20, background: '#faf9ff' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ ...intelHead, fontSize: 14 }}><Sparkles size={15} /> Topic Research <span style={{ fontSize: 10, fontWeight: 700, color: '#7c3aed', background: '#f3e8ff', borderRadius: 6, padding: '1px 6px', marginLeft: 4 }}>BETA</span></div>
+            <div style={{ fontSize: 12, color: '#64748b', marginTop: 3, maxWidth: 640 }}>
+              Starts from your buyer's problems (ICP + your site's themes), validates each with real search demand (People Also Ask + suggestions), and mines competitor topics — not just variations of the seed.
+            </div>
+          </div>
+          <button style={{ ...primaryBtn, background: '#7c3aed' }}
+            onClick={() => researchTopics.mutate()} disabled={topicRunning || researchTopics.isPending}>
+            <Sparkles size={14} /> {topicRunning || researchTopics.isPending ? 'Researching…' : topics.length ? 'Re-research topics' : 'Research topics'}
+          </button>
+        </div>
+        {researchTopics.isError && <div style={{ ...errBox, marginTop: 12, marginBottom: 0 }}>Couldn't start topic research — please try again.</div>}
+        {topicRunning && <div style={{ fontSize: 12, color: '#7c3aed', marginTop: 12 }}>Researching buyer problems, real demand, and competitor topics… (~30s)</div>}
+        {!topicRunning && topics.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 12, marginTop: 14 }}>
+            {topics.map((t, i) => (
+              <div key={`${t.theme}-${i}`} style={{ border: '1px solid #e9e5ff', borderRadius: 10, padding: '12px 14px', background: '#fff' }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>{t.title}</div>
+                {t.problem && <div style={{ fontSize: 12, color: '#475569', margin: '4px 0 8px' }}>{t.problem}</div>}
+                {t.supporting_keywords.length > 0 && (
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4, color: '#94a3b8', marginBottom: 3 }}>Keywords ({num(t.volume_total)} vol)</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                      {t.supporting_keywords.slice(0, 8).map((k) => (
+                        <span key={k.keyword} style={{ padding: '2px 8px', background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe', borderRadius: 999, fontSize: 11 }}>
+                          {k.keyword}{k.volume ? ` · ${num(k.volume)}` : ''}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {t.questions.length > 0 && (
+                  <div style={{ marginBottom: t.competitor_examples.length ? 8 : 0 }}>
+                    <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4, color: '#94a3b8', marginBottom: 3 }}>Questions people ask</div>
+                    <ul style={{ margin: 0, paddingLeft: 15, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      {t.questions.slice(0, 5).map((q) => <li key={q} style={{ fontSize: 12, color: '#334155' }}>{q}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {t.competitor_examples.length > 0 && (
+                  <div style={{ fontSize: 11, color: '#94a3b8' }}>
+                    <Trophy size={11} style={{ verticalAlign: 'middle' }} /> Competitors cover this: {t.competitor_examples.slice(0, 2).map((c) => c.split(':')[0]).join(', ')}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        {!topicRunning && researchTopics.isSuccess && topics.length === 0 && (
+          <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 12 }}>No topics were generated — this client may need an ICP or site content on file for problem-first research.</div>
+        )}
+      </div>
 
       {!runId && !running && (
         <div style={emptyBox}>Enter a seed keyword above to run your first research.</div>

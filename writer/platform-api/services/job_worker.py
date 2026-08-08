@@ -874,6 +874,9 @@ async def _process_job(job: dict) -> None:
         await run_link_gap_job(job)
     elif job_type == "keyword_research":
         await run_keyword_research_job(job)
+    elif job_type == "keyword_topic_research":
+        from services.keyword_topic_research import run_topic_research_job
+        await run_topic_research_job(job)
     elif job_type == "deliverables_log":
         await run_deliverables_log_job(job)
     elif job_type == "deliverable_notes_scan":
