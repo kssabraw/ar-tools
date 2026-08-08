@@ -88,7 +88,10 @@ today a per-site NAP override goes through the config, not a form.
 ### To run it end-to-end
 
 Flip `website_builder_enabled=true` (and `website_images_enabled=true` for art)
-on PLATFORM — **both currently unset**. Then the normal lifecycle: create a
+on PLATFORM — **both set to `true` on 2026-08-08** (deployment `ea2b98b4`,
+commit `b4ca6da`, SUCCESS; verified behaviourally in the running app's logs —
+the scheduler is executing `enqueue_due_deploy_polls`, which returns early
+unless the flag is on). Then the normal lifecycle: create a
 `websites` row → upload+approve a theme → provision → build+approve a plan →
 generate (now covers home/about/contact + hero images, not just nlp pages) →
 publish. Testing: ~160 new unit tests across the three modules; full backend
@@ -125,7 +128,8 @@ repo to point at. Nothing is deployed from it and it has no Cloudflare project.
 
 **For a real website to exist, all of these must happen deliberately:**
 
-1. `website_builder_enabled=true` set on PLATFORM (it is not set, so it is False)
+1. `website_builder_enabled=true` set on PLATFORM (**done 2026-08-08**; was
+   False before that, which is why nothing below had run)
 2. a `websites` row created for a client
 3. `POST /websites/{id}/provision` called by a staff+ user
 4. a site plan built, reviewed and approved
@@ -178,8 +182,9 @@ The impure half is now built: `services/website_plan_store.py` (build / rebuild
 across the seven modules** (was 99).
 
 **UI (built 2026-08-06).** Two entry points, per PRD §6.1, and **both are
-hidden until `website_builder_enabled=true` on PLATFORM** — the flag is unset,
-so the module is currently invisible in the dashboard by design:
+hidden until `website_builder_enabled=true` on PLATFORM** — **set 2026-08-08**,
+so the module is now visible in the dashboard (it was invisible by design until
+then):
 
 1. **Sidebar → Websites** (`pages/Websites.tsx`, route `/websites`) — the fleet
    across every client, with status/domain/last-deploy columns, a filter, the
