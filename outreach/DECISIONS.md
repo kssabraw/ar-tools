@@ -1082,3 +1082,32 @@ Pure builder + approval-reflection unit-tested (`test_outreach_report.py`); the 
 validated end-to-end with a mocked WeasyPrint. Config `outreach_report_agency_name`. **All four
 report increments are now built** — the report is feature-complete; only the R2 delivery refinement
 remains open under I-095.
+
+---
+
+## 2026-08-08 — Client report delivery: signed URL via Supabase Storage (not R2), the I-095 refinement
+
+The last open item under I-095: reporting-layer-spec §5 wants the client-facing PDF delivered as a
+SIGNED URL with an expiry (so a client gets a link, not an emailed file), and names Cloudflare R2.
+
+**Built it on Supabase Storage instead of R2, deliberately.** The substance §5 asks for is "a signed
+URL, no auth, ~90-day expiry"; a private Supabase Storage bucket delivers exactly that. The reasons
+it wins over R2 here:
+- **No new credentials to provision.** platform-api already holds the Outreacher project's
+  service-role key; the outreach Railway service carries only Outscraper/DataForSEO/Supabase creds
+  today (I-073), so R2 would be a net-new dependency + an owner-side setup step for the same outcome.
+- **Cheapest to reverse.** All signing goes through one seam (`_sign_report_url`); swapping the
+  storage backend to R2 later is a one-function change, and `report_approval.storage_path` +
+  `content_hash` already record where the bytes are and which bytes they are.
+
+Shape: `generate_client_report_pdf` uploads the rendered PDF to the private `outreach-reports` bucket
+(migration `20260808180000`, applied live) at `{prospect_id}/{content_hash}.pdf` (content-hash keyed,
+so identical inputs reuse one object — reporting §6), records the path on the approval row, and
+returns a signed URL (TTL `outreach_report_url_ttl_days`=90). `POST …/report/pdf` now returns the
+link (JSON) rather than the raw bytes; `GET …/report/pdf` re-signs the latest approval's stored PDF
+so an expired link refreshes without re-approving (read-only, not admin-gated — approval already
+happened). Storage is best-effort: a failure still records the approval, only the link is absent.
+Frontend: the client face shows the shareable link (copy / open) + the expiry note.
+
+**I-095 is now fully resolved** — the per-prospect report is complete end to end (shell, organic,
+LLM, approved client PDF, signed-URL delivery).

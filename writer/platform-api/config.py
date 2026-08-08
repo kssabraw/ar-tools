@@ -1665,6 +1665,11 @@ class Settings(BaseSettings):
     # White-label name in the footer of the client-facing report PDF (increment 4). Mirrors the
     # suite's client_report_agency_name; a prospect-facing asset should carry the agency's name.
     outreach_report_agency_name: str = "Amazing Rankings"
+    # The approved client-facing PDF is stored in the private `outreach-reports` bucket and delivered
+    # as a signed URL (reporting-layer-spec §5) so a client gets a link, not an emailed file. Default
+    # 90 days per the spec; the URL is re-signable from the stored path without re-approving.
+    outreach_report_bucket: str = "outreach-reports"
+    outreach_report_url_ttl_days: int = 90
 
     leadoff_income_acs_year: int = 2023
     leadoff_income_refresh_days: int = 365
