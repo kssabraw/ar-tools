@@ -116,6 +116,34 @@ interface ReportRow {
 const num = (n: number | null | undefined, digits = 0) =>
   n === null || n === undefined ? '—' : n.toLocaleString(undefined, { maximumFractionDigits: digits })
 
+// The seed keyword for a Blog Writer run from a topic card: its highest-volume
+// supporting keyword (the term the brief/outline is built on), falling back to
+// the theme/title. Capped to the run keyword's 150-char limit.
+function topicSeedKeyword(t: TopicCard): string {
+  const kws = [...(t.supporting_keywords || [])].sort((a, b) => (b.volume || 0) - (a.volume || 0))
+  const seed = kws[0]?.keyword || t.theme || t.title || ''
+  return seed.slice(0, 150)
+}
+
+// The per-run editorial guidance threaded into the Writer — carries the topic's
+// angle (title, buyer problem, intent/funnel), the questions to answer, and the
+// remaining target keywords. The brief stays keyword-driven; the angle rides here.
+function composeWriterNotes(t: TopicCard, seed: string): string {
+  const lines: string[] = []
+  if (t.title) lines.push(`Working title: ${t.title}`)
+  const problem = t.problem
+  if (problem) lines.push(`Angle / buyer problem: ${problem}`)
+  const meta = [t.search_intent && `intent: ${t.search_intent}`, t.funnel_stage && `funnel stage: ${t.funnel_stage}`]
+    .filter(Boolean).join(' · ')
+  if (meta) lines.push(meta)
+  const qs = (t.questions || []).slice(0, 6)
+  if (qs.length) lines.push('Answer these reader questions:\n' + qs.map((q) => `- ${q}`).join('\n'))
+  const others = (t.supporting_keywords || []).map((k) => k.keyword).filter((k) => k && k !== seed).slice(0, 8)
+  if (others.length) lines.push(`Work in these related keywords naturally: ${others.join(', ')}`)
+  lines.push(`Source: Topic Research plan${t.pillar ? ` (pillar: ${t.pillar})` : ''}. Write as an authoritative, buyer-focused blog post.`)
+  return lines.join('\n')
+}
+
 export function KeywordResearch() {
   const { id } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
@@ -202,6 +230,35 @@ export function KeywordResearch() {
   const topics = useMemo<TopicCard[]>(() => topicData?.latest?.topics ?? [], [topicData])
   const topicAssessment = topicData?.latest?.assessment ?? topicData?.latest?.plan?.assessment ?? null
   const [topicGapsOnly, setTopicGapsOnly] = useState(false)
+  // "Write this post" — create a Blog Writer run seeded from a topic card.
+  const [writeTopic, setWriteTopic] = useState<TopicCard | null>(null)
+  const [writeKeyword, setWriteKeyword] = useState('')
+  const [writeNotes, setWriteNotes] = useState('')
+  const [writeError, setWriteError] = useState<string | null>(null)
+  const [createdRunId, setCreatedRunId] = useState<string | null>(null)
+  function openWrite(t: TopicCard) {
+    const seed = topicSeedKeyword(t)
+    setWriteTopic(t)
+    setWriteKeyword(seed)
+    setWriteNotes(composeWriterNotes(t, seed))
+    setWriteError(null)
+    setCreatedRunId(null)
+  }
+  const createDraft = useMutation({
+    mutationFn: (body: { client_id: string; keyword: string; content_type: string; writer_notes?: string }) =>
+      api.post<{ run_id: string; status: string }>('/runs', body),
+    onSuccess: (resp) => {
+      setCreatedRunId(resp.run_id)
+      queryClient.invalidateQueries({ queryKey: ['runs'] })
+    },
+    onError: (e: unknown) => {
+      const detail = e instanceof Error ? e.message : ''
+      setWriteError(
+        detail === 'concurrency_limit' ? 'Too many drafts are generating right now (max 5). Try again shortly.'
+        : detail === 'client_frozen' ? 'This client is frozen — content creation is paused.'
+        : 'Could not create the draft. Please try again.')
+    },
+  })
   const topicCoveredCount = useMemo(() => topics.filter((t) => t.coverage === 'covered').length, [topics])
   // Group cards under their pillar (topical-authority structure), preserving the
   // priority order the backend already applied; optionally hide already-covered topics.
@@ -532,6 +589,11 @@ export function KeywordResearch() {
                     </div>
                   )}
                   {t.rationale && <div style={{ fontSize: 11, color: '#64748b', fontStyle: 'italic' }}>{t.rationale}</div>}
+                  <button
+                    onClick={() => openWrite(t)}
+                    style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: '#6d28d9', background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: 7, padding: '5px 10px', cursor: 'pointer' }}>
+                    <FileText size={13} /> Write this post
+                  </button>
                 </div>
               ))}
             </div>
@@ -833,6 +895,68 @@ export function KeywordResearch() {
           ) : null}
         </>
       ))}
+
+      {writeTopic && (
+        <div onClick={() => !createDraft.isPending && setWriteTopic(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: 16 }}>
+          <div onClick={(e) => e.stopPropagation()}
+            style={{ background: '#fff', borderRadius: 12, maxWidth: 560, width: '100%', maxHeight: '85vh', overflow: 'auto', boxShadow: '0 20px 50px rgba(0,0,0,0.25)' }}>
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <FileText size={16} color="#6d28d9" />
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a' }}>Write this post</div>
+            </div>
+            <div style={{ padding: 20 }}>
+              {createdRunId ? (
+                <div>
+                  <div style={{ fontSize: 14, color: '#0f172a', marginBottom: 6 }}>✅ Draft queued.</div>
+                  <p style={{ fontSize: 13, color: '#475569', marginTop: 0 }}>
+                    The Blog Writer is generating <strong>{writeKeyword}</strong>. It’ll appear in Runs when ready.
+                  </p>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                    <button onClick={() => navigate(`/runs/${createdRunId}`)}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#fff', background: '#6d28d9', border: 'none', borderRadius: 8, padding: '8px 14px', cursor: 'pointer' }}>View the draft</button>
+                    <button onClick={() => setWriteTopic(null)}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#475569', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 14px', cursor: 'pointer' }}>Close</button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <p style={{ fontSize: 12.5, color: '#64748b', marginTop: 0 }}>
+                    Creates a blog post in the Blog Writer for this client — seeded with the keyword below, with the topic’s angle as writer guidance.
+                  </p>
+                  <label style={{ display: 'block', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, color: '#94a3b8', margin: '12px 0 4px' }}>
+                    Seed keyword <span style={{ textTransform: 'none', color: '#cbd5e1' }}>(drives the outline)</span>
+                  </label>
+                  {writeTopic.supporting_keywords.length > 1 ? (
+                    <select value={writeKeyword} onChange={(e) => setWriteKeyword(e.target.value)}
+                      style={{ width: '100%', fontSize: 13, padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: 8, background: '#fff' }}>
+                      {writeTopic.supporting_keywords.map((k) => (
+                        <option key={k.keyword} value={k.keyword}>{k.keyword}{k.volume ? ` · ${num(k.volume)} vol` : ''}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input value={writeKeyword} onChange={(e) => setWriteKeyword(e.target.value)} maxLength={150}
+                      style={{ width: '100%', fontSize: 13, padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} />
+                  )}
+                  <label style={{ display: 'block', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, color: '#94a3b8', margin: '14px 0 4px' }}>Writer guidance (angle)</label>
+                  <textarea value={writeNotes} onChange={(e) => setWriteNotes(e.target.value)} rows={9} maxLength={4000}
+                    style={{ width: '100%', fontSize: 12.5, padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: 8, resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box', lineHeight: 1.5 }} />
+                  {writeError && <div style={{ fontSize: 12.5, color: '#b91c1c', marginTop: 8 }}>{writeError}</div>}
+                  <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                    <button disabled={!writeKeyword.trim() || createDraft.isPending}
+                      onClick={() => id && createDraft.mutate({ client_id: id, keyword: writeKeyword.trim().slice(0, 150), content_type: 'blog_post', writer_notes: writeNotes.trim() || undefined })}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#fff', background: '#6d28d9', border: 'none', borderRadius: 8, padding: '8px 14px', cursor: 'pointer', opacity: (!writeKeyword.trim() || createDraft.isPending) ? 0.6 : 1 }}>
+                      {createDraft.isPending ? 'Creating…' : 'Create draft'}
+                    </button>
+                    <button disabled={createDraft.isPending} onClick={() => setWriteTopic(null)}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#475569', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 14px', cursor: 'pointer' }}>Cancel</button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
