@@ -40,18 +40,25 @@ interface BlogTopic {
 }
 interface TopicCard {
   theme: string
+  pillar?: string | null
   problem: string | null
   title: string
+  search_intent?: string | null
+  funnel_stage?: string | null
   supporting_keywords: { keyword: string; volume: number | null }[]
   questions: string[]
   competitor_examples: string[]
   volume_total: number
   priority: number
+  priority_label?: string | null
+  rationale?: string | null
 }
 interface TopicRun {
   id: string
   topic_count: number
   topics: TopicCard[] | null
+  assessment: string | null
+  plan: { assessment?: string; pillars?: { pillar: string; rationale?: string }[] } | null
   competitors: { domain: string; informational_keywords: number; sample: { keyword: string; volume: number | null }[] }[] | null
   cost_usd: number | null
   created_at: string
@@ -192,6 +199,19 @@ export function KeywordResearch() {
   }, [topicJobStatus?.status]) // eslint-disable-line react-hooks/exhaustive-deps
   const topicRunning = Boolean(topicJob) && !['complete', 'failed'].includes(topicJobStatus?.status ?? '')
   const topics = useMemo<TopicCard[]>(() => topicData?.latest?.topics ?? [], [topicData])
+  const topicAssessment = topicData?.latest?.assessment ?? topicData?.latest?.plan?.assessment ?? null
+  // Group cards under their pillar (topical-authority structure), preserving the
+  // priority order the backend already applied.
+  const topicPillars = useMemo(() => {
+    const groups: { pillar: string; cards: TopicCard[] }[] = []
+    for (const c of topics) {
+      const label = c.pillar ?? c.theme ?? 'Topics'
+      let g = groups.find((x) => x.pillar === label)
+      if (!g) { g = { pillar: label, cards: [] }; groups.push(g) }
+      g.cards.push(c)
+    }
+    return groups
+  }, [topics])
 
   const clearAll = useMutation({
     mutationFn: () => api.delete<{ deleted: number }>(`/clients/${id}/keyword-research`),
@@ -450,41 +470,58 @@ export function KeywordResearch() {
         </div>
         {researchTopics.isError && <div style={{ ...errBox, marginTop: 12, marginBottom: 0 }}>Couldn't start topic research — please try again.</div>}
         {topicRunning && <div style={{ fontSize: 12, color: '#7c3aed', marginTop: 12 }}>Researching buyer problems, real demand, and competitor topics… (~30s)</div>}
-        {!topicRunning && topics.length > 0 && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 12, marginTop: 14 }}>
-            {topics.map((t, i) => (
-              <div key={`${t.theme}-${i}`} style={{ border: '1px solid #e9e5ff', borderRadius: 10, padding: '12px 14px', background: '#fff' }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>{t.title}</div>
-                {t.problem && <div style={{ fontSize: 12, color: '#475569', margin: '4px 0 8px' }}>{t.problem}</div>}
-                {t.supporting_keywords.length > 0 && (
-                  <div style={{ marginBottom: 8 }}>
-                    <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4, color: '#94a3b8', marginBottom: 3 }}>Keywords ({num(t.volume_total)} vol)</div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                      {t.supporting_keywords.slice(0, 8).map((k) => (
-                        <span key={k.keyword} style={{ padding: '2px 8px', background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe', borderRadius: 999, fontSize: 11 }}>
-                          {k.keyword}{k.volume ? ` · ${num(k.volume)}` : ''}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {t.questions.length > 0 && (
-                  <div style={{ marginBottom: t.competitor_examples.length ? 8 : 0 }}>
-                    <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4, color: '#94a3b8', marginBottom: 3 }}>Questions people ask</div>
-                    <ul style={{ margin: 0, paddingLeft: 15, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                      {t.questions.slice(0, 5).map((q) => <li key={q} style={{ fontSize: 12, color: '#334155' }}>{q}</li>)}
-                    </ul>
-                  </div>
-                )}
-                {t.competitor_examples.length > 0 && (
-                  <div style={{ fontSize: 11, color: '#94a3b8' }}>
-                    <Trophy size={11} style={{ verticalAlign: 'middle' }} /> Competitors cover this: {t.competitor_examples.slice(0, 2).map((c) => c.split(':')[0]).join(', ')}
-                  </div>
-                )}
-              </div>
-            ))}
+        {!topicRunning && topicAssessment && (
+          <div style={{ fontSize: 12.5, color: '#0f172a', background: '#f3e8ff', border: '1px solid #e9d5ff', borderRadius: 8, padding: '10px 12px', marginTop: 12, lineHeight: 1.5 }}>
+            <strong style={{ color: '#6d28d9' }}>Strategy:</strong> {topicAssessment}
           </div>
         )}
+        {!topicRunning && topicPillars.map((group) => (
+          <div key={group.pillar} style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#5b21b6', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>{group.pillar}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 12 }}>
+              {group.cards.map((t, i) => (
+                <div key={`${t.title}-${i}`} style={{ border: '1px solid #e9e5ff', borderRadius: 10, padding: '12px 14px', background: '#fff' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>{t.title}</div>
+                    {t.priority_label && (
+                      <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', borderRadius: 6, padding: '1px 6px',
+                        background: t.priority_label === 'high' ? '#dcfce7' : t.priority_label === 'low' ? '#f1f5f9' : '#fef9c3',
+                        color: t.priority_label === 'high' ? '#15803d' : t.priority_label === 'low' ? '#64748b' : '#a16207' }}>{t.priority_label}</span>
+                    )}
+                  </div>
+                  {(t.search_intent || t.funnel_stage) && (
+                    <div style={{ display: 'flex', gap: 6, margin: '4px 0' }}>
+                      {t.search_intent && <span style={{ fontSize: 10, color: '#475569', background: '#f1f5f9', borderRadius: 6, padding: '1px 6px' }}>{t.search_intent}</span>}
+                      {t.funnel_stage && <span style={{ fontSize: 10, color: '#475569', background: '#f1f5f9', borderRadius: 6, padding: '1px 6px' }}>{t.funnel_stage}</span>}
+                    </div>
+                  )}
+                  {t.problem && <div style={{ fontSize: 12, color: '#475569', margin: '4px 0 8px' }}>{t.problem}</div>}
+                  {t.supporting_keywords.length > 0 && (
+                    <div style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4, color: '#94a3b8', marginBottom: 3 }}>Keywords{t.volume_total ? ` (${num(t.volume_total)} vol)` : ''}</div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                        {t.supporting_keywords.slice(0, 8).map((k) => (
+                          <span key={k.keyword} style={{ padding: '2px 8px', background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe', borderRadius: 999, fontSize: 11 }}>
+                            {k.keyword}{k.volume ? ` · ${num(k.volume)}` : ''}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {t.questions.length > 0 && (
+                    <div style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4, color: '#94a3b8', marginBottom: 3 }}>Questions people ask</div>
+                      <ul style={{ margin: 0, paddingLeft: 15, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        {t.questions.slice(0, 5).map((q) => <li key={q} style={{ fontSize: 12, color: '#334155' }}>{q}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                  {t.rationale && <div style={{ fontSize: 11, color: '#64748b', fontStyle: 'italic' }}>{t.rationale}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
         {!topicRunning && researchTopics.isSuccess && topics.length === 0 && (
           <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 12 }}>No topics were generated — this client may need an ICP or site content on file for problem-first research.</div>
         )}

@@ -298,38 +298,20 @@ def _match_competitor_examples(theme: dict, competitors: list[dict]) -> list[str
     return out
 
 
-async def run_topic_research(
-    client_id: str,
-    seeds: list[str],
-    location_code: Optional[int] = None,
-    language_code: Optional[str] = None,
+async def gather_evidence(
+    ctx: dict, seeds: list[str], loc: int, lang: str,
 ) -> dict:
-    """Problem-first topic research: themes → real demand (PAA + suggestions) →
-    competitor mining → ranked topic cards, persisted to a run. Returns a summary."""
-    supabase = get_supabase()
-    ctx = keyword_research._client_context(client_id)
-    if location_code is None:
-        location_code = ctx.get("rank_tracking_location_code")
-    loc = dataforseo_labs.labs_location_code(location_code)
-    lang = language_code or settings.dataforseo_default_language_code
-
-    # Client's own site themes (best-effort) ground the problem-first generation.
-    site_topics, _ = await keyword_research_topics.discover_site_topics(ctx, location_code)
+    """Gather the deterministic evidence a topic plan is built from: buyer
+    problem-themes (LLM), each theme's real demand (SERP PAA + suggestions), and
+    competitor informational keywords. Returns {themes, mined, competitors,
+    site_topics, cost}. Best-effort throughout."""
+    site_topics, _ = await keyword_research_topics.discover_site_topics(
+        ctx, loc if loc else None)
     themes = generate_problem_themes(ctx, seeds, site_topics)
     if not themes:
-        # No LLM / no context → nothing to research problem-first.
-        run = supabase.table("keyword_topic_research_runs").insert({
-            "client_id": client_id, "seeds": seeds, "location_code": location_code,
-            "language_code": lang, "status": "complete", "topic_count": 0,
-            "topics": None, "competitors": None, "cost_usd": 0,
-        }).execute().data[0]
-        return {"run_id": run["id"], "topic_count": 0, "cost_usd": 0.0}
+        return {"themes": [], "mined": [], "competitors": [], "site_topics": site_topics, "cost": 0.0}
 
-    # Budget: 1 SERP + 1 suggestions per theme + competitor ranked calls.
-    n_themes = len(themes)
-    keyword_research.reserve_budget(
-        n_themes * 2 + settings.keyword_topic_max_competitors)
-
+    keyword_research.reserve_budget(len(themes) * 2 + settings.keyword_topic_max_competitors)
     mined = await asyncio.gather(*[_mine_theme(t, loc, lang) for t in themes])
     cost = sum(m.get("cost") or 0.0 for m in mined)
 
@@ -338,30 +320,77 @@ async def run_topic_research(
     if website:
         from services.dataforseo_rank import extract_domain
         client_domain = extract_domain(website) or None
-
     comp_domains = aggregate_competitor_domains(
         [m.get("organic") or [] for m in mined], client_domain,
         top_n=settings.keyword_topic_max_competitors)
     competitors, comp_cost = await _mine_competitors(comp_domains, loc, lang)
     cost += comp_cost
+    return {"themes": themes, "mined": mined, "competitors": competitors,
+            "site_topics": site_topics, "cost": cost}
 
+
+def _cards_from_evidence(evidence: dict) -> list[dict]:
+    """The deterministic topic cards (fallback path when the strategist is off/
+    unavailable). Pure over gathered evidence."""
+    competitors = evidence.get("competitors") or []
     cards = [
         build_topic_card(
             m["theme"], m.get("suggestions") or [], m.get("questions") or [],
             _match_competitor_examples(m["theme"], competitors),
         )
-        for m in mined
+        for m in evidence.get("mined") or []
     ]
-    topics = rank_topics(cards)
+    return rank_topics(cards)
+
+
+async def run_topic_research(
+    client_id: str,
+    seeds: list[str],
+    location_code: Optional[int] = None,
+    language_code: Optional[str] = None,
+) -> dict:
+    """Strategist-grade topic research: gather evidence (problem-themes → real
+    demand → competitors), then reason over it grounded in the agency SOPs + the
+    client's real position (a bounded tool-use loop) to emit a topical-authority
+    PLAN. Falls back to deterministic topic cards when the strategist is disabled
+    or unavailable. Persists a run; returns a summary."""
+    supabase = get_supabase()
+    ctx = keyword_research._client_context(client_id)
+    if location_code is None:
+        location_code = ctx.get("rank_tracking_location_code")
+    loc = dataforseo_labs.labs_location_code(location_code)
+    lang = language_code or settings.dataforseo_default_language_code
+
+    evidence = await gather_evidence(ctx, seeds, loc, lang)
+    cost = evidence.get("cost") or 0.0
+
+    plan: Optional[dict] = None
+    assessment: Optional[str] = None
+    topics = _cards_from_evidence(evidence)  # deterministic default / fallback
+
+    if evidence.get("themes") and settings.keyword_topic_strategist_enabled:
+        try:
+            from services import keyword_topic_strategist
+            plan = await keyword_topic_strategist.run_topic_strategy(
+                client_id, ctx, evidence)
+        except Exception as exc:  # noqa: BLE001 — never lose the run over the loop
+            logger.warning("keyword_topic_research.strategist_failed", extra={"error": str(exc)})
+        if plan:
+            assessment = plan.get("assessment")
+            flat = keyword_topic_strategist.flatten_plan_to_cards(plan, evidence)
+            if flat:
+                topics = flat
 
     run = supabase.table("keyword_topic_research_runs").insert({
         "client_id": client_id, "seeds": seeds, "location_code": location_code,
         "language_code": lang, "status": "complete", "topic_count": len(topics),
-        "topics": topics or None, "competitors": competitors or None,
+        "topics": topics or None, "competitors": evidence.get("competitors") or None,
+        "plan": plan or None, "assessment": assessment,
         "cost_usd": round(cost, 4),
     }).execute().data[0]
     _prune_runs(client_id)
-    return {"run_id": run["id"], "topic_count": len(topics), "cost_usd": round(cost, 4)}
+    return {"run_id": run["id"], "topic_count": len(topics),
+            "has_plan": bool(plan), "cost_usd": round(cost, 4)}
 
 
 _RUNS_KEEP = 25
