@@ -948,6 +948,11 @@ class Settings(BaseSettings):
     # salary" is on-topic but targets job-seekers, not the carriers who hire a TPA
     # (55% of a live BSA Claims run). Best-effort — the ICP layer degrades to the
     # universal guard; set _filter False to disable entirely.
+    # Navigational + competitor-brand filter (keyword_research_navigational): drop
+    # support/lookup keywords ("<brand> phone number", "login", "claim status") and
+    # competitor-brand lookups, keeping competitor COMPARISON keywords.
+    keyword_research_navigational_filter: bool = True
+    keyword_research_competitor_filter: bool = True    # the competitor-brand half
     keyword_research_audience_filter: bool = True
     keyword_research_audience_icp: bool = True         # the ICP-grounded LLM off-audience pass
     keyword_research_audience_model: str = "claude-haiku-4-5-20251001"

@@ -1060,6 +1060,16 @@ async def run_keyword_research(
     rows, audience_report = keyword_research_audience.filter_by_audience(rows, ctx, seed_list)
     topic_research["audience"] = audience_report
 
+    # Navigational + competitor-brand filter: drop support/lookup keywords
+    # ("<competitor> phone number", "login", "claim status") and competitor-brand
+    # lookups (keeping competitor COMPARISON keywords). "sedgwick phone number" is
+    # on-topic + buyer-adjacent but is a claimant support query, never a content
+    # target. Runs after audience, before clustering.
+    nav_report = {"gate": "off"}
+    from services import keyword_research_navigational
+    rows, nav_report = keyword_research_navigational.filter_navigational(rows, client_id)
+    topic_research["navigational"] = nav_report
+
     warnings = seed_warnings(
         seed_list, client_name, filter_report,
         ratio_threshold=settings.keyword_research_brand_seed_ratio,
@@ -1087,6 +1097,13 @@ async def run_keyword_research(
         warnings.append(
             f"Filtered {_aud_dropped} keyword(s) that target the wrong audience "
             "(job-seekers / careers / off-audience), not the client's buyer."
+        )
+    _nav_dropped = (nav_report.get("dropped_navigational", 0)
+                    + nav_report.get("dropped_competitor", 0))
+    if _nav_dropped:
+        warnings.append(
+            f"Filtered {_nav_dropped} navigational / competitor-lookup keyword(s) "
+            "(e.g. “<competitor> phone number”, logins) that aren't content topics."
         )
     if warnings:
         logger.info("keyword_research.seed_warnings",
