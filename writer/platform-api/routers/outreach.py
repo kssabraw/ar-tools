@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from config import settings
@@ -179,20 +179,18 @@ async def approve_client_report_pdf(
     prospect_id: str,
     snapshot_id: Optional[str] = None,
     auth: dict = Depends(require_admin),
-) -> Response:
-    """Approve and render the client-facing report to a downloadable PDF.
+) -> dict:
+    """Approve, render, store the client-facing report PDF, and return a shareable signed URL.
 
     ADMIN-gated, and the click IS the approval: a prospect-facing asset must not be generated
     without explicit human approval (a hard module invariant; reporting-layer-spec §4a). This is the
-    one path that turns the on-screen DRAFT into a shippable PDF, and it records a `report_approval`
-    row (actor + the exact bytes' content_hash) before returning them. Refuses an unmeasured area —
-    there is no honest client report to render when nothing has been scanned.
+    one path that turns the on-screen DRAFT into a shippable PDF — it records a `report_approval` row
+    (actor + the exact bytes' content_hash + storage path) and returns a signed URL a client can open
+    with no login, valid for the configured TTL (reporting §5). Refuses an unmeasured area.
     """
     _require_outreach_ready()
     try:
-        pdf, _approval = outreach_service.generate_client_report_pdf(
-            prospect_id, auth["user_id"], snapshot_id
-        )
+        result = outreach_service.generate_client_report_pdf(prospect_id, auth["user_id"], snapshot_id)
     except OutreachError as e:
         status = 404 if e.code.endswith("_not_found") else 422
         raise HTTPException(status_code=status, detail=e.code) from e
@@ -201,11 +199,23 @@ async def approve_client_report_pdf(
     except Exception as e:  # noqa: BLE001
         logger.error("outreach_client_report_pdf_failed", extra={"error": str(e)})
         raise HTTPException(status_code=500, detail="internal_error") from e
-    return Response(
-        content=pdf,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="report-{prospect_id}.pdf"'},
-    )
+    # The PDF bytes stay server-side (stored); the caller gets the link + provenance, not the blob.
+    return {
+        "signed_url": result.get("signed_url"),
+        "content_hash": result.get("content_hash"),
+        "expires_days": result.get("expires_days"),
+        "approved_at": (result.get("approval") or {}).get("created_at"),
+    }
+
+
+@router.get("/outreach/prospects/{prospect_id}/report/pdf")
+async def get_client_report_url(
+    prospect_id: str, auth: dict = Depends(require_outreach)
+) -> dict:
+    """A FRESH signed URL for the prospect's most recent approved report, re-signed from the stored
+    PDF (so an expired link is refreshed without re-approving). 404 when there is no approved report.
+    Read-only — no approval happens here, so it is not admin-gated."""
+    return _handle(outreach_service.latest_client_report_url, prospect_id)
 
 
 # --- Lead CRM ----------------------------------------------------------------------------------

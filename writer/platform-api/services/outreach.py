@@ -1477,7 +1477,7 @@ def _latest_report_approval(client: Any, prospect_id: str) -> dict[str, Any] | N
     try:
         rows = (
             client.table("report_approval")
-            .select("approved_by, content_hash, created_at")
+            .select("approved_by, content_hash, created_at, storage_path")
             .eq("prospect_id", prospect_id)
             .order("created_at", desc=True)
             .limit(1)
@@ -1491,11 +1491,31 @@ def _latest_report_approval(client: Any, prospect_id: str) -> dict[str, Any] | N
         return None
 
 
-def generate_client_report_pdf(prospect_id: str, actor_id: str, snapshot_id: str | None = None) -> tuple[bytes, dict[str, Any]]:
-    """Render the client-facing report to PDF and RECORD the approval. The admin click is the
-    approval (reporting-layer-spec §4a; the no-unapproved-asset invariant), so this is the one path
-    that turns the draft into a shippable prospect-facing asset — and it writes a `report_approval`
-    row naming the actor and the exact bytes' content_hash before returning them.
+def _sign_report_url(client: Any, path: str) -> str | None:
+    """A signed URL for a stored report PDF, valid for the configured TTL. reporting-layer-spec §5:
+    a prospect reads the audit through a signed URL with an expiry, no auth. Best-effort — a signing
+    failure returns None so the caller can still hand back the bytes rather than 500."""
+    from config import settings
+
+    if not path:
+        return None
+    try:
+        ttl = int(settings.outreach_report_url_ttl_days) * 86400
+        res = client.storage.from_(settings.outreach_report_bucket).create_signed_url(path, ttl)
+        return (res or {}).get("signedURL") or (res or {}).get("signedUrl")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("outreach_report_sign_failed", extra={"error": str(exc)})
+        return None
+
+
+def generate_client_report_pdf(
+    prospect_id: str, actor_id: str, snapshot_id: str | None = None
+) -> dict[str, Any]:
+    """Render the client-facing report to PDF, STORE it, and RECORD the approval. The admin click is
+    the approval (reporting-layer-spec §4a; the no-unapproved-asset invariant), so this is the one
+    path that turns the draft into a shippable prospect-facing asset. It writes a `report_approval`
+    row naming the actor, the exact bytes' content_hash, and the storage path, then returns the PDF
+    bytes AND a signed URL (reporting §5 — a client gets a link with an expiry, not an emailed file).
 
     Refuses an unmeasured area: there is no honest client-facing report to render when nothing has
     been scanned, so it raises rather than producing an empty asset.
@@ -1515,6 +1535,21 @@ def generate_client_report_pdf(prospect_id: str, actor_id: str, snapshot_id: str
 
     snap_id = (report.get("justification", {}).get("provenance") or {}).get("snapshot_id")
     client = get_outreach_client()
+
+    # Store the bytes, keyed by content_hash so identical inputs reuse one object (reporting §6). A
+    # storage failure must not lose the approval or the download, so it is best-effort — the row is
+    # still written and the bytes still returned; only the shareable link is absent.
+    storage_path = f"{prospect_id}/{content_hash}.pdf"
+    signed_url: str | None = None
+    try:
+        client.storage.from_(settings.outreach_report_bucket).upload(
+            storage_path, pdf, {"content-type": "application/pdf", "upsert": "true"}
+        )
+        signed_url = _sign_report_url(client, storage_path)
+    except Exception as exc:  # noqa: BLE001 — the download still works without the stored copy
+        logger.warning("outreach_report_store_failed", extra={"error": str(exc)})
+        storage_path = None  # type: ignore[assignment]
+
     row: dict[str, Any] = {
         "prospect_id": prospect_id,
         "content_hash": content_hash,
@@ -1522,10 +1557,40 @@ def generate_client_report_pdf(prospect_id: str, actor_id: str, snapshot_id: str
     }
     if snap_id:
         row["snapshot_id"] = snap_id
+    if storage_path:
+        row["storage_path"] = storage_path
     written = client.table("report_approval").insert(row).execute().data or []
     approval = written[0] if written else row
     logger.info("outreach_client_report_approved", extra={"prospect_id": prospect_id, "content_hash": content_hash})
-    return pdf, approval
+    return {
+        "pdf": pdf,
+        "approval": approval,
+        "signed_url": signed_url,
+        "content_hash": content_hash,
+        "expires_days": int(settings.outreach_report_url_ttl_days),
+    }
+
+
+def latest_client_report_url(prospect_id: str) -> dict[str, Any]:
+    """A fresh signed URL for the prospect's most recent approved report, re-signed from the stored
+    path (so a link that expired is refreshed without re-approving). 404s when there is no approval
+    with a stored PDF."""
+    client = get_outreach_client()
+    approval = _latest_report_approval(client, prospect_id)
+    path = (approval or {}).get("storage_path")
+    if not approval or not path:
+        raise OutreachError("report_not_found", "no approved report PDF for this prospect")
+    url = _sign_report_url(client, path)
+    if not url:
+        raise OutreachError("report_not_found", "the stored report could not be signed")
+    from config import settings
+
+    return {
+        "signed_url": url,
+        "content_hash": approval.get("content_hash"),
+        "approved_at": approval.get("created_at"),
+        "expires_days": int(settings.outreach_report_url_ttl_days),
+    }
 
 
 def _llm_section(client: Any, orep: Any, prospect: dict[str, Any], region_name: str, *, keyword: str | None) -> dict[str, Any]:

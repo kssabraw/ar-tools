@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, X, FileText, Users, Phone, Printer, AlertTriangle, CheckCircle2, Download } from 'lucide-react'
+import { Loader2, X, FileText, Users, Phone, Printer, AlertTriangle, CheckCircle2, Download, Copy, ExternalLink } from 'lucide-react'
 import { api } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 
@@ -358,23 +358,31 @@ function InternalBrief({ data }: { data: ReportData }) {
 }
 
 // ── Client-facing draft ──────────────────────────────────────────────────────
+interface ReportLink { signed_url: string | null; expires_days?: number }
+
 function ClientDraft({ data }: { data: ReportData }) {
   const { isAdmin } = useAuth()
   const queryClient = useQueryClient()
   const approved = data.client_facing.approved
+  const [link, setLink] = useState<ReportLink | null>(null)
+  const [copied, setCopied] = useState(false)
 
-  const generate = useMutation({
-    mutationFn: async () => {
-      const blob = await api.postBlob(`/outreach/prospects/${data.prospect_id}/report/pdf`)
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `report-${data.identity.name ?? data.prospect_id}.pdf`
-      document.body.appendChild(a); a.click(); a.remove()
-      URL.revokeObjectURL(url)
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['outreach-report', data.prospect_id] }),
+  const onLink = (r: ReportLink, opened: boolean) => {
+    setLink(r)
+    if (opened && r.signed_url) window.open(r.signed_url, '_blank', 'noopener')
+  }
+  // Approve (POST) turns the draft into a stored PDF + shareable link; Get-link (GET) re-signs the
+  // latest approved report without re-approving.
+  const approve = useMutation({
+    mutationFn: () => api.post<ReportLink>(`/outreach/prospects/${data.prospect_id}/report/pdf`, {}),
+    onSuccess: r => { onLink(r, true); queryClient.invalidateQueries({ queryKey: ['outreach-report', data.prospect_id] }) },
   })
+  const getLink = useMutation({
+    mutationFn: () => api.get<ReportLink>(`/outreach/prospects/${data.prospect_id}/report/pdf`),
+    onSuccess: r => onLink(r, true),
+  })
+  const busy = approve.isPending || getLink.isPending
+  const err = (approve.error ?? getLink.error) as Error | undefined
 
   return (
     <div>
@@ -391,24 +399,51 @@ function ClientDraft({ data }: { data: ReportData }) {
         </div>
         {isAdmin && (
           <button
-            onClick={() => generate.mutate()}
-            disabled={generate.isPending}
-            title="Approve this report and download it as a PDF to send"
+            onClick={() => (approved ? getLink : approve).mutate()}
+            disabled={busy}
+            title={approved ? 'Get a fresh shareable link' : 'Approve this report and get a shareable link'}
             style={{ flexShrink: 0, display: 'inline-flex', gap: 6, alignItems: 'center',
               padding: '8px 12px', borderRadius: 8, border: 'none', fontWeight: 600, fontSize: 12.5,
               background: '#0f172a', color: '#fff', cursor: 'pointer' }}>
-            {generate.isPending
-              ? <Loader2 size={13} className="animate-spin" />
-              : <Download size={13} />}
-            {approved ? 'Download PDF' : 'Approve & download PDF'}
+            {busy ? <Loader2 size={13} className="animate-spin" /> : approved ? <ExternalLink size={13} /> : <Download size={13} />}
+            {approved ? 'Get shareable link' : 'Approve & generate PDF'}
           </button>
         )}
       </div>
-      {generate.error instanceof Error && (
+      {err && (
         <div style={{ fontSize: 12, color: '#b91c1c', marginBottom: 10 }}>
-          {generate.error.message === 'report_not_measured'
+          {err.message === 'report_not_measured'
             ? 'Can’t generate a report yet — this area hasn’t been scanned.'
-            : generate.error.message}
+            : err.message === 'report_not_found'
+            ? 'No approved report yet — approve it first.'
+            : err.message}
+        </div>
+      )}
+      {link && (
+        link.signed_url ? (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 12,
+            padding: '8px 10px', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+            <input readOnly value={link.signed_url} onFocus={e => e.currentTarget.select()}
+              style={{ flex: 1, border: 'none', background: 'transparent', fontSize: 12, color: '#334155' }} />
+            <button onClick={() => { navigator.clipboard?.writeText(link.signed_url!); setCopied(true); setTimeout(() => setCopied(false), 1500) }}
+              style={{ display: 'inline-flex', gap: 4, alignItems: 'center', border: '1px solid #e2e8f0',
+                background: '#fff', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', fontSize: 12 }}>
+              <Copy size={12} /> {copied ? 'Copied' : 'Copy'}
+            </button>
+            <a href={link.signed_url} target="_blank" rel="noreferrer"
+              style={{ display: 'inline-flex', gap: 4, alignItems: 'center', color: '#2563eb', fontSize: 12 }}>
+              <ExternalLink size={12} /> Open
+            </a>
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: '#b45309', marginBottom: 10 }}>
+            The report was approved but the shareable link couldn’t be generated — try “Get shareable link” again.
+          </div>
+        )
+      )}
+      {approved && link?.expires_days && (
+        <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
+          Anyone with this link can view the report; it expires in {link.expires_days} days.
         </div>
       )}
 
