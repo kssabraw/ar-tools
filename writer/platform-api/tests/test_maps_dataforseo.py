@@ -29,6 +29,37 @@ def _run(coro):
 
 
 # ---------------------------------------------------------------------------
+# zoom_for_radius / resolve_zoom — viewport must scale with the grid radius
+# ---------------------------------------------------------------------------
+def test_zoom_for_radius_anchor_and_scaling():
+    # Anchor: 5-mile radius ↔ 13z (the LeadOff scanner's proven calibration).
+    assert m.zoom_for_radius(5) == "13z"
+    # Halve → tighter, double → wider.
+    assert m.zoom_for_radius(2.5) == "14z"
+    assert m.zoom_for_radius(10) == "12z"
+    # Ties/fractions bias WIDER (floor): under-coverage is the failure mode
+    # that collapsed the 2026-08-07 parallel-run scans to 12/97 pins.
+    assert m.zoom_for_radius(3) == "13z"   # 13.7 → 13
+    assert m.zoom_for_radius(6) == "12z"   # 12.7 → 12
+    assert m.zoom_for_radius(7) == "12z"   # 12.5 → 12
+
+
+def test_zoom_for_radius_clamps_and_defaults():
+    assert m.zoom_for_radius(0.25) == "15z"   # clamped tight end
+    assert m.zoom_for_radius(100) == "10z"    # clamped wide end
+    # Missing radius (defensive) → the 5-mile anchor, never a crash.
+    assert m.zoom_for_radius(None) == "13z"
+    assert m.zoom_for_radius(0) == "13z"
+
+
+def test_resolve_zoom_override_wins(monkeypatch):
+    monkeypatch.setattr(settings, "maps_dfs_zoom", "", raising=False)
+    assert m.resolve_zoom(5) == "13z"
+    monkeypatch.setattr(settings, "maps_dfs_zoom", "15z", raising=False)
+    assert m.resolve_zoom(5) == "15z"  # explicit override beats auto
+
+
+# ---------------------------------------------------------------------------
 # in_circle / build_pin_tasks — circle masking + request bodies
 # ---------------------------------------------------------------------------
 def test_in_circle_counts_match_presets():

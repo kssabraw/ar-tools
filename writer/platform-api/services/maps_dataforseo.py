@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import math
 from statistics import mean
 from typing import Optional
 
@@ -119,6 +120,29 @@ def _biz(record: list) -> dict:
 # ----------------------------------------------------------------------------
 # Pure helpers (no I/O) — independently unit-tested.
 # ----------------------------------------------------------------------------
+_ZOOM_ANCHOR_RADIUS_MILES = 5.0  # 5-mile radius ↔ 13z (LeadOff scanner calibration)
+_ZOOM_ANCHOR = 13
+_ZOOM_MIN, _ZOOM_MAX = 10, 15
+
+
+def zoom_for_radius(radius_miles: Optional[float]) -> str:
+    """Viewport zoom matched to the grid radius. The zoom must be wide enough
+    for an outer pin's viewport to reach the business (≈ the radius), else the
+    client is invisible there regardless of its real rank — but not so wide
+    that every pin returns the same city-scale pack. Anchor 5 mi ↔ 13z; halving
+    the radius → one level tighter, doubling → one wider. Floored (ties bias
+    WIDER) because under-coverage is the catastrophic direction."""
+    r = float(radius_miles) if radius_miles else _ZOOM_ANCHOR_RADIUS_MILES
+    z = math.floor(_ZOOM_ANCHOR - math.log2(r / _ZOOM_ANCHOR_RADIUS_MILES))
+    return f"{min(_ZOOM_MAX, max(_ZOOM_MIN, z))}z"
+
+
+def resolve_zoom(radius_miles: Optional[float]) -> str:
+    """The zoom for a scan: the maps_dfs_zoom override when set, else derived
+    from the scan's radius."""
+    return settings.maps_dfs_zoom or zoom_for_radius(radius_miles)
+
+
 def in_circle(row: int, col: int, n: int) -> bool:
     """The inscribed-circle mask shared with the rollups (same test as the LD
     `summarize_grid`): only pins within the circle are queried / counted."""
@@ -479,7 +503,7 @@ async def start_client_scan_dfs(client_id: str, trigger: str = "scheduled") -> d
         return {"status": "failed", "error": str(exc)}
 
     device = _device(config)
-    zoom, depth = settings.maps_dfs_zoom, settings.maps_dfs_depth
+    zoom, depth = resolve_zoom(radius), settings.maps_dfs_depth
     bodies = [
         pin_task_body(s["keyword"], s["lat"], s["lng"], s["row_idx"], s["col_idx"],
                       zoom, depth, device, scan_id, s["keyword_index"])
@@ -564,7 +588,8 @@ async def poll_scan_dfs(scan_row: dict) -> str:
     ).data
     our_place_id = cfg[0].get("google_place_id") if cfg else None
     device = _device(cfg[0] if cfg else {})
-    zoom, depth = settings.maps_dfs_zoom, settings.maps_dfs_depth
+    # Reposts must use the same zoom the scan's original pins were posted with.
+    zoom, depth = resolve_zoom(scan_row.get("radius_miles")), settings.maps_dfs_depth
 
     batch = (
         supabase.table("maps_scan_pins").select("*")

@@ -611,7 +611,8 @@ export interface SiloPromoteResponse {
 }
 
 // --- Maps / local-pack geo-grid ranker (Module #5) ---
-export type MapsRadius = 3 | 5 | 7
+// Free choice 1-10 whole miles (was a 3|5|7 preset); bounds enforced server-side.
+export type MapsRadius = number
 export interface MapsConfig {
   client_id: string
   google_place_id: string | null

@@ -1,7 +1,7 @@
 """Maps / local-pack geo-grid ranker router (Module #5).
 
 Per-client geo-grid config + keywords + scans via Local Dominator. The team
-picks a 3/5/7-mile radius (1-mile pin spacing) around the business and tracked
+picks a 1-10-mile radius (1-mile pin spacing) around the business and tracked
 keywords; scans run weekly on the shared scheduler plus on-demand. All DB access
 uses the service-role client; any authenticated user can operate it.
 """

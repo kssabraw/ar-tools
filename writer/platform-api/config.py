@@ -460,10 +460,17 @@ class Settings(BaseSettings):
     # DataForSEO dormant) | 'dataforseo'.
     maps_scan_provider: str = "local_dominator"
     # DataForSEO Maps SERP per-pin params. The zoom in location_coordinate
-    # ("lat,lng,<zoom>"): 15z ≈ a 1–2-mile viewport matching our 1-mile pin
-    # spacing (14z ≈ ~3 mi) — calibrated during the parallel-run (§7). depth 20
-    # mirrors LD's top-20/pin and fits DataForSEO's base price.
-    maps_dfs_zoom: str = "15z"
+    # ("lat,lng,<zoom>") sets the simulated viewport WIDTH at each pin, and the
+    # viewport must cover the pin→business distance (the grid RADIUS, not the
+    # pin spacing) or the client can't appear at outer pins at all: at 15z
+    # (~1-mile viewport) a 5-mile grid collapsed to the ~12 pins nearest the
+    # business (parallel-run finding, 2026-08-07 — LD found the client on 76–92
+    # of 97 pins where DFS found exactly 12). Zoom is therefore derived from
+    # each scan's radius_miles (maps_dataforseo.zoom_for_radius, anchored 5 mi
+    # ↔ 13z per the LeadOff scanner's calibration); this setting is a manual
+    # override — leave empty for auto. depth 20 mirrors LD's top-20/pin and
+    # fits DataForSEO's base price.
+    maps_dfs_zoom: str = ""
     maps_dfs_depth: int = 20
     # Per polling tick, per DataForSEO scan: cap on task_get calls (oldest pins
     # first) and how many run concurrently. task_get is free — this just paces

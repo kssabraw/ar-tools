@@ -14,7 +14,9 @@ class MapsConfig(BaseModel):
     business_name: Optional[str] = None
     center_lat: Optional[float] = None
     center_lng: Optional[float] = None
-    radius_miles: Literal[3, 5, 7] = 5
+    # Free choice 1-10 miles (1-mile pin spacing, so pins/scan = (2r+1)²) —
+    # was a 3/5/7 preset. Cost scales quadratically; 10 mi = a 21×21 grid.
+    radius_miles: int = Field(5, ge=1, le=10)
     shape: Literal["circle", "square"] = "circle"
     resource_category: Literal["googleMaps", "googleLocalFinder"] = "googleMaps"
     serp_device: Literal["desktop", "mobile", "both"] = "desktop"
@@ -41,7 +43,7 @@ class MapsConfigUpdate(BaseModel):
     business_name: Optional[str] = None
     center_lat: Optional[float] = None
     center_lng: Optional[float] = None
-    radius_miles: Optional[Literal[3, 5, 7]] = None
+    radius_miles: Optional[int] = Field(default=None, ge=1, le=10)
     shape: Optional[Literal["circle", "square"]] = None
     resource_category: Optional[Literal["googleMaps", "googleLocalFinder"]] = None
     serp_device: Optional[Literal["desktop", "mobile", "both"]] = None
