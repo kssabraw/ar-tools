@@ -139,6 +139,25 @@ async def get_prospect(prospect_id: str, auth: dict = Depends(require_outreach))
     return _handle(outreach_service.get_prospect, prospect_id)
 
 
+@router.get("/outreach/prospects/{prospect_id}/justification")
+async def prospect_justification(
+    prospect_id: str,
+    snapshot_id: Optional[str] = None,
+    auth: dict = Depends(require_outreach),
+) -> dict:
+    """The caller's "why this is a lead" talking points — the phone-call hook (outreach PRD §716,
+    HANDOFF §12 item 1).
+
+    Deterministic and read-only: assembled from the prospect's own scan data (coverage deficit,
+    the geographic pattern of their invisibility, who outranks them and where, reviews vs the local
+    field, listing gaps) — never an LLM guess, never a fabricated number. Spends nothing. Returns
+    `{measured: false, …}` when the area has no rolled-up scan, so the UI can say "not measured"
+    rather than render an empty list as "nobody visible". `snapshot_id` pins a specific scan;
+    omitted, it uses the latest rolled-up one for the prospect's submarket.
+    """
+    return _handle(outreach_service.prospect_justification, prospect_id, snapshot_id)
+
+
 # --- Lead CRM ----------------------------------------------------------------------------------
 
 

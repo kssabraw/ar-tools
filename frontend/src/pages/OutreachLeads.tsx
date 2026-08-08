@@ -2,9 +2,10 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Crosshair, Loader2, Plus, X, AlertTriangle, Ban, Search,
+  Crosshair, Loader2, Plus, X, AlertTriangle, Ban, Search, Phone,
 } from 'lucide-react'
 import { api } from '../lib/api'
+import { Justification } from '../components/outreach/Justification'
 
 // ── Types (mirror the CRM half of routers/outreach.py) ───────────────────────
 interface LeadStage { key: string; label: string; sort_order: number; is_terminal: boolean }
@@ -259,6 +260,7 @@ function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; 
   const [note, setNote] = useState('')
   const [lostReason, setLostReason] = useState('')
   const [pendingStage, setPendingStage] = useState<string | null>(null)
+  const [showHook, setShowHook] = useState(false)
 
   const { data: lead } = useQuery<LeadDetail>({
     queryKey: ['outreach-lead', id],
@@ -317,6 +319,22 @@ function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; 
                 {lead.prospect.rating ? ` · ${lead.prospect.rating}★` : ''}</span>
             </>}
           </div>
+
+          {lead.prospect_id && (
+            <div style={{ marginTop: 14 }}>
+              <button onClick={() => setShowHook(h => !h)}
+                style={{ display: 'inline-flex', gap: 6, alignItems: 'center', border: '1px solid #e2e8f0',
+                  background: showHook ? '#eff6ff' : '#fff', borderRadius: 8, padding: '6px 10px',
+                  fontSize: 12, fontWeight: 600, color: '#0369a1', cursor: 'pointer' }}>
+                <Phone size={13} /> {showHook ? 'Hide call hook' : 'Why call? — call hook'}
+              </button>
+              {showHook && (
+                <div style={{ marginTop: 8 }}>
+                  <Justification prospectId={lead.prospect_id} />
+                </div>
+              )}
+            </div>
+          )}
 
           <div style={{ marginTop: 14 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase' }}>Stage</div>

@@ -886,3 +886,59 @@ becomes the city-centre grid. `create_onboard_from_place(subarea=None)` builds t
 city; a NAMED sub-area still must carry coordinates (a partial pick is an error, not a whole-city
 scan). Unit-tested (`test_outreach_onboard.py`: whole-city path, empty-dict path, partial-pick
 refusal).
+
+---
+
+## 2026-08-08 — The call-hook justification is PURE deterministic assembly, not an LLM phrasing pass
+
+The Phase 3 "phone-call hook generated from the prospect's own data" (HANDOFF §12 item 1; PRD §716;
+reporting-layer-spec §4a "Call hooks are exempt"): before a caller dials a scanned prospect they
+read a short, human-readable set of talking points — WHY the business is worth calling. Built as
+`services/outreach_justification.py` (pure) + `services/outreach.prospect_justification` (I/O) +
+`GET /outreach/prospects/{id}/justification` in platform-api, surfaced in `Outreach.tsx`'s coverage
+table and the CRM lead drawer. Reads existing scan data only; spends nothing; writes nothing.
+
+**THE DESIGN FORK (the one the task flagged): deterministic assembly vs an LLM phrasing pass
+strictly grounded on the assembled facts. Chosen: PURE deterministic assembly.** Reasoning, in the
+order it mattered:
+
+1. **Cheapest to reverse — the deciding rule.** Pure assembly adds no dependency, key, cost, or
+   non-determinism. An LLM phrasing pass can always be layered ON TOP later, grounded on the facts
+   this module already assembles (the suite's "numbers-only, never invent" report narratives are
+   exactly that shape). Deterministic-now → phrasing-later is strictly cheaper to reverse than
+   LLM-now → strip-it-out-later, which is the test the session protocol sets.
+2. **The invariant is "never invent a fact, a competitor, or a number" (CLAUDE.md; PRD §14
+   "diagnose, not promise").** A deterministic assembler CANNOT fabricate — every sentence is a
+   template over a measured number. An LLM pass, however tightly grounded, reopens that door and
+   needs guarding shut again (verify-at-render, hallucination review). The whole reporting family
+   is deterministic by requirement (reporting §2/§6 — a March render must regenerate in June); the
+   hook inherits that for free.
+3. **Replayability.** Each talking point carries the raw `facts` it was built from — the same
+   discipline `score_factors` holds — so the claim is inspectable and reproducible from stored
+   inputs, exactly like the heatmap's `content_hash`.
+
+**Sub-decisions:**
+
+- **The phrasing templates are code constants, not config.** The heatmap renderer's legend labels
+  ("In the map pack (1–3)", …) are ALSO code constants — the accepted Phase 3 precedent. "Template
+  MUST be config" (PRD §716) is honored in spirit: the sentences are filled from persisted scan
+  data and never improvised at send time, which is what that MUST protects against. Promoting to
+  config is a later cheap-to-reverse step if an A/B need arises.
+- **The hook is a single element with the sentence composed from it (PRD §1335).** `hook_element`
+  logs the primary driver (coverage — the strongest state pitch); `available_elements` records the
+  full set it was chosen from (the §14a "available-but-passed" attribution a future emit manifest
+  needs). A `delta` element would rank ABOVE coverage ("prefer a delta over a state", §716) — it is
+  deliberately absent until a second scan exists, the same seam the heatmap delta guards leave open
+  (I-091). The single-scan caveat says so.
+- **It lives in platform-api, not the outreach api.** The outreach api is a batch job platform-api
+  cannot call; the surface that needs the hook (the route + UI) is platform-api, which already reads
+  the Outreacher DB. The one thing this costs is compass-directional geography, which needs the
+  pinned geometry generator that must not be re-derived across the deploy boundary — deferred and
+  logged as I-093 (the radial pattern from stored scalars ships now).
+- **Competitor detail degrades, never fabricates.** "Who outranks you and where" reads the map pack
+  from `grid_result` (bounded to `rank <= pack_size`), naming only competitors whose `place_id`
+  resolves to a known business; a cold-dropped partition drops the competitor point and says so in a
+  caveat (I-094), leaving coverage/reviews/gaps intact.
+
+Pure logic unit-tested (`writer/platform-api/tests/test_outreach_justification.py`, 16 cases);
+config knobs `outreach_call_hook_pack_size`/`_justification_max_competitors`/`_field_review_min_sample`.

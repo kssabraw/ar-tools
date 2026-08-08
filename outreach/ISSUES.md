@@ -2081,3 +2081,50 @@ types IS the ingest category, which is why the form is "City + Business type". T
 ingest+filter for the city BEFORE the scan, or reuse an already-ingested city's prospects. Not a
 bug — the pipeline order — recorded so the execution slice is built with it front of mind and no
 one wires a "scan a fresh city" button that silently returns nothing.
+
+---
+
+### I-093 (open, by design) — the call hook's geography is RADIAL, not compass-directional
+
+The call-hook justification (DECISIONS 2026-08-08) describes the geographic pattern of a prospect's
+invisibility from the coverage scalars the rollup already stores — coverage %, absent-point count,
+`centroid_dist_at_loss` ("holds close to home, falls off beyond ~N miles"), rank depth. That is a
+RADIAL read: near vs far, which "parts" of the service area in the concentric sense.
+
+The richer read the task named — "which parts they don't rank in, derived from `rank_vector` + the
+snapshot's stored geometry" in the COMPASS sense (weakest to the north/east) — is **deferred**,
+because it needs each point's (dx, dy) offset, which comes only from the pinned geometry generator
+(`api/services/geometry.generate_points`). That generator lives in the outreach api, which
+platform-api (where the hook is assembled) cannot import across the deploy boundary. Re-deriving the
+lattice in platform-api is exactly the "second definition of geometry" the version registry exists
+to prevent (CLAUDE.md) — a byte decode of the vector is geometry-free and safe; a point→coordinate
+mapping is not.
+
+**Cheapest-to-reverse reading chosen:** ship the radial pattern now (no geometry, honors the
+boundary), defer the compass decomposition. Two clean ways to add it later, neither a rewrite of the
+hook: (a) vendor `geometry.py` byte-identical into platform-api with a sync-guard test — the
+established suite pattern for cross-boundary duplication (`agent_docs/`, the voice_card vendoring) —
+so there is no drifting second *definition*, only a test-enforced copy; or (b) have the rollup store
+a small per-prospect directional summary (octant weakest-quadrant) alongside coverage, which the hook
+then reads as a scalar. (b) is cleaner but touches the rollup, so it waits for a rollup-touching
+build. Neither is worth pulling forward before the hook has been used on a real call.
+
+### I-094 (open, by design) — the hook's competitor detail needs a HOT `grid_result` partition
+
+"Who outranks you and where" reads the map pack from `grid_result` (bounded to `rank <= pack_size`).
+`grid_result` is partitioned by month and cold-dropped after the hot window (~90 days,
+`drop_cold_partitions`), while `prospect_coverage` persists indefinitely — which is exactly why the
+heatmap renderer reads ONLY coverage, so it renders forever (reporting §4).
+
+The hook deliberately diverges: it reads `grid_result` because competitor IDENTITY (place_id → name)
+lives nowhere else, and the hook is a call-prep artifact generated soon after a scan, when the
+partition is hot. When the partition has been dropped, `_fetch_pack_rows` degrades: the competitor
+talking point is omitted and a caveat says "the raw ranking data has aged out", while coverage,
+geography, reviews and gaps — all from the persistent coverage row + the prospect — still stand. So
+a hook built from a cold scan is thinner, never wrong, and never fabricated.
+
+**Adopt a durable form when:** competitor identity needs to survive the partition drop. The clean
+option is for the rollup (or a later phase) to persist the top-N pack holders' `place_id`s per
+prospect alongside coverage — a handful of ids, negligible storage — so the hook reads them from a
+permanent row. Not built now: it touches the rollup, and the hot-window read covers the actual
+use (dialing a fresh shortlist).
