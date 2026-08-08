@@ -940,6 +940,26 @@ class Settings(BaseSettings):
     keyword_research_relevance_floor: float = 0.62
     keyword_research_relevance_anchor_cap: int = 60    # bound the embedded anchor set
     keyword_research_embedding_model: str = "gemini-embedding-2"
+    # Audience-fit filter (keyword_research_audience): drop keywords that target the
+    # WRONG audience for the client's buyer — the universal job-seeker/career guard
+    # (salary/jobs/how-to-become/…) plus an ICP-grounded LLM pass that returns the
+    # client-specific wrong-audience vocabulary (for a B2B TPA: public-adjuster /
+    # licensing / DIY-consumer terms). Relevance ≠ buyer fit: "insurance adjuster
+    # salary" is on-topic but targets job-seekers, not the carriers who hire a TPA
+    # (55% of a live BSA Claims run). Best-effort — the ICP layer degrades to the
+    # universal guard; set _filter False to disable entirely.
+    keyword_research_audience_filter: bool = True
+    keyword_research_audience_icp: bool = True         # the ICP-grounded LLM off-audience pass
+    keyword_research_audience_model: str = "claude-haiku-4-5-20251001"
+    keyword_research_audience_max_tokens: int = 400
+    keyword_research_audience_max_terms: int = 30      # cap ICP off-audience terms
+    # Blog-topic idea generator (keyword_research_content): on-demand, turns a run's
+    # BUYER-FIT keywords + the ICP into blog post ideas (title + angle + target
+    # keywords). One LLM call, cached on the run.
+    keyword_research_topic_model: str = "claude-sonnet-4-6"
+    keyword_research_topic_max_tokens: int = 1500
+    keyword_research_topic_count: int = 12             # blog ideas per generation
+    keyword_research_topic_keyword_cap: int = 60       # buyer-fit keywords fed to the LLM
 
     # On-site content comparison (Tier B / B5): how many competitor pages to
     # scrape per keyword, and the thresholds to flag a content gap (words thinner

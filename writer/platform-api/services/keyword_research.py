@@ -1026,6 +1026,15 @@ async def run_keyword_research(
         )
     topic_research["relevance"] = relevance_report
 
+    # Audience-fit filter: drop keywords targeting the WRONG audience for the
+    # client's buyer (job-seeker/career universally + ICP-specific off-audience
+    # vocabulary). Relevance ≠ buyer fit — "insurance adjuster salary" is on-topic
+    # but useless to a B2B TPA. Runs on the relevance survivors, before clustering.
+    audience_report = {"gate": "off"}
+    from services import keyword_research_audience
+    rows, audience_report = keyword_research_audience.filter_by_audience(rows, ctx, seed_list)
+    topic_research["audience"] = audience_report
+
     warnings = seed_warnings(
         seed_list, client_name, filter_report,
         ratio_threshold=settings.keyword_research_brand_seed_ratio,
@@ -1046,6 +1055,13 @@ async def run_keyword_research(
         warnings.append(
             f"Filtered {relevance_report['dropped']} keyword(s) that weren't topically "
             "relevant to the seeds or the client's business."
+        )
+    _aud_dropped = (audience_report.get("dropped_job_seeker", 0)
+                    + audience_report.get("dropped_off_audience", 0))
+    if _aud_dropped:
+        warnings.append(
+            f"Filtered {_aud_dropped} keyword(s) that target the wrong audience "
+            "(job-seekers / careers / off-audience), not the client's buyer."
         )
     if warnings:
         logger.info("keyword_research.seed_warnings",
@@ -1083,6 +1099,7 @@ async def run_keyword_research(
         "is_question": r.get("is_question"),
         "opportunity_score": r.get("opportunity_score"),
         "relevance_score": r.get("relevance_score"),
+        "audience_fit": r.get("audience_fit"),
         "source_seeds": sorted(seed_attr.get(normalize_keyword(r["keyword"]), set())) or None,
     } for r in rows]
     for group in dataforseo_labs.chunk(child, 500):
