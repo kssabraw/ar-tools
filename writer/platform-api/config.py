@@ -922,7 +922,15 @@ class Settings(BaseSettings):
     # every keyword keeps its score (relevance_score) so it's sortable and the floor
     # is tunable from real runs. Set False to disable the semantic layer entirely.
     keyword_research_semantic_relevance: bool = True
-    keyword_research_relevance_floor: float = 0.55
+    # Calibrated on a live BSA Claims run (2026-08-08): the on-topic core scores
+    # ≥ ~0.72, clear junk ("mattress firm warranty claim", "is life extension third
+    # party tested") sits below 0.70, and real competitor brands (Crawford ~0.67,
+    # Pilot Catastrophe ~0.58) sit in between. Set to 0.62 (owner ruling) to KEEP
+    # competitor-brand visibility while still trimming the clearest junk; the
+    # biggest drift source (a domain-ambiguous expansion seed) is removed at the
+    # source by domain_anchored, so the floor is only a backstop. Raise toward ~0.68
+    # for stricter, brand-free results.
+    keyword_research_relevance_floor: float = 0.62
     keyword_research_relevance_anchor_cap: int = 60    # bound the embedded anchor set
     keyword_research_embedding_model: str = "gemini-embedding-2"
 
