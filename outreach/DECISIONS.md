@@ -1160,3 +1160,53 @@ advertising is a scorer-owned signal, not a cold-call hook.
 
 *Revisit:* Slice B (site-fetch money signal) and the Phase-4 scorer, which consume this. If the first
 `scan-organic` run proves LSA needs a dedicated endpoint, add the gated `scan-lsa` command (I-096).
+
+---
+
+## 2026-08-08 — Paid-placement Slice B1 (site tech signals) + the §16a.1 spike; B2 gated behind a yield spike
+
+Owner authorized proceeding on the Slice B design (2026-08-08): "build B1 now, gate B2 behind the yield
+spike," run the §16a.1 pixel spike, persist the design doc. Built B1 + the spike instrument; deferred
+B2. Full design: `docs/paid-placement-slice-b-design-v0_1.md`.
+
+**B1 and B2 are separate builds because they are separate providers with opposite cost profiles.** B1
+(tech/tag PRESENCE — Meta pixel, AW- conversion tag, GTM container, CallRail/Podium/Birdeye) comes from
+a DIRECT HTTP fetch of the prospect's own site (PRD §B3 "own request, not a paid service") — FREE. B2
+(spend MAGNITUDE) comes from DataForSEO Labs — PAID, and likely sparse for small local advertisers
+(I-098). Bundling them would gate a free capability behind a paid one, or spend on a magnitude estimate
+before proving it yields. So: `scan-tech` (free, NOT in PAID_COMMANDS — a test pins it) ships now;
+`scan-adspend` is deferred behind the `probe-labs-paid` yield spike.
+
+**`scan-tech` is free, so it is not spend-gated — same posture and same test as `collect`.** It makes
+no paid provider call; gating it would make a routine detect refuse for want of a token. The §16a.1
+pixel spike (`probe-pixel-field`) DOES bill (an Outscraper enrichment on a small sample) and IS gated.
+
+**The measured-vs-found rule is structural in B1, the fourth time this correction has been made** (see
+the 2026-08-05 coverage-denominator entry). A failed site fetch stores a `fetch_status`
+(`unreachable`/`timeout`/`blocked`) with the signal booleans null — NEVER `absent`. Unknown ≡ absent
+for the scorer (one-directional, never subtracts — PRD §B3), but the two must be stored distinctly so
+the report can say "couldn't read the site" rather than "no ad tech". The platform-api reader enforces
+it too: `_tech_ok` treats a non-'ok' row as no tech signal at all.
+
+**The §16a.1 spike is isolated from the ingest path on purpose.** `outscraper_client.submit_maps_search`
+carries a hard invariant — base-tier only, never populate `enrichment` — that protects the MASS ingest
+from silently billing enrichment across thousands of places. A one-off enriched sample of ~8 places is
+a different, deliberate, gated act, so `pixel_probe.fetch_enriched_sample` builds its OWN request rather
+than bending that method. The pure heuristic (`scan_place_for_pixel`) never asserts the enrichment's
+field name — it scans for pixel INDICATORS by key and value, because the field name is exactly what the
+spike measures (measure-don't-infer). Likely outcome (pixel not in the base pull, or GTM-injected and
+missed) reinforces the site-fetch B1 already built.
+
+**The report/hook gained the strongest pitch the model has: "paying and losing."** B1's AW- tag (plus
+Slice A's SERP paid / LSA) makes `prospect_is_paying` computable, and combined with poor coverage it is
+the vendor-failing SHAPE — proven budget AND a visible problem (scoring-spec.md §Proven-spend /
+§Buying-intent, the +66/+90 territory). It is folded into `derive_paid_signal` ADDITIVELY (Slice A's
+SERP-derived facts keep their exact meaning; the competitor-gap stays SERP-only, so Slice A tests are
+unchanged), gets its own `ELEM_PAYING` justification element that LEADS the spoken hook when it fires,
+and is one-directional throughout. Persisted per-prospect in `prospect_tech_signal` (migration
+`20260808200000`, applied live to Outreacher) — keyed to the prospect, not a snapshot, because the site
+is the prospect's and does not change per scan (so it does NOT ride `serp_result`).
+
+*Revisit:* the `probe-labs-paid` yield spike decides whether B2 (`scan-adspend`) is built; the §16a.1
+spike decides whether `tech_follow_gtm` defaults on and whether the Outscraper pull can supply the Meta
+half near-free (I-097).

@@ -428,6 +428,12 @@ CANDIDATE_REVIEW_PATHS: tuple[str, ...] = (
     # measure-don't-infer discipline this module exists to enforce.
     "/v3/serp/google/organic/live/advanced",
     "/v3/serp/google/organic/task_post",
+    # DataForSEO Labs — the ad-spend MAGNITUDE source for paid-placement Slice B2 (the money signal).
+    # Probed FREE here to confirm (a) Labs access on this account at all, before the paid yield spike
+    # decides whether the paid metrics are populated for small local advertisers (design doc
+    # paid-placement-slice-b-design-v0_1.md; ISSUES I-098). Not yet consumed by any producer.
+    "/v3/dataforseo_labs/google/domain_rank_overview/live",
+    "/v3/dataforseo_labs/google/bulk_traffic_estimation/live",
 )
 
 # A task with no fields. A path that exists answers 200 and rejects the task at the task level

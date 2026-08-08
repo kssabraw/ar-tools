@@ -547,6 +547,85 @@ def cmd_scan_ai(args) -> int:
     return 0 if any(r["stored"] for r in out) else 1
 
 
+def cmd_scan_tech(args) -> int:
+    """Fetch each prospect's OWN site and store the ad/marketing tech on it. FREE (own HTTP GET).
+
+    Paid-placement Slice B1 (the money signal, PRD §B3): Meta pixel, Google Ads (AW-) conversion tag,
+    GTM container, and vendor tags (CallRail/Podium/Birdeye) — the scoring-spec.md buying-intent /
+    decision-structure signals a SERP read cannot see. NOT in PAID_COMMANDS: it makes no paid call.
+    A failed fetch stores `unknown` (a status), never `absent`.
+    """
+    import asyncio as _asyncio
+
+    from api.services import scan_tech
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    settings = get_settings()
+    client = _client()
+    market_id = _market_id(client, definition.name)
+
+    report = _asyncio.run(
+        scan_tech.run_tech_scan(client, settings, market_id=market_id, limit=args.limit or None)
+    )
+    print(
+        json.dumps(
+            {
+                "market_id": report.market_id,
+                "considered": report.considered,
+                "fetched_ok": report.fetched_ok,
+                "failed": report.failed,
+                "with_pixel": report.with_pixel,
+                "with_ads": report.with_ads,
+                "with_vendor": report.with_vendor,
+                "stored": report.stored,
+                "problems": report.problems[:20],
+            },
+            indent=2,
+        )
+    )
+    return 0 if report.stored or report.considered == 0 else 1
+
+
+def cmd_probe_pixel_field(args) -> int:
+    """§16a.1 spike — is a Meta pixel in the Outscraper ENRICHMENT pull? BILLS (enrichment).
+
+    Enriches a SMALL sample of the market's prospects and reports whether a pixel field is present
+    (and how often it is populated). Decides whether Slice B1's Meta half can come near-free from the
+    pull we already run, or whether the site fetch (`scan-tech`) stays the primary source (ISSUES
+    I-003). The `--enrichment` name is a GUESS to confirm against the logged sample record — the
+    parser never asserts the field name (measure-don't-infer).
+    """
+    import asyncio as _asyncio
+
+    from api.services import pixel_probe
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    settings = get_settings()
+    client = _client()
+    market_id = _market_id(client, definition.name)
+
+    sample = (
+        client.table("prospect")
+        .select("name, address, website")
+        .eq("market_id", market_id)
+        .not_.is_("website", "null")
+        .limit(args.limit or 8)
+        .execute()
+        .data
+        or []
+    )
+    if not sample:
+        print("REFUSED: no prospects with a website to sample", file=sys.stderr)
+        return 2
+    queries = [f"{p['name']} {p.get('address') or ''}".strip() for p in sample]
+
+    records = _asyncio.run(
+        pixel_probe.fetch_enriched_sample(settings, queries, enrichment=args.enrichment)
+    )
+    print(json.dumps(pixel_probe.summarize_pixel_probe(records), indent=2))
+    return 0
+
+
 def cmd_collect(args) -> int:
     """Drain the ready list and store whatever is done. FREE, and safe to run on any tick."""
     import asyncio as _asyncio
@@ -1195,8 +1274,13 @@ _SHA_VARS = ("OUTREACH_BUILD_SHA", "RAILWAY_GIT_COMMIT_SHA", "SOURCE_COMMIT", "G
 # counterpart cannot manufacture. Listing `tick` here would make every cron heartbeat refuse,
 # which is the §8a collect-gating mistake with a different spelling.
 PAID_COMMANDS = frozenset(
-    {"ingest", "run", "calibrate", "verify-reviews", "probe-ai-granularity", "scan", "scan-organic", "scan-ai"}
+    {"ingest", "run", "calibrate", "verify-reviews", "probe-ai-granularity", "scan", "scan-organic",
+     "scan-ai", "probe-pixel-field"}
 )
+# NOTE `scan-tech` is deliberately NOT here — it fetches prospects' own sites over plain HTTP and
+# makes no paid provider call (PRD §B3 "own request, not a paid service"), the same posture as
+# `collect`/`rollup`. A test pins this. `probe-pixel-field` IS here — it bills an Outscraper
+# enrichment on a small sample (§16a.1 spike).
 
 SAFE_COMMAND = "filter"
 
@@ -1339,7 +1423,8 @@ def main() -> int:
             dict(os.environ),
             [
                 "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-                "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "collect", "rollup", "tick",
+                "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech",
+                "probe-pixel-field", "collect", "rollup", "tick",
                 "render-heatmap", "render-delta",
             ],
         ),
@@ -1351,7 +1436,8 @@ def main() -> int:
         "command",
         choices=[
             "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-            "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "collect", "rollup", "tick",
+            "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech",
+                "probe-pixel-field", "collect", "rollup", "tick",
             "render-heatmap", "render-delta",
         ],
     )
@@ -1374,6 +1460,14 @@ def main() -> int:
         help=(
             "probe-dataforseo: after discovery, send ONE real request per surviving path with "
             "this place_id to learn the response shape. This BILLS (a few cents)."
+        ),
+    )
+    parser.add_argument(
+        "--enrichment", default="domains_service",
+        help=(
+            "probe-pixel-field: the Outscraper enrichment to request on the sample. A GUESS to "
+            "confirm against the logged sample record — the parser never asserts the field name "
+            "(measure-don't-infer). §16a.1 spike."
         ),
     )
     parser.add_argument(
@@ -1457,6 +1551,8 @@ def main() -> int:
         "scan": cmd_scan,
         "scan-organic": cmd_scan_organic,
         "scan-ai": cmd_scan_ai,
+        "scan-tech": cmd_scan_tech,
+        "probe-pixel-field": cmd_probe_pixel_field,
         "collect": cmd_collect,
         "rollup": cmd_rollup,
         "tick": cmd_tick,

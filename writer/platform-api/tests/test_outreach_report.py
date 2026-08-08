@@ -250,6 +250,50 @@ def test_build_paid_section_not_scanned_when_no_summary_or_no_paid_block():
     assert s1["status"] == orep.STATUS_NOT_SCANNED
 
 
+def _tech(**over):
+    base = {"fetch_status": "ok", "meta_pixel": False, "google_ads_conversion": False,
+            "vendor_tags": [], "gtm_container_ids": []}
+    base.update(over)
+    return base
+
+
+def test_derive_paid_signal_folds_site_tech_additively():
+    # No SERP ads, but the prospect's own site carries an AW conversion tag + two vendor tags.
+    block = _paid_block()
+    sig = orep.derive_paid_signal(
+        block, prospect_website="drips.com", prospect_name="Drips", max_named=3,
+        tech=_tech(google_ads_conversion=True, meta_pixel=True, vendor_tags=["callrail", "podium"]),
+    )
+    assert sig["tech_measured"] is True
+    assert sig["prospect_ad_conversion_tag"] is True and sig["prospect_meta_pixel"] is True
+    assert sig["prospect_vendor_tags"] == ["callrail", "podium"]
+    assert sig["prospect_likely_represented"] is True          # 2 vendor signals
+    # An AW tag means they're paying — the broad "is paying" read used by the losing pitch.
+    assert sig["prospect_is_paying"] is True
+    # Slice-A SERP semantics are untouched: no SERP ad block -> these stay false.
+    assert sig["prospect_running_ads"] is False
+
+
+def test_derive_paid_signal_failed_tech_fetch_is_unknown_not_absent():
+    # A failed fetch must contribute nothing — unknown never reads as "no ad tech".
+    sig = orep.derive_paid_signal(
+        _paid_block(), prospect_website="drips.com", prospect_name="Drips", max_named=3,
+        tech=_tech(fetch_status="unreachable", google_ads_conversion=True),  # booleans ignored
+    )
+    assert sig["tech_measured"] is False
+    assert sig["prospect_ad_conversion_tag"] is False and sig["prospect_is_paying"] is False
+
+
+def test_build_paid_section_includes_tech():
+    summary = {"results": [], "paid": _paid_block()}
+    section = orep.build_paid_section(
+        summary, prospect_website="drips.com", prospect_name="Drips", max_competitors=3,
+        tech=_tech(meta_pixel=True),
+    )
+    assert section["status"] == orep.STATUS_MEASURED
+    assert section["prospect_meta_pixel"] is True
+
+
 def test_build_paid_section_measured_carries_the_signal():
     summary = {"results": [], "paid": _paid_block(advertisers=[{"domain": "ace.com", "rank": 1, "title": "Ace"}])}
     section = orep.build_paid_section(summary, prospect_website="drips.com", prospect_name="Drips", max_competitors=3)

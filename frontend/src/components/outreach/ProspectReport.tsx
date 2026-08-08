@@ -67,6 +67,13 @@ interface PaidSection {
   advertiser_count?: number
   lsa_count?: number
   competitors_advertising_gap?: boolean
+  // Site ad tech (Slice B1)
+  tech_measured?: boolean
+  prospect_is_paying?: boolean
+  prospect_meta_pixel?: boolean
+  prospect_ad_conversion_tag?: boolean
+  prospect_vendor_tags?: string[]
+  prospect_likely_represented?: boolean
 }
 interface TalkingPoint { element: string; text: string }
 interface ReportData {
@@ -346,10 +353,10 @@ function PaidTable({ s, name, keyword, clientTone }: {
     )
   }
   let lead: string
-  if (s.prospect_running_any) {
+  if (s.prospect_is_paying) {
     lead = clientTone
-      ? `You’re running paid ads for “${keyword}”. Here’s who else is bidding for the same customers:`
-      : `${name} is running paid ads for “${keyword}”; other advertisers on this search:`
+      ? `You’re paying to advertise for “${keyword}”. Here’s who else is bidding for the same customers:`
+      : `${name} IS paying (SERP ad / LSA / AW- tag) — proven budget; if coverage is weak this is the "paying and losing" pitch. Other advertisers on this search:`
   } else if (s.competitors_advertising_gap) {
     lead = clientTone
       ? `Competitors are paying Google to appear at the top for “${keyword}”, and you’re not — they’re buying the customers you’re invisible to.`
@@ -357,9 +364,23 @@ function PaidTable({ s, name, keyword, clientTone }: {
   } else {
     lead = `Paid advertising is active on “${keyword}”.`
   }
+  // Internal brief only: the prospect's own site ad tech (Slice B1). One-directional — shown only
+  // when the site was actually read (tech_measured), never as absence on a failed fetch.
+  const techBits: string[] = []
+  if (!clientTone && s.tech_measured) {
+    if (s.prospect_meta_pixel) techBits.push('Meta pixel')
+    if (s.prospect_ad_conversion_tag) techBits.push('Google Ads conversion tag')
+    if (s.prospect_vendor_tags && s.prospect_vendor_tags.length) techBits.push(...s.prospect_vendor_tags)
+  }
   return (
     <>
       <div style={{ fontSize: 12.5, color: '#334155', marginBottom: 6 }}>{lead}</div>
+      {techBits.length > 0 && (
+        <div style={{ fontSize: 12, color: '#475569', marginBottom: 6 }}>
+          Site ad tech: {techBits.join(', ')}
+          {s.prospect_likely_represented && ' · likely represented (agency stack)'}
+        </div>
+      )}
       {(ads.length > 0 || lsa.length > 0) && (
         <table style={{ width: '100%', fontSize: 12.5, borderCollapse: 'collapse' }}>
           <thead>

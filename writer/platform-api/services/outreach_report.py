@@ -199,12 +199,21 @@ def _normalize_name(text: Optional[str]) -> str:
     return re.sub(r"[^a-z0-9 ]", "", (text or "").lower()).strip()
 
 
+# Vendor tags that count as "an agency/marketing stack is involved" — the scoring-spec.md
+# §Decision-structure `likely_represented` bin (2+ signals).
+def _tech_ok(tech: Optional[dict[str, Any]]) -> bool:
+    """A tech row is usable only when the fetch SUCCEEDED — a failed fetch is unknown, never absent
+    (PRD §B3), so its all-False booleans must not read as "no ad tech"."""
+    return bool(tech) and tech.get("fetch_status") == "ok"
+
+
 def derive_paid_signal(
     paid: Optional[dict[str, Any]],
     *,
     prospect_website: Optional[str],
     prospect_name: Optional[str],
     max_named: int,
+    tech: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """The paid-placement facts for ONE prospect, from the snapshot's stored `payload_summary.paid`.
     Pure and deterministic — never asserts an ad, advertiser or spend that is not in the captured
@@ -262,6 +271,21 @@ def derive_paid_signal(
     competitor_lsa.sort(key=lambda a: (a["rank"] if isinstance(a.get("rank"), int) else 10**6, str(a["name"])))
 
     competitors_advertising = bool(competitor_ads) or bool(competitor_lsa)
+
+    # --- site tech signals (Slice B1), folded in additively -----------------------------------
+    # The SERP-derived facts above keep their Slice-A meaning (the competitor gap stays keyed on the
+    # SERP paid block alone, unchanged). The tech row adds "does the prospect run ad tech on their
+    # OWN site" — an AW- conversion tag / Meta pixel / vendor stack — a separate, complementary
+    # signal. `prospect_is_paying` is the BROAD read used for the "paying and losing" pitch:
+    # in the paid SERP block, OR running LSA, OR carrying an AW conversion tag. A failed/absent tech
+    # fetch contributes nothing (unknown ≡ absent — never subtracts).
+    t = tech if _tech_ok(tech) else None
+    tech_ads = bool(t and t.get("google_ads_conversion"))
+    tech_pixel = bool(t and t.get("meta_pixel"))
+    vendor_tags = list(t.get("vendor_tags") or []) if t else []
+    likely_represented = (len(vendor_tags) + (1 if (t and t.get("gtm_container_ids")) else 0)) >= 2
+    prospect_is_paying = prospect_running_ads or prospect_running_lsa or tech_ads
+
     return {
         "ads_present": ads_present,
         "lsa_present": lsa_present,
@@ -275,6 +299,14 @@ def derive_paid_signal(
         # THE pitch: rivals are paying to appear for this search and the prospect is not.
         "competitors_advertising_gap": competitors_advertising
         and not (prospect_running_ads or prospect_running_lsa),
+        # Site tech (Slice B1). `tech_measured` distinguishes "site read, nothing found" from "site
+        # not read / not scanned" so the report never shows absence as a finding on a failed fetch.
+        "tech_measured": t is not None,
+        "prospect_meta_pixel": tech_pixel,
+        "prospect_ad_conversion_tag": tech_ads,
+        "prospect_vendor_tags": vendor_tags,
+        "prospect_likely_represented": likely_represented,
+        "prospect_is_paying": prospect_is_paying,
     }
 
 
@@ -284,15 +316,18 @@ def build_paid_section(
     prospect_website: Optional[str],
     prospect_name: Optional[str],
     max_competitors: int,
+    tech: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """The "paid placement" report section. Pure.
 
-    `summary` is the stored `serp_result.payload_summary` (from `organic_scan.summarize_serp`). Paid
-    placement rides the SAME organic capture, so:
+    `summary` is the stored `serp_result.payload_summary` (from `organic_scan.summarize_serp`) —
+    Slice A's SERP paid block. `tech` is the latest `prospect_tech_signal` row — Slice B1's site ad
+    tech (or None when `scan-tech` hasn't run for the prospect). Paid placement rides the organic
+    capture, so the SECTION's presence is gated on the SERP capture:
       * `summary is None` → the organic/paid scan hasn't run → `not_scanned`.
       * `summary` present but with no `paid` block → captured before paid parsing existed → also
         `not_scanned` (honest: we didn't measure ads, which must not read as "no ads").
-      * otherwise → `measured`, with the derived per-prospect facts.
+      * otherwise → `measured`, with the derived per-prospect facts (SERP + site tech).
     """
     if not summary:
         return not_scanned_section(
@@ -307,6 +342,7 @@ def build_paid_section(
         prospect_website=prospect_website,
         prospect_name=prospect_name,
         max_named=max_competitors,
+        tech=tech,
     )
     return {"status": STATUS_MEASURED, "signal": SIGNAL_PAID, **signal}
 
@@ -478,10 +514,10 @@ def _client_paid_html(section: dict[str, Any], keyword: str) -> str:
             f"<p>No businesses are currently paying for Google Ads on “{_esc(keyword)}” in your area "
             "— the top of this search is still won on merit, not budget.</p>"
         )
-    if section.get("prospect_running_any"):
+    if section.get("prospect_is_paying"):
         lead = (
-            f"<p>You’re currently running paid ads for “{_esc(keyword)}”. Here’s who else is bidding "
-            "for the same customers:</p>"
+            f"<p>You’re paying to advertise for “{_esc(keyword)}”. Here’s who else is bidding for the "
+            "same customers:</p>"
         )
     elif section.get("competitors_advertising_gap"):
         lead = (

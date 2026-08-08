@@ -28,6 +28,7 @@ export interface JustificationData {
 // caller can scan. Unknown elements fall back to the raw key rather than being hidden.
 const ELEMENT_LABEL: Record<string, string> = {
   coverage: 'Invisibility',
+  paying: 'Paying & losing',
   competitor: 'Who’s winning',
   paid: 'Paying to win',
   geography: 'Where they drop off',

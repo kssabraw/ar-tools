@@ -148,6 +148,16 @@ def test_the_collector_must_never_be_spend_gated():
     assert spend_denial("collect", {}) is None
 
 
+def test_scan_tech_is_free_but_the_pixel_spike_is_gated():
+    """`scan-tech` fetches prospects' OWN sites over plain HTTP — no paid provider call (PRD §B3),
+    same posture as collect. The §16a.1 pixel spike bills an Outscraper enrichment, so it IS gated."""
+    assert "scan-tech" not in PAID_COMMANDS
+    assert spend_denial("scan-tech", {}) is None
+    assert "probe-pixel-field" in PAID_COMMANDS
+    assert spend_denial("probe-pixel-field", {}) is not None
+    assert spend_denial("probe-pixel-field", {"OUTREACH_CONFIRM_SPEND": "probe-pixel-field"}) is None
+
+
 def test_every_paid_command_refuses_without_a_token():
     for command in sorted(PAID_COMMANDS):
         denial = spend_denial(command, {})

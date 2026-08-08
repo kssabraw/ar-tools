@@ -50,6 +50,7 @@ BYTE_DEAD = 255
 # (PRD §14a "record which element was selected as the hook and which others were available") is a
 # stable vocabulary and not a free-text label.
 ELEM_COVERAGE = "coverage"
+ELEM_PAYING = "paying"
 ELEM_COMPETITOR = "competitor"
 ELEM_PAID = "paid"
 ELEM_GEOGRAPHY = "geography"
@@ -65,6 +66,9 @@ ELEM_LISTING_STATUS = "listing_status"
 # it is deliberately absent until a second scan exists (deltas arrive at cycle 2, ~30 days), the
 # same seam the heatmap delta guards leave open (outreach ISSUES I-091). See the caveats.
 HOOK_PRIORITY = (
+    # "Paying and losing" is the highest-intent opener available (the vendor-failing shape,
+    # scoring-spec.md §Proven-spend / §Buying-intent): proven budget AND a visible problem.
+    ELEM_PAYING,
     ELEM_COVERAGE,
     ELEM_COMPETITOR,
     ELEM_PAID,
@@ -301,6 +305,36 @@ def build_justification(
         )
     points.append(_point(ELEM_COVERAGE, cov_text, cov_facts))
 
+    # --- paying and losing: the strongest pitch — proven budget AND a visible problem ----------
+    # scoring-spec.md §Proven-spend / §Buying-intent (the vendor-failing SHAPE). Fires when the
+    # prospect is paying for visibility (in the SERP paid block, running LSA, or carrying an AW-
+    # conversion tag on their site — Slice B1) AND is losing it (invisible everywhere, or missing
+    # from the majority of the area). Deterministic: every clause is a measured fact.
+    paying_and_losing = bool(
+        paid and paid.get("prospect_is_paying") and (invisible_everywhere or deficit >= 50)
+    )
+    if paying_and_losing:
+        where = (
+            f"invisible in Google's map results everywhere across {submarket}"
+            if invisible_everywhere
+            else f"missing from Google's map results across {_pct(deficit)} of {submarket}"
+        )
+        channel = "Local Services ad" if paid.get("prospect_running_lsa") else "Google Ads"
+        points.append(
+            _point(
+                ELEM_PAYING,
+                f"Paying for {channel} on “{keyword}” but {where} — spending to be found and still "
+                f"losing the map pack, which is the gap {name} can close fastest.",
+                {
+                    "prospect_running_ads": paid.get("prospect_running_ads"),
+                    "prospect_running_lsa": paid.get("prospect_running_lsa"),
+                    "prospect_ad_conversion_tag": paid.get("prospect_ad_conversion_tag"),
+                    "coverage_deficit": deficit,
+                    "invisible_everywhere": invisible_everywhere,
+                },
+            )
+        )
+
     # --- competitor: who is taking the space where they're invisible --------------------------
     named = competitors.get("named") or []
     invis_pts = int(competitors.get("invisible_points") or 0)
@@ -444,7 +478,11 @@ def build_justification(
         "prospect_id": prospect.get("id"),
         "prospect_name": name,
         "headline": _headline(name, keyword, submarket, deficit, invisible_everywhere),
-        "hook": _hook(name, keyword, submarket, deficit, invisible_everywhere, named, pack_size),
+        "hook": _hook(
+            name, keyword, submarket, deficit, invisible_everywhere, named, pack_size,
+            paying_and_losing=paying_and_losing,
+            paying_channel="Local Services ad" if (paid and paid.get("prospect_running_lsa")) else "Google Ads",
+        ),
         "hook_element": hook_element,
         "available_elements": available_elements,
         "talking_points": points,
@@ -494,9 +532,26 @@ def _hook(
     invisible_everywhere: bool,
     named: list[dict[str, Any]],
     pack_size: int,
+    *,
+    paying_and_losing: bool = False,
+    paying_channel: str = "Google Ads",
 ) -> str:
     """The single spoken opener, in the PRD §716 shape: keyword + area + a competitor when there is
-    one. Built from persisted facts, never improvised — the same sentence for the same scan."""
+    one. Built from persisted facts, never improvised — the same sentence for the same scan.
+
+    When the prospect is paying AND losing, the opener LEADS with that (the strongest, highest-intent
+    line available — they've proven budget and have a visible problem), so `hook_element == 'paying'`
+    and the spoken hook agree."""
+    if paying_and_losing:
+        where = (
+            "you don't show up in the Google map results anywhere I looked"
+            if invisible_everywhere
+            else f"you're missing from the Google map results across {_pct(deficit)} of the area"
+        )
+        return (
+            f"I searched “{keyword}” across {submarket} — you're paying for {paying_channel}, but "
+            f"{where}, so you're buying clicks your competitors are getting for free."
+        )
     if invisible_everywhere:
         clause = f"you don't show up in the Google map results for “{keyword}” anywhere I looked"
     else:

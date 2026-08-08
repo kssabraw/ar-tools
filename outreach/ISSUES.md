@@ -2193,3 +2193,40 @@ dedicated `/v3/serp/google/local_services/live/advanced` capture — its own PAI
 command (`scan-lsa`), a `cost_ledger` row, and the path added to the free probe set first. Parsing an
 existing field costs nothing and adds no paid call; a speculative new paid call on a wrong envelope
 is what this reading avoids.
+
+---
+
+### I-097 (open, cheap follow-ups) — Slice B1 tech-scan: survivor filtering + GTM-follow default
+
+Slice B1 (`scan-tech`, `services/scan_tech.py`) fetches every prospect-with-a-website in a market and
+stores `prospect_tech_signal`. Two deliberate simplifications, each a cheap follow-up, neither wrong:
+
+- **Scans all prospects with a website, not only filter survivors.** PRD §B3 says "survivors only".
+  Narrowing to filter survivors needs the filter verdict joined in; a wasted FREE fetch on an excluded
+  prospect is slightly wasteful, never wrong (the row is per-prospect and read only for a prospect the
+  report is about). Follow-up: join `filter_result`/exclusion into the query.
+- **GTM container follow is OFF by default** (`tech_follow_gtm=False`). A GTM container can inject a
+  pixel the inline scan misses (I-003 / §16a.1). The seam is built (`looks_gtm_only` + `merge_signals`,
+  unit-tested), gated behind the flag until the §16a.1 spike measures the miss rate. Flip the flag if
+  the spike shows inline scanning misses GTM-injected pixels.
+
+Also: `scan-tech` is a manual per-market command today — it is NOT yet on the `tick` cron or a
+`scan_request`/order path (Slice A's producers aren't either). Wiring it into the cadence is a
+follow-up once the first run proves the fetch behaves against real sites.
+
+---
+
+### I-098 (open, gates Slice B2) — DataForSEO Labs ad-spend yield is unproven for small local advertisers
+
+Slice B2 (ad-spend MAGNITUDE, the >$2k / $500–2k bands) is designed against DataForSEO Labs domain
+paid metrics (`domain_rank_overview` — `estimated_paid_traffic_cost` / `count`), added to the free
+`probe-dataforseo` set so endpoint EXISTENCE + account access is confirmable free. **B2 is deferred
+behind a yield spike** (owner ruling 2026-08-08: build B1 now, gate B2) for one reason: Labs paid data
+is keyword-SERP-derived, so a two-truck local operator bidding on hyper-local terms — and running LSA,
+which Labs does not index as paid search at all — very often returns `paid.count = 0`. That is exactly
+the population this pipeline targets, so the band is likely SPARSE for our prospects.
+
+**Resolve before building `scan-adspend`:** a `probe-labs-paid` sample over ~20 small local prospects,
+measuring how many return a non-zero paid estimate. If near-zero, defer B2 and rely on the PRESENCE
+signals (Slice A + B1); a documented fallback (the scanned keyword's CPC as a spend FLOOR — "some spend
+vs none", insufficient for the >$2k band) is the cheaper alternative. Design: `docs/paid-placement-slice-b-design-v0_1.md`.

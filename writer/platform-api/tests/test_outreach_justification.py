@@ -277,6 +277,42 @@ def test_build_no_paid_point_when_prospect_is_the_advertiser():
     assert oj.ELEM_PAID not in result["available_elements"]
 
 
+def test_build_paying_and_losing_is_the_lead_hook():
+    # Prospect IS paying (AW tag / SERP paid / LSA) AND invisible -> the strongest opener.
+    paid = {
+        "ads_present": True, "lsa_present": False, "prospect_running_ads": True,
+        "prospect_running_lsa": False, "prospect_running_any": True, "prospect_is_paying": True,
+        "prospect_ad_conversion_tag": True, "competitor_advertisers": [], "competitor_lsa": [],
+        "advertiser_count": 0, "lsa_count": 0, "competitors_advertising_gap": False,
+    }
+    result = oj.build_justification(
+        prospect=_prospect(), keyword="plumber", submarket="Van Nuys", snapshot=_SNAP,
+        coverage=None, live_points=12, competitors=_NO_COMP,     # coverage None -> invisible everywhere
+        field_reviews={"median": None, "sample": 0}, field_min_sample=5, pack_size=3, paid=paid,
+    )
+    assert oj.ELEM_PAYING in result["available_elements"]
+    # It outranks coverage as the hook, and the spoken hook agrees (leads with the paying pitch).
+    assert result["hook_element"] == oj.ELEM_PAYING
+    assert "paying for Google Ads" in result["hook"]
+    assert "getting for free" in result["hook"]
+    point = next(p for p in result["talking_points"] if p["element"] == oj.ELEM_PAYING)
+    assert point["facts"]["invisible_everywhere"] is True
+
+
+def test_build_paying_but_not_losing_does_not_fire():
+    # Paying AND good coverage (present, low deficit) -> no "losing" pitch.
+    paid = {"prospect_is_paying": True, "prospect_running_lsa": False}
+    coverage = {"coverage_pct": 90.0, "points_present": 9, "live_points": 10,
+                "best_rank": 1, "worst_rank": 3, "avg_rank": 1.5, "centroid_dist_at_loss": None}
+    result = oj.build_justification(
+        prospect=_prospect(), keyword="plumber", submarket="Van Nuys", snapshot=_SNAP,
+        coverage=coverage, live_points=10, competitors=_NO_COMP,
+        field_reviews={"median": None, "sample": 0}, field_min_sample=5, pack_size=3, paid=paid,
+    )
+    assert oj.ELEM_PAYING not in result["available_elements"]
+    assert "paying for" not in result["hook"]
+
+
 def test_build_no_paid_point_when_signal_absent():
     result = oj.build_justification(
         prospect=_prospect(), keyword="plumber", submarket="Van Nuys", snapshot=_SNAP,

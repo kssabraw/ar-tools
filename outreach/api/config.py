@@ -238,6 +238,17 @@ class Settings(BaseSettings):
     # second provider and `prospect_delta` exist (ISSUES I-091).
     max_delta_span_days: int = 45
 
+    # --- Site tech-signal scan (paid-placement Slice B1, PRD §B3) --------------------------
+    # `scan-tech` fetches each prospect's OWN site and detects ad/marketing tech (Meta pixel, AW-
+    # conversion tag, GTM container, CallRail/Podium/Birdeye). FREE (own HTTP GET, "not a paid
+    # service" — §B3), so `scan-tech` is deliberately NOT in PAID_COMMANDS.
+    tech_fetch_timeout_seconds: float = 12.0
+    tech_scan_concurrency: int = 8
+    # Follow the GTM container to recover pixels injected client-side (ISSUES I-003 / §16a.1). OFF
+    # until the §16a.1 spike measures whether inline scanning misses GTM-injected pixels — the seam
+    # is built either way, this only decides whether it runs by default.
+    tech_follow_gtm: bool = False
+
 
 def missing_supabase_vars(settings: "Settings") -> list[str]:
     """Which Supabase credentials are absent, by env-var name.

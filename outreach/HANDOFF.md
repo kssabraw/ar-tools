@@ -826,11 +826,19 @@ In rough value order:
       **LSA item type is unconfirmed against this account's organic response (I-096)** — parsed
       tolerantly + logged on first run; if LSA needs its own endpoint, a gated `scan-lsa` is the additive
       follow-up. Stored + shown, NOT scored until the Phase-4 scorer exists.
-    - **Slice B — the MONEY SIGNAL (bigger; the site-fetch enrichment layer).** Ad-spend MAGNITUDE
-      (>$2k/mo bands) and pixel/tag detection (Meta pixel, `AW-` conversion tags, GTM container contents
-      — PRD §B3, §16a.1) need fetching the prospect's site and reading its tags. A genuine unbuilt
-      component (the "money signal"); I-003/§16a.1 flag the open question of whether GTM-injected pixels
-      require the container fetch. Do Slice A first; Slice B is its own build.
+    - **Slice B — the MONEY SIGNAL. Designed + B1 BUILT 2026-08-08; B2 gated behind a yield spike.**
+      Full design: `docs/paid-placement-slice-b-design-v0_1.md`. Splits into two providers with opposite
+      cost profiles: **B1 tech/tag PRESENCE** (Meta pixel, `AW-` conversion tag, GTM container,
+      CallRail/Podium/Birdeye) from a **free** direct site fetch (PRD §B3) — **BUILT** (`scan-tech`, NOT
+      in PAID_COMMANDS; `services/tech_signals.py` pure + `scan_tech.py` producer + migration
+      `20260808200000_prospect_tech_signal` applied live; a failed fetch stores `unknown`, never
+      `absent`; GTM container-follow behind `tech_follow_gtm`, off until §16a.1 decides — I-097). **B2
+      ad-spend MAGNITUDE** (>$2k/mo bands) from DataForSEO Labs — **PAID and DEFERRED** behind a yield
+      spike (Labs paid data is likely sparse for small local advertisers — I-098; Labs endpoints added to
+      the free probe set). The **§16a.1 pixel spike** (`probe-pixel-field`, gated) is built to decide
+      whether the Outscraper pull supplies the Meta half near-free. Surfaced: a new **"paying and losing"**
+      call-hook element (proven budget + a visible problem — the strongest pitch) + the prospect's own ad
+      tech in the report, both folded ADDITIVELY into the paid signal (Slice A semantics unchanged).
     Both are Phase-4 scoring inputs; until the scorer exists they are stored + shown, not scored. Same
     invariants as the three signals it joins: deterministic + fact-grounded (never assert an ad that is
     not in the response), paid runs gated, tests, DECISIONS/ISSUES entries.

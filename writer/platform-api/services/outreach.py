@@ -1363,12 +1363,34 @@ def _organic_summary_for(client: Any, snapshot_id: str) -> dict[str, Any] | None
         return None
 
 
+def _latest_tech_signal(client: Any, prospect_id: str) -> dict[str, Any] | None:
+    """The most recent `prospect_tech_signal` row for a prospect (Slice B1 site ad tech), or None.
+    Best-effort — before the migration is applied / before `scan-tech` has run, returns None so the
+    paid signal degrades to Slice A's SERP-only read."""
+    try:
+        rows = (
+            client.table("prospect_tech_signal")
+            .select("fetch_status, meta_pixel, google_ads_conversion, vendor_tags, gtm_container_ids")
+            .eq("prospect_id", prospect_id)
+            .order("fetched_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return rows[0] if rows else None
+    except Exception as exc:  # noqa: BLE001 — the paid signal stands on the SERP read alone
+        logger.warning("outreach_tech_signal_unavailable", extra={"error": str(exc)})
+        return None
+
+
 def _paid_signal_for(
     client: Any, orep: Any, snapshot_id: str, prospect: dict[str, Any], *, max_named: int
 ) -> dict[str, Any] | None:
     """The derived paid-placement facts for one prospect, or None when no organic scan has run.
-    Threads the stored SERP summary through the pure `derive_paid_signal`, so a justification's
-    paid talking point and the report's paid section read one source of truth."""
+    Threads the stored SERP summary (Slice A) AND the latest site tech signal (Slice B1) through the
+    pure `derive_paid_signal`, so a justification's paid talking point and the report's paid section
+    read one source of truth."""
     summary = _organic_summary_for(client, snapshot_id)
     if not summary or "paid" not in summary:
         return None
@@ -1377,6 +1399,7 @@ def _paid_signal_for(
         prospect_website=prospect.get("website"),
         prospect_name=prospect.get("name"),
         max_named=max_named,
+        tech=_latest_tech_signal(client, prospect["id"]),
     )
 
 
@@ -1799,6 +1822,7 @@ def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[st
         prospect_website=prospect.get("website"),
         prospect_name=prospect.get("name"),
         max_competitors=settings.outreach_justification_max_competitors,
+        tech=_latest_tech_signal(client, prospect_id),
     )
 
     coverage_rows = (
