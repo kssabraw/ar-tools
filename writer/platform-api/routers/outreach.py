@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from config import settings
@@ -172,6 +172,40 @@ async def prospect_report(
     DRAFT — a prospect-facing asset requires explicit approval before it is sent (a hard module
     invariant), which a later slice wires."""
     return _handle(outreach_service.prospect_report, prospect_id, snapshot_id)
+
+
+@router.post("/outreach/prospects/{prospect_id}/report/pdf")
+async def approve_client_report_pdf(
+    prospect_id: str,
+    snapshot_id: Optional[str] = None,
+    auth: dict = Depends(require_admin),
+) -> Response:
+    """Approve and render the client-facing report to a downloadable PDF.
+
+    ADMIN-gated, and the click IS the approval: a prospect-facing asset must not be generated
+    without explicit human approval (a hard module invariant; reporting-layer-spec §4a). This is the
+    one path that turns the on-screen DRAFT into a shippable PDF, and it records a `report_approval`
+    row (actor + the exact bytes' content_hash) before returning them. Refuses an unmeasured area —
+    there is no honest client report to render when nothing has been scanned.
+    """
+    _require_outreach_ready()
+    try:
+        pdf, _approval = outreach_service.generate_client_report_pdf(
+            prospect_id, auth["user_id"], snapshot_id
+        )
+    except OutreachError as e:
+        status = 404 if e.code.endswith("_not_found") else 422
+        raise HTTPException(status_code=status, detail=e.code) from e
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.error("outreach_client_report_pdf_failed", extra={"error": str(e)})
+        raise HTTPException(status_code=500, detail="internal_error") from e
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="report-{prospect_id}.pdf"'},
+    )
 
 
 # --- Lead CRM ----------------------------------------------------------------------------------

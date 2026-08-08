@@ -1471,6 +1471,63 @@ def prospect_justification(prospect_id: str, snapshot_id: str | None = None) -> 
     )
 
 
+def _latest_report_approval(client: Any, prospect_id: str) -> dict[str, Any] | None:
+    """The most recent client-facing approval for a prospect, or None. Best-effort — before the
+    report_approval migration exists this returns None (the report reads as an unapproved draft)."""
+    try:
+        rows = (
+            client.table("report_approval")
+            .select("approved_by, content_hash, created_at")
+            .eq("prospect_id", prospect_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return rows[0] if rows else None
+    except Exception as exc:  # noqa: BLE001 — an unapproved report is the safe default
+        logger.warning("outreach_report_approval_read_failed", extra={"error": str(exc)})
+        return None
+
+
+def generate_client_report_pdf(prospect_id: str, actor_id: str, snapshot_id: str | None = None) -> tuple[bytes, dict[str, Any]]:
+    """Render the client-facing report to PDF and RECORD the approval. The admin click is the
+    approval (reporting-layer-spec §4a; the no-unapproved-asset invariant), so this is the one path
+    that turns the draft into a shippable prospect-facing asset — and it writes a `report_approval`
+    row naming the actor and the exact bytes' content_hash before returning them.
+
+    Refuses an unmeasured area: there is no honest client-facing report to render when nothing has
+    been scanned, so it raises rather than producing an empty asset.
+    """
+    import hashlib
+
+    from config import settings
+    from services import client_report, outreach_report as orep
+
+    report = prospect_report(prospect_id, snapshot_id)
+    if not report.get("measured"):
+        raise OutreachError("report_not_measured", "no rolled-up scan for this prospect's area yet")
+
+    html = orep.render_client_report_html(report, agency_name=settings.outreach_report_agency_name)
+    content_hash = hashlib.sha256(html.encode("utf-8")).hexdigest()
+    pdf = client_report.render_pdf(html)
+
+    snap_id = (report.get("justification", {}).get("provenance") or {}).get("snapshot_id")
+    client = get_outreach_client()
+    row: dict[str, Any] = {
+        "prospect_id": prospect_id,
+        "content_hash": content_hash,
+        "approved_by": actor_id,
+    }
+    if snap_id:
+        row["snapshot_id"] = snap_id
+    written = client.table("report_approval").insert(row).execute().data or []
+    approval = written[0] if written else row
+    logger.info("outreach_client_report_approved", extra={"prospect_id": prospect_id, "content_hash": content_hash})
+    return pdf, approval
+
+
 def _llm_section(client: Any, orep: Any, prospect: dict[str, Any], region_name: str, *, keyword: str | None) -> dict[str, Any]:
     """The report's AI-visibility section for a prospect: find the ai_region matching its submarket
     name, read the latest AI scan per engine for that region × keyword, and hand the rows to the
@@ -1582,6 +1639,7 @@ def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[st
 
     justification = prospect_justification(prospect_id, snapshot_id)
     llm = _llm_section(client, orep, prospect, submarket_name, keyword=None)
+    approval = _latest_report_approval(client, prospect_id)
 
     if not justification.get("measured"):
         organic = orep.not_scanned_section(
@@ -1597,6 +1655,7 @@ def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[st
             organic_section=organic,
             llm_section=llm,
             heatmap_available=False,
+            approval=approval,
         )
 
     prov = justification["provenance"]
@@ -1671,6 +1730,7 @@ def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[st
         organic_section=organic,
         llm_section=llm,
         heatmap_available=coverage is not None,
+        approval=approval,
     )
 
 

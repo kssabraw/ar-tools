@@ -21,6 +21,7 @@ The section shapes are fixed now so a later slice fills a block, not restructure
 """
 from __future__ import annotations
 
+import html
 import re
 from typing import Any, Optional
 from urllib.parse import urlparse
@@ -275,6 +276,123 @@ def build_llm_section(
     return section
 
 
+LLM_ENGINE_LABELS = {"chatgpt": "ChatGPT", "google_aio": "Google AI Overview"}
+
+
+def _esc(text: Any) -> str:
+    return html.escape(str(text if text is not None else ""))
+
+
+def _client_maps_html(section: dict[str, Any], keyword: str, submarket: str) -> str:
+    if section.get("status") != STATUS_MEASURED or not section.get("prospect"):
+        return "<p class='muted'>This section will be added when the map scan is available.</p>"
+    p = section["prospect"]
+    rows = [
+        f"<tr class='you'><td>You</td><td>{_esc(p.get('pack_points'))}</td>"
+        f"<td>{_esc(p.get('pack_best_rank') or '—')}</td></tr>"
+    ]
+    for c in section.get("competitors", []):
+        rows.append(
+            f"<tr><td>{_esc(c.get('name'))}</td><td>{_esc(c.get('pack_points'))}</td>"
+            f"<td>{_esc(c.get('best_rank') or '—')}</td></tr>"
+        )
+    return (
+        f"<p>For “{_esc(keyword)}” across {_esc(submarket)}, you appear in the Google map results at "
+        f"{_esc(p.get('points_present'))} of {_esc(p.get('live_points'))} points "
+        f"({_esc(p.get('coverage_pct'))}%). Here is how the businesses winning that search compare:</p>"
+        "<table><thead><tr><th>Business</th><th>Map-pack points</th><th>Best rank</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>"
+    )
+
+
+def _client_organic_html(section: dict[str, Any], keyword: str, submarket: str) -> str:
+    if section.get("status") != STATUS_MEASURED:
+        return "<p class='muted'>This section will be added when the search scan is available.</p>"
+    rank = section.get("prospect_rank")
+    depth = section.get("captured_depth")
+    lead = (
+        f"<p>You rank #{_esc(rank)} in Google’s standard search results for “{_esc(keyword)}”.</p>"
+        if rank is not None
+        else f"<p>You don’t appear in the top {_esc(depth)} Google search results for "
+        f"“{_esc(keyword)}” in {_esc(submarket)}.</p>"
+    )
+    rows = "".join(
+        f"<tr><td>{_esc(c.get('domain'))}</td><td>{_esc(c.get('rank') or '—')}</td></tr>"
+        for c in section.get("competitors", [])
+    )
+    table = (
+        "<table><thead><tr><th>Ranking ahead of you</th><th>Rank</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
+        if rows
+        else ""
+    )
+    return lead + table
+
+
+def _client_llm_html(section: dict[str, Any]) -> str:
+    if section.get("status") != STATUS_MEASURED or not section.get("engines"):
+        return "<p class='muted'>This section will be added when the AI-visibility scan is available.</p>"
+    rows = []
+    for e in section["engines"]:
+        label = LLM_ENGINE_LABELS.get(e.get("engine"), _esc(e.get("engine")))
+        if not e.get("present"):
+            verdict = "<span class='muted'>No AI answer returned for this search.</span>"
+        elif e.get("visible"):
+            verdict = "<span class='good'>✓ You’re named in the AI answer.</span>"
+        else:
+            names = ", ".join(_esc(b) for b in (e.get("sample_businesses") or [])[:4])
+            extra = f" It names: {names}." if names else ""
+            verdict = f"<span class='bad'>✗ You’re not named.</span>{extra}"
+        rows.append(f"<tr><td>{_esc(label)}</td><td>{verdict}</td></tr>")
+    caveat = f"<p class='muted small'>{_esc(section['caveat'])}</p>" if section.get("caveat") else ""
+    return (
+        "<table><thead><tr><th>AI assistant</th><th>Are you named?</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>{caveat}"
+    )
+
+
+def render_client_report_html(report: dict[str, Any], *, agency_name: str) -> str:
+    """The client-facing report as a standalone HTML document, for WeasyPrint → PDF.
+
+    Pure and deterministic — the SAME assembled facts the on-screen client-facing face renders, in a
+    print layout. Client tone, honest `not_scanned` blocks (never an empty table), and every value
+    escaped. It is generated ONLY after explicit approval (the router gate), so — unlike the
+    on-screen preview — it carries no DRAFT watermark; the footer names the agency that prepared it.
+    """
+    identity = report.get("identity", {})
+    keyword = report.get("keyword", "")
+    submarket = report.get("submarket", "")
+    signals = report.get("signals", {})
+    name = identity.get("name") or "Your business"
+
+    css = (
+        "body{font-family:Helvetica,Arial,sans-serif;color:#1f2937;margin:40px;font-size:12px}"
+        "h1{font-size:20px;margin:0 0 2px}h2{font-size:13px;margin:22px 0 6px;color:#0f172a;"
+        "text-transform:uppercase;letter-spacing:.4px}.sub{color:#64748b;margin:0 0 4px}"
+        "table{width:100%;border-collapse:collapse;margin-top:4px}"
+        "th,td{text-align:left;padding:5px 8px;border-bottom:1px solid #eef2f7}"
+        "th{color:#64748b;font-size:10px;text-transform:uppercase}"
+        "tr.you{background:#eff6ff;font-weight:bold}.muted{color:#94a3b8}.small{font-size:10px}"
+        ".good{color:#166534;font-weight:bold}.bad{color:#b91c1c;font-weight:bold}"
+        ".footer{margin-top:28px;color:#94a3b8;font-size:10px;border-top:1px solid #eef2f7;padding-top:8px}"
+    )
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        f"<style>{css}</style></head><body>"
+        f"<h1>Your Google visibility for “{_esc(keyword)}” in {_esc(submarket)}</h1>"
+        f"<p class='sub'>Prepared for {_esc(name)}</p>"
+        "<h2>Google Maps — where customers do (and don’t) find you</h2>"
+        f"{_client_maps_html(signals.get('maps', {}), keyword, submarket)}"
+        "<h2>Google search results</h2>"
+        f"{_client_organic_html(signals.get('organic', {}), keyword, submarket)}"
+        "<h2>AI assistants (ChatGPT, Google AI Overview)</h2>"
+        f"{_client_llm_html(signals.get('llm', {}))}"
+        f"<div class='footer'>Based on a live scan of {_esc(submarket)}. Figures are a point-in-time "
+        f"snapshot. Prepared by {_esc(agency_name)}.</div>"
+        "</body></html>"
+    )
+
+
 def build_report(
     *,
     prospect: dict[str, Any],
@@ -285,6 +403,7 @@ def build_report(
     organic_section: dict[str, Any],
     llm_section: dict[str, Any],
     heatmap_available: bool,
+    approval: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Assemble the full report document — identity + the three competitive signals + the call hook.
 
@@ -317,10 +436,22 @@ def build_report(
         },
         "heatmap_available": heatmap_available,
         "justification": justification,
-        # The client-facing face is a draft until approval exists — surfaced so the UI can gate it.
-        "client_facing": {
-            "status": "draft",
-            "approved": False,
-            "note": "Draft — a prospect-facing asset requires explicit approval before it is sent.",
-        },
+        # The client-facing face is a draft until an approval is on record. `approval` is the latest
+        # report_approval row (or None), so the UI flips from "draft" to "approved" after the first
+        # explicit human approval and can show who/when.
+        "client_facing": (
+            {
+                "status": "approved",
+                "approved": True,
+                "approved_by": approval.get("approved_by"),
+                "approved_at": approval.get("created_at"),
+                "note": "Approved — this report may be shared with the prospect.",
+            }
+            if approval
+            else {
+                "status": "draft",
+                "approved": False,
+                "note": "Draft — a prospect-facing asset requires explicit approval before it is sent.",
+            }
+        ),
     }

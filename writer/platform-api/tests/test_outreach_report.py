@@ -225,6 +225,77 @@ def test_build_report_shape_and_client_draft_gate():
     assert report["justification"] is justification
 
 
+def test_build_report_reflects_approval():
+    j = {"measured": True, "provenance": {}, "talking_points": []}
+    base = dict(
+        prospect=_prospect(), keyword="plumber", submarket="Van Nuys", justification=j,
+        maps_section={"status": "measured"},
+        organic_section=orep.not_scanned_section(orep.SIGNAL_ORGANIC, "x"),
+        llm_section=orep.not_scanned_section(orep.SIGNAL_LLM, "x"),
+        heatmap_available=False,
+    )
+    draft = orep.build_report(**base)
+    assert draft["client_facing"]["approved"] is False and draft["client_facing"]["status"] == "draft"
+
+    approved = orep.build_report(**base, approval={"approved_by": "u1", "created_at": "2026-08-08"})
+    assert approved["client_facing"]["approved"] is True
+    assert approved["client_facing"]["approved_by"] == "u1"
+    assert approved["client_facing"]["status"] == "approved"
+
+
+# --- render_client_report_html ----------------------------------------------------------------
+
+
+def _report_doc(maps, organic, llm, name="Drips Plumbing"):
+    return {
+        "identity": {"name": name}, "keyword": "plumber", "submarket": "Van Nuys",
+        "signals": {"maps": maps, "organic": organic, "llm": llm},
+    }
+
+
+def test_render_client_report_html_contains_the_facts_and_escapes():
+    maps = orep.build_maps_comparison(
+        prospect_place_id="SELF", pack_rows=[_pack(0, "A", 1)],
+        name_by_place_id={"A": "Ace Plumbing"},
+        coverage={"coverage_pct": 20.0, "points_present": 2, "best_rank": 3, "avg_rank": 5.0},
+        live_points=8, max_competitors=3,
+    )
+    organic = orep.build_organic_section(
+        _summary([{"rank": 1, "domain": "ace.com", "title": "Ace"}]),
+        prospect_website="drips.com", max_competitors=3,
+    )
+    llm = orep.build_llm_section(
+        engine_rows=[{"engine": "chatgpt", "present": True, "named_businesses": ["Ace"],
+                      "reference_domains": [], "raw_excerpt": ""}],
+        prospect_name="Drips Plumbing", prospect_domain="drips.com",
+        region="Van Nuys", name_level="suburb",
+    )
+    html = orep.render_client_report_html(
+        _report_doc(maps, organic, llm, name="Drips & Sons <Plumbing>"), agency_name="Amazing Rankings"
+    )
+    assert "Your Google visibility for" in html and "plumber" in html
+    assert "Ace Plumbing" in html                       # a maps competitor
+    assert "Prepared by Amazing Rankings" in html       # white-label footer
+    assert "Draft" not in html                          # approved asset — no draft watermark
+    # The prospect name is escaped, not injected as markup.
+    assert "Drips &amp; Sons &lt;Plumbing&gt;" in html
+    assert "<Plumbing>" not in html
+
+
+def test_render_client_report_html_not_scanned_blocks_never_empty_tables():
+    html = orep.render_client_report_html(
+        _report_doc(
+            {"status": "not_measured", "signal": "maps"},
+            orep.not_scanned_section(orep.SIGNAL_ORGANIC, "x"),
+            orep.not_scanned_section(orep.SIGNAL_LLM, "x"),
+        ),
+        agency_name="Amazing Rankings",
+    )
+    # Three "will be added" placeholders, no fabricated competitor rows.
+    assert html.count("will be added") == 3
+    assert "<tbody>" not in html
+
+
 def test_build_report_deterministic():
     justification = {"measured": True, "provenance": {}, "talking_points": []}
     kwargs = dict(
