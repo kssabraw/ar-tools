@@ -2157,3 +2157,114 @@ report renders them as explicit `not_scanned` blocks until they land — never a
 
 None is a restructure of the report — each fills a section shape that exists now. Build order
 2 → 3 → 4; increment 3 needs the two human inputs above before it starts.
+
+---
+
+### I-096 (open, cheapest-to-reverse reading taken) — the LSA / Google-Guaranteed item type is unconfirmed against this account's organic response
+
+Paid-placement PRESENCE (HANDOFF §12 item 3a, Slice A) is parsed from the organic SERP response
+`scan-organic` already captures — no new paid call. Two item types feed it:
+
+- **Google Ads** — DataForSEO's `type == "paid"`. High confidence (it is the standard label), and
+  the parse is tolerant (domain recovered from the ad URL when `domain` is absent).
+- **Local Services Ads ("Google Guaranteed")** — parsed from `type ∈ {local_services,
+  google_local_services, local_service_ads}` in the SAME response.
+
+**The ambiguity:** whether LSA actually rides the organic `/serp/google/organic/live/advanced`
+response for THIS account, and under which exact item type, is UNMEASURED — the organic scan has
+never run (I-095), so there is no stored sample to read. The spec is explicit that this is a
+measure-don't-infer point ("confirm its item type against a live response before parsing").
+
+**The reading taken (cheapest to reverse, per the session protocol):** parse LSA from the
+already-captured organic response with a tolerant type set, and DO NOT add a speculative new paid
+LSA call in Slice A. Two guards make the reading recoverable:
+
+- `parse_organic_serp` records every distinct top-level item `type` it saw (`seen_item_types`), and
+  `capture_organic` logs it plus the paid/LSA counts on the first run, so the exact envelope is
+  confirmable from the log (and from `serp_result.payload_summary.paid.seen_item_types`) rather than
+  a second paid run.
+- Presence-absent is a finding, not a gap — `ads_present:false`/`lsa_present:false` never
+  manufacture a claim, so a wrong LSA type reads as "no LSA detected" (understates, the safe
+  direction), never a fabricated advertiser.
+
+**Resolve after the first `scan-organic` run:** read `seen_item_types` from the log / stored summary.
+If LSA does NOT appear in the organic response for local-service queries, the follow-up is a
+dedicated `/v3/serp/google/local_services/live/advanced` capture — its own PAID, token/order-gated
+command (`scan-lsa`), a `cost_ledger` row, and the path added to the free probe set first. Parsing an
+existing field costs nothing and adds no paid call; a speculative new paid call on a wrong envelope
+is what this reading avoids.
+
+---
+
+### I-099 (RESOLVED, same session) — three defects found by adversarial review of the Slice A/B code
+
+Reviewed the paid-placement code adversarially before it ran and found three real defects, each
+reproduced with a concrete input before fixing. Recorded because two of them are the SAME class of
+mistake this module keeps meeting, in a new place.
+
+1. **`scan-tech` scanned 20 of ~1,000 sites and exited 0.** `--limit` had a SHARED argparse default
+   of 20, inherited by a command that wants "all". A full-market run reported `considered: 20` and
+   looked clean — the "reports clean because it did almost nothing" failure, again. Fixed by giving
+   the flag NO shared default and naming a per-command default (`scan_tech_limit` → all,
+   `pixel_probe_limit` → 8 because it spends, `legacy_limit` → the previous 20). The parser was
+   extracted as `build_parser()` so tests exercise the real wiring; the gap was that pure logic was
+   covered and the argparse-to-command seam was not.
+2. **A bidirectional LSA name match fabricated a claim.** `name in prospect_norm` let a SHORTER
+   competitor name inside a LONGER prospect name read as the prospect — "AAA Plumbing" (a distinct
+   business) inside "AAA Plumbing Services". It asserted an LSA the prospect does not run AND
+   deleted a real competitor. Fixed to one-directional (prospect-name-in-advertiser), which is the
+   rule `detect_ai_mention` already used and which fails toward understating.
+3. **An `AW-` tag on the SITE produced the spoken line "you're paying for Google Ads on ⟨keyword⟩".**
+   The tag proves conversion tracking is installed, not that they bid on that term — and tags
+   routinely outlive the campaigns that placed them, so the claim is falsifiable on the call. Fixed
+   by splitting `prospect_paying_this_keyword` (measured on this SERP) from the broad
+   `prospect_is_paying`, and carrying `paying_evidence` (`serp_ad`/`lsa`/`conversion_tag`) so the
+   hook, the report and the client PDF each say only what was observed. The tag-only wording now
+   ASKS about spend instead of asserting it.
+
+Also fixed in the same pass: `likely_represented` counted GTM (near-universal, and the only derived
+flag that scores NEGATIVE) — now 2+ vendor tags; the pixel spike discarded already-billed results on
+any mid-loop failure (`httpx.ReadTimeout` is not in `FAILOVER_ERRORS`, so it propagated) — now
+per-query isolation with the errors reported beside the results; no credential pre-flight on the
+spike (`missing_outscraper_vars` added); a page-size cap + bounded problem list on the site fetch;
+the report's duplicate cross-region reads (a per-request memo); and the `deficit >= 50` literal moved
+to config. Every fix carries a regression test.
+
+---
+
+### I-097 (open, cheap follow-ups) — Slice B1 tech-scan: survivor filtering + GTM-follow default
+
+Slice B1 (`scan-tech`, `services/scan_tech.py`) fetches every prospect-with-a-website in a market and
+stores `prospect_tech_signal`. Two deliberate simplifications, each a cheap follow-up, neither wrong:
+
+- **Scans all prospects with a website, not only filter survivors.** PRD §B3 says "survivors only".
+  Narrowing to filter survivors needs the filter verdict joined in; a wasted FREE fetch on an excluded
+  prospect is slightly wasteful, never wrong (the row is per-prospect and read only for a prospect the
+  report is about). Follow-up: join `filter_result`/exclusion into the query.
+- **GTM container follow is OFF by default** (`tech_follow_gtm=False`). A GTM container can inject a
+  pixel the inline scan misses (I-003 / §16a.1). The seam is built (`looks_gtm_only` + `merge_signals`,
+  unit-tested), gated behind the flag until the §16a.1 spike measures the miss rate. Flip the flag if
+  the spike shows inline scanning misses GTM-injected pixels.
+
+Also: `scan-tech` is a manual per-market command today — it is NOT yet on the `tick` cron or a
+`scan_request`/order path (Slice A's producers aren't either). Wiring it into the cadence is a
+follow-up once the first run proves the fetch behaves against real sites.
+
+---
+
+### I-098 (open, gates Slice B2) — DataForSEO Labs ad-spend yield is unproven for small local advertisers
+
+Slice B2 (ad-spend MAGNITUDE, the >$2k / $500–2k bands) is designed against DataForSEO Labs domain
+paid metrics (`domain_rank_overview` — `estimated_paid_traffic_cost` / `count`), added to the free
+`probe-dataforseo` set so endpoint EXISTENCE is confirmable free. **That probe does NOT establish
+entitlement**: an account without Labs can answer HTTP 200 with a task-level access error, and the
+probe's `exists` flag is HTTP-200-only — read `task_message` rather than the `exists` list. **B2 is deferred
+behind a yield spike** (owner ruling 2026-08-08: build B1 now, gate B2) for one reason: Labs paid data
+is keyword-SERP-derived, so a two-truck local operator bidding on hyper-local terms — and running LSA,
+which Labs does not index as paid search at all — very often returns `paid.count = 0`. That is exactly
+the population this pipeline targets, so the band is likely SPARSE for our prospects.
+
+**Resolve before building `scan-adspend`:** a `probe-labs-paid` sample over ~20 small local prospects,
+measuring how many return a non-zero paid estimate. If near-zero, defer B2 and rely on the PRESENCE
+signals (Slice A + B1); a documented fallback (the scanned keyword's CPC as a spend FLOOR — "some spend
+vs none", insufficient for the >$2k band) is the cheaper alternative. Design: `docs/paid-placement-slice-b-design-v0_1.md`.

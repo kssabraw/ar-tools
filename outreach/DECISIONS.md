@@ -1111,3 +1111,143 @@ Frontend: the client face shows the shareable link (copy / open) + the expiry no
 
 **I-095 is now fully resolved** — the per-prospect report is complete end to end (shell, organic,
 LLM, approved client PDF, signed-URL delivery).
+
+---
+
+## 2026-08-08 — Paid-placement PRESENCE (Slice A): parse it from the response we already pay for; persist in payload_summary
+
+HANDOFF §12 item 3a, the owner's stated next build — the fourth competitive signal: is the business
+(and are its competitors) BUYING Google Ads / Local Services Ads for its keyword. scoring-spec.md
+rates it above every organic signal (LSA active +57, Google Ads + no organic/pack +46) because a
+business paying to solve the visibility problem while still losing organically has proven budget AND
+intent. Slice A is PRESENCE only (built); the money signal — spend magnitude + pixel/tag detection —
+is Slice B, its own later build.
+
+**The paid items ride the organic capture — no new paid call for Google Ads.** `scan-organic` already
+stores the FULL DataForSEO SERP response in `serp_result.payload`, and that response carries the paid
+items; the old parser discarded everything that was not `organic`/`ai_overview`. So `parse_organic_serp`
+now also collects `type=="paid"` (Google Ads) and `type∈{local_services,…}` (LSA), and `summarize_serp`
+emits a `paid` block in `payload_summary`. Deriving Google-Ads presence from data already on disk with
+ZERO new spend is the cheapest possible reading, and it is exactly the discipline the module already
+follows for the organic prospect-rank (parsed once, matched at read).
+
+**LSA item type is unconfirmed and taken cheapest-to-reverse — logged as I-096, not resolved in specs.**
+The exact DataForSEO type for Local Services Ads in THIS account's organic response is unmeasured (the
+organic scan has never run). Rather than build a speculative NEW paid LSA call that might hit a wrong
+envelope, Slice A parses LSA tolerantly from the already-captured response and records `seen_item_types`
+(logged on first run + stored in the summary) so the shape is confirmable from the log. If the first
+live run shows LSA needs its own endpoint, a gated `scan-lsa` call is the additive follow-up. Parsing
+an existing field is free to reverse; a wrong paid call is not.
+
+**Persistence: `serp_result.payload_summary.paid`, keyed to the snapshot — NO new column/table/migration.**
+This mirrors the organic signal exactly: the per-snapshot advertiser lists persist in the summary, and
+the per-prospect question ("is THIS business advertising") is DERIVED at read time by matching the
+prospect's website domain (Ads) / name (LSA) against the stored lists — the same read-time match the
+organic `prospect_rank` and the LLM mention use. That derivation (`outreach_report.derive_paid_signal`,
+pure) feeds both the report's fourth "Paid placement" section AND the call-hook justification's
+`ELEM_PAID` talking point ("rivals are paying for this search and you're not" — the §Buying-intent
+pitch), so the two never disagree. The Phase-4 scorer reads the same per-snapshot summary + prospect to
+compute its bins; the per-snapshot lists also support the future `ads_state_change` delta (diff two
+summaries). A per-prospect table was rejected for the same reason the organic signal has none — the fact
+is per-snapshot, the flag is a deterministic read-time match, and duplicating it per prospect invites
+drift. Until the Phase-4 scorer exists the signal is STORED + SHOWN, not scored (HANDOFF §12 item 3a).
+
+**Deterministic + fact-grounded, same as the three signals it joins.** Absence of ads is a FINDING
+(`ads_present:false`), never a gap that manufactures a claim; a competitor is named only from a real
+advertiser domain/name; the prospect's own ad presence excludes it from its own competitor list. The
+paid talking point fires ONLY on the rivals-advertising-and-prospect-not gap — a prospect who IS
+advertising is a scorer-owned signal, not a cold-call hook.
+
+*Revisit:* Slice B (site-fetch money signal) and the Phase-4 scorer, which consume this. If the first
+`scan-organic` run proves LSA needs a dedicated endpoint, add the gated `scan-lsa` command (I-096).
+
+---
+
+## 2026-08-08 — Paid-placement Slice B1 (site tech signals) + the §16a.1 spike; B2 gated behind a yield spike
+
+Owner authorized proceeding on the Slice B design (2026-08-08): "build B1 now, gate B2 behind the yield
+spike," run the §16a.1 pixel spike, persist the design doc. Built B1 + the spike instrument; deferred
+B2. Full design: `docs/paid-placement-slice-b-design-v0_1.md`.
+
+**B1 and B2 are separate builds because they are separate providers with opposite cost profiles.** B1
+(tech/tag PRESENCE — Meta pixel, AW- conversion tag, GTM container, CallRail/Podium/Birdeye) comes from
+a DIRECT HTTP fetch of the prospect's own site (PRD §B3 "own request, not a paid service") — FREE. B2
+(spend MAGNITUDE) comes from DataForSEO Labs — PAID, and likely sparse for small local advertisers
+(I-098). Bundling them would gate a free capability behind a paid one, or spend on a magnitude estimate
+before proving it yields. So: `scan-tech` (free, NOT in PAID_COMMANDS — a test pins it) ships now;
+`scan-adspend` is deferred behind the `probe-labs-paid` yield spike.
+
+**`scan-tech` is free, so it is not spend-gated — same posture and same test as `collect`.** It makes
+no paid provider call; gating it would make a routine detect refuse for want of a token. The §16a.1
+pixel spike (`probe-pixel-field`) DOES bill (an Outscraper enrichment on a small sample) and IS gated.
+
+**The measured-vs-found rule is structural in B1, the fourth time this correction has been made** (see
+the 2026-08-05 coverage-denominator entry). A failed site fetch stores a `fetch_status`
+(`unreachable`/`timeout`/`blocked`) with the signal booleans null — NEVER `absent`. Unknown ≡ absent
+for the scorer (one-directional, never subtracts — PRD §B3), but the two must be stored distinctly so
+the report can say "couldn't read the site" rather than "no ad tech". The platform-api reader enforces
+it too: `_tech_ok` treats a non-'ok' row as no tech signal at all.
+
+**The §16a.1 spike is isolated from the ingest path on purpose.** `outscraper_client.submit_maps_search`
+carries a hard invariant — base-tier only, never populate `enrichment` — that protects the MASS ingest
+from silently billing enrichment across thousands of places. A one-off enriched sample of ~8 places is
+a different, deliberate, gated act, so `pixel_probe.fetch_enriched_sample` builds its OWN request rather
+than bending that method. The pure heuristic (`scan_place_for_pixel`) never asserts the enrichment's
+field name — it scans for pixel INDICATORS by key and value, because the field name is exactly what the
+spike measures (measure-don't-infer). Likely outcome (pixel not in the base pull, or GTM-injected and
+missed) reinforces the site-fetch B1 already built.
+
+**The report/hook gained the strongest pitch the model has: "paying and losing."** B1's AW- tag (plus
+Slice A's SERP paid / LSA) makes `prospect_is_paying` computable, and combined with poor coverage it is
+the vendor-failing SHAPE — proven budget AND a visible problem (scoring-spec.md §Proven-spend /
+§Buying-intent, the +66/+90 territory). It is folded into `derive_paid_signal` ADDITIVELY (Slice A's
+SERP-derived facts keep their exact meaning; the competitor-gap stays SERP-only, so Slice A tests are
+unchanged), gets its own `ELEM_PAYING` justification element that LEADS the spoken hook when it fires,
+and is one-directional throughout. Persisted per-prospect in `prospect_tech_signal` (migration
+`20260808200000`, applied live to Outreacher) — keyed to the prospect, not a snapshot, because the site
+is the prospect's and does not change per scan (so it does NOT ride `serp_result`).
+
+*Revisit:* the `probe-labs-paid` yield spike decides whether B2 (`scan-adspend`) is built; the §16a.1
+spike decides whether `tech_follow_gtm` defaults on and whether the Outscraper pull can supply the Meta
+half near-free (I-097).
+
+
+---
+
+## 2026-08-08 — Paid placement: what a signal may CLAIM is decided by which evidence produced it
+
+Found by adversarially reviewing the Slice A/B code before it ran (ISSUES I-099). Two of the three
+defects were the same shape: a derived boolean was true for more than one reason, and the sentence
+built from it named only the most flattering one.
+
+**A signal that can fire from several sources must carry WHICH one fired.** `prospect_is_paying`
+was true for a SERP ad, an LSA, or an `AW-` conversion tag on the prospect's site — and the caller's
+opener said "you're paying for Google Ads on ⟨keyword⟩" in all three cases. The first two were
+measured on that keyword's own SERP. The third was measured on their website, proves only that
+conversion tracking is installed, and is routinely left behind after a campaign stops. So the module
+now carries `paying_evidence` (`serp_ad` | `lsa` | `conversion_tag`) alongside a narrow
+`prospect_paying_this_keyword`, and every surface — the spoken hook, the internal brief, the
+approval-gated client PDF — branches on it. The tag-only path ASKS ("are you paying for clicks your
+competitors get free from the map pack?") rather than asserting. This is the fabrication invariant
+applied one level deeper than "don't invent a competitor": *don't let a true-for-one-reason flag
+license a sentence that names a different reason.*
+
+**A two-sided name match fails in one safe direction and one unsafe one.** The LSA advertiser match
+was bidirectional, so a SHORTER competitor name inside a LONGER prospect name ("AAA Plumbing" inside
+"AAA Plumbing Services" — routine in the trades) both asserted an LSA the prospect does not run and
+deleted a real competitor from the list. `detect_ai_mention` had already chosen the one-directional
+rule for exactly this reason; the paid signal now matches it. The kept direction's failure is a MISS,
+which understates spend — the direction that costs nothing to be wrong in.
+
+**A shared CLI default is not a default, it is an accident waiting for a new command.** `--limit`
+defaulted to 20 for every subcommand, so `scan-tech` — which wants every site — silently covered 20
+of ~1,000 and exited 0. Defaults now belong to the COMMAND (`scan_tech_limit`, `pixel_probe_limit`,
+`legacy_limit`), which is the same principle `resolve_command` already applies to the spend gate:
+the safe value is what you get by omission, and "safe" differs per command (all sites for a free
+scan, a small sample for one that bills). The parser is extracted as `build_parser()` so the
+argparse-to-command seam is testable — the bug shipped because the pure logic was covered and that
+seam was not.
+
+*Consequence:* `likely_represented` no longer counts GTM. It is the only derived flag scoring
+NEGATIVE (−21 Model A / −26 Model B), and GTM is a free tool on a large share of all sites, so
+counting it penalised DIY operators for having a tag manager.

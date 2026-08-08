@@ -194,6 +194,159 @@ def test_build_llm_section_engine_present_false_is_never_visible():
     assert section["engines"][0]["visible"] is False
 
 
+# --- paid placement (the fourth signal) -------------------------------------------------------
+
+
+def _paid_block(advertisers=None, lsa=None):
+    ads = advertisers or []
+    ls = lsa or []
+    return {
+        "ads_present": bool(ads), "lsa_present": bool(ls),
+        "advertisers": ads, "lsa_advertisers": ls, "seen_item_types": ["organic"],
+    }
+
+
+def test_derive_paid_signal_competitor_gap_is_the_pitch():
+    # Rivals paying, prospect not — the highest-value cold-outreach signal (scoring-spec §Buying intent).
+    block = _paid_block(
+        advertisers=[{"domain": "ace.com", "rank": 1, "title": "Ace"},
+                     {"domain": "ace.com", "rank": 2, "title": "Ace dup"},   # deduped by domain
+                     {"domain": "bolt.com", "rank": 3, "title": "Bolt"}],
+        lsa=[{"name": "Reliable Rooter", "rank": 1}],
+    )
+    sig = orep.derive_paid_signal(block, prospect_website="drips.com", prospect_name="Drips Plumbing", max_named=3)
+    assert sig["ads_present"] is True and sig["lsa_present"] is True
+    assert sig["prospect_running_ads"] is False and sig["prospect_running_any"] is False
+    assert [a["domain"] for a in sig["competitor_advertisers"]] == ["ace.com", "bolt.com"]  # deduped, rank-sorted
+    assert sig["advertiser_count"] == 2 and sig["lsa_count"] == 1
+    assert sig["competitors_advertising_gap"] is True
+
+
+def test_derive_paid_signal_prospect_is_the_advertiser_no_gap():
+    # The prospect's OWN domain/name in the ad lists — proven budget, but not the "rivals only" pitch.
+    block = _paid_block(
+        advertisers=[{"domain": "www.drips.com", "rank": 1, "title": "Drips"}],
+        lsa=[{"name": "Drips Plumbing", "rank": 1}],
+    )
+    sig = orep.derive_paid_signal(block, prospect_website="https://drips.com", prospect_name="Drips Plumbing", max_named=3)
+    assert sig["prospect_running_ads"] is True and sig["prospect_running_lsa"] is True
+    assert sig["prospect_running_any"] is True
+    assert sig["competitor_advertisers"] == [] and sig["competitor_lsa"] == []
+    assert sig["competitors_advertising_gap"] is False   # no rival-only gap when the prospect advertises
+
+
+def test_derive_paid_signal_absent_never_manufactures_a_claim():
+    sig = orep.derive_paid_signal(_paid_block(), prospect_website="drips.com", prospect_name="Drips", max_named=3)
+    assert sig["ads_present"] is False and sig["lsa_present"] is False
+    assert sig["competitors_advertising_gap"] is False
+
+
+def test_build_paid_section_not_scanned_when_no_summary_or_no_paid_block():
+    # No organic capture at all.
+    s0 = orep.build_paid_section(None, prospect_website="x.com", prospect_name="X", max_competitors=3)
+    assert s0["status"] == orep.STATUS_NOT_SCANNED and s0["signal"] == orep.SIGNAL_PAID
+    # A capture that predates paid parsing (no "paid" key) is honestly not_scanned, never "no ads".
+    s1 = orep.build_paid_section({"results": []}, prospect_website="x.com", prospect_name="X", max_competitors=3)
+    assert s1["status"] == orep.STATUS_NOT_SCANNED
+
+
+def test_lsa_match_is_one_directional_regression():
+    """REGRESSION: a bidirectional substring match made a SHORTER competitor name inside a LONGER
+    prospect name read as the prospect — asserting an LSA they don't run AND deleting a real
+    competitor. Both are fabrications; the match is one-directional now."""
+    block = _paid_block(lsa=[{"name": "AAA Plumbing", "rank": 1}, {"name": "Speedy Rooter", "rank": 2}])
+    sig = orep.derive_paid_signal(
+        block, prospect_website="aaaplumbingservices.com",
+        prospect_name="AAA Plumbing Services", max_named=3,
+    )
+    assert sig["prospect_running_lsa"] is False          # they run NO LSA
+    assert sig["prospect_is_paying"] is False
+    assert [c["name"] for c in sig["competitor_lsa"]] == ["AAA Plumbing", "Speedy Rooter"]
+    assert sig["competitors_advertising_gap"] is True    # the real pitch survives
+
+
+def test_lsa_match_still_catches_the_prospects_longer_legal_name():
+    # The kept direction: the LSA lists a longer name than the GBP one.
+    block = _paid_block(lsa=[{"name": "Drips Plumbing & Sons LLC", "rank": 1}])
+    sig = orep.derive_paid_signal(
+        block, prospect_website="drips.com", prospect_name="Drips Plumbing", max_named=3)
+    assert sig["prospect_running_lsa"] is True and sig["competitor_lsa"] == []
+
+
+def _tech(**over):
+    base = {"fetch_status": "ok", "meta_pixel": False, "google_ads_conversion": False,
+            "vendor_tags": [], "gtm_container_ids": []}
+    base.update(over)
+    return base
+
+
+def test_derive_paid_signal_folds_site_tech_additively():
+    # No SERP ads, but the prospect's own site carries an AW conversion tag + two vendor tags.
+    block = _paid_block()
+    sig = orep.derive_paid_signal(
+        block, prospect_website="drips.com", prospect_name="Drips", max_named=3,
+        tech=_tech(google_ads_conversion=True, meta_pixel=True, vendor_tags=["callrail", "podium"]),
+    )
+    assert sig["tech_measured"] is True
+    assert sig["prospect_ad_conversion_tag"] is True and sig["prospect_meta_pixel"] is True
+    assert sig["prospect_vendor_tags"] == ["callrail", "podium"]
+    assert sig["prospect_likely_represented"] is True          # 2 vendor signals
+    # An AW tag means they're paying — the broad "is paying" read used by the losing pitch.
+    assert sig["prospect_is_paying"] is True
+    # Slice-A SERP semantics are untouched: no SERP ad block -> these stay false.
+    assert sig["prospect_running_ads"] is False
+
+
+def test_derive_paid_signal_failed_tech_fetch_is_unknown_not_absent():
+    # A failed fetch must contribute nothing — unknown never reads as "no ad tech".
+    sig = orep.derive_paid_signal(
+        _paid_block(), prospect_website="drips.com", prospect_name="Drips", max_named=3,
+        tech=_tech(fetch_status="unreachable", google_ads_conversion=True),  # booleans ignored
+    )
+    assert sig["tech_measured"] is False
+    assert sig["prospect_ad_conversion_tag"] is False and sig["prospect_is_paying"] is False
+
+
+def test_build_paid_section_includes_tech():
+    summary = {"results": [], "paid": _paid_block()}
+    section = orep.build_paid_section(
+        summary, prospect_website="drips.com", prospect_name="Drips", max_competitors=3,
+        tech=_tech(meta_pixel=True),
+    )
+    assert section["status"] == orep.STATUS_MEASURED
+    assert section["prospect_meta_pixel"] is True
+
+
+def test_build_paid_section_measured_carries_the_signal():
+    summary = {"results": [], "paid": _paid_block(advertisers=[{"domain": "ace.com", "rank": 1, "title": "Ace"}])}
+    section = orep.build_paid_section(summary, prospect_website="drips.com", prospect_name="Drips", max_competitors=3)
+    assert section["status"] == orep.STATUS_MEASURED and section["signal"] == orep.SIGNAL_PAID
+    assert section["competitors_advertising_gap"] is True
+
+
+def test_client_paid_html_states_the_gap_and_escapes():
+    section = orep.build_paid_section(
+        {"results": [], "paid": _paid_block(advertisers=[{"domain": "ace.com", "rank": 1, "title": "Ace"}])},
+        prospect_website="drips.com", prospect_name="Drips", max_competitors=3,
+    )
+    doc = _report_doc({"status": "not_measured", "signal": "maps"},
+                      orep.not_scanned_section(orep.SIGNAL_ORGANIC, "x"),
+                      orep.not_scanned_section(orep.SIGNAL_LLM, "x"), paid=section)
+    html = orep.render_client_report_html(doc, agency_name="Amazing Rankings")
+    assert "buying the customers you" in html   # the competitor-gap pitch copy
+    assert "ace.com" in html and "Google Ads" in html
+
+
+def test_client_paid_html_no_ads_is_a_finding():
+    section = orep.build_paid_section({"results": [], "paid": _paid_block()},
+                                      prospect_website="drips.com", prospect_name="Drips", max_competitors=3)
+    doc = _report_doc({"status": "not_measured", "signal": "maps"},
+                      orep.not_scanned_section(orep.SIGNAL_ORGANIC, "x"),
+                      orep.not_scanned_section(orep.SIGNAL_LLM, "x"), paid=section)
+    html = orep.render_client_report_html(doc, agency_name="Amazing Rankings")
+    assert "still won on merit" in html
+
+
 def _prospect():
     return {"id": "p1", "name": "Drips Plumbing", "category": "plumber", "phone": "+1",
             "website": "", "address": "1 Main St", "rating": 4.1, "review_count": 4}
@@ -211,14 +364,16 @@ def test_build_report_shape_and_client_draft_gate():
         justification=justification, maps_section=maps,
         organic_section=orep.not_scanned_section(orep.SIGNAL_ORGANIC, "staged"),
         llm_section=orep.not_scanned_section(orep.SIGNAL_LLM, "staged"),
+        paid_section=orep.not_scanned_section(orep.SIGNAL_PAID, "staged"),
         heatmap_available=True,
     )
     assert report["measured"] is True
     assert report["identity"]["name"] == "Drips Plumbing"
     assert report["signals"]["maps"]["status"] == orep.STATUS_MEASURED
-    # Organic and LLM are explicit not_scanned blocks — never an empty table.
+    # Organic, LLM and paid are explicit not_scanned blocks — never an empty table.
     assert report["signals"]["organic"]["status"] == orep.STATUS_NOT_SCANNED
     assert report["signals"]["llm"]["status"] == orep.STATUS_NOT_SCANNED
+    assert report["signals"]["paid"]["status"] == orep.STATUS_NOT_SCANNED
     # The client-facing face is a DRAFT, unapproved, until the approval slice lands.
     assert report["client_facing"]["approved"] is False
     # The hook is reused verbatim from the justification, not re-derived.
@@ -232,6 +387,7 @@ def test_build_report_reflects_approval():
         maps_section={"status": "measured"},
         organic_section=orep.not_scanned_section(orep.SIGNAL_ORGANIC, "x"),
         llm_section=orep.not_scanned_section(orep.SIGNAL_LLM, "x"),
+        paid_section=orep.not_scanned_section(orep.SIGNAL_PAID, "x"),
         heatmap_available=False,
     )
     draft = orep.build_report(**base)
@@ -246,10 +402,11 @@ def test_build_report_reflects_approval():
 # --- render_client_report_html ----------------------------------------------------------------
 
 
-def _report_doc(maps, organic, llm, name="Drips Plumbing"):
+def _report_doc(maps, organic, llm, name="Drips Plumbing", paid=None):
     return {
         "identity": {"name": name}, "keyword": "plumber", "submarket": "Van Nuys",
-        "signals": {"maps": maps, "organic": organic, "llm": llm},
+        "signals": {"maps": maps, "organic": organic, "llm": llm,
+                    "paid": paid if paid is not None else orep.not_scanned_section(orep.SIGNAL_PAID, "x")},
     }
 
 
@@ -291,8 +448,8 @@ def test_render_client_report_html_not_scanned_blocks_never_empty_tables():
         ),
         agency_name="Amazing Rankings",
     )
-    # Three "will be added" placeholders, no fabricated competitor rows.
-    assert html.count("will be added") == 3
+    # Four "will be added" placeholders (maps, organic, llm, paid), no fabricated competitor rows.
+    assert html.count("will be added") == 4
     assert "<tbody>" not in html
 
 
@@ -303,6 +460,65 @@ def test_build_report_deterministic():
         maps_section={"status": "measured"},
         organic_section=orep.not_scanned_section(orep.SIGNAL_ORGANIC, "x"),
         llm_section=orep.not_scanned_section(orep.SIGNAL_LLM, "x"),
+        paid_section=orep.not_scanned_section(orep.SIGNAL_PAID, "x"),
         heatmap_available=False,
     )
     assert orep.build_report(**kwargs) == orep.build_report(**kwargs)
+
+
+def test_paying_evidence_separates_measured_spend_from_a_site_tag():
+    """A conversion tag proves tracking is installed, NOT that they bid on this keyword. The two
+    must be distinguishable, or a prospect-facing sentence claims unmeasured spend."""
+    # Tag only, no ad in this SERP's paid block.
+    tag_only = orep.derive_paid_signal(
+        _paid_block(), prospect_website="drips.com", prospect_name="Drips", max_named=3,
+        tech=_tech(google_ads_conversion=True))
+    assert tag_only["paying_evidence"] == "conversion_tag"
+    assert tag_only["prospect_is_paying"] is True           # broad read
+    assert tag_only["prospect_paying_this_keyword"] is False  # NOT measured on this keyword
+
+    # Measured in this SERP's paid block.
+    in_serp = orep.derive_paid_signal(
+        _paid_block(advertisers=[{"domain": "drips.com", "rank": 1, "title": "Drips"}]),
+        prospect_website="drips.com", prospect_name="Drips", max_named=3,
+        tech=_tech(google_ads_conversion=True))
+    assert in_serp["paying_evidence"] == "serp_ad"
+    assert in_serp["prospect_paying_this_keyword"] is True
+
+    # LSA beats the tag as evidence.
+    lsa = orep.derive_paid_signal(
+        _paid_block(lsa=[{"name": "Drips Plumbing", "rank": 1}]),
+        prospect_website="drips.com", prospect_name="Drips Plumbing", max_named=3,
+        tech=_tech(google_ads_conversion=True))
+    assert lsa["paying_evidence"] == "lsa" and lsa["prospect_paying_this_keyword"] is True
+
+    # Nothing at all.
+    assert orep.derive_paid_signal(_paid_block(), prospect_website="d.com",
+                                   prospect_name="D", max_named=3)["paying_evidence"] is None
+
+
+def test_likely_represented_needs_two_vendor_tags_not_gtm():
+    """REGRESSION: GTM is a free, near-universal Google tool, so counting it as an agency signal
+    flagged DIY operators. `likely_represented` is the one derived flag that scores NEGATIVE."""
+    gtm_plus_one = orep.derive_paid_signal(
+        _paid_block(), prospect_website="d.com", prospect_name="Drips", max_named=3,
+        tech=_tech(vendor_tags=["callrail"], gtm_container_ids=["GTM-A1"]))
+    assert gtm_plus_one["prospect_likely_represented"] is False
+    two_vendors = orep.derive_paid_signal(
+        _paid_block(), prospect_website="d.com", prospect_name="Drips", max_named=3,
+        tech=_tech(vendor_tags=["callrail", "podium"]))
+    assert two_vendors["prospect_likely_represented"] is True
+
+
+def test_client_pdf_does_not_claim_keyword_spend_from_a_site_tag():
+    section = orep.build_paid_section(
+        {"results": [], "paid": _paid_block(advertisers=[{"domain": "ace.com", "rank": 1, "title": "Ace"}])},
+        prospect_website="drips.com", prospect_name="Drips", max_competitors=3,
+        tech=_tech(google_ads_conversion=True))
+    html = orep.render_client_report_html(
+        _report_doc({"status": "not_measured", "signal": "maps"},
+                    orep.not_scanned_section(orep.SIGNAL_ORGANIC, "x"),
+                    orep.not_scanned_section(orep.SIGNAL_LLM, "x"), paid=section),
+        agency_name="AR")
+    assert "You’re paying to advertise for" not in html      # the unmeasured claim
+    assert "conversion tracking" in html                     # what was actually observed

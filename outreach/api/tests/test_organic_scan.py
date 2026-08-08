@@ -14,6 +14,7 @@ from api.services.organic_scan import (
     build_organic_task,
     domain_of,
     parse_organic_serp,
+    summarize_paid,
     summarize_serp,
 )
 
@@ -106,3 +107,64 @@ def test_summarize_serp_is_json_ready():
     assert summary["engine"] == "google_organic"
     assert summary["captured_depth"] == 20
     assert summary["results"] == [{"rank": 1, "domain": "bolt.com", "url": "u", "title": "Bolt"}]
+    # No paid items -> the block still exists, presence flags false (absence is a finding, not a gap).
+    assert summary["paid"] == {
+        "ads_present": False, "lsa_present": False,
+        "advertisers": [], "lsa_advertisers": [], "seen_item_types": ["organic"],
+    }
+
+
+# --- paid placement (the fourth signal) -------------------------------------------------------
+
+
+def test_parse_organic_serp_extracts_paid_ads_from_the_same_response():
+    # The paid items ride the SAME response the organic parse already reads — no new call.
+    body = _serp_body([
+        {"type": "paid", "rank_absolute": 1, "domain": "AcePlumbing.com", "url": "https://ace.com/x", "title": "Ace — Ad"},
+        {"type": "organic", "rank_absolute": 1, "domain": "bolt.com"},
+        {"type": "paid", "rank_group": 2, "url": "https://boltrooter.com/lp", "title": "Bolt Ad"},  # domain from url
+    ])
+    serp = parse_organic_serp(body)
+    assert [(p.rank, p.domain, p.title) for p in serp.paid_results] == [
+        (1, "aceplumbing.com", "Ace — Ad"),
+        (2, "boltrooter.com", "Bolt Ad"),   # domain recovered from the ad URL
+    ]
+    assert serp.seen_item_types == ("paid", "organic")
+
+
+def test_parse_organic_serp_extracts_lsa_flat_and_nested():
+    flat = _serp_body([
+        {"type": "local_services", "rank_absolute": 1, "title": "Reliable Rooter"},
+    ])
+    assert [(l.name, l.rank) for l in parse_organic_serp(flat).lsa_results] == [("Reliable Rooter", 1)]
+
+    nested = _serp_body([
+        {"type": "local_services", "rank_absolute": 1, "items": [
+            {"title": "Reliable Rooter", "rank_absolute": 1},
+            {"title": "Speedy Plumbing", "rank_absolute": 2},
+        ]},
+    ])
+    serp = parse_organic_serp(nested)
+    assert [(l.name, l.rank) for l in serp.lsa_results] == [("Reliable Rooter", 1), ("Speedy Plumbing", 2)]
+    assert serp.lsa_results and serp.results == []  # LSA is not an organic competitor
+
+
+def test_summarize_paid_presence_and_advertisers():
+    body = _serp_body([
+        {"type": "paid", "rank_absolute": 1, "domain": "ace.com", "title": "Ace"},
+        {"type": "local_services", "rank_absolute": 1, "items": [{"title": "Reliable Rooter"}]},
+    ])
+    paid = summarize_paid(parse_organic_serp(body))
+    assert paid["ads_present"] is True
+    assert paid["lsa_present"] is True
+    assert paid["advertisers"] == [{"domain": "ace.com", "rank": 1, "title": "Ace"}]
+    assert paid["lsa_advertisers"] == [{"name": "Reliable Rooter", "rank": 1}]
+    assert "local_services" in paid["seen_item_types"]
+
+
+def test_summarize_paid_absent_is_a_finding_not_a_gap():
+    paid = summarize_paid(parse_organic_serp(_serp_body([{"type": "organic", "rank_absolute": 1, "domain": "x.com"}])))
+    assert paid == {
+        "ads_present": False, "lsa_present": False,
+        "advertisers": [], "lsa_advertisers": [], "seen_item_types": ["organic"],
+    }

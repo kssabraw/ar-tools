@@ -812,20 +812,33 @@ In rough value order:
     from the pack +50, Google Ads + no organic/pack +46, est. ad spend >$2k/mo +66** — because a
     business *paying to solve the visibility problem while still losing organically* has proven budget
     AND intent, which is the ideal cold-outreach target. Two slices, cheapest first:
-    - **Slice A — paid-placement PRESENCE (cheap; reuses data we already pay for).** The `scan-organic`
-      capture already stores the FULL DataForSEO SERP response in `serp_result.payload`, and that
-      response CONTAINS the paid-ads items — the parser (`organic_scan.parse_organic_serp`) simply
-      discards everything that is not `type=="organic"`/`"ai_overview"`. So "is this business / are its
-      competitors running **Google Ads** for this keyword" is parseable from data already on disk, with
-      NO new call. **LSA / Google Guaranteed** is a distinct DataForSEO SERP element (its item type must
-      be confirmed against a live response — measure-don't-infer); it may ride the same organic call or
-      need a targeted one. Surface as a **fourth report signal ("Paid placement")** in the report + the
-      call hook, and persist the presence flags so the Phase-4 scorer can read them.
-    - **Slice B — the MONEY SIGNAL (bigger; the site-fetch enrichment layer).** Ad-spend MAGNITUDE
-      (>$2k/mo bands) and pixel/tag detection (Meta pixel, `AW-` conversion tags, GTM container contents
-      — PRD §B3, §16a.1) need fetching the prospect's site and reading its tags. A genuine unbuilt
-      component (the "money signal"); I-003/§16a.1 flag the open question of whether GTM-injected pixels
-      require the container fetch. Do Slice A first; Slice B is its own build.
+    - **Slice A — paid-placement PRESENCE — BUILT 2026-08-08 (draft PR).** The `scan-organic` capture
+      already stores the FULL DataForSEO SERP response in `serp_result.payload`; the parser
+      (`organic_scan.parse_organic_serp`) used to discard everything not `organic`/`ai_overview`. It now
+      also collects `type=="paid"` (**Google Ads**) and `type∈{local_services,…}` (**LSA / Google
+      Guaranteed**) from the SAME response — Google-Ads presence is derived from data already on disk
+      with NO new call. `summarize_serp` writes a `paid` block into `payload_summary` (advertisers by
+      domain, LSA by name, + `seen_item_types` for measure-don't-infer). The per-prospect facts
+      (`outreach_report.derive_paid_signal`, pure) feed a **fourth report signal ("Paid placement")** in
+      both report faces + a `paid` talking point in the call hook ("rivals are paying for this search and
+      you're not" — the §Buying-intent pitch). Persisted in `payload_summary` keyed to the snapshot (no
+      migration — mirrors the organic signal; the per-prospect flag is a read-time domain/name match).
+      **LSA item type is unconfirmed against this account's organic response (I-096)** — parsed
+      tolerantly + logged on first run; if LSA needs its own endpoint, a gated `scan-lsa` is the additive
+      follow-up. Stored + shown, NOT scored until the Phase-4 scorer exists.
+    - **Slice B — the MONEY SIGNAL. Designed + B1 BUILT 2026-08-08; B2 gated behind a yield spike.**
+      Full design: `docs/paid-placement-slice-b-design-v0_1.md`. Splits into two providers with opposite
+      cost profiles: **B1 tech/tag PRESENCE** (Meta pixel, `AW-` conversion tag, GTM container,
+      CallRail/Podium/Birdeye) from a **free** direct site fetch (PRD §B3) — **BUILT** (`scan-tech`, NOT
+      in PAID_COMMANDS; `services/tech_signals.py` pure + `scan_tech.py` producer + migration
+      `20260808200000_prospect_tech_signal` applied live; a failed fetch stores `unknown`, never
+      `absent`; GTM container-follow behind `tech_follow_gtm`, off until §16a.1 decides — I-097). **B2
+      ad-spend MAGNITUDE** (>$2k/mo bands) from DataForSEO Labs — **PAID and DEFERRED** behind a yield
+      spike (Labs paid data is likely sparse for small local advertisers — I-098; Labs endpoints added to
+      the free probe set). The **§16a.1 pixel spike** (`probe-pixel-field`, gated) is built to decide
+      whether the Outscraper pull supplies the Meta half near-free. Surfaced: a new **"paying and losing"**
+      call-hook element (proven budget + a visible problem — the strongest pitch) + the prospect's own ad
+      tech in the report, both folded ADDITIVELY into the paid signal (Slice A semantics unchanged).
     Both are Phase-4 scoring inputs; until the scorer exists they are stored + shown, not scored. Same
     invariants as the three signals it joins: deterministic + fact-grounded (never assert an ad that is
     not in the response), paid runs gated, tests, DECISIONS/ISSUES entries.
@@ -849,6 +862,10 @@ check on the scan path and a durable `recovered_by_tag` are still worth revisiti
 to block, organic + AI, are merged.)
 
 **The owner's stated next build is 3a — paid placement (Google Ads / LSA).** Requested 2026-08-08.
+**Slice A (presence) is BUILT 2026-08-08** (draft PR — parses paid/LSA from the already-captured
+organic response, fourth report signal + call-hook talking point, no new paid call for Google Ads;
+I-096 flags the unconfirmed LSA item type). **Slice B (the money signal — spend magnitude + pixel/tag
+site-fetch, PRD §B3/§16a.1) remains its own build.**
 
 **Not on the list, because it is done:** ingest + filter (Phase 1), the lead CRM board and
 one-click promote (Phase 1b, #574), the scan producer/consumer/rollup/placeholder-score, the

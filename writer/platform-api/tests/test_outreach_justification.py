@@ -239,6 +239,90 @@ def test_build_listing_gaps():
     assert "closed temporarily" in status["text"]
 
 
+def test_build_paid_talking_point_fires_on_the_competitor_gap():
+    # Rivals paying for the search the prospect is invisible on — the scoring-spec §Buying-intent pitch.
+    paid = {
+        "ads_present": True, "lsa_present": True, "prospect_running_ads": False,
+        "prospect_running_lsa": False, "prospect_running_any": False,
+        "competitor_advertisers": [{"domain": "ace.com", "rank": 1, "title": "Ace"}],
+        "competitor_lsa": [{"name": "Reliable Rooter", "rank": 1}],
+        "advertiser_count": 1, "lsa_count": 1, "competitors_advertising_gap": True,
+    }
+    result = oj.build_justification(
+        prospect=_prospect(), keyword="plumber", submarket="Van Nuys", snapshot=_SNAP,
+        coverage=None, live_points=10, competitors=_NO_COMP,
+        field_reviews={"median": None, "sample": 0}, field_min_sample=5, pack_size=3, paid=paid,
+    )
+    assert oj.ELEM_PAID in result["available_elements"]
+    point = next(p for p in result["talking_points"] if p["element"] == oj.ELEM_PAID)
+    # LSA names lead over bare ad domains; the "2 in all" count is stated.
+    assert "Reliable Rooter" in point["text"]
+    assert "2 competitors" in point["text"]
+    assert point["facts"]["advertiser_count"] == 1
+
+
+def test_build_no_paid_point_when_prospect_is_the_advertiser():
+    # A prospect who IS advertising has no "rivals only" gap — the scorer owns that signal, not the hook.
+    paid = {
+        "ads_present": True, "lsa_present": False, "prospect_running_ads": True,
+        "prospect_running_lsa": False, "prospect_running_any": True,
+        "competitor_advertisers": [], "competitor_lsa": [],
+        "advertiser_count": 0, "lsa_count": 0, "competitors_advertising_gap": False,
+    }
+    result = oj.build_justification(
+        prospect=_prospect(), keyword="plumber", submarket="Van Nuys", snapshot=_SNAP,
+        coverage=None, live_points=10, competitors=_NO_COMP,
+        field_reviews={"median": None, "sample": 0}, field_min_sample=5, pack_size=3, paid=paid,
+    )
+    assert oj.ELEM_PAID not in result["available_elements"]
+
+
+def test_build_paying_and_losing_is_the_lead_hook():
+    # Prospect IS paying (AW tag / SERP paid / LSA) AND invisible -> the strongest opener.
+    paid = {
+        "ads_present": True, "lsa_present": False, "prospect_running_ads": True,
+        "prospect_running_lsa": False, "prospect_running_any": True, "prospect_is_paying": True,
+        "prospect_paying_this_keyword": True, "paying_evidence": "serp_ad",
+        "prospect_ad_conversion_tag": True, "competitor_advertisers": [], "competitor_lsa": [],
+        "advertiser_count": 0, "lsa_count": 0, "competitors_advertising_gap": False,
+    }
+    result = oj.build_justification(
+        prospect=_prospect(), keyword="plumber", submarket="Van Nuys", snapshot=_SNAP,
+        coverage=None, live_points=12, competitors=_NO_COMP,     # coverage None -> invisible everywhere
+        field_reviews={"median": None, "sample": 0}, field_min_sample=5, pack_size=3, paid=paid,
+    )
+    assert oj.ELEM_PAYING in result["available_elements"]
+    # It outranks coverage as the hook, and the spoken hook agrees (leads with the paying pitch).
+    assert result["hook_element"] == oj.ELEM_PAYING
+    assert "paying for Google Ads" in result["hook"]
+    assert "getting for free" in result["hook"]
+    point = next(p for p in result["talking_points"] if p["element"] == oj.ELEM_PAYING)
+    assert point["facts"]["invisible_everywhere"] is True
+
+
+def test_build_paying_but_not_losing_does_not_fire():
+    # Paying AND good coverage (present, low deficit) -> no "losing" pitch.
+    paid = {"prospect_is_paying": True, "prospect_running_lsa": False}
+    coverage = {"coverage_pct": 90.0, "points_present": 9, "live_points": 10,
+                "best_rank": 1, "worst_rank": 3, "avg_rank": 1.5, "centroid_dist_at_loss": None}
+    result = oj.build_justification(
+        prospect=_prospect(), keyword="plumber", submarket="Van Nuys", snapshot=_SNAP,
+        coverage=coverage, live_points=10, competitors=_NO_COMP,
+        field_reviews={"median": None, "sample": 0}, field_min_sample=5, pack_size=3, paid=paid,
+    )
+    assert oj.ELEM_PAYING not in result["available_elements"]
+    assert "paying for" not in result["hook"]
+
+
+def test_build_no_paid_point_when_signal_absent():
+    result = oj.build_justification(
+        prospect=_prospect(), keyword="plumber", submarket="Van Nuys", snapshot=_SNAP,
+        coverage=None, live_points=10, competitors=_NO_COMP,
+        field_reviews={"median": None, "sample": 0}, field_min_sample=5, pack_size=3, paid=None,
+    )
+    assert oj.ELEM_PAID not in result["available_elements"]
+
+
 def test_build_is_deterministic():
     coverage = {"coverage_pct": 30.0, "points_present": 3, "live_points": 10,
                 "best_rank": 2, "worst_rank": 8, "avg_rank": 4.67, "centroid_dist_at_loss": 2.5}
@@ -270,3 +354,56 @@ def test_not_measured():
     assert result["measured"] is False
     assert result["talking_points"] == []
     assert "Not measured" in result["message"]
+
+
+def test_a_site_tag_alone_never_claims_keyword_spend_regression():
+    """REGRESSION: an `AW-` tag on the prospect's SITE produced the spoken line "you're paying for
+    Google Ads" about a keyword whose SERP showed no ad from them. The tag proves tracking is
+    installed, not that they bid on this term — and tags routinely outlive the campaigns that placed
+    them, so the claim is falsifiable in one sentence on the call."""
+    paid = {
+        "ads_present": False, "lsa_present": False, "prospect_running_ads": False,
+        "prospect_running_lsa": False, "prospect_running_any": False,
+        "prospect_is_paying": True, "prospect_paying_this_keyword": False,
+        "paying_evidence": "conversion_tag", "prospect_ad_conversion_tag": True,
+        "competitor_advertisers": [], "competitor_lsa": [],
+        "advertiser_count": 0, "lsa_count": 0, "competitors_advertising_gap": False,
+    }
+    result = oj.build_justification(
+        prospect=_prospect(), keyword="emergency plumber", submarket="Los Angeles", snapshot=_SNAP,
+        coverage=None, live_points=81, competitors=_NO_COMP,
+        field_reviews={"median": None, "sample": 0}, field_min_sample=5, pack_size=3, paid=paid,
+    )
+    # It still fires (proven budget somewhere + measured invisibility) …
+    assert result["hook_element"] == oj.ELEM_PAYING
+    # … but it ASKS about spend rather than asserting it on this keyword.
+    assert "you're paying for Google Ads" not in result["hook"]
+    assert "conversion tracking" in result["hook"] and result["hook"].rstrip().endswith("?")
+    point = next(p for p in result["talking_points"] if p["element"] == oj.ELEM_PAYING)
+    assert "Running Google Ads conversion tracking" in point["text"]
+    assert point["facts"]["paying_evidence"] == "conversion_tag"
+
+
+def test_lsa_evidence_names_the_lsa_channel():
+    paid = {"prospect_is_paying": True, "prospect_paying_this_keyword": True,
+            "paying_evidence": "lsa", "prospect_running_lsa": True, "prospect_running_ads": False}
+    result = oj.build_justification(
+        prospect=_prospect(), keyword="plumber", submarket="Van Nuys", snapshot=_SNAP,
+        coverage=None, live_points=10, competitors=_NO_COMP,
+        field_reviews={"median": None, "sample": 0}, field_min_sample=5, pack_size=3, paid=paid,
+    )
+    assert "a Local Services ad" in result["hook"]
+
+
+def test_losing_deficit_threshold_is_configurable():
+    paid = {"prospect_is_paying": True, "paying_evidence": "serp_ad",
+            "prospect_paying_this_keyword": True, "prospect_running_lsa": False}
+    coverage = {"coverage_pct": 70.0, "points_present": 7, "live_points": 10,
+                "best_rank": 1, "worst_rank": 5, "avg_rank": 2.0, "centroid_dist_at_loss": None}
+    kw = dict(prospect=_prospect(), keyword="plumber", submarket="Van Nuys", snapshot=_SNAP,
+              coverage=coverage, live_points=10, competitors=_NO_COMP,
+              field_reviews={"median": None, "sample": 0}, field_min_sample=5, pack_size=3, paid=paid)
+    # 30% deficit: below the default 50 bar -> not "losing".
+    assert oj.ELEM_PAYING not in oj.build_justification(**kw)["available_elements"]
+    # A stricter bar makes the same scan qualify.
+    assert oj.ELEM_PAYING in oj.build_justification(**kw, losing_deficit_pct=25.0)["available_elements"]

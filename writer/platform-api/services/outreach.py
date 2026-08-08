@@ -1341,7 +1341,94 @@ def _resolve_place_names(client: Any, place_ids: list[str]) -> dict[str, str]:
     return names
 
 
-def prospect_justification(prospect_id: str, snapshot_id: str | None = None) -> dict[str, Any]:
+def _organic_summary_for(
+    client: Any, snapshot_id: str, cache: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
+    """The stored `serp_result.payload_summary` for a snapshot's organic capture, or None. This is
+    the read the organic AND paid-placement signals both come off (paid rides the organic capture —
+    outreach HANDOFF §12 item 3a). Best-effort: a missing table / cold-dropped row returns None so
+    the report and hook still assemble without those sections.
+
+    `cache` is an optional per-request memo. `prospect_report` calls `prospect_justification`, and
+    both need this row — without the memo one report render makes the same cross-region round trip
+    twice. The cache is passed in (never module state) so it lives exactly as long as one request.
+    """
+    key = f"serp:{snapshot_id}"
+    if cache is not None and key in cache:
+        return cache[key]
+    try:
+        rows = (
+            client.table("serp_result")
+            .select("payload_summary")
+            .eq("snapshot_id", snapshot_id)
+            .eq("engine", "google_organic")
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        summary = rows[0].get("payload_summary") if rows else None
+        if cache is not None:
+            cache[key] = summary
+        return summary
+    except Exception as exc:  # noqa: BLE001 — the report stands without the organic/paid section
+        logger.warning("outreach_report_organic_unavailable", extra={"error": str(exc)})
+        return None
+
+
+def _latest_tech_signal(
+    client: Any, prospect_id: str, cache: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
+    """The most recent `prospect_tech_signal` row for a prospect (Slice B1 site ad tech), or None.
+    Best-effort — before the migration is applied / before `scan-tech` has run, returns None so the
+    paid signal degrades to Slice A's SERP-only read. `cache` is the same per-request memo
+    `_organic_summary_for` takes, for the same reason (the report reads this twice otherwise)."""
+    key = f"tech:{prospect_id}"
+    if cache is not None and key in cache:
+        return cache[key]
+    try:
+        rows = (
+            client.table("prospect_tech_signal")
+            .select("fetch_status, meta_pixel, google_ads_conversion, vendor_tags, gtm_container_ids")
+            .eq("prospect_id", prospect_id)
+            .order("fetched_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        row = rows[0] if rows else None
+        if cache is not None:
+            cache[key] = row
+        return row
+    except Exception as exc:  # noqa: BLE001 — the paid signal stands on the SERP read alone
+        logger.warning("outreach_tech_signal_unavailable", extra={"error": str(exc)})
+        return None
+
+
+def _paid_signal_for(
+    client: Any, orep: Any, snapshot_id: str, prospect: dict[str, Any], *, max_named: int,
+    cache: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """The derived paid-placement facts for one prospect, or None when no organic scan has run.
+    Threads the stored SERP summary (Slice A) AND the latest site tech signal (Slice B1) through the
+    pure `derive_paid_signal`, so a justification's paid talking point and the report's paid section
+    read one source of truth."""
+    summary = _organic_summary_for(client, snapshot_id, cache)
+    if not summary or "paid" not in summary:
+        return None
+    return orep.derive_paid_signal(
+        summary.get("paid"),
+        prospect_website=prospect.get("website"),
+        prospect_name=prospect.get("name"),
+        max_named=max_named,
+        tech=_latest_tech_signal(client, prospect["id"], cache),
+    )
+
+
+def prospect_justification(
+    prospect_id: str, snapshot_id: str | None = None, _cache: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Assemble the deterministic call-hook justification for one prospect.
 
     Reads-only: the prospect + submarket, the latest rolled-up coverage, the map-pack competitors
@@ -1352,6 +1439,7 @@ def prospect_justification(prospect_id: str, snapshot_id: str | None = None) -> 
     """
     from config import settings
     from services import outreach_justification as oj
+    from services import outreach_report as orep
 
     client = get_outreach_client()
 
@@ -1457,6 +1545,14 @@ def prospect_justification(prospect_id: str, snapshot_id: str | None = None) -> 
     ) if submarket_id else []
     field_reviews = oj.field_review_stats(field_rows)
 
+    # Paid-placement signal (outreach HANDOFF §12 item 3a): the organic capture for this snapshot
+    # already carries the paid ads. Derive the prospect's paid facts so a "competitors are buying
+    # this search and you're not" talking point can fire. Best-effort — no organic scan / no serp
+    # row → no paid talking point (never a fabricated ad).
+    paid_signal = _paid_signal_for(client, orep, snapshot["id"], prospect,
+                                   max_named=settings.outreach_justification_max_competitors,
+                                   cache=_cache)
+
     return oj.build_justification(
         prospect=prospect,
         keyword=keyword,
@@ -1468,6 +1564,8 @@ def prospect_justification(prospect_id: str, snapshot_id: str | None = None) -> 
         field_reviews=field_reviews,
         field_min_sample=settings.outreach_field_review_min_sample,
         pack_size=pack_size,
+        paid=paid_signal,
+        losing_deficit_pct=settings.outreach_paying_losing_deficit_pct,
     )
 
 
@@ -1702,13 +1800,20 @@ def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[st
         if sub:
             submarket_name = sub[0]["name"]
 
-    justification = prospect_justification(prospect_id, snapshot_id)
+    # One memo per report render: prospect_justification and the sections below read the same
+    # serp_result / prospect_tech_signal rows, and this database is a second Supabase project in
+    # another region — paying for those round trips twice per report is pure waste.
+    cache: dict[str, Any] = {}
+    justification = prospect_justification(prospect_id, snapshot_id, cache)
     llm = _llm_section(client, orep, prospect, submarket_name, keyword=None)
     approval = _latest_report_approval(client, prospect_id)
 
     if not justification.get("measured"):
         organic = orep.not_scanned_section(
             orep.SIGNAL_ORGANIC, "The organic-search scan hasn't run for this prospect yet."
+        )
+        paid = orep.not_scanned_section(
+            orep.SIGNAL_PAID, "The paid-placement scan hasn't run for this prospect yet."
         )
         maps_section = {"status": orep.STATUS_NOT_MEASURED, "signal": orep.SIGNAL_MAPS}
         return orep.build_report(
@@ -1719,6 +1824,7 @@ def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[st
             maps_section=maps_section,
             organic_section=organic,
             llm_section=llm,
+            paid_section=paid,
             heatmap_available=False,
             approval=approval,
         )
@@ -1732,28 +1838,22 @@ def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[st
     # the primary keyword for the not-measured path).
     llm = _llm_section(client, orep, prospect, prov.get("submarket") or submarket_name, keyword=keyword)
 
-    # Organic-SERP signal (increment 2): the stored capture for this snapshot, if the organic scan
-    # has run for it. Absent → the builder returns a not_scanned block (never an empty table).
-    organic_summary = None
-    try:
-        serp_rows = (
-            client.table("serp_result")
-            .select("payload_summary")
-            .eq("snapshot_id", snap_id)
-            .eq("engine", "google_organic")
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-        if serp_rows:
-            organic_summary = serp_rows[0].get("payload_summary")
-    except Exception as exc:  # noqa: BLE001 — the report stands without the organic section
-        logger.warning("outreach_report_organic_unavailable", extra={"error": str(exc)})
+    # Organic-SERP signal (increment 2) + paid-placement signal (increment/slice A): the stored
+    # capture for this snapshot, if the organic scan has run for it. The paid ads ride the SAME
+    # capture (outreach HANDOFF §12 item 3a), so one read feeds both. Absent → each builder returns
+    # a not_scanned block (never an empty table that would read as "no competitors / no ads").
+    organic_summary = _organic_summary_for(client, snap_id, cache)
     organic = orep.build_organic_section(
         organic_summary,
         prospect_website=prospect.get("website"),
         max_competitors=settings.outreach_justification_max_competitors,
+    )
+    paid = orep.build_paid_section(
+        organic_summary,
+        prospect_website=prospect.get("website"),
+        prospect_name=prospect.get("name"),
+        max_competitors=settings.outreach_justification_max_competitors,
+        tech=_latest_tech_signal(client, prospect_id, cache),
     )
 
     coverage_rows = (
@@ -1794,6 +1894,7 @@ def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[st
         maps_section=maps_section,
         organic_section=organic,
         llm_section=llm,
+        paid_section=paid,
         heatmap_available=coverage is not None,
         approval=approval,
     )

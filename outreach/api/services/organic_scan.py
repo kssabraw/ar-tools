@@ -49,6 +49,21 @@ _TASK_STATUS_OK = 20000
 _ORGANIC_TYPES = frozenset({"organic"})
 _AI_OVERVIEW_TYPES = frozenset({"ai_overview"})
 
+# Paid-placement item types — the fourth competitive signal (outreach HANDOFF §12 item 3a). The
+# already-captured organic response ALREADY carries these items; the parser used to discard
+# everything that was not organic/ai_overview, so Google-Ads presence is derivable from data on disk
+# with NO new paid call.
+#
+# `paid` is DataForSEO's standard label for a Google Ads text ad in the organic SERP. `local_services`
+# is the Local Services Ads ("Google Guaranteed") block. **Both item types are MEASURED, not asserted**
+# — `capture_organic` logs the distinct item-type set on first run so the exact envelope for THIS
+# account is confirmable from the log rather than a second paid run, and `parse_organic_serp` records
+# every non-organic type it saw. If the first live run shows LSA does NOT ride the organic response,
+# a dedicated Local-Services endpoint call becomes a gated follow-up (outreach ISSUES I-096); until
+# then the cheapest-to-reverse reading is "parse it from the response we already pay for".
+_PAID_TYPES = frozenset({"paid"})
+_LSA_TYPES = frozenset({"local_services", "google_local_services", "local_service_ads"})
+
 
 class OrganicScanError(RuntimeError):
     """A failure capturing or parsing an organic SERP, including task-level errors inside a 200."""
@@ -63,10 +78,36 @@ class OrganicResult:
 
 
 @dataclass(frozen=True)
+class PaidResult:
+    """One Google Ads (paid text) result. `domain` is the advertiser; `rank` its position among the
+    paid block (may be absent). The advertiser identity is what the report matches a prospect against
+    to decide "is THIS business buying ads" — deterministically, never guessed."""
+    rank: int | None
+    domain: str | None
+    title: str | None
+
+
+@dataclass(frozen=True)
+class LsaResult:
+    """One Local Services Ads ("Google Guaranteed") advertiser. LSA entries are keyed by business
+    NAME, not domain (the block rarely carries a URL), so the report matches a prospect's name — the
+    same loose normalization the AI-mention detector uses."""
+    name: str | None
+    rank: int | None
+
+
+@dataclass(frozen=True)
 class OrganicSerp:
     results: list[OrganicResult]
     ai_overview_present: bool
     total_count: int
+    # Paid-placement signal, parsed from the SAME response (see _PAID_TYPES / _LSA_TYPES). Defaulted
+    # so any existing construction still works; parse_organic_serp always fills them.
+    paid_results: tuple[PaidResult, ...] = ()
+    lsa_results: tuple[LsaResult, ...] = ()
+    # Every distinct top-level item `type` the response carried — the measure-don't-infer record, so
+    # the first live run's log proves which types this account actually returns for paid/LSA.
+    seen_item_types: tuple[str, ...] = ()
 
 
 @dataclass
@@ -77,6 +118,8 @@ class OrganicCaptureReport:
     already_captured: bool = False
     results: int = 0
     ai_overview_present: bool = False
+    ads_present: bool = False
+    lsa_present: bool = False
     problems: list[str] = field(default_factory=list)
 
 
@@ -155,13 +198,24 @@ def parse_organic_serp(body: dict[str, Any]) -> OrganicSerp:
         items = []
 
     results: list[OrganicResult] = []
+    paid: list[PaidResult] = []
+    lsa: list[LsaResult] = []
+    seen_types: list[str] = []
     ai_overview = False
     for item in items:
         if not isinstance(item, dict):
             continue
         item_type = str(item.get("type") or "")
+        if item_type and item_type not in seen_types:
+            seen_types.append(item_type)
         if item_type in _AI_OVERVIEW_TYPES:
             ai_overview = True
+            continue
+        if item_type in _PAID_TYPES:
+            paid.append(_paid_result(item))
+            continue
+        if item_type in _LSA_TYPES:
+            lsa.extend(_lsa_results(item))
             continue
         if item_type not in _ORGANIC_TYPES:
             continue
@@ -186,7 +240,43 @@ def parse_organic_serp(body: dict[str, Any]) -> OrganicSerp:
         results=results,
         ai_overview_present=ai_overview,
         total_count=int(total) if isinstance(total, (int, float)) else len(results),
+        paid_results=tuple(paid),
+        lsa_results=tuple(lsa),
+        seen_item_types=tuple(seen_types),
     )
+
+
+def _rank_of(item: dict[str, Any]) -> int | None:
+    rank = item.get("rank_absolute")
+    if rank is None:
+        rank = item.get("rank_group")
+    return int(rank) if isinstance(rank, (int, float)) and not isinstance(rank, bool) else None
+
+
+def _paid_result(item: dict[str, Any]) -> PaidResult:
+    """One `paid` item → advertiser domain + rank. The domain falls back to one derived from the
+    ad's URL when DataForSEO omits `domain` (tolerant, the parser-returns-nothing trap). Pure."""
+    domain = str(item.get("domain") or "").lower() or domain_of(item.get("url"))
+    return PaidResult(rank=_rank_of(item), domain=domain, title=item.get("title"))
+
+
+def _lsa_results(item: dict[str, Any]) -> list[LsaResult]:
+    """One `local_services` element → its advertiser names. Tolerant of both shapes seen in the wild:
+    a flat element carrying its own `title`, and a container whose `items` are the individual
+    advertisers. Each name is a business the LSA block is promoting for this search. Pure."""
+    rank = _rank_of(item)
+    nested = item.get("items")
+    if isinstance(nested, list) and nested:
+        out: list[LsaResult] = []
+        for sub in nested:
+            if not isinstance(sub, dict):
+                continue
+            name = sub.get("title") or sub.get("name")
+            out.append(LsaResult(name=str(name) if name else None, rank=_rank_of(sub) or rank))
+        if out:
+            return out
+    name = item.get("title") or item.get("name")
+    return [LsaResult(name=str(name) if name else None, rank=rank)]
 
 
 def summarize_serp(serp: OrganicSerp, *, depth: int) -> dict[str, Any]:
@@ -204,6 +294,36 @@ def summarize_serp(serp: OrganicSerp, *, depth: int) -> dict[str, Any]:
             {"rank": r.rank, "domain": r.domain, "url": r.url, "title": r.title}
             for r in serp.results
         ],
+        "paid": summarize_paid(serp),
+    }
+
+
+def summarize_paid(serp: OrganicSerp) -> dict[str, Any]:
+    """The paid-placement block of `payload_summary` — the fourth competitive signal. Pure.
+
+    Presence flags plus the advertiser lists, so the per-prospect report (and, later, the Phase-4
+    scorer) can read "is this business / are its competitors buying ads for this keyword" straight
+    off the snapshot's stored summary, with no re-parse and no new paid call. Nothing here decides
+    whether a GIVEN prospect is advertising — that match (their domain vs an advertiser's, their
+    name vs an LSA advertiser's) is derived at read time, exactly as the organic prospect_rank is,
+    so this stays a per-snapshot fact and never asserts anything about one business.
+    """
+    advertisers = [
+        {"domain": p.domain, "rank": p.rank, "title": p.title}
+        for p in serp.paid_results
+        if p.domain
+    ]
+    lsa_advertisers = [
+        {"name": a.name, "rank": a.rank} for a in serp.lsa_results if a.name
+    ]
+    return {
+        "ads_present": bool(advertisers),
+        "lsa_present": bool(lsa_advertisers),
+        "advertisers": advertisers,
+        "lsa_advertisers": lsa_advertisers,
+        # The measure-don't-infer record: which item types this account actually returned, so the
+        # exact paid/LSA envelope is confirmable from a stored summary as well as from the log.
+        "seen_item_types": list(serp.seen_item_types),
     }
 
 
@@ -267,6 +387,17 @@ async def capture_organic(
     logger.info("organic serp sample", extra={"raw": str(body)[:4000]})
 
     serp = parse_organic_serp(body)
+    # The paid/LSA envelope is unproven against this account (organic has never run). Log the distinct
+    # item types + what paid parsing found, once, so the exact shape is recoverable from the log
+    # rather than a second paid run (the dataforseo_client.py discipline; outreach ISSUES I-096).
+    logger.info(
+        "organic serp paid signal",
+        extra={
+            "seen_item_types": list(serp.seen_item_types),
+            "paid_count": len(serp.paid_results),
+            "lsa_count": len(serp.lsa_results),
+        },
+    )
     scan_month = month_of(snapshot["scanned_at"])
     db.table("serp_result").insert(
         {
@@ -280,6 +411,8 @@ async def capture_organic(
     report.stored = True
     report.results = len(serp.results)
     report.ai_overview_present = serp.ai_overview_present
+    report.ads_present = bool(serp.paid_results)
+    report.lsa_present = bool(serp.lsa_results)
 
     try:
         from .cost import build_ledger_row

@@ -238,6 +238,36 @@ class Settings(BaseSettings):
     # second provider and `prospect_delta` exist (ISSUES I-091).
     max_delta_span_days: int = 45
 
+    # --- Site tech-signal scan (paid-placement Slice B1, PRD §B3) --------------------------
+    # `scan-tech` fetches each prospect's OWN site and detects ad/marketing tech (Meta pixel, AW-
+    # conversion tag, GTM container, CallRail/Podium/Birdeye). FREE (own HTTP GET, "not a paid
+    # service" — §B3), so `scan-tech` is deliberately NOT in PAID_COMMANDS.
+    tech_fetch_timeout_seconds: float = 12.0
+    tech_scan_concurrency: int = 8
+    # Only this many bytes of a page are kept and regex-scanned. Ad tags live in the head and in
+    # script tags near it, so 2 MB is generous; without a cap one CMS page dumping a 50 MB inlined
+    # payload would be held in memory and scanned by every pattern, times the concurrency.
+    tech_max_page_bytes: int = 2_000_000
+    # Follow the GTM container to recover pixels injected client-side (ISSUES I-003 / §16a.1). OFF
+    # until the §16a.1 spike measures whether inline scanning misses GTM-injected pixels — the seam
+    # is built either way, this only decides whether it runs by default.
+    tech_follow_gtm: bool = False
+
+
+def missing_outscraper_vars(settings: "Settings") -> list[str]:
+    """Which Outscraper credentials are absent, by env-var name.
+
+    Mirrors `missing_supabase_vars` / `dataforseo_client.missing_dataforseo_vars` so a paid command
+    can REFUSE before opening a credential rather than firing N requests with an empty API key and
+    failing per-request. `OutscraperClient.__aenter__` does not validate the key (unlike the
+    DataForSEO client), so the check has to live at the command boundary.
+    """
+    return [
+        name
+        for name, value in (("OUTREACH_OUTSCRAPER_API_KEY", settings.outscraper_api_key),)
+        if not value
+    ]
+
 
 def missing_supabase_vars(settings: "Settings") -> list[str]:
     """Which Supabase credentials are absent, by env-var name.

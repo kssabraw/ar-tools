@@ -53,6 +53,30 @@ interface LlmSection {
   caveat?: string
   engines?: LlmEngine[]
 }
+interface PaidSection {
+  status: 'measured' | 'not_scanned'
+  signal: string
+  reason?: string
+  ads_present?: boolean
+  lsa_present?: boolean
+  prospect_running_ads?: boolean
+  prospect_running_lsa?: boolean
+  prospect_running_any?: boolean
+  competitor_advertisers?: { domain: string; rank: number | null; title: string | null }[]
+  competitor_lsa?: { name: string; rank: number | null }[]
+  advertiser_count?: number
+  lsa_count?: number
+  competitors_advertising_gap?: boolean
+  // Site ad tech (Slice B1)
+  tech_measured?: boolean
+  prospect_is_paying?: boolean
+  prospect_paying_this_keyword?: boolean
+  paying_evidence?: 'serp_ad' | 'lsa' | 'conversion_tag' | null
+  prospect_meta_pixel?: boolean
+  prospect_ad_conversion_tag?: boolean
+  prospect_vendor_tags?: string[]
+  prospect_likely_represented?: boolean
+}
 interface TalkingPoint { element: string; text: string }
 interface ReportData {
   prospect_id: string
@@ -63,7 +87,7 @@ interface ReportData {
   }
   keyword: string
   submarket: string
-  signals: { maps: Section; organic: OrganicSection; llm: LlmSection }
+  signals: { maps: Section; organic: OrganicSection; llm: LlmSection; paid: PaidSection }
   heatmap_available: boolean
   justification: {
     measured: boolean; headline?: string; hook?: string; talking_points: TalkingPoint[]
@@ -312,6 +336,87 @@ function LlmTable({ s, name, clientTone }: { s: LlmSection; name: string; client
   )
 }
 
+function PaidTable({ s, name, keyword, clientTone }: {
+  s: PaidSection; name: string; keyword: string; clientTone?: boolean
+}) {
+  if (s.status !== 'measured') {
+    return <NotScanned label={clientTone ? 'Paid advertising' : 'Paid placement'}
+      reason={s.reason ?? 'the search scan hasn’t run for this prospect yet.'} />
+  }
+  const ads = s.competitor_advertisers ?? []
+  const lsa = s.competitor_lsa ?? []
+  if (!s.ads_present && !s.lsa_present) {
+    return (
+      <div style={{ fontSize: 12.5, color: '#334155' }}>
+        {clientTone
+          ? `No businesses are paying for Google Ads on “${keyword}” in your area — the top of this search is still won on merit.`
+          : `No Google Ads or Local Services Ads detected for “${keyword}”.`}
+      </div>
+    )
+  }
+  // Keyword-level spend is only claimed when it was MEASURED on this keyword's SERP. A conversion
+  // tag proves tracking is installed on their site, not that they bid on this term.
+  let lead: string
+  if (s.prospect_paying_this_keyword) {
+    lead = clientTone
+      ? `You’re paying to advertise for “${keyword}”. Here’s who else is bidding for the same customers:`
+      : `${name} holds paid placement on this SERP — measured spend on “${keyword}”. If coverage is weak this is the "paying and losing" pitch. Other advertisers:`
+  } else if (s.paying_evidence === 'conversion_tag') {
+    lead = clientTone
+      ? `Your site is running Google Ads conversion tracking, so you’re investing in paid traffic — but you’re not showing in the paid results for “${keyword}”, and these businesses are:`
+      : `${name} runs Google Ads conversion tracking on their site (buying traffic somewhere) but is NOT in this keyword's paid block — ask what they spend; don't assert it. Advertisers here:`
+  } else if (s.competitors_advertising_gap) {
+    lead = clientTone
+      ? `Competitors are paying Google to appear at the top for “${keyword}”, and you’re not — they’re buying the customers you’re invisible to.`
+      : `${name} is NOT advertising, but rivals are paying for “${keyword}” (proven budget + intent — the ideal outreach signal).`
+  } else {
+    lead = `Paid advertising is active on “${keyword}”.`
+  }
+  // Internal brief only: the prospect's own site ad tech (Slice B1). One-directional — shown only
+  // when the site was actually read (tech_measured), never as absence on a failed fetch.
+  const techBits: string[] = []
+  if (!clientTone && s.tech_measured) {
+    if (s.prospect_meta_pixel) techBits.push('Meta pixel')
+    if (s.prospect_ad_conversion_tag) techBits.push('Google Ads conversion tag')
+    if (s.prospect_vendor_tags && s.prospect_vendor_tags.length) techBits.push(...s.prospect_vendor_tags)
+  }
+  return (
+    <>
+      <div style={{ fontSize: 12.5, color: '#334155', marginBottom: 6 }}>{lead}</div>
+      {techBits.length > 0 && (
+        <div style={{ fontSize: 12, color: '#475569', marginBottom: 6 }}>
+          Site ad tech: {techBits.join(', ')}
+          {s.prospect_likely_represented && ' · likely represented (agency stack)'}
+        </div>
+      )}
+      {(ads.length > 0 || lsa.length > 0) && (
+        <table style={{ width: '100%', fontSize: 12.5, borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ textAlign: 'left', color: '#64748b', fontSize: 11 }}>
+              <th style={{ padding: '4px 8px' }}>Advertiser</th>
+              <th style={{ padding: '4px 8px' }}>Type</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ads.map(a => (
+              <tr key={`ad-${a.domain}`} style={{ borderTop: '1px solid #f1f5f9' }}>
+                <td style={{ padding: '6px 8px' }}>{a.domain}</td>
+                <td style={{ padding: '6px 8px', color: '#64748b' }}>Google Ads</td>
+              </tr>
+            ))}
+            {lsa.map(a => (
+              <tr key={`lsa-${a.name}`} style={{ borderTop: '1px solid #f1f5f9' }}>
+                <td style={{ padding: '6px 8px' }}>{a.name}</td>
+                <td style={{ padding: '6px 8px', color: '#64748b' }}>Local Services Ad{clientTone ? '' : ' (Google Guaranteed)'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
+  )
+}
+
 // ── Internal brief ───────────────────────────────────────────────────────────
 function InternalBrief({ data }: { data: ReportData }) {
   const j = data.justification
@@ -333,6 +438,9 @@ function InternalBrief({ data }: { data: ReportData }) {
 
       <SectionTitle>AI / LLM visibility</SectionTitle>
       <LlmTable s={data.signals.llm} name={data.identity.name ?? 'This business'} />
+
+      <SectionTitle>Paid placement (Google Ads / LSA)</SectionTitle>
+      <PaidTable s={data.signals.paid} name={data.identity.name ?? 'This business'} keyword={data.keyword} />
 
       {j.hook && (
         <>
@@ -460,6 +568,9 @@ function ClientDraft({ data }: { data: ReportData }) {
 
       <SectionTitle>AI assistants (ChatGPT, Google AI Overview)</SectionTitle>
       <LlmTable s={data.signals.llm} name={data.identity.name ?? 'You'} clientTone />
+
+      <SectionTitle>Paid advertising</SectionTitle>
+      <PaidTable s={data.signals.paid} name={data.identity.name ?? 'You'} keyword={data.keyword} clientTone />
 
       <div style={{ marginTop: 16, fontSize: 11, color: '#94a3b8' }}>
         Based on a live scan of the Google map results across {data.submarket}. Figures are a point-in-time snapshot.

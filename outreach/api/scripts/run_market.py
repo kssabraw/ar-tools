@@ -202,7 +202,7 @@ def cmd_calibrate(args) -> int:
         region=definition.region,
     )[0]
 
-    return _asyncio.run(calibrate(tile.query, args.limit, tile.coordinates))
+    return _asyncio.run(calibrate(tile.query, legacy_limit(args), tile.coordinates))
 
 
 def cmd_verify_reviews(args) -> int:
@@ -233,7 +233,7 @@ def cmd_verify_reviews(args) -> int:
                 client=client,
                 settings=get_settings(),
                 market_id=market_id,
-                limit=args.limit,
+                limit=legacy_limit(args),
                 group=args.group,
                 provider=args.provider,
             )
@@ -468,6 +468,8 @@ def cmd_scan_organic(args) -> int:
                 "already_captured": report.already_captured,
                 "results": report.results,
                 "ai_overview_present": report.ai_overview_present,
+                "ads_present": report.ads_present,
+                "lsa_present": report.lsa_present,
                 "problems": report.problems,
             },
             indent=2,
@@ -543,6 +545,96 @@ def cmd_scan_ai(args) -> int:
         )
     print(json.dumps({"regions": out}, indent=2))
     return 0 if any(r["stored"] for r in out) else 1
+
+
+def cmd_scan_tech(args) -> int:
+    """Fetch each prospect's OWN site and store the ad/marketing tech on it. FREE (own HTTP GET).
+
+    Paid-placement Slice B1 (the money signal, PRD §B3): Meta pixel, Google Ads (AW-) conversion tag,
+    GTM container, and vendor tags (CallRail/Podium/Birdeye) — the scoring-spec.md buying-intent /
+    decision-structure signals a SERP read cannot see. NOT in PAID_COMMANDS: it makes no paid call.
+    A failed fetch stores `unknown` (a status), never `absent`.
+    """
+    import asyncio as _asyncio
+
+    from api.services import scan_tech
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    settings = get_settings()
+    client = _client()
+    market_id = _market_id(client, definition.name)
+
+    report = _asyncio.run(
+        scan_tech.run_tech_scan(client, settings, market_id=market_id, limit=scan_tech_limit(args))
+    )
+    print(
+        json.dumps(
+            {
+                "market_id": report.market_id,
+                "considered": report.considered,
+                "fetched_ok": report.fetched_ok,
+                "failed": report.failed,
+                "with_pixel": report.with_pixel,
+                "with_ads": report.with_ads,
+                "with_vendor": report.with_vendor,
+                "stored": report.stored,
+                "problems": report.problems[:20],
+            },
+            indent=2,
+        )
+    )
+    return 0 if report.stored or report.considered == 0 else 1
+
+
+def cmd_probe_pixel_field(args) -> int:
+    """§16a.1 spike — is a Meta pixel in the Outscraper ENRICHMENT pull? BILLS (enrichment).
+
+    Enriches a SMALL sample of the market's prospects and reports whether a pixel field is present
+    (and how often it is populated). Decides whether Slice B1's Meta half can come near-free from the
+    pull we already run, or whether the site fetch (`scan-tech`) stays the primary source (ISSUES
+    I-003). The `--enrichment` name is a GUESS to confirm against the logged sample record — the
+    parser never asserts the field name (measure-don't-infer).
+    """
+    import asyncio as _asyncio
+
+    from api.config import missing_outscraper_vars
+    from api.services import pixel_probe
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    settings = get_settings()
+
+    # Refuse BEFORE opening a credential, like every other paid command. OutscraperClient does not
+    # validate its key, so without this the spike fires N requests with an empty X-API-KEY.
+    absent = missing_outscraper_vars(settings)
+    if absent:
+        print(f"REFUSED: missing credentials: {', '.join(absent)}", file=sys.stderr)
+        return 2
+
+    client = _client()
+    market_id = _market_id(client, definition.name)
+
+    sample = (
+        client.table("prospect")
+        .select("name, address, website")
+        .eq("market_id", market_id)
+        .not_.is_("website", "null")
+        .limit(pixel_probe_limit(args))
+        .execute()
+        .data
+        or []
+    )
+    if not sample:
+        print("REFUSED: no prospects with a website to sample", file=sys.stderr)
+        return 2
+    queries = [f"{p['name']} {p.get('address') or ''}".strip() for p in sample]
+
+    records, errors = _asyncio.run(
+        pixel_probe.fetch_enriched_sample(settings, queries, enrichment=args.enrichment)
+    )
+    print(json.dumps(pixel_probe.summarize_pixel_probe(records, errors), indent=2))
+    # Every query failing means the spike measured nothing (a wrong enrichment name, a dead key) —
+    # that is a failure. A partial sample still answers the question, so it exits zero.
+    return 1 if errors and not records else 0
 
 
 def cmd_collect(args) -> int:
@@ -711,7 +803,7 @@ def cmd_rollup(args) -> int:
         client,
         settings,
         snapshot_ids=[args.snapshot] if args.snapshot else None,
-        limit=args.limit if args.snapshot is None else None,
+        limit=legacy_limit(args) if args.snapshot is None else None,
     )
     print(
         json.dumps(
@@ -1193,8 +1285,13 @@ _SHA_VARS = ("OUTREACH_BUILD_SHA", "RAILWAY_GIT_COMMIT_SHA", "SOURCE_COMMIT", "G
 # counterpart cannot manufacture. Listing `tick` here would make every cron heartbeat refuse,
 # which is the §8a collect-gating mistake with a different spelling.
 PAID_COMMANDS = frozenset(
-    {"ingest", "run", "calibrate", "verify-reviews", "probe-ai-granularity", "scan", "scan-organic", "scan-ai"}
+    {"ingest", "run", "calibrate", "verify-reviews", "probe-ai-granularity", "scan", "scan-organic",
+     "scan-ai", "probe-pixel-field"}
 )
+# NOTE `scan-tech` is deliberately NOT here — it fetches prospects' own sites over plain HTTP and
+# makes no paid provider call (PRD §B3 "own request, not a paid service"), the same posture as
+# `collect`/`rollup`. A test pins this. `probe-pixel-field` IS here — it bills an Outscraper
+# enrichment on a small sample (§16a.1 spike).
 
 SAFE_COMMAND = "filter"
 
@@ -1324,43 +1421,58 @@ class _ExtraFormatter(logging.Formatter):
         return f"{base} {extras}" if extras else base
 
 
-def main() -> int:
-    _install_sigterm_marker()
-    handler = logging.StreamHandler()
-    handler.setFormatter(_ExtraFormatter("%(levelname)s %(name)s %(message)s"))
-    logging.basicConfig(level=logging.INFO, handlers=[handler])
+# --- per-command --limit defaults ---------------------------------------------------------
+#
+# `--limit` deliberately has NO shared default. It used to default to 20 for every command, which
+# silently capped `scan-tech` at 20 of ~1,000 sites and still exited 0 — a run that "reports clean
+# because it did almost nothing", the failure mode this codebase keeps meeting. The safe value is
+# per-command, so each one names its own and omission means that command's safe behaviour.
 
-    import os
 
-    print(
-        build_identity(
-            dict(os.environ),
-            [
-                "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-                "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "collect", "rollup", "tick",
-                "render-heatmap", "render-delta",
-            ],
-        ),
-        flush=True,
-    )
+def scan_tech_limit(args) -> "int | None":
+    """scan-tech: None = EVERY site with a website. It is free, so there is no reason to sample."""
+    return args.limit
 
+
+def pixel_probe_limit(args) -> int:
+    """probe-pixel-field: a small sample, because this one SPENDS (§16a.1 wants ~8-20 places)."""
+    return args.limit or 8
+
+
+def legacy_limit(args) -> int:
+    """calibrate / verify-reviews / rollup: the 20 they had before the flag lost its shared default."""
+    return args.limit or 20
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """The real CLI parser, extracted so tests exercise THIS wiring rather than a copy of it.
+
+    The 20-of-1,000 cap shipped because nothing tested the flag-to-command wiring — the pure logic
+    was covered and the seam between argparse and the command was not.
+    """
     parser = argparse.ArgumentParser(description="Outreach pipeline — Phase 1")
     parser.add_argument(
         "command",
         choices=[
             "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-            "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "collect", "rollup", "tick",
+            "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech",
+                "probe-pixel-field", "collect", "rollup", "tick",
             "render-heatmap", "render-delta",
         ],
     )
     parser.add_argument("definition", help="path to a market definition JSON file")
     parser.add_argument("--cycle", type=int, default=None, help="cycle number for cost_ledger")
     parser.add_argument(
-        "--limit", type=int, default=20,
+        "--limit", type=int, default=None,
         help=(
-            "places per query (calibrate); prospects to look up (verify-reviews); snapshots to "
-            "roll up in one invocation (rollup — the command is idempotent, so a larger backlog "
-            "just needs another run)"
+            "places per query (calibrate, default 20); prospects to look up (verify-reviews, "
+            "default 20); snapshots to roll up in one invocation (rollup, default 20 — the command "
+            "is idempotent, so a larger backlog just needs another run); places to enrich "
+            "(probe-pixel-field, default 8 — this one SPENDS); sites to fetch (scan-tech, default "
+            "ALL). "
+            "DEFAULTS ARE PER-COMMAND, not on the flag: a shared default of 20 silently capped "
+            "scan-tech at 20 of ~1,000 sites and still exited 0, which is the 'reports clean "
+            "because it did almost nothing' failure this module keeps meeting."
         ),
     )
     parser.add_argument(
@@ -1372,6 +1484,14 @@ def main() -> int:
         help=(
             "probe-dataforseo: after discovery, send ONE real request per surviving path with "
             "this place_id to learn the response shape. This BILLS (a few cents)."
+        ),
+    )
+    parser.add_argument(
+        "--enrichment", default="domains_service",
+        help=(
+            "probe-pixel-field: the Outscraper enrichment to request on the sample. A GUESS to "
+            "confirm against the logged sample record — the parser never asserts the field name "
+            "(measure-don't-infer). §16a.1 spike."
         ),
     )
     parser.add_argument(
@@ -1443,6 +1563,32 @@ def main() -> int:
             "isolating a collection problem, not for routine use."
         ),
     )
+    return parser
+
+
+def main() -> int:
+    _install_sigterm_marker()
+    handler = logging.StreamHandler()
+    handler.setFormatter(_ExtraFormatter("%(levelname)s %(name)s %(message)s"))
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
+
+    import os
+
+    print(
+        build_identity(
+            dict(os.environ),
+            [
+                "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
+                "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech",
+                "probe-pixel-field", "collect", "rollup", "tick",
+                "render-heatmap", "render-delta",
+            ],
+        ),
+        flush=True,
+    )
+
+    parser = build_parser()
+
     handlers = {
         "seed": cmd_seed,
         "ingest": cmd_ingest,
@@ -1455,6 +1601,8 @@ def main() -> int:
         "scan": cmd_scan,
         "scan-organic": cmd_scan_organic,
         "scan-ai": cmd_scan_ai,
+        "scan-tech": cmd_scan_tech,
+        "probe-pixel-field": cmd_probe_pixel_field,
         "collect": cmd_collect,
         "rollup": cmd_rollup,
         "tick": cmd_tick,
