@@ -959,6 +959,9 @@ def list_onboard_requests(
 
 
 def onboard_request_detail(request_id: str) -> dict[str, Any]:
+    """One onboard order plus its scan snapshot's live collection progress — so the status screen
+    shows the same "X/81 collected → rolled up" bar a scan order does, once the order's scan has
+    been submitted (`snapshot_id` set)."""
     client = get_outreach_client()
     rows = (
         client.table("onboard_request")
@@ -971,7 +974,8 @@ def onboard_request_detail(request_id: str) -> dict[str, Any]:
     )
     if not rows:
         raise OutreachError("onboard_request_not_found")
-    return {"onboard_request": rows[0]}
+    order = rows[0]
+    return {"onboard_request": order, **_snapshot_detail(client, order.get("snapshot_id"))}
 
 
 def cancel_onboard_request(request_id: str, actor_id: str) -> dict[str, Any]:
@@ -1165,15 +1169,47 @@ def build_task_progress(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _snapshot_detail(client: Any, snapshot_id: str | None) -> dict[str, Any]:
+    """The status-screen read for one scan snapshot: the snapshot row, per-status task counts, and
+    whether the rollup marker exists (I-069 — completeness is a recorded fact; the marker also
+    gates the placeholder score's LEFT JOIN, I-076). Shared by the scan-order and onboard-order
+    status screens, so a whole-city onboard shows the same live "X/81 collected → rolled up"
+    progress a scan order does. The task read is bounded by construction — one snapshot holds
+    `expected_points` tasks (81 on the standard grid), far under the PostgREST cap."""
+    if not snapshot_id:
+        return {"snapshot": None, "task_progress": None, "rolled_up": False}
+    snap_rows = (
+        client.table("scan_snapshot")
+        .select("id, expected_points, actual_points, complete, scanned_at, geometry_version")
+        .eq("id", snapshot_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    tasks = (
+        client.table("scan_task").select("status").eq("snapshot_id", snapshot_id).execute().data
+        or []
+    )
+    marker = (
+        client.table("snapshot_rollup")
+        .select("snapshot_id")
+        .eq("snapshot_id", snapshot_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    return {
+        "snapshot": snap_rows[0] if snap_rows else None,
+        "task_progress": build_task_progress(tasks),
+        "rolled_up": bool(marker),
+    }
+
+
 def scan_request_detail(request_id: str) -> dict[str, Any]:
     """One order with everything the status screen needs: the row, its snapshot, per-status task
-    counts, and whether the rollup marker exists (I-069 — completeness is a recorded fact, and
-    the marker is also what gates the placeholder score's LEFT JOIN, I-076).
-
-    The task read is bounded by construction — one snapshot holds `expected_points` tasks (81 on
-    the standard grid), far under the PostgREST cap, so this is not an unbounded-read exception
-    to the module rule; it is a read whose bound is structural.
-    """
+    counts, and whether the rollup marker exists."""
     client = get_outreach_client()
     rows = (
         client.table("scan_request")
@@ -1187,47 +1223,7 @@ def scan_request_detail(request_id: str) -> dict[str, Any]:
     if not rows:
         raise OutreachError("scan_request_not_found")
     order = rows[0]
-
-    snapshot = None
-    progress = None
-    rolled_up = False
-    if order.get("snapshot_id"):
-        snap_rows = (
-            client.table("scan_snapshot")
-            .select("id, expected_points, actual_points, complete, scanned_at, geometry_version")
-            .eq("id", order["snapshot_id"])
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-        snapshot = snap_rows[0] if snap_rows else None
-        tasks = (
-            client.table("scan_task")
-            .select("status")
-            .eq("snapshot_id", order["snapshot_id"])
-            .execute()
-            .data
-            or []
-        )
-        progress = build_task_progress(tasks)
-        marker = (
-            client.table("snapshot_rollup")
-            .select("snapshot_id")
-            .eq("snapshot_id", order["snapshot_id"])
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-        rolled_up = bool(marker)
-
-    return {
-        "scan_request": order,
-        "snapshot": snapshot,
-        "task_progress": progress,
-        "rolled_up": rolled_up,
-    }
+    return {"scan_request": order, **_snapshot_detail(client, order.get("snapshot_id"))}
 
 
 def placeholder_scores(

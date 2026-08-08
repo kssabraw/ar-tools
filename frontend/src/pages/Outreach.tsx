@@ -74,6 +74,29 @@ interface OnboardRequest {
   keyword?: { term: string } | null
 }
 
+interface OnboardRequestDetail {
+  onboard_request: OnboardRequest
+  snapshot: {
+    id: string; expected_points: number; actual_points: number
+    complete: boolean; scanned_at: string; geometry_version: string
+  } | null
+  task_progress: TaskProgress | null
+  rolled_up: boolean
+}
+// The discovered/collected business data (v_prospect_status), available as soon as discovery runs.
+interface Prospect {
+  id: string
+  name: string
+  category: string | null
+  phone: string | null
+  website: string | null
+  rating: number | null
+  review_count: number | null
+  address: string | null
+  excluded: boolean | null
+  evaluated: boolean | null
+}
+
 const ACTIVE = new Set(['pending', 'running'])
 
 const STATUS_STYLE: Record<ScanRequest['status'], { color: string; bg: string; Icon: typeof Clock }> = {
@@ -150,9 +173,10 @@ export function Outreach() {
 
       <OnboardCityCard isAdmin={isAdmin} />
       <OnboardOrdersCard />
+      {market && <BusinessesCard marketId={market.id} />}
+      {market && <ResultsCard marketId={market.id} />}
       {market && <QueueScanCard marketId={market.id} isAdmin={isAdmin} />}
       <OrdersCard />
-      {market && <ResultsCard marketId={market.id} />}
     </div>
   )
 }
@@ -314,6 +338,7 @@ function OnboardCityCard({ isAdmin }: { isAdmin: boolean }) {
 
 function OnboardOrdersCard() {
   const queryClient = useQueryClient()
+  const [openId, setOpenId] = useState<string | null>(null)
 
   const { data, isLoading } = useQuery<{ onboard_requests: OnboardRequest[]; total: number }>({
     queryKey: ['outreach-onboard-requests'],
@@ -356,7 +381,8 @@ function OnboardOrdersCard() {
           <tbody>
             {orders.map(order => (
               <Fragment key={order.id}>
-                <tr style={{ borderTop: '1px solid #f1f5f9' }}>
+                <tr style={{ borderTop: '1px solid #f1f5f9', cursor: order.snapshot_id ? 'pointer' : 'default' }}
+                  onClick={() => order.snapshot_id && setOpenId(openId === order.id ? null : order.id)}>
                   <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{new Date(order.created_at).toLocaleString()}</td>
                   <td style={{ padding: '6px 8px' }}>{order.submarket?.name ?? '—'}</td>
                   <td style={{ padding: '6px 8px' }}>{order.keyword?.term ?? order.category}</td>
@@ -367,7 +393,7 @@ function OnboardOrdersCard() {
                   <td style={{ padding: '6px 8px' }}><StatusChip status={order.status} /></td>
                   <td style={{ padding: '6px 8px', textAlign: 'right' }}>
                     {order.status === 'pending' && (
-                      <button onClick={() => cancel.mutate(order.id)}
+                      <button onClick={e => { e.stopPropagation(); cancel.mutate(order.id) }}
                         style={{ fontSize: 12, border: '1px solid #e2e8f0', background: '#fff',
                           borderRadius: 6, padding: '2px 8px', cursor: 'pointer', color: '#b91c1c' }}>
                         Withdraw
@@ -383,10 +409,132 @@ function OnboardOrdersCard() {
                     </td>
                   </tr>
                 )}
+                {openId === order.id && order.snapshot_id && (
+                  <tr>
+                    <td colSpan={6} style={{ padding: '4px 8px 10px' }}>
+                      <OnboardProgress id={order.id} />
+                    </td>
+                  </tr>
+                )}
               </Fragment>
             ))}
           </tbody>
         </table>
+      )}
+    </div>
+  )
+}
+
+function OnboardProgress({ id }: { id: string }) {
+  const { data } = useQuery<OnboardRequestDetail>({
+    queryKey: ['outreach-onboard-request', id],
+    queryFn: () => api.get(`/outreach/onboard-requests/${id}`),
+    refetchInterval: q => {
+      const d = q.state.data
+      if (!d?.task_progress) return 30_000
+      // Keep polling until every point is terminal AND the rollup marker exists.
+      return d.task_progress.outstanding > 0 || !d.rolled_up ? 30_000 : false
+    },
+  })
+  if (!data?.task_progress || !data.snapshot) {
+    return <span style={{ fontSize: 12, color: '#64748b' }}>Waiting for the scan to post…</span>
+  }
+  const p = data.task_progress
+  const pct = p.total ? Math.round((p.collected / p.total) * 100) : 0
+  return (
+    <div style={{ fontSize: 12, color: '#334155' }}>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+        <div style={{ flex: 1, height: 8, background: '#f1f5f9', borderRadius: 4, overflow: 'hidden' }}>
+          <div style={{ width: `${pct}%`, height: '100%', background: '#0f172a' }} />
+        </div>
+        <span>{p.collected}/{p.total} points collected</span>
+      </div>
+      <div style={{ marginTop: 4, color: '#64748b' }}>
+        {p.outstanding > 0 && <>Results arrive over the next hours as the provider finishes each point. </>}
+        {p.failed > 0 && <span style={{ color: '#b91c1c' }}>{p.failed} point{p.failed > 1 ? 's' : ''} failed. </span>}
+        Snapshot {data.snapshot.complete ? 'complete' : 'incomplete'} ·{' '}
+        {data.rolled_up
+          ? 'coverage rolled up — see “Coverage results” below.'
+          : 'coverage not rolled up yet.'}
+      </div>
+    </div>
+  )
+}
+
+// ── Businesses found (the collected data — available as soon as discovery runs) ──────────────
+
+function BusinessesCard({ marketId }: { marketId: string }) {
+  const [submarketId, setSubmarketId] = useState('')
+  const { data: subsData } = useQuery<{ submarkets: Submarket[] }>({
+    queryKey: ['outreach-submarkets', marketId],
+    queryFn: () => api.get(`/outreach/markets/${marketId}/submarkets`),
+  })
+  const submarkets = subsData?.submarkets ?? []
+
+  const { data, isLoading } = useQuery<{ prospects: Prospect[]; total: number }>({
+    queryKey: ['outreach-prospects', submarketId],
+    queryFn: () => api.get(`/outreach/prospects?submarket_id=${submarketId}&status=survived&limit=200`),
+    enabled: !!submarketId,
+  })
+  const prospects = data?.prospects ?? []
+
+  return (
+    <div style={{ marginTop: 16, padding: 16, border: '1px solid #e2e8f0', borderRadius: 12 }}>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+        <div style={{ fontWeight: 600, fontSize: 14 }}>Businesses found</div>
+        <select value={submarketId} onChange={e => setSubmarketId(e.target.value)}
+          style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13 }}>
+          <option value="">Choose a target…</option>
+          {submarkets.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+      </div>
+      <p style={{ fontSize: 11, color: '#94a3b8', margin: '6px 0 0' }}>
+        The businesses discovery found and the filter kept — available as soon as a scan's discovery
+        stage runs, before the grid finishes collecting. This is what was collected; coverage per
+        business shows in “Coverage results” once the scan rolls up.
+      </p>
+      {!submarketId ? null : isLoading ? (
+        <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>Loading…</p>
+      ) : prospects.length === 0 ? (
+        <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>
+          No businesses kept here yet — either nothing has been discovered for this target, or the
+          filter excluded them all.
+        </p>
+      ) : (
+        <table style={{ width: '100%', marginTop: 8, fontSize: 13, borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ textAlign: 'left', color: '#64748b', fontSize: 11 }}>
+              <th style={{ padding: '4px 8px' }}>Business</th>
+              <th style={{ padding: '4px 8px' }}>Category</th>
+              <th style={{ padding: '4px 8px' }}>Phone</th>
+              <th style={{ padding: '4px 8px' }}>Website</th>
+              <th style={{ padding: '4px 8px', textAlign: 'right' }}>Rating</th>
+              <th style={{ padding: '4px 8px', textAlign: 'right' }}>Reviews</th>
+            </tr>
+          </thead>
+          <tbody>
+            {prospects.map(p => (
+              <tr key={p.id} style={{ borderTop: '1px solid #f1f5f9' }}>
+                <td style={{ padding: '6px 8px' }}>{p.name}</td>
+                <td style={{ padding: '6px 8px', color: '#475569' }}>{p.category ?? '—'}</td>
+                <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{p.phone ?? '—'}</td>
+                <td style={{ padding: '6px 8px', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {p.website
+                    ? <a href={p.website} target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>{p.website.replace(/^https?:\/\//, '')}</a>
+                    : '—'}
+                </td>
+                <td style={{ padding: '6px 8px', textAlign: 'right' }}>{p.rating != null ? p.rating.toFixed(1) : '—'}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right' }}>{p.review_count ?? '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {prospects.length > 0 && (
+        <p style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>
+          Showing up to 200 kept businesses. Coverage ranking (who's most invisible) is in “Coverage
+          results”.
+        </p>
       )}
     </div>
   )
