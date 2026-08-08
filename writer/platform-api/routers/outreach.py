@@ -357,11 +357,13 @@ class OnboardSubarea(BaseModel):
 
 
 class OnboardRequestCreate(BaseModel):
-    """The "City + Business type" order. `city` + `subarea` come straight from
-    `GET /outreach/geo/subareas`; `business_type` is the typed category (== the scan keyword)."""
+    """The "City → sub-area → search" order. `city` + `subarea` come straight from
+    `GET /outreach/geo/subareas`; `subarea` is OPTIONAL — omit it to scan the whole city centre.
+    `business_type` is the consumer search term (one string: the discovery query AND the scan
+    keyword — what a customer would type, e.g. "emergency plumber")."""
 
     city: OnboardCity
-    subarea: OnboardSubarea
+    subarea: Optional[OnboardSubarea] = None
     business_type: str
     note: Optional[str] = None
 
@@ -513,7 +515,7 @@ async def create_onboard_request(
         "onboard_request": _handle(
             outreach_service.create_onboard_from_place,
             city=payload.city.model_dump(),
-            subarea=payload.subarea.model_dump(),
+            subarea=payload.subarea.model_dump() if payload.subarea else None,
             business_type=payload.business_type,
             note=payload.note,
             actor_id=auth["user_id"],

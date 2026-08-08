@@ -853,33 +853,45 @@ def _ensure_keyword(client: Any, *, market_id: str, term: str) -> str:
 def create_onboard_from_place(
     *,
     city: dict[str, Any],
-    subarea: dict[str, Any],
+    subarea: dict[str, Any] | None,
     business_type: str,
     note: str | None,
     actor_id: str,
 ) -> dict[str, Any]:
-    """The "City + Business type" order: create-or-get the market/sub-area/keyword rows for a typed
-    city, then place a signed `onboard_request` (discover → filter → scan). Admin-gated at the
-    router — this order authorizes BOTH a paid discovery pull and a scan.
+    """The "City → sub-area (optional) → search" order: create-or-get the market/sub-area/keyword
+    rows for a typed city, then place a signed `onboard_request` (discover → filter → scan).
+    Admin-gated at the router — this order authorizes BOTH a paid discovery pull and a scan.
 
-    `city` = {name, lat, lng} (resolved by `outreach_geo`), `subarea` = {name, lat, lng} (a
-    verified sub-area the operator picked), `business_type` = the Outscraper category + scan term.
+    `city` = {name, lat, lng} (resolved by `outreach_geo`); `subarea` = {name, lat, lng} (a verified
+    sub-area the operator picked) or None to scan the WHOLE CITY (the submarket becomes the city
+    centre grid); `business_type` = the consumer search term — one string that is both the Outscraper
+    discovery query and the geogrid scan keyword (a customer's search, e.g. "emergency plumber").
     """
     business_type = (business_type or "").strip()
     city_name = str(city.get("name") or "").strip()
-    sub_name = str(subarea.get("name") or "").strip()
     if not business_type:
         raise OutreachError("business_type_required")
-    if not city_name or subarea.get("lat") is None or subarea.get("lng") is None:
+    if not city_name or city.get("lat") is None or city.get("lng") is None:
+        raise OutreachError("city_incomplete")
+
+    # Sub-area is optional. A picked one must carry coordinates; if none is picked, the submarket IS
+    # the city centre (the "whole city" scan), so a small city with no distinct sub-areas is never a
+    # dead end.
+    sub = subarea or {}
+    sub_name = str(sub.get("name") or "").strip()
+    if sub_name and (sub.get("lat") is None or sub.get("lng") is None):
         raise OutreachError("subarea_incomplete")
+    if sub_name:
+        sub_lat, sub_lng = float(sub["lat"]), float(sub["lng"])
+    else:
+        sub_name, sub_lat, sub_lng = city_name, float(city["lat"]), float(city["lng"])
 
     client = get_outreach_client()
     market_id = _ensure_market(
         client, name=city_name, lat=float(city["lat"]), lng=float(city["lng"])
     )
     submarket_id = _ensure_submarket(
-        client, market_id=market_id, name=sub_name,
-        lat=float(subarea["lat"]), lng=float(subarea["lng"]),
+        client, market_id=market_id, name=sub_name, lat=sub_lat, lng=sub_lng,
     )
     keyword_id = _ensure_keyword(client, market_id=market_id, term=business_type)
 
