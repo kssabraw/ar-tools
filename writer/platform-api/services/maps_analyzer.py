@@ -33,7 +33,7 @@ from statistics import mean
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import maps_reporting
+from services import maps_compare, maps_reporting
 from services.maps_analytics import OCTANT_FULL, build_geogrid_analytics
 
 logger = logging.getLogger(__name__)
@@ -361,7 +361,15 @@ def build_maps_changes(
 ) -> dict:
     """Per-keyword scan-over-scan deltas + declining octants + fired alert types.
     Works on the first scan too (prev_scan None → has_previous False, current
-    values only). Returns a plain dict matching MapsChangesResponse."""
+    values only). Returns a plain dict matching MapsChangesResponse.
+
+    Deltas are measured on the ground the two scans share: if the grid was
+    resized between them, both sides are re-measured on the smaller grid first,
+    so a widened radius doesn't render as a drop (see services.maps_compare).
+    """
+    curr_results, prev_results, normalized_to = maps_compare.normalize_pair(
+        curr_results, prev_results
+    )
     prev_by_kw = {r["keyword"]: r for r in prev_results}
     has_previous = bool(prev_scan)
 
@@ -423,6 +431,9 @@ def build_maps_changes(
         "has_previous": has_previous,
         "current_scan_id": (curr_scan or {}).get("id"),
         "previous_scan_id": (prev_scan or {}).get("id"),
+        # Set only when the grid was resized between the two scans, so the UI can
+        # say which shared area the deltas were measured on.
+        "compared_on_radius_miles": maps_compare.radius_miles_for_side(normalized_to),
         "keywords": keywords,
     }
 
@@ -501,7 +512,13 @@ def _scope_for(keyword: Optional[str], points: Sequence[dict], today: date) -> d
 def build_maps_periods(scans: Sequence[dict], results: Sequence[dict], today: date) -> dict:
     """7/30/90-day + since-start deltas for the visibility metrics, overall +
     per-keyword. `scans` = completed scans ({id, completed_at}); `results` = their
-    per-keyword rows. Pure — matches MapsPeriodsResponse."""
+    per-keyword rows. Pure — matches MapsPeriodsResponse.
+
+    These windows can span a grid resize, and every number here is a delta, so
+    the whole series is first re-measured on the grid all of its scans share
+    (see services.maps_compare). Without that, widening the radius would show
+    as a 90-day decline across every metric at once."""
+    results, _normalized_to = maps_compare.normalize_series(results)
     meta = {s["id"]: s for s in scans}
     by_scan: dict[str, list[dict]] = {}
     by_kw: dict[str, list[dict]] = {}
@@ -810,11 +827,23 @@ def analyze_scan(scan_id: str) -> dict:
         supabase.table("maps_scan_results").select(_RESULT_FIELDS)
         .eq("scan_id", prev_scan["id"]).execute()
     ).data or []
-    prev_by_kw = {r["keyword"]: r for r in prev_results}
+
+    # If the grid was resized between these two scans, re-measure both on the
+    # ground they share before diffing. Otherwise the extra outer pins of a
+    # widened grid — where the business ranks worse — would open alerts that
+    # describe a measurement change as a ranking drop. No-op when the geometry
+    # matched, which is the normal case.
+    curr_cmp, prev_cmp, normalized_to = maps_compare.normalize_pair(curr_results, prev_results)
+    if normalized_to:
+        logger.info(
+            "maps_analyze_normalized_geometry",
+            extra={"scan_id": scan_id, "prev_scan_id": prev_scan["id"], "grid_side": normalized_to},
+        )
+    prev_by_kw = {r["keyword"]: r for r in prev_cmp}
 
     per_keyword = [
         (r["keyword"], analyze_keyword(r["keyword"], r, prev_by_kw.get(r["keyword"])))
-        for r in curr_results
+        for r in curr_cmp
     ]
     today = datetime.now(timezone.utc).date()
     result = reconcile_alerts(supabase, client_id, scan_id, prev_scan["id"], per_keyword, today)

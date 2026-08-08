@@ -2040,6 +2040,16 @@ function ChangeTable({ changes }: { changes?: MapsChangesResponse }) {
       <p style={{ fontSize: 12, color: '#64748b', margin: '2px 0 12px' }}>
         This scan vs the one before it. <span style={{ color: '#dc2626', fontWeight: 600 }}>▲ worse</span> · <span style={{ color: '#16a34a', fontWeight: 600 }}>▼ better</span>.
       </p>
+      {changes.compared_on_radius_miles != null && (
+        // The grid was resized between these two scans; say so, because the
+        // numbers here deliberately don't match the headline coverage figures.
+        <p style={{ fontSize: 12, color: '#3730a3', background: '#eef2ff', border: '1px solid #e0e7ff', borderRadius: 6, padding: '7px 10px', margin: '0 0 12px' }}>
+          The scan radius changed between these two scans. To keep the comparison
+          honest, these changes are measured on the{' '}
+          <strong>{changes.compared_on_radius_miles}-mile area both scans cover</strong> —
+          a wider grid adds outlying pins that would otherwise look like a drop.
+        </p>
+      )}
       <div className="scroll-x">
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr>

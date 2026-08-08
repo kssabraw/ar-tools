@@ -814,6 +814,8 @@ export interface MapsTrendPoint {
   found_pct: number | null
   top3_pct: number | null
   top10_pct: number | null
+  /** Grid this point was measured on — coverage % is a share of the area scanned. */
+  radius_miles: number | null
 }
 
 export interface MapsKeywordTrend {
@@ -891,6 +893,8 @@ export interface MapsChangesResponse {
   has_previous: boolean
   current_scan_id: string | null
   previous_scan_id: string | null
+  /** Set when the grid was resized between the two scans: the shared radius the deltas were measured on. */
+  compared_on_radius_miles: number | null
   keywords: MapsKeywordChange[]
 }
 

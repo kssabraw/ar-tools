@@ -817,21 +817,24 @@ def _fetch_maps_signals(supabase, client_id: str) -> "tuple[list[dict], list[dic
         if scans:
             latest_rows = (
                 supabase.table("maps_scan_results")
-                .select("report_weak_locations, total_pins, top3_pins, top10_pins, competitors")
+                .select("report_weak_locations, total_pins, top3_pins, top10_pins, competitors, rank_grid")
                 .eq("scan_id", scans[0]["id"])
                 .execute()
             ).data or []
             weak_areas = _aggregate_weak_areas(latest_rows)
             if len(scans) >= 2:
-                from services import maps_solv
+                from services import maps_compare, maps_solv
 
                 prev_rows = (
                     supabase.table("maps_scan_results")
-                    .select("total_pins, top3_pins, top10_pins, competitors")
+                    .select("total_pins, top3_pins, top10_pins, competitors, rank_grid")
                     .eq("scan_id", scans[1]["id"])
                     .execute()
                 ).data or []
-                solv_drop = maps_solv.detect_solv_drop(latest_rows, prev_rows, SOLV_DROP_MIN_PCT)
+                # A Share-of-Local-Voice "drop" must not just be a widened grid,
+                # so compare the two scans on the ground they share.
+                curr_cmp, prev_cmp, _ = maps_compare.normalize_pair(latest_rows, prev_rows)
+                solv_drop = maps_solv.detect_solv_drop(curr_cmp, prev_cmp, SOLV_DROP_MIN_PCT)
     except Exception as exc:
         logger.warning("reopt_plan_maps_signals_failed", extra={"client_id": client_id, "error": str(exc)})
         weak_areas, solv_drop = weak_areas, None

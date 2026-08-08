@@ -445,6 +445,7 @@ def build_maps_trends(scans: list[dict], results: list[dict]) -> MapsTrendsRespo
             scan_id=r["scan_id"],
             completed_at=s.get("completed_at"),
             trigger=s.get("trigger", "scheduled"),
+            radius_miles=s.get("radius_miles"),
             total_pins=total,
             found_pins=r.get("found_pins") or 0,
             top3_pins=r.get("top3_pins") or 0,
@@ -475,7 +476,7 @@ async def maps_trends(
     supabase = get_supabase()
     scans = (
         maps_reporting.only_reporting(
-            supabase.table("maps_scans").select("id, completed_at, trigger")
+            supabase.table("maps_scans").select("id, completed_at, trigger, radius_miles")
         )
         .eq("client_id", str(client_id)).eq("status", "complete")
         .order("completed_at", desc=True).limit(max(1, min(limit, 200))).execute()
@@ -861,7 +862,7 @@ async def maps_periods(
         return MapsPeriodsResponse()
     results = (
         supabase.table("maps_scan_results")
-        .select("scan_id, keyword, average_rank, found_pins, total_pins, top3_pins, top10_pins")
+        .select("scan_id, keyword, average_rank, found_pins, total_pins, top3_pins, top10_pins, rank_grid")
         .in_("scan_id", [s["id"] for s in scans]).execute()
     ).data or []
     data = build_maps_periods(scans, results, datetime.now(timezone.utc).date())
