@@ -423,6 +423,11 @@ CANDIDATE_REVIEW_PATHS: tuple[str, ...] = (
     # The live twin of the Maps path that IS genuinely proven — maps_dataforseo.py has used
     # /v3/serp/google/maps/task_post + task_get/advanced in production.
     "/v3/serp/google/maps/live/advanced",
+    # Organic SERP — the report's "organic ranking vs competitors" signal (organic_scan.py). Added
+    # here so `probe-dataforseo` confirms the endpoint FREE before the first paid capture, the
+    # measure-don't-infer discipline this module exists to enforce.
+    "/v3/serp/google/organic/live/advanced",
+    "/v3/serp/google/organic/task_post",
 )
 
 # A task with no fields. A path that exists answers 200 and rejects the task at the task level

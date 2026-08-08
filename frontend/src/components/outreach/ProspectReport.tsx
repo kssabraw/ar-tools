@@ -25,6 +25,17 @@ interface Section {
   competitors?: MapsCompetitor[]
   total_competitors?: number
 }
+interface OrganicCompetitor { domain: string; rank: number | null; title: string | null }
+interface OrganicSection {
+  status: 'measured' | 'not_scanned'
+  signal: string
+  reason?: string
+  prospect_domain?: string | null
+  prospect_rank?: number | null
+  ai_overview_present?: boolean
+  captured_depth?: number | null
+  competitors?: OrganicCompetitor[]
+}
 interface TalkingPoint { element: string; text: string }
 interface ReportData {
   prospect_id: string
@@ -35,7 +46,7 @@ interface ReportData {
   }
   keyword: string
   submarket: string
-  signals: { maps: Section; organic: Section; llm: Section }
+  signals: { maps: Section; organic: OrganicSection; llm: Section }
   heatmap_available: boolean
   justification: {
     measured: boolean; headline?: string; hook?: string; talking_points: TalkingPoint[]
@@ -193,6 +204,46 @@ function MapsTable({ s, name, keyword, submarket, clientTone }: {
   )
 }
 
+function OrganicTable({ s, name, keyword, submarket, clientTone }: {
+  s: OrganicSection; name: string; keyword: string; submarket: string; clientTone?: boolean
+}) {
+  if (s.status !== 'measured') {
+    return <NotScanned label={clientTone ? 'Google search results' : 'Organic search'}
+      reason={s.reason ?? 'the search scan hasn’t run for this prospect yet.'} />
+  }
+  const rankLine = s.prospect_rank != null
+    ? (clientTone
+      ? `You rank #${s.prospect_rank} in Google’s standard search results for “${keyword}”.`
+      : `Prospect ranks #${s.prospect_rank} for “${keyword}” (organic).`)
+    : (clientTone
+      ? `You don’t appear in the top ${s.captured_depth ?? '—'} Google search results for “${keyword}” in ${submarket}.`
+      : `Prospect not in the top ${s.captured_depth ?? '—'} organic results for “${keyword}”.`)
+  return (
+    <>
+      <div style={{ fontSize: 12.5, color: '#334155', marginBottom: 6 }}>
+        {rankLine}
+        {s.ai_overview_present && ' Google is also showing an AI overview for this search.'}
+      </div>
+      <table style={{ width: '100%', fontSize: 12.5, borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ textAlign: 'left', color: '#64748b', fontSize: 11 }}>
+            <th style={{ padding: '4px 8px' }}>{clientTone ? 'Ranking ahead of you' : 'Top domains'}</th>
+            <th style={{ padding: '4px 8px', textAlign: 'right' }}>Rank</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(s.competitors ?? []).map(c => (
+            <tr key={`${c.domain}-${c.rank}`} style={{ borderTop: '1px solid #f1f5f9' }}>
+              <td style={{ padding: '6px 8px' }}>{c.domain}</td>
+              <td style={{ padding: '6px 8px', textAlign: 'right' }}>{c.rank ?? '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
+  )
+}
+
 // ── Internal brief ───────────────────────────────────────────────────────────
 function InternalBrief({ data }: { data: ReportData }) {
   const j = data.justification
@@ -210,7 +261,7 @@ function InternalBrief({ data }: { data: ReportData }) {
       <MapsTable s={data.signals.maps} name={data.identity.name ?? 'This business'} keyword={data.keyword} submarket={data.submarket} />
 
       <SectionTitle>Organic rankings vs competitors</SectionTitle>
-      <NotScanned label="Organic search" reason={data.signals.organic.reason} />
+      <OrganicTable s={data.signals.organic} name={data.identity.name ?? 'This business'} keyword={data.keyword} submarket={data.submarket} />
 
       <SectionTitle>AI / LLM visibility</SectionTitle>
       <NotScanned label="AI answers" reason={data.signals.llm.reason} />
@@ -256,7 +307,7 @@ function ClientDraft({ data }: { data: ReportData }) {
       <MapsTable s={data.signals.maps} name={data.identity.name ?? 'You'} keyword={data.keyword} submarket={data.submarket} clientTone />
 
       <SectionTitle>Google search results</SectionTitle>
-      <NotScanned label="Organic search" reason="This section will be added when the search scan is run." />
+      <OrganicTable s={data.signals.organic} name={data.identity.name ?? 'You'} keyword={data.keyword} submarket={data.submarket} clientTone />
 
       <SectionTitle>AI assistants (ChatGPT, Google AI, and more)</SectionTitle>
       <NotScanned label="AI answers" reason="This section will be added when the AI-visibility scan is run." />

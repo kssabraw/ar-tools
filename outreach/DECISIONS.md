@@ -978,3 +978,34 @@ print). The organic + LLM scan layers and the client-facing PDF+approval are sta
   WeasyPrint PDF + approval gate + signed R2 URL is increment 4.
 
 Pure builders unit-tested (`writer/platform-api/tests/test_outreach_report.py`, 6 cases).
+
+---
+
+## 2026-08-08 — Organic-SERP capture (report increment 2): one live call, attached to the maps snapshot
+
+Increment 2 of the per-prospect report (ISSUES I-095): the "organic ranking for this keyword vs the
+top competitors" signal. Built the producer + the read + the render.
+
+- **One live call, not the queued grid.** Organic is ONE SERP per snapshot (`organic_scan.py` →
+  `/v3/serp/google/organic/live/advanced`), so it uses the live endpoint — immediate, one billed
+  request — rather than the 81-task queued lifecycle the maps grid needs. Gated like every paid
+  command (`scan-organic` in `PAID_COMMANDS`); writes a `cost_ledger` row (stage `b2_organic`).
+- **Attaches to the maps `scan_snapshot`** (I-084 decision): `scan-organic` targets the latest
+  ROLLED-UP snapshot for a submarket×keyword (the one the report reads), via the same resolver the
+  heatmap uses, and writes `serp_result` (engine `google_organic`, `payload` + `payload_summary`).
+  So the organic and coverage reads come off one snapshot, keyed the natural way.
+- **Endpoint shape MEASURED on first run, not asserted** — the `dataforseo_client.py` discipline. The
+  path is added to the free `probe-dataforseo` set, `capture_organic` logs one full response, and
+  `parse_organic_serp` RAISES on a task-level error rather than returning an empty SERP (an outage
+  must never read as "nobody ranks"). The first real run proves the envelope, like the maps scan.
+- **Idempotent per snapshot:** a re-run on a snapshot that already has an organic row is free and
+  stores nothing.
+- **The prospect's own organic rank** is read by matching their website's domain against the SERP's
+  `domain` field, normalised identically on both sides (`domain_of` in each codebase). A prospect not
+  in the captured depth reports `prospect_rank: None` (not ranking in the top N) — never a guessed
+  position. Competitors are the top ranked domains, the prospect's own excluded.
+
+Pure logic unit-tested both sides (`outreach/api/tests/test_organic_scan.py` 8 cases;
+`writer/platform-api/tests/test_outreach_report.py` organic cases). Reuses `scan_depth` /
+`dataforseo_*` config — no new knobs. **Still staged (I-095):** LLM visibility (increment 3, blocked
+on `ai_region`) and the client-facing PDF + approval gate (increment 4).

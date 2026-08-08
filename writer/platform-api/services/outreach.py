@@ -1514,16 +1514,15 @@ def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[st
 
     justification = prospect_justification(prospect_id, snapshot_id)
 
-    organic = orep.not_scanned_section(
-        orep.SIGNAL_ORGANIC,
-        "The organic-search scan hasn't run for this prospect yet.",
-    )
     llm = orep.not_scanned_section(
         orep.SIGNAL_LLM,
         "The AI-visibility scan hasn't run for this prospect yet.",
     )
 
     if not justification.get("measured"):
+        organic = orep.not_scanned_section(
+            orep.SIGNAL_ORGANIC, "The organic-search scan hasn't run for this prospect yet."
+        )
         maps_section = {"status": orep.STATUS_NOT_MEASURED, "signal": orep.SIGNAL_MAPS}
         return orep.build_report(
             prospect=prospect,
@@ -1540,6 +1539,30 @@ def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[st
     snap_id = prov["snapshot_id"]
     keyword = prov["keyword"]
     live_points = prov["live_points"]
+
+    # Organic-SERP signal (increment 2): the stored capture for this snapshot, if the organic scan
+    # has run for it. Absent → the builder returns a not_scanned block (never an empty table).
+    organic_summary = None
+    try:
+        serp_rows = (
+            client.table("serp_result")
+            .select("payload_summary")
+            .eq("snapshot_id", snap_id)
+            .eq("engine", "google_organic")
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if serp_rows:
+            organic_summary = serp_rows[0].get("payload_summary")
+    except Exception as exc:  # noqa: BLE001 — the report stands without the organic section
+        logger.warning("outreach_report_organic_unavailable", extra={"error": str(exc)})
+    organic = orep.build_organic_section(
+        organic_summary,
+        prospect_website=prospect.get("website"),
+        max_competitors=settings.outreach_justification_max_competitors,
+    )
 
     coverage_rows = (
         client.table("prospect_coverage")

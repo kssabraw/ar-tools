@@ -413,6 +413,70 @@ def cmd_scan(args) -> int:
     return 0 if report.posted else 1
 
 
+def cmd_scan_organic(args) -> int:
+    """Capture ONE organic SERP for a submarket x keyword's latest rolled-up snapshot. BILLS one request.
+
+    The report's "organic ranking vs competitors" signal (outreach ISSUES I-095, increment 2). It
+    attaches to the maps `scan_snapshot` the report already reads (I-084 — DECISIONS 2026-08-08), so
+    the organic and coverage reads come off the same snapshot. Idempotent per snapshot: a re-run on a
+    snapshot that already has an organic row is free and stores nothing.
+
+    Targets a ROLLED-UP snapshot deliberately — that is the one the per-prospect report reads — via
+    the same resolver the heatmap uses (`--snapshot`, or `--submarket` + optional `--keyword`).
+    """
+    import asyncio as _asyncio
+
+    from api.services import organic_scan
+    from api.services.dataforseo_client import missing_dataforseo_vars
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    settings = get_settings()
+    client = _client()
+
+    absent = missing_dataforseo_vars(settings)
+    if absent:
+        print(f"REFUSED: missing credentials: {', '.join(absent)}", file=sys.stderr)
+        return 2
+
+    market_id = _market_id(client, definition.name)
+    snapshot = _resolve_rollup_snapshot(client, market_id, args)
+    if snapshot is None:
+        return 2
+
+    kw = (
+        client.table("keyword").select("term").eq("id", snapshot["keyword_id"]).limit(1).execute().data
+    )
+    keyword_term = kw[0]["term"] if kw else ""
+    if not keyword_term:
+        print("REFUSED: snapshot's keyword could not be resolved", file=sys.stderr)
+        return 2
+    if snapshot.get("center_lat") is None or snapshot.get("center_lng") is None:
+        print("REFUSED: snapshot has no recorded centre — cannot anchor the organic SERP", file=sys.stderr)
+        return 2
+
+    report = _asyncio.run(
+        organic_scan.capture_organic(
+            client, settings, snapshot, keyword_term, market_id=market_id
+        )
+    )
+    print(
+        json.dumps(
+            {
+                "snapshot_id": report.snapshot_id,
+                "keyword": report.keyword,
+                "stored": report.stored,
+                "already_captured": report.already_captured,
+                "results": report.results,
+                "ai_overview_present": report.ai_overview_present,
+                "problems": report.problems,
+            },
+            indent=2,
+        )
+    )
+    # already_captured is a successful no-op; only a genuine failure to store is non-zero.
+    return 0 if (report.stored or report.already_captured) else 1
+
+
 def cmd_collect(args) -> int:
     """Drain the ready list and store whatever is done. FREE, and safe to run on any tick."""
     import asyncio as _asyncio
@@ -1061,7 +1125,7 @@ _SHA_VARS = ("OUTREACH_BUILD_SHA", "RAILWAY_GIT_COMMIT_SHA", "SOURCE_COMMIT", "G
 # counterpart cannot manufacture. Listing `tick` here would make every cron heartbeat refuse,
 # which is the §8a collect-gating mistake with a different spelling.
 PAID_COMMANDS = frozenset(
-    {"ingest", "run", "calibrate", "verify-reviews", "probe-ai-granularity", "scan"}
+    {"ingest", "run", "calibrate", "verify-reviews", "probe-ai-granularity", "scan", "scan-organic"}
 )
 
 SAFE_COMMAND = "filter"
@@ -1205,7 +1269,7 @@ def main() -> int:
             dict(os.environ),
             [
                 "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-                "probe-dataforseo", "probe-ai-granularity", "scan", "collect", "rollup", "tick",
+                "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "collect", "rollup", "tick",
                 "render-heatmap", "render-delta",
             ],
         ),
@@ -1217,7 +1281,7 @@ def main() -> int:
         "command",
         choices=[
             "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-            "probe-dataforseo", "probe-ai-granularity", "scan", "collect", "rollup", "tick",
+            "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "collect", "rollup", "tick",
             "render-heatmap", "render-delta",
         ],
     )
@@ -1321,6 +1385,7 @@ def main() -> int:
         "probe-dataforseo": cmd_probe_dataforseo,
         "probe-ai-granularity": cmd_probe_ai_granularity,
         "scan": cmd_scan,
+        "scan-organic": cmd_scan_organic,
         "collect": cmd_collect,
         "rollup": cmd_rollup,
         "tick": cmd_tick,
