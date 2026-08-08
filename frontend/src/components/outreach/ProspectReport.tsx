@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Loader2, X, FileText, Users, Phone, Printer, AlertTriangle } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Loader2, X, FileText, Users, Phone, Printer, AlertTriangle, CheckCircle2, Download } from 'lucide-react'
 import { api } from '../../lib/api'
+import { useAuth } from '../../context/AuthContext'
 
 // Mirrors services/outreach_report.build_report. Deterministic, read-only — assembled from scan
 // data already captured (outreach report-assembly module). Two faces over ONE document: an internal
@@ -68,7 +69,10 @@ interface ReportData {
     measured: boolean; headline?: string; hook?: string; talking_points: TalkingPoint[]
     caveats?: string[]; message?: string
   }
-  client_facing: { status: string; approved: boolean; note: string }
+  client_facing: {
+    status: string; approved: boolean; note: string
+    approved_by?: string | null; approved_at?: string | null
+  }
 }
 
 type Face = 'internal' | 'client'
@@ -355,12 +359,58 @@ function InternalBrief({ data }: { data: ReportData }) {
 
 // ── Client-facing draft ──────────────────────────────────────────────────────
 function ClientDraft({ data }: { data: ReportData }) {
+  const { isAdmin } = useAuth()
+  const queryClient = useQueryClient()
+  const approved = data.client_facing.approved
+
+  const generate = useMutation({
+    mutationFn: async () => {
+      const blob = await api.postBlob(`/outreach/prospects/${data.prospect_id}/report/pdf`)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `report-${data.identity.name ?? data.prospect_id}.pdf`
+      document.body.appendChild(a); a.click(); a.remove()
+      URL.revokeObjectURL(url)
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['outreach-report', data.prospect_id] }),
+  })
+
   return (
     <div>
-      <div style={{ padding: '8px 12px', borderRadius: 10, background: '#fffbeb', border: '1px solid #fde68a',
-        color: '#92400e', fontSize: 12, display: 'flex', gap: 6, alignItems: 'center', marginBottom: 14 }}>
-        <AlertTriangle size={14} /> <strong>Draft.</strong> {data.client_facing.note}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
+        gap: 10, marginBottom: 14 }}>
+        <div style={{ flex: 1, padding: '8px 12px', borderRadius: 10, fontSize: 12,
+          display: 'flex', gap: 6, alignItems: 'center',
+          background: approved ? '#f0fdf4' : '#fffbeb',
+          border: `1px solid ${approved ? '#bbf7d0' : '#fde68a'}`,
+          color: approved ? '#166534' : '#92400e' }}>
+          {approved
+            ? <><CheckCircle2 size={14} /> <strong>Approved.</strong> This report may be shared with the prospect.</>
+            : <><AlertTriangle size={14} /> <strong>Draft.</strong> {data.client_facing.note}</>}
+        </div>
+        {isAdmin && (
+          <button
+            onClick={() => generate.mutate()}
+            disabled={generate.isPending}
+            title="Approve this report and download it as a PDF to send"
+            style={{ flexShrink: 0, display: 'inline-flex', gap: 6, alignItems: 'center',
+              padding: '8px 12px', borderRadius: 8, border: 'none', fontWeight: 600, fontSize: 12.5,
+              background: '#0f172a', color: '#fff', cursor: 'pointer' }}>
+            {generate.isPending
+              ? <Loader2 size={13} className="animate-spin" />
+              : <Download size={13} />}
+            {approved ? 'Download PDF' : 'Approve & download PDF'}
+          </button>
+        )}
       </div>
+      {generate.error instanceof Error && (
+        <div style={{ fontSize: 12, color: '#b91c1c', marginBottom: 10 }}>
+          {generate.error.message === 'report_not_measured'
+            ? 'Can’t generate a report yet — this area hasn’t been scanned.'
+            : generate.error.message}
+        </div>
+      )}
 
       <div style={{ fontSize: 18, fontWeight: 700, color: '#0f172a' }}>
         Your Google visibility for “{data.keyword}” in {data.submarket}

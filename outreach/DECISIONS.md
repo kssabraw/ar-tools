@@ -1049,3 +1049,36 @@ Pure logic unit-tested both sides (`outreach/api/tests/test_ai_visibility.py`;
 `ai_visibility_chatgpt_model` / `_openai_cost_cents`. **All four report increments are now built**
 (I-095): shell, organic, LLM. The client-facing PDF + approval gate (increment 4) remains — the
 client face is still a print-preview DRAFT.
+
+---
+
+## 2026-08-08 — Client-facing PDF + approval gate (report increment 4 — the last one)
+
+Increment 4 completes the per-prospect report (ISSUES I-095): the client-facing face becomes a real,
+shareable **PDF**, generated ONLY behind an explicit human approval.
+
+- **The approval gate is the module's hardest invariant** ("no prospect-facing asset without
+  explicit human approval" — CLAUDE.md; reporting-layer-spec §4a). Implemented as: the client-PDF
+  route is **admin-gated, and the click IS the approval**. Generating the PDF writes a
+  **`report_approval`** row (migration `20260808160000`, applied live) naming the actor and the
+  **content_hash of the exact bytes** approved (reporting §2 — a report shared in March regenerates
+  identically in June; the approval records which render was sanctioned). `approved_by` is an AR
+  Tools profile id with no cross-database FK (HANDOFF §2).
+- **Server-side HTML → WeasyPrint, reusing the suite's `client_report.render_pdf`** (already in the
+  platform-api image, so no Dockerfile change). `render_client_report_html` is a PURE builder of the
+  SAME assembled facts the on-screen client face shows — client tone, honest `not_scanned` blocks
+  (never an empty table), every value escaped, white-label agency footer, and NO draft watermark
+  (it is generated only after approval).
+- **Delivery is a direct download for v1** (`POST …/report/pdf` → `application/pdf` bytes; the
+  frontend downloads the blob), not an R2 signed URL. Cheapest-to-reverse: it needs no new bucket or
+  R2 creds in this context, and the admin downloads-and-sends. The R2 signed-URL delivery
+  (reporting §5, 90-day expiry) is a documented follow-up (ISSUES I-095) — the approval + content_hash
+  it would key on already exist.
+- **Refuses an unmeasured area** — there is no honest client report when nothing has been scanned, so
+  it raises rather than rendering an empty asset. The report's `client_facing` block flips from
+  `draft` to `approved` (with who/when) once an approval is on record, so the UI banner reflects it.
+
+Pure builder + approval-reflection unit-tested (`test_outreach_report.py`); the render + record flow
+validated end-to-end with a mocked WeasyPrint. Config `outreach_report_agency_name`. **All four
+report increments are now built** — the report is feature-complete; only the R2 delivery refinement
+remains open under I-095.

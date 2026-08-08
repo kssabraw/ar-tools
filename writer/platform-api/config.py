@@ -1662,6 +1662,9 @@ class Settings(BaseSettings):
     outreach_call_hook_pack_size: int = 3
     outreach_justification_max_competitors: int = 3
     outreach_field_review_min_sample: int = 5
+    # White-label name in the footer of the client-facing report PDF (increment 4). Mirrors the
+    # suite's client_report_agency_name; a prospect-facing asset should carry the agency's name.
+    outreach_report_agency_name: str = "Amazing Rankings"
 
     leadoff_income_acs_year: int = 2023
     leadoff_income_refresh_days: int = 365

@@ -2150,7 +2150,7 @@ report renders them as explicit `not_scanned` blocks until they land — never a
   DataForSEO's Google AI Overview/AI Mode needs no per-engine key, plus optionally ChatGPT). Same
   order-gated spend path. Fills the report's `llm` section.
 
-- **Client-facing PDF + approval gate (increment 4).** Today the client face is a print-preview DRAFT
+- **Client-facing PDF + approval gate (increment 4) — BUILT 2026-08-08.** Delivery is a direct download for v1; the R2 signed-URL delivery (reporting §5) is the one remaining refinement. Today the client face is a print-preview DRAFT
   marked `approved:false`. Turning it into a sendable asset needs the Phase 3 audit path: WeasyPrint
   render + signed R2 URL + the explicit-approval gate (reporting §4a; the no-unapproved-asset
   invariant). Build order: after the data layers, so the PDF has all three signals to show.
