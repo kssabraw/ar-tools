@@ -21,6 +21,7 @@ The section shapes are fixed now so a later slice fills a block, not restructure
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -184,6 +185,94 @@ def build_organic_section(
         "captured_depth": summary.get("captured_depth"),
         "competitors": competitors,
     }
+
+
+def _normalize_name(text: Optional[str]) -> str:
+    """Lower-case, alnum-and-spaces-only — the loose comparison `ai_granularity.normalize` uses on
+    the producer side, so both sides judge "same business" the same way."""
+    return re.sub(r"[^a-z0-9 ]", "", (text or "").lower()).strip()
+
+
+def detect_ai_mention(
+    *,
+    prospect_name: Optional[str],
+    prospect_domain: Optional[str],
+    named_businesses: list[str],
+    reference_domains: list[str],
+    raw_excerpt: Optional[str],
+) -> bool:
+    """Is THIS prospect named in one engine's answer? Pure, deterministic, conservative.
+
+    A match is: the prospect's (normalised) name appearing inside a named business or the raw
+    excerpt, OR the prospect's domain appearing in the AIO reference domains. The name must be ≥4
+    normalised chars to match on substring, so a two-letter shop name can't trivially hit — a false
+    NEGATIVE (the AI named them under a variant we didn't match) is the safe direction here: it
+    understates the prospect's visibility, never manufactures invisibility as a pitch.
+    """
+    if prospect_domain and prospect_domain in {d for d in reference_domains if d}:
+        return True
+    needle = _normalize_name(prospect_name)
+    if len(needle) < 4:
+        return False
+    haystacks = [_normalize_name(b) for b in named_businesses]
+    haystacks.append(_normalize_name(raw_excerpt))
+    return any(needle in h for h in haystacks if h)
+
+
+def build_llm_section(
+    *,
+    engine_rows: list[dict[str, Any]],
+    prospect_name: Optional[str],
+    prospect_domain: Optional[str],
+    region: Optional[str],
+    name_level: Optional[str],
+    sample_size: int = 5,
+) -> dict[str, Any]:
+    """The "AI / LLM visibility" section — per engine, is the prospect named. Pure.
+
+    `engine_rows` are stored `ai_scan_result` rows (latest per engine) for the prospect's region ×
+    keyword, or empty when no AI scan has run → a `not_scanned` block. Each engine reports `present`
+    (the engine gave a usable answer), `visible` (the prospect was named in it), and a small sample
+    of who WAS named — the "here's who the AI recommends instead of you" evidence. A
+    `neighbourhood`-level region carries the I-004 caveat that the model may have answered for the
+    metro.
+    """
+    if not engine_rows:
+        return not_scanned_section(SIGNAL_LLM, "The AI-visibility scan hasn't run for this region yet.")
+
+    prospect_domain = prospect_domain or None
+    engines: list[dict[str, Any]] = []
+    for row in engine_rows:
+        named = row.get("named_businesses") or []
+        present = bool(row.get("present"))
+        visible = present and detect_ai_mention(
+            prospect_name=prospect_name,
+            prospect_domain=prospect_domain,
+            named_businesses=named,
+            reference_domains=row.get("reference_domains") or [],
+            raw_excerpt=row.get("raw_excerpt"),
+        )
+        engines.append({
+            "engine": row.get("engine"),
+            "present": present,
+            "visible": visible,
+            "named_count": len(named),
+            "sample_businesses": [b for b in named[:sample_size]],
+        })
+
+    section: dict[str, Any] = {
+        "status": STATUS_MEASURED,
+        "signal": SIGNAL_LLM,
+        "region": region,
+        "name_level": name_level,
+        "engines": engines,
+    }
+    if name_level == "neighbourhood":
+        section["caveat"] = (
+            "This is a neighbourhood-level check; an AI assistant may answer for the wider metro, "
+            "so read a miss here as directional."
+        )
+    return section
 
 
 def build_report(

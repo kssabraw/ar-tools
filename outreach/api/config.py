@@ -138,6 +138,16 @@ class Settings(BaseSettings):
     # cheapest way to find out.
     ai_granularity_model: str = "gpt-5.4"
 
+    # --- AI-visibility scan (report increment 3) -----------------------------------------
+    # The report's LLM signal: does an AI assistant name this business for its keyword in its
+    # region. Two engines (owner ruling 2026-08-08): ChatGPT (OpenAI, reuses OUTREACH_OPENAI_API_KEY)
+    # and Google AI Overview (DataForSEO). The ChatGPT model is a consumer-reachable one, like the
+    # granularity spike. OpenAI does not return a per-call cost, so the ledger stores this configured
+    # estimate (the DataForSEO/AIO side rides dataforseo_cost_per_request_cents) — reconciled against
+    # the dashboard like every other rate here.
+    ai_visibility_chatgpt_model: str = "gpt-5.4"
+    ai_visibility_openai_cost_cents: int = 2
+
     # --- Cost guardrails -----------------------------------------------------------------
     # Abort the paid stage if the pre-flight projection exceeds this (brief §4).
     max_market_run_cost_cents: int = 5000

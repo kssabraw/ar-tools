@@ -123,6 +123,77 @@ def test_build_organic_section_no_website_still_lists_competitors():
     assert section["competitors"][0]["domain"] == "ace.com"
 
 
+# --- detect_ai_mention + build_llm_section ----------------------------------------------------
+
+
+def test_detect_ai_mention_name_domain_and_short_guard():
+    # Named directly.
+    assert orep.detect_ai_mention(
+        prospect_name="Drips Plumbing", prospect_domain=None,
+        named_businesses=["Ace", "Drips Plumbing"], reference_domains=[], raw_excerpt=None) is True
+    # Named only in prose.
+    assert orep.detect_ai_mention(
+        prospect_name="Drips Plumbing", prospect_domain=None,
+        named_businesses=[], reference_domains=[], raw_excerpt="…try Drips Plumbing on Main St…") is True
+    # Domain cited in AIO references.
+    assert orep.detect_ai_mention(
+        prospect_name="X", prospect_domain="drips.com",
+        named_businesses=[], reference_domains=["ace.com", "drips.com"], raw_excerpt=None) is True
+    # Not named at all.
+    assert orep.detect_ai_mention(
+        prospect_name="Drips Plumbing", prospect_domain="drips.com",
+        named_businesses=["Ace", "Bolt"], reference_domains=["ace.com"], raw_excerpt="Ace and Bolt") is False
+    # Short name never matches on substring (avoids trivial hits).
+    assert orep.detect_ai_mention(
+        prospect_name="AB", prospect_domain=None,
+        named_businesses=["ABC Plumbing and Sons"], reference_domains=[], raw_excerpt=None) is False
+
+
+def test_build_llm_section_measured_marks_visibility_per_engine():
+    rows = [
+        {"engine": "chatgpt", "present": True,
+         "named_businesses": ["Ace Plumbing", "Bolt Rooter", "Drips Plumbing"],
+         "reference_domains": [], "raw_excerpt": ""},
+        {"engine": "google_aio", "present": True,
+         "named_businesses": ["Ace Plumbing"], "reference_domains": ["ace.com"], "raw_excerpt": "Ace"},
+    ]
+    section = orep.build_llm_section(
+        engine_rows=rows, prospect_name="Drips Plumbing", prospect_domain="drips.com",
+        region="Van Nuys", name_level="suburb",
+    )
+    assert section["status"] == orep.STATUS_MEASURED
+    by = {e["engine"]: e for e in section["engines"]}
+    assert by["chatgpt"]["visible"] is True                      # named in ChatGPT
+    assert by["google_aio"]["visible"] is False                  # not named in AIO
+    assert by["google_aio"]["sample_businesses"] == ["Ace Plumbing"]
+    assert "caveat" not in section                               # suburb -> no neighbourhood caveat
+
+
+def test_build_llm_section_neighbourhood_carries_caveat():
+    rows = [{"engine": "chatgpt", "present": True, "named_businesses": ["Ace"],
+             "reference_domains": [], "raw_excerpt": ""}]
+    section = orep.build_llm_section(
+        engine_rows=rows, prospect_name="Drips", prospect_domain=None,
+        region="Hollywood", name_level="neighbourhood",
+    )
+    assert "caveat" in section
+
+
+def test_build_llm_section_empty_is_not_scanned():
+    section = orep.build_llm_section(
+        engine_rows=[], prospect_name="Drips", prospect_domain=None, region="Van Nuys", name_level=None)
+    assert section["status"] == orep.STATUS_NOT_SCANNED
+    assert section["signal"] == orep.SIGNAL_LLM
+
+
+def test_build_llm_section_engine_present_false_is_never_visible():
+    rows = [{"engine": "chatgpt", "present": False, "named_businesses": [],
+             "reference_domains": [], "raw_excerpt": None}]
+    section = orep.build_llm_section(
+        engine_rows=rows, prospect_name="Drips", prospect_domain=None, region="X", name_level="city")
+    assert section["engines"][0]["visible"] is False
+
+
 def _prospect():
     return {"id": "p1", "name": "Drips Plumbing", "category": "plumber", "phone": "+1",
             "website": "", "address": "1 Main St", "rating": 4.1, "review_count": 4}

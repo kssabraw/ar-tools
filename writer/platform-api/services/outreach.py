@@ -1471,6 +1471,74 @@ def prospect_justification(prospect_id: str, snapshot_id: str | None = None) -> 
     )
 
 
+def _llm_section(client: Any, orep: Any, prospect: dict[str, Any], region_name: str, *, keyword: str | None) -> dict[str, Any]:
+    """The report's AI-visibility section for a prospect: find the ai_region matching its submarket
+    name, read the latest AI scan per engine for that region × keyword, and hand the rows to the
+    pure builder. Best-effort — before the ai_visibility migration is applied (or when no scan has
+    run) it degrades to a not_scanned block rather than raising."""
+    empty = orep.build_llm_section(
+        engine_rows=[], prospect_name=prospect.get("name"),
+        prospect_domain=orep.domain_of(prospect.get("website")),
+        region=region_name, name_level=None,
+    )
+    market_id = prospect.get("market_id")
+    if not market_id or not region_name:
+        return empty
+    try:
+        regions = (
+            client.table("ai_region")
+            .select("id, name, name_level")
+            .eq("market_id", market_id)
+            .ilike("name", region_name)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not regions:
+            return empty
+        region = regions[0]
+
+        if keyword:
+            krows = (
+                client.table("keyword").select("id").eq("market_id", market_id)
+                .ilike("term", keyword).limit(1).execute().data or []
+            )
+        else:
+            krows = (
+                client.table("keyword").select("id").eq("market_id", market_id)
+                .order("is_primary", desc=True).limit(1).execute().data or []
+            )
+        if not krows:
+            return empty
+        keyword_id = krows[0]["id"]
+
+        scan_rows = (
+            client.table("ai_scan_result")
+            .select("engine, present, named_businesses, reference_domains, raw_excerpt, scanned_at")
+            .eq("ai_region_id", region["id"])
+            .eq("keyword_id", keyword_id)
+            .order("scanned_at", desc=True)
+            .range(0, MAX_PAGE_SIZE - 1)
+            .execute()
+            .data
+            or []
+        )
+        latest: dict[str, Any] = {}
+        for row in scan_rows:
+            latest.setdefault(row["engine"], row)
+        return orep.build_llm_section(
+            engine_rows=list(latest.values()),
+            prospect_name=prospect.get("name"),
+            prospect_domain=orep.domain_of(prospect.get("website")),
+            region=region["name"],
+            name_level=region.get("name_level"),
+        )
+    except Exception as exc:  # noqa: BLE001 — the report stands without the LLM section
+        logger.warning("outreach_report_llm_unavailable", extra={"error": str(exc)})
+        return empty
+
+
 def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[str, Any]:
     """Assemble the per-prospect competitive report — the internal brief and the client-facing
     draft, over one shared document.
@@ -1489,7 +1557,7 @@ def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[st
     rows = (
         client.table("prospect")
         .select(
-            "id, name, submarket_id, place_id, phone, website, address, category, rating, "
+            "id, name, market_id, submarket_id, place_id, phone, website, address, category, rating, "
             "review_count, review_count_inferred_zero, business_status"
         )
         .eq("id", prospect_id)
@@ -1513,11 +1581,7 @@ def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[st
             submarket_name = sub[0]["name"]
 
     justification = prospect_justification(prospect_id, snapshot_id)
-
-    llm = orep.not_scanned_section(
-        orep.SIGNAL_LLM,
-        "The AI-visibility scan hasn't run for this prospect yet.",
-    )
+    llm = _llm_section(client, orep, prospect, submarket_name, keyword=None)
 
     if not justification.get("measured"):
         organic = orep.not_scanned_section(
@@ -1539,6 +1603,10 @@ def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[st
     snap_id = prov["snapshot_id"]
     keyword = prov["keyword"]
     live_points = prov["live_points"]
+
+    # Recompute the LLM section against the snapshot's actual keyword + region (the early call used
+    # the primary keyword for the not-measured path).
+    llm = _llm_section(client, orep, prospect, prov.get("submarket") or submarket_name, keyword=keyword)
 
     # Organic-SERP signal (increment 2): the stored capture for this snapshot, if the organic scan
     # has run for it. Absent → the builder returns a not_scanned block (never an empty table).

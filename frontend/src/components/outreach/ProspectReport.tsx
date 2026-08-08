@@ -36,6 +36,22 @@ interface OrganicSection {
   captured_depth?: number | null
   competitors?: OrganicCompetitor[]
 }
+interface LlmEngine {
+  engine: string
+  present: boolean
+  visible: boolean
+  named_count: number
+  sample_businesses: string[]
+}
+interface LlmSection {
+  status: 'measured' | 'not_scanned'
+  signal: string
+  reason?: string
+  region?: string | null
+  name_level?: string | null
+  caveat?: string
+  engines?: LlmEngine[]
+}
 interface TalkingPoint { element: string; text: string }
 interface ReportData {
   prospect_id: string
@@ -46,7 +62,7 @@ interface ReportData {
   }
   keyword: string
   submarket: string
-  signals: { maps: Section; organic: OrganicSection; llm: Section }
+  signals: { maps: Section; organic: OrganicSection; llm: LlmSection }
   heatmap_available: boolean
   justification: {
     measured: boolean; headline?: string; hook?: string; talking_points: TalkingPoint[]
@@ -244,6 +260,54 @@ function OrganicTable({ s, keyword, submarket, clientTone }: {
   )
 }
 
+const LLM_ENGINE_LABEL: Record<string, string> = {
+  chatgpt: 'ChatGPT',
+  google_aio: 'Google AI Overview',
+}
+
+function LlmTable({ s, name, clientTone }: { s: LlmSection; name: string; clientTone?: boolean }) {
+  if (s.status !== 'measured' || !s.engines || s.engines.length === 0) {
+    return <NotScanned label={clientTone ? 'AI assistants' : 'AI answers'}
+      reason={s.reason ?? 'the AI-visibility scan hasn’t run for this region yet.'} />
+  }
+  return (
+    <>
+      <div style={{ display: 'grid', gap: 8 }}>
+        {s.engines.map(e => (
+          <div key={e.engine} style={{ display: 'flex', gap: 10, alignItems: 'flex-start',
+            padding: '8px 10px', background: '#f8fafc', borderRadius: 8 }}>
+            <span style={{ minWidth: 140, fontWeight: 600, fontSize: 12.5, color: '#334155' }}>
+              {LLM_ENGINE_LABEL[e.engine] ?? e.engine}
+            </span>
+            <div style={{ fontSize: 12.5 }}>
+              {!e.present ? (
+                <span style={{ color: '#94a3b8' }}>No AI answer returned for this search.</span>
+              ) : e.visible ? (
+                <span style={{ color: '#166534', fontWeight: 600 }}>
+                  ✓ {clientTone ? `You’re named` : `${name} is named`} in the AI answer.
+                </span>
+              ) : (
+                <div>
+                  <span style={{ color: '#b91c1c', fontWeight: 600 }}>
+                    ✗ {clientTone ? 'You’re not named' : `${name} is not named`}.
+                  </span>
+                  {e.sample_businesses.length > 0 && (
+                    <div style={{ color: '#64748b', marginTop: 2 }}>
+                      It names: {e.sample_businesses.slice(0, 4).join(', ')}
+                      {e.named_count > 4 ? ` (+${e.named_count - 4} more)` : ''}.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      {s.caveat && <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>{s.caveat}</div>}
+    </>
+  )
+}
+
 // ── Internal brief ───────────────────────────────────────────────────────────
 function InternalBrief({ data }: { data: ReportData }) {
   const j = data.justification
@@ -264,7 +328,7 @@ function InternalBrief({ data }: { data: ReportData }) {
       <OrganicTable s={data.signals.organic} keyword={data.keyword} submarket={data.submarket} />
 
       <SectionTitle>AI / LLM visibility</SectionTitle>
-      <NotScanned label="AI answers" reason={data.signals.llm.reason} />
+      <LlmTable s={data.signals.llm} name={data.identity.name ?? 'This business'} />
 
       {j.hook && (
         <>
@@ -309,8 +373,8 @@ function ClientDraft({ data }: { data: ReportData }) {
       <SectionTitle>Google search results</SectionTitle>
       <OrganicTable s={data.signals.organic} keyword={data.keyword} submarket={data.submarket} clientTone />
 
-      <SectionTitle>AI assistants (ChatGPT, Google AI, and more)</SectionTitle>
-      <NotScanned label="AI answers" reason="This section will be added when the AI-visibility scan is run." />
+      <SectionTitle>AI assistants (ChatGPT, Google AI Overview)</SectionTitle>
+      <LlmTable s={data.signals.llm} name={data.identity.name ?? 'You'} clientTone />
 
       <div style={{ marginTop: 16, fontSize: 11, color: '#94a3b8' }}>
         Based on a live scan of the Google map results across {data.submarket}. Figures are a point-in-time snapshot.

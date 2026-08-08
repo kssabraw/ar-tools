@@ -477,6 +477,74 @@ def cmd_scan_organic(args) -> int:
     return 0 if (report.stored or report.already_captured) else 1
 
 
+def cmd_scan_ai(args) -> int:
+    """Capture AI-visibility for a market's ai_regions x a keyword. BILLS (OpenAI + one AIO request per region).
+
+    The report's LLM signal (outreach ISSUES I-095, increment 3): asks ChatGPT + Google AI Overview
+    "best <keyword> in <region>" for each seeded ai_region and stores what they name, so the report
+    can check whether a given prospect is named. Runs per REGION (not per prospect) — the answer is
+    shared. `--submarket` narrows to the one ai_region of that name; otherwise every region in the
+    market is scanned. `--keyword` picks the term (defaults to the market's primary).
+    """
+    import asyncio as _asyncio
+
+    from api.services import ai_visibility
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    settings = get_settings()
+    client = _client()
+    market_id = _market_id(client, definition.name)
+
+    regions = (
+        client.table("ai_region").select("*").eq("market_id", market_id).order("name").execute().data
+        or []
+    )
+    if args.submarket:
+        regions = [r for r in regions if r["name"].lower() == args.submarket.lower()]
+    if not regions:
+        known = ", ".join(
+            sorted(r["name"] for r in (
+                client.table("ai_region").select("name").eq("market_id", market_id).execute().data or []
+            ))
+        )
+        print(
+            f"REFUSED: no ai_region matched. Known regions: {known or '(none — seed ai_region first)'}",
+            file=sys.stderr,
+        )
+        return 2
+
+    keywords = client.table("keyword").select("*").eq("market_id", market_id).execute().data or []
+    if args.keyword:
+        keywords = [k for k in keywords if k["term"].lower() == args.keyword.lower()]
+    else:
+        keywords = [k for k in keywords if k.get("is_primary")] or keywords[:1]
+    if len(keywords) != 1:
+        terms = ", ".join(sorted(k["term"] for k in keywords))
+        print(f"REFUSED: pass --keyword to pick exactly one of: {terms}", file=sys.stderr)
+        return 2
+
+    out = []
+    for region in regions:
+        report = _asyncio.run(
+            ai_visibility.run_ai_scan(client, settings, region, keywords[0], market_id=market_id)
+        )
+        out.append(
+            {
+                "ai_region": report.ai_region,
+                "keyword": report.keyword,
+                "stored": report.stored,
+                "engines": [
+                    {"engine": e.engine, "present": e.present,
+                     "named": len(e.named_businesses), "error": e.error}
+                    for e in report.engines
+                ],
+                "problems": report.problems,
+            }
+        )
+    print(json.dumps({"regions": out}, indent=2))
+    return 0 if any(r["stored"] for r in out) else 1
+
+
 def cmd_collect(args) -> int:
     """Drain the ready list and store whatever is done. FREE, and safe to run on any tick."""
     import asyncio as _asyncio
@@ -1125,7 +1193,7 @@ _SHA_VARS = ("OUTREACH_BUILD_SHA", "RAILWAY_GIT_COMMIT_SHA", "SOURCE_COMMIT", "G
 # counterpart cannot manufacture. Listing `tick` here would make every cron heartbeat refuse,
 # which is the §8a collect-gating mistake with a different spelling.
 PAID_COMMANDS = frozenset(
-    {"ingest", "run", "calibrate", "verify-reviews", "probe-ai-granularity", "scan", "scan-organic"}
+    {"ingest", "run", "calibrate", "verify-reviews", "probe-ai-granularity", "scan", "scan-organic", "scan-ai"}
 )
 
 SAFE_COMMAND = "filter"
@@ -1269,7 +1337,7 @@ def main() -> int:
             dict(os.environ),
             [
                 "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-                "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "collect", "rollup", "tick",
+                "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "collect", "rollup", "tick",
                 "render-heatmap", "render-delta",
             ],
         ),
@@ -1281,7 +1349,7 @@ def main() -> int:
         "command",
         choices=[
             "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-            "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "collect", "rollup", "tick",
+            "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "collect", "rollup", "tick",
             "render-heatmap", "render-delta",
         ],
     )
@@ -1386,6 +1454,7 @@ def main() -> int:
         "probe-ai-granularity": cmd_probe_ai_granularity,
         "scan": cmd_scan,
         "scan-organic": cmd_scan_organic,
+        "scan-ai": cmd_scan_ai,
         "collect": cmd_collect,
         "rollup": cmd_rollup,
         "tick": cmd_tick,
