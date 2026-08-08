@@ -245,6 +245,9 @@ _SYSTEM = (
     "demand or read an SOP section before committing when useful, but stay within "
     "the drill-down budget.\n"
     "- Never invent metrics; if you lack data, say so in the rationale.\n\n"
+    "OUTPUT: the assessment is a SHORT 2-4 sentence summary — the actual plan MUST "
+    "go in `pillars` (3-6 pillars, each with 2-4 clusters). NEVER emit an empty "
+    "pillars list; do not put the plan in the assessment prose.\n\n"
     "When done, call emit_topic_plan exactly once."
 )
 
@@ -286,8 +289,13 @@ async def run_topic_strategy(client_id: str, ctx: dict, evidence: dict) -> Optio
     drilldowns = 0
     emitted: Optional[dict] = None
 
-    for round_no in range(max_dd + 3):
-        force_emit = round_no >= max_dd + 1 or drilldowns >= max_dd
+    for round_no in range(max_dd + 4):
+        # Force the emit only when the ROUND budget is spent — not the instant the
+        # drill-down budget runs out. Once drilldowns hit the cap the tools return
+        # a "cap reached" nudge, so the model still gets free rounds to COMPOSE the
+        # pillar plan before it's forced; forcing on drilldowns>=cap made it dump
+        # its plan into the assessment and emit pillars:[] (observed 2026-08-08).
+        force_emit = round_no >= max_dd + 2
         resp = await retry_transient(
             lambda: api.messages.create(
                 model=settings.keyword_topic_model,
@@ -307,7 +315,10 @@ async def run_topic_strategy(client_id: str, ctx: dict, evidence: dict) -> Optio
             break
         if not tool_uses:
             messages.append({"role": "assistant", "content": resp.content})
-            messages.append({"role": "user", "content": "Call emit_topic_plan now."})
+            messages.append({"role": "user", "content":
+                "Call emit_topic_plan now with the FULL plan — pillars must not be "
+                "empty; put the pillars → clusters there and keep the assessment to "
+                "2-4 sentences."})
             continue
         messages.append({"role": "assistant", "content": resp.content})
         results = []

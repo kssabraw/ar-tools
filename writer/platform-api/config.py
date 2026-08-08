@@ -981,7 +981,7 @@ class Settings(BaseSettings):
     # the shared context providers) and emits a topical-authority plan (pillars →
     # clusters). Falls back to the deterministic topic cards when disabled/unavailable.
     keyword_topic_strategist_enabled: bool = True
-    keyword_topic_strategist_max_tokens: int = 4000
+    keyword_topic_strategist_max_tokens: int = 8000    # room for a full pillar/cluster plan
     keyword_topic_max_drilldowns: int = 4              # investigation tool calls per run
     keyword_topic_sop_char_budget: int = 16000         # SOP grounding block size
     keyword_topic_context_char_budget: int = 12000     # client-position JSON size
