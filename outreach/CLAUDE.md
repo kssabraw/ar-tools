@@ -23,16 +23,31 @@ configuration reference. The six specs are reference material, not a work order.
 
 ## Current phase
 
-**Read `HANDOFF.md` first — it carries current state.** As of 2026-08-04: Phase 1 and 1b are
-merged, and Phase 2's **storage foundations**, **pinned geometry generator**, **suite router** and
-**rollup-integrity guard** (I-069) are built and applied live.
+**Read `HANDOFF.md` first — it carries current state.** As of 2026-08-08: Phase 1 and 1b are
+merged, Phase 2's storage foundations / geometry / router / rollup / placeholder score are live,
+and **the first live scan is DONE** — `emergency plumber` × whole-city Los Angeles, run through the
+new any-city onboard path: 122 discovered, 83 survived, 81/81 points collected, snapshot rolled up,
+119 coverage rows. The scan tables hold real data for the first time.
 
-**Phase 2 SCANNING: the geogrid client and collector are BUILT; nothing has been scanned yet.**
-`api/services/maps_scan.py` (pure — task bodies, `tasks_ready`/`task_get` parsing, completeness)
-and `api/services/scan_runner.py` (submission, collection, finalization) with the `scan_task`
-bookkeeping table. Two commands: `scan` (paid, one submarket × one keyword) and `collect` (free,
-never spend-gated). What remains before the first live run is a Railway deploy, the confirm token,
-and a **second, frequent cron schedule** for `collect` — see below.
+**Phase 2 SCANNING is PROVEN, not just built.** `api/services/maps_scan.py` (pure — task bodies,
+`tasks_ready`/`task_get` parsing, completeness) and `api/services/scan_runner.py` (submission,
+collection, finalization) with the `scan_task` bookkeeping table ran end-to-end against a live
+DataForSEO response. Commands: `scan` (paid, one submarket × one keyword), `collect` (free), and
+`tick` (the cron heartbeat — collect + drain at most one `scan_request` + one `onboard_request`),
+live on a 15-minute cron since 2026-08-07.
+
+**The ANY-CITY SCAN is BUILT + MERGED (2026-08-08).** The scan is no longer confined to the seeded
+LA market. A user types any Google-resolved **city** + optional Google-recognized **sub-area** + a
+**free-text consumer search** (what a customer types, not a GBP category) on the `/outreach` page;
+platform-api discovers (Outscraper) → filters → scans (geogrid), the consumer search driving BOTH
+the ingest category AND the scan keyword. This is required because `prospect_coverage` joins
+`grid_result` to *pre-ingested* `prospect` rows on place_id (I-092) — scanning a never-ingested city
+would yield zero coverage, so the onboard path ingests-then-scans as one staged **`onboard_request`**
+order (migration `20260808120000`, applied live; `api/services/onboard_queue.py`; drained by `tick`,
+one per heartbeat, order row is its own spend confirmation). Geo enumeration is OSM-enumerate
+(`platform-api services/outreach_geo.py` via `overpass.places_near`) + Google-verify
+(`place_is_within_city`, moved to the FastAPI-free `services/maps_geocode.py`). **platform-api is now
+configured** with the Outreacher credentials (Railway cross-service reference variables).
 
 **The collector's schedule is load-bearing, not a preference.** The ready list holds a task ~3
 days. A collector on the 15-day scan cadence lets every task age off between runs, silently
@@ -55,15 +70,21 @@ Phase 4 model's, and the reporting layer already reads it as one). `scan_snapsho
 its own grid centre now (I-078 resolved), which had to happen before the first snapshot was
 written rather than after.
 
-**The UI trigger is BUILT (2026-08-06, owner ruling — resolves I-072, supersedes HANDOFF §11a's
-default).** A `scan_request` signed order (placed admin-only from the suite SPA's `/outreach`
-page via platform-api) is the UI path's spend confirmation; the outreach `tick` command
-(collect + drain at most ONE order per heartbeat) executes it on the cron §11 already required.
+**The UI trigger is BUILT + MERGED (2026-08-06 `scan_request`, extended 2026-08-08 to any-city
+`onboard_request` — resolves I-072).** Two signed-order types, both placed admin-only from the
+`/outreach` page via platform-api and both its own spend confirmation: `scan_request` (scan a
+pre-ingested submarket) and `onboard_request` (discover→filter→scan any city). The outreach `tick`
+command (collect + drain at most ONE of each per heartbeat) executes them on the 15-minute cron.
 `tick` is deliberately NOT in `PAID_COMMANDS` — the order row is its confirmation — and `collect`
 stays free and never drains. The env token still gates every config-driven paid command.
 
-Still unbuilt downstream: the organic/AI layers and the heatmap — both of which need scan rows
-that now have a producer, a consumer, and no data yet.
+**Phase 3 heatmap renderers are BUILT + MERGED** (#580 slice 1: deterministic per-prospect heatmap +
+`report_artifact` provenance; #589 slice 2: `heatmap_pair` + `heatmap_delta`). The renderer now has a
+live snapshot to draw from, but nothing has rendered an artifact yet (no `report_artifact` rows).
+
+Still unbuilt downstream: the rest of Phase 3 (call hook → outcome/touch + emit webhook → approval
+gate + PDF → client views), the organic/AI scan layers, and the Phase 4 scoring model — see
+HANDOFF §12 for the value-ordered roadmap.
 
 **The pipeline is an AR Tools SUITE MODULE, not a standalone tool** (owner ruling, HANDOFF §2).
 The database stays in the Outreacher project; the API and UI belong in `platform-api` and the
