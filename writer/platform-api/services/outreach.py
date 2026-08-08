@@ -746,6 +746,252 @@ def list_keywords(market_id: str) -> list[dict[str, Any]]:
     return rows
 
 
+# --- Any-city onboarding: create-or-get the rows a typed city needs, then place the order ------
+#
+# The "City + Business type" form (DECISIONS.md 2026-08-08) needs market/submarket/keyword rows to
+# exist before an order can name them. platform-api creates them here (free — geocoded upstream by
+# `outreach_geo`), then writes an `onboard_request` the outreach `tick` executes as
+# discover → filter → scan. Get-or-CREATE, never update: grid geometry is immutable once scanned,
+# so a repeat pick of the same city/sub-area reuses the existing rows rather than drifting a
+# centre. Idempotency key is the canonical name (Google's formatted name is stable), scoped to its
+# parent — market by name, submarket by (market, name), keyword by (market, term).
+
+ONBOARD_REQUEST_ACTIVE_STATUSES: tuple[str, ...] = ("pending", "running")
+
+
+def _ensure_market(client: Any, *, name: str, lat: float, lng: float) -> str:
+    from config import settings
+
+    existing = (
+        client.table("market").select("id").eq("name", name).limit(1).execute().data or []
+    )
+    if existing:
+        return str(existing[0]["id"])
+    row = {
+        "name": name,
+        "center_lat": lat,
+        "center_lng": lng,
+        "radius_miles": settings.outreach_onboard_market_radius_miles,
+    }
+    written = client.table("market").insert(row).execute().data or []
+    if not written:
+        raise OutreachError("market_not_created")
+    return str(written[0]["id"])
+
+
+def _ensure_submarket(client: Any, *, market_id: str, name: str, lat: float, lng: float) -> str:
+    from config import settings
+
+    existing = (
+        client.table("submarket")
+        .select("id")
+        .eq("market_id", market_id)
+        .eq("name", name)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if existing:
+        return str(existing[0]["id"])
+    row = {
+        "market_id": market_id,
+        "name": name,
+        "center_lat": lat,
+        "center_lng": lng,
+        "grid_radius_miles": settings.outreach_onboard_grid_radius_miles,
+        "grid_spacing_miles": settings.outreach_onboard_grid_spacing_miles,
+    }
+    written = client.table("submarket").insert(row).execute().data or []
+    if not written:
+        raise OutreachError("submarket_not_created")
+    return str(written[0]["id"])
+
+
+def _ensure_keyword(client: Any, *, market_id: str, term: str) -> str:
+    existing = (
+        client.table("keyword")
+        .select("id")
+        .eq("market_id", market_id)
+        .eq("term", term)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if existing:
+        return str(existing[0]["id"])
+    # First keyword in a fresh market is its primary; the unique (market_id, term) index is
+    # authoritative, so a racing insert is caught and re-read rather than duplicated.
+    has_any = (
+        client.table("keyword").select("id").eq("market_id", market_id).limit(1).execute().data
+        or []
+    )
+    row = {"market_id": market_id, "term": term, "is_primary": not has_any}
+    try:
+        written = client.table("keyword").insert(row).execute().data or []
+    except Exception as exc:  # noqa: BLE001
+        if "keyword" in str(exc) and "term" in str(exc):
+            again = (
+                client.table("keyword")
+                .select("id")
+                .eq("market_id", market_id)
+                .eq("term", term)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if again:
+                return str(again[0]["id"])
+        raise
+    if not written:
+        raise OutreachError("keyword_not_created")
+    return str(written[0]["id"])
+
+
+def create_onboard_from_place(
+    *,
+    city: dict[str, Any],
+    subarea: dict[str, Any],
+    business_type: str,
+    note: str | None,
+    actor_id: str,
+) -> dict[str, Any]:
+    """The "City + Business type" order: create-or-get the market/sub-area/keyword rows for a typed
+    city, then place a signed `onboard_request` (discover → filter → scan). Admin-gated at the
+    router — this order authorizes BOTH a paid discovery pull and a scan.
+
+    `city` = {name, lat, lng} (resolved by `outreach_geo`), `subarea` = {name, lat, lng} (a
+    verified sub-area the operator picked), `business_type` = the Outscraper category + scan term.
+    """
+    business_type = (business_type or "").strip()
+    city_name = str(city.get("name") or "").strip()
+    sub_name = str(subarea.get("name") or "").strip()
+    if not business_type:
+        raise OutreachError("business_type_required")
+    if not city_name or subarea.get("lat") is None or subarea.get("lng") is None:
+        raise OutreachError("subarea_incomplete")
+
+    client = get_outreach_client()
+    market_id = _ensure_market(
+        client, name=city_name, lat=float(city["lat"]), lng=float(city["lng"])
+    )
+    submarket_id = _ensure_submarket(
+        client, market_id=market_id, name=sub_name,
+        lat=float(subarea["lat"]), lng=float(subarea["lng"]),
+    )
+    keyword_id = _ensure_keyword(client, market_id=market_id, term=business_type)
+
+    active = (
+        client.table("onboard_request")
+        .select("id, status")
+        .eq("submarket_id", submarket_id)
+        .eq("keyword_id", keyword_id)
+        .in_("status", list(ONBOARD_REQUEST_ACTIVE_STATUSES))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if active:
+        raise OutreachError(
+            "onboard_request_already_active",
+            "an onboard for this city sub-area x business type is already pending or running",
+        )
+
+    row = {
+        "submarket_id": submarket_id,
+        "keyword_id": keyword_id,
+        "category": business_type,
+        "region": str(city.get("region") or "").strip(),
+        "requested_by": actor_id,
+        "note": (note or "").strip() or None,
+    }
+    try:
+        written = client.table("onboard_request").insert(row).execute().data or []
+    except Exception as exc:  # noqa: BLE001 — the one-active index refused a race our read missed
+        if "onboard_request_one_active" in str(exc):
+            raise OutreachError(
+                "onboard_request_already_active",
+                "an onboard for this city sub-area x business type is already pending or running",
+            ) from exc
+        raise
+    if not written:
+        raise OutreachError("onboard_request_not_created")
+    order = written[0]
+    order["submarket"] = {"name": sub_name}
+    order["keyword"] = {"term": business_type}
+    order["market"] = {"name": city_name}
+    return order
+
+
+def list_onboard_requests(
+    *, status: str | None, limit: int, offset: int
+) -> dict[str, Any]:
+    client = get_outreach_client()
+    query = (
+        client.table("onboard_request")
+        .select(
+            "id, submarket_id, keyword_id, category, region, status, stage, "
+            "prospects_ingested, prospects_survived, snapshot_id, error, "
+            "created_at, started_at, finished_at, "
+            "submarket(name), keyword(term)"
+        )
+        .order("created_at", desc=True)
+    )
+    if status:
+        query = query.eq("status", status)
+    rows = query.range(offset, offset + limit - 1).execute().data or []
+    return {"onboard_requests": rows, "total": len(rows)}
+
+
+def onboard_request_detail(request_id: str) -> dict[str, Any]:
+    client = get_outreach_client()
+    rows = (
+        client.table("onboard_request")
+        .select("*, submarket(name), keyword(term)")
+        .eq("id", request_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise OutreachError("onboard_request_not_found")
+    return {"onboard_request": rows[0]}
+
+
+def cancel_onboard_request(request_id: str, actor_id: str) -> dict[str, Any]:
+    """Withdraw a PENDING onboard. Conditional on status, like the scan-order cancel: a row the
+    tick has claimed is executing (mid-discovery — real money), so past `pending` the answer is to
+    let it resolve and read the outcome, not orphan the spend."""
+    from datetime import datetime, timezone
+
+    client = get_outreach_client()
+    hit = (
+        client.table("onboard_request")
+        .update(
+            {
+                "status": "cancelled",
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "error": None,
+            }
+        )
+        .eq("id", request_id)
+        .eq("status", "pending")
+        .execute()
+        .data
+        or []
+    )
+    if not hit:
+        raise OutreachError(
+            "onboard_request_not_cancellable",
+            "only a pending onboard can be cancelled; one already running resolves on its own",
+        )
+    return {"onboard_request": hit[0]}
+
+
 def create_scan_request(
     *, submarket_id: str, keyword_id: str, note: str | None, actor_id: str
 ) -> dict[str, Any]:

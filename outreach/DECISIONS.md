@@ -823,3 +823,43 @@ sandbox, so it is deliberately verified live rather than merged blind.
 Refactor rider: `place_is_within_city` moved from `local_seo_silo` (imports FastAPI) to
 `maps_geocode` (pure), re-exported for existing callers — so the outreach geo layer reuses it
 without importing a web-framework-bound module.
+
+---
+
+## 2026-08-08 — Any-city onboarding slice 2: the discover→filter→scan order + form
+
+Slice 1 gave a read-only geo layer (resolve city + verified sub-areas). Slice 2 makes "City +
+Business type → Go" actually run, and it required a genuinely new order type because a typed city
+has never been ingested (I-092: a scan of it rolls up zero prospects).
+
+**A SEPARATE `onboard_request` table, not a flag on `scan_request`.** `scan_request` authorizes one
+thing — a scan of an already-ingested submarket — and its drain, its budget check, and its
+one-active guard are all built around exactly that one paid step. An onboard order spends
+differently: a variable Outscraper discovery pull PLUS a scan, across three stages. Bolting an
+"ingest first" flag onto `scan_request` would bend its invariants around a second spend it was
+never scoped for. A separate table + a separate drain (`onboard_queue`) keeps each order type's
+guarantees intact; the claim/budget primitives are reused from `scan_queue`, not re-derived.
+
+**Where each half runs.** platform-api owns the geo + row creation (resolve city, create-or-get
+market/submarket/keyword — all free) and writes the signed order; the outreach service owns the
+paid pipeline, because the Outscraper + scan clients live in its image. Same split, same reason, as
+`scan_request` (a spend gate stops being one if both halves live in one service). The business type
+the operator types is the Outscraper **category** AND the scan **keyword** — one input, both roles.
+
+**The drain runs inside `tick`, staged, and fails asymmetrically.** `cmd_tick` now drains at most
+one onboard order per heartbeat (after the quick scan drain, since discovery is multi-minute). The
+order records which STAGE it reached; a budget refusal or the ingest cost-gate firing spends
+nothing, an ingest/filter failure never reaches the scan (and records what discovery cost), and a
+scan failure keeps its snapshot findable — `scan_queue`'s rule extended to a multi-step run. The
+conditional claim means an onboard tick that runs past the next heartbeat cannot be
+double-processed. One replica assumed (as everywhere in the outreach service).
+
+**Create-or-get, never update.** Grid geometry is immutable once scanned, so a repeat pick of the
+same city/sub-area reuses the existing rows (dedup by canonical Google name, scoped to parent)
+rather than minting a second submarket with a drifted centre.
+
+**Can't be tested from the build sandbox** (no Outscraper / Google / outreach DB), so the pure
+logic — the staged drain's claim/budget/stage-failure decisions, the create-or-get dedup — is
+unit-tested (`test_onboard_queue.py` 15 cases, `test_outreach_onboard.py` 6 cases), and the paid
+execution is verified LIVE on the first real run (which is also the pipeline's first real scan).
+Migration `20260808120000_onboard_request.sql`.

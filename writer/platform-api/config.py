@@ -1608,6 +1608,16 @@ class Settings(BaseSettings):
     # slack for a sub-area sitting right on the city edge.
     outreach_subarea_bounds_pad: float = 0.15
 
+    # Geometry for the rows the any-city "City + Business type" form creates. The
+    # market row's radius is a rough metro extent (used only for that row); the
+    # sub-area's SCAN grid is 5-mile / 1-mile — the pinned 81-point grid the
+    # geometry generator produces. Grid geometry is immutable once scanned, so a
+    # repeat pick of the same sub-area reuses the existing submarket, never a new
+    # one with a drifted centre.
+    outreach_onboard_market_radius_miles: float = 25.0
+    outreach_onboard_grid_radius_miles: float = 5.0
+    outreach_onboard_grid_spacing_miles: float = 1.0
+
     leadoff_income_acs_year: int = 2023
     leadoff_income_refresh_days: int = 365
     # Per-city county map (public.city_counties) — reverse-geocoded from each

@@ -342,6 +342,30 @@ class ScanRequestCreate(BaseModel):
     note: Optional[str] = None
 
 
+class OnboardCity(BaseModel):
+    name: str
+    region: Optional[str] = None
+    lat: float
+    lng: float
+
+
+class OnboardSubarea(BaseModel):
+    name: str
+    lat: float
+    lng: float
+    place_id: Optional[str] = None
+
+
+class OnboardRequestCreate(BaseModel):
+    """The "City + Business type" order. `city` + `subarea` come straight from
+    `GET /outreach/geo/subareas`; `business_type` is the typed category (== the scan keyword)."""
+
+    city: OnboardCity
+    subarea: OnboardSubarea
+    business_type: str
+    note: Optional[str] = None
+
+
 @router.get("/outreach/markets/{market_id}/keywords")
 async def list_keywords(market_id: str, auth: dict = Depends(require_outreach)) -> dict:
     return {"keywords": _handle(outreach_service.list_keywords, market_id)}
@@ -466,6 +490,61 @@ async def placeholder_scores(
     result = _handle(outreach_service.placeholder_scores, submarket_id, limit, offset)
     result["measured"] = result["total"] > 0
     return result
+
+
+# --- Onboard orders (the "City + Business type" full-pipeline order) ---------------------------
+#
+# An onboard order authorizes discover → filter → scan for a TYPED city (DECISIONS.md 2026-08-08,
+# ISSUES I-092). Admin-gated like scan orders — it authorizes a paid discovery pull PLUS a scan —
+# and executed the same way: platform-api writes the signed row, the outreach `tick` runs it.
+
+
+@router.post("/outreach/onboard-requests")
+async def create_onboard_request(
+    payload: OnboardRequestCreate, auth: dict = Depends(require_admin)
+) -> dict:
+    """Place a signed onboard order for a typed city + business type.
+
+    ADMIN-gated: this row causes the outreach job to run a paid Outscraper discovery pull AND post
+    a geogrid scan on its next tick. The click IS the confirmation; nothing is contacted here.
+    """
+    _require_outreach_ready()
+    return {
+        "onboard_request": _handle(
+            outreach_service.create_onboard_from_place,
+            city=payload.city.model_dump(),
+            subarea=payload.subarea.model_dump(),
+            business_type=payload.business_type,
+            note=payload.note,
+            actor_id=auth["user_id"],
+        )
+    }
+
+
+@router.get("/outreach/onboard-requests")
+async def list_onboard_requests(
+    status: Optional[str] = None,
+    limit: int = Query(default=outreach_service.DEFAULT_PAGE_SIZE, ge=1),
+    offset: int = Query(default=0, ge=0),
+    auth: dict = Depends(require_outreach),
+) -> dict:
+    return _handle(outreach_service.list_onboard_requests, status=status, limit=limit, offset=offset)
+
+
+@router.get("/outreach/onboard-requests/{request_id}")
+async def onboard_request_detail(request_id: str, auth: dict = Depends(require_outreach)) -> dict:
+    """The status screen's read: order + stage + ingested/survived counts + snapshot."""
+    return _handle(outreach_service.onboard_request_detail, request_id)
+
+
+@router.post("/outreach/onboard-requests/{request_id}/cancel")
+async def cancel_onboard_request(
+    request_id: str, auth: dict = Depends(require_admin)
+) -> dict:
+    """Withdraw a PENDING onboard. One the tick has claimed is mid-discovery (real money) and
+    resolves on its own."""
+    _require_outreach_ready()
+    return _handle(outreach_service.cancel_onboard_request, request_id, auth["user_id"])
 
 
 def _require_outreach_ready() -> None:
