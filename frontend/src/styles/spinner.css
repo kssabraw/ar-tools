@@ -23,3 +23,32 @@
   to { transform: rotate(360deg); }
 }
 .spin { animation: ar-spin 1s linear infinite; }
+
+/* ---------------------------------------------------------------------------
+   Global `spin` keyframe + `animate-spin` utility.
+
+   Two other spinner idioms are used across the suite that this file must back,
+   or they render frozen everywhere outside the few pages that patched around it:
+
+   1. Inline `style={{ animation: 'spin 1s linear infinite' }}` — references a
+      keyframe named `spin`. That name was only ever defined by the vendored
+      fanout stylesheet (loaded on /fanout) and by a handful of pages injecting
+      their own local `<style>@keyframes spin</style>`. Off those pages the
+      keyframe didn't exist, so DomainIntel / KeywordResearch / Backlinks /
+      Competitors / WeeklyPulse / StrategistReview / Runs spun frozen. Defining
+      it here — in the one stylesheet main.tsx always imports — fixes them all.
+
+   2. `className="animate-spin"` (a Tailwind utility) — but this project has no
+      Tailwind, so the class resolved to nothing on Outreach / OutreachLeads.
+
+   The keyframe body is identical to fanout's own `@keyframes spin` (a bare
+   rotate to 360deg) and to the per-page copies, so the document-wide
+   last-definition-wins resolution is a no-op — every definition is the same
+   rotation. Animation *timing* lives on each call site's shorthand, never in
+   the keyframe, so there is nothing here to "retime".
+--------------------------------------------------------------------------- */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.animate-spin { animation: spin 1s linear infinite; }
