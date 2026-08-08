@@ -613,7 +613,8 @@ function Setup({ clientId }: { clientId: string }) {
       business_name: form.business_name ?? null,
       center_lat: form.center_lat ?? null,
       center_lng: form.center_lng ?? null,
-      radius_miles: form.radius_miles ?? 5,
+      // Clamp to the server's 1-10 bound — a number input lets you type past max.
+      radius_miles: Math.min(10, Math.max(1, Math.round(form.radius_miles ?? 5))),
       resource_category: form.resource_category ?? 'googleMaps',
       serp_device: form.serp_device ?? 'desktop',
       provider: form.provider ?? config?.provider_default ?? 'local_dominator',
@@ -636,7 +637,9 @@ function Setup({ clientId }: { clientId: string }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['maps-keywords', clientId] }),
   })
 
-  const pins = ({ 3: 49, 5: 121, 7: 225 } as Record<number, number>)[form.radius_miles ?? 5]
+  // Pins per keyword = (2r+1)² at the fixed 1-mile spacing — the cost driver.
+  const radius = Math.min(10, Math.max(1, Math.round(form.radius_miles ?? 5)))
+  const pins = (2 * radius + 1) ** 2
 
   // Weekly scanning on + zero active keywords = the scheduler skips this client
   // entirely, so the geo-grid quietly stops updating while this tab still reads
@@ -684,10 +687,16 @@ function Setup({ clientId }: { clientId: string }) {
           </Field>
         </div>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          <Field label={`Radius (≈${pins} pins)`}>
-            <select style={input} value={form.radius_miles ?? 5} onChange={e => set({ radius_miles: Number(e.target.value) as MapsRadius })}>
-              {[3, 5, 7].map(r => <option key={r} value={r}>{r} miles</option>)}
-            </select>
+          <Field label={`Radius, miles (1–10 · ≈${pins} pins/keyword)`}>
+            <input
+              style={input}
+              type="number"
+              min={1}
+              max={10}
+              step={1}
+              value={form.radius_miles ?? 5}
+              onChange={e => set({ radius_miles: e.target.value === '' ? undefined : (Number(e.target.value) as MapsRadius) })}
+            />
           </Field>
           <Field label="Surface">
             <select style={input} value={form.resource_category ?? 'googleMaps'} onChange={e => set({ resource_category: e.target.value as MapsConfig['resource_category'] })}>

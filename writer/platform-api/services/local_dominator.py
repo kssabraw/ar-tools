@@ -1,7 +1,7 @@
 """Local Dominator client + geo-grid scan orchestration (Module #5).
 
 Maps / local-pack geo-grid ranker. The team configures a per-client grid (a
-3/5/7-mile radius at 1-mile spacing around the business) and tracked keywords;
+1-10-mile radius at 1-mile spacing around the business) and tracked keywords;
 this runs scans via the Local Dominator API and stores the business's Maps rank
 per pin for a heatmap + a trend over time.
 

@@ -23,8 +23,14 @@ def test_pin_count_for_presets():
 
 
 def test_grid_size_always_odd_so_business_is_centered():
-    for r in maps_grid.SUPPORTED_RADII_MILES:
+    for r in range(maps_grid.MIN_RADIUS_MILES, maps_grid.MAX_RADIUS_MILES + 1):
         assert maps_grid.grid_size_for(r) % 2 == 1
+
+
+def test_grid_size_covers_full_radius_range():
+    # Free-choice radii (1-10 mi): every whole-mile radius maps to 2r+1 pins/side.
+    for r in range(maps_grid.MIN_RADIUS_MILES, maps_grid.MAX_RADIUS_MILES + 1):
+        assert maps_grid.grid_size_for(r) == 2 * r + 1
 
 
 def test_invalid_inputs_raise():
