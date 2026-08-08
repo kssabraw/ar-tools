@@ -31,6 +31,12 @@ interface ResearchKeyword {
   is_question: boolean
   opportunity_score: number | null
   relevance_score: number | null
+  audience_fit: string | null
+}
+interface BlogTopic {
+  title: string
+  angle: string
+  target_keywords?: string[]
 }
 interface TopicResearch {
   enabled: boolean
@@ -68,7 +74,7 @@ interface SerpIntel {
   paa: string[]
 }
 interface RunResponse {
-  run: (RunSummary & { location_code: number | null; language_code: string | null; serp_intel: SerpIntel | null; topic_research: TopicResearch | null }) | null
+  run: (RunSummary & { location_code: number | null; language_code: string | null; serp_intel: SerpIntel | null; topic_research: TopicResearch | null; blog_topics: BlogTopic[] | null }) | null
   keywords: ResearchKeyword[]
   clusters: ClusterSummary[]
   warnings?: string[]
@@ -241,6 +247,16 @@ export function KeywordResearch() {
       if (r.download_url) window.open(r.download_url, '_blank')
     },
   })
+  const genTopics = useMutation({
+    mutationFn: (rid: string) =>
+      api.post<{ topics: BlogTopic[]; generated: boolean; reason?: string }>(
+        `/clients/${id}/keyword-research/runs/${rid}/blog-topics`, {}),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['keyword-research-run', id, runId] }),
+  })
+  const blogTopics = useMemo<BlogTopic[]>(
+    () => genTopics.data?.topics ?? runData?.run?.blog_topics ?? [],
+    [genTopics.data, runData],
+  )
   const runReports = useMemo(
     () => (reportsData?.reports ?? []).filter((r) => r.run_id === runId),
     [reportsData, runId],
@@ -543,6 +559,41 @@ export function KeywordResearch() {
               </div>
             </div>
           )}
+
+          {/* Blog topic ideas — buyer-fit keywords + ICP → post ideas for a writer */}
+          <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: '14px 16px', marginBottom: 16, background: '#fbfaff' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+              <div style={intelHead}><Lightbulb size={14} /> Blog topic ideas</div>
+              <button style={{ ...primaryBtn, height: 34, padding: '7px 14px', fontSize: 13 }}
+                onClick={() => runId && genTopics.mutate(runId)} disabled={!keywords.length || genTopics.isPending}>
+                <Lightbulb size={14} /> {genTopics.isPending ? 'Thinking…' : blogTopics.length ? 'Regenerate' : 'Generate blog topics'}
+              </button>
+            </div>
+            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+              Post ideas built from the buyer-fit keywords + this client's ideal customer — ready to hand a writer.
+            </div>
+            {genTopics.isError && <div style={{ ...errBox, marginTop: 10, marginBottom: 0 }}>Couldn't generate topics — please try again.</div>}
+            {!genTopics.isPending && genTopics.data && !blogTopics.length && (
+              <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 10 }}>No topic ideas were generated for this run.</div>
+            )}
+            {blogTopics.length > 0 && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 10, marginTop: 12 }}>
+                {blogTopics.map((t, i) => (
+                  <div key={`${t.title}-${i}`} style={{ border: '1px solid #e9e5ff', borderRadius: 8, padding: '10px 12px', background: '#fff' }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a', marginBottom: 4 }}>{t.title}</div>
+                    {t.angle && <div style={{ fontSize: 12, color: '#475569', marginBottom: 6 }}>{t.angle}</div>}
+                    {(t.target_keywords?.length ?? 0) > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                        {t.target_keywords!.slice(0, 6).map((k) => (
+                          <span key={k} style={{ padding: '2px 8px', background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe', borderRadius: 999, fontSize: 11 }}>{k}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* Keyword table */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>

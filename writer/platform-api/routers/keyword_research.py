@@ -21,6 +21,7 @@ from db.supabase_client import get_supabase
 from middleware.auth import require_auth
 from services import (
     keyword_research,
+    keyword_research_content,
     keyword_research_handoff,
     keyword_research_report,
     keyword_research_seeds,
@@ -176,6 +177,22 @@ async def create_report(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         logger.error("keyword_research_report_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.post("/clients/{client_id}/keyword-research/runs/{run_id}/blog-topics")
+async def blog_topics(
+    client_id: UUID, run_id: UUID, auth: dict = Depends(require_auth)
+) -> dict:
+    """Generate blog post ideas from a run's BUYER-FIT keywords + the client's ICP
+    (one LLM call, cached on the run). Returns {topics, generated}."""
+    try:
+        return keyword_research_content.generate_blog_topics(str(client_id), str(run_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("keyword_research_blog_topics_failed",
+                     extra={"client_id": str(client_id), "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
 
 
