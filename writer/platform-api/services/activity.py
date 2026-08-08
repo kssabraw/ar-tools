@@ -88,6 +88,9 @@ SINGLE_JOB_REGISTRY: dict[str, dict[str, Any]] = {
     "rank_keyword_report":    {"label": "Rank analysis report",    "path": "clients/{cid}/rankings",         "notify": True},
     "backlink_lookup":        {"label": "Backlink lookup",         "path": "clients/{cid}/backlinks",        "notify": True},
     "article_reanalyze":      {"label": "Article reanalysis",      "path": "clients/{cid}/articles",         "notify": True},
+    # The Fanout keyword report is session-scoped; it links to the Fanout app
+    # (not a client page) and only pings when the session is client-linked.
+    "fanout_report":          {"label": "Keyword report",          "path": "fanout",                         "notify": True},
 }
 
 # Every job_type the Activity indicator reads: content page jobs (batch-tracked)

@@ -134,9 +134,10 @@ def _upload_to_drive(client: Optional[dict], title: str, pdf: bytes) -> Optional
         return None
 
 
-def generate_report(session_id: str, user_id: Optional[str]) -> dict:
-    """Build + deliver the report for a session. Raises ValueError('no_keywords')
-    when the session has nothing to report on."""
+def _render_into_row(report_id: str, session_id: str) -> dict:
+    """Render + deliver the report PDF for a pending row and mark it complete.
+    SYNCHRONOUS by design (WeasyPrint + the Drive asyncio.run must run off the
+    event loop). Raises ValueError('session_not_found' / 'no_keywords')."""
     session = store.get_session(session_id)
     if not session:
         raise ValueError("session_not_found")
@@ -157,48 +158,123 @@ def generate_report(session_id: str, user_id: Optional[str]) -> dict:
     client = _suite_client(session)
     from config import settings as suite_settings
 
-    agency_name = suite_settings.client_report_agency_name
-    client_name = (client or {}).get("name")
-    exec_summary = _exec_summary(stats)
-    generated_on = datetime.now(timezone.utc).strftime("%b %d, %Y")
-
     html = builders.render_report_html(
-        stats=stats, exec_summary=exec_summary, agency_name=agency_name,
-        client_name=client_name, generated_on=generated_on,
+        stats=stats, exec_summary=_exec_summary(stats),
+        agency_name=suite_settings.client_report_agency_name,
+        client_name=(client or {}).get("name"),
+        generated_on=datetime.now(timezone.utc).strftime("%b %d, %Y"),
     )
-
     from services.client_report import render_pdf
 
-    pdf = render_pdf(html)
     title = f"Keyword Research — {stats['seed'] or 'Report'}"
-
-    svc = get_service_client()
-    row = (
-        svc.table("keyword_reports")
-        .insert({"session_id": session_id, "created_by": user_id, "title": title, "status": "complete"})
-        .execute()
-    ).data[0]
-    report_id = row["id"]
-
+    pdf = render_pdf(html)
     storage_path, download_url = _store_pdf(session_id, report_id, pdf)
     drive_url = _upload_to_drive(client, title, pdf)
 
-    svc.table("keyword_reports").update(
-        {"storage_path": storage_path, "drive_url": drive_url}
+    get_service_client().table("keyword_reports").update(
+        {"status": "complete", "title": title, "storage_path": storage_path,
+         "drive_url": drive_url, "error": None}
     ).eq("id", report_id).execute()
-
     logger.info(
         "kw_report_created",
         extra={"event": "kw_report_created", "session_id": session_id,
                "keywords": stats["total_keywords"], "drive": bool(drive_url)},
     )
     return {
-        "report_id": report_id,
-        "session_id": session_id,
-        "title": title,
-        "download_url": download_url,
-        "drive_url": drive_url,
-        "generated_at": row["generated_at"],
+        "report_id": report_id, "session_id": session_id, "title": title,
+        "download_url": download_url, "drive_url": drive_url,
+    }
+
+
+def enqueue_report(session_id: str, user_id: Optional[str]) -> dict:
+    """Create a pending report row + enqueue the render as a background job, so the
+    user can navigate away while the PDF builds (and gets a completion
+    notification in the activity sidebar when the session is client-linked).
+    Validates the session up front. Returns the pending row descriptor."""
+    session = store.get_session(session_id)
+    if not session:
+        raise ValueError("session_not_found")
+    if not store.list_surviving_keywords(session_id):
+        raise ValueError("no_keywords")
+
+    svc = get_service_client()
+    row = (
+        svc.table("keyword_reports")
+        .insert({"session_id": session_id, "created_by": user_id,
+                 "title": "Keyword Research report", "status": "pending"})
+        .execute()
+    ).data[0]
+    report_id = row["id"]
+
+    from db.supabase_client import get_supabase
+
+    get_supabase().table("async_jobs").insert({
+        "job_type": "fanout_report", "entity_id": session.get("client_id"),
+        "payload": {"report_id": report_id, "session_id": session_id,
+                    "client_id": session.get("client_id"), "user_id": user_id},
+    }).execute()
+    return {"report_id": report_id, "session_id": session_id, "status": "pending",
+            "generated_at": row.get("generated_at")}
+
+
+async def run_report_job(job: dict) -> None:
+    """async_jobs handler for fanout_report — render + deliver the PDF for a
+    pending row (in a worker thread), then settle the row and the job."""
+    import asyncio as _asyncio
+
+    from db.supabase_client import get_supabase
+
+    payload = job.get("payload") or {}
+    report_id = payload.get("report_id")
+    session_id = payload.get("session_id")
+    job_id = job["id"]
+    supabase = get_supabase()
+
+    def _fail(reason: str) -> None:
+        if report_id:
+            try:
+                get_service_client().table("keyword_reports").update(
+                    {"status": "failed", "error": reason}
+                ).eq("id", report_id).execute()
+            except Exception:  # noqa: BLE001
+                pass
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": reason, "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+
+    if not (report_id and session_id):
+        _fail("missing_payload")
+        return
+    try:
+        result = await _asyncio.to_thread(_render_into_row, report_id, session_id)
+    except ValueError as exc:
+        _fail(str(exc))
+        return
+    except Exception as exc:  # noqa: BLE001 — render/LLM failure
+        logger.warning("fanout_report.render_failed", extra={"report_id": report_id, "error": str(exc)})
+        _fail("render_failed")
+        return
+    supabase.table("async_jobs").update(
+        {"status": "complete", "result": result, "completed_at": "now()"}
+    ).eq("id", job_id).execute()
+
+
+def get_report_status(session_id: str, report_id: str) -> Optional[dict]:
+    """A report row's status + a fresh download URL when complete — for polling the
+    background render. None when not found for this session."""
+    rows = (
+        get_service_client().table("keyword_reports")
+        .select("id, title, status, error, storage_path, drive_url, generated_at")
+        .eq("id", report_id).eq("session_id", session_id).limit(1).execute()
+    ).data
+    if not rows:
+        return None
+    r = rows[0]
+    download_url = signed_download_url(r["storage_path"]) if r.get("storage_path") else None
+    return {
+        "report_id": r["id"], "title": r.get("title"), "status": r.get("status"),
+        "error": r.get("error"), "download_url": download_url,
+        "drive_url": r.get("drive_url"), "generated_at": r.get("generated_at"),
     }
 
 

@@ -65,6 +65,7 @@ from services.competitor_gbp import run_competitor_gbp_job
 from services.review_analytics import run_review_intel_job
 from services.backlink_intel import run_backlink_intel_job
 from services.backlink_explorer import run_backlink_snapshot_job
+from services.backlink_explorer import run_lookup_job as run_backlink_lookup_job
 from services.content_intel import run_content_intel_job
 from services.leadoff_actions import (
     run_scout_job as run_leadoff_scout_job,
@@ -785,6 +786,8 @@ async def _process_job(job: dict) -> None:
         await run_backlink_intel_job(job)
     elif job_type == "backlink_snapshot":
         await run_backlink_snapshot_job(job)
+    elif job_type == "backlink_lookup":
+        await run_backlink_lookup_job(job)
     elif job_type == "content_intel":
         await run_content_intel_job(job)
     elif job_type == "local_relevance":
@@ -880,6 +883,9 @@ async def _process_job(job: dict) -> None:
     elif job_type == "keyword_topic_research":
         from services.keyword_topic_research import run_topic_research_job
         await run_topic_research_job(job)
+    elif job_type == "fanout_report":
+        from fanout.report_runner import run_report_job as run_fanout_report_job
+        await run_fanout_report_job(job)
     elif job_type == "deliverables_log":
         await run_deliverables_log_job(job)
     elif job_type == "deliverable_notes_scan":

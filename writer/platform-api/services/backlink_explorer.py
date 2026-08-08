@@ -421,6 +421,62 @@ async def lookup(
     }
 
 
+def enqueue_lookup(
+    target: str, client_id: Optional[str] = None, user_id: Optional[str] = None,
+    force: bool = False,
+) -> str:
+    """Enqueue a backlink lookup as a background job so the user can navigate away
+    while the (uncached) DataForSEO pull runs. Returns the job id; poll it, then
+    read the result off the job row. ``user_id`` (the initiator) drives the
+    Activity indicator + completion notification (client-linked lookups only)."""
+    row = (
+        get_supabase().table("async_jobs").insert({
+            "job_type": "backlink_lookup",
+            "entity_id": client_id,
+            "payload": {"target": target, "client_id": client_id,
+                        "user_id": user_id, "force": bool(force)},
+        }).execute()
+    ).data[0]
+    return row["id"]
+
+
+async def run_lookup_job(job: dict) -> None:
+    """async_jobs handler for backlink_lookup — run the lookup and store the full
+    payload on the job row (the frontend reads it from the poll). Records the
+    provider/budget failure reason so the UI can show the same message as before."""
+    payload = job.get("payload") or {}
+    job_id = job["id"]
+    supabase = get_supabase()
+
+    def _fail(reason: str) -> None:
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": reason, "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+
+    target = payload.get("target")
+    if not target:
+        _fail("missing_target")
+        return
+    try:
+        result = await lookup(
+            target, client_id=payload.get("client_id"),
+            created_by=payload.get("user_id"), force=bool(payload.get("force")),
+        )
+    except BudgetExceeded:
+        _fail("backlink_budget_exceeded")
+        return
+    except ValueError as exc:
+        _fail(str(exc))
+        return
+    except Exception as exc:  # noqa: BLE001 — provider error
+        logger.warning("backlink_lookup.job_failed", extra={"target": target, "error": str(exc)})
+        _fail("backlink_provider_error")
+        return
+    supabase.table("async_jobs").update(
+        {"status": "complete", "result": result, "completed_at": "now()"}
+    ).eq("id", job_id).execute()
+
+
 async def _lazy_children(
     raw_target: str, kind: str, client_id: Optional[str] = None, force: bool = False
 ) -> dict:

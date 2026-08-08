@@ -33,12 +33,14 @@ def _require_session(user: AuthedUser, session_id: str) -> dict:
 
 @router.post("/sessions/{session_id}/report")
 def create_report(session_id: str, user: AuthedUser = Depends(require_user)) -> dict:
-    """Generate + deliver a keyword-research PDF report. Returns the report row
-    with a download URL and (when the session is client-linked) a Drive URL."""
+    """Enqueue a keyword-research PDF report as a background job, so the user can
+    navigate away while it renders (and gets a completion notification in the
+    activity sidebar when the session is client-linked). Returns the pending row;
+    poll `.../report/{report_id}` for the download link."""
     _require_session(user, session_id)
     bind_session_id(session_id)
     try:
-        return report_runner.generate_report(session_id, user.id)
+        return report_runner.enqueue_report(session_id, user.id)
     except ValueError as exc:
         reason = str(exc)
         if reason == "no_keywords":
@@ -48,6 +50,16 @@ def create_report(session_id: str, user: AuthedUser = Depends(require_user)) -> 
                 "research first.",
             )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=reason)
+
+
+@router.get("/sessions/{session_id}/report/{report_id}")
+def report_status(session_id: str, report_id: str, user: AuthedUser = Depends(require_user)) -> dict:
+    """Poll a background report render — status + a fresh download URL when done."""
+    _require_session(user, session_id)
+    result = report_runner.get_report_status(session_id, report_id)
+    if not result:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+    return result
 
 
 @router.get("/sessions/{session_id}/reports")

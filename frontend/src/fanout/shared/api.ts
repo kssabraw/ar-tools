@@ -852,10 +852,34 @@ export interface KeywordReportListItem {
   has_download: boolean;
 }
 
-// Generate a client-facing PDF report (silos, demand, top opportunities, content
-// plan + keyword appendix), saved to the client's Drive folder + downloadable.
+// The pending descriptor returned when a report render is enqueued.
+export interface KeywordReportPending {
+  report_id: string;
+  session_id: string;
+  status: string;
+  generated_at: string;
+}
+
+// A report row's live status + a fresh download URL once the render completes.
+export interface KeywordReportStatus {
+  report_id: string;
+  title: string | null;
+  status: string;               // pending | complete | failed
+  error: string | null;
+  download_url: string | null;
+  drive_url: string | null;
+  generated_at: string | null;
+}
+
+// Enqueue a client-facing PDF report (silos, demand, top opportunities, content
+// plan + keyword appendix) as a background job — the user can navigate away while
+// it renders. Poll getKeywordReportStatus, then download.
 export const createKeywordReport = (sessionId: string) =>
-  request<KeywordReportResult>(`/sessions/${sessionId}/report`, { method: "POST" });
+  request<KeywordReportPending>(`/sessions/${sessionId}/report`, { method: "POST" });
+
+// Poll a background report render.
+export const getKeywordReportStatus = (sessionId: string, reportId: string) =>
+  request<KeywordReportStatus>(`/sessions/${sessionId}/report/${reportId}`);
 
 // Past reports for a session, newest first.
 export const listKeywordReports = (sessionId: string) =>
