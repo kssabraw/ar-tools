@@ -1,10 +1,11 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, AlertTriangle, Calculator, Download, ExternalLink, OctagonAlert, RefreshCw, Send, Wallet,
 } from 'lucide-react'
 import { api } from '../lib/api'
+import { useResumableJob } from '../lib/useResumableJob'
 import { toCsv, downloadCsv } from '../lib/csv'
 import type { Client } from '../lib/types'
 
@@ -106,26 +107,31 @@ export function TaskPlan() {
 
   // Push the shown plan's lines into the client's Asana project (async job;
   // idempotent per line — a re-push creates only tasks that don't exist yet).
-  const [pushJobId, setPushJobId] = useState<string | null>(null)
-  const pushMut = useMutation({
-    mutationFn: () => api.post<{ job_id: string }>(`/clients/${id}/task-plan/${shown!.id}/push`, {}),
-    onSuccess: (r) => setPushJobId(r.job_id),
-  })
-  const { data: pushStatus } = useQuery<PushStatus>({
-    queryKey: ['task-plan-push', id, pushJobId],
-    queryFn: () => api.get<PushStatus>(`/clients/${id}/task-plan/push/${pushJobId}`),
-    enabled: Boolean(pushJobId),
-    refetchInterval: (q) => {
-      const s = q.state.data?.status
-      return s === 'complete' || s === 'failed' ? false : 2500
+  // Runs backgrounded + reconnect-on-return via useResumableJob; the outcome is
+  // captured into local state so we can render the created/skipped/errors summary.
+  const [pushResult, setPushResult] = useState<PushStatus | null>(null)
+  const pushJob = useResumableJob<PushStatus['result'], undefined>({
+    storageKey: `taskplan:push:${id}:${shown?.id ?? 'none'}`,
+    poll: async (jobId) => {
+      const st = await api.get<PushStatus>(`/clients/${id}/task-plan/push/${jobId}`)
+      return { status: st.status, result: st.result, error: st.error }
     },
-  })
-  const pushing = pushMut.isPending || (Boolean(pushJobId) && pushStatus?.status !== 'complete' && pushStatus?.status !== 'failed')
-  useEffect(() => {
-    if (pushStatus?.status === 'complete') {
+    intervalMs: 2500,
+    onComplete: (result) => {
+      setPushResult({ status: 'complete', result: result ?? null, error: null })
       queryClient.invalidateQueries({ queryKey: ['task-plans', id] })
-    }
-  }, [pushStatus?.status, id, queryClient])
+    },
+    onError: (error) => setPushResult({ status: 'failed', result: null, error }),
+  })
+  const runPush = () => {
+    if (!shown) return
+    setPushResult(null)
+    void pushJob.start(async () => {
+      const r = await api.post<{ job_id: string }>(`/clients/${id}/task-plan/${shown.id}/push`, {})
+      return r.job_id
+    }, undefined)
+  }
+  const pushing = pushJob.running
 
   const exportCsv = () => {
     if (!body || !shown) return
@@ -192,7 +198,7 @@ export function TaskPlan() {
         )}
         {body && body.tasks.length > 0 && (
           <button
-            onClick={() => { setPushJobId(null); pushMut.mutate() }}
+            onClick={runPush}
             disabled={pushing}
             title="Create the plan's tasks in the client's Asana project (already-pushed lines are skipped)"
             style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '9px 14px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#fff', color: '#334155', fontSize: 13, fontWeight: 600, cursor: 'pointer', opacity: pushing ? 0.6 : 1 }}>
@@ -202,18 +208,16 @@ export function TaskPlan() {
       </div>
 
       {/* Push outcome */}
-      {pushMut.isError && (
+      {pushResult && pushResult.status === 'failed' && pushResult.error === 'no_project_mapping' && (
         <div style={{ padding: '10px 14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, marginBottom: 14, fontSize: 13, color: '#b91c1c' }}>
-          {(pushMut.error as Error).message === 'no_project_mapping'
-            ? 'This client has no Asana project mapped — set it on the Asana Tasks page first.'
-            : (pushMut.error as Error).message}
+          This client has no Asana project mapped — set it on the Asana Tasks page first.
         </div>
       )}
-      {pushJobId && pushStatus && (pushStatus.status === 'complete' || pushStatus.status === 'failed') && (
-        <div style={{ padding: '10px 14px', background: pushStatus.status === 'complete' ? '#f0fdf4' : '#fef2f2', border: `1px solid ${pushStatus.status === 'complete' ? '#bbf7d0' : '#fecaca'}`, borderRadius: 10, marginBottom: 14, fontSize: 13, color: pushStatus.status === 'complete' ? '#166534' : '#b91c1c' }}>
-          {pushStatus.status === 'complete' && pushStatus.result
-            ? <>Asana push: {pushStatus.result.created ?? 0} task{(pushStatus.result.created ?? 0) === 1 ? '' : 's'} created{(pushStatus.result.skipped ?? 0) > 0 && <>, {pushStatus.result.skipped} already pushed</>}{(pushStatus.result.errors?.length ?? 0) > 0 && <> · {pushStatus.result.errors!.length} failed (retry pushes just the missing ones)</>}{pushStatus.result.reason && <> — {pushStatus.result.reason}</>}</>
-            : <>Asana push failed{pushStatus.error ? `: ${pushStatus.error}` : ''}</>}
+      {pushResult && (pushResult.status === 'complete' || pushResult.status === 'failed') && pushResult.error !== 'no_project_mapping' && (
+        <div style={{ padding: '10px 14px', background: pushResult.status === 'complete' ? '#f0fdf4' : '#fef2f2', border: `1px solid ${pushResult.status === 'complete' ? '#bbf7d0' : '#fecaca'}`, borderRadius: 10, marginBottom: 14, fontSize: 13, color: pushResult.status === 'complete' ? '#166534' : '#b91c1c' }}>
+          {pushResult.status === 'complete' && pushResult.result
+            ? <>Asana push: {pushResult.result.created ?? 0} task{(pushResult.result.created ?? 0) === 1 ? '' : 's'} created{(pushResult.result.skipped ?? 0) > 0 && <>, {pushResult.result.skipped} already pushed</>}{(pushResult.result.errors?.length ?? 0) > 0 && <> · {pushResult.result.errors!.length} failed (retry pushes just the missing ones)</>}{pushResult.result.reason && <> — {pushResult.result.reason}</>}</>
+            : <>Asana push failed{pushResult.error ? `: ${pushResult.error}` : ''}</>}
         </div>
       )}
 

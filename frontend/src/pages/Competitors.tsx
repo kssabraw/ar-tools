@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, ExternalLink, Globe, Link2, MapPin, Plus, RefreshCw, Star, Swords, Trash2, TrendingUp,
 } from 'lucide-react'
 import { api } from '../lib/api'
+import { useResumableJob } from '../lib/useResumableJob'
 import type { Client, CompetitorProfilesResponse } from '../lib/types'
 
 // Competitive intelligence — the unified per-client competitor registry.
@@ -30,7 +31,6 @@ export function Competitors() {
   const [showForm, setShowForm] = useState(false)
   const [name, setName] = useState('')
   const [domain, setDomain] = useState('')
-  const [syncJob, setSyncJob] = useState<string | null>(null)
 
   const addCompetitor = useMutation({
     mutationFn: () =>
@@ -44,28 +44,29 @@ export function Competitors() {
     mutationFn: (compId: string) => api.delete(`/clients/${id}/competitors/${compId}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['competitors', id] }),
   })
-  const syncNow = useMutation({
-    mutationFn: () => api.post<{ job_id: string }>(`/clients/${id}/competitors/sync`, {}),
-    onSuccess: (r) => setSyncJob(r.job_id),
+
+  // Sync runs as a background async_job; persist the id so navigating away and
+  // back reconnects and refetches the competitor list when it lands.
+  const syncJob = useResumableJob<unknown, undefined>({
+    storageKey: `competitors:sync:${id}`,
+    poll: async (jobId) => {
+      const st = await api.get<{ status: string }>(`/clients/${id}/competitors/sync/${jobId}`)
+      return { status: st.status }
+    },
+    intervalMs: 2500,
+    onComplete: () => queryClient.invalidateQueries({ queryKey: ['competitors', id] }),
+    onError: () => queryClient.invalidateQueries({ queryKey: ['competitors', id] }),
   })
 
-  const { data: syncStatus } = useQuery<{ status: string }>({
-    queryKey: ['competitor-sync', id, syncJob],
-    queryFn: () => api.get(`/clients/${id}/competitors/sync/${syncJob}`),
-    enabled: Boolean(syncJob),
-    refetchInterval: (q) =>
-      ['complete', 'failed'].includes(q.state.data?.status ?? '') ? false : 2500,
-  })
-  useEffect(() => {
-    if (syncStatus?.status === 'complete' || syncStatus?.status === 'failed') {
-      queryClient.invalidateQueries({ queryKey: ['competitors', id] })
-      if (syncStatus.status === 'complete') setSyncJob(null)
-    }
-  }, [syncStatus?.status, queryClient, id])
+  const runSync = () =>
+    syncJob.start(async () => {
+      const r = await api.post<{ job_id: string }>(`/clients/${id}/competitors/sync`, {})
+      return r.job_id
+    }, undefined)
 
   const me = data?.client
   const profiles = data?.competitors ?? []
-  const syncing = Boolean(syncJob) && syncStatus?.status !== 'failed'
+  const syncing = syncJob.running
 
   return (
     <div style={{ padding: 32, maxWidth: 980 }}>
@@ -76,7 +77,7 @@ export function Competitors() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '0 0 4px' }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: 0 }}>Competitive Intel</h1>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button style={ghostBtn} disabled={syncing} onClick={() => syncNow.mutate()}>
+          <button style={ghostBtn} disabled={syncing} onClick={() => void runSync()}>
             <RefreshCw size={14} style={syncing ? { animation: 'spin 1s linear infinite' } : undefined} />
             {syncing ? 'Syncing…' : 'Sync now'}
           </button>

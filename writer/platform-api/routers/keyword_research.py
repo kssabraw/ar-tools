@@ -169,11 +169,13 @@ async def to_scheduler(
 async def create_report(
     client_id: UUID, run_id: UUID, auth: dict = Depends(require_auth)
 ) -> dict:
-    """Generate a client-facing PDF report for a run (synchronous: build →
-    exec-summary → PDF → store → Drive copy). Returns the report + download link."""
+    """Enqueue a client-facing PDF report for a run as a background job (build →
+    exec-summary → PDF → store → Drive copy), so the user can navigate away while
+    it renders and gets a completion notification in the activity sidebar. Returns
+    the pending report row; poll `.../reports/{report_id}` for the download link."""
     try:
-        return keyword_research_report.generate_report(
-            str(client_id), str(run_id), user_id=auth.get("sub") or auth.get("user_id"),
+        return keyword_research_report.enqueue_report(
+            str(client_id), str(run_id), user_id=auth["user_id"],
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -257,6 +259,17 @@ async def list_reports(client_id: UUID, auth: dict = Depends(require_auth)) -> d
     except Exception as exc:
         logger.error("keyword_research_reports_list_failed", extra={"client_id": str(client_id), "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.get("/clients/{client_id}/keyword-research/reports/{report_id}")
+async def report_status(
+    client_id: UUID, report_id: UUID, auth: dict = Depends(require_auth)
+) -> dict:
+    """Poll a background report render — status + a fresh download URL when done."""
+    status = keyword_research_report.get_report_status(str(client_id), str(report_id))
+    if not status:
+        raise HTTPException(status_code=404, detail="report_not_found")
+    return status
 
 
 @router.get("/clients/{client_id}/keyword-research/reports/{report_id}/download")
