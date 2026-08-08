@@ -52,3 +52,28 @@ def test_build_anchors_combines_in_order_and_dedupes():
 
 def test_build_anchors_handles_empty_groups():
     assert top.build_anchors(["a"], [], [], None) == ["a"]
+
+
+def test_domain_anchored_requires_shared_seed_token():
+    from services import keyword_research as kr
+    seed_tokens = set()
+    for s in ["third party claims administrator", "catastrophe claims management"]:
+        seed_tokens |= kr.token_set(s)
+    # shares a seed token → anchored
+    assert top.domain_anchored("flood claims expertise", seed_tokens)       # "claim"
+    assert top.domain_anchored("catastrophe adjuster deployment", seed_tokens)  # "catastrophe"
+    # the real drift case: shares NO seed token → not anchored
+    assert not top.domain_anchored("commercial property valuation", seed_tokens)
+    # no seeds to anchor against → never gate
+    assert top.domain_anchored("anything", set())
+
+
+def test_clean_expansion_seeds_drops_out_of_domain_seed():
+    seeds = ["third party claims administrator", "catastrophe claims management"]
+    out = top.clean_expansion_seeds(
+        ["flood claims expertise", "commercial property valuation",
+         "catastrophe adjuster deployment"],
+        seeds, "BSA Claims", cap=10)
+    assert "commercial property valuation" not in out   # jumped to real-estate domain
+    assert "flood claims expertise" in out
+    assert "catastrophe adjuster deployment" in out

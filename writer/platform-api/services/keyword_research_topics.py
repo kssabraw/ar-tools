@@ -111,17 +111,39 @@ def build_anchors(
     return anchors
 
 
+def domain_anchored(phrase: Optional[str], seed_tokens: set[str]) -> bool:
+    """Whether an expansion seed stays inside the SEED domain — it must share at
+    least one significant token with the seed-token union. This is the guard that
+    stops a domain-ambiguous expansion seed from jumping to an adjacent industry:
+    the intent fan-out for a third-party-claims-administrator once produced
+    "commercial property valuation" (from an intent phrased "... claims expertise
+    AND valuation"), and phrase-containment suggestions for it flooded the run with
+    global real-estate appraisal ("commercial property valuation singapore/zoopla/
+    adelaide") — 122/322 keywords in one live run. Requiring a shared seed token
+    drops it (it shares none of {third, party, claim, administrator, …}) while
+    keeping legit domain extensions ("flood claims expertise" shares "claim",
+    "catastrophe adjuster deployment" shares "catastrophe"). Pure."""
+    if not seed_tokens:
+        return True  # no seeds to anchor against → don't gate
+    return bool(keyword_research.token_set(phrase) & seed_tokens)
+
+
 def clean_expansion_seeds(
     items: list[str], seeds: list[str], client_name: Optional[str], *, cap: int
 ) -> list[str]:
     """Normalize/dedupe LLM expansion seeds, drop any equal to an existing seed,
-    "near me", or a pure brand-name seed. Reuses the seed-suggestion cleaner so the
+    "near me", a pure brand-name seed, or one that isn't domain-anchored to the
+    seeds (see domain_anchored). Reuses the seed-suggestion cleaner so the shared
     rules stay in one place. Pure."""
     existing = {keyword_research.normalize_keyword(s) for s in (seeds or [])}
-    return keyword_research_seeds.clean_seeds(
-        items, client_name, existing, cap=cap,
+    cleaned = keyword_research_seeds.clean_seeds(
+        items, client_name, existing, cap=len(items or []) + cap,
         brand_ratio=settings.keyword_research_brand_seed_ratio,
     )
+    seed_tokens: set[str] = set()
+    for s in seeds or []:
+        seed_tokens |= keyword_research.token_set(s)
+    return [s for s in cleaned if domain_anchored(s, seed_tokens)][:cap]
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +202,11 @@ def _intent_prompt(seeds: list[str], context: str, site_topics: list[str], count
         "- Intents are short noun phrases (2-6 words), not questions.\n"
         "- Expansion seeds are short (2-4 words), commercial/topic terms, never the "
         "bare business name and never \"near me\".\n"
+        "- Each expansion seed MUST stay inside this business's domain — it should "
+        "reuse a core word from the seeds (e.g. claims / adjusting / insurance). Do "
+        "NOT emit a bare adjacent-industry term whose meaning leaves the domain "
+        "(e.g. \"commercial property valuation\" for a claims business — say "
+        "\"commercial property claims\" instead).\n"
         "- Return via the emit_topics tool."
     )
 
