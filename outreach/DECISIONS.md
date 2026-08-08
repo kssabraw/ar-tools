@@ -863,3 +863,26 @@ logic — the staged drain's claim/budget/stage-failure decisions, the create-or
 unit-tested (`test_onboard_queue.py` 15 cases, `test_outreach_onboard.py` 6 cases), and the paid
 execution is verified LIVE on the first real run (which is also the pipeline's first real scan).
 Migration `20260808120000_onboard_request.sql`.
+
+---
+
+## 2026-08-08 — Any-city scan: a consumer SEARCH, not a GBP category; sub-area optional
+
+Two owner refinements to the just-merged any-city scan, both making it more self-contained (and
+explicitly NOT coupled to LeadOff — the outreach targeting stands on its own):
+
+**The input is the search a customer would type, not a business category.** A GBP-category picker was
+considered (and a source debated — DataForSEO live list vs bundled taxonomy) and rejected in favour
+of a free-text CONSUMER SEARCH ("emergency plumber", "roof repair near me"). It's the natural input
+for a geogrid tool — the scan measures who shows up when a customer searches that term, so the
+businesses discovered are exactly the ones competing for it (sharper than a category). It also needs
+no taxonomy to source. Mechanically this is what was already built: one string is both the Outscraper
+discovery query AND the geogrid scan keyword; only the framing/labels changed (the `onboard_request.
+category` column now holds that search term).
+
+**The sub-area is optional.** "City → submarket if applicable → search" — a small city with no
+distinct sub-areas, or a run you just want city-wide, picks "Whole city (center)" and the submarket
+becomes the city-centre grid. `create_onboard_from_place(subarea=None)` builds the submarket from the
+city; a NAMED sub-area still must carry coordinates (a partial pick is an error, not a whole-city
+scan). Unit-tested (`test_outreach_onboard.py`: whole-city path, empty-dict path, partial-pick
+refusal).

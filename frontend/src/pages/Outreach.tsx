@@ -174,13 +174,19 @@ function OnboardCityCard({ isAdmin }: { isAdmin: boolean }) {
   const result = find.data
   const city = result?.city
   const subareas = result?.subareas ?? []
+  const WHOLE_CITY = -2
+  const wholeCity = subIdx === WHOLE_CITY
   const subarea = subIdx >= 0 ? subareas[subIdx] : undefined
+  const targetChosen = wholeCity || !!subarea
 
   const place = useMutation({
     mutationFn: () =>
       api.post<{ onboard_request: OnboardRequest }>('/outreach/onboard-requests', {
         city: { name: city!.name, region: city!.region, lat: city!.lat, lng: city!.lng },
-        subarea: { name: subarea!.name, lat: subarea!.lat, lng: subarea!.lng, place_id: subarea!.place_id },
+        // Omit the sub-area to scan the whole city centre.
+        subarea: subarea
+          ? { name: subarea.name, lat: subarea.lat, lng: subarea.lng, place_id: subarea.place_id }
+          : null,
         business_type: businessType.trim(),
       }),
     onSuccess: () => {
@@ -198,19 +204,20 @@ function OnboardCityCard({ isAdmin }: { isAdmin: boolean }) {
       : place.error.message)
     : null
 
-  const canQueue = isAdmin && !!subarea && businessType.trim().length > 0
+  const canQueue = isAdmin && targetChosen && businessType.trim().length > 0
 
   return (
     <div style={{ marginTop: 16, padding: 16, border: '1px solid #e2e8f0', borderRadius: 12 }}>
       <div style={{ fontWeight: 600, fontSize: 14 }}>Scan a city</div>
       <p style={{ fontSize: 12, color: '#64748b', margin: '4px 0 12px' }}>
-        Type any city and a business type. The engine <strong>discovers</strong> those businesses
-        (a paid data pull), filters them, then <strong>scans</strong> the sub-area you pick — so the
-        results are real coverage, not an empty grid. This spends at two points and runs over
-        several minutes; you can leave the page and check back on the order below.
+        Type a city and the <strong>search a customer would use</strong> (e.g. “emergency plumber”).
+        The engine <strong>discovers</strong> the businesses competing for that search (a paid data
+        pull), filters them, then <strong>scans</strong> that search across the grid — so the results
+        are real coverage, not an empty grid. Pick a specific sub-area or scan the whole city. This
+        spends at two points and runs over several minutes; you can leave and check back below.
       </p>
 
-      {/* Step 1 — city + business type */}
+      {/* Step 1 — city + the consumer search */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <input
           value={cityQuery}
@@ -222,8 +229,8 @@ function OnboardCityCard({ isAdmin }: { isAdmin: boolean }) {
         <input
           value={businessType}
           onChange={e => { setBusinessType(e.target.value); place.reset() }}
-          placeholder="Business type, e.g. plumber"
-          style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', minWidth: 180 }}
+          placeholder="What a customer searches, e.g. emergency plumber"
+          style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', minWidth: 240 }}
         />
         <button
           onClick={() => find.mutate()}
@@ -231,7 +238,7 @@ function OnboardCityCard({ isAdmin }: { isAdmin: boolean }) {
           style={{ padding: '6px 14px', borderRadius: 8, border: '1px solid #e2e8f0',
             background: '#fff', fontWeight: 600, fontSize: 13,
             cursor: cityQuery.trim() ? 'pointer' : 'not-allowed' }}>
-          {find.isPending ? <Loader2 size={13} className="animate-spin" /> : 'Find sub-areas'}
+          {find.isPending ? <Loader2 size={13} className="animate-spin" /> : 'Find city'}
         </button>
       </div>
       {findError && (
@@ -240,53 +247,53 @@ function OnboardCityCard({ isAdmin }: { isAdmin: boolean }) {
         </p>
       )}
 
-      {/* Step 2 — pick a verified sub-area */}
+      {/* Step 2 — pick a target: the whole city, or a verified sub-area */}
       {result && (
         <div style={{ marginTop: 12 }}>
           {city && (
             <div style={{ fontSize: 12, color: '#334155', marginBottom: 6 }}>
-              Resolved <strong>{city.name}</strong> — {subareas.length} Google-verified sub-area{subareas.length === 1 ? '' : 's'}.
+              Resolved <strong>{city.name}</strong> —{' '}
+              {subareas.length > 0
+                ? `${subareas.length} Google-verified sub-area${subareas.length === 1 ? '' : 's'}, or scan the whole city.`
+                : (result.note ? `${result.note} Scan the whole city.` : 'Scan the whole city.')}
             </div>
           )}
-          {subareas.length === 0 ? (
-            <p style={{ fontSize: 12, color: '#64748b' }}>{result.note ?? 'No sub-areas found.'}</p>
-          ) : (
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-              <select value={subIdx} onChange={e => { setSubIdx(Number(e.target.value)); place.reset() }}
-                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', minWidth: 200 }}>
-                <option value={-1}>Choose a sub-area…</option>
-                {subareas.map((s, i) => <option key={s.place_id ?? s.name} value={i}>{s.name}</option>)}
-              </select>
-              {!confirming ? (
-                <button
-                  disabled={!canQueue}
-                  onClick={() => setConfirming(true)}
-                  title={isAdmin ? undefined : 'Placing an order is admin-only — it authorizes spend'}
-                  style={{ padding: '6px 14px', borderRadius: 8, border: 'none', fontWeight: 600, fontSize: 13,
-                    background: canQueue ? '#0f172a' : '#e2e8f0', color: canQueue ? '#fff' : '#94a3b8',
-                    cursor: canQueue ? 'pointer' : 'not-allowed' }}>
-                  Discover &amp; scan…
-                </button>
-              ) : (
-                <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 12, color: '#b45309', fontWeight: 600 }}>
-                    Discover “{businessType.trim()}” across {subarea?.name}, then scan it? Spends on the
-                    data pull + ≈$0.81 scan.
-                  </span>
-                  <button onClick={() => place.mutate()} disabled={place.isPending}
-                    style={{ padding: '6px 14px', borderRadius: 8, border: 'none', fontWeight: 600,
-                      fontSize: 13, background: '#b45309', color: '#fff', cursor: 'pointer' }}>
-                    {place.isPending ? <Loader2 size={13} className="animate-spin" /> : 'Confirm — place order'}
-                  </button>
-                  <button onClick={() => setConfirming(false)}
-                    style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0',
-                      background: '#fff', fontSize: 13, cursor: 'pointer' }}>
-                    Back
-                  </button>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <select value={subIdx} onChange={e => { setSubIdx(Number(e.target.value)); place.reset() }}
+              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', minWidth: 220 }}>
+              <option value={-1}>Choose a target…</option>
+              <option value={WHOLE_CITY}>Whole city (center)</option>
+              {subareas.map((s, i) => <option key={s.place_id ?? s.name} value={i}>{s.name}</option>)}
+            </select>
+            {!confirming ? (
+              <button
+                disabled={!canQueue}
+                onClick={() => setConfirming(true)}
+                title={isAdmin ? undefined : 'Placing an order is admin-only — it authorizes spend'}
+                style={{ padding: '6px 14px', borderRadius: 8, border: 'none', fontWeight: 600, fontSize: 13,
+                  background: canQueue ? '#0f172a' : '#e2e8f0', color: canQueue ? '#fff' : '#94a3b8',
+                  cursor: canQueue ? 'pointer' : 'not-allowed' }}>
+                Discover &amp; scan…
+              </button>
+            ) : (
+              <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12, color: '#b45309', fontWeight: 600 }}>
+                  Discover “{businessType.trim()}” across {subarea?.name ?? `${city?.name} (whole city)`},
+                  then scan it? Spends on the data pull + ≈$0.81 scan.
                 </span>
-              )}
-            </div>
-          )}
+                <button onClick={() => place.mutate()} disabled={place.isPending}
+                  style={{ padding: '6px 14px', borderRadius: 8, border: 'none', fontWeight: 600,
+                    fontSize: 13, background: '#b45309', color: '#fff', cursor: 'pointer' }}>
+                  {place.isPending ? <Loader2 size={13} className="animate-spin" /> : 'Confirm — place order'}
+                </button>
+                <button onClick={() => setConfirming(false)}
+                  style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0',
+                    background: '#fff', fontSize: 13, cursor: 'pointer' }}>
+                  Back
+                </button>
+              </span>
+            )}
+          </div>
         </div>
       )}
       {!isAdmin && (
@@ -339,8 +346,8 @@ function OnboardOrdersCard() {
           <thead>
             <tr style={{ textAlign: 'left', color: '#64748b', fontSize: 11 }}>
               <th style={{ padding: '4px 8px' }}>Placed</th>
-              <th style={{ padding: '4px 8px' }}>Sub-area</th>
-              <th style={{ padding: '4px 8px' }}>Business type</th>
+              <th style={{ padding: '4px 8px' }}>Target</th>
+              <th style={{ padding: '4px 8px' }}>Search</th>
               <th style={{ padding: '4px 8px' }}>Stage</th>
               <th style={{ padding: '4px 8px' }}>Status</th>
               <th style={{ padding: '4px 8px' }} />

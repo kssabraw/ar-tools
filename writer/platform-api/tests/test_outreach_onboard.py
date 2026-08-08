@@ -166,9 +166,30 @@ def test_blank_business_type_is_refused(fake):
 
 
 def test_incomplete_subarea_is_refused(fake):
+    # A NAMED sub-area must carry coordinates (a partial pick is an error, not a whole-city scan).
     with pytest.raises(svc.OutreachError) as exc:
         svc.create_onboard_from_place(
             city=CITY, subarea={"name": "Nowhere"}, business_type="plumber",
             note=None, actor_id="admin-1",
         )
     assert exc.value.code == "subarea_incomplete"
+
+
+def test_no_subarea_scans_the_whole_city_center(fake):
+    # subarea=None → the submarket IS the city centre, so a small city with no sub-areas isn't a
+    # dead end. The submarket is named after the city and sits at its coordinates.
+    order = svc.create_onboard_from_place(
+        city=CITY, subarea=None, business_type="plumber", note=None, actor_id="admin-1"
+    )
+    assert order["submarket"]["name"] == "Van Nuys, CA, USA"
+    sub = fake.tables["submarket"][0]
+    assert sub["name"] == "Van Nuys, CA, USA"
+    assert sub["center_lat"] == 34.19 and sub["center_lng"] == -118.45
+    assert len(fake.tables["onboard_request"]) == 1
+
+
+def test_empty_subarea_dict_is_also_whole_city(fake):
+    order = svc.create_onboard_from_place(
+        city=CITY, subarea={}, business_type="plumber", note=None, actor_id="admin-1"
+    )
+    assert order["submarket"]["name"] == "Van Nuys, CA, USA"
