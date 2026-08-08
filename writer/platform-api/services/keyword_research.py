@@ -1271,8 +1271,10 @@ def enqueue_keyword_research(
     seeds: list[str],
     location_code: Optional[int] = None,
     language_code: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> str:
-    """Enqueue a keyword_research async job. Returns the job id."""
+    """Enqueue a keyword_research async job. Returns the job id. ``user_id`` (the
+    initiator) drives the Activity indicator + completion notification."""
     row = (
         get_supabase().table("async_jobs").insert({
             "job_type": "keyword_research",
@@ -1280,6 +1282,7 @@ def enqueue_keyword_research(
             "payload": {
                 "client_id": client_id, "seeds": seeds,
                 "location_code": location_code, "language_code": language_code,
+                "user_id": user_id,
             },
         }).execute()
     ).data[0]

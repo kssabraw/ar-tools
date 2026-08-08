@@ -48,7 +48,7 @@ async def generate_report(
     report_id = client_report.enqueue_client_report(
         str(client_id), body.report_type,
         _parse_date(body.period_start), _parse_date(body.period_end),
-        deliver=body.deliver, period=body.period,
+        deliver=body.deliver, period=body.period, user_id=auth["user_id"],
     )
     row = (
         get_supabase().table("client_reports").select("*").eq("id", report_id).limit(1).execute()

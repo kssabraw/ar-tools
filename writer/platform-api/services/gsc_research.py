@@ -307,9 +307,12 @@ def is_gsc_research_due(last_run_date: Optional[date], today: date, interval_day
 # ----------------------------------------------------------------------------
 # Orchestration
 # ----------------------------------------------------------------------------
-def enqueue_gsc_research(client_id: str, trigger: str = "manual") -> Optional[str]:
+def enqueue_gsc_research(
+    client_id: str, trigger: str = "manual", user_id: Optional[str] = None
+) -> Optional[str]:
     """Create a pending run + enqueue its job. Returns the run id, or None if a
-    run is already in flight for this client (dedupe)."""
+    run is already in flight for this client (dedupe). ``user_id`` (the initiator)
+    drives the Activity indicator + completion notification."""
     supabase = get_supabase()
     in_flight = (
         supabase.table("gsc_research_runs")
@@ -329,7 +332,8 @@ def enqueue_gsc_research(client_id: str, trigger: str = "manual") -> Optional[st
     ).data[0]
     run_id = run["id"]
     supabase.table("async_jobs").insert(
-        {"job_type": "gsc_research", "entity_id": client_id, "payload": {"run_id": run_id, "client_id": client_id}}
+        {"job_type": "gsc_research", "entity_id": client_id,
+         "payload": {"run_id": run_id, "client_id": client_id, "user_id": user_id}}
     ).execute()
     return run_id
 

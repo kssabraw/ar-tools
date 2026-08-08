@@ -31,24 +31,34 @@ class BacklinkLookupRequest(BaseModel):
 
 @router.post("/backlinks/lookup")
 async def backlink_lookup(body: BacklinkLookupRequest, auth: dict = Depends(require_auth)) -> dict:
-    """Overview + referring domains + anchors + history for any domain/url.
-    Served from cache when a snapshot is within the TTL (unless `force`)."""
+    """Enqueue a backlink lookup as a background job (overview + referring domains
+    + anchors + history) so the user can navigate away while an uncached pull
+    runs. Returns the job id; poll `/backlinks/lookup/{job_id}` for the result. A
+    cached snapshot still completes near-instantly."""
     if not (settings.dataforseo_login and settings.dataforseo_password):
         raise HTTPException(status_code=503, detail="dataforseo_not_configured")
-    try:
-        return await backlink_explorer.lookup(
-            body.target,
-            client_id=str(body.client_id) if body.client_id else None,
-            created_by=auth.get("sub"),
-            force=body.force,
-        )
-    except backlink_explorer.BudgetExceeded as exc:
-        raise HTTPException(status_code=429, detail="backlink_budget_exceeded") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.error("backlink_lookup_failed", extra={"target": body.target, "error": str(exc)})
-        raise HTTPException(status_code=502, detail="backlink_provider_error") from exc
+    job_id = backlink_explorer.enqueue_lookup(
+        body.target,
+        client_id=str(body.client_id) if body.client_id else None,
+        user_id=auth["user_id"],
+        force=body.force,
+    )
+    return {"job_id": job_id, "target": body.target}
+
+
+@router.get("/backlinks/lookup/{job_id}")
+async def backlink_lookup_status(job_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Poll a background backlink lookup — status, plus the full lookup payload in
+    `result` when complete."""
+    from db.supabase_client import get_supabase
+
+    rows = (
+        get_supabase().table("async_jobs").select("id, status, result, error")
+        .eq("id", str(job_id)).limit(1).execute()
+    ).data
+    if not rows:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    return rows[0]
 
 
 @router.get("/backlinks/links")

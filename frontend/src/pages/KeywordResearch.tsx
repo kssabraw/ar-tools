@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, CalendarPlus, Download, FileText, HelpCircle, Lightbulb, MessageCircleQuestion, Plus, RefreshCw, Search, Sparkles, Trash2, Trophy } from 'lucide-react'
 import { api } from '../lib/api'
+import { useResumableJob } from '../lib/useResumableJob'
 import type { Client } from '../lib/types'
 
 // Keyword Research — the seed-keyword explorer. Enter seed keyword(s) → the
@@ -162,7 +163,7 @@ export function KeywordResearch() {
 
   const [seeds, setSeeds] = useState('')
   const [runId, setRunId] = useState<string | null>(null)
-  const [job, setJob] = useState<string | null>(null)
+  const [researchError, setResearchError] = useState<string | null>(null)
   const [activeCluster, setActiveCluster] = useState<string | null>(null)
   const [downloadErr, setDownloadErr] = useState<string | null>(null)
   const [onlyQuestions, setOnlyQuestions] = useState(false)
@@ -183,10 +184,22 @@ export function KeywordResearch() {
     enabled: Boolean(id && runId),
   })
 
-  const research = useMutation({
-    mutationFn: (raw: string) =>
-      api.post<{ job_id: string; seeds: string[] }>(`/clients/${id}/keyword-research`, { seeds: raw }),
-    onSuccess: (r) => setJob(r.job_id),
+  // The keyword-research run is a background async_jobs job. Its id is persisted
+  // (keyed by client), so navigating away and back reconnects to the in-flight
+  // run and opens it when it lands — instead of losing tracking in useState.
+  const researchJob = useResumableJob<{ run_id?: string } | null, undefined>({
+    storageKey: `keyword-research:run:${id}`,
+    poll: async (jobId) => {
+      const st = await api.get<{ status: string; error?: string; result?: { run_id?: string } }>(
+        `/clients/${id}/keyword-research/jobs/${jobId}`)
+      return { status: st.status, result: st.result ?? null, error: st.error }
+    },
+    onComplete: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['keyword-research', id] })
+      if (result?.run_id) { setRunId(result.run_id); setActiveCluster(null) }
+    },
+    onError: (err) => setResearchError(err === 'job_failed' ? '' : err),
+    intervalMs: 2500,
   })
 
   const [suggested, setSuggested] = useState<string[] | null>(null)
@@ -209,24 +222,28 @@ export function KeywordResearch() {
     queryFn: () => api.get(`/clients/${id}/topic-research`),
     enabled: Boolean(id),
   })
-  const [topicJob, setTopicJob] = useState<string | null>(null)
-  const researchTopics = useMutation({
-    mutationFn: () => api.post<{ job_id: string }>(`/clients/${id}/topic-research`, { seeds }),
-    onSuccess: (r) => setTopicJob(r.job_id),
-  })
-  const { data: topicJobStatus } = useQuery<{ status: string; error?: string }>({
-    queryKey: ['topic-research-job', id, topicJob],
-    queryFn: () => api.get(`/clients/${id}/topic-research/jobs/${topicJob}`),
-    enabled: Boolean(topicJob),
-    refetchInterval: (q) => (['complete', 'failed'].includes(q.state.data?.status ?? '') ? false : 3000),
-  })
-  useEffect(() => {
-    if (topicJobStatus?.status === 'complete') {
-      setTopicJob(null)
+  const [topicError, setTopicError] = useState(false)
+  const [topicRan, setTopicRan] = useState(false)
+  const topicJob = useResumableJob<unknown, undefined>({
+    storageKey: `keyword-research:topics:${id}`,
+    poll: async (jobId) => {
+      const st = await api.get<{ status: string; error?: string }>(`/clients/${id}/topic-research/jobs/${jobId}`)
+      return { status: st.status, error: st.error }
+    },
+    onComplete: () => {
+      setTopicRan(true)
       queryClient.invalidateQueries({ queryKey: ['topic-research', id] })
-    }
-  }, [topicJobStatus?.status]) // eslint-disable-line react-hooks/exhaustive-deps
-  const topicRunning = Boolean(topicJob) && !['complete', 'failed'].includes(topicJobStatus?.status ?? '')
+    },
+    onError: () => setTopicError(true),
+  })
+  const runTopics = () => {
+    setTopicError(false)
+    void topicJob.start(async () => {
+      const r = await api.post<{ job_id: string }>(`/clients/${id}/topic-research`, { seeds })
+      return r.job_id
+    }, undefined)
+  }
+  const topicRunning = topicJob.running
   const topics = useMemo<TopicCard[]>(() => topicData?.latest?.topics ?? [], [topicData])
   const topicAssessment = topicData?.latest?.assessment ?? topicData?.latest?.plan?.assessment ?? null
   const [topicGapsOnly, setTopicGapsOnly] = useState(false)
@@ -278,7 +295,7 @@ export function KeywordResearch() {
     mutationFn: () => api.delete<{ deleted: number }>(`/clients/${id}/keyword-research`),
     onSuccess: () => {
       setRunId(null)
-      setJob(null)
+      researchJob.reset()
       setActiveCluster(null)
       setPickedInitial(true) // don't auto-reopen a run after clearing
       queryClient.invalidateQueries({ queryKey: ['keyword-research', id] })
@@ -306,20 +323,7 @@ export function KeywordResearch() {
     return prev.trim() ? `${prev.trim()}\n${fresh.join('\n')}` : fresh.join('\n')
   })
 
-  const { data: jobStatus } = useQuery<{ status: string; error?: string; result?: { run_id?: string } }>({
-    queryKey: ['keyword-research-job', id, job],
-    queryFn: () => api.get(`/clients/${id}/keyword-research/jobs/${job}`),
-    enabled: Boolean(job),
-    refetchInterval: (q) => (['complete', 'failed'].includes(q.state.data?.status ?? '') ? false : 2500),
-  })
-  useEffect(() => {
-    if (jobStatus?.status === 'complete') {
-      queryClient.invalidateQueries({ queryKey: ['keyword-research', id] })
-      if (jobStatus.result?.run_id) { setRunId(jobStatus.result.run_id); setActiveCluster(null) }
-    }
-  }, [jobStatus?.status]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const running = Boolean(job) && !['complete', 'failed'].includes(jobStatus?.status ?? '')
+  const running = researchJob.running
   const budget = history?.budget_remaining ?? 0
   const keywords = useMemo(() => runData?.keywords ?? [], [runData])
   const clusters = useMemo(() => runData?.clusters ?? [], [runData])
@@ -363,15 +367,33 @@ export function KeywordResearch() {
     queryFn: () => api.get(`/clients/${id}/keyword-research/reports`),
     enabled: Boolean(id),
   })
-  const genReport = useMutation({
-    mutationFn: (rid: string) =>
-      api.post<{ report_id: string; download_url: string | null; drive_url: string | null }>(
-        `/clients/${id}/keyword-research/runs/${rid}/report`, {}),
-    onSuccess: (r) => {
-      queryClient.invalidateQueries({ queryKey: ['keyword-research-reports', id] })
-      if (r.download_url) window.open(r.download_url, '_blank')
+  // The PDF report renders as a background job — the user can navigate away while
+  // it builds (and gets a completion notification in the activity sidebar). The
+  // in-flight report id persists per run, so returning reconnects and opens the
+  // download when it lands.
+  const [reportError, setReportError] = useState<string | null>(null)
+  const reportJob = useResumableJob<{ download_url: string | null }, null>({
+    storageKey: `keyword-research:report:${id}:${runId ?? 'none'}`,
+    poll: async (reportId) => {
+      const r = await api.get<{ status: string; download_url: string | null; error?: string | null }>(
+        `/clients/${id}/keyword-research/reports/${reportId}`)
+      return { status: r.status, result: { download_url: r.download_url }, error: r.error }
     },
+    onComplete: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['keyword-research-reports', id] })
+      if (result?.download_url) window.open(result.download_url, '_blank')
+    },
+    onError: (err) => setReportError(err === 'no_keywords'
+      ? 'This run has no keywords to report on yet.' : 'Report failed.'),
   })
+  const startReport = (rid: string) => {
+    setReportError(null)
+    void reportJob.start(async () => {
+      const { report_id } = await api.post<{ report_id: string }>(
+        `/clients/${id}/keyword-research/runs/${rid}/report`, {})
+      return report_id
+    }, null)
+  }
   const genTopics = useMutation({
     mutationFn: (rid: string) =>
       api.post<{ topics: BlogTopic[]; generated: boolean; reason?: string }>(
@@ -398,7 +420,14 @@ export function KeywordResearch() {
     }
   }
 
-  const submit = () => { if (seeds.trim()) research.mutate(seeds) }
+  const submit = () => {
+    if (!seeds.trim()) return
+    setResearchError(null)
+    void researchJob.start(async () => {
+      const r = await api.post<{ job_id: string; seeds: string[] }>(`/clients/${id}/keyword-research`, { seeds })
+      return r.job_id
+    }, undefined)
+  }
 
   const exportCsv = () => {
     if (!filtered.length) return
@@ -441,7 +470,7 @@ export function KeywordResearch() {
           style={{ ...inputStyle, flex: 1, minWidth: 260, resize: 'vertical', fontFamily: 'inherit' }}
         />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <button style={primaryBtn} disabled={running || research.isPending || budget <= 0 || !seeds.trim()} onClick={submit}>
+          <button style={primaryBtn} disabled={running || budget <= 0 || !seeds.trim()} onClick={submit}>
             <RefreshCw size={14} style={running ? { animation: 'spin 1s linear infinite' } : undefined} />
             {running ? 'Researching…' : 'Research keywords'}
           </button>
@@ -479,9 +508,8 @@ export function KeywordResearch() {
           </div>
         )
       )}
-      {research.isError && <div style={errBox}>{(research.error as Error)?.message ?? 'Failed to start research.'}</div>}
-      {jobStatus?.status === 'failed' && (
-        <div style={errBox}>Research failed{jobStatus.error ? `: ${jobStatus.error === 'budget_exceeded' ? ' daily budget reached' : ` ${jobStatus.error}`}` : ''}.</div>
+      {researchError !== null && (
+        <div style={errBox}>Research failed{researchError ? `: ${researchError === 'budget_exceeded' ? ' daily budget reached' : ` ${researchError}`}` : ''}.</div>
       )}
 
       {/* Run history chips */}
@@ -525,11 +553,11 @@ export function KeywordResearch() {
             </div>
           </div>
           <button style={{ ...primaryBtn, background: '#7c3aed' }}
-            onClick={() => researchTopics.mutate()} disabled={topicRunning || researchTopics.isPending}>
-            <Sparkles size={14} /> {topicRunning || researchTopics.isPending ? 'Researching…' : topics.length ? 'Re-research topics' : 'Research topics'}
+            onClick={runTopics} disabled={topicRunning}>
+            <Sparkles size={14} /> {topicRunning ? 'Researching…' : topics.length ? 'Re-research topics' : 'Research topics'}
           </button>
         </div>
-        {researchTopics.isError && <div style={{ ...errBox, marginTop: 12, marginBottom: 0 }}>Couldn't start topic research — please try again.</div>}
+        {topicError && <div style={{ ...errBox, marginTop: 12, marginBottom: 0 }}>Couldn't start topic research — please try again.</div>}
         {topicRunning && <div style={{ fontSize: 12, color: '#7c3aed', marginTop: 12 }}>Researching buyer problems, real demand, and competitor topics… (~30s)</div>}
         {!topicRunning && topicAssessment && (
           <div style={{ fontSize: 12.5, color: '#0f172a', background: '#f3e8ff', border: '1px solid #e9d5ff', borderRadius: 8, padding: '10px 12px', marginTop: 12, lineHeight: 1.5 }}>
@@ -599,7 +627,7 @@ export function KeywordResearch() {
             </div>
           </div>
         ))}
-        {!topicRunning && researchTopics.isSuccess && topics.length === 0 && (
+        {!topicRunning && topicRan && topics.length === 0 && (
           <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 12 }}>No topics were generated — this client may need an ICP or site content on file for problem-first research.</div>
         )}
       </div>
@@ -826,8 +854,8 @@ export function KeywordResearch() {
                 <CalendarPlus size={14} />
                 {sendToScheduler.isPending ? 'Sending…' : `Send${selected.size ? ` ${selected.size}` : ''} to Content Scheduler`}
               </button>
-              <button style={ghostBtn} onClick={() => runId && genReport.mutate(runId)} disabled={!keywords.length || genReport.isPending}>
-                <FileText size={14} /> {genReport.isPending ? 'Building…' : 'Client PDF report'}
+              <button style={ghostBtn} onClick={() => runId && startReport(runId)} disabled={!keywords.length || reportJob.running}>
+                <FileText size={14} /> {reportJob.running ? 'Building… (you can leave)' : 'Client PDF report'}
               </button>
               <button style={ghostBtn} onClick={exportCsv} disabled={!filtered.length}>
                 <Download size={14} /> Export CSV
@@ -835,7 +863,7 @@ export function KeywordResearch() {
             </div>
           </div>
           {sendToScheduler.isError && <div style={errBox}>{(sendToScheduler.error as Error)?.message ?? 'Could not send to the Content Scheduler.'}</div>}
-          {genReport.isError && <div style={errBox}>{(genReport.error as Error)?.message ?? 'Report failed.'}</div>}
+          {reportError && <div style={errBox}>{reportError}</div>}
           {downloadErr && <div style={errBox}>{downloadErr}</div>}
           {runReports.length > 0 && (
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>

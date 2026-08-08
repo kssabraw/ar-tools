@@ -132,6 +132,10 @@ class Settings(BaseSettings):
         # while these execute (formerly in-request SSE; jobs so a deploy can't
         # kill them). Same must-not-queue rationale as local_seo_action.
         "service_page_score", "service_page_reoptimize",
+        # User-awaited on-demand actions moved from synchronous requests to jobs
+        # (so the user can navigate away): the PDF reports (WeasyPrint render) and
+        # the backlink lookup (DataForSEO pull on a cache miss).
+        "keyword_research_report", "fanout_report", "backlink_lookup",
     ]
     # Freeze Protocol: daily homepage-indexation check (GSC URL Inspection with a
     # DataForSEO site: warn-only fallback) that can auto-open a deindexing freeze.

@@ -228,7 +228,7 @@ async def suggest_brand_keywords(client_id: UUID, auth: dict = Depends(require_a
 @router.post("/clients/{client_id}/brand/report")
 async def start_brand_report(client_id: UUID, auth: dict = Depends(require_auth)):
     from services.brand_report import enqueue_brand_report
-    return {"job_id": enqueue_brand_report(str(client_id))}
+    return {"job_id": enqueue_brand_report(str(client_id), user_id=auth["user_id"])}
 
 
 @router.get("/clients/{client_id}/brand/report/{job_id}")

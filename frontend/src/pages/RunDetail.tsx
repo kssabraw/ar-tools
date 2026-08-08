@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import { useResumableJob } from '../lib/useResumableJob'
 import type { RunDetail as RunDetailType, RunStatus } from '../lib/types'
 import { ArrowLeft, Ban, CheckCircle, XCircle, Clock, Loader, Download, Copy, Check, RotateCcw, Repeat, Play, ExternalLink, AlertTriangle, GitBranch } from 'lucide-react'
 import {
@@ -298,8 +299,6 @@ export function RunDetail() {
   const [wpUrl, setWpUrl] = useState<string | null>(null)
   const [wpStatus, setWpStatus] = useState<'draft' | 'publish'>('draft')
   const [ghUrl, setGhUrl] = useState<string | null>(null)
-  const [ghPhase, setGhPhase] = useState<'idle' | 'generating' | 'error'>('idle')
-  const [ghJobId, setGhJobId] = useState<string | null>(null)
   const [ghError, setGhError] = useState<string | null>(null)
   const [ghQueueAhead, setGhQueueAhead] = useState<number | null>(null)
   const [fmt, setFmt] = useState<'markdown' | 'html'>('markdown')
@@ -320,6 +319,34 @@ export function RunDetail() {
       if (link) window.open(link, '_blank')
     },
   })
+  // The async GitHub-publish job (image generation + atomic commit) runs as a
+  // resumable job: navigating away and back reconnects to it and re-opens the
+  // result when it lands. Only blog posts return a job; other content commits
+  // synchronously (handled in the mutation's onSuccess).
+  const ghJob = useResumableJob<{ html_url?: string }, undefined>({
+    storageKey: `run-github-publish:${id}`,
+    intervalMs: 4000,
+    poll: async (jobId) => {
+      const s = await api.get<{ status: string; result?: { html_url?: string }; error?: string; queue_ahead?: number }>(
+        `/runs/${id}/github-publish/status?job_id=${jobId}`,
+      )
+      setGhQueueAhead(s.status === 'pending' ? (s.queue_ahead ?? null) : null)
+      return { status: s.status, result: s.result ?? null, error: s.error }
+    },
+    onComplete: (result) => {
+      setGhError(null)
+      setGhQueueAhead(null)
+      setGhUrl(result?.html_url ?? null)
+      queryClient.invalidateQueries({ queryKey: ['run', id] })
+      queryClient.invalidateQueries({ queryKey: ['run-images', id] })
+      if (result?.html_url) window.open(result.html_url, '_blank')
+    },
+    onError: (err) => {
+      setGhQueueAhead(null)
+      setGhError(err || 'github_publish_failed')
+    },
+  })
+
   const ghPublishMutation = useMutation({
     mutationFn: () => api.post<{ url?: string; path?: string; status?: string; job_id?: string }>(
       `/runs/${id}/publish`, { destination: 'github' },
@@ -327,49 +354,17 @@ export function RunDetail() {
     onSuccess: (data) => {
       setGhError(null)
       // Blog posts return { status: 'generating', job_id } — the images are
-      // generated + committed by an async job we poll below. Other content
-      // returns the committed URL directly (synchronous single-file commit).
+      // generated + committed by the async job the resumable hook polls. Other
+      // content returns the committed URL directly (synchronous single-file commit).
       if (data.status === 'generating' && data.job_id) {
-        setGhJobId(data.job_id)
-        setGhPhase('generating')
+        const jobId = data.job_id
+        void ghJob.start(async () => jobId, undefined)
       } else if (data.url) {
         setGhUrl(data.url)
         window.open(data.url, '_blank')
       }
     },
   })
-
-  // Poll the async GitHub-publish job (image generation + atomic commit).
-  useEffect(() => {
-    if (ghPhase !== 'generating' || !ghJobId) return
-    let active = true
-    const tick = async () => {
-      try {
-        const s = await api.get<{ status: string; result?: { html_url?: string }; error?: string; queue_ahead?: number }>(
-          `/runs/${id}/github-publish/status?job_id=${ghJobId}`,
-        )
-        if (!active) return
-        setGhQueueAhead(s.status === 'pending' ? (s.queue_ahead ?? null) : null)
-        if (s.status === 'complete') {
-          setGhPhase('idle')
-          setGhJobId(null)
-          setGhUrl(s.result?.html_url ?? null)
-          queryClient.invalidateQueries({ queryKey: ['run', id] })
-          queryClient.invalidateQueries({ queryKey: ['run-images', id] })
-          if (s.result?.html_url) window.open(s.result.html_url, '_blank')
-        } else if (s.status === 'failed') {
-          setGhPhase('error')
-          setGhJobId(null)
-          setGhError(s.error || 'github_publish_failed')
-        }
-      } catch {
-        /* transient — keep polling */
-      }
-    }
-    const h = setInterval(tick, 4000)
-    tick()
-    return () => { active = false; clearInterval(h) }
-  }, [ghPhase, ghJobId, id, queryClient])
 
   const runImagesQuery = useQuery({
     queryKey: ['run-images', id],
@@ -729,12 +724,12 @@ export function RunDetail() {
               ) : (
                 <button
                   onClick={() => ghPublishMutation.mutate()}
-                  disabled={ghPublishMutation.isPending || ghPhase === 'generating'}
+                  disabled={ghPublishMutation.isPending || ghJob.running}
                   style={{ ...ghostBtn, color: '#334155', borderColor: '#cbd5e1' }}
                   title="Generate images and commit this post to the client's configured GitHub repo"
                 >
                   <GitBranch size={13} /> {
-                    ghPhase === 'generating'
+                    ghJob.running
                       ? 'Generating images…'
                       : ghPublishMutation.isPending ? 'Publishing…' : 'Publish to GitHub'
                   }
@@ -749,7 +744,7 @@ export function RunDetail() {
               onChange={(url) => featuredImageMutation.mutateAsync(url).then(() => undefined)}
             />
           </div>
-          {ghPhase === 'generating' && (
+          {ghJob.running && (
             <div style={{ marginBottom: 12, padding: '10px 12px', background: '#f0fdf4', borderRadius: 6, color: '#15803d', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
               <Loader size={14} className="spin" />
               {ghQueueAhead != null && ghQueueAhead > 0

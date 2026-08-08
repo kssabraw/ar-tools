@@ -450,11 +450,13 @@ def _prune_runs(client_id: str) -> None:
 def enqueue_topic_research(
     client_id: str, seeds: list[str],
     location_code: Optional[int] = None, language_code: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> str:
     row = get_supabase().table("async_jobs").insert({
         "job_type": "keyword_topic_research", "entity_id": client_id,
         "payload": {"client_id": client_id, "seeds": seeds,
-                    "location_code": location_code, "language_code": language_code},
+                    "location_code": location_code, "language_code": language_code,
+                    "user_id": user_id},
     }).execute().data[0]
     return row["id"]
 

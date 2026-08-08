@@ -470,9 +470,12 @@ def _upload_to_drive(client: Optional[dict], title: str, pdf: bytes) -> Optional
         return None
 
 
-def generate_report(client_id: str, run_id: str, user_id: Optional[str] = None) -> dict:
-    """Build + deliver the client-facing PDF for a run. Raises ValueError
-    ('run_not_found' / 'no_keywords') when there's nothing to report on."""
+def _render_into_row(report_id: str, client_id: str, run_id: str) -> dict:
+    """Render + deliver the PDF for a pending report row and mark it complete.
+    SYNCHRONOUS by design: it renders WeasyPrint and (via _upload_to_drive)
+    calls asyncio.run, so it must run OFF the event loop (in a worker thread /
+    a sync request), never awaited on the loop. Raises ValueError
+    ('run_not_found' / 'no_keywords'). Returns the delivery descriptor."""
     data = keyword_research.get_run(client_id, run_id)
     if not data or not data.get("run"):
         raise ValueError("run_not_found")
@@ -482,45 +485,114 @@ def generate_report(client_id: str, run_id: str, user_id: Optional[str] = None) 
 
     stats = build_report_stats(run=data["run"], keywords=keywords)
     client = _client_row(client_id)
-    agency_name = settings.client_report_agency_name
-    client_name = (client or {}).get("name")
-    exec_summary = _exec_summary(stats)
-    generated_on = datetime.now(timezone.utc).strftime("%b %d, %Y")
-
     html = render_report_html(
-        stats=stats, exec_summary=exec_summary, agency_name=agency_name,
-        client_name=client_name, generated_on=generated_on,
+        stats=stats, exec_summary=_exec_summary(stats),
+        agency_name=settings.client_report_agency_name,
+        client_name=(client or {}).get("name"),
+        generated_on=datetime.now(timezone.utc).strftime("%b %d, %Y"),
     )
-
     from services.client_report import render_pdf
 
-    pdf = render_pdf(html)
     title = f"Keyword Research — {stats['seed'] or 'Report'}"
+    pdf = render_pdf(html)
+    storage_path, download_url = _store_pdf(client_id, report_id, pdf)
+    drive_url = _upload_to_drive(client, title, pdf)
+
+    get_supabase().table("keyword_research_reports").update(
+        {"status": "complete", "title": title, "storage_path": storage_path,
+         "drive_url": drive_url, "error": None}
+    ).eq("id", report_id).execute()
+    logger.info("keyword_research_report_created",
+                extra={"client_id": client_id, "run_id": run_id, "drive": bool(drive_url)})
+    return {"report_id": report_id, "title": title,
+            "download_url": download_url, "drive_url": drive_url}
+
+
+def enqueue_report(client_id: str, run_id: str, user_id: Optional[str] = None) -> dict:
+    """Create a pending report row + enqueue the render as a background job, so the
+    user can navigate away while the PDF builds (the sibling of the sync
+    ``generate_report``). Validates the run up front (raises ValueError) so a bad
+    run fails fast at the request instead of in the background. Returns the pending
+    row descriptor; poll the report status, then GET the download link."""
+    data = keyword_research.get_run(client_id, run_id)
+    if not data or not data.get("run"):
+        raise ValueError("run_not_found")
+    if not (data.get("keywords") or []):
+        raise ValueError("no_keywords")
 
     supabase = get_supabase()
     row = (
         supabase.table("keyword_research_reports").insert({
             "client_id": client_id, "run_id": run_id, "created_by": user_id,
-            "title": title, "status": "complete",
+            "title": "Keyword Research report", "status": "pending",
         }).execute()
     ).data[0]
     report_id = row["id"]
+    supabase.table("async_jobs").insert({
+        "job_type": "keyword_research_report", "entity_id": report_id,
+        "payload": {"report_id": report_id, "client_id": client_id,
+                    "run_id": run_id, "user_id": user_id},
+    }).execute()
+    return {"report_id": report_id, "run_id": run_id, "status": "pending",
+            "created_at": row.get("created_at")}
 
-    storage_path, download_url = _store_pdf(client_id, report_id, pdf)
-    drive_url = _upload_to_drive(client, title, pdf)
 
-    supabase.table("keyword_research_reports").update(
-        {"storage_path": storage_path, "drive_url": drive_url}
-    ).eq("id", report_id).execute()
+async def run_report_job(job: dict) -> None:
+    """async_jobs handler for keyword_research_report — render + deliver the PDF for
+    a pending report row, then settle both the row and the job. The heavy work runs
+    in a worker thread (WeasyPrint + asyncio.run for the Drive upload can't run on
+    the event loop)."""
+    payload = job.get("payload") or {}
+    report_id = payload.get("report_id")
+    client_id = payload.get("client_id")
+    run_id = payload.get("run_id")
+    job_id = job["id"]
+    supabase = get_supabase()
 
-    logger.info("keyword_research_report_created", extra={
-        "client_id": client_id, "run_id": run_id,
-        "keywords": stats["total_keywords"], "drive": bool(drive_url),
-    })
+    def _fail(reason: str) -> None:
+        if report_id:
+            supabase.table("keyword_research_reports").update(
+                {"status": "failed", "error": reason}
+            ).eq("id", report_id).execute()
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": reason, "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+
+    if not (report_id and client_id and run_id):
+        _fail("missing_payload")
+        return
+    try:
+        result = await asyncio.to_thread(_render_into_row, report_id, client_id, run_id)
+    except ValueError as exc:
+        _fail(str(exc))
+        return
+    except Exception as exc:  # noqa: BLE001 — render/LLM failure
+        logger.warning("keyword_research_report.render_failed", extra={"report_id": report_id, "error": str(exc)})
+        _fail("render_failed")
+        return
+
+    supabase.table("async_jobs").update(
+        {"status": "complete", "result": result, "completed_at": "now()"}
+    ).eq("id", job_id).execute()
+
+
+def get_report_status(client_id: str, report_id: str) -> Optional[dict]:
+    """A report row's status + a fresh download URL when complete — for polling the
+    background render. None when the report isn't found for this client."""
+    rows = (
+        get_supabase().table("keyword_research_reports")
+        .select("id, run_id, title, status, error, storage_path, drive_url, created_at")
+        .eq("id", report_id).eq("client_id", client_id).limit(1).execute()
+    ).data
+    if not rows:
+        return None
+    r = rows[0]
+    download_url = _signed_url(r["storage_path"]) if r.get("storage_path") else None
     return {
-        "report_id": report_id, "run_id": run_id, "title": title,
-        "download_url": download_url, "drive_url": drive_url,
-        "created_at": row.get("created_at"),
+        "report_id": r["id"], "run_id": r.get("run_id"), "title": r.get("title"),
+        "status": r.get("status"), "error": r.get("error"),
+        "download_url": download_url, "drive_url": r.get("drive_url"),
+        "created_at": r.get("created_at"),
     }
 
 

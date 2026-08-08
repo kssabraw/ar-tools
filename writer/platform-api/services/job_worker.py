@@ -45,6 +45,7 @@ from services.domain_intel import run_domain_overview_job, run_keyword_gap_job, 
 from services.github_infer import run_github_infer_job
 from services.blog_media.pipeline import run_blog_media_publish_job
 from services.keyword_research import run_keyword_research_job
+from services.keyword_research_report import run_report_job as run_keyword_research_report_job
 from services.freeze import FREEZE_GATED_JOB_TYPES, is_frozen, job_client_id, run_freeze_check_job
 from services.page_backlink_intel import run_page_backlink_job
 from services.notifications import run_notification_dispatch_job
@@ -64,6 +65,7 @@ from services.competitor_gbp import run_competitor_gbp_job
 from services.review_analytics import run_review_intel_job
 from services.backlink_intel import run_backlink_intel_job
 from services.backlink_explorer import run_backlink_snapshot_job
+from services.backlink_explorer import run_lookup_job as run_backlink_lookup_job
 from services.content_intel import run_content_intel_job
 from services.leadoff_actions import (
     run_scout_job as run_leadoff_scout_job,
@@ -784,6 +786,8 @@ async def _process_job(job: dict) -> None:
         await run_backlink_intel_job(job)
     elif job_type == "backlink_snapshot":
         await run_backlink_snapshot_job(job)
+    elif job_type == "backlink_lookup":
+        await run_backlink_lookup_job(job)
     elif job_type == "content_intel":
         await run_content_intel_job(job)
     elif job_type == "local_relevance":
@@ -874,9 +878,14 @@ async def _process_job(job: dict) -> None:
         await run_link_gap_job(job)
     elif job_type == "keyword_research":
         await run_keyword_research_job(job)
+    elif job_type == "keyword_research_report":
+        await run_keyword_research_report_job(job)
     elif job_type == "keyword_topic_research":
         from services.keyword_topic_research import run_topic_research_job
         await run_topic_research_job(job)
+    elif job_type == "fanout_report":
+        from fanout.report_runner import run_report_job as run_fanout_report_job
+        await run_fanout_report_job(job)
     elif job_type == "deliverables_log":
         await run_deliverables_log_job(job)
     elif job_type == "deliverable_notes_scan":
@@ -912,13 +921,14 @@ async def _process_job(job: dict) -> None:
         logger.info("job_worker.settled_by_worker",
                     extra={"job_id": job["id"], "job_type": job_type})
 
-    # Cross-module batch awareness: after a content-generation job settles (the
-    # handler has already written its terminal status), check whether it was the
-    # last in-flight one for its (user, client, family) group and, if so, notify
-    # the user their batch finished. Best-effort — never breaks the worker.
-    if job_type in activity.CONTENT_JOB_TYPES:
+    # Cross-module activity awareness: after a settled job that a user started and
+    # may have navigated away from, tell them it's done. Content page jobs roll up
+    # into one per-batch notification; single registered jobs get one per-job
+    # completion ping (both to the initiator's header bell). Every path is gated
+    # on payload.user_id, so scheduled/background runs never ping. Best-effort.
+    if job_type in activity.ACTIVITY_JOB_TYPES:
         try:
-            activity.on_content_job_settled(job)
+            activity.on_job_settled(job)
         except Exception as exc:  # pragma: no cover - defensive
             logger.error(
                 "job_worker.activity_settle_failed",

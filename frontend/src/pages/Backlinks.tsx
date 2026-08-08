@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
+import { useResumableJob } from '../lib/useResumableJob'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -118,24 +119,46 @@ export function Backlinks() {
     onSuccess: invalidateTracked,
   })
 
-  const lookup = useMutation({
-    mutationFn: (vars: { target: string; force: boolean }) =>
-      api.post<LookupResponse>('/backlinks/lookup', {
-        target: vars.target, client_id: id ?? null, force: vars.force,
-      }),
-    onSuccess: () => {
+  // The lookup runs as a background job (an uncached pull is several DataForSEO
+  // calls), so the user can navigate away; the in-flight job id persists and
+  // reconnects on return, re-displaying the result when it lands.
+  const [data, setData] = useState<LookupResponse | null>(null)
+  const [lookupError, setLookupError] = useState<string | null>(null)
+  const lookupJob = useResumableJob<LookupResponse, null>({
+    storageKey: `backlinks:lookup:${id ?? 'global'}`,
+    poll: async (jobId) => {
+      const r = await api.get<{ status: string; result: LookupResponse | null; error?: string | null }>(
+        `/backlinks/lookup/${jobId}`)
+      return { status: r.status, result: r.result, error: r.error }
+    },
+    onComplete: (result, _meta, resumed) => {
+      if (result) {
+        setData(result)
+        if (resumed) { setSubmitted(result.target); setQuery(result.target) }
+      }
       // New lookup → drop any lazy-tab caches for a clean slate on force.
       queryClient.removeQueries({ queryKey: ['backlink-rd'] })
       queryClient.removeQueries({ queryKey: ['backlink-anchors'] })
     },
+    onError: (err) => setLookupError(err || 'backlink_provider_error'),
   })
+  const startLookup = (target: string, force: boolean) => {
+    setLookupError(null)
+    void lookupJob.start(async () => {
+      const { job_id } = await api.post<{ job_id: string }>('/backlinks/lookup', {
+        target, client_id: id ?? null, force,
+      })
+      return job_id
+    }, null)
+  }
 
-  // Prefill + auto-analyze the client's own domain when opened from a workspace.
+  // Prefill + auto-analyze the client's own domain when opened from a workspace —
+  // unless a prior lookup job is already resuming (the hook reconnects to it).
   useEffect(() => {
-    if (client?.website_url && !query) {
+    if (client?.website_url && !query && lookupJob.phase === 'idle') {
       setQuery(client.website_url)
       setSubmitted(client.website_url)
-      lookup.mutate({ target: client.website_url, force: false })
+      startLookup(client.website_url, false)
     }
   }, [client?.website_url]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -145,11 +168,11 @@ export function Backlinks() {
     setSubmitted(t)
     setTab('overview')
     setLinksScope(null)
-    lookup.mutate({ target: t, force })
+    startLookup(t, force)
   }
 
-  const data = lookup.data
   const ov = data?.overview
+  const looking = lookupJob.running
 
   return (
     <div style={{ padding: 32, maxWidth: 1040 }}>
@@ -215,23 +238,23 @@ export function Backlinks() {
             onKeyDown={(e) => { if (e.key === 'Enter') analyze(query) }}
           />
         </div>
-        <button style={primaryBtn} disabled={lookup.isPending || !query.trim()} onClick={() => analyze(query)}>
+        <button style={primaryBtn} disabled={looking || !query.trim()} onClick={() => analyze(query)}>
           <Search size={14} /> Analyze
         </button>
         {data && (
-          <button style={ghostBtn} disabled={lookup.isPending} onClick={() => analyze(query, true)}
+          <button style={ghostBtn} disabled={looking} onClick={() => analyze(query, true)}
             title="Force a fresh pull — 3 paid API calls (ignores the 24h cache)">
-            <RefreshCw size={14} style={lookup.isPending ? { animation: 'spin 1s linear infinite' } : undefined} /> Refresh
+            <RefreshCw size={14} style={looking ? { animation: 'spin 1s linear infinite' } : undefined} /> Refresh
           </button>
         )}
       </div>
 
-      {lookup.isPending && <div style={emptyBox}>Pulling backlink data for {submitted}…</div>}
-      {lookup.isError && (
+      {looking && <div style={emptyBox}>Pulling backlink data for {submitted}… (you can leave — it finishes in the background)</div>}
+      {lookupError && (
         <div style={{ ...emptyBox, borderColor: '#fecaca', color: '#b91c1c' }}>
-          {(lookup.error as Error).message === 'dataforseo_not_configured'
+          {lookupError === 'dataforseo_not_configured'
             ? 'DataForSEO credentials are not configured on the platform.'
-            : (lookup.error as Error).message === 'backlink_budget_exceeded'
+            : lookupError === 'backlink_budget_exceeded'
               ? 'The daily backlink API budget is used up — cached lookups still work; fresh pulls resume tomorrow.'
               : `Could not fetch backlinks for ${submitted}.`}
         </div>

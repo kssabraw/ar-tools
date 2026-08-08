@@ -1,16 +1,20 @@
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createExport,
   createKeywordReport,
   downloadExport,
   downloadKeywordReport,
+  getKeywordReportStatus,
   getSummary,
   listExports,
   listKeywordReports,
   type CsvExportFormat,
   type CsvExportListItem,
   type KeywordReportListItem,
+  type KeywordReportStatus,
 } from "../../shared/api";
+import { useResumableJob } from "../../../lib/useResumableJob";
 import { useSession } from "../SessionWorkspace";
 
 // Exports tab (PRD §12): four CSV formats generated live from Postgres, frozen
@@ -40,15 +44,29 @@ export function ExportsView() {
 
   const architectureReady = Boolean(summary.data?.architecture);
 
-  const genReport = useMutation({
-    mutationFn: () => createKeywordReport(sessionId),
-    onSuccess: (res) => {
-      const url = res.download_url || res.drive_url;
-      if (url) openDownload(url);
+  // The report renders as a background job — the user can leave while it builds
+  // (and gets a completion notification in the activity sidebar when the session
+  // is client-linked). The in-flight report id persists and reconnects on return.
+  const [reportDriveUrl, setReportDriveUrl] = useState<string | null>(null);
+  const reportJob = useResumableJob<KeywordReportStatus, null>({
+    storageKey: `fanout:kw-report:${sessionId}`,
+    poll: (reportId) =>
+      getKeywordReportStatus(sessionId, reportId).then((r) => ({
+        status: r.status, result: r, error: r.error,
+      })),
+    onComplete: (result) => {
+      if (result) {
+        const url = result.download_url || result.drive_url;
+        if (url) openDownload(url);
+        setReportDriveUrl(result.drive_url);
+      }
       qc.invalidateQueries({ queryKey: ["kw-reports", sessionId] });
     },
-    onError: (e: Error) => alert(e.message),
+    onError: (err) => alert(err || "Report failed"),
   });
+  const startReport = () => {
+    void reportJob.start(() => createKeywordReport(sessionId).then((r) => r.report_id), null);
+  };
 
   const redownloadReport = useMutation({
     mutationFn: (reportId: string) => downloadKeywordReport(reportId),
@@ -89,23 +107,23 @@ export function ExportsView() {
           <button
             className="btn btn-primary"
             style={{ width: "auto" }}
-            disabled={genReport.isPending}
-            onClick={() => genReport.mutate()}
+            disabled={reportJob.running}
+            onClick={startReport}
           >
-            {genReport.isPending ? (
+            {reportJob.running ? (
               <>
                 <span className="spinner-sm" />
-                Generating…
+                Generating… (you can leave)
               </>
             ) : (
               "Generate report"
             )}
           </button>
         </div>
-        {genReport.data?.drive_url && !genReport.isPending && (
+        {reportDriveUrl && !reportJob.running && (
           <p className="muted" style={{ marginTop: 8 }}>
             Latest report saved to Drive:{" "}
-            <a href={genReport.data.drive_url} target="_blank" rel="noopener noreferrer">
+            <a href={reportDriveUrl} target="_blank" rel="noopener noreferrer">
               open in Drive
             </a>
           </p>

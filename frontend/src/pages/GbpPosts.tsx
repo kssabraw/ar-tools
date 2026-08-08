@@ -6,6 +6,7 @@ import {
   CalendarClock, Send, Save, X, Upload, ImageIcon, CheckCircle2, XCircle, Clock, Link2,
 } from 'lucide-react'
 import { api } from '../lib/api'
+import { useResumableJob, type JobPoll } from '../lib/useResumableJob'
 import type { Client } from '../lib/types'
 
 // Google Business Profile Posts — compose (manual + AI-drafted) and publish
@@ -96,14 +97,22 @@ function timeToGoogle(v: string) {
   return { hours: h, minutes: min }
 }
 
-async function pollJob(clientId: string, jobId: string): Promise<JobStatus> {
-  const started = Date.now()
-  for (;;) {
-    const rows = await api.post<JobStatus[]>(`/clients/${clientId}/gbp/posts/jobs/status`, { job_ids: [jobId] })
-    const row = rows[0]
-    if (row && ['complete', 'failed', 'cancelled'].includes(row.status)) return row
-    if (Date.now() - started > 150000) return { job_id: jobId, status: 'timeout', post_id: null, error: 'timed_out' }
-    await new Promise((r) => setTimeout(r, 2500))
+// One poll tick for a GBP-posts async job. Shared by the resumable-job hooks
+// (generate / publish / sync) so a backgrounded job reconnects on return.
+async function pollGbpJob(clientId: string, jobId: string): Promise<JobPoll<JobStatus>> {
+  const rows = await api.post<JobStatus[]>(`/clients/${clientId}/gbp/posts/jobs/status`, { job_ids: [jobId] })
+  const row = rows[0]
+  return row ? { status: row.status, result: row, error: row.error } : { status: 'running' }
+}
+
+// Read a resumable job's persisted meta (to re-derive which row is busy after a
+// remount). Mirrors the hook's internal storage shape.
+function readPersistedMeta<M>(storageKey: string): M | null {
+  try {
+    const raw = localStorage.getItem(storageKey)
+    return raw ? ((JSON.parse(raw).meta as M) ?? null) : null
+  } catch {
+    return null
   }
 }
 
@@ -376,14 +385,46 @@ function ComposeTab({ clientId, locations, onDone }: { clientId: string; locatio
 
   const valid = locationId && summary.trim() && (!needsEvent || (eventTitle.trim() && startDate)) && (!ctaType || ctaType === 'call' || ctaUrl.trim())
 
+  // Publish runs as a backgrounded async job — survive navigating away and
+  // reconnect on return (the post publishes server-side regardless).
+  const publishJob = useResumableJob<JobStatus, undefined>({
+    storageKey: `gbp-posts:compose-publish:${clientId}`,
+    poll: (jobId) => pollGbpJob(clientId, jobId),
+    onComplete: () => onDone(),
+    onError: (err) => setError(err === 'job_failed' ? 'Publish failed.' : err),
+  })
+  // AI draft also runs as a backgrounded job; on completion we fetch the drafted
+  // post and drop its text into the composer.
+  const generateJob = useResumableJob<JobStatus, undefined>({
+    storageKey: `gbp-posts:generate:${clientId}`,
+    poll: (jobId) => pollGbpJob(clientId, jobId),
+    onComplete: async (row) => {
+      if (!row?.post_id) { setError(row?.error || 'draft_failed'); return }
+      try {
+        const p = await api.get<GbpPost>(`/gbp/posts/${row.post_id}`)
+        setSummary(p.summary); setError(null)
+      } catch (e) { setError((e as Error).message) }
+    },
+    onError: (err) => setError(err === 'job_failed' ? 'draft_failed' : err),
+  })
+  const publishing = publishJob.running
+  const anyBusy = busy !== null || publishing
+
   async function submit(action: 'draft' | 'publish' | 'schedule') {
-    setError(null); setBusy(action)
+    setError(null)
+    if (action === 'publish') {
+      // Create the post, then enqueue + poll the publish job (resumable).
+      await publishJob.start(async () => {
+        const post = await api.post<GbpPost>(`/clients/${clientId}/gbp/posts`, buildBody())
+        const { job_id } = await api.post<{ job_id: string }>(`/clients/${clientId}/gbp/posts/${post.id}/publish`, {})
+        return job_id
+      }, undefined)
+      return
+    }
+    setBusy(action)
     try {
       const post = await api.post<GbpPost>(`/clients/${clientId}/gbp/posts`, buildBody())
-      if (action === 'publish') {
-        const { job_id } = await api.post<{ job_id: string }>(`/clients/${clientId}/gbp/posts/${post.id}/publish`, {})
-        await pollJob(clientId, job_id)
-      } else if (action === 'schedule') {
+      if (action === 'schedule') {
         // tz known → send the raw wall-clock; the backend interprets it in the
         // client's timezone. tz unknown → resolve in the browser tz to a UTC ISO
         // (graceful fallback, matches the backend's naive-as-UTC path).
@@ -398,19 +439,16 @@ function ComposeTab({ clientId, locations, onDone }: { clientId: string; locatio
     }
   }
 
-  const aiDraft = useMutation({
-    mutationFn: async () => {
+  const runAiDraft = () => {
+    setError(null)
+    void generateJob.start(async () => {
       const { job_id } = await api.post<{ job_id: string }>(`/clients/${clientId}/gbp/posts/generate`, {
         location_row_id: locationId, topic_type: type, theme: theme.trim() || null,
         source_url: sourceUrl.trim() || null, cta_type: ctaType || null, cta_url: ctaUrl.trim() || null,
       })
-      const done = await pollJob(clientId, job_id)
-      if (done.status !== 'complete' || !done.post_id) throw new Error(done.error || 'draft_failed')
-      return api.get<GbpPost>(`/gbp/posts/${done.post_id}`)
-    },
-    onSuccess: (p) => { setSummary(p.summary); setError(null) },
-    onError: (e: Error) => setError(e.message),
-  })
+      return job_id
+    }, undefined)
+  }
 
   return (
     <div style={{ display: 'grid', gap: 16, maxWidth: 640 }}>
@@ -475,8 +513,8 @@ function ComposeTab({ clientId, locations, onDone }: { clientId: string; locatio
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <input value={theme} onChange={(e) => setTheme(e.target.value)} placeholder="Topic / angle (optional)" style={{ ...input, flex: 2, minWidth: 160 }} />
           <input value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} placeholder="Announce a page URL (optional)" style={{ ...input, flex: 2, minWidth: 160 }} />
-          <button onClick={() => aiDraft.mutate()} disabled={!locationId || aiDraft.isPending} style={btn(ACCENT)}>
-            {aiDraft.isPending ? 'Drafting…' : 'Draft with AI'}
+          <button onClick={runAiDraft} disabled={!locationId || generateJob.running} style={btn(ACCENT)}>
+            {generateJob.running ? 'Drafting…' : 'Draft with AI'}
           </button>
         </div>
       </div>
@@ -507,18 +545,18 @@ function ComposeTab({ clientId, locations, onDone }: { clientId: string; locatio
 
       {/* Actions */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', borderTop: '1px solid #f1f5f9', paddingTop: 14 }}>
-        <button onClick={() => submit('draft')} disabled={!valid || busy !== null} style={{ ...btn('#fff', '#334155'), opacity: valid ? 1 : 0.5 }}>
+        <button onClick={() => submit('draft')} disabled={!valid || anyBusy} style={{ ...btn('#fff', '#334155'), opacity: valid ? 1 : 0.5 }}>
           <Save size={13} /> {busy === 'draft' ? 'Saving…' : 'Save draft'}
         </button>
-        <button onClick={() => submit('publish')} disabled={!valid || busy !== null || okLocations.length === 0} style={{ ...btn('#16a34a'), opacity: valid && okLocations.length ? 1 : 0.5 }}>
-          <Send size={13} /> {busy === 'publish' ? 'Publishing…' : 'Publish now'}
+        <button onClick={() => submit('publish')} disabled={!valid || anyBusy || okLocations.length === 0} style={{ ...btn('#16a34a'), opacity: valid && okLocations.length ? 1 : 0.5 }}>
+          <Send size={13} /> {publishing ? 'Publishing…' : 'Publish now'}
         </button>
         <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginLeft: 'auto' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             <input type="datetime-local" value={scheduleAt} onChange={(e) => setScheduleAt(e.target.value)} style={{ ...input, width: 200 }} title={`Publish time — ${tzLabel(tz)}`} />
             <span style={{ fontSize: 10, color: '#94a3b8' }}>{tzLabel(tz)}</span>
           </div>
-          <button onClick={() => submit('schedule')} disabled={!valid || !scheduleAt || busy !== null} style={{ ...btn(ACCENT), opacity: valid && scheduleAt ? 1 : 0.5 }}>
+          <button onClick={() => submit('schedule')} disabled={!valid || !scheduleAt || anyBusy} style={{ ...btn(ACCENT), opacity: valid && scheduleAt ? 1 : 0.5 }}>
             <CalendarClock size={13} /> {busy === 'schedule' ? 'Scheduling…' : 'Schedule'}
           </button>
         </div>
@@ -541,17 +579,44 @@ function PostsTab({ clientId }: { clientId: string }) {
     setPending(key)
     try { await fn() } finally { setPending(null); invalidate() }
   }
-  const syncMut = useMutation({
-    mutationFn: () => api.post<{ job_id: string }>(`/clients/${clientId}/gbp/posts/sync`, {}),
-    onSuccess: async (r) => { await pollJob(clientId, r.job_id); invalidate() },
+
+  // Sync-from-Google runs as a backgrounded async job — reconnects on return.
+  const syncJob = useResumableJob<JobStatus, undefined>({
+    storageKey: `gbp-posts:sync:${clientId}`,
+    poll: (jobId) => pollGbpJob(clientId, jobId),
+    onComplete: () => invalidate(),
+    onError: () => invalidate(),
   })
+
+  // Per-post publish runs as a backgrounded async job; the meta carries which
+  // post is publishing so the right row shows the busy state (and re-derives it
+  // after a remount from the persisted meta).
+  const [publishingPostId, setPublishingPostId] = useState<string | null>(
+    () => readPersistedMeta<{ postId: string }>(`gbp-posts:post-publish:${clientId}`)?.postId ?? null,
+  )
+  const publishJob = useResumableJob<JobStatus, { postId: string }>({
+    storageKey: `gbp-posts:post-publish:${clientId}`,
+    poll: (jobId) => pollGbpJob(clientId, jobId),
+    onComplete: () => { setPublishingPostId(null); invalidate() },
+    onError: () => { setPublishingPostId(null); invalidate() },
+  })
+  const publishPost = (postId: string) => {
+    setPublishingPostId(postId)
+    void publishJob.start(async () => {
+      const r = await api.post<{ job_id: string }>(`/clients/${clientId}/gbp/posts/${postId}/publish`, {})
+      return r.job_id
+    }, { postId })
+  }
 
   const posts = data ?? []
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-        <button onClick={() => syncMut.mutate()} disabled={syncMut.isPending} style={btn('#fff', '#334155')}>
-          <RefreshCw size={13} /> {syncMut.isPending ? 'Syncing…' : 'Sync from Google'}
+        <button onClick={() => { void syncJob.start(async () => {
+          const r = await api.post<{ job_id: string }>(`/clients/${clientId}/gbp/posts/sync`, {})
+          return r.job_id
+        }, undefined) }} disabled={syncJob.running} style={btn('#fff', '#334155')}>
+          <RefreshCw size={13} /> {syncJob.running ? 'Syncing…' : 'Sync from Google'}
         </button>
       </div>
       {isLoading ? <div style={{ color: '#64748b', fontSize: 13 }}>Loading…</div>
@@ -560,7 +625,8 @@ function PostsTab({ clientId }: { clientId: string }) {
           <div style={{ display: 'grid', gap: 10 }}>
             {posts.map((p) => {
               const meta = STATUS_META[p.status]
-              const busy = pending?.startsWith(p.id)
+              const isPublishing = publishJob.running && publishingPostId === p.id
+              const busy = Boolean(pending?.startsWith(p.id)) || isPublishing
               return (
                 <div key={p.id} style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 14 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
@@ -582,8 +648,8 @@ function PostsTab({ clientId }: { clientId: string }) {
                   {p.error && <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 6 }}>Error: {p.error}</div>}
                   <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
                     {(p.status === 'draft' || p.status === 'failed') && (
-                      <button disabled={busy} onClick={() => run(async () => { const r = await api.post<{ job_id: string }>(`/clients/${clientId}/gbp/posts/${p.id}/publish`, {}); await pollJob(clientId, r.job_id) }, `${p.id}:pub`)} style={btn('#16a34a')}>
-                        <Send size={12} /> {pending === `${p.id}:pub` ? 'Publishing…' : 'Publish'}
+                      <button disabled={busy} onClick={() => publishPost(p.id)} style={btn('#16a34a')}>
+                        <Send size={12} /> {isPublishing ? 'Publishing…' : 'Publish'}
                       </button>
                     )}
                     {p.status === 'scheduled' && (

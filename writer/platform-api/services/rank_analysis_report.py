@@ -283,9 +283,11 @@ async def generate_report_for_keyword(client_id: str, keyword_id: str) -> dict:
 # ----------------------------------------------------------------------------
 def enqueue_rank_keyword_report(
     client_id: str, keyword_id: str, keyword: str, trigger: str = "on_demand",
+    user_id: Optional[str] = None,
 ) -> Optional[str]:
     """Create a pending report row + enqueue the job (deduped on the pending
-    row). Returns the report row id, or None if one is already in flight."""
+    row). Returns the report row id, or None if one is already in flight.
+    ``user_id`` (the initiator) drives the Activity indicator + completion ping."""
     supabase = get_supabase()
     existing = (
         supabase.table("rank_keyword_reports").select("id")
@@ -304,7 +306,7 @@ def enqueue_rank_keyword_report(
         supabase.table("async_jobs").insert({
             "job_type": "rank_keyword_report", "entity_id": report_id,
             "payload": {"report_id": report_id, "client_id": client_id,
-                        "keyword_id": keyword_id, "trigger": trigger},
+                        "keyword_id": keyword_id, "trigger": trigger, "user_id": user_id},
         }).execute()
     return report_id
 
