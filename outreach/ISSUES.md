@@ -2138,7 +2138,7 @@ rankings-vs-competitors table + the call hook, in an internal brief and a client
 pieces are deliberately staged, because each is a real build (two of them paid, one blocked), and the
 report renders them as explicit `not_scanned` blocks until they land — never an empty table:
 
-- **Organic-SERP scan (increment 2, unblocked, PAID).** A new producer in the outreach Railway job:
+- **Organic-SERP scan (increment 2) — BUILT 2026-08-08.** A new producer in the outreach Railway job:
   a DataForSEO organic SERP for the prospect's keyword+location, the prospect's rank + top
   competitors, written to `serp_result` against the maps `scan_snapshot` (I-084 resolved — single
   location per keyword×submarket). Authorized through the `scan_request`/`tick` order mechanism, not a

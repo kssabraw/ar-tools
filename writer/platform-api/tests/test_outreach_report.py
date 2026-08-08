@@ -68,6 +68,61 @@ def test_not_scanned_section():
     assert s == {"status": orep.STATUS_NOT_SCANNED, "signal": "organic", "reason": "no scan yet"}
 
 
+# --- domain_of + build_organic_section --------------------------------------------------------
+
+
+def test_domain_of_matches_the_producer_side():
+    assert orep.domain_of("https://www.AcePlumbing.com/x") == "aceplumbing.com"
+    assert orep.domain_of("boltrooter.com") == "boltrooter.com"
+    assert orep.domain_of("") is None and orep.domain_of(None) is None
+
+
+def _summary(results, ai=False, depth=20):
+    return {"engine": "google_organic", "captured_depth": depth,
+            "ai_overview_present": ai, "results": results}
+
+
+def test_build_organic_section_finds_prospect_rank_and_competitors():
+    summary = _summary([
+        {"rank": 1, "domain": "bigrooter.com", "url": "u1", "title": "Big Rooter"},
+        {"rank": 2, "domain": "ace.com", "url": "u2", "title": "Ace"},
+        {"rank": 5, "domain": "drips.com", "url": "u3", "title": "Drips"},  # the prospect
+    ], ai=True)
+    section = orep.build_organic_section(
+        summary, prospect_website="https://www.drips.com/services", max_competitors=2
+    )
+    assert section["status"] == orep.STATUS_MEASURED
+    assert section["prospect_domain"] == "drips.com"
+    assert section["prospect_rank"] == 5
+    assert section["ai_overview_present"] is True
+    # Competitors are the top domains, prospect's own excluded, capped.
+    assert [c["domain"] for c in section["competitors"]] == ["bigrooter.com", "ace.com"]
+
+
+def test_build_organic_section_prospect_not_in_results():
+    summary = _summary([{"rank": 1, "domain": "ace.com"}, {"rank": 2, "domain": "bolt.com"}])
+    section = orep.build_organic_section(
+        summary, prospect_website="drips.com", max_competitors=3
+    )
+    # Not in the captured depth -> None (not ranking in the top N), never a guessed position.
+    assert section["prospect_rank"] is None
+    assert [c["domain"] for c in section["competitors"]] == ["ace.com", "bolt.com"]
+
+
+def test_build_organic_section_no_summary_is_not_scanned():
+    section = orep.build_organic_section(None, prospect_website="x.com", max_competitors=3)
+    assert section["status"] == orep.STATUS_NOT_SCANNED
+    assert section["signal"] == orep.SIGNAL_ORGANIC
+
+
+def test_build_organic_section_no_website_still_lists_competitors():
+    summary = _summary([{"rank": 1, "domain": "ace.com"}])
+    section = orep.build_organic_section(summary, prospect_website=None, max_competitors=3)
+    assert section["prospect_domain"] is None
+    assert section["prospect_rank"] is None
+    assert section["competitors"][0]["domain"] == "ace.com"
+
+
 def _prospect():
     return {"id": "p1", "name": "Drips Plumbing", "category": "plumber", "phone": "+1",
             "website": "", "address": "1 Main St", "rating": 4.1, "review_count": 4}

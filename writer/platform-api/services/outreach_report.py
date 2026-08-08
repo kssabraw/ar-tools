@@ -22,6 +22,7 @@ The section shapes are fixed now so a later slice fills a block, not restructure
 from __future__ import annotations
 
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 # Section status vocabulary. `measured` = a scan ran and produced data; `not_scanned` = the signal's
 # scan layer hasn't run for this prospect (staged/paid/blocked); `not_measured` = the area itself has
@@ -113,6 +114,76 @@ def build_maps_comparison(
 def not_scanned_section(signal: str, reason: str) -> dict[str, Any]:
     """A signal whose scan layer has not run for this prospect. Explicit, never an empty table."""
     return {"status": STATUS_NOT_SCANNED, "signal": signal, "reason": reason}
+
+
+def domain_of(url: Optional[str]) -> Optional[str]:
+    """A bare, lower-cased host from a URL or host string, `www.` stripped. Pure.
+
+    Mirrors `organic_scan.domain_of` in the outreach api (the two codebases can't share code), so
+    the prospect's stored website and the SERP's `domain` field normalise identically — otherwise a
+    prospect who DOES rank would silently read as "not found", the false direction. Never raises."""
+    if not url:
+        return None
+    text = url.strip().lower()
+    if not text:
+        return None
+    if "//" not in text:
+        text = "//" + text
+    host = urlparse(text).netloc or ""
+    host = host.split("@")[-1].split(":")[0]
+    if host.startswith("www."):
+        host = host[4:]
+    return host or None
+
+
+def build_organic_section(
+    summary: Optional[dict[str, Any]],
+    *,
+    prospect_website: Optional[str],
+    max_competitors: int,
+) -> dict[str, Any]:
+    """The "organic ranking for this keyword vs the top competitors" section. Pure.
+
+    `summary` is a stored `serp_result.payload_summary` (from `organic_scan.summarize_serp`), or
+    None when no organic scan has run for the snapshot — which returns a `not_scanned` block, never
+    an empty table. The prospect's own organic rank is read by matching their website's domain
+    against the SERP's `domain` field (both normalised the same way); competitors are the top
+    ranked domains excluding the prospect's own. Nothing is invented — a prospect not in the
+    captured depth reports `prospect_rank: None` (not ranking in the top N), not a guessed position.
+    """
+    if not summary:
+        return not_scanned_section(
+            SIGNAL_ORGANIC, "The organic-search scan hasn't run for this prospect yet."
+        )
+
+    results = summary.get("results") or []
+    prospect_domain = domain_of(prospect_website)
+
+    prospect_rank: Optional[int] = None
+    if prospect_domain:
+        for r in results:
+            if domain_of(r.get("domain")) == prospect_domain and isinstance(r.get("rank"), int):
+                prospect_rank = r["rank"] if prospect_rank is None else min(prospect_rank, r["rank"])
+
+    competitors: list[dict[str, Any]] = []
+    for r in sorted(results, key=lambda r: r.get("rank", 10**6)):
+        if not r.get("domain"):
+            continue
+        if prospect_domain and domain_of(r.get("domain")) == prospect_domain:
+            continue
+        competitors.append({"domain": r.get("domain"), "rank": r.get("rank"), "title": r.get("title")})
+        if len(competitors) >= max_competitors:
+            break
+
+    return {
+        "status": STATUS_MEASURED,
+        "signal": SIGNAL_ORGANIC,
+        "prospect_domain": prospect_domain,
+        "prospect_rank": prospect_rank,
+        "ai_overview_present": bool(summary.get("ai_overview_present")),
+        "captured_depth": summary.get("captured_depth"),
+        "competitors": competitors,
+    }
 
 
 def build_report(
