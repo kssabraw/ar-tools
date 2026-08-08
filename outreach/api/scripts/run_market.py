@@ -202,7 +202,7 @@ def cmd_calibrate(args) -> int:
         region=definition.region,
     )[0]
 
-    return _asyncio.run(calibrate(tile.query, args.limit, tile.coordinates))
+    return _asyncio.run(calibrate(tile.query, legacy_limit(args), tile.coordinates))
 
 
 def cmd_verify_reviews(args) -> int:
@@ -233,7 +233,7 @@ def cmd_verify_reviews(args) -> int:
                 client=client,
                 settings=get_settings(),
                 market_id=market_id,
-                limit=args.limit,
+                limit=legacy_limit(args),
                 group=args.group,
                 provider=args.provider,
             )
@@ -565,7 +565,7 @@ def cmd_scan_tech(args) -> int:
     market_id = _market_id(client, definition.name)
 
     report = _asyncio.run(
-        scan_tech.run_tech_scan(client, settings, market_id=market_id, limit=args.limit or None)
+        scan_tech.run_tech_scan(client, settings, market_id=market_id, limit=scan_tech_limit(args))
     )
     print(
         json.dumps(
@@ -597,10 +597,19 @@ def cmd_probe_pixel_field(args) -> int:
     """
     import asyncio as _asyncio
 
+    from api.config import missing_outscraper_vars
     from api.services import pixel_probe
 
     definition = seeding.MarketDefinition.from_file(args.definition)
     settings = get_settings()
+
+    # Refuse BEFORE opening a credential, like every other paid command. OutscraperClient does not
+    # validate its key, so without this the spike fires N requests with an empty X-API-KEY.
+    absent = missing_outscraper_vars(settings)
+    if absent:
+        print(f"REFUSED: missing credentials: {', '.join(absent)}", file=sys.stderr)
+        return 2
+
     client = _client()
     market_id = _market_id(client, definition.name)
 
@@ -609,7 +618,7 @@ def cmd_probe_pixel_field(args) -> int:
         .select("name, address, website")
         .eq("market_id", market_id)
         .not_.is_("website", "null")
-        .limit(args.limit or 8)
+        .limit(pixel_probe_limit(args))
         .execute()
         .data
         or []
@@ -619,11 +628,13 @@ def cmd_probe_pixel_field(args) -> int:
         return 2
     queries = [f"{p['name']} {p.get('address') or ''}".strip() for p in sample]
 
-    records = _asyncio.run(
+    records, errors = _asyncio.run(
         pixel_probe.fetch_enriched_sample(settings, queries, enrichment=args.enrichment)
     )
-    print(json.dumps(pixel_probe.summarize_pixel_probe(records), indent=2))
-    return 0
+    print(json.dumps(pixel_probe.summarize_pixel_probe(records, errors), indent=2))
+    # Every query failing means the spike measured nothing (a wrong enrichment name, a dead key) —
+    # that is a failure. A partial sample still answers the question, so it exits zero.
+    return 1 if errors and not records else 0
 
 
 def cmd_collect(args) -> int:
@@ -792,7 +803,7 @@ def cmd_rollup(args) -> int:
         client,
         settings,
         snapshot_ids=[args.snapshot] if args.snapshot else None,
-        limit=args.limit if args.snapshot is None else None,
+        limit=legacy_limit(args) if args.snapshot is None else None,
     )
     print(
         json.dumps(
@@ -1410,27 +1421,35 @@ class _ExtraFormatter(logging.Formatter):
         return f"{base} {extras}" if extras else base
 
 
-def main() -> int:
-    _install_sigterm_marker()
-    handler = logging.StreamHandler()
-    handler.setFormatter(_ExtraFormatter("%(levelname)s %(name)s %(message)s"))
-    logging.basicConfig(level=logging.INFO, handlers=[handler])
+# --- per-command --limit defaults ---------------------------------------------------------
+#
+# `--limit` deliberately has NO shared default. It used to default to 20 for every command, which
+# silently capped `scan-tech` at 20 of ~1,000 sites and still exited 0 — a run that "reports clean
+# because it did almost nothing", the failure mode this codebase keeps meeting. The safe value is
+# per-command, so each one names its own and omission means that command's safe behaviour.
 
-    import os
 
-    print(
-        build_identity(
-            dict(os.environ),
-            [
-                "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-                "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech",
-                "probe-pixel-field", "collect", "rollup", "tick",
-                "render-heatmap", "render-delta",
-            ],
-        ),
-        flush=True,
-    )
+def scan_tech_limit(args) -> "int | None":
+    """scan-tech: None = EVERY site with a website. It is free, so there is no reason to sample."""
+    return args.limit
 
+
+def pixel_probe_limit(args) -> int:
+    """probe-pixel-field: a small sample, because this one SPENDS (§16a.1 wants ~8-20 places)."""
+    return args.limit or 8
+
+
+def legacy_limit(args) -> int:
+    """calibrate / verify-reviews / rollup: the 20 they had before the flag lost its shared default."""
+    return args.limit or 20
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """The real CLI parser, extracted so tests exercise THIS wiring rather than a copy of it.
+
+    The 20-of-1,000 cap shipped because nothing tested the flag-to-command wiring — the pure logic
+    was covered and the seam between argparse and the command was not.
+    """
     parser = argparse.ArgumentParser(description="Outreach pipeline — Phase 1")
     parser.add_argument(
         "command",
@@ -1444,11 +1463,16 @@ def main() -> int:
     parser.add_argument("definition", help="path to a market definition JSON file")
     parser.add_argument("--cycle", type=int, default=None, help="cycle number for cost_ledger")
     parser.add_argument(
-        "--limit", type=int, default=20,
+        "--limit", type=int, default=None,
         help=(
-            "places per query (calibrate); prospects to look up (verify-reviews); snapshots to "
-            "roll up in one invocation (rollup — the command is idempotent, so a larger backlog "
-            "just needs another run)"
+            "places per query (calibrate, default 20); prospects to look up (verify-reviews, "
+            "default 20); snapshots to roll up in one invocation (rollup, default 20 — the command "
+            "is idempotent, so a larger backlog just needs another run); places to enrich "
+            "(probe-pixel-field, default 8 — this one SPENDS); sites to fetch (scan-tech, default "
+            "ALL). "
+            "DEFAULTS ARE PER-COMMAND, not on the flag: a shared default of 20 silently capped "
+            "scan-tech at 20 of ~1,000 sites and still exited 0, which is the 'reports clean "
+            "because it did almost nothing' failure this module keeps meeting."
         ),
     )
     parser.add_argument(
@@ -1539,6 +1563,32 @@ def main() -> int:
             "isolating a collection problem, not for routine use."
         ),
     )
+    return parser
+
+
+def main() -> int:
+    _install_sigterm_marker()
+    handler = logging.StreamHandler()
+    handler.setFormatter(_ExtraFormatter("%(levelname)s %(name)s %(message)s"))
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
+
+    import os
+
+    print(
+        build_identity(
+            dict(os.environ),
+            [
+                "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
+                "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech",
+                "probe-pixel-field", "collect", "rollup", "tick",
+                "render-heatmap", "render-delta",
+            ],
+        ),
+        flush=True,
+    )
+
+    parser = build_parser()
+
     handlers = {
         "seed": cmd_seed,
         "ingest": cmd_ingest,

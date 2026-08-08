@@ -225,17 +225,27 @@ def test_every_command_the_parser_accepts_has_a_handler_and_a_banner_entry():
                 found.append([e.value for e in sub.elts])
         return found
 
-    main_fn = next(
-        n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main"
-    )
+    # The banner list lives in main(); the argparse choices moved into build_parser() when the
+    # parser was extracted so the --limit wiring could be tested. Both are still checked — the
+    # guarantee is that every list agrees, not that they share a function.
+    fns = {
+        n.name: n for n in tree.body
+        if isinstance(n, ast.FunctionDef) and n.name in ("main", "build_parser")
+    }
+    assert set(fns) == {"main", "build_parser"}, "both command-list owners must exist"
     handler_keys = next(
         {k.value for k in n.keys if isinstance(k, ast.Constant)}
-        for n in ast.walk(main_fn)
+        for n in ast.walk(fns["main"])
         if isinstance(n, ast.Dict) and n.keys
         and all(isinstance(k, ast.Constant) and isinstance(k.value, str) for k in n.keys)
         and "seed" in {k.value for k in n.keys}
     )
-    command_lists = [set(lst) for lst in string_lists(main_fn) if "seed" in lst]
+    command_lists = [
+        set(lst)
+        for fn in fns.values()
+        for lst in string_lists(fn)
+        if "seed" in lst
+    ]
 
     assert len(command_lists) == 2, "expected the banner list and the argparse choices"
     assert command_lists[0] == command_lists[1] == handler_keys
@@ -291,3 +301,45 @@ def test_the_banner_marks_an_unset_token_and_the_safe_default():
     assert "command=filter" in line
     assert "PAID" not in line
     assert "confirm=(unset)" in line
+
+
+# --- per-command --limit defaults (the gap that let a silent 20-of-1000 cap ship) --------------
+
+
+def _parsed(argv):
+    """Parse argv exactly as main() does, so these test the REAL wiring rather than a copy."""
+    import argparse
+
+    from api.scripts.run_market import build_parser
+
+    return build_parser().parse_args(argv)
+
+
+def test_limit_flag_has_no_shared_default():
+    """REGRESSION: `--limit` defaulted to 20 for EVERY command, so `scan-tech` silently fetched 20
+    of ~1,000 sites and still exited 0 — the 'reports clean because it did almost nothing' failure.
+    The default now belongs to each command, so omission means that command's own safe value."""
+    assert _parsed(["scan-tech", "m.json"]).limit is None
+
+
+def test_scan_tech_scans_everything_by_default():
+    from api.scripts.run_market import scan_tech_limit
+
+    assert scan_tech_limit(_parsed(["scan-tech", "m.json"])) is None      # ALL sites
+    assert scan_tech_limit(_parsed(["scan-tech", "m.json", "--limit", "50"])) == 50
+
+
+def test_paid_spike_defaults_to_a_small_sample():
+    from api.scripts.run_market import pixel_probe_limit
+
+    # This one SPENDS, so omission must give the small documented sample, not the old shared 20.
+    assert pixel_probe_limit(_parsed(["probe-pixel-field", "m.json"])) == 8
+    assert pixel_probe_limit(_parsed(["probe-pixel-field", "m.json", "--limit", "20"])) == 20
+
+
+def test_unchanged_commands_keep_their_previous_default_of_20():
+    from api.scripts.run_market import legacy_limit
+
+    for cmd in ("calibrate", "verify-reviews", "rollup"):
+        assert legacy_limit(_parsed([cmd, "m.json"])) == 20
+        assert legacy_limit(_parsed([cmd, "m.json", "--limit", "5"])) == 5

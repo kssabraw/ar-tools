@@ -1670,6 +1670,11 @@ class Settings(BaseSettings):
     # 90 days per the spec; the URL is re-signable from the stored path without re-approving.
     outreach_report_bucket: str = "outreach-reports"
     outreach_report_url_ttl_days: int = 90
+    # Paid-placement: how much of the area a business must be MISSING from before "paying and
+    # losing" is a fair thing to say about it. Config rather than a literal because it decides
+    # whether a prospect-facing sentence is made at all — a threshold buried in a function body is
+    # one nobody can find when a pitch reads wrong (the same complaint as land_mask_null_scans).
+    outreach_paying_losing_deficit_pct: float = 50.0
 
     leadoff_income_acs_year: int = 2023
     leadoff_income_refresh_days: int = 365

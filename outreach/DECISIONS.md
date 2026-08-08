@@ -1210,3 +1210,44 @@ is the prospect's and does not change per scan (so it does NOT ride `serp_result
 *Revisit:* the `probe-labs-paid` yield spike decides whether B2 (`scan-adspend`) is built; the §16a.1
 spike decides whether `tech_follow_gtm` defaults on and whether the Outscraper pull can supply the Meta
 half near-free (I-097).
+
+
+---
+
+## 2026-08-08 — Paid placement: what a signal may CLAIM is decided by which evidence produced it
+
+Found by adversarially reviewing the Slice A/B code before it ran (ISSUES I-099). Two of the three
+defects were the same shape: a derived boolean was true for more than one reason, and the sentence
+built from it named only the most flattering one.
+
+**A signal that can fire from several sources must carry WHICH one fired.** `prospect_is_paying`
+was true for a SERP ad, an LSA, or an `AW-` conversion tag on the prospect's site — and the caller's
+opener said "you're paying for Google Ads on ⟨keyword⟩" in all three cases. The first two were
+measured on that keyword's own SERP. The third was measured on their website, proves only that
+conversion tracking is installed, and is routinely left behind after a campaign stops. So the module
+now carries `paying_evidence` (`serp_ad` | `lsa` | `conversion_tag`) alongside a narrow
+`prospect_paying_this_keyword`, and every surface — the spoken hook, the internal brief, the
+approval-gated client PDF — branches on it. The tag-only path ASKS ("are you paying for clicks your
+competitors get free from the map pack?") rather than asserting. This is the fabrication invariant
+applied one level deeper than "don't invent a competitor": *don't let a true-for-one-reason flag
+license a sentence that names a different reason.*
+
+**A two-sided name match fails in one safe direction and one unsafe one.** The LSA advertiser match
+was bidirectional, so a SHORTER competitor name inside a LONGER prospect name ("AAA Plumbing" inside
+"AAA Plumbing Services" — routine in the trades) both asserted an LSA the prospect does not run and
+deleted a real competitor from the list. `detect_ai_mention` had already chosen the one-directional
+rule for exactly this reason; the paid signal now matches it. The kept direction's failure is a MISS,
+which understates spend — the direction that costs nothing to be wrong in.
+
+**A shared CLI default is not a default, it is an accident waiting for a new command.** `--limit`
+defaulted to 20 for every subcommand, so `scan-tech` — which wants every site — silently covered 20
+of ~1,000 and exited 0. Defaults now belong to the COMMAND (`scan_tech_limit`, `pixel_probe_limit`,
+`legacy_limit`), which is the same principle `resolve_command` already applies to the spend gate:
+the safe value is what you get by omission, and "safe" differs per command (all sites for a free
+scan, a small sample for one that bills). The parser is extracted as `build_parser()` so the
+argparse-to-command seam is testable — the bug shipped because the pure logic was covered and that
+seam was not.
+
+*Consequence:* `likely_represented` no longer counts GTM. It is the only derived flag scoring
+NEGATIVE (−21 Model A / −26 Model B), and GTM is a free tool on a large share of all sites, so
+counting it penalised DIY operators for having a tag manager.

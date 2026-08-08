@@ -255,6 +255,7 @@ def build_justification(
     field_min_sample: int,
     pack_size: int,
     paid: Optional[dict[str, Any]] = None,
+    losing_deficit_pct: float = 50.0,
 ) -> dict[str, Any]:
     """Assemble the whole justification for one prospect. Pure — every input is already resolved.
 
@@ -311,21 +312,39 @@ def build_justification(
     # conversion tag on their site — Slice B1) AND is losing it (invisible everywhere, or missing
     # from the majority of the area). Deterministic: every clause is a measured fact.
     paying_and_losing = bool(
-        paid and paid.get("prospect_is_paying") and (invisible_everywhere or deficit >= 50)
+        paid and paid.get("prospect_is_paying") and (invisible_everywhere or deficit >= losing_deficit_pct)
     )
+    # WHICH evidence fired decides what may be SAID. `serp_ad`/`lsa` were measured on this keyword's
+    # own SERP, so a keyword-specific spend claim is grounded. `conversion_tag` was measured on their
+    # SITE: it proves Google Ads conversion tracking is installed, NOT that they bid on this term —
+    # and tags routinely outlive the campaigns that placed them. Saying "you're paying for Google Ads
+    # on <keyword>" off a tag is a claim the prospect can falsify in one sentence, which PRD §9a.2
+    # names as the way a false claim costs the lead.
+    paying_evidence = (paid or {}).get("paying_evidence")
     if paying_and_losing:
         where = (
             f"invisible in Google's map results everywhere across {submarket}"
             if invisible_everywhere
             else f"missing from Google's map results across {_pct(deficit)} of {submarket}"
         )
-        channel = "Local Services ad" if paid.get("prospect_running_lsa") else "Google Ads"
+        if paying_evidence == "conversion_tag":
+            text = (
+                f"Running Google Ads conversion tracking on their site — they're buying traffic "
+                f"somewhere — but {where} for “{keyword}”. Worth asking what they spend and what it "
+                f"returns, because the organic side is going to the businesses above them."
+            )
+        else:
+            channel = "a Local Services ad" if paying_evidence == "lsa" else "Google Ads"
+            text = (
+                f"Paying for {channel} on “{keyword}” but {where} — spending to be found and still "
+                f"losing the map pack, which is the gap {name} can close fastest."
+            )
         points.append(
             _point(
                 ELEM_PAYING,
-                f"Paying for {channel} on “{keyword}” but {where} — spending to be found and still "
-                f"losing the map pack, which is the gap {name} can close fastest.",
+                text,
                 {
+                    "paying_evidence": paying_evidence,
                     "prospect_running_ads": paid.get("prospect_running_ads"),
                     "prospect_running_lsa": paid.get("prospect_running_lsa"),
                     "prospect_ad_conversion_tag": paid.get("prospect_ad_conversion_tag"),
@@ -481,7 +500,7 @@ def build_justification(
         "hook": _hook(
             name, keyword, submarket, deficit, invisible_everywhere, named, pack_size,
             paying_and_losing=paying_and_losing,
-            paying_channel="Local Services ad" if (paid and paid.get("prospect_running_lsa")) else "Google Ads",
+            paying_evidence=paying_evidence,
         ),
         "hook_element": hook_element,
         "available_elements": available_elements,
@@ -534,22 +553,36 @@ def _hook(
     pack_size: int,
     *,
     paying_and_losing: bool = False,
-    paying_channel: str = "Google Ads",
+    paying_evidence: Optional[str] = None,
 ) -> str:
     """The single spoken opener, in the PRD §716 shape: keyword + area + a competitor when there is
     one. Built from persisted facts, never improvised — the same sentence for the same scan.
 
     When the prospect is paying AND losing, the opener LEADS with that (the strongest, highest-intent
     line available — they've proven budget and have a visible problem), so `hook_element == 'paying'`
-    and the spoken hook agree."""
+    and the spoken hook agree.
+
+    **This sentence is said to the prospect's face, so it may only claim what was measured.** With
+    `serp_ad`/`lsa` evidence their paid placement was observed on THIS keyword's SERP and the spend
+    claim is grounded. With `conversion_tag` evidence only their site was observed, so the opener
+    asks about ad spend instead of asserting it — a caller who says "you're paying for Google Ads on
+    X" to someone who paused that campaign has lost the call in one sentence.
+    """
     if paying_and_losing:
         where = (
             "you don't show up in the Google map results anywhere I looked"
             if invisible_everywhere
             else f"you're missing from the Google map results across {_pct(deficit)} of the area"
         )
+        if paying_evidence == "conversion_tag":
+            return (
+                f"I searched “{keyword}” across {submarket} — {where}. I noticed you're running "
+                f"Google Ads conversion tracking, so are you paying for clicks your competitors are "
+                f"getting for free from the map pack?"
+            )
+        channel = "a Local Services ad" if paying_evidence == "lsa" else "Google Ads"
         return (
-            f"I searched “{keyword}” across {submarket} — you're paying for {paying_channel}, but "
+            f"I searched “{keyword}” across {submarket} — you're paying for {channel}, but "
             f"{where}, so you're buying clicks your competitors are getting for free."
         )
     if invisible_everywhere:

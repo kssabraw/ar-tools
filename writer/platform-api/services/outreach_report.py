@@ -199,8 +199,6 @@ def _normalize_name(text: Optional[str]) -> str:
     return re.sub(r"[^a-z0-9 ]", "", (text or "").lower()).strip()
 
 
-# Vendor tags that count as "an agency/marketing stack is involved" — the scoring-spec.md
-# §Decision-structure `likely_represented` bin (2+ signals).
 def _tech_ok(tech: Optional[dict[str, Any]]) -> bool:
     """A tech row is usable only when the fetch SUCCEEDED — a failed fetch is unknown, never absent
     (PRD §B3), so its all-False booleans must not read as "no ad tech"."""
@@ -241,10 +239,23 @@ def derive_paid_signal(
         return bool(prospect_domain) and domain_of(ad.get("domain")) == prospect_domain
 
     def _is_prospect_lsa(ad: dict[str, Any]) -> bool:
-        # Name match, same conservative rule as detect_ai_mention: ≥4 chars so a two-letter shop
-        # name can't trivially collide, and a miss understates (never manufactures) a claim.
+        """Is this LSA advertiser the prospect? ONE-DIRECTIONAL — the prospect's name inside the
+        advertiser's, never the reverse. Exactly the rule `detect_ai_mention` uses, and for the same
+        reason: the two directions fail in OPPOSITE directions and only one is safe.
+
+        The reverse (`name in prospect_norm`) let a SHORTER advertiser name match a longer prospect
+        name — "AAA Plumbing" (a real, distinct competitor) inside prospect "AAA Plumbing Services",
+        which is routine in the trades. That produced two fabrications at once: it asserted the
+        prospect was running an LSA they do not run, and it DELETED a real competitor from the list
+        (this function also gates the competitor loop below). Both breach "never assert an ad, an
+        advertiser, or spend that is not in the captured response".
+
+        This direction's failure mode is a miss (the LSA lists a longer legal name than the GBP
+        name), which UNDERSTATES the prospect's spend and at worst lists them beside their own
+        competitors — visible and harmless, never a claim made to their face.
+        """
         name = _normalize_name(ad.get("name"))
-        return len(prospect_norm) >= 4 and bool(name) and (prospect_norm in name or name in prospect_norm)
+        return len(prospect_norm) >= 4 and bool(name) and prospect_norm in name
 
     prospect_running_ads = any(_is_prospect_ad(a) for a in advertisers)
     prospect_running_lsa = any(_is_prospect_lsa(a) for a in lsa_advertisers)
@@ -283,8 +294,28 @@ def derive_paid_signal(
     tech_ads = bool(t and t.get("google_ads_conversion"))
     tech_pixel = bool(t and t.get("meta_pixel"))
     vendor_tags = list(t.get("vendor_tags") or []) if t else []
-    likely_represented = (len(vendor_tags) + (1 if (t and t.get("gtm_container_ids")) else 0)) >= 2
-    prospect_is_paying = prospect_running_ads or prospect_running_lsa or tech_ads
+    # 2+ VENDOR tags only. GTM was counted here and must not be: it is a free Google tool on a large
+    # share of all sites, so "GTM + one vendor tag" flagged DIY operators as agency-managed — and
+    # `likely_represented` is the one derived flag that scores NEGATIVE (−21 Model A / −26 Model B),
+    # so a loose match here penalises a good prospect. GTM stays recorded on the row as context.
+    likely_represented = len(vendor_tags) >= 2
+
+    # TWO reads, deliberately kept apart, because they support different claims:
+    #   * `prospect_paying_this_keyword` — MEASURED on this keyword's SERP (their ad or their LSA is
+    #     in the captured block). Only this one licenses a keyword-specific spend claim.
+    #   * `prospect_is_paying` — the BROAD read, which also counts an `AW-` conversion tag found on
+    #     their site. A tag proves Google Ads conversion tracking is installed; it does NOT prove
+    #     they bid on this keyword, and tags routinely outlive the campaigns that placed them.
+    # `paying_evidence` names which one fired, so every downstream sentence can be built from what
+    # was actually observed instead of collapsing the two.
+    prospect_paying_this_keyword = prospect_running_ads or prospect_running_lsa
+    prospect_is_paying = prospect_paying_this_keyword or tech_ads
+    paying_evidence = (
+        "serp_ad" if prospect_running_ads
+        else "lsa" if prospect_running_lsa
+        else "conversion_tag" if tech_ads
+        else None
+    )
 
     return {
         "ads_present": ads_present,
@@ -296,9 +327,12 @@ def derive_paid_signal(
         "competitor_lsa": competitor_lsa[:max_named],
         "advertiser_count": len(competitor_ads),
         "lsa_count": len(competitor_lsa),
-        # THE pitch: rivals are paying to appear for this search and the prospect is not.
-        "competitors_advertising_gap": competitors_advertising
-        and not (prospect_running_ads or prospect_running_lsa),
+        # THE pitch, and it is SERP-SCOPED on both sides: rivals hold paid placement on THIS
+        # keyword's SERP and the prospect does not. It deliberately ignores `tech_ads` — a
+        # conversion tag says nothing about this keyword — so a prospect can legitimately be both
+        # `prospect_is_paying` (tag on site) and inside this gap (absent from this SERP's paid
+        # block). Those are not contradictory; they are two different measurements.
+        "competitors_advertising_gap": competitors_advertising and not prospect_paying_this_keyword,
         # Site tech (Slice B1). `tech_measured` distinguishes "site read, nothing found" from "site
         # not read / not scanned" so the report never shows absence as a finding on a failed fetch.
         "tech_measured": t is not None,
@@ -307,6 +341,8 @@ def derive_paid_signal(
         "prospect_vendor_tags": vendor_tags,
         "prospect_likely_represented": likely_represented,
         "prospect_is_paying": prospect_is_paying,
+        "prospect_paying_this_keyword": prospect_paying_this_keyword,
+        "paying_evidence": paying_evidence,
     }
 
 
@@ -514,10 +550,19 @@ def _client_paid_html(section: dict[str, Any], keyword: str) -> str:
             f"<p>No businesses are currently paying for Google Ads on “{_esc(keyword)}” in your area "
             "— the top of this search is still won on merit, not budget.</p>"
         )
-    if section.get("prospect_is_paying"):
+    # Keyword-level spend is claimed ONLY when it was measured on this keyword's SERP. A conversion
+    # tag found on their site proves tracking is installed, not that they bid on this term — and a
+    # claim the reader can falsify ("we paused those ads months ago") costs the lead.
+    if section.get("prospect_paying_this_keyword"):
         lead = (
             f"<p>You’re paying to advertise for “{_esc(keyword)}”. Here’s who else is bidding for the "
             "same customers:</p>"
+        )
+    elif section.get("paying_evidence") == "conversion_tag":
+        lead = (
+            "<p>Your site is running Google Ads conversion tracking, so you’re investing in paid "
+            f"traffic — but you’re not showing in the paid results for “{_esc(keyword)}”, and these "
+            "businesses are:</p>"
         )
     elif section.get("competitors_advertising_gap"):
         lead = (

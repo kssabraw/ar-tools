@@ -82,13 +82,21 @@ def scan_place_for_pixel(place: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def summarize_pixel_probe(records: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize_pixel_probe(
+    records: list[dict[str, Any]], errors: list[str] | None = None
+) -> dict[str, Any]:
     """Aggregate the spike over its sample — the answer §16a.1 wants. Pure.
 
     `found_rate` is the share of records with a value hit; `carries_field` is the share with any key
     hint (the field being PRESENT in the envelope even when unpopulated). A high carries_field with a
     low found_rate is the "field exists but is sparse" outcome that argues the site fetch stays
-    primary."""
+    primary.
+
+    `errors` are the queries that failed. They are reported ALONGSIDE the results rather than
+    replacing them: this spike BILLS per query, so a failure on query 4 must not discard what
+    queries 1–3 were charged for (the rates are then computed over what actually came back, and the
+    error list says how much of the sample is missing).
+    """
     n = len(records)
     scans = [scan_place_for_pixel(r) for r in records]
     found = sum(1 for s in scans if s["found"])
@@ -101,6 +109,7 @@ def summarize_pixel_probe(records: list[dict[str, Any]]) -> dict[str, Any]:
         "carries_field": carries,
         "carries_field_rate": round(carries / n, 3) if n else 0.0,
         "field_names_seen": all_hint_keys,
+        "errors": list(errors or []),
         "per_record": scans,
     }
 
@@ -111,16 +120,25 @@ async def fetch_enriched_sample(
     *,
     enrichment: str,
     client: httpx.AsyncClient | None = None,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[str]]:
     """Fetch a SMALL enriched sample — the spike's one billed act. Isolated from the ingest path.
 
     Builds its own request rather than calling `submit_maps_search` (whose base-tier invariant must
-    not be bent). Logs one full record so the enrichment envelope is measured, not inferred. Returns
-    the raw place records for `scan_place_for_pixel`; a provider/parse failure raises rather than
-    returning `[]` (an outage must not read as "no pixel anywhere")."""
-    from .outscraper_client import OutscraperClient  # local: keep the spike off the module's surface
+    not be bent). Logs one full record so the enrichment envelope is measured, not inferred.
+
+    Returns `(records, errors)`. **Each query is isolated**, because every query is BILLED: a
+    ReadTimeout on query 4 (a synchronous enriched pull is exactly the shape that hits the 60s
+    timeout, and `httpx.ReadTimeout` is deliberately NOT in `FAILOVER_ERRORS`, so it propagates)
+    used to abort the loop and discard the records queries 1–3 had already been charged for. The
+    failure is REPORTED, never swallowed into "no pixel anywhere" — an outage must not answer the
+    question the spike is asking.
+    """
+    # Imported once, not per iteration.
+    from .outscraper_client import OutscraperClient, extract_places
 
     records: list[dict[str, Any]] = []
+    errors: list[str] = []
+    logged_sample = False
     async with OutscraperClient(settings, client=client) as oc:
         # A synchronous enriched pull for a handful of queries — the SDK's search endpoint with an
         # explicit enrichment param. Deliberately not the async tile lifecycle: this is ~N places,
@@ -135,10 +153,16 @@ async def fetch_enriched_sample(
                 "async": "false",
                 "enrichment": enrichment,
             }
-            body = await oc._request("GET", endpoint, params=params)  # noqa: SLF001 — spike
-            if not records:
+            try:
+                body = await oc._request("GET", endpoint, params=params)  # noqa: SLF001 — spike
+            except Exception as exc:  # noqa: BLE001 — a billed query already spent; keep the rest
+                errors.append(f"{query}: {str(exc)[:200]}")
+                logger.warning("pixel probe query failed", extra={"query": query, "error": str(exc)[:300]})
+                continue
+            if not logged_sample:
+                # Once per RUN (not "while records is empty") — a first query returning no places
+                # would otherwise log the sample again on every following query.
+                logged_sample = True
                 logger.info("pixel probe sample record", extra={"raw": str(body)[:4000]})
-            from .outscraper_client import extract_places
-
             records.extend(extract_places(body))
-    return records
+    return records, errors

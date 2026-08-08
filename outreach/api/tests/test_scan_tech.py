@@ -112,4 +112,19 @@ def test_run_tech_scan_one_bad_site_never_ends_the_batch():
     # p1 + p3 fetched + stored; p2's exception is captured, not raised.
     assert report.stored == 2
     assert report.with_pixel == 2
+    # The exception counts as a FAILURE, so the numbers add up: considered == ok + failed.
+    assert report.failed == 1
+    assert report.considered == report.fetched_ok + report.failed
     assert any("p2" in prob for prob in report.problems)
+
+
+def test_page_body_is_capped_so_one_huge_page_cannot_blow_memory():
+    p = {"id": "p1", "name": "X", "website": "drips.com"}
+    huge = "x" * 5_000_000 + "fbq('init','777777')"      # the pixel sits past the cap
+
+    async def fetch(url):
+        return FetchResult(STATUS_OK, url, huge[:_settings(tech_max_page_bytes=1000).tech_max_page_bytes])
+
+    row = _run(scan_tech.scan_prospect_tech(p, _settings(tech_max_page_bytes=1000), fetch=fetch))
+    # Truncation is the point: we bound the work rather than scanning 5 MB of one page.
+    assert row["fetch_status"] == STATUS_OK and row["meta_pixel"] is False

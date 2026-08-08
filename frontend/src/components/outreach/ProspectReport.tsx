@@ -70,6 +70,8 @@ interface PaidSection {
   // Site ad tech (Slice B1)
   tech_measured?: boolean
   prospect_is_paying?: boolean
+  prospect_paying_this_keyword?: boolean
+  paying_evidence?: 'serp_ad' | 'lsa' | 'conversion_tag' | null
   prospect_meta_pixel?: boolean
   prospect_ad_conversion_tag?: boolean
   prospect_vendor_tags?: string[]
@@ -352,11 +354,17 @@ function PaidTable({ s, name, keyword, clientTone }: {
       </div>
     )
   }
+  // Keyword-level spend is only claimed when it was MEASURED on this keyword's SERP. A conversion
+  // tag proves tracking is installed on their site, not that they bid on this term.
   let lead: string
-  if (s.prospect_is_paying) {
+  if (s.prospect_paying_this_keyword) {
     lead = clientTone
       ? `You’re paying to advertise for “${keyword}”. Here’s who else is bidding for the same customers:`
-      : `${name} IS paying (SERP ad / LSA / AW- tag) — proven budget; if coverage is weak this is the "paying and losing" pitch. Other advertisers on this search:`
+      : `${name} holds paid placement on this SERP — measured spend on “${keyword}”. If coverage is weak this is the "paying and losing" pitch. Other advertisers:`
+  } else if (s.paying_evidence === 'conversion_tag') {
+    lead = clientTone
+      ? `Your site is running Google Ads conversion tracking, so you’re investing in paid traffic — but you’re not showing in the paid results for “${keyword}”, and these businesses are:`
+      : `${name} runs Google Ads conversion tracking on their site (buying traffic somewhere) but is NOT in this keyword's paid block — ask what they spend; don't assert it. Advertisers here:`
   } else if (s.competitors_advertising_gap) {
     lead = clientTone
       ? `Competitors are paying Google to appear at the top for “${keyword}”, and you’re not — they’re buying the customers you’re invisible to.`

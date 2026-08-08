@@ -46,4 +46,15 @@ def test_summarize_pixel_probe_aggregates_rates():
 def test_summarize_empty_sample_is_zero_not_error():
     out = pp.summarize_pixel_probe([])
     assert out == {"sample": 0, "found": 0, "found_rate": 0.0, "carries_field": 0,
-                   "carries_field_rate": 0.0, "field_names_seen": [], "per_record": []}
+                   "carries_field_rate": 0.0, "field_names_seen": [], "errors": [],
+                   "per_record": []}
+
+
+def test_summarize_reports_errors_alongside_results_not_instead_of_them():
+    """Every query is BILLED, so a failure on query 4 must not discard what 1-3 were charged for.
+    The rates are computed over what came back and the errors say how much is missing."""
+    out = pp.summarize_pixel_probe(
+        [{"fb_pixel": "connect.facebook.net/fbevents.js"}], ["q4: ReadTimeout"]
+    )
+    assert out["sample"] == 1 and out["found"] == 1
+    assert out["errors"] == ["q4: ReadTimeout"]

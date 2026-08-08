@@ -41,6 +41,9 @@ STATUS_UNREACHABLE = "unreachable"
 STATUS_TIMEOUT = "timeout"
 STATUS_BLOCKED = "blocked"
 
+# How many per-site failures are kept as examples. The report's COUNTS are always exact.
+_MAX_PROBLEMS = 50
+
 # A browser-ish UA — some sites 403 an obvious bot, which would misrecord a live site as unreachable.
 _UA = "Mozilla/5.0 (compatible; AR-Outreach-TechScan/1.0)"
 
@@ -87,7 +90,7 @@ def normalize_site_url(website: str | None) -> str | None:
 
 
 async def fetch_page(
-    url: str, *, timeout: float, client: httpx.AsyncClient | None = None
+    url: str, *, timeout: float, max_bytes: int = 2_000_000, client: httpx.AsyncClient | None = None
 ) -> FetchResult:
     """Fetch one page. Maps transport outcomes to a status; never raises. BILLS NOTHING.
 
@@ -105,7 +108,9 @@ async def fetch_page(
             return FetchResult(STATUS_BLOCKED, final, "")
         if resp.status_code >= 400:
             return FetchResult(STATUS_UNREACHABLE, final, "")
-        return FetchResult(STATUS_OK, final, resp.text or "")
+        # Truncated, not streamed: ad tags sit in the head and the scripts around it, so the cap
+        # costs nothing real and bounds both memory and the regex work per page.
+        return FetchResult(STATUS_OK, final, (resp.text or "")[:max_bytes])
     except httpx.TimeoutException:
         return FetchResult(STATUS_TIMEOUT, url, "")
     except httpx.HTTPError:
@@ -187,7 +192,9 @@ async def run_tech_scan(
     )
     if fetch is None:
         async def fetch(url: str) -> FetchResult:  # noqa: E306
-            return await fetch_page(url, timeout=timeout, client=client)
+            return await fetch_page(
+                url, timeout=timeout, max_bytes=settings.tech_max_page_bytes, client=client
+            )
 
     sem = asyncio.Semaphore(max(1, settings.tech_scan_concurrency))
 
@@ -196,7 +203,11 @@ async def run_tech_scan(
             try:
                 return await scan_prospect_tech(prospect, settings, fetch=fetch)
             except Exception as exc:  # noqa: BLE001 — one site must not end the batch
-                report.problems.append(f"{prospect.get('id')}: {str(exc)[:200]}")
+                # Bounded: a market where every site errors would otherwise build a list as long as
+                # the market. The counts below stay exact; only the examples are capped.
+                if len(report.problems) < _MAX_PROBLEMS:
+                    report.problems.append(f"{prospect.get('id')}: {str(exc)[:200]}")
+                report.failed += 1
                 return None
 
     try:
