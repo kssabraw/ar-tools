@@ -236,3 +236,105 @@ def test_analyze_scan_refuses_a_one_off(monkeypatch):
     out = maps_analyzer.analyze_scan("s1")
     assert out == {"skipped": "scan_not_in_reporting", "opened": 0}
     assert supa.results_read is False
+
+
+# ---------------------------------------------------------------------------
+# Scoped "Clear all" — the two lists are cleared from different screens, so
+# neither may take the other's history with it.
+# ---------------------------------------------------------------------------
+class _ClearSupabase:
+    """Enough of the query builder for clear_scans: a filtered select of scan
+    rows, then a delete keyed on explicit ids."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.deleted_ids = None
+        self._mode = None
+
+    def table(self, _name):
+        return self
+
+    def select(self, *_a, **_k):
+        self._mode = "select"
+        return self
+
+    def delete(self):
+        self._mode = "delete"
+        return self
+
+    def eq(self, *_a, **_k):
+        return self
+
+    def in_(self, column, values):
+        if self._mode == "delete":
+            assert column == "id", "delete must be keyed on resolved ids"
+            self.deleted_ids = list(values)
+        return self
+
+    def execute(self):
+        data = [] if self._mode == "delete" else self.rows
+        return type("R", (), {"data": data})
+
+
+_MIXED = [
+    {"id": "s1", "trigger": "scheduled"},
+    {"id": "m1", "trigger": "manual"},
+    {"id": "s2", "trigger": "scheduled"},
+    {"id": "m2", "trigger": "manual"},
+]
+
+
+def _clear(monkeypatch, scope, rows=_MIXED):
+    import asyncio
+    from uuid import uuid4
+
+    from routers import maps as maps_router
+
+    supa = _ClearSupabase(rows)
+    monkeypatch.setattr(maps_router, "get_supabase", lambda: supa)
+    out = asyncio.run(maps_router.clear_scans(uuid4(), scope=scope, auth={}))
+    return out, supa
+
+
+def test_clearing_scheduled_scans_leaves_one_offs_alone(monkeypatch):
+    out, supa = _clear(monkeypatch, "scheduled")
+    assert supa.deleted_ids == ["s1", "s2"]
+    assert out == {"deleted": 2}
+
+
+def test_clearing_one_offs_leaves_the_reporting_history_alone(monkeypatch):
+    out, supa = _clear(monkeypatch, "manual")
+    assert supa.deleted_ids == ["m1", "m2"]
+    assert out == {"deleted": 2}
+
+
+def test_scope_all_clears_both(monkeypatch):
+    out, supa = _clear(monkeypatch, "all")
+    assert supa.deleted_ids == ["s1", "m1", "s2", "m2"]
+    assert out == {"deleted": 4}
+
+
+def test_nothing_matching_issues_no_delete_at_all(monkeypatch):
+    # Guard against a no-op clear falling through to an unfiltered delete.
+    out, supa = _clear(monkeypatch, "manual", rows=[{"id": "s1", "trigger": "scheduled"}])
+    assert supa.deleted_ids is None
+    assert out == {"deleted": 0}
+
+
+def test_an_unknown_scope_is_rejected(monkeypatch):
+    import asyncio
+    from uuid import uuid4
+
+    from fastapi import HTTPException
+
+    from routers import maps as maps_router
+
+    supa = _ClearSupabase(_MIXED)
+    monkeypatch.setattr(maps_router, "get_supabase", lambda: supa)
+    try:
+        asyncio.run(maps_router.clear_scans(uuid4(), scope="everything", auth={}))
+    except HTTPException as exc:
+        assert exc.status_code == 400 and exc.detail == "invalid_scope"
+    else:
+        raise AssertionError("expected a 400")
+    assert supa.deleted_ids is None

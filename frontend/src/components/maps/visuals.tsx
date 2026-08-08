@@ -172,6 +172,22 @@ export function TrendChart({ keywords, metric }: { keywords: MapsKeywordTrend[];
   const ticks = Array.from({ length: 5 }, (_, i) => yLo + ((yHi - yLo) * i) / 4)
   const fmt = (v: number | null) => (v == null ? '—' : `${metric.lowerIsBetter ? (Math.round(v * 10) / 10) : Math.round(v)}${metric.unit}`)
 
+  // Scans where the grid radius changed. Coverage % is a share of the area
+  // scanned, so widening the grid steps the line down with no ranking change.
+  // The line stays continuous (a break would imply lost history) and the step
+  // is labelled instead, so nobody reads a resize as a decline.
+  const byTime = new Map<number, number>()
+  for (const k of keywords) {
+    for (const p of k.points) {
+      const t = Date.parse(p.completed_at || '') || 0
+      if (p.radius_miles != null && !byTime.has(t)) byTime.set(t, p.radius_miles)
+    }
+  }
+  const ordered = [...byTime.entries()].sort((a, b) => a[0] - b[0])
+  const resizes = ordered
+    .map(([t, r], i) => (i > 0 && r !== ordered[i - 1][1] ? { t, from: ordered[i - 1][1], to: r } : null))
+    .filter((m): m is { t: number; from: number; to: number } => m !== null)
+
   return (
     <div>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W, display: 'block' }} role="img" aria-label={`${metric.label} trend`}>
@@ -179,6 +195,13 @@ export function TrendChart({ keywords, metric }: { keywords: MapsKeywordTrend[];
           <g key={i}>
             <line x1={padL} x2={W - padR} y1={y(tk)} y2={y(tk)} stroke="#eef2f7" strokeWidth={1} />
             <text x={padL - 6} y={y(tk) + 3} textAnchor="end" fontSize={9} fill="#94a3b8">{Math.round(tk)}{metric.unit}</text>
+          </g>
+        ))}
+        {resizes.map((m, i) => (
+          <g key={`resize-${i}`}>
+            <line x1={x(m.t)} x2={x(m.t)} y1={padT} y2={padT + plotH} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3 3" />
+            <text x={x(m.t) + 3} y={padT + 9} fontSize={9} fill="#64748b">{m.to} mi</text>
+            <title>{`Grid resized ${m.from} → ${m.to} miles here. A wider grid measures more outlying area, so coverage % steps even when rankings are unchanged.`}</title>
           </g>
         ))}
         {keywords.map((k, ki) => {
@@ -190,7 +213,7 @@ export function TrendChart({ keywords, metric }: { keywords: MapsKeywordTrend[];
               {pts.length > 1 && <polyline points={line} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />}
               {pts.map((p, i) => (
                 <circle key={i} cx={x(Date.parse(p.completed_at || '') || 0)} cy={y(val(p) as number)} r={2.8} fill={color}>
-                  <title>{`${k.keyword} · ${fmt(val(p))} · ${p.completed_at ? new Date(p.completed_at).toLocaleDateString() : ''}`}</title>
+                  <title>{`${k.keyword} · ${fmt(val(p))} · ${p.completed_at ? new Date(p.completed_at).toLocaleDateString() : ''}${p.radius_miles ? ` · ${p.radius_miles}-mile grid` : ''}`}</title>
                 </circle>
               ))}
             </g>
@@ -208,6 +231,15 @@ export function TrendChart({ keywords, metric }: { keywords: MapsKeywordTrend[];
           )
         })}
       </div>
+      {resizes.length > 0 && (
+        <p style={{ ...muted, marginBottom: 0, marginTop: 8 }}>
+          The dashed line marks where the scan radius changed
+          {` (${resizes.map(m => `${m.from} → ${m.to} mi`).join(', ')})`}. A wider grid
+          measures more outlying area, so coverage % steps down even when rankings
+          haven’t moved. Week-over-week changes and alerts compare only the area both
+          scans share, so they aren’t affected.
+        </p>
+      )}
       {metric.lowerIsBetter && <p style={{ ...muted, marginBottom: 0, marginTop: 8 }}>Lower is better — the line is drawn so up = improving.</p>}
     </div>
   )

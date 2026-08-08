@@ -270,16 +270,39 @@ async def list_scans(client_id: UUID, auth: dict = Depends(require_auth)) -> lis
 
 
 @router.delete("/clients/{client_id}/maps/scans")
-async def clear_scans(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+async def clear_scans(
+    client_id: UUID, scope: str = "all", auth: dict = Depends(require_auth)
+) -> dict:
     """Clear the client's scan history. Deletes every terminal scan (and its
     per-keyword results, via cascade); in-flight scans are left untouched —
-    stop them first if you want them gone."""
-    res = (
-        get_supabase().table("maps_scans").delete()
+    stop them first if you want them gone.
+
+    `scope` bounds it to one of the two lists the UI shows separately:
+    `scheduled` (the reporting series), `manual` (one-off checks), or `all`.
+    Scheduled and one-off scans are cleared from different screens, so a
+    "Clear all" on one must not take the other's history with it.
+
+    The rows are resolved to ids first and deleted by id. A filter that failed
+    to apply on a bulk delete would wipe the client's whole scan history, and
+    this also lets the caller be told exactly how many rows went.
+    """
+    if scope not in ("all", "scheduled", "manual"):
+        raise HTTPException(status_code=400, detail="invalid_scope")
+    supabase = get_supabase()
+    rows = (
+        supabase.table("maps_scans").select("id, trigger")
         .eq("client_id", str(client_id))
         .in_("status", ["complete", "failed", "cancelled"]).execute()
-    )
-    return {"deleted": len(res.data or [])}
+    ).data or []
+    if scope == "scheduled":
+        rows = maps_reporting.filter_reporting(rows)
+    elif scope == "manual":
+        rows = [r for r in rows if not maps_reporting.is_reporting_scan(r)]
+    ids = [r["id"] for r in rows]
+    if not ids:
+        return {"deleted": 0}
+    supabase.table("maps_scans").delete().in_("id", ids).execute()
+    return {"deleted": len(ids)}
 
 
 @router.post("/maps-scans/{scan_id}/cancel")
@@ -422,6 +445,7 @@ def build_maps_trends(scans: list[dict], results: list[dict]) -> MapsTrendsRespo
             scan_id=r["scan_id"],
             completed_at=s.get("completed_at"),
             trigger=s.get("trigger", "scheduled"),
+            radius_miles=s.get("radius_miles"),
             total_pins=total,
             found_pins=r.get("found_pins") or 0,
             top3_pins=r.get("top3_pins") or 0,
@@ -452,7 +476,7 @@ async def maps_trends(
     supabase = get_supabase()
     scans = (
         maps_reporting.only_reporting(
-            supabase.table("maps_scans").select("id, completed_at, trigger")
+            supabase.table("maps_scans").select("id, completed_at, trigger, radius_miles")
         )
         .eq("client_id", str(client_id)).eq("status", "complete")
         .order("completed_at", desc=True).limit(max(1, min(limit, 200))).execute()
@@ -838,7 +862,7 @@ async def maps_periods(
         return MapsPeriodsResponse()
     results = (
         supabase.table("maps_scan_results")
-        .select("scan_id, keyword, average_rank, found_pins, total_pins, top3_pins, top10_pins")
+        .select("scan_id, keyword, average_rank, found_pins, total_pins, top3_pins, top10_pins, rank_grid")
         .in_("scan_id", [s["id"] for s in scans]).execute()
     ).data or []
     data = build_maps_periods(scans, results, datetime.now(timezone.utc).date())

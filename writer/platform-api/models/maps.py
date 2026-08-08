@@ -147,6 +147,10 @@ class MapsTrendPoint(BaseModel):
     found_pct: Optional[float] = None   # % of pins where the business appears
     top3_pct: Optional[float] = None    # % of pins ranking in the local pack (<= 3)
     top10_pct: Optional[float] = None   # % of pins ranking <= 10
+    # The grid this point was measured on. Coverage % is a share of the area
+    # scanned, so a radius change steps the line without any ranking change —
+    # the chart marks the scan where it changed rather than hiding it.
+    radius_miles: Optional[int] = None
 
 
 class MapsKeywordTrend(BaseModel):
@@ -395,6 +399,9 @@ class MapsChangesResponse(BaseModel):
     has_previous: bool = False
     current_scan_id: Optional[UUID] = None
     previous_scan_id: Optional[UUID] = None
+    # Set only when the grid was resized between the two scans: the shared
+    # radius both were re-measured on so the deltas compare the same ground.
+    compared_on_radius_miles: Optional[int] = None
     keywords: list[MapsKeywordChange] = Field(default_factory=list)
 
 
