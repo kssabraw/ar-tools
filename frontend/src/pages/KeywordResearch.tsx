@@ -52,6 +52,7 @@ interface TopicCard {
   priority: number
   priority_label?: string | null
   rationale?: string | null
+  coverage?: string | null
 }
 interface TopicRun {
   id: string
@@ -200,18 +201,21 @@ export function KeywordResearch() {
   const topicRunning = Boolean(topicJob) && !['complete', 'failed'].includes(topicJobStatus?.status ?? '')
   const topics = useMemo<TopicCard[]>(() => topicData?.latest?.topics ?? [], [topicData])
   const topicAssessment = topicData?.latest?.assessment ?? topicData?.latest?.plan?.assessment ?? null
+  const [topicGapsOnly, setTopicGapsOnly] = useState(false)
+  const topicCoveredCount = useMemo(() => topics.filter((t) => t.coverage === 'covered').length, [topics])
   // Group cards under their pillar (topical-authority structure), preserving the
-  // priority order the backend already applied.
+  // priority order the backend already applied; optionally hide already-covered topics.
   const topicPillars = useMemo(() => {
     const groups: { pillar: string; cards: TopicCard[] }[] = []
     for (const c of topics) {
+      if (topicGapsOnly && c.coverage === 'covered') continue
       const label = c.pillar ?? c.theme ?? 'Topics'
       let g = groups.find((x) => x.pillar === label)
       if (!g) { g = { pillar: label, cards: [] }; groups.push(g) }
       g.cards.push(c)
     }
     return groups
-  }, [topics])
+  }, [topics, topicGapsOnly])
 
   const clearAll = useMutation({
     mutationFn: () => api.delete<{ deleted: number }>(`/clients/${id}/keyword-research`),
@@ -475,6 +479,12 @@ export function KeywordResearch() {
             <strong style={{ color: '#6d28d9' }}>Strategy:</strong> {topicAssessment}
           </div>
         )}
+        {!topicRunning && topicCoveredCount > 0 && (
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#475569', marginTop: 12, cursor: 'pointer' }}>
+            <input type="checkbox" checked={topicGapsOnly} onChange={(e) => setTopicGapsOnly(e.target.checked)} style={{ cursor: 'pointer' }} />
+            Show gaps only <span style={{ color: '#94a3b8' }}>({topicCoveredCount} already covered on the client's content)</span>
+          </label>
+        )}
         {!topicRunning && topicPillars.map((group) => (
           <div key={group.pillar} style={{ marginTop: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: '#5b21b6', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>{group.pillar}</div>
@@ -483,11 +493,16 @@ export function KeywordResearch() {
                 <div key={`${t.title}-${i}`} style={{ border: '1px solid #e9e5ff', borderRadius: 10, padding: '12px 14px', background: '#fff' }}>
                   <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>{t.title}</div>
-                    {t.priority_label && (
-                      <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', borderRadius: 6, padding: '1px 6px',
-                        background: t.priority_label === 'high' ? '#dcfce7' : t.priority_label === 'low' ? '#f1f5f9' : '#fef9c3',
-                        color: t.priority_label === 'high' ? '#15803d' : t.priority_label === 'low' ? '#64748b' : '#a16207' }}>{t.priority_label}</span>
-                    )}
+                    <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                      {t.coverage === 'covered' && (
+                        <span title="You likely already have a base for this on the client's content" style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', borderRadius: 6, padding: '1px 6px', background: '#e0f2fe', color: '#0369a1' }}>covered</span>
+                      )}
+                      {t.priority_label && (
+                        <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', borderRadius: 6, padding: '1px 6px',
+                          background: t.priority_label === 'high' ? '#dcfce7' : t.priority_label === 'low' ? '#f1f5f9' : '#fef9c3',
+                          color: t.priority_label === 'high' ? '#15803d' : t.priority_label === 'low' ? '#64748b' : '#a16207' }}>{t.priority_label}</span>
+                      )}
+                    </div>
                   </div>
                   {(t.search_intent || t.funnel_stage) && (
                     <div style={{ display: 'flex', gap: 6, margin: '4px 0' }}>

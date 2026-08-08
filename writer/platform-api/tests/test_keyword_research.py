@@ -611,6 +611,33 @@ def test_brand_flood_disabled_returns_empty():
     assert flood == set() and report["gate"] == "off"
 
 
+# --- is_seed_acronym + flood exoneration -------------------------------------
+def test_is_seed_acronym_matches_subsequence_from_first_word():
+    assert kr.is_seed_acronym("tpa", ["third party claims administrator"])   # t-p-a of t-p-c-a
+    assert kr.is_seed_acronym("tpca", ["third party claims administrator"])  # full acronym
+
+
+def test_is_seed_acronym_rejects_non_acronyms():
+    assert not kr.is_seed_acronym("mitchell", ["third party claims administrator"])
+    assert not kr.is_seed_acronym("t", ["third party claims administrator"])   # too short
+    assert not kr.is_seed_acronym("pca", ["third party claims administrator"])  # must start at first word
+    assert not kr.is_seed_acronym("tpa", ["roof repair contractor"])           # not this seed
+
+
+def test_brand_flood_exonerates_seed_acronym():
+    # "tpa" is the seed's own acronym — the "tpa ..." namespace must NOT be flooded,
+    # while a real competitor brand ("mitchell") still is.
+    related = ["tpa companies", "tpa insurance", "tpa software", "tpa services",
+               "tpa login", "tpa portal", "tpa list", "tpa near me",
+               "mitchell connect", "mitchell prodemand", "mitchell login",
+               "mitchell serum", "mitchell 1", "mitchell cloud", "mitchell community",
+               "mitchell international"]
+    flood, _ = kr.detect_brand_flood_tokens(
+        related, ["third party claims administrator"], min_count=5, min_fraction=0.3)
+    assert "tpa" not in flood
+    assert "mitchell" in flood
+
+
 # --- detect_generic_drift_tokens (bleached filler-token drift gate) -------------
 def _tpa_related():
     """The real "third party claims administrator" shape: the related graph
