@@ -1240,12 +1240,14 @@ def enqueue_client_report(
     period_start: Optional[date] = None, period_end: Optional[date] = None,
     deliver: bool = False,
     period: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> str:
     """Create a pending client_reports row + its async job. Returns the report id.
     deliver=True runs Phase 5 delivery (email + Drive copy per the client's
     report settings) after the render — scheduled runs always deliver; on-demand
     generation opts in. `period` is a PERIOD_CHOICES coverage token resolved to
-    period_start here (explicit dates win over it)."""
+    period_start here (explicit dates win over it). ``user_id`` (the initiator)
+    drives the Activity indicator + completion notification."""
     supabase = get_supabase()
     if period and period_start is None:
         today = period_end or date.today()
@@ -1266,7 +1268,7 @@ def enqueue_client_report(
         "job_type": "client_report", "entity_id": client_id,
         "payload": {"client_id": client_id, "report_id": row["id"], "report_type": report_type,
                     "period_start": row.get("period_start"), "period_end": row.get("period_end"),
-                    "deliver": deliver},
+                    "deliver": deliver, "user_id": user_id},
     }).execute()
     return row["id"]
 

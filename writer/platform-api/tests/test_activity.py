@@ -100,3 +100,56 @@ def test_build_batch_notification_reports_failures_only():
     )
     assert note is not None
     assert "0 done" in note["summary"] and "2 failed" in note["summary"]
+
+
+# ── single-job registry + completion notification ───────────────────────────
+
+def test_activity_job_types_union():
+    # The indicator reads content page jobs + every registered single job.
+    assert activity.CONTENT_JOB_TYPES <= activity.ACTIVITY_JOB_TYPES
+    assert "keyword_research" in activity.ACTIVITY_JOB_TYPES
+    assert "domain_overview" in activity.ACTIVITY_JOB_TYPES
+    # A single-job type is not a content family.
+    assert activity.family_for("keyword_research") is None
+
+
+def test_single_job_notification_complete():
+    note = activity.single_job_notification("keyword_research", "Acme", "complete")
+    assert note["title"] == "Keyword research finished"
+    assert "acme" in note["summary"].lower()
+    assert note["severity"] == "info"
+
+
+def test_single_job_notification_failed_is_warning_with_reason():
+    note = activity.single_job_notification("domain_overview", "Acme", "failed", "boom")
+    assert note["title"] == "Domain overview failed"
+    assert note["severity"] == "warning"
+    assert "boom" in note["summary"]
+
+
+def test_single_job_notification_cancelled_is_silent():
+    assert activity.single_job_notification(
+        "keyword_research", "Acme", "failed", "cancelled_by_user"
+    ) is None
+
+
+def test_single_job_notification_unregistered_or_running_is_none():
+    # Content page jobs are handled by the batch path, not this one.
+    assert activity.single_job_notification("local_seo_generate", "Acme", "complete") is None
+    # A non-terminal status never notifies.
+    assert activity.single_job_notification("keyword_research", "Acme", "running") is None
+    # An unknown type is inert.
+    assert activity.single_job_notification("nope", "Acme", "complete") is None
+
+
+def test_job_item_single_registered():
+    job = {
+        "id": "j1", "job_type": "keyword_research", "entity_id": "c1",
+        "payload": {"user_id": "u1"}, "status": "running",
+        "created_at": "2026-08-08T00:00:00+00:00",
+    }
+    item = activity._job_item(job, {"c1": "Acme"})
+    assert item["family"] == "task"
+    assert item["kind_label"] == "Keyword research"
+    assert item["href"] == "/clients/c1/keyword-research"
+    assert item["client_name"] == "Acme"

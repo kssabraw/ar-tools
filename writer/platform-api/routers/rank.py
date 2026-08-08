@@ -747,7 +747,8 @@ async def generate_keyword_analysis(
                 "detail": "Capture a Competitive SERP Snapshot for this keyword first."}
 
     report_id = rank_analysis_report.enqueue_rank_keyword_report(
-        k["client_id"], str(keyword_id), k["keyword"], trigger="on_demand"
+        k["client_id"], str(keyword_id), k["keyword"], trigger="on_demand",
+        user_id=auth["user_id"],
     )
     if report_id is None:
         existing = (

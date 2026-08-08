@@ -912,13 +912,14 @@ async def _process_job(job: dict) -> None:
         logger.info("job_worker.settled_by_worker",
                     extra={"job_id": job["id"], "job_type": job_type})
 
-    # Cross-module batch awareness: after a content-generation job settles (the
-    # handler has already written its terminal status), check whether it was the
-    # last in-flight one for its (user, client, family) group and, if so, notify
-    # the user their batch finished. Best-effort — never breaks the worker.
-    if job_type in activity.CONTENT_JOB_TYPES:
+    # Cross-module activity awareness: after a settled job that a user started and
+    # may have navigated away from, tell them it's done. Content page jobs roll up
+    # into one per-batch notification; single registered jobs get one per-job
+    # completion ping (both to the initiator's header bell). Every path is gated
+    # on payload.user_id, so scheduled/background runs never ping. Best-effort.
+    if job_type in activity.ACTIVITY_JOB_TYPES:
         try:
-            activity.on_content_job_settled(job)
+            activity.on_job_settled(job)
         except Exception as exc:  # pragma: no cover - defensive
             logger.error(
                 "job_worker.activity_settle_failed",

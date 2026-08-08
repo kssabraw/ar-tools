@@ -92,7 +92,7 @@ async def start_standalone_overview(body: OverviewRequest, auth: dict = Depends(
         job_id = domain_intel.enqueue_domain_overview(
             None, domain, role=body.role,
             location_code=body.location_code, language_code=body.language_code,
-            force=body.force,
+            force=body.force, user_id=auth["user_id"],
         )
     except Exception as exc:
         logger.error("domain_intel_start_failed", extra={"error": str(exc)})
@@ -156,7 +156,7 @@ async def start_overview(
         job_id = domain_intel.enqueue_domain_overview(
             str(client_id), domain, role=body.role,
             location_code=body.location_code, language_code=body.language_code,
-            force=body.force,
+            force=body.force, user_id=auth["user_id"],
         )
     except Exception as exc:
         logger.error("domain_intel_start_failed", extra={"client_id": str(client_id), "error": str(exc)})
@@ -187,6 +187,7 @@ async def start_keyword_gap(
         job_id = domain_intel.enqueue_keyword_gap(
             str(client_id), competitor_domains=body.competitor_domains,
             location_code=body.location_code, language_code=body.language_code,
+            user_id=auth["user_id"],
         )
     except Exception as exc:
         logger.error("keyword_gap_start_failed", extra={"client_id": str(client_id), "error": str(exc)})
@@ -214,7 +215,9 @@ async def start_link_gap(
     if domain_intel.budget_remaining() <= 0:
         raise HTTPException(status_code=429, detail="budget_exceeded")
     try:
-        job_id = domain_intel.enqueue_link_gap(str(client_id), competitor_domains=body.competitor_domains)
+        job_id = domain_intel.enqueue_link_gap(
+            str(client_id), competitor_domains=body.competitor_domains, user_id=auth["user_id"],
+        )
     except Exception as exc:
         logger.error("link_gap_start_failed", extra={"client_id": str(client_id), "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc

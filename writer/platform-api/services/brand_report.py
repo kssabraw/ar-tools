@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
@@ -355,11 +356,12 @@ async def _narrative(client_name: str, snapshot: dict) -> str:
 
 
 # ── enqueue + job ────────────────────────────────────────────────────────────
-def enqueue_brand_report(client_id: str) -> str:
+def enqueue_brand_report(client_id: str, user_id: Optional[str] = None) -> str:
     supabase = get_supabase()
     res = (
         supabase.table("async_jobs")
-        .insert({"job_type": "brand_report", "entity_id": client_id, "payload": {"client_id": client_id}})
+        .insert({"job_type": "brand_report", "entity_id": client_id,
+                 "payload": {"client_id": client_id, "user_id": user_id}})
         .execute()
     )
     return res.data[0]["id"]

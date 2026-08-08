@@ -108,6 +108,7 @@ async def start_research(
         job_id = keyword_research.enqueue_keyword_research(
             str(client_id), seeds,
             location_code=body.location_code, language_code=body.language_code,
+            user_id=auth["user_id"],
         )
     except Exception as exc:
         logger.error("keyword_research_start_failed", extra={"client_id": str(client_id), "error": str(exc)})
@@ -192,7 +193,7 @@ async def start_topic_research(
         seeds = keyword_research.parse_seeds(body.seeds)
         job_id = keyword_topic_research.enqueue_topic_research(
             str(client_id), seeds, location_code=body.location_code,
-            language_code=body.language_code)
+            language_code=body.language_code, user_id=auth["user_id"])
         return {"job_id": job_id, "seeds": seeds}
     except Exception as exc:
         logger.error("topic_research_start_failed", extra={"client_id": str(client_id), "error": str(exc)})
