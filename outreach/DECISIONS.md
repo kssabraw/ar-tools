@@ -1009,3 +1009,43 @@ Pure logic unit-tested both sides (`outreach/api/tests/test_organic_scan.py` 8 c
 `writer/platform-api/tests/test_outreach_report.py` organic cases). Reuses `scan_depth` /
 `dataforseo_*` config — no new knobs. **Still staged (I-095):** LLM visibility (increment 3, blocked
 on `ai_region`) and the client-facing PDF + approval gate (increment 4).
+
+---
+
+## 2026-08-08 — AI-visibility scan (report increment 3): two engines, per-region, seeded ai_regions
+
+Increment 3 of the per-prospect report (ISSUES I-095): the "AI / LLM visibility" signal — does an AI
+assistant name this business when a customer asks about its keyword in its region. Owner rulings:
+**only ChatGPT + Google AI Overview (AIO)**, and **yes, seed the region names** (from the I-073 LA
+draft). Built the producer, the read, the render, and applied the migration live.
+
+- **Two engines, both reusing proven pieces.** ChatGPT reuses the I-004 spike's OpenAI call +
+  tolerant name parser (`ai_granularity.py`) — one definition of "the consumer question"; AIO reuses
+  the organic DataForSEO path (`organic_scan.py`) and parses the `ai_overview` element's cited
+  sources + text. Gated like every paid command (`scan-ai` in `PAID_COMMANDS`); a `cost_ledger` row
+  per engine (`b3_ai_chatgpt` / `b3_ai_aio`).
+- **Per (region × keyword), not per prospect.** The AI answer is the same for every prospect in a
+  region, so the scan stores the answer (`ai_scan_result`: named_businesses / reference_domains /
+  raw_excerpt / present) and the prospect-level "is THIS business named" is detected at report-read
+  time. That is what keeps it cheap — a handful of regions × keywords × 2 engines, not one call per
+  prospect.
+- **`ai_region` is the coarse place-name geography (PRD §8b), NOT the submarket.** New table
+  (migration `20260808140000`, applied live to Outreacher), seeded with the ELEVEN validated LA
+  names from I-073 (7 cities + 3 LA suburbs + Hollywood as `neighbourhood`); the three WEAK names
+  (Downtown/West/East LA) deliberately excluded — I-073 found them to be the "reads specific,
+  returns metro" trap. A prospect maps to a region by its submarket NAME; `name_level` carries the
+  I-004 recognition risk, and a `neighbourhood`-level region's report shows the "the AI may have
+  answered for the metro" caveat.
+- **Mention detection is conservative + never manufactures invisibility** (`detect_ai_mention`,
+  pure): the prospect's normalised name inside a named business or the raw text, or its domain in the
+  AIO references; name must be ≥4 chars to match on substring. A false NEGATIVE (named under a
+  variant we missed) understates visibility — the safe direction — while a failed engine call is
+  stored `present=False` with the error, never as "the AI doesn't know you".
+- **AIO envelope MEASURED on first run** (the `dataforseo_client.py` discipline): `parse_aio` is
+  tolerant and `capture_aio` logs one sample; no AI Overview parsed against this account before.
+
+Pure logic unit-tested both sides (`outreach/api/tests/test_ai_visibility.py`;
+`writer/platform-api/tests/test_outreach_report.py` detection + section cases). Config
+`ai_visibility_chatgpt_model` / `_openai_cost_cents`. **All four report increments are now built**
+(I-095): shell, organic, LLM. The client-facing PDF + approval gate (increment 4) remains — the
+client face is still a print-preview DRAFT.

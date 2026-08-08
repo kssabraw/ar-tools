@@ -2144,7 +2144,7 @@ report renders them as explicit `not_scanned` blocks until they land — never a
   location per keyword×submarket). Authorized through the `scan_request`/`tick` order mechanism, not a
   platform-api call. Then `outreach_report.build_report`'s `organic` section fills from it.
 
-- **LLM-visibility scan (increment 3, BLOCKED + PAID).** Blocked on `ai_region` names (§7.4 — a human
+- **LLM-visibility scan (increment 3) — BUILT 2026-08-08.** Blocked on `ai_region` names (§7.4 — a human
   "which place names does an LLM recognise" task; a candidate LA list is drafted in I-073) and an
   engine choice (the suite AI-visibility uses six; a prospect scan likely wants a cheap subset —
   DataForSEO's Google AI Overview/AI Mode needs no per-engine key, plus optionally ChatGPT). Same
