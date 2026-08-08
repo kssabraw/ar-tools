@@ -786,3 +786,40 @@ output was protected empirically.
 The guard mechanism is fuller than its current data (span enforced now; provider-boundary and
 drift-suppression are seams awaiting a second provider and `prospect_delta`) — logged as I-091
 rather than resolved by building those subsystems ahead of their phase.
+
+---
+
+## 2026-08-08 — Any-city scan onboarding: type "City + Business type", built in stages
+
+The scan form only let an operator pick a PRE-SEEDED submarket from a dropdown (submarkets ship
+from a market definition file). Owner request: type any city and scan it. Two findings shaped how
+this is built.
+
+**"Google-recognised submarkets" can't be sourced from Google.** Google resolves a place you name
+but has no endpoint that LISTS a city's neighbourhoods. So sub-areas are OSM-enumerated (Overpass
+`place=suburb|neighbourhood|…` nodes) and each is then VERIFIED against Google geocoding and kept
+only if it resolves inside the city — every option shown is Google-recognised, the list just isn't
+Google-sourced. This is the exact pipeline the Local SEO neighbourhood silo already rides; the
+primitives (`maps_geocode.forward_geocode_places`, `place_is_within_city`, `overpass`) are reused,
+not reinvented. Owner picked this over a Google-Places-Nearby-only list (patchy coverage). Owner
+also fixed scope at ONE sub-area per scan (keeps the one-submarket first-run rule).
+
+**A scan of a city that hasn't been INGESTED produces nothing.** `prospect_coverage` is
+`grid_result` joined to `prospect` on place_id, and `prospect` rows come only from the paid
+Outscraper `ingest` pass. So "scan a typed city" is really discover (ingest) → filter → scan —
+the business type the operator types is exactly the ingest CATEGORY. That's why the form is "City +
+Business type" and not just a place picker (I-092).
+
+**Staged build (this is why the first PR is backend-only).** The geo READ layer ships first:
+`services/outreach_geo.py` (resolve city + enumerate verified sub-areas, pure helpers unit-tested)
++ read-only routes (`GET /outreach/geo/resolve-city`, `/outreach/geo/subareas`, staff-gated,
+geocoding-only — they cannot reach the ~$0.81 scan spend). The "City + Business type" FORM and the
+discovery-execution (create market/submarket/keyword + run ingest→filter→scan on demand in the
+outreach service) land together in the next slice, so the form's Queue button is never a dead end
+that produces empty scans. The execution layer changes the outreach service's guarded spend/
+execution model (a new paid job beyond the one-scan drain) and can't be tested from the build
+sandbox, so it is deliberately verified live rather than merged blind.
+
+Refactor rider: `place_is_within_city` moved from `local_seo_silo` (imports FastAPI) to
+`maps_geocode` (pure), re-exported for existing callers — so the outreach geo layer reuses it
+without importing a web-framework-bound module.

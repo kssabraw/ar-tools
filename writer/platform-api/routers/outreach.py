@@ -347,6 +347,59 @@ async def list_keywords(market_id: str, auth: dict = Depends(require_outreach)) 
     return {"keywords": _handle(outreach_service.list_keywords, market_id)}
 
 
+# --- Any-city geo (read-only: resolve a typed city + list its verified sub-areas) --------------
+#
+# These power the "City + Business type" scan form (owner request 2026-08-08). They only READ —
+# Google geocoding + Overpass — so they never touch the ~$0.81 scan spend the scan-order routes
+# guard; a wrong enumeration shows a wrong list, never a bill. Staff-gated (not open to every
+# authed user) because geocoding a metro's sub-areas is a small metered cost, and staff is the bar
+# the rest of the module's cost-bearing surface already uses.
+
+
+@router.get("/outreach/geo/resolve-city")
+async def resolve_city(
+    q: str = Query(..., min_length=1), auth: dict = Depends(require_staff)
+) -> dict:
+    """Resolve a typed city string to a Google place (name, region, centre, place_id)."""
+    _require_outreach_ready()
+    from db.supabase_client import get_supabase
+    from services import outreach_geo
+
+    try:
+        return {"city": await outreach_geo.resolve_city(q, supabase=get_supabase())}
+    except OutreachError as e:
+        status = 404 if e.code.endswith("_not_found") else 422
+        raise HTTPException(status_code=status, detail=e.code) from e
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.error("outreach_resolve_city_failed", extra={"error": str(e)})
+        raise HTTPException(status_code=500, detail="internal_error") from e
+
+
+@router.get("/outreach/geo/subareas")
+async def list_subareas(
+    q: str = Query(..., min_length=1), auth: dict = Depends(require_staff)
+) -> dict:
+    """A typed city's Google-verified sub-areas, as scan targets. Returns
+    ``{city, subareas: [{name, lat, lng, place_id}], note}``; a degraded source yields an empty
+    list with a note, never a 500. An unresolvable city is a 404 so the form can say so."""
+    _require_outreach_ready()
+    from db.supabase_client import get_supabase
+    from services import outreach_geo
+
+    try:
+        return await outreach_geo.enumerate_subareas(q, supabase=get_supabase())
+    except OutreachError as e:
+        status = 404 if e.code.endswith("_not_found") else 422
+        raise HTTPException(status_code=status, detail=e.code) from e
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.error("outreach_list_subareas_failed", extra={"error": str(e)})
+        raise HTTPException(status_code=500, detail="internal_error") from e
+
+
 @router.post("/outreach/scan-requests")
 async def create_scan_request(
     payload: ScanRequestCreate, auth: dict = Depends(require_admin)

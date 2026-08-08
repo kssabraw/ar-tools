@@ -1585,6 +1585,29 @@ class Settings(BaseSettings):
     # off the suite without unsetting keys the Railway job also needs.
     outreach_enabled: bool = True
 
+    # --- Any-city onboarding: geo enumeration of a typed city's sub-areas -------
+    # A scan targets a submarket (a city sub-area) with a fixed 81-point grid. To
+    # let an operator type ANY city instead of picking a pre-seeded one, the suite
+    # resolves the city (Google geocoding), enumerates its real sub-areas from
+    # OpenStreetMap (`place=<type>` nodes via Overpass — Google has no
+    # "list a city's neighbourhoods" endpoint), then keeps only those Google
+    # geocoding VERIFIES as inside the city. Same pipeline the Local SEO
+    # neighbourhood silo rides; these knobs are outreach-scoped so tuning one
+    # tool never moves the other.
+    outreach_subarea_place_types: str = "suburb,neighbourhood,quarter,city_district,borough"
+    # Overpass search radius (km) around the city centre — only used as a fallback
+    # when the city's geocoded bounding box is unavailable (rare); normally the
+    # box drives containment.
+    outreach_subarea_radius_km: float = 20.0
+    # Cap OSM candidates BEFORE Google verification, so a huge metro can't fan out
+    # into hundreds of paid geocode calls in one enumeration.
+    outreach_subarea_max_candidates: int = 60
+    # Final cap on sub-areas returned to the picker.
+    outreach_subarea_max_results: int = 60
+    # Bounds padding (fraction of the box span) for the inside-the-city test —
+    # slack for a sub-area sitting right on the city edge.
+    outreach_subarea_bounds_pad: float = 0.15
+
     leadoff_income_acs_year: int = 2023
     leadoff_income_refresh_days: int = 365
     # Per-city county map (public.city_counties) — reverse-geocoded from each
