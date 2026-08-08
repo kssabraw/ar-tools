@@ -285,6 +285,67 @@ def list_batches(client_id: str) -> list[dict]:
             .execute().data or [])
 
 
+# ---------------------------------------------------------------------------
+# Content Scheduler DRAFT — a durable per-client stash of handed-off keywords
+# (e.g. from "Send to Content Scheduler" in Keyword Research) so they survive a
+# refresh / navigation. This is a draft of the batch INPUT: no jobs are enqueued
+# and the scheduler never touches it. One row per client (client_id PK).
+# ---------------------------------------------------------------------------
+_DRAFT_MAX_TERMS = 500
+
+
+def get_draft(client_id: str) -> dict:
+    """The client's pending scheduler draft: {terms, content_type}. Empty terms
+    when there is no draft."""
+    res = (get_supabase().table("content_scheduler_drafts")
+           .select("terms, content_type").eq("client_id", client_id).limit(1).execute())
+    row = res.data[0] if res.data else {}
+    return {"terms": row.get("terms") or [], "content_type": row.get("content_type")}
+
+
+def _dedupe_terms(terms) -> list[str]:
+    """Trim, drop blanks, dedupe case-insensitively (order-preserving), cap length
+    per term and count. Pure."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for t in terms or []:
+        s = " ".join(str(t or "").split())[:_MAX_KEYWORD_LEN].strip()
+        if not s:
+            continue
+        k = s.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(s)
+        if len(out) >= _DRAFT_MAX_TERMS:
+            break
+    return out
+
+
+def merge_draft(client_id: str, terms, content_type: Optional[str] = None) -> dict:
+    """Merge terms into the client's draft (union, dedup), keeping/​setting an
+    optional suggested content_type. Returns the updated {terms, content_type}."""
+    existing = get_draft(client_id)
+    merged = _dedupe_terms(list(existing["terms"]) + list(terms or []))
+    ct = content_type or existing.get("content_type")
+    (get_supabase().table("content_scheduler_drafts").upsert({
+        "client_id": client_id, "terms": merged, "content_type": ct,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }).execute())
+    return {"terms": merged, "content_type": ct}
+
+
+def clear_draft(client_id: str) -> None:
+    """Delete the client's pending scheduler draft (called once a batch is created
+    from it, or the user clears the list). Best-effort."""
+    try:
+        (get_supabase().table("content_scheduler_drafts").delete()
+         .eq("client_id", client_id).execute())
+    except Exception as exc:  # noqa: BLE001 — clearing a draft must never hard-fail
+        logger.warning("content_scheduler_draft.clear_failed",
+                       extra={"client_id": client_id, "error": str(exc)})
+
+
 def progress_by_batch(client_id: str) -> dict[str, dict]:
     """Per-batch status counts for a client, in one paged scan (no N+1)."""
     client = get_supabase()

@@ -177,4 +177,18 @@ export const schedulerApi = {
   cancelBatch: (clientId: string, batchId: string) =>
     api.post<{ status: string; cancelled_items: number }>(
       `/clients/${clientId}/content-batches/${batchId}/cancel`, {}),
+  // Durable per-client draft — handed-off keywords (e.g. from Keyword Research)
+  // that seed the batch form and survive a refresh until a batch is created.
+  getDraft: (clientId: string) =>
+    api.get<SchedulerDraft>(`/clients/${clientId}/content-scheduler-draft`),
+  saveDraft: (clientId: string, keywords: string[], contentType?: ContentType) =>
+    api.post<SchedulerDraft>(`/clients/${clientId}/content-scheduler-draft`,
+      { keywords, content_type: contentType }),
+  clearDraft: (clientId: string) =>
+    api.delete<{ cleared: boolean }>(`/clients/${clientId}/content-scheduler-draft`),
+}
+
+export interface SchedulerDraft {
+  terms: string[]
+  content_type: ContentType | null
 }

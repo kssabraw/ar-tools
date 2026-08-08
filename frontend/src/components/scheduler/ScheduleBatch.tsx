@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CalendarClock, Download, Loader2, Plus, Upload, X, Zap } from 'lucide-react'
 import { card, errorBox, input, label, outlineBtn, primaryBtn } from '../localseo/shared'
@@ -84,11 +84,39 @@ export function ScheduleBatch({ clientId, fixedType, githubReady, initialTerms, 
   // Auto-publish finished blog posts to GitHub (per the image SOP). Default ON
   // when the client is GitHub-ready — the common case is "generate AND publish".
   const [githubPublish, setGithubPublish] = useState(true)
-  const [rows, setRows] = useState<DraftRow[]>(() =>
-    (initialTerms ?? [])
-      .map(t => (t ?? '').trim())
-      .filter(Boolean)
-      .map((term, i) => ({ key: `init-${i}`, term, service: '', notes: '', date: '' })))
+  const [rows, setRows] = useState<DraftRow[]>([])
+
+  // Durable handoff: keywords sent from another tool (e.g. Keyword Research) are
+  // stashed server-side as a per-client draft, so they survive a refresh /
+  // navigation. Seed the form from the draft (merged with any initialTerms) once,
+  // then clear the draft when a batch is created or the list is cleared.
+  const draftQ = useQuery({
+    queryKey: ['content-scheduler-draft', clientId],
+    queryFn: () => schedulerApi.getDraft(clientId),
+    enabled: Boolean(clientId),
+  })
+  const seededRef = useRef(false)
+  useEffect(() => {
+    if (seededRef.current || draftQ.isLoading) return
+    const seedTerms = [...(initialTerms ?? []), ...(draftQ.data?.terms ?? [])]
+    if (!seedTerms.length) return
+    seededRef.current = true
+    setRows(prev => {
+      const have = new Set(prev.map(r => r.term.trim().toLowerCase()).filter(Boolean))
+      const add = seedTerms
+        .map(t => (t ?? '').trim())
+        .filter(Boolean)
+        .filter(t => { const k = t.toLowerCase(); if (have.has(k)) return false; have.add(k); return true })
+        .map((term, i) => ({ key: `seed-${i}`, term, service: '', notes: '', date: '' }))
+      return [...prev, ...add]
+    })
+    if (draftQ.data?.content_type) setContentType(draftQ.data.content_type)
+  }, [draftQ.data, draftQ.isLoading]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const clearDraft = () => {
+    schedulerApi.clearDraft(clientId).catch(() => {})
+    queryClient.setQueryData(['content-scheduler-draft', clientId], { terms: [], content_type: null })
+  }
   const [bulk, setBulk] = useState('')
   const [when, setWhen] = useState<'now' | 'schedule'>('now')
   const fileRef = useRef<HTMLInputElement>(null)
@@ -204,6 +232,7 @@ export function ScheduleBatch({ clientId, fixedType, githubReady, initialTerms, 
         return
       }
       resetForm()
+      clearDraft()  // the handoff keywords are now a real batch — drop the draft
       if (when === 'now') {
         // Future-dated rows aren't created now — the scheduler releases them on
         // their date. Split the message so the count isn't overstated.
@@ -308,7 +337,7 @@ export function ScheduleBatch({ clientId, fixedType, githubReady, initialTerms, 
               Pages{isLocalSeo ? ' — Service required, Notes optional' : ' — Notes optional'}
             </label>
             <button type="button" style={{ ...outlineBtn, padding: '4px 10px', fontSize: 12 }}
-              onClick={() => setRows([])}>Clear all</button>
+              onClick={() => { setRows([]); clearDraft() }}>Clear all</button>
           </div>
           <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
             {isLocalSeo && (
