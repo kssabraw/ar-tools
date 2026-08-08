@@ -204,8 +204,8 @@ function MapsTable({ s, name, keyword, submarket, clientTone }: {
   )
 }
 
-function OrganicTable({ s, name, keyword, submarket, clientTone }: {
-  s: OrganicSection; name: string; keyword: string; submarket: string; clientTone?: boolean
+function OrganicTable({ s, keyword, submarket, clientTone }: {
+  s: OrganicSection; keyword: string; submarket: string; clientTone?: boolean
 }) {
   if (s.status !== 'measured') {
     return <NotScanned label={clientTone ? 'Google search results' : 'Organic search'}
@@ -261,7 +261,7 @@ function InternalBrief({ data }: { data: ReportData }) {
       <MapsTable s={data.signals.maps} name={data.identity.name ?? 'This business'} keyword={data.keyword} submarket={data.submarket} />
 
       <SectionTitle>Organic rankings vs competitors</SectionTitle>
-      <OrganicTable s={data.signals.organic} name={data.identity.name ?? 'This business'} keyword={data.keyword} submarket={data.submarket} />
+      <OrganicTable s={data.signals.organic} keyword={data.keyword} submarket={data.submarket} />
 
       <SectionTitle>AI / LLM visibility</SectionTitle>
       <NotScanned label="AI answers" reason={data.signals.llm.reason} />
@@ -307,7 +307,7 @@ function ClientDraft({ data }: { data: ReportData }) {
       <MapsTable s={data.signals.maps} name={data.identity.name ?? 'You'} keyword={data.keyword} submarket={data.submarket} clientTone />
 
       <SectionTitle>Google search results</SectionTitle>
-      <OrganicTable s={data.signals.organic} name={data.identity.name ?? 'You'} keyword={data.keyword} submarket={data.submarket} clientTone />
+      <OrganicTable s={data.signals.organic} keyword={data.keyword} submarket={data.submarket} clientTone />
 
       <SectionTitle>AI assistants (ChatGPT, Google AI, and more)</SectionTitle>
       <NotScanned label="AI answers" reason="This section will be added when the AI-visibility scan is run." />
