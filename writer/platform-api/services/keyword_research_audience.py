@@ -49,8 +49,23 @@ _JOB_SEEKER_TERMS = (
     "career", "careers", "hiring", "now hiring", "recruiter", "recruitment",
     "resume", "cover letter", "interview questions",
     "how to become", "become a", "become an", "how do i become", "how do you become",
+    # Near-miss phrasings observed leaking through on a live BSA Claims run —
+    # aspiring-practitioner / student intent the salary/jobs words miss:
+    "how to be a", "how to be an",
+    "how to get licensed", "get licensed", "getting licensed",
+    "pre licensing", "pre-licensing", "prelicensing",
+    "practice questions", "practice exam", "practice test", "exam prep", "test prep",
+    "continuing education", "ce credits",
+    "firms that hire",
     "entry level", "entry-level", "apprentice", "apprenticeship",
     "internship", "work from home", "remote jobs",
+)
+
+# Salary/earnings intent that isn't a single keyword ("how much does an X make"):
+# a career-earnings question, distinct from a buyer's "how much does an X cost".
+_SALARY_RE = re.compile(
+    r"how much (?:do|does|can|will|to)\b.{0,45}\b(?:make|makes|earn|earns|paid|salary)\b",
+    re.I,
 )
 
 
@@ -69,7 +84,8 @@ _JOB_SEEKER_RE = _phrase_regex(_JOB_SEEKER_TERMS)
 def is_job_seeker(keyword: Optional[str]) -> bool:
     """Whether a keyword reads as a job-seeker / career / recruiting query — the
     universal wrong-audience class for content SEO. Pure."""
-    return bool(_JOB_SEEKER_RE.search(keyword_research.normalize_keyword(keyword)))
+    nk = keyword_research.normalize_keyword(keyword)
+    return bool(_JOB_SEEKER_RE.search(nk) or _SALARY_RE.search(nk))
 
 
 def matches_any(keyword: Optional[str], pattern: Optional[re.Pattern]) -> bool:
@@ -163,7 +179,12 @@ def _icp_prompt(icp_text: str, sample_keywords: list[str]) -> str:
         "consumers, job-seekers beyond the obvious salary/jobs words, licensing/"
         "certification seekers, policyholders if the business sells to insurers, "
         "etc.). Only terms you're confident signal the wrong audience. If every "
-        "sample looks on-audience, return an empty list."
+        "sample looks on-audience, return an empty list.\n\n"
+        "You MAY include a term that contains the business's own topic noun as long "
+        "as it adds a clear wrong-audience discriminator — e.g. for a B2B claims firm "
+        "whose buyers are insurance carriers, 'adjuster license', 'adjuster school', "
+        "'adjuster exam' target aspiring adjusters, not buyers — but NEVER return the "
+        "bare topic noun alone ('adjuster', 'claims')."
     )
 
 
@@ -210,9 +231,12 @@ def icp_off_audience_terms(client: dict, sample_keywords: list[str]) -> list[str
 
 
 def guard_off_terms(off_terms: list[str], seeds: list[str]) -> list[str]:
-    """Drop any ICP off-audience term that shares a significant token with the
-    seeds — such a term would filter the run's own core topic (a mis-returned
-    "claims"/"adjuster" would nuke everything). Pure."""
+    """Drop an ICP off-audience term only when it is ENTIRELY seed tokens — such a
+    term ("adjuster", "claims adjuster") carries no discriminator and would nuke the
+    run's core topic. A term that shares the seed noun but adds a wrong-audience
+    discriminator ("adjuster license", "adjuster exam", "adjuster school") IS kept:
+    it's a real wrong-audience signal, and this is exactly the case where the seed
+    itself is the wrong audience's anchor (BSA: "independent claims adjuster"). Pure."""
     seed_toks: set[str] = set()
     for s in seeds or []:
         seed_toks |= keyword_research.token_set(s)
@@ -220,8 +244,11 @@ def guard_off_terms(off_terms: list[str], seeds: list[str]) -> list[str]:
         return list(off_terms or [])
     safe: list[str] = []
     for t in off_terms or []:
-        if not (keyword_research.token_set(t) & seed_toks):
-            safe.append(t)
+        toks = keyword_research.token_set(t)
+        # Keep unless every token is a seed token (no discriminating word).
+        if toks and toks.issubset(seed_toks):
+            continue
+        safe.append(t)
     return safe
 
 
