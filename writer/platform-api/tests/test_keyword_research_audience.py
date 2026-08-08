@@ -17,6 +17,31 @@ def test_is_job_seeker_leaves_buyer_terms():
     assert not aud.is_job_seeker("catastrophe claims management")
 
 
+def test_is_job_seeker_catches_live_bsa_near_misses():
+    # Career/student phrasings that leaked through as "buyer" on a live BSA run.
+    assert aud.is_job_seeker("how much does an independent claims adjuster make")
+    assert aud.is_job_seeker("how to be an independent claims adjuster")
+    assert aud.is_job_seeker("ia firms that hire new adjusters")
+    assert aud.is_job_seeker("claims adjuster exam practice questions")
+    assert aud.is_job_seeker("how to get licensed as an adjuster")
+
+
+def test_salary_pattern_does_not_catch_buyer_cost_question():
+    # "how much does X cost" is a BUYER question — must stay buyer.
+    assert not aud.is_job_seeker("how much does a tpa cost")
+    assert not aud.is_job_seeker("how much does claims outsourcing cost")
+
+
+def test_guard_keeps_seed_noun_with_discriminator():
+    # When the seed noun IS the wrong-audience anchor, an off-term that adds a
+    # discriminator ("adjuster license") is kept; the bare noun is still dropped.
+    seeds = ["third party claims administration", "independent claims adjuster"]
+    g = aud.guard_off_terms(
+        ["adjuster license", "adjuster school", "adjuster", "claims adjuster", "license"], seeds)
+    assert "adjuster license" in g and "adjuster school" in g and "license" in g
+    assert "adjuster" not in g and "claims adjuster" not in g
+
+
 def test_is_job_seeker_word_boundary_no_false_hit():
     # "jobsite" should not match "jobs" (word boundary).
     assert not aud.is_job_seeker("construction jobsite claims")
