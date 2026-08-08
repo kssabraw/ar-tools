@@ -29,6 +29,23 @@ and **the first live scan is DONE** — `emergency plumber` × whole-city Los An
 new any-city onboard path: 122 discovered, 83 survived, 81/81 points collected, snapshot rolled up,
 119 coverage rows. The scan tables hold real data for the first time.
 
+**THE PER-PROSPECT REPORT IS BUILT + MERGED (2026-08-08, PRs #615–#619).** The "why this is a lead"
+**call hook** ("Why call?" — deterministic talking points a caller reads before dialing) plus a
+two-face competitive **report** (an internal brief + an approval-gated client-facing PDF) carrying
+three signals: **MAPS** (rankings vs competitors, has live data from the first scan), **ORGANIC**
+(`scan-organic`, PAID, unrun) and **AI VISIBILITY** (`scan-ai` — ChatGPT + Google AI Overview, new
+`ai_region` + `ai_scan_result` tables; PAID, unrun). Every part is DETERMINISTIC and fact-grounded —
+never an LLM guess, never a fabricated fact/competitor/number (DECISIONS 2026-08-08, the design-fork
+ruling), the same discipline as the heatmap renderer. The client PDF is generated only behind an
+explicit human approval (`report_approval`, the no-unapproved-asset invariant) and delivered as a
+90-day signed URL on Supabase Storage (reporting §5, not R2). Read/assembly logic lives in
+`writer/platform-api/services/outreach_justification.py` + `outreach_report.py` (pure) with the I/O
+in `services/outreach.py`; the paid producers are `api/services/organic_scan.py` +
+`ai_visibility.py`; UI in `frontend/src/pages/Outreach.tsx` + `components/outreach/ProspectReport.tsx`.
+Migrations `20260808140000` / `160000` / `180000` applied live. **I-095 is fully resolved.** The
+organic + AI scans have never been run — the report's organic/LLM sections read `not_scanned` until
+an admin authorizes those paid commands (they gate exactly like `scan`).
+
 **Phase 2 SCANNING is PROVEN, not just built.** `api/services/maps_scan.py` (pure — task bodies,
 `tasks_ready`/`task_get` parsing, completeness) and `api/services/scan_runner.py` (submission,
 collection, finalization) with the `scan_task` bookkeeping table ran end-to-end against a live
