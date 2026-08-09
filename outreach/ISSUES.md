@@ -2307,3 +2307,63 @@ DDL leaves `selection_reason` unconstrained text (as adopted from PHASE3-outcome
 this needs no migration and the vocabulary can tighten later. **Action at Phase 4:** the selector
 writes `thompson` / `random_control`; `manual` remains only for hand-picked contacts, and refits
 must treat the three buckets distinctly (they already must exclude `thompson`-only — §7).
+
+---
+
+## Phase 4 Stage 1 findings (2026-08-09)
+
+### I-103 · Geogrid "steep decay from pin" qualifier is not evaluated — coverage<20 always maps to the `_steep` bin
+scoring-spec §Geogrid-pain names the strongest pain bin "Coverage <20% + steep decay from pin" (+57),
+but there is NO non-steep <20 bin to fall to. Requiring a reliable per-pin decay computation (from
+`centroid_dist_at_loss`) to gate the pipeline's PRIMARY discriminator would zero out the strongest
+signal in the market whenever the decay read was ambiguous. So `score_features._geogrid_bin` maps any
+coverage below the low threshold to `geogrid_lt20_steep` unconditionally. **Cheapest-to-reverse
+reading** (CLAUDE.md §protocol): the decay refinement lands with a trustworthy per-pin measurement;
+until then the +57 bin fires on coverage alone. `centroid_dist_at_loss` is carried on FeatureInputs so
+the refinement needs no new capture.
+
+### I-104 · GBP strong/weak bins are dormant — Stage 1 captures rating only, not photos/categories
+scoring-spec §GBP-gate's `gbp_strong` (+34) requires "rating >= 4.0, photos, categories set" and
+`gbp_weak` (-26) is a rebuild-level deficiency — neither reducible to rating alone. Stage 1 does not
+capture photos/categories, so GBP scores at the `adequate` reference (0) for every prospect with a
+rating, and strong/weak never fire. This is honest (a feature with no variance cannot discriminate —
+the §7a logic), not a bug. A future GBP-detail enrichment (photos/categories from the Outscraper/DfS
+pull) lights them up with no coefficient change. `score_gbp_strong_rating` config is kept for then.
+
+### I-105 · The scanned market has no definition file, so the `score`/`recalibrate` CLI needs `--market-name`
+The measured LA market is "Los Angeles, CA, USA" (`9238e737…`, created by the any-city ONBOARD path),
+NOT the seeded "Los Angeles, CA — Plumbing" (`markets/los-angeles-plumbing.json`, which has zero
+coverage). The `score`/`recalibrate` commands resolve the market by the definition file's `name`, so
+they would target the empty seeded market. **Fixed:** a `--market-name` override on both commands
+(the positional definition file is still required by argparse, but its name is overridden). The
+production run is `score <any-file> --market-name "Los Angeles, CA, USA"`. A cleaner fix (resolve
+onboard markets without a file) is deferred — onboard markets are created dynamically and a broader
+market-resolution rework is out of Stage-1 scope.
+
+### I-106 · `score_run` stores ONE calibration alpha/gamma, but calibration is per-channel
+scoring-spec §1 forbids pooling phone and email, and §6 Stage 2 fits calibration per channel — but the
+PRD `score_run` DDL carries a single `calibration_alpha`/`calibration_gamma` pair. So `recalibrate`
+writes a calibrated run only when EXACTLY ONE channel clears the outcome floor (the phone-first reality:
+phone is observable first, §1). A run where BOTH channels fit has nowhere to store both and is reported
+as a problem, writing no calibrated run. **Action when the email track goes live:** a migration adding
+per-channel calibration storage (e.g. a `score_run_calibration(score_run_id, channel, alpha, gamma)`
+child table), then `run_score` reads the pair per channel. Not needed until email + ~30 email outcomes
+exist, which is many months out.
+
+### I-107 · `phone_type` is 'unknown' for every ingested prospect — phone reachability is dormant
+Every LA prospect carries `phone_type='unknown'` (the base pull does not classify the line), so the
+phone-track reachability bins (direct-owner +50 / listed 0 / gatekept -37) never fire and reachability
+is correctly EXCLUDED from the phone reply score (START-HERE Phase 4: "pass 1 excludes reachability
+rather than defaulting it"). This is honest but means the phone reply score currently has no
+reachability contribution for anyone. When the ingest/enrichment classifies `phone_type` (or an owner-
+name signal appears), the bins fire with no code change. Not a defect — a dormant signal awaiting data.
+
+### I-108 · Reporting/platform-api still reads the placeholder, not `v_prospect_ranked` — reader NOT repointed
+`writer/platform-api/services/outreach.py::placeholder_scores` reads `v_prospect_placeholder_score`,
+and the frontend prospect list ranks by it. Phase 4 built the fitted `v_prospect_ranked` and
+subordinated the placeholder (view comment), but did NOT repoint the platform-api reader/frontend to
+prefer real scores when a score_run exists — that is a separate change with frontend regression surface,
+deliberately deprioritized this session (owner away, high bar on user-facing change). **Action:** repoint
+`placeholder_scores` (or add a ranked-scores endpoint) to read `v_prospect_ranked` where a score_run
+exists, falling back to the placeholder otherwise; then the UI reflects the fitted ranking. Until then
+the placeholder still drives the list even after a `score` run populates the fitted tables.

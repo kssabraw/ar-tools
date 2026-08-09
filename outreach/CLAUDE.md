@@ -124,8 +124,12 @@ live snapshot to draw from, but nothing has rendered an artifact yet (no `report
 **What is genuinely unbuilt is now short.** Phase 3's renderer, call hook, report, approval gate and
 PDF are all merged; the organic / AI / paid scan layers are merged; **`outcome` + `touch` + the emit
 webhook are BUILT AND MERGED (2026-08-09, PR #625 → `8141629`; migration `20260809170000` applied
-live).** What remains is Phase 4 scoring, Phase 5 email, Phase 6 learning. See HANDOFF §12 for the
-value-ordered roadmap.
+live).** **Phase 4 scoring — STAGE 1 (priors) is BUILT (2026-08-09; migration `20260809190000`
+applied live): the sabermetric scorecard engine, `score_run`/`prospect_score`/`conflict_check`/
+`v_prospect_ranked`, the golden-fixture harness, the empty-safe Stage-2 recalibration job, and the
+free `score`/`recalibrate` commands.** What remains is Phase 4 Stages 2–3 (recalibration fit /
+hierarchical refit + Thompson — both need accumulated `outcome` rows), Phase 5 email, Phase 6
+learning. See HANDOFF §12 for the value-ordered roadmap.
 
 **`outcome` + `touch` are BUILT + MERGED — the closing window is open, capture through it.** The
 learning substrate every later model fits against now exists and cannot be backfilled
@@ -187,8 +191,12 @@ and never in `writer/supabase/migrations/`, which targets AR-Internal-Tools.
   but only inside a submarket carrying a `snapshot_rollup` marker. Outside one, nothing was
   measured and there is no score to give. Confusing the two scores a failed scan as total
   invisibility, which is the strongest pitch in the market, manufactured.
-- **`prospect_score` is the Phase 4 model's table and stays empty until then** (ISSUES I-082). The
-  placeholder is a view. The reporting layer already reads `prospect_score` as a fitted score.
+- **`prospect_score` is the Phase 4 model's table** (ISSUES I-082). **Phase 4 Stage 1 is BUILT
+  (2026-08-09)** — the fitted scorecard writes it via the `score` command, and `v_prospect_ranked`
+  ranks reply/close/value side-by-side (migration `20260809190000`). It is empty between `score`
+  runs; the placeholder view (`v_prospect_placeholder_score`) is the subordinated fallback the
+  reporting layer still reads until the reader is repointed (I-108). A row is written ONLY by a
+  score run, never by the placeholder path.
 - **Partitioning must exist before cycle two writes data.** At the portfolio size, unpartitioned
   append breaches Supabase Pro's 8 GB allowance inside year one.
 - **`outcome` is the modelling substrate.** Workflow changes never mutate it. `touch` is
