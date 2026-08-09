@@ -51,3 +51,23 @@ Append-only. One line per task started, commit made, dependency added, test run.
 - 2026-08-09T19:05Z — FULL SUITE: outreach api/tests 465 passed (411 baseline + 54 new). All 7 outreach service files parse. score/recalibrate confirmed free (not in PAID_COMMANDS, spend_denial None).
 - 2026-08-09T19:15Z — LIVE VERIFY: read Railway outreach config (builds main; cron */15 tick; OAuth REDACTS variable values -> can't run run_score locally). Fetched 83 real LA prospects (market 9238e737 "Los Angeles, CA, USA", NOT seeded plumbing market — I-105). Offline-computed full run via REAL pure fns: top reply = low-coverage non-franchise (decile 8-10), bottom = high-coverage (88.9%, geogrid_gt80) + flagged franchises (-87) decile 1 — correct. Wrote 4-prospect faithful sample live, verified v_prospect_ranked pivots reply/close/value + orders by value within channel (1415>1333>714>508, franchise value-decile 1) + display_prob clamp logic (alpha null) — all correct. DELETED demo run; DB clean (0 score_runs/scores/ranked), placeholder intact.
 - 2026-08-09T19:20Z — Did NOT run paid producers (owner-away + smallest-scope discipline; Railway-job path, not sandbox). Did NOT repoint platform-api reader to v_prospect_ranked (frontend regression surface, deprioritized) — I-108. Logged DECISIONS (8 entries) + ISSUES I-103..I-108.
+- 2026-08-09T19:00Z — Consolidated 4 commits (migration / engine+registry+golden / extraction+job+recal+CLI / docs), pushed branch, opened DRAFT PR #627. Only check is the Netlify deploy-preview (informational; no test CI). Scheduled an ~8-min self check-in to mark ready + squash-merge on green.
+
+## Session Summary (2026-08-09) — Phase 4 Stage 1
+
+**Objective:** Build the real sabermetric SCORING MODEL, Stage 1 (priors). DONE.
+
+**Done:**
+- Data model live (migration 20260809190000, applied to Outreacher): score_run / prospect_score / conflict_check (PRD DDL) + v_prospect_ranked (§10 side-by-side). Placeholder subordinated, not dropped.
+- Pure scorecard engine (scorecard.py + scorecard_config.py registry): all coeffs config-loaded, zero hardcoded betas; Models A/B/C; replayable score_factors; per-channel pinned offsets; calibration transform.
+- Golden-fixture harness: all 7 independent fixtures reproduced exactly. Feature extraction (unknown==absent / franchise-flags / reachability-excluded). Score job + free `score` CLI (phone/pass-1). Empty-safe Stage-2 recalibration + free `recalibrate` CLI. --market-name CLI override.
+- 465 tests green (411 baseline + 54 new). v_prospect_ranked verified live on 4 real prospects (franchise value-decile 1; low-coverage non-franchise top), then deleted → DB clean.
+
+**Blocked / not done (deliberate, logged):**
+- Did NOT run paid producers scan-organic/scan-ai or free scan-tech (Railway-job path, not the sandbox; owner-away + smallest-scope discipline). Extraction wiring is in place; a producer run lights the bins up with no code change. HIGH-VALUE NEXT: run scan-tech (free) first, then scan-organic/scan-ai at min scope.
+- Did NOT repoint the platform-api reader/frontend from the placeholder to v_prospect_ranked (I-108, frontend regression surface). So the UI still ranks by the placeholder until repointed + a `score` run populates the fitted tables.
+- Stage 2 (recalibration FIT) and Stage 3 (hierarchical refit + Thompson) wait on accumulated `outcome` rows (0 today). MMR slot selection deferred (selection layer, I-101).
+
+**Paid runs this session:** NONE. **Deploys:** NONE (branch push only). **Railway config:** READ ONLY — never armed a paid command; OUTREACH_CONFIRM_SPEND / OUTREACH_COMMAND untouched (values OAuth-redacted). Migrations applied via Supabase MCP only.
+
+**Look at first next session:** run the free `scan-tech` on the LA market (market "Los Angeles, CA, USA", NOT the seeded plumbing market — I-105), then re-score; and repoint the platform-api reader to v_prospect_ranked (I-108). The scored ranking is a strong PRIOR, not a prediction, until ~100 prospects are contacted.
