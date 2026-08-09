@@ -1968,3 +1968,378 @@ def promote_prospect(prospect_id: str, actor_id: str) -> dict[str, Any]:
             return dict(raced[0], already_existed=True)
         raise
     return dict(lead, already_existed=False)
+
+
+# --- Emit + touch (Phase 3 — the learning substrate) -------------------------------------------
+#
+# `emit_prospect` sends a prospect to the external outreach queue (n8n / Encharge) and writes the
+# `outcome` row the Phase-4 model will one day fit against — the row that cannot be backfilled
+# (scoring-spec §8). `record_touch` logs an actual contact attempt and rolls it up into the outcome.
+#
+# The teed-up 2026-08-06 question — whether emit bulk-backfills outcomes for pre-existing hand-picked
+# leads — is resolved by these two functions together (DECISIONS 2026-08-09): an outcome is created
+# by whichever of emit/first-touch comes first, both idempotent, and there is NO bulk backfill. A
+# hand-picked lead becomes modellable the moment it is CONTACTED (a touch), not when it is promoted —
+# recording an outcome for a prospect nobody called would inject a fabricated contact event into the
+# substrate, which is worse than the model not seeing it.
+#
+# Nothing here spends money: a webhook POST to the agency's own automation tool is not a paid
+# provider call (the "platform-api must not spend" invariant is about Outscraper/DataForSEO).
+
+
+def _ensure_outcome(
+    client: Any,
+    prospect_id: str,
+    *,
+    selection_reason: str,
+    sequence_version: str,
+    touches_per_sequence: int,
+    agg: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """Create the outcome if missing (idempotent), or update its touch rollup if it exists.
+
+    Never overwrites an existing `selection_reason` — the first writer (emit or first-touch) owns it.
+    `agg` is the recomputed `{touch_count, first_contacted_at}` from `aggregate_touches`; when given,
+    it is applied on both the create and the update path so the derived fields never drift. Returns
+    `(row, created)`.
+
+    Relies on the composite FK: a lead with (prospect_id, 'outbound_scan') must already exist, which
+    both callers guarantee (emit via `promote_prospect`, touch because it read the lead first).
+    """
+    from services import outreach_emit as oe
+
+    existing = (
+        client.table("outcome").select("*").eq("prospect_id", prospect_id).limit(1).execute().data
+        or []
+    )
+    if existing:
+        row = existing[0]
+        if agg is not None:
+            updated = (
+                client.table("outcome").update(agg).eq("prospect_id", prospect_id).execute().data
+                or []
+            )
+            row = updated[0] if updated else {**row, **agg}
+        return row, False
+
+    insert = oe.build_outcome_row(
+        prospect_id=prospect_id,
+        selection_reason=selection_reason,
+        sequence_version=sequence_version,
+        touches_per_sequence=touches_per_sequence,
+    )
+    if agg is not None:
+        insert.update(agg)
+    try:
+        written = client.table("outcome").insert(insert).execute().data or []
+    except Exception:
+        # Raced a concurrent create (the PK refused). The row exists, which is the outcome the caller
+        # wanted — re-read and, if we brought a rollup, apply it.
+        raced = (
+            client.table("outcome").select("*").eq("prospect_id", prospect_id).limit(1).execute().data
+            or []
+        )
+        if not raced:
+            raise
+        row = raced[0]
+        if agg is not None:
+            updated = (
+                client.table("outcome").update(agg).eq("prospect_id", prospect_id).execute().data
+                or []
+            )
+            row = updated[0] if updated else row
+        return row, False
+    return (written[0] if written else insert), True
+
+
+def _post_emit_webhook(payload: dict[str, Any]) -> dict[str, Any]:
+    """POST the audit-ready queue row to the configured webhook. Best-effort — the DB write is the
+    source of truth, so a delivery failure is reported for retry (re-emit is idempotent), never
+    raised. An unset URL means the external queue is not wired yet: the outcome is still captured and
+    the `touch` path records real contacts regardless."""
+    from config import settings
+    from services import outreach_emit as oe
+
+    url = (settings.outreach_emit_webhook_url or "").strip()
+    if not url:
+        return {"configured": False, "delivered": False, "status": None, "reason": "webhook_not_configured"}
+
+    import httpx
+
+    try:
+        resp = httpx.post(
+            url,
+            json=payload,
+            headers=oe.build_webhook_headers(settings.outreach_emit_webhook_token),
+            timeout=settings.outreach_emit_webhook_timeout_s,
+        )
+        ok = 200 <= resp.status_code < 300
+        return {
+            "configured": True,
+            "delivered": ok,
+            "status": resp.status_code,
+            "reason": None if ok else "webhook_http_error",
+        }
+    except Exception as exc:  # noqa: BLE001 — a webhook hiccup must not lose the captured outcome
+        logger.warning("outreach_emit_webhook_failed", extra={"error": str(exc)})
+        return {
+            "configured": True,
+            "delivered": False,
+            "status": None,
+            "reason": "webhook_request_failed",
+            "error": str(exc),
+        }
+
+
+def emit_prospect(
+    prospect_id: str,
+    actor_id: str,
+    *,
+    selection_reason: str | None = None,
+    channel: str | None = None,
+    snapshot_id: str | None = None,
+) -> dict[str, Any]:
+    """Emit a prospect to the outbound queue: write the lead + outcome and post the webhook.
+
+    Requires a rolled-up scan (`prospect_justification.measured`) — there is no honest queue row for a
+    prospect whose invisibility was never measured, and emitting an empty pitch would manufacture the
+    picture the module guards against. The cadence / evidence-age emit gates (PRD §183/§198) are the
+    Phase-4 selector's and are deferred (ISSUES I-101); v1 emit is manual and bootstrap-gated.
+    """
+    from config import settings
+    from services import outreach_emit as oe
+
+    try:
+        sel = oe.resolve_selection_reason(
+            selection_reason, default=settings.outreach_default_selection_reason
+        )
+        chan = oe.validate_channel(channel or settings.outreach_emit_channel_default)
+    except ValueError as e:
+        raise OutreachError("invalid_emit_request", str(e)) from e
+
+    # The pitch + evidence. Reused verbatim as the payload's primary_pitch so the queue row and the
+    # on-screen call hook can never disagree.
+    justification = prospect_justification(prospect_id, snapshot_id)
+    if not justification.get("measured"):
+        raise OutreachError(
+            "not_measured", "cannot emit a prospect whose area has no rolled-up scan"
+        )
+
+    client = get_outreach_client()
+    rows = (
+        client.table("prospect")
+        .select("id, name, place_id, category, phone, website, submarket_id")
+        .eq("id", prospect_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise OutreachError("prospect_not_found", "no such prospect")
+    prospect = rows[0]
+
+    # Ensure the lead exists (idempotent — a hand-picked lead is reused, a fresh one created). Same
+    # source an emit writes under, so the unique (prospect_id, source) dedupes hand-picks and emits.
+    lead = promote_prospect(prospect_id, actor_id)
+
+    contacts = {
+        "phone": prospect.get("phone"),
+        "website": prospect.get("website"),
+        "email": lead.get("email"),
+    }
+
+    ph_rows = (
+        client.table("v_prospect_placeholder_score")
+        .select("*")
+        .eq("prospect_id", prospect_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    placeholder = ph_rows[0] if ph_rows else None
+
+    payload = oe.build_emit_payload(
+        prospect=prospect,
+        channel=chan,
+        contacts=contacts,
+        justification=justification,
+        placeholder=placeholder,
+        selection_reason=sel,
+    )
+
+    # Write the outcome stub (touch_count 0, first_contacted_at null — emit enqueues, a touch
+    # contacts). Idempotent: a re-emit keeps the original selection_reason.
+    outcome, created = _ensure_outcome(
+        client,
+        prospect_id,
+        selection_reason=sel,
+        sequence_version=settings.outreach_sequence_version,
+        touches_per_sequence=settings.outreach_touches_per_sequence,
+    )
+
+    delivery = _post_emit_webhook(payload)
+
+    # Append-only audit trail (a system row, not a contact — a contact is a touch). Best-effort.
+    try:
+        client.table("lead_activity").insert(
+            {
+                "lead_id": lead["id"],
+                "kind": "system",
+                "body": "Emitted to outreach queue",
+                "actor_id": actor_id,
+                "metadata": {
+                    "event": "emitted",
+                    "channel": chan,
+                    "selection_reason": sel,
+                    "delivered": delivery.get("delivered"),
+                    "webhook_status": delivery.get("status"),
+                    "webhook_configured": delivery.get("configured"),
+                },
+            }
+        ).execute()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("outreach_emit_activity_failed", extra={"error": str(exc)})
+
+    return {
+        "prospect_id": prospect_id,
+        "lead": lead,
+        "outcome": outcome,
+        "payload": payload,
+        "delivery": delivery,
+        "already_emitted": not created,
+    }
+
+
+def record_touch(
+    lead_id: str,
+    actor_id: str,
+    *,
+    channel: str,
+    sequence_version: str | None = None,
+    touch_number: int | None = None,
+    disposition: str | None = None,
+    note: str | None = None,
+) -> dict[str, Any]:
+    """Record one contact attempt against a lead and roll it up into the outcome.
+
+    A touch is authoritative for "a contact attempt happened" (CLAUDE.md invariant). For an
+    `outbound_scan` lead it creates the outcome if missing (this is how a hand-picked lead becomes
+    modellable — at first contact, not at promotion) and recomputes `touch_count` /
+    `first_contacted_at` from all its touches. A touch on an inbound/referral lead is recorded but
+    never rolls up (the outbound-only rule).
+    """
+    from config import settings
+    from services import outreach_emit as oe
+
+    try:
+        chan = oe.validate_channel(channel)
+    except ValueError as e:
+        raise OutreachError("invalid_channel", str(e)) from e
+
+    client = get_outreach_client()
+    leads = (
+        client.table("lead")
+        .select("id, source, prospect_id, deleted_at")
+        .eq("id", lead_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not leads:
+        raise OutreachError("lead_not_found", "no such lead")
+    lead = leads[0]
+
+    seq = sequence_version if sequence_version is not None else settings.outreach_sequence_version
+    touch_row = oe.build_touch_row(
+        lead_id=lead_id,
+        channel=chan,
+        sequence_version=seq,
+        touch_number=touch_number,
+        disposition=disposition,
+        note=note,
+        actor_id=actor_id,
+    )
+    written = client.table("touch").insert(touch_row).execute().data or []
+    if not written:
+        raise OutreachError("touch_not_created", "the touch was not written")
+    touch = written[0]
+
+    # A call note is human commentary ON a call, and only a call_note may carry a touch_id (the DB
+    # check). Email sends are recorded by the touch row itself — there is no 'email_sent' activity
+    # kind, by design (touch is authoritative, lead_activity is commentary).
+    if chan == "phone" and note and note.strip():
+        try:
+            client.table("lead_activity").insert(
+                {
+                    "lead_id": lead_id,
+                    "kind": "call_note",
+                    "body": note.strip(),
+                    "actor_id": actor_id,
+                    "touch_id": touch["id"],
+                }
+            ).execute()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("outreach_touch_call_note_failed", extra={"error": str(exc)})
+
+    outcome = None
+    if lead.get("source") == "outbound_scan" and lead.get("prospect_id"):
+        touches = (
+            client.table("touch")
+            .select("touched_at")
+            .eq("lead_id", lead_id)
+            .order("touched_at")
+            .range(0, MAX_PAGE_SIZE - 1)
+            .execute()
+            .data
+            or []
+        )
+        agg = oe.aggregate_touches(touches)
+        outcome, _ = _ensure_outcome(
+            client,
+            lead["prospect_id"],
+            selection_reason=settings.outreach_default_selection_reason,
+            sequence_version=settings.outreach_sequence_version,
+            touches_per_sequence=settings.outreach_touches_per_sequence,
+            agg=agg,
+        )
+
+    return {"touch": touch, "outcome": outcome}
+
+
+def get_outcome(prospect_id: str) -> dict[str, Any]:
+    """The outcome row for a prospect, or `{outcome: None}` — the modelling substrate is write-mostly,
+    but the CRM reads it to show contact/reply state."""
+    rows = (
+        get_outreach_client()
+        .table("outcome")
+        .select("*")
+        .eq("prospect_id", prospect_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    return {"outcome": rows[0] if rows else None}
+
+
+def list_touches(lead_id: str, limit: int | None = None, offset: int | None = None) -> dict[str, Any]:
+    """A page of a lead's contact attempts, newest first — the CRM's contact history."""
+    size, start = clamp_page(limit, offset)
+    response = (
+        get_outreach_client()
+        .table("touch")
+        .select("*", count="exact")
+        .eq("lead_id", lead_id)
+        .order("touched_at", desc=True)
+        .range(start, start + size - 1)
+        .execute()
+    )
+    return {
+        "touches": response.data or [],
+        "total": response.count or 0,
+        "limit": size,
+        "offset": start,
+    }

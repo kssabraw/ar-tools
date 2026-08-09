@@ -791,12 +791,24 @@ function OrderProgress({ id }: { id: string }) {
 // submarket picker) and by an onboard row's inline results (submarket fixed to that scan).
 function CoverageTable({ submarketId }: { submarketId: string }) {
   const [promoted, setPromoted] = useState<Record<string, boolean>>({})
+  const [emitted, setEmitted] = useState<Record<string, { delivered: boolean; configured: boolean }>>({})
   const [openHook, setOpenHook] = useState<string | null>(null)
   const promote = useMutation({
     mutationFn: (prospectId: string) =>
       api.post<{ lead: { id: string; already_existed: boolean } }>(
         `/outreach/prospects/${prospectId}/promote`, {}),
     onSuccess: (_data, prospectId) => setPromoted(p => ({ ...p, [prospectId]: true })),
+  })
+  // Emit writes the outcome (the non-backfillable modelling substrate) and posts the outbound
+  // queue webhook. The button is enabled for every measured prospect; the backend records the
+  // outcome even when the webhook URL is unset (delivered:false), so the substrate fills regardless.
+  const emit = useMutation({
+    mutationFn: (prospectId: string) =>
+      api.post<{ delivery: { delivered: boolean; configured: boolean } }>(
+        `/outreach/prospects/${prospectId}/emit`, {}),
+    onSuccess: (data, prospectId) =>
+      setEmitted(e => ({ ...e, [prospectId]: {
+        delivered: !!data.delivery?.delivered, configured: !!data.delivery?.configured } })),
   })
   const { data, isLoading } = useQuery<{ scores: PlaceholderScore[]; total: number; measured: boolean }>({
     queryKey: ['outreach-placeholder-scores', submarketId],
@@ -859,14 +871,31 @@ function CoverageTable({ submarketId }: { submarketId: string }) {
                     <Phone size={12} /> Why call?
                   </button>
                   {promoted[s.prospect_id] ? (
-                    <span style={{ fontSize: 12, color: '#166534' }}>✓ on board</span>
+                    <span style={{ fontSize: 12, color: '#166534', marginRight: 6 }}>✓ on board</span>
                   ) : (
                     <button
                       onClick={() => promote.mutate(s.prospect_id)}
                       disabled={promote.isPending}
                       style={{ fontSize: 12, border: '1px solid #e2e8f0', background: '#fff',
-                        borderRadius: 6, padding: '2px 10px', cursor: 'pointer' }}>
+                        borderRadius: 6, padding: '2px 10px', cursor: 'pointer', marginRight: 6 }}>
                       Send to CRM
+                    </button>
+                  )}
+                  {emitted[s.prospect_id] ? (
+                    <span style={{ fontSize: 12, color: emitted[s.prospect_id].delivered ? '#166534' : '#b45309' }}
+                      title={emitted[s.prospect_id].configured
+                        ? (emitted[s.prospect_id].delivered ? 'Queued and delivered to the outbound webhook' : 'Outcome recorded; webhook delivery failed — re-emit to retry')
+                        : 'Outcome recorded; the outbound webhook is not configured yet'}>
+                      {emitted[s.prospect_id].delivered ? '✓ emitted' : '✓ outcome saved'}
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => emit.mutate(s.prospect_id)}
+                      disabled={emit.isPending}
+                      title="Write the outcome (learning substrate); also posts a webhook only if one is configured. You can skip this and just Log calls."
+                      style={{ fontSize: 12, border: 'none', background: '#0369a1', color: '#fff',
+                        borderRadius: 6, padding: '2px 10px', cursor: 'pointer' }}>
+                      Emit
                     </button>
                   )}
                 </td>

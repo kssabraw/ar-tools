@@ -1676,6 +1676,28 @@ class Settings(BaseSettings):
     # one nobody can find when a pitch reads wrong (the same complaint as land_mask_null_scans).
     outreach_paying_losing_deficit_pct: float = 50.0
 
+    # --- Emit (Phase 3 — the optional outbound-queue webhook; outreach PRD §C) ------------------
+    # Emit posts an AUDIT-READY QUEUE (not generated assets) as plain JSON to whatever URL is set
+    # here — any HTTP receiver (Zapier, Make, a custom endpoint, ...). The PRD named n8n / Encharge
+    # only as EXAMPLES of a downstream sender; nothing depends on them. LEAVE EMPTY if you have no
+    # automated sender: emit still writes the lead + outcome (the non-backfillable substrate) and
+    # reports delivered=false, and logging a call (the `touch` path) captures outcomes with no
+    # webhook at all — that is the primary capture path for a manual phone workflow.
+    outreach_emit_webhook_url: str = ""
+    # Optional bearer token sent as `Authorization: Bearer <token>` when the webhook needs one.
+    outreach_emit_webhook_token: str = ""
+    outreach_emit_webhook_timeout_s: float = 10.0
+    # The outcome's modelling metadata, stamped at emit / first-touch. Config, never hardcoded
+    # (scoring-spec §10 — zero hardcoded params). `sequence_version` is the Phase-6 confounder stamp;
+    # `touches_per_sequence` is the planned sequence length recorded at send (DECISIONS — 5).
+    outreach_sequence_version: str = "phone_v1"
+    outreach_touches_per_sequence: int = 5
+    outreach_emit_channel_default: str = "phone"
+    # Pre-Phase-4 default selection_reason (scoring-spec §7; ISSUES I-102). 'manual' because a
+    # hand-picked pre-model contact is neither a Thompson draw nor the random-control hold-out —
+    # labelling it 'random_control' would poison the baseline that bucket exists to measure.
+    outreach_default_selection_reason: str = "manual"
+
     leadoff_income_acs_year: int = 2023
     leadoff_income_refresh_days: int = 365
     # Per-city county map (public.city_counties) — reverse-geocoded from each

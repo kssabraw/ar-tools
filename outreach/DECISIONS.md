@@ -1251,3 +1251,148 @@ seam was not.
 *Consequence:* `likely_represented` no longer counts GTM. It is the only derived flag scoring
 NEGATIVE (−21 Model A / −26 Model B), and GTM is a free tool on a large share of all sites, so
 counting it penalised DIY operators for having a tag manager.
+
+---
+
+## 2026-08-09 — Phase 3 `outcome` + `touch`: DDL adopted verbatim; touch anchored on lead; app-owned rollup
+
+The learning substrate (HANDOFF §12, scoring-spec §8 — the item with a closing window because
+`outcome` cannot be backfilled). Migration `20260809170000_outcome_touch.sql`, applied live to
+Outreacher and verified by `tests/outcome_touch_constraints.sql` (12 checks, all correct).
+
+**`outcome` is adopted VERBATIM from `PHASE3-outcome-constraint.md`, not re-derived.** That DDL was
+worked out and verified live against the real key on 2026-07-31, and the task instruction was to
+adopt it. So the outbound-only rule stays STRUCTURAL: the composite FK targets
+`lead(prospect_id, source)`, making an outcome on an inbound-with-a-prospect_id lead unrepresentable
+(FK violation) and a reclassify-with-an-outcome refused through `on update cascade` — rather than a
+trigger convention. The only additions over the doc's DDL are two non-modelling audit columns
+(`created_at`/`updated_at` + an updated_at trigger); they touch no coefficient and were kept minimal
+so the modelling shape is exactly the spec's.
+
+**`touch` is anchored on `lead`, not `prospect`.** A touch happens against the CRM entity being
+worked, `lead_activity.touch_id` lives on a lead's timeline, and an inbound/referral lead can be
+contacted too — so `touch` must accept any lead. The outbound-only rule lives on `outcome` alone: a
+touch on an inbound lead is real and recordable, it just never rolls up into an outcome. `id` is
+`bigint generated always as identity` because Phase 1b shipped `lead_activity.touch_id bigint`
+against this table's future existence. `channel` (phone|email) lives on the touch because phone and
+email are measured with different offsets and never pooled (scoring-spec §8); the outcome has no
+channel column (derivable from `sequence_version` / the touches).
+
+**`outcome.touch_count` + `first_contacted_at` are an APP-OWNED rollup of `touch`, not a DB
+trigger.** A trigger creating/maintaining the outcome would need `selection_reason` /
+`sequence_version` / `touches_per_sequence_at_send` — all config-driven ("zero hardcoded params",
+CLAUDE.md) — which SQL cannot read without hardcoding them. So the application recomputes the two
+derived fields from the touch rows on every write (recompute-on-write, never an increment that can
+drift). This mirrors the coverage-rollup philosophy: derive, don't drift. The cost is that a touch
+inserted by raw SQL (not through platform-api) won't update the outcome — acceptable because
+platform-api is the only writer (HANDOFF §2).
+
+**`first_contacted_at` is set by the first TOUCH, not by emit.** `touch` is authoritative for "a
+contact attempt happened" (CLAUDE.md invariant); emit only enqueues. A prospect emitted to the
+queue but never dialed keeps `first_contacted_at` null — the honest state that lets the model tell
+"queued" from "contacted". Logged as I-101 that the PRD's min-history / evidence-age emit gates are
+deferred to the Phase-4 selector (v1 emit is manual + bootstrap-gated).
+
+**`lead_activity.touch_id` gets its FK now** (`on delete set null`): deleting a touch nulls the
+referencing call_note's pointer but never deletes the human commentary. 0 orphans verified live
+before applying. This does NOT let `lead_activity` start recording sends — the
+`lead_activity_touch_on_call_note_only` check (Phase 1b) still confines a `touch_id` to a
+`call_note`, and `touch` remains the authoritative send record.
+
+---
+
+## 2026-08-09 — The emit path writes the outcome; a touch also creates it. NO bulk backfill of hand-picked leads (resolves the teed-up 2026-08-06 question)
+
+DECISIONS 2026-08-06 ("Hand-picked leads ARE `outbound_scan`") left one question explicitly for
+Phase 3: *whether the emit path also backfills outcomes for hand-picked `outbound_scan` leads that
+already exist, or the model simply doesn't see them until they are re-emitted.* The emit machinery
+now gives it a concrete shape, so it is decided.
+
+**Decision: an `outcome` is created by whichever comes first — emit or the first touch — and both
+are idempotent. There is NO bulk backfill that sweeps pre-existing hand-picked leads into
+outcomes.** A hand-picked lead becomes modellable the moment it is actually CONTACTED (a `touch` is
+recorded), not the moment it is promoted to the board.
+
+**Why.** Promotion ("Send to CRM") is not contact. Writing an outcome — with a `first_contacted_at`
+and a `selection_reason` — for a prospect nobody has called would inject fabricated contact events
+into the exact substrate the Phase-4 model fits against, which is worse than the model not seeing
+them. The whole reason `outcome` cannot be backfilled is that a contact event is unrecoverable after
+the fact; the mirror of that is that a NON-contact must never be recorded as one. So:
+
+- **Emit** (send to the external outreach queue) writes the `outcome` stub for the emitted prospect,
+  reusing the existing hand-picked lead idempotently (via `promote_prospect`). `touch_count = 0`,
+  `first_contacted_at = null` — queued, not yet contacted.
+- **A touch** on any `outbound_scan` lead ensures the outcome exists (create-if-missing, config
+  metadata + `selection_reason` default `manual`) and rolls up the touch. So a hand-picked lead that
+  is manually dialed gets its outcome at the first call — captured from call one, which is the entire
+  point of building this before dialing.
+- Both paths never overwrite an existing outcome's `selection_reason` (idempotent).
+
+**Reversibility (the deciding test).** If a bulk backfill is ever wanted, it is a purely additive
+job over existing leads — nothing here forecloses it, and no data is lost by not doing it now
+(a hand-picked lead's outcome is written the instant it is contacted). Backfilling now, by contrast,
+would write contact events that never happened, which is not reversible without knowing which rows
+were fabricated. So "create on first contact, no bulk backfill" is strictly the more reversible
+reading. Recorded here; the alternative (bulk backfill at emit) remains open as an additive job.
+
+---
+
+## 2026-08-09 — The emit webhook: configurable POST, audit-ready queue, best-effort delivery, never triggers assets
+
+PRD §C: emit MUST post an audit-ready QUEUE to a configurable webhook (n8n / Encharge), NOT
+generated assets, and asset generation must stay behind the existing approval gate.
+
+**One configurable URL, generic POST.** `outreach_emit_webhook_url` (default "" = the external queue
+is not wired yet) + an optional `outreach_emit_webhook_token` bearer header. n8n and Encharge both
+receive a plain JSON POST, so no provider branch is needed — the URL is where it points. `httpx`
+(already a platform-api dep) does the POST with a bounded timeout.
+
+**The payload is a deterministic, PURE builder** (`services/outreach_emit.py::build_emit_payload`),
+reusing the same assembled facts the report/justification already produce: prospect identity,
+channel, contacts, the placeholder score + empty `score_factors` (the Phase-4 model fills these —
+labelled `placeholder` so it is never mistaken for a fitted score), `primary_pitch` (the
+justification's call-hook sentence + element + talking points), `matched_case_study: null` (I-012),
+`deltas: []` (single scan — needs ≥2, the same seam the heatmap delta leaves open), and evidence
+references (snapshot id, submarket, scanned_at, geometry_version, coverage). Deterministic and
+fact-grounded, the same discipline as every other outreach render.
+
+**Asset generation is NOT triggered by emission.** The payload is a queue row, never a prospect-
+facing asset; the approval-gated client PDF (`report_approval`) stays the only path to an asset. A
+test pins that the emit payload carries no rendered asset and no PDF call.
+
+**Delivery is best-effort; the DB write is the source of truth.** Order: write lead (idempotent) →
+write outcome → POST the webhook. A POST failure leaves the outcome written and reports
+`delivered:false` with the status/error for retry (re-emit is idempotent and retries the POST). This
+honors the closing-window urgency — the outcome is captured even if the external queue hiccups —
+without the double-send risk of POST-then-write. If the webhook URL is unset, emit still writes the
+outcome and reports `delivered:false, reason:webhook_not_configured`; the `touch` path is the
+independent, webhook-free capture of real contacts, so the substrate fills from call one regardless.
+
+**Emit lives in platform-api and does not spend.** A webhook POST to the agency's own automation
+tool is not a paid provider call — the "platform-api must not spend" invariant is about
+Outscraper/DataForSEO. Emit is admin-gated (it queues a real business for outreach), matching the
+scan-order routes. It records a `lead_activity` kind=`system` row (`event: emitted`) for an
+append-only audit trail without persisting the re-derivable payload.
+
+---
+
+## 2026-08-09 — The emit webhook is a GENERIC optional integration; n8n/Encharge were only PRD examples (owner clarification)
+
+Owner, on reviewing the Phase 3 build: *"We are not using n8n and I don't know what Encharge is."*
+The PRD §C wording ("MUST emit via configurable webhook (n8n / Encharge)") named those two as
+EXAMPLES of a downstream sender, and the build repeated the names in comments/docstrings as if they
+were givens. They are not — nothing in the code depends on either.
+
+**What is actually true, and now the framing:**
+- `outreach_emit_webhook_url` POSTs plain JSON to ANY HTTP receiver, or nothing when empty. It is a
+  generic, optional integration point (Zapier, Make, a custom endpoint — or none).
+- **The primary capture path for a manual phone workflow needs no webhook at all.** Logging a call
+  (the `touch` path) creates/rolls up the `outcome`, so the non-backfillable substrate fills from
+  call one whether or not any external sender exists. Emit's webhook is purely for teams that DO run
+  an automated outbound sender.
+- Reworded the config comment, the Emit button tooltip, and this log so no artifact implies n8n or
+  Encharge is required. No behaviour change — the code was always generic; only the framing was off.
+
+*Reversible:* if the team later adopts an automation tool, set the URL (and optional token). If emit
+itself is unwanted (pure manual dialling), the touch path stands alone and the Emit button can be
+hidden with a one-line UI change — the outcome is still created at first touch.

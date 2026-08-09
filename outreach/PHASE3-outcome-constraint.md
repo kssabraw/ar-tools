@@ -100,6 +100,13 @@ null or kind = 'call_note')` keeps the two from re-merging by accident.
 
 ## 3. When you land, update the verification script
 
-`outreach/tests/lead_crm_rls.sql` cases 1–3 currently run against a throwaway
-`_phase3_probe` table standing in for `outcome`. Delete the probe and point them
-at the real table; the assertions themselves do not change.
+**DONE 2026-08-09 — but not as written here.** This said `lead_crm_rls.sql`
+cases 1–3 run against a throwaway `_phase3_probe` table standing in for
+`outcome`, and to point them at the real table. No such probe was ever committed
+(`grep -rn _phase3_probe` matches only this line), and `lead_crm_rls.sql` cases
+1–3 test the lead `source` vocabulary, not `outcome` — the probe was a scratch
+table used live during the 2026-07-31 verification and never landed in the repo.
+So `lead_crm_rls.sql` is left untouched, and the real `outcome`/`touch`
+constraints got their own new script, `tests/outcome_touch_constraints.sql` (12
+checks, self-cleaning, run live against Outreacher — all correct). See ISSUES
+I-100. The migration is `20260809170000_outcome_touch.sql`, applied live.

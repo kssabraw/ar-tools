@@ -383,6 +383,97 @@ async def promote_prospect(
     return {"lead": _handle(outreach_service.promote_prospect, prospect_id, auth["user_id"])}
 
 
+# --- Emit + touch (Phase 3 — the learning substrate) -------------------------------------------
+#
+# `emit` sends a prospect to the external outreach queue (n8n / Encharge) and writes the `outcome`
+# row the Phase-4 model fits against — the row that cannot be backfilled (scoring-spec §8). `touch`
+# records an actual contact attempt. Both are STAFF-gated, matching create_lead/promote: they are
+# commitments to contact a real business, not spend (a webhook POST is not a paid provider call, so
+# these are not admin-gated the way scan orders are).
+
+
+class EmitRequest(BaseModel):
+    """Emit a prospect to the outbound queue. All optional: `selection_reason` defaults to the
+    configured pre-Phase-4 value ('manual'), `channel` to the configured default ('phone'),
+    `snapshot_id` to the latest rolled-up scan."""
+
+    selection_reason: Optional[str] = None
+    channel: Optional[str] = None
+    snapshot_id: Optional[str] = None
+
+
+class TouchCreateRequest(BaseModel):
+    """Record one contact attempt. `channel` is required (phone|email); a `note` on a phone touch
+    also writes a call_note referencing the touch."""
+
+    channel: str
+    sequence_version: Optional[str] = None
+    touch_number: Optional[int] = None
+    disposition: Optional[str] = None
+    note: Optional[str] = None
+
+
+@router.post("/outreach/prospects/{prospect_id}/emit")
+async def emit_prospect(
+    prospect_id: str, payload: EmitRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Emit a prospect to the outbound queue.
+
+    Writes the lead (idempotent) + the `outcome` row (with `selection_reason` recorded — the
+    non-backfillable substrate) and posts the audit-ready queue payload to the configured webhook.
+    Delivery is best-effort: the outcome is captured even if the webhook is unset or hiccups (the
+    response's `delivery` block says which). Requires a rolled-up scan — a prospect whose area was
+    never measured has no honest queue row. Asset generation is NOT triggered here."""
+    _require_outreach_ready()
+    return _handle(
+        outreach_service.emit_prospect,
+        prospect_id,
+        auth["user_id"],
+        selection_reason=payload.selection_reason,
+        channel=payload.channel,
+        snapshot_id=payload.snapshot_id,
+    )
+
+
+@router.post("/outreach/leads/{lead_id}/touches")
+async def record_touch(
+    lead_id: str, payload: TouchCreateRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Record a contact attempt against a lead.
+
+    A touch is authoritative for "a contact attempt happened". For an `outbound_scan` lead it
+    creates the outcome if missing (this is how a hand-picked lead becomes modellable — at first
+    contact, not at promotion) and rolls up `touch_count` / `first_contacted_at`."""
+    _require_outreach_ready()
+    return _handle(
+        outreach_service.record_touch,
+        lead_id,
+        auth["user_id"],
+        channel=payload.channel,
+        sequence_version=payload.sequence_version,
+        touch_number=payload.touch_number,
+        disposition=payload.disposition,
+        note=payload.note,
+    )
+
+
+@router.get("/outreach/leads/{lead_id}/touches")
+async def list_touches(
+    lead_id: str,
+    limit: int = Query(default=outreach_service.DEFAULT_PAGE_SIZE, ge=1),
+    offset: int = Query(default=0, ge=0),
+    auth: dict = Depends(require_outreach),
+) -> dict:
+    """A lead's contact history, newest first."""
+    return _handle(outreach_service.list_touches, lead_id, limit, offset)
+
+
+@router.get("/outreach/prospects/{prospect_id}/outcome")
+async def get_outcome(prospect_id: str, auth: dict = Depends(require_outreach)) -> dict:
+    """The prospect's outcome row (contact/reply/close state), or `{outcome: null}`."""
+    return _handle(outreach_service.get_outcome, prospect_id)
+
+
 @router.get("/outreach/suppressions")
 async def list_suppressions(
     limit: int = Query(default=outreach_service.DEFAULT_PAGE_SIZE, ge=1),
