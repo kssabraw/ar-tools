@@ -2268,3 +2268,42 @@ the population this pipeline targets, so the band is likely SPARSE for our prosp
 measuring how many return a non-zero paid estimate. If near-zero, defer B2 and rely on the PRESENCE
 signals (Slice A + B1); a documented fallback (the scanned keyword's CPC as a spend FLOOR — "some spend
 vs none", insufficient for the >$2k band) is the cheaper alternative. Design: `docs/paid-placement-slice-b-design-v0_1.md`.
+
+---
+
+## Phase 3 — outcome + touch + emit (2026-08-09)
+
+### I-100 · `PHASE3-outcome-constraint.md` §3 points at a `_phase3_probe` that never existed
+**Doc-vs-code drift, resolved cheapest-to-reverse.** §3 of `PHASE3-outcome-constraint.md` says
+"`outreach/tests/lead_crm_rls.sql` cases 1–3 currently run against a throwaway `_phase3_probe`
+table standing in for `outcome`. Delete the probe and point them at the real table." No such probe
+exists anywhere in the repo — `grep -rn _phase3_probe` matches only that one doc line — and
+`lead_crm_rls.sql` cases 1–3 test the lead SOURCE vocabulary, not `outcome`. The probe was
+presumably a scratch table used live during the 2026-07-31 verification (the doc records that run)
+and never committed.
+**What was done instead of "deleting the probe":** `lead_crm_rls.sql` is left untouched (its cases
+1–3 are about `source`, still correct), and the real `outcome`/`touch` constraints get their OWN
+new script `tests/outcome_touch_constraints.sql` (12 checks, self-cleaning, run live 2026-08-09 —
+all `(correct)`), following the `lead_crm_rls.sql` pattern the task pointed at. Adding a script is
+more reversible than editing a working one to chase a table that isn't there.
+
+### I-101 · Emit-time cadence + evidence-age gates (PRD §183/§198) are NOT enforced in v1 emit
+**Deferred to the Phase-4 selection layer, deliberately.** PRD §C-adjacent rules say a prospect
+MUST NOT be emitted unless its submarket has ≥ `min_history_cycles` (2) snapshots (§198) and its
+backing evidence is younger than `max_evidence_age_days` (§183). v1 emit does NOT check these; it
+requires only that the prospect has a rolled-up snapshot (`prospect_justification.measured`), which
+under `bootstrap_share = 1.0` (DECISIONS — cycle one runs on a single snapshot) is the correct
+bootstrap bar. The min-history and evidence-age gates are selection-policy concerns that belong with
+the Phase-4 scorer/selector (where `selection_reason` becomes `thompson`), not with a manual v1
+emit. Recorded so it is not mistaken for an omission. **Action:** enforce both gates in the Phase-4
+selection job; until then emit is manual and bootstrap-gated.
+
+### I-102 · `selection_reason` carries a third value, `manual`, in the pre-Phase-4 era
+scoring-spec §7 names the enum `{thompson, random_control}`, but both presuppose a model to select
+from or to hold out against — neither exists before Phase 4. Labelling a hand-picked pre-model
+contact `random_control` would poison the one unbiased baseline that bucket exists to measure. So
+the application allowlist is `{thompson, random_control, manual}`, default `manual`. The `outcome`
+DDL leaves `selection_reason` unconstrained text (as adopted from PHASE3-outcome-constraint.md), so
+this needs no migration and the vocabulary can tighten later. **Action at Phase 4:** the selector
+writes `thompson` / `random_control`; `manual` remains only for hand-picked contacts, and refits
+must treat the three buckets distinctly (they already must exclude `thompson`-only — §7).
