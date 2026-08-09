@@ -892,7 +892,7 @@ function CoverageTable({ submarketId }: { submarketId: string }) {
                     <button
                       onClick={() => emit.mutate(s.prospect_id)}
                       disabled={emit.isPending}
-                      title="Write the outcome (learning substrate) and post the outbound queue webhook"
+                      title="Write the outcome (learning substrate); also posts a webhook only if one is configured. You can skip this and just Log calls."
                       style={{ fontSize: 12, border: 'none', background: '#0369a1', color: '#fff',
                         borderRadius: 6, padding: '2px 10px', cursor: 'pointer' }}>
                       Emit

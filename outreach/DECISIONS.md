@@ -1373,3 +1373,26 @@ tool is not a paid provider call — the "platform-api must not spend" invariant
 Outscraper/DataForSEO. Emit is admin-gated (it queues a real business for outreach), matching the
 scan-order routes. It records a `lead_activity` kind=`system` row (`event: emitted`) for an
 append-only audit trail without persisting the re-derivable payload.
+
+---
+
+## 2026-08-09 — The emit webhook is a GENERIC optional integration; n8n/Encharge were only PRD examples (owner clarification)
+
+Owner, on reviewing the Phase 3 build: *"We are not using n8n and I don't know what Encharge is."*
+The PRD §C wording ("MUST emit via configurable webhook (n8n / Encharge)") named those two as
+EXAMPLES of a downstream sender, and the build repeated the names in comments/docstrings as if they
+were givens. They are not — nothing in the code depends on either.
+
+**What is actually true, and now the framing:**
+- `outreach_emit_webhook_url` POSTs plain JSON to ANY HTTP receiver, or nothing when empty. It is a
+  generic, optional integration point (Zapier, Make, a custom endpoint — or none).
+- **The primary capture path for a manual phone workflow needs no webhook at all.** Logging a call
+  (the `touch` path) creates/rolls up the `outcome`, so the non-backfillable substrate fills from
+  call one whether or not any external sender exists. Emit's webhook is purely for teams that DO run
+  an automated outbound sender.
+- Reworded the config comment, the Emit button tooltip, and this log so no artifact implies n8n or
+  Encharge is required. No behaviour change — the code was always generic; only the framing was off.
+
+*Reversible:* if the team later adopts an automation tool, set the URL (and optional token). If emit
+itself is unwanted (pure manual dialling), the touch path stands alone and the Emit button can be
+hidden with a one-line UI change — the outcome is still created at first touch.

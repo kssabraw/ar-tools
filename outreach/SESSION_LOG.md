@@ -35,3 +35,4 @@ Append-only. One line per task started, commit made, dependency added, test run.
 **Test status:** outreach api 411 passed; platform-api outreach suite 75 passed; frontend npm run build clean; live SQL 12/12 correct.
 
 **Look at first:** the emit webhook URL is UNSET on PLATFORM (outreach_emit_webhook_url) — emit records the outcome but reports delivered:false until the n8n/Encharge URL (+ optional token) is set. The touch path is webhook-independent, so outcomes capture from call one regardless. No paid run was triggered.
+- 2026-08-09T17:45Z — owner feedback: "not using n8n, don't know Encharge" (PRD's example downstream senders). Reframed the emit webhook as a generic optional integration (config comment + Emit button tooltip) and logged DECISIONS entry; no behaviour change (code was always a generic JSON POST to any URL / none). Primary capture is the webhook-free touch path. Frontend build clean.

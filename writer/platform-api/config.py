@@ -1676,11 +1676,13 @@ class Settings(BaseSettings):
     # one nobody can find when a pitch reads wrong (the same complaint as land_mask_null_scans).
     outreach_paying_losing_deficit_pct: float = 50.0
 
-    # --- Emit (Phase 3 — the outbound queue webhook; outreach PRD §C) --------------------------
-    # Emit posts an AUDIT-READY QUEUE (not generated assets) to a configurable webhook — n8n or
-    # Encharge, both plain JSON POST, so one URL is enough. Empty = the external queue is not wired
-    # yet: emit still writes the lead + outcome (the non-backfillable substrate) and reports
-    # delivered=false, and the `touch` path captures real contacts independently of the webhook.
+    # --- Emit (Phase 3 — the optional outbound-queue webhook; outreach PRD §C) ------------------
+    # Emit posts an AUDIT-READY QUEUE (not generated assets) as plain JSON to whatever URL is set
+    # here — any HTTP receiver (Zapier, Make, a custom endpoint, ...). The PRD named n8n / Encharge
+    # only as EXAMPLES of a downstream sender; nothing depends on them. LEAVE EMPTY if you have no
+    # automated sender: emit still writes the lead + outcome (the non-backfillable substrate) and
+    # reports delivered=false, and logging a call (the `touch` path) captures outcomes with no
+    # webhook at all — that is the primary capture path for a manual phone workflow.
     outreach_emit_webhook_url: str = ""
     # Optional bearer token sent as `Authorization: Bearer <token>` when the webhook needs one.
     outreach_emit_webhook_token: str = ""
