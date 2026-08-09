@@ -253,6 +253,91 @@ class Settings(BaseSettings):
     # is built either way, this only decides whether it runs by default.
     tech_follow_gtm: bool = False
 
+    # --- Scoring model — Phase 4 Stage 1 (scoring-spec.md) --------------------------------
+    # EVERYTHING here is a CONFIG value. Zero hardcoded betas, ever (CLAUDE.md invariant). The
+    # scalar knobs live here; the full coefficient REGISTRY (the elicited priors, ~40 bins) lives
+    # in `services/scorecard_config.py`, loaded through this settings layer and overridable via
+    # `scorecard_coefficients_json`. Every coefficient in this model is an ELICITED estimate — no
+    # part has been tested against a single reply — so treat rank order as a strong prior, not a
+    # prediction, until ~100 prospects have been contacted (CLAUDE.md → What is unvalidated).
+
+    # scoring-spec §1. Score = TargetScore + Factor x ln(odds); Factor = PDO / ln(2). Every +PDO
+    # points doubles the odds. TargetScore 500 = a market-average prospect. Factor is DERIVED from
+    # pdo (scorecard_config.factor_of) — not a stored constant — so the two can never drift.
+    score_pdo: float = 50.0
+    score_target: float = 500.0
+
+    # scoring-spec §5. The uniform shrinkage on every elicited beta at v1. A UNIFORM multiplier: it
+    # cannot change rank order (CLAUDE.md trap — do not tune it to improve ranking). Store both the
+    # prior and the effective contribution; this is the only knob between them.
+    score_lambda_shrink: float = 0.5
+
+    # scoring-spec §1 offsets, PINNED to the values the golden fixtures were hand-computed against
+    # (tests/fixtures/golden-fixtures.json). They are DERIVED from the base rates below
+    # (offset = target - factor x ln(base_odds)); a unit test asserts the derivation rounds to
+    # these, so replacing a base rate per §9 without updating its offset fails loudly rather than
+    # silently miscalibrating. Phone and email are 126 points apart and MUST NEVER be ranked in one
+    # list (enforced at the read surface by carrying `channel` on every score row).
+    score_offset_email: float = 705.0
+    score_offset_phone: float = 579.3
+    score_offset_close: float = 625.1
+
+    # scoring-spec §1 base rates — sequence-level (a full 5-touch sequence), per-channel, and
+    # ASSUMPTIONS (MUST be config, not constants — §1). The phone figure is the weaker guess and is
+    # observable first. Overwrite with observed data after ~3 weeks of sends rather than tuning
+    # coefficients around them (§9 open decision 1).
+    score_base_rate_reply_email: float = 0.055
+    score_base_rate_reply_phone: float = 0.25
+    score_base_rate_close: float = 0.15
+
+    # scoring-spec §5. v1 scores are ORDINAL ONLY — displayed probabilities clamped to this until a
+    # score_run has a non-null calibration_alpha (Stage 2). Applied at the read surface
+    # (v_prospect_ranked.display_prob) and by the engine's display_prob.
+    score_display_prob_clamp_pct: float = 60.0
+
+    # scoring-spec §4 — Model C value layer. INERT under flat pricing: R and T are constants and drop
+    # out of ranking, so the operative ranking is p_reply x p_close. Do NOT spend effort tuning these
+    # (CLAUDE.md trap) — they exist so E[revenue] is a meaningful dollar figure and reactivating the
+    # value dimension is a config change (§4, revisit ~month 9).
+    score_r_base: float = 2000.0
+    score_t_base: float = 15.0
+
+    # Stamped on every score_run so a stored score names the coefficient generation that produced it.
+    # Bump when the registry or scaling changes (a re-score is always a NEW run — immutable history).
+    score_model_version: str = "stage1-priors-v1"
+
+    # Optional JSON object overriding any coefficient in the registry, keyed by bin name:
+    # '{"geogrid_lt20_steep": 60, "aw_tag": 22}'. Empty = the elicited-prior defaults in
+    # scorecard_config.py. This is the "coefficients load from config" seam — the registry is the
+    # documented default, this is the override, and nothing in the scoring LOGIC hardcodes a beta.
+    scorecard_coefficients_json: str = ""
+
+    # scoring-spec §7a — the AI-inversion trigger's threshold. Below this variance of AI presence
+    # across a market's qualified set, AI features stay low-weight pitch flags; crossing it is the
+    # signal to re-elicit them as discriminators. Stage 1 only records the metric; it does not act.
+    score_ai_variance_threshold: float = 0.10
+
+    # Bin BOUNDARIES for the feature-extraction layer (scoring-spec §2 geogrid pain / trajectory).
+    # These define which bin a measurement falls in — structural like the point values, and config
+    # for the same reason (§7a: geogrid weight/boundaries may shift if local-pack results compress).
+    # Coverage is a percentage 0-100. <low = severe pain; low-mid; mid-high = reference; >high = strong.
+    score_geogrid_low_pct: float = 20.0
+    score_geogrid_mid_pct: float = 50.0
+    score_geogrid_high_pct: float = 80.0
+    # Bottom-review-quartile bin requires >= this many reviews (scoring-spec §Trajectory, "bottom
+    # quartile (>=10)") — a business with near-zero reviews is a different case than a lagging one.
+    score_review_bottom_min: int = 10
+    # GBP "strong" needs rating >= this AND photos/categories evidence. Stage 1 does not capture
+    # photos/categories, so strong/weak stay dormant and GBP scores at the `adequate` reference
+    # (ISSUES: a future GBP-detail enrichment lights them up). Threshold kept for when it does.
+    score_gbp_strong_rating: float = 4.0
+
+    # scoring-spec §6 Stage 2 — the standalone recalibration job. It fits a two-parameter logistic
+    # (alpha + gamma x prior-log-odds) on real reply outcomes, correcting calibration WITHOUT
+    # touching rank order. Below this many reply outcomes IN A CHANNEL it refuses and writes nothing
+    # (§6 "~30-50 outcomes"). Zero outcomes exist today, which is the correct empty-safe state.
+    score_recalibration_min_outcomes: int = 30
+
 
 def missing_outscraper_vars(settings: "Settings") -> list[str]:
     """Which Outscraper credentials are absent, by env-var name.
