@@ -43,6 +43,17 @@ interface LeadDetail extends Lead {
   activity_total: number
   prospect: { name: string; address: string | null; rating: number | null; review_count: number | null; submarket_name: string | null } | null
 }
+// The Phase 3 modelling substrate (outbound-only). Written by emit / rolled up by touches.
+interface Outcome {
+  prospect_id: string
+  selection_reason: string
+  sequence_version: string
+  touches_per_sequence_at_send: number
+  touch_count: number
+  first_contacted_at: string | null
+  replied_at: string | null
+  closed_at: string | null
+}
 
 const LOST_REASONS = [
   'no_response', 'not_interested', 'no_budget', 'has_agency', 'timing',
@@ -262,15 +273,28 @@ function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; 
   const [lostReason, setLostReason] = useState('')
   const [pendingStage, setPendingStage] = useState<string | null>(null)
   const [showHook, setShowHook] = useState(false)
+  const [touchChannel, setTouchChannel] = useState('phone')
+  const [touchDisposition, setTouchDisposition] = useState('')
+  const [touchNote, setTouchNote] = useState('')
 
   const { data: lead } = useQuery<LeadDetail>({
     queryKey: ['outreach-lead', id],
     queryFn: () => api.get(`/outreach/leads/${id}`),
   })
 
+  // The outcome exists only for outbound leads, and only once emitted or first contacted.
+  const isOutbound = lead?.source === 'outbound_scan' && !!lead?.prospect_id
+  const { data: outcomeData } = useQuery<{ outcome: Outcome | null }>({
+    queryKey: ['outreach-outcome', lead?.prospect_id],
+    queryFn: () => api.get(`/outreach/prospects/${lead!.prospect_id}/outcome`),
+    enabled: !!isOutbound,
+  })
+  const outcome = outcomeData?.outcome ?? null
+
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['outreach-lead', id] })
     queryClient.invalidateQueries({ queryKey: ['outreach-leads'] })
+    if (lead?.prospect_id) queryClient.invalidateQueries({ queryKey: ['outreach-outcome', lead.prospect_id] })
   }
 
   const patch = useMutation({
@@ -280,6 +304,16 @@ function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; 
   const addNote = useMutation({
     mutationFn: () => api.post(`/outreach/leads/${id}/activities`, { kind: 'note', body: note }),
     onSuccess: () => { setNote(''); refresh() },
+  })
+  // A touch is authoritative for "a contact attempt happened" — distinct from a free-text note.
+  // For an outbound lead it also creates/rolls up the outcome (the modelling substrate).
+  const logTouch = useMutation({
+    mutationFn: () => api.post(`/outreach/leads/${id}/touches`, {
+      channel: touchChannel,
+      disposition: touchDisposition.trim() || undefined,
+      note: touchNote.trim() || undefined,
+    }),
+    onSuccess: () => { setTouchDisposition(''); setTouchNote(''); refresh() },
   })
 
   const onStagePick = (stage: string) => {
@@ -379,6 +413,47 @@ function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; 
             <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase' }}>Next action</div>
             <NextAction lead={lead} onSave={(next_action, next_action_due) =>
               patch.mutate({ next_action, next_action_due })} />
+          </div>
+
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase' }}>
+              Log contact
+            </div>
+            {isOutbound && (
+              <div style={{ fontSize: 12, color: '#475569', marginTop: 6, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <span><strong>{outcome?.touch_count ?? 0}</strong> contact{(outcome?.touch_count ?? 0) === 1 ? '' : 's'}</span>
+                <span style={{ color: '#94a3b8' }}>
+                  {outcome?.first_contacted_at
+                    ? `first ${new Date(outcome.first_contacted_at).toLocaleDateString()}`
+                    : 'not contacted yet'}
+                </span>
+                {outcome?.replied_at && <span style={{ color: '#166534' }}>replied</span>}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+              <select value={touchChannel} onChange={e => setTouchChannel(e.target.value)}
+                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13 }}>
+                <option value="phone">Phone</option>
+                <option value="email">Email</option>
+              </select>
+              <input value={touchDisposition} onChange={e => setTouchDisposition(e.target.value)}
+                placeholder="Disposition (e.g. voicemail)"
+                style={{ flex: 1, minWidth: 120, padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13 }} />
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+              <input value={touchNote} onChange={e => setTouchNote(e.target.value)}
+                placeholder={touchChannel === 'phone' ? 'Call note (optional)' : 'Note (optional)'}
+                style={{ flex: 1, padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13 }} />
+              <button disabled={logTouch.isPending} onClick={() => logTouch.mutate()}
+                style={{ padding: '6px 12px', borderRadius: 8, border: 'none', fontSize: 13,
+                  fontWeight: 600, cursor: 'pointer', background: '#0369a1', color: '#fff',
+                  display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                <Phone size={13} /> Log {touchChannel === 'phone' ? 'call' : 'contact'}
+              </button>
+            </div>
+            {logTouch.error instanceof Error && (
+              <p style={{ fontSize: 12, color: '#b91c1c', marginTop: 6 }}>{logTouch.error.message}</p>
+            )}
           </div>
 
           <div style={{ marginTop: 14 }}>
