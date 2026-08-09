@@ -1396,3 +1396,93 @@ were givens. They are not — nothing in the code depends on either.
 *Reversible:* if the team later adopts an automation tool, set the URL (and optional token). If emit
 itself is unwanted (pure manual dialling), the touch path stands alone and the Emit button can be
 hidden with a one-line UI change — the outcome is still created at first touch.
+
+---
+
+## Phase 4 Stage 1 — the scoring model (2026-08-09)
+
+### `prospect_score` / `score_run` / `conflict_check` are the PRD DDL, verbatim; the PK forces `channel` NOT NULL
+
+START-HERE §3a names `docs/PRD-prospect-pipeline.md` as the owner of these three tables, and its DDL
+is a superset of scoring-spec §8 (it adds `pass`, `channel`, `primary_pitch`, `evidence_age_days` on
+`prospect_score` and `cycle_number` on `score_run`, which the reporting layer already reads). So the
+PRD shape is the one built. The PRD makes `channel` part of the `prospect_score` primary key, which
+in Postgres forces it NOT NULL — so Model B (close), whose coefficients are channel-independent, is
+still STAMPED with the channel of the reply it composes into a `value` (close(phone) and close(email)
+are distinct rows with identical points). That is deliberate: phone and email must never be ranked in
+one list (spec §1), and carrying `channel` on every row is what enforces that at the read surface.
+
+### `v_prospect_ranked` is a NEW view; the 2026-08-05 claim that it "already selects prospect_score
+### where pass=2 and model='value'" was inaccurate and is corrected
+
+The placeholder-score migration comment and the 2026-08-05 DECISIONS entry both referred to
+`v_prospect_ranked` as an existing view. It never existed — verified live (`to_regclass` null) and by
+grep (no migration creates it). The reporting spec's operator queue is a DIFFERENT view
+(`v_prospect_queue`, §3.1, still unbuilt because it needs the enrichment/case_study tables). This
+migration builds `v_prospect_ranked` for real, as the §10 acceptance surface ("rank order under all
+three models side-by-side"). It does NOT hard-code `pass=2`: with no email enrichment yet, Stage 1
+scores the phone track at pass 1, so pinning pass 2 would show an empty table. It reads the latest
+score_run per market and pivots reply/close/value per prospect x channel x pass.
+
+### Stage-1 live scope: PHONE track, PASS 1 only
+
+The engine and golden fixtures cover both channels, but the score JOB writes the phone track at pass 1
+(phone-first, pre-enrichment). Reasons: (1) the whole design is phone-first (HANDOFF); (2) email
+reachability needs enrichment, which is Phase 5 — scoring an email track now would rank an unreachable
+channel; (3) START-HERE Phase 4 requires "pass 1 excludes reachability rather than defaulting it", and
+the phone reachability we DO have is `phone_type='unknown'` for every LA prospect, so it is correctly
+excluded (not scored at a reference 0). Email lights up when enrichment lands, no code change beyond
+passing `channels=('email',)` at pass 2.
+
+### Offsets are pinned config; base rates are ALSO config (§1 requires it); a test binds them
+
+scoring-spec §1 presents base rates and offsets together, with the offset derived from the base rate.
+Deriving the offset at runtime (705.14 vs the fixtures' pinned 705.0) drifts F1/F7 probabilities to
+the very edge of the 0.05pp golden tolerance. So the engine uses the PINNED offsets (705.0/579.3/625.1,
+matching the fixtures exactly), and the base rates are ALSO config fields (§1 "MUST be config") with a
+unit test asserting `derive_offset(base_rate)` rounds to the pinned offset within 0.2 — so replacing a
+base rate per §9 without regenerating its offset fails loudly rather than silently miscalibrating.
+
+### The coefficient registry IS the config; the points, not the displayed betas, are authoritative
+
+"All coefficients from config, zero hardcoded betas" is satisfied structurally: the scalar knobs
+(pdo/target/lambda/offsets/base rates) are `Settings` fields, and the ~40 elicited-prior point values
+live in one documented registry (`scorecard_config.COEFFICIENTS`) loaded through the settings layer and
+overridable per bin via `OUTREACH_SCORECARD_COEFFICIENTS_JSON`. Nothing in the scoring LOGIC hardcodes
+a beta. The registry stores the spec's INTEGER points as authoritative (not `round(displayed_beta x
+factor)`, which disagrees — ln(1.5)=0.4055 gives owner_operated +29 but round(0.41 x 72.13)=30, and the
+golden fixtures were computed from the integer +29). `or`/`beta` are carried for the score_factors audit
+trail only.
+
+### Stage-2 recalibration is BUILT now, empty-safe (not stubbed)
+
+Acceptance §10 requires it "runnable as a standalone job against outcome". It is built: a pure Fisher-
+scoring fit of alpha+gamma on real reply outcomes (per channel, Thompson-subset guarded), and a
+`recalibrate` CLI command. With zero contacted outcomes today it reports "insufficient" and writes
+nothing — the correct empty-safe state, not a failure. It becomes useful as `outcome` rows accumulate.
+`score_run` stores one alpha/gamma pair, so a calibrated run is single-channel (the phone-first reality);
+per-channel calibration storage is a later migration when the email track is live (logged in ISSUES).
+
+### The live-verification score run used minimal `score_factors` and was DELETED afterward
+
+A full 83-prospect score run's faithful `score_factors` is ~170KB of SQL, which is expensive to route
+through the MCP write path (the only path available: Railway OAuth redacts the service-role key, so
+`run_score` cannot run locally, and triggering the production `score` command would disturb the cron
+heartbeat unattended). So the live verification wrote a 4-prospect faithful sample (spanning severe-pain
+/ franchise / high-coverage-incumbent / all-geogrid-bins), confirmed `v_prospect_ranked` pivots and
+orders correctly (value 1415>1333>714>508; the franchise sinks to value decile 1; display_prob clamp
+logic correct with calibration_alpha null), then DELETED the run — leaving the DB clean and the
+placeholder intact as fallback. The full production ranking is one `score --market-name "Los Angeles,
+CA, USA"` invocation away (see ISSUES for the onboard-market resolution). The model's correctness on the
+full 83 prospects was demonstrated offline (top = low-coverage non-franchise; bottom = high-coverage +
+franchises), and by 465 green tests including the 7 independent golden fixtures.
+
+### Did NOT run the paid producers (scan-organic / scan-ai) this session
+
+Authorized but deliberately not done: the async producers are built to run on the Railway job with its
+credentials and egress, not from this sandbox; the free `scan-tech` is likewise a Railway-job producer.
+The model already discriminates meaningfully on the signals we have (geogrid coverage + franchise +
+review-count quartile), and the "measure-don't-infer / smallest-scope-first" discipline argues against a
+first paid run through an unfamiliar path while the owner is away. Running them (scan-tech first, free)
+to fill the buying-intent / organic-pain columns is the documented high-value next step; the extraction
+wiring is already in place (unknown==absent), so a producer run lights those bins up with no code change.

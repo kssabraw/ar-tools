@@ -824,6 +824,95 @@ def cmd_rollup(args) -> int:
     return 1 if report.problems else 0
 
 
+def cmd_score(args) -> int:
+    """Score a market's measured prospects into `prospect_score` (Phase 4 Stage 1). FREE.
+
+    Replaces the coverage-deficit placeholder ranking with the sabermetric scorecard
+    (`docs/scoring-spec.md`): ranked by who is worth CALLING (reply x close propensity), all
+    coefficients config-driven, `score_factors` fully replayable. Reads only stored signals and
+    writes only score rows — NO paid provider call, so `score` is not in PAID_COMMANDS (the same
+    posture as `rollup`).
+
+    STAGE 1 SCOPE (DECISIONS): scores the PHONE track at PASS 1 — phone-first, pre-enrichment. Email
+    reachability needs enrichment (Phase 5); the engine + golden fixtures prove that path and the job
+    lights it up when it exists. A re-run inserts a NEW immutable score_run.
+
+    Every coefficient is an ELICITED estimate — rank order is a strong prior, not a prediction, until
+    ~100 prospects have been contacted (CLAUDE.md).
+    """
+    from api.services import scoring
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    settings = get_settings()
+    client = _client()
+    market_id = _market_id(client, args.market_name or definition.name)
+
+    report = scoring.run_score(
+        client, settings, market_id=market_id, cycle_number=args.cycle or 1,
+    )
+    print(
+        json.dumps(
+            {
+                "market_id": report.market_id,
+                "score_run_id": report.score_run_id,
+                "cycle_number": report.cycle_number,
+                "scored": report.scored,
+                "rows_written": report.rows_written,
+                "channels": list(report.channels),
+                "pass": report.pass_number,
+                "review_distribution_p25_p75": report.review_distribution,
+                "problems": report.problems[:20],
+            },
+            indent=2,
+        )
+    )
+    # Scoring an already-measured market with nobody to score is a real problem (the placeholder had
+    # rows); a run that wrote scores is success even with per-prospect problems logged.
+    return 0 if report.rows_written or report.scored == 0 else 1
+
+
+def cmd_recalibrate(args) -> int:
+    """Stage-2 recalibration (scoring-spec §6): fit alpha+gamma on real reply outcomes. FREE.
+
+    Reads `outcome`, fits a two-parameter logistic (alpha + gamma x prior-log-odds) PER CHANNEL, and
+    — only when a channel clears the outcome floor — writes a calibrated score_run that corrects the
+    probability layer WITHOUT touching rank order. Makes no paid call, so it is not in PAID_COMMANDS.
+
+    EMPTY-SAFE: with zero contacted outcomes (today's state) it reports "insufficient" and writes
+    nothing. It becomes useful as outcomes accumulate — Stage 1 rank order stands until then.
+    """
+    from api.services import recalibrate
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    settings = get_settings()
+    client = _client()
+    market_id = _market_id(client, args.market_name or definition.name)
+
+    report = recalibrate.run_recalibration(
+        client, settings, market_id=market_id, cycle_number=args.cycle or 1,
+    )
+    print(
+        json.dumps(
+            {
+                "market_id": report.market_id,
+                "total_outcomes": report.total_outcomes,
+                "channel_fits": [
+                    {"channel": f.channel, "outcomes": f.outcomes, "replies": f.replies,
+                     "fitted": f.fitted, "alpha": f.alpha, "gamma": f.gamma, "reason": f.reason}
+                    for f in report.channel_fits
+                ],
+                "wrote_calibrated_run": report.wrote_calibrated_run,
+                "score_run_id": report.score_run_id,
+                "problems": report.problems,
+            },
+            indent=2,
+        )
+    )
+    # Insufficient data is the NORMAL state until ~30-50 outcomes exist — exit zero. A real problem
+    # (e.g. a multi-channel fit with nowhere to store both) is the reportable failure.
+    return 1 if report.problems else 0
+
+
 def cmd_probe_ai_granularity(args) -> int:
     """The I-004 spike: does the place name in an AI prompt change the answer? BILLS a few cents.
 
@@ -1456,7 +1545,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[
             "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
             "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech",
-                "probe-pixel-field", "collect", "rollup", "tick",
+                "probe-pixel-field", "collect", "rollup", "tick", "score", "recalibrate",
             "render-heatmap", "render-delta",
         ],
     )
@@ -1526,6 +1615,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="scan: the ONE submarket to scan, by name. Required — see cmd_scan.",
     )
     parser.add_argument(
+        "--market-name", default=None,
+        help=(
+            "score / recalibrate: resolve the market by THIS name instead of the definition file's "
+            "`name`. Needed for any-city ONBOARD markets (e.g. 'Los Angeles, CA, USA'), which are "
+            "created dynamically and have no definition file — the positional file is still required "
+            "by argparse, but its name is overridden. See ISSUES."
+        ),
+    )
+    parser.add_argument(
         "--allow-geometry-change",
         action="store_true",
         help="permit geometry edits to submarkets that have NOT been scanned",
@@ -1580,7 +1678,7 @@ def main() -> int:
             [
                 "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
                 "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech",
-                "probe-pixel-field", "collect", "rollup", "tick",
+                "probe-pixel-field", "collect", "rollup", "tick", "score", "recalibrate",
                 "render-heatmap", "render-delta",
             ],
         ),
@@ -1606,6 +1704,8 @@ def main() -> int:
         "collect": cmd_collect,
         "rollup": cmd_rollup,
         "tick": cmd_tick,
+        "score": cmd_score,
+        "recalibrate": cmd_recalibrate,
         "render-heatmap": cmd_render_heatmap,
         "render-delta": cmd_render_delta,
     }

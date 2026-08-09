@@ -837,13 +837,28 @@ In rough value order:
    `reporting-layer-spec.md` is the authority; every renderer is deterministic (identical inputs →
    identical `content_hash`).
 
-2. **The real scoring model — Phase 4. Do NOT start before Phase 3 is producing audits.** Today
-   the list is ranked "most invisible first," a deliberate placeholder (`v_prospect_placeholder_score`,
-   ISSUES I-082). Phase 4 replaces it with the sabermetric scorecard in `docs/scoring-spec.md`:
-   ranked by *who is worth calling* (reply probability × value), all coefficients config-driven,
-   `score_factors` fully replayable, golden fixtures green in CI, per-channel offsets never pooled
-   (phone 579.3 / email 705.0). The coefficients are elicited estimates until real replies exist —
-   which is why this waits on Phase 3.
+2. **The real scoring model — Phase 4. STAGE 1 (priors) BUILT 2026-08-09.** Today the list is still
+   ranked "most invisible first" (`v_prospect_placeholder_score`, ISSUES I-082) because the reporting
+   reader is not yet repointed (I-108). Phase 4 replaces it with the sabermetric scorecard in
+   `docs/scoring-spec.md`: ranked by *who is worth calling* (reply probability × close probability),
+   all coefficients config-driven, `score_factors` fully replayable, golden fixtures green (local
+   pytest — no CI here), per-channel offsets never pooled (phone 579.3 / email 705.0). **Built:**
+   migration `20260809190000` (`score_run`/`prospect_score`/`conflict_check`/`v_prospect_ranked`,
+   applied live); the pure engine (`api/services/scorecard.py` + `scorecard_config.py` registry); the
+   feature extraction (`score_features.py`, unknown==absent / franchise-flags-not-excludes /
+   reachability-excluded-not-defaulted); the score job + `score` command (phone/pass-1, free); the
+   golden-fixture harness (`tests/test_scorecard.py`, all 7 independent fixtures green); the
+   **empty-safe Stage-2 recalibration** (`recalibrate.py` + `recalibrate` command — fits alpha+gamma
+   on real reply outcomes, per-channel, Thompson-guarded; 0 outcomes today = correct "insufficient").
+   Verified live: `v_prospect_ranked` pivots reply/close/value and ranks the franchise last, the
+   low-coverage non-franchise first. **The coefficients are ELICITED estimates until real replies
+   exist** — rank order is a strong prior, not a prediction, until ~100 prospects are contacted.
+   **Stages 2–3 (the recalibration FIT, then the hierarchical refit + Thompson sampler) wait on
+   accumulated `outcome` rows** — Stage 3 needs a posterior only ~80+ reply outcomes produce.
+   **Next Phase-4 steps:** run the free `scan-tech` + paid `scan-organic`/`scan-ai` (min scope) to
+   fill the buying-intent/organic/AI signal columns the extraction already reads; repoint the
+   platform-api reader to `v_prospect_ranked` (I-108); run `score --market-name "Los Angeles, CA,
+   USA"` for the full production ranking (I-105).
 
 3. **The other scan signals — organic + AI are now BUILT (2026-08-08); paid placement is the gap.**
    The Maps geo-grid, the **organic-search** layer (`scan-organic`) and the **AI-answer** layer
