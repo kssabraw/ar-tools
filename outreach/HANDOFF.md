@@ -2,8 +2,20 @@
 
 **Read this first, then `CLAUDE.md` → `START-HERE.md` → `ISSUES.md` → `DECISIONS.md`.**
 
-Status as of 2026-08-08 (the first live scan is DONE; heatmap slices 1–2, the any-city scan, **the per-prospect report — call hook + 3 signals + approval-gated client PDF**, and **the paid-placement 4th signal** — all MERGED to `main`):
+Status as of 2026-08-09 (the first live scan is DONE; heatmap slices 1–2, the any-city scan, **the per-prospect report — call hook + 3 signals + approval-gated client PDF**, **the paid-placement 4th signal**, and **`outcome` + `touch` + the emit webhook** — all MERGED to `main`):
 
+- **`outcome` + `touch` + THE EMIT WEBHOOK ARE BUILT AND MERGED (2026-08-09, PR #625 → `8141629`).**
+  The learning substrate (HANDOFF §12's named next build; the one Phase-3 item with a closing window,
+  because `outcome` cannot be backfilled — scoring-spec §8). Migration `20260809170000_outcome_touch.sql`
+  applied live to Outreacher (`touch` + `outcome` — outbound-only made structural via the composite FK,
+  adopted verbatim from `PHASE3-outcome-constraint.md` — + `lead_activity.touch_id`'s FK), verified live
+  by `tests/outcome_touch_constraints.sql` (12/12). platform-api `emit_prospect`/`record_touch` + pure
+  `outreach_emit.py`; the SPA's Emit button + Log-contact/outcome UI. `selection_reason` on 100% of
+  contacts (ISSUES I-102). **The emit webhook is a GENERIC, OPTIONAL integration** — the owner does NOT
+  use n8n/Encharge (the PRD's example senders); the webhook-free `touch` path is the real capture, so
+  the substrate fills from call one with no external sender. The teed-up hand-picked-backfill question
+  is resolved: create-on-first-contact, no bulk backfill (DECISIONS 2026-08-09). See the dedicated
+  section below and §12.
 - **THE PAID-PLACEMENT SIGNAL IS BUILT AND MERGED (2026-08-08, PR #621 → `b4ca6da`).** The report's
   FOURTH competitive signal, and per `docs/scoring-spec.md` the highest-value one in the whole model:
   a business paying to solve its visibility problem while still losing organically has proven budget
@@ -814,13 +826,14 @@ In rough value order:
    BUILT.**
    The heatmap renderer (slices 1–2, #580/#589), the **call hook + the two-face competitive report +
    the approval-gated client PDF with signed-URL delivery** (PRs #615–#619), and — new 2026-08-09 —
-   **`outcome` + `touch` + the emit webhook** (migration `20260809170000` applied live; draft PR) are
-   done. A prospect's invisibility is a picture and a script, and emitting one now writes the
-   non-backfillable `outcome` row + posts the outbound queue webhook, while logging a call writes a
-   `touch` that rolls up into the outcome. Two of the report's three signals (organic, AI) are built
-   but never run. Also still open: the org/AI scan cadence, the reporting §5 delivery is on Supabase
-   Storage rather than R2 (DECISIONS 2026-08-08 — reversible behind one seam), and the emit webhook
-   URL is unset (emit records the outcome, reports `delivered:false` until it is wired).
+   **`outcome` + `touch` + the emit webhook** (migration `20260809170000` applied live; PR #625,
+   merged) are done. A prospect's invisibility is a picture and a script, and emitting one now writes
+   the non-backfillable `outcome` row (and posts a webhook only if one is configured), while logging a
+   call writes a `touch` that rolls up into the outcome — the webhook-free capture path. Two of the
+   report's three signals (organic, AI) are built but never run. Also still open: the org/AI scan
+   cadence, the reporting §5 delivery is on Supabase Storage rather than R2 (DECISIONS 2026-08-08 —
+   reversible behind one seam), and the emit webhook is optional + unset (owner does not use
+   n8n/Encharge — the touch path is the real capture; wire a URL only if a sender is adopted).
    `reporting-layer-spec.md` is the authority; every renderer is deterministic (identical inputs →
    identical `content_hash`).
 
@@ -899,27 +912,33 @@ to block, organic + AI, are merged.)
 
 ---
 
-## `outcome` + `touch` + THE EMIT WEBHOOK — BUILT + MERGED-PENDING (2026-08-09, draft PR)
+## `outcome` + `touch` + THE EMIT WEBHOOK — BUILT + MERGED (2026-08-09, PR #625 → `8141629`)
 
-**This section's build is DONE.** Migration `20260809170000_outcome_touch.sql` (applied live to
-Outreacher): `touch` (authoritative for "a contact attempt happened", anchored on lead, bigint
-identity), `outcome` (adopted verbatim from `PHASE3-outcome-constraint.md` — outbound-only made
-structural via the composite FK), and `lead_activity.touch_id`'s foreign key (0 orphans verified).
-Verified live by `tests/outcome_touch_constraints.sql` (12 checks, all correct). platform-api gained
-`services/outreach_emit.py` (pure) + `emit_prospect`/`record_touch`/`get_outcome`/`list_touches` in
-`services/outreach.py` + four routes; the SPA gained an Emit button (CoverageTable) and a Log-contact
-section + outcome summary (LeadDrawer). Tests: platform-api outreach suite 75 passing; outreach api
-411 passing (unchanged). `selection_reason` is recorded on 100% of contacts (allowlist
-`{thompson, random_control, manual}`; ISSUES I-102).
+**This section's build is DONE and MERGED to `main`.** Migration `20260809170000_outcome_touch.sql`
+(applied live to Outreacher): `touch` (authoritative for "a contact attempt happened", anchored on
+lead, bigint identity), `outcome` (adopted verbatim from `PHASE3-outcome-constraint.md` —
+outbound-only made structural via the composite FK), and `lead_activity.touch_id`'s foreign key (0
+orphans verified). Verified live by `tests/outcome_touch_constraints.sql` (12 checks, all correct).
+platform-api gained `services/outreach_emit.py` (pure) +
+`emit_prospect`/`record_touch`/`get_outcome`/`list_touches` in `services/outreach.py` + four routes;
+the SPA gained an Emit button (CoverageTable) and a Log-contact section + outcome summary
+(LeadDrawer). Tests: platform-api outreach suite 75 passing; outreach api 411 passing (unchanged).
+`selection_reason` is recorded on 100% of contacts (allowlist `{thompson, random_control, manual}`;
+ISSUES I-102).
 
 **What the emit does:** writes the lead (idempotent) + the `outcome` row (the non-backfillable
-substrate) and posts an audit-ready QUEUE to the configurable webhook (`outreach_emit_webhook_url` —
-n8n / Encharge). It never triggers asset generation (the approval gate stays the only path to an
-asset), and it does not spend (a webhook POST is not a paid provider call). **Still unwired:** the
-webhook URL is unset on PLATFORM, so emit currently records the outcome and reports
-`delivered:false, reason:webhook_not_configured` — set `outreach_emit_webhook_url` (and optionally
-`outreach_emit_webhook_token`) to point at the real queue. The `touch` path captures real contacts
-independently of the webhook, so the substrate fills from call one regardless.
+substrate) and — only if a webhook is configured — posts an audit-ready QUEUE to it. It never
+triggers asset generation (the approval gate stays the only path to an asset), and it does not spend
+(a webhook POST is not a paid provider call).
+
+**The emit webhook is a GENERIC, OPTIONAL integration — owner does NOT use n8n/Encharge** (owner
+clarification 2026-08-09; DECISIONS same date). Those two are only the PRD's *examples* of a
+downstream sender; nothing depends on them. `outreach_emit_webhook_url` POSTs plain JSON to any HTTP
+receiver (Zapier / Make / a custom endpoint) — or stays empty, which it is on PLATFORM. **The primary
+capture path is webhook-free:** logging a call (the `touch` path) creates/rolls up the `outcome`, so
+the substrate fills from call one for a manual phone workflow with no external sender at all. Wire a
+URL only if/when the team adopts an automated sender; until then emit records the outcome and reports
+`delivered:false, reason:webhook_not_configured`, which is the intended, harmless state.
 
 **The teed-up 2026-08-06 question is RESOLVED** (DECISIONS 2026-08-09): an outcome is created by
 whichever of emit / first-touch comes first (both idempotent); there is NO bulk backfill of

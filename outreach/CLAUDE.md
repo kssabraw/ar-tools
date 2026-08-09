@@ -123,20 +123,26 @@ live snapshot to draw from, but nothing has rendered an artifact yet (no `report
 
 **What is genuinely unbuilt is now short.** Phase 3's renderer, call hook, report, approval gate and
 PDF are all merged; the organic / AI / paid scan layers are merged; **`outcome` + `touch` + the emit
-webhook are BUILT (2026-08-09, draft PR — migration `20260809170000` applied live).** What remains is
-Phase 4 scoring, Phase 5 email, Phase 6 learning. See HANDOFF §12 for the value-ordered roadmap.
+webhook are BUILT AND MERGED (2026-08-09, PR #625 → `8141629`; migration `20260809170000` applied
+live).** What remains is Phase 4 scoring, Phase 5 email, Phase 6 learning. See HANDOFF §12 for the
+value-ordered roadmap.
 
-**`outcome` + `touch` are BUILT — the closing window is open, capture through it.** The learning
-substrate every later model fits against now exists and cannot be backfilled (`scoring-spec.md` §8 —
-*"MUST be written from campaign one"*). It fills two ways, both idempotent: **emit** (writes the
-outcome + posts the outbound queue webhook) and **touch** (records an actual contact attempt and
-rolls it up). A hand-picked lead becomes modellable at first CONTACT (a touch), not at promotion —
-there is no bulk backfill, by decision (recording an outcome for a prospect nobody called would
-fabricate a contact event). `selection_reason` is recorded on 100% of contacts. **So the standing
-"go make the first calls" recommendation and the substrate no longer pull against each other — call,
-and log the touch, and the outcome lands from call one.** One wiring gap remains:
-`outreach_emit_webhook_url` is unset, so emit records the outcome but reports `delivered:false` until
-the n8n/Encharge URL is set; the touch path is webhook-independent.
+**`outcome` + `touch` are BUILT + MERGED — the closing window is open, capture through it.** The
+learning substrate every later model fits against now exists and cannot be backfilled
+(`scoring-spec.md` §8 — *"MUST be written from campaign one"*). It fills two ways, both idempotent:
+**emit** (writes the outcome + posts a webhook only if one is configured) and **touch** (records an
+actual contact attempt and rolls it up). A hand-picked lead becomes modellable at first CONTACT (a
+touch), not at promotion — there is no bulk backfill, by decision (recording an outcome for a
+prospect nobody called would fabricate a contact event). `selection_reason` is recorded on 100% of
+contacts. **So the standing "go make the first calls" recommendation and the substrate no longer pull
+against each other — call, log the touch, and the outcome lands from call one.**
+
+**The emit webhook is a GENERIC, OPTIONAL integration — the owner does NOT use n8n/Encharge** (owner
+clarification 2026-08-09). Those two are only the PRD's *examples* of a downstream sender; nothing
+depends on them. `outreach_emit_webhook_url` is unset on PLATFORM, and that is the intended state for
+a manual phone workflow: emit records the outcome and reports `delivered:false`, while the
+webhook-free `touch` path is the real capture. Wire a URL (Zapier / Make / a custom endpoint) only
+if the team ever adopts an automated sender.
 
 **FOUR paid producers are built and have NEVER RUN** — `scan-organic`, `scan-ai`,
 `probe-pixel-field` (and the free `scan-tech`). HANDOFF §8.1 2c already made the argument that each
