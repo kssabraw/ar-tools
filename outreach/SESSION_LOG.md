@@ -12,3 +12,26 @@ Append-only. One line per task started, commit made, dependency added, test run.
 - 2026-08-09T16:45Z — wrote tests/test_outreach_emit.py (17 cases). Ran platform-api: test_outreach_emit + test_outreach_report + test_outreach_justification = 75 passed. py_compile OK on outreach.py/outreach_emit.py/routers/outreach.py/config.py. config loads new settings.
 - 2026-08-09T17:05Z — TASK frontend: added Emit button (per prospect) to CoverageTable in Outreach.tsx (writes outcome + posts webhook; shows delivered / outcome-saved / not-configured states); added "Log contact" section (channel + disposition + note → touch) + outcome summary (contact count / first contacted / replied) to LeadDrawer in OutreachLeads.tsx. Ran `npm install` + `npm run build` — tsc + vite clean (pre-existing chunk-size warning only).
 - 2026-08-09T17:20Z — TASK docs: updated CLAUDE.md (unbuilt list + closing-window section → BUILT), HANDOFF.md (§12 item 1, new "outcome + touch + emit BUILT" section superseding the "NEXT BUILD" one), PHASE3-outcome-constraint.md §3 (stale _phase3_probe note resolved). No PR template in repo.
+- 2026-08-09T17:30Z — pushed branch (force-with-lease: remote held only pre-squash 2ab1210 = already-merged PR #623, per HANDOFF §6.12). Opened DRAFT PR #625. PR status: only a Netlify deploy-preview (informational; no test CI in this repo). Final test run: outreach 411 passed, platform-api outreach 75 passed.
+
+## Session Summary (2026-08-09)
+
+**Objective:** Finish Phase 3 — `outcome` + `touch` + the emit webhook + `selection_reason`. DONE.
+
+**Tasks completed (4 commits):**
+1. 9c69a8a — migration 20260809170000_outcome_touch.sql (touch + outcome + lead_activity.touch_id FK), applied live; tests/outcome_touch_constraints.sql (12 checks, live-verified).
+2. 0609a54 — platform-api emit + touch: services/outreach_emit.py (pure), emit_prospect/record_touch/etc in services/outreach.py, 4 routes, 6 config knobs, test_outreach_emit.py (17 cases).
+3. efdf0e7 — frontend: Emit button (CoverageTable) + Log-contact/outcome UI (LeadDrawer).
+4. d5f2c82 — docs: CLAUDE.md / HANDOFF.md / PHASE3-outcome-constraint.md marked built.
+
+**Tasks blocked:** none.
+
+**Decisions logged (DECISIONS.md):** outcome/touch DDL adopted verbatim + touch anchored on lead + app-owned rollup; teed-up hand-picked-backfill question RESOLVED (create-on-first-contact, no bulk backfill); emit webhook design (best-effort POST, audit queue, never triggers assets).
+
+**Issues logged (ISSUES.md):** I-100 (stale _phase3_probe doc ref), I-101 (emit cadence/age gates deferred to Phase 4), I-102 (selection_reason 'manual' pre-Phase-4 value).
+
+**Dependencies added:** none to any requirements file. (Sandbox-only test deps installed into system python: pydantic, httpx, pydantic-settings, pytest.)
+
+**Test status:** outreach api 411 passed; platform-api outreach suite 75 passed; frontend npm run build clean; live SQL 12/12 correct.
+
+**Look at first:** the emit webhook URL is UNSET on PLATFORM (outreach_emit_webhook_url) — emit records the outcome but reports delivered:false until the n8n/Encharge URL (+ optional token) is set. The touch path is webhook-independent, so outcomes capture from call one regardless. No paid run was triggered.
