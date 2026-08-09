@@ -46,6 +46,28 @@ Migrations `20260808140000` / `160000` / `180000` applied live. **I-095 is fully
 organic + AI scans have never been run — the report's organic/LLM sections read `not_scanned` until
 an admin authorizes those paid commands (they gate exactly like `scan`).
 
+**THE PAID-PLACEMENT SIGNAL IS BUILT + MERGED (2026-08-08, PR #621).** The report's FOURTH signal —
+is the business (and are its competitors) BUYING Google Ads / Local Services Ads. `scoring-spec.md`
+rates it above every organic signal, because a business paying to solve the visibility problem while
+still losing organically has proven budget AND intent. **Slice A (presence)** is parsed out of the
+organic SERP capture already on disk — `organic_scan.parse_organic_serp` now also reads `paid` and
+`local_services` items and writes a `paid` block into `serp_result.payload_summary`, so Google-Ads
+presence costs NO new paid call. **Slice B1 (site tech)** is `scan-tech` — a FREE fetch of each
+prospect's own site detecting Meta pixel / `AW-` conversion tag / GTM / CallRail-Podium-Birdeye into
+`prospect_tech_signal` (`services/tech_signals.py` pure + `scan_tech.py`). **Slice B2 (ad-spend
+MAGNITUDE) is deliberately NOT built** — gated behind a DataForSEO Labs yield spike, because Labs
+paid data is likely sparse for the small local advertisers this pipeline targets (I-098). The
+§16a.1 pixel spike (`probe-pixel-field`, PAID + gated) is built and unrun. Design:
+`docs/paid-placement-slice-b-design-v0_1.md`.
+
+**Read I-099 before touching the paid signal.** An adversarial review found three real defects in
+this code before it ran, and two were the same shape: *a boolean true for several reasons, with the
+sentence built from it naming only the most flattering one.* An `AW-` tag on a prospect's SITE
+produced the spoken claim "you're paying for Google Ads on ⟨keyword⟩" for a keyword whose SERP showed
+no ad from them. So the signal now carries `paying_evidence` (`serp_ad` | `lsa` | `conversion_tag`)
+and a narrow `prospect_paying_this_keyword` beside the broad `prospect_is_paying`, and every surface
+branches on it. **When you add a source to a signal, add the evidence tag with it.**
+
 **Phase 2 SCANNING is PROVEN, not just built.** `api/services/maps_scan.py` (pure — task bodies,
 `tasks_ready`/`task_get` parsing, completeness) and `api/services/scan_runner.py` (submission,
 collection, finalization) with the `scan_task` bookkeeping table ran end-to-end against a live
@@ -99,9 +121,25 @@ stays free and never drains. The env token still gates every config-driven paid 
 `report_artifact` provenance; #589 slice 2: `heatmap_pair` + `heatmap_delta`). The renderer now has a
 live snapshot to draw from, but nothing has rendered an artifact yet (no `report_artifact` rows).
 
-Still unbuilt downstream: the rest of Phase 3 (call hook → outcome/touch + emit webhook → approval
-gate + PDF → client views), the organic/AI scan layers, and the Phase 4 scoring model — see
-HANDOFF §12 for the value-ordered roadmap.
+**What is genuinely unbuilt is now short.** Phase 3's renderer, call hook, report, approval gate and
+PDF are all merged; the organic / AI / paid scan layers are merged. What remains of Phase 3 is
+**`outcome` + `touch` + the emit webhook**, then Phase 4 scoring, Phase 5 email, Phase 6 learning.
+See HANDOFF §12 for the value-ordered roadmap.
+
+**`outcome` is the item with a CLOSING WINDOW, and it is the next build.** It is the learning
+substrate every later model fits against, and it cannot be backfilled: a call made before `outcome`
+exists is a data point lost permanently (`scoring-spec.md` §8 — *"MUST be written from campaign one
+even though nothing reads it for months"*). HANDOFF's standing recommendation is "go make the first
+calls", and that recommendation and this invariant PULL AGAINST EACH OTHER — every call placed
+before the table exists is unmodellable. The DDL is already worked out in
+`PHASE3-outcome-constraint.md`. Build it before dialing, or decide deliberately that the first N
+calls are lost to the model and write that down.
+
+**FOUR paid producers are built and have NEVER RUN** — `scan-organic`, `scan-ai`,
+`probe-pixel-field` (and the free `scan-tech`). HANDOFF §8.1 2c already made the argument that each
+additional unrun layer raises the chance the first run surfaces several faults at once, interacting,
+in a batch that has been paid for. That argument is stronger now than when it was written, so prefer
+RUNNING a built layer over building a fifth.
 
 **The pipeline is an AR Tools SUITE MODULE, not a standalone tool** (owner ruling, HANDOFF §2).
 The database stays in the Outreacher project; the API and UI belong in `platform-api` and the
@@ -152,6 +190,18 @@ and never in `writer/supabase/migrations/`, which targets AR-Internal-Tools.
   list.
 - **Unknown ≡ absent for ad/tech signals.** Neither ever subtracts.
 - **No prospect-facing asset is generated without explicit human approval.**
+- **A signal that can fire from several sources must carry WHICH one fired**, and every sentence
+  built from it may claim only what that source measured (I-099). `paying_evidence` is the worked
+  example: a SERP ad and an `AW-` tag on the prospect's own site both make them "paying", but only
+  the first was measured on this keyword — and a claim the prospect can falsify in one sentence
+  costs the call. Absence of a source contributes NOTHING (unknown ≡ absent, never subtracts).
+- **A name match between two records is ONE-DIRECTIONAL — the prospect's name inside the other's,
+  never the reverse** (I-099, and `detect_ai_mention` before it). The reverse lets a shorter
+  competitor name ("AAA Plumbing") match a longer prospect name ("AAA Plumbing Services") and
+  fabricates a claim while deleting a real competitor. The kept direction fails toward a MISS.
+- **A shared CLI default is not a default.** `--limit` defaulted to 20 for every subcommand and
+  silently capped `scan-tech` at 20 of ~1,000 sites while exiting 0. Defaults belong to the COMMAND
+  (`scan_tech_limit` / `pixel_probe_limit` / `legacy_limit`), and the safe value differs per command.
 - **`outcome` is outbound-only.** Rows exist solely for leads with `source = 'outbound_scan'`.
   Inbound and referral leads converted for different reasons; including them would inflate every
   coefficient. Business reporting reads `lead.stage`; model fitting reads `outcome`.
