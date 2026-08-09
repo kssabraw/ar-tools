@@ -810,19 +810,19 @@ or the email track before there is a single reply is dressing up a guess.
 
 In rough value order:
 
-1. **The audit / heatmap — Phase 3. The renderer, the call hook, and the report are BUILT (2026-08-08);
-   `outcome`/`touch` + the emit webhook are what remain.**
-   The heatmap renderer (slices 1–2, #580/#589) and — new 2026-08-08 — the **call hook + the two-face
-   competitive report + the approval-gated client PDF with signed-URL delivery** (PRs #615–#619, the top
-   status bullet) are done: a prospect's invisibility is now a picture and a script you hand a caller,
-   deterministic and fact-grounded. **What still remains of this item:** the `outcome` row written per
-   emitted prospect (the learning substrate everything downstream fits against, PHASE3-outcome-constraint.md),
-   the `touch` table, and the **emit webhook** that writes `lead` rows with `source='outbound_scan'` —
-   the report today is generated on-demand (human-triggered, reporting §4a), which does NOT yet write an
-   `outcome`. And two of the report's three signals (organic, AI) are built but never run. Also still
-   open: the org/AI scan cadence, and the reporting §5 delivery is on Supabase Storage rather than R2
-   (DECISIONS 2026-08-08 — reversible behind one seam). `reporting-layer-spec.md` is the authority; every
-   renderer is deterministic (identical inputs → identical `content_hash`).
+1. **The audit / heatmap — Phase 3. Renderer, call hook, report, AND `outcome`/`touch`/emit are all
+   BUILT.**
+   The heatmap renderer (slices 1–2, #580/#589), the **call hook + the two-face competitive report +
+   the approval-gated client PDF with signed-URL delivery** (PRs #615–#619), and — new 2026-08-09 —
+   **`outcome` + `touch` + the emit webhook** (migration `20260809170000` applied live; draft PR) are
+   done. A prospect's invisibility is a picture and a script, and emitting one now writes the
+   non-backfillable `outcome` row + posts the outbound queue webhook, while logging a call writes a
+   `touch` that rolls up into the outcome. Two of the report's three signals (organic, AI) are built
+   but never run. Also still open: the org/AI scan cadence, the reporting §5 delivery is on Supabase
+   Storage rather than R2 (DECISIONS 2026-08-08 — reversible behind one seam), and the emit webhook
+   URL is unset (emit records the outcome, reports `delivered:false` until it is wired).
+   `reporting-layer-spec.md` is the authority; every renderer is deterministic (identical inputs →
+   identical `content_hash`).
 
 2. **The real scoring model — Phase 4. Do NOT start before Phase 3 is producing audits.** Today
    the list is ranked "most invisible first," a deliberate placeholder (`v_prospect_placeholder_score`,
@@ -899,7 +899,42 @@ to block, organic + AI, are merged.)
 
 ---
 
-## THE NEXT BUILD IS `outcome` + `touch` + THE EMIT WEBHOOK — and it is the only item with a deadline
+## `outcome` + `touch` + THE EMIT WEBHOOK — BUILT + MERGED-PENDING (2026-08-09, draft PR)
+
+**This section's build is DONE.** Migration `20260809170000_outcome_touch.sql` (applied live to
+Outreacher): `touch` (authoritative for "a contact attempt happened", anchored on lead, bigint
+identity), `outcome` (adopted verbatim from `PHASE3-outcome-constraint.md` — outbound-only made
+structural via the composite FK), and `lead_activity.touch_id`'s foreign key (0 orphans verified).
+Verified live by `tests/outcome_touch_constraints.sql` (12 checks, all correct). platform-api gained
+`services/outreach_emit.py` (pure) + `emit_prospect`/`record_touch`/`get_outcome`/`list_touches` in
+`services/outreach.py` + four routes; the SPA gained an Emit button (CoverageTable) and a Log-contact
+section + outcome summary (LeadDrawer). Tests: platform-api outreach suite 75 passing; outreach api
+411 passing (unchanged). `selection_reason` is recorded on 100% of contacts (allowlist
+`{thompson, random_control, manual}`; ISSUES I-102).
+
+**What the emit does:** writes the lead (idempotent) + the `outcome` row (the non-backfillable
+substrate) and posts an audit-ready QUEUE to the configurable webhook (`outreach_emit_webhook_url` —
+n8n / Encharge). It never triggers asset generation (the approval gate stays the only path to an
+asset), and it does not spend (a webhook POST is not a paid provider call). **Still unwired:** the
+webhook URL is unset on PLATFORM, so emit currently records the outcome and reports
+`delivered:false, reason:webhook_not_configured` — set `outreach_emit_webhook_url` (and optionally
+`outreach_emit_webhook_token`) to point at the real queue. The `touch` path captures real contacts
+independently of the webhook, so the substrate fills from call one regardless.
+
+**The teed-up 2026-08-06 question is RESOLVED** (DECISIONS 2026-08-09): an outcome is created by
+whichever of emit / first-touch comes first (both idempotent); there is NO bulk backfill of
+pre-existing hand-picked leads — a hand-picked lead becomes modellable when it is CONTACTED (a
+touch), not when it is promoted, because recording an outcome for a prospect nobody called would
+inject a fabricated contact event into the substrate.
+
+**Deferred (ISSUES I-101):** the PRD §183/§198 emit cadence + evidence-age gates belong to the
+Phase-4 selector; v1 emit requires only a rolled-up scan (bootstrap-gated).
+
+---
+
+## (historical) THE NEXT BUILD IS `outcome` + `touch` + THE EMIT WEBHOOK — and it is the only item with a deadline
+
+**Superseded by the section above — this build is done.** Kept for the reasoning that drove it.
 
 Everything else on this list can wait without cost. This one cannot, and the reason is not effort:
 
