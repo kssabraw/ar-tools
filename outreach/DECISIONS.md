@@ -1486,3 +1486,56 @@ review-count quartile), and the "measure-don't-infer / smallest-scope-first" dis
 first paid run through an unfamiliar path while the owner is away. Running them (scan-tech first, free)
 to fill the buying-intent / organic-pain columns is the documented high-value next step; the extraction
 wiring is already in place (unknown==absent), so a producer run lights those bins up with no code change.
+
+---
+
+## 2026-08-10 — Lead enrichment: order-driven, batchable, contact-aware, mass-ingest invariant untouched
+
+Owner request: on-demand enrichment of a prospect (and a selection / all) with contact NAMES, PHONE
+NUMBERS and EMAILS via Outscraper — one at a time and as a bulk "select all" action.
+
+**The mass-ingest enrichment invariant is untouched, by construction.** `outscraper_client.submit_maps_search`
+still hardcodes `enrichment=""` and gains no flag. Enrichment builds its OWN request in a new
+`services/enrich_client.py::enrich_places`, generalizing the `pixel_probe.fetch_enriched_sample` model
+(the proven, deliberately-off-the-ingest-path pattern for a billed enrichment call). Called BY place_id
+(Outscraper resolves a place_id passed as the query to exactly that place), so a selection enriches
+exactly the chosen leads. This was the whole shape of the request, so it was never in question — recorded
+so a future reader does not "unify" the two paths.
+
+**The order is the spend confirmation — same model as `scan_request`/`onboard_request`, NOT a platform-api
+spend.** A UI click writes an `enrichment_request` row (migration `20260810120000`); the outreach job's
+`tick` drains it and bills Outscraper. platform-api never spends. The alternative — platform-api calling
+Outscraper directly — was rejected for the same reason it was rejected for scans: it splits the spend
+path across two services and duplicates the client. The order carries the selection + the enricher set
+frozen at authorization, and `est_cost_cents` doubles as the per-user daily budget ledger (no separate
+spend table — mirrors the LeadOff pattern the request pointed at, but the order rows ARE the ledger).
+
+**Batchable, so NOT the ≤1-order-per-tick cadence.** The scan drain takes at most one order per tick so
+each scan's collection starts before the next scan spends. Enrichment is lightweight and one cheap request
+covers a whole selection, so that reasoning does not apply: `enrich_queue.drain` processes up to
+`enrich_orders_per_tick` (5) orders per heartbeat, each order the whole selection in one chunked pass. The
+request explicitly warned against copying the heavy-scan cadence; this is the answer.
+
+**Idempotent so a re-order is a cheap resume, not a re-bill.** A prospect already carrying a
+`prospect_enrichment` row with status `enriched`/`no_contacts` is skipped (billed once, answer durable);
+only `failed` is retried. Contacts are chunked and stored replace-on-place, so a crash marks the finished
+chunks (skipped on re-order) and a re-enrich never duplicates contacts. This is what makes a stuck-`running`
+order recoverable — re-place it and only the un-enriched prospects cost money.
+
+**Contact-aware storage — one business → N contacts, `prospect` left pristine.** `prospect_contact`
+(N children keyed on prospect_id + place_id), `prospect_enrichment` (per-prospect status + provenance +
+the idempotency marker), `enrichment_request` (the order). The `prospect` table (owned verbatim by
+PHASE-1-BRIEF §1) gains nothing, so coverage/scoring are unaffected. A `no_contacts` outcome is recorded
+distinctly from a `failed` call — the first is billed-and-answered, the second retryable.
+
+**Admin-gated placement (owner ruling 2026-08-10), staff reads.** Enrichment bills, so placing an order
+matches the module's paid-order convention (`scan_request`/`onboard_request` are admin-gated — the click
+IS the authorization) rather than LeadOff's staff+budget model. It is additionally budget-guarded per user.
+Reads (estimate, status, contacts) are staff. Relaxing to staff later is a one-line dependency change.
+
+**Measure-don't-infer: the field names are UNCONFIRMED and the parser asserts nothing.** No enriched pull
+has run against this account, so the exact enrichment param value(s) and response field names are unknown.
+`services/enrichment.py` reads the DOCUMENTED "Emails & Contacts" column shape defensively (both the nested
+list-of-dicts and flat/numbered forms), stores each record's untouched fragment in `raw` for free
+re-parsing against corrected aliases, and a `probe-enrich` command (PAID, env-gated) logs one full record
+to confirm the shape before production is trusted — exactly the `probe-pixel-field` discipline. See ISSUES.

@@ -154,6 +154,28 @@ additional unrun layer raises the chance the first run surfaces several faults a
 in a batch that has been paid for. That argument is stronger now than when it was written, so prefer
 RUNNING a built layer over building a fifth.
 
+**LEAD ENRICHMENT IS BUILT (2026-08-10) — contact NAMES / PHONES / EMAILS per prospect, on demand.**
+A prospect (or a selection / all) is enriched via Outscraper's "Emails & Contacts"-style enrichers.
+**The mass-ingest enrichment invariant is untouched** — `outscraper_client.submit_maps_search` still
+hardcodes `enrichment=""`; enrichment builds its OWN request in `api/services/enrich_client.py`
+(generalizing `pixel_probe.fetch_enriched_sample`), called BY place_id. It is a SIGNED ORDER
+(`enrichment_request`, migration `20260810120000`, applied live), drained by `tick` — the order is the
+spend confirmation, platform-api never spends (same model as `scan_request`/`onboard_request`). Because
+enrichment is BATCHABLE, the drain (`api/services/enrich_queue.py`) does several orders per tick
+(`enrich_orders_per_tick`), NOT the heavy-scan ≤1 cadence, and is idempotent (a prospect already
+`enriched`/`no_contacts` is skipped — no re-bill), so a re-order is a cheap resume. Contact-aware storage:
+`prospect_contact` (one business → N contacts), `prospect_enrichment` (per-prospect status + provenance +
+the idempotency marker); the `prospect` table is left pristine. Spend-gated three ways: a FREE preflight
+cost estimate, a per-user daily budget guard (platform-api, order rows as the ledger), and the order row.
+**Admin-gated** placement (paid — owner ruling), staff reads. Pure parser (`api/services/enrichment.py`,
+26 tests) + drain (`test_enrich_queue.py`); platform-api surface in `services/outreach.py` +
+`routers/outreach.py` (`POST /outreach/enrichment/estimate`, `POST /outreach/prospects/{id}/enrich`,
+`POST /outreach/enrichment`, list/detail/cancel, `GET …/contacts`); UI in
+`frontend/src/components/outreach/Enrichment.tsx` (per-row Enrich + select-all bulk bar + contact chips,
+via `useResumableBatch`) wired into the coverage table + the CRM lead drawer. **UNRUN, and the field
+names are UNCONFIRMED (measure-don't-infer): run `probe-enrich` (PAID, gated) once to confirm the
+enrichment param value(s) + response shape before trusting production output — see ISSUES I-109/110/111.**
+
 **The pipeline is an AR Tools SUITE MODULE, not a standalone tool** (owner ruling, HANDOFF §2).
 The database stays in the Outreacher project; the API and UI belong in `platform-api` and the
 suite SPA. Retool is dropped; access is service-role only. Anything you read that says to create
