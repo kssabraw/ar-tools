@@ -1688,9 +1688,12 @@ vertical adds one map key. Both are additive and change the gate's inputs, never
 The unbounded-`coordinates` drift noted as deferred above is now built as an eighth rule,
 `within_area`. Outscraper's `coordinates` biases the search centre but does not bound it, so a
 category pull returned a kitchen remodeler in Lompoc (~150 mi) for an Inglewood plumbing order. The
-rule drops a listing whose location is further than `filter_max_distance_miles` (default **30**, a
-generous cap) from its **assigned submarket centroid** — the submarket it was matched to as NEAREST
-at ingest, so an in-metro business sits a few miles from it and 30 miles only catches gross drift.
+rule drops a listing whose location is further than `filter_max_distance_miles` (default **7 miles**,
+owner ruling 2026-08-10) from its **assigned submarket centroid** — which, for the typed-city onboard
+flow, IS the city centre (platform-api geocodes the typed city to that submarket). 7 miles keeps
+results inside the city while still covering a business on its far side; the live Inglewood pull sat
+entirely within 6.7 miles of centre. A market whose submarkets are spaced further apart may need a
+looser cap, so it stays per-config.
 Fail-open, like every rule: NOT_EVALUATED (kept) when disabled, when no centroid/cap is available, or
 when the listing carries no coordinates (an unknown location is not a distant one). No migration — it
 excludes via `filter_result` like the other hard gates; no new column. `filters` keeps its own
