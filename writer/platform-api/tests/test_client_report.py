@@ -147,33 +147,34 @@ def test_generate_exec_summary_no_key_returns_none(monkeypatch):
 # build_comparisons (30 / 90 / since-start) + performance section
 # ---------------------------------------------------------------------------
 def _series_rows():
-    """Daily rows over ~120 days: impressions climbing, rank improving."""
+    """Daily rows over ~120 days ending at period_end (a 30-day period): impressions
+    climbing, rank improving. Returns (rows, period_start, period_end)."""
     from datetime import date as _d, timedelta as _td
-    today = _d(2026, 6, 26)
+    period_end = _d(2026, 6, 26)
+    period_start = period_end - _td(days=30)
     rows = []
     for i in range(120):  # oldest → newest
-        day = today - _td(days=119 - i)
+        day = period_end - _td(days=119 - i)
         rows.append({"date": day.isoformat(), "impressions": 100 + i, "clicks": None,
                      "gsc_position": 30 - (i * 0.1)})
-    return rows, today
+    return rows, period_start, period_end
 
 
-def test_build_comparisons_volume_and_rank():
-    rows, today = _series_rows()
-    comp = cr.build_comparisons(rows, today)
+def test_build_comparisons_period_over_period():
+    rows, ps, pe = _series_rows()
+    comp = cr.build_comparisons(rows, ps, pe)
     assert comp is not None
-    assert comp["impressions"]["current"] is not None
-    # impressions trended up → all changes positive
-    ch = comp["impressions"]["changes"]
-    assert ch["30d"] > 0 and ch["90d"] > 0 and ch["start"] > 0
-    # rank improved (position number fell) → positive "positions gained"
-    assert comp["rank"]["changes_positions"]["start"] > 0
-    # clicks were all None → omitted
-    assert "clicks" not in comp
+    # this period vs the previous same-length period, both present (enough history)
+    assert comp["impressions"]["current"] > 0 and comp["impressions"]["previous"] is not None
+    assert comp["impressions"]["change"] > 0            # impressions climbed
+    assert comp["rank"]["change_positions"] > 0         # rank improved (position fell)
+    assert "clicks" not in comp                         # all None → omitted
 
 
 def test_build_comparisons_empty():
-    assert cr.build_comparisons([], cr.date.today()) is None
+    from datetime import date as _d, timedelta as _td
+    pe = _d(2026, 6, 26)
+    assert cr.build_comparisons([], pe - _td(days=30), pe) is None
 
 
 def test_build_comparisons_sources_volume_from_traffic_rows():
@@ -181,62 +182,83 @@ def test_build_comparisons_sources_volume_from_traffic_rows():
     GSC), NOT from the per-keyword metric rows — which can be stale/zero. Rank still
     comes from the metric rows."""
     from datetime import date as _d, timedelta as _td
-    today = _d(2026, 6, 26)
+    pe = _d(2026, 6, 26)
+    ps = pe - _td(days=30)
     metric, traffic = [], []
     for i in range(120):
-        day = (today - _td(days=119 - i)).isoformat()
+        day = (pe - _td(days=119 - i)).isoformat()
         # per-keyword rows: rank present, traffic zeroed (the stale-feed case)
         metric.append({"date": day, "gsc_position": 30 - (i * 0.1), "impressions": 0, "clicks": 0})
         traffic.append({"date": day, "impressions": 100 + i, "clicks": 5 + i})
-    comp = cr.build_comparisons(metric, today, traffic_rows=traffic)
+    comp = cr.build_comparisons(metric, ps, pe, traffic_rows=traffic)
     assert comp["impressions"]["current"] and comp["impressions"]["current"] > 0
     assert comp["clicks"]["current"] and comp["clicks"]["current"] > 0
     assert comp["rank"]["current"] is not None  # rank still from the metric series
 
 
-def test_build_comparisons_suppresses_short_history_since_start():
-    """With < 60 days of data the 'first 30 days' window overlaps the current one,
-    so the since-start delta is noise — it's suppressed (and never becomes the KPI
-    hero), while the 30-day trend still renders."""
+def test_build_comparisons_suppresses_previous_without_coverage():
+    """When the data doesn't span the previous period (a young campaign), the
+    previous-period figure and change are suppressed — never a partial, misleading
+    delta — and the KPI hero doesn't render off it."""
     from datetime import date as _d, timedelta as _td
-    today = _d(2026, 8, 10)
+    pe = _d(2026, 8, 10)
+    ps = pe - _td(days=30)
     rows = [
-        {"date": (today - _td(days=37 - i)).isoformat(), "impressions": 1000 + i,
+        {"date": (pe - _td(days=37 - i)).isoformat(), "impressions": 1000 + i,
          "clicks": 10 + i, "gsc_position": 8.0}
-        for i in range(38)  # only 38 days of history
+        for i in range(38)  # data starts ~07-04, before ps(07-11) but not before prev period start
     ]
-    comp = cr.build_comparisons(rows, today)
+    comp = cr.build_comparisons(rows, ps, pe)
     assert comp["impressions"]["current"] is not None
-    assert comp["impressions"]["changes"]["30d"] is not None
-    assert comp["impressions"]["changes"]["start"] is None  # too little history
-    assert comp["rank"]["changes_positions"]["start"] is None
+    assert comp["impressions"]["previous"] is None
+    assert comp["impressions"]["change"] is None
+    assert comp["rank"]["previous"] is None
     kpi = cr._kpi_strip(_data(organic={"comparisons": comp, "summary": {"tracked": 5, "top10": 2}}))
-    assert "Search visibility" not in kpi  # no misleading since-start hero
+    assert "Search visibility" not in kpi  # no hero off a non-comparable metric
 
 
-def test_section_performance_renders_changes():
-    rows, today = _series_rows()
-    data = _data(organic={"comparisons": cr.build_comparisons(rows, today)})
+def test_section_performance_renders_this_vs_previous():
+    rows, ps, pe = _series_rows()
+    data = _data(organic={"comparisons": cr.build_comparisons(rows, ps, pe)})
     out = cr.build_report_html(data)
     assert "Performance highlights" in out
+    assert "This period" in out and "Previous period" in out and "Change" in out
     assert "Impressions" in out and "Average ranking" in out
-    assert "Since we started" in out
     assert "▲" in out  # positive change arrow
 
 
 def test_section_performance_omits_zero_volume_metric():
-    """A volume metric whose current window is 0 (a GSC gap) is dropped rather than
+    """A volume metric whose current period is 0 (a GSC gap) is dropped rather than
     shown as a scary '0 ▼ -100%'; the ranking row still renders."""
     comp = {
-        "impressions": {"current": 0, "changes": {"30d": -100.0, "90d": None, "start": None}},
-        "clicks": {"current": 0, "changes": {"30d": None, "90d": None, "start": None}},
-        "rank": {"current": 7.0, "changes_positions": {"30d": None, "90d": None, "start": None}},
+        "impressions": {"current": 0, "previous": 100, "change": -100.0},
+        "clicks": {"current": 0, "previous": 5, "change": None},
+        "rank": {"current": 7.0, "previous": 8.0, "change_positions": 1.0},
     }
     out = cr._section_performance(_data(organic={"comparisons": comp}))
     assert "Performance highlights" in out
     assert "Average ranking" in out
     assert "Impressions" not in out and "Organic clicks" not in out
     assert "-100" not in out and "100%" not in out
+
+
+def test_period_over_period_extras_render():
+    """Maps presence, AI visibility, and goal movement each show a 'vs previous
+    period' comparison."""
+    # Maps local-pack presence delta
+    geo = _data(geogrid={"keywords": [{"keyword": "x", "average_rank": 5, "top3_pins": 3,
+                                        "total_pins": 10, "rank_grid": [[1]]}],
+                         "presence_now": 19.0, "presence_prev": 14.0, "weak_areas": []})
+    assert "up from 14%" in cr.build_report_html(geo)
+    # AI visibility overall delta
+    ai = _data(ai_visibility={"engines": {"chatgpt": "8 of 12 answers"},
+                              "visibility_now": 71.0, "visibility_prev": 63.0, "keywords": []})
+    assert "up from 63%" in cr.build_report_html(ai)
+    # Goal movement since last period (clicks goal is date-aware)
+    g = {"goal_type": "organic_clicks", "label": "Clicks", "status": "achieved",
+         "progress_pct": 100.0, "current_value": 257, "previous_value": 129, "target_value": 40}
+    html = cr._section_goals({"goals": {"goals": [g]}})
+    assert "since last period" in html and "128" in html  # 257 - 129
 
 
 # ---------------------------------------------------------------------------
@@ -360,8 +382,8 @@ def test_section_work_delivered():
 def test_kpi_strip_renders_present_metrics():
     assert cr._kpi_strip(_data()) == ""
     data = _data(
-        organic={"comparisons": {"impressions": {"current": 100, "changes": {"start": 24.0}},
-                                 "rank": {"current": 5, "changes_positions": {"start": 3.0}}},
+        organic={"comparisons": {"impressions": {"current": 100, "previous": 80, "change": 24.0},
+                                 "rank": {"current": 5, "previous": 8, "change_positions": 3.0}},
                  "summary": {"tracked": 12, "top10": 5}},
         work_delivered={"counts": {"blog_post": 4}, "total": 4},
     )
