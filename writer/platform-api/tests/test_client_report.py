@@ -176,6 +176,24 @@ def test_build_comparisons_empty():
     assert cr.build_comparisons([], cr.date.today()) is None
 
 
+def test_build_comparisons_sources_volume_from_traffic_rows():
+    """When traffic_rows is given, impressions/clicks come from it (property-level
+    GSC), NOT from the per-keyword metric rows — which can be stale/zero. Rank still
+    comes from the metric rows."""
+    from datetime import date as _d, timedelta as _td
+    today = _d(2026, 6, 26)
+    metric, traffic = [], []
+    for i in range(120):
+        day = (today - _td(days=119 - i)).isoformat()
+        # per-keyword rows: rank present, traffic zeroed (the stale-feed case)
+        metric.append({"date": day, "gsc_position": 30 - (i * 0.1), "impressions": 0, "clicks": 0})
+        traffic.append({"date": day, "impressions": 100 + i, "clicks": 5 + i})
+    comp = cr.build_comparisons(metric, today, traffic_rows=traffic)
+    assert comp["impressions"]["current"] and comp["impressions"]["current"] > 0
+    assert comp["clicks"]["current"] and comp["clicks"]["current"] > 0
+    assert comp["rank"]["current"] is not None  # rank still from the metric series
+
+
 def test_section_performance_renders_changes():
     rows, today = _series_rows()
     data = _data(organic={"comparisons": cr.build_comparisons(rows, today)})
@@ -184,6 +202,21 @@ def test_section_performance_renders_changes():
     assert "Impressions" in out and "Average ranking" in out
     assert "Since we started" in out
     assert "▲" in out  # positive change arrow
+
+
+def test_section_performance_omits_zero_volume_metric():
+    """A volume metric whose current window is 0 (a GSC gap) is dropped rather than
+    shown as a scary '0 ▼ -100%'; the ranking row still renders."""
+    comp = {
+        "impressions": {"current": 0, "changes": {"30d": -100.0, "90d": None, "start": None}},
+        "clicks": {"current": 0, "changes": {"30d": None, "90d": None, "start": None}},
+        "rank": {"current": 7.0, "changes_positions": {"30d": None, "90d": None, "start": None}},
+    }
+    out = cr._section_performance(_data(organic={"comparisons": comp}))
+    assert "Performance highlights" in out
+    assert "Average ranking" in out
+    assert "Impressions" not in out and "Organic clicks" not in out
+    assert "-100" not in out and "100%" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +228,27 @@ def test_section_ai_visibility():
     out = cr.build_report_html(data)
     assert "AI search visibility" in out
     assert "ChatGPT" in out and "3 of 5 answers" in out
+
+
+def test_section_ai_visibility_per_keyword_matrix():
+    data = _data(ai_visibility={
+        "engines": {"chatgpt": "2 of 2 answers"},
+        "keywords": [
+            {"keyword": "best managed IT services near me",
+             "engines": {"chatgpt": True, "claude": True, "perplexity": False},
+             "found_count": 2, "total": 3},
+            {"keyword": "emergency it support downtown",
+             "engines": {"chatgpt": False, "claude": False}, "found_count": 0, "total": 2},
+        ],
+    })
+    out = cr.build_report_html(data)
+    # per-query matrix present, with specific query text + a per-query score
+    assert "Which AI tools recommend you" in out
+    assert "best managed IT services near me" in out and "2/3" in out
+    # engine chips labelled
+    assert "ChatGPT" in out and "Perplexity" in out
+    # the brand-invisible query is called out as the opportunity
+    assert "isn’t appearing yet" in out and "emergency it support downtown" in out
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +333,19 @@ def test_section_goals_renders_and_softens_status():
     assert "Rank roof repair" in html
     # client-facing softening: "behind" is never shown; "In progress" is.
     assert "In progress" in html and "BEHIND" not in html
+
+
+def test_section_goals_shows_pace_marker():
+    """The bar carries an 'expected by now' marker at elapsed%, so a short bar +
+    a status label no longer look contradictory to a client."""
+    data = _goals(
+        {"goal_type": "maps_pack_presence", "label": "Local-pack presence", "status": "behind",
+         "progress_pct": 5.0, "elapsed_pct": 19.0, "current_value": 11.5, "target_value": 25,
+         "due_date": "2026-12-31"},
+    )
+    html = cr._section_goals(data)
+    assert "gmark" in html and "left:19%" in html
+    assert "In progress" in html  # softened 'behind'
 
 
 def test_section_goals_drops_no_data_and_shows_achieved():

@@ -116,14 +116,36 @@ def base_map_url(center_lat: float, center_lng: float, zoom: int) -> Optional[st
 # Render (Pillow) — the only heavy I/O
 # ----------------------------------------------------------------------------
 async def _fetch_base_tile(url: str) -> Optional[bytes]:
-    """GET the Google static-map PNG; None on any failure (→ neutral background)."""
+    """GET the Google static-map PNG; None on any failure (→ neutral background).
+
+    Logs the exact HTTP status + response body on failure. The Static Maps API
+    returns a plain-text reason (e.g. "The Maps Static API is not enabled…" or a
+    key/referrer-restriction message) with a 403 — surfacing it here is the only
+    way to tell "API/key misconfigured" (every scan renders pins on a blank
+    background) apart from a one-off dead tile, without shipping the PDF to inspect."""
     import httpx  # noqa: PLC0415 — lazy: keep the pure geometry helpers import-free
 
     try:
         async with httpx.AsyncClient(timeout=30) as http:
             resp = await http.get(url)
             resp.raise_for_status()
+            # Static Maps sometimes answers 200 with an HTML/text error instead of a
+            # PNG (some key errors). Treat a non-image body as a failure so it's not
+            # composited as a "map".
+            ct = resp.headers.get("content-type", "")
+            if "image" not in ct:
+                logger.warning(
+                    "maps_base_tile_not_image",
+                    extra={"content_type": ct, "body": resp.text[:300]},
+                )
+                return None
             return resp.content
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "maps_base_tile_fetch_failed",
+            extra={"status": exc.response.status_code, "body": exc.response.text[:300]},
+        )
+        return None
     except Exception as exc:  # noqa: BLE001 — a dead tile must never sink the image
         logger.warning("maps_base_tile_fetch_failed", extra={"error": str(exc)})
         return None

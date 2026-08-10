@@ -323,41 +323,58 @@ def _rank_changes(by_date: dict, today: date, earliest: date) -> Optional[dict]:
     }}
 
 
-def build_comparisons(metric_rows: list[dict], today: date) -> Optional[dict]:
+def _accum_by_date(rows: list[dict], field: str) -> dict:
+    """{date: summed field} over rows with a parseable date and a non-null field."""
+    out: dict = {}
+    for r in rows or []:
+        if r.get(field) is None:
+            continue
+        try:
+            d = date.fromisoformat(str(r.get("date"))[:10])
+        except (TypeError, ValueError):
+            continue
+        out[d] = out.get(d, 0) + (r[field] or 0)
+    return out
+
+
+def build_comparisons(
+    metric_rows: list[dict], today: date, traffic_rows: Optional[list[dict]] = None
+) -> Optional[dict]:
     """30/90/since-start changes for impressions, organic clicks, and avg ranking.
 
     Pure. Volume metrics compare the trailing-30-day total to the same window 30/90
     days ago and to the first 30 days of data; ranking compares the trailing-7-day
-    average. A metric/window with no data is omitted (None) — never fabricated."""
-    impr, clk, rsum, rn = {}, {}, {}, {}
-    dates: set = set()
-    for r in metric_rows:
-        ds = r.get("date")
+    average. A metric/window with no data is omitted (None) — never fabricated.
+
+    ``traffic_rows`` (impressions/clicks, one row per date) sources the volume
+    metrics when given — the property-level GSC daily totals, the same source the
+    campaign goals use; ranking always comes from ``metric_rows`` (per-keyword
+    positions). Without it both come from ``metric_rows`` (back-compat). Each series
+    anchors its since-start window on its own earliest date."""
+    traffic_src = traffic_rows if traffic_rows is not None else metric_rows
+    impr = _accum_by_date(traffic_src, "impressions")
+    clk = _accum_by_date(traffic_src, "clicks")
+
+    rsum, rn = {}, {}
+    for r in metric_rows or []:
         try:
-            d = date.fromisoformat(str(ds)[:10])
+            d = date.fromisoformat(str(r.get("date"))[:10])
         except (TypeError, ValueError):
             continue
-        dates.add(d)
-        if r.get("impressions") is not None:
-            impr[d] = impr.get(d, 0) + (r["impressions"] or 0)
-        if r.get("clicks") is not None:
-            clk[d] = clk.get(d, 0) + (r["clicks"] or 0)
         pos = r.get("gsc_position")
         if pos is None:
             pos = r.get("tracked_rank")
         if pos is not None:
             rsum[d] = rsum.get(d, 0) + pos
             rn[d] = rn.get(d, 0) + 1
-    if not dates:
-        return None
-    earliest = min(dates)
     rank = {d: rsum[d] / rn[d] for d in rsum}
+
     out: dict = {}
-    if (v := _volume_changes(impr, today, earliest)):
+    if impr and (v := _volume_changes(impr, today, min(impr))):
         out["impressions"] = v
-    if (v := _volume_changes(clk, today, earliest)):
+    if clk and (v := _volume_changes(clk, today, min(clk))):
         out["clicks"] = v
-    if (v := _rank_changes(rank, today, earliest)):
+    if rank and (v := _rank_changes(rank, today, min(rank))):
         out["rank"] = v
     return out or None
 
@@ -405,6 +422,11 @@ def _section_performance(data: dict) -> str:
         m = comp.get(key)
         if not m or m.get("current") is None:
             continue
+        # A volume metric with a zero current window means the source has no traffic
+        # for this period (a GSC gap, or a stale feed) — showing "0 ▼ -100%" reads
+        # as a collapse to a client. Omit it rather than fabricate a scary delta.
+        if key in ("impressions", "clicks") and not m.get("current"):
+            continue
         ch = m.get(change_key, {})
         rows.append(_perf_row(label, fmt_val(m["current"]),
                               fmt_change(ch.get("30d")), fmt_change(ch.get("90d")), fmt_change(ch.get("start"))))
@@ -431,15 +453,68 @@ def _section_ai_visibility(data: dict) -> str:
     )
     return (
         "<section><h2>AI search visibility</h2>"
-        "<p class='lead'>How often the brand shows up when AI assistants answer your keywords:</p>"
-        f"<ul class='reviews'>{items}</ul></section>"
+        "<p class='note'>How often your brand is recommended when AI assistants "
+        "answer questions like your customers'.</p>"
+        "<p class='lead'>Across the AI tools we track:</p>"
+        f"<ul class='reviews'>{items}</ul>"
+        + _ai_keyword_matrix(a.get("keywords") or [])
+        + "</section>"
     )
+
+
+def _ai_keyword_matrix(keywords: list[dict]) -> str:
+    """Per-query visibility: for each tracked question, which AI tools recommend the
+    brand (green chip) vs don't (grey). Makes the summary counts specific — the
+    client sees exactly which questions they win and which they're missing from."""
+    if not keywords:
+        return ""
+    rows = ""
+    for k in keywords:
+        eng = k.get("engines") or {}
+        chips = ""
+        for e in _AI_ENGINE_ORDER:
+            if e not in eng:
+                continue  # engine not run for this query → not shown (not a miss)
+            cls = "aiyes" if eng[e] else "aino"
+            chips += f"<span class='aichip {cls}'>{_esc(_AI_ENGINE_SHORT[e])}</span>"
+        count = f"{k.get('found_count', 0)}/{k.get('total', 0)}"
+        rows += (
+            f"<tr><td class='aiq'>{_esc(_shorten(k.get('keyword'), 120))}</td>"
+            f"<td class='aichips'>{chips}</td>"
+            f"<td class='num aicount'>{_esc(count)}</td></tr>"
+        )
+    invisible = [k for k in keywords if not k.get("found_count")]
+    note = ""
+    if invisible:
+        qs = ", ".join(f"“{_shorten(k.get('keyword'), 70)}”" for k in invisible[:4])
+        note = (
+            f"<p class='note'>Biggest opportunity — the brand isn’t appearing yet for "
+            f"{len(invisible)} question{'s' if len(invisible) != 1 else ''}: {_esc(qs)}"
+            f"{'…' if len(invisible) > 4 else ''}</p>"
+        )
+    return (
+        "<p class='lead' style='margin-top:12px'>Which AI tools recommend you, question by question:</p>"
+        "<table class='aimatrix'><thead><tr><th>Question a customer might ask</th>"
+        "<th>AI tools recommending you</th><th class='num'>Score</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>{note}"
+    )
+
+
+def _shorten(text, limit: int) -> str:
+    s = "" if text is None else str(text)
+    return s if len(s) <= limit else s[: limit - 1].rstrip() + "…"
 
 
 _ENGINE_LABELS = {
     "chatgpt": "ChatGPT", "claude": "Claude", "gemini": "Gemini",
     "perplexity": "Perplexity", "google_ai_overview": "Google AI Overviews",
     "google_ai_mode": "Google AI Mode",
+}
+# Stable column order + compact labels for the per-keyword chip matrix.
+_AI_ENGINE_ORDER = ["chatgpt", "claude", "gemini", "perplexity", "google_ai_overview", "google_ai_mode"]
+_AI_ENGINE_SHORT = {
+    "chatgpt": "ChatGPT", "claude": "Claude", "gemini": "Gemini",
+    "perplexity": "Perplexity", "google_ai_overview": "AI Overviews", "google_ai_mode": "AI Mode",
 }
 
 
@@ -449,7 +524,8 @@ def _section_exec(data: dict) -> str:
         return ""
 
     def _list(title, items):
-        lis = "".join(f"<li>{_esc(x)}</li>" for x in (items or [])[:5])
+        clean = [x for x in (items or []) if x is not None and str(x).strip()][:5]
+        lis = "".join(f"<li>{_esc(x)}</li>" for x in clean)
         return f"<div class='hcol'><h4>{title}</h4><ul>{lis}</ul></div>" if lis else ""
 
     cols = _list("Highlights", e.get("highlights")) + _list("What we’re focused on next", e.get("focus_next"))
@@ -521,8 +597,16 @@ def _section_goals(data: dict) -> str:
         bar = ""
         if pct is not None:
             w = max(0, min(100, round(pct)))
+            # "Expected by now" marker at elapsed%: fill short of the marker reads as
+            # behind pace at a glance, so a green "On track" (or amber "In progress")
+            # never contradicts an almost-empty bar.
+            elapsed = g.get("elapsed_pct")
+            marker = ""
+            if isinstance(elapsed, (int, float)):
+                ew = max(0, min(100, round(elapsed)))
+                marker = f"<div class='gmark' style='left:{ew}%'></div>"
             bar = (f"<div class='gbar'><div class='gbar-fill' style='width:{w}%;"
-                   f"background:{colour}'></div></div>")
+                   f"background:{colour}'></div>{marker}</div>")
         where = current if gt == "custom" else f"{_esc(current)} &middot; target {_esc(target)}"
         rows.append(
             f"<tr><td><strong>{_esc(_goal_label(g))}</strong></td>"
@@ -534,7 +618,8 @@ def _section_goals(data: dict) -> str:
         return ""
     return (
         "<section><h2>Progress toward your goals</h2>"
-        "<p class='note'>The targets we set for this campaign and how each is tracking.</p>"
+        "<p class='note'>The targets we set for this campaign and how each is tracking. "
+        "The line on each bar marks where the goal is expected to be by now.</p>"
         "<table><thead><tr><th>Goal</th><th>Status</th><th>Progress</th>"
         "<th class='num'>Where we are</th></tr></thead><tbody>"
         + "".join(rows) + "</tbody></table></section>"
@@ -670,8 +755,16 @@ td.num, th.num { text-align:right; }
 .reviews { color:#334155; } .reviews li { margin-bottom:4px; }
 .gchip { font-weight:700; font-size:10px; }
 .gprog { width:34%; }
-.gbar { background:#eef2f6; border-radius:6px; height:8px; width:100%; overflow:hidden; }
+.gbar { position:relative; background:#eef2f6; border-radius:6px; height:8px; width:100%; }
 .gbar-fill { height:8px; border-radius:6px; }
+.gmark { position:absolute; top:-2px; width:2px; height:12px; background:#334155; border-radius:1px; }
+.aimatrix td, .aimatrix th { vertical-align:middle; }
+.aimatrix .aiq { width:46%; color:#334155; }
+.aichips { line-height:1.9; }
+.aichip { display:inline-block; font-size:8px; font-weight:600; padding:1px 6px; border-radius:9px; margin:1px 3px 1px 0; }
+.aichip.aiyes { background:#dcfce7; color:#166534; }
+.aichip.aino { background:#f1f5f9; color:#94a3b8; }
+.aicount { font-weight:700; color:#166534; white-space:nowrap; }
 footer { margin-top:24px; padding-top:8px; border-top:1px solid #e2e8f0; color:#94a3b8; font-size:9px; text-align:center; }
 .exec .headline { font-size:13px; color:#0f172a; font-weight:600; }
 td.num.pos { font-weight:600; color:#166534; }
@@ -735,8 +828,36 @@ def _gather_organic(supabase, client_id: str, today: date) -> Optional[dict]:
     return {
         "keywords": keywords,
         "summary": {"tracked": len(keywords), "top10": top10, "improved": improved, "declined": declined},
-        "comparisons": build_comparisons(flat_rows, today),
+        # Volume metrics come from the property-level GSC daily totals (same source
+        # as the campaign goals) so Performance highlights agrees with the goals and
+        # never shows the stale-per-keyword "0 / -100%" artifact; ranking stays from
+        # the per-keyword series (flat_rows).
+        "comparisons": build_comparisons(
+            flat_rows, today, traffic_rows=_gather_gsc_traffic(supabase, client_id, today)
+        ),
     }
+
+
+def _gather_gsc_traffic(supabase, client_id: str, today: date) -> Optional[list[dict]]:
+    """Per-day property-level GSC impressions/clicks over the comparison window, via
+    the aggregating RPC (one row per day). None when the client has no verified GSC
+    property or the read fails — comparisons then fall back to the per-keyword series."""
+    try:
+        prop = (
+            supabase.table("gsc_properties").select("id")
+            .eq("client_id", client_id).eq("access_status", "ok").limit(1).execute()
+        ).data
+        if not prop:
+            return None
+        cutoff = date.fromordinal(today.toordinal() - _COMPARISON_LOOKBACK_DAYS).isoformat()
+        rows = supabase.rpc(
+            "gsc_property_daily_traffic",
+            {"p_property_id": prop[0]["id"], "p_from": cutoff},
+        ).execute().data or []
+        return rows or None
+    except Exception as exc:
+        logger.warning("report_gsc_traffic_failed", extra={"client_id": client_id, "error": str(exc)})
+        return None
 
 
 def _gather_geogrid(supabase, client_id: str) -> Optional[dict]:
@@ -980,27 +1101,60 @@ def _gather_goals(supabase, client_id: str, period_end: date) -> Optional[dict]:
 
 
 def _gather_ai_visibility(supabase, client_id: str) -> Optional[dict]:
-    """Latest AI-visibility scan, per-engine appearance counts. None until a scan
+    """Latest AI-visibility scan: per-engine appearance counts AND a per-keyword
+    breakdown (which AI answers mention the brand, per engine). None until a scan
     has run (auto-populates once AI Visibility is used for the client)."""
-    newest = (
-        supabase.table("brand_mention_history").select("scan_batch_id")
-        .eq("client_id", client_id).order("created_at", desc=True).limit(1).execute()
-    ).data
-    if not newest:
-        return None
-    rows = (
-        supabase.table("brand_mention_history").select("engine, mention_found")
-        .eq("client_id", client_id).eq("scan_batch_id", newest[0]["scan_batch_id"]).execute()
+    # Newest NON-competitor batch (a competitor scan can be the newest rows).
+    recent = (
+        supabase.table("brand_mention_history").select("scan_batch_id, is_competitor_scan")
+        .eq("client_id", client_id).order("created_at", desc=True).limit(500).execute()
     ).data or []
+    batch = next((r["scan_batch_id"] for r in recent if not r.get("is_competitor_scan")), None)
+    if not batch:
+        return None
+    rows = [
+        r for r in (
+            supabase.table("brand_mention_history")
+            .select("engine, mention_found, keyword_id, is_competitor_scan")
+            .eq("client_id", client_id).eq("scan_batch_id", batch).execute()
+        ).data or []
+        if not r.get("is_competitor_scan")
+    ]
     if not rows:
         return None
+    kw_ids = list({r["keyword_id"] for r in rows if r.get("keyword_id")})
+    kw_map: dict[str, str] = {}
+    if kw_ids:
+        for k in (
+            supabase.table("brand_tracked_keywords").select("id, keyword")
+            .in_("id", kw_ids).execute()
+        ).data or []:
+            kw_map[k["id"]] = k["keyword"]
+
     per: dict[str, dict] = {}
+    by_kw: dict[str, dict] = {}
     for r in rows:
-        e = per.setdefault(r.get("engine") or "?", {"found": 0, "total": 0})
-        e["total"] += 1
-        if r.get("mention_found"):
-            e["found"] += 1
-    return {"engines": {e: f"{v['found']} of {v['total']} answers" for e, v in per.items()}}
+        e = r.get("engine") or "?"
+        pe = per.setdefault(e, {"found": 0, "total": 0})
+        pe["total"] += 1
+        found = bool(r.get("mention_found"))
+        if found:
+            pe["found"] += 1
+        kid = r.get("keyword_id")
+        if kid and kid in kw_map:
+            by_kw.setdefault(kid, {"keyword": kw_map[kid], "engines": {}})["engines"][e] = found
+
+    keywords = []
+    for b in by_kw.values():
+        found_count = sum(1 for v in b["engines"].values() if v)
+        keywords.append({**b, "found_count": found_count, "total": len(b["engines"])})
+    # Most-visible first; the brand-invisible queries sort to the bottom where the
+    # "not yet appearing" note draws the eye.
+    keywords.sort(key=lambda k: (-k["found_count"], k["keyword"]))
+    return {
+        "engines": {e: f"{v['found']} of {v['total']} answers" for e, v in per.items()},
+        "keywords": keywords,
+    }
 
 
 # ---------------------------------------------------------------------------

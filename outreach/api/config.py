@@ -342,6 +342,14 @@ class Settings(BaseSettings):
     organic_orders_per_tick: int = 1
     ai_orders_per_tick: int = 1
 
+    # --- Always-on worker (tick-loop daemon) ---------------------------------------------
+    # The `tick-loop` command runs `tick` continuously so a UI-placed order (enrich / scan)
+    # drains within seconds instead of waiting for the cron. This is the sleep between ticks.
+    # Every iteration is one tick, whose spend is authorized per signed order (tick is not in
+    # PAID_COMMANDS); an idle iteration spends nothing and `collect` is free, so a short interval
+    # is cheap. Kept off the floor so the DB / free-endpoint polling stays modest.
+    tick_loop_interval_seconds: float = 8.0
+
     # --- Scoring model — Phase 4 Stage 1 (scoring-spec.md) --------------------------------
     # EVERYTHING here is a CONFIG value. Zero hardcoded betas, ever (CLAUDE.md invariant). The
     # scalar knobs live here; the full coefficient REGISTRY (the elicited priors, ~40 bins) lives

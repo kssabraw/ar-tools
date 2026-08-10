@@ -67,6 +67,29 @@ def test_pace_on_track_vs_behind():
     assert cg.evaluate_goal(g, 12.0, TODAY)["status"] == "behind"
 
 
+def test_pace_projection_not_fooled_by_calendar():
+    # The WheelHouse local-pack case: baseline 10.8 → 11.5 toward target 25, only
+    # ~5% of the way with ~19% of a long window elapsed. Projected pace is well
+    # short of the target, so it must read "behind" — NOT "on track" just because
+    # little time has elapsed (the old additive-grace bug).
+    g = _goal(goal_type="maps_pack_presence", baseline_value=10.8, target_value=25.0,
+              baseline_date="2026-07-07", due_date="2026-12-31")
+    ev = cg.evaluate_goal(g, 11.5, date(2026, 8, 10))
+    assert ev["status"] == "behind"
+    # A goal keeping projected pace (half-way at a fifth of the time) stays on track.
+    g2 = _goal(goal_type="keywords_in_top", baseline_value=0, target_value=2.0,
+               baseline_date="2026-07-07", due_date="2026-12-31")
+    assert cg.evaluate_goal(g2, 1.0, date(2026, 8, 10))["status"] == "on_track"
+
+
+def test_pace_benefit_of_doubt_very_early():
+    # A few days into a 6-month window (elapsed < the min-pace floor): too early to
+    # judge the projection, so a barely-moved goal is not alarmed as "behind".
+    g = _goal(goal_type="maps_pack_presence", baseline_value=10.0, target_value=25.0,
+              baseline_date="2026-07-07", due_date="2026-12-31")
+    assert cg.evaluate_goal(g, 10.5, date(2026, 7, 12))["status"] == "on_track"
+
+
 def test_overdue_past_due_date():
     g = _goal(due_date="2026-07-01")
     ev = cg.evaluate_goal(g, 6.0, TODAY)

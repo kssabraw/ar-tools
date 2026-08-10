@@ -1698,4 +1698,36 @@ Fail-open, like every rule: NOT_EVALUATED (kept) when disabled, when no centroid
 when the listing carries no coordinates (an unknown location is not a distant one). No migration — it
 excludes via `filter_result` like the other hard gates; no new column. `filters` keeps its own
 6-line haversine to stay dependency-free (a test pins it to `tiling.haversine_miles`). Config:
-`filter_max_distance_enabled` (default True) / `filter_max_distance_miles` (30).
+`filter_max_distance_enabled` (default True) / `filter_max_distance_miles` (7).
+## 2026-08-10 — Always-on `tick-loop` worker (interactive orders drain in seconds, not on a cron)
+
+**Complaint:** a UI-placed enrichment/scan order sat until the 15-minute cron picked it up — a
+click-and-wait action felt hung. The order itself is fast (~5s once drained); the wait was entirely
+the cron cadence.
+
+**Why a cron can't fix it:** Railway's cron floor is **5 minutes**, so a cron can never be
+interactive. Shortening 15→5 min (done as immediate relief) is the best a cron allows.
+
+**Fix — the worker becomes a daemon.** New `tick-loop` command (`run_market.py::cmd_tick_loop`) runs
+`cmd_tick` continuously with a short sleep (`tick_loop_interval_seconds`, default 8s), so a signed
+order drains within seconds. It is the SAME tick the cron ran, so it inherits every safety property:
+conditional claims (no double-spend), terminal order outcomes, free `collect`, and spend authorized
+ONLY per signed order row — so `tick-loop` is deliberately NOT in `PAID_COMMANDS`, exactly like
+`tick`, and an idle iteration spends nothing. Two robustness rules: a single bad iteration is logged
+and swallowed (one transient error must not stop draining every client's orders), and SIGTERM/SIGINT
+sets a stop flag so the loop exits cleanly AFTER the current tick (a deploy never severs a drain
+mid-flight; the sleep is sliced so the stop is honored within ~¼s).
+
+**Service config (cutover):** OUTREACH_COMMAND=`tick-loop`, `cronSchedule`=null (continuous),
+`restartPolicyType`=`on_failure`. The last REPLACES the old `never`: `never` was correct when this
+was a one-shot cron job; a daemon must self-heal from a crash (OOM/SIGKILL), and a clean SIGTERM exit
+(returns 0) is deliberately NOT restarted (the new deployment takes over). `railway.toml` updated to
+match so a future code deploy can't silently revert the policy. **Caveat recorded in railway.toml:**
+do not repurpose this daemon service for a manual PAID one-shot (ingest/run) — under `on_failure` a
+failed paid pull would restart and re-pull (the loop the old `never` guarded); run those via the
+local CLI or an ephemeral job. The steady state here is tick-loop, whose restart just resumes
+draining.
+
+**Cost:** an always-on container (a few $/mo) vs a briefly-running cron — an accepted trade for
+interactive latency (owner chose the always-on worker over the 5-min cron). No paid-call increase:
+`collect` is free and drains only spend on authorized orders.

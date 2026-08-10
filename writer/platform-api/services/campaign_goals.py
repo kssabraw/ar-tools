@@ -42,9 +42,18 @@ GOAL_TYPES = (
     "custom",
 )
 
-# On-pace grace: progress may trail elapsed time by this fraction before the
-# goal reads "behind" (movement is lumpy — links index in waves).
+# On-pace tolerance: a goal reads "on track" when, projecting its current pace to
+# the due date, it would reach within this fraction of the target (i.e. projected
+# progress >= 1 - _PACE_GRACE). Movement is lumpy — links index in waves — so a
+# little slack is allowed. A *projection* (progress ÷ elapsed) is used rather than
+# a flat additive tolerance because the additive form was trivially cleared early
+# in a long campaign: at 19% elapsed, "progress >= elapsed - 0.15" passes at ~4%
+# progress, so a barely-moved, long-dated goal read "on track" (a client saw an
+# almost-empty bar labelled green). A ratio can't be gamed by the calendar.
 _PACE_GRACE = 0.15
+# Below this elapsed fraction the projection is too noisy to judge fairly (a goal
+# a few days into a 6-month window), so give it the benefit of the doubt.
+_PACE_MIN_ELAPSED = 0.1
 _CLICKS_WINDOW_DAYS = 30
 
 
@@ -101,12 +110,18 @@ def evaluate_goal(goal: dict, current_value: Optional[float], today: date) -> di
         if today > due:
             return {"status": "overdue", "progress_pct": progress_pct, "elapsed_pct": 100.0}
         elapsed_pct = None
-        if start and due > start:
-            elapsed = (today - start).days / (due - start).days
-            elapsed_pct = round(min(1.0, max(0.0, elapsed)) * 100.0, 1)
-            if progress is not None:
-                status = "on_track" if progress >= (elapsed - _PACE_GRACE) else "behind"
-                return {"status": status, "progress_pct": progress_pct, "elapsed_pct": elapsed_pct}
+        if start and due > start and progress is not None:
+            elapsed = min(1.0, max(0.0, (today - start).days / (due - start).days))
+            elapsed_pct = round(elapsed * 100.0, 1)
+            # Project the current pace to the due date: on track only if continuing
+            # at this rate would land within _PACE_GRACE of the target. Too early to
+            # judge the projection fairly → benefit of the doubt.
+            if elapsed < _PACE_MIN_ELAPSED:
+                status = "on_track"
+            else:
+                projected = progress / elapsed
+                status = "on_track" if projected >= (1.0 - _PACE_GRACE) else "behind"
+            return {"status": status, "progress_pct": progress_pct, "elapsed_pct": elapsed_pct}
         # No usable pace axis → judge by movement alone.
         return {
             "status": "on_track" if (progress or 0) > 0 else "behind",
