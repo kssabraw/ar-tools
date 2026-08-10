@@ -1636,6 +1636,69 @@ Call-hook section and the `/justification` panel both pick up the new hook with 
 `outreach_call_hook_llm_enabled` (default True) / `_provider` / `_model` / `_openai_model` /
 `_max_tokens`. Pure logic (guard, fingerprint, prompt builder, lead-fact selection) unit-tested.
 
+---
+
+## 2026-08-10 — Category relevance: a three-bucket ingest gate (keep / review / drop)
+
+**The problem, measured on live data.** A "plumbing contractor" onboard order for Inglewood pulled
+135 GBPs; **~46% were not plumbing-service businesses** (apartment buildings, tool stores, painters,
+HVAC firms, general contractors, and plumbing-SUPPLY warehouses), and about half of *those* survived
+Stage A2 into the contactable set. Root cause: Google Maps category search fuzzy-matches adjacent
+trades, and none of the six Phase-1 filter rules asked whether a listing is actually the searched
+trade. The `category` was already parsed and stored on every prospect — it was simply never used to
+filter.
+
+**The decision.** Add a seventh filter rule, `category_relevant`, keyed on Google's own **primary**
+category, with THREE outcomes rather than the usual two:
+
+- primary category on the vertical's allow-list → **keep** (rule passes)
+- primary off-list, but a **secondary** category matches → **review** (passes, but flagged; a human
+  glances before contact — mirrors the franchise "flag, never exclude" posture)
+- primary off-list, no secondary match → **drop** (rule fails, hard exclude)
+
+**Why primary-not-any-subtype.** Measured: a Home Depot service desk lists "Plumber" among ten
+subtypes, and an any-subtype match would auto-KEEP it — re-admitting the exact noise. Primary-category
+matching is the precision point; secondaries feed only the review pile, which rescues genuinely
+mislabeled plumbers (SLATER PLUMBING, primary "Contractor") without auto-keeping the generalists.
+
+**Fail-open, everywhere, by this module's own rule** (a false exclusion is the one filter error with
+no recovery path): the rule records NOT_EVALUATED and keeps the prospect when the gate is disabled,
+when the vertical has no curated allow-list (`filter_category_relevance` map miss → `None`), or when
+the listing carries no category at all. Enabling the feature for an un-curated vertical is a no-op,
+not a mass exclusion.
+
+**Human rulings win and are protected in the DB.** `category_status` ('unknown'/'relevant'/'review'/
+'off_category'/'confirmed_relevant'/'confirmed_off') is re-derived each run, but a `confirmed_*`
+ruling is preserved by extending the `prospect_preserve_decisions()` trigger (clause 4, symmetric with
+the franchise clause) — same class as I-053/I-054, guarded in the database, not just at the call site.
+
+**Retroactive clean is free.** `run_filter` re-derives from stored `raw` and upserts `filter_result`,
+so switching this on and re-running re-buckets everything already pulled with **zero** Outscraper
+spend — the module's "re-parsing raw is free, re-pulling is not" principle.
+
+Config: `filter_category_relevance_enabled` (default True) + `filter_category_relevance` (ingest
+category → accepted Google categories; seeded for plumbing only). Migration `20260810180000`.
+
+**Deliberately deferred:** (1) the unbounded-`coordinates` geographic drift (a distinct, smaller
+nearest-submarket distance gate); (2) curating allow-lists for verticals beyond plumbing — each new
+vertical adds one map key. Both are additive and change the gate's inputs, never its mechanism.
+
+### Addendum (same day) — distance gate folded in
+
+The unbounded-`coordinates` drift noted as deferred above is now built as an eighth rule,
+`within_area`. Outscraper's `coordinates` biases the search centre but does not bound it, so a
+category pull returned a kitchen remodeler in Lompoc (~150 mi) for an Inglewood plumbing order. The
+rule drops a listing whose location is further than `filter_max_distance_miles` (default **7 miles**,
+owner ruling 2026-08-10) from its **assigned submarket centroid** — which, for the typed-city onboard
+flow, IS the city centre (platform-api geocodes the typed city to that submarket). 7 miles keeps
+results inside the city while still covering a business on its far side; the live Inglewood pull sat
+entirely within 6.7 miles of centre. A market whose submarkets are spaced further apart may need a
+looser cap, so it stays per-config.
+Fail-open, like every rule: NOT_EVALUATED (kept) when disabled, when no centroid/cap is available, or
+when the listing carries no coordinates (an unknown location is not a distant one). No migration — it
+excludes via `filter_result` like the other hard gates; no new column. `filters` keeps its own
+6-line haversine to stay dependency-free (a test pins it to `tiling.haversine_miles`). Config:
+`filter_max_distance_enabled` (default True) / `filter_max_distance_miles` (7).
 ## 2026-08-10 — Always-on `tick-loop` worker (interactive orders drain in seconds, not on a cron)
 
 **Complaint:** a UI-placed enrichment/scan order sat until the 15-minute cron picked it up — a
