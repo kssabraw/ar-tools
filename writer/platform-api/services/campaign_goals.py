@@ -256,7 +256,15 @@ def _measure_gsc_sum(supabase, client_id: str, field: str, today: date) -> Optio
         return None
     if not rows:
         return None
-    return float(sum(r.get(field) or 0 for r in rows))
+    # The RPC sums from p_from with no upper bound; bound it to `today` so a
+    # historical measurement (e.g. the value as of the start of a report period,
+    # used for "since last period" movement) reflects only data up to that date —
+    # not everything since. For a current measurement this is a no-op.
+    today_iso = today.isoformat()
+    windowed = [r for r in rows if str(r.get("date")) <= today_iso]
+    if not windowed:
+        return None
+    return float(sum(r.get(field) or 0 for r in windowed))
 
 
 def _measure_ai_visibility(supabase, client_id: str, goal: dict, today: date) -> Optional[float]:

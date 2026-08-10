@@ -140,9 +140,12 @@ def test_measure_gsc_sum_aggregates_via_rpc():
 
     class _Rpc:
         def execute(self):
-            # one row per day (already aggregated) — sums to 17 clicks
-            return _Res([{"date": "2026-08-01", "impressions": 100, "clicks": 9},
-                         {"date": "2026-08-02", "impressions": 50, "clicks": 8}])
+            # one row per day (already aggregated); the row dated AFTER `today` must
+            # be excluded by the upper-bound filter so a historical measurement is
+            # correct — clicks sum to 17 (9 + 8), not 25.
+            return _Res([{"date": "2026-07-01", "impressions": 100, "clicks": 9},
+                         {"date": "2026-07-05", "impressions": 50, "clicks": 8},
+                         {"date": "2026-07-20", "impressions": 999, "clicks": 8}])
 
     class _SB:
         def table(self, name):
@@ -153,5 +156,6 @@ def test_measure_gsc_sum_aggregates_via_rpc():
             assert params["p_property_id"] == "prop1"
             return _Rpc()
 
+    # TODAY = 2026-07-07 → the 2026-07-20 row is in the future and excluded.
     assert cg._measure_gsc_sum(_SB(), "c1", "clicks", TODAY) == 17.0
     assert cg._measure_gsc_sum(_SB(), "c1", "impressions", TODAY) == 150.0
