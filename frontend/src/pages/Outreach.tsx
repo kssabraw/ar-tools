@@ -372,15 +372,18 @@ function OnboardOrdersCard() {
       {isLoading ? (
         <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>Loading…</p>
       ) : (
-        <table style={{ width: '100%', marginTop: 8, fontSize: 13, borderCollapse: 'collapse' }}>
+        // table-layout:fixed so this table's cells (incl. the colSpan results cell holding the
+        // nested CoverageTable) have DEFINITE widths — otherwise an auto-layout cell expands to the
+        // wide inner table and pushes the card border out instead of letting it scroll.
+        <table style={{ width: '100%', tableLayout: 'fixed', marginTop: 8, fontSize: 13, borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ textAlign: 'left', color: '#64748b', fontSize: 11 }}>
-              <th style={{ padding: '4px 8px' }}>Placed</th>
+              <th style={{ padding: '4px 8px', width: 200 }}>Placed</th>
               <th style={{ padding: '4px 8px' }}>Target</th>
               <th style={{ padding: '4px 8px' }}>Search</th>
-              <th style={{ padding: '4px 8px' }}>Stage</th>
-              <th style={{ padding: '4px 8px' }}>Status</th>
-              <th style={{ padding: '4px 8px' }} />
+              <th style={{ padding: '4px 8px', width: 150 }}>Stage</th>
+              <th style={{ padding: '4px 8px', width: 110 }}>Status</th>
+              <th style={{ padding: '4px 8px', width: 130 }} />
             </tr>
           </thead>
           <tbody>
