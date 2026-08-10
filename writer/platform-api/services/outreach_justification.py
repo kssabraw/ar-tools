@@ -66,14 +66,19 @@ ELEM_LISTING_STATUS = "listing_status"
 # it is deliberately absent until a second scan exists (deltas arrive at cycle 2, ~30 days), the
 # same seam the heatmap delta guards leave open (outreach ISSUES I-091). See the caveats.
 HOOK_PRIORITY = (
-    # "Paying and losing" is the highest-intent opener available (the vendor-failing shape,
-    # scoring-spec.md §Proven-spend / §Buying-intent): proven budget AND a visible problem.
+    # The single opener a caller leads with, ordered so the hook LEADS with the most
+    # per-prospect-DISTINCTIVE loss rather than the coverage line every business in a submarket
+    # shares (that sameness was the complaint this ordering answers). Paying-and-losing stays top
+    # (proven budget AND a visible problem — scoring-spec.md §Buying-intent). Then a NAMED
+    # competitor taking the exact points this business is missing, then its own review deficit vs
+    # the field — both differ business-to-business even inside one submarket. Bare coverage (shared
+    # across a submarket) drops BELOW them, so two neighbours no longer open with the same line.
     ELEM_PAYING,
-    ELEM_COVERAGE,
     ELEM_COMPETITOR,
-    ELEM_PAID,
-    ELEM_GEOGRAPHY,
     ELEM_REVIEWS,
+    ELEM_COVERAGE,
+    ELEM_GEOGRAPHY,
+    ELEM_PAID,
     ELEM_NO_WEBSITE,
     ELEM_NO_PHONE,
     ELEM_LISTING_STATUS,
@@ -293,16 +298,18 @@ def build_justification(
         "submarket": submarket,
     }
     if invisible_everywhere:
-        denom = f"the {total_points} points we checked" if total_points else "every point we checked"
+        denom = f"all {total_points} points we checked" if total_points else "every point we checked"
         cov_text = (
-            f"Doesn't appear in Google's map results for “{keyword}” at {denom} across "
-            f"{submarket} — invisible across their whole service area."
+            f"Every customer searching “{keyword}” across {submarket} is being handed to a "
+            f"competitor — {name} doesn't appear in Google's map results at {denom}, so none of "
+            f"that demand is reaching them."
         )
     else:
-        span = f"{invisible} of the {total_points} points" if total_points is not None else "much"
+        span = f"{invisible} of the {total_points} points" if total_points is not None else "much of the area"
         cov_text = (
-            f"Missing from Google's map results for “{keyword}” across {_pct(deficit)} of "
-            f"{submarket} — absent at {span} we measured."
+            f"{name} is losing “{keyword}” searches across {_pct(deficit)} of {submarket} — "
+            f"absent from Google's map results at {span} we measured, so those customers are "
+            f"reaching a competitor first."
         )
     points.append(_point(ELEM_COVERAGE, cov_text, cov_facts))
 
@@ -360,15 +367,16 @@ def build_justification(
     if competitors.get("available") and named and invis_pts > 0:
         lead = named[0]
         text = (
-            f"{lead['name']} is sitting in Google's top {pack_size} at {lead['points']} of the "
-            f"{invis_pts} {_plural(invis_pts, 'point')} where {name} doesn't show up at all"
+            f"{lead['name']} is taking {lead['points']} of the {invis_pts} "
+            f"{_plural(invis_pts, 'point')} where {name} never appears — sitting in Google's top "
+            f"{pack_size} and pulling the customers {name} can't be seen by"
         )
         if len(named) > 1:
             second = named[1]
-            text += f", and {second['name']} at {second['points']}"
+            text += f", with {second['name']} taking {second['points']} more"
         total = int(competitors.get("total") or 0)
         if total > len(named):
-            text += f" ({total} competitors are taking that space in all)"
+            text += f" ({total} competitors are splitting that space in all)"
         text += "."
         points.append(
             _point(
@@ -395,9 +403,9 @@ def build_justification(
         if display:
             lead = display[0]
             channel = "Local Services ad" if lsa_names else "Google Ad"
-            text = f"{lead} is running a {channel} for “{keyword}” — paying to sit at the top of a search {name} is invisible on"
+            text = f"{lead} is paying for a {channel} on “{keyword}” — buying the customers {name} is invisible to at the top of the search"
             if count > 1:
-                text += f", and they're not the only one ({count} competitors are buying this search)"
+                text += f", and they're not alone ({count} competitors are buying this search)"
             text += "."
             points.append(
                 _point(
@@ -426,12 +434,13 @@ def build_justification(
             "best_rank": coverage.get("best_rank"),
         }
         text = (
-            f"Holds the map pack close to home but falls off it beyond about {_miles(dist)} "
-            f"{_plural(round(dist), 'mile')} out — the edges of {submarket} are wide open"
+            f"{name} holds the map pack close to home but loses it past about {_miles(dist)} "
+            f"{_plural(round(dist), 'mile')} out — every search from the edges of {submarket} is "
+            f"going to a competitor"
         )
         avg_rank = coverage.get("avg_rank")
         if avg_rank is not None:
-            text += f", and where they do appear they average position {round(float(avg_rank), 1)}"
+            text += f", and even where they do appear they sit at position {round(float(avg_rank), 1)}"
         text += "."
         points.append(_point(ELEM_GEOGRAPHY, text, geo_facts))
 
@@ -448,9 +457,9 @@ def build_justification(
         points.append(
             _point(
                 ELEM_REVIEWS,
-                f"Only {own_reviews} Google {_plural(own_reviews, 'review')} — the typical "
-                f"“{keyword}” we looked at in {submarket} has around {_miles(field_median)}. "
-                f"Reviews are the first thing a searcher compares.",
+                f"Only {own_reviews} Google {_plural(own_reviews, 'review')} against a field that "
+                f"averages about {_miles(field_median)} — at the moment a searcher compares, "
+                f"{name} loses the click to a better-reviewed competitor.",
                 {
                     "review_count": own_reviews,
                     "field_median": field_median,
@@ -491,15 +500,17 @@ def build_justification(
 
     available_elements = [p["element"] for p in points]
     hook_element = next((e for e in HOOK_PRIORITY if e in available_elements), None)
+    points_by_element = {p["element"]: p for p in points}
 
     return {
         "measured": True,
         "prospect_id": prospect.get("id"),
         "prospect_name": name,
         "headline": _headline(name, keyword, submarket, deficit, invisible_everywhere),
-        "hook": _hook(
-            name, keyword, submarket, deficit, invisible_everywhere, named, pack_size,
-            paying_and_losing=paying_and_losing,
+        "hook": _compose_hook(
+            hook_element, points_by_element,
+            name=name, keyword=keyword, submarket=submarket, deficit=deficit,
+            invisible_everywhere=invisible_everywhere, pack_size=pack_size, named=named,
             paying_evidence=paying_evidence,
         ),
         "hook_element": hook_element,
@@ -538,37 +549,48 @@ def not_measured(prospect_id: str, prospect_name: Optional[str]) -> dict[str, An
 def _headline(
     name: str, keyword: str, submarket: str, deficit: float, invisible_everywhere: bool
 ) -> str:
+    """One-line loss-framed summary — what is walking out the door, not a neutral state read."""
     if invisible_everywhere:
-        return f"{name} doesn't appear anywhere on Google Maps for “{keyword}” in {submarket}."
-    return f"{name} is invisible on Google Maps for “{keyword}” across {_pct(deficit)} of {submarket}."
+        return (
+            f"{name} is invisible on Google Maps for “{keyword}” in {submarket} — every one of "
+            f"those searches is going to a competitor."
+        )
+    return (
+        f"{name} is losing “{keyword}” searches across {_pct(deficit)} of {submarket} on Google "
+        f"Maps — that demand is reaching competitors instead."
+    )
 
 
-def _hook(
+def _compose_hook(
+    hook_element: Optional[str],
+    points_by_element: dict[str, dict[str, Any]],
+    *,
     name: str,
     keyword: str,
     submarket: str,
     deficit: float,
     invisible_everywhere: bool,
-    named: list[dict[str, Any]],
     pack_size: int,
-    *,
-    paying_and_losing: bool = False,
-    paying_evidence: Optional[str] = None,
+    named: list[dict[str, Any]],
+    paying_evidence: Optional[str],
 ) -> str:
-    """The single spoken opener, in the PRD §716 shape: keyword + area + a competitor when there is
-    one. Built from persisted facts, never improvised — the same sentence for the same scan.
+    """The single spoken opener — **loss-framed** and **leading with this prospect's most
+    distinctive measured loss** (whatever `hook_element` resolved to), so two businesses in the same
+    submarket no longer open with the same coverage line.
 
-    When the prospect is paying AND losing, the opener LEADS with that (the strongest, highest-intent
-    line available — they've proven budget and have a visible problem), so `hook_element == 'paying'`
-    and the spoken hook agree.
-
-    **This sentence is said to the prospect's face, so it may only claim what was measured.** With
-    `serp_ad`/`lsa` evidence their paid placement was observed on THIS keyword's SERP and the spend
-    claim is grounded. With `conversion_tag` evidence only their site was observed, so the opener
-    asks about ad spend instead of asserting it — a caller who says "you're paying for Google Ads on
-    X" to someone who paused that campaign has lost the call in one sentence.
+    Deterministic FALLBACK: `services/outreach_call_hook.py` rewrites this with an LLM when
+    available, grounded on the same facts; this is what ships when the model is unavailable, so it
+    must stand on its own. Every clause is a MEASURED fact — the loss is framed, never invented: no
+    promises, and no money / lead / traffic-volume numbers (the module's governing invariant; a
+    claim the prospect can falsify in one sentence costs the call).
     """
-    if paying_and_losing:
+    prefix = f"I searched “{keyword}” across {submarket} —"
+
+    if hook_element == ELEM_PAYING:
+        # Evidence-gated exactly as before: serp_ad/lsa were measured on this keyword's SERP so the
+        # spend claim is grounded; a conversion tag was measured on their SITE, so the opener ASKS
+        # rather than asserts (a caller who says "you're paying for Google Ads on X" to someone who
+        # paused that campaign has lost the call). This branch's copy is unchanged.
         where = (
             "you don't show up in the Google map results anywhere I looked"
             if invisible_everywhere
@@ -576,22 +598,67 @@ def _hook(
         )
         if paying_evidence == "conversion_tag":
             return (
-                f"I searched “{keyword}” across {submarket} — {where}. I noticed you're running "
-                f"Google Ads conversion tracking, so are you paying for clicks your competitors are "
-                f"getting for free from the map pack?"
+                f"{prefix} {where}. I noticed you're running Google Ads conversion tracking, so are "
+                f"you paying for clicks your competitors are getting for free from the map pack?"
             )
         channel = "a Local Services ad" if paying_evidence == "lsa" else "Google Ads"
         return (
-            f"I searched “{keyword}” across {submarket} — you're paying for {channel}, but "
-            f"{where}, so you're buying clicks your competitors are getting for free."
+            f"{prefix} you're paying for {channel}, but {where}, so you're buying clicks your "
+            f"competitors are getting for free."
         )
+
+    if hook_element == ELEM_COMPETITOR and named:
+        lead = named[0]
+        pts = int(lead.get("points") or 0)
+        return (
+            f"{prefix} {lead['name']} is sitting in the top {pack_size} at {pts} of the exact "
+            f"{_plural(pts, 'spot')} you never appear, taking those “{keyword}” customers right now."
+        )
+
+    if hook_element == ELEM_REVIEWS and ELEM_REVIEWS in points_by_element:
+        f = points_by_element[ELEM_REVIEWS]["facts"]
+        own = int(f.get("review_count") or 0)
+        med = f.get("field_median")
+        return (
+            f"{prefix} you've got {own} Google {_plural(own, 'review')} against a field that "
+            f"averages about {_miles(med)}, so the moment a searcher compares, that call goes to a "
+            f"better-reviewed competitor instead of you."
+        )
+
+    if hook_element == ELEM_GEOGRAPHY and ELEM_GEOGRAPHY in points_by_element:
+        f = points_by_element[ELEM_GEOGRAPHY]["facts"]
+        dist = f.get("centroid_dist_at_loss")
+        return (
+            f"{prefix} you hold the map pack near your shop but disappear past about {_miles(dist)} "
+            f"{_plural(round(float(dist)), 'mile')} out, so every “{keyword}” search from the edges "
+            f"of {submarket} is going to a competitor."
+        )
+
+    if hook_element == ELEM_PAID and ELEM_PAID in points_by_element:
+        f = points_by_element[ELEM_PAID]["facts"]
+        lsa = [a.get("name") for a in (f.get("competitor_lsa") or []) if a.get("name")]
+        ads = [a.get("domain") for a in (f.get("competitor_advertisers") or []) if a.get("domain")]
+        display = lsa + ads
+        advertiser = display[0] if display else "a competitor"
+        return (
+            f"{prefix} {advertiser} is paying to sit at the top of a search you're invisible on, "
+            f"buying the “{keyword}” customers who never see you."
+        )
+
+    # Coverage (and any listing-only fallback): the shared line, still loss-framed.
     if invisible_everywhere:
-        clause = f"you don't show up in the Google map results for “{keyword}” anywhere I looked"
+        clause = (
+            f"you don't come up in the Google map results for “{keyword}” anywhere I looked, so "
+            f"every one of those searches is going to a competitor"
+        )
     else:
-        clause = f"you're missing from the Google map results for “{keyword}” across {_pct(deficit)} of the area"
-    hook = f"I searched “{keyword}” across {submarket} — {clause}"
+        clause = (
+            f"you're missing from the Google map results for “{keyword}” across {_pct(deficit)} of "
+            f"the area, and those customers are calling whoever shows instead"
+        )
+    hook = f"{prefix} {clause}"
     if named:
-        hook += f", while {named[0]['name']} is showing up in the top {pack_size}"
+        hook += f" — {named[0]['name']} is one of the businesses taking that space"
     return hook + "."
 
 

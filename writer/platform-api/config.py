@@ -527,6 +527,17 @@ class Settings(BaseSettings):
     # Set RANK_ANALYSIS_PROVIDER=anthropic to revert (uses rank_analysis_model).
     rank_analysis_provider: str = "openai"        # openai | anthropic
     rank_analysis_openai_model: str = "gpt-5.4"
+
+    # Outreach "Why call?" hook — the loss-framed LLM phrasing pass over the deterministic
+    # justification facts (services/outreach_call_hook.py). ONE small call per report, cached per
+    # (prospect, snapshot), best-effort with a deterministic fallback, and a hard grounding guard
+    # (no invented money / lead-volume numbers). Low volume + cached, so it defaults to Anthropic
+    # (no fan-out 429 exposure like the maps report); flip the provider to reuse OpenAI's quota.
+    outreach_call_hook_llm_enabled: bool = True
+    outreach_call_hook_provider: str = "anthropic"   # anthropic | openai
+    outreach_call_hook_model: str = "claude-sonnet-4-6"
+    outreach_call_hook_openai_model: str = "gpt-5.4"
+    outreach_call_hook_max_tokens: int = 700
     rank_analysis_max_retries: int = 6
     rank_analysis_retry_base_seconds: float = 2.0
     # Weekly auto-generation: gated on this flag; runs the day after the weekly

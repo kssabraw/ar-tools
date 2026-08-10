@@ -1960,7 +1960,7 @@ def prospect_justification(
                                    max_named=settings.outreach_justification_max_competitors,
                                    cache=_cache)
 
-    return oj.build_justification(
+    justification = oj.build_justification(
         prospect=prospect,
         keyword=keyword,
         submarket=submarket_name,
@@ -1974,6 +1974,107 @@ def prospect_justification(
         paid=paid_signal,
         losing_deficit_pct=settings.outreach_paying_losing_deficit_pct,
     )
+    # Loss-framed LLM phrasing on top of the deterministic hook — cached per (prospect, snapshot),
+    # best-effort, guarded against fabricated numbers. Falls back to the deterministic hook on any
+    # failure. Both report faces read this justification, so the report + the "Why call?" panel share
+    # the same generated hook.
+    _apply_call_hook_phrasing(client, justification, prospect_id, snapshot["id"])
+    return justification
+
+
+def _apply_hook_to_justification(
+    justification: dict[str, Any], hook: str, points: list[dict[str, Any]]
+) -> None:
+    """Swap the deterministic hook for the generated one and rephrase the talking points KEYED BY
+    ELEMENT — the model can only re-word points it was given, never add, drop, or reorder them (the
+    element+facts stay the deterministic ones, so provenance is intact). Pure mutation."""
+    justification["hook"] = hook
+    justification["hook_generated"] = True
+    by_el: dict[str, str] = {}
+    for p in points or []:
+        el, txt = p.get("element"), p.get("text")
+        if el and isinstance(txt, str) and txt.strip():
+            by_el.setdefault(el, txt.strip())
+    for tp in justification.get("talking_points") or []:
+        if tp.get("element") in by_el:
+            tp["text"] = by_el[tp["element"]]
+
+
+def _apply_call_hook_phrasing(
+    client: Any, justification: dict[str, Any], prospect_id: str, snapshot_id: str
+) -> None:
+    """Apply the cached loss-framed hook, or generate + cache one. Best-effort — never raises past a
+    log; the deterministic hook stands on any failure (no key, LLM error, guard rejection, a
+    not-yet-migrated cache table)."""
+    from config import settings
+
+    if not settings.outreach_call_hook_llm_enabled or not justification.get("measured"):
+        return
+    try:
+        from services import outreach_call_hook as och
+
+        fingerprint = och.facts_fingerprint(justification)
+        cached = _get_cached_call_hook(client, prospect_id, snapshot_id)
+        if cached and cached.get("facts_fingerprint") == fingerprint and cached.get("hook"):
+            _apply_hook_to_justification(
+                justification, cached["hook"], cached.get("talking_points") or []
+            )
+            return
+        generated = och.generate_hook(justification)
+        if not generated:
+            return
+        _apply_hook_to_justification(
+            justification, generated["hook"], generated.get("talking_points") or []
+        )
+        _store_call_hook(client, prospect_id, snapshot_id, fingerprint, generated)
+    except Exception as exc:  # noqa: BLE001 — phrasing is a nicety; the report must render regardless
+        logger.warning("outreach_call_hook_apply_failed", extra={"error": str(exc)[:200]})
+
+
+def _get_cached_call_hook(client: Any, prospect_id: str, snapshot_id: str) -> dict[str, Any] | None:
+    """The stored generated hook for this (prospect, snapshot), or None. Returns None (not an error)
+    when the cache table doesn't exist yet, so the feature degrades to live generation."""
+    try:
+        rows = (
+            client.table("prospect_call_hook")
+            .select("hook, talking_points, facts_fingerprint")
+            .eq("prospect_id", prospect_id)
+            .eq("snapshot_id", snapshot_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return rows[0] if rows else None
+    except Exception:  # noqa: BLE001 — table not migrated / read failed → no cache, generate live
+        return None
+
+
+def _store_call_hook(
+    client: Any,
+    prospect_id: str,
+    snapshot_id: str,
+    fingerprint: str,
+    generated: dict[str, Any],
+) -> None:
+    """Persist the generated hook so a re-read is a cheap, identical replay. Upsert on (prospect_id,
+    snapshot_id); a store failure is logged, never fatal."""
+    from config import settings
+
+    row = {
+        "prospect_id": prospect_id,
+        "snapshot_id": snapshot_id,
+        "facts_fingerprint": fingerprint,
+        "hook": generated["hook"],
+        "talking_points": generated.get("talking_points") or [],
+        "model": f"{settings.outreach_call_hook_provider}:{settings.outreach_call_hook_model}",
+    }
+    try:
+        client.table("prospect_call_hook").upsert(
+            row, on_conflict="prospect_id,snapshot_id"
+        ).execute()
+    except Exception as exc:  # noqa: BLE001 — the hook already rendered; caching is opportunistic
+        logger.warning("outreach_call_hook_store_failed", extra={"error": str(exc)[:200]})
 
 
 def _latest_report_approval(client: Any, prospect_id: str) -> dict[str, Any] | None:
