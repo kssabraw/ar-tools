@@ -297,6 +297,20 @@ def _pct(curr: Optional[float], prev: Optional[float]) -> Optional[float]:
     return round((curr - prev) / prev * 100, 1)
 
 
+# The since-start comparison needs two non-overlapping 30-day windows (the first
+# 30 days vs the last 30). With less history the "first 30 days" window overlaps
+# the current one and the delta is noise — a 5-week-old campaign showed a
+# misleading "▼ -19% since we started" while the 30-day trend was +88%. Below this
+# many days of history, "start" (and the since-start KPI) is suppressed.
+_MIN_SINCE_START_DAYS = 60
+
+
+def _since_start_pct(cur: Optional[float], by_date: dict, today: date, earliest: date) -> Optional[float]:
+    if (today - earliest).days < _MIN_SINCE_START_DAYS:
+        return None
+    return _pct(cur, _window_sum(by_date, earliest + timedelta(days=30), 30))
+
+
 def _volume_changes(by_date: dict, today: date, earliest: date) -> Optional[dict]:
     cur = _window_sum(by_date, today, 30)
     if cur is None:
@@ -304,7 +318,7 @@ def _volume_changes(by_date: dict, today: date, earliest: date) -> Optional[dict
     return {"current": cur, "changes": {
         "30d": _pct(cur, _window_sum(by_date, today - timedelta(days=30), 30)),
         "90d": _pct(cur, _window_sum(by_date, today - timedelta(days=90), 30)),
-        "start": _pct(cur, _window_sum(by_date, earliest + timedelta(days=30), 30)),
+        "start": _since_start_pct(cur, by_date, today, earliest),
     }}
 
 
@@ -316,10 +330,13 @@ def _rank_changes(by_date: dict, today: date, earliest: date) -> Optional[dict]:
     def improvement(prev):  # rank: lower is better → positive = positions gained
         return None if prev is None else round(prev - cur, 1)
 
+    start = None
+    if (today - earliest).days >= _MIN_SINCE_START_DAYS:
+        start = improvement(_window_avg(by_date, earliest + timedelta(days=7), 7))
     return {"current": cur, "changes_positions": {
         "30d": improvement(_window_avg(by_date, today - timedelta(days=30), 7)),
         "90d": improvement(_window_avg(by_date, today - timedelta(days=90), 7)),
-        "start": improvement(_window_avg(by_date, earliest + timedelta(days=7), 7)),
+        "start": start,
     }}
 
 
@@ -673,7 +690,10 @@ def _kpi_strip(data: dict) -> str:
     comp = (data.get("organic") or {}).get("comparisons") or {}
     impr = comp.get("impressions") or {}
     impr_start = (impr.get("changes") or {}).get("start")
-    if impr_start is not None:
+    # Only a genuine gain leads the report — a flat/negative or too-short-to-judge
+    # since-start figure isn't a hero number (and _volume_changes already drops it
+    # when history is too short to compare non-overlapping windows).
+    if impr_start and impr_start > 0:
         cards.append(_kpi("Search visibility", _fmt_pct(impr_start), "since we started"))
     rank = comp.get("rank") or {}
     rank_start = (rank.get("changes_positions") or {}).get("start")

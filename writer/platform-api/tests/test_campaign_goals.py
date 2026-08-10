@@ -115,3 +115,43 @@ def test_goal_note_carries_numbers_and_status():
 
 def test_measure_goal_dispatch_custom_is_none():
     assert cg.measure_goal(None, "c1", {"goal_type": "custom"}, TODAY) is None
+
+
+def test_measure_gsc_sum_aggregates_via_rpc():
+    """Clicks/impressions goals must sum the per-day RPC totals (server-side
+    aggregate), not a raw gsc_query_daily select that PostgREST caps at 1000 rows
+    and silently undercounts a busy property."""
+    class _Res:
+        def __init__(self, data):
+            self.data = data
+
+    class _Table:
+        def select(self, *a, **k):
+            return self
+
+        def eq(self, *a, **k):
+            return self
+
+        def limit(self, *a, **k):
+            return self
+
+        def execute(self):
+            return _Res([{"id": "prop1"}])  # gsc_properties row
+
+    class _Rpc:
+        def execute(self):
+            # one row per day (already aggregated) — sums to 17 clicks
+            return _Res([{"date": "2026-08-01", "impressions": 100, "clicks": 9},
+                         {"date": "2026-08-02", "impressions": 50, "clicks": 8}])
+
+    class _SB:
+        def table(self, name):
+            return _Table()
+
+        def rpc(self, name, params):
+            assert name == "gsc_property_daily_traffic"
+            assert params["p_property_id"] == "prop1"
+            return _Rpc()
+
+    assert cg._measure_gsc_sum(_SB(), "c1", "clicks", TODAY) == 17.0
+    assert cg._measure_gsc_sum(_SB(), "c1", "impressions", TODAY) == 150.0

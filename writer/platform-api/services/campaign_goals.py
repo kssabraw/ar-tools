@@ -238,11 +238,22 @@ def _measure_gsc_sum(supabase, client_id: str, field: str, today: date) -> Optio
     if not prop:
         return None
     cutoff = date.fromordinal(today.toordinal() - _CLICKS_WINDOW_DAYS).isoformat()
-    rows = (
-        supabase.table("gsc_query_daily")
-        .select(field)
-        .eq("property_id", prop[0]["id"]).gte("date", cutoff).execute()
-    ).data or []
+    # Aggregate per-day in Postgres (one row per day) via the RPC. A plain
+    # gsc_query_daily select is one row per query×day — thousands per 30 days —
+    # and PostgREST caps a response at 1000 rows, so summing client-side silently
+    # undercounts a busy property by orders of magnitude (a real 257-clicks/mo
+    # property measured as ~10, so a met goal read "in progress").
+    try:
+        rows = supabase.rpc(
+            "gsc_property_daily_traffic",
+            {"p_property_id": prop[0]["id"], "p_from": cutoff},
+        ).execute().data or []
+    except Exception as exc:
+        logger.warning(
+            "campaign_goals.gsc_sum_failed",
+            extra={"client_id": client_id, "field": field, "error": str(exc)},
+        )
+        return None
     if not rows:
         return None
     return float(sum(r.get(field) or 0 for r in rows))

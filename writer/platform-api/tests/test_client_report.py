@@ -194,6 +194,26 @@ def test_build_comparisons_sources_volume_from_traffic_rows():
     assert comp["rank"]["current"] is not None  # rank still from the metric series
 
 
+def test_build_comparisons_suppresses_short_history_since_start():
+    """With < 60 days of data the 'first 30 days' window overlaps the current one,
+    so the since-start delta is noise — it's suppressed (and never becomes the KPI
+    hero), while the 30-day trend still renders."""
+    from datetime import date as _d, timedelta as _td
+    today = _d(2026, 8, 10)
+    rows = [
+        {"date": (today - _td(days=37 - i)).isoformat(), "impressions": 1000 + i,
+         "clicks": 10 + i, "gsc_position": 8.0}
+        for i in range(38)  # only 38 days of history
+    ]
+    comp = cr.build_comparisons(rows, today)
+    assert comp["impressions"]["current"] is not None
+    assert comp["impressions"]["changes"]["30d"] is not None
+    assert comp["impressions"]["changes"]["start"] is None  # too little history
+    assert comp["rank"]["changes_positions"]["start"] is None
+    kpi = cr._kpi_strip(_data(organic={"comparisons": comp, "summary": {"tracked": 5, "top10": 2}}))
+    assert "Search visibility" not in kpi  # no misleading since-start hero
+
+
 def test_section_performance_renders_changes():
     rows, today = _series_rows()
     data = _data(organic={"comparisons": cr.build_comparisons(rows, today)})
