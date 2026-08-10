@@ -194,6 +194,26 @@ def test_build_comparisons_sources_volume_from_traffic_rows():
     assert comp["rank"]["current"] is not None  # rank still from the metric series
 
 
+def test_build_comparisons_suppresses_short_history_since_start():
+    """With < 60 days of data the 'first 30 days' window overlaps the current one,
+    so the since-start delta is noise — it's suppressed (and never becomes the KPI
+    hero), while the 30-day trend still renders."""
+    from datetime import date as _d, timedelta as _td
+    today = _d(2026, 8, 10)
+    rows = [
+        {"date": (today - _td(days=37 - i)).isoformat(), "impressions": 1000 + i,
+         "clicks": 10 + i, "gsc_position": 8.0}
+        for i in range(38)  # only 38 days of history
+    ]
+    comp = cr.build_comparisons(rows, today)
+    assert comp["impressions"]["current"] is not None
+    assert comp["impressions"]["changes"]["30d"] is not None
+    assert comp["impressions"]["changes"]["start"] is None  # too little history
+    assert comp["rank"]["changes_positions"]["start"] is None
+    kpi = cr._kpi_strip(_data(organic={"comparisons": comp, "summary": {"tracked": 5, "top10": 2}}))
+    assert "Search visibility" not in kpi  # no misleading since-start hero
+
+
 def test_section_performance_renders_changes():
     rows, today = _series_rows()
     data = _data(organic={"comparisons": cr.build_comparisons(rows, today)})
@@ -247,8 +267,8 @@ def test_section_ai_visibility_per_keyword_matrix():
     assert "best managed IT services near me" in out and "2/3" in out
     # engine chips labelled
     assert "ChatGPT" in out and "Perplexity" in out
-    # the brand-invisible query is called out as the opportunity
-    assert "isn’t appearing yet" in out and "emergency it support downtown" in out
+    # the brand-invisible query is surfaced as a forward-looking opportunity
+    assert "Room to grow" in out and "emergency it support downtown" in out
 
 
 # ---------------------------------------------------------------------------
@@ -273,9 +293,39 @@ def test_section_organic_shows_top_movers_only():
                           "summary": {"tracked": 10, "top10": 4, "improved": 6, "declined": 1}})
     out = cr.build_report_html(data)
     assert "Movement" in out
-    # biggest mover (kw9, change 9) shown; smallest non-mover trimmed
+    # biggest gainer (kw9, change 9) shown; smallest non-mover trimmed
     assert "kw9" in out and "kw1<" not in out
     assert "remaining 5 are tracked" in out
+
+
+def test_section_organic_leads_with_wins_not_lone_decliner():
+    """Positive framing: feature the strongest rankings, never headline a keyword
+    purely because it slipped, and no negative ('to watch') copy."""
+    wins = [{"keyword": f"win{i}", "current_rank": r, "change": None, "sparkline": []}
+            for i, r in enumerate([3, 4, 5, 8, 10])]
+    decliner = {"keyword": "slipped kw", "current_rank": 12, "change": -2.0, "sparkline": [10, 12]}
+    data = _data(organic={"keywords": wins + [decliner],
+                          "summary": {"tracked": 40, "top10": 5, "improved": 0, "declined": 1}})
+    out = cr.build_report_html(data)
+    assert "win0" in out and "win4" in out          # strongest rankings featured
+    assert "slipped kw" not in out                   # lone poor-ranked decliner not featured
+    assert "to watch" not in out                     # no negative summary copy
+    assert "ranking on page 1 of Google" in out
+
+
+def test_positive_framing_reframes_weaknesses():
+    # Maps weak areas → opportunity language
+    geo = _data(geogrid={"keywords": [{"keyword": "x", "average_rank": 5, "top3_pins": 3,
+                                        "total_pins": 10, "rank_grid": [[1]]}],
+                         "weak_areas": ["Davie", "Plantation"]})
+    out = cr.build_report_html(geo)
+    assert "room to grow" in out.lower() and "Weakest" not in out
+    # AI invisible-questions callout → forward-looking, not "isn't appearing yet"
+    ai = _data(ai_visibility={"engines": {"chatgpt": "0 of 1 answers"},
+                              "keywords": [{"keyword": "foo bar",
+                                            "engines": {"chatgpt": False}, "found_count": 0, "total": 1}]})
+    out2 = cr.build_report_html(ai)
+    assert "Room to grow" in out2 and "isn’t appearing yet" not in out2
 
 
 # ---------------------------------------------------------------------------
