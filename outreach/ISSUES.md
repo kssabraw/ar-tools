@@ -2402,3 +2402,18 @@ daily budget guard) are both `5`, a GUESS. Outscraper returns no per-request cos
 the ledger is `units × rate` reconciled manually against the dashboard (I-022). **Action:** set BOTH from
 the real plan before a production run, and keep them equal — the budget guard is exactly as honest as the
 platform-api value, and the ledger as honest as the outreach one.
+
+### I-112 · Enrichment daily-budget guard has a benign check-then-insert race
+`create_enrichment_request` reads a user's spend-today and inserts without a lock, so two concurrent
+orders by the same admin (a double-click, or a per-row Enrich fired alongside a bulk order) can both
+pass the guard and land slightly over `outreach_enrich_daily_budget_usd`. Bounded by one extra order's
+estimate; identical shape to LeadOff's `check_budget`. **Left as-is** — soft guard, single admin,
+cheap enrichment; a DB-side atomic check isn't worth the complexity at this volume. Revisit if
+enrichment ever runs unattended or multi-user.
+
+### I-113 · An order's progress counters undercount when a selected prospect is deleted before the drain
+If a `prospect` in an `enrichment_request`'s selection is deleted between placement and drain, it is
+excluded from `to_enrich`, so the order's `enriched_count + skipped_count + failed_count` (the
+`progress.done`) is less than `requested_count`. **Cosmetic only** — the order still resolves to
+`done` and the UI batch completes (useResumableBatch keys on the order STATUS, not the counts), so
+nothing hangs. Left as-is; if a precise reconciliation is ever wanted, add a `vanished_count`.
