@@ -2638,9 +2638,19 @@ def list_prospect_contacts(prospect_id: str) -> dict[str, Any]:
         .data
         or []
     )
+    prospect_rows = (
+        client.table("prospect")
+        .select("website")
+        .eq("id", prospect_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
     return {
         "prospect_id": prospect_id,
         "enrichment": status_rows[0] if status_rows else None,
+        "website": prospect_rows[0].get("website") if prospect_rows else None,
         "contacts": contacts,
     }
 
@@ -2653,17 +2663,18 @@ _CONTACT_COLUMNS = (
 
 
 def list_prospect_contacts_batch(prospect_ids: list[str]) -> dict[str, Any]:
-    """Contacts + enrichment status for a SET of prospects in one read — the coverage table's batch,
-    so a 200-row table costs 2 queries instead of 200 (no N+1). Reads are chunked under the 1000-row
-    cap. Only prospects that have an enrichment row and/or contacts appear in `by_prospect`; the rest
-    are absent (the UI renders the Enrich affordance for those). Bounded: the caller passes the page
-    it is showing."""
+    """Contacts + enrichment status + website for a SET of prospects in one read — the coverage
+    table's batch, so a 200-row table costs a few queries instead of 200 (no N+1). Reads are chunked
+    under the 1000-row cap. Every existing requested prospect appears in `by_prospect` carrying its
+    `website` (so the website shows for every row, enriched or not); `enrichment`/`contacts` are
+    filled where present. Bounded: the caller passes the page it is showing."""
     ids = [p for p in dict.fromkeys(prospect_ids) if p]
     if not ids:
         return {"by_prospect": {}}
     client = get_outreach_client()
     contacts_by: dict[str, list[dict[str, Any]]] = {}
     enrichment_by: dict[str, dict[str, Any]] = {}
+    website_by: dict[str, str | None] = {}
     for start in range(0, len(ids), 200):
         chunk = ids[start : start + 200]
         for row in (
@@ -2685,10 +2696,20 @@ def list_prospect_contacts_batch(prospect_ids: list[str]) -> dict[str, Any]:
             or []
         ):
             enrichment_by[row["prospect_id"]] = row
+        for row in (
+            client.table("prospect").select("id, website").in_("id", chunk).execute().data or []
+        ):
+            website_by[row["id"]] = row.get("website")
     by_prospect: dict[str, Any] = {}
-    for pid in set(contacts_by) | set(enrichment_by):
+    # Key on every EXISTING prospect (website_by), plus any with contacts/enrichment, so a website
+    # shows for every row even before it is enriched.
+    for pid in set(website_by) | set(contacts_by) | set(enrichment_by):
         # Sort each prospect's contacts by contact_index (the .order above is a global sort; grouping
         # preserves it, but be explicit so a provider quirk can't reorder a person's rows).
         rows = sorted(contacts_by.get(pid, []), key=lambda r: r.get("contact_index") or 0)
-        by_prospect[pid] = {"enrichment": enrichment_by.get(pid), "contacts": rows}
+        by_prospect[pid] = {
+            "enrichment": enrichment_by.get(pid),
+            "website": website_by.get(pid),
+            "contacts": rows,
+        }
     return {"by_prospect": by_prospect}

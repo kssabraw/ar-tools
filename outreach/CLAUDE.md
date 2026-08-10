@@ -172,9 +172,14 @@ cost estimate, a per-user daily budget guard (platform-api, order rows as the le
 `routers/outreach.py` (`POST /outreach/enrichment/estimate`, `POST /outreach/prospects/{id}/enrich`,
 `POST /outreach/enrichment`, list/detail/cancel, `GET …/contacts`); UI in
 `frontend/src/components/outreach/Enrichment.tsx` (per-row Enrich + select-all bulk bar + contact chips,
-via `useResumableBatch`) wired into the coverage table + the CRM lead drawer. **UNRUN, and the field
-names are UNCONFIRMED (measure-don't-infer): run `probe-enrich` (PAID, gated) once to confirm the
-enrichment param value(s) + response shape before trusting production output — see ISSUES I-109/110/111.**
+via `useResumableBatch`) wired into the coverage table + the CRM lead drawer. **RUN LIVE 2026-08-10** —
+first order drained in 5s; it exposed that the enricher set was wrong (validators without the scraper →
+`name_for_emails` but no emails), now corrected to **`domains_service,emails_validator_service,phones_enricher_service`**
+(`domains_service` is the one that scrapes emails/contacts from the business's GBP website; I-109 UPDATE).
+Enrichment also **backfills `prospect.website`** from the GBP/Outscraper response when it's blank and
+surfaces the website in the contacts UI. The `domains_service` FIELD SHAPE is still to be confirmed on the
+next real run — parser stays defensive, `raw` is the recovery path (I-109). Config rates remain placeholders
+(I-111).
 
 **The pipeline is an AR Tools SUITE MODULE, not a standalone tool** (owner ruling, HANDOFF §2).
 The database stays in the Outreacher project; the API and UI belong in `platform-api` and the
