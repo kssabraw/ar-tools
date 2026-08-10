@@ -23,9 +23,10 @@ configuration reference. The six specs are reference material, not a work order.
 
 ## Current phase
 
-**Read `HANDOFF.md` first — it carries current state.** As of 2026-08-08: Phase 1 and 1b are
+**Read `HANDOFF.md` first — it carries current state.** As of 2026-08-10: Phase 1 and 1b are
 merged, Phase 2's storage foundations / geometry / router / rollup / placeholder score are live,
-and **the first live scan is DONE** — `emergency plumber` × whole-city Los Angeles, run through the
+**Phase 4 scoring Stage 1 (the sabermetric priors) is MERGED** (PR #627 → `ddf82df`), and **the
+first live scan is DONE** — `emergency plumber` × whole-city Los Angeles, run through the
 new any-city onboard path: 122 discovered, 83 survived, 81/81 points collected, snapshot rolled up,
 119 coverage rows. The scan tables hold real data for the first time.
 
@@ -124,10 +125,11 @@ live snapshot to draw from, but nothing has rendered an artifact yet (no `report
 **What is genuinely unbuilt is now short.** Phase 3's renderer, call hook, report, approval gate and
 PDF are all merged; the organic / AI / paid scan layers are merged; **`outcome` + `touch` + the emit
 webhook are BUILT AND MERGED (2026-08-09, PR #625 → `8141629`; migration `20260809170000` applied
-live).** **Phase 4 scoring — STAGE 1 (priors) is BUILT (2026-08-09; migration `20260809190000`
-applied live): the sabermetric scorecard engine, `score_run`/`prospect_score`/`conflict_check`/
-`v_prospect_ranked`, the golden-fixture harness, the empty-safe Stage-2 recalibration job, and the
-free `score`/`recalibrate` commands.** What remains is Phase 4 Stages 2–3 (recalibration fit /
+live).** **Phase 4 scoring — STAGE 1 (priors) is BUILT AND MERGED (2026-08-10, PR #627 → `ddf82df`;
+migration `20260809190000` applied live): the sabermetric scorecard engine,
+`score_run`/`prospect_score`/`conflict_check`/`v_prospect_ranked`, the golden-fixture harness, the
+empty-safe Stage-2 recalibration job, and the free `score`/`recalibrate` commands.** What remains is
+Phase 4 Stages 2–3 (recalibration fit /
 hierarchical refit + Thompson — both need accumulated `outcome` rows), Phase 5 email, Phase 6
 learning. See HANDOFF §12 for the value-ordered roadmap.
 
@@ -192,8 +194,8 @@ and never in `writer/supabase/migrations/`, which targets AR-Internal-Tools.
   measured and there is no score to give. Confusing the two scores a failed scan as total
   invisibility, which is the strongest pitch in the market, manufactured.
 - **`prospect_score` is the Phase 4 model's table** (ISSUES I-082). **Phase 4 Stage 1 is BUILT
-  (2026-08-09)** — the fitted scorecard writes it via the `score` command, and `v_prospect_ranked`
-  ranks reply/close/value side-by-side (migration `20260809190000`). It is empty between `score`
+  AND MERGED (2026-08-10, PR #627)** — the fitted scorecard writes it via the `score` command, and
+  `v_prospect_ranked` ranks reply/close/value side-by-side (migration `20260809190000`). It is empty between `score`
   runs; the placeholder view (`v_prospect_placeholder_score`) is the subordinated fallback the
   reporting layer still reads until the reader is repointed (I-108). A row is written ONLY by a
   score run, never by the placeholder path.
