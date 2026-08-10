@@ -1709,9 +1709,16 @@ class Settings(BaseSettings):
     # today. Set from the real Outscraper plan before a production run (I-022 — the guard is exactly
     # as honest as the rate above).
     outreach_enrich_daily_budget_usd: float = 10.0
-    # The enricher set frozen onto each order at placement — a GUESS to confirm via `probe-enrich`
-    # (measure-don't-infer). Kept as a string; split on commas so it can be overridden by one env var.
-    outreach_enrich_enrichments: str = "emails_validator_service,phones_enricher_service"
+    # The enricher set frozen onto each order at placement. `domains_service` is the one that actually
+    # SCRAPES emails + contact names + phones from the business's (GBP) website — the repo's own
+    # convention for a contact pull (pixel_probe / run_market `--enrichment` default). The other two
+    # only post-process what it finds: `emails_validator_service` validates the emails (→
+    # email.emails_validator.status), `phones_enricher_service` adds phone carrier/type. Requesting the
+    # validators WITHOUT the scraper is why the first live run returned name_for_emails but zero emails
+    # (I-109 confirmed against a real response). Kept as a string; overridable by one env var.
+    outreach_enrich_enrichments: str = (
+        "domains_service,emails_validator_service,phones_enricher_service"
+    )
     # A selection larger than this is refused at placement (the drain enforces the same cap). A bigger
     # "select all" is split into several orders by the UI.
     outreach_enrich_max_places_per_order: int = 200

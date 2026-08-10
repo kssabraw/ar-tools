@@ -110,8 +110,9 @@ def _finish(db: Any, order_id: str, fields: dict[str, Any]) -> None:
 
 
 def _load_prospects(db: Any, prospect_ids: list[str]) -> dict[str, dict[str, Any]]:
-    """{prospect_id: {id, place_id, market_id, name}} for the selection, chunked under the 1000-row
-    PostgREST cap."""
+    """{prospect_id: {id, place_id, market_id, name, website}} for the selection, chunked under the
+    1000-row PostgREST cap. `website` is read so the drain can backfill it from the GBP/Outscraper
+    response when the prospect has none."""
     out: dict[str, dict[str, Any]] = {}
     for start in range(0, len(prospect_ids), 500):
         chunk = prospect_ids[start : start + 500]
@@ -119,7 +120,7 @@ def _load_prospects(db: Any, prospect_ids: list[str]) -> dict[str, dict[str, Any
             continue
         for row in (
             db.table("prospect")
-            .select("id, place_id, market_id, name")
+            .select("id, place_id, market_id, name, website")
             .in_("id", chunk)
             .execute()
             .data
@@ -127,6 +128,33 @@ def _load_prospects(db: Any, prospect_ids: list[str]) -> dict[str, dict[str, Any
         ):
             out[row["id"]] = row
     return out
+
+
+def website_from(records: list[dict[str, Any]]) -> str | None:
+    """The business website in an enriched record set, if any. Pure. Reads `website` then `site`
+    (Outscraper uses both across endpoints); returns the first non-empty."""
+    for record in records:
+        for key in ("website", "site"):
+            value = record.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+def _backfill_website(db: Any, prospect: dict[str, Any], records: list[dict[str, Any]]) -> None:
+    """Write `prospect.website` from the GBP/Outscraper response when the prospect has none — the
+    'pull the website from the GBP as well' step. Only fills a NULL/blank; never overwrites a website
+    ingest or a human already set. Best-effort: a failure here must not lose the enrichment."""
+    if (prospect.get("website") or "").strip():
+        return
+    site = website_from(records)
+    if not site:
+        return
+    try:
+        db.table("prospect").update({"website": site}).eq("id", prospect["id"]).execute()
+        prospect["website"] = site
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("enrich website backfill failed", extra={"error": str(exc)[:200]})
 
 
 def _already_enriched(db: Any, prospect_ids: list[str]) -> set[str]:
@@ -317,6 +345,8 @@ async def process_order(db: Any, settings: Settings, order: dict[str, Any]) -> E
                 db, prospect_id=prospect["id"], place_id=place_id, records=recs,
                 enrichments=enrichments, order_id=report.order_id,
             )
+            # Pull the website from the GBP/Outscraper response into prospect.website when it's blank.
+            _backfill_website(db, prospect, recs)
             report.enriched += 1
             report.contacts += written
         report.problems.extend(errors)

@@ -260,11 +260,16 @@ class Settings(BaseSettings):
     # pixel_probe.fetch_enriched_sample) and never touches that method. The order row
     # (`enrichment_request`) is its own spend confirmation; the `tick` command drains it.
 
-    # The enricher set requested by default. Outscraper takes a LIST, called BY place_id. These are
-    # a GUESS to confirm against a logged sample record via `probe-enrich` (measure-don't-infer,
-    # ISSUES) before trusting production output — the parser never asserts a field it hasn't seen.
+    # The enricher set requested by default (the fallback; an order freezes its own set at placement).
+    # Outscraper takes a LIST, called BY place_id. `domains_service` is the SCRAPER that pulls emails +
+    # contact names + phones from the business's website (the repo's contact-pull convention); the
+    # other two post-process it (email validation → email.emails_validator.status; phone carrier). The
+    # first live run requested the validators WITHOUT the scraper and got name_for_emails but no emails
+    # (I-109). The parser still never asserts a field it hasn't seen — `probe-enrich` confirms the shape.
     enrich_enrichments: list[str] = Field(
-        default_factory=lambda: ["emails_validator_service", "phones_enricher_service"]
+        default_factory=lambda: [
+            "domains_service", "emails_validator_service", "phones_enricher_service"
+        ]
     )
 
     # Outscraper enrichment is billed per record. The API returns no per-request cost, so like every

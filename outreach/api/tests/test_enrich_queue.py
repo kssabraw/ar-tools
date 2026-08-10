@@ -184,6 +184,45 @@ def test_enrich_place_intersection_is_scoped_to_the_chunk():
     assert enrich_queue.enrich_place_intersection(errors, ["p1", "p2"]) == {"p1"}
 
 
+def test_website_from_reads_website_then_site():
+    assert enrich_queue.website_from([{"website": "https://a.com"}]) == "https://a.com"
+    assert enrich_queue.website_from([{"site": "https://b.com"}]) == "https://b.com"
+    assert enrich_queue.website_from([{"website": "  "}, {"site": "https://c.com"}]) == "https://c.com"
+    assert enrich_queue.website_from([{"name": "x"}]) is None
+
+
+def test_the_website_is_backfilled_when_the_prospect_has_none(monkeypatch):
+    db = _FakeDB()
+    _seed(
+        db,
+        prospects=[{"id": "p1", "place_id": "place-1", "market_id": "m1", "name": "A", "website": None}],
+        orders=[_order(prospect_ids=["p1"])],
+    )
+    _stub_enrich(
+        monkeypatch,
+        by_place={"place-1": [{"website": "https://acme.com", "emails": [{"value": "a@acme.com"}]}]},
+    )
+    asyncio.run(enrich_queue.drain(db, _Settings()))
+    assert db.tables["prospect"][0]["website"] == "https://acme.com"
+
+
+def test_an_existing_website_is_never_overwritten(monkeypatch):
+    db = _FakeDB()
+    _seed(
+        db,
+        prospects=[
+            {"id": "p1", "place_id": "place-1", "market_id": "m1", "name": "A", "website": "https://kept.com"}
+        ],
+        orders=[_order(prospect_ids=["p1"])],
+    )
+    _stub_enrich(
+        monkeypatch,
+        by_place={"place-1": [{"website": "https://other.com", "emails": [{"value": "a@x.com"}]}]},
+    )
+    asyncio.run(enrich_queue.drain(db, _Settings()))
+    assert db.tables["prospect"][0]["website"] == "https://kept.com"
+
+
 def test_enrichment_param_is_endpoint_shaped():
     from api.services.enrich_client import _enrichment_param
     from api.services.outscraper_client import ENDPOINT_MAPS_SEARCH, ENDPOINT_SEARCH_V3

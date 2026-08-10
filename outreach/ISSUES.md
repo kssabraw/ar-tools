@@ -2372,6 +2372,20 @@ the placeholder still drives the list even after a `score` run populates the fit
 
 ## Lead enrichment (2026-08-10)
 
+### I-109 UPDATE (2026-08-10) · The enricher SET was wrong — corrected against a real response; domains_service field shape still to confirm
+The first live enrichment ran (order drained in 5s, 1 contact) and produced the evidence the probe was
+meant to: the response carried `name_for_emails` + the base listing `phone` + `website`, but **ZERO
+email fields** (`emails` key absent). Root cause: the default set requested the POST-PROCESSORS
+(`emails_validator_service`, `phones_enricher_service`) WITHOUT the scraper that actually finds emails.
+That scraper is **`domains_service`** (the repo's own contact-pull convention — `pixel_probe` /
+`run_market --enrichment` default), which reads the business's website and returns emails + contact names
++ phones for the validators to enrich. Fixed: the default enricher set is now
+`domains_service,emails_validator_service,phones_enricher_service` (both configs).
+**Still open:** the exact FIELD SHAPE `domains_service` returns is not yet seen against this account, so
+the parser stays defensive and the stored `raw` is the recovery path — inspect the next real enrichment
+and adjust `enrichment.py` aliases if the emails/contacts land under unexpected keys. Not fully closed
+until a `domains_service` run is confirmed to yield real emails/people.
+
 ### I-109 · Outscraper enrichment param value(s) + response field names UNCONFIRMED — run `probe-enrich` first
 **Severity: blocks trusting production enrichment OUTPUT; does not block the code.**
 No enriched pull has ever run against this account, so — exactly like I-018 for the base pull and I-003

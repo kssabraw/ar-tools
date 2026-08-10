@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import type { CSSProperties } from 'react'
+import type { CSSProperties, ReactElement } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Mail, Phone, Sparkles, User } from 'lucide-react'
+import { Globe, Loader2, Mail, Phone, Sparkles, User } from 'lucide-react'
 import { api } from '../../lib/api'
 import { useResumableBatch } from '../../lib/useResumableBatch'
 
@@ -26,6 +26,7 @@ interface Contact {
 interface ContactsResp {
   prospect_id: string
   enrichment: { status: string; contact_count: number; error: string | null; enriched_at: string } | null
+  website?: string | null
   contacts: Contact[]
 }
 interface EnrichOrder {
@@ -217,6 +218,7 @@ export function LeadContacts({ prospectId, isAdmin }: { prospectId: string; isAd
 
 export interface ProspectContacts {
   enrichment: ContactsResp['enrichment']
+  website?: string | null
   contacts: Contact[]
 }
 
@@ -250,9 +252,13 @@ export function ContactCell({
 
   const enrichment = provided !== undefined ? provided?.enrichment : self.data?.enrichment
   const contacts = (provided !== undefined ? provided?.contacts : self.data?.contacts) ?? []
+  const website = (provided !== undefined ? provided?.website : self.data?.website) ?? null
 
+  // The state-specific part (contacts / status / Enrich button) rendered UNDER the website line,
+  // so the website shows in every state (enriched, not-yet, no-contacts, failed).
+  let body: ReactElement
   if (contacts.length > 0) {
-    return (
+    body = (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
         {contacts.map((c) => (
           <div key={c.id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, flexWrap: 'wrap' }}>
@@ -280,32 +286,41 @@ export function ContactCell({
         ))}
       </div>
     )
+  } else if (enrichment?.status === 'no_contacts') {
+    body = <span style={{ fontSize: 12, color: '#94a3b8' }}>no contacts found</span>
+  } else if (enrichment?.status === 'failed') {
+    body = <span style={{ fontSize: 12, color: '#b45309' }}>enrichment failed</span>
+  } else if (batchRunning) {
+    body = <span style={{ fontSize: 12, color: '#1d4ed8' }}>queued…</span>
+  } else if (isAdmin) {
+    body = (
+      <button
+        onClick={() => controller.create.mutate([prospectId])}
+        disabled={controller.create.isPending}
+        title="Enrich this lead with contact names, phones and emails (bills on the next run)"
+        style={{
+          fontSize: 12, border: '1px solid #e2e8f0', background: '#fff', borderRadius: 6,
+          padding: '2px 8px', cursor: 'pointer', display: 'inline-flex', gap: 4, alignItems: 'center',
+          color: '#7c3aed',
+        }}
+      >
+        <Sparkles size={12} /> Enrich
+      </button>
+    )
+  } else {
+    body = <span style={{ fontSize: 12, color: '#cbd5e1' }}>—</span>
   }
 
-  if (enrichment?.status === 'no_contacts') {
-    return <span style={{ fontSize: 12, color: '#94a3b8' }}>no contacts found</span>
-  }
-  if (enrichment?.status === 'failed') {
-    return <span style={{ fontSize: 12, color: '#b45309' }}>enrichment failed</span>
-  }
-  if (batchRunning) {
-    return <span style={{ fontSize: 12, color: '#1d4ed8' }}>queued…</span>
-  }
-  if (!isAdmin) return <span style={{ fontSize: 12, color: '#cbd5e1' }}>—</span>
-
+  if (!website) return body
   return (
-    <button
-      onClick={() => controller.create.mutate([prospectId])}
-      disabled={controller.create.isPending}
-      title="Enrich this lead with contact names, phones and emails (bills on the next run)"
-      style={{
-        fontSize: 12, border: '1px solid #e2e8f0', background: '#fff', borderRadius: 6,
-        padding: '2px 8px', cursor: 'pointer', display: 'inline-flex', gap: 4, alignItems: 'center',
-        color: '#7c3aed',
-      }}
-    >
-      <Sparkles size={12} /> Enrich
-    </button>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <a href={website} target="_blank" rel="noreferrer"
+        style={{ display: 'inline-flex', gap: 3, alignItems: 'center', fontSize: 12, color: '#0369a1' }}
+        title={website}>
+        <Globe size={11} /> {website.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')}
+      </a>
+      {body}
+    </div>
   )
 }
 
