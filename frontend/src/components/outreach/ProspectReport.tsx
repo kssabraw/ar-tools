@@ -222,7 +222,7 @@ function MapsTable({ s, name, keyword, submarket, clientTone }: {
         </thead>
         <tbody>
           <tr style={{ borderTop: '1px solid #f1f5f9', background: '#eff6ff', fontWeight: 600 }}>
-            <td style={{ padding: '6px 8px' }}>{name} {clientTone ? '(you)' : '(prospect)'}</td>
+            <td style={{ padding: '6px 8px', wordBreak: 'break-word' }}>{name} {clientTone ? '(you)' : '(prospect)'}</td>
             <td style={{ padding: '6px 8px', textAlign: 'right' }}>{p.pack_points}</td>
             <td style={{ padding: '6px 8px', textAlign: 'right' }}>
               {p.live_points ? `${Math.round((p.pack_points / p.live_points) * 100)}%` : '—'}
@@ -231,7 +231,7 @@ function MapsTable({ s, name, keyword, submarket, clientTone }: {
           </tr>
           {(s.competitors ?? []).map(c => (
             <tr key={c.place_id} style={{ borderTop: '1px solid #f1f5f9' }}>
-              <td style={{ padding: '6px 8px' }}>{c.name}</td>
+              <td style={{ padding: '6px 8px', wordBreak: 'break-word' }}>{c.name}</td>
               <td style={{ padding: '6px 8px', textAlign: 'right' }}>{c.pack_points}</td>
               <td style={{ padding: '6px 8px', textAlign: 'right' }}>{c.pack_share_pct != null ? `${c.pack_share_pct}%` : '—'}</td>
               <td style={{ padding: '6px 8px', textAlign: 'right' }}>{c.best_rank ?? '—'}</td>
@@ -278,7 +278,7 @@ function OrganicTable({ s, keyword, submarket, clientTone }: {
         <tbody>
           {(s.competitors ?? []).map(c => (
             <tr key={`${c.domain}-${c.rank}`} style={{ borderTop: '1px solid #f1f5f9' }}>
-              <td style={{ padding: '6px 8px' }}>{c.domain}</td>
+              <td style={{ padding: '6px 8px', wordBreak: 'break-word' }}>{c.domain}</td>
               <td style={{ padding: '6px 8px', textAlign: 'right' }}>{c.rank ?? '—'}</td>
             </tr>
           ))}
@@ -400,13 +400,13 @@ function PaidTable({ s, name, keyword, clientTone }: {
           <tbody>
             {ads.map(a => (
               <tr key={`ad-${a.domain}`} style={{ borderTop: '1px solid #f1f5f9' }}>
-                <td style={{ padding: '6px 8px' }}>{a.domain}</td>
+                <td style={{ padding: '6px 8px', wordBreak: 'break-word' }}>{a.domain}</td>
                 <td style={{ padding: '6px 8px', color: '#64748b' }}>Google Ads</td>
               </tr>
             ))}
             {lsa.map(a => (
               <tr key={`lsa-${a.name}`} style={{ borderTop: '1px solid #f1f5f9' }}>
-                <td style={{ padding: '6px 8px' }}>{a.name}</td>
+                <td style={{ padding: '6px 8px', wordBreak: 'break-word' }}>{a.name}</td>
                 <td style={{ padding: '6px 8px', color: '#64748b' }}>Local Services Ad{clientTone ? '' : ' (Google Guaranteed)'}</td>
               </tr>
             ))}

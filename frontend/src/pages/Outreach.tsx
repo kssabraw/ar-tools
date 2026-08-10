@@ -624,7 +624,7 @@ function QueueScanCard({ marketId, isAdmin }: { marketId: string; isAdmin: boole
             Queue scan…
           </button>
         ) : (
-          <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+          <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={{ fontSize: 12, color: '#b45309', fontWeight: 600 }}>
               Spend ≈$0.81 scanning “{keyword?.term}” across {submarket?.name}?
             </span>
@@ -858,46 +858,46 @@ function CoverageTable({ submarketId }: { submarketId: string }) {
                 <td style={{ padding: '6px 8px', textAlign: 'right' }}>
                   {s.centroid_dist_at_loss != null ? `${s.centroid_dist_at_loss.toFixed(1)} mi` : '—'}
                 </td>
-                <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                  <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', marginRight: 6 }}>
+                <td style={{ padding: '6px 8px' }}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>
                     <ProspectReportButtons prospectId={s.prospect_id} compact />
-                  </span>
-                  <button
-                    onClick={() => setOpenHook(openHook === s.prospect_id ? null : s.prospect_id)}
-                    title="Why this business is worth calling"
-                    style={{ fontSize: 12, border: '1px solid #e2e8f0', background: openHook === s.prospect_id ? '#eff6ff' : '#fff',
-                      borderRadius: 6, padding: '2px 8px', cursor: 'pointer', marginRight: 6,
-                      display: 'inline-flex', gap: 4, alignItems: 'center', color: '#0369a1' }}>
-                    <Phone size={12} /> Why call?
-                  </button>
-                  {promoted[s.prospect_id] ? (
-                    <span style={{ fontSize: 12, color: '#166534', marginRight: 6 }}>✓ on board</span>
-                  ) : (
                     <button
-                      onClick={() => promote.mutate(s.prospect_id)}
-                      disabled={promote.isPending}
-                      style={{ fontSize: 12, border: '1px solid #e2e8f0', background: '#fff',
-                        borderRadius: 6, padding: '2px 10px', cursor: 'pointer', marginRight: 6 }}>
-                      Send to CRM
+                      onClick={() => setOpenHook(openHook === s.prospect_id ? null : s.prospect_id)}
+                      title="Why this business is worth calling"
+                      style={{ fontSize: 12, border: '1px solid #e2e8f0', background: openHook === s.prospect_id ? '#eff6ff' : '#fff',
+                        borderRadius: 6, padding: '2px 8px', cursor: 'pointer',
+                        display: 'inline-flex', gap: 4, alignItems: 'center', color: '#0369a1' }}>
+                      <Phone size={12} /> Why call?
                     </button>
-                  )}
-                  {emitted[s.prospect_id] ? (
-                    <span style={{ fontSize: 12, color: emitted[s.prospect_id].delivered ? '#166534' : '#b45309' }}
-                      title={emitted[s.prospect_id].configured
-                        ? (emitted[s.prospect_id].delivered ? 'Queued and delivered to the outbound webhook' : 'Outcome recorded; webhook delivery failed — re-emit to retry')
-                        : 'Outcome recorded; the outbound webhook is not configured yet'}>
-                      {emitted[s.prospect_id].delivered ? '✓ emitted' : '✓ outcome saved'}
-                    </span>
-                  ) : (
-                    <button
-                      onClick={() => emit.mutate(s.prospect_id)}
-                      disabled={emit.isPending}
-                      title="Write the outcome (learning substrate); also posts a webhook only if one is configured. You can skip this and just Log calls."
-                      style={{ fontSize: 12, border: 'none', background: '#0369a1', color: '#fff',
-                        borderRadius: 6, padding: '2px 10px', cursor: 'pointer' }}>
-                      Emit
-                    </button>
-                  )}
+                    {promoted[s.prospect_id] ? (
+                      <span style={{ fontSize: 12, color: '#166534' }}>✓ on board</span>
+                    ) : (
+                      <button
+                        onClick={() => promote.mutate(s.prospect_id)}
+                        disabled={promote.isPending}
+                        style={{ fontSize: 12, border: '1px solid #e2e8f0', background: '#fff',
+                          borderRadius: 6, padding: '2px 10px', cursor: 'pointer' }}>
+                        Send to CRM
+                      </button>
+                    )}
+                    {emitted[s.prospect_id] ? (
+                      <span style={{ fontSize: 12, color: emitted[s.prospect_id].delivered ? '#166534' : '#b45309' }}
+                        title={emitted[s.prospect_id].configured
+                          ? (emitted[s.prospect_id].delivered ? 'Queued and delivered to the outbound webhook' : 'Outcome recorded; webhook delivery failed — re-emit to retry')
+                          : 'Outcome recorded; the outbound webhook is not configured yet'}>
+                        {emitted[s.prospect_id].delivered ? '✓ emitted' : '✓ outcome saved'}
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => emit.mutate(s.prospect_id)}
+                        disabled={emit.isPending}
+                        title="Write the outcome (learning substrate); also posts a webhook only if one is configured. You can skip this and just Log calls."
+                        style={{ fontSize: 12, border: 'none', background: '#0369a1', color: '#fff',
+                          borderRadius: 6, padding: '2px 10px', cursor: 'pointer' }}>
+                        Emit
+                      </button>
+                    )}
+                  </div>
                 </td>
               </tr>
               {openHook === s.prospect_id && (
