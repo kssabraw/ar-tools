@@ -2,8 +2,25 @@
 
 **Read this first, then `CLAUDE.md` → `START-HERE.md` → `ISSUES.md` → `DECISIONS.md`.**
 
-Status as of 2026-08-09 (the first live scan is DONE; heatmap slices 1–2, the any-city scan, **the per-prospect report — call hook + 3 signals + approval-gated client PDF**, **the paid-placement 4th signal**, and **`outcome` + `touch` + the emit webhook** — all MERGED to `main`):
+Status as of 2026-08-10 (the first live scan is DONE; heatmap slices 1–2, the any-city scan, **the per-prospect report — call hook + 3 signals + approval-gated client PDF**, **the paid-placement 4th signal**, **`outcome` + `touch` + the emit webhook**, and **Phase 4 scoring Stage 1 — the sabermetric priors** — all MERGED to `main`):
 
+- **PHASE 4 SCORING — STAGE 1 (THE SABERMETRIC PRIORS) IS BUILT AND MERGED (2026-08-10, PR #627 → `ddf82df`).**
+  The ranking model itself: the pure scorecard engine with every coefficient config-loaded (zero hardcoded
+  βs), Models reply/close/value, replayable `score_factors`, and per-channel offsets never pooled (phone
+  579.3 / email 705.0). Migration `20260809190000` applied live to Outreacher —
+  `score_run` / `prospect_score` / `conflict_check` + **`v_prospect_ranked`** (the §10 side-by-side read:
+  latest run per market, reply/close/value pivoted per prospect × channel × pass, ordered by value within a
+  channel; probabilities clamped ≤0.60 until a calibration_alpha exists). Free CLI `score` (phone/pass-1,
+  writes the ranking) + empty-safe `recalibrate` (Stage-2 alpha+gamma fit — reports "insufficient" and
+  writes nothing at 0 outcomes, today's state); neither is in `PAID_COMMANDS`. Golden-fixture harness green
+  (all 7 hand-computed cases, local pytest — no CI). Verified live then cleaned up: `v_prospect_ranked`
+  ranked the franchise last and the low-coverage non-franchise first, and the demo run was deleted. **The
+  coefficients are ELICITED estimates** — rank order is a strong prior, not a prediction, until ~100
+  prospects are contacted with outcomes logged. **Next:** repoint the platform-api reader off the
+  placeholder to `v_prospect_ranked` (I-108); run the free `scan-tech` then `score --market-name
+  "Los Angeles, CA, USA"` (I-105) for the full production ranking. A plain-English staff guide to the model
+  and the call workflow was produced this session (shareable one-pager; not committed to the repo).
+  See §12 item 2.
 - **`outcome` + `touch` + THE EMIT WEBHOOK ARE BUILT AND MERGED (2026-08-09, PR #625 → `8141629`).**
   The learning substrate (HANDOFF §12's named next build; the one Phase-3 item with a closing window,
   because `outcome` cannot be backfilled — scoring-spec §8). Migration `20260809170000_outcome_touch.sql`
@@ -837,9 +854,10 @@ In rough value order:
    `reporting-layer-spec.md` is the authority; every renderer is deterministic (identical inputs →
    identical `content_hash`).
 
-2. **The real scoring model — Phase 4. STAGE 1 (priors) BUILT 2026-08-09.** Today the list is still
-   ranked "most invisible first" (`v_prospect_placeholder_score`, ISSUES I-082) because the reporting
-   reader is not yet repointed (I-108). Phase 4 replaces it with the sabermetric scorecard in
+2. **The real scoring model — Phase 4. STAGE 1 (priors) BUILT AND MERGED 2026-08-10 (PR #627 →
+   `ddf82df`).** Today the list is still ranked "most invisible first"
+   (`v_prospect_placeholder_score`, ISSUES I-082) because the reporting reader is not yet repointed
+   (I-108). Phase 4 replaces it with the sabermetric scorecard in
    `docs/scoring-spec.md`: ranked by *who is worth calling* (reply probability × close probability),
    all coefficients config-driven, `score_factors` fully replayable, golden fixtures green (local
    pytest — no CI here), per-channel offsets never pooled (phone 579.3 / email 705.0). **Built:**
