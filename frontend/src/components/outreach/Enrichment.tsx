@@ -58,7 +58,13 @@ export function useEnrichment(scopeKey: string) {
         ids.map(async (id) => {
           const r = await api.get<{ enrichment_request: EnrichOrder }>(`/outreach/enrichment/${id}`)
           const o = r.enrichment_request
-          return { id, status: o.status, error: o.error ?? null, result: (o.progress ?? {}) as Record<string, unknown> }
+          // useResumableBatch's terminal vocabulary is the async_jobs one
+          // (complete|failed|cancelled), but an enrichment order reports SUCCESS as `done`.
+          // Normalize it here or the batch never sees a terminal state — leaving the UI stuck
+          // "Enriching…" forever (localStorage-persisted, so a reload doesn't clear it) and
+          // blocking the next order. Only `done` needs mapping; failed/cancelled already match.
+          const status = o.status === 'done' ? 'complete' : o.status
+          return { id, status, error: o.error ?? null, result: (o.progress ?? {}) as Record<string, unknown> }
         }),
       ),
     onDone: () => {
