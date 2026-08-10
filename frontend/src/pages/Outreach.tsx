@@ -161,7 +161,7 @@ export function Outreach() {
   }
 
   return (
-    <div style={{ padding: 24, maxWidth: 1100 }}>
+    <div style={{ padding: 24, maxWidth: 1400 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <h1 style={{ fontSize: 20, fontWeight: 700, display: 'flex', gap: 8, alignItems: 'center' }}>
           <Crosshair size={20} /> Outreach — geogrid scans
@@ -859,7 +859,12 @@ function CoverageTable({ submarketId }: { submarketId: string }) {
           onCleared={() => setSelected(new Set())}
         />
       )}
-      <table style={{ width: '100%', marginTop: 8, fontSize: 13, borderCollapse: 'collapse' }}>
+      {/* Horizontal scroll: the coverage table has many columns (contacts + a wide actions
+          group), so it can exceed the card width — scroll it rather than crush the columns.
+          width:max-content keeps every column at its natural size; minWidth:100% fills the card
+          when there's room. */}
+      <div style={{ overflowX: 'auto', marginTop: 8 }}>
+      <table style={{ width: 'max-content', minWidth: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
         <thead>
           <tr style={{ textAlign: 'left', color: '#64748b', fontSize: 11 }}>
             {isAdmin && (
@@ -957,6 +962,7 @@ function CoverageTable({ submarketId }: { submarketId: string }) {
           ))}
         </tbody>
       </table>
+      </div>
     </>
   )
 }
