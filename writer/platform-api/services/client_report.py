@@ -170,9 +170,13 @@ def _section_organic(data: dict) -> str:
 
     gainers = sorted((k for k in kws if (k.get("change") or 0) > 0),
                      key=lambda k: k.get("change") or 0, reverse=True)
-    strongest = sorted((k for k in kws if _rank_of(k) < 10_000), key=_rank_of)
+    # Only genuine wins are showcased: keywords that improved, or that rank on
+    # page 1. A mid-pack or slipping keyword is NOT pulled in just to fill the
+    # table (a client with only a few page-1 rankings would otherwise see a
+    # decline padded into the list).
+    page_one = sorted((k for k in kws if _rank_of(k) <= 10), key=_rank_of)
     featured, seen = [], set()
-    for k in gainers + strongest:
+    for k in gainers + page_one:
         key = k.get("keyword")
         if key in seen:
             continue
@@ -180,8 +184,11 @@ def _section_organic(data: dict) -> str:
         featured.append(k)
         if len(featured) >= _TOP_MOVERS:
             break
-    if not featured:  # nothing ranked or gaining yet → show the tracked set
-        featured = kws[:_TOP_MOVERS]
+    if not featured:
+        # Nothing on page 1 or improving yet → show the closest-to-the-top few so
+        # the section still reflects real positions (never headlining a decline).
+        ranked = sorted((k for k in kws if _rank_of(k) < 10_000), key=_rank_of)
+        featured = ranked[:_TOP_MOVERS] or kws[:_TOP_MOVERS]
     rows = []
     for k in featured:
         rank = k.get("current_rank")
