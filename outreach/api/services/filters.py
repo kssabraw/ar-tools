@@ -38,6 +38,7 @@ RULE_NOT_FRANCHISE = "not_franchise"
 RULE_REVIEW_COUNT = "review_count_min"
 RULE_REVIEW_RECENCY = "review_recency"
 RULE_CATEGORY_RELEVANT = "category_relevant"
+RULE_WITHIN_AREA = "within_area"
 
 # Order is presentation only — all of them run regardless.
 ALL_RULES: tuple[str, ...] = (
@@ -48,6 +49,7 @@ ALL_RULES: tuple[str, ...] = (
     RULE_REVIEW_COUNT,
     RULE_REVIEW_RECENCY,
     RULE_CATEGORY_RELEVANT,
+    RULE_WITHIN_AREA,
 )
 
 # The one non-exclusionary rule. Failing it sets franchise_status = 'flagged' and the prospect
@@ -235,6 +237,22 @@ def category_signals(place: ParsedPlace) -> tuple[str | None, frozenset[str]]:
     )
 
 
+def _haversine_miles(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Great-circle distance in miles. A local copy of `tiling.haversine_miles` on purpose — this
+    module is deliberately dependency-free (its docstring: no database, no clock, no config), and
+    importing `tiling` would drag in the Outscraper client + httpx at import time. Six lines of
+    pure trig is the cheaper price. A test pins the two implementations to agree.
+    """
+    import math
+
+    earth_radius_miles = 3958.7613
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    d_phi = phi2 - phi1
+    d_lambda = math.radians(lng2 - lng1)
+    a = math.sin(d_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
+    return 2 * earth_radius_miles * math.asin(math.sqrt(a))
+
+
 def _months_between(earlier: date, later: date) -> int:
     return (later.year - earlier.year) * 12 + (later.month - earlier.month)
 
@@ -258,6 +276,10 @@ def evaluate(
     accepted_categories: frozenset[str] | None = None,
     category_relevance_enabled: bool = False,
     category_decision: str | None = None,
+    anchor_lat: float | None = None,
+    anchor_lng: float | None = None,
+    max_distance_miles: float | None = None,
+    distance_gate_enabled: bool = False,
 ) -> FilterVerdict:
     """Run every rule against one place and return all outcomes.
 
@@ -404,5 +426,38 @@ def evaluate(
             )
         else:
             outcomes.append(RuleOutcome(RULE_CATEGORY_RELEVANT, False, primary))
+
+    # -- 8. geographic distance — the unbounded-coordinates escape ------------------------
+    #
+    # Outscraper's `coordinates` biases the search CENTRE but does not bound the area (there is no
+    # radius parameter — tiling.py / outscraper_client.py), so a category search can return a
+    # business far outside the market: an Inglewood plumbing pull surfaced a kitchen remodeler in
+    # Lompoc, ~150 miles away. This rule drops a listing whose location is further than
+    # `max_distance_miles` from its assigned submarket centroid.
+    #
+    # Fail-open, like every other rule: NOT_EVALUATED (kept) when disabled, when no centroid/cap is
+    # supplied, or when the listing itself carries no coordinates — an unknown location is not
+    # evidence of a distant one. The default cap is deliberately generous (it is anchored on the
+    # centroid a prospect was already assigned to as its NEAREST submarket, so an in-metro business
+    # sits a few miles from it at most); the point is to catch gross drift, not to fence a service
+    # area.
+    if (
+        not distance_gate_enabled
+        or max_distance_miles is None
+        or anchor_lat is None
+        or anchor_lng is None
+    ):
+        outcomes.append(RuleOutcome(RULE_WITHIN_AREA, True, NOT_EVALUATED))
+    elif place.lat is None or place.lng is None:
+        outcomes.append(RuleOutcome(RULE_WITHIN_AREA, True, NOT_EVALUATED))
+    else:
+        distance = _haversine_miles(place.lat, place.lng, anchor_lat, anchor_lng)
+        outcomes.append(
+            RuleOutcome(
+                RULE_WITHIN_AREA,
+                distance <= max_distance_miles,
+                f"{distance:.1f} mi",
+            )
+        )
 
     return FilterVerdict(outcomes=outcomes)

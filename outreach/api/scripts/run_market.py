@@ -175,6 +175,8 @@ def cmd_filter(args) -> int:
         market_id=market_id,
         accepted_categories=frozenset(accepted) or None,
         category_relevance_enabled=settings.filter_category_relevance_enabled,
+        distance_gate_enabled=settings.filter_max_distance_enabled,
+        max_distance_miles=settings.filter_max_distance_miles,
     )
 
     print(

@@ -246,6 +246,8 @@ def run_filter(
     suppression: SuppressionIndex | None = None,
     accepted_categories: frozenset[str] | None = None,
     category_relevance_enabled: bool = False,
+    distance_gate_enabled: bool = False,
+    max_distance_miles: float | None = None,
 ) -> FilterReport:
     """Stage A2 — free. Reads prospects back out and writes the full rule matrix.
 
@@ -260,9 +262,23 @@ def run_filter(
     # 1388 LA prospects unfiltered on the first run (ISSUES I-036).
     prospects = fetch_all(
         lambda: client.table("prospect")
-        .select("id,place_id,name,phone,website,rating,review_count,review_count_inferred_zero,franchise_status,category_status,lat,lng,business_status,raw")
+        .select("id,place_id,name,phone,website,rating,review_count,review_count_inferred_zero,franchise_status,category_status,submarket_id,lat,lng,business_status,raw")
         .eq("market_id", market_id)
     )
+
+    # Submarket centroids for the distance gate — the anchor is the submarket a prospect was already
+    # assigned to (its nearest, at ingest). Loaded once, not per prospect. A prospect with no
+    # submarket, or a submarket with no centroid, simply has no anchor and the rule fails open.
+    submarket_centroids: dict[str, tuple[float, float]] = {}
+    if distance_gate_enabled:
+        for sub in fetch_all(
+            lambda: client.table("submarket").select("id,center_lat,center_lng").eq(
+                "market_id", market_id
+            )
+        ):
+            lat, lng = sub.get("center_lat"), sub.get("center_lng")
+            if lat is not None and lng is not None:
+                submarket_centroids[sub["id"]] = (float(lat), float(lng))
 
     filter_rows: list[dict[str, Any]] = []
     franchise_updates: list[str] = []
@@ -276,6 +292,8 @@ def run_filter(
         if place is None:
             logger.warning("stored raw no longer parses", extra={"prospect_id": row.get("id")})
             continue
+
+        anchor = submarket_centroids.get(row.get("submarket_id")) if distance_gate_enabled else None
 
         verdict: FilterVerdict = evaluate(
             place,
@@ -303,6 +321,10 @@ def run_filter(
             # The COLUMN, not the re-parsed payload — a human ruling on relevance must win over the
             # category match and survive re-filtering, exactly like franchise (I-054).
             category_decision=row.get("category_status"),
+            anchor_lat=anchor[0] if anchor else None,
+            anchor_lng=anchor[1] if anchor else None,
+            max_distance_miles=max_distance_miles,
+            distance_gate_enabled=distance_gate_enabled,
         )
 
         report.evaluated += 1

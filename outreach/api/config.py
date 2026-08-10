@@ -200,6 +200,17 @@ class Settings(BaseSettings):
         }
     )
 
+    # --- Distance gate -------------------------------------------------------------------
+    # `coordinates` biases the Outscraper search centre but does not bound it (there is no radius
+    # parameter), so a category search can return a business far outside the market — an Inglewood
+    # pull surfaced a kitchen remodeler ~150 miles away in Lompoc. This drops a listing further than
+    # `filter_max_distance_miles` from its assigned submarket centroid (the submarket it was matched
+    # to as NEAREST at ingest). Fail-open: a listing with no coordinates is kept. The cap is
+    # deliberately generous — an in-metro business sits a few miles from its nearest centroid, so
+    # 30 miles catches gross drift without fencing a real service area. Tighten per market if needed.
+    filter_max_distance_enabled: bool = True
+    filter_max_distance_miles: float = 30.0
+
     # --- Cadence -------------------------------------------------------------------------
     scan_interval_days: int = 15
 

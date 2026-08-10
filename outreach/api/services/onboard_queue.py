@@ -200,6 +200,8 @@ async def drain_one(db: Any, settings: Settings) -> OnboardDrainReport:
                 str(order.get("category") or ""), settings.filter_category_relevance
             ),
             category_relevance_enabled=settings.filter_category_relevance_enabled,
+            distance_gate_enabled=settings.filter_max_distance_enabled,
+            max_distance_miles=settings.filter_max_distance_miles,
         )
     except Exception as exc:  # noqa: BLE001
         logger.error("onboard filter failed", extra={"order_id": report.order_id})

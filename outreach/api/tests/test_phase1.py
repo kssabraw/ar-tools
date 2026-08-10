@@ -26,7 +26,9 @@ from api.services.filters import (  # noqa: E402
     RULE_NOT_SUPPRESSED,
     RULE_REVIEW_COUNT,
     RULE_REVIEW_RECENCY,
+    RULE_WITHIN_AREA,
     SuppressionIndex,
+    _haversine_miles,
     category_signals,
     evaluate,
     matches_franchise_pattern,
@@ -146,6 +148,7 @@ def test_every_rule_is_recorded_for_every_prospect():
         RULE_REVIEW_COUNT,
         RULE_REVIEW_RECENCY,
         RULE_CATEGORY_RELEVANT,
+        RULE_WITHIN_AREA,
     }
 
 
@@ -1190,3 +1193,86 @@ def test_category_signals_reads_primary_and_all_secondaries():
     assert primary == "General contractor"
     assert "plumber" in all_cats
     assert "remodeler" in all_cats
+
+
+# --- distance gate: gross geographic drift ----------------------------------------------
+
+# Overland Park submarket centroid (from SUBMARKETS above) — the anchor for these cases.
+ANCHOR_LAT, ANCHOR_LNG = 38.9822, -94.6708
+LOMPOC_LAT, LOMPOC_LNG = 34.6391, -120.4579  # ~1,270 miles from Overland Park, KS
+
+
+def run_dist(p, **kwargs):
+    return run(
+        p,
+        distance_gate_enabled=True,
+        max_distance_miles=30.0,
+        anchor_lat=ANCHOR_LAT,
+        anchor_lng=ANCHOR_LNG,
+        **kwargs,
+    )
+
+
+def _area_outcome(verdict):
+    return next(o for o in verdict.outcomes if o.rule == RULE_WITHIN_AREA)
+
+
+def test_distance_gate_defaults_off_and_is_not_evaluated():
+    verdict = run(place(latitude=LOMPOC_LAT, longitude=LOMPOC_LNG))
+    outcome = _area_outcome(verdict)
+    assert outcome.passed
+    assert not outcome.evaluated
+    assert not verdict.excluded
+
+
+def test_a_prospect_inside_the_radius_is_kept():
+    # place() sits at 38.98,-94.67 — a few hundred metres from the anchor.
+    verdict = run_dist(place())
+    assert not verdict.excluded
+    assert _area_outcome(verdict).passed
+
+
+def test_a_far_away_prospect_is_excluded():
+    verdict = run_dist(place(latitude=LOMPOC_LAT, longitude=LOMPOC_LNG))
+    assert verdict.excluded
+    assert RULE_WITHIN_AREA in verdict.failed_rules
+    assert _area_outcome(verdict).observed_value.endswith(" mi")
+
+
+def test_distance_gate_fails_open_when_the_listing_has_no_coordinates():
+    """An unknown location is not a distant one — keep it, like every other rule's missing data."""
+    verdict = run_dist(place(latitude=None, longitude=None))
+    assert _area_outcome(verdict).observed_value == NOT_EVALUATED
+    assert not verdict.excluded
+
+
+def test_distance_gate_fails_open_when_there_is_no_anchor():
+    verdict = run(
+        place(latitude=LOMPOC_LAT, longitude=LOMPOC_LNG),
+        distance_gate_enabled=True,
+        max_distance_miles=30.0,
+        anchor_lat=None,
+        anchor_lng=None,
+    )
+    assert _area_outcome(verdict).observed_value == NOT_EVALUATED
+    assert not verdict.excluded
+
+
+def test_distance_gate_does_not_rescue_a_prospect_failing_another_gate():
+    verdict = run_dist(place(phone=None))
+    assert verdict.excluded
+    assert RULE_HAS_PHONE in verdict.failed_rules
+    assert RULE_WITHIN_AREA not in verdict.failed_rules
+
+
+def test_local_haversine_matches_the_tiling_implementation():
+    """The distance rule keeps its own copy to stay dependency-free; it must not drift from the
+    tiler's, which the ingest uses for submarket assignment."""
+    from api.services.tiling import haversine_miles
+
+    for a, b, c, d in [
+        (38.9822, -94.6708, 34.6391, -120.4579),
+        (33.9617, -118.3531, 34.7420, -120.4570),
+        (40.0, -70.0, 40.0, -70.0),
+    ]:
+        assert _haversine_miles(a, b, c, d) == pytest.approx(haversine_miles(a, b, c, d))
