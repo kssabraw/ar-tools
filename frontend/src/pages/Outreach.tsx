@@ -861,10 +861,11 @@ function CoverageTable({ submarketId }: { submarketId: string }) {
       )}
       {/* Horizontal scroll: the coverage table has many columns (contacts + a wide actions
           group), so it can exceed the card width — scroll it rather than crush the columns.
-          width:max-content keeps every column at its natural size; minWidth:100% fills the card
-          when there's room. */}
+          width:max-content sizes the table to its content (no crushing); we deliberately do NOT
+          stretch it to the card (no minWidth:100%), or the extra width on a wide screen is dumped
+          into the Contacts column as a big empty gap. */}
       <div style={{ overflowX: 'auto', marginTop: 8 }}>
-      <table style={{ width: 'max-content', minWidth: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
+      <table style={{ width: 'max-content', fontSize: 13, borderCollapse: 'collapse' }}>
         <thead>
           <tr style={{ textAlign: 'left', color: '#64748b', fontSize: 11 }}>
             {isAdmin && (

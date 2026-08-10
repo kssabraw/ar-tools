@@ -319,7 +319,9 @@ export function ContactCell({
 
   if (!website) return body
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+    // alignItems:flex-start so the website link and the Enrich button size to their content
+    // instead of stretching to the (variable) column width.
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start' }}>
       <a href={website} target="_blank" rel="noreferrer"
         style={{ display: 'inline-flex', gap: 3, alignItems: 'center', fontSize: 12, color: '#0369a1' }}
         title={website}>
