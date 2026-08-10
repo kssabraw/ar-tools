@@ -136,6 +136,43 @@ _SNAP = {"id": "snap1", "scanned_at": "2026-08-08T10:00:00Z", "geometry_version"
 _NO_COMP = {"available": True, "named": [], "total": 0, "invisible_points": 0}
 
 
+def test_hook_leads_with_the_distinctive_fact_so_neighbours_diverge():
+    """Two businesses in the SAME submarket+keyword with the SAME coverage no longer open with the
+    same line: the one with a review deficit leads with reviews, the one with none leads with
+    coverage. This is the fix for the 'generic and identical' complaint — the hook leads with the
+    per-prospect-distinctive loss, not the shared coverage line."""
+    coverage = {
+        "coverage_pct": 30.0, "points_present": 3, "live_points": 10,
+        "best_rank": 2, "worst_rank": 8, "avg_rank": 4.67, "centroid_dist_at_loss": None,
+    }
+    common = dict(
+        keyword="plumber", submarket="Van Nuys", snapshot=_SNAP,
+        coverage=coverage, live_points=10, competitors=_NO_COMP, field_min_sample=5, pack_size=3,
+    )
+    # Prospect A: 4 reviews against a field median of 40 -> reviews lead.
+    a = oj.build_justification(prospect=_prospect(review_count=4),
+                              field_reviews={"median": 40.0, "sample": 8}, **common)
+    # Prospect B: 90 reviews, above field -> no review deficit, coverage leads.
+    b = oj.build_justification(prospect=_prospect(review_count=90),
+                              field_reviews={"median": 40.0, "sample": 8}, **common)
+    assert a["hook_element"] == oj.ELEM_REVIEWS
+    assert b["hook_element"] == oj.ELEM_COVERAGE
+    assert a["hook"] != b["hook"]
+    # A's opener is built from ITS distinctive fact (the review count), not the shared coverage %.
+    assert "4 " in a["hook"] and "review" in a["hook"]
+
+
+def test_hook_is_loss_framed_present_tense():
+    """The opener frames an active, ongoing loss — customers going to a competitor now — not a
+    neutral 'you could improve' read."""
+    result = oj.build_justification(
+        prospect=_prospect(), keyword="plumber", submarket="Van Nuys", snapshot=_SNAP,
+        coverage=None, live_points=12, competitors=_NO_COMP,
+        field_reviews={"median": None, "sample": 0}, field_min_sample=5, pack_size=3,
+    )
+    assert "going to a competitor" in result["hook"]
+
+
 def test_build_partial_coverage_produces_coverage_and_geography():
     coverage = {
         "coverage_pct": 30.0, "points_present": 3, "live_points": 10,
@@ -169,7 +206,8 @@ def test_build_invisible_everywhere_has_no_geography_point():
     assert oj.ELEM_GEOGRAPHY not in result["available_elements"]
     cov = next(p for p in result["talking_points"] if p["element"] == oj.ELEM_COVERAGE)
     assert cov["facts"]["invisible_points"] == 12
-    assert "invisible across their whole service area" in cov["text"]
+    # Loss-framed: the searches are being handed to a competitor, not a neutral "invisible" read.
+    assert "handed to a competitor" in cov["text"]
     assert "anywhere I looked" in result["hook"]
 
 

@@ -4,6 +4,18 @@
 
 Status as of 2026-08-10 (the first live scan is DONE; heatmap slices 1–2, the any-city scan, **the per-prospect report — call hook + 3 signals + approval-gated client PDF**, **the paid-placement 4th signal**, and **`outcome` + `touch` + the emit webhook** — all MERGED to `main`; **lead enrichment + the report-signal UI triggers built on draft PRs**):
 
+- **CALL HOOK — LOSS-FRAMED + PER-PROSPECT (2026-08-10, draft PR).** The "Why call?" hook read
+  generic/identical for prospects in one submarket (one template led with the shared coverage line).
+  Fixed in two layers: (1) the deterministic assembler (`services/outreach_justification.py`) now
+  LEADS with the most per-prospect-distinctive loss (paying-and-losing → named competitor → review
+  deficit → coverage) and every template is loss-framed; (2) a grounded LLM phrasing pass
+  (`services/outreach_call_hook.py`, `report_llm.run_forced_tool_sync`) rewrites it into compelling
+  loss-framed prose using ONLY the assembled facts, with a deterministic **grounding guard** that
+  rejects invented money/lead-volume numbers (fear-of-loss's failure mode) → falls back to the
+  deterministic hook. Cached per (prospect, snapshot) in `prospect_call_hook` (migration
+  `20260810160000`, **applied live**) keyed by a facts fingerprint, so determinism/replayability lives
+  at the cache (identical re-reads, one paid call per prospect×snapshot). No frontend change (output
+  shape unchanged). Config `outreach_call_hook_*`. Full design in DECISIONS.md 2026-08-10.
 - **REPORT SIGNAL SCANS — RUN ORGANIC + AI PER-PROSPECT FROM THE REPORT (2026-08-10, draft PR).** The
   report always rendered four signals but only the geogrid could be TRIGGERED in-app; `scan-organic`
   and `scan-ai` were CLI-only, so their sections read `not_scanned` for every un-hand-run prospect.

@@ -1581,3 +1581,57 @@ Then it retries the order. The human still makes the recognition judgement; the 
 one-active index collapses many organic clicks in a submarket to one order, so the drain's
 `max_market_run_cost_cents` gate + admin gating suffice. Enrichment bills per-contact, which is why
 it carries a ledger; these do not.
+
+## 2026-08-10 — Loss-framed, per-prospect "Why call?" hook (grounded LLM phrasing layered on the deterministic facts)
+
+**The complaint:** the call hook read generic and identical for prospects in the same
+submarket+keyword. Root cause (grounded in the code): `outreach_justification._hook` was one
+template keyed on keyword+area+top-competitor+coverage-deficit — all shared across a submarket — and
+led with coverage (the least per-prospect-distinctive fact). Owner also asked for **loss framing**
+(consumers move on fear of loss).
+
+**Two changes, deliberately separated.**
+
+**(1) Deterministic side — loss-framed + lead with the distinctive fact.** `HOOK_PRIORITY` reordered
+so the spoken hook LEADS with the most per-prospect-distinctive loss (paying-and-losing → a named
+competitor taking the exact missing points → the business's own review deficit → then bare coverage,
+which is shared across a submarket). `_hook` → `_compose_hook`, and every talking-point + headline
+template rewritten from gain- to loss-framing ("every search for X is going to a competitor", not "a
+gap you could close"). Output shape unchanged, so the report + existing tests are untouched except
+the copy assertions. Two neighbours with the same coverage now diverge (one opens on its review
+deficit, one on coverage).
+
+**(2) Grounded LLM phrasing pass on top — the module docstring's anticipated extension.** A new
+`services/outreach_call_hook.py` rewrites the deterministic hook into compelling, loss-framed,
+per-prospect prose via `report_llm.run_forced_tool_sync` (the same grounded forced-tool transport the
+maps/rank narratives use). This REVERSES the module's deterministic-by-default stance for the hook —
+its docstring pre-authorizes exactly this ("an LLM phrasing pass can always be layered ON TOP later,
+grounded on the facts THIS module already assembles"), so it is the planned path, not a new fork.
+
+**Why this doesn't break "never invent a fact/competitor/number".** Three guards, in order of teeth:
+- The model only RE-WORDS. It's handed the assembled facts; the caller keeps each talking point's
+  `element`+`facts` and takes only the model's prose, so it can't add/drop/reorder a point or change a
+  number-as-data.
+- A deterministic **grounding guard** (`guard_output`, pure, unit-tested) rejects any output that
+  slips a currency figure, a per-month/ROI number, or an estimated lead/job/sale/customer VOLUME
+  through — precisely the fabrications fear-of-loss copy invites ("you're losing $8k/month", which is
+  unprovable AND falsifiable in one sentence, PRD §9a.2). A regex can't be argued out of a verdict;
+  the legitimate measured numbers (%, review counts, "top 3", points, miles) are deliberately not
+  matched. Known limit: it targets the money/volume mode, not an invented competitor NAME (guarded by
+  the prompt + the kept `element`/`facts`) — documented in-code.
+- On any failure (no key, provider error, malformed response, guard rejection) the deterministic
+  loss-framed hook (change 1) stands. A report never fails to render because phrasing was unavailable.
+
+**Determinism/replayability is preserved at the CACHE, not the model.** `prospect_call_hook`
+(migration `20260810160000`, applied live) stores the generated hook per (prospect, snapshot) keyed
+by a SHA-256 `facts_fingerprint` over the deterministic facts (element + facts, NOT prose). A re-read
+with a matching fingerprint returns the stored bytes (identical artifact, no second paid call —
+reporting-spec §2/§6); a new scan changes a number → new fingerprint → regenerate. So the LLM runs
+once per prospect×snapshot, and a report shared in March still regenerates identically in June.
+
+**No per-report cost surprise, no frontend change.** One small cached call per prospect×snapshot,
+default provider Anthropic (low volume, no fan-out 429 exposure like the maps report; flip
+`outreach_call_hook_provider`). The justification's output shape is unchanged, so the report's
+Call-hook section and the `/justification` panel both pick up the new hook with no UI change. Config:
+`outreach_call_hook_llm_enabled` (default True) / `_provider` / `_model` / `_openai_model` /
+`_max_tokens`. Pure logic (guard, fingerprint, prompt builder, lead-fact selection) unit-tested.
