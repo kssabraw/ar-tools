@@ -184,6 +184,15 @@ def test_enrich_place_intersection_is_scoped_to_the_chunk():
     assert enrich_queue.enrich_place_intersection(errors, ["p1", "p2"]) == {"p1"}
 
 
+def test_enrichment_param_is_endpoint_shaped():
+    from api.services.enrich_client import _enrichment_param
+    from api.services.outscraper_client import ENDPOINT_MAPS_SEARCH, ENDPOINT_SEARCH_V3
+
+    # GET query param → single comma-joined value; POST body → JSON list.
+    assert _enrichment_param(["a", "b"], ENDPOINT_SEARCH_V3) == "a,b"
+    assert _enrichment_param(["a", "b"], ENDPOINT_MAPS_SEARCH) == ["a", "b"]
+
+
 # --- claiming ---------------------------------------------------------------------------------
 
 

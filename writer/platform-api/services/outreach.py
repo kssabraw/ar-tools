@@ -2643,3 +2643,52 @@ def list_prospect_contacts(prospect_id: str) -> dict[str, Any]:
         "enrichment": status_rows[0] if status_rows else None,
         "contacts": contacts,
     }
+
+
+_CONTACT_COLUMNS = (
+    "prospect_id, id, place_id, contact_index, full_name, first_name, last_name, title, "
+    "name_for_emails, email, email_status, email_is_generic, phone, phone_type, phone_carrier, "
+    "source, enriched_at"
+)
+
+
+def list_prospect_contacts_batch(prospect_ids: list[str]) -> dict[str, Any]:
+    """Contacts + enrichment status for a SET of prospects in one read — the coverage table's batch,
+    so a 200-row table costs 2 queries instead of 200 (no N+1). Reads are chunked under the 1000-row
+    cap. Only prospects that have an enrichment row and/or contacts appear in `by_prospect`; the rest
+    are absent (the UI renders the Enrich affordance for those). Bounded: the caller passes the page
+    it is showing."""
+    ids = [p for p in dict.fromkeys(prospect_ids) if p]
+    if not ids:
+        return {"by_prospect": {}}
+    client = get_outreach_client()
+    contacts_by: dict[str, list[dict[str, Any]]] = {}
+    enrichment_by: dict[str, dict[str, Any]] = {}
+    for start in range(0, len(ids), 200):
+        chunk = ids[start : start + 200]
+        for row in (
+            client.table("prospect_contact")
+            .select(_CONTACT_COLUMNS)
+            .in_("prospect_id", chunk)
+            .order("contact_index")
+            .execute()
+            .data
+            or []
+        ):
+            contacts_by.setdefault(row["prospect_id"], []).append(row)
+        for row in (
+            client.table("prospect_enrichment")
+            .select("prospect_id, status, contact_count, enrichments, error, enriched_at")
+            .in_("prospect_id", chunk)
+            .execute()
+            .data
+            or []
+        ):
+            enrichment_by[row["prospect_id"]] = row
+    by_prospect: dict[str, Any] = {}
+    for pid in set(contacts_by) | set(enrichment_by):
+        # Sort each prospect's contacts by contact_index (the .order above is a global sort; grouping
+        # preserves it, but be explicit so a provider quirk can't reorder a person's rows).
+        rows = sorted(contacts_by.get(pid, []), key=lambda r: r.get("contact_index") or 0)
+        by_prospect[pid] = {"enrichment": enrichment_by.get(pid), "contacts": rows}
+    return {"by_prospect": by_prospect}

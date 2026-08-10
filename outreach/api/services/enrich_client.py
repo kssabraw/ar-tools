@@ -40,11 +40,17 @@ logger = logging.getLogger(__name__)
 PLACE_TAG = "_place_id"
 
 
-def _enrichment_param(enrichments: list[str]) -> Any:
-    """The `enrichment` value for the wire. GET /maps/search-v3 takes a comma-joined string (how
-    platform-api sends multi-valued params); POST /google-maps-search takes a JSON list. Returning
-    the right shape here keeps the request builder below simple."""
-    return list(enrichments)
+def _enrichment_param(enrichments: list[str], endpoint: str) -> Any:
+    """The `enrichment` value for the wire, shaped for the endpoint.
+
+    GET /maps/search-v3 gets a single comma-joined query value (unambiguous to serialize — no reliance
+    on httpx's list-repeat behaviour, and the shape pixel_probe's single-enricher call already uses);
+    POST /google-maps-search gets a JSON list. Which form Outscraper actually wants for a MULTI-valued
+    set is unconfirmed against this account (measure-don't-infer, ISSUES I-109) — `probe-enrich`
+    settles it, and this is the one line to change if it disagrees."""
+    if endpoint == ENDPOINT_MAPS_SEARCH:
+        return list(enrichments)
+    return ",".join(enrichments)
 
 
 async def _enrich_one(
@@ -58,7 +64,7 @@ async def _enrich_one(
     `enrich_request_timeout_seconds`, clear of the 60s base.
     """
     endpoint = settings.outscraper_search_endpoint
-    enrichment = _enrichment_param(enrichments)
+    enrichment = _enrichment_param(enrichments, endpoint)
     if endpoint == ENDPOINT_MAPS_SEARCH:
         payload: dict[str, Any] = {
             "query": [place_id],
@@ -76,7 +82,7 @@ async def _enrich_one(
             "language": settings.outscraper_language,
             "region": settings.outscraper_region,
             "async": "false",
-            # GET carries repeated params for a list; httpx serializes a list value as repeats.
+            # `enrichment` is a single comma-joined value on GET (see `_enrichment_param`).
             "enrichment": enrichment,
         }
         body = await oc._request("GET", endpoint, params=params)  # noqa: SLF001 — enrichment path

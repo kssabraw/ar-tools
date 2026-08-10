@@ -547,6 +547,10 @@ class EnrichRequestCreate(BaseModel):
     note: Optional[str] = None
 
 
+class ContactsBatchRequest(BaseModel):
+    prospect_ids: list[str]
+
+
 @router.get("/outreach/markets/{market_id}/keywords")
 async def list_keywords(market_id: str, auth: dict = Depends(require_outreach)) -> dict:
     return {"keywords": _handle(outreach_service.list_keywords, market_id)}
@@ -633,6 +637,15 @@ async def cancel_enrichment_request(
     its own."""
     _require_outreach_ready()
     return _handle(outreach_service.cancel_enrichment_request, request_id, auth["user_id"])
+
+
+@router.post("/outreach/contacts/batch")
+async def list_prospect_contacts_batch(
+    payload: ContactsBatchRequest, auth: dict = Depends(require_outreach)
+) -> dict:
+    """Contacts + enrichment status for a SET of prospects in one read — the coverage table's batch,
+    so rendering N rows costs 2 queries, not 2N. Read-only."""
+    return _handle(outreach_service.list_prospect_contacts_batch, payload.prospect_ids)
 
 
 @router.get("/outreach/prospects/{prospect_id}/contacts")

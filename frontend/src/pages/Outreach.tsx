@@ -9,6 +9,7 @@ import { Tabs } from './OutreachLeads'
 import { Justification } from '../components/outreach/Justification'
 import { ProspectReportButtons } from '../components/outreach/ProspectReport'
 import { ContactCell, EnrichmentBar, useEnrichment } from '../components/outreach/Enrichment'
+import type { ProspectContacts } from '../components/outreach/Enrichment'
 
 // ── Types (mirror routers/outreach.py's scan-order section) ──────────────────
 interface Market { id: string; name: string }
@@ -822,6 +823,15 @@ function CoverageTable({ submarketId }: { submarketId: string }) {
     queryFn: () => api.get(`/outreach/submarkets/${submarketId}/placeholder-scores?limit=200`),
     enabled: !!submarketId,
   })
+  // Contacts for the whole table in ONE read (no per-row N+1). Keyed on the visible prospect ids;
+  // refetched while an enrichment batch drains so freshly-written contacts appear without a reload.
+  const visibleIds = (data?.scores ?? []).filter(s => !s.excluded).map(s => s.prospect_id)
+  const { data: contactsBatch } = useQuery<{ by_prospect: Record<string, ProspectContacts> }>({
+    queryKey: ['outreach-contacts-batch', submarketId, visibleIds],
+    queryFn: () => api.post('/outreach/contacts/batch', { prospect_ids: visibleIds }),
+    enabled: visibleIds.length > 0,
+    refetchInterval: batchRunning ? 6000 : false,
+  })
 
   if (!submarketId) return null
   if (isLoading) return <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>Loading…</p>
@@ -883,7 +893,8 @@ function CoverageTable({ submarketId }: { submarketId: string }) {
                 <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{s.phone ?? '—'}</td>
                 <td style={{ padding: '6px 8px' }}>
                   <ContactCell prospectId={s.prospect_id} isAdmin={isAdmin}
-                    controller={enrich} batchRunning={batchRunning} />
+                    controller={enrich} batchRunning={batchRunning}
+                    provided={contactsBatch?.by_prospect?.[s.prospect_id] ?? null} />
                 </td>
                 <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.coverage_pct?.toFixed(1)}%</td>
                 <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>

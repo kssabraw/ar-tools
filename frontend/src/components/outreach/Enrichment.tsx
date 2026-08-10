@@ -61,9 +61,11 @@ export function useEnrichment(scopeKey: string) {
         }),
       ),
     onDone: () => {
-      // The drained orders wrote contacts + statuses — refresh both the per-row contact cells and
-      // the coverage list (an enriched prospect's phone may now be known).
+      // The drained orders wrote contacts + statuses — refresh the per-row contact cells (both the
+      // batched table read and the single-prospect drawer read) and the coverage list (an enriched
+      // prospect's phone may now be known).
       qc.invalidateQueries({ queryKey: ['outreach-contacts'] })
+      qc.invalidateQueries({ queryKey: ['outreach-contacts-batch'] })
       qc.invalidateQueries({ queryKey: ['outreach-placeholder-scores'] })
     },
   })
@@ -153,7 +155,15 @@ export function EnrichmentBar({
   return (
     <div style={{ ...barStyle, flexWrap: 'wrap' }}>
       <Sparkles size={14} color="#7c3aed" />
-      {estimate.isLoading || !est ? (
+      {estimate.isError ? (
+        <>
+          <span style={{ fontSize: 12, color: '#b91c1c' }}>
+            {(estimate.error as { message?: string })?.message ?? 'Could not estimate — try again'}
+          </span>
+          <button onClick={() => estimate.refetch()} style={ghostBtn}>Retry</button>
+          <button onClick={() => setConfirming(false)} style={ghostBtn}>Cancel</button>
+        </>
+      ) : estimate.isLoading || !est ? (
         <span style={{ fontSize: 13 }}>Estimating…</span>
       ) : (
         <>
@@ -205,28 +215,41 @@ export function LeadContacts({ prospectId, isAdmin }: { prospectId: string; isAd
   )
 }
 
+export interface ProspectContacts {
+  enrichment: ContactsResp['enrichment']
+  contacts: Contact[]
+}
+
 // ── Per-row contacts + single "Enrich" button ───────────────────────────────────────────────────
+// `provided` is the batched read (the coverage table fetches all rows' contacts in ONE call and
+// passes each row's slice, or `null` when a prospect has no enrichment yet — avoiding an N+1 of one
+// request per row). When `provided` is undefined (the CRM drawer's single prospect) the cell
+// self-queries instead.
 export function ContactCell({
   prospectId,
   isAdmin,
   controller,
   batchRunning,
+  provided,
 }: {
   prospectId: string
   isAdmin: boolean
   controller: Controller
   batchRunning: boolean
+  provided?: ProspectContacts | null
 }) {
-  const { data } = useQuery<ContactsResp>({
+  const self = useQuery<ContactsResp>({
     queryKey: ['outreach-contacts', prospectId],
     queryFn: () => api.get(`/outreach/prospects/${prospectId}/contacts`),
+    // Only self-query when the parent did NOT provide a batched read.
+    enabled: provided === undefined,
     // While a batch is draining, keep checking so freshly-written contacts appear without a manual
     // refresh (the order finishes on a tick, not synchronously).
-    refetchInterval: batchRunning ? 6000 : false,
+    refetchInterval: provided === undefined && batchRunning ? 6000 : false,
   })
 
-  const enrichment = data?.enrichment
-  const contacts = data?.contacts ?? []
+  const enrichment = provided !== undefined ? provided?.enrichment : self.data?.enrichment
+  const contacts = (provided !== undefined ? provided?.contacts : self.data?.contacts) ?? []
 
   if (contacts.length > 0) {
     return (
