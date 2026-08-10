@@ -30,6 +30,7 @@ from typing import Any
 from ..config import Settings
 from . import scan_runner, seeding
 from .cost import CostLimitExceeded
+from .filters import resolve_accepted_categories
 from .pipeline import run_filter, run_ingest
 from .scan_queue import budget_denial, estimate_cost_cents
 
@@ -190,7 +191,16 @@ async def drain_one(db: Any, settings: Settings) -> OnboardDrainReport:
     report.stage = "filter"
     _update(db, report.order_id, {"stage": "filter", "prospects_ingested": report.prospects_ingested})
     try:
-        fr = run_filter(client=db, settings=settings, market_id=submarket_row["market_id"])
+        fr = run_filter(
+            client=db,
+            settings=settings,
+            market_id=submarket_row["market_id"],
+            # The typed business type IS the ingest category, so it keys the vertical's allow-list.
+            accepted_categories=resolve_accepted_categories(
+                str(order.get("category") or ""), settings.filter_category_relevance
+            ),
+            category_relevance_enabled=settings.filter_category_relevance_enabled,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.error("onboard filter failed", extra={"order_id": report.order_id})
         return _fail(db, report, f"filter failed: {repr(exc)[:400]}")

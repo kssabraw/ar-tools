@@ -50,6 +50,8 @@ class FilterReport:
     excluded: int = 0
     survived: int = 0
     franchise_flagged: int = 0
+    # The 'maybe' pile: primary category off-list but a secondary matched — awaiting a human glance.
+    category_review_flagged: int = 0
     failures_by_rule: dict[str, int] = field(default_factory=dict)
 
 
@@ -242,6 +244,8 @@ def run_filter(
     market_id: str,
     today: date | None = None,
     suppression: SuppressionIndex | None = None,
+    accepted_categories: frozenset[str] | None = None,
+    category_relevance_enabled: bool = False,
 ) -> FilterReport:
     """Stage A2 — free. Reads prospects back out and writes the full rule matrix.
 
@@ -256,12 +260,16 @@ def run_filter(
     # 1388 LA prospects unfiltered on the first run (ISSUES I-036).
     prospects = fetch_all(
         lambda: client.table("prospect")
-        .select("id,place_id,name,phone,website,rating,review_count,review_count_inferred_zero,franchise_status,lat,lng,business_status,raw")
+        .select("id,place_id,name,phone,website,rating,review_count,review_count_inferred_zero,franchise_status,category_status,lat,lng,business_status,raw")
         .eq("market_id", market_id)
     )
 
     filter_rows: list[dict[str, Any]] = []
     franchise_updates: list[str] = []
+    # place_id-keyed by NEW status -> the prospect ids to move there. A human-confirmed status
+    # ('confirmed_*') is never re-derived from the pattern, mirroring franchise_updates; the DB
+    # guard (20260810180000) enforces the same regardless of caller.
+    category_updates: dict[str, list[str]] = {}
 
     for row in prospects:
         place = parse_place(row.get("raw") or {})
@@ -290,6 +298,11 @@ def run_filter(
             # the I-045 geogrid backfill), and re-parsing raw would silently discard it.
             review_count_override=row.get("review_count"),
             franchise_decision=row.get("franchise_status"),
+            accepted_categories=accepted_categories,
+            category_relevance_enabled=category_relevance_enabled,
+            # The COLUMN, not the re-parsed payload — a human ruling on relevance must win over the
+            # category match and survive re-filtering, exactly like franchise (I-054).
+            category_decision=row.get("category_status"),
         )
 
         report.evaluated += 1
@@ -305,6 +318,19 @@ def run_filter(
                 "confirmed_independent",
             ):
                 franchise_updates.append(row["id"])
+
+        if verdict.category_review_flagged:
+            report.category_review_flagged += 1
+
+        # Persist the computed bucket ('relevant' | 'review' | 'off_category' | 'unknown') so the
+        # review pile and the drops are queryable. Never over a human 'confirmed_*' ruling.
+        if category_relevance_enabled and row.get("category_status") not in (
+            "confirmed_relevant",
+            "confirmed_off",
+        ):
+            new_status = verdict.category_status
+            if new_status != row.get("category_status"):
+                category_updates.setdefault(new_status, []).append(row["id"])
 
         for outcome in verdict.outcomes:
             if not outcome.passed:
@@ -336,6 +362,14 @@ def run_filter(
         client.table("prospect").update({"franchise_status": "flagged"}).in_(
             "id", franchise_updates
         ).execute()
+
+    # One update per destination bucket. Confirmed human rulings were already excluded above and
+    # are protected by the DB guard regardless.
+    for status_value, ids in category_updates.items():
+        if ids:
+            client.table("prospect").update({"category_status": status_value}).in_(
+                "id", ids
+            ).execute()
 
     # The filter stage is free; the ledger row records that explicitly rather than omitting it,
     # so "what did this market cost" sums every stage rather than the paid ones.

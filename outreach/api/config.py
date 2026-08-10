@@ -180,6 +180,26 @@ class Settings(BaseSettings):
         default_factory=lambda: list(DEFAULT_FRANCHISE_PATTERNS)
     )
 
+    # --- Category relevance (three-bucket gate) ------------------------------------------
+    # A Google Maps category search returns adjacent trades too — a "plumbing contractor" pull for
+    # Inglewood surfaced apartment buildings, tool stores, HVAC firms and supply houses, ~half the
+    # contactable set. This gate drops a listing whose PRIMARY Google category is off the vertical's
+    # allow-list, keeps it when the primary matches, and flags it for REVIEW (never auto-drops) when
+    # only a SECONDARY category matches. Fail-open: a listing with no category, or a vertical absent
+    # from the map below, is NOT_EVALUATED and kept.
+    #
+    # Enabled by default, but a no-op for any vertical not in `filter_category_relevance` — so it
+    # touches only the verticals whose allow-list has been curated here. Keyed on the INGEST
+    # category (the typed business type). Add a vertical by adding a key.
+    filter_category_relevance_enabled: bool = True
+    filter_category_relevance: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "plumber": ["Plumber", "Fontanero", "Drainage service"],
+            "plumbing contractor": ["Plumber", "Fontanero", "Drainage service"],
+            "plumbing": ["Plumber", "Fontanero", "Drainage service"],
+        }
+    )
+
     # --- Cadence -------------------------------------------------------------------------
     scan_interval_days: int = 15
 

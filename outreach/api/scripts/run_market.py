@@ -25,7 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from api.config import get_settings  # noqa: E402
-from api.services import seeding  # noqa: E402
+from api.services import filters, seeding  # noqa: E402
 from api.services.cost import CostLimitExceeded  # noqa: E402
 from api.services.pipeline import run_filter, run_ingest  # noqa: E402
 
@@ -155,9 +155,27 @@ def cmd_ingest(args) -> int:
 def cmd_filter(args) -> int:
     definition = seeding.MarketDefinition.from_file(args.definition)
     client = _client()
+    settings = get_settings()
     market_id = _market_id(client, definition.name)
 
-    report = run_filter(client=client, settings=get_settings(), market_id=market_id)
+    # A market can define more than one ingest category; the relevance allow-list is the union of
+    # each configured category's set. Unconfigured categories contribute nothing (and the whole
+    # gate is a no-op when none of the market's categories are in the map).
+    accepted: set[str] = set()
+    for category in definition.categories:
+        resolved = filters.resolve_accepted_categories(
+            category, settings.filter_category_relevance
+        )
+        if resolved:
+            accepted.update(resolved)
+
+    report = run_filter(
+        client=client,
+        settings=settings,
+        market_id=market_id,
+        accepted_categories=frozenset(accepted) or None,
+        category_relevance_enabled=settings.filter_category_relevance_enabled,
+    )
 
     print(
         json.dumps(
@@ -166,6 +184,7 @@ def cmd_filter(args) -> int:
                 "survived": report.survived,
                 "excluded": report.excluded,
                 "franchise_flagged": report.franchise_flagged,
+                "category_review_flagged": report.category_review_flagged,
                 "failures_by_rule": report.failures_by_rule,
             },
             indent=2,
