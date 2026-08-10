@@ -826,7 +826,13 @@ def cmd_tick(args) -> int:
     """
     import asyncio as _asyncio
 
-    from api.services import enrich_queue, onboard_queue, scan_queue
+    from api.services import (
+        ai_scan_queue,
+        enrich_queue,
+        onboard_queue,
+        organic_scan_queue,
+        scan_queue,
+    )
 
     code = cmd_collect(args)
 
@@ -838,6 +844,21 @@ def cmd_tick(args) -> int:
     # the one-per-tick cadence — several orders per heartbeat. Order-gated (each signed order is its
     # own confirmation), so no env token, same as the drains above.
     enriched = _asyncio.run(enrich_queue.drain(client, settings))
+    # Report signal scans (organic / AI-visibility UI triggers). Each is one cheap paid call, drained
+    # ≤ its configured per-tick count (default 1), same signed-order + terminal-outcome model. A drain
+    # that claims nothing ends the loop early, so an empty queue costs one read, not N.
+    organic_drains = []
+    for _ in range(max(0, settings.organic_orders_per_tick)):
+        r = _asyncio.run(organic_scan_queue.drain_one(client, settings))
+        if not r.claimed:
+            break
+        organic_drains.append(r)
+    ai_drains = []
+    for _ in range(max(0, settings.ai_orders_per_tick)):
+        r = _asyncio.run(ai_scan_queue.drain_one(client, settings))
+        if not r.claimed:
+            break
+        ai_drains.append(r)
     print(
         json.dumps(
             {
@@ -881,6 +902,28 @@ def cmd_tick(args) -> int:
                         for o in enriched.orders
                     ],
                 },
+                "organic": [
+                    {
+                        "order_id": o.order_id,
+                        "snapshot_id": o.snapshot_id,
+                        "keyword": o.keyword,
+                        "outcome": o.outcome,
+                        "already_captured": o.already_captured,
+                        "error": o.error,
+                    }
+                    for o in organic_drains
+                ],
+                "ai": [
+                    {
+                        "order_id": o.order_id,
+                        "ai_region": o.ai_region,
+                        "keyword": o.keyword,
+                        "outcome": o.outcome,
+                        "stored": o.stored,
+                        "error": o.error,
+                    }
+                    for o in ai_drains
+                ],
             },
             indent=2,
         )
@@ -889,7 +932,14 @@ def cmd_tick(args) -> int:
     # queue whose orders quietly fail is the "green badge over a crashed job" shape (§6.2), and the
     # exit code is the only summary a cron run leaves besides its logs.
     enrich_failed = any(o.outcome == "failed" for o in enriched.orders)
-    return 1 if enrich_failed or "failed" in (drained.outcome, onboarded.outcome) else code
+    signal_failed = any(
+        o.outcome == "failed" for o in (*organic_drains, *ai_drains)
+    )
+    return (
+        1
+        if enrich_failed or signal_failed or "failed" in (drained.outcome, onboarded.outcome)
+        else code
+    )
 
 
 def cmd_rollup(args) -> int:

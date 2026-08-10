@@ -2,8 +2,28 @@
 
 **Read this first, then `CLAUDE.md` → `START-HERE.md` → `ISSUES.md` → `DECISIONS.md`.**
 
-Status as of 2026-08-10 (the first live scan is DONE; heatmap slices 1–2, the any-city scan, **the per-prospect report — call hook + 3 signals + approval-gated client PDF**, **the paid-placement 4th signal**, and **`outcome` + `touch` + the emit webhook** — all MERGED to `main`; **lead enrichment built on a draft PR**):
+Status as of 2026-08-10 (the first live scan is DONE; heatmap slices 1–2, the any-city scan, **the per-prospect report — call hook + 3 signals + approval-gated client PDF**, **the paid-placement 4th signal**, and **`outcome` + `touch` + the emit webhook** — all MERGED to `main`; **lead enrichment + the report-signal UI triggers built on draft PRs**):
 
+- **REPORT SIGNAL SCANS — RUN ORGANIC + AI PER-PROSPECT FROM THE REPORT (2026-08-10, draft PR).** The
+  report always rendered four signals but only the geogrid could be TRIGGERED in-app; `scan-organic`
+  and `scan-ai` were CLI-only, so their sections read `not_scanned` for every un-hand-run prospect.
+  Owner request: let staff run organic + AI per prospect from the report. Two new signed-order queues
+  on the `scan_request` rails — `organic_scan_request` + `ai_scan_request` (migration
+  `20260810140000`, **applied live** to Outreacher). platform-api WRITES the order admin-only, the
+  outreach `tick` DRAINS + runs it (`api/services/organic_scan_queue.py` / `ai_scan_queue.py`,
+  ≤`organic_orders_per_tick`/`ai_orders_per_tick`=1 each); platform-api never spends. Organic resolves
+  the EXACT snapshot the report reads (idempotent → a re-order/second prospect in the submarket is a
+  free `done`); AI targets a human-seeded `ai_region`, so `create_ai_scan_request` 422s
+  `ai_region_not_seeded` when none matches and the report UI opens a seed modal (`POST
+  /outreach/ai-regions`, admin, name pre-filled to the prospect's area so the resolver matches, human
+  picks name_level — the I-073 invariant intact). platform-api: `services/outreach.py` +
+  `routers/outreach.py` (`/outreach/prospects/{id}/scan-organic|scan-ai`, `/outreach/{organic|ai}-scan-requests`
+  list/detail/cancel, `/outreach/markets/{id}/ai-regions`, `/outreach/ai-regions`). UI:
+  admin-only "Run organic scan" / "Run AI scan" buttons + the region-seed modal in
+  `frontend/src/components/outreach/ProspectReport.tsx` (poll order → refetch report). No per-user
+  budget ledger (each run ~1–3¢; the one-active index + admin gating suffice). Pure drain logic
+  unit-tested (`test_organic_scan_queue.py` / `test_ai_scan_queue.py`, 25 tests) + platform-api
+  gating/constants/validation. Full design in DECISIONS.md 2026-08-10.
 - **LEAD ENRICHMENT IS BUILT (2026-08-10, draft PR) — contact NAMES / PHONES / EMAILS per prospect,
   one-by-one and select-all.** Enriches a prospect (or a selection) via Outscraper "Emails & Contacts"
   enrichers. **The mass-ingest enrichment invariant is intact** — `submit_maps_search` is untouched;

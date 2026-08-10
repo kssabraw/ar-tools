@@ -654,6 +654,9 @@ def build_report(
     measured = bool(justification.get("measured"))
     return {
         "prospect_id": prospect.get("id"),
+        # The prospect's market, so the report UI's "Run AI scan" seed modal knows which market to
+        # list/seed ai_regions against (the AI signal is scanned per human-seeded region, not submarket).
+        "market_id": prospect.get("market_id"),
         "measured": measured,
         "identity": {
             "name": prospect.get("name"),

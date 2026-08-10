@@ -1539,3 +1539,45 @@ has run against this account, so the exact enrichment param value(s) and respons
 list-of-dicts and flat/numbered forms), stores each record's untouched fragment in `raw` for free
 re-parsing against corrected aliases, and a `probe-enrich` command (PAID, env-gated) logs one full record
 to confirm the shape before production is trusted — exactly the `probe-pixel-field` discipline. See ISSUES.
+
+## 2026-08-10 — Report signal scans: run ORGANIC and AI per-prospect from the report UI
+
+**The report already rendered organic + AI; only the geogrid could be TRIGGERED in-app.** The
+per-prospect report (`writer/platform-api ProspectReport`) has always assembled four signals — maps,
+organic, AI-visibility, paid — and their sections read `not_scanned` honestly until the paid scan
+runs. But `scan-organic` and `scan-ai` were CLI-only, so every prospect nobody hand-ran showed those
+two sections blank. Owner request (this session): let staff run organic + AI for each prospect from
+the report. Built as two more signed-order queues on the existing `scan_request` rails.
+
+**Same money-gate carrier, two new order tables.** `organic_scan_request` + `ai_scan_request`
+(migration `20260810140000`): platform-api WRITES the order admin-only (the click is the spend
+authorization, evidence the accidental deploy path cannot manufacture), the outreach `tick` DRAINS
+and runs it (`organic_scan_queue` / `ai_scan_queue`, mirroring `scan_queue`). platform-api never
+spends. ≤1 order per tick each (`organic_orders_per_tick`/`ai_orders_per_tick`, default 1) — the
+geogrid cadence, not enrichment's batch drain — since each is a discrete paid capture and a first
+run can surface a fault; raise the knob if a queue ever backs up.
+
+**Two tables, not one polymorphic order (the onboard_request precedent).** Organic attaches to an
+existing rolled-up `scan_snapshot` (resolved server-side from the prospect's report provenance, so
+the capture lands on the EXACT snapshot the report reads); AI targets an `ai_region` × keyword.
+Different targets, different invariants — keeping them apart means neither bends to fit the other.
+Organic's one-active index is on `(snapshot_id, keyword_id)`, so a dozen prospects sharing a
+submarket snapshot collapse to ONE billed capture; capture_organic is idempotent, so a re-order is a
+free `done`. AI's is on `(ai_region_id, keyword_id)`; run_ai_scan is re-runnable (latest wins), so
+its index only blocks a duplicate in-flight order, and a `done` requires ≥1 engine stored — `stored
+== 0` fails the order (an outage must never be recorded as "the AI doesn't know this business").
+
+**AI needs a human-seeded region, so the UI got a seed step — the I-073 invariant is intact.** The AI
+scan runs at a coarse `ai_region` (a recognizable place name), NOT the fine submarket grid, and its
+`name_level` is a human judgement the module forbids deriving. Only LA's regions were seeded, so a
+typed any-city prospect had no region to target. Rather than auto-deriving a region (which would
+break I-073) or leaving the AI button inert, `create_ai_scan_request` returns `ai_region_not_seeded`
+when no region matches the prospect's submarket name, and the report UI opens a small seed modal
+(`POST /outreach/ai-regions`, admin) where a human names the region — pre-filled to the prospect's
+area so it MATCHES (the resolver joins region.name ilike submarket.name) — and picks its name_level.
+Then it retries the order. The human still makes the recognition judgement; the tool just asks for it.
+
+**Deliberately no per-user daily budget ledger (unlike enrichment).** Each run is ~1–3¢ and the
+one-active index collapses many organic clicks in a submarket to one order, so the drain's
+`max_market_run_cost_cents` gate + admin gating suffice. Enrichment bills per-contact, which is why
+it carries a ledger; these do not.
