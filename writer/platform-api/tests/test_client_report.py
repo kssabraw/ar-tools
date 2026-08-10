@@ -313,6 +313,21 @@ def test_section_organic_leads_with_wins_not_lone_decliner():
     assert "ranking on page 1 of Google" in out
 
 
+def test_section_organic_does_not_pad_with_decliner():
+    """The real WheelHouse case: only 4 page-1 keywords, and the 5th-best rank is a
+    mid-pack decliner. It must NOT be pulled into the table just to reach 5 rows."""
+    kws = [{"keyword": "w1", "current_rank": 3, "change": None, "sparkline": []},
+           {"keyword": "w2", "current_rank": 4, "change": None, "sparkline": []},
+           {"keyword": "w3", "current_rank": 5, "change": None, "sparkline": []},
+           {"keyword": "w4", "current_rank": 8, "change": None, "sparkline": []},
+           {"keyword": "decliner kw", "current_rank": 12, "change": -2.0, "sparkline": [10, 12]}]
+    data = _data(organic={"keywords": kws, "summary": {"tracked": 40, "top10": 4, "improved": 0, "declined": 1}})
+    out = cr.build_report_html(data)
+    assert "w1" in out and "w4" in out
+    assert "decliner kw" not in out
+    assert "-2 positions" not in out
+
+
 def test_positive_framing_reframes_weaknesses():
     # Maps weak areas → opportunity language
     geo = _data(geogrid={"keywords": [{"keyword": "x", "average_rank": 5, "top3_pins": 3,
