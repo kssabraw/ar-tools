@@ -253,6 +253,47 @@ class Settings(BaseSettings):
     # is built either way, this only decides whether it runs by default.
     tech_follow_gtm: bool = False
 
+    # --- Lead enrichment (contact names / phones / emails via Outscraper) ------------------
+    # A SEPARATE, spend-gated, per-selection action — NOT the mass ingest, which hardcodes
+    # `enrichment=""` with a hard invariant so a market pull can never silently bill per-place
+    # enrichment (outscraper_client.submit_maps_search). This path builds its own request (like
+    # pixel_probe.fetch_enriched_sample) and never touches that method. The order row
+    # (`enrichment_request`) is its own spend confirmation; the `tick` command drains it.
+
+    # The enricher set requested by default. Outscraper takes a LIST, called BY place_id. These are
+    # a GUESS to confirm against a logged sample record via `probe-enrich` (measure-don't-infer,
+    # ISSUES) before trusting production output — the parser never asserts a field it hasn't seen.
+    enrich_enrichments: list[str] = Field(
+        default_factory=lambda: ["emails_validator_service", "phones_enricher_service"]
+    )
+
+    # Outscraper enrichment is billed per record. The API returns no per-request cost, so like every
+    # other rate here this is a CONFIGURED number reconciled against the dashboard (I-022) — set it
+    # from the real plan before a production run. Keep in sync with platform-api's
+    # outreach_enrich_cost_per_place_cents (that one drives the placement-time budget guard; this
+    # one drives the drain's cost_ledger write).
+    enrich_cost_per_place_cents: int = 5
+
+    # place_ids per Outscraper enrichment request. Enrichment is BATCHABLE — one request covers many
+    # place_ids — so chunks stay modest: a synchronous enriched pull for a chunk stays under the
+    # timeout, and a failed chunk loses one chunk's worth, not the whole order (the pixel_probe
+    # per-query-isolation lesson).
+    enrich_chunk_size: int = 10
+
+    # Enrichment is lightweight + batchable, so the tick is deliberately NOT held to the ≤1-order
+    # cadence the heavy geogrid scan uses (that cadence exists so each scan's collection starts
+    # before the next scan's spend — irrelevant when one cheap request covers a whole selection). It
+    # drains up to this many orders per heartbeat.
+    enrich_orders_per_tick: int = 5
+    # A defensive ceiling on one order's selection, so a single order can never run unboundedly (the
+    # placement layer caps it too — this is the drain's backstop). A bigger "select all" is split
+    # into several orders.
+    enrich_max_places_per_order: int = 200
+
+    # A synchronous enriched pull for a chunk of place_ids can take longer than the base search; its
+    # own timeout, clear of the 60s base request timeout.
+    enrich_request_timeout_seconds: float = 180.0
+
     # --- Scoring model — Phase 4 Stage 1 (scoring-spec.md) --------------------------------
     # EVERYTHING here is a CONFIG value. Zero hardcoded betas, ever (CLAUDE.md invariant). The
     # scalar knobs live here; the full coefficient REGISTRY (the elicited priors, ~40 bins) lives

@@ -2,8 +2,28 @@
 
 **Read this first, then `CLAUDE.md` → `START-HERE.md` → `ISSUES.md` → `DECISIONS.md`.**
 
-Status as of 2026-08-09 (the first live scan is DONE; heatmap slices 1–2, the any-city scan, **the per-prospect report — call hook + 3 signals + approval-gated client PDF**, **the paid-placement 4th signal**, and **`outcome` + `touch` + the emit webhook** — all MERGED to `main`):
+Status as of 2026-08-10 (the first live scan is DONE; heatmap slices 1–2, the any-city scan, **the per-prospect report — call hook + 3 signals + approval-gated client PDF**, **the paid-placement 4th signal**, and **`outcome` + `touch` + the emit webhook** — all MERGED to `main`; **lead enrichment built on a draft PR**):
 
+- **LEAD ENRICHMENT IS BUILT (2026-08-10, draft PR) — contact NAMES / PHONES / EMAILS per prospect,
+  one-by-one and select-all.** Enriches a prospect (or a selection) via Outscraper "Emails & Contacts"
+  enrichers. **The mass-ingest enrichment invariant is intact** — `submit_maps_search` is untouched;
+  enrichment builds its own by-place_id request in `api/services/enrich_client.py` (generalizing
+  `pixel_probe.fetch_enriched_sample`). Order-driven like scans: a UI click (ADMIN, budget-guarded) writes
+  an `enrichment_request` (migration `20260810120000`, **applied live** to Outreacher); the `tick` command
+  drains it (`api/services/enrich_queue.py`) and bills — platform-api never spends. Batchable, so the drain
+  does several orders/tick (not the ≤1 scan cadence) and is idempotent (already-enriched prospects skipped,
+  no re-bill → a re-order is a cheap resume). Contact-aware: `prospect_contact` (one business → N contacts)
+  + `prospect_enrichment` (status/provenance/idempotency marker); `prospect` left pristine. Free preflight
+  estimate + per-user daily budget guard (order rows = the ledger). New commands: `enrich` (order-gated,
+  drains) + `probe-enrich` (PAID, the measure-don't-infer spike); both wired into `run_market.py`, `enrich`
+  drained in `tick`. platform-api: `services/outreach.py` + `routers/outreach.py`
+  (`/outreach/enrichment/estimate`, `/outreach/prospects/{id}/enrich`, `/outreach/enrichment`, list/detail/
+  cancel, `/outreach/prospects/{id}/contacts`). UI: `frontend/src/components/outreach/Enrichment.tsx`
+  (per-row Enrich + select-all bulk bar + contact chips, `useResumableBatch`) in the coverage table + CRM
+  lead drawer. Pure logic unit-tested (parser 26 + drain; platform-api estimate/budget/validation).
+  **UNRUN + field names UNCONFIRMED:** run `probe-enrich` once (owner-authorized) to confirm the enrichment
+  param value(s) + response shape before trusting output — ISSUES I-109/110/111. Config rates are
+  placeholders (I-111). Full design in DECISIONS.md 2026-08-10.
 - **`outcome` + `touch` + THE EMIT WEBHOOK ARE BUILT AND MERGED (2026-08-09, PR #625 → `8141629`).**
   The learning substrate (HANDOFF §12's named next build; the one Phase-3 item with a closing window,
   because `outcome` cannot be backfilled — scoring-spec §8). Migration `20260809170000_outcome_touch.sql`

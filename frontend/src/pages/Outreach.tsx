@@ -8,6 +8,7 @@ import { useAuth } from '../context/AuthContext'
 import { Tabs } from './OutreachLeads'
 import { Justification } from '../components/outreach/Justification'
 import { ProspectReportButtons } from '../components/outreach/ProspectReport'
+import { ContactCell, EnrichmentBar, useEnrichment } from '../components/outreach/Enrichment'
 
 // ── Types (mirror routers/outreach.py's scan-order section) ──────────────────
 interface Market { id: string; name: string }
@@ -790,9 +791,15 @@ function OrderProgress({ id }: { id: string }) {
 // The ranked coverage table for ONE submarket — reused by the Coverage results card (with a
 // submarket picker) and by an onboard row's inline results (submarket fixed to that scan).
 function CoverageTable({ submarketId }: { submarketId: string }) {
+  const { isAdmin } = useAuth()
   const [promoted, setPromoted] = useState<Record<string, boolean>>({})
   const [emitted, setEmitted] = useState<Record<string, { delivered: boolean; configured: boolean }>>({})
   const [openHook, setOpenHook] = useState<string | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const enrich = useEnrichment(submarketId)
+  const batchRunning = enrich.batch.running
+  const toggle = (id: string) =>
+    setSelected(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next })
   const promote = useMutation({
     mutationFn: (prospectId: string) =>
       api.post<{ lead: { id: string; already_existed: boolean } }>(
@@ -826,17 +833,35 @@ function CoverageTable({ submarketId }: { submarketId: string }) {
       </p>
     )
   }
+  const visible = data.scores.filter(s => !s.excluded)
+  const allSelected = visible.length > 0 && visible.every(s => selected.has(s.prospect_id))
+  const colSpan = 7 + (isAdmin ? 1 : 0) + 1  // + checkbox (admin) + contacts column
   return (
     <>
       <p style={{ fontSize: 11, color: '#94a3b8', margin: '6px 0 0' }}>
         Ranked by coverage deficit — a business absent at every measured point shows 100% deficit
         (zero coverage, not unknown). Send the most invisible ones to your CRM.
       </p>
+      {isAdmin && (
+        <EnrichmentBar
+          selectedIds={[...selected]}
+          controller={enrich}
+          onCleared={() => setSelected(new Set())}
+        />
+      )}
       <table style={{ width: '100%', marginTop: 8, fontSize: 13, borderCollapse: 'collapse' }}>
         <thead>
           <tr style={{ textAlign: 'left', color: '#64748b', fontSize: 11 }}>
+            {isAdmin && (
+              <th style={{ padding: '4px 8px', width: 24 }}>
+                <input type="checkbox" checked={allSelected}
+                  title="Select all for enrichment"
+                  onChange={() => setSelected(allSelected ? new Set() : new Set(visible.map(s => s.prospect_id)))} />
+              </th>
+            )}
             <th style={{ padding: '4px 8px' }}>Prospect</th>
             <th style={{ padding: '4px 8px' }}>Phone</th>
+            <th style={{ padding: '4px 8px' }}>Contacts</th>
             <th style={{ padding: '4px 8px', textAlign: 'right' }}>Coverage</th>
             <th style={{ padding: '4px 8px', textAlign: 'right' }}>Deficit</th>
             <th style={{ padding: '4px 8px', textAlign: 'right' }}>Best rank</th>
@@ -845,11 +870,21 @@ function CoverageTable({ submarketId }: { submarketId: string }) {
           </tr>
         </thead>
         <tbody>
-          {data.scores.filter(s => !s.excluded).map(s => (
+          {visible.map(s => (
             <Fragment key={s.prospect_id}>
               <tr style={{ borderTop: '1px solid #f1f5f9' }}>
+                {isAdmin && (
+                  <td style={{ padding: '6px 8px' }}>
+                    <input type="checkbox" checked={selected.has(s.prospect_id)}
+                      onChange={() => toggle(s.prospect_id)} />
+                  </td>
+                )}
                 <td style={{ padding: '6px 8px' }}>{s.name}</td>
                 <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{s.phone ?? '—'}</td>
+                <td style={{ padding: '6px 8px' }}>
+                  <ContactCell prospectId={s.prospect_id} isAdmin={isAdmin}
+                    controller={enrich} batchRunning={batchRunning} />
+                </td>
                 <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.coverage_pct?.toFixed(1)}%</td>
                 <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>
                   {s.coverage_deficit?.toFixed(1)}%
@@ -902,7 +937,7 @@ function CoverageTable({ submarketId }: { submarketId: string }) {
               </tr>
               {openHook === s.prospect_id && (
                 <tr>
-                  <td colSpan={7} style={{ padding: '2px 8px 10px' }}>
+                  <td colSpan={colSpan} style={{ padding: '2px 8px 10px' }}>
                     <Justification prospectId={s.prospect_id} />
                   </td>
                 </tr>

@@ -538,9 +538,109 @@ class OnboardRequestCreate(BaseModel):
     note: Optional[str] = None
 
 
+class EnrichEstimateRequest(BaseModel):
+    prospect_ids: list[str]
+
+
+class EnrichRequestCreate(BaseModel):
+    prospect_ids: list[str]
+    note: Optional[str] = None
+
+
 @router.get("/outreach/markets/{market_id}/keywords")
 async def list_keywords(market_id: str, auth: dict = Depends(require_outreach)) -> dict:
     return {"keywords": _handle(outreach_service.list_keywords, market_id)}
+
+
+# --- Lead enrichment (contact names / phones / emails — outreach DECISIONS.md) -----------------
+#
+# Enrich a selected prospect (or a selected set) with contact names/phones/emails via Outscraper.
+# The estimate is FREE (staff, read-only). Placing an order BILLS on the next tick, so it is
+# ADMIN-gated — the click is the spend authorization, exactly like a scan order — and additionally
+# budget-guarded per user. platform-api never spends: it writes a signed `enrichment_request` the
+# outreach job drains. Reads (list/detail/contacts) are open to any authed staff.
+
+
+@router.post("/outreach/enrichment/estimate")
+async def estimate_enrichment(
+    payload: EnrichEstimateRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Free preflight cost estimate for a selection: billable count, est cost, today's spend and
+    whether the daily budget allows it. Spends nothing; shown before the admin confirms."""
+    _require_outreach_ready()
+    return _handle(outreach_service.estimate_enrichment, payload.prospect_ids, auth["user_id"])
+
+
+@router.post("/outreach/prospects/{prospect_id}/enrich")
+async def enrich_prospect(
+    prospect_id: str, note: Optional[str] = None, auth: dict = Depends(require_admin)
+) -> dict:
+    """Enrich ONE prospect — the per-row button. Places a signed one-prospect order; the tick bills
+    it. Admin-gated + budget-guarded. 422 `nothing_to_enrich` if it is already enriched."""
+    _require_outreach_ready()
+    return {
+        "enrichment_request": _handle(
+            outreach_service.create_enrichment_request,
+            prospect_ids=[prospect_id],
+            note=note,
+            actor_id=auth["user_id"],
+        )
+    }
+
+
+@router.post("/outreach/enrichment")
+async def create_enrichment_request(
+    payload: EnrichRequestCreate, auth: dict = Depends(require_admin)
+) -> dict:
+    """Enrich a SELECTION (select-all / bulk) — one signed order carrying the whole place-id list,
+    drained in one batchable pass. Admin-gated + budget-guarded; the estimate rides the response."""
+    _require_outreach_ready()
+    return {
+        "enrichment_request": _handle(
+            outreach_service.create_enrichment_request,
+            prospect_ids=payload.prospect_ids,
+            note=payload.note,
+            actor_id=auth["user_id"],
+        )
+    }
+
+
+@router.get("/outreach/enrichment")
+async def list_enrichment_requests(
+    status: Optional[str] = None,
+    limit: int = Query(default=outreach_service.DEFAULT_PAGE_SIZE, ge=1),
+    offset: int = Query(default=0, ge=0),
+    auth: dict = Depends(require_outreach),
+) -> dict:
+    return _handle(
+        outreach_service.list_enrichment_requests, status=status, limit=limit, offset=offset
+    )
+
+
+@router.get("/outreach/enrichment/{request_id}")
+async def enrichment_request_detail(
+    request_id: str, auth: dict = Depends(require_outreach)
+) -> dict:
+    """One order + its progress counters — the poll the bulk bar's useResumableBatch reads."""
+    return _handle(outreach_service.enrichment_request_detail, request_id)
+
+
+@router.post("/outreach/enrichment/{request_id}/cancel")
+async def cancel_enrichment_request(
+    request_id: str, auth: dict = Depends(require_admin)
+) -> dict:
+    """Withdraw a PENDING order. One the tick has claimed is enriching (real money) and resolves on
+    its own."""
+    _require_outreach_ready()
+    return _handle(outreach_service.cancel_enrichment_request, request_id, auth["user_id"])
+
+
+@router.get("/outreach/prospects/{prospect_id}/contacts")
+async def list_prospect_contacts(
+    prospect_id: str, auth: dict = Depends(require_outreach)
+) -> dict:
+    """A prospect's enriched contacts (names/phones/emails) + its enrichment status. Read-only."""
+    return _handle(outreach_service.list_prospect_contacts, prospect_id)
 
 
 # --- Any-city geo (read-only: resolve a typed city + list its verified sub-areas) --------------

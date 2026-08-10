@@ -2343,3 +2343,303 @@ def list_touches(lead_id: str, limit: int | None = None, offset: int | None = No
         "limit": size,
         "offset": start,
     }
+
+
+# --- Lead enrichment (contact names / phones / emails) -----------------------------------------
+#
+# On-demand enrichment of a selected prospect (or a selected set / all) with contact names, phone
+# numbers and emails via Outscraper. This surface WRITES A SIGNED ORDER (`enrichment_request`) and
+# NOTHING MORE — the money moves in the outreach job's `tick`, which drains the order and bills
+# Outscraper. The order is the confirmation, exactly like a scan order (outreach DECISIONS.md
+# 2026-08-06). Two spend guards sit in front of it: a FREE preflight cost estimate the UI shows, and
+# a per-user daily budget guard (mirroring LeadOff's leadoff_spend check) that uses the order rows
+# themselves as the ledger. This is DELIBERATELY separate from the mass ingest, whose base-tier
+# invariant it never touches.
+
+ENRICHMENT_REQUEST_ACTIVE_STATUSES: tuple[str, ...] = ("pending", "running")
+# The enrichment statuses that mean "already billed, answer is durable" — the drain skips these, and
+# the estimate/budget count only prospects NOT in one of them.
+_ENRICH_DONE_STATUSES: tuple[str, ...] = ("enriched", "no_contacts")
+
+
+def enrich_enrichments() -> list[str]:
+    """The configured enricher set, parsed. A guess to confirm via `probe-enrich`."""
+    from config import settings
+
+    return [e.strip() for e in (settings.outreach_enrich_enrichments or "").split(",") if e.strip()]
+
+
+def enrich_cost_cents(billable: int, rate_cents: int) -> int:
+    """Estimated cost of enriching `billable` places at `rate_cents` each. Pure."""
+    return max(0, billable) * max(0, rate_cents)
+
+
+def enrich_spent_today_cents(orders: list[dict[str, Any]]) -> int:
+    """Sum of est_cost_cents across a user's orders placed today — the per-user ledger. Pure."""
+    return sum(int(o.get("est_cost_cents") or 0) for o in orders)
+
+
+def enrich_budget_denial(spent_cents: int, add_cents: int, budget_usd: float) -> str | None:
+    """Why placing this order would breach the daily budget, or None. Pure, so the gate is testable
+    without a database — mirrors LeadOff's check_budget shape (a refusal names the numbers)."""
+    budget_cents = int(round(budget_usd * 100))
+    if spent_cents + add_cents > budget_cents:
+        return (
+            f"daily enrichment budget ${budget_usd:.2f} would be exceeded — "
+            f"${spent_cents / 100:.2f} spent today, this order is ${add_cents / 100:.2f}"
+        )
+    return None
+
+
+def validate_enrich_selection(prospect_ids: list[str], cap: int) -> list[str]:
+    """De-dupe and bound a selection. Pure. Refuses an empty selection (nothing to enrich) and one
+    past the per-order cap (a bigger 'select all' is split into several orders by the UI)."""
+    ids = [p for p in dict.fromkeys(prospect_ids) if p]
+    if not ids:
+        raise OutreachError("empty_selection", "select at least one prospect to enrich")
+    if len(ids) > cap:
+        raise OutreachError(
+            "selection_too_large",
+            f"a single enrichment order is capped at {cap} prospects (got {len(ids)}); "
+            "split a larger selection into several orders",
+        )
+    return ids
+
+
+def _enrich_billable(client: Any, prospect_ids: list[str]) -> dict[str, Any]:
+    """How many of a selection would actually be billed: prospects that exist, carry a place_id, and
+    are not already enriched. Reads `prospect` + `prospect_enrichment`, chunked under the 1000-row
+    cap. Returns counts the estimate and the order both use."""
+    existing: dict[str, dict[str, Any]] = {}
+    for start in range(0, len(prospect_ids), 500):
+        chunk = prospect_ids[start : start + 500]
+        if not chunk:
+            continue
+        for row in (
+            client.table("prospect")
+            .select("id, place_id")
+            .in_("id", chunk)
+            .execute()
+            .data
+            or []
+        ):
+            existing[row["id"]] = row
+    done: set[str] = set()
+    for start in range(0, len(prospect_ids), 500):
+        chunk = prospect_ids[start : start + 500]
+        if not chunk:
+            continue
+        for row in (
+            client.table("prospect_enrichment")
+            .select("prospect_id, status")
+            .in_("prospect_id", chunk)
+            .in_("status", list(_ENRICH_DONE_STATUSES))
+            .execute()
+            .data
+            or []
+        ):
+            done.add(row["prospect_id"])
+    billable = [
+        pid
+        for pid in prospect_ids
+        if pid in existing and existing[pid].get("place_id") and pid not in done
+    ]
+    return {
+        "selected": len(prospect_ids),
+        "already_enriched": sum(1 for pid in prospect_ids if pid in done),
+        "unknown": sum(1 for pid in prospect_ids if pid not in existing),
+        "billable": len(billable),
+    }
+
+
+def _enrich_spent_today(client: Any, user_id: str) -> int:
+    """A user's est_cost_cents summed over orders they placed today (UTC). The ledger read."""
+    from datetime import datetime, timezone
+
+    day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    rows = (
+        client.table("enrichment_request")
+        .select("est_cost_cents")
+        .eq("requested_by", user_id)
+        .gte("created_at", day_start.isoformat())
+        .execute()
+        .data
+        or []
+    )
+    return enrich_spent_today_cents(rows)
+
+
+def estimate_enrichment(prospect_ids: list[str], user_id: str) -> dict[str, Any]:
+    """Free preflight: what a selection would cost, and whether the daily budget allows it. Spends
+    nothing — the UI shows this before the admin confirms."""
+    from config import settings
+
+    ids = validate_enrich_selection(prospect_ids, settings.outreach_enrich_max_places_per_order)
+    client = get_outreach_client()
+    counts = _enrich_billable(client, ids)
+    est_cents = enrich_cost_cents(counts["billable"], settings.outreach_enrich_cost_per_place_cents)
+    spent = _enrich_spent_today(client, user_id)
+    denial = enrich_budget_denial(spent, est_cents, settings.outreach_enrich_daily_budget_usd)
+    return {
+        **counts,
+        "est_cost_cents": est_cents,
+        "est_cost_usd": round(est_cents / 100, 2),
+        "spent_today_cents": spent,
+        "daily_budget_usd": settings.outreach_enrich_daily_budget_usd,
+        "allowed": denial is None,
+        "denial": denial,
+    }
+
+
+def create_enrichment_request(
+    *, prospect_ids: list[str], note: str | None, actor_id: str
+) -> dict[str, Any]:
+    """Place a signed enrichment order. Admin-gated at the router — this row authorizes billed
+    enrichment on the next tick. Validates the selection, checks the per-user daily budget against
+    the estimate, records the estimate on the order (the row is the ledger), and inserts. platform-api
+    never spends: the order is drained by the outreach job. A selection that is entirely already
+    enriched is refused (nothing to bill) so a click that would do nothing says so."""
+    from config import settings
+
+    ids = validate_enrich_selection(prospect_ids, settings.outreach_enrich_max_places_per_order)
+    client = get_outreach_client()
+    counts = _enrich_billable(client, ids)
+    if counts["billable"] == 0:
+        raise OutreachError(
+            "nothing_to_enrich",
+            "every selected prospect is already enriched (or has no place_id) — nothing to bill",
+        )
+    est_cents = enrich_cost_cents(counts["billable"], settings.outreach_enrich_cost_per_place_cents)
+    spent = _enrich_spent_today(client, actor_id)
+    denial = enrich_budget_denial(spent, est_cents, settings.outreach_enrich_daily_budget_usd)
+    if denial:
+        raise OutreachError("enrich_budget_exceeded", denial)
+
+    row = {
+        "prospect_ids": ids,
+        "enrichments": enrich_enrichments(),
+        "requested_by": actor_id,
+        "est_cost_cents": est_cents,
+        "requested_count": len(ids),
+        "note": (note or "").strip() or None,
+    }
+    written = client.table("enrichment_request").insert(row).execute().data or []
+    if not written:
+        raise OutreachError("enrichment_request_not_created", "the order was not written")
+    order = written[0]
+    order["estimate"] = {**counts, "est_cost_cents": est_cents}
+    return order
+
+
+def list_enrichment_requests(
+    *, status: str | None = None, limit: int | None = None, offset: int | None = None
+) -> dict[str, Any]:
+    """Enrichment orders, newest first — the queue/progress view."""
+    size, start = clamp_page(limit, offset)
+    query = (
+        get_outreach_client()
+        .table("enrichment_request")
+        .select("*", count="exact")
+        .order("created_at", desc=True)
+        .range(start, start + size - 1)
+    )
+    if status:
+        query = query.eq("status", status)
+    response = query.execute()
+    return {
+        "enrichment_requests": response.data or [],
+        "total": response.count or 0,
+        "limit": size,
+        "offset": start,
+    }
+
+
+def enrichment_request_detail(request_id: str) -> dict[str, Any]:
+    """One order plus a small progress read (the counters live on the row itself)."""
+    rows = (
+        get_outreach_client()
+        .table("enrichment_request")
+        .select("*")
+        .eq("id", request_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise OutreachError("enrichment_request_not_found", "no such order")
+    order = rows[0]
+    done = order["enriched_count"] + order["skipped_count"] + order["failed_count"]
+    order["progress"] = {
+        "requested": order["requested_count"],
+        "done": done,
+        "enriched": order["enriched_count"],
+        "skipped": order["skipped_count"],
+        "failed": order["failed_count"],
+        "contacts": order["contact_count"],
+    }
+    return {"enrichment_request": order}
+
+
+def cancel_enrichment_request(request_id: str, actor_id: str) -> dict[str, Any]:
+    """Withdraw a PENDING order. Conditional on status, like the scan-order cancel: one the tick has
+    claimed is already enriching (real money) and resolves on its own."""
+    from datetime import datetime, timezone
+
+    client = get_outreach_client()
+    hit = (
+        client.table("enrichment_request")
+        .update({"status": "cancelled", "finished_at": datetime.now(timezone.utc).isoformat()})
+        .eq("id", request_id)
+        .eq("status", "pending")
+        .execute()
+        .data
+        or []
+    )
+    if hit:
+        return {"enrichment_request": hit[0]}
+    existing = (
+        client.table("enrichment_request").select("id, status").eq("id", request_id).limit(1)
+        .execute().data
+    )
+    if not existing:
+        raise OutreachError("enrichment_request_not_found", "no such order")
+    raise OutreachError(
+        "enrichment_request_not_cancellable",
+        f"order is {existing[0]['status']!r}; only a pending order can be withdrawn",
+    )
+
+
+def list_prospect_contacts(prospect_id: str) -> dict[str, Any]:
+    """A prospect's enriched contacts + its enrichment status. Read-only; the CRM lead drawer and the
+    coverage table both read this to show names/phones/emails. Bounded by construction — a business
+    returns a handful of contacts, far under the 1000-row cap."""
+    client = get_outreach_client()
+    contacts = (
+        client.table("prospect_contact")
+        .select(
+            "id, place_id, contact_index, full_name, first_name, last_name, title, name_for_emails, "
+            "email, email_status, email_is_generic, phone, phone_type, phone_carrier, "
+            "source, enriched_at"
+        )
+        .eq("prospect_id", prospect_id)
+        .order("contact_index")
+        .range(0, MAX_PAGE_SIZE - 1)
+        .execute()
+        .data
+        or []
+    )
+    status_rows = (
+        client.table("prospect_enrichment")
+        .select("status, contact_count, enrichments, error, enriched_at")
+        .eq("prospect_id", prospect_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    return {
+        "prospect_id": prospect_id,
+        "enrichment": status_rows[0] if status_rows else None,
+        "contacts": contacts,
+    }

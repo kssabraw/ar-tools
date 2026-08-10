@@ -7,6 +7,8 @@ import {
 import { api } from '../lib/api'
 import { Justification } from '../components/outreach/Justification'
 import { ProspectReportButtons } from '../components/outreach/ProspectReport'
+import { LeadContacts } from '../components/outreach/Enrichment'
+import { useAuth } from '../context/AuthContext'
 
 // ── Types (mirror the CRM half of routers/outreach.py) ───────────────────────
 interface LeadStage { key: string; label: string; sort_order: number; is_terminal: boolean }
@@ -269,6 +271,7 @@ function AddLeadModal({ onClose }: { onClose: () => void }) {
 
 function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; onClose: () => void }) {
   const queryClient = useQueryClient()
+  const { isAdmin } = useAuth()
   const [note, setNote] = useState('')
   const [lostReason, setLostReason] = useState('')
   const [pendingStage, setPendingStage] = useState<string | null>(null)
@@ -371,6 +374,7 @@ function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; 
                   <Justification prospectId={lead.prospect_id} />
                 </div>
               )}
+              <LeadContacts prospectId={lead.prospect_id} isAdmin={isAdmin} />
             </div>
           )}
 

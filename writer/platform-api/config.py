@@ -1698,6 +1698,24 @@ class Settings(BaseSettings):
     # labelling it 'random_control' would poison the baseline that bucket exists to measure.
     outreach_default_selection_reason: str = "manual"
 
+    # --- Lead enrichment (contact names / phones / emails) --------------------------------------
+    # The PLACEMENT side of the spend gate: platform-api writes a signed `enrichment_request` order
+    # (it never spends — the outreach `tick` drains it) and enforces the per-user daily budget here,
+    # mirroring LeadOff's leadoff_spend guard but using the order rows themselves as the ledger. The
+    # cost rate drives the free preflight estimate + the budget check; keep it in sync with the
+    # outreach job's enrich_cost_per_place_cents (that one drives the drain's cost_ledger write).
+    outreach_enrich_cost_per_place_cents: int = 5
+    # Per-user daily enrichment ceiling (USD). Enforced against the sum of a user's orders placed
+    # today. Set from the real Outscraper plan before a production run (I-022 — the guard is exactly
+    # as honest as the rate above).
+    outreach_enrich_daily_budget_usd: float = 10.0
+    # The enricher set frozen onto each order at placement — a GUESS to confirm via `probe-enrich`
+    # (measure-don't-infer). Kept as a string; split on commas so it can be overridden by one env var.
+    outreach_enrich_enrichments: str = "emails_validator_service,phones_enricher_service"
+    # A selection larger than this is refused at placement (the drain enforces the same cap). A bigger
+    # "select all" is split into several orders by the UI.
+    outreach_enrich_max_places_per_order: int = 200
+
     leadoff_income_acs_year: int = 2023
     leadoff_income_refresh_days: int = 365
     # Per-city county map (public.city_counties) — reverse-geocoded from each

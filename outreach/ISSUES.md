@@ -2367,3 +2367,38 @@ deliberately deprioritized this session (owner away, high bar on user-facing cha
 `placeholder_scores` (or add a ranked-scores endpoint) to read `v_prospect_ranked` where a score_run
 exists, falling back to the placeholder otherwise; then the UI reflects the fitted ranking. Until then
 the placeholder still drives the list even after a `score` run populates the fitted tables.
+
+---
+
+## Lead enrichment (2026-08-10)
+
+### I-109 · Outscraper enrichment param value(s) + response field names UNCONFIRMED — run `probe-enrich` first
+**Severity: blocks trusting production enrichment OUTPUT; does not block the code.**
+No enriched pull has ever run against this account, so — exactly like I-018 for the base pull and I-003
+for the pixel field — the exact `enrichment` param VALUE(S) (the guess is
+`emails_validator_service,phones_enricher_service`, config `enrich_enrichments` /
+`outreach_enrich_enrichments`) and the RESPONSE field names are unverified. `services/enrichment.py`
+reads the documented "Emails & Contacts" column shape (both nested and flat forms) DEFENSIVELY and asserts
+nothing; every record's untouched fragment is stored in `prospect_contact.raw` / `prospect_enrichment.raw`,
+so a corrected alias re-parses stored data for free (no re-pull).
+**Action (owner-authorized, one billed call):** deploy + run `probe-enrich` with
+`OUTREACH_CONFIRM_SPEND=probe-enrich` on one place (`--place-id` or the market's first prospect). It prints
+the parsed summary and LOGS the full record (`enrich sample record`). Read the log, confirm the enricher
+set + field paths, adjust `enrichment.py`'s aliases if they differ, and (if needed) re-parse via a small
+backfill over stored `raw`. Until then, treat parsed contact fields as provisional.
+
+### I-110 · A stuck-`running` enrichment order is not auto-resumed
+Like `scan_request`/`onboard_request`, a container death mid-drain leaves an `enrichment_request` at
+`running` with no reaper (the outreach service is a cron, not an async_jobs worker). Correctness is
+protected by idempotency — a NEW order over the same prospects skips the ones already enriched (no re-bill)
+— but the stuck row itself is not retried by the machine, matching the module's "terminal failure, human
+re-places" philosophy. A re-order is the cheap resume. If enrichment volume grows enough that this bites,
+add an owner-id + heartbeat claim (the same upgrade the scan drains would need for >1 replica).
+
+### I-111 · Enrichment billing rate is a placeholder, in TWO places that must stay in sync
+`enrich_cost_per_place_cents` (outreach job — drives the `cost_ledger` write) and
+`outreach_enrich_cost_per_place_cents` (platform-api — drives the free preflight estimate + the per-user
+daily budget guard) are both `5`, a GUESS. Outscraper returns no per-request cost, so like every rate here
+the ledger is `units × rate` reconciled manually against the dashboard (I-022). **Action:** set BOTH from
+the real plan before a production run, and keep them equal — the budget guard is exactly as honest as the
+platform-api value, and the ledger as honest as the outreach one.

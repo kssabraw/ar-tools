@@ -704,9 +704,111 @@ def cmd_collect(args) -> int:
     return 1 if report.problems and not report.collected else 0
 
 
+def cmd_enrich(args) -> int:
+    """Drain pending enrichment orders and store the contacts. FREE to INVOKE — the order row is the
+    spend confirmation, like `tick`/`collect`, so this is deliberately NOT in PAID_COMMANDS. It bills
+    only what a signed `enrichment_request` authorized. Enrichment is batchable, so one pass drains
+    several orders (`enrich_orders_per_tick`); a re-order skips already-enriched prospects (no re-bill).
+    """
+    import asyncio as _asyncio
+
+    from api.config import missing_outscraper_vars
+    from api.services import enrich_queue
+
+    settings = get_settings()
+    absent = missing_outscraper_vars(settings)
+    if absent:
+        print(f"REFUSED: missing credentials: {', '.join(absent)}", file=sys.stderr)
+        return 2
+
+    client = _client()
+    report = _asyncio.run(enrich_queue.drain(client, settings))
+    print(
+        json.dumps(
+            {
+                "orders_processed": report.orders_processed,
+                "orders": [
+                    {
+                        "order_id": o.order_id,
+                        "outcome": o.outcome,
+                        "requested": o.requested,
+                        "skipped": o.skipped,
+                        "enriched": o.enriched,
+                        "contacts": o.contacts,
+                        "failed": o.failed,
+                        "error": o.error,
+                        "problems": o.problems[:10],
+                    }
+                    for o in report.orders
+                ],
+            },
+            indent=2,
+        )
+    )
+    return 1 if any(o.outcome == "failed" for o in report.orders) else 0
+
+
+def cmd_probe_enrich(args) -> int:
+    """§ measure-don't-infer spike: enrich ONE place and LOG the full record. BILLS one enrichment.
+
+    The exact enrichment param value(s) and response field names are unconfirmed against this
+    account. This confirms them on one billed call before production trusts the parser — mirrors
+    `probe-pixel-field`. Prints the parsed summary; the raw record is logged (INFO `enrich sample
+    record`) so the real envelope is recoverable. `--place-id` picks the place; otherwise the first
+    prospect with a place_id in the market. `--enrichments` overrides the requested set.
+    """
+    import asyncio as _asyncio
+
+    from api.config import missing_outscraper_vars
+    from api.services import enrich_client, enrichment
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    settings = get_settings()
+
+    absent = missing_outscraper_vars(settings)
+    if absent:
+        print(f"REFUSED: missing credentials: {', '.join(absent)}", file=sys.stderr)
+        return 2
+
+    place_id = args.place_id
+    if not place_id:
+        client = _client()
+        market_id = _market_id(client, definition.name)
+        sample = (
+            client.table("prospect")
+            .select("place_id, name")
+            .eq("market_id", market_id)
+            .not_.is_("place_id", "null")
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not sample:
+            print("REFUSED: no prospect with a place_id to sample — pass --place-id", file=sys.stderr)
+            return 2
+        place_id = sample[0]["place_id"]
+
+    enrichments = (
+        [e.strip() for e in args.enrichments.split(",") if e.strip()]
+        if args.enrichments
+        else settings.enrich_enrichments
+    )
+    records, errors = _asyncio.run(
+        enrich_client.enrich_places(settings, [place_id], enrichments=enrichments)
+    )
+    summary = enrichment.summarize(records, errors)
+    summary["place_id"] = place_id
+    summary["enrichments"] = enrichments
+    print(json.dumps(summary, indent=2))
+    # Every query failing means nothing was measured (a wrong enrichment name / dead key) — a
+    # failure. A record that came back answers the question even with no contacts in it.
+    return 1 if errors and not records else 0
+
+
 def cmd_tick(args) -> int:
     """One heartbeat: collect (always, free) + execute at most ONE scan order + at most ONE
-    onboard order.
+    onboard order + drain enrichment orders.
 
     This is what the §11 cron runs. It replaces nothing — `collect` remains the pure free
     command — it drains the `scan_request` orders the UI places (DECISIONS.md 2026-08-06) and the
@@ -724,7 +826,7 @@ def cmd_tick(args) -> int:
     """
     import asyncio as _asyncio
 
-    from api.services import onboard_queue, scan_queue
+    from api.services import enrich_queue, onboard_queue, scan_queue
 
     code = cmd_collect(args)
 
@@ -732,6 +834,10 @@ def cmd_tick(args) -> int:
     client = _client()
     drained = _asyncio.run(scan_queue.drain_one(client, settings))
     onboarded = _asyncio.run(onboard_queue.drain_one(client, settings))
+    # Enrichment is batchable and cheap, so it drains AFTER the heavy scan/onboard work but WITHOUT
+    # the one-per-tick cadence — several orders per heartbeat. Order-gated (each signed order is its
+    # own confirmation), so no env token, same as the drains above.
+    enriched = _asyncio.run(enrich_queue.drain(client, settings))
     print(
         json.dumps(
             {
@@ -760,14 +866,30 @@ def cmd_tick(args) -> int:
                     "posted": onboarded.posted,
                     "error": onboarded.error,
                 },
+                "enrich": {
+                    "orders_processed": enriched.orders_processed,
+                    "orders": [
+                        {
+                            "order_id": o.order_id,
+                            "outcome": o.outcome,
+                            "enriched": o.enriched,
+                            "contacts": o.contacts,
+                            "skipped": o.skipped,
+                            "failed": o.failed,
+                            "error": o.error,
+                        }
+                        for o in enriched.orders
+                    ],
+                },
             },
             indent=2,
         )
     )
-    # A failed ORDER (either queue) exits non-zero even though the tick itself survived: an
-    # unattended queue whose orders quietly fail is the "green badge over a crashed job" shape
-    # (§6.2), and the exit code is the only summary a cron run leaves besides its logs.
-    return 1 if "failed" in (drained.outcome, onboarded.outcome) else code
+    # A failed ORDER (any queue) exits non-zero even though the tick itself survived: an unattended
+    # queue whose orders quietly fail is the "green badge over a crashed job" shape (§6.2), and the
+    # exit code is the only summary a cron run leaves besides its logs.
+    enrich_failed = any(o.outcome == "failed" for o in enriched.orders)
+    return 1 if enrich_failed or "failed" in (drained.outcome, onboarded.outcome) else code
 
 
 def cmd_rollup(args) -> int:
@@ -1375,12 +1497,18 @@ _SHA_VARS = ("OUTREACH_BUILD_SHA", "RAILWAY_GIT_COMMIT_SHA", "SOURCE_COMMIT", "G
 # which is the §8a collect-gating mistake with a different spelling.
 PAID_COMMANDS = frozenset(
     {"ingest", "run", "calibrate", "verify-reviews", "probe-ai-granularity", "scan", "scan-organic",
-     "scan-ai", "probe-pixel-field"}
+     "scan-ai", "probe-pixel-field", "probe-enrich"}
 )
 # NOTE `scan-tech` is deliberately NOT here — it fetches prospects' own sites over plain HTTP and
 # makes no paid provider call (PRD §B3 "own request, not a paid service"), the same posture as
-# `collect`/`rollup`. A test pins this. `probe-pixel-field` IS here — it bills an Outscraper
-# enrichment on a small sample (§16a.1 spike).
+# `collect`/`rollup`. `probe-pixel-field` and `probe-enrich` ARE here — each bills an Outscraper
+# enrichment on a sample.
+#
+# `enrich` is deliberately absent, and it is a DESIGN choice like `tick`'s absence (DECISIONS.md):
+# `enrich` drains signed `enrichment_request` orders, and the order IS the affirmative confirmation
+# (single-use, attributed to the admin who placed it). Listing it here would make every drain refuse
+# for want of an env token, the §8a collect-gating mistake again. The env token guards the CLI probe;
+# the order row guards the drain.
 
 SAFE_COMMAND = "filter"
 
@@ -1545,7 +1673,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[
             "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
             "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech",
-                "probe-pixel-field", "collect", "rollup", "tick", "score", "recalibrate",
+                "probe-pixel-field", "enrich", "probe-enrich", "collect", "rollup", "tick", "score",
+                "recalibrate",
             "render-heatmap", "render-delta",
         ],
     )
@@ -1615,6 +1744,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="scan: the ONE submarket to scan, by name. Required — see cmd_scan.",
     )
     parser.add_argument(
+        "--place-id", default=None,
+        help="probe-enrich: the place_id to enrich. Defaults to the first prospect with one.",
+    )
+    parser.add_argument(
+        "--enrichments", default=None,
+        help=(
+            "probe-enrich: comma-separated Outscraper enricher set to request "
+            "(e.g. 'emails_validator_service,phones_enricher_service'). Defaults to "
+            "enrich_enrichments. A GUESS to confirm against the logged sample record."
+        ),
+    )
+    parser.add_argument(
         "--market-name", default=None,
         help=(
             "score / recalibrate: resolve the market by THIS name instead of the definition file's "
@@ -1678,7 +1819,8 @@ def main() -> int:
             [
                 "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
                 "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech",
-                "probe-pixel-field", "collect", "rollup", "tick", "score", "recalibrate",
+                "probe-pixel-field", "enrich", "probe-enrich", "collect", "rollup", "tick", "score",
+                "recalibrate",
                 "render-heatmap", "render-delta",
             ],
         ),
@@ -1701,6 +1843,8 @@ def main() -> int:
         "scan-ai": cmd_scan_ai,
         "scan-tech": cmd_scan_tech,
         "probe-pixel-field": cmd_probe_pixel_field,
+        "enrich": cmd_enrich,
+        "probe-enrich": cmd_probe_enrich,
         "collect": cmd_collect,
         "rollup": cmd_rollup,
         "tick": cmd_tick,
