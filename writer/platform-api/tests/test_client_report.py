@@ -267,8 +267,8 @@ def test_section_ai_visibility_per_keyword_matrix():
     assert "best managed IT services near me" in out and "2/3" in out
     # engine chips labelled
     assert "ChatGPT" in out and "Perplexity" in out
-    # the brand-invisible query is called out as the opportunity
-    assert "isn’t appearing yet" in out and "emergency it support downtown" in out
+    # the brand-invisible query is surfaced as a forward-looking opportunity
+    assert "Room to grow" in out and "emergency it support downtown" in out
 
 
 # ---------------------------------------------------------------------------
@@ -293,9 +293,39 @@ def test_section_organic_shows_top_movers_only():
                           "summary": {"tracked": 10, "top10": 4, "improved": 6, "declined": 1}})
     out = cr.build_report_html(data)
     assert "Movement" in out
-    # biggest mover (kw9, change 9) shown; smallest non-mover trimmed
+    # biggest gainer (kw9, change 9) shown; smallest non-mover trimmed
     assert "kw9" in out and "kw1<" not in out
     assert "remaining 5 are tracked" in out
+
+
+def test_section_organic_leads_with_wins_not_lone_decliner():
+    """Positive framing: feature the strongest rankings, never headline a keyword
+    purely because it slipped, and no negative ('to watch') copy."""
+    wins = [{"keyword": f"win{i}", "current_rank": r, "change": None, "sparkline": []}
+            for i, r in enumerate([3, 4, 5, 8, 10])]
+    decliner = {"keyword": "slipped kw", "current_rank": 12, "change": -2.0, "sparkline": [10, 12]}
+    data = _data(organic={"keywords": wins + [decliner],
+                          "summary": {"tracked": 40, "top10": 5, "improved": 0, "declined": 1}})
+    out = cr.build_report_html(data)
+    assert "win0" in out and "win4" in out          # strongest rankings featured
+    assert "slipped kw" not in out                   # lone poor-ranked decliner not featured
+    assert "to watch" not in out                     # no negative summary copy
+    assert "ranking on page 1 of Google" in out
+
+
+def test_positive_framing_reframes_weaknesses():
+    # Maps weak areas → opportunity language
+    geo = _data(geogrid={"keywords": [{"keyword": "x", "average_rank": 5, "top3_pins": 3,
+                                        "total_pins": 10, "rank_grid": [[1]]}],
+                         "weak_areas": ["Davie", "Plantation"]})
+    out = cr.build_report_html(geo)
+    assert "room to grow" in out.lower() and "Weakest" not in out
+    # AI invisible-questions callout → forward-looking, not "isn't appearing yet"
+    ai = _data(ai_visibility={"engines": {"chatgpt": "0 of 1 answers"},
+                              "keywords": [{"keyword": "foo bar",
+                                            "engines": {"chatgpt": False}, "found_count": 0, "total": 1}]})
+    out2 = cr.build_report_html(ai)
+    assert "Room to grow" in out2 and "isn’t appearing yet" not in out2
 
 
 # ---------------------------------------------------------------------------

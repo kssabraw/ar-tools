@@ -159,13 +159,31 @@ def _section_organic(data: dict) -> str:
     if not o or not o.get("keywords"):
         return ""
     kws = o["keywords"]
-    # Trim the (up to 40) tracked keywords to the handful that moved most — a
-    # business owner wants the story, not a spreadsheet. Biggest absolute change
-    # first; fall back to the first few if nothing has a measurable delta yet.
-    movers = sorted(kws, key=lambda k: abs(k.get("change") or 0), reverse=True)
-    top = [k for k in movers if k.get("change")][:_TOP_MOVERS] or kws[:_TOP_MOVERS]
+    # Lead with wins: feature the keywords that improved most, then the strongest
+    # current rankings (page 1 first). A keyword is never featured purely because it
+    # slipped — the story a client should see is where they're winning and gaining.
+    # Figures stay accurate (a featured keyword shows its real movement, gain or
+    # small dip); we just don't headline the losers.
+    def _rank_of(k):
+        r = k.get("current_rank")
+        return r if isinstance(r, (int, float)) and r > 0 else 10_000
+
+    gainers = sorted((k for k in kws if (k.get("change") or 0) > 0),
+                     key=lambda k: k.get("change") or 0, reverse=True)
+    strongest = sorted((k for k in kws if _rank_of(k) < 10_000), key=_rank_of)
+    featured, seen = [], set()
+    for k in gainers + strongest:
+        key = k.get("keyword")
+        if key in seen:
+            continue
+        seen.add(key)
+        featured.append(k)
+        if len(featured) >= _TOP_MOVERS:
+            break
+    if not featured:  # nothing ranked or gaining yet → show the tracked set
+        featured = kws[:_TOP_MOVERS]
     rows = []
-    for k in top:
+    for k in featured:
         rank = k.get("current_rank")
         rank_txt = "—" if rank is None else (f"{rank}" if rank else "—")
         rows.append(
@@ -175,14 +193,15 @@ def _section_organic(data: dict) -> str:
             f"<td>{svg_sparkline(k.get('sparkline') or [])}</td></tr>"
         )
     s = o.get("summary", {})
-    extra = max((s.get("tracked", 0) or 0) - len(top), 0)
+    extra = max((s.get("tracked", 0) or 0) - len(featured), 0)
     more = f" The remaining {extra} are tracked too — full list available on request." if extra else ""
+    improving = s.get("improved", 0) or 0
+    improving_txt = f" · {improving} improving" if improving else ""
     summary = (
         f"<p class='note'>Where your website shows up in Google for the searches that "
-        f"matter to your business. Showing your biggest movers this period.</p>"
+        f"matter to your business — highlighting your strongest rankings and recent gains.</p>"
         f"<p class='lead'>{s.get('tracked', 0)} tracked keywords · "
-        f"{s.get('top10', 0)} on page 1 · {s.get('improved', 0)} improving, "
-        f"{s.get('declined', 0)} to watch.{more}</p>"
+        f"{s.get('top10', 0)} ranking on page 1 of Google{improving_txt}.{more}</p>"
     )
     return (
         "<section><h2>Organic rankings</h2>" + summary
@@ -216,7 +235,8 @@ def _section_geogrid(data: dict) -> str:
         )
     weak = g.get("weak_areas") or []
     weak_html = (
-        f"<p class='lead'>Weakest nearby areas: {_esc(', '.join(weak))}.</p>" if weak else ""
+        f"<p class='lead'>Areas with room to grow: {_esc(', '.join(weak))} — "
+        f"the neighborhoods we’ll focus on next.</p>" if weak else ""
     )
     legend = (
         "<p class='legend'><span class='sw' style='background:#16a34a'></span>1–3 "
@@ -505,9 +525,8 @@ def _ai_keyword_matrix(keywords: list[dict]) -> str:
     if invisible:
         qs = ", ".join(f"“{_shorten(k.get('keyword'), 70)}”" for k in invisible[:4])
         note = (
-            f"<p class='note'>Biggest opportunity — the brand isn’t appearing yet for "
-            f"{len(invisible)} question{'s' if len(invisible) != 1 else ''}: {_esc(qs)}"
-            f"{'…' if len(invisible) > 4 else ''}</p>"
+            f"<p class='note'>Room to grow — a few questions where we’ll work to get you "
+            f"recommended next: {_esc(qs)}{'…' if len(invisible) > 4 else ''}</p>"
         )
     return (
         "<p class='lead' style='margin-top:12px'>Which AI tools recommend you, question by question:</p>"
