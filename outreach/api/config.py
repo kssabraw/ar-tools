@@ -294,6 +294,15 @@ class Settings(BaseSettings):
     # own timeout, clear of the 60s base request timeout.
     enrich_request_timeout_seconds: float = 180.0
 
+    # --- Report signal scans (organic / AI-visibility UI triggers, 2026-08-10) -----------
+    # The per-prospect report's ORGANIC and AI sections are filled by two signed-order queues
+    # (`organic_scan_request` / `ai_scan_request`), drained by `tick`. Each is a single cheap paid
+    # call, so ≤1 per tick — matching the geogrid scan's cadence, NOT enrichment's batch drain —
+    # keeps every capture a discrete, terminal, first-run-fault-bounded order. Raise if a queue ever
+    # backs up faster than the 15-minute cron clears it.
+    organic_orders_per_tick: int = 1
+    ai_orders_per_tick: int = 1
+
     # --- Scoring model — Phase 4 Stage 1 (scoring-spec.md) --------------------------------
     # EVERYTHING here is a CONFIG value. Zero hardcoded betas, ever (CLAUDE.md invariant). The
     # scalar knobs live here; the full coefficient REGISTRY (the elicited priors, ~40 bins) lives

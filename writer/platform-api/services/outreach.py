@@ -1226,6 +1226,413 @@ def scan_request_detail(request_id: str) -> dict[str, Any]:
     return {"scan_request": order, **_snapshot_detail(client, order.get("snapshot_id"))}
 
 
+# --- Report signal scans (organic / AI-visibility UI triggers — outreach 2026-08-10) ----------
+#
+# The per-prospect report already renders four signals — maps, organic, AI, paid — but only the
+# maps geogrid had an in-app trigger. These place the two signed orders that let the report's
+# "Run organic" / "Run AI" buttons fill the organic and AI sections. Same money-gate carrier as
+# scan_request: platform-api WRITES the order (admin-gated), the outreach `tick` DRAINS and runs it;
+# platform-api never spends. Organic attaches to the exact snapshot the report reads; AI targets an
+# `ai_region` (a coarse human-seeded place name, not a submarket), so it also needs the small region
+# create/list surface below (name_level is a human judgement the module forbids deriving — I-073).
+
+ORGANIC_SCAN_REQUEST_ACTIVE_STATUSES: tuple[str, ...] = ("pending", "running")
+AI_SCAN_REQUEST_ACTIVE_STATUSES: tuple[str, ...] = ("pending", "running")
+AI_REGION_NAME_LEVELS: tuple[str, ...] = ("metro", "city", "suburb", "neighbourhood")
+
+
+def create_organic_scan_request(
+    *, prospect_id: str, note: str | None, actor_id: str
+) -> dict[str, Any]:
+    """Place a signed organic-scan order for the snapshot the prospect's report reads.
+
+    Admin-gated at the router — this row authorizes one paid organic SERP capture on the next tick.
+    It resolves the EXACT rolled-up snapshot the report's organic section reads (via
+    `_latest_rolled_up_snapshot`, the same resolver the justification uses) so the capture lands
+    where the report will look, and refuses `not_measured` when the area has no rolled-up scan
+    (there is no snapshot to attach organic to). The one-active partial unique index dedupes clicks
+    across prospects sharing a submarket snapshot — a dozen clicks collapse to one billed capture.
+    """
+    client = get_outreach_client()
+    rows = (
+        client.table("prospect")
+        .select("id, submarket_id")
+        .eq("id", prospect_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise OutreachError("prospect_not_found", "no such prospect")
+    snapshot = _latest_rolled_up_snapshot(client, rows[0].get("submarket_id"), None)
+    if snapshot is None:
+        raise OutreachError(
+            "not_measured",
+            "this prospect's area has no rolled-up scan to attach an organic capture to",
+        )
+    snapshot_id = snapshot["id"]
+    keyword_id = snapshot["keyword_id"]
+
+    active = (
+        client.table("organic_scan_request")
+        .select("id, status")
+        .eq("snapshot_id", snapshot_id)
+        .eq("keyword_id", keyword_id)
+        .in_("status", list(ORGANIC_SCAN_REQUEST_ACTIVE_STATUSES))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if active:
+        raise OutreachError(
+            "organic_scan_request_already_active",
+            "an organic scan for this area is already pending or running",
+        )
+
+    row = {
+        "snapshot_id": snapshot_id,
+        "keyword_id": keyword_id,
+        "requested_by": actor_id,
+        "note": (note or "").strip() or None,
+    }
+    try:
+        written = client.table("organic_scan_request").insert(row).execute().data or []
+    except Exception as exc:
+        if "organic_scan_request_one_active" in str(exc):
+            raise OutreachError(
+                "organic_scan_request_already_active",
+                "an organic scan for this area is already pending or running",
+            ) from exc
+        raise
+    if not written:
+        raise OutreachError("organic_scan_request_not_created")
+    return written[0]
+
+
+def _resolve_ai_target(client: Any, prospect: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """Resolve the (ai_region, keyword_id) the report's AI section reads for this prospect.
+
+    The region is the seeded `ai_region` whose name matches the prospect's submarket name (the same
+    ilike join `_llm_section` uses at read time); the keyword is the one the report shows — the
+    latest rolled-up snapshot's keyword when the area is measured, else the market's primary. Raises
+    `ai_region_not_seeded` when no region matches, which the frontend turns into the seed modal.
+    """
+    market_id = prospect.get("market_id")
+    submarket_id = prospect.get("submarket_id")
+    if not market_id:
+        raise OutreachError("prospect_market_unknown", "this prospect has no market")
+
+    submarket_name = None
+    if submarket_id:
+        sub = (
+            client.table("submarket").select("name").eq("id", submarket_id).limit(1).execute().data
+            or []
+        )
+        if sub:
+            submarket_name = sub[0]["name"]
+    if not submarket_name:
+        raise OutreachError(
+            "ai_region_not_seeded", "this prospect has no area name to match an AI region"
+        )
+
+    regions = (
+        client.table("ai_region")
+        .select("id, name, name_level")
+        .eq("market_id", market_id)
+        .ilike("name", submarket_name)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not regions:
+        raise OutreachError(
+            "ai_region_not_seeded",
+            f"no AI region named {submarket_name!r} is seeded for this market — seed one first",
+        )
+    region = regions[0]
+
+    keyword_id: str | None = None
+    snapshot = _latest_rolled_up_snapshot(client, submarket_id, None)
+    if snapshot is not None:
+        keyword_id = snapshot.get("keyword_id")
+    if not keyword_id:
+        prim = (
+            client.table("keyword")
+            .select("id")
+            .eq("market_id", market_id)
+            .order("is_primary", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not prim:
+            raise OutreachError("no_keyword", "this market has no keyword to scan")
+        keyword_id = prim[0]["id"]
+    return region, keyword_id
+
+
+def create_ai_scan_request(*, prospect_id: str, note: str | None, actor_id: str) -> dict[str, Any]:
+    """Place a signed AI-visibility order for the prospect's ai_region × keyword.
+
+    Admin-gated — authorizes one ChatGPT + one Google-AI-Overview call on the next tick. The scan is
+    per REGION, shared by every prospect in it, so the order targets the region (the report does the
+    per-prospect "is this business named" read). Raises `ai_region_not_seeded` when the prospect's
+    area has no seeded region — the frontend then offers the region-seed modal and retries.
+    """
+    client = get_outreach_client()
+    rows = (
+        client.table("prospect")
+        .select("id, market_id, submarket_id, name")
+        .eq("id", prospect_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise OutreachError("prospect_not_found", "no such prospect")
+    region, keyword_id = _resolve_ai_target(client, rows[0])
+
+    active = (
+        client.table("ai_scan_request")
+        .select("id, status")
+        .eq("ai_region_id", region["id"])
+        .eq("keyword_id", keyword_id)
+        .in_("status", list(AI_SCAN_REQUEST_ACTIVE_STATUSES))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if active:
+        raise OutreachError(
+            "ai_scan_request_already_active",
+            "an AI scan for this region is already pending or running",
+        )
+
+    row = {
+        "ai_region_id": region["id"],
+        "keyword_id": keyword_id,
+        "requested_by": actor_id,
+        "note": (note or "").strip() or None,
+    }
+    try:
+        written = client.table("ai_scan_request").insert(row).execute().data or []
+    except Exception as exc:
+        if "ai_scan_request_one_active" in str(exc):
+            raise OutreachError(
+                "ai_scan_request_already_active",
+                "an AI scan for this region is already pending or running",
+            ) from exc
+        raise
+    if not written:
+        raise OutreachError("ai_scan_request_not_created")
+    order = written[0]
+    order["ai_region"] = {"name": region.get("name"), "name_level": region.get("name_level")}
+    return order
+
+
+def list_organic_scan_requests(
+    status: str | None = None, limit: int | None = None, offset: int | None = None
+) -> dict[str, Any]:
+    """Organic-scan orders newest-first, keyword term embedded — the queue/status view."""
+    size, start = clamp_page(limit, offset)
+    query = (
+        get_outreach_client()
+        .table("organic_scan_request")
+        .select("*, keyword(term)", count="exact")
+        .order("created_at", desc=True)
+        .range(start, start + size - 1)
+    )
+    if status:
+        query = query.eq("status", status)
+    response = query.execute()
+    return {
+        "organic_scan_requests": response.data or [],
+        "total": response.count or 0,
+        "limit": size,
+        "offset": start,
+    }
+
+
+def organic_scan_request_detail(request_id: str) -> dict[str, Any]:
+    """One organic order — the poll a useResumableJob reads. The status IS the progress (a single
+    capture), so this is just the row plus its keyword term."""
+    rows = (
+        get_outreach_client()
+        .table("organic_scan_request")
+        .select("*, keyword(term)")
+        .eq("id", request_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise OutreachError("organic_scan_request_not_found", "no such order")
+    return {"organic_scan_request": rows[0]}
+
+
+def cancel_organic_scan_request(request_id: str, actor_id: str) -> dict[str, Any]:
+    """Withdraw a PENDING organic order. Conditional on status, like every other order cancel: one
+    the tick has claimed is already running and resolves on its own."""
+    from datetime import datetime, timezone
+
+    client = get_outreach_client()
+    hit = (
+        client.table("organic_scan_request")
+        .update({"status": "cancelled", "finished_at": datetime.now(timezone.utc).isoformat()})
+        .eq("id", request_id)
+        .eq("status", "pending")
+        .execute()
+        .data
+        or []
+    )
+    if hit:
+        return {"organic_scan_request": hit[0]}
+    existing = (
+        client.table("organic_scan_request").select("id, status").eq("id", request_id).limit(1)
+        .execute().data
+    )
+    if not existing:
+        raise OutreachError("organic_scan_request_not_found", "no such order")
+    raise OutreachError(
+        "organic_scan_request_not_cancellable",
+        f"order is {existing[0]['status']!r}; only a pending order can be withdrawn",
+    )
+
+
+def list_ai_scan_requests(
+    status: str | None = None, limit: int | None = None, offset: int | None = None
+) -> dict[str, Any]:
+    """AI-scan orders newest-first, region + keyword embedded — the queue/status view."""
+    size, start = clamp_page(limit, offset)
+    query = (
+        get_outreach_client()
+        .table("ai_scan_request")
+        .select("*, ai_region(name, name_level), keyword(term)", count="exact")
+        .order("created_at", desc=True)
+        .range(start, start + size - 1)
+    )
+    if status:
+        query = query.eq("status", status)
+    response = query.execute()
+    return {
+        "ai_scan_requests": response.data or [],
+        "total": response.count or 0,
+        "limit": size,
+        "offset": start,
+    }
+
+
+def ai_scan_request_detail(request_id: str) -> dict[str, Any]:
+    """One AI order — the poll a useResumableJob reads."""
+    rows = (
+        get_outreach_client()
+        .table("ai_scan_request")
+        .select("*, ai_region(name, name_level), keyword(term)")
+        .eq("id", request_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise OutreachError("ai_scan_request_not_found", "no such order")
+    return {"ai_scan_request": rows[0]}
+
+
+def cancel_ai_scan_request(request_id: str, actor_id: str) -> dict[str, Any]:
+    """Withdraw a PENDING AI order. Conditional on status."""
+    from datetime import datetime, timezone
+
+    client = get_outreach_client()
+    hit = (
+        client.table("ai_scan_request")
+        .update({"status": "cancelled", "finished_at": datetime.now(timezone.utc).isoformat()})
+        .eq("id", request_id)
+        .eq("status", "pending")
+        .execute()
+        .data
+        or []
+    )
+    if hit:
+        return {"ai_scan_request": hit[0]}
+    existing = (
+        client.table("ai_scan_request").select("id, status").eq("id", request_id).limit(1)
+        .execute().data
+    )
+    if not existing:
+        raise OutreachError("ai_scan_request_not_found", "no such order")
+    raise OutreachError(
+        "ai_scan_request_not_cancellable",
+        f"order is {existing[0]['status']!r}; only a pending order can be withdrawn",
+    )
+
+
+def list_ai_regions(market_id: str) -> dict[str, Any]:
+    """The seeded AI regions for a market — the seed modal's picker. Read-only."""
+    rows = (
+        get_outreach_client()
+        .table("ai_region")
+        .select("id, name, name_level, created_at")
+        .eq("market_id", market_id)
+        .order("name")
+        .execute()
+        .data
+        or []
+    )
+    return {"ai_regions": rows}
+
+
+def create_ai_region(*, market_id: str, name: str, name_level: str) -> dict[str, Any]:
+    """Seed one coarse AI region (a human-judged place name + name_level) for a market.
+
+    Admin-gated. `name_level` (metro/city/suburb/neighbourhood) is a human judgement the module
+    forbids deriving from data (invariant I-073/I-004) — this is the deliberate human-in-the-loop
+    step that lets the AI scan run for a typed any-city market. Idempotent on (market_id, name): a
+    re-seed of an existing region returns it rather than erroring, so the modal is safe to re-submit.
+    """
+    clean = (name or "").strip()
+    if not clean:
+        raise OutreachError("ai_region_name_required", "a region name is required")
+    if name_level not in AI_REGION_NAME_LEVELS:
+        raise OutreachError(
+            "invalid_name_level",
+            f"name_level must be one of {', '.join(AI_REGION_NAME_LEVELS)}",
+        )
+    client = get_outreach_client()
+    market = client.table("market").select("id").eq("id", market_id).limit(1).execute().data or []
+    if not market:
+        raise OutreachError("market_not_found", "no such market")
+
+    row = {"market_id": market_id, "name": clean, "name_level": name_level}
+    try:
+        written = client.table("ai_region").insert(row).execute().data or []
+    except Exception as exc:
+        if "ai_region_market_id_name" in str(exc) or "duplicate key" in str(exc).lower():
+            existing = (
+                client.table("ai_region")
+                .select("*")
+                .eq("market_id", market_id)
+                .ilike("name", clean)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if existing:
+                return existing[0]
+        raise
+    if not written:
+        raise OutreachError("ai_region_not_created")
+    return written[0]
+
+
 def placeholder_scores(
     submarket_id: str,
     limit: int | None = None,

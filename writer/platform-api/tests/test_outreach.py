@@ -313,3 +313,58 @@ def test_promotion_is_idempotent_not_an_error():
     section = source.split("def promote_prospect", 1)[1]
     assert section.count("already_existed=True") == 2, "pre-check AND race path must both return it"
     assert "already_existed=False" in section
+
+
+# --- report signal scans (organic / AI-visibility UI triggers — outreach 2026-08-10) ------------
+
+
+def test_signal_order_active_statuses_mirror_the_one_active_indexes():
+    """Each order type's service-level duplicate pre-check must agree with its database partial
+    unique index on what "active" means — both are `status in ('pending', 'running')` (migration
+    20260810140000), or the friendly 422 and the constraint refuse different things."""
+    assert svc.ORGANIC_SCAN_REQUEST_ACTIVE_STATUSES == ("pending", "running")
+    assert svc.AI_SCAN_REQUEST_ACTIVE_STATUSES == ("pending", "running")
+
+
+def test_ai_region_name_levels_match_the_check_constraint():
+    """`name_level` is a human judgement (I-073) constrained by the migration to exactly these four.
+    The service allow-list and the DB CHECK must agree, or a value the API accepts fails at insert."""
+    assert svc.AI_REGION_NAME_LEVELS == ("metro", "city", "suburb", "neighbourhood")
+
+
+def test_seeding_a_region_rejects_a_bad_name_level_before_touching_the_db():
+    """The name_level guard runs before get_outreach_client(), so a bad level is a named 422, not a
+    constraint string — and the check never spends a round trip to learn the value was invalid."""
+    with pytest.raises(OutreachError) as e:
+        svc.create_ai_region(market_id="m-1", name="Long Beach", name_level="county")
+    assert e.value.code == "invalid_name_level"
+
+
+def test_seeding_a_region_requires_a_name():
+    with pytest.raises(OutreachError) as e:
+        svc.create_ai_region(market_id="m-1", name="   ", name_level="city")
+    assert e.value.code == "ai_region_name_required"
+
+
+def test_signal_scan_spend_routes_are_admin_gated_reads_are_not():
+    """The click IS the spend confirmation, so placing/cancelling an organic or AI order — and
+    seeding a region, which unlocks paid AI runs — is admin-gated, above the staff bar the reads
+    use. Checked at the source because a Depends() swap is invisible until the wrong person spends.
+    """
+    import pathlib
+
+    source = (
+        pathlib.Path(svc.__file__).resolve().parents[1] / "routers" / "outreach.py"
+    ).read_text()
+    for route in (
+        "create_organic_scan_request", "cancel_organic_scan_request",
+        "create_ai_scan_request", "cancel_ai_scan_request", "create_ai_region",
+    ):
+        head = source.split(f"async def {route}", 1)[1].split(") -> dict")[0]
+        assert "require_admin" in head, f"{route} must be admin-gated"
+    for route in (
+        "list_organic_scan_requests", "organic_scan_request_detail",
+        "list_ai_scan_requests", "ai_scan_request_detail", "list_ai_regions",
+    ):
+        head = source.split(f"async def {route}", 1)[1].split(") -> dict")[0]
+        assert "require_outreach" in head, f"{route} should be readable by any authed staff"

@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, X, FileText, Users, Phone, Printer, AlertTriangle, CheckCircle2, Download, Copy, ExternalLink } from 'lucide-react'
+import { Loader2, X, FileText, Users, Phone, Printer, AlertTriangle, CheckCircle2, Download, Copy, ExternalLink, Play, RefreshCw } from 'lucide-react'
 import { api } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 
@@ -80,6 +80,7 @@ interface PaidSection {
 interface TalkingPoint { element: string; text: string }
 interface ReportData {
   prospect_id: string
+  market_id: string | null
   measured: boolean
   identity: {
     name: string | null; category: string | null; phone: string | null; website: string | null
@@ -417,9 +418,179 @@ function PaidTable({ s, name, keyword, clientTone }: {
   )
 }
 
+// ── Run-scan controls (admin-only, internal face) ────────────────────────────
+// The report's organic + AI sections read `not_scanned` until those PAID scans have run for the
+// prospect. These place the signed order (platform-api never spends; the outreach `tick` drains it),
+// poll it to a terminal state, then refetch the report. The AI scan targets a human-seeded ai_region
+// matching the prospect's area — when none exists the placement 422s `ai_region_not_seeded`, and we
+// open a seed modal (a human names the region + its recognition level, the module's I-073 invariant).
+const TERMINAL = ['done', 'failed', 'cancelled']
+const FRIENDLY: Record<string, string> = {
+  not_measured: 'This area hasn’t been scanned yet — run a map scan first.',
+  organic_scan_request_already_active: 'An organic scan for this area is already queued.',
+  ai_scan_request_already_active: 'An AI scan for this area is already queued.',
+  no_keyword: 'This market has no keyword to scan.',
+}
+
+function SignalScanControl({ prospectId, signal, status, marketId, submarket, onScanned }: {
+  prospectId: string; signal: 'organic' | 'ai'; status: string
+  marketId: string | null; submarket: string; onScanned: () => void
+}) {
+  const { isAdmin } = useAuth()
+  const [orderId, setOrderId] = useState<string | null>(null)
+  const [seedOpen, setSeedOpen] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const label = signal === 'organic' ? 'organic' : 'AI'
+  const path = signal === 'organic' ? 'scan-organic' : 'scan-ai'
+  const key = signal === 'organic' ? 'organic_scan_request' : 'ai_scan_request'
+  const detailBase = signal === 'organic' ? 'organic-scan-requests' : 'ai-scan-requests'
+  const cost = signal === 'organic' ? '~1¢' : '~3¢'
+
+  const place = useMutation({
+    mutationFn: () => api.post<Record<string, { id: string }>>(`/outreach/prospects/${prospectId}/${path}`, {}),
+    onSuccess: r => { setErr(null); setOrderId(r[key].id) },
+    onError: (e: Error) => {
+      if (signal === 'ai' && e.message === 'ai_region_not_seeded') { setSeedOpen(true); return }
+      setErr(FRIENDLY[e.message] ?? e.message)
+    },
+  })
+
+  // Poll the order to a terminal state, then refetch the report.
+  const { data: order } = useQuery<Record<string, { status: string; error?: string | null }>>({
+    queryKey: ['outreach-signal-order', detailBase, orderId],
+    queryFn: () => api.get(`/outreach/${detailBase}/${orderId}`),
+    enabled: !!orderId,
+    refetchInterval: q => {
+      const s = (q.state.data as Record<string, { status?: string }> | undefined)?.[key]?.status
+      return s && TERMINAL.includes(s) ? false : 4000
+    },
+  })
+  const orderStatus = order?.[key]?.status
+  useEffect(() => {
+    if (!orderStatus) return
+    if (orderStatus === 'done') { onScanned(); setOrderId(null) }
+    else if (orderStatus === 'failed' || orderStatus === 'cancelled') {
+      setErr(order?.[key]?.error ?? `${label} scan ${orderStatus}`); setOrderId(null)
+    }
+  }, [orderStatus]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!isAdmin) return null
+
+  const running = place.isPending || (!!orderId && !TERMINAL.includes(orderStatus ?? ''))
+  const rerun = status === 'measured' // only AI reaches here measured (organic hides the button)
+  const btnLabel = running
+    ? (place.isPending ? 'Queuing…' : 'Scanning…')
+    : rerun ? `Re-run ${label} scan` : `Run ${label} scan`
+
+  const confirmAndRun = () => {
+    if (running) return
+    const ok = window.confirm(
+      `Run the ${label} scan for this prospect? It makes a paid API call (${cost}) on the next scan tick and fills the ${label} section of the report for everyone in this area.`
+    )
+    if (ok) place.mutate()
+  }
+
+  return (
+    <div style={{ margin: '2px 0 6px' }}>
+      <button onClick={confirmAndRun} disabled={running}
+        style={{ display: 'inline-flex', gap: 5, alignItems: 'center', fontSize: 12, fontWeight: 600,
+          border: '1px solid #cbd5e1', background: running ? '#f1f5f9' : '#fff', color: '#334155',
+          borderRadius: 7, padding: '4px 10px', cursor: running ? 'default' : 'pointer' }}>
+        {running ? <Loader2 size={12} className="animate-spin" /> : rerun ? <RefreshCw size={12} /> : <Play size={12} />}
+        {btnLabel} <span style={{ color: '#94a3b8', fontWeight: 400 }}>· paid {cost}</span>
+      </button>
+      {running && (
+        <span style={{ fontSize: 11, color: '#94a3b8', marginLeft: 8 }}>
+          runs on the next scan tick (up to ~15 min) — the section refreshes when it lands.
+        </span>
+      )}
+      {err && <div style={{ fontSize: 11.5, color: '#b91c1c', marginTop: 4 }}>{err}</div>}
+      {seedOpen && (
+        <AiRegionSeedModal marketId={marketId} defaultName={submarket}
+          onClose={() => setSeedOpen(false)}
+          onSeeded={() => { setSeedOpen(false); place.mutate() }} />
+      )}
+    </div>
+  )
+}
+
+// The AI scan runs at a human-seeded PLACE NAME (ai_region), not the fine submarket grid; its
+// `name_level` (metro/city/suburb/neighbourhood) is a human judgement the module refuses to derive.
+// The region name must match the prospect's area for the scan to attach to this report, so we
+// pre-fill it and say so — the admin only judges the recognition level.
+function AiRegionSeedModal({ marketId, defaultName, onClose, onSeeded }: {
+  marketId: string | null; defaultName: string; onClose: () => void; onSeeded: () => void
+}) {
+  const [name, setName] = useState(defaultName)
+  const [nameLevel, setNameLevel] = useState('city')
+  const { data: existing } = useQuery<{ ai_regions: { id: string; name: string; name_level: string }[] }>({
+    queryKey: ['outreach-ai-regions', marketId],
+    queryFn: () => api.get(`/outreach/markets/${marketId}/ai-regions`),
+    enabled: !!marketId,
+  })
+  const create = useMutation({
+    mutationFn: () => api.post('/outreach/ai-regions', { market_id: marketId, name: name.trim(), name_level: nameLevel }),
+    onSuccess: () => onSeeded(),
+  })
+  const err = create.error as Error | undefined
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', zIndex: 60,
+      display: 'flex', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 12, width: 440,
+        maxWidth: '94vw', padding: 20, boxShadow: '0 20px 60px rgba(15,23,42,0.3)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>Seed an AI region</div>
+          <button onClick={onClose} style={{ border: 'none', background: 'none', cursor: 'pointer' }}><X size={16} /></button>
+        </div>
+        <div style={{ fontSize: 12, color: '#64748b', marginBottom: 12 }}>
+          AI assistants are asked about a recognizable place, not a map grid. The region name must
+          match this prospect’s area (“{defaultName}”) to appear on their report; you judge how
+          recognizable the place is.
+        </div>
+        <label style={{ fontSize: 11.5, color: '#475569', fontWeight: 600 }}>Region name</label>
+        <input value={name} onChange={e => setName(e.target.value)}
+          style={{ width: '100%', boxSizing: 'border-box', margin: '3px 0 10px', padding: '7px 9px',
+            border: '1px solid #cbd5e1', borderRadius: 7, fontSize: 13 }} />
+        <label style={{ fontSize: 11.5, color: '#475569', fontWeight: 600 }}>Recognition level</label>
+        <select value={nameLevel} onChange={e => setNameLevel(e.target.value)}
+          style={{ width: '100%', boxSizing: 'border-box', margin: '3px 0 4px', padding: '7px 9px',
+            border: '1px solid #cbd5e1', borderRadius: 7, fontSize: 13, background: '#fff' }}>
+          <option value="metro">Metro — a whole metro area</option>
+          <option value="city">City — a city an assistant would recognize</option>
+          <option value="suburb">Suburb — a named suburb</option>
+          <option value="neighbourhood">Neighbourhood — an AI may answer for the wider metro</option>
+        </select>
+        <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 12 }}>
+          A neighbourhood-level check carries a caveat on the report (the model may answer for the metro).
+        </div>
+        {existing?.ai_regions && existing.ai_regions.length > 0 && (
+          <div style={{ fontSize: 11, color: '#64748b', marginBottom: 12 }}>
+            Already seeded: {existing.ai_regions.map(r => r.name).join(', ')}
+          </div>
+        )}
+        {err && <div style={{ fontSize: 11.5, color: '#b91c1c', marginBottom: 10 }}>{err.message}</div>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button onClick={onClose}
+            style={{ border: '1px solid #e2e8f0', background: '#fff', borderRadius: 7, padding: '7px 12px',
+              fontSize: 12.5, cursor: 'pointer', color: '#475569' }}>Cancel</button>
+          <button onClick={() => create.mutate()} disabled={!marketId || !name.trim() || create.isPending}
+            style={{ border: 'none', background: '#0f172a', color: '#fff', borderRadius: 7, padding: '7px 12px',
+              fontSize: 12.5, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', gap: 5, alignItems: 'center' }}>
+            {create.isPending && <Loader2 size={12} className="animate-spin" />} Seed & run AI scan
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Internal brief ───────────────────────────────────────────────────────────
 function InternalBrief({ data }: { data: ReportData }) {
   const j = data.justification
+  const queryClient = useQueryClient()
+  const refetchReport = () => queryClient.invalidateQueries({ queryKey: ['outreach-report', data.prospect_id] })
   return (
     <div>
       <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a' }}>{data.identity.name}</div>
@@ -434,9 +605,15 @@ function InternalBrief({ data }: { data: ReportData }) {
       <MapsTable s={data.signals.maps} name={data.identity.name ?? 'This business'} keyword={data.keyword} submarket={data.submarket} />
 
       <SectionTitle>Organic rankings vs competitors</SectionTitle>
+      {data.signals.organic.status !== 'measured' && (
+        <SignalScanControl prospectId={data.prospect_id} signal="organic" status={data.signals.organic.status}
+          marketId={data.market_id} submarket={data.submarket} onScanned={refetchReport} />
+      )}
       <OrganicTable s={data.signals.organic} keyword={data.keyword} submarket={data.submarket} />
 
       <SectionTitle>AI / LLM visibility</SectionTitle>
+      <SignalScanControl prospectId={data.prospect_id} signal="ai" status={data.signals.llm.status}
+        marketId={data.market_id} submarket={data.submarket} onScanned={refetchReport} />
       <LlmTable s={data.signals.llm} name={data.identity.name ?? 'This business'} />
 
       <SectionTitle>Paid placement (Google Ads / LSA)</SectionTitle>

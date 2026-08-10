@@ -551,6 +551,22 @@ class ContactsBatchRequest(BaseModel):
     prospect_ids: list[str]
 
 
+class SignalScanCreate(BaseModel):
+    """The per-prospect "Run organic" / "Run AI" order body — a note is the only thing to carry, the
+    target is resolved server-side from the prospect's report."""
+
+    note: Optional[str] = None
+
+
+class AiRegionCreate(BaseModel):
+    """Seed a coarse AI region for a market. `name_level` is a human judgement (metro/city/suburb/
+    neighbourhood) the module forbids deriving — the seed modal is where a human supplies it."""
+
+    market_id: str
+    name: str
+    name_level: str = Field(pattern="^(metro|city|suburb|neighbourhood)$")
+
+
 @router.get("/outreach/markets/{market_id}/keywords")
 async def list_keywords(market_id: str, auth: dict = Depends(require_outreach)) -> dict:
     return {"keywords": _handle(outreach_service.list_keywords, market_id)}
@@ -757,6 +773,124 @@ async def list_scan_requests(
 async def scan_request_detail(request_id: str, auth: dict = Depends(require_outreach)) -> dict:
     """The status screen's read: order + snapshot + per-status task counts + rollup marker."""
     return _handle(outreach_service.scan_request_detail, request_id)
+
+
+# --- Report signal scans (organic / AI-visibility UI triggers — outreach 2026-08-10) ----------
+#
+# The per-prospect report already renders four signals; organic + AI could only be filled from the
+# CLI. These place the two signed orders that let the report's "Run organic" / "Run AI" buttons fill
+# those sections — ADMIN-gated (the click is the spend authorization, exactly like a scan order),
+# reads open to any authed staff. platform-api never spends: the outreach `tick` drains and runs the
+# order. `POST scan-ai` may return `ai_region_not_seeded`, which the UI turns into the seed modal.
+
+
+@router.post("/outreach/prospects/{prospect_id}/scan-organic")
+async def create_organic_scan_request(
+    prospect_id: str, payload: SignalScanCreate, auth: dict = Depends(require_admin)
+) -> dict:
+    """Run the report's ORGANIC signal for a prospect. Places a signed order the tick bills (one
+    organic SERP capture) against the exact snapshot the report reads. 422 `not_measured` when the
+    prospect's area has no rolled-up scan."""
+    _require_outreach_ready()
+    return {
+        "organic_scan_request": _handle(
+            outreach_service.create_organic_scan_request,
+            prospect_id=prospect_id,
+            note=payload.note,
+            actor_id=auth["user_id"],
+        )
+    }
+
+
+@router.post("/outreach/prospects/{prospect_id}/scan-ai")
+async def create_ai_scan_request(
+    prospect_id: str, payload: SignalScanCreate, auth: dict = Depends(require_admin)
+) -> dict:
+    """Run the report's AI-VISIBILITY signal for a prospect. Places a signed order the tick bills
+    (ChatGPT + Google AI Overview) for the prospect's ai_region × keyword. 422 `ai_region_not_seeded`
+    when no region is seeded for the prospect's area — the UI then offers the seed modal and retries."""
+    _require_outreach_ready()
+    return {
+        "ai_scan_request": _handle(
+            outreach_service.create_ai_scan_request,
+            prospect_id=prospect_id,
+            note=payload.note,
+            actor_id=auth["user_id"],
+        )
+    }
+
+
+@router.get("/outreach/organic-scan-requests")
+async def list_organic_scan_requests(
+    status: Optional[str] = None,
+    limit: int = Query(default=outreach_service.DEFAULT_PAGE_SIZE, ge=1),
+    offset: int = Query(default=0, ge=0),
+    auth: dict = Depends(require_outreach),
+) -> dict:
+    return _handle(
+        outreach_service.list_organic_scan_requests, status=status, limit=limit, offset=offset
+    )
+
+
+@router.get("/outreach/organic-scan-requests/{request_id}")
+async def organic_scan_request_detail(
+    request_id: str, auth: dict = Depends(require_outreach)
+) -> dict:
+    """One organic order — the poll a useResumableJob reads (the status is the progress)."""
+    return _handle(outreach_service.organic_scan_request_detail, request_id)
+
+
+@router.post("/outreach/organic-scan-requests/{request_id}/cancel")
+async def cancel_organic_scan_request(
+    request_id: str, auth: dict = Depends(require_admin)
+) -> dict:
+    _require_outreach_ready()
+    return _handle(outreach_service.cancel_organic_scan_request, request_id, auth["user_id"])
+
+
+@router.get("/outreach/ai-scan-requests")
+async def list_ai_scan_requests(
+    status: Optional[str] = None,
+    limit: int = Query(default=outreach_service.DEFAULT_PAGE_SIZE, ge=1),
+    offset: int = Query(default=0, ge=0),
+    auth: dict = Depends(require_outreach),
+) -> dict:
+    return _handle(
+        outreach_service.list_ai_scan_requests, status=status, limit=limit, offset=offset
+    )
+
+
+@router.get("/outreach/ai-scan-requests/{request_id}")
+async def ai_scan_request_detail(request_id: str, auth: dict = Depends(require_outreach)) -> dict:
+    """One AI order — the poll a useResumableJob reads."""
+    return _handle(outreach_service.ai_scan_request_detail, request_id)
+
+
+@router.post("/outreach/ai-scan-requests/{request_id}/cancel")
+async def cancel_ai_scan_request(request_id: str, auth: dict = Depends(require_admin)) -> dict:
+    _require_outreach_ready()
+    return _handle(outreach_service.cancel_ai_scan_request, request_id, auth["user_id"])
+
+
+@router.get("/outreach/markets/{market_id}/ai-regions")
+async def list_ai_regions(market_id: str, auth: dict = Depends(require_outreach)) -> dict:
+    """The seeded AI regions for a market — the seed modal's picker. Read-only."""
+    return _handle(outreach_service.list_ai_regions, market_id)
+
+
+@router.post("/outreach/ai-regions")
+async def create_ai_region(payload: AiRegionCreate, auth: dict = Depends(require_admin)) -> dict:
+    """Seed a coarse AI region (name + human-judged name_level) so the AI scan can run for a typed
+    any-city market. Admin-gated; idempotent on (market, name)."""
+    _require_outreach_ready()
+    return {
+        "ai_region": _handle(
+            outreach_service.create_ai_region,
+            market_id=payload.market_id,
+            name=payload.name,
+            name_level=payload.name_level,
+        )
+    }
 
 
 @router.get("/outreach/submarkets/{submarket_id}/placeholder-scores")
