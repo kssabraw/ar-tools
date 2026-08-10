@@ -942,6 +942,67 @@ def cmd_tick(args) -> int:
     )
 
 
+# The always-on worker's stop flag. Module-level so the SIGTERM/SIGINT handler cmd_tick_loop
+# installs can flip it and the loop can read it. False until a shutdown signal arrives.
+_tick_loop_stop = False
+
+
+def cmd_tick_loop(args) -> int:
+    """Run `tick` continuously — the always-on worker (owner request 2026-08-10).
+
+    A UI click that places a signed order (enrich / organic / AI / scan) should drain within
+    seconds, not wait for a cron. Railway's cron floor is 5 minutes, so near-instant needs a
+    daemon: this loops `cmd_tick` with a short sleep. It is the same tick the cron ran, just
+    on a tight interval, so it inherits every safety property — conditional claims (no double
+    spend even if a second worker existed), terminal order outcomes, `collect` free, and spend
+    authorized ONLY by a signed order row (so `tick-loop` is deliberately NOT in PAID_COMMANDS,
+    exactly like `tick`). An idle iteration spends nothing.
+
+    Two robustness rules:
+      * A single bad iteration (a transient provider/DB error) is logged and swallowed — it must
+        never kill the daemon and stop draining every other client's orders.
+      * SIGTERM/SIGINT (a Railway deploy) sets a stop flag and the loop exits cleanly AFTER the
+        current tick, so a deploy doesn't sever a drain mid-flight. The sleep is sliced so the
+        stop is honored within a fraction of a second, not a whole interval.
+    """
+    import time as _time
+
+    global _tick_loop_stop
+    _tick_loop_stop = False
+
+    def _stop(signum, _frame):  # noqa: ANN001
+        global _tick_loop_stop
+        _tick_loop_stop = True
+        print(f"OUTREACH_TICK_LOOP stopping signal={signum}", flush=True)
+
+    # Override the one-shot marker handler (main installed it) for the daemon's lifetime: for a
+    # loop we want a clean stop-after-current-tick, not an immediate SystemExit mid-drain.
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
+
+    interval = max(1.0, float(get_settings().tick_loop_interval_seconds))
+    print(f"OUTREACH_TICK_LOOP started interval={interval}s", flush=True)
+
+    iterations = 0
+    while not _tick_loop_stop:
+        try:
+            cmd_tick(args)
+        except SystemExit:
+            raise  # a real refusal/exit from within the tick must still propagate
+        except Exception as exc:  # noqa: BLE001 — one bad tick must not stop the daemon
+            logging.getLogger(__name__).error(
+                "tick-loop iteration failed", extra={"error": repr(exc)[:500]}
+            )
+        iterations += 1
+        slept = 0.0
+        while slept < interval and not _tick_loop_stop:
+            _time.sleep(min(0.25, interval - slept))
+            slept += 0.25
+
+    print(f"OUTREACH_TICK_LOOP stopped iterations={iterations}", flush=True)
+    return 0
+
+
 def cmd_rollup(args) -> int:
     """Roll finalized snapshots into `prospect_coverage`. FREE — no provider is contacted.
 
@@ -1723,7 +1784,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[
             "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
             "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech",
-                "probe-pixel-field", "enrich", "probe-enrich", "collect", "rollup", "tick", "score",
+                "probe-pixel-field", "enrich", "probe-enrich", "collect", "rollup", "tick", "tick-loop", "score",
                 "recalibrate",
             "render-heatmap", "render-delta",
         ],
@@ -1869,7 +1930,7 @@ def main() -> int:
             [
                 "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
                 "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech",
-                "probe-pixel-field", "enrich", "probe-enrich", "collect", "rollup", "tick", "score",
+                "probe-pixel-field", "enrich", "probe-enrich", "collect", "rollup", "tick", "tick-loop", "score",
                 "recalibrate",
                 "render-heatmap", "render-delta",
             ],
@@ -1898,6 +1959,7 @@ def main() -> int:
         "collect": cmd_collect,
         "rollup": cmd_rollup,
         "tick": cmd_tick,
+        "tick-loop": cmd_tick_loop,
         "score": cmd_score,
         "recalibrate": cmd_recalibrate,
         "render-heatmap": cmd_render_heatmap,
