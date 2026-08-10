@@ -218,6 +218,25 @@ def _section_organic(data: dict) -> str:
     )
 
 
+def _maps_presence_line(g: dict) -> str:
+    """A plain-English local-pack presence line with this-period vs previous-period
+    movement (positive framing — a gain is called out; a dip is stated neutrally)."""
+    now = g.get("presence_now")
+    if now is None:
+        return ""
+    base = f"You’re in the top 3 on Google Maps across {round(now)}% of your service area"
+    prev = g.get("presence_prev")
+    if prev is not None:
+        delta = round(now - prev)
+        if delta > 0:
+            base += f" — up from {round(prev)}% the previous period"
+        elif delta < 0:
+            base += f" — {round(prev)}% the previous period"
+        else:
+            base += " — steady vs the previous period"
+    return f"<p class='lead'>{base}.</p>"
+
+
 def _section_geogrid(data: dict) -> str:
     g = data.get("geogrid")
     if not g or not g.get("keywords"):
@@ -240,6 +259,7 @@ def _section_geogrid(data: dict) -> str:
             f"top-3 in {_esc(k.get('top3_pins', 0))}/{_esc(k.get('total_pins', 0))} pins</div>"
             "</div>"
         )
+    presence_html = _maps_presence_line(g)
     weak = g.get("weak_areas") or []
     weak_html = (
         f"<p class='lead'>Areas with room to grow: {_esc(', '.join(weak))} — "
@@ -256,7 +276,7 @@ def _section_geogrid(data: dict) -> str:
         "<section><h2>Local pack / Maps coverage</h2>"
         "<p class='note'>How visible your business is on Google Maps across your "
         "service area — green means you’re at the top of the map.</p>"
-        + weak_html + legend
+        + presence_html + weak_html + legend
         + "<div class='grid-cards'>" + "".join(cards) + "</div></section>"
     )
 
@@ -305,15 +325,20 @@ def _section_gbp(data: dict) -> str:
     )
 
 
-# --- Period comparisons (30-day / 90-day / since-start) — pure ---------------
-def _window_sum(by_date: dict, end: date, days: int) -> Optional[float]:
-    start = end - timedelta(days=days)
+# --- Period-over-period comparisons (this period vs the previous same-length
+# window) — pure --------------------------------------------------------------
+def previous_period(period_start: date, period_end: date) -> tuple[date, date]:
+    """The window of the same length immediately before the report period. Pure."""
+    length = max(1, (period_end - period_start).days)
+    return period_start - timedelta(days=length), period_start
+
+
+def _sum_between(by_date: dict, start: date, end: date) -> Optional[float]:
     vals = [v for d, v in by_date.items() if start < d <= end]
     return sum(vals) if vals else None
 
 
-def _window_avg(by_date: dict, end: date, days: int) -> Optional[float]:
-    start = end - timedelta(days=days)
+def _avg_between(by_date: dict, start: date, end: date) -> Optional[float]:
     vals = [v for d, v in by_date.items() if start < d <= end]
     return sum(vals) / len(vals) if vals else None
 
@@ -322,49 +347,6 @@ def _pct(curr: Optional[float], prev: Optional[float]) -> Optional[float]:
     if curr is None or not prev:
         return None
     return round((curr - prev) / prev * 100, 1)
-
-
-# The since-start comparison needs two non-overlapping 30-day windows (the first
-# 30 days vs the last 30). With less history the "first 30 days" window overlaps
-# the current one and the delta is noise — a 5-week-old campaign showed a
-# misleading "▼ -19% since we started" while the 30-day trend was +88%. Below this
-# many days of history, "start" (and the since-start KPI) is suppressed.
-_MIN_SINCE_START_DAYS = 60
-
-
-def _since_start_pct(cur: Optional[float], by_date: dict, today: date, earliest: date) -> Optional[float]:
-    if (today - earliest).days < _MIN_SINCE_START_DAYS:
-        return None
-    return _pct(cur, _window_sum(by_date, earliest + timedelta(days=30), 30))
-
-
-def _volume_changes(by_date: dict, today: date, earliest: date) -> Optional[dict]:
-    cur = _window_sum(by_date, today, 30)
-    if cur is None:
-        return None
-    return {"current": cur, "changes": {
-        "30d": _pct(cur, _window_sum(by_date, today - timedelta(days=30), 30)),
-        "90d": _pct(cur, _window_sum(by_date, today - timedelta(days=90), 30)),
-        "start": _since_start_pct(cur, by_date, today, earliest),
-    }}
-
-
-def _rank_changes(by_date: dict, today: date, earliest: date) -> Optional[dict]:
-    cur = _window_avg(by_date, today, 7)
-    if cur is None:
-        return None
-
-    def improvement(prev):  # rank: lower is better → positive = positions gained
-        return None if prev is None else round(prev - cur, 1)
-
-    start = None
-    if (today - earliest).days >= _MIN_SINCE_START_DAYS:
-        start = improvement(_window_avg(by_date, earliest + timedelta(days=7), 7))
-    return {"current": cur, "changes_positions": {
-        "30d": improvement(_window_avg(by_date, today - timedelta(days=30), 7)),
-        "90d": improvement(_window_avg(by_date, today - timedelta(days=90), 7)),
-        "start": start,
-    }}
 
 
 def _accum_by_date(rows: list[dict], field: str) -> dict:
@@ -382,19 +364,18 @@ def _accum_by_date(rows: list[dict], field: str) -> dict:
 
 
 def build_comparisons(
-    metric_rows: list[dict], today: date, traffic_rows: Optional[list[dict]] = None
+    metric_rows: list[dict], period_start: date, period_end: date,
+    traffic_rows: Optional[list[dict]] = None,
 ) -> Optional[dict]:
-    """30/90/since-start changes for impressions, organic clicks, and avg ranking.
+    """This-period vs previous-period change for impressions, organic clicks, and
+    average ranking — tied to the report's own period length. Pure.
 
-    Pure. Volume metrics compare the trailing-30-day total to the same window 30/90
-    days ago and to the first 30 days of data; ranking compares the trailing-7-day
-    average. A metric/window with no data is omitted (None) — never fabricated.
-
-    ``traffic_rows`` (impressions/clicks, one row per date) sources the volume
-    metrics when given — the property-level GSC daily totals, the same source the
-    campaign goals use; ranking always comes from ``metric_rows`` (per-keyword
-    positions). Without it both come from ``metric_rows`` (back-compat). Each series
-    anchors its since-start window on its own earliest date."""
+    The previous period is the same-length window immediately before the report
+    period. A previous-period figure is shown only when the data actually spans
+    that window (data began on or before it); otherwise it's None — never a
+    partial, misleading delta. ``traffic_rows`` (one row per date) sources the
+    volume metrics (property-level GSC daily totals); ranking always comes from
+    ``metric_rows`` (per-keyword positions)."""
     traffic_src = traffic_rows if traffic_rows is not None else metric_rows
     impr = _accum_by_date(traffic_src, "impressions")
     clk = _accum_by_date(traffic_src, "clicks")
@@ -412,13 +393,33 @@ def build_comparisons(
             rsum[d] = rsum.get(d, 0) + pos
             rn[d] = rn.get(d, 0) + 1
     rank = {d: rsum[d] / rn[d] for d in rsum}
+    prev_start, prev_end = previous_period(period_start, period_end)
+
+    def _prev_covered(by_date: dict) -> bool:
+        # Only compare to the previous period when data actually spans it.
+        return bool(by_date) and min(by_date) <= prev_start
+
+    def _vol(by_date: dict) -> Optional[dict]:
+        cur = _sum_between(by_date, period_start, period_end)
+        if cur is None:
+            return None
+        prev = _sum_between(by_date, prev_start, prev_end) if _prev_covered(by_date) else None
+        return {"current": cur, "previous": prev, "change": _pct(cur, prev)}
+
+    def _rnk(by_date: dict) -> Optional[dict]:
+        cur = _avg_between(by_date, period_start, period_end)
+        if cur is None:
+            return None
+        prev = _avg_between(by_date, prev_start, prev_end) if _prev_covered(by_date) else None
+        change = None if prev is None else round(prev - cur, 1)  # positive = positions gained
+        return {"current": cur, "previous": prev, "change_positions": change}
 
     out: dict = {}
-    if impr and (v := _volume_changes(impr, today, min(impr))):
+    if (v := _vol(impr)):
         out["impressions"] = v
-    if clk and (v := _volume_changes(clk, today, min(clk))):
+    if (v := _vol(clk)):
         out["clicks"] = v
-    if rank and (v := _rank_changes(rank, today, min(rank))):
+    if (v := _rnk(rank)):
         out["rank"] = v
     return out or None
 
@@ -447,10 +448,10 @@ def _fmt_positions(d) -> str:
     return "no change"
 
 
-def _perf_row(label, current, c30, c90, cstart) -> str:
+def _perf_row(label, current, previous, change) -> str:
     return (f"<tr><td>{_esc(label)}</td><td class='num'>{_esc(current)}</td>"
-            f"<td class='num pos'>{_esc(c30)}</td><td class='num pos'>{_esc(c90)}</td>"
-            f"<td class='num pos'>{_esc(cstart)}</td></tr>")
+            f"<td class='num'>{_esc(previous)}</td>"
+            f"<td class='num pos'>{_esc(change)}</td></tr>")
 
 
 def _section_performance(data: dict) -> str:
@@ -459,9 +460,9 @@ def _section_performance(data: dict) -> str:
         return ""
     rows = []
     for key, label, fmt_val, change_key, fmt_change in (
-        ("impressions", "Impressions", _fmt_int, "changes", _fmt_pct),
-        ("clicks", "Organic clicks", _fmt_int, "changes", _fmt_pct),
-        ("rank", "Average ranking", _fmt_pos, "changes_positions", _fmt_positions),
+        ("impressions", "Impressions", _fmt_int, "change", _fmt_pct),
+        ("clicks", "Organic clicks", _fmt_int, "change", _fmt_pct),
+        ("rank", "Average ranking", _fmt_pos, "change_positions", _fmt_positions),
     ):
         m = comp.get(key)
         if not m or m.get("current") is None:
@@ -471,18 +472,18 @@ def _section_performance(data: dict) -> str:
         # as a collapse to a client. Omit it rather than fabricate a scary delta.
         if key in ("impressions", "clicks") and not m.get("current"):
             continue
-        ch = m.get(change_key, {})
-        rows.append(_perf_row(label, fmt_val(m["current"]),
-                              fmt_change(ch.get("30d")), fmt_change(ch.get("90d")), fmt_change(ch.get("start"))))
+        prev = m.get("previous")
+        prev_txt = fmt_val(prev) if prev is not None else "—"
+        rows.append(_perf_row(label, fmt_val(m["current"]), prev_txt, fmt_change(m.get(change_key))))
     if not rows:
         return ""
     return (
         "<section><h2>Performance highlights</h2>"
-        "<p class='note'>The big-picture trend: how many people are finding you in "
-        "search and how your rankings are moving over time.</p>"
-        "<table><thead><tr><th>Metric</th><th class='num'>Last 30 days</th>"
-        "<th class='num'>vs 30 days ago</th><th class='num'>vs 90 days ago</th>"
-        "<th class='num'>Since we started</th></tr></thead><tbody>"
+        "<p class='note'>How you’re doing this period compared with the period just "
+        "before it (the same number of days).</p>"
+        "<table><thead><tr><th>Metric</th><th class='num'>This period</th>"
+        "<th class='num'>Previous period</th><th class='num'>Change</th>"
+        "</tr></thead><tbody>"
         + "".join(rows) + "</tbody></table></section>"
     )
 
@@ -499,11 +500,31 @@ def _section_ai_visibility(data: dict) -> str:
         "<section><h2>AI search visibility</h2>"
         "<p class='note'>How often your brand is recommended when AI assistants "
         "answer questions like your customers'.</p>"
-        "<p class='lead'>Across the AI tools we track:</p>"
+        + _ai_visibility_headline(a)
+        + "<p class='lead'>Across the AI tools we track:</p>"
         f"<ul class='reviews'>{items}</ul>"
         + _ai_keyword_matrix(a.get("keywords") or [])
         + "</section>"
     )
+
+
+def _ai_visibility_headline(a: dict) -> str:
+    """Overall AI visibility this period, with previous-period movement (positive
+    framing — a gain is called out, a dip stated neutrally)."""
+    now = a.get("visibility_now")
+    if now is None:
+        return ""
+    base = f"You’re being recommended in {round(now)}% of the AI answers we track"
+    prev = a.get("visibility_prev")
+    if prev is not None:
+        delta = round(now - prev)
+        if delta > 0:
+            base += f" — up from {round(prev)}% the previous period"
+        elif delta < 0:
+            base += f" — {round(prev)}% the previous period"
+        else:
+            base += " — steady vs the previous period"
+    return f"<p class='lead'>{base}.</p>"
 
 
 def _ai_keyword_matrix(keywords: list[dict]) -> str:
@@ -625,6 +646,37 @@ def _goal_label(goal: dict) -> str:
     return base.get(goal.get("goal_type"), "Goal")
 
 
+# Goal types whose measurement is date-aware (respects the as-of date), so a
+# "since last period" delta is meaningful. maps_pack_presence / ai_visibility read
+# the latest scan regardless of date (they get their own period comparison in the
+# Maps / AI sections instead), and custom has no metric.
+_PERIOD_GOAL_TYPES = {"keyword_position", "keywords_in_top", "organic_clicks", "organic_impressions"}
+_GOAL_MOVE_UNIT = {
+    "keyword_position": "positions", "keywords_in_top": "keywords",
+    "organic_clicks": "clicks/mo", "organic_impressions": "impressions/mo",
+}
+
+
+def _goal_movement(g: dict) -> str:
+    """A small 'since last period' movement line for a goal (positive framing —
+    gains are green, dips are muted, never alarming red). '' when not comparable."""
+    gt = g.get("goal_type")
+    cur, prev = g.get("current_value"), g.get("previous_value")
+    if gt not in _PERIOD_GOAL_TYPES or cur is None or prev is None:
+        return ""
+    lower = gt == "keyword_position"
+    gain = round((prev - cur) if lower else (cur - prev), 1)
+    if gain == 0:
+        return "<div class='gmove'>no change since last period</div>"
+    unit = _GOAL_MOVE_UNIT.get(gt, "")
+    mag = abs(gain)
+    if mag == 1 and unit in ("positions", "keywords"):
+        unit = unit[:-1]  # "1 keyword" / "1 position", not "1 keywords"
+    mag_txt = _fmt_int(mag) if gt in ("organic_clicks", "organic_impressions") else f"{mag:g}"
+    arrow, cls = ("▲", "up") if gain > 0 else ("▼", "down")
+    return f"<div class='gmove {cls}'>{arrow} {mag_txt} {unit} since last period</div>"
+
+
 def _section_goals(data: dict) -> str:
     goals = (data.get("goals") or {}).get("goals") or []
     rows = []
@@ -655,7 +707,7 @@ def _section_goals(data: dict) -> str:
             f"<tr><td><strong>{_esc(_goal_label(g))}</strong></td>"
             f"<td><span class='gchip' style='color:{colour}'>{_esc(status_text)}</span></td>"
             f"<td class='gprog'>{bar}</td>"
-            f"<td class='num'>{where}</td></tr>"
+            f"<td class='num'>{where}{_goal_movement(g)}</td></tr>"
         )
     if not rows:
         return ""
@@ -715,16 +767,16 @@ def _kpi_strip(data: dict) -> str:
     cards: list[str] = []
     comp = (data.get("organic") or {}).get("comparisons") or {}
     impr = comp.get("impressions") or {}
-    impr_start = (impr.get("changes") or {}).get("start")
-    # Only a genuine gain leads the report — a flat/negative or too-short-to-judge
-    # since-start figure isn't a hero number (and _volume_changes already drops it
-    # when history is too short to compare non-overlapping windows).
-    if impr_start and impr_start > 0:
-        cards.append(_kpi("Search visibility", _fmt_pct(impr_start), "since we started"))
+    impr_change = impr.get("change")
+    # Only a genuine gain leads the report — a flat/negative or not-yet-comparable
+    # figure isn't a hero number (build_comparisons already leaves change None when
+    # there's no comparable previous period).
+    if impr_change and impr_change > 0:
+        cards.append(_kpi("Search visibility", _fmt_pct(impr_change), "vs the previous period"))
     rank = comp.get("rank") or {}
-    rank_start = (rank.get("changes_positions") or {}).get("start")
-    if rank_start and rank_start > 0:
-        cards.append(_kpi("Ranking gains", f"▲ {round(rank_start, 1):g}", "positions, since we started"))
+    rank_change = (rank or {}).get("change_positions")
+    if rank_change and rank_change > 0:
+        cards.append(_kpi("Ranking gains", f"▲ {round(rank_change, 1):g}", "positions vs the previous period"))
     summ = (data.get("organic") or {}).get("summary") or {}
     if summ.get("tracked"):
         cards.append(_kpi("On page 1 of Google", str(summ.get("top10", 0)), f"of {summ.get('tracked')} keywords"))
@@ -804,6 +856,8 @@ td.num, th.num { text-align:right; }
 .gbar { position:relative; background:#eef2f6; border-radius:6px; height:8px; width:100%; }
 .gbar-fill { height:8px; border-radius:6px; }
 .gmark { position:absolute; top:-2px; width:2px; height:12px; background:#334155; border-radius:1px; }
+.gmove { font-size:9px; font-weight:400; color:#94a3b8; margin-top:2px; }
+.gmove.up { color:#166534; }
 .aimatrix td, .aimatrix th { vertical-align:middle; }
 .aimatrix .aiq { width:46%; color:#334155; }
 .aichips { line-height:1.9; }
@@ -823,7 +877,34 @@ td.num.pos { font-weight:600; color:#166534; }
 # ---------------------------------------------------------------------------
 # Data gathering (DB reads) — best-effort per section.
 # ---------------------------------------------------------------------------
-def _gather_organic(supabase, client_id: str, today: date) -> Optional[dict]:
+def _keyword_period_change(rows: list[dict], period_start: date, period_end: date):
+    """Positions gained this period vs the previous same-length period for one
+    keyword (positive = improved, since a lower rank is better). None when either
+    period lacks position data. Pure."""
+    prev_start, _ = previous_period(period_start, period_end)
+
+    def _avg(start: date, end: date):
+        vals = []
+        for r in rows or []:
+            try:
+                d = date.fromisoformat(str(r.get("date"))[:10])
+            except (TypeError, ValueError):
+                continue
+            pos = r.get("gsc_position")
+            if pos is None:
+                pos = r.get("tracked_rank")
+            if pos is not None and start < d <= end:
+                vals.append(pos)
+        return sum(vals) / len(vals) if vals else None
+
+    cur = _avg(period_start, period_end)
+    prev = _avg(prev_start, period_start)
+    if cur is None or prev is None:
+        return None
+    return round(prev - cur, 1)
+
+
+def _gather_organic(supabase, client_id: str, period_start: date, period_end: date) -> Optional[dict]:
     from services import rank_status
 
     kws = (
@@ -840,8 +921,8 @@ def _gather_organic(supabase, client_id: str, today: date) -> Optional[dict]:
     kw_ids = [k["id"] for k in kws]
     metrics: dict[str, list[dict]] = {}
     flat_rows: list[dict] = []
-    # Full history (capped) so the since-start comparison has a baseline.
-    cutoff = date.fromordinal(today.toordinal() - _COMPARISON_LOOKBACK_DAYS).isoformat()
+    # Full history (capped) so the previous-period comparison has a baseline.
+    cutoff = date.fromordinal(period_end.toordinal() - _COMPARISON_LOOKBACK_DAYS).isoformat()
     for r in (
         supabase.table("rank_keyword_metrics")
         .select("keyword_id, date, gsc_position, tracked_rank, impressions, clicks")
@@ -855,20 +936,23 @@ def _gather_organic(supabase, client_id: str, today: date) -> Optional[dict]:
     keywords, top10, improved, declined = [], 0, 0, 0
     for k in kws:
         s = rank_status.compute_keyword_summary(
-            metrics.get(k["id"], []), today, settings.rank_gsc_coverage_days
+            metrics.get(k["id"], []), period_end, settings.rank_gsc_coverage_days
         )
         rank = s.get("today_rank")
         if isinstance(rank, (int, float)) and rank <= 10:
             top10 += 1
-        if s.get("direction") == "up":
-            improved += 1
-        elif s.get("direction") == "down":
-            declined += 1
+        # Movement is this period vs the previous same-length period.
+        change = _keyword_period_change(metrics.get(k["id"], []), period_start, period_end)
+        if isinstance(change, (int, float)):
+            if change > 0:
+                improved += 1
+            elif change < 0:
+                declined += 1
         keywords.append({
             "keyword": k["keyword"],
             "current_rank": rank,
             "avg_30d": s.get("avg_30"),
-            "change": _keyword_change(s),
+            "change": change,
             "sparkline": s.get("sparkline") or [],
         })
     return {
@@ -879,7 +963,8 @@ def _gather_organic(supabase, client_id: str, today: date) -> Optional[dict]:
         # never shows the stale-per-keyword "0 / -100%" artifact; ranking stays from
         # the per-keyword series (flat_rows).
         "comparisons": build_comparisons(
-            flat_rows, today, traffic_rows=_gather_gsc_traffic(supabase, client_id, today)
+            flat_rows, period_start, period_end,
+            traffic_rows=_gather_gsc_traffic(supabase, client_id, period_end),
         ),
     }
 
@@ -906,25 +991,43 @@ def _gather_gsc_traffic(supabase, client_id: str, today: date) -> Optional[list[
         return None
 
 
-def _gather_geogrid(supabase, client_id: str) -> Optional[dict]:
-    # The client-facing PDF reports the scheduled series only — a one-off run the
-    # team did to check something is not this client's local-pack record.
-    scan = (
+def _latest_reporting_scan(supabase, client_id: str, on_or_before: date):
+    """The newest scheduled (reporting) complete scan created on/before a date."""
+    rows = (
         maps_reporting.only_reporting(
             supabase.table("maps_scans").select("id, created_at")
         )
         .eq("client_id", client_id)
         .eq("status", "complete")
+        .lt("created_at", (on_or_before + timedelta(days=1)).isoformat())
         .order("created_at", desc=True)
         .limit(1)
         .execute()
     ).data
+    return rows[0] if rows else None
+
+
+def _scan_presence(supabase, scan_id: str) -> Optional[float]:
+    """Overall top-3 local-pack presence % for a scan (share of pins in the top 3)."""
+    rows = (
+        supabase.table("maps_scan_results").select("top3_pins, total_pins")
+        .eq("scan_id", scan_id).execute()
+    ).data or []
+    total = sum(r.get("total_pins") or 0 for r in rows)
+    top3 = sum(r.get("top3_pins") or 0 for r in rows)
+    return round(100.0 * top3 / total, 1) if total else None
+
+
+def _gather_geogrid(supabase, client_id: str, period_start: date, period_end: date) -> Optional[dict]:
+    # The client-facing PDF reports the scheduled series only — a one-off run the
+    # team did to check something is not this client's local-pack record.
+    scan = _latest_reporting_scan(supabase, client_id, period_end)
     if not scan:
         return None
     results = (
         supabase.table("maps_scan_results")
         .select("keyword, average_rank, top3_pins, total_pins, rank_grid, map_image_url, report_weak_locations")
-        .eq("scan_id", scan[0]["id"])
+        .eq("scan_id", scan["id"])
         .limit(6)
         .execute()
     ).data or []
@@ -935,8 +1038,16 @@ def _gather_geogrid(supabase, client_id: str) -> Optional[dict]:
         for city in _weak_area_names(r.get("report_weak_locations")):
             if city not in weak:
                 weak.append(city)
+    # Local-pack presence this period vs the previous period's scan.
+    presence_now = _scan_presence(supabase, scan["id"])
+    presence_prev = None
+    prev_scan = _latest_reporting_scan(supabase, client_id, period_start)
+    if prev_scan and prev_scan["id"] != scan["id"]:
+        presence_prev = _scan_presence(supabase, prev_scan["id"])
     return {
-        "scan_at": scan[0].get("created_at"),
+        "scan_at": scan.get("created_at"),
+        "presence_now": presence_now,
+        "presence_prev": presence_prev,
         "keywords": [
             {
                 "keyword": r.get("keyword"),
@@ -1116,11 +1227,11 @@ def gather_report_data(client_id: str, period_start: date, period_end: date) -> 
         "section_status": {},
     }
     for key, fn in (
-        ("goals", lambda: _gather_goals(supabase, client_id, period_end)),
-        ("organic", lambda: _gather_organic(supabase, client_id, period_end)),
+        ("goals", lambda: _gather_goals(supabase, client_id, period_start, period_end)),
+        ("organic", lambda: _gather_organic(supabase, client_id, period_start, period_end)),
         ("work_delivered", lambda: _gather_work_delivered(supabase, client_id, period_start, period_end)),
-        ("geogrid", lambda: _gather_geogrid(supabase, client_id)),
-        ("ai_visibility", lambda: _gather_ai_visibility(supabase, client_id)),
+        ("geogrid", lambda: _gather_geogrid(supabase, client_id, period_start, period_end)),
+        ("ai_visibility", lambda: _gather_ai_visibility(supabase, client_id, period_start, period_end)),
         ("gbp", lambda: _gather_gbp(supabase, client_id, client, period_end)),
     ):
         try:
@@ -1136,28 +1247,64 @@ def gather_report_data(client_id: str, period_start: date, period_end: date) -> 
     return data
 
 
-def _gather_goals(supabase, client_id: str, period_end: date) -> Optional[dict]:
+def _gather_goals(supabase, client_id: str, period_start: date, period_end: date) -> Optional[dict]:
     """Campaign goals assessed as of the report's period end (reuses the canonical
-    campaign_goals reader). None when the client has no goals / none are shown."""
+    campaign_goals reader), each annotated with its value at the start of the
+    period so the report can show movement since the previous period. None when
+    the client has no goals / none are shown."""
     from services import campaign_goals
 
     goals = campaign_goals.assess_goals(client_id, today=period_end)
     shown = [g for g in goals if g.get("status") in _GOAL_STATUS_CLIENT]
-    return {"goals": shown} if shown else None
+    if not shown:
+        return None
+    for g in shown:
+        try:
+            g["previous_value"] = campaign_goals.measure_goal(supabase, client_id, g, period_start)
+        except Exception:
+            g["previous_value"] = None
+    return {"goals": shown}
 
 
-def _gather_ai_visibility(supabase, client_id: str) -> Optional[dict]:
-    """Latest AI-visibility scan: per-engine appearance counts AND a per-keyword
-    breakdown (which AI answers mention the brand, per engine). None until a scan
-    has run (auto-populates once AI Visibility is used for the client)."""
-    # Newest NON-competitor batch (a competitor scan can be the newest rows).
+def _batch_overall_visibility(supabase, client_id: str, batch: str) -> Optional[float]:
+    """Overall brand-visibility % for one scan batch (share of engine×keyword
+    answers that mention the brand). None when the batch has no non-competitor rows."""
+    rows = [
+        r for r in (
+            supabase.table("brand_mention_history").select("mention_found, is_competitor_scan")
+            .eq("client_id", client_id).eq("scan_batch_id", batch).execute()
+        ).data or []
+        if not r.get("is_competitor_scan")
+    ]
+    if not rows:
+        return None
+    found = sum(1 for r in rows if r.get("mention_found"))
+    return round(100.0 * found / len(rows), 1)
+
+
+def _gather_ai_visibility(supabase, client_id: str, period_start: date, period_end: date) -> Optional[dict]:
+    """AI-visibility scan for the period: per-engine appearance counts, a per-keyword
+    breakdown, and overall visibility this period vs the previous period. None until
+    a scan has run (auto-populates once AI Visibility is used for the client)."""
+    # Newest NON-competitor batches on/before the period end and the period start
+    # (a competitor scan can be the newest rows, so filter it out).
     recent = (
-        supabase.table("brand_mention_history").select("scan_batch_id, is_competitor_scan")
-        .eq("client_id", client_id).order("created_at", desc=True).limit(500).execute()
+        supabase.table("brand_mention_history").select("scan_batch_id, is_competitor_scan, created_at")
+        .eq("client_id", client_id).order("created_at", desc=True).limit(1000).execute()
     ).data or []
-    batch = next((r["scan_batch_id"] for r in recent if not r.get("is_competitor_scan")), None)
+    noncomp = [r for r in recent if not r.get("is_competitor_scan")]
+
+    def _batch_before(iso_exclusive: str):
+        return next((r["scan_batch_id"] for r in noncomp if str(r.get("created_at")) < iso_exclusive), None)
+
+    batch = _batch_before((period_end + timedelta(days=1)).isoformat())
     if not batch:
         return None
+    prev_batch = _batch_before(period_start.isoformat())
+    visibility_prev = (
+        _batch_overall_visibility(supabase, client_id, prev_batch)
+        if prev_batch and prev_batch != batch else None
+    )
     rows = [
         r for r in (
             supabase.table("brand_mention_history")
@@ -1197,9 +1344,14 @@ def _gather_ai_visibility(supabase, client_id: str) -> Optional[dict]:
     # Most-visible first; the brand-invisible queries sort to the bottom where the
     # "not yet appearing" note draws the eye.
     keywords.sort(key=lambda k: (-k["found_count"], k["keyword"]))
+    total_cells = sum(v["total"] for v in per.values())
+    found_cells = sum(v["found"] for v in per.values())
+    visibility_now = round(100.0 * found_cells / total_cells, 1) if total_cells else None
     return {
         "engines": {e: f"{v['found']} of {v['total']} answers" for e, v in per.items()},
         "keywords": keywords,
+        "visibility_now": visibility_now,
+        "visibility_prev": visibility_prev,
     }
 
 
