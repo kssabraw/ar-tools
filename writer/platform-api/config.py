@@ -586,6 +586,11 @@ class Settings(BaseSettings):
     client_report_health_max_tokens: int = 1100
     # White-label: the agency name shown in the client-facing report footer.
     client_report_agency_name: str = "Amazing Rankings"
+    # GBP reviews this-period-vs-last-period: fetch the dated review list (one paid
+    # Outscraper call per report) to count new reviews per period + surface recent
+    # highlights. Off → the report falls back to the review-count snapshot series.
+    client_report_gbp_reviews_enabled: bool = True
+    client_report_review_fetch_limit: int = 200
 
     # Reoptimization planner — turns rank-tracker signals (open drops, rankability
     # Quick wins, GSC-Research cannibalization/hidden-wins) into a ranked,

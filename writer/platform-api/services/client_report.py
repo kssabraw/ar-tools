@@ -281,11 +281,42 @@ def _section_geogrid(data: dict) -> str:
     )
 
 
+def _gbp_review_period_block(rp: Optional[dict]) -> tuple[str, bool]:
+    """Reviews + rating this period vs last period (positive framing). Returns
+    (html, has_highlights) — has_highlights lets the caller drop the generic
+    top-reviews list when we're already showing this-period highlights."""
+    if not rp:
+        return "", False
+    parts: list[str] = []
+    rt = rp.get("reviews_this")
+    if isinstance(rt, int) and (rt > 0 or (rp.get("reviews_prev") or 0) > 0):
+        prev = rp.get("reviews_prev")
+        vs = f" (vs {prev} the previous period)" if isinstance(prev, int) else ""
+        parts.append(
+            f"<p class='lead'>You gained <strong>{rt}</strong> new review"
+            f"{'s' if rt != 1 else ''} this period{vs}.</p>"
+        )
+    now, prev_r = rp.get("rating_now"), rp.get("rating_prev")
+    if now is not None and prev_r is not None and round(now - prev_r, 1) > 0:
+        parts.append(
+            f"<p class='lead'>Your rating climbed to {now:g}★ — up from "
+            f"{round(prev_r, 1):g}★ at the start of the period.</p>"
+        )
+    highlights = rp.get("highlights") or []
+    if highlights:
+        lis = "".join(f"<li>“{_esc(t)}”</li>" for t in highlights)
+        parts.append(f"<p class='note'>Recent reviews this period:</p><ul class='reviews'>{lis}</ul>")
+    return "".join(parts), bool(highlights)
+
+
 def _section_gbp(data: dict) -> str:
     b = data.get("gbp")
     if not b:
         return ""
-    reviews = "".join(
+    review_period_html, has_period_highlights = _gbp_review_period_block(b.get("review_period"))
+    # Fall back to the generic top-reviews list only when the period block isn't
+    # already showing this-period highlights.
+    reviews = "" if has_period_highlights else "".join(
         f"<li>“{_esc(r)}”</li>" for r in (b.get("top_reviews") or [])[:3]
     )
     reviews_html = f"<ul class='reviews'>{reviews}</ul>" if reviews else ""
@@ -321,7 +352,7 @@ def _section_gbp(data: dict) -> str:
         "<p class='note'>Your Google listing — the profile customers see on Google "
         "Search and Maps, with their ratings and reviews.</p>"
         f"<p>{_esc(b.get('business_name'))}{(' · ' + _esc(b.get('address'))) if b.get('address') else ''}</p>"
-        + rating_html + reviews_html + metrics_html + "</section>"
+        + rating_html + review_period_html + reviews_html + metrics_html + "</section>"
     )
 
 
@@ -1083,9 +1114,9 @@ def _png_data_uri(url: Optional[str]) -> Optional[str]:
         return None
 
 
-def _gather_gbp(supabase, client_id: str, client: dict, period_end: date) -> Optional[dict]:
+def _gather_gbp(supabase, client_id: str, client: dict, period_start: date, period_end: date) -> Optional[dict]:
     gbp = client.get("gbp") or {}
-    if not (gbp.get("business_name") or gbp.get("place_id")):
+    if not (gbp.get("business_name") or gbp.get("place_id") or gbp.get("google_maps_uri")):
         return None
     reviews = gbp.get("reviews") or gbp.get("top_reviews") or []
     texts = []
@@ -1102,10 +1133,53 @@ def _gather_gbp(supabase, client_id: str, client: dict, period_end: date) -> Opt
         "rating": rating,
         "review_count": review_count,
         "top_reviews": texts,
+        # New reviews + rating this period vs last period (dated-review count now,
+        # exact rating from the snapshot series once it accrues). Best-effort.
+        "review_period": _gather_review_period(
+            supabase, client_id, gbp, rating, review_count, period_start, period_end
+        ),
         # Performance-metric growth (impressions/calls/clicks/directions) — the
         # Phase-2 GBP time-series. Best-effort: absent until GBP metrics ingest
         # is enabled and has data for this client's verified location(s).
         "metrics": _gather_gbp_metric_growth(supabase, client_id, period_end),
+    }
+
+
+def _gather_review_period(supabase, client_id: str, gbp: dict, rating_now, review_count,
+                          period_start: date, period_end: date) -> Optional[dict]:
+    """Reviews + rating this period vs the previous period. New-review COUNT and
+    highlights come from the dated review list (immediate); rating-at-period-start
+    prefers the exact snapshot series, falling back to a cumulative-average
+    approximation. Always records a fresh snapshot so the exact series builds up.
+    Best-effort — returns None when nothing comparable is available."""
+    from services import gbp_reviews
+
+    prev_start, _ = previous_period(period_start, period_end)
+    reviews = gbp_reviews.fetch_dated_reviews(gbp) if settings.client_report_gbp_reviews_enabled else []
+    # Grow the exact review-count/rating series regardless of whether we can render
+    # a comparison this time.
+    gbp_reviews.record_snapshot(supabase, client_id, review_count, rating_now)
+
+    reviews_this = gbp_reviews.count_in_range(reviews, period_start, period_end) if reviews else None
+    reviews_prev = gbp_reviews.count_in_range(reviews, prev_start, period_start) if reviews else None
+
+    rating_prev = None
+    snap = gbp_reviews.snapshot_on_or_before(supabase, client_id, period_start)
+    if snap and snap.get("rating") is not None:
+        rating_prev = float(snap["rating"])          # exact
+    elif reviews:
+        rating_prev = gbp_reviews.avg_rating_asof(reviews, period_start)  # approximate
+
+    highlights = gbp_reviews.newest_highlights(reviews, period_start, period_end) if reviews else []
+
+    if reviews_this is None and rating_prev is None:
+        return None  # nothing comparable yet (fetch unavailable, no snapshot history)
+    return {
+        "reviews_this": reviews_this,
+        "reviews_prev": reviews_prev,
+        "rating_now": rating_now,
+        "rating_prev": rating_prev,
+        "highlights": highlights,
     }
 
 
@@ -1232,7 +1306,7 @@ def gather_report_data(client_id: str, period_start: date, period_end: date) -> 
         ("work_delivered", lambda: _gather_work_delivered(supabase, client_id, period_start, period_end)),
         ("geogrid", lambda: _gather_geogrid(supabase, client_id, period_start, period_end)),
         ("ai_visibility", lambda: _gather_ai_visibility(supabase, client_id, period_start, period_end)),
-        ("gbp", lambda: _gather_gbp(supabase, client_id, client, period_end)),
+        ("gbp", lambda: _gather_gbp(supabase, client_id, client, period_start, period_end)),
     ):
         try:
             section = fn()
