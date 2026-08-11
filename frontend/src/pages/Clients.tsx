@@ -15,7 +15,7 @@ function AnalysisStatus({ status }: { status: ClientListItem['website_analysis_s
 export function Clients() {
   const qc = useQueryClient()
   const navigate = useNavigate()
-  const { isAdmin } = useAuth()
+  const { isStaff } = useAuth()
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
   const { data: clients = [], isLoading } = useQuery<ClientListItem[]>({
@@ -36,7 +36,7 @@ export function Clients() {
     <div style={{ padding: 32 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: 0 }}>Clients</h1>
-        {isAdmin && (
+        {isStaff && (
           <Link to="/clients/new" style={primaryBtn}>
             <Plus size={15} /> Add Client
           </Link>
@@ -47,7 +47,7 @@ export function Clients() {
         <div style={{ color: '#64748b', fontSize: 14 }}>Loading clients…</div>
       ) : clients.length === 0 ? (
         <div style={{ ...cardStyle, textAlign: 'center', color: '#64748b', padding: 48 }}>
-          No clients yet.{isAdmin ? (
+          No clients yet.{isStaff ? (
             <>
               {' '}
               <Link to="/clients/new" style={{ color: '#6366f1', textDecoration: 'none', fontWeight: 500 }}>
@@ -78,7 +78,7 @@ export function Clients() {
                   <AnalysisStatus status={c.website_analysis_status} />
                 </div>
               </div>
-              {isAdmin && (
+              {isStaff && (
                 <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   <Link to={`/clients/${c.id}/edit`} style={iconBtn} title="Edit">
                     <Pencil size={14} />

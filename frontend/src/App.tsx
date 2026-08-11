@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider } from './context/AuthContext'
-import { ProtectedRoute, AdminRoute } from './components/ProtectedRoute'
+import { ProtectedRoute, AdminRoute, StaffRoute } from './components/ProtectedRoute'
 import { Layout } from './components/Layout'
 import { Login } from './pages/Login'
 import { Home } from './pages/Home'
@@ -98,7 +98,7 @@ export default function App() {
                       <Route path="/runs" element={<Runs />} />
                       <Route path="/runs/:id" element={<RunDetail />} />
                       <Route path="/clients" element={<Clients />} />
-                      <Route path="/clients/new" element={<AdminRoute><ClientForm /></AdminRoute>} />
+                      <Route path="/clients/new" element={<StaffRoute><ClientForm /></StaffRoute>} />
                       <Route path="/clients/:id" element={<ClientWorkspace />} />
                       <Route path="/clients/:id/brand-voice" element={<BrandVoice />} />
                       <Route path="/clients/:id/icp" element={<Icp />} />
@@ -133,7 +133,7 @@ export default function App() {
                       <Route path="/clients/:id/maps/report" element={<MapsReport />} />
                       <Route path="/clients/:id/rankings/report" element={<RankReport />} />
                       <Route path="/clients/:id/rankings/report/:reportId" element={<RankReport />} />
-                      <Route path="/clients/:id/edit" element={<AdminRoute><ClientForm /></AdminRoute>} />
+                      <Route path="/clients/:id/edit" element={<StaffRoute><ClientForm /></StaffRoute>} />
                       <Route path="/articles" element={<Articles />} />
                       <Route path="/silos" element={<Silos />} />
                       <Route path="/my-tasks" element={<MyTasks />} />
