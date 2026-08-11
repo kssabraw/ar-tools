@@ -350,6 +350,36 @@ def test_section_organic_does_not_pad_with_decliner():
     assert "-2 positions" not in out
 
 
+def test_gbp_review_period_renders():
+    """GBP section shows new reviews this vs last period, a rating climb, and
+    recent-review highlights (positive framing)."""
+    data = _data(gbp={
+        "business_name": "WheelHouse IT", "address": "Fort Lauderdale",
+        "rating": 4.6, "review_count": 84, "top_reviews": ["generic old review"],
+        "review_period": {
+            "reviews_this": 6, "reviews_prev": 4,
+            "rating_now": 4.6, "rating_prev": 4.5,
+            "highlights": ["Fantastic team, fixed our servers fast"],
+        },
+    })
+    out = cr.build_report_html(data)
+    assert "Google Business Profile" in out
+    assert "gained" in out and "6" in out and "vs 4 the previous period" in out
+    assert "up from 4.5★" in out
+    assert "Recent reviews this period" in out and "Fantastic team" in out
+    # the generic top-review list is dropped when we have this-period highlights
+    assert "generic old review" not in out
+
+
+def test_gbp_review_period_absent_degrades():
+    # no review_period → section still renders with rating/reviews, no crash
+    data = _data(gbp={"business_name": "X", "rating": 4.6, "review_count": 84,
+                      "top_reviews": ["nice"], "review_period": None})
+    out = cr.build_report_html(data)
+    assert "Google Business Profile" in out and "nice" in out
+    assert "gained" not in out
+
+
 def test_positive_framing_reframes_weaknesses():
     # Maps weak areas → opportunity language
     geo = _data(geogrid={"keywords": [{"keyword": "x", "average_rank": 5, "top3_pins": 3,
