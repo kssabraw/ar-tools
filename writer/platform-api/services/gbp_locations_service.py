@@ -71,6 +71,7 @@ def parse_location(loc: dict, account_id: Optional[str]) -> Optional[dict]:
     address = ", ".join(p for p in parts if p) or None
     phone = (loc.get("phoneNumbers") or {}).get("primaryPhone")
     latlng = loc.get("latlng") or {}
+    meta = loc.get("metadata") or {}
     return {
         "location_id": name,
         "account_id": account_id,
@@ -79,8 +80,48 @@ def parse_location(loc: dict, account_id: Optional[str]) -> Optional[dict]:
         "phone": phone,
         "lat": latlng.get("latitude"),
         "lng": latlng.get("longitude"),
-        "place_id": (loc.get("metadata") or {}).get("placeId"),
+        "place_id": meta.get("placeId"),
+        "maps_uri": meta.get("mapsUri"),  # carries the CID — the exact-match key
     }
+
+
+def parse_cid(uri: Optional[str]) -> Optional[str]:
+    """Extract the Google **CID** (the listing's stable numeric id) from a Maps
+    URL, as a decimal string. Handles both forms the suite sees:
+      * the stored `clients.gbp.google_maps_uri` hex form ``…!1s0x..:0x<hex>`` →
+        the second hex is the CID (converted from hex);
+      * the Business Information API's ``metadata.mapsUri`` ``?cid=<decimal>`` form.
+    Pure; None when no CID is present. The CID is the identifier both the client
+    dashboard and the API listing share, so it pins the match to the *same*
+    business the dashboard shows (immune to name/geo lookalikes)."""
+    if not uri:
+        return None
+    m = re.search(r"[?&]cid=(\d+)", uri)
+    if m:
+        return m.group(1)
+    m = re.search(r"0x[0-9a-fA-F]+:0x([0-9a-fA-F]+)", uri)
+    if m:
+        try:
+            return str(int(m.group(1), 16))
+        except ValueError:
+            return None
+    return None
+
+
+def find_exact_match(
+    client_cid: Optional[str], client_place_id: Optional[str], locations: list[dict]
+) -> Optional[dict]:
+    """The listing that *is* the client's dashboard GBP, by exact identifier
+    (Place ID, else CID) — not similarity. None when no exact key matches. Pure."""
+    if client_place_id:
+        for loc in locations:
+            if loc.get("place_id") and loc["place_id"] == client_place_id:
+                return loc
+    if client_cid:
+        for loc in locations:
+            if parse_cid(loc.get("maps_uri")) == client_cid:
+                return loc
+    return None
 
 
 def _name_tokens(value: Optional[str]) -> set[str]:
@@ -267,15 +308,27 @@ def match_client_location(client_id: str) -> dict:
     gbp = client.get("gbp") or {}
     client_name = gbp.get("business_name") or client.get("name")
     client_ll = parse_latlng_from_maps_uri(gbp.get("google_maps_uri"))
+    client_cid = parse_cid(gbp.get("google_maps_uri"))
+    client_place_id = gbp.get("place_id")
     client_label = client_name
 
     resolved = resolve_connected_locations()
     if resolved.get("detail") and not resolved.get("locations"):
         return {"client_label": client_label, "matched": None, "candidates": [], "detail": resolved["detail"]}
 
-    ranked = rank_matches(client_name, client_ll, resolved.get("locations") or [])
-    top = ranked[0] if ranked else None
-    matched = top if (top and top.get("score", 0) >= _CONFIDENT) else None
+    locations = resolved.get("locations") or []
+    ranked = rank_matches(client_name, client_ll, locations)
+
+    # Exact identity (Place ID / CID) is the dashboard's GBP — always wins over
+    # name/geo similarity, and is hoisted to the front as the confident match.
+    exact = find_exact_match(client_cid, client_place_id, locations)
+    if exact:
+        matched = {**exact, "score": 1.0}
+        ranked = [matched] + [l for l in ranked if l.get("location_id") != exact.get("location_id")]
+    else:
+        top = ranked[0] if ranked else None
+        matched = top if (top and top.get("score", 0) >= _CONFIDENT) else None
+
     return {
         "client_label": client_label,
         "matched": matched,

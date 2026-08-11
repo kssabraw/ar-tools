@@ -206,7 +206,7 @@ def test_parse_location_full():
             "storefrontAddress": {"addressLines": ["12 Main St"], "locality": "Austin", "administrativeArea": "TX"},
             "phoneNumbers": {"primaryPhone": "+1 512-555-0100"},
             "latlng": {"latitude": 30.27, "longitude": -97.74},
-            "metadata": {"placeId": "ChIJ123"},
+            "metadata": {"placeId": "ChIJ123", "mapsUri": "https://maps.google.com/?cid=999"},
         },
         "accounts/123",
     )
@@ -219,6 +219,7 @@ def test_parse_location_full():
         "lat": 30.27,
         "lng": -97.74,
         "place_id": "ChIJ123",
+        "maps_uri": "https://maps.google.com/?cid=999",
     }
 
 
@@ -263,6 +264,34 @@ def test_score_match_uses_geo_to_disambiguate_same_name():
 def test_score_match_without_geo_is_name_only():
     loc = {"title": "ABC Tree And Landscape Service"}  # no lat/lng
     assert loc_svc.score_match("ABC Tree And Landscape Service", None, loc) == 1.0
+
+
+# ── exact identity match (the dashboard's GBP, by CID / place_id) ─────────────
+def test_parse_cid_from_client_hex_uri():
+    # The stored clients.gbp.google_maps_uri hex form → decimal CID.
+    uri = "https://www.google.com/maps/place/X/@34.16,-116.54,14z/data=!4m8!1m2!2m1!1sABC!3m4!1s0x8f25d7aec605aa33:0xc1cd0ec6746318ae!8m2!3d34.16!4d-116.54"
+    assert loc_svc.parse_cid(uri) == str(int("c1cd0ec6746318ae", 16))
+
+
+def test_parse_cid_from_api_cid_uri_and_none():
+    assert loc_svc.parse_cid("https://maps.google.com/?cid=13964098231375669678") == "13964098231375669678"
+    assert loc_svc.parse_cid("https://example.com/no-cid") is None
+    assert loc_svc.parse_cid(None) is None
+
+
+def test_find_exact_match_by_cid_beats_a_same_name_lookalike():
+    client_cid = str(int("c1cd0ec6746318ae", 16))
+    right = {"location_id": "locations/1", "title": "ABC Tree", "maps_uri": f"https://maps.google.com/?cid={client_cid}"}
+    lookalike = {"location_id": "locations/2", "title": "ABC Tree", "maps_uri": "https://maps.google.com/?cid=42"}
+    assert loc_svc.find_exact_match(client_cid, None, [lookalike, right]) is right
+
+
+def test_find_exact_match_by_place_id_then_none():
+    a = {"location_id": "locations/1", "place_id": "ChIJ_A"}
+    b = {"location_id": "locations/2", "place_id": "ChIJ_B"}
+    assert loc_svc.find_exact_match(None, "ChIJ_B", [a, b]) is b
+    assert loc_svc.find_exact_match(None, "ChIJ_Z", [a, b]) is None
+    assert loc_svc.find_exact_match(None, None, [a, b]) is None
 
 
 # ── schedule cadence math ────────────────────────────────────────────────────
