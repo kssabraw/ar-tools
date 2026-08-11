@@ -1731,3 +1731,35 @@ draining.
 **Cost:** an always-on container (a few $/mo) vs a briefly-running cron — an accepted trade for
 interactive latency (owner chose the always-on worker over the 5-min cron). No paid-call increase:
 `collect` is free and drains only spend on authorized orders.
+
+## 2026-08-11 — Whole-city onboards auto-seed a `city`-level AI region (sub-areas still go to the human seed modal)
+
+**Friction:** AI-visibility scans resolve a prospect to an `ai_region` by NAME (its submarket name
+`ilike` a seeded region name — `resolve_ai_region_for_prospect`). Onboarding a city
+(`create_onboard_from_place`) created the market/submarket/keyword/order but NEVER an `ai_region`, so
+every any-city AI scan hit `ai_region_not_seeded` until a human hand-seeded one from the modal. For
+the common case that manual step has exactly one correct answer, so it was pure ceremony.
+
+**Why one answer suffices for a whole city.** A whole-city onboard (no sub-area) names its submarket
+after the city itself, and the operator picked a Google-resolved CITY — a locality by definition. The
+four `name_level` choices collapse: `metro` makes a miss trivially dismissible (never seeded for a
+pitch); `neighbourhood` is the silent-fallback trap and the only level with a downstream behavioural
+consequence (the report caveat); `suburb` vs `city` render identically everywhere. So the whole-city
+answer is always `city`, and it is never the one risky level.
+
+**Fix.** `create_onboard_from_place` now calls `_auto_seed_city_ai_region` on the whole-city path
+only (`picked_subarea` is captured before `sub_name` is reassigned to the city name). It reuses
+`create_ai_region` (idempotent on `(market_id, name)`, non-destructive on conflict) and is
+best-effort — a seed failure is logged and swallowed, never failing the onboard order it rides on.
+
+**Not a breach of "name_level is a human judgement, never derived" (I-073 / I-004).** I-073's filter
+exists to judge an AMBIGUOUS SUB-AREA NAME from self-naming evidence. A whole city is the opposite:
+I-073 itself calls a real Google locality "close to a formality" / "very likely to survive a
+recognition test" (Inglewood sits in its strong `city` list). We carry forward the KNOWN level of the
+operator's explicit input; we derive nothing from scan data. A PICKED SUB-AREA — where suburb-vs-
+`neighbourhood` recognition IS the judgement and the silent-fallback risk lives — is deliberately left
+to the manual seed modal, untouched.
+
+**Scope.** platform-api `services/outreach.py` only; no migration, no new config, no change to the
+outreach drain or the manual `create_ai_region` route. Tests in `tests/test_outreach_onboard.py`
+(auto-seed on whole-city, no-seed on sub-area, seed failure never fails the order).

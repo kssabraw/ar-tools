@@ -193,3 +193,42 @@ def test_empty_subarea_dict_is_also_whole_city(fake):
         city=CITY, subarea={}, business_type="plumber", note=None, actor_id="admin-1"
     )
     assert order["submarket"]["name"] == "Van Nuys, CA, USA"
+
+
+# --- auto-seeding the whole-city AI region -----------------------------------------------------
+
+
+def test_whole_city_onboard_auto_seeds_a_city_level_ai_region(fake):
+    # A whole-city scan seeds a `city`-level ai_region named for the city, so the AI-visibility scan
+    # resolves (prospect submarket name -> region name) without a manual seed. name_level here is the
+    # level of the operator's explicit Google-city pick, not a derived judgement (I-073).
+    svc.create_onboard_from_place(
+        city=CITY, subarea=None, business_type="plumber", note=None, actor_id="admin-1"
+    )
+    regions = fake.tables.get("ai_region", [])
+    assert len(regions) == 1
+    assert regions[0]["name"] == "Van Nuys, CA, USA"      # matches the submarket name
+    assert regions[0]["name_level"] == "city"
+
+
+def test_subarea_onboard_does_not_auto_seed(fake):
+    # A picked sub-area's granularity (suburb vs silent-fallback neighbourhood) is the I-073 human
+    # judgement, so it is left to the manual seed modal — never auto-assigned.
+    svc.create_onboard_from_place(
+        city=CITY, subarea=SUB, business_type="plumber", note=None, actor_id="admin-1"
+    )
+    assert fake.tables.get("ai_region", []) == []
+
+
+def test_auto_seed_failure_never_fails_the_onboard_order(fake, monkeypatch):
+    # The AI region is a convenience; if seeding raises, the onboard order must still be placed.
+    def boom(*_a, **_k):
+        raise RuntimeError("ai_region insert exploded")
+
+    monkeypatch.setattr(svc, "create_ai_region", boom)
+    order = svc.create_onboard_from_place(
+        city=CITY, subarea=None, business_type="plumber", note=None, actor_id="admin-1"
+    )
+    assert order["status"] == "pending"
+    assert len(fake.tables["onboard_request"]) == 1
+    assert fake.tables.get("ai_region", []) == []
