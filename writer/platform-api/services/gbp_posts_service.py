@@ -310,6 +310,38 @@ def upload_post_image(data: bytes, content_type: str) -> str:
         raise HTTPException(status_code=502, detail="image_upload_failed")
 
 
+def build_image_prompt(prompt: str, business_name: Optional[str] = None) -> str:
+    """A brand-safe image prompt for Nano Banana from the user's idea. Appends a
+    photographic, text-free style tail so the render suits a Business Profile post
+    and can't stamp a fake sign/logo. Pure (unit-tested)."""
+    base = (prompt or "").strip()
+    who = f" for {business_name.strip()}" if business_name and business_name.strip() else ""
+    return (
+        f"{base}. A professional, high-quality photograph{who} suitable for a Google "
+        "Business Profile post — natural lighting, realistic, sharp focus, no text, "
+        "no words, no letters, no logos, no watermarks."
+    )
+
+
+async def generate_post_image(prompt: str, business_name: Optional[str] = None) -> str:
+    """Generate a GBP post image with Nano Banana (Gemini 2.5 Flash Image),
+    validate it against Google's floor, store it in the public bucket, and return
+    the sourceUrl. Interactive — raises HTTPException on failure."""
+    _assert_enabled()
+    from services import nano_banana  # lazy
+
+    if not nano_banana.is_configured():
+        raise HTTPException(status_code=503, detail="image_gen_not_configured")
+    if not (prompt or "").strip():
+        raise HTTPException(status_code=422, detail="prompt_required")
+    png = await nano_banana.generate_image(build_image_prompt(prompt, business_name))
+    if not png:
+        raise HTTPException(status_code=502, detail="image_gen_failed")
+    # Reuse the upload path: same bucket, same Google-floor validation as an
+    # uploaded image (Nano Banana returns PNG, comfortably above the floor).
+    return upload_post_image(png, "image/png")
+
+
 def list_reusable_images(client_id: str) -> list[dict]:
     """The client's existing public images (blog featured images + Local SEO page
     images) so a post can reuse an asset already generated for the client — the

@@ -157,6 +157,12 @@ class GbpRegisterLocationRequest(BaseModel):
     title: Optional[str] = None
 
 
+class GbpGenerateImageRequest(BaseModel):
+    """Text-to-image prompt for a GBP post image (Nano Banana / Gemini)."""
+
+    prompt: str
+
+
 class GbpPost(BaseModel):
     id: UUID
     client_id: UUID

@@ -457,6 +457,8 @@ function RegisterLocations({ clientId, registered, onClose }: { clientId: string
 // ── Image field (upload + reuse existing) ────────────────────────────────────
 function ImageField({ clientId, value, onChange }: { clientId: string; value: string | null; onChange: (url: string | null) => void }) {
   const [showReuse, setShowReuse] = useState(false)
+  const [showGen, setShowGen] = useState(false)
+  const [genPrompt, setGenPrompt] = useState('')
   const [err, setErr] = useState<string | null>(null)
   const reuseQ = useQuery<ReusableImage[]>({
     queryKey: ['gbp-reusable-images', clientId],
@@ -471,6 +473,18 @@ function ImageField({ clientId, value, onChange }: { clientId: string; value: st
     onSuccess: (r) => { setErr(null); onChange(r.url) },
     onError: (e: Error) => setErr(e.message),
   })
+  const genMut = useMutation({
+    mutationFn: (prompt: string) => api.post<{ url: string }>(`/clients/${clientId}/gbp/posts/generate-image`, { prompt }),
+    onSuccess: (r) => { setErr(null); setShowGen(false); onChange(r.url) },
+    onError: (e: Error) => setErr(e.message),
+  })
+  const errMsg = (e: string): string =>
+    e === 'image_dimensions_too_small' ? 'Image must be at least 250×250px.'
+      : e === 'unsupported_image_type' ? 'Use a JPG or PNG image.'
+      : e === 'image_gen_failed' ? 'Image generation failed — try a different prompt.'
+      : e === 'image_gen_not_configured' ? 'AI image generation isn’t configured on the server.'
+      : e === 'prompt_required' ? 'Describe the image you want.'
+      : e
 
   return (
     <div>
@@ -487,10 +501,23 @@ function ImageField({ clientId, value, onChange }: { clientId: string; value: st
             <input type="file" accept="image/jpeg,image/png" hidden
               onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadMut.mutate(f) }} />
           </label>
-          <button onClick={() => setShowReuse((s) => !s)} style={btn('#fff', '#334155')}><ImageIcon size={13} /> Reuse existing</button>
+          <button onClick={() => { setShowGen((s) => !s); setShowReuse(false) }} style={btn(showGen ? '#eef2ff' : '#fff', showGen ? ACCENT : '#334155')}><Sparkles size={13} /> Generate with AI</button>
+          <button onClick={() => { setShowReuse((s) => !s); setShowGen(false) }} style={btn('#fff', '#334155')}><ImageIcon size={13} /> Reuse existing</button>
         </div>
       )}
-      {err && <div style={{ color: '#b91c1c', fontSize: 12, marginTop: 6 }}>{err === 'image_dimensions_too_small' ? 'Image must be at least 250×250px.' : err === 'unsupported_image_type' ? 'Use a JPG or PNG image.' : err}</div>}
+      {err && <div style={{ color: '#b91c1c', fontSize: 12, marginTop: 6 }}>{errMsg(err)}</div>}
+      {showGen && !value && (
+        <div style={{ marginTop: 10, padding: 12, border: '1px dashed #c7d2fe', borderRadius: 10, background: '#f5f3ff' }}>
+          <label style={{ ...label, color: ACCENT }}><Sparkles size={12} style={{ verticalAlign: -1 }} /> Describe the image (Nano Banana · Gemini)</label>
+          <textarea value={genPrompt} onChange={(e) => setGenPrompt(e.target.value)} rows={2}
+            placeholder="e.g. a friendly roofer inspecting a tiled roof on a sunny day" style={{ ...input, resize: 'vertical' }} />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+            <button onClick={() => genMut.mutate(genPrompt.trim())} disabled={!genPrompt.trim() || genMut.isPending} style={{ ...btn(ACCENT), opacity: genPrompt.trim() ? 1 : 0.5 }}>
+              <Sparkles size={13} /> {genMut.isPending ? 'Generating…' : 'Generate image'}
+            </button>
+          </div>
+        </div>
+      )}
       {showReuse && !value && (
         <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(84px,1fr))', gap: 8, maxHeight: 200, overflowY: 'auto', padding: 8, border: '1px solid #e2e8f0', borderRadius: 8 }}>
           {reuseQ.isLoading ? <span style={{ fontSize: 12, color: '#94a3b8' }}>Loading…</span>

@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, File, Query, UploadFile
 from middleware.auth import require_auth, require_staff
 from models.gbp_posts import (
     GbpAvailableLocationsResponse,
+    GbpGenerateImageRequest,
     GbpImageUploadResponse,
     GbpMatchLocationResponse,
     GbpJob,
@@ -101,6 +102,16 @@ async def upload_post_image(
     bad image fails here, not as a rejected post."""
     data = await file.read()
     url = svc.upload_post_image(data, file.content_type or "")
+    return GbpImageUploadResponse(url=url)
+
+
+@router.post("/clients/{client_id}/gbp/posts/generate-image", response_model=GbpImageUploadResponse)
+async def generate_post_image(
+    client_id: UUID, body: GbpGenerateImageRequest, auth: dict = Depends(require_auth)
+):
+    """Generate a post image from a text prompt with Nano Banana (Gemini 2.5 Flash
+    Image), store it in the public bucket, and return its URL to drop into media."""
+    url = await svc.generate_post_image(body.prompt)
     return GbpImageUploadResponse(url=url)
 
 

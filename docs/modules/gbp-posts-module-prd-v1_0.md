@@ -184,14 +184,16 @@ Config (`config.py`): `gbp_api_enabled` (False), `gbp_posts_enabled` (False), `g
 
 ## 8. Media handling (locked decision 3)
 
-**Built 2026-07-23 (backend):** `POST /clients/{id}/gbp/posts/image` (multipart) validates an upload against Google's local-post floor — **JPG/PNG only** (WebP/GIF are dropped: Google rejects them for local posts, unlike the generic `/files/image` endpoint), **≥250×250 px** (decoded with Pillow), **10 KB–25 MB** — via the pure, unit-tested `image_rejection_reason`, then stores it in the public `wordpress_images` bucket under a `gbp-posts/` prefix and returns the public URL to drop into a post's `media`. `GET /clients/{id}/gbp/posts/reusable-images` lists the client's existing public images (blog + Local SEO featured images) for the "reuse suite images" picker. A rejected image fails at upload (413/422) rather than becoming a rejected post.
+**Built 2026-07-23 (backend):** `POST /clients/{id}/gbp/posts/image` (multipart) validates an upload against Google's local-post floor — **JPG/PNG only** (WebP/GIF are dropped: Google rejects them for local posts, unlike the generic `/files/image` endpoint), **≥250×250 px** (decoded with Pillow), **10 KB–25 MB** — via the pure, unit-tested `image_rejection_reason`, then stores it in the public `wordpress_images` bucket under a `gbp-posts/` prefix and returns the public URL to drop into a post's `media`. `GET /clients/{id}/gbp/posts/reusable-images` lists the client's existing public images (blog + Local SEO featured images) for the "reuse suite images" picker. A rejected image fails at upload (413/422) rather than becoming a rejected post. **AI image generation (built 2026-08-11):** `POST /clients/{id}/gbp/posts/generate-image` renders an image from a text prompt with **Nano Banana** (Gemini 2.5 Flash Image) — `services/nano_banana.py` (reusable, reuses the shared `GEMINI_API_KEY`; pure `extract_image_bytes` unit-tested), brand-safe prompt via `gbp_posts_service.build_image_prompt` (photographic, text/logo-free), then the same public-bucket upload + Google-floor validation as an upload. Frontend: a "Generate with AI" option in `ImageField` (prompt → generate → preview). Model overridable via `nano_banana_model` (default `gemini-2.5-flash-image`).
 
 
 An optional single image per post, from either source:
 - **Upload** through the existing file-upload path into a **public** bucket (reuse `wordpress_images` or add `gbp-post-images`), validated app-side against Google's floor (≥250×250, ≥10 KB; Pillow is already a dependency).
 - **Pick from the client's existing suite images** — a picker over the client's already-public generated assets (blog featured images in `wordpress_images`), so the "announce this content" flow can reuse the piece's own image with zero extra work.
 
-The stored public URL goes into `media[].sourceUrl`. Google fetches at publish time — a private/signed URL will fail, hence public buckets only. AI-generated-on-demand imagery is out of scope v1.
+- **Generate with AI** — text-to-image via Nano Banana (Gemini 2.5 Flash Image), stored to the same public bucket (built 2026-08-11; see the built-backend note above).
+
+The stored public URL goes into `media[].sourceUrl`. Google fetches at publish time — a private/signed URL will fail, hence public buckets only.
 
 ---
 

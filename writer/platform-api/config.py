@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     illustration_image_model: str = "gpt-image-1"      # AI illustration renderer
     illustration_image_size: str = "1536x1024"         # landscape hero/body ratio
     illustration_brief_model: str = "gpt-5.4-mini"     # art-direction + chart-series extraction
+    # Nano Banana — Gemini 2.5 Flash Image text-to-image (reuses GEMINI_API_KEY).
+    # Overridable when Google rotates the image tier (e.g. gemini-3.1-flash-image).
+    nano_banana_model: str = "gemini-2.5-flash-image"
     # ── Cross-provider LLM fallback ──────────────────────────────────────────
     # When a primary-provider call (usually Anthropic) hits a *transient* failure
     # that outlasts its per-provider retry budget — a 429 rate/concurrency limit,
