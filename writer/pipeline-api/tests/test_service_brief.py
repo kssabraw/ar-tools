@@ -8,6 +8,7 @@ so the wiring is exercised end-to-end.
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -19,6 +20,7 @@ from models.service_brief import (
 )
 from modules.service_brief import serp as serp_mod
 from modules.service_brief.competitor import teardown_competitors
+from modules.service_brief.llm import claude_json_model
 from modules.service_brief.pipeline import run_service_brief
 from modules.sie.entities import AggregatedEntity
 from modules.sie.scraper import ScrapeResult
@@ -426,6 +428,84 @@ def _decision_fit_synthesis_stub():
         }
         return base
     return AsyncMock(side_effect=_fake)
+
+
+# ----------------------------------------------------------------------
+# claude_json_model shape-guard: a non-object synthesis response is a
+# retryable failure, not a permanent run-killer (the "Raiz visibility"
+# synthesis_failed / "returned a non-object payload" regression).
+# ----------------------------------------------------------------------
+
+def _fake_message(text: str):
+    """Build a minimal Anthropic message stub for claude_json_model."""
+    block = MagicMock()
+    block.type = "text"
+    block.text = text
+    msg = MagicMock()
+    msg.content = [block]
+    msg.usage = None
+    msg.stop_reason = "end_turn"
+    return msg
+
+
+def _claude_client_returning(*texts: str):
+    """A fake Anthropic client whose messages.create returns each text in turn."""
+    client = MagicMock()
+    client.messages.create = AsyncMock(side_effect=[_fake_message(t) for t in texts])
+    return client
+
+
+def _patch_llm_client(client):
+    return (
+        patch(f"{_PREFIX}.llm.get_anthropic", return_value=client),
+        patch(f"{_PREFIX}.llm._get_anthropic_semaphore", return_value=asyncio.Semaphore(1)),
+    )
+
+
+async def test_claude_json_model_retries_on_non_object():
+    # Attempt 1 returns a top-level array (wrong shape); attempt 2 returns the
+    # object. The strict-JSON retry that recovers a parse error also recovers a
+    # shape error, so the caller gets a dict instead of a hard failure.
+    client = _claude_client_returning('["a", "b"]', '{"positioning_angle": "x"}')
+    p_client, p_sema = _patch_llm_client(client)
+    with p_client, p_sema:
+        result = await claude_json_model("sys", "user", model="m", expect_obj=True)
+
+    assert result == {"positioning_angle": "x"}
+    assert client.messages.create.await_count == 2
+
+
+async def test_claude_json_model_unwraps_single_element_array():
+    # A single-object array is a benign wrapping mistake — unwrapped, not retried.
+    client = _claude_client_returning('[{"positioning_angle": "x"}]')
+    p_client, p_sema = _patch_llm_client(client)
+    with p_client, p_sema:
+        result = await claude_json_model("sys", "user", model="m", expect_obj=True)
+
+    assert result == {"positioning_angle": "x"}
+    assert client.messages.create.await_count == 1
+
+
+async def test_claude_json_model_raises_on_persistent_non_object():
+    # Both attempts return a non-object → the caller still fails, but with a
+    # clear shape error (not a silent wrong-typed payload).
+    client = _claude_client_returning('["a"]', '"just a string"')
+    p_client, p_sema = _patch_llm_client(client)
+    with p_client, p_sema, pytest.raises(ValueError, match="expected a JSON object"):
+        await claude_json_model("sys", "user", model="m", expect_obj=True)
+
+    assert client.messages.create.await_count == 2
+
+
+async def test_claude_json_model_allows_array_when_not_expecting_object():
+    # Without expect_obj, a top-level array is a valid return (unchanged behavior).
+    client = _claude_client_returning('["a", "b"]')
+    p_client, p_sema = _patch_llm_client(client)
+    with p_client, p_sema:
+        result = await claude_json_model("sys", "user", model="m")
+
+    assert result == ["a", "b"]
+    assert client.messages.create.await_count == 1
 
 
 async def test_pipeline_surfaces_decision_fit():

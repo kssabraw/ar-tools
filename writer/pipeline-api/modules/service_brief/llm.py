@@ -34,6 +34,7 @@ async def claude_json_model(
     model: str,
     max_tokens: int = 2000,
     temperature: float = 0.2,
+    expect_obj: bool = False,
 ) -> Any:
     """Call Claude on a caller-chosen model and parse the response as JSON.
 
@@ -41,6 +42,15 @@ async def claude_json_model(
     retry) but takes an explicit `model` so callers can pick the Haiku
     extraction tier vs the Sonnet synthesis tier. Shares the brief module's
     rate-limit semaphore.
+
+    When `expect_obj=True`, the caller requires a JSON *object* (a dict). A
+    response that parses to a valid-but-wrong-shape value (most often a
+    top-level array, or prose whose first bracketed token is a stray list the
+    tolerant extractor decodes) is treated as a retryable failure — the same
+    strict-JSON retry that recovers a parse error also recovers a shape error,
+    rather than the caller hard-failing the whole run on a single unlucky
+    generation. A single-element `[obj]` wrapper (a common model mistake) is
+    unwrapped instead of retried.
     """
     client = get_anthropic()
     semaphore = _get_anthropic_semaphore()
@@ -72,7 +82,7 @@ async def claude_json_model(
                 extra={"model": model, "max_tokens": max_tokens, "tail": text[-200:]},
             )
         try:
-            return _extract_json_payload(text)
+            payload = _extract_json_payload(text)
         except json.JSONDecodeError as exc:
             last_error = exc
             logger.warning(
@@ -82,6 +92,28 @@ async def claude_json_model(
                 text[:300],
             )
             continue
+
+        if expect_obj and not isinstance(payload, dict):
+            # A single-object array is a benign wrapping mistake — unwrap it
+            # rather than spend a retry.
+            if (
+                isinstance(payload, list)
+                and len(payload) == 1
+                and isinstance(payload[0], dict)
+            ):
+                return payload[0]
+            last_error = ValueError(
+                f"expected a JSON object, got {type(payload).__name__}"
+            )
+            logger.warning(
+                "service_brief.llm.non_object (attempt %s/2): type=%s head=%r",
+                attempt + 1,
+                type(payload).__name__,
+                text[:300],
+            )
+            continue
+
+        return payload
 
     assert last_error is not None
     raise last_error
