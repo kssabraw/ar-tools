@@ -326,6 +326,33 @@ def test_build_image_prompt_adds_brand_safe_style():
     assert "no text" in p and "no logos" in p and "photograph" in p
 
 
+# ── bulk create-from-URL (pure helpers) ──────────────────────────────────────
+def test_clamp_bulk_count():
+    assert svc.clamp_bulk_count(3) == 3
+    assert svc.clamp_bulk_count(0) == 0
+    assert svc.clamp_bulk_count(-5) == 0
+    assert svc.clamp_bulk_count(999) == svc.settings.gbp_post_max_bulk  # capped at 99
+    assert svc.clamp_bulk_count("7") == 7
+    assert svc.clamp_bulk_count(None) == 0
+    assert svc.clamp_bulk_count("abc") == 0
+
+
+def test_variation_instruction_single_is_none():
+    assert svc.variation_instruction(1, 1) is None
+    assert svc.variation_instruction(1, 0) is None
+
+
+def test_variation_instruction_distinct_angles_cycle():
+    a = svc.variation_instruction(1, 3)
+    b = svc.variation_instruction(2, 3)
+    assert a and b and a != b
+    assert "post 1 of 3" in a and "post 2 of 3" in b
+    # angles cycle: index 1 and index len+1 share an angle phrase
+    n = len(svc._VARIATION_ANGLES)
+    assert svc._VARIATION_ANGLES[0] in svc.variation_instruction(1, 20)
+    assert svc._VARIATION_ANGLES[0] in svc.variation_instruction(n + 1, 20)
+
+
 # ── schedule cadence math ────────────────────────────────────────────────────
 def _now():
     # A fixed Thursday 2026-07-23 12:00 UTC (weekday 3).

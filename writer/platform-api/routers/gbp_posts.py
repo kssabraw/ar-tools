@@ -20,6 +20,8 @@ from fastapi import APIRouter, Depends, File, Query, UploadFile
 from middleware.auth import require_auth, require_staff
 from models.gbp_posts import (
     GbpAvailableLocationsResponse,
+    GbpBulkGenerateResponse,
+    GbpGenerateFromUrlRequest,
     GbpGenerateImageRequest,
     GbpImageUploadResponse,
     GbpMatchLocationResponse,
@@ -213,6 +215,18 @@ async def generate_post(
     """AI-draft a post (lands as a draft for review — never auto-publishes here)."""
     job_id = svc.enqueue_generate(str(client_id), body.model_dump(mode="json"), auth["user_id"])
     return GbpJob(job_id=job_id)
+
+
+@router.post("/clients/{client_id}/gbp/posts/generate-from-url", response_model=GbpBulkGenerateResponse)
+async def generate_from_url(
+    client_id: UUID, body: GbpGenerateFromUrlRequest, auth: dict = Depends(require_auth)
+):
+    """Read a page URL and draft 0–99 DISTINCT posts from its content (each lands
+    as a draft for review). Returns the enqueued job ids to poll."""
+    return await svc.enqueue_generate_from_url(
+        str(client_id), str(body.location_row_id), body.url, body.count,
+        body.topic_type, body.cta_type, body.cta_url, auth["user_id"],
+    )
 
 
 @router.post("/clients/{client_id}/gbp/posts/jobs/status", response_model=list[GbpJobStatus])
