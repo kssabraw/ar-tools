@@ -117,6 +117,32 @@ class GbpLocationOption(BaseModel):
     access_status: str
 
 
+class GbpAvailableLocation(BaseModel):
+    """A listing the connected agency account manages (from Google), offered in
+    the picker. `registered_client_*` is set when it's already assigned."""
+
+    location_id: str
+    account_id: Optional[str] = None
+    title: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    place_id: Optional[str] = None
+    registered_client_id: Optional[UUID] = None
+    registered_client_name: Optional[str] = None
+
+
+class GbpAvailableLocationsResponse(BaseModel):
+    locations: list[GbpAvailableLocation]
+    detail: Optional[str] = None  # set (with locations empty) when resolution failed
+
+
+class GbpRegisterLocationRequest(BaseModel):
+    location_id: str
+    account_id: Optional[str] = None
+    place_id: Optional[str] = None
+    title: Optional[str] = None
+
+
 class GbpPost(BaseModel):
     id: UUID
     client_id: UUID

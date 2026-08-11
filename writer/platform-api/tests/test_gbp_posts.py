@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from services import gbp_locations_service as loc_svc
 from services import gbp_posts_api as api
 from services import gbp_posts_service as svc
 
@@ -194,6 +195,35 @@ def test_classify_not_manager():
 def test_classify_invalid_and_notfound():
     assert api.classify_post_error(400, "bad content") == "invalid_post_content"
     assert api.classify_post_error(404, "not found") == "post_or_location_not_found"
+
+
+# ── location resolution (parse_location) ─────────────────────────────────────
+def test_parse_location_full():
+    parsed = loc_svc.parse_location(
+        {
+            "name": "locations/456",
+            "title": "Acme Roofing",
+            "storefrontAddress": {"addressLines": ["12 Main St"], "locality": "Austin", "administrativeArea": "TX"},
+            "phoneNumbers": {"primaryPhone": "+1 512-555-0100"},
+            "metadata": {"placeId": "ChIJ123"},
+        },
+        "accounts/123",
+    )
+    assert parsed == {
+        "location_id": "locations/456",
+        "account_id": "accounts/123",
+        "title": "Acme Roofing",
+        "address": "12 Main St, Austin, TX",
+        "phone": "+1 512-555-0100",
+        "place_id": "ChIJ123",
+    }
+
+
+def test_parse_location_minimal_and_missing_name():
+    thin = loc_svc.parse_location({"name": "locations/9", "title": "X"}, None)
+    assert thin["location_id"] == "locations/9" and thin["account_id"] is None
+    assert thin["address"] is None and thin["phone"] is None and thin["place_id"] is None
+    assert loc_svc.parse_location({"title": "no name"}, "accounts/1") is None
 
 
 # ── schedule cadence math ────────────────────────────────────────────────────
