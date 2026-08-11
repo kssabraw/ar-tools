@@ -850,6 +850,40 @@ def _ensure_keyword(client: Any, *, market_id: str, term: str) -> str:
     return str(written[0]["id"])
 
 
+def _auto_seed_city_ai_region(*, market_id: str, city_name: str) -> None:
+    """Best-effort: ensure a `city`-level `ai_region` named for the whole city an onboard scans.
+
+    This does NOT breach the "name_level is a human judgement, never derived" invariant (I-073 /
+    I-004). It derives nothing from scan data or self-naming evidence — the thing I-073's commercial-
+    reality filter exists to judge for an *ambiguous sub-area name*. A whole-city onboard is the
+    opposite: the operator explicitly picked a Google-resolved CITY (a locality by definition, with
+    its own market centre) and chose to scan the whole of it, so `city` is the known level of that
+    input. I-073 calls exactly these — a real Google locality — "close to a formality" and "very
+    likely to survive a recognition test"; Inglewood sits in its strong `city` list.
+
+    It is only called on the whole-city path. A picked sub-area, whose suburb-vs-`neighbourhood`
+    recognition IS the I-073 judgement (and the silent-fallback risk), is left to the manual seed
+    modal. `city` is used rather than distinguishing `city`/`suburb` because the two render
+    identically everywhere downstream — only `neighbourhood` carries a behavioural consequence (the
+    report caveat), and a whole city is never that.
+
+    Idempotent and non-destructive: `create_ai_region` inserts only when absent and, on a name
+    conflict, returns the existing region WITHOUT touching a `name_level` a human may have set. Any
+    failure is swallowed — the AI region is a convenience the report layer also creates on demand, so
+    it must never fail the onboard order it rides on.
+    """
+    name = (city_name or "").strip()
+    if not name:
+        return
+    try:
+        create_ai_region(market_id=market_id, name=name, name_level="city")
+    except Exception as exc:  # noqa: BLE001 — a convenience seed must never cost the onboard order
+        logger.warning(
+            "onboard auto-seed of city ai_region failed",
+            extra={"market_id": market_id, "city": name, "error": str(exc)[:300]},
+        )
+
+
 def create_onboard_from_place(
     *,
     city: dict[str, Any],
@@ -879,6 +913,7 @@ def create_onboard_from_place(
     # dead end.
     sub = subarea or {}
     sub_name = str(sub.get("name") or "").strip()
+    picked_subarea = bool(sub_name)  # true only when the operator chose a distinct sub-area
     if sub_name and (sub.get("lat") is None or sub.get("lng") is None):
         raise OutreachError("subarea_incomplete")
     if sub_name:
@@ -932,6 +967,13 @@ def create_onboard_from_place(
     if not written:
         raise OutreachError("onboard_request_not_created")
     order = written[0]
+
+    # Whole-city onboards auto-seed a `city`-level AI region so the AI-visibility scan resolves
+    # without a manual seed (DECISIONS 2026-08-11). Sub-area picks are left to the seed modal — their
+    # granularity is the I-073 judgement. Best-effort: never fails the order it rides on.
+    if not picked_subarea:
+        _auto_seed_city_ai_region(market_id=market_id, city_name=city_name)
+
     order["submarket"] = {"name": sub_name}
     order["keyword"] = {"term": business_type}
     order["market"] = {"name": city_name}
