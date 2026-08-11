@@ -17,8 +17,9 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 
-from middleware.auth import require_auth
+from middleware.auth import require_auth, require_staff
 from models.gbp_posts import (
+    GbpAvailableLocationsResponse,
     GbpImageUploadResponse,
     GbpJob,
     GbpJobsStatusRequest,
@@ -29,12 +30,14 @@ from models.gbp_posts import (
     GbpPostGenerateRequest,
     GbpPostScheduleAtRequest,
     GbpPostUpdateRequest,
+    GbpRegisterLocationRequest,
     GbpReusableImage,
     GbpSchedule,
     GbpScheduleUpsertRequest,
     GbpTimezoneResponse,
     GbpTrashPurgeResponse,
 )
+from services import gbp_locations_service as loc_svc
 from services import gbp_posts_service as svc
 from services import gbp_timezone
 from services.freeze import assert_not_frozen
@@ -50,6 +53,34 @@ async def list_post_locations(client_id: UUID, auth: dict = Depends(require_auth
     """Registered GBP locations for this client (only 'ok' ones can be posted to)."""
     svc._assert_enabled()
     return svc.list_ok_locations(str(client_id))
+
+
+@router.get("/gbp/available-locations", response_model=GbpAvailableLocationsResponse)
+async def available_locations(auth: dict = Depends(require_staff)):
+    """Every listing the connected agency account manages (from Google), flagged
+    with the client each is already registered to. The source for the "assign a
+    listing to this client" picker. Staff-gated (agency-wide)."""
+    return loc_svc.resolve_connected_locations()
+
+
+@router.post("/clients/{client_id}/gbp/register-location", response_model=GbpLocationOption)
+async def register_location(
+    client_id: UUID, body: GbpRegisterLocationRequest, auth: dict = Depends(require_staff)
+):
+    """Assign one resolved listing to this client so it appears in Compose."""
+    return loc_svc.register_location(
+        str(client_id), body.location_id, body.account_id, body.place_id,
+        body.title, auth["user_id"],
+    )
+
+
+@router.delete("/clients/{client_id}/gbp/locations/{row_id}")
+async def unregister_location(
+    client_id: UUID, row_id: UUID, auth: dict = Depends(require_staff)
+):
+    """Remove a registered location (its posts cascade-delete)."""
+    loc_svc.unregister_location(str(client_id), str(row_id))
+    return {"ok": True}
 
 
 # ── images (validated upload + reuse existing client assets) ─────────────────

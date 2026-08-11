@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Megaphone, Trash2, RotateCcw, ExternalLink, RefreshCw, Sparkles,
   CalendarClock, Send, Save, X, Upload, ImageIcon, CheckCircle2, XCircle, Clock, Link2,
+  MapPin, Search, Plus,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useResumableJob, type JobPoll } from '../lib/useResumableJob'
@@ -21,6 +22,11 @@ type CtaType = 'book' | 'order' | 'shop' | 'learn_more' | 'sign_up' | 'call'
 type PostStatus = 'draft' | 'scheduled' | 'publishing' | 'live' | 'rejected' | 'failed' | 'deleted'
 
 interface GbpLocation { id: string; location_id: string; title: string | null; access_status: string }
+interface AvailableLocation {
+  location_id: string; account_id: string | null; title: string | null
+  address: string | null; phone: string | null; place_id: string | null
+  registered_client_id: string | null; registered_client_name: string | null
+}
 interface ReusableImage { url: string; source: string; label: string | null }
 interface GbpPost {
   id: string; location_row_id: string; source: string; topic_type: TopicType
@@ -131,6 +137,7 @@ export function GbpPosts() {
   const { id } = useParams<{ id: string }>()
   const qc = useQueryClient()
   const [tab, setTab] = useState<'compose' | 'posts' | 'schedule' | 'trash'>('compose')
+  const [manageOpen, setManageOpen] = useState(false)
 
   const { data: client } = useQuery<Client>({
     queryKey: ['client', id], queryFn: () => api.get<Client>(`/clients/${id}`), enabled: Boolean(id),
@@ -162,19 +169,27 @@ export function GbpPosts() {
         <EnablementNotice />
       ) : (
         <>
-          <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '1px solid #e2e8f0' }}>
+          <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '1px solid #e2e8f0', alignItems: 'center' }}>
             {(['compose', 'posts', 'schedule', 'trash'] as const).map((t) => (
               <button key={t} onClick={() => setTab(t)}
                 style={{ padding: '9px 16px', border: 'none', borderBottom: tab === t ? `2px solid ${ACCENT}` : '2px solid transparent', background: 'none', color: tab === t ? ACCENT : '#64748b', fontSize: 13, fontWeight: 600, cursor: 'pointer', textTransform: 'capitalize' }}>
                 {t === 'posts' ? 'Posts' : t}
               </button>
             ))}
+            {(locationsQ.data ?? []).length > 0 && (
+              <button onClick={() => setManageOpen((o) => !o)}
+                style={{ marginLeft: 'auto', marginBottom: 6, ...btn('#fff', '#334155') }}>
+                <MapPin size={13} /> {manageOpen ? 'Done' : 'Manage listings'}
+              </button>
+            )}
           </div>
 
           {locationsQ.isLoading ? (
             <div style={{ color: '#64748b', fontSize: 13 }}>Loading…</div>
           ) : (locationsQ.data ?? []).length === 0 ? (
-            <NoLocations />
+            <RegisterLocations clientId={id!} registered={[]} />
+          ) : manageOpen ? (
+            <RegisterLocations clientId={id!} registered={locationsQ.data!} onClose={() => setManageOpen(false)} />
           ) : tab === 'compose' ? (
             <ComposeTab clientId={id!} locations={locationsQ.data!} onDone={() => { setTab('posts'); qc.invalidateQueries({ queryKey: ['gbp-posts', id] }) }} />
           ) : tab === 'posts' ? (
@@ -275,11 +290,127 @@ function EnablementNotice() {
     </div>
   )
 }
-function NoLocations() {
+// ── Listing picker (assign one of the connected account's listings to a client) ─
+function RegisterLocations({ clientId, registered, onClose }: { clientId: string; registered: GbpLocation[]; onClose?: () => void }) {
+  const qc = useQueryClient()
+  const [find, setFind] = useState(false)
+  const [q, setQ] = useState('')
+  const [err, setErr] = useState<string | null>(null)
+
+  const availQ = useQuery<{ locations: AvailableLocation[]; detail: string | null }>({
+    queryKey: ['gbp-available-locations'],
+    queryFn: () => api.get<{ locations: AvailableLocation[]; detail: string | null }>('/gbp/available-locations'),
+    enabled: find, retry: false,
+  })
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['gbp-post-locations', clientId] })
+    qc.invalidateQueries({ queryKey: ['gbp-available-locations'] })
+  }
+  const registerMut = useMutation({
+    mutationFn: (l: AvailableLocation) => api.post(`/clients/${clientId}/gbp/register-location`, {
+      location_id: l.location_id, account_id: l.account_id, place_id: l.place_id, title: l.title,
+    }),
+    onSuccess: invalidate,
+    onError: (e: Error) => setErr(e.message === 'forbidden' ? 'Only an admin/staff user can register listings.' : e.message),
+  })
+  const unregisterMut = useMutation({
+    mutationFn: (rowId: string) => api.delete(`/clients/${clientId}/gbp/locations/${rowId}`),
+    onSuccess: invalidate,
+    onError: (e: Error) => setErr(e.message),
+  })
+
+  const registeredLocIds = new Set(registered.map((r) => r.location_id))
+  const detailMsg = (d: string | null): string => {
+    if (d === 'gbp_not_connected') return 'Connect the agency Google account first (the Connect button above).'
+    if (d === 'no_locations_visible') return "The connected account doesn't manage any listings yet — accept access invitations above, or add it as a Manager on the client's Business Profile."
+    if (d === 'service_account_not_a_manager_or_insufficient_permission') return 'The connected account has no access to any listings yet. Accept access invitations above, or have the client add it as a Manager.'
+    if (d === 'quota_exceeded_or_not_granted') return 'Google returned a quota error — try again shortly.'
+    return d ? `Could not load listings: ${d}` : 'No listings found.'
+  }
+  const all = availQ.data?.locations ?? []
+  const term = q.trim().toLowerCase()
+  const shown = term
+    ? all.filter((l) => `${l.title ?? ''} ${l.address ?? ''} ${l.phone ?? ''}`.toLowerCase().includes(term))
+    : all
+
   return (
-    <div style={{ padding: 20, borderRadius: 12, background: '#f8fafc', border: '1px solid #e2e8f0', fontSize: 13, color: '#475569', lineHeight: 1.6 }}>
-      No Business Profile location is registered for this client yet. Add the service account as a Manager on the
-      client's Google Business Profile and register the location (GBP connection) before posting.
+    <div style={{ display: 'grid', gap: 16, maxWidth: 640 }}>
+      <div style={{ padding: 16, borderRadius: 12, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <MapPin size={16} color={ACCENT} />
+          <strong style={{ fontSize: 14, color: '#0f172a' }}>Business Profile listings</strong>
+          {onClose && <button onClick={onClose} style={{ marginLeft: 'auto', ...btn('#fff', '#334155') }}>Done</button>}
+        </div>
+        <p style={{ fontSize: 13, color: '#64748b', margin: 0, lineHeight: 1.6 }}>
+          Choose which listing the connected Google account manages for this client. Posts publish to the listing you assign here.
+        </p>
+      </div>
+
+      {err && <div style={{ color: '#b91c1c', fontSize: 13, background: '#fef2f2', border: '1px solid #fecaca', padding: 10, borderRadius: 8 }}>{err}</div>}
+
+      {registered.length > 0 && (
+        <div style={{ display: 'grid', gap: 8 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: '#475569' }}>Assigned to this client</span>
+          {registered.map((r) => (
+            <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid #bbf7d0', background: '#f0fdf4', borderRadius: 10, padding: 12 }}>
+              <CheckCircle2 size={15} color="#15803d" />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>{r.title || r.location_id}</div>
+                <div style={{ fontSize: 11, color: '#94a3b8' }}>{r.location_id}{r.access_status !== 'ok' ? ` · ${r.access_status}` : ''}</div>
+              </div>
+              <button onClick={() => { if (confirm('Remove this listing from the client? Its posts will be deleted.')) unregisterMut.mutate(r.id) }}
+                disabled={unregisterMut.isPending} style={btn('#fff', '#b91c1c')}>
+                <X size={12} /> Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!find ? (
+        <button onClick={() => setFind(true)} style={{ ...btn(ACCENT), justifySelf: 'start' }}>
+          <Search size={14} /> Find my listings
+        </button>
+      ) : availQ.isLoading ? (
+        <div style={{ color: '#64748b', fontSize: 13 }}>Loading listings from Google…</div>
+      ) : availQ.isError ? (
+        <div style={{ color: '#b91c1c', fontSize: 13 }}>Couldn't reach Google. {(availQ.error as Error)?.message}</div>
+      ) : all.length === 0 ? (
+        <div style={{ fontSize: 13, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', padding: 12, borderRadius: 8, lineHeight: 1.6 }}>
+          {detailMsg(availQ.data?.detail ?? null)}
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by name, address, or phone…" style={{ ...input, flex: 1 }} />
+            <button onClick={() => availQ.refetch()} disabled={availQ.isFetching} title="Refresh" style={btn('#fff', '#334155')}>
+              <RefreshCw size={13} /> {availQ.isFetching ? 'Refreshing…' : 'Refresh'}
+            </button>
+          </div>
+          <span style={{ fontSize: 12, color: '#94a3b8' }}>{shown.length} of {all.length} listing{all.length === 1 ? '' : 's'} managed by the connected account</span>
+          {shown.map((l) => {
+            const here = registeredLocIds.has(l.location_id)
+            const elsewhere = !here && l.registered_client_id
+            return (
+              <div key={l.location_id} style={{ display: 'flex', alignItems: 'center', gap: 12, border: '1px solid #e2e8f0', borderRadius: 10, padding: 12 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>{l.title || l.location_id}</div>
+                  <div style={{ fontSize: 12, color: '#64748b' }}>{[l.address, l.phone].filter(Boolean).join(' · ') || l.location_id}</div>
+                  {elsewhere && <div style={{ fontSize: 11, color: '#b45309', marginTop: 2 }}>Already assigned to {l.registered_client_name || 'another client'}</div>}
+                </div>
+                {here ? (
+                  <span style={{ fontSize: 12, color: '#15803d', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}><CheckCircle2 size={14} /> Assigned</span>
+                ) : (
+                  <button onClick={() => { setErr(null); registerMut.mutate(l) }} disabled={registerMut.isPending}
+                    style={btn(elsewhere ? '#fff' : ACCENT, elsewhere ? '#334155' : '#fff')} title={elsewhere ? 'Reassign this listing to this client' : 'Use for this client'}>
+                    <Plus size={13} /> {elsewhere ? 'Reassign here' : 'Use for this client'}
+                  </button>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
