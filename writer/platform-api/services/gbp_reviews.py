@@ -23,8 +23,11 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-_OUTSCRAPER_SEARCH_URL = "https://api.app.outscraper.com/maps/search-v3"
-_FETCH_TIMEOUT = 60.0
+# The dedicated Reviews endpoint returns the full dated review list (place-search
+# only returns a small inline sample). Its `data` is a flat list of place objects,
+# each with `reviews_data`.
+_OUTSCRAPER_REVIEWS_URL = "https://api.app.outscraper.com/maps/reviews-v3"
+_FETCH_TIMEOUT = 180.0
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +52,23 @@ def _parse_date(value) -> Optional[date]:
         return date.fromisoformat(str(value)[:10])
     except (TypeError, ValueError):
         return None
+
+
+def first_place(data: Any) -> Optional[dict]:
+    """The first place object in an Outscraper response. Handles the reviews-v3
+    shape (`data` = [place_dict, …]) AND the search-v3 array-of-arrays
+    (`data` = [[place_dict, …], …]). Pure."""
+    blocks = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(blocks, list):
+        return None
+    for b in blocks:
+        if isinstance(b, dict):
+            return b
+        if isinstance(b, list):
+            for x in b:
+                if isinstance(x, dict):
+                    return x
+    return None
 
 
 def parse_reviews(place: dict[str, Any]) -> list[dict]:
@@ -127,24 +147,21 @@ def fetch_dated_reviews(gbp: dict, limit: Optional[int] = None) -> list[dict]:
 
         params = {
             "query": query,
-            "organizationsPerQueryLimit": 1,
-            "language": "en",
-            "async": "false",
+            "limit": 1,          # one place
             "reviewsLimit": limit,
             "sort": "newest",
+            "language": "en",
+            "async": "false",
         }
         with httpx.Client(timeout=_FETCH_TIMEOUT) as client:
-            resp = client.get(_OUTSCRAPER_SEARCH_URL, params=params,
+            resp = client.get(_OUTSCRAPER_REVIEWS_URL, params=params,
                               headers={"X-API-KEY": settings.outscraper_api_key})
             resp.raise_for_status()
             data = resp.json()
-        # Outscraper returns data.data as an array-of-arrays; the place is at [0][0].
-        blocks = data.get("data") if isinstance(data, dict) else None
-        place = None
-        if isinstance(blocks, list) and blocks:
-            first = blocks[0]
-            place = first[0] if isinstance(first, list) and first else (first if isinstance(first, dict) else None)
-        return parse_reviews(place) if isinstance(place, dict) else []
+        place = first_place(data)
+        reviews = parse_reviews(place) if isinstance(place, dict) else []
+        logger.info("gbp_reviews.fetched", extra={"count": len(reviews), "query": query[:60]})
+        return reviews
     except Exception as exc:  # noqa: BLE001 — a review fetch must never sink a report
         logger.warning("gbp_reviews.fetch_failed", extra={"error": str(exc)})
         return []

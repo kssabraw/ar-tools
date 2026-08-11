@@ -15,6 +15,17 @@ def test_query_for_prefers_maps_uri_then_falls_back():
     assert gr.query_for(None) is None
 
 
+def test_first_place_handles_both_response_shapes():
+    place = {"name": "X", "reviews_data": []}
+    # reviews-v3: data is a flat list of place dicts
+    assert gr.first_place({"data": [place]}) is place
+    # search-v3: data is an array-of-arrays
+    assert gr.first_place({"data": [[place]]}) is place
+    assert gr.first_place({"data": []}) is None
+    assert gr.first_place({}) is None
+    assert gr.first_place(None) is None
+
+
 def test_parse_reviews_maps_sorts_and_drops_undated():
     place = {"reviews_data": [
         {"review_datetime_utc": "2026-07-01 10:00:00", "review_rating": 5, "review_text": "great", "author_title": "A"},
