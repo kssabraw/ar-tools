@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timezone
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from services import gbp_locations_service as loc_svc
 from services import gbp_posts_api as api
 from services import gbp_posts_service as svc
+from services import nano_banana
 
 
 # ── v4_parent ────────────────────────────────────────────────────────────────
@@ -292,6 +294,63 @@ def test_find_exact_match_by_place_id_then_none():
     assert loc_svc.find_exact_match(None, "ChIJ_B", [a, b]) is b
     assert loc_svc.find_exact_match(None, "ChIJ_Z", [a, b]) is None
     assert loc_svc.find_exact_match(None, None, [a, b]) is None
+
+
+# ── Nano Banana image generation (pure helpers) ──────────────────────────────
+def test_extract_image_bytes_camelcase():
+    b64 = base64.b64encode(b"\x89PNG-fake").decode()
+    resp = {"candidates": [{"content": {"parts": [
+        {"text": "here you go"},
+        {"inlineData": {"mimeType": "image/png", "data": b64}},
+    ]}}]}
+    assert nano_banana.extract_image_bytes(resp) == b"\x89PNG-fake"
+
+
+def test_extract_image_bytes_snake_case():
+    b64 = base64.b64encode(b"jpegbytes").decode()
+    resp = {"candidates": [{"content": {"parts": [
+        {"inline_data": {"mime_type": "image/jpeg", "data": b64}},
+    ]}}]}
+    assert nano_banana.extract_image_bytes(resp) == b"jpegbytes"
+
+
+def test_extract_image_bytes_none_when_absent_or_text_only():
+    assert nano_banana.extract_image_bytes({"candidates": [{"content": {"parts": [{"text": "sorry, no image"}]}}]}) is None
+    assert nano_banana.extract_image_bytes({}) is None
+    assert nano_banana.extract_image_bytes({"candidates": []}) is None
+
+
+def test_build_image_prompt_adds_brand_safe_style():
+    p = svc.build_image_prompt("a roofer on a roof")
+    assert p.startswith("a roofer on a roof.")
+    assert "no text" in p and "no logos" in p and "photograph" in p
+
+
+# ── bulk create-from-URL (pure helpers) ──────────────────────────────────────
+def test_clamp_bulk_count():
+    assert svc.clamp_bulk_count(3) == 3
+    assert svc.clamp_bulk_count(0) == 0
+    assert svc.clamp_bulk_count(-5) == 0
+    assert svc.clamp_bulk_count(999) == svc.settings.gbp_post_max_bulk  # capped at 99
+    assert svc.clamp_bulk_count("7") == 7
+    assert svc.clamp_bulk_count(None) == 0
+    assert svc.clamp_bulk_count("abc") == 0
+
+
+def test_variation_instruction_single_is_none():
+    assert svc.variation_instruction(1, 1) is None
+    assert svc.variation_instruction(1, 0) is None
+
+
+def test_variation_instruction_distinct_angles_cycle():
+    a = svc.variation_instruction(1, 3)
+    b = svc.variation_instruction(2, 3)
+    assert a and b and a != b
+    assert "post 1 of 3" in a and "post 2 of 3" in b
+    # angles cycle: index 1 and index len+1 share an angle phrase
+    n = len(svc._VARIATION_ANGLES)
+    assert svc._VARIATION_ANGLES[0] in svc.variation_instruction(1, 20)
+    assert svc._VARIATION_ANGLES[0] in svc.variation_instruction(n + 1, 20)
 
 
 # ── schedule cadence math ────────────────────────────────────────────────────

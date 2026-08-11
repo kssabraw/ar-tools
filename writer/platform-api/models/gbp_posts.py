@@ -157,6 +157,28 @@ class GbpRegisterLocationRequest(BaseModel):
     title: Optional[str] = None
 
 
+class GbpGenerateImageRequest(BaseModel):
+    """Text-to-image prompt for a GBP post image (Nano Banana / Gemini)."""
+
+    prompt: str
+
+
+class GbpGenerateFromUrlRequest(BaseModel):
+    """Create N distinct draft posts from the content of a page URL (0–99)."""
+
+    location_row_id: UUID
+    url: str
+    count: int = Field(1, ge=0, le=99)
+    topic_type: TopicType = "standard"
+    cta_type: Optional[CtaType] = None
+    cta_url: Optional[str] = None
+
+
+class GbpBulkGenerateResponse(BaseModel):
+    count: int
+    job_ids: list[UUID]
+
+
 class GbpPost(BaseModel):
     id: UUID
     client_id: UUID

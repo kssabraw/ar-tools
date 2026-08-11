@@ -457,6 +457,8 @@ function RegisterLocations({ clientId, registered, onClose }: { clientId: string
 // ── Image field (upload + reuse existing) ────────────────────────────────────
 function ImageField({ clientId, value, onChange }: { clientId: string; value: string | null; onChange: (url: string | null) => void }) {
   const [showReuse, setShowReuse] = useState(false)
+  const [showGen, setShowGen] = useState(false)
+  const [genPrompt, setGenPrompt] = useState('')
   const [err, setErr] = useState<string | null>(null)
   const reuseQ = useQuery<ReusableImage[]>({
     queryKey: ['gbp-reusable-images', clientId],
@@ -471,6 +473,18 @@ function ImageField({ clientId, value, onChange }: { clientId: string; value: st
     onSuccess: (r) => { setErr(null); onChange(r.url) },
     onError: (e: Error) => setErr(e.message),
   })
+  const genMut = useMutation({
+    mutationFn: (prompt: string) => api.post<{ url: string }>(`/clients/${clientId}/gbp/posts/generate-image`, { prompt }),
+    onSuccess: (r) => { setErr(null); setShowGen(false); onChange(r.url) },
+    onError: (e: Error) => setErr(e.message),
+  })
+  const errMsg = (e: string): string =>
+    e === 'image_dimensions_too_small' ? 'Image must be at least 250×250px.'
+      : e === 'unsupported_image_type' ? 'Use a JPG or PNG image.'
+      : e === 'image_gen_failed' ? 'Image generation failed — try a different prompt.'
+      : e === 'image_gen_not_configured' ? 'AI image generation isn’t configured on the server.'
+      : e === 'prompt_required' ? 'Describe the image you want.'
+      : e
 
   return (
     <div>
@@ -487,10 +501,23 @@ function ImageField({ clientId, value, onChange }: { clientId: string; value: st
             <input type="file" accept="image/jpeg,image/png" hidden
               onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadMut.mutate(f) }} />
           </label>
-          <button onClick={() => setShowReuse((s) => !s)} style={btn('#fff', '#334155')}><ImageIcon size={13} /> Reuse existing</button>
+          <button onClick={() => { setShowGen((s) => !s); setShowReuse(false) }} style={btn(showGen ? '#eef2ff' : '#fff', showGen ? ACCENT : '#334155')}><Sparkles size={13} /> Generate with AI</button>
+          <button onClick={() => { setShowReuse((s) => !s); setShowGen(false) }} style={btn('#fff', '#334155')}><ImageIcon size={13} /> Reuse existing</button>
         </div>
       )}
-      {err && <div style={{ color: '#b91c1c', fontSize: 12, marginTop: 6 }}>{err === 'image_dimensions_too_small' ? 'Image must be at least 250×250px.' : err === 'unsupported_image_type' ? 'Use a JPG or PNG image.' : err}</div>}
+      {err && <div style={{ color: '#b91c1c', fontSize: 12, marginTop: 6 }}>{errMsg(err)}</div>}
+      {showGen && !value && (
+        <div style={{ marginTop: 10, padding: 12, border: '1px dashed #c7d2fe', borderRadius: 10, background: '#f5f3ff' }}>
+          <label style={{ ...label, color: ACCENT }}><Sparkles size={12} style={{ verticalAlign: -1 }} /> Describe the image (Nano Banana · Gemini)</label>
+          <textarea value={genPrompt} onChange={(e) => setGenPrompt(e.target.value)} rows={2}
+            placeholder="e.g. a friendly roofer inspecting a tiled roof on a sunny day" style={{ ...input, resize: 'vertical' }} />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+            <button onClick={() => genMut.mutate(genPrompt.trim())} disabled={!genPrompt.trim() || genMut.isPending} style={{ ...btn(ACCENT), opacity: genPrompt.trim() ? 1 : 0.5 }}>
+              <Sparkles size={13} /> {genMut.isPending ? 'Generating…' : 'Generate image'}
+            </button>
+          </div>
+        </div>
+      )}
       {showReuse && !value && (
         <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(84px,1fr))', gap: 8, maxHeight: 200, overflowY: 'auto', padding: 8, border: '1px solid #e2e8f0', borderRadius: 8 }}>
           {reuseQ.isLoading ? <span style={{ fontSize: 12, color: '#94a3b8' }}>Loading…</span>
@@ -507,6 +534,74 @@ function ImageField({ clientId, value, onChange }: { clientId: string; value: st
 }
 
 // ── Compose ──────────────────────────────────────────────────────────────────
+// ── Create N posts from a page URL ───────────────────────────────────────────
+function CreateFromUrl({ clientId, locationId, disabled, onDone }: { clientId: string; locationId: string; disabled: boolean; onDone: () => void }) {
+  const [url, setUrl] = useState('')
+  const [count, setCount] = useState(3)
+  const [status, setStatus] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const errMsg = (e: string): string =>
+    e === 'source_fetch_failed' ? "Couldn't read that page — check the URL is public and try again."
+      : e === 'url_required' ? 'Enter a page URL.'
+      : e === 'client_frozen' ? 'This client is frozen — content creation is paused.'
+      : e
+
+  const run = async () => {
+    setErr(null)
+    const clean = url.trim()
+    if (!clean) { setErr('Enter a page URL.'); return }
+    const n = Math.max(0, Math.min(99, Math.floor(count || 0)))
+    if (n === 0) { setErr('Set how many posts to create (1–99).'); return }
+    setBusy(true); setStatus(`Reading the page and drafting ${n} post${n === 1 ? '' : 's'}…`)
+    try {
+      const r = await api.post<{ count: number; job_ids: string[] }>(`/clients/${clientId}/gbp/posts/generate-from-url`, {
+        location_row_id: locationId, url: clean, count: n, topic_type: 'standard',
+      })
+      const ids = r.job_ids
+      // Poll the batch until every job settles (bounded so a hung job can't spin forever).
+      for (let i = 0; i < 60 && ids.length; i++) {
+        await new Promise((res) => setTimeout(res, 3000))
+        const rows = await api.post<JobStatus[]>(`/clients/${clientId}/gbp/posts/jobs/status`, { job_ids: ids })
+        const done = rows.filter((x) => x.status === 'complete' || x.status === 'failed').length
+        const ok = rows.filter((x) => x.status === 'complete').length
+        setStatus(`Drafted ${ok} of ${ids.length}…`)
+        if (done >= ids.length) break
+      }
+      setStatus(null); setBusy(false); setUrl(''); onDone()
+    } catch (e) {
+      setErr(errMsg((e as Error).message)); setBusy(false); setStatus(null)
+    }
+  }
+
+  return (
+    <div style={{ padding: 14, border: '1px dashed #c7d2fe', borderRadius: 10, background: '#f5f3ff' }}>
+      <label style={{ ...label, color: ACCENT, marginBottom: 8 }}><Sparkles size={12} style={{ verticalAlign: -1 }} /> Create posts from a page URL</label>
+      <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 10px' }}>
+        Paste a page (a blog post, service page, offer…) and we'll draft distinct posts from its content. They land as drafts for review.
+      </p>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <div style={{ flex: 3, minWidth: 220 }}>
+          <label style={label}>Page URL</label>
+          <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/blog/post" style={input} />
+        </div>
+        <div style={{ width: 90 }}>
+          <label style={label}>How many</label>
+          <input type="number" min={0} max={99} value={count}
+            onChange={(e) => setCount(Math.max(0, Math.min(99, Math.floor(Number(e.target.value) || 0))))} style={input} />
+        </div>
+        <button onClick={run} disabled={busy || disabled || !locationId} style={{ ...btn(ACCENT), height: 38 }}>
+          <Sparkles size={13} /> {busy ? 'Creating…' : 'Create posts'}
+        </button>
+      </div>
+      {status && <div style={{ fontSize: 12, color: ACCENT, marginTop: 8 }}>{status}</div>}
+      {err && <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 8 }}>{err}</div>}
+      {disabled && <div style={{ fontSize: 12, color: '#b45309', marginTop: 8 }}>Posts can't publish until a verified location is assigned — drafts will still be created.</div>}
+    </div>
+  )
+}
+
 function ComposeTab({ clientId, locations, onDone }: { clientId: string; locations: GbpLocation[]; onDone: () => void }) {
   const okLocations = locations.filter((l) => l.access_status === 'ok')
   const [locationId, setLocationId] = useState(okLocations[0]?.id ?? locations[0]?.id ?? '')
@@ -622,6 +717,7 @@ function ComposeTab({ clientId, locations, onDone }: { clientId: string; locatio
 
   return (
     <div style={{ display: 'grid', gap: 16, maxWidth: 640 }}>
+      <CreateFromUrl clientId={clientId} locationId={locationId} disabled={okLocations.length === 0} onDone={onDone} />
       {okLocations.length === 0 && (
         <div style={{ fontSize: 12, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', padding: 10, borderRadius: 8 }}>
           No verified location — posts can't publish until the service account is a Manager and the location shows “ok”.

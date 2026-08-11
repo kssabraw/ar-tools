@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     illustration_image_model: str = "gpt-image-1"      # AI illustration renderer
     illustration_image_size: str = "1536x1024"         # landscape hero/body ratio
     illustration_brief_model: str = "gpt-5.4-mini"     # art-direction + chart-series extraction
+    # Nano Banana — Gemini 2.5 Flash Image text-to-image (reuses GEMINI_API_KEY).
+    # Overridable when Google rotates the image tier (e.g. gemini-3.1-flash-image).
+    nano_banana_model: str = "gemini-2.5-flash-image"
     # ── Cross-provider LLM fallback ──────────────────────────────────────────
     # When a primary-provider call (usually Anthropic) hits a *transient* failure
     # that outlasts its per-provider retry budget — a 429 rate/concurrency limit,
@@ -387,6 +390,12 @@ class Settings(BaseSettings):
     # Append utm_source=gbp&utm_medium=post&utm_campaign=<slug> to CTA links so
     # post→site clicks are attributable (GA4, once connected).
     gbp_post_default_utm: bool = True
+    # Bulk "create N posts from a page URL": the page content fed to each draft
+    # (chars), and the stagger between the per-post jobs (short — a draft is one
+    # fast Claude call, unlike the 180s local-seo page generation).
+    gbp_post_source_chars: int = 5000
+    gbp_post_bulk_spacing_seconds: int = 5
+    gbp_post_max_bulk: int = 99
     # Daily live-state reconciliation (catches async REJECTED + imports external
     # posts). One sync job per client with an ok location, after this hour (UTC).
     gbp_posts_sync_hour_utc: int = 9

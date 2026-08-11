@@ -310,6 +310,38 @@ def upload_post_image(data: bytes, content_type: str) -> str:
         raise HTTPException(status_code=502, detail="image_upload_failed")
 
 
+def build_image_prompt(prompt: str, business_name: Optional[str] = None) -> str:
+    """A brand-safe image prompt for Nano Banana from the user's idea. Appends a
+    photographic, text-free style tail so the render suits a Business Profile post
+    and can't stamp a fake sign/logo. Pure (unit-tested)."""
+    base = (prompt or "").strip()
+    who = f" for {business_name.strip()}" if business_name and business_name.strip() else ""
+    return (
+        f"{base}. A professional, high-quality photograph{who} suitable for a Google "
+        "Business Profile post — natural lighting, realistic, sharp focus, no text, "
+        "no words, no letters, no logos, no watermarks."
+    )
+
+
+async def generate_post_image(prompt: str, business_name: Optional[str] = None) -> str:
+    """Generate a GBP post image with Nano Banana (Gemini 2.5 Flash Image),
+    validate it against Google's floor, store it in the public bucket, and return
+    the sourceUrl. Interactive — raises HTTPException on failure."""
+    _assert_enabled()
+    from services import nano_banana  # lazy
+
+    if not nano_banana.is_configured():
+        raise HTTPException(status_code=503, detail="image_gen_not_configured")
+    if not (prompt or "").strip():
+        raise HTTPException(status_code=422, detail="prompt_required")
+    png = await nano_banana.generate_image(build_image_prompt(prompt, business_name))
+    if not png:
+        raise HTTPException(status_code=502, detail="image_gen_failed")
+    # Reuse the upload path: same bucket, same Google-floor validation as an
+    # uploaded image (Nano Banana returns PNG, comfortably above the floor).
+    return upload_post_image(png, "image/png")
+
+
 def list_reusable_images(client_id: str) -> list[dict]:
     """The client's existing public images (blog featured images + Local SEO page
     images) so a post can reuse an asset already generated for the client — the
@@ -573,8 +605,37 @@ _TYPE_GUIDE = {
 }
 
 
+# Rotating angles so N posts drawn from one page read distinctly instead of
+# paraphrasing each other. Cycled by the post's index within the batch.
+_VARIATION_ANGLES = [
+    "Lead with the single biggest benefit or takeaway from the page.",
+    "Highlight one specific tip, step, or detail from the page.",
+    "Answer a common customer question the page addresses.",
+    "Focus on a problem the page solves and how it's solved.",
+    "Share a 'did you know' fact from the page — only if it's actually stated there.",
+    "Emphasize the outcome or result the reader gets.",
+    "Frame it as a quick how-to based on the page.",
+    "Take a timely or seasonal angle tied to the page's topic.",
+]
+
+
+def variation_instruction(index: int, total: int) -> Optional[str]:
+    """A distinct-angle instruction for post `index` of `total` from one page, or
+    None for a single post. Pure (unit-tested)."""
+    if not total or total <= 1:
+        return None
+    angle = _VARIATION_ANGLES[(max(1, index) - 1) % len(_VARIATION_ANGLES)]
+    return (
+        f"This is post {index} of {total} drawn from the SAME page — make it clearly "
+        f"DISTINCT from the others: {angle} Vary the opening line and wording so the "
+        "posts don't repeat each other."
+    )
+
+
 async def draft_summary(
-    client: dict, topic_type: str, theme: Optional[str], source_url: Optional[str]
+    client: dict, topic_type: str, theme: Optional[str], source_url: Optional[str],
+    *, page_content: Optional[str] = None, page_title: Optional[str] = None,
+    variation: Optional[str] = None,
 ) -> str:
     """One bounded Claude call returning post body text. Raises on hard failure."""
     import anthropic  # lazy
@@ -588,8 +649,16 @@ async def draft_summary(
     ask.append(_TYPE_GUIDE.get(topic_type, _TYPE_GUIDE["standard"]))
     if theme:
         ask.append(f"Topic / angle: {theme}")
+    if page_content:
+        ask.append(
+            "Base the post ONLY on this page's actual content (do not invent facts, "
+            f"prices, dates, or claims not present here). Page title: {page_title or 'n/a'}.\n"
+            f"--- PAGE CONTENT ---\n{page_content}\n--- END PAGE CONTENT ---"
+        )
     if source_url:
         ask.append(f"Feature this page and point the call-to-action at it: {source_url}")
+    if variation:
+        ask.append(variation)
     user = build_client_context(client) + "\n\n" + "\n".join(ask)
 
     api_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=60)
@@ -626,6 +695,66 @@ def enqueue_generate(client_id: str, req: dict, user_id: str) -> str:
     return res.data[0]["id"]
 
 
+def clamp_bulk_count(count) -> int:
+    """Clamp a requested bulk-post count to [0, gbp_post_max_bulk]. Pure."""
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(n, settings.gbp_post_max_bulk))
+
+
+async def enqueue_generate_from_url(
+    client_id: str, location_row_id: str, url: str, count, topic_type: Optional[str],
+    cta_type: Optional[str], cta_url: Optional[str], user_id: str,
+) -> dict:
+    """Fetch a page once and enqueue N ``gbp_post_generate`` jobs that each draft a
+    DISTINCT GBP post from its content (staggered so they run at background
+    priority). Returns {count, job_ids}. Drafts only — never auto-publishes."""
+    _assert_enabled()
+    location = _location(location_row_id, client_id)
+    n = clamp_bulk_count(count)
+    if n == 0:
+        return {"count": 0, "job_ids": []}
+    src = (url or "").strip()
+    if not src:
+        raise HTTPException(status_code=422, detail="url_required")
+
+    from services.syndication_rewrite import extract_source_content  # lazy
+
+    try:
+        page_title, markdown = await extract_source_content(src)
+    except Exception as exc:  # noqa: BLE001 — surface a clean, actionable error
+        logger.warning("gbp_posts.source_fetch_failed", extra={"url": src, "error": str(exc)[:200]})
+        raise HTTPException(status_code=502, detail="source_fetch_failed")
+    content = (markdown or "")[: settings.gbp_post_source_chars]
+
+    topic = topic_type or "standard"
+    # Default the CTA at the page it's announcing (unless it's a Call button).
+    cta_t = cta_type or "learn_more"
+    cta_u = None if cta_t == "call" else (cta_url or src)
+
+    now = datetime.now(timezone.utc)
+    rows = [
+        {
+            "job_type": "gbp_post_generate", "entity_id": client_id,
+            "scheduled_at": (now + timedelta(seconds=i * settings.gbp_post_bulk_spacing_seconds)).isoformat(),
+            "payload": {
+                "client_id": client_id, "location_row_id": location["id"],
+                "topic_type": topic, "theme": None, "source_url": src,
+                "page_content": content, "page_title": page_title,
+                "variation_index": i + 1, "variation_total": n,
+                "cta_type": cta_t, "cta_url": cta_u,
+                "user_id": user_id, "source": "ai",
+            },
+        }
+        for i in range(n)
+    ]
+    res = get_supabase().table("async_jobs").insert(rows).execute()
+    logger.info("gbp_posts.bulk_from_url", extra={"client_id": client_id, "count": n, "url": src})
+    return {"count": n, "job_ids": [r["id"] for r in res.data]}
+
+
 async def run_generate_job(job: dict) -> None:
     """Handler for job_type='gbp_post_generate'. Drafts copy, creates a draft
     post row, and (for auto-publish schedules, if not frozen) chains publish."""
@@ -636,9 +765,13 @@ async def run_generate_job(job: dict) -> None:
     supabase = get_supabase()
     try:
         client = _client(client_id)
+        vt = payload.get("variation_total")
+        variation = variation_instruction(int(payload.get("variation_index") or 1), int(vt)) if vt else None
         summary = await draft_summary(
             client, payload.get("topic_type") or "standard",
             payload.get("theme"), payload.get("source_url"),
+            page_content=payload.get("page_content"), page_title=payload.get("page_title"),
+            variation=variation,
         )
         if not summary:
             raise HTTPException(status_code=502, detail="empty_draft")
