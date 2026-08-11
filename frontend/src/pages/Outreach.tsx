@@ -1,9 +1,10 @@
 import { Fragment, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Crosshair, Loader2, AlertTriangle, XCircle, CheckCircle2, Clock, Ban, RefreshCw, Phone,
+  Crosshair, Loader2, AlertTriangle, XCircle, CheckCircle2, Clock, Ban, RefreshCw, Phone, Download,
 } from 'lucide-react'
 import { api } from '../lib/api'
+import { toCsv, downloadCsv } from '../lib/csv'
 import { useAuth } from '../context/AuthContext'
 import { Tabs } from './OutreachLeads'
 import { Justification } from '../components/outreach/Justification'
@@ -122,6 +123,19 @@ function StatusChip({ status }: { status: ScanRequest['status'] }) {
       <Icon size={12} className={status === 'running' ? 'animate-spin' : undefined} />
       {status}
     </span>
+  )
+}
+
+// A small "Download CSV" button. Builds the file client-side from data the card
+// already fetched (the suite's toCsv/downloadCsv convention) — no backend call.
+function DownloadCsvButton({ onClick, title }: { onClick: () => void; title?: string }) {
+  return (
+    <button onClick={onClick} title={title ?? 'Download this run as a CSV'}
+      style={{ fontSize: 12, border: '1px solid #e2e8f0', background: '#fff', borderRadius: 6,
+        padding: '2px 8px', cursor: 'pointer', color: '#334155',
+        display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+      <Download size={12} /> CSV
+    </button>
   )
 }
 
@@ -428,7 +442,8 @@ function OnboardOrdersCard() {
                       <div style={{ fontWeight: 600, fontSize: 13, margin: '12px 0 0' }}>
                         Results for this scan
                       </div>
-                      <CoverageTable submarketId={order.submarket_id} />
+                      <CoverageTable submarketId={order.submarket_id}
+                        submarketName={order.submarket?.name} />
                     </td>
                   </tr>
                 )}
@@ -494,6 +509,18 @@ function BusinessesCard({ marketId }: { marketId: string }) {
   })
   const prospects = data?.prospects ?? []
 
+  const exportCsv = () => {
+    const headers = ['Business', 'Category', 'Phone', 'Website', 'Rating', 'Reviews', 'Address']
+    const rows = prospects.map(p => [
+      p.name, p.category ?? '', p.phone ?? '', p.website ?? '',
+      p.rating != null ? p.rating.toFixed(1) : '', p.review_count ?? '', p.address ?? '',
+    ])
+    const slug = (submarkets.find(s => s.id === submarketId)?.name ?? 'submarket')
+      .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+    downloadCsv(`outreach-businesses-${slug}-${new Date().toISOString().slice(0, 10)}.csv`,
+      toCsv(headers, rows))
+  }
+
   return (
     <div style={{ marginTop: 16, padding: 16, border: '1px solid #e2e8f0', borderRadius: 12 }}>
       <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
@@ -503,6 +530,11 @@ function BusinessesCard({ marketId }: { marketId: string }) {
           <option value="">Choose a target…</option>
           {submarkets.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
+        {prospects.length > 0 && (
+          <div style={{ marginLeft: 'auto' }}>
+            <DownloadCsvButton onClick={exportCsv} title="Download these businesses as a CSV" />
+          </div>
+        )}
       </div>
       <p style={{ fontSize: 11, color: '#94a3b8', margin: '6px 0 0' }}>
         The businesses discovery found and the filter kept — available as soon as a scan's discovery
@@ -794,7 +826,7 @@ function OrderProgress({ id }: { id: string }) {
 
 // The ranked coverage table for ONE submarket — reused by the Coverage results card (with a
 // submarket picker) and by an onboard row's inline results (submarket fixed to that scan).
-function CoverageTable({ submarketId }: { submarketId: string }) {
+function CoverageTable({ submarketId, submarketName }: { submarketId: string; submarketName?: string }) {
   const { isAdmin } = useAuth()
   const [promoted, setPromoted] = useState<Record<string, boolean>>({})
   const [emitted, setEmitted] = useState<Record<string, { delivered: boolean; configured: boolean }>>({})
@@ -849,12 +881,47 @@ function CoverageTable({ submarketId }: { submarketId: string }) {
   const visible = data.scores.filter(s => !s.excluded)
   const allSelected = visible.length > 0 && visible.every(s => selected.has(s.prospect_id))
   const colSpan = 7 + (isAdmin ? 1 : 0) + 1  // + checkbox (admin) + contacts column
+
+  const exportCsv = () => {
+    const by = contactsBatch?.by_prospect
+    const join = (id: string, pick: (c: ProspectContacts['contacts'][number]) => string | null | undefined) =>
+      (by?.[id]?.contacts ?? []).map(pick).filter(Boolean).join('; ')
+    const headers = [
+      'Prospect', 'Phone', 'Coverage %', 'Deficit %', 'Best rank', 'Drops out at (mi)',
+      'Website', 'Contact names', 'Emails', 'Contact phones', 'Measured at',
+    ]
+    const rows = visible.map(s => [
+      s.name,
+      s.phone ?? '',
+      s.coverage_pct != null ? s.coverage_pct.toFixed(1) : '',
+      s.coverage_deficit != null ? s.coverage_deficit.toFixed(1) : '',
+      s.best_rank ?? '',
+      s.centroid_dist_at_loss != null ? s.centroid_dist_at_loss.toFixed(1) : '',
+      by?.[s.prospect_id]?.website ?? '',
+      join(s.prospect_id, c => c.full_name || c.name_for_emails),
+      join(s.prospect_id, c => c.email),
+      join(s.prospect_id, c => c.phone),
+      s.measured_at ?? '',
+    ])
+    const slug = (submarketName ?? submarketId)
+      .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+    downloadCsv(`outreach-coverage-${slug}-${new Date().toISOString().slice(0, 10)}.csv`,
+      toCsv(headers, rows))
+  }
+
   return (
     <>
-      <p style={{ fontSize: 11, color: '#94a3b8', margin: '6px 0 0' }}>
-        Ranked by coverage deficit — a business absent at every measured point shows 100% deficit
-        (zero coverage, not unknown). Send the most invisible ones to your CRM.
-      </p>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', margin: '6px 0 0' }}>
+        <p style={{ fontSize: 11, color: '#94a3b8', margin: 0 }}>
+          Ranked by coverage deficit — a business absent at every measured point shows 100% deficit
+          (zero coverage, not unknown). Send the most invisible ones to your CRM.
+        </p>
+        {visible.length > 0 && (
+          <div style={{ marginLeft: 'auto', flexShrink: 0 }}>
+            <DownloadCsvButton onClick={exportCsv} title="Download this run's coverage (with contacts) as a CSV" />
+          </div>
+        )}
+      </div>
       {isAdmin && (
         <EnrichmentBar
           selectedIds={[...selected]}
@@ -989,7 +1056,8 @@ function ResultsCard({ marketId }: { marketId: string }) {
           {submarkets.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
       </div>
-      <CoverageTable submarketId={submarketId} />
+      <CoverageTable submarketId={submarketId}
+        submarketName={submarkets.find(s => s.id === submarketId)?.name} />
     </div>
   )
 }
