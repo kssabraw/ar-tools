@@ -119,14 +119,18 @@ class GbpLocationOption(BaseModel):
 
 class GbpAvailableLocation(BaseModel):
     """A listing the connected agency account manages (from Google), offered in
-    the picker. `registered_client_*` is set when it's already assigned."""
+    the picker. `registered_client_*` is set when it's already assigned; `score`
+    is the match confidence to a client (only on the match endpoint)."""
 
     location_id: str
     account_id: Optional[str] = None
     title: Optional[str] = None
     address: Optional[str] = None
     phone: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
     place_id: Optional[str] = None
+    score: Optional[float] = None
     registered_client_id: Optional[UUID] = None
     registered_client_name: Optional[str] = None
 
@@ -134,6 +138,16 @@ class GbpAvailableLocation(BaseModel):
 class GbpAvailableLocationsResponse(BaseModel):
     locations: list[GbpAvailableLocation]
     detail: Optional[str] = None  # set (with locations empty) when resolution failed
+
+
+class GbpMatchLocationResponse(BaseModel):
+    """The one listing that is this client's GBP (auto-matched), plus every
+    listing ranked as a fallback when the match isn't confident."""
+
+    client_label: Optional[str] = None
+    matched: Optional[GbpAvailableLocation] = None
+    candidates: list[GbpAvailableLocation] = []
+    detail: Optional[str] = None
 
 
 class GbpRegisterLocationRequest(BaseModel):
