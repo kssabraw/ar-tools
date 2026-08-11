@@ -21,6 +21,7 @@ from middleware.auth import require_auth, require_staff
 from models.gbp_posts import (
     GbpAvailableLocationsResponse,
     GbpImageUploadResponse,
+    GbpMatchLocationResponse,
     GbpJob,
     GbpJobsStatusRequest,
     GbpJobStatus,
@@ -55,11 +56,18 @@ async def list_post_locations(client_id: UUID, auth: dict = Depends(require_auth
     return svc.list_ok_locations(str(client_id))
 
 
+@router.get("/clients/{client_id}/gbp/match-location", response_model=GbpMatchLocationResponse)
+async def match_location(client_id: UUID, auth: dict = Depends(require_staff)):
+    """The one listing that is this client's Google Business Profile, auto-matched
+    from the client's captured GBP (business name + Maps pin) against the connected
+    account's managed listings. `candidates` is the ranked fallback."""
+    return loc_svc.match_client_location(str(client_id))
+
+
 @router.get("/gbp/available-locations", response_model=GbpAvailableLocationsResponse)
 async def available_locations(auth: dict = Depends(require_staff)):
     """Every listing the connected agency account manages (from Google), flagged
-    with the client each is already registered to. The source for the "assign a
-    listing to this client" picker. Staff-gated (agency-wide)."""
+    with the client each is already registered to. Agency-wide fallback browse."""
     return loc_svc.resolve_connected_locations()
 
 

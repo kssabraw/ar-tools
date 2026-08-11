@@ -26,6 +26,8 @@ Refs: developers.google.com/my-business/reference/businessinformation/rest/v1/ac
 from __future__ import annotations
 
 import logging
+import math
+import re
 from typing import Optional
 
 from fastapi import HTTPException
@@ -35,9 +37,19 @@ from db.supabase_client import get_supabase
 logger = logging.getLogger(__name__)
 
 # Everything the picker needs about a listing. metadata.placeId links a listing
-# back to the Place ID we already store on clients.gbp; phone is a disambiguator
-# for the operator (two listings can share a name across cities).
-_READ_MASK = "name,title,storefrontAddress,phoneNumbers,metadata"
+# back to the Place ID we already store on clients.gbp; latlng disambiguates two
+# same-name listings across cities (e.g. WheelHouse IT FL vs Orlando); phone is a
+# human-legible disambiguator.
+_READ_MASK = "name,title,storefrontAddress,phoneNumbers,latlng,metadata"
+
+# Company-suffix / stopword noise stripped before matching a client's business
+# name against a listing title.
+_NAME_STOP = {
+    "the", "llc", "inc", "co", "ltd", "corp", "company", "services", "service",
+    "and", "&", "of", "a",
+}
+# A match this strong (name + geo) is auto-confidently the client's listing.
+_CONFIDENT = 0.55
 
 
 # ── pure helpers (unit-tested) ───────────────────────────────────────────────
@@ -58,14 +70,94 @@ def parse_location(loc: dict, account_id: Optional[str]) -> Optional[dict]:
         parts.append(region)
     address = ", ".join(p for p in parts if p) or None
     phone = (loc.get("phoneNumbers") or {}).get("primaryPhone")
+    latlng = loc.get("latlng") or {}
     return {
         "location_id": name,
         "account_id": account_id,
         "title": loc.get("title"),
         "address": address,
         "phone": phone,
+        "lat": latlng.get("latitude"),
+        "lng": latlng.get("longitude"),
         "place_id": (loc.get("metadata") or {}).get("placeId"),
     }
+
+
+def _name_tokens(value: Optional[str]) -> set[str]:
+    """Lowercased alnum tokens of a business name, minus company-suffix noise."""
+    toks = re.findall(r"[a-z0-9]+", (value or "").lower())
+    return {t for t in toks if t not in _NAME_STOP}
+
+
+def name_similarity(a: Optional[str], b: Optional[str]) -> float:
+    """Jaccard overlap of two business names' significant tokens (0..1). Pure."""
+    ta, tb = _name_tokens(a), _name_tokens(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+def parse_latlng_from_maps_uri(uri: Optional[str]) -> Optional[tuple[float, float]]:
+    """Pull (lat, lng) out of a stored Google Maps place URL. Prefers the precise
+    ``!3d<lat>!4d<lng>`` pin, falling back to the ``@lat,lng`` viewport centre.
+    Pure; None when neither is present."""
+    if not uri:
+        return None
+    m = re.search(r"!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)", uri)
+    if not m:
+        m = re.search(r"@(-?\d+\.\d+),(-?\d+\.\d+)", uri)
+    if not m:
+        return None
+    try:
+        return float(m.group(1)), float(m.group(2))
+    except (TypeError, ValueError):
+        return None
+
+
+def _haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Great-circle distance in km between two (lat, lng) points. Pure."""
+    r = 6371.0
+    lat1, lon1, lat2, lon2 = map(math.radians, (a[0], a[1], b[0], b[1]))
+    dlat, dlon = lat2 - lat1, lon2 - lon1
+    h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(h))
+
+
+def _geo_score(client_ll: Optional[tuple[float, float]], loc: dict) -> Optional[float]:
+    """0..1 proximity score of a listing to the client's pin, or None when either
+    side lacks coordinates. Tight bands — geo is the multi-location tiebreaker."""
+    if not client_ll or loc.get("lat") is None or loc.get("lng") is None:
+        return None
+    dist = _haversine_km(client_ll, (loc["lat"], loc["lng"]))
+    if dist <= 0.3:
+        return 1.0
+    if dist <= 1.0:
+        return 0.8
+    if dist <= 3.0:
+        return 0.5
+    if dist <= 10.0:
+        return 0.2
+    return 0.0
+
+
+def score_match(client_name: Optional[str], client_ll: Optional[tuple[float, float]], loc: dict) -> float:
+    """Combined 0..1 confidence that ``loc`` is this client's listing. Name always
+    counts; geo (when both sides have coords) is weighted in as the disambiguator
+    for same-name listings in different cities. Pure (unit-tested)."""
+    name = name_similarity(client_name, loc.get("title"))
+    geo = _geo_score(client_ll, loc)
+    if geo is None:
+        return round(name, 4)
+    return round(name * 0.6 + geo * 0.4, 4)
+
+
+def rank_matches(client_name: Optional[str], client_ll: Optional[tuple[float, float]], locations: list[dict]) -> list[dict]:
+    """Return the listings scored + sorted best-first (each gets a ``score``).
+    Pure — the live resolution feeds it, the frontend renders the top as the
+    client's suggested profile with the rest as a fallback."""
+    scored = [{**loc, "score": score_match(client_name, client_ll, loc)} for loc in locations]
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return scored
 
 
 # ── Google client build (OAuth or SA, via gbp_auth) ──────────────────────────
@@ -152,6 +244,44 @@ def _annotate_registered(locations: list[dict]) -> None:
         if reg:
             loc["registered_client_id"] = reg.get("client_id")
             loc["registered_client_name"] = (reg.get("clients") or {}).get("name")
+
+
+def match_client_location(client_id: str) -> dict:
+    """Resolve the *one* listing that is this client's Google Business Profile.
+
+    Uses what the suite already knows about the client (its captured GBP business
+    name + Maps pin) to auto-match against the connected account's managed
+    listings — so the operator confirms a single card, not a browse. Returns
+    ``{client_label, matched, candidates, detail}``: ``matched`` is the confident
+    pick (score ≥ threshold) else None; ``candidates`` is every listing ranked, the
+    fallback when the match isn't confident. Best-effort — never raises."""
+    try:
+        rows = (
+            get_supabase().table("clients")
+            .select("name, gbp").eq("id", client_id).limit(1).execute().data or []
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.info("gbp_locations.client_load_failed", extra={"error": str(exc)})
+        rows = []
+    client = rows[0] if rows else {}
+    gbp = client.get("gbp") or {}
+    client_name = gbp.get("business_name") or client.get("name")
+    client_ll = parse_latlng_from_maps_uri(gbp.get("google_maps_uri"))
+    client_label = client_name
+
+    resolved = resolve_connected_locations()
+    if resolved.get("detail") and not resolved.get("locations"):
+        return {"client_label": client_label, "matched": None, "candidates": [], "detail": resolved["detail"]}
+
+    ranked = rank_matches(client_name, client_ll, resolved.get("locations") or [])
+    top = ranked[0] if ranked else None
+    matched = top if (top and top.get("score", 0) >= _CONFIDENT) else None
+    return {
+        "client_label": client_label,
+        "matched": matched,
+        "candidates": ranked,
+        "detail": None if ranked else "no_locations_visible",
+    }
 
 
 # ── registration ─────────────────────────────────────────────────────────────

@@ -205,6 +205,7 @@ def test_parse_location_full():
             "title": "Acme Roofing",
             "storefrontAddress": {"addressLines": ["12 Main St"], "locality": "Austin", "administrativeArea": "TX"},
             "phoneNumbers": {"primaryPhone": "+1 512-555-0100"},
+            "latlng": {"latitude": 30.27, "longitude": -97.74},
             "metadata": {"placeId": "ChIJ123"},
         },
         "accounts/123",
@@ -215,6 +216,8 @@ def test_parse_location_full():
         "title": "Acme Roofing",
         "address": "12 Main St, Austin, TX",
         "phone": "+1 512-555-0100",
+        "lat": 30.27,
+        "lng": -97.74,
         "place_id": "ChIJ123",
     }
 
@@ -224,6 +227,42 @@ def test_parse_location_minimal_and_missing_name():
     assert thin["location_id"] == "locations/9" and thin["account_id"] is None
     assert thin["address"] is None and thin["phone"] is None and thin["place_id"] is None
     assert loc_svc.parse_location({"title": "no name"}, "accounts/1") is None
+
+
+# ── client → listing matching ────────────────────────────────────────────────
+def test_parse_latlng_from_maps_uri_prefers_pin():
+    uri = "https://www.google.com/maps/place/X/@34.169,-116.541,14z/data=!3d34.1693721!4d-116.541466"
+    assert loc_svc.parse_latlng_from_maps_uri(uri) == (34.1693721, -116.541466)
+
+
+def test_parse_latlng_falls_back_to_viewport_and_none():
+    assert loc_svc.parse_latlng_from_maps_uri("https://maps.google.com/@26.09,-80.36,14z") == (26.09, -80.36)
+    assert loc_svc.parse_latlng_from_maps_uri("no coords here") is None
+    assert loc_svc.parse_latlng_from_maps_uri(None) is None
+
+
+def test_name_similarity_ignores_suffix_noise():
+    # "Service"/"and" are stopwords → exact-token match.
+    assert loc_svc.name_similarity("ABC Tree And Landscape Service", "ABC Tree Landscape") == 1.0
+    assert loc_svc.name_similarity("WheelHouse IT", "WheelHouse IT") == 1.0
+    assert loc_svc.name_similarity("WheelHouse IT", "Joe's Plumbing") == 0.0
+
+
+def test_score_match_uses_geo_to_disambiguate_same_name():
+    """Two same-name WheelHouse IT listings — geo picks the right city."""
+    ll_ftl = (26.0841946, -80.1793231)  # Fort Lauderdale client pin
+    ftl = {"title": "WheelHouse IT", "lat": 26.0842, "lng": -80.1793}
+    orl = {"title": "WheelHouse IT", "lat": 28.5717, "lng": -81.2085}
+    s_ftl = loc_svc.score_match("WheelHouse IT", ll_ftl, ftl)
+    s_orl = loc_svc.score_match("WheelHouse IT", ll_ftl, orl)
+    assert s_ftl > s_orl
+    ranked = loc_svc.rank_matches("WheelHouse IT", ll_ftl, [orl, ftl])
+    assert ranked[0]["lat"] == 26.0842  # closest wins
+
+
+def test_score_match_without_geo_is_name_only():
+    loc = {"title": "ABC Tree And Landscape Service"}  # no lat/lng
+    assert loc_svc.score_match("ABC Tree And Landscape Service", None, loc) == 1.0
 
 
 # ── schedule cadence math ────────────────────────────────────────────────────
