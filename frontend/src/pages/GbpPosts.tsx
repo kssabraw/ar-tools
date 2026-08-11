@@ -237,11 +237,29 @@ function ConnectionBar() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['gbp-oauth-status'] }),
     onError: (e: Error) => setNotice({ ok: false, msg: e.message === 'forbidden' ? 'Only an admin/staff user can disconnect.' : e.message }),
   })
+  // Pending manager invitations the connected account has received. Drives
+  // whether we even show an "Accept" button — an always-on button reads as a
+  // standing demand when there's nothing to accept (which is the normal state
+  // once the account already manages the listings).
+  const invitationsQ = useQuery<{ invitations: { business: string | null }[] }>({
+    queryKey: ['gbp-invitations'],
+    queryFn: () => api.get<{ invitations: { business: string | null }[] }>('/gbp/oauth/invitations'),
+    enabled: Boolean(data?.connected), staleTime: 60_000, retry: false,
+  })
+  const pendingCount = invitationsQ.data?.invitations.length ?? 0
   const acceptMut = useMutation({
     mutationFn: () => api.post<{ accepted: number; pending: number }>('/gbp/oauth/accept-invitations', {}),
-    onSuccess: (r) => setNotice({ ok: true, msg: r.accepted > 0 ? `Accepted ${r.accepted} access invitation${r.accepted === 1 ? '' : 's'}.` : 'No pending access invitations.' }),
+    onSuccess: (r) => {
+      setNotice({ ok: true, msg: r.accepted > 0 ? `Accepted ${r.accepted} access invitation${r.accepted === 1 ? '' : 's'}.` : 'No pending access invitations.' })
+      qc.invalidateQueries({ queryKey: ['gbp-invitations'] })
+    },
     onError: (e: Error) => setNotice({ ok: false, msg: e.message === 'forbidden' ? 'Only an admin/staff user can do this.' : e.message }),
   })
+  const recheck = async () => {
+    const r = await invitationsQ.refetch()
+    const n = r.data?.invitations.length ?? 0
+    if (n === 0) setNotice({ ok: true, msg: 'No pending access invitations — this account already has the access it’s been granted.' })
+  }
 
   if (!data) return null
   const bar: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 10, fontSize: 13, marginBottom: 16 }
@@ -256,9 +274,15 @@ function ConnectionBar() {
         <div style={{ ...bar, background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#15803d' }}>
           <CheckCircle2 size={15} />
           <span>Connected to Google Business Profile{data.account_email ? ` as ${data.account_email}` : ''}.</span>
-          <button onClick={() => acceptMut.mutate()} disabled={acceptMut.isPending} title="Accept manager invitations clients have sent to the connected account" style={{ ...btn('#fff', '#334155'), marginLeft: 'auto' }}>
-            {acceptMut.isPending ? 'Checking…' : 'Accept access invitations'}
-          </button>
+          {pendingCount > 0 ? (
+            <button onClick={() => acceptMut.mutate()} disabled={acceptMut.isPending} title="Clients have added this account as a Manager — accept to manage their listings" style={{ ...btn(ACCENT), marginLeft: 'auto' }}>
+              {acceptMut.isPending ? 'Accepting…' : `Accept ${pendingCount} access invitation${pendingCount === 1 ? '' : 's'}`}
+            </button>
+          ) : (
+            <button onClick={recheck} disabled={invitationsQ.isFetching} title="Check for new access grants (after a client adds this account as a Manager)" style={{ ...btn('#fff', '#334155'), marginLeft: 'auto' }}>
+              {invitationsQ.isFetching ? 'Checking…' : 'Re-check access'}
+            </button>
+          )}
           <button onClick={() => disconnectMut.mutate()} disabled={disconnectMut.isPending} style={btn('#fff', '#334155')}>
             {disconnectMut.isPending ? 'Disconnecting…' : 'Disconnect'}
           </button>
