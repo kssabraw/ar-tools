@@ -532,16 +532,22 @@ optimised for Answer Engine Optimisation. Follow all of them in every section.
 
 9. ENTITY TRIPLETS in ≥3 sections: [Brand] + [service] + [city] must co-occur in the
    intro, the main services body, the local section, and the FAQ. This establishes the
-   entity relationship in LLM retrieval.
-   MAIN ENTITY IN SUBHEADINGS: repeat the page's main entity — the [service] (and [city]
-   where it reads naturally) — across the H2/H3 subheadings, EACH paired with a real
-   subtopic. Every section heading should name what the page is about, never a bare
-   generic label.
+   entity relationship in LLM retrieval. This is a BODY-PROSE rule — the triplet lives in
+   sentences, NOT in the headings.
+   SERVICE-LED SUBHEADINGS — ONE GEOGRAPHIC HEADING ONLY: front every H2/H3 with the page's
+   main entity — the [service] or a specific service sub-entity (e.g. drain cleaning, water
+   heater repair, burst pipe) drawn from the analysis's service entities — EACH paired with a
+   real subtopic. Do NOT repeat the [city] across the subheadings: extra location entities in
+   headings dilute the primary geo signal and confuse Google + LLM entity extraction about
+   which place the page targets. The city belongs in the H1, the intro, and exactly ONE
+   dedicated geographic heading (the local-area section) — nowhere else in the heading set.
+   Every heading should name what the page is about, never a bare generic label.
    ✗ Bad:  "Our Process" / "Why Choose Us" / "Get Started"
-   ✓ Good: "[Service] Process in [City]" / "Why [City] Homeowners Choose [Brand] for [Service]"
+   ✗ Too much geo: "[Service] in [City]" / "[Service] Process in [City]" / "Why [City] Homeowners Choose Us" (city repeated across headings)
+   ✓ Good: "How [Service] Prevents [Problem]" / "[Sub-service] Explained" / "What to Expect During [Service]", plus ONE geo heading like "[Service] Across [City] & Nearby Areas"
    Do NOT spam the exact-match keyword VERBATIM across headings — vary the wording and front
    the entity + the subtopic. Question-format H3s (rule 3) still count as long as they name
-   the entity, e.g. "How much does [service] cost in [city]?".
+   the entity, e.g. "How much does [service] cost?".
 
 10. SECTION LENGTH ≤300 words: LLMs extract from dense sections poorly. If a topic needs
     more depth, split it into multiple H2 subsections rather than lengthening one section.
@@ -644,8 +650,8 @@ Section 1 — Intro / Direct Answer Block (100–150 words)
 
 Section 2 — USP / Value Proposition (150–200 words)
 <section id="usp">
-  <h2>[Single sentence combining: the main entity (service, + city where it fits) worded naturally + persuasion/outcome + 1–2 entities]</h2>
-  FIRST H2 FORMULA: Must be a complete sentence (not a fragment) that names the main entity — the service (and city where it reads naturally) — paired with a persuasive outcome or differentiator and 1–2 entities. Word the entity NATURALLY; do NOT drop the exact-match keyword in verbatim. Exact-match keywords stuffed into H2s are a demoting signal — the H1 already carries the primary keyword verbatim (rule 9), so front the service + the buyer's situation here instead. (e.g. "When Anaheim Homeowners Face a Burst Pipe After Hours, [Brand] Delivers Same-Day Emergency Plumbing Across Orange County" — names the service + city + situation without repeating the exact query string)
+  <h2>[Single sentence combining: the main entity (the service) worded naturally + persuasion/outcome + 1–2 service entities]</h2>
+  FIRST H2 FORMULA: Must be a complete sentence (not a fragment) that names the main entity — the service — paired with a persuasive outcome or differentiator and 1–2 service entities. Word the entity NATURALLY; do NOT drop the exact-match keyword in verbatim, and do NOT put the city in this heading (rule 9 — the city stays in the H1, the intro, and the dedicated geographic heading only). Exact-match keywords stuffed into H2s are a demoting signal — the H1 already carries the primary keyword verbatim, so front the service + the buyer's situation here instead. (e.g. "When Homeowners Face a Burst Pipe After Hours, [Brand] Delivers Same-Day Emergency Plumbing & Fast Leak Repair" — names the service + situation + service entities without a city or the exact query string)
   [Min 3 differentiators with mechanisms. One contrast statement. One proof signal.]
 </section>
 
@@ -675,12 +681,12 @@ Section 6 — Main Service Body (800–1400 words)
   - You MUST use MULTIPLE H2s within this section — each H2 block must be ≤300 words; split further into additional H2s if needed
   - Each H2 should represent a distinct major topic or service category
   - Use H3s under each H2 for sub-services, use cases, or scenarios
-  - Every heading: include service/city naturally where it fits (not forced)
+  - Every heading: front the SERVICE or a service sub-entity; do NOT put the city in these body-section headings (rule 9 — the city is anchored in the H1, the intro, and the dedicated geographic section only)
   - Open with a primary service description paragraph (answer-first)
   - Each H3: 2–4 sentences covering description, real-world scenario, differentiator, geo reference
   - List ALL sub-services or service types in individual H3 sections (e.g. if keyword is "plumber", include H3s for drain cleaning, water heater repair, pipe repair, etc. — each 2–4 sentences)
-  - At least one H3 must include city or neighborhood name naturally in the heading text
-  - Include a coverage or geo reference in at least one H3 body paragraph
+  - Keep the city OUT of the §6 headings (rule 9); the geographic heading is the dedicated local section only
+  - Include a coverage or geo reference in at least one H3 body paragraph (body prose, not the heading)
   - Weave in the EXACT competitor 4-word phrases from the SEO checklist verbatim (do not paraphrase)
   - Do NOT copy competitor headings verbatim — use them to understand topic coverage, then write
     headings that are more specific, benefit-oriented, or locally relevant
