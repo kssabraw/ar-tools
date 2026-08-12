@@ -603,6 +603,7 @@ async def _run_page_structure_scrape(job: dict) -> None:
     page_type = payload.get("page_type")
     url = payload.get("url")
     job_id = job["id"]
+    supabase = get_supabase()
 
     logger.info(
         "page_structure_scrape_started",
