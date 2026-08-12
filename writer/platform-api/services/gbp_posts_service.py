@@ -819,6 +819,52 @@ def enqueue_generate(client_id: str, req: dict, user_id: str) -> str:
     return res.data[0]["id"]
 
 
+async def enqueue_regenerate(post_id: str, client_id: str, user_id: str) -> str:
+    """Re-draft one AI post in place (async ``gbp_post_generate`` job). Reuses the
+    post's stored gen_context — a URL-sourced post re-fetches its page and keeps
+    its distinct angle. Raises if the post can't be regenerated (manual/no context)."""
+    _assert_enabled()
+    supabase = get_supabase()
+    rows = (
+        supabase.table("gbp_posts")
+        .select("id, client_id, location_row_id, source, cta_type, cta_url, gen_context")
+        .eq("id", post_id).eq("client_id", client_id).is_("deleted_at", "null")
+        .limit(1).execute().data
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="post_not_found")
+    post = rows[0]
+    ctx = post.get("gen_context") or {}
+    if post.get("source") not in ("ai", "schedule"):
+        raise HTTPException(status_code=422, detail="post_not_ai_generated")
+
+    src = ctx.get("source_url")
+    page_content = page_title = None
+    if src:
+        from services.syndication_rewrite import extract_source_content  # lazy
+
+        try:
+            page_title, markdown = await extract_source_content(src)
+            page_content = (markdown or "")[: settings.gbp_post_source_chars]
+        except Exception as exc:  # noqa: BLE001 — regenerate without the page rather than fail
+            logger.info("gbp_posts.regen_source_fetch_failed", extra={"url": src, "error": str(exc)[:200]})
+
+    res = (
+        supabase.table("async_jobs")
+        .insert({"job_type": "gbp_post_generate", "entity_id": client_id, "payload": {
+            "client_id": client_id, "location_row_id": post["location_row_id"],
+            "topic_type": ctx.get("topic_type") or "standard", "theme": ctx.get("theme"),
+            "source_url": src, "page_content": page_content, "page_title": page_title,
+            "variation_index": ctx.get("variation_index"), "variation_total": ctx.get("variation_total"),
+            "cta_type": post.get("cta_type"), "cta_url": post.get("cta_url"),
+            "user_id": user_id, "source": post.get("source") or "ai",
+            "regenerate": True, "regenerate_post_id": post_id,
+        }})
+        .execute()
+    )
+    return res.data[0]["id"]
+
+
 def clamp_bulk_count(count) -> int:
     """Clamp a requested bulk-post count to [0, gbp_post_max_bulk]. Pure."""
     try:
@@ -891,6 +937,10 @@ async def run_generate_job(job: dict) -> None:
         client = _client(client_id)
         vt = payload.get("variation_total")
         variation = variation_instruction(int(payload.get("variation_index") or 1), int(vt)) if vt else None
+        if payload.get("regenerate"):
+            # A per-post re-draft — nudge for a genuinely fresh take.
+            regen = "Produce a FRESH, different version — vary the opening and wording from any earlier draft."
+            variation = f"{variation} {regen}" if variation else regen
         # The distilled Voice & Audience Card (cached on clients.voice_card;
         # distilled once per guide revision — the first bulk job pays it, the
         # rest hit the cache). Best-effort: {} when no guide/ICP → prior behaviour.
@@ -905,6 +955,29 @@ async def run_generate_job(job: dict) -> None:
         )
         if not summary:
             raise HTTPException(status_code=502, detail="empty_draft")
+
+        # Regenerate: rewrite the existing post's text in place instead of adding
+        # a new row (keeps its image, schedule slot, CTA, and gen_context).
+        regen_id = payload.get("regenerate_post_id")
+        if regen_id:
+            post = (
+                supabase.table("gbp_posts")
+                .update({"summary": summary, "status": "draft", "error": None, "updated_at": "now()"})
+                .eq("id", regen_id).eq("client_id", client_id).execute().data
+            )
+            post = post[0] if post else {"id": regen_id}
+            supabase.table("async_jobs").update(
+                {"status": "complete", "result": {"post_id": regen_id, "regenerated": True},
+                 "completed_at": "now()"}
+            ).eq("id", job["id"]).execute()
+            return
+
+        gen_context = {
+            "topic_type": payload.get("topic_type") or "standard",
+            "theme": payload.get("theme"), "source_url": payload.get("source_url"),
+            "variation_index": payload.get("variation_index"),
+            "variation_total": payload.get("variation_total"),
+        }
         row = {
             "client_id": client_id, "location_row_id": payload["location_row_id"],
             "schedule_id": payload.get("schedule_id"),
@@ -912,6 +985,7 @@ async def run_generate_job(job: dict) -> None:
             "topic_type": payload.get("topic_type") or "standard", "summary": summary,
             "cta_type": payload.get("cta_type"), "cta_url": payload.get("cta_url"),
             "status": "draft", "created_by": payload.get("user_id"),
+            "gen_context": gen_context,
         }
         post = supabase.table("gbp_posts").insert(row).execute().data[0]
         auto = bool(payload.get("auto_publish"))

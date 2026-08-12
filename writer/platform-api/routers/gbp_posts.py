@@ -228,6 +228,13 @@ async def generate_post(
     return GbpJob(job_id=job_id)
 
 
+@router.post("/clients/{client_id}/gbp/posts/{post_id}/regenerate", response_model=GbpJob)
+async def regenerate_post(client_id: UUID, post_id: UUID, auth: dict = Depends(require_auth)):
+    """Re-draft one AI post in place (reuses its stored generation context)."""
+    job_id = await svc.enqueue_regenerate(str(post_id), str(client_id), auth["user_id"])
+    return GbpJob(job_id=job_id)
+
+
 @router.post("/clients/{client_id}/gbp/posts/generate-from-url", response_model=GbpBulkGenerateResponse)
 async def generate_from_url(
     client_id: UUID, body: GbpGenerateFromUrlRequest, auth: dict = Depends(require_auth)
