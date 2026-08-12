@@ -191,21 +191,9 @@ function EmojiPicker({ onSelect }: { onSelect: (emoji: string) => void }) {
 
 export function GbpPosts() {
   const { id } = useParams<{ id: string }>()
-  const qc = useQueryClient()
-  const [tab, setTab] = useState<'compose' | 'posts' | 'schedule' | 'trash'>('compose')
-  const [manageOpen, setManageOpen] = useState(false)
-
   const { data: client } = useQuery<Client>({
     queryKey: ['client', id], queryFn: () => api.get<Client>(`/clients/${id}`), enabled: Boolean(id),
   })
-  const locationsQ = useQuery<GbpLocation[]>({
-    queryKey: ['gbp-post-locations', id],
-    queryFn: () => api.get<GbpLocation[]>(`/clients/${id}/gbp/post-locations`),
-    enabled: Boolean(id), retry: false,
-  })
-
-  const disabled = (locationsQ.error as Error | null)?.message === 'gbp_posts_not_enabled'
-
   return (
     <div style={{ padding: 32, maxWidth: 980 }}>
       <Link to={`/clients/${id}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: ACCENT, textDecoration: 'none', marginBottom: 16 }}>
@@ -218,9 +206,32 @@ export function GbpPosts() {
       <p style={{ fontSize: 13, color: '#64748b', marginTop: 0, marginBottom: 20 }}>
         Compose and publish Google Business Profile posts — Updates, Offers, Events & Products — to this client's listing.
       </p>
+      {id && <GbpWorkspace clientId={id} />}
+    </div>
+  )
+}
 
+// The full GBP posts toolkit for one client (Connect + Compose/Posts/Schedule/
+// Trash + listing management). Reused by the standalone page AND embedded in the
+// Local SEO module. `seed` (with a changing nonce) drops text into the composer.
+export function GbpWorkspace({ clientId, seed }: { clientId: string; seed?: { text: string; nonce: number } }) {
+  const qc = useQueryClient()
+  const [tab, setTab] = useState<'compose' | 'posts' | 'schedule' | 'trash'>('compose')
+  const [manageOpen, setManageOpen] = useState(false)
+
+  const locationsQ = useQuery<GbpLocation[]>({
+    queryKey: ['gbp-post-locations', clientId],
+    queryFn: () => api.get<GbpLocation[]>(`/clients/${clientId}/gbp/post-locations`),
+    enabled: Boolean(clientId), retry: false,
+  })
+  const disabled = (locationsQ.error as Error | null)?.message === 'gbp_posts_not_enabled'
+
+  // Seeding the composer from outside (Local SEO suggestions) → jump to Compose.
+  useEffect(() => { if (seed) setTab('compose') }, [seed?.nonce])
+
+  return (
+    <>
       <ConnectionBar />
-
       {disabled ? (
         <EnablementNotice />
       ) : (
@@ -243,21 +254,21 @@ export function GbpPosts() {
           {locationsQ.isLoading ? (
             <div style={{ color: '#64748b', fontSize: 13 }}>Loading…</div>
           ) : (locationsQ.data ?? []).length === 0 ? (
-            <RegisterLocations clientId={id!} registered={[]} />
+            <RegisterLocations clientId={clientId} registered={[]} />
           ) : manageOpen ? (
-            <RegisterLocations clientId={id!} registered={locationsQ.data!} onClose={() => setManageOpen(false)} />
+            <RegisterLocations clientId={clientId} registered={locationsQ.data!} onClose={() => setManageOpen(false)} />
           ) : tab === 'compose' ? (
-            <ComposeTab clientId={id!} locations={locationsQ.data!} onDone={() => { setTab('posts'); qc.invalidateQueries({ queryKey: ['gbp-posts', id] }) }} />
+            <ComposeTab clientId={clientId} locations={locationsQ.data!} seed={seed} onDone={() => { setTab('posts'); qc.invalidateQueries({ queryKey: ['gbp-posts', clientId] }) }} />
           ) : tab === 'posts' ? (
-            <PostsTab clientId={id!} />
+            <PostsTab clientId={clientId} />
           ) : tab === 'schedule' ? (
-            <ScheduleTab clientId={id!} locations={locationsQ.data!} />
+            <ScheduleTab clientId={clientId} locations={locationsQ.data!} />
           ) : (
-            <TrashTab clientId={id!} />
+            <TrashTab clientId={clientId} />
           )}
         </>
       )}
-    </div>
+    </>
   )
 }
 
@@ -675,12 +686,14 @@ function CreateFromUrl({ clientId, locationId, disabled, onDone }: { clientId: s
   )
 }
 
-function ComposeTab({ clientId, locations, onDone }: { clientId: string; locations: GbpLocation[]; onDone: () => void }) {
+function ComposeTab({ clientId, locations, onDone, seed }: { clientId: string; locations: GbpLocation[]; onDone: () => void; seed?: { text: string; nonce: number } }) {
   const okLocations = locations.filter((l) => l.access_status === 'ok')
   const [locationId, setLocationId] = useState(okLocations[0]?.id ?? locations[0]?.id ?? '')
   const [type, setType] = useState<TopicType>('standard')
-  const [summary, setSummary] = useState('')
+  const [summary, setSummary] = useState(seed?.text ?? '')
   const summaryRef = useRef<HTMLTextAreaElement>(null)
+  // Re-seed the composer when an external suggestion is picked (Local SEO).
+  useEffect(() => { if (seed) setSummary(seed.text.slice(0, MAX_CHARS)) }, [seed?.nonce])
   const [ctaType, setCtaType] = useState<CtaType | ''>('')
   const [ctaUrl, setCtaUrl] = useState('')
   const [image, setImage] = useState<string | null>(null)
