@@ -4061,7 +4061,10 @@ def compute_zone_targets(
     target. Using the 75th percentile (rather than max) avoids outlier competitor
     pages setting unrealistically high targets that inflate serp_signal_coverage
     scoring difficulty.
-    Also computes per-zone entity targets using the same 75th-percentile approach.
+    Also computes per-zone entity targets using the same 75th-percentile
+    approach — EXCEPT the H2/H3 zone's entity target, which is benchmarked
+    against the most aggressive competitor (trimmed max, spam outliers
+    excluded) to drive denser entity coverage in the subheadings.
     """
     targets: Dict[str, dict] = {}
     entity_names = {e["name"].lower() for e in google_entities} if google_entities else set()
@@ -4072,6 +4075,24 @@ def compute_zone_targets(
         sorted_vals = sorted(values)
         idx = int(np.ceil(0.75 * len(sorted_vals))) - 1
         return sorted_vals[max(idx, 0)]
+
+    def _aggressive_max(values: list) -> int:
+        """Benchmark against the MOST AGGRESSIVE competitor, not the 75th
+        percentile — the highest per-page count after dropping spam outliers
+        (pages whose count exceeds 3× the median). So one keyword-stuffed
+        competitor cannot set an impossible bar, but a genuinely thorough
+        competitor does raise the target. Used for the H2/H3 entity target."""
+        if not values:
+            return 0
+        if len(values) < 3:
+            return max(values)
+        median = float(np.median(values))
+        if median > 0:
+            threshold = median * 3.0
+            filtered = [v for v in values if v <= threshold]
+            if filtered:
+                return max(filtered)
+        return max(values)
 
     for zone_name in ZONES:
         terms = getattr(related, zone_name, [])
@@ -4088,9 +4109,17 @@ def compute_zone_targets(
             if entity_names:
                 entity_counts.append(sum(1 for e in entity_names if e in cleaned))
 
+        # H2/H3 entity target is benchmarked against the most aggressive
+        # competitor to drive denser entity subheadings; every other zone and
+        # all keyword targets stay at the 75th percentile.
+        entity_target = (
+            _aggressive_max(entity_counts)
+            if zone_name == "h2_h3"
+            else _p75(entity_counts)
+        )
         targets[zone_name] = {
             "target":        _p75(term_counts),
-            "entity_target": _p75(entity_counts),
+            "entity_target": entity_target,
         }
 
     return targets
