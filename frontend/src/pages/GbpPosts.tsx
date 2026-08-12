@@ -832,19 +832,111 @@ function ComposeTab({ clientId, locations, onDone }: { clientId: string; locatio
 }
 
 // ── Posts list ───────────────────────────────────────────────────────────────
+// One post row — with per-post image editing + scheduling for drafts.
+function PostCard({ clientId, post: p, tz, onPublish, isPublishing, onChanged }: {
+  clientId: string; post: GbpPost; tz: string | null
+  onPublish: (id: string) => void; isPublishing: boolean; onChanged: () => void
+}) {
+  const [pending, setPending] = useState<string | null>(null)
+  const [showImage, setShowImage] = useState(false)
+  const [schedAt, setSchedAt] = useState('')
+  const meta = STATUS_META[p.status]
+  const busy = pending !== null || isPublishing
+  const isDraft = p.status === 'draft' || p.status === 'failed'
+  const hasImage = Boolean(p.media?.[0]?.sourceUrl)
+
+  const run = async (fn: () => Promise<unknown>, key: string) => {
+    setPending(key)
+    try { await fn() } finally { setPending(null); onChanged() }
+  }
+  const setImage = (url: string | null) => {
+    void run(() => api.patch(`/gbp/posts/${p.id}`, { media: url ? [{ sourceUrl: url }] : null }), `${p.id}:img`)
+    if (url) setShowImage(false)
+  }
+  const schedule = () => {
+    // tz known → send the raw wall-clock (backend interprets it in the client's
+    // tz); tz unknown → resolve in the browser tz to a UTC ISO (matches Compose).
+    const scheduled_at = tz ? schedAt : new Date(schedAt).toISOString()
+    void run(() => api.post(`/clients/${clientId}/gbp/posts/${p.id}/schedule`, { scheduled_at }), `${p.id}:sch`)
+  }
+
+  return (
+    <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <span style={{ padding: '3px 9px', borderRadius: 999, background: meta.bg, color: meta.color, fontSize: 11, fontWeight: 700 }}>{meta.label}</span>
+        <span style={{ fontSize: 11, color: '#94a3b8', textTransform: 'capitalize' }}>{p.topic_type === 'standard' ? 'update' : p.topic_type}</span>
+        {p.scheduled_at && p.status === 'scheduled' && (
+          <span style={{ fontSize: 11, color: '#7c3aed', display: 'inline-flex', alignItems: 'center', gap: 3 }} title={tzLabel(tz)}><Clock size={11} /> {fmtInTz(p.scheduled_at, tz)}</span>
+        )}
+        {p.search_url && (
+          <a href={p.search_url} target="_blank" rel="noreferrer" style={{ marginLeft: 'auto', fontSize: 12, color: ACCENT, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+            View on Google <ExternalLink size={11} />
+          </a>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 12 }}>
+        {hasImage && <img src={p.media![0].sourceUrl} alt="" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 6, flexShrink: 0 }} />}
+        <p style={{ margin: 0, fontSize: 13, color: '#334155', whiteSpace: 'pre-wrap', flex: 1 }}>{p.summary}</p>
+      </div>
+      {p.error && <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 6 }}>Error: {p.error}</div>}
+
+      {/* Per-post image editor (drafts) */}
+      {isDraft && (
+        <div style={{ marginTop: 10 }}>
+          {showImage ? (
+            <div style={{ padding: 10, border: '1px solid #e2e8f0', borderRadius: 8 }}>
+              <ImageField clientId={clientId} value={p.media?.[0]?.sourceUrl ?? null} onChange={setImage} />
+              <button onClick={() => setShowImage(false)} style={{ ...btn('#fff', '#334155'), marginTop: 8 }}>Done</button>
+            </div>
+          ) : (
+            <button disabled={busy} onClick={() => setShowImage(true)} style={btn('#fff', '#334155')}>
+              <ImageIcon size={12} /> {hasImage ? 'Change image' : 'Add image'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Actions */}
+      <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        {isDraft && (
+          <button disabled={busy} onClick={() => onPublish(p.id)} style={btn('#16a34a')}>
+            <Send size={12} /> {isPublishing ? 'Publishing…' : 'Publish now'}
+          </button>
+        )}
+        {p.status === 'scheduled' && (
+          <button disabled={busy} onClick={() => run(() => api.post(`/clients/${clientId}/gbp/posts/${p.id}/unschedule`, {}), `${p.id}:unsch`)} style={btn('#fff', '#334155')}>
+            <X size={12} /> Unschedule
+          </button>
+        )}
+        {p.status === 'live' && p.search_url && (
+          <button disabled={busy} onClick={() => run(() => api.post(`/gbp/posts/${p.id}/remove-from-google`, {}), `${p.id}:rmg`)} style={btn('#fff', '#b91c1c')}>
+            <XCircle size={12} /> {pending === `${p.id}:rmg` ? 'Removing…' : 'Remove from Google'}
+          </button>
+        )}
+        <button disabled={busy} onClick={() => run(() => api.delete(`/gbp/posts/${p.id}`), `${p.id}:del`)} style={btn('#fff', '#64748b')}>
+          <Trash2 size={12} /> Trash
+        </button>
+        {isDraft && (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto' }}>
+            <input type="datetime-local" value={schedAt} onChange={(e) => setSchedAt(e.target.value)}
+              style={{ ...input, width: 190 }} title={`Publish time — ${tzLabel(tz)}`} />
+            <button disabled={!schedAt || busy} onClick={schedule} style={{ ...btn(ACCENT), opacity: schedAt ? 1 : 0.5 }}>
+              <CalendarClock size={12} /> {pending === `${p.id}:sch` ? 'Scheduling…' : 'Schedule'}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function PostsTab({ clientId }: { clientId: string }) {
   const qc = useQueryClient()
   const { data, isLoading } = useQuery<GbpPost[]>({
     queryKey: ['gbp-posts', clientId], queryFn: () => api.get<GbpPost[]>(`/clients/${clientId}/gbp/posts`),
   })
   const invalidate = () => qc.invalidateQueries({ queryKey: ['gbp-posts', clientId] })
-  const [pending, setPending] = useState<string | null>(null)
   const tz = useClientTz(clientId)
-
-  async function run(fn: () => Promise<unknown>, key: string) {
-    setPending(key)
-    try { await fn() } finally { setPending(null); invalidate() }
-  }
 
   // Sync-from-Google runs as a backgrounded async job — reconnects on return.
   const syncJob = useResumableJob<JobStatus, undefined>({
@@ -889,52 +981,11 @@ function PostsTab({ clientId }: { clientId: string }) {
         : posts.length === 0 ? <div style={{ color: '#94a3b8', fontSize: 13, padding: '24px 0' }}>No posts yet — compose one to get started.</div>
         : (
           <div style={{ display: 'grid', gap: 10 }}>
-            {posts.map((p) => {
-              const meta = STATUS_META[p.status]
-              const isPublishing = publishJob.running && publishingPostId === p.id
-              const busy = Boolean(pending?.startsWith(p.id)) || isPublishing
-              return (
-                <div key={p.id} style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 14 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                    <span style={{ padding: '3px 9px', borderRadius: 999, background: meta.bg, color: meta.color, fontSize: 11, fontWeight: 700 }}>{meta.label}</span>
-                    <span style={{ fontSize: 11, color: '#94a3b8', textTransform: 'capitalize' }}>{p.topic_type === 'standard' ? 'update' : p.topic_type}</span>
-                    {p.scheduled_at && p.status === 'scheduled' && (
-                      <span style={{ fontSize: 11, color: '#7c3aed', display: 'inline-flex', alignItems: 'center', gap: 3 }} title={tzLabel(tz)}><Clock size={11} /> {fmtInTz(p.scheduled_at, tz)}</span>
-                    )}
-                    {p.search_url && (
-                      <a href={p.search_url} target="_blank" rel="noreferrer" style={{ marginLeft: 'auto', fontSize: 12, color: ACCENT, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                        View on Google <ExternalLink size={11} />
-                      </a>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', gap: 12 }}>
-                    {p.media?.[0]?.sourceUrl && <img src={p.media[0].sourceUrl} alt="" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 6, flexShrink: 0 }} />}
-                    <p style={{ margin: 0, fontSize: 13, color: '#334155', whiteSpace: 'pre-wrap', flex: 1 }}>{p.summary}</p>
-                  </div>
-                  {p.error && <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 6 }}>Error: {p.error}</div>}
-                  <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
-                    {(p.status === 'draft' || p.status === 'failed') && (
-                      <button disabled={busy} onClick={() => publishPost(p.id)} style={btn('#16a34a')}>
-                        <Send size={12} /> {isPublishing ? 'Publishing…' : 'Publish'}
-                      </button>
-                    )}
-                    {p.status === 'scheduled' && (
-                      <button disabled={busy} onClick={() => run(() => api.post(`/clients/${clientId}/gbp/posts/${p.id}/unschedule`, {}), `${p.id}:unsch`)} style={btn('#fff', '#334155')}>
-                        <X size={12} /> Unschedule
-                      </button>
-                    )}
-                    {p.status === 'live' && p.search_url && (
-                      <button disabled={busy} onClick={() => run(() => api.post(`/gbp/posts/${p.id}/remove-from-google`, {}), `${p.id}:rmg`)} style={btn('#fff', '#b91c1c')}>
-                        <XCircle size={12} /> {pending === `${p.id}:rmg` ? 'Removing…' : 'Remove from Google'}
-                      </button>
-                    )}
-                    <button disabled={busy} onClick={() => run(() => api.delete(`/gbp/posts/${p.id}`), `${p.id}:del`)} style={btn('#fff', '#64748b')}>
-                      <Trash2 size={12} /> Trash
-                    </button>
-                  </div>
-                </div>
-              )
-            })}
+            {posts.map((p) => (
+              <PostCard key={p.id} clientId={clientId} post={p} tz={tz}
+                onPublish={publishPost} isPublishing={publishJob.running && publishingPostId === p.id}
+                onChanged={invalidate} />
+            ))}
           </div>
         )}
     </div>
