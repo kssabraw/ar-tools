@@ -430,10 +430,10 @@ Return valid HTML only. No markdown. No explanations outside the HTML. Structure
 Then on a NEW LINE after </article>, output the JSON-LD schema block starting with <script type="application/ld+json"> (3 schema blocks in one script tag).
 
 TITLE TAG FORMULA (follow exactly — do not deviate):
-<title>[Power Word]! [Exact Match Keyword] | [Brand Name] | [Justification using entities] | [Additional persuasion + entities]</title>
-- Power Word: a single urgent/emotional word (e.g. Trusted, Fast, Expert, Certified, Local, Licensed)
-- Exact Match Keyword: the primary keyword verbatim
+<title>[Exact Match Keyword] | [Brand Name] | [Phrase Match Keyword] | [Justification using entities] | [Additional persuasion + entities]</title>
+- Exact Match Keyword (EMQ): the primary keyword verbatim
 - Brand Name: the business name
+- Phrase Match Keyword (PMQ): a secondary keyword that contains the primary keyword phrase plus a modifier (e.g. "[keyword] near me", "24 hour [keyword]", "affordable [keyword]") — broadens keyword coverage without repeating the EMQ verbatim
 - Justification: a short phrase using 1–2 Google entities that validates the claim (e.g. "Serving Anaheim Hills & Orange County")
 - Additional persuasion: a benefit or proof point that includes 1–2 more entities (e.g. "Same-Day Response, No Overtime Fees")
 - Total title length: no character limit — prioritise keyword density and entity coverage over brevity
