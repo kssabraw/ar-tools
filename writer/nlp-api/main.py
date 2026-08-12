@@ -434,8 +434,9 @@ TITLE TAG FORMULA (follow exactly — do not deviate):
 - Exact Match Keyword (EMQ): the primary keyword verbatim
 - Brand Name: the business name
 - Phrase Match Keyword (PMQ): a secondary keyword that contains the primary keyword phrase plus a modifier (e.g. "[keyword] near me", "24 hour [keyword]", "affordable [keyword]") — broadens keyword coverage without repeating the EMQ verbatim
-- Justification: a short phrase using 1–2 Google entities that validates the claim (e.g. "Serving Anaheim Hills & Orange County")
-- Additional persuasion: a benefit or proof point that includes 1–2 more entities (e.g. "Same-Day Response, No Overtime Fees")
+- Justification: a short phrase using 1–2 SERVICE-SCOPE or CREDENTIAL entities that validates the claim — NOT additional locations (e.g. "Licensed Burst Pipe & Blocked Drain Repair")
+- Additional persuasion: a benefit or proof point that includes 1–2 more service-scope or credential entities, not places (e.g. "Same-Day Response, No Overtime Fees")
+- GEOGRAPHIC ENTITY RULE: the primary city is ALREADY in the Exact Match Keyword and is the ONLY geographic entity the title should contain. Do NOT append neighbouring suburbs, adjacent cities, or the county — extra locations dilute the primary geo signal and confuse Google + LLM entity extraction. Prefer the SERVICE entities surfaced by the analysis (the services, products, and problems the business solves) for the justification/persuasion slots.
 - Total title length: no character limit — prioritise keyword density and entity coverage over brevity
 
 AEO / LLM WRITING RULES — apply throughout every section
@@ -633,8 +634,8 @@ The rule: lead with the answer, then let the rest of the sentence and paragraph 
 
 Section 1 — Intro / Direct Answer Block (100–150 words)
 <section id="intro">
-  <h1>[Exact Match Keyword] + [1–2 entities that reinforce location or service scope]</h1>
-  H1 FORMULA: Write the primary keyword verbatim, then append relevant entities naturally (e.g. "Emergency Plumber Anaheim — Serving Anaheim Hills, Yorba Linda & Orange County")
+  <h1>[Exact Match Keyword] + [1–2 SERVICE-SCOPE or CREDENTIAL entities]</h1>
+  H1 FORMULA: Write the primary keyword verbatim (it already contains the primary city — the ONLY geographic entity the H1 should carry), then append 1–2 entities that describe the SERVICE scope or a credential — NOT additional locations. Prefer the service entities surfaced by the analysis (e.g. "Emergency Plumber Anaheim — Burst Pipe, Blocked Drain & Water Heater Repair"). Secondary service areas belong in a body "areas we serve" section, not the H1.
   <p>[Brand] provides [service] to [city] — [primary differentiator stated in the first sentence]. [One short supporting sentence with a proof point.]</p>
   <p>[Availability / scope signal — use a specific timeframe ONLY if it is in the business data, otherwise a coverage or credential proof point.] [Phone number as a CTA, e.g. "Call [phone] now".]</p>
   <p>[Direct service claim + city + 1 neighborhood.]</p>
