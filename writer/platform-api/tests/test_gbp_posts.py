@@ -326,6 +326,51 @@ def test_build_image_prompt_adds_brand_safe_style():
     assert "no text" in p and "no logos" in p and "photograph" in p
 
 
+# ── Voice & Audience Card in the draft (pure helpers) ────────────────────────
+def test_render_voice_card_block_empty():
+    assert svc.render_voice_card_block(None) == ""
+    assert svc.render_voice_card_block({}) == ""
+    assert svc.render_voice_card_block({"tone_adjectives": [], "never_use_terms": []}) == ""
+
+
+def test_render_voice_card_block_includes_key_fields():
+    card = {
+        "tone_adjectives": ["warm", "confident"],
+        "person": "first",
+        "must_use_terms": ["storm restoration"],
+        "never_use_terms": ["cheap", "guarantee"],
+        "audience_label": "Melbourne homeowner with an old tile roof",
+        "audience_motivations": ["a roof that lasts"],
+        "cta_language": ["Book your free inspection"],
+    }
+    block = svc.render_voice_card_block(card)
+    assert "HIGHEST PRIORITY" in block
+    assert "warm, confident" in block
+    assert "FIRST PERSON" in block
+    assert '"storm restoration"' in block
+    assert '"cheap"' in block and '"guarantee"' in block
+    assert "Melbourne homeowner" in block
+    assert "Book your free inspection" in block
+
+
+def test_voice_forbidden_hits_word_boundary_case_insensitive():
+    card = {"never_use_terms": ["cheap", "guarantee"]}
+    assert svc.voice_forbidden_hits("We offer CHEAP rates", card) == ["cheap"]
+    assert set(svc.voice_forbidden_hits("cheap guarantee!", card)) == {"cheap", "guarantee"}
+    # word-boundary: "cheaper" does not contain the whole-word "cheap"
+    assert svc.voice_forbidden_hits("cheaper options", card) == []
+    assert svc.voice_forbidden_hits("all good here", card) == []
+    assert svc.voice_forbidden_hits("anything", {}) == []
+
+
+def test_content_type_for_image_format():
+    assert svc.content_type_for_image_format("JPEG") == "image/jpeg"
+    assert svc.content_type_for_image_format("png") == "image/png"  # case-insensitive
+    assert svc.content_type_for_image_format("WEBP") is None  # Google rejects
+    assert svc.content_type_for_image_format("GIF") is None
+    assert svc.content_type_for_image_format(None) is None
+
+
 # ── bulk create-from-URL (pure helpers) ──────────────────────────────────────
 def test_clamp_bulk_count():
     assert svc.clamp_bulk_count(3) == 3

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import uuid4
@@ -342,6 +343,48 @@ async def generate_post_image(prompt: str, business_name: Optional[str] = None) 
     return upload_post_image(png, "image/png")
 
 
+def content_type_for_image_format(fmt: Optional[str]) -> Optional[str]:
+    """Map a Pillow image format to a GBP-allowed content type, or None if Google
+    rejects it (WebP/GIF/etc.). Pure (unit-tested)."""
+    return {"JPEG": "image/jpeg", "PNG": "image/png"}.get((fmt or "").upper())
+
+
+async def import_post_image_from_url(url: str) -> str:
+    """Fetch an image from a public URL, validate it against Google's floor, and
+    re-host it in the public bucket — so the post's media is a stable URL Google
+    can fetch at publish (an external URL may be private/hotlink-blocked/dead).
+    Returns the hosted sourceUrl. Raises HTTPException on failure."""
+    _assert_enabled()
+    import io  # lazy
+
+    import httpx
+
+    u = (url or "").strip()
+    if not u.lower().startswith(("http://", "https://")):
+        raise HTTPException(status_code=422, detail="invalid_image_url")
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as http:
+            resp = await http.get(u, headers={"User-Agent": "Mozilla/5.0 (compatible; ar-tools/1.0)"})
+    except Exception as exc:  # noqa: BLE001
+        logger.info("gbp_posts.image_url_fetch_failed", extra={"url": u[:200], "error": str(exc)[:200]})
+        raise HTTPException(status_code=502, detail="image_fetch_failed")
+    if resp.status_code != 200 or not resp.content:
+        raise HTTPException(status_code=502, detail="image_fetch_failed")
+    data = resp.content
+    # Sniff the real format (a wrong/missing Content-Type header is common) and
+    # map it to a Google-allowed type; upload_post_image re-validates dims/size.
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as im:
+            ct = content_type_for_image_format(im.format)
+    except Exception:  # noqa: BLE001 — not a decodable image
+        raise HTTPException(status_code=422, detail="invalid_image")
+    if not ct:
+        raise HTTPException(status_code=422, detail="unsupported_image_type")
+    return upload_post_image(data, ct)
+
+
 def list_reusable_images(client_id: str) -> list[dict]:
     """The client's existing public images (blog featured images + Local SEO page
     images) so a post can reuse an asset already generated for the client — the
@@ -632,12 +675,68 @@ def variation_instruction(index: int, total: int) -> Optional[str]:
     )
 
 
+def render_voice_card_block(card: Optional[dict]) -> str:
+    """The distilled Voice & Audience Card as a late, high-priority prompt block
+    for a GBP post — the same enforceable card the page writers use, rendered
+    compactly for a short post. Empty string when there's no card. Pure."""
+    if not isinstance(card, dict) or not any(card.values()):
+        return ""
+    lines = [
+        "BRAND VOICE & AUDIENCE — THE CLIENT'S OWN GUIDE (HIGHEST PRIORITY).",
+        "Where anything above conflicts on tone, word choice, grammatical person, or "
+        "CTA wording, THESE RULES WIN.",
+    ]
+    if card.get("tone_adjectives"):
+        lines.append(f"Tone (the post must read this way): {', '.join(card['tone_adjectives'])}")
+    person = card.get("person")
+    if person == "first":
+        lines.append('Grammatical person: FIRST PERSON — write as "we/our".')
+    elif person == "third":
+        lines.append('Grammatical person: THIRD PERSON — name the business, not "we/our".')
+    if card.get("voice_directives"):
+        lines.append("Voice rules: " + "; ".join(card["voice_directives"]))
+    if card.get("must_use_terms"):
+        lines.append("Use these terms verbatim where they fit: " + ", ".join(f'"{t}"' for t in card["must_use_terms"]))
+    if card.get("never_use_terms"):
+        lines.append("FORBIDDEN — never use these words/phrases: " + ", ".join(f'"{t}"' for t in card["never_use_terms"]))
+    if card.get("discouraged_terms"):
+        lines.append("Avoid where possible: " + ", ".join(f'"{t}"' for t in card["discouraged_terms"]))
+    aud: list[str] = []
+    if card.get("audience_label"):
+        aud.append(f"Primary customer: {card['audience_label']}.")
+    if card.get("audience_pain_points"):
+        aud.append("Worried about: " + "; ".join(card["audience_pain_points"]) + ".")
+    if card.get("audience_motivations"):
+        aud.append("They want: " + "; ".join(card["audience_motivations"]) + ".")
+    if card.get("audience_objections"):
+        aud.append("They hesitate because: " + "; ".join(card["audience_objections"]) + ".")
+    if aud:
+        lines.append("Write to this customer — " + " ".join(aud))
+    if card.get("cta_language"):
+        lines.append("CTA wording — use the client's phrasing: " + " / ".join(f'"{c}"' for c in card["cta_language"]))
+    return "\n".join(lines)
+
+
+def voice_forbidden_hits(text: str, card: Optional[dict]) -> list[str]:
+    """The card's never-use terms that appear in `text` (word-boundary,
+    case-insensitive). Pure (unit-tested) — the enforcement trigger."""
+    terms = (card or {}).get("never_use_terms") or []
+    hits: list[str] = []
+    for term in terms:
+        t = (term or "").strip()
+        if t and re.search(r"\b" + re.escape(t) + r"\b", text or "", re.IGNORECASE):
+            hits.append(t)
+    return hits
+
+
 async def draft_summary(
     client: dict, topic_type: str, theme: Optional[str], source_url: Optional[str],
     *, page_content: Optional[str] = None, page_title: Optional[str] = None,
-    variation: Optional[str] = None,
+    variation: Optional[str] = None, card: Optional[dict] = None,
 ) -> str:
-    """One bounded Claude call returning post body text. Raises on hard failure."""
+    """One bounded Claude call returning post body text, grounded in the client's
+    distilled Voice & Audience Card when present (with a corrective pass if a
+    forbidden term slips through). Raises on hard failure."""
     import anthropic  # lazy
 
     from services.report_llm import retry_transient
@@ -660,20 +759,45 @@ async def draft_summary(
     if variation:
         ask.append(variation)
     user = build_client_context(client) + "\n\n" + "\n".join(ask)
+    # The distilled card is the late, high-priority block — it wins on expression.
+    voice_block = render_voice_card_block(card)
+    if voice_block:
+        user += "\n\n" + voice_block
 
     api_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=60)
-    resp = await retry_transient(
-        lambda: api_client.messages.create(
-            model=settings.gbp_post_model,
-            max_tokens=settings.gbp_post_max_tokens,
-            system=_DRAFT_SYSTEM,
-            messages=[{"role": "user", "content": user}],
-        ),
-        max_retries=2,
-        log_tag="gbp_post_draft",
-    )
-    text = "\n".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
-    return text[: settings.gbp_post_max_chars]
+
+    async def _one_call(content: str) -> str:
+        resp = await retry_transient(
+            lambda: api_client.messages.create(
+                model=settings.gbp_post_model, max_tokens=settings.gbp_post_max_tokens,
+                system=_DRAFT_SYSTEM, messages=[{"role": "user", "content": content}],
+            ),
+            max_retries=2, log_tag="gbp_post_draft",
+        )
+        return "\n".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
+
+    text = (await _one_call(user))[: settings.gbp_post_max_chars]
+
+    # Enforcement: a forbidden term is provable — one corrective rewrite to remove
+    # it (mirrors the page writers' critical-finding → corrective pass). Keep the
+    # version with fewer forbidden hits so a rewrite can never make it worse.
+    hits = voice_forbidden_hits(text, card)
+    if hits:
+        fix = (
+            "Rewrite this Google Business Profile post to REMOVE these forbidden words/"
+            f"phrases entirely (and any close variant): {', '.join(hits)}. Keep the same "
+            "meaning, the same brand voice, and under 1500 characters. Return ONLY the post.\n\n"
+            + text
+        )
+        if voice_block:
+            fix = voice_block + "\n\n" + fix
+        try:
+            rewritten = (await _one_call(fix))[: settings.gbp_post_max_chars]
+            if rewritten and len(voice_forbidden_hits(rewritten, card)) < len(hits):
+                text = rewritten
+        except Exception as exc:  # noqa: BLE001 — enforcement is best-effort
+            logger.info("gbp_posts.voice_correction_failed", extra={"error": str(exc)[:200]})
+    return text
 
 
 def enqueue_generate(client_id: str, req: dict, user_id: str) -> str:
@@ -767,11 +891,17 @@ async def run_generate_job(job: dict) -> None:
         client = _client(client_id)
         vt = payload.get("variation_total")
         variation = variation_instruction(int(payload.get("variation_index") or 1), int(vt)) if vt else None
+        # The distilled Voice & Audience Card (cached on clients.voice_card;
+        # distilled once per guide revision — the first bulk job pays it, the
+        # rest hit the cache). Best-effort: {} when no guide/ICP → prior behaviour.
+        from services import voice_card_service  # lazy (avoids import cycle)
+
+        card = await voice_card_service.get_voice_card(client, user_id=payload.get("user_id"))
         summary = await draft_summary(
             client, payload.get("topic_type") or "standard",
             payload.get("theme"), payload.get("source_url"),
             page_content=payload.get("page_content"), page_title=payload.get("page_title"),
-            variation=variation,
+            variation=variation, card=card,
         )
         if not summary:
             raise HTTPException(status_code=502, detail="empty_draft")
