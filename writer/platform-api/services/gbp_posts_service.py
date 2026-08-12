@@ -342,6 +342,48 @@ async def generate_post_image(prompt: str, business_name: Optional[str] = None) 
     return upload_post_image(png, "image/png")
 
 
+def content_type_for_image_format(fmt: Optional[str]) -> Optional[str]:
+    """Map a Pillow image format to a GBP-allowed content type, or None if Google
+    rejects it (WebP/GIF/etc.). Pure (unit-tested)."""
+    return {"JPEG": "image/jpeg", "PNG": "image/png"}.get((fmt or "").upper())
+
+
+async def import_post_image_from_url(url: str) -> str:
+    """Fetch an image from a public URL, validate it against Google's floor, and
+    re-host it in the public bucket — so the post's media is a stable URL Google
+    can fetch at publish (an external URL may be private/hotlink-blocked/dead).
+    Returns the hosted sourceUrl. Raises HTTPException on failure."""
+    _assert_enabled()
+    import io  # lazy
+
+    import httpx
+
+    u = (url or "").strip()
+    if not u.lower().startswith(("http://", "https://")):
+        raise HTTPException(status_code=422, detail="invalid_image_url")
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as http:
+            resp = await http.get(u, headers={"User-Agent": "Mozilla/5.0 (compatible; ar-tools/1.0)"})
+    except Exception as exc:  # noqa: BLE001
+        logger.info("gbp_posts.image_url_fetch_failed", extra={"url": u[:200], "error": str(exc)[:200]})
+        raise HTTPException(status_code=502, detail="image_fetch_failed")
+    if resp.status_code != 200 or not resp.content:
+        raise HTTPException(status_code=502, detail="image_fetch_failed")
+    data = resp.content
+    # Sniff the real format (a wrong/missing Content-Type header is common) and
+    # map it to a Google-allowed type; upload_post_image re-validates dims/size.
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as im:
+            ct = content_type_for_image_format(im.format)
+    except Exception:  # noqa: BLE001 — not a decodable image
+        raise HTTPException(status_code=422, detail="invalid_image")
+    if not ct:
+        raise HTTPException(status_code=422, detail="unsupported_image_type")
+    return upload_post_image(data, ct)
+
+
 def list_reusable_images(client_id: str) -> list[dict]:
     """The client's existing public images (blog featured images + Local SEO page
     images) so a post can reuse an asset already generated for the client — the

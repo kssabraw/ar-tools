@@ -459,6 +459,8 @@ function ImageField({ clientId, value, onChange }: { clientId: string; value: st
   const [showReuse, setShowReuse] = useState(false)
   const [showGen, setShowGen] = useState(false)
   const [genPrompt, setGenPrompt] = useState('')
+  const [showUrl, setShowUrl] = useState(false)
+  const [imgUrl, setImgUrl] = useState('')
   const [err, setErr] = useState<string | null>(null)
   const reuseQ = useQuery<ReusableImage[]>({
     queryKey: ['gbp-reusable-images', clientId],
@@ -478,12 +480,20 @@ function ImageField({ clientId, value, onChange }: { clientId: string; value: st
     onSuccess: (r) => { setErr(null); setShowGen(false); onChange(r.url) },
     onError: (e: Error) => setErr(e.message),
   })
+  const urlMut = useMutation({
+    mutationFn: (u: string) => api.post<{ url: string }>(`/clients/${clientId}/gbp/posts/image-from-url`, { url: u }),
+    onSuccess: (r) => { setErr(null); setShowUrl(false); setImgUrl(''); onChange(r.url) },
+    onError: (e: Error) => setErr(e.message),
+  })
   const errMsg = (e: string): string =>
     e === 'image_dimensions_too_small' ? 'Image must be at least 250×250px.'
       : e === 'unsupported_image_type' ? 'Use a JPG or PNG image.'
       : e === 'image_gen_failed' ? 'Image generation failed — try a different prompt.'
       : e === 'image_gen_not_configured' ? 'AI image generation isn’t configured on the server.'
       : e === 'prompt_required' ? 'Describe the image you want.'
+      : e === 'image_fetch_failed' ? "Couldn't fetch that image URL — make sure it's public and direct to a JPG/PNG."
+      : e === 'invalid_image_url' ? 'Enter a valid http(s) image URL.'
+      : e === 'invalid_image' ? "That URL didn't return a readable image."
       : e
 
   return (
@@ -501,11 +511,24 @@ function ImageField({ clientId, value, onChange }: { clientId: string; value: st
             <input type="file" accept="image/jpeg,image/png" hidden
               onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadMut.mutate(f) }} />
           </label>
-          <button onClick={() => { setShowGen((s) => !s); setShowReuse(false) }} style={btn(showGen ? '#eef2ff' : '#fff', showGen ? ACCENT : '#334155')}><Sparkles size={13} /> Generate with AI</button>
-          <button onClick={() => { setShowReuse((s) => !s); setShowGen(false) }} style={btn('#fff', '#334155')}><ImageIcon size={13} /> Reuse existing</button>
+          <button onClick={() => { setShowGen((s) => !s); setShowReuse(false); setShowUrl(false) }} style={btn(showGen ? '#eef2ff' : '#fff', showGen ? ACCENT : '#334155')}><Sparkles size={13} /> Generate with AI</button>
+          <button onClick={() => { setShowUrl((s) => !s); setShowGen(false); setShowReuse(false) }} style={btn(showUrl ? '#eef2ff' : '#fff', showUrl ? ACCENT : '#334155')}><Link2 size={13} /> From URL</button>
+          <button onClick={() => { setShowReuse((s) => !s); setShowGen(false); setShowUrl(false) }} style={btn('#fff', '#334155')}><ImageIcon size={13} /> Reuse existing</button>
         </div>
       )}
       {err && <div style={{ color: '#b91c1c', fontSize: 12, marginTop: 6 }}>{errMsg(err)}</div>}
+      {showUrl && !value && (
+        <div style={{ marginTop: 10, padding: 12, border: '1px solid #e2e8f0', borderRadius: 10 }}>
+          <label style={label}>Image URL <span style={{ color: '#94a3b8', fontWeight: 400 }}>(direct link to a JPG/PNG)</span></label>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input value={imgUrl} onChange={(e) => setImgUrl(e.target.value)} placeholder="https://example.com/image.jpg" style={{ ...input, flex: 1 }} />
+            <button onClick={() => urlMut.mutate(imgUrl.trim())} disabled={!imgUrl.trim() || urlMut.isPending} style={{ ...btn(ACCENT), opacity: imgUrl.trim() ? 1 : 0.5 }}>
+              {urlMut.isPending ? 'Fetching…' : 'Use image'}
+            </button>
+          </div>
+          <p style={{ fontSize: 11, color: '#94a3b8', margin: '6px 0 0' }}>We fetch and re-host it so Google can load it reliably at publish time.</p>
+        </div>
+      )}
       {showGen && !value && (
         <div style={{ marginTop: 10, padding: 12, border: '1px dashed #c7d2fe', borderRadius: 10, background: '#f5f3ff' }}>
           <label style={{ ...label, color: ACCENT }}><Sparkles size={12} style={{ verticalAlign: -1 }} /> Describe the image (Nano Banana · Gemini)</label>

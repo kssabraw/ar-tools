@@ -326,6 +326,14 @@ def test_build_image_prompt_adds_brand_safe_style():
     assert "no text" in p and "no logos" in p and "photograph" in p
 
 
+def test_content_type_for_image_format():
+    assert svc.content_type_for_image_format("JPEG") == "image/jpeg"
+    assert svc.content_type_for_image_format("png") == "image/png"  # case-insensitive
+    assert svc.content_type_for_image_format("WEBP") is None  # Google rejects
+    assert svc.content_type_for_image_format("GIF") is None
+    assert svc.content_type_for_image_format(None) is None
+
+
 # ── bulk create-from-URL (pure helpers) ──────────────────────────────────────
 def test_clamp_bulk_count():
     assert svc.clamp_bulk_count(3) == 3

@@ -163,6 +163,12 @@ class GbpGenerateImageRequest(BaseModel):
     prompt: str
 
 
+class GbpImageFromUrlRequest(BaseModel):
+    """A public image URL to fetch, validate, and re-host for a post."""
+
+    url: str
+
+
 class GbpGenerateFromUrlRequest(BaseModel):
     """Create N distinct draft posts from the content of a page URL (0–99)."""
 

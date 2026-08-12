@@ -23,6 +23,7 @@ from models.gbp_posts import (
     GbpBulkGenerateResponse,
     GbpGenerateFromUrlRequest,
     GbpGenerateImageRequest,
+    GbpImageFromUrlRequest,
     GbpImageUploadResponse,
     GbpMatchLocationResponse,
     GbpJob,
@@ -114,6 +115,16 @@ async def generate_post_image(
     """Generate a post image from a text prompt with Nano Banana (Gemini 2.5 Flash
     Image), store it in the public bucket, and return its URL to drop into media."""
     url = await svc.generate_post_image(body.prompt)
+    return GbpImageUploadResponse(url=url)
+
+
+@router.post("/clients/{client_id}/gbp/posts/image-from-url", response_model=GbpImageUploadResponse)
+async def image_from_url(
+    client_id: UUID, body: GbpImageFromUrlRequest, auth: dict = Depends(require_auth)
+):
+    """Fetch a public image URL, validate it against Google's floor, and re-host
+    it in the public bucket. Returns the hosted URL to drop into a post's media."""
+    url = await svc.import_post_image_from_url(body.url)
     return GbpImageUploadResponse(url=url)
 
 
