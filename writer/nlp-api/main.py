@@ -4062,9 +4062,10 @@ def compute_zone_targets(
     pages setting unrealistically high targets that inflate serp_signal_coverage
     scoring difficulty.
     Also computes per-zone entity targets using the same 75th-percentile
-    approach — EXCEPT the H2/H3 zone's entity target, which is benchmarked
-    against the most aggressive competitor (trimmed max, spam outliers
-    excluded) to drive denser entity coverage in the subheadings.
+    approach — EXCEPT the H2/H3 and paragraph zones' entity targets, which are
+    benchmarked against the most aggressive competitor (trimmed max, spam
+    outliers excluded) to drive denser entity coverage in the subheadings and
+    body prose.
     """
     targets: Dict[str, dict] = {}
     entity_names = {e["name"].lower() for e in google_entities} if google_entities else set()
@@ -4109,12 +4110,13 @@ def compute_zone_targets(
             if entity_names:
                 entity_counts.append(sum(1 for e in entity_names if e in cleaned))
 
-        # H2/H3 entity target is benchmarked against the most aggressive
-        # competitor to drive denser entity subheadings; every other zone and
-        # all keyword targets stay at the 75th percentile.
+        # H2/H3 and paragraph entity targets are benchmarked against the most
+        # aggressive competitor to drive denser entity coverage in subheadings
+        # + body prose; the title/H1 entity targets and all keyword targets
+        # stay at the 75th percentile.
         entity_target = (
             _aggressive_max(entity_counts)
-            if zone_name == "h2_h3"
+            if zone_name in ("h2_h3", "paragraphs")
             else _p75(entity_counts)
         )
         targets[zone_name] = {
