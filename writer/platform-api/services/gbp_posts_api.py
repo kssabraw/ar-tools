@@ -215,6 +215,26 @@ def classify_post_error(status_code: Optional[int], message: str = "") -> str:
     return f"http_{status_code}" if status_code else "unknown_error"
 
 
+# Classified codes that a retry may clear WITHOUT any config/content change —
+# Google rejected the request BEFORE creating anything, so re-publishing is safe
+# (no duplicate) and worthwhile:
+#   * gbp_api_not_enabled  — the "API has not been used ... or is disabled" 403
+#     is intermittently returned under propagation load even when the API IS
+#     enabled (the same post published LIVE on a retry minutes later).
+#   * gbp_quota_not_granted — a 429/quota blip; backoff-then-retry is exactly right.
+# Terminal codes (invalid_post_content, not-a-manager/forbidden, not-found) are
+# client-actionable and a retry can only burn attempts and delay the real error.
+_TRANSIENT_POST_ERRORS = {"gbp_api_not_enabled", "gbp_quota_not_granted"}
+
+
+def is_transient_post_error(code: Optional[str]) -> bool:
+    """Whether a classified publish-error code is worth another attempt. Pure
+    (unit-tested). A 5xx from Google (``http_5xx``) or an unclassified blip
+    (``unknown_error``, from a response with no status) is transient too."""
+    c = (code or "").strip().lower()
+    return c in _TRANSIENT_POST_ERRORS or c.startswith("http_5") or c == "unknown_error"
+
+
 # ---------------------------------------------------------------------------
 # Live calls (synchronous; run via asyncio.to_thread from async runners).
 # ---------------------------------------------------------------------------

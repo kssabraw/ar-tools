@@ -399,6 +399,14 @@ class Settings(BaseSettings):
     # Daily live-state reconciliation (catches async REJECTED + imports external
     # posts). One sync job per client with an ok location, after this hour (UTC).
     gbp_posts_sync_hour_utc: int = 9
+    # Max attempts for a publish job. Google's Business Profile v4 API
+    # intermittently returns transient 403 "API has not been used ... or is
+    # disabled" / 429 quota errors under propagation load even when the API is
+    # enabled — observed publishing the SAME post LIVE minutes later with no
+    # config change. A transient failure is re-queued on the shared retry ladder
+    # (backoff 5/15/45 min), so 4 attempts cover ~65 min — well past a typical
+    # propagation flake — before the post is marked failed and the team alerted.
+    gbp_post_publish_max_attempts: int = 4
     # ------------------------------------------------------------------
     # GBP OAuth (alternative to the service account for the Posts/GBP APIs).
     # Google's Business Profile API is OAuth-first; a bare service account may

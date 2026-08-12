@@ -199,6 +199,43 @@ def test_classify_invalid_and_notfound():
     assert api.classify_post_error(404, "not found") == "post_or_location_not_found"
 
 
+# ── transient-vs-terminal publish classification (auto-retry) ────────────────
+def test_is_transient_post_error_true_for_propagation_and_quota_and_5xx():
+    # The observed incident: a 403 "API has not been used ... or is disabled" that
+    # cleared on a retry minutes later — must be retried, not failed.
+    assert api.is_transient_post_error("gbp_api_not_enabled") is True
+    assert api.is_transient_post_error("gbp_quota_not_granted") is True
+    assert api.is_transient_post_error("http_503") is True
+    assert api.is_transient_post_error("unknown_error") is True
+    assert api.is_transient_post_error("GBP_API_NOT_ENABLED") is True  # case-insensitive
+
+
+def test_is_transient_post_error_false_for_terminal_codes():
+    # Client-actionable — retrying only burns attempts and delays the real error.
+    assert api.is_transient_post_error("invalid_post_content") is False
+    assert api.is_transient_post_error("service_account_not_a_manager_or_forbidden") is False
+    assert api.is_transient_post_error("post_or_location_not_found") is False
+    assert api.is_transient_post_error("http_400") is False
+    assert api.is_transient_post_error(None) is False
+
+
+def test_publish_failure_is_transient_reads_httpexception_detail():
+    from fastapi import HTTPException
+    # The v4 wrapper maps every non-2xx to a 502, so the DETAIL code classifies.
+    assert svc.publish_failure_is_transient(HTTPException(502, "gbp_api_not_enabled")) is True
+    assert svc.publish_failure_is_transient(HTTPException(502, "gbp_quota_not_granted")) is True
+    assert svc.publish_failure_is_transient(HTTPException(502, "invalid_post_content")) is False
+    # Pre-call gates (verified/not-found) are terminal.
+    assert svc.publish_failure_is_transient(HTTPException(409, "gbp_location_not_verified")) is False
+
+
+def test_publish_failure_is_transient_treats_transport_errors_as_transient():
+    import httpx
+    assert svc.publish_failure_is_transient(httpx.ConnectTimeout("boom")) is True
+    assert svc.publish_failure_is_transient(TimeoutError()) is True
+    assert svc.publish_failure_is_transient(ValueError("a bug")) is False
+
+
 # ── location resolution (parse_location) ─────────────────────────────────────
 def test_parse_location_full():
     parsed = loc_svc.parse_location(
