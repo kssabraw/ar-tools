@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, ArrowRight, Check, Copy, Download, ExternalLink, TrendingUp, Wand2,
+  ArrowLeft, ArrowRight, Check, Copy, Download, ExternalLink, TrendingUp, Wand2, Megaphone,
 } from 'lucide-react'
+import { GbpWorkspace } from '../../pages/GbpPosts'
 import { localSeoApi } from './api'
 import { useResumableJob } from '../../lib/useResumableJob'
 import type { LocalSeoPageDetail, SocialPostsResult } from './types'
@@ -139,6 +140,7 @@ export function GeneratedPageView({
   const [social, setSocial] = useState<SocialPostsResult | null>(null)
   const [socialError, setSocialError] = useState('')
   const [copiedPost, setCopiedPost] = useState<string | null>(null)
+  const [gbpSeed, setGbpSeed] = useState<{ text: string; nonce: number } | undefined>(undefined)
   const socialRequested = useRef(false)
   const socialJob = useResumableJob<SocialPostsResult, null>({
     storageKey: `localseo:social:${clientId}:${page.id}`,
@@ -372,17 +374,22 @@ export function GeneratedPageView({
           )}
           {!socialLoading && social && (
             <>
-              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>Suggested posts for this page — send one to the composer below to add an image, schedule, or publish it.</p>
                 <button style={outlineBtn} onClick={downloadSocial}><Download size={14} /> Download all</button>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {social.gbp.map((post, i) => {
                   const id = `gbp-${i}`
                   return (
-                    <div key={id} style={{ ...card, padding: 16, display: 'flex', gap: 12 }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', width: 16, flexShrink: 0 }}>{i + 1}</span>
+                    <div key={id} style={{ ...card, padding: 16, display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', width: 16, flexShrink: 0, marginTop: 2 }}>{i + 1}</span>
                       <p style={{ fontSize: 14, color: '#0f172a', flex: 1, whiteSpace: 'pre-wrap', margin: 0 }}>{post}</p>
-                      <button onClick={() => copyPost(post, id)} title="Copy" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', flexShrink: 0 }}>
+                      <button onClick={() => setGbpSeed({ text: post, nonce: Date.now() })} title="Send to the composer below"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: '#eef2ff', border: '1px solid #c7d2fe', color: '#4f46e5', fontSize: 12, fontWeight: 600, cursor: 'pointer', borderRadius: 8, padding: '5px 10px', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                        <Megaphone size={13} /> Use in composer
+                      </button>
+                      <button onClick={() => copyPost(post, id)} title="Copy" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', flexShrink: 0, marginTop: 2 }}>
                         {copiedPost === id ? <Check size={16} color="#16a34a" /> : <Copy size={16} />}
                       </button>
                     </div>
@@ -391,6 +398,16 @@ export function GeneratedPageView({
               </div>
             </>
           )}
+
+          {/* Full GBP Posts toolkit — compose (seedable from a suggestion above),
+              add images, schedule, and publish to the client's Business Profile. */}
+          <div style={{ marginTop: 8, paddingTop: 16, borderTop: '1px solid #e2e8f0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <Megaphone size={18} color="#6366f1" />
+              <h3 style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', margin: 0 }}>Post to Google Business Profile</h3>
+            </div>
+            <GbpWorkspace clientId={clientId} seed={gbpSeed} />
+          </div>
         </div>
       )}
 
