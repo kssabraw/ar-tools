@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Megaphone, Trash2, RotateCcw, ExternalLink, RefreshCw, Sparkles,
   CalendarClock, Send, Save, X, Upload, ImageIcon, CheckCircle2, XCircle, Clock, Link2,
-  MapPin, Plus, Pencil,
+  MapPin, Plus, Pencil, Smile,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useResumableJob, type JobPoll } from '../lib/useResumableJob'
@@ -139,6 +139,55 @@ const input: React.CSSProperties = {
   fontFamily: 'inherit', boxSizing: 'border-box',
 }
 const label: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: '#475569', marginBottom: 4, display: 'block' }
+
+// ── Emoji picker (dependency-free) ───────────────────────────────────────────
+const EMOJI_GROUPS: { label: string; emojis: string[] }[] = [
+  { label: 'Smileys & people', emojis: ['😀', '😃', '😄', '😁', '😊', '🙂', '😉', '😍', '🤩', '😎', '🥳', '🤗', '🙌', '👏', '💪', '👍', '👌', '🙏', '🤝', '✌️'] },
+  { label: 'Nature & weather', emojis: ['🌟', '⭐', '✨', '🔥', '💥', '☀️', '🌤️', '🌧️', '⛈️', '🌈', '🌳', '🌲', '🍃', '🌸', '🌺', '🌱', '🍂', '❄️', '🌊', '⚡'] },
+  { label: 'Home & work', emojis: ['🏡', '🏠', '🔨', '🛠️', '🧰', '🪜', '🚜', '🚚', '📞', '📱', '💻', '📅', '📍', '🎉', '🎁', '🏆', '💰', '💯', '✅', '⏰'] },
+  { label: 'Symbols', emojis: ['❤️', '🧡', '💛', '💚', '💙', '💜', '✔️', '➡️', '⬇️', '❗', '❓', '💬', '📢', '🔔', '♻️', '🆕', '🆓', '🔝', '💎', '⚠️'] },
+]
+
+// Insert text at the textarea's caret (or append if unfocused), respecting a max.
+function insertAtCursor(el: HTMLTextAreaElement | null, current: string, text: string, max: number): { value: string; caret: number } {
+  const start = el?.selectionStart ?? current.length
+  const end = el?.selectionEnd ?? current.length
+  const value = (current.slice(0, start) + text + current.slice(end)).slice(0, max)
+  return { value, caret: Math.min(start + text.length, value.length) }
+}
+
+function EmojiPicker({ onSelect }: { onSelect: (emoji: string) => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <button type="button" onClick={() => setOpen((o) => !o)} title="Insert emoji" style={btn('#fff', '#334155')}>
+        <Smile size={14} /> Emoji
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 20 }} />
+          <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 6, zIndex: 21, width: 290, maxHeight: 260, overflowY: 'auto', background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, boxShadow: '0 8px 24px rgba(15,23,42,0.14)', padding: 10 }}>
+            {EMOJI_GROUPS.map((g) => (
+              <div key={g.label} style={{ marginBottom: 4 }}>
+                <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.3, margin: '4px 2px' }}>{g.label}</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                  {g.emojis.map((e) => (
+                    <button key={e} type="button" onClick={() => { onSelect(e); setOpen(false) }}
+                      style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: 4, borderRadius: 6 }}
+                      onMouseEnter={(ev) => { ev.currentTarget.style.background = '#f1f5f9' }}
+                      onMouseLeave={(ev) => { ev.currentTarget.style.background = 'none' }}>
+                      {e}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
 
 export function GbpPosts() {
   const { id } = useParams<{ id: string }>()
@@ -631,6 +680,7 @@ function ComposeTab({ clientId, locations, onDone }: { clientId: string; locatio
   const [locationId, setLocationId] = useState(okLocations[0]?.id ?? locations[0]?.id ?? '')
   const [type, setType] = useState<TopicType>('standard')
   const [summary, setSummary] = useState('')
+  const summaryRef = useRef<HTMLTextAreaElement>(null)
   const [ctaType, setCtaType] = useState<CtaType | ''>('')
   const [ctaUrl, setCtaUrl] = useState('')
   const [image, setImage] = useState<string | null>(null)
@@ -811,8 +861,15 @@ function ComposeTab({ clientId, locations, onDone }: { clientId: string; locatio
       </div>
 
       <div>
-        <label style={label}>Post text</label>
-        <textarea value={summary} onChange={(e) => setSummary(e.target.value.slice(0, MAX_CHARS))} rows={5}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+          <label style={{ ...label, marginBottom: 0 }}>Post text</label>
+          <EmojiPicker onSelect={(e) => {
+            const { value, caret } = insertAtCursor(summaryRef.current, summary, e, MAX_CHARS)
+            setSummary(value)
+            requestAnimationFrame(() => { const el = summaryRef.current; if (el) { el.focus(); el.setSelectionRange(caret, caret) } })
+          }} />
+        </div>
+        <textarea ref={summaryRef} value={summary} onChange={(e) => setSummary(e.target.value.slice(0, MAX_CHARS))} rows={5}
           placeholder="Write your post…" style={{ ...input, resize: 'vertical' }} />
         <div style={{ fontSize: 11, color: summary.length > MAX_CHARS - 100 ? '#b45309' : '#94a3b8', textAlign: 'right', marginTop: 2 }}>{summary.length}/{MAX_CHARS}</div>
       </div>
@@ -866,6 +923,7 @@ function PostCard({ clientId, post: p, tz, onPublish, isPublishing, onChanged }:
   const [showImage, setShowImage] = useState(false)
   const [schedAt, setSchedAt] = useState('')
   const [editText, setEditText] = useState<string | null>(null)
+  const editRef = useRef<HTMLTextAreaElement>(null)
   const meta = STATUS_META[p.status]
   const busy = pending !== null || isPublishing
   const isDraft = p.status === 'draft' || p.status === 'failed'
@@ -929,13 +987,18 @@ function PostCard({ clientId, post: p, tz, onPublish, isPublishing, onChanged }:
         {hasImage && <img src={p.media![0].sourceUrl} alt="" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 6, flexShrink: 0 }} />}
         {editText !== null ? (
           <div style={{ flex: 1 }}>
-            <textarea value={editText} onChange={(e) => setEditText(e.target.value.slice(0, MAX_CHARS))} rows={4}
+            <textarea ref={editRef} value={editText} onChange={(e) => setEditText(e.target.value.slice(0, MAX_CHARS))} rows={4}
               style={{ ...input, resize: 'vertical' }} />
-            <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+            <div style={{ display: 'flex', gap: 6, marginTop: 6, alignItems: 'center' }}>
               <button disabled={busy || !editText.trim()} onClick={saveText} style={btn(ACCENT)}>
                 <Save size={12} /> {pending === `${p.id}:edit` ? 'Saving…' : 'Save'}
               </button>
               <button onClick={() => setEditText(null)} style={btn('#fff', '#334155')}>Cancel</button>
+              <EmojiPicker onSelect={(e) => {
+                const { value, caret } = insertAtCursor(editRef.current, editText, e, MAX_CHARS)
+                setEditText(value)
+                requestAnimationFrame(() => { const el = editRef.current; if (el) { el.focus(); el.setSelectionRange(caret, caret) } })
+              }} />
             </div>
           </div>
         ) : (
