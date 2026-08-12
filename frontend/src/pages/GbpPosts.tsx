@@ -1081,6 +1081,7 @@ function PostsTab({ clientId }: { clientId: string }) {
   })
   const invalidate = () => qc.invalidateQueries({ queryKey: ['gbp-posts', clientId] })
   const tz = useClientTz(clientId)
+  const [filter, setFilter] = useState<'all' | 'drafts' | 'scheduled' | 'live'>('all')
 
   // Sync-from-Google runs as a backgrounded async job — reconnects on return.
   const syncJob = useResumableJob<JobStatus, undefined>({
@@ -1111,21 +1112,53 @@ function PostsTab({ clientId }: { clientId: string }) {
   }
 
   const posts = data ?? []
+  // Actionable (draft/failed → then scheduled → publishing) sort ahead of live/
+  // imported posts, so your own drafts are never buried under posts synced from
+  // Google. Data arrives created_at-desc, so a stable sort keeps recency within
+  // each status band.
+  const STATUS_RANK: Record<string, number> = { draft: 0, failed: 1, scheduled: 2, publishing: 3, live: 4, rejected: 5, deleted: 6 }
+  const isDraftish = (s: string) => s === 'draft' || s === 'failed'
+  const counts = {
+    all: posts.length,
+    drafts: posts.filter((p) => isDraftish(p.status)).length,
+    scheduled: posts.filter((p) => p.status === 'scheduled').length,
+    live: posts.filter((p) => p.status === 'live').length,
+  }
+  const shown = posts
+    .filter((p) => filter === 'all' ? true : filter === 'drafts' ? isDraftish(p.status) : p.status === filter)
+    .slice()
+    .sort((a, b) => (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9))
+
+  const TABS: { key: typeof filter; label: string; n: number }[] = [
+    { key: 'all', label: 'All', n: counts.all },
+    { key: 'drafts', label: 'Drafts', n: counts.drafts },
+    { key: 'scheduled', label: 'Scheduled', n: counts.scheduled },
+    { key: 'live', label: 'Live', n: counts.live },
+  ]
+
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {TABS.map((t) => (
+            <button key={t.key} onClick={() => setFilter(t.key)}
+              style={{ padding: '5px 11px', borderRadius: 999, border: `1px solid ${filter === t.key ? ACCENT : '#e2e8f0'}`, background: filter === t.key ? '#eef2ff' : '#fff', color: filter === t.key ? ACCENT : '#475569', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+              {t.label} {t.n}
+            </button>
+          ))}
+        </div>
         <button onClick={() => { void syncJob.start(async () => {
           const r = await api.post<{ job_id: string }>(`/clients/${clientId}/gbp/posts/sync`, {})
           return r.job_id
-        }, undefined) }} disabled={syncJob.running} style={btn('#fff', '#334155')}>
+        }, undefined) }} disabled={syncJob.running} style={{ ...btn('#fff', '#334155'), marginLeft: 'auto' }}>
           <RefreshCw size={13} /> {syncJob.running ? 'Syncing…' : 'Sync from Google'}
         </button>
       </div>
       {isLoading ? <div style={{ color: '#64748b', fontSize: 13 }}>Loading…</div>
-        : posts.length === 0 ? <div style={{ color: '#94a3b8', fontSize: 13, padding: '24px 0' }}>No posts yet — compose one to get started.</div>
+        : shown.length === 0 ? <div style={{ color: '#94a3b8', fontSize: 13, padding: '24px 0' }}>{posts.length === 0 ? 'No posts yet — compose one to get started.' : 'No posts in this view.'}</div>
         : (
           <div style={{ display: 'grid', gap: 10 }}>
-            {posts.map((p) => (
+            {shown.map((p) => (
               <PostCard key={p.id} clientId={clientId} post={p} tz={tz}
                 onPublish={publishPost} isPublishing={publishJob.running && publishingPostId === p.id}
                 onChanged={invalidate} />
