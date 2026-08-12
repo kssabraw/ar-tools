@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Megaphone, Trash2, RotateCcw, ExternalLink, RefreshCw, Sparkles,
   CalendarClock, Send, Save, X, Upload, ImageIcon, CheckCircle2, XCircle, Clock, Link2,
-  MapPin, Plus,
+  MapPin, Plus, Pencil,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useResumableJob, type JobPoll } from '../lib/useResumableJob'
@@ -39,7 +39,7 @@ interface GbpPost {
   id: string; location_row_id: string; source: string; topic_type: TopicType
   summary: string; cta_type: CtaType | null; cta_url: string | null
   event: Record<string, unknown> | null; offer: Record<string, unknown> | null
-  media: { sourceUrl?: string }[] | null; status: PostStatus
+  media: { sourceUrl?: string; prompt?: string }[] | null; status: PostStatus
   scheduled_at: string | null; published_at: string | null
   search_url: string | null; error: string | null; created_at: string | null
 }
@@ -455,7 +455,7 @@ function RegisterLocations({ clientId, registered, onClose }: { clientId: string
 }
 
 // ── Image field (upload + reuse existing) ────────────────────────────────────
-function ImageField({ clientId, value, onChange }: { clientId: string; value: string | null; onChange: (url: string | null) => void }) {
+function ImageField({ clientId, value, onChange }: { clientId: string; value: string | null; onChange: (url: string | null, prompt?: string) => void }) {
   const [showReuse, setShowReuse] = useState(false)
   const [showGen, setShowGen] = useState(false)
   const [genPrompt, setGenPrompt] = useState('')
@@ -477,7 +477,8 @@ function ImageField({ clientId, value, onChange }: { clientId: string; value: st
   })
   const genMut = useMutation({
     mutationFn: (prompt: string) => api.post<{ url: string }>(`/clients/${clientId}/gbp/posts/generate-image`, { prompt }),
-    onSuccess: (r) => { setErr(null); setShowGen(false); onChange(r.url) },
+    // Pass the prompt back so the caller can store it — enables one-click "Regenerate image".
+    onSuccess: (r, prompt) => { setErr(null); setShowGen(false); onChange(r.url, prompt) },
     onError: (e: Error) => setErr(e.message),
   })
   const urlMut = useMutation({
@@ -633,6 +634,7 @@ function ComposeTab({ clientId, locations, onDone }: { clientId: string; locatio
   const [ctaType, setCtaType] = useState<CtaType | ''>('')
   const [ctaUrl, setCtaUrl] = useState('')
   const [image, setImage] = useState<string | null>(null)
+  const [imagePrompt, setImagePrompt] = useState<string | null>(null)
   // offer/event fields
   const [eventTitle, setEventTitle] = useState('')
   const [startDate, setStartDate] = useState(''); const [startTime, setStartTime] = useState('')
@@ -651,7 +653,7 @@ function ComposeTab({ clientId, locations, onDone }: { clientId: string; locatio
     const body: Record<string, unknown> = {
       location_row_id: locationId, topic_type: type, summary: summary.trim(),
       cta_type: ctaType || null, cta_url: ctaType && ctaType !== 'call' ? ctaUrl.trim() || null : null,
-      media: image ? [{ sourceUrl: image }] : null,
+      media: image ? [{ sourceUrl: image, ...(imagePrompt ? { prompt: imagePrompt } : {}) }] : null,
     }
     if (needsEvent) {
       const schedule: Record<string, unknown> = {}
@@ -815,7 +817,7 @@ function ComposeTab({ clientId, locations, onDone }: { clientId: string; locatio
         <div style={{ fontSize: 11, color: summary.length > MAX_CHARS - 100 ? '#b45309' : '#94a3b8', textAlign: 'right', marginTop: 2 }}>{summary.length}/{MAX_CHARS}</div>
       </div>
 
-      <ImageField clientId={clientId} value={image} onChange={setImage} />
+      <ImageField clientId={clientId} value={image} onChange={(u, p) => { setImage(u); setImagePrompt(p ?? null) }} />
 
       <div>
         <label style={label}>Call to action <span style={{ color: '#94a3b8', fontWeight: 400 }}>(optional)</span></label>
@@ -863,24 +865,50 @@ function PostCard({ clientId, post: p, tz, onPublish, isPublishing, onChanged }:
   const [pending, setPending] = useState<string | null>(null)
   const [showImage, setShowImage] = useState(false)
   const [schedAt, setSchedAt] = useState('')
+  const [editText, setEditText] = useState<string | null>(null)
   const meta = STATUS_META[p.status]
   const busy = pending !== null || isPublishing
   const isDraft = p.status === 'draft' || p.status === 'failed'
   const hasImage = Boolean(p.media?.[0]?.sourceUrl)
+  const imagePrompt = p.media?.[0]?.prompt
+  const isAi = p.source === 'ai' || p.source === 'schedule'
 
   const run = async (fn: () => Promise<unknown>, key: string) => {
     setPending(key)
     try { await fn() } finally { setPending(null); onChanged() }
   }
-  const setImage = (url: string | null) => {
-    void run(() => api.patch(`/gbp/posts/${p.id}`, { media: url ? [{ sourceUrl: url }] : null }), `${p.id}:img`)
+  const setImage = (url: string | null, prompt?: string) => {
+    const media = url ? [{ sourceUrl: url, ...(prompt ? { prompt } : {}) }] : null
+    void run(() => api.patch(`/gbp/posts/${p.id}`, { media }), `${p.id}:img`)
     if (url) setShowImage(false)
+  }
+  const saveText = () => {
+    const summary = (editText ?? '').trim()
+    if (!summary) return
+    void run(() => api.patch(`/gbp/posts/${p.id}`, { summary }), `${p.id}:edit`).then(() => setEditText(null))
   }
   const schedule = () => {
     // tz known → send the raw wall-clock (backend interprets it in the client's
     // tz); tz unknown → resolve in the browser tz to a UTC ISO (matches Compose).
     const scheduled_at = tz ? schedAt : new Date(schedAt).toISOString()
     void run(() => api.post(`/clients/${clientId}/gbp/posts/${p.id}/schedule`, { scheduled_at }), `${p.id}:sch`)
+  }
+  // Re-draft the post text in place (async job) — poll until it settles.
+  const regenerateText = () => run(async () => {
+    const { job_id } = await api.post<{ job_id: string }>(`/clients/${clientId}/gbp/posts/${p.id}/regenerate`, {})
+    for (let i = 0; i < 40; i++) {
+      await new Promise((res) => setTimeout(res, 2500))
+      const rows = await api.post<JobStatus[]>(`/clients/${clientId}/gbp/posts/jobs/status`, { job_ids: [job_id] })
+      if (rows[0]?.status === 'complete' || rows[0]?.status === 'failed') break
+    }
+  }, `${p.id}:regen`)
+  // Re-roll the AI image using its stored prompt (Nano Banana is non-deterministic).
+  const regenerateImage = () => {
+    if (!imagePrompt) return
+    void run(async () => {
+      const r = await api.post<{ url: string }>(`/clients/${clientId}/gbp/posts/generate-image`, { prompt: imagePrompt })
+      await api.patch(`/gbp/posts/${p.id}`, { media: [{ sourceUrl: r.url, prompt: imagePrompt }] })
+    }, `${p.id}:imgregen`)
   }
 
   return (
@@ -899,22 +927,42 @@ function PostCard({ clientId, post: p, tz, onPublish, isPublishing, onChanged }:
       </div>
       <div style={{ display: 'flex', gap: 12 }}>
         {hasImage && <img src={p.media![0].sourceUrl} alt="" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 6, flexShrink: 0 }} />}
-        <p style={{ margin: 0, fontSize: 13, color: '#334155', whiteSpace: 'pre-wrap', flex: 1 }}>{p.summary}</p>
+        {editText !== null ? (
+          <div style={{ flex: 1 }}>
+            <textarea value={editText} onChange={(e) => setEditText(e.target.value.slice(0, MAX_CHARS))} rows={4}
+              style={{ ...input, resize: 'vertical' }} />
+            <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+              <button disabled={busy || !editText.trim()} onClick={saveText} style={btn(ACCENT)}>
+                <Save size={12} /> {pending === `${p.id}:edit` ? 'Saving…' : 'Save'}
+              </button>
+              <button onClick={() => setEditText(null)} style={btn('#fff', '#334155')}>Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <p style={{ margin: 0, fontSize: 13, color: '#334155', whiteSpace: 'pre-wrap', flex: 1 }}>{p.summary || <span style={{ color: '#94a3b8' }}>(no text)</span>}</p>
+        )}
       </div>
       {p.error && <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 6 }}>Error: {p.error}</div>}
 
       {/* Per-post image editor (drafts) */}
       {isDraft && (
-        <div style={{ marginTop: 10 }}>
+        <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           {showImage ? (
-            <div style={{ padding: 10, border: '1px solid #e2e8f0', borderRadius: 8 }}>
+            <div style={{ padding: 10, border: '1px solid #e2e8f0', borderRadius: 8, width: '100%' }}>
               <ImageField clientId={clientId} value={p.media?.[0]?.sourceUrl ?? null} onChange={setImage} />
               <button onClick={() => setShowImage(false)} style={{ ...btn('#fff', '#334155'), marginTop: 8 }}>Done</button>
             </div>
           ) : (
-            <button disabled={busy} onClick={() => setShowImage(true)} style={btn('#fff', '#334155')}>
-              <ImageIcon size={12} /> {hasImage ? 'Change image' : 'Add image'}
-            </button>
+            <>
+              <button disabled={busy} onClick={() => setShowImage(true)} style={btn('#fff', '#334155')}>
+                <ImageIcon size={12} /> {hasImage ? 'Change image' : 'Add image'}
+              </button>
+              {hasImage && imagePrompt && (
+                <button disabled={busy} onClick={regenerateImage} title="Generate a new image from the same prompt" style={btn('#fff', '#334155')}>
+                  <RefreshCw size={12} /> {pending === `${p.id}:imgregen` ? 'Regenerating…' : 'Regenerate image'}
+                </button>
+              )}
+            </>
           )}
         </div>
       )}
@@ -924,6 +972,16 @@ function PostCard({ clientId, post: p, tz, onPublish, isPublishing, onChanged }:
         {isDraft && (
           <button disabled={busy} onClick={() => onPublish(p.id)} style={btn('#16a34a')}>
             <Send size={12} /> {isPublishing ? 'Publishing…' : 'Publish now'}
+          </button>
+        )}
+        {isDraft && editText === null && (
+          <button disabled={busy} onClick={() => setEditText(p.summary)} style={btn('#fff', '#334155')}>
+            <Pencil size={12} /> Edit
+          </button>
+        )}
+        {isDraft && isAi && (
+          <button disabled={busy} onClick={regenerateText} title="Re-draft this post with AI" style={btn('#fff', '#334155')}>
+            <Sparkles size={12} /> {pending === `${p.id}:regen` ? 'Regenerating…' : 'Regenerate'}
           </button>
         )}
         {p.status === 'scheduled' && (
