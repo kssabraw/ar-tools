@@ -8072,7 +8072,7 @@ SKIMMABILITY PROTOCOL (a store page is scanned, not read) — a buyer must be ab
 - Front-load the buy decision — what it is, key specs/value, and why this one — all reachable near the top.
 - Never place more than TWO consecutive <p> paragraphs without an intervening scannable element (a bulleted/numbered list, a table, a bold lead-in, or a decision block). Long unbroken prose is THE failure mode — break it up or cut it.
 - Whenever the content is a set of options, specs, steps, comparisons, or facts, use a list or table instead of paragraphs.
-- Keep every paragraph to 1–3 sentences, one idea each.
+- HARD LIMIT: no paragraph may exceed THREE sentences — ever, in any section including the market/positioning context. This is a strict cap, not a guideline. If a point needs more than three sentences, split it into multiple short paragraphs or convert it to a list or table. One idea per paragraph.
 - No two sections may cover the same ground; if two sections would repeat facts, MERGE them.
 
 WRITING METHODOLOGY — Max-Cosine Score (MCS). This is HOW every section must be written. The "main entity" is THIS specific product/SKU (PDP) or category (PLP) as sold by this store — never the generic ingredient/material/topic. Follow ALL of these:
@@ -8090,7 +8090,7 @@ WRITING METHODOLOGY — Max-Cosine Score (MCS). This is HOW every section must b
 11. Active voice; consistent terminology (pick one name for a thing and keep it); power words only when they truthfully reflect the product.
 12. FAQ: an H2 "Frequently Asked Questions" with 4–7 <h3> questions in real buyer language (sizing, compatibility, shipping, returns, care, differences between options), each answered answer-first in 1–3 sentences.
 13. CTA: a clear, value-forward primary call-to-action (e.g. "Add to Cart", "Shop the collection") — prefer value framing over a bare "Buy now" where natural. Where truthful and provided, include trust signals (returns window, warranty, ratings, guarantees).
-14. Formatting hygiene: short paragraphs (1–2 sentences). Use <strong> SPARINGLY — a median of ~7 bold tags per page and NEVER more than 15 (over-bolding is associated with deindexing).
+14. Formatting hygiene: short paragraphs — 3 sentences MAXIMUM, no exceptions (see the SKIMMABILITY PROTOCOL's hard limit). Use <strong> SPARINGLY — a median of ~7 bold tags per page and NEVER more than 15 (over-bolding is associated with deindexing).
 15. Voice & audience: match the provided BRAND VOICE and speak directly to the provided IDEAL CUSTOMER.
 16. Decision-fit mapping (only when a real choice exists): if THIS product has genuine variants/options (size, strength, quantity, form, tier) OR there are relevant related products to route between, include a concise, answer-first condition→option treatment — "if your work needs X, choose A; if Y, choose B" — woven into the copy or as a small "which is right for you" list/table, using ONLY options actually offered. COMPARATIVE DEPTH (Goldilocks): when you do compare, compare the options on the SAME decision axes that matter for THIS product (e.g. size/strength, use-case fit, per-unit value) — deep enough to let the buyer choose, but NO deeper; cover the real tradeoffs, never pad with trivial differences. If the product is genuinely single-option with no meaningful choice, OMIT this — never manufacture a fake choice.
 
@@ -8101,7 +8101,8 @@ PAGE-TYPE DIRECTIVE (stated in the user message):
   3) Why choose this one — the product's differentiators/benefits (quality, testing, guarantees), benefit-led.
   4) Specifications — a fact-model <table> of the product's real specs/variants.
   5) What's included / options — variants, quantity, what ships.
-  6) Who it's for & how it's used — the buyer + their use case (the ONE allowed short product-anchored educational sentence may go here).
+  6) Who it's for & how it's used — the buyer + their use case.
+  6b) What it's used / studied for (applications) — INCLUDE this section. For a general consumer product: the product's real-world use cases and who it's for. For a research compound / Research-Use-Only product: the specific research contexts it is studied in AND the biological target/receptor it is studied against (e.g. "studied in GLP-1 receptor agonism research", "used as a research tool for examining X pathways"). Develop it with substantive, specific detail — this is the WELCOME applications depth, and it is what a buyer means by "what does it do". COMPLIANCE BOUNDARY (research/RUO products): frame everything as what the product is USED or STUDIED FOR — never what it treats, cures, causes, or does in the human body. NO therapeutic/medical claims, NO efficacy/outcome claims, NO mechanism-as-benefit, NO dosing/administration guidance. "Studied for", not "works by" or "helps you". This applications/research-context section is DISTINCT from — and allowed despite — the BANNED textbook mechanism-of-action / physiology / health-benefits encyclopedia.
   7) Shipping, returns & guarantees — state what's known; flag unknowns as gaps.
   8) (OPTIONAL — at most ONE section) Market/positioning context — how THIS product compares to the alternatives a buyer is weighing, framed as "what this means for your purchase". Include ONLY if it genuinely aids the decision; keep it to a SINGLE consolidated section placed here (after the core buyer sections); never split it across multiple sections or repeat its facts elsewhere.
   9) FAQ — 4–7 real buyer questions (fit, compatibility, shipping, returns, care).
