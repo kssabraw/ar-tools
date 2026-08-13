@@ -132,8 +132,9 @@ function PageTypeToggle({ value, onChange }: { value: PageType; onChange: (v: Pa
       <label style={label}>Page type</label>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <Pill active={value === 'city'} onClick={() => onChange('city')}>City page</Pill>
-        <Pill active={value === 'service'} onClick={() => onChange('service')}>Service page</Pill>
         <Pill active={value === 'local_seo'} onClick={() => onChange('local_seo')}>Local SEO page</Pill>
+        {/* Service page hidden until it has its own ACF field group + writer
+            (it must NOT reuse the City/Local-SEO 33-field writer). */}
       </div>
     </div>
   )
