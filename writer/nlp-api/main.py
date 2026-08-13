@@ -951,6 +951,21 @@ TEXTRAZOR_MAX_RETRIES     = int(os.environ.get("TEXTRAZOR_MAX_RETRIES", "4"))
 TEXTRAZOR_RETRY_BASE      = float(os.environ.get("TEXTRAZOR_RETRY_BASE", "0.5"))
 _textrazor_semaphore = asyncio.Semaphore(TEXTRAZOR_MAX_CONCURRENCY)
 
+# ── Entity provider selection (per-request: TextRazor | Google NLP) ───────────
+# TextRazor stays the default (cheaper + Wikidata/Wikipedia linking). Google
+# Cloud Natural Language is available PER-REQUEST when GOOGLE_NLP_API_KEY is set
+# on the nlp service — callers pass entity_provider="google" to opt in. Both
+# emit the same entity shape (name/entity_type/mid/mean_salience/page_spread/
+# recommended_mentions), so everything downstream is provider-agnostic.
+ENTITY_PROVIDERS = ("textrazor", "google")
+ENTITY_PROVIDER_DEFAULT = (os.environ.get("ENTITY_PROVIDER", "textrazor") or "textrazor").lower()
+GOOGLE_NLP_API_KEY   = os.environ.get("GOOGLE_NLP_API_KEY", "")
+GOOGLE_NLP_ENDPOINT  = "https://language.googleapis.com/v1/documents:analyzeEntities"
+GOOGLE_NLP_MAX_BYTES = 100_000   # Google NLP per-document size limit
+# Google NLP salience (0–1) is its own scale — keep the historical 0.40 floor,
+# distinct from TextRazor's relevance floor above. Env-tunable.
+GOOGLE_NLP_MIN_SALIENCE = float(os.environ.get("GOOGLE_NLP_MIN_SALIENCE", "0.40"))
+
 
 # DataForSEO: how many organic results to request
 SERP_RESULT_COUNT = 20
@@ -1004,6 +1019,8 @@ def _block_ssrf(url: str) -> None:
 
 class AnalysisRequest(BaseModel):
     keyword: str
+    # Entity extractor for this request: 'textrazor' (default) | 'google'.
+    entity_provider: Optional[str] = None
     location: str                        # e.g. "Anaheim, California, United States"
     location_code: Optional[int] = None  # DataForSEO numeric location code (preferred)
     urls: Optional[List[str]] = None     # override SERP lookup — pass URLs directly
@@ -1732,6 +1749,139 @@ async def get_textrazor_entities(
     return results
 
 
+async def fetch_google_entities(text: str, client: httpx.AsyncClient) -> List[dict]:
+    """Call Google Cloud Natural Language `analyzeEntities` for one document via
+    the REST API (API-key auth — no service account). Returns the raw `entities`
+    list. Ported from the reference nlp service."""
+    if not GOOGLE_NLP_API_KEY or not text.strip():
+        return []
+    encoded = text.encode("utf-8")[:GOOGLE_NLP_MAX_BYTES]
+    safe_text = encoded.decode("utf-8", errors="ignore")
+    try:
+        response = await client.post(
+            GOOGLE_NLP_ENDPOINT,
+            params={"key": GOOGLE_NLP_API_KEY},
+            json={"document": {"type": "PLAIN_TEXT", "content": safe_text}, "encodingType": "UTF8"},
+            timeout=15.0,
+        )
+        response.raise_for_status()
+        return response.json().get("entities", [])
+    except Exception as e:  # noqa: BLE001 — degrade to no entities on any failure
+        logger.warning(f"Google NLP API error: {e}")
+        return []
+
+
+async def get_google_entities(
+    paragraph_docs: List[str],
+    min_page_spread: float = ENTITY_MIN_PAGE_SPREAD,
+    min_salience: float = GOOGLE_NLP_MIN_SALIENCE,
+) -> List[dict]:
+    """Aggregate Google NLP entities across competitor pages (per-page de-dup →
+    page-spread + salience filter). Emits the SAME shape as get_textrazor_entities
+    so the downstream `google_entities` consumers are untouched — `mid` carries
+    Google's Knowledge-Graph MID, `wiki_link` the entity's Wikipedia URL."""
+    if not GOOGLE_NLP_API_KEY:
+        return []
+
+    total_pages = len(paragraph_docs)
+    min_pages_required = max(2, int(np.ceil(total_pages * min_page_spread)))
+
+    async with httpx.AsyncClient() as client:
+        per_page_entities = await asyncio.gather(
+            *[fetch_google_entities(doc, client) for doc in paragraph_docs]
+        )
+
+    entity_data: Dict[tuple, Dict] = defaultdict(lambda: {
+        "saliences": [], "mention_counts": [], "pages": set(),
+    })
+
+    for page_idx, entities in enumerate(per_page_entities):
+        seen_this_page = set()
+        for entity in entities:
+            name = (entity.get("name") or "").strip()
+            etype = entity.get("type", "UNKNOWN")
+            salience = float(entity.get("salience", 0.0) or 0.0)
+            mention_count = len(entity.get("mentions", []))
+            meta = entity.get("metadata", {}) or {}
+            mid = meta.get("mid", "")
+            wiki_link = meta.get("wikipedia_url", "")
+            if not name:
+                continue
+            key = (name.lower(), etype)
+            if key not in seen_this_page:
+                d = entity_data[key]
+                d["saliences"].append(salience)
+                d["mention_counts"].append(mention_count)
+                d["pages"].add(page_idx)
+                d["name"] = name
+                d["entity_type"] = etype
+                if mid and not d.get("mid"):
+                    d["mid"] = mid
+                if wiki_link and not d.get("wiki_link"):
+                    d["wiki_link"] = wiki_link
+                seen_this_page.add(key)
+
+    results = []
+    for key, data in entity_data.items():
+        page_count = len(data["pages"])
+        if page_count < min_pages_required:
+            continue
+        mean_salience = float(np.mean(data["saliences"]))
+        if mean_salience < min_salience:
+            continue
+        recommended_mentions = int(round(float(np.mean(data["mention_counts"]))))
+        results.append({
+            "name": data["name"],
+            "entity_type": data["entity_type"],
+            "mid": data.get("mid", ""),
+            "wiki_link": data.get("wiki_link", ""),
+            "mean_salience": round(mean_salience, 4),
+            "page_spread": page_count,
+            "page_spread_pct": round(page_count / total_pages, 2),
+            "recommended_mentions": max(1, recommended_mentions),
+            "type": "google_entity",
+        })
+
+    results.sort(key=lambda x: x["mean_salience"], reverse=True)
+    logger.info(
+        f"Google NLP entities: {len(results)} kept "
+        f"(salience>={min_salience}, page_spread>={min_pages_required}/{total_pages})"
+    )
+    return results
+
+
+def resolve_entity_provider(requested: Optional[str]) -> str:
+    """Pick the entity provider for a request. Honours the request's choice when
+    it names a known provider whose key is configured; otherwise falls back to
+    whichever provider IS configured (so a request never silently yields zero
+    entities because its chosen provider is unkeyed). TextRazor wins ties."""
+    choice = (requested or ENTITY_PROVIDER_DEFAULT or "textrazor").lower()
+    if choice not in ENTITY_PROVIDERS:
+        choice = "textrazor"
+    keyed = {"textrazor": bool(TEXTRAZOR_API_KEY), "google": bool(GOOGLE_NLP_API_KEY)}
+    if keyed.get(choice):
+        return choice
+    # Chosen provider isn't configured — fall back to the other if it is.
+    for alt in ("textrazor", "google"):
+        if keyed.get(alt):
+            if alt != choice:
+                logger.warning(
+                    f"entity_provider '{choice}' has no API key configured; "
+                    f"falling back to '{alt}'"
+                )
+            return alt
+    return choice  # neither keyed — extractor returns [] (best-effort, unchanged)
+
+
+async def get_serp_entities(paragraph_docs: List[str], provider: Optional[str] = None) -> List[dict]:
+    """Dispatch competitor-page entity extraction to the selected provider
+    (per-request). Both return the same shape; downstream is provider-agnostic."""
+    chosen = resolve_entity_provider(provider)
+    if chosen == "google":
+        return await get_google_entities(paragraph_docs)
+    return await get_textrazor_entities(paragraph_docs)
+
+
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 
 async def _run_serp_analysis(
@@ -1739,10 +1889,13 @@ async def _run_serp_analysis(
     location: str,
     location_code: Optional[int] = None,
     urls: Optional[List[str]] = None,
+    entity_provider: Optional[str] = None,
 ) -> AnalysisResponse:
     """
-    Shared SERP analysis pipeline used by both /analyze and /score-page.
-    Runs DataForSEO → ScrapeOwl (hybrid JS retry) → TF-IDF → quadgrams → Google NLP.
+    Shared SERP analysis pipeline used by /analyze, /score-page, generation, etc.
+    Runs DataForSEO → ScrapeOwl (hybrid JS retry) → TF-IDF → quadgrams → entity
+    extraction. `entity_provider` ('textrazor' | 'google') selects the entity
+    engine per-request (default `ENTITY_PROVIDER`); both emit the same shape.
     """
     # Step 1: get URLs + bold terms from SERP snippets
     bold_terms_from_serp: List[str] = []
@@ -1792,20 +1945,22 @@ async def _run_serp_analysis(
     )
     quadgrams = get_top_quadgrams(zone_buckets["paragraphs"], keyword)
 
-    # Step 5: TextRazor entity analysis — use paragraph text already in memory.
-    # `google_entities` keeps its name for serp_analysis / frontend compatibility,
-    # but is now TextRazor-sourced (Wikidata/Wikipedia-linked).
+    # Step 5: entity analysis (per-request provider — TextRazor or Google NLP) on
+    # the paragraph text already in memory. The `google_entities` field keeps its
+    # name for serp_analysis / frontend compatibility regardless of provider.
+    provider = resolve_entity_provider(entity_provider)
     google_entities: List[dict] = []
     nlp_requests = 0
-    if TEXTRAZOR_API_KEY:
+    provider_keyed = TEXTRAZOR_API_KEY if provider == "textrazor" else GOOGLE_NLP_API_KEY
+    if provider_keyed:
         para_texts = [t for t in zone_buckets["paragraphs"] if len(t) > 100]
         if para_texts:
             try:
-                google_entities = await get_textrazor_entities(para_texts)
+                google_entities = await get_serp_entities(para_texts, provider)
                 nlp_requests = len(para_texts)
-                logger.info(f"TextRazor: {len(google_entities)} entities from {len(para_texts)} pages")
+                logger.info(f"Entities ({provider}): {len(google_entities)} from {len(para_texts)} pages")
             except Exception as _nlp_err:
-                logger.warning(f"TextRazor failed (non-fatal): {_nlp_err}")
+                logger.warning(f"Entity extraction ({provider}) failed (non-fatal): {_nlp_err}")
 
     # Step 6: SERP bold keyword analysis — count usage across competitor pages
     serp_bold_keywords: List[dict] = []
@@ -1913,7 +2068,10 @@ async def analyze(request: Request, body: AnalysisRequest):
 
     Pass optional `urls` to skip the DataForSEO SERP step (testing / override).
     """
-    return await _run_serp_analysis(body.keyword, body.location, body.location_code, body.urls)
+    return await _run_serp_analysis(
+        body.keyword, body.location, body.location_code, body.urls,
+        entity_provider=body.entity_provider,
+    )
 
 
 @app.get('/health')
@@ -5155,6 +5313,7 @@ async def find_page_for_keyword(request: Request, body: FindPageRequest):
 
 class ScorePageRequest(BaseModel):
     keyword: str
+    entity_provider: Optional[str] = None  # 'textrazor' (default) | 'google'
     location: str = ""  # optional in national mode
     location_code: Optional[int] = None  # DataForSEO numeric location code
     page_url: Optional[str] = None
@@ -5222,7 +5381,7 @@ async def score_page(request: Request, body: ScorePageRequest):
             # so SERP Signal Coverage still has competitor data to score against.
             _serp_loc = body.location or ("United States" if national else body.location)
             _serp_code = body.location_code or (2840 if national else body.location_code)
-            inline_serp = await _run_serp_analysis(body.keyword, _serp_loc, _serp_code)
+            inline_serp = await _run_serp_analysis(body.keyword, _serp_loc, _serp_code, entity_provider=body.entity_provider)
             serp_analysis_dict = inline_serp.model_dump()
         except Exception as _serp_err:
             logger.warning(f"score-page: inline SERP analysis failed ({_serp_err})")
@@ -5599,6 +5758,7 @@ _AUGMENT_TOOL = {
 
 class AugmentPageRequest(BaseModel):
     keyword: str
+    entity_provider: Optional[str] = None  # 'textrazor' (default) | 'google'
     location: str
     location_code: Optional[int] = None
     page_url: str
@@ -5642,7 +5802,7 @@ async def augment_page(request: Request, body: AugmentPageRequest):
     if not serp_analysis_dict:
         logger.info(f"augment-page: no serp_analysis provided — running inline for '{body.keyword}'")
         try:
-            inline_serp = await _run_serp_analysis(body.keyword, body.location, body.location_code)
+            inline_serp = await _run_serp_analysis(body.keyword, body.location, body.location_code, entity_provider=body.entity_provider)
             serp_analysis_dict = inline_serp.model_dump()
         except Exception as e:
             logger.warning(f"augment-page: inline SERP analysis failed ({e})")
@@ -5877,6 +6037,7 @@ async def _extract_template_outline(url: Optional[str], html: Optional[str]) -> 
 
 class GeneratePageRequest(BaseModel):
     keyword: str
+    entity_provider: Optional[str] = None  # 'textrazor' (default) | 'google'
     location: str
     location_code: Optional[int] = None  # DataForSEO numeric location code (preferred)
     business_name: str
@@ -6009,7 +6170,7 @@ async def generate_page(request: Request, body: GeneratePageRequest):
         if not serp_analysis_dict and body.run_analysis:
             await q.put({"step": "progress", "progress": 10, "message": "Fetching top search results…"})
             try:
-                inline_serp = await _run_serp_analysis(body.keyword, body.location, body.location_code)
+                inline_serp = await _run_serp_analysis(body.keyword, body.location, body.location_code, entity_provider=body.entity_provider)
                 serp_analysis_dict = inline_serp.model_dump() if hasattr(inline_serp, "model_dump") else dict(inline_serp)
                 await q.put({"step": "progress", "progress": 50, "message": "Analyzing competitor pages…"})
             except Exception as _serp_err:
@@ -8235,6 +8396,7 @@ _ECOMMERCE_SERP_LOCATION_CODE = 2840
 
 class EcommerceScoreRequest(BaseModel):
     keyword: str
+    entity_provider: Optional[str] = None  # 'textrazor' (default) | 'google'
     page_type: str = "product"          # "product" | "collection"
     page_url: Optional[str] = None
     page_content: Optional[str] = None  # if omitted, fetched from page_url
@@ -8276,7 +8438,7 @@ async def score_ecommerce_page(request: Request, body: EcommerceScoreRequest):
         try:
             _loc = body.location or _ECOMMERCE_SERP_LOCATION
             _code = body.location_code or _ECOMMERCE_SERP_LOCATION_CODE
-            inline_serp = await _run_serp_analysis(body.keyword, _loc, _code)
+            inline_serp = await _run_serp_analysis(body.keyword, _loc, _code, entity_provider=body.entity_provider)
             serp_analysis_dict = inline_serp.model_dump()
         except Exception as _serp_err:
             logger.warning(f"score-ecommerce: inline SERP analysis failed ({_serp_err})")
@@ -8473,6 +8635,7 @@ ARTICLE CONTENT (first 8,000 chars):
 
 class BlogScoreRequest(BaseModel):
     keyword: str
+    entity_provider: Optional[str] = None  # 'textrazor' (default) | 'google'
     page_url: Optional[str] = None
     page_content: Optional[str] = None  # if omitted, fetched from page_url
     business_name: str = ""
@@ -8512,7 +8675,7 @@ async def score_blog_page(request: Request, body: BlogScoreRequest):
         try:
             _loc = body.location or _ECOMMERCE_SERP_LOCATION
             _code = body.location_code or _ECOMMERCE_SERP_LOCATION_CODE
-            inline_serp = await _run_serp_analysis(body.keyword, _loc, _code)
+            inline_serp = await _run_serp_analysis(body.keyword, _loc, _code, entity_provider=body.entity_provider)
             serp_analysis_dict = inline_serp.model_dump()
         except Exception as _serp_err:
             logger.warning(f"score-blog: inline SERP analysis failed ({_serp_err})")
@@ -8587,6 +8750,7 @@ async def score_blog_page(request: Request, body: BlogScoreRequest):
 
 class GenerateEcommerceRequest(BaseModel):
     keyword: str
+    entity_provider: Optional[str] = None  # 'textrazor' (default) | 'google'
     page_type: str = "product"           # "product" | "collection"
     business_name: str
     website: Optional[str] = None
@@ -8801,7 +8965,7 @@ async def generate_ecommerce_page(request: Request, body: GenerateEcommerceReque
             try:
                 _loc = body.location or _ECOMMERCE_SERP_LOCATION
                 _code = body.location_code or _ECOMMERCE_SERP_LOCATION_CODE
-                inline_serp = await _run_serp_analysis(body.keyword, _loc, _code)
+                inline_serp = await _run_serp_analysis(body.keyword, _loc, _code, entity_provider=body.entity_provider)
                 serp_analysis_dict = inline_serp.model_dump() if hasattr(inline_serp, "model_dump") else dict(inline_serp)
                 await q.put({"step": "progress", "progress": 45, "message": "Analyzing competitor pages…"})
             except Exception as _serp_err:
