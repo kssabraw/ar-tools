@@ -31,18 +31,24 @@ from services.wheelhouse_pages import (
 
 logger = logging.getLogger(__name__)
 
-PAGE_TYPES = ("service", "city")
+PAGE_TYPES = ("service", "city", "local_seo")
+# Only the city page is 2-level (silo → city). Service AND local SEO pages are
+# 3-level (silo → city → leaf), i.e. /florida/<city>/<service>/. City + local SEO
+# pages share the 33-field local-seo writer; the service page keeps its writer.
+TWO_LEVEL_TYPES = ("city",)
 
 
 def _norm_page_type(page_type: Optional[str]) -> str:
-    return "city" if (page_type or "").lower() == "city" else "service"
+    pt = (page_type or "").lower()
+    return pt if pt in PAGE_TYPES else "service"
 
 
 def _require_service(page_type: str, service: str) -> None:
-    """A service page needs a non-empty service (its leaf URL segment); without one
-    the page is unpublishable (invalid_slug). Guard at the entry points so a bad
-    row is never created. City pages have no service by design."""
-    if _norm_page_type(page_type) == "service" and not (service or "").strip():
+    """A 3-level page (service or local SEO) needs a non-empty leaf/service (its
+    leaf URL segment); without one the page is unpublishable (invalid_slug). Guard
+    at the entry points so a bad row is never created. City pages (2-level) have no
+    service by design."""
+    if _norm_page_type(page_type) not in TWO_LEVEL_TYPES and not (service or "").strip():
         raise HTTPException(status_code=422, detail="service_required")
 
 
@@ -68,7 +74,8 @@ def _levels_for_page(page: dict) -> list[dict]:
     WP page — a service run reuses the existing city page as its parent hub."""
     state_slug, city_slug = slugify(page["state"]), slugify(page["city"])
     title = page.get("title") or page["city"]
-    if _norm_page_type(page.get("page_type")) == "city":
+    if _norm_page_type(page.get("page_type")) in TWO_LEVEL_TYPES:
+        # silo → leaf (city page or local SEO page carries the 33 ACF fields).
         return [{"slug": state_slug, "title": page["state"]},
                 {"slug": city_slug, "title": title}]
     return [{"slug": state_slug, "title": page["state"]},
@@ -155,9 +162,9 @@ def _upsert_draft(
     supabase = get_supabase()
     page_type = _norm_page_type(page_type)
     state_slug, city_slug = slugify(state), slugify(city)
-    # City page: no service segment (it IS the local SEO page). Service page: the
-    # service is the leaf segment.
-    if page_type == "city":
+    # City / local SEO page: no service segment, the leaf IS the page (2-level).
+    # Service page: the service is the leaf segment (3-level).
+    if page_type in TWO_LEVEL_TYPES:
         service, service_slug = "", ""
         slug_path = build_slug_path(state_slug, city_slug)
     else:
@@ -354,7 +361,7 @@ async def enqueue_mass(
     page_type = _norm_page_type(page_type)
     if not (state or "").strip():
         raise HTTPException(status_code=422, detail="state_required")
-    if page_type == "service" and not (city or "").strip():
+    if page_type not in TWO_LEVEL_TYPES and not (city or "").strip():
         raise HTTPException(status_code=422, detail="city_required")
     rows = []
     seen = set()
@@ -364,9 +371,10 @@ async def enqueue_mass(
         if not item or key in seen:
             continue
         seen.add(key)
-        # city mode → item is the city (no service); service mode → item is the service.
-        row_city = item if page_type == "city" else city.strip()
-        row_service = "" if page_type == "city" else item
+        # city/local_seo mode → item is the leaf (city or page name), no service;
+        # service mode → item is the service under the single `city`.
+        row_city = item if page_type in TWO_LEVEL_TYPES else city.strip()
+        row_service = "" if page_type in TWO_LEVEL_TYPES else item
         rows.append({
             "job_type": "wheelhouse_generate",
             "entity_id": client_id,
@@ -452,11 +460,12 @@ async def publish(client_id: str, page_id: str, status: str = "draft") -> dict:
         "published_url": result["link"], "edit_link": result["edit_link"],
         "slug_path": result["slug_path"], "status": "published", "updated_at": "now()",
     }).eq("id", page_id).execute()
-    # A service page nests under /state/city/; if that city page isn't published,
-    # the parent URL is a live-but-empty hub. Flag it so the UI can prompt the user
-    # to publish the city page (the page still publishes — this is advisory).
+    # A 3-level page (service or local SEO) nests under /state/city/; if that city
+    # page isn't published, the parent URL is a live-but-empty hub. Flag it so the
+    # UI can prompt the user to publish the city page (the page still publishes —
+    # this is advisory).
     city_page_unpublished = (
-        _norm_page_type(page.get("page_type")) == "service"
+        _norm_page_type(page.get("page_type")) not in TWO_LEVEL_TYPES
         and not _has_published_city_page(client_id, page["state"], page["city"])
     )
     return {**result, "page_id": page_id, "city_page_unpublished": city_page_unpublished}

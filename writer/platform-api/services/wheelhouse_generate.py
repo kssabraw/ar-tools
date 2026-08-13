@@ -79,7 +79,14 @@ def compose_city_title(city: str) -> str:
 
 
 def title_for(page_type: str, state: str, city: str, service: str) -> str:
-    return compose_city_title(city) if page_type == "city" else compose_title(state, city, service)
+    if page_type == "city":
+        return compose_city_title(city)
+    if page_type == "local_seo":
+        # A local SEO page is 3-level (/city/<leaf>/); the leaf (carried in
+        # `service`) names the page/keyword and is the WP post title. The ACF
+        # hero_headline is the generated on-page H1.
+        return (service or "").strip() or "IT Support"
+    return compose_title(state, city, service)
 
 
 def _field_guide_lines(exclude: set) -> str:
@@ -136,7 +143,7 @@ async def generate_fields(
     generated in one forced-tool call. Best-effort: any missing field validates as
     empty rather than raising."""
     if page_type == "city":
-        service = CITY_SERVICE_LABEL  # fixed offering woven into the city page
+        service = CITY_SERVICE_LABEL  # the city page's fixed offering
     supplied = {k: v for k, v in (supplied or {}).items()
                 if isinstance(v, str) and v.strip()}
     exclude = set(supplied.keys())

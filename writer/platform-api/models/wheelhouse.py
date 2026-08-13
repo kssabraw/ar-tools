@@ -7,7 +7,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 
-PageType = Literal["service", "city"]
+PageType = Literal["service", "city", "local_seo"]
 
 
 class WheelhouseMassRequest(BaseModel):
