@@ -1759,6 +1759,7 @@ const ALERT_LABEL: Record<string, string> = {
   lost_pack: 'Lost the pack',
   area_decline: 'Area decline',
   competitor_surge: 'Competitor surge',
+  gradual_decline: 'Gradual decline',
 }
 
 function WhatChanged({ clientId }: { clientId: string }) {

@@ -328,3 +328,85 @@ def test_summarize_maps_alerts_critical_and_warning():
     assert crit["severity"] == "critical" and crit["title"] == "2 local-pack alerts detected"
     warn = ma.summarize_maps_alerts([{"keyword": "a", "alert_type": "coverage_drop", "message": "m"}])
     assert warn["severity"] == "warning" and warn["title"] == "1 local-pack alert detected"
+
+
+# ---------------------------------------------------------------------------
+# gradual_decline — the slow multi-scan slide the scan-over-scan rules miss
+# ---------------------------------------------------------------------------
+_WEEKLY = (0, 7, 14, 21, 28, 35, 42, 49)  # 8 weekly scan offsets, all within a 56d window
+
+
+def _pts(specs):
+    """specs: [(days_ago, average_rank, top3_pct), ...] → gradual point dicts."""
+    return [
+        {"ord": TODAY.toordinal() - o, "average_rank": ar, "top3_pct": t3}
+        for o, ar, t3 in specs
+    ]
+
+
+def _gd(pts):
+    return ma.detect_gradual_decline(
+        "kw", pts, TODAY, window_days=56, min_points=4, rank_drop=3.0, top3_drop=15.0
+    )
+
+
+def test_gradual_decline_fires_on_slow_rank_slide():
+    # Avg grid rank ramps 3 → 9 over ~7 weeks; Top-3 coverage flat.
+    pts = _pts([(o, round(9 - 6 * (o / 49), 2), 80.0) for o in _WEEKLY])
+    sig = _gd(pts)
+    assert _types(sig) == {"gradual_decline"}
+    assert "average grid rank" in sig[0].message
+    assert "average_rank" in sig[0].details and "top3_pct" not in sig[0].details
+    assert sig[0].details["average_rank"]["delta"] >= 3.0
+
+
+def test_gradual_decline_fires_on_slow_coverage_erosion():
+    # Top-3 coverage erodes 90% → 70%; avg rank flat.
+    pts = _pts([(o, 4.0, round(70 + 20 * (o / 49), 2)) for o in _WEEKLY])
+    sig = _gd(pts)
+    assert _types(sig) == {"gradual_decline"}
+    assert "Top-3 coverage" in sig[0].message
+    assert "top3_pct" in sig[0].details and "average_rank" not in sig[0].details
+    assert sig[0].details["top3_pct"]["delta"] >= 15.0
+
+
+def test_gradual_decline_cites_both_metrics_when_both_slide():
+    pts = _pts([(o, round(9 - 6 * (o / 49), 2), round(70 + 20 * (o / 49), 2)) for o in _WEEKLY])
+    sig = _gd(pts)
+    assert _types(sig) == {"gradual_decline"}
+    assert "average grid rank" in sig[0].message and "Top-3 coverage" in sig[0].message
+    assert "average_rank" in sig[0].details and "top3_pct" in sig[0].details
+
+
+def test_no_gradual_decline_on_old_cliff():
+    # A one-scan cliff (good → bad) weeks ago, flat since — the scan-over-scan
+    # rules owned it when it happened; not a gradual slide.
+    pts = _pts([(o, 3.0 if o >= 42 else 9.0, 80.0) for o in _WEEKLY])
+    assert _gd(pts) == []
+
+
+def test_no_gradual_decline_when_recovered_mid_window():
+    def ar(o):
+        if o >= 42:
+            return 3.0   # oldest: good
+        if o >= 21:
+            return 10.0  # mid: spiked bad
+        return 7.0       # recent: partially recovered
+    pts = _pts([(o, ar(o), 80.0) for o in _WEEKLY])
+    assert _gd(pts) == []
+
+
+def test_no_gradual_decline_when_stable():
+    assert _gd(_pts([(o, 5.0, 80.0) for o in _WEEKLY])) == []
+
+
+def test_no_gradual_decline_with_too_few_points():
+    # Only 3 in-window readings (< min_points=4) — can't judge a trend.
+    pts = _pts([(o, round(9 - 6 * (o / 14), 2), 80.0) for o in (0, 7, 14)])
+    assert _gd(pts) == []
+
+
+def test_gradual_decline_ignores_points_outside_the_window():
+    # A steep slide entirely older than the window must not fire on today.
+    old = [(o, round(9 - 6 * ((o - 70) / 49), 2), 80.0) for o in (70, 77, 84, 91, 98, 105)]
+    assert _gd(_pts(old)) == []
