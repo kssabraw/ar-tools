@@ -57,6 +57,7 @@ from .heading_sanitizer import SanitizationLog, sanitize_heading_structure
 from .heading_seo_optimizer import optimize_headings
 from .heading_entity_enforcer import enforce_heading_entities
 from .icp_verification import verify_icp_callout_landed
+from .reopt import reopt_directive
 from .sections import SectionWriteResult, write_h2_group
 from .term_usage import compute_term_usage_by_zone
 from .voice_review import review_article_voice
@@ -600,6 +601,13 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     # prompt (plus intro + conclusion) so a note like "mention <brand> as one
     # of the top 10" can land wherever it fits most naturally.
     user_notes = (req.user_notes or "").strip() or None
+    # Reoptimize mode: fold the scorer's deficiency directive into user_notes so
+    # every section/intro/conclusion prompt is steered to fix the low-scoring
+    # dimensions. Reuses the existing user_notes threading (no prompt changes).
+    if getattr(req, "mode", "generate") == "reoptimize":
+        directive = reopt_directive(req.deficiencies, req.prior_sections)
+        if directive:
+            user_notes = f"{directive}\n\n{user_notes}" if user_notes else directive
     preceding_summaries_running: list[str] = []
     for h2_idx, (h2_item, h3_items) in enumerate(h2_groups):
         section_budget = section_budgets.get(h2_item.get("order"), 0)

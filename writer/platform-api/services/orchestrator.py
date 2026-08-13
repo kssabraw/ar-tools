@@ -584,6 +584,7 @@ def _build_writer_payload(
     sie_output: dict,
     research_output: dict,
     snapshot: dict,
+    source_deficiencies: list[dict] | None = None,
 ) -> dict:
     brand_guide_text = snapshot.get("brand_guide_text") or ""
     brand_guide_format = snapshot.get("brand_guide_format") or "text"
@@ -603,7 +604,7 @@ def _build_writer_payload(
         blog_structure_entry, "blog_post", mode="structure"
     )
 
-    return {
+    payload = {
         "run_id": run["id"],
         "attempt": 1,
         "brief_output": brief_output,
@@ -624,6 +625,16 @@ def _build_writer_payload(
             "reference_page_body_structure": reference_page_body_structure,
         },
     }
+    # Reoptimize-of-existing (a blog run tagged with a live URL / pasted article):
+    # the first writer pass runs in reoptimize mode fed the scored source's
+    # deficiencies, so the new article specifically fixes where the source falls
+    # short. There are no structured `prior_sections` — the source isn't ours — so
+    # generation still follows the brief's architecture, just deficiency-guided.
+    if source_deficiencies:
+        payload["mode"] = "reoptimize"
+        payload["deficiencies"] = source_deficiencies
+        payload["prior_sections"] = []
+    return payload
 
 
 def _build_sources_cited_payload(
@@ -734,13 +745,16 @@ async def _orchestrate_service_page(
     # so the writer's first pass is fed its deficiencies. Best-effort — a
     # scrape/score failure logs and falls back to a normal (non-reopt) generation.
     source_deficiencies: list[dict] | None = None
-    source_url = run.get("reoptimize_source_url")
-    if source_url and completed.get("service_writer") is None:
+    source_url = (run.get("reoptimize_source_url") or "").strip()
+    source_html = (run.get("reoptimize_source_html") or "").strip()
+    if (source_url or source_html) and completed.get("service_writer") is None:
         try:
             from services.service_page_score import score_external_page
 
             await _set_run_status(run_id, "service_scoring_running")
-            source_score = await score_external_page(run_id, source_url)
+            source_score = await score_external_page(
+                run_id, source_url or None, source_html=source_html or None
+            )
             source_deficiencies = source_score.get("deficiencies") or []
         except Exception as exc:
             logger.warning(
@@ -911,8 +925,32 @@ async def _orchestrate_run_impl(run_id: str) -> None:
         writer_result = completed.get("writer")
         if writer_result is None:
             await _set_run_status(run_id, "writer_running")
+            # Blog reoptimize-of-existing: when the run carries a live URL or a
+            # pasted article, score that source with the blog/AEO rubric and feed
+            # its deficiencies into the writer's first pass (best-effort — a scrape
+            # or scoring failure just degrades to a normal generation).
+            source_deficiencies: list[dict] | None = None
+            reopt_url = (run.get("reoptimize_source_url") or "").strip()
+            reopt_html = (run.get("reoptimize_source_html") or "").strip()
+            if reopt_url or reopt_html:
+                try:
+                    from services.blog_page_score import score_external_page
+
+                    src_score = await score_external_page(
+                        run_id,
+                        source_url=reopt_url or None,
+                        source_html=reopt_html or None,
+                        user_id=run.get("created_by"),
+                    )
+                    source_deficiencies = src_score.get("deficiencies") or []
+                except Exception as exc:  # noqa: BLE001 — never block the run
+                    logger.warning(
+                        "blog_reopt_source_score_failed",
+                        extra={"run_id": run_id, "error": str(exc)},
+                    )
             writer_payload = _build_writer_payload(
-                run, brief_result, sie_result, research_result, snapshot
+                run, brief_result, sie_result, research_result, snapshot,
+                source_deficiencies=source_deficiencies,
             )
             writer_result = await _call_module("writer", run_id, writer_payload)
 

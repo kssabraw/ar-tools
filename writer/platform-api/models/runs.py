@@ -230,6 +230,55 @@ class ServicePageReoptimizeExistingRequest(BaseModel):
     location_code: Optional[int] = None
 
 
+class ReoptimizeExistingItem(BaseModel):
+    """One page to reoptimize from an external source — a live URL or pasted
+    (WYSIWYG) content. Shared by the service + blog bulk reoptimize endpoints."""
+
+    keyword: str
+    source_url: Optional[str] = None
+    source_html: Optional[str] = None
+    location: Optional[str] = None
+    location_code: Optional[int] = None
+
+
+class ServicePageReoptimizeBulkRequest(BaseModel):
+    client_id: UUID
+    page_type: str = "service_page"  # "service_page" | "location_page"
+    items: list[ReoptimizeExistingItem] = Field(default_factory=list, max_length=BULK_RUNS_MAX)
+
+
+class BlogReoptimizeBulkRequest(BaseModel):
+    client_id: UUID
+    writer_notes: Optional[str] = None
+    items: list[ReoptimizeExistingItem] = Field(default_factory=list, max_length=BULK_RUNS_MAX)
+
+
+class ReoptimizeExistingBulkResponse(BaseModel):
+    # One spawned run per valid item; the frontend polls each run like any other.
+    # `skipped` lists the items that couldn't start (missing keyword or url/html)
+    # so the UI can surface them as terminal rows.
+    runs: list[dict[str, Any]] = Field(default_factory=list)
+    skipped: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class BlogReoptimizeRequest(BaseModel):
+    # Scorer deficiencies the writer should fix; empty = reoptimize against all.
+    deficiencies: list[dict[str, Any]] = []
+
+
+class BlogReoptimizeExistingRequest(BaseModel):
+    """Reoptimize a blog article that has no cheap suite run to reuse — either a
+    live published URL or content pasted into the WYSIWYG editor. Spawns a blog
+    run tagged with the source; the orchestrator scores that source with the
+    blog/AEO rubric and feeds the gaps into the writer's first pass."""
+
+    client_id: UUID
+    keyword: str
+    source_url: Optional[str] = None
+    source_html: Optional[str] = None  # pasted WYSIWYG article content
+    writer_notes: Optional[str] = None
+
+
 class RunPollResponse(BaseModel):
     run_id: UUID
     status: str

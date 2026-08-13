@@ -69,6 +69,16 @@ class WriterRequest(BaseModel):
     # part of brief_output - the brief is client-agnostic and globally
     # cached. Optional - None/absent leaves writing behavior unchanged.
     user_notes: Optional[str] = None
+    # Reoptimization mode (mirrors the service_writer contract). In "reoptimize"
+    # mode the writer regenerates the article driven by the same brief, but a
+    # deficiency directive (built from the blog scorer's engine deficiencies) is
+    # folded into the per-section editorial guidance so every call addresses the
+    # low-scoring dimensions. `prior_sections` names the prior draft's headings so
+    # the rewrite preserves what already works. Output shape is unchanged (no
+    # schema bump) — reopt is an input-only concern.
+    mode: Literal["generate", "reoptimize"] = "generate"
+    prior_sections: list[dict[str, Any]] = Field(default_factory=list)
+    deficiencies: list[dict[str, Any]] = Field(default_factory=list)
 
 
 # ---- Brand voice card (output of Step 3.5a) ----

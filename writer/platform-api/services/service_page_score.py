@@ -149,22 +149,29 @@ async def score_run(run_id: str, user_id: Optional[str] = None) -> dict:
 
 
 async def score_external_page(
-    run_id: str, source_url: str, user_id: Optional[str] = None
+    run_id: str,
+    source_url: Optional[str] = None,
+    user_id: Optional[str] = None,
+    *,
+    source_html: Optional[str] = None,
 ) -> dict:
-    """Scrape a page already published on the client's live site and score it via
-    the nlp-api 8-engine scorer, persisting a `source_page_score` module_output.
-    Returns the ScoreResult (its `deficiencies` drive the reoptimize generation).
+    """Score an EXTERNAL service/location page — either scraped from a live URL or
+    pasted by the user (WYSIWYG) — via the nlp-api 8-engine scorer, persisting a
+    `source_page_score` module_output. Returns the ScoreResult (its `deficiencies`
+    drive the reoptimize generation).
 
     Mirrors `score_run`'s geo handling (national for service pages, local for
-    location pages) but scores the *scraped live HTML* rather than a generated page.
+    location pages) but scores the *external HTML* rather than a generated page.
     Raises on scrape/score failure; the orchestrator calls it best-effort."""
-    from services.website_scraper import scrapeowl_fetch
-
     run = _get_run(run_id)
     client = _get_client(run["client_id"])
     business_name, gbp_category, address = _business_fields(client)
-    html = await scrapeowl_fetch(source_url)
-    if not (html or "").strip():
+    html = (source_html or "").strip()
+    if not html and source_url:
+        from services.website_scraper import scrapeowl_fetch
+
+        html = (await scrapeowl_fetch(source_url) or "").strip()
+    if not html:
         raise HTTPException(status_code=422, detail="source_page_empty")
     payload = {
         "keyword": run.get("keyword") or "",

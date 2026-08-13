@@ -121,6 +121,10 @@ import ecommerce_mcs as mcs  # Max-Cosine Synthesis (AIO capture + entity + head
 import ecommerce_facts as ecom_facts  # invariant public-spec auto-research (cited)
 import ecommerce_loop as ecom_loop  # auto-retry loop stop decisions (pure)
 import voice_card as vcard  # brand voice + ICP: distilled card, prompt block, hard checks
+from blog_structure import (  # deterministic blog/AEO structure checks (R4/R6/R7)
+    compute_blog_structural_aeo as _compute_blog_structural_aeo,
+    detect_blog_structure as _detect_blog_structure,
+)
 
 STOP_WORDS = set(stopwords.words('english'))
 
@@ -8337,6 +8341,243 @@ async def score_ecommerce_page(request: Request, body: EcommerceScoreRequest):
         composite_status=status,
         engine_scores=scores,
         deficiencies=_ecommerce_build_deficiencies(scores),
+        voice_compliance=voice_compliance,
+        token_usage=token_rec,
+        serp_analysis=serp_analysis_dict if inline_serp else None,
+        analysis_cost=inline_serp.analysis_cost if inline_serp else None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Blog / article scoring rubric (AEO-oriented, national scope)
+# ---------------------------------------------------------------------------
+# Blog posts are written in pipeline-api (the 5-module blog pipeline), NOT here —
+# nlp-api only SCORES them. The rubric mirrors the ecommerce scorer seam: a
+# (weights, labels, system prompt, prompt builder, deficiency builder) tuple that
+# reuses the shared _composite_from_scores / _serp_context / _run_serp_analysis /
+# _scrape_one / _compute_serp_signal_coverage / _voice_scorecard_from helpers.
+#
+# Two engines are DETERMINISTIC (scored in Python, never sent to Claude):
+#   • serp_signal_coverage (.15) — reused as-is (exact keyword/entity presence).
+#   • structural_aeo (.10)       — the content-quality PRD's R4/R6/R7 checks
+#                                   (Key Takeaways / paragraph cap / citations /
+#                                   scannability / heading structure).
+# The other 6 are LLM-scored. Weights sum to 1.0 and, like the other rubrics,
+# NEVER include brand voice (voice is a separate scorecard).
+_BLOG_ENGINE_WEIGHTS = {
+    "organic_ranking":       0.12,
+    "aeo_llm_retrieval":     0.20,
+    "content_depth":         0.15,
+    "entity_topic_coverage": 0.13,
+    "eeat_citations":        0.10,
+    "icp_alignment":         0.05,
+    "structural_aeo":        0.10,   # deterministic — scored in Python, not Claude
+    "serp_signal_coverage":  0.15,   # deterministic — scored in Python, not Claude
+}
+
+_BLOG_ENGINE_LABELS = {
+    "organic_ranking":       "Organic Ranking Engine",
+    "aeo_llm_retrieval":     "AEO / LLM Retrieval Engine",
+    "content_depth":         "Content Depth & Helpfulness Engine",
+    "entity_topic_coverage": "Entity & Topic Coverage Engine",
+    "eeat_citations":        "E-E-A-T & Citations Engine",
+    "icp_alignment":         "ICP Alignment Engine",
+    "structural_aeo":        "Structural / AEO Readiness",
+    "serp_signal_coverage":  "SERP Signal Coverage",
+}
+
+
+def _blog_score_system_prompt_for(voice_card: Optional[dict] = None) -> str:
+    if vcard.is_card_empty(voice_card):
+        return _BLOG_SCORE_SYSTEM_PROMPT
+    return _BLOG_SCORE_SYSTEM_PROMPT + _VOICE_SCORE_PROMPT_SUFFIX
+
+
+def _blog_build_deficiencies(scores: dict) -> List[dict]:
+    """Per-engine deficiencies (<80) using the blog labels. Mirrors
+    _build_deficiencies but keyed to _BLOG_ENGINE_LABELS (so the deterministic
+    structural_aeo/serp_signal_coverage engines surface as deficiencies too)."""
+    out = []
+    for key, label in _BLOG_ENGINE_LABELS.items():
+        eng = scores.get(key, {})
+        if eng.get("score", 100) < 80:
+            out.append({
+                "engine": label,
+                "engine_key": key,
+                "score": eng.get("score", 0),
+                "issues": eng.get("issues", []),
+                "recommendations": eng.get("recommendations", []),
+            })
+    return out
+
+
+_BLOG_SCORE_SYSTEM_PROMPT = """You are an expert content-SEO + AEO (Answer Engine Optimization) analyst. Score the provided BLOG ARTICLE against all 6 engines below.
+
+IMPORTANT: These 6 engines account for 75% of the composite score. The remaining 25% is scored separately by two deterministic Python engines you do NOT score — Structural / AEO Readiness (10%, checks Key Takeaways / paragraph length / citations / scannability / heading structure) and SERP Signal Coverage (15%, checks exact keyword/entity/quadgram presence per HTML zone). Focus only on the 6 below. Use the deterministic HTML STRUCTURE FACTS in the CONTEXT (heading/list/paragraph/link counts) — do NOT re-count them from the stripped text.
+
+This is an informational/editorial ARTICLE, not a landing page or product page. Judge it as content a reader (and an AI answer engine) would find genuinely helpful, trustworthy, and extractable. Do NOT reward hard sales copy, keyword stuffing, or thin restatement.
+
+SCORING CRITERIA — score each engine 0–100:
+
+1. organic_ranking (weight 12%): the target keyword / topic in <title>, H1, and the opening answer sentence; search-intent match (does the article answer what someone searching this query actually wants?); unique angle and substance vs. generic boilerplate; a compelling, non-clickbait title.
+
+2. aeo_llm_retrieval (weight 20% — treat as high value): extractability for AI answers and featured snippets. A single DIRECT, liftable answer sentence to the seed query in the opening (~15–30 words, self-contained). A "Key Takeaways" block of standalone, quotable claims near the top (the first bullet a clean definitional/direct answer). Section headings that read as real questions or specific sub-topics (penalise vague "Overview"/"More info"/the exact search phrase verbatim as a heading). Each key claim quotable WITHOUT surrounding context (penalise vague "it depends" hedging). An FAQ with answer-first responses is a plus. Scannable structure (short paragraphs, lists) that an LLM can cleanly cite.
+
+3. content_depth (weight 15%): genuine helpfulness and comprehensiveness for the intent; concrete specifics, examples, data, and first-hand/expert insight over filler; covers the sub-questions a reader would have; no fluff, no repetition, no obvious AI-boilerplate ("In today's fast-paced world…"). Penalise padding and off-topic drift from the title's promise.
+
+4. entity_topic_coverage (weight 13%): topical authority — the main entity plus the related entities, concepts, and terms a thorough piece on this topic would cover, co-occurring across multiple sections; semantic completeness vs. what the SERP competitors cover; no critical sub-topic gaps.
+
+5. eeat_citations (weight 10%): Experience, Expertise, Authoritativeness, Trust. External citations/links on time-bound, statistical, or named-source claims (a piece making factual claims with zero sourcing scores LOW); first-party/authoritative sources preferred over aggregators; author/brand credibility signals; accurate, non-misleading claims. Judge the citation presence the COPY shows — do not penalise for lacking a platform byline widget.
+
+6. icp_alignment (weight 5%): does the article speak to the client's actual audience (the ICP) and their level, problems, and language? Framing and examples relevant to that reader; appropriate depth for who it's for. Score neutrally (~70) when no ICP context is provided rather than penalising.
+
+Return ONLY valid JSON — no markdown, no explanation:
+{
+  "organic_ranking":       {"score": 0, "issues": [], "recommendations": []},
+  "aeo_llm_retrieval":     {"score": 0, "issues": [], "recommendations": []},
+  "content_depth":         {"score": 0, "issues": [], "recommendations": []},
+  "entity_topic_coverage": {"score": 0, "issues": [], "recommendations": []},
+  "eeat_citations":        {"score": 0, "issues": [], "recommendations": []},
+  "icp_alignment":         {"score": 0, "issues": [], "recommendations": [], "icp_detected": ""}
+}
+
+Be specific — reference actual content found (or missing) in the article."""
+
+
+def _build_blog_score_prompt(
+    business_name: str,
+    brand_context: str,
+    keyword: str,
+    serp_ctx: str,
+    page_text: str,
+    html_structure: str = "",
+    voice_card: Optional[dict] = None,
+) -> str:
+    """Dynamic user-message portion of the blog scoring prompt. The static rubric
+    lives in _BLOG_SCORE_SYSTEM_PROMPT (cached separately)."""
+    structure_block = f"\n{html_structure}\n" if html_structure else ""
+    ctx_line = f"Brand/business context: {brand_context}\n" if brand_context else ""
+    voice_rendered = vcard.render_voice_card_block(voice_card)
+    voice_block = (
+        f"\nCLIENT BRAND VOICE & AUDIENCE (score the brand voice scorecard against this):\n{voice_rendered}\n"
+        if voice_rendered else ""
+    )
+    return f"""CONTEXT
+Business / brand: {business_name}
+Content type: Blog article (informational)
+Target keyword / topic: {keyword}
+{ctx_line}{serp_ctx}{structure_block}{voice_block}
+ARTICLE CONTENT (first 8,000 chars):
+{page_text[:8000]}"""
+
+
+class BlogScoreRequest(BaseModel):
+    keyword: str
+    page_url: Optional[str] = None
+    page_content: Optional[str] = None  # if omitted, fetched from page_url
+    business_name: str = ""
+    brand_context: Optional[str] = None
+    serp_analysis: Optional[dict] = None
+    location: str = _ECOMMERCE_SERP_LOCATION
+    location_code: Optional[int] = None
+    brand_voice: Optional[dict] = None
+    detected_icp: Optional[dict] = None
+    voice_card: Optional[dict] = None
+
+
+class BlogScoreResponse(BaseModel):
+    composite_score: float
+    composite_status: str
+    engine_scores: dict
+    deficiencies: List[dict]
+    token_usage: dict
+    serp_analysis: Optional[dict] = None
+    analysis_cost: Optional[dict] = None
+    voice_compliance: Optional[dict] = None
+
+
+@app.post('/score-blog-page', response_model=BlogScoreResponse)
+@limiter.limit("10/minute")
+async def score_blog_page(request: Request, body: BlogScoreRequest):
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
+
+    import anthropic as _anthropic
+    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+
+    # SERP analysis inline if not supplied (national scope — blog topics rank nationally).
+    inline_serp = None
+    serp_analysis_dict: Optional[dict] = body.serp_analysis
+    if not serp_analysis_dict:
+        try:
+            _loc = body.location or _ECOMMERCE_SERP_LOCATION
+            _code = body.location_code or _ECOMMERCE_SERP_LOCATION_CODE
+            inline_serp = await _run_serp_analysis(body.keyword, _loc, _code)
+            serp_analysis_dict = inline_serp.model_dump()
+        except Exception as _serp_err:
+            logger.warning(f"score-blog: inline SERP analysis failed ({_serp_err})")
+            raise HTTPException(status_code=503, detail="Could not fetch competitor data. Please try again in a moment.")
+
+    from bs4 import BeautifulSoup as _BS
+    page_html = body.page_content
+    if not page_html and body.page_url:
+        async with httpx.AsyncClient() as _fc:
+            page_html = await _scrape_one(body.page_url, _fc, render_js=False)
+            if not page_html:
+                page_html = await _scrape_one(body.page_url, _fc, render_js=True)
+        if not page_html:
+            raise HTTPException(status_code=422, detail="Could not fetch the provided page URL. Check that it is correct and publicly accessible.")
+    if not page_html:
+        raise HTTPException(status_code=422, detail="Either page_content or page_url is required")
+
+    html_structure = _detect_blog_structure(page_html)
+    page_text = _BS(page_html, "html.parser").get_text(separator="\n", strip=True)
+    serp_ctx = _serp_context(serp_analysis_dict)
+    brand_context = body.brand_context or body.business_name
+    voice_card = await _resolve_voice_card(client, body)
+    user_prompt = _build_blog_score_prompt(
+        body.business_name, brand_context, body.keyword, serp_ctx, page_text,
+        html_structure, voice_card=voice_card,
+    )
+
+    scores = None
+    token_rec = None
+    for attempt in range(2):
+        try:
+            msg = await client.messages.create(
+                model=SCORE_MODEL,
+                max_tokens=8192,
+                system=[{
+                    "type": "text",
+                    "text": _blog_score_system_prompt_for(voice_card),
+                    "cache_control": {"type": "ephemeral"},
+                }],
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            token_rec = _token_record("score-blog-page", SCORE_MODEL, msg.usage.input_tokens, msg.usage.output_tokens)
+            parsed = _parse_claude_json(msg.content[0].text)
+            if parsed:
+                scores = parsed
+                break
+            logger.warning(f"score-blog: invalid JSON on attempt {attempt + 1}")
+        except Exception:
+            logger.exception(f"Blog scoring error on attempt {attempt + 1}")
+            if attempt == 1:
+                raise HTTPException(status_code=502, detail="Scoring service temporarily unavailable. Please try again.")
+
+    if not scores:
+        raise HTTPException(status_code=502, detail="Scoring service returned an invalid response. Please try again.")
+
+    scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_html, serp_analysis_dict)
+    scores["structural_aeo"] = _compute_blog_structural_aeo(page_html)
+    voice_compliance = _voice_scorecard_from(scores, page_html, "", voice_card)
+    composite, status = _composite_from_scores(scores, _BLOG_ENGINE_WEIGHTS)
+
+    return BlogScoreResponse(
+        composite_score=composite,
+        composite_status=status,
+        engine_scores=scores,
+        deficiencies=_blog_build_deficiencies(scores),
         voice_compliance=voice_compliance,
         token_usage=token_rec,
         serp_analysis=serp_analysis_dict if inline_serp else None,
