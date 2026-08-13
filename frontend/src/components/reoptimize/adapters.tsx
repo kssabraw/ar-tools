@@ -81,6 +81,7 @@ export function localSeoAdapter(clientId: string, clientName: string | undefined
     supportsUrl: true,
     supportsPaste: false,
     supportsExisting: false,
+    supportsEntityProvider: true,
     urlSingleToggle: true,
     requiresKeyword: true,
     keywordLabel: 'Service',
@@ -104,6 +105,7 @@ export function localSeoAdapter(clientId: string, clientName: string | undefined
         })),
         score_threshold: SCORE_THRESHOLD,
         publish_to_doc: opts.destination === 'doc',
+        entity_provider: opts.entityProvider ?? null,
       })
       return (res.jobs ?? []).map(j => ({
         kind: 'job' as const, id: j.job_id, jobId: j.job_id, label: j.page_url.replace(/^https?:\/\//, ''),
@@ -131,6 +133,7 @@ export function ecommerceAdapter(clientId: string, clientName: string | undefine
     supportsPaste: false,
     supportsExisting: false,
     supportsDiscover: true,
+    supportsEntityProvider: true,
     requiresKeyword: false,
     keywordLabel: 'Target keyword',
     keywordPlaceholder: 'e.g. wireless noise-cancelling headphones',
@@ -159,6 +162,7 @@ export function ecommerceAdapter(clientId: string, clientName: string | undefine
         score_threshold: SCORE_THRESHOLD,
         publish_to_doc: Boolean(opts.publishToDoc),
         notes: opts.notes ?? null,
+        entity_provider: opts.entityProvider ?? null,
       })
       return (res.jobs ?? []).map(j => ({
         kind: 'job' as const, id: j.job_id, jobId: j.job_id, label: j.page_url.replace(/^https?:\/\//, ''),

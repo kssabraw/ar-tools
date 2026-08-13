@@ -4,6 +4,7 @@ import {
   ArrowRight, CheckCircle2, ExternalLink, MinusCircle, Search, Sparkles, XCircle,
 } from 'lucide-react'
 import { useResumableBatch, type BatchJobRow } from '../../lib/useResumableBatch'
+import { EntityProviderSelect, type EntityProvider } from '../EntityProviderSelect'
 import { LocationAutocomplete } from '../localseo/LocationAutocomplete'
 import { Spinner } from '../localseo/Spinner'
 import { card, errorBox, input, label, outlineBtn, primaryBtn, scoreColor } from '../localseo/shared'
@@ -64,6 +65,8 @@ export function ReoptimizePanel({ adapter, pageType: pageTypeProp }: Props) {
   const [location, setLocation] = useState('')
   const [locationCode, setLocationCode] = useState<number | null>(null)
   const [notes, setNotes] = useState('')
+  // Entity-extraction engine for the nlp SERP analysis (Local SEO + Ecommerce).
+  const [entityProvider, setEntityProvider] = useState<EntityProvider>('textrazor')
 
   // Page type: owned by the panel (Service) or supplied by the parent (Ecommerce).
   const [internalPageType, setInternalPageType] = useState(
@@ -288,6 +291,7 @@ export function ReoptimizePanel({ adapter, pageType: pageTypeProp }: Props) {
         publishToDoc,
         notes: notes.trim() || null,
         pageType,
+        entityProvider: adapter.supportsEntityProvider ? entityProvider : undefined,
       })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not start reoptimization')
@@ -581,6 +585,11 @@ export function ReoptimizePanel({ adapter, pageType: pageTypeProp }: Props) {
             placeholder={adapter.notesPlaceholder ?? 'e.g. emphasize fast shipping; write for clinics not individuals'}
           />
         </div>
+      )}
+
+      {/* Entity engine (Local SEO + Ecommerce) */}
+      {adapter.supportsEntityProvider && (
+        <EntityProviderSelect value={entityProvider} onChange={setEntityProvider} disabled={running} />
       )}
 
       {/* Destination — radio (Local SEO) or a single publish-to-Doc checkbox */}

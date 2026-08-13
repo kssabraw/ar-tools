@@ -78,6 +78,9 @@ export interface ReoptStartOpts {
   notes?: string | null
   // The active page type (product/collection or service_page/location_page).
   pageType?: string
+  // Entity-extraction engine for the nlp SERP analysis ("textrazor"|"google").
+  // Only set by adapters that opt in via `supportsEntityProvider`.
+  entityProvider?: string | null
 }
 
 // A radio-style destination choice (Local SEO's "where should pages go?").
@@ -149,6 +152,11 @@ export interface ReoptAdapter {
   supportsNotes?: boolean
   notesLabel?: string
   notesPlaceholder?: string
+
+  // ── Entity engine ──
+  // When true the panel renders the TextRazor/Google NLP selector and threads the
+  // choice into `start`'s opts.entityProvider. Only Local SEO + Ecommerce set it.
+  supportsEntityProvider?: boolean
 
   // ── Destination ──
   destinations?: ReoptDestination[]
