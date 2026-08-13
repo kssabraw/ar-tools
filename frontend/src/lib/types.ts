@@ -83,6 +83,8 @@ export interface Client extends ClientListItem {
   wordpress_site_url: string | null
   wordpress_username: string | null
   wordpress_app_password_set: boolean
+  // Per-client gate for the WheelHouse IT page poster module.
+  wheelhouse_cpt_enabled?: boolean
   gsc_property: string | null
   business_location: string | null
   gbp_place_id: string | null

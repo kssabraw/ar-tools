@@ -521,6 +521,8 @@ async def update_client(
     # string clears it; a value replaces it.
     if body.wordpress_app_password is not None:
         updates["wordpress_app_password"] = body.wordpress_app_password or None
+    if body.wheelhouse_cpt_enabled is not None:
+        updates["wheelhouse_cpt_enabled"] = body.wheelhouse_cpt_enabled
     if body.logo_url is not None:
         updates["logo_url"] = body.logo_url
     if body.gsc_property is not None:

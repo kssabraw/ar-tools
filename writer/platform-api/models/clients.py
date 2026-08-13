@@ -132,6 +132,8 @@ class ClientDetail(BaseModel):
     wordpress_site_url: Optional[str] = None
     wordpress_username: Optional[str] = None
     wordpress_app_password_set: bool = False
+    # Per-client gate for the WheelHouse IT location/service page poster module.
+    wheelhouse_cpt_enabled: bool = False
     logo_url: Optional[str] = None
     gsc_property: Optional[str] = None
     business_location: Optional[str] = None
@@ -195,6 +197,8 @@ class ClientCreateRequest(BaseModel):
     wordpress_site_url: Optional[str] = None
     wordpress_username: Optional[str] = None
     wordpress_app_password: Optional[str] = None
+    # Per-client gate for the WheelHouse IT page poster (admin-toggled).
+    wheelhouse_cpt_enabled: Optional[bool] = None
     logo_url: Optional[str] = None
     gsc_property: Optional[str] = None
     business_location: Optional[str] = None
@@ -240,6 +244,8 @@ class ClientUpdateRequest(BaseModel):
     wordpress_site_url: Optional[str] = None
     wordpress_username: Optional[str] = None
     wordpress_app_password: Optional[str] = None
+    # Per-client gate for the WheelHouse IT page poster (admin-toggled).
+    wheelhouse_cpt_enabled: Optional[bool] = None
     logo_url: Optional[str] = None
     gsc_property: Optional[str] = None
     business_location: Optional[str] = None

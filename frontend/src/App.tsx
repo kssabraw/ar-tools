@@ -19,6 +19,7 @@ import { Icp } from './pages/Icp'
 import { InternalLinks } from './pages/InternalLinks'
 import { LocalSeoContent } from './pages/LocalSeoContent'
 import { EcommerceProduct } from './pages/EcommerceProduct'
+import { Wheelhouse } from './pages/Wheelhouse'
 import { ContentScheduler } from './pages/ContentScheduler'
 import { ContentCalendar } from './pages/ContentCalendar'
 import { ServicePages } from './pages/ServicePages'
@@ -105,6 +106,7 @@ export default function App() {
                       <Route path="/clients/:id/content" element={<ClientContent />} />
                       <Route path="/clients/:id/local-seo" element={<LocalSeoContent />} />
                       <Route path="/clients/:id/ecommerce" element={<EcommerceProduct />} />
+                      <Route path="/clients/:id/wheelhouse" element={<Wheelhouse />} />
                       <Route path="/clients/:id/content-scheduler" element={<ContentScheduler />} />
                       <Route path="/clients/:id/service-pages" element={<ServicePages />} />
                       <Route path="/clients/:id/location-pages" element={<LocationPages />} />

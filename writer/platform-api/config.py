@@ -1139,6 +1139,16 @@ class Settings(BaseSettings):
     # empty (no gate). Keep ≳ a single item's runtime so an interactive job waits
     # behind at most the currently-running bulk item.
     local_seo_bulk_job_spacing_seconds: int = 180
+    # WheelHouse IT location/service page poster (client-gated via the per-client
+    # clients.wheelhouse_cpt_enabled flag). LLM that fills the 33 ACF fields.
+    wheelhouse_provider: str = "anthropic"
+    wheelhouse_model: str = "claude-sonnet-4-6"
+    # Headroom for 25 fields incl. a 200-word body + several 50–90-word bodies;
+    # too low truncates the tool_use JSON and silently drops fields.
+    wheelhouse_max_tokens: int = 6000
+    # Spacing between per-leaf jobs in a mass (city×service) run — same rationale
+    # as local_seo_bulk_job_spacing_seconds (background priority + reaper safety).
+    wheelhouse_bulk_job_spacing_seconds: int = 120
     # Content Scheduler (suite bulk page creation + scheduling). Max keywords per
     # batch; per-content-type $/page cost estimate (the deliberate fix for the
     # Fanout scheduler's caveat of estimating every type at the blog constant);
