@@ -8,8 +8,13 @@ const TYPE_META: Record<RankAlertType, { label: string; icon: React.ReactNode; c
   weekly_drop: { label: 'Weekly drop', icon: <ArrowDownRight size={15} />, color: '#dc2626' },
   page_one_exit: { label: 'Off page 1', icon: <TrendingDown size={15} />, color: '#ea580c' },
   thirty_day_drop: { label: '30-day drop', icon: <ArrowDownRight size={15} />, color: '#d97706' },
+  gradual_drop: { label: 'Gradual slide', icon: <TrendingDown size={15} />, color: '#b45309' },
   deindexed: { label: 'Deindexed', icon: <FileX size={15} />, color: '#b91c1c' },
 }
+
+// A defensive fallback so an unrecognized alert_type (e.g. a type added to the
+// API before the frontend deploys) renders instead of crashing on undefined.
+const FALLBACK_META = { label: 'Ranking drop', icon: <ArrowDownRight size={15} />, color: '#64748b' }
 
 // Per-client Rankings "Alerts" tab. Surfaces the in-app rank-drop alerts the
 // daily materialize job opens (weekly_drop / page_one_exit / thirty_day_drop /
@@ -55,7 +60,8 @@ export function RankAlerts({ clientId }: { clientId: string }) {
       </div>
       <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 14px', lineHeight: 1.6 }}>
         We flag a keyword when it <strong>drops 6+ spots in a week</strong> from a top-15 position,
-        <strong> falls off page 1</strong>, <strong>drops 6+ spots over 30 days</strong> from ~top 20, or
+        <strong> falls off page 1</strong>, <strong>drops 6+ spots over 30 days</strong> from ~top 20,
+        <strong> slides steadily over ~8 weeks</strong> (a slow decline no single-week drop would catch), or
         <strong> falls out of Google's index</strong>. Each alert clears automatically once the keyword recovers.
       </p>
 
@@ -70,7 +76,7 @@ export function RankAlerts({ clientId }: { clientId: string }) {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           {alerts.map((a, i) => {
-            const meta = TYPE_META[a.alert_type]
+            const meta = TYPE_META[a.alert_type] ?? FALLBACK_META
             const resolved = Boolean(a.resolved_at)
             const unread = a.status === 'unread'
             return (

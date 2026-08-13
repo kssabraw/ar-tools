@@ -368,15 +368,22 @@ def classify_client_drops(client_id: str, drops: list[dict]) -> dict:
     except Exception as exc:
         logger.warning("drop_classifier.tracked_count_failed", extra={"client_id": client_id, "error": str(exc)})
 
-    scope = detect_scope(len(drops), tracked_count)
+    # Sitewide scope (§A — the algo/manual-action/technical emergency ladder) is a
+    # SUDDEN cross-keyword signal, so gradual_drop rows (individual slow slides)
+    # must not inflate the count and trip a false sitewide banner.
+    sudden_drops = sum(1 for d in drops if d.get("alert_type") != "gradual_drop")
+    scope = detect_scope(sudden_drops, tracked_count)
     cannibalized = _cannibalized_queries(supabase, client_id)
 
     classified = 0
     for d in drops:
         try:
             keyword_id = d.get("keyword_id")
-            shift = _keyword_serp_shift(supabase, keyword_id) if keyword_id else {}
-            triage = _keyword_triage(supabase, keyword_id) if keyword_id else None
+            # classify_drop ignores serp-shift/triage for a gradual_drop (it routes
+            # to GRADUAL or B1), so skip those per-drop reads for it.
+            is_gradual = d.get("alert_type") == "gradual_drop"
+            shift = _keyword_serp_shift(supabase, keyword_id) if (keyword_id and not is_gradual) else {}
+            triage = _keyword_triage(supabase, keyword_id) if (keyword_id and not is_gradual) else None
             result = classify_drop(d, cannibalized=cannibalized, serp_shift=shift, triage=triage)
             playbook = RESPONSE_PLAYBOOK[result["classification"]]
             d["classification"] = result["classification"]
@@ -398,5 +405,8 @@ def classify_client_drops(client_id: str, drops: list[dict]) -> dict:
                            extra={"client_id": client_id, "keyword": d.get("keyword"),
                                   "error": str(exc)})
 
+    # open_drops feeds the §A sitewide banner text ("N of M keywords down
+    # together"), so report the sudden count that actually defines the emergency,
+    # not the gradual slides excluded from the scope decision above.
     return {"scope": scope, "sitewide": scope == "sitewide", "classified": classified,
-            "open_drops": len(drops), "tracked_count": tracked_count}
+            "open_drops": sudden_drops, "tracked_count": tracked_count}

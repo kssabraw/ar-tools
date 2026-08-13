@@ -333,7 +333,12 @@ export interface RankOverview {
   unread_alert_count: number
 }
 
-export type RankAlertType = 'weekly_drop' | 'page_one_exit' | 'thirty_day_drop' | 'deindexed'
+export type RankAlertType =
+  | 'weekly_drop'
+  | 'page_one_exit'
+  | 'thirty_day_drop'
+  | 'gradual_drop'
+  | 'deindexed'
 
 export interface RankAlert {
   id: string

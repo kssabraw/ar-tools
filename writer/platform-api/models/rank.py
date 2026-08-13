@@ -375,7 +375,9 @@ class RankAlert(BaseModel):
     id: UUID
     keyword_id: UUID
     keyword: str
-    alert_type: Literal["weekly_drop", "page_one_exit", "thirty_day_drop", "deindexed"]
+    alert_type: Literal[
+        "weekly_drop", "page_one_exit", "thirty_day_drop", "gradual_drop", "deindexed"
+    ]
     source: Optional[str] = None
     from_position: Optional[float] = None
     to_position: Optional[float] = None
