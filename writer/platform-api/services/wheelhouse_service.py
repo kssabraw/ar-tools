@@ -23,7 +23,6 @@ from db.supabase_client import get_supabase
 from services import wheelhouse_generate
 from services.wheelhouse_fields import FIELD_NAMES, validate_fields
 from services.wheelhouse_pages import (
-    WordPressPublishError,
     build_slug_path,
     dry_run_leaf,
     publish_leaf,

@@ -25,11 +25,9 @@ import logging
 import re
 import unicodedata
 from typing import Optional
-from urllib.parse import urlparse
 
 import httpx
 
-from config import settings
 from services.wordpress_publish import (
     WordPressPublishError,
     _auth_header,
