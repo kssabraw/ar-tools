@@ -658,10 +658,10 @@ Section 2 — USP / Value Proposition (150–200 words)
 Section 3 — Special Offers (omit this section if no offer data provided)
 <section id="offers">...</section>
 
-Section 4 — CTA Block Primary (50–75 words)
+Section 4 — CTA Block Primary (50–75 words) — VALUE / OFFER-LED
 <section id="cta-primary">
-  <h2>[Action-oriented H2]</h2>
-  [Differentiated CTA — not "Contact us today". Include phone.]
+  <h2>[Service-anchored action heading — name the SERVICE (no city, and do NOT repeat the exact-match keyword verbatim), e.g. "Book Your Roof Restoration Today" / "Start Your Emergency Plumbing Repair"]</h2>
+  [Lead with the core VALUE or OFFER: the primary differentiator or a free quote/estimate, then the ask. NOT "Contact us today". Include the phone number.]
 </section>
 
 Section 5 — Features and Benefits (150–200 words)
@@ -698,8 +698,11 @@ Section 7 — Testimonials (include only if reviews provided above; omit if none
   [Verbatim reviews only — first name + last initial, stars, date, full text]
 </section>
 
-Section 8 — CTA Block Secondary (50–75 words — different angle from Section 4)
-<section id="cta-secondary">...</section>
+Section 8 — CTA Block Secondary (50–75 words) — PROOF / RISK-REVERSAL
+<section id="cta-secondary">
+  <h2>[Service-anchored action heading — name the SERVICE (no city, no verbatim exact-match keyword), DISTINCT wording from §4, e.g. "Trust Your Roof Restoration to a Proven Crew"]</h2>
+  [A DISTINCT angle from §4: lead with proof or risk-reversal — a guarantee/warranty, licensing/insurance, or a reviews callback (each ONLY if present in the business data; never invent one), then the ask. Include the phone. Do NOT reuse §4's wording or angle.]
+</section>
 
 Section 9 — Getting Started (150–200 words)
 <section id="getting-started">
@@ -713,8 +716,11 @@ Section 10 — Geographic / Local SEO Section (200–300 words)
   [City + min 3 neighborhoods in sentence context (not just a list) + min 1 landmark + min 2 streets + zip codes (min 3). Use only real, verifiable geographic details. If neighborhood/landmark/street/zip data is not provided in the business data, include only what you are certain is accurate for the target city. Do not invent or guess street names, zip codes, or landmarks. Coverage area required. Response time: ONLY include if explicitly stated in business hours, GBP description, or reviews — otherwise write "Call us for availability" or omit entirely.]
 </section>
 
-Section 11 — CTA Block Tertiary (50–75 words — urgency-forward)
-<section id="cta-tertiary">...</section>
+Section 11 — CTA Block Tertiary (50–75 words) — URGENCY / AVAILABILITY
+<section id="cta-tertiary">
+  <h2>[Service-anchored action heading — name the SERVICE (no city, no verbatim exact-match keyword), DISTINCT wording from §4 and §8, e.g. "Get Your Roof Restoration Scheduled"]</h2>
+  [A DISTINCT angle from §4 and §8: lead with urgency or availability — same-day/emergency response ONLY if it is in the business data; otherwise use non-fabricated urgency ("don't wait until the damage spreads", seasonal timing, "book before your preferred slot fills"). NEVER invent a timeframe. Include the phone. Do NOT reuse the earlier CTAs' wording.]
+</section>
 
 Section 12 — FAQ (min 4, max 7 entries — 40–80 words each)
 <section id="faq">
