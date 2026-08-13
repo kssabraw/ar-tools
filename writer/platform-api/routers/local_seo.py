@@ -73,6 +73,7 @@ async def generate_local_seo_page_async(
         user_id=auth["user_id"],
         page_template_url=body.page_template_url,
         force_refresh=body.force_refresh,
+        entity_provider=body.entity_provider,
     )
     return LocalSeoGenerateJob(job_id=job_id, status="pending")
 
@@ -108,6 +109,7 @@ async def generate_local_seo_pages_bulk(
         user_id=auth["user_id"],
         page_template_url=body.page_template_url,
         force_refresh=body.force_refresh,
+        entity_provider=body.entity_provider,
     )
     return LocalSeoBulkGenerateJob(job_ids=job_ids)
 
@@ -127,6 +129,7 @@ async def reoptimize_local_seo_pages_bulk(
         user_id=auth["user_id"],
         score_threshold=body.score_threshold,
         publish_to_doc=body.publish_to_doc,
+        entity_provider=body.entity_provider,
     )
     return LocalSeoReoptimizeBulkJob(jobs=jobs)
 
@@ -223,6 +226,7 @@ async def score_local_seo_page(
             "location_code": body.location_code, "page_url": body.page_url,
             "page_content": body.page_content, "serp_analysis": body.serp_analysis,
             "force_refresh": body.force_refresh,
+            "entity_provider": body.entity_provider,
         },
         auth["user_id"],
     )
@@ -292,6 +296,7 @@ async def reoptimize_local_seo_page_async(
         deficiencies=body.deficiencies,
         serp_analysis=body.serp_analysis,
         user_id=auth["user_id"],
+        entity_provider=body.entity_provider,
     )
     return LocalSeoGenerateJob(job_id=job_id, status="pending")
 

@@ -65,7 +65,7 @@ def _business_fields(client: dict) -> dict:
 
 def _gbp_to_generate_payload(
     client: dict, keyword: str, location: str, location_code: Optional[int] = None,
-    include_decision_map: bool = True,
+    include_decision_map: bool = True, entity_provider: Optional[str] = None,
 ) -> dict:
     """Map a suite client row (with its `gbp` JSONB) to the nlp service's
     GeneratePageRequest. The converged brand_voice / detected_icp /
@@ -94,6 +94,10 @@ def _gbp_to_generate_payload(
         "brand_voice": client.get("brand_voice"),
         "detected_icp": client.get("detected_icp"),
         "differentiators": client.get("differentiators") or [],
+        # Per-request entity-extraction provider ("textrazor"|"google"); None →
+        # nlp's default. Threaded from the UI so the SERP entity analysis inside
+        # nlp uses the chosen engine.
+        "entity_provider": entity_provider,
     }
 
 
@@ -357,16 +361,19 @@ def _analysis_lock(key: str) -> asyncio.Lock:
 
 async def _compute_and_store(
     keyword: str, location: str, location_code: Optional[int], user_id: Optional[str], required: bool,
+    entity_provider: Optional[str] = None,
 ) -> Optional[dict]:
     """Run the nlp SERP analysis and cache it. On provider failure: re-raise when
     `required` (the analysis IS the deliverable), else log and return None so the
     caller can degrade gracefully (generate/score are enhanced by analysis, not
-    gated on it)."""
+    gated on it). `entity_provider` picks the nlp entity-extraction engine
+    ("textrazor"|"google"); None → nlp's default."""
     try:
         result = await _post_nlp("/analyze", {
             "keyword": keyword,
             "location": location,
             "location_code": location_code,
+            "entity_provider": entity_provider,
         }, user_id=user_id)
     except HTTPException as exc:
         if required:
@@ -387,13 +394,17 @@ async def _get_or_compute_analysis(
     force_refresh: bool,
     user_id: Optional[str] = None,
     required: bool = True,
+    entity_provider: Optional[str] = None,
 ) -> Optional[dict]:
     """Return a SERP analysis for (keyword, location), served from the shared
     cache when fresh (within the TTL) — otherwise run the nlp pipeline once and
     cache the result. `force_refresh` bypasses the cache for a re-scrape;
-    `required=False` degrades to None on provider failure instead of raising."""
+    `required=False` degrades to None on provider failure instead of raising.
+    `entity_provider` picks the nlp entity-extraction engine on a compute."""
     if force_refresh:
-        return await _compute_and_store(keyword, location, location_code, user_id, required)
+        return await _compute_and_store(
+            keyword, location, location_code, user_id, required, entity_provider
+        )
 
     cached = analysis_cache.get(keyword, location_code, location)
     if cached is not None:
@@ -403,7 +414,9 @@ async def _get_or_compute_analysis(
         cached = analysis_cache.get(keyword, location_code, location)
         if cached is not None:
             return cached
-        return await _compute_and_store(keyword, location, location_code, user_id, required)
+        return await _compute_and_store(
+            keyword, location, location_code, user_id, required, entity_provider
+        )
 
 
 def set_page_template_default(client_id: str, page_template_url: Optional[str]) -> dict:
@@ -454,6 +467,7 @@ async def generate_page(
     page_template_url: Optional[str] = None,
     include_decision_map: bool = True,
     notes: Optional[str] = None,
+    entity_provider: Optional[str] = None,
 ) -> dict:
     """Generate a local SEO page for a client and persist it.
 
@@ -468,7 +482,8 @@ async def generate_page(
     client = _get_client(client_id)
     location, location_code = await locations_service.resolve_location(client, location, location_code)
     payload = _gbp_to_generate_payload(
-        client, keyword, location, location_code, include_decision_map=include_decision_map
+        client, keyword, location, location_code, include_decision_map=include_decision_map,
+        entity_provider=entity_provider,
     )
     # The client's brand guide, distilled into enforceable rules (cached per
     # guide revision). Steers generation and drives the deterministic post-write
@@ -501,7 +516,8 @@ async def generate_page(
     if (notes or "").strip():
         payload["notes"] = notes.strip()  # per-page writing guidance the writer follows
     serp = await _get_or_compute_analysis(
-        keyword, location, location_code, force_refresh, user_id, required=False
+        keyword, location, location_code, force_refresh, user_id, required=False,
+        entity_provider=entity_provider,
     )
     if serp is not None:
         payload["serp_analysis"] = serp
@@ -521,6 +537,7 @@ async def generate_page(
 async def enqueue_generate(
     client_id: str, keyword: str, location: str, location_code: Optional[int],
     user_id: str, page_template_url: Optional[str] = None, force_refresh: bool = False,
+    entity_provider: Optional[str] = None,
 ) -> str:
     """Validate the area, then enqueue a `local_seo_generate` job. Returns the job
     id. The location is resolved up front so a mistyped area fails fast (400) before
@@ -542,6 +559,7 @@ async def enqueue_generate(
                     "user_id": user_id,
                     "page_template_url": (page_template_url or "").strip() or None,
                     "force_refresh": bool(force_refresh),
+                    "entity_provider": entity_provider,
                 },
             }
         )
@@ -565,6 +583,7 @@ async def run_generate_job(job: dict) -> None:
             user_id=payload["user_id"],
             force_refresh=bool(payload.get("force_refresh")),
             page_template_url=payload.get("page_template_url"),
+            entity_provider=payload.get("entity_provider"),
         )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": {"page_id": page["id"]}, "completed_at": "now()"}
@@ -622,6 +641,7 @@ def _bulk_scheduled_at(index: int) -> str:
 async def enqueue_generate_bulk(
     client_id: str, keywords: list[str], location: str, location_code: Optional[int],
     user_id: str, page_template_url: Optional[str] = None, force_refresh: bool = False,
+    entity_provider: Optional[str] = None,
 ) -> list[str]:
     """Enqueue one `local_seo_generate` job per keyword (area validated once up
     front). Returns the job ids in input order."""
@@ -645,6 +665,7 @@ async def enqueue_generate_bulk(
                     "user_id": user_id,
                     "page_template_url": template,
                     "force_refresh": bool(force_refresh),
+                    "entity_provider": entity_provider,
                 },
             }
         )
@@ -657,6 +678,7 @@ async def enqueue_generate_bulk(
 async def enqueue_reoptimize_bulk(
     client_id: str, targets: list[dict], user_id: str,
     score_threshold: Optional[float] = None, publish_to_doc: bool = False,
+    entity_provider: Optional[str] = None,
 ) -> list[dict]:
     """Enqueue one `local_seo_reoptimize_url` job per target. Each target is
     ``{page_url, keyword, location, location_code}``; the area is resolved inside
@@ -683,6 +705,7 @@ async def enqueue_reoptimize_bulk(
                     "user_id": user_id,
                     "score_threshold": threshold,
                     "publish_to_doc": bool(publish_to_doc),
+                    "entity_provider": entity_provider,
                 },
             }
         )
@@ -712,6 +735,7 @@ async def run_reoptimize_url_job(job: dict) -> None:
             user_id=payload["user_id"],
             score_threshold=payload.get("score_threshold", REOPT_SCORE_THRESHOLD),
             publish_to_doc=bool(payload.get("publish_to_doc")),
+            entity_provider=payload.get("entity_provider"),
         )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": result, "completed_at": "now()"}
@@ -751,6 +775,7 @@ async def enqueue_reoptimize_page(
     client_id: str, keyword: str, location: str,
     existing_page_html: Optional[str], existing_page_url: Optional[str],
     deficiencies: list[dict], serp_analysis: Optional[dict], user_id: str,
+    entity_provider: Optional[str] = None,
 ) -> str:
     """Enqueue a background reoptimize-by-page job (the score→reoptimize flow).
     Returns the job id. A single interactive reoptimize, so it's NOT staggered —
@@ -773,6 +798,7 @@ async def enqueue_reoptimize_page(
                     "deficiencies": deficiencies or [],
                     "serp_analysis": serp_analysis,
                     "user_id": user_id,
+                    "entity_provider": entity_provider,
                 },
             }
         )
@@ -798,6 +824,7 @@ async def run_reoptimize_page_job(job: dict) -> None:
             deficiencies=payload.get("deficiencies") or [],
             serp_analysis=payload.get("serp_analysis"),
             user_id=payload["user_id"],
+            entity_provider=payload.get("entity_provider"),
         )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": {"page_id": page["id"]}, "completed_at": "now()"}
@@ -870,6 +897,7 @@ async def score_page(
     serp_analysis: Optional[dict],
     user_id: Optional[str] = None,
     force_refresh: bool = False,
+    entity_provider: Optional[str] = None,
 ) -> dict:
     """Score an existing page (by URL or raw HTML) against the 8 engines.
 
@@ -885,7 +913,8 @@ async def score_page(
     location, location_code = await locations_service.resolve_location(client, location, location_code)
     if not serp_analysis:
         serp_analysis = await _get_or_compute_analysis(
-            keyword, location, location_code, force_refresh, user_id, required=False
+            keyword, location, location_code, force_refresh, user_id, required=False,
+            entity_provider=entity_provider,
         )
     from services import voice_card_service
 
@@ -899,6 +928,7 @@ async def score_page(
         "gbp_category": fields["gbp_category"],
         "address": fields["address"],
         "serp_analysis": serp_analysis,
+        "entity_provider": entity_provider,
         # Without these the rubric measured SEO only: icp_alignment inferred an
         # audience from the keyword and nothing scored brand voice at all.
         "voice_card": await voice_card_service.get_voice_card(client, user_id=user_id),
@@ -935,6 +965,7 @@ async def reoptimize_page(
     deficiencies: list[dict],
     serp_analysis: Optional[dict],
     user_id: str,
+    entity_provider: Optional[str] = None,
 ) -> dict:
     """Reoptimize an existing page to lift its score, re-score the result, and
     persist it as a `mode='reoptimize'` row."""
@@ -961,6 +992,7 @@ async def reoptimize_page(
         "address": fields["address"],
         "phone": fields["phone"],
         "serp_analysis": serp_analysis,
+        "entity_provider": entity_provider,
         "voice_card": voice_card,
         # Keep the decision-fit treatment on reoptimization (parity with generate).
         "include_decision_map": True,
@@ -979,6 +1011,7 @@ async def reoptimize_page(
                 "gbp_category": fields["gbp_category"],
                 "address": fields["address"],
                 "serp_analysis": serp_analysis,
+                "entity_provider": entity_provider,
                 "voice_card": voice_card,
             })
             result["composite_score"] = score.get("composite_score")
@@ -1010,6 +1043,7 @@ async def reoptimize_url(
     user_id: str,
     score_threshold: float = REOPT_SCORE_THRESHOLD,
     publish_to_doc: bool = False,
+    entity_provider: Optional[str] = None,
 ) -> dict:
     """Score a live page (by URL) and reoptimize it only if it scores below
     `score_threshold`. Strong pages (>= threshold) are skipped with a note rather
@@ -1032,7 +1066,8 @@ async def reoptimize_url(
     # score and the rewrite so neither re-scrapes. Optional: both degrade
     # gracefully without it (required=False).
     serp = await _get_or_compute_analysis(
-        keyword, location, location_code, force_refresh=False, user_id=user_id, required=False
+        keyword, location, location_code, force_refresh=False, user_id=user_id, required=False,
+        entity_provider=entity_provider,
     )
 
     from services import voice_card_service
@@ -1047,6 +1082,7 @@ async def reoptimize_url(
         "gbp_category": fields["gbp_category"],
         "address": fields["address"],
         "serp_analysis": serp,
+        "entity_provider": entity_provider,
         "voice_card": await voice_card_service.get_voice_card(client, user_id=user_id),
     }, user_id=user_id)
 
@@ -1102,6 +1138,7 @@ async def reoptimize_url(
         deficiencies=score_result.get("deficiencies") or [],
         serp_analysis=serp,
         user_id=user_id,
+        entity_provider=entity_provider,
     )
 
     out: dict = {
@@ -1225,6 +1262,7 @@ async def _run_action(action: str, client_id: str, args: dict, user_id: str) -> 
             location_code=args.get("location_code"), page_url=args.get("page_url"),
             page_content=args.get("page_content"), serp_analysis=args.get("serp_analysis"),
             user_id=user_id, force_refresh=bool(args.get("force_refresh")),
+            entity_provider=args.get("entity_provider"),
         )
     if action == "related_pages":
         return await related_pages(client_id=client_id, keyword=args["keyword"], location=args["location"])

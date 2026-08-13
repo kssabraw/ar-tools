@@ -87,6 +87,7 @@ def _generate_payload(
     source_url: Optional[str], product_input: Optional[str],
     page_template_url: Optional[str] = None, notes: Optional[str] = None,
     reference_page_structure: Optional[str] = None,
+    entity_provider: Optional[str] = None,
 ) -> dict:
     """Map a suite client row to the nlp GenerateEcommerceRequest. The converged
     brand_voice / detected_icp / differentiators assets are passed through so the
@@ -108,6 +109,9 @@ def _generate_payload(
         "reference_page_structure": (reference_page_structure or "").strip() or None,
         "notes": (notes or "").strip() or None,
         "run_analysis": True,
+        # Per-request entity-extraction provider ("textrazor"|"google") for the
+        # SERP entity analysis inside nlp; None → nlp's default.
+        "entity_provider": entity_provider,
     }
 
 
@@ -306,6 +310,7 @@ async def generate_page(
     client_id: str, keyword: str, page_type: str,
     source_url: Optional[str], product_input: Optional[str], user_id: str,
     page_template_url: Optional[str] = None, notes: Optional[str] = None,
+    entity_provider: Optional[str] = None,
 ) -> dict:
     """Generate an ecommerce page for a client and persist it. Competitor SERP
     analysis runs inside the nlp endpoint (run_analysis defaults True).
@@ -336,6 +341,7 @@ async def generate_page(
         client, keyword.strip(), page_type, source_url, product_input,
         page_template_url=template_url, notes=notes,
         reference_page_structure=reference_structure,
+        entity_provider=entity_provider,
     )
     # The client's brand guide, distilled into enforceable rules (cached per
     # guide revision). Imported lazily — voice_card_service -> brand_voice_service
@@ -361,7 +367,7 @@ async def generate_page(
 async def score_page(
     client_id: str, keyword: str, page_type: str,
     page_url: Optional[str], page_content: Optional[str], user_id: Optional[str] = None,
-    serp_analysis: Optional[dict] = None,
+    serp_analysis: Optional[dict] = None, entity_provider: Optional[str] = None,
 ) -> dict:
     """Score an existing ecommerce page (by URL or raw HTML) against the 8
     engines. The nlp endpoint runs SERP analysis inline when none is supplied and
@@ -380,6 +386,7 @@ async def score_page(
         "business_name": _business_name(client),
         "brand_context": _brand_context(client),
         "serp_analysis": serp_analysis,
+        "entity_provider": entity_provider,
         "voice_card": await voice_card_service.get_voice_card(client, user_id=user_id),
     }, user_id=user_id)
     _record_score_run(client_id, keyword, page_type, "score", result, page_id=None, page_url=page_url, user_id=user_id)
@@ -392,6 +399,7 @@ async def reoptimize_from(
     deficiencies: list[dict], serp_analysis: Optional[dict],
     product_input: Optional[str], user_id: str, notes: Optional[str] = None,
     score_threshold: float = REOPT_SCORE_THRESHOLD,
+    entity_provider: Optional[str] = None,
 ) -> dict:
     """Rewrite an existing ecommerce page to lift its score, then persist it as a
     `mode='reoptimize'` row. The nlp endpoint re-scores the rewrite and runs an
@@ -420,6 +428,7 @@ async def reoptimize_from(
         "detected_icp": client.get("detected_icp"),
         "voice_card": await voice_card_service.get_voice_card(client, user_id=user_id),
         "serp_analysis": serp_analysis,
+        "entity_provider": entity_provider,
         "product_input": (product_input or "").strip() or None,
         "notes": (notes or "").strip() or None,
         "score_threshold": score_threshold,
@@ -435,7 +444,7 @@ async def reoptimize_from(
 async def reoptimize_url(
     client_id: str, page_url: str, keyword: str, page_type: str, user_id: str,
     score_threshold: float = REOPT_SCORE_THRESHOLD, publish_to_doc: bool = False,
-    notes: Optional[str] = None,
+    notes: Optional[str] = None, entity_provider: Optional[str] = None,
 ) -> dict:
     """Score a live page (by URL) and reoptimize it only if it scores below
     `score_threshold`. The SERP analysis the score produced is threaded into the
@@ -448,6 +457,7 @@ async def reoptimize_url(
     page_type = _norm_page_type(page_type)
     score_result = await score_page(
         client_id, keyword, page_type, page_url=page_url, page_content=None, user_id=user_id,
+        entity_provider=entity_provider,
     )
     # Record the "before" verdict distinctly (score_page already logged a 'score'
     # row; re-tag as reoptimize_before for the reoptimize history semantics).
@@ -487,6 +497,7 @@ async def reoptimize_url(
         serp_analysis=score_result.get("serp_analysis"),
         product_input=None, user_id=user_id, notes=notes,
         score_threshold=score_threshold,
+        entity_provider=entity_provider,
     )
 
     out: dict = {
@@ -730,6 +741,7 @@ async def enqueue_generate(
     client_id: str, keyword: str, page_type: str,
     source_url: Optional[str], product_input: Optional[str], user_id: str,
     page_template_url: Optional[str] = None, notes: Optional[str] = None,
+    entity_provider: Optional[str] = None,
 ) -> str:
     """Enqueue an `ecommerce_generate` job. Returns the job id. `page_template_url`
     is an optional per-call override of the client's house PDP template (products
@@ -748,6 +760,7 @@ async def enqueue_generate(
             "page_template_url": (page_template_url or "").strip() or None,
             "notes": (notes or "").strip() or None,
             "user_id": user_id,
+            "entity_provider": entity_provider,
         },
     }).execute()
     return res.data[0]["id"]
@@ -763,7 +776,7 @@ async def run_generate_job(job: dict) -> None:
             page_type=payload.get("page_type", "product"),
             source_url=payload.get("source_url"), product_input=payload.get("product_input"),
             user_id=payload["user_id"], page_template_url=payload.get("page_template_url"),
-            notes=payload.get("notes"),
+            notes=payload.get("notes"), entity_provider=payload.get("entity_provider"),
         )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": {"page_id": page["id"]}, "completed_at": "now()"}
@@ -793,7 +806,7 @@ def get_generate_job(job_id: str, client_id: str) -> dict:
 
 async def enqueue_generate_bulk(
     client_id: str, keywords: list[str], page_type: str, user_id: str,
-    notes: Optional[str] = None,
+    notes: Optional[str] = None, entity_provider: Optional[str] = None,
 ) -> list[str]:
     """Enqueue one `ecommerce_generate` job per keyword. Returns job ids. `notes`
     is batch-level writing guidance applied to every page in the batch."""
@@ -811,6 +824,7 @@ async def enqueue_generate_bulk(
             "payload": {
                 "client_id": client_id, "keyword": kw.strip(), "page_type": ptype,
                 "source_url": None, "product_input": None, "notes": note, "user_id": user_id,
+                "entity_provider": entity_provider,
             },
         })
     if not rows:
@@ -822,7 +836,7 @@ async def enqueue_generate_bulk(
 async def enqueue_reoptimize_bulk(
     client_id: str, targets: list[dict], user_id: str,
     score_threshold: Optional[float] = None, publish_to_doc: bool = False,
-    notes: Optional[str] = None,
+    notes: Optional[str] = None, entity_provider: Optional[str] = None,
 ) -> list[dict]:
     """Enqueue one `ecommerce_reoptimize_url` job per target. Each target is
     ``{page_url, keyword, page_type}``. Returns ``[{job_id, page_url}]``. `notes`
@@ -846,6 +860,7 @@ async def enqueue_reoptimize_bulk(
                 "page_type": _norm_page_type(t.get("page_type")),
                 "user_id": user_id, "score_threshold": threshold,
                 "publish_to_doc": bool(publish_to_doc), "notes": note,
+                "entity_provider": entity_provider,
             },
         })
     if not rows:
@@ -864,6 +879,7 @@ async def run_reoptimize_url_job(job: dict) -> None:
             keyword=payload["keyword"], page_type=payload.get("page_type", "product"),
             user_id=payload["user_id"], score_threshold=payload.get("score_threshold", REOPT_SCORE_THRESHOLD),
             publish_to_doc=bool(payload.get("publish_to_doc")), notes=payload.get("notes"),
+            entity_provider=payload.get("entity_provider"),
         )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": result, "completed_at": "now()"}
@@ -942,6 +958,7 @@ async def _run_action(action: str, client_id: str, args: dict, user_id: str) -> 
         return await score_page(
             client_id, args.get("keyword", ""), args.get("page_type", "product"),
             page_url=args.get("page_url"), page_content=args.get("page_content"), user_id=user_id,
+            entity_provider=args.get("entity_provider"),
         )
     if action == "discover":
         from services.ecommerce_discovery import discover_pages

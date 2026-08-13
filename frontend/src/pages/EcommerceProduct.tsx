@@ -13,6 +13,7 @@ import { ProductScoreView } from '../components/ecommerce/ProductScoreView'
 import { ReoptimizeView } from '../components/ecommerce/ReoptimizeView'
 import { useBulkGenerate } from '../components/ecommerce/useBulkGenerate'
 import { Spinner } from '../components/localseo/Spinner'
+import { EntityProviderSelect, type EntityProvider } from '../components/EntityProviderSelect'
 import { useBulkPublish, type PublishItem } from '../components/publish/useBulkPublish'
 import { BulkPublishBar } from '../components/publish/BulkPublishBar'
 import { usePagedPublish, PublishTabs, Pager, PublishBadges } from '../components/publish/PublishFilter'
@@ -71,6 +72,8 @@ export function EcommerceProduct() {
   const [sourceUrl, setSourceUrl] = useState('')
   const [productInput, setProductInput] = useState('')
   const [notes, setNotes] = useState('')
+  // Which entity-extraction engine the nlp SERP analysis uses (default TextRazor).
+  const [entityProvider, setEntityProvider] = useState<EntityProvider>('textrazor')
   const [bulkKeywords, setBulkKeywords] = useState('')
   const [bulkNotes, setBulkNotes] = useState('')
   const [error, setError] = useState('')
@@ -125,6 +128,7 @@ export function EcommerceProduct() {
         source_url: sourceUrl.trim() || null,
         product_input: productInput.trim() || null,
         notes: notes.trim() || null,
+        entity_provider: entityProvider,
       })
       const poll = async () => {
         if (genCancelledRef.current) return
@@ -398,6 +402,9 @@ export function EcommerceProduct() {
               placeholder={'e.g. emphasize fast shipping; write for clinics not individuals'}
             />
           </div>
+
+          {/* Entity-extraction engine for the competitor SERP analysis */}
+          <EntityProviderSelect value={entityProvider} onChange={setEntityProvider} />
 
           {error && <div style={errorBox}>{error}</div>}
 
