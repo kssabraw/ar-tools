@@ -439,6 +439,13 @@ class Settings(BaseSettings):
     # last `rank_gsc_coverage_days` days; otherwise it falls back to DataForSEO.
     dataforseo_rank_weekday: int = 0
     rank_gsc_coverage_days: int = 14
+    # Gradual-drop alert: a slow, sustained multi-week slide the window-over-window
+    # rank rules miss (e.g. ~1 spot/week erosion that never accumulates ≥6 spots
+    # inside a single 7- or 30-day window). Opens a `gradual_drop` rank alert with
+    # the same notification/episode machinery as the sudden drops. The numeric
+    # thresholds are module constants in services/rank_alerts.py; this only gates
+    # the detector on/off. Set False if it proves noisy.
+    rank_gradual_drop_enabled: bool = True
     dataforseo_serp_depth: int = 100  # find rank within the top 100, else "not ranking"
     dataforseo_default_location_code: int = 2840  # United States
     dataforseo_default_language_code: str = "en"
