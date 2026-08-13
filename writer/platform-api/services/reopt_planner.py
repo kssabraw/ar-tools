@@ -71,6 +71,7 @@ _MAPS_WITHIN = {
     "coverage_drop": 6_000,
     "competitor_surge": 5_000,
     "area_decline": 3_000,
+    "gradual_decline": 2_000,  # a slow slide — important but below the sudden declines
 }
 _MAPS_WEAK_AREA_WITHIN = 1_000  # weak coverage areas sit at the bottom of the Maps tier
 _MAPS_GBP_WITHIN = 4_000        # a GBP-gap action sits mid Maps tier (above weak areas)
@@ -463,6 +464,28 @@ def build_maps_actions(
                     "diagnosis": message,
                     "recommendation": "A competitor is newly outranking you across the grid. Review their GBP "
                     "profile (primary category, review count/velocity, photos, posts) and close the gaps.",
+                    "cta_label": "Open Maps tracker",
+                    "cta_path": maps_path,
+                    "severity": "warning",
+                    "sort": _SORT_MAPS + _within(within),
+                }
+            )
+            continue
+
+        if alert_type == "gradual_decline":
+            actions.append(
+                {
+                    "kind": "maps_gradual_decline",
+                    "source": "maps",
+                    "keyword": keyword,
+                    "diagnosis": message,
+                    "recommendation": (
+                        "Local-pack visibility has been eroding steadily for weeks — you're being "
+                        "out-worked over time, not hit by a sudden drop. Sustain the local signals: keep "
+                        "GBP fresh (weekly posts, new photos, accurate categories/services), keep review "
+                        "velocity matching or beating competitors, and keep location-page content current. "
+                        "Check the geo-grid trend to see which areas are softening."
+                    ),
                     "cta_label": "Open Maps tracker",
                     "cta_path": maps_path,
                     "severity": "warning",

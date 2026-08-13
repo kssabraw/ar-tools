@@ -410,7 +410,8 @@ class MapsAlert(BaseModel):
     id: UUID
     keyword: str
     alert_type: Literal[
-        "grid_rank_drop", "coverage_drop", "lost_pack", "area_decline", "competitor_surge"
+        "grid_rank_drop", "coverage_drop", "lost_pack", "area_decline",
+        "competitor_surge", "gradual_decline"
     ]
     sector: Optional[str] = None
     from_value: Optional[float] = None

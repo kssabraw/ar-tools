@@ -769,6 +769,19 @@ class Settings(BaseSettings):
     maps_alert_area_coverage_drop_pct: float = 25.0  # per-octant Top-3 coverage drop (pts) → area_decline
     maps_alert_area_rank_drop: float = 2.0          # per-octant avg-rank worsening (spots) → area_decline
     maps_alert_competitor_surge_pins: int = 5       # min newly-above pins for competitor_surge
+    # Gradual local-pack decline: a slow, sustained slide across many scheduled
+    # scans that no single scan-over-scan threshold catches (the local-pack
+    # analogue of the organic gradual_drop). Measured over a trailing window on
+    # the scan time series (grid-resize-normalized), opens a `gradual_decline`
+    # maps alert. Numeric bars are cumulative-over-the-window, deliberately below
+    # the per-scan sudden thresholds above. Set enabled False to disable.
+    maps_gradual_decline_enabled: bool = True
+    maps_gradual_window_days: int = 56      # ~8 weeks of scheduled scans
+    maps_gradual_min_points: int = 4        # scan points (per metric) needed to judge a trend
+    maps_gradual_rank_drop: float = 3.0     # cumulative avg-grid-rank worsening (spots) to fire
+    maps_gradual_top3_drop: float = 15.0    # cumulative Top-3 coverage fall (points) to fire
+    maps_gradual_max_scans: int = 60        # ABSOLUTE ceiling on scans loaded (bounds load); the
+                                            # operative cap is derived from the window (see _gradual_signals)
 
     # Competitor GBP intelligence (Tier B / B1): how many of the latest scan's
     # top local-pack competitors to fetch full GBP profiles for (each fetch is an

@@ -907,6 +907,7 @@ export interface MapsChangesResponse {
 
 export type MapsAlertType =
   | 'grid_rank_drop' | 'coverage_drop' | 'lost_pack' | 'area_decline' | 'competitor_surge'
+  | 'gradual_decline'
 
 export interface MapsAlert {
   id: string

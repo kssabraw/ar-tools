@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional, Sequence
 
 from statistics import mean
@@ -44,11 +44,27 @@ ALERT_TYPES = (
     "lost_pack",
     "area_decline",
     "competitor_surge",
+    "gradual_decline",
 )
 
 # An octant needs at least this many in-circle cells (in BOTH scans) before a
 # per-area decline is trusted — keeps thin edge octants from firing on noise.
 AREA_MIN_CELLS = 3
+
+# --- gradual_decline shape gates --------------------------------------------
+# A slow multi-scan slide the scan-over-scan detectors miss. Endpoints (oldest
+# vs newest scan in the window) set MAGNITUDE; three segment means set SHAPE, so
+# a sudden step (one segment carries almost the whole move — a cliff the
+# grid_rank_drop/coverage_drop rules already own) is rejected. Per-metric noise
+# tolerances are scaled to each metric (rank spots vs coverage points).
+GRADUAL_SEGMENTS = 3
+GRADUAL_MAX_STEP_SHARE = 0.75
+GRADUAL_RANK_NOISE = 1.0    # avg-rank spots a segment may improve and still count as a steady slide
+GRADUAL_TOP3_NOISE = 7.0    # Top-3 coverage points likewise
+# Sudden magnitude alerts on the same keyword this scan suppress the gradual one
+# (one decline never opens two overlapping episodes). area_decline (per-octant)
+# and competitor_surge (a different axis) deliberately do NOT suppress.
+GRADUAL_SUPPRESSORS = frozenset({"grid_rank_drop", "coverage_drop", "lost_pack"})
 
 
 @dataclass
@@ -318,8 +334,13 @@ def detect_competitor_surge(
 
 
 def analyze_keyword(keyword: str, curr: dict, prev: Optional[dict]) -> list[MapsAlertSignal]:
-    """All decline signals for one keyword vs its previous scan. Empty when there
-    is no previous scan (first-ever scan → nothing to compare)."""
+    """All scan-over-scan decline signals for one keyword vs its previous scan.
+    Empty when there is no previous scan (first-ever scan → nothing to compare).
+
+    NOTE: gradual_decline is NOT computed here — it needs the multi-scan series,
+    not a single prior scan, so it's produced in analyze_scan via
+    detect_gradual_decline over the trailing window.
+    """
     if prev is None:
         return []
     signals: list[MapsAlertSignal] = []
@@ -331,6 +352,145 @@ def analyze_keyword(keyword: str, curr: dict, prev: Optional[dict]) -> list[Maps
     signals += detect_area_decline(keyword, curr_an, prev_an)
     signals += detect_competitor_surge(keyword, curr, prev)
     return signals
+
+
+# --- gradual_decline (slow multi-scan slide the scan-over-scan rules miss) ---
+def _segment_means_over(
+    points: Sequence[tuple[int, Optional[float]]], lo: int, hi: int, segments: int
+) -> list[Optional[float]]:
+    """Split the ordinal span [lo, hi] into `segments` equal buckets (oldest
+    first) and return the mean non-null value in each (None if empty). Pure."""
+    span = hi - lo + 1
+    seg_len = span / segments
+    buckets: list[list[float]] = [[] for _ in range(segments)]
+    for o, v in points:
+        if v is None or not (lo <= o <= hi):
+            continue
+        idx = int((o - lo) / seg_len)
+        if idx >= segments:  # the newest point lands exactly on the boundary
+            idx = segments - 1
+        buckets[idx].append(float(v))
+    return [round(mean(b), 2) if b else None for b in buckets]
+
+
+def _gradual_metric(
+    points: Sequence[tuple[int, Optional[float]]],
+    today_ord: int,
+    window_days: int,
+    min_delta: float,
+    noise: float,
+    lower_is_better: bool,
+) -> Optional[tuple[float, float, float]]:
+    """One metric's cumulative worsening across the window, if it's a genuine
+    gradual slide. Returns (baseline, current, worsening>0) or None. Pure.
+
+    Magnitude comes from the window endpoints (oldest vs newest scan point);
+    the three segment means gate the SHAPE — no mid-window recovery (steady),
+    and no single segment carrying almost the whole move (that's a cliff the
+    scan-over-scan rules already own). Oriented so 'worse' is always larger, so
+    avg-rank (lower better) and Top-3 coverage (higher better) share one path.
+    """
+    lo = today_ord - window_days + 1
+    win = [(o, v) for o, v in points if v is not None and lo <= o <= today_ord]
+    if len(win) < 2:
+        return None
+    win.sort(key=lambda p: p[0])
+    baseline, current = float(win[0][1]), float(win[-1][1])
+    worsening = round((current - baseline) if lower_is_better else (baseline - current), 2)
+    if worsening < min_delta:
+        return None
+
+    # Steady (no mid-window recovery): tested on the SMOOTHED 3-segment means, so
+    # a single noisy up-tick between weekly scans doesn't disqualify a real slide.
+    means = _segment_means_over(win, lo, today_ord, GRADUAL_SEGMENTS)
+    if any(m is None for m in means):
+        return None  # need coverage across the whole window to judge the shape
+    oriented_means = means if lower_is_better else [-m for m in means]  # higher = worse
+    for i in range(1, len(oriented_means)):
+        if oriented_means[i] - oriented_means[i - 1] < -noise:
+            return None  # recovered mid-window → not a steady slide
+
+    # Not a cliff: no single scan-over-scan step carries most of the move. Measured
+    # on the RAW consecutive points (not the smoothed segments), so a one-scan
+    # cliff is caught wherever it falls — including straddling a segment boundary,
+    # which smears across a segment mean and slipped the old segment-based test.
+    # `worsening` is the sum of these steps and is > 0 here (>= min_delta), so this
+    # gate always applies (no degenerate span<=0 skip).
+    oriented_raw = [v if lower_is_better else -v for _, v in win]
+    max_step = max(
+        (oriented_raw[i] - oriented_raw[i - 1] for i in range(1, len(oriented_raw))),
+        default=0.0,
+    )
+    if max_step > GRADUAL_MAX_STEP_SHARE * worsening:
+        return None  # a cliff, not a gradual slide
+    return round(baseline, 2), round(current, 2), worsening
+
+
+def detect_gradual_decline(
+    keyword: str,
+    points: Sequence[dict],
+    today: date,
+    *,
+    window_days: int,
+    min_points: int,
+    rank_drop: float,
+    top3_drop: float,
+) -> list[MapsAlertSignal]:
+    """One combined `gradual_decline` signal for a keyword whose average grid
+    rank OR Top-3 pin coverage has slid steadily across the window. Pure.
+
+    `points`: one dict per scan, {'ord': date-ordinal, 'average_rank', 'top3_pct'}
+    (any order). Each metric needs >= min_points in-window readings to be judged,
+    and fires only when the slide is genuinely gradual (see _gradual_metric).
+    """
+    today_ord = today.toordinal()
+    lo = today_ord - window_days + 1
+    rank_pts = [(p["ord"], p.get("average_rank")) for p in points]
+    top3_pts = [(p["ord"], p.get("top3_pct")) for p in points]
+    n_rank = sum(1 for o, v in rank_pts if v is not None and lo <= o <= today_ord)
+    n_top3 = sum(1 for o, v in top3_pts if v is not None and lo <= o <= today_ord)
+
+    rank_res = (
+        _gradual_metric(rank_pts, today_ord, window_days, rank_drop, GRADUAL_RANK_NOISE, True)
+        if n_rank >= min_points else None
+    )
+    top3_res = (
+        _gradual_metric(top3_pts, today_ord, window_days, top3_drop, GRADUAL_TOP3_NOISE, False)
+        if n_top3 >= min_points else None
+    )
+    if not rank_res and not top3_res:
+        return []
+
+    weeks = round(window_days / 7)
+    parts: list[str] = []
+    details: dict = {"window_days": window_days}
+    from_value = to_value = delta = None
+    if rank_res:
+        b, c, d = rank_res
+        parts.append(f"average grid rank slipped {d:g} spots (from {b:.1f} to {c:.1f})")
+        details["average_rank"] = {"from": b, "to": c, "delta": d}
+        from_value, to_value, delta = b, c, d  # avg-rank is the primary metric when present
+    if top3_res:
+        b, c, d = top3_res
+        parts.append(f"Top-3 coverage fell {d:g} points (from {b:g}% to {c:g}%)")
+        details["top3_pct"] = {"from": b, "to": c, "delta": d}
+        if not rank_res:
+            from_value, to_value, delta = b, c, d
+    message = (
+        f'"{keyword}" has slowly declined over the past ~{weeks} weeks — '
+        + " and ".join(parts)
+        + " — a steady slide no single-scan drop alert would catch."
+    )
+    return [
+        MapsAlertSignal(
+            alert_type="gradual_decline",
+            from_value=from_value,
+            to_value=to_value,
+            delta=delta,
+            message=message,
+            details=details,
+        )
+    ]
 
 
 def _severity_for(alert_type: str) -> str:
@@ -792,6 +952,105 @@ _RESULT_FIELDS = (
     "rank_grid, competitors_above"
 )
 
+# Safety ceiling on window result rows (scans × keywords); well above any real
+# maps client so PostgREST's default 1000-row cap can't silently truncate the
+# gradual series and strand keywords with a partial history.
+_GRADUAL_MAX_RESULT_ROWS = 10_000
+
+# Leaner than _RESULT_FIELDS: the gradual pass needs only avg_rank + Top-3
+# coverage (top3_pins/total_pins) and rank_grid (which normalize_series reads to
+# detect/crop a mid-window geometry change). It never uses competitors_above /
+# found_pins / top10_pins, so they're dropped to avoid loading the large
+# per-pin competitors_above grid across the whole window.
+_GRADUAL_RESULT_FIELDS = "scan_id, keyword, average_rank, total_pins, top3_pins, rank_grid"
+
+
+def _gradual_signals(supabase, client_id: str, today: date) -> dict[str, list[MapsAlertSignal]]:
+    """Per-keyword gradual_decline signals over the trailing window of completed
+    SCHEDULED scans. Empty when too few scans exist to judge a trend.
+
+    Loads only reporting scans (a one-off never joins the baseline series),
+    caps the scan count, normalizes the whole series onto the common grid all of
+    its scans share (so a mid-window radius change can't fake a slide — the same
+    guard the scan-over-scan path and the periods view use), then runs
+    detect_gradual_decline per keyword.
+    """
+    window_days = settings.maps_gradual_window_days
+    min_points = settings.maps_gradual_min_points
+    start = (today - timedelta(days=window_days)).isoformat()
+
+    # Derive the scan cap from the window so widening maps_gradual_window_days
+    # can't silently truncate the series (a fixed cap would): weekly cadence
+    # yields ~ceil(window/7) scans, and 2x + min_points leaves generous headroom.
+    # Bounded by the absolute ceiling to cap load. DESC order means any truncation
+    # keeps the most recent scans, so the effect is a conservative shorter window
+    # (an under-alert), never a false positive.
+    expected_weekly = -(-window_days // 7)  # ceil(window_days / 7)
+    scan_cap = min(settings.maps_gradual_max_scans, 2 * expected_weekly + min_points)
+    scans = (
+        maps_reporting.only_reporting(
+            supabase.table("maps_scans")
+            .select("id, completed_at")
+            .eq("client_id", client_id)
+            .eq("status", "complete")
+        )
+        .gte("completed_at", start)
+        .order("completed_at", desc=True)
+        .limit(scan_cap)
+        .execute()
+    ).data or []
+    if len(scans) < min_points:
+        return {}
+    if len(scans) >= scan_cap:
+        # Hit the cap — more scheduled scans in the window than expected (a faster
+        # cadence than weekly). We kept the most recent; the gradual window is
+        # effectively shorter this run. Observable rather than silent.
+        logger.info(
+            "maps_gradual_window_truncated",
+            extra={"client_id": client_id, "scan_cap": scan_cap, "window_days": window_days},
+        )
+    meta = {s["id"]: s for s in scans}
+
+    results = (
+        supabase.table("maps_scan_results")
+        .select(_GRADUAL_RESULT_FIELDS)
+        .in_("scan_id", list(meta.keys()))
+        .limit(_GRADUAL_MAX_RESULT_ROWS)
+        .execute()
+    ).data or []
+    if not results:
+        return {}
+    results, _normalized_to = maps_compare.normalize_series(results)
+
+    by_kw: dict[str, list[dict]] = {}
+    for r in results:
+        m = meta.get(r.get("scan_id"))
+        if not m:
+            continue
+        o = _date_ord(m.get("completed_at"))
+        if o is None:
+            continue
+        by_kw.setdefault(r["keyword"], []).append(
+            {
+                "ord": o,
+                "average_rank": r.get("average_rank"),
+                "top3_pct": _pct(r.get("top3_pins"), r.get("total_pins")),
+            }
+        )
+
+    out: dict[str, list[MapsAlertSignal]] = {}
+    for kw, pts in by_kw.items():
+        sigs = detect_gradual_decline(
+            kw, pts, today,
+            window_days=window_days,
+            min_points=min_points,
+            rank_drop=settings.maps_gradual_rank_drop,
+            top3_drop=settings.maps_gradual_top3_drop,
+        )
+        if sigs:
+            out[kw] = sigs
+    return out
+
 
 def analyze_scan(scan_id: str) -> dict:
     """Compare a completed scan to the client's previous completed scan; open/
@@ -846,6 +1105,30 @@ def analyze_scan(scan_id: str) -> dict:
         for r in curr_cmp
     ]
     today = datetime.now(timezone.utc).date()
+
+    # Gradual multi-scan slide — added per keyword, but suppressed when a sudden
+    # magnitude alert already fired for that keyword this scan (one decline never
+    # opens two overlapping episodes). Best-effort: a failure here never blocks
+    # the scan-over-scan alert path.
+    if settings.maps_gradual_decline_enabled:
+        try:
+            gradual_by_kw = _gradual_signals(supabase, client_id, today)
+        except Exception as exc:
+            logger.warning("maps_gradual_signals_failed", extra={"scan_id": scan_id, "error": str(exc)})
+            gradual_by_kw = {}
+        if gradual_by_kw:
+            per_keyword = [
+                (
+                    kw,
+                    sigs + (
+                        gradual_by_kw.get(kw, [])
+                        if not (GRADUAL_SUPPRESSORS & {s.alert_type for s in sigs})
+                        else []
+                    ),
+                )
+                for kw, sigs in per_keyword
+            ]
+
     result = reconcile_alerts(supabase, client_id, scan_id, prev_scan["id"], per_keyword, today)
 
     opened = result.get("opened_alerts") or []
