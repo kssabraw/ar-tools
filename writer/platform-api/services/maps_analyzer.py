@@ -951,6 +951,13 @@ _RESULT_FIELDS = (
 # gradual series and strand keywords with a partial history.
 _GRADUAL_MAX_RESULT_ROWS = 10_000
 
+# Leaner than _RESULT_FIELDS: the gradual pass needs only avg_rank + Top-3
+# coverage (top3_pins/total_pins) and rank_grid (which normalize_series reads to
+# detect/crop a mid-window geometry change). It never uses competitors_above /
+# found_pins / top10_pins, so they're dropped to avoid loading the large
+# per-pin competitors_above grid across the whole window.
+_GRADUAL_RESULT_FIELDS = "scan_id, keyword, average_rank, total_pins, top3_pins, rank_grid"
+
 
 def _gradual_signals(supabase, client_id: str, today: date) -> dict[str, list[MapsAlertSignal]]:
     """Per-keyword gradual_decline signals over the trailing window of completed
@@ -984,7 +991,7 @@ def _gradual_signals(supabase, client_id: str, today: date) -> dict[str, list[Ma
 
     results = (
         supabase.table("maps_scan_results")
-        .select("scan_id, " + _RESULT_FIELDS)
+        .select(_GRADUAL_RESULT_FIELDS)
         .in_("scan_id", list(meta.keys()))
         .limit(_GRADUAL_MAX_RESULT_ROWS)
         .execute()
