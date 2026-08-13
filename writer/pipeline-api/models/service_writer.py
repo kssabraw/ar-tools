@@ -108,6 +108,13 @@ class ServiceWriterMetadata(BaseModel):
     # True when the brief carried a usable decision_fit map that was woven into the
     # generation directive. Additive/observability only — output shape is unchanged.
     decision_fit_rendered: bool = False
+    # Entity-coverage enforcement (Option B) — the page's entity coverage vs the
+    # most-aggressive-competitor benchmark. Additive/observability only.
+    entity_target: int = 0
+    entity_covered: int = 0
+    entity_rewrite_triggered: bool = False
+    entity_sections_rewritten: int = 0
+    entities_missing: list[str] = Field(default_factory=list)
 
 
 class ServiceWriterResponse(BaseModel):

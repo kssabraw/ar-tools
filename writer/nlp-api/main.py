@@ -434,12 +434,13 @@ Return valid HTML only. No markdown. No explanations outside the HTML. Structure
 Then on a NEW LINE after </article>, output the JSON-LD schema block starting with <script type="application/ld+json"> (3 schema blocks in one script tag).
 
 TITLE TAG FORMULA (follow exactly — do not deviate):
-<title>[Power Word]! [Exact Match Keyword] | [Brand Name] | [Justification using entities] | [Additional persuasion + entities]</title>
-- Power Word: a single urgent/emotional word (e.g. Trusted, Fast, Expert, Certified, Local, Licensed)
-- Exact Match Keyword: the primary keyword verbatim
+<title>[Exact Match Keyword] | [Brand Name] | [Phrase Match Keyword] | [Justification using entities] | [Additional persuasion + entities]</title>
+- Exact Match Keyword (EMQ): the primary keyword verbatim
 - Brand Name: the business name
-- Justification: a short phrase using 1–2 Google entities that validates the claim (e.g. "Serving Anaheim Hills & Orange County")
-- Additional persuasion: a benefit or proof point that includes 1–2 more entities (e.g. "Same-Day Response, No Overtime Fees")
+- Phrase Match Keyword (PMQ): a secondary keyword that contains the primary keyword phrase plus a modifier (e.g. "[keyword] near me", "24 hour [keyword]", "affordable [keyword]") — broadens keyword coverage without repeating the EMQ verbatim
+- Justification: a short phrase using 1–2 SERVICE-SCOPE or CREDENTIAL entities that validates the claim — NOT additional locations (e.g. "Licensed Burst Pipe & Blocked Drain Repair")
+- Additional persuasion: a benefit or proof point that includes 1–2 more service-scope or credential entities, not places (e.g. "Same-Day Response, No Overtime Fees")
+- GEOGRAPHIC ENTITY RULE: the primary city is ALREADY in the Exact Match Keyword and is the ONLY geographic entity the title should contain. Do NOT append neighbouring suburbs, adjacent cities, or the county — extra locations dilute the primary geo signal and confuse Google + LLM entity extraction. Prefer the SERVICE entities surfaced by the analysis (the services, products, and problems the business solves) for the justification/persuasion slots.
 - Total title length: no character limit — prioritise keyword density and entity coverage over brevity
 
 AEO / LLM WRITING RULES — apply throughout every section
@@ -535,16 +536,22 @@ optimised for Answer Engine Optimisation. Follow all of them in every section.
 
 9. ENTITY TRIPLETS in ≥3 sections: [Brand] + [service] + [city] must co-occur in the
    intro, the main services body, the local section, and the FAQ. This establishes the
-   entity relationship in LLM retrieval.
-   MAIN ENTITY IN SUBHEADINGS: repeat the page's main entity — the [service] (and [city]
-   where it reads naturally) — across the H2/H3 subheadings, EACH paired with a real
-   subtopic. Every section heading should name what the page is about, never a bare
-   generic label.
+   entity relationship in LLM retrieval. This is a BODY-PROSE rule — the triplet lives in
+   sentences, NOT in the headings.
+   SERVICE-LED SUBHEADINGS — ONE GEOGRAPHIC HEADING ONLY: front every H2/H3 with the page's
+   main entity — the [service] or a specific service sub-entity (e.g. drain cleaning, water
+   heater repair, burst pipe) drawn from the analysis's service entities — EACH paired with a
+   real subtopic. Do NOT repeat the [city] across the subheadings: extra location entities in
+   headings dilute the primary geo signal and confuse Google + LLM entity extraction about
+   which place the page targets. The city belongs in the H1, the intro, and exactly ONE
+   dedicated geographic heading (the local-area section) — nowhere else in the heading set.
+   Every heading should name what the page is about, never a bare generic label.
    ✗ Bad:  "Our Process" / "Why Choose Us" / "Get Started"
-   ✓ Good: "[Service] Process in [City]" / "Why [City] Homeowners Choose [Brand] for [Service]"
+   ✗ Too much geo: "[Service] in [City]" / "[Service] Process in [City]" / "Why [City] Homeowners Choose Us" (city repeated across headings)
+   ✓ Good: "How [Service] Prevents [Problem]" / "[Sub-service] Explained" / "What to Expect During [Service]", plus ONE geo heading like "[Service] Across [City] & Nearby Areas"
    Do NOT spam the exact-match keyword VERBATIM across headings — vary the wording and front
    the entity + the subtopic. Question-format H3s (rule 3) still count as long as they name
-   the entity, e.g. "How much does [service] cost in [city]?".
+   the entity, e.g. "How much does [service] cost?".
 
 10. SECTION LENGTH ≤300 words: LLMs extract from dense sections poorly. If a topic needs
     more depth, split it into multiple H2 subsections rather than lengthening one section.
@@ -637,8 +644,8 @@ The rule: lead with the answer, then let the rest of the sentence and paragraph 
 
 Section 1 — Intro / Direct Answer Block (100–150 words)
 <section id="intro">
-  <h1>[Exact Match Keyword] + [1–2 entities that reinforce location or service scope]</h1>
-  H1 FORMULA: Write the primary keyword verbatim, then append relevant entities naturally (e.g. "Emergency Plumber Anaheim — Serving Anaheim Hills, Yorba Linda & Orange County")
+  <h1>[Exact Match Keyword] + [1–2 SERVICE-SCOPE or CREDENTIAL entities]</h1>
+  H1 FORMULA: Write the primary keyword verbatim (it already contains the primary city — the ONLY geographic entity the H1 should carry), then append 1–2 entities that describe the SERVICE scope or a credential — NOT additional locations. Prefer the service entities surfaced by the analysis (e.g. "Emergency Plumber Anaheim — Burst Pipe, Blocked Drain & Water Heater Repair"). Secondary service areas belong in a body "areas we serve" section, not the H1.
   <p>[Brand] provides [service] to [city] — [primary differentiator stated in the first sentence]. [One short supporting sentence with a proof point.]</p>
   <p>[Availability / scope signal — use a specific timeframe ONLY if it is in the business data, otherwise a coverage or credential proof point.] [Phone number as a CTA, e.g. "Call [phone] now".]</p>
   <p>[Direct service claim + city + 1 neighborhood.]</p>
@@ -647,18 +654,18 @@ Section 1 — Intro / Direct Answer Block (100–150 words)
 
 Section 2 — USP / Value Proposition (150–200 words)
 <section id="usp">
-  <h2>[Single sentence combining: the main entity (service, + city where it fits) worded naturally + persuasion/outcome + 1–2 entities]</h2>
-  FIRST H2 FORMULA: Must be a complete sentence (not a fragment) that names the main entity — the service (and city where it reads naturally) — paired with a persuasive outcome or differentiator and 1–2 entities. Word the entity NATURALLY; do NOT drop the exact-match keyword in verbatim. Exact-match keywords stuffed into H2s are a demoting signal — the H1 already carries the primary keyword verbatim (rule 9), so front the service + the buyer's situation here instead. (e.g. "When Anaheim Homeowners Face a Burst Pipe After Hours, [Brand] Delivers Same-Day Emergency Plumbing Across Orange County" — names the service + city + situation without repeating the exact query string)
+  <h2>[Single sentence combining: the main entity (the service) worded naturally + persuasion/outcome + 1–2 service entities]</h2>
+  FIRST H2 FORMULA: Must be a complete sentence (not a fragment) that names the main entity — the service — paired with a persuasive outcome or differentiator and 1–2 service entities. Word the entity NATURALLY; do NOT drop the exact-match keyword in verbatim, and do NOT put the city in this heading (rule 9 — the city stays in the H1, the intro, and the dedicated geographic heading only). Exact-match keywords stuffed into H2s are a demoting signal — the H1 already carries the primary keyword verbatim, so front the service + the buyer's situation here instead. (e.g. "When Homeowners Face a Burst Pipe After Hours, [Brand] Delivers Same-Day Emergency Plumbing & Fast Leak Repair" — names the service + situation + service entities without a city or the exact query string)
   [Min 3 differentiators with mechanisms. One contrast statement. One proof signal.]
 </section>
 
 Section 3 — Special Offers (omit this section if no offer data provided)
 <section id="offers">...</section>
 
-Section 4 — CTA Block Primary (50–75 words)
+Section 4 — CTA Block Primary (50–75 words) — VALUE / OFFER-LED
 <section id="cta-primary">
-  <h2>[Action-oriented H2]</h2>
-  [Differentiated CTA — not "Contact us today". Include phone.]
+  <h2>[Service-anchored action heading — name the SERVICE (no city, and do NOT repeat the exact-match keyword verbatim), e.g. "Book Your Roof Restoration Today" / "Start Your Emergency Plumbing Repair"]</h2>
+  [Lead with the core VALUE or OFFER: the primary differentiator or a free quote/estimate, then the ask. NOT "Contact us today". Include the phone number.]
 </section>
 
 Section 5 — Features and Benefits (150–200 words)
@@ -678,12 +685,12 @@ Section 6 — Main Service Body (800–1400 words)
   - You MUST use MULTIPLE H2s within this section — each H2 block must be ≤300 words; split further into additional H2s if needed
   - Each H2 should represent a distinct major topic or service category
   - Use H3s under each H2 for sub-services, use cases, or scenarios
-  - Every heading: include service/city naturally where it fits (not forced)
+  - Every heading: front the SERVICE or a service sub-entity; do NOT put the city in these body-section headings (rule 9 — the city is anchored in the H1, the intro, and the dedicated geographic section only)
   - Open with a primary service description paragraph (answer-first)
   - Each H3: 2–4 sentences covering description, real-world scenario, differentiator, geo reference
   - List ALL sub-services or service types in individual H3 sections (e.g. if keyword is "plumber", include H3s for drain cleaning, water heater repair, pipe repair, etc. — each 2–4 sentences)
-  - At least one H3 must include city or neighborhood name naturally in the heading text
-  - Include a coverage or geo reference in at least one H3 body paragraph
+  - Keep the city OUT of the §6 headings (rule 9); the geographic heading is the dedicated local section only
+  - Include a coverage or geo reference in at least one H3 body paragraph (body prose, not the heading)
   - Weave in the EXACT competitor 4-word phrases from the SEO checklist verbatim (do not paraphrase)
   - Do NOT copy competitor headings verbatim — use them to understand topic coverage, then write
     headings that are more specific, benefit-oriented, or locally relevant
@@ -695,8 +702,11 @@ Section 7 — Testimonials (include only if reviews provided above; omit if none
   [Verbatim reviews only — first name + last initial, stars, date, full text]
 </section>
 
-Section 8 — CTA Block Secondary (50–75 words — different angle from Section 4)
-<section id="cta-secondary">...</section>
+Section 8 — CTA Block Secondary (50–75 words) — PROOF / RISK-REVERSAL
+<section id="cta-secondary">
+  <h2>[Service-anchored action heading — name the SERVICE (no city, no verbatim exact-match keyword), DISTINCT wording from §4, e.g. "Trust Your Roof Restoration to a Proven Crew"]</h2>
+  [A DISTINCT angle from §4: lead with proof or risk-reversal — a guarantee/warranty, licensing/insurance, or a reviews callback (each ONLY if present in the business data; never invent one), then the ask. Include the phone. Do NOT reuse §4's wording or angle.]
+</section>
 
 Section 9 — Getting Started (150–200 words)
 <section id="getting-started">
@@ -710,8 +720,11 @@ Section 10 — Geographic / Local SEO Section (200–300 words)
   [City + min 3 neighborhoods in sentence context (not just a list) + min 1 landmark + min 2 streets + zip codes (min 3). Use only real, verifiable geographic details. If neighborhood/landmark/street/zip data is not provided in the business data, include only what you are certain is accurate for the target city. Do not invent or guess street names, zip codes, or landmarks. Coverage area required. Response time: ONLY include if explicitly stated in business hours, GBP description, or reviews — otherwise write "Call us for availability" or omit entirely.]
 </section>
 
-Section 11 — CTA Block Tertiary (50–75 words — urgency-forward)
-<section id="cta-tertiary">...</section>
+Section 11 — CTA Block Tertiary (50–75 words) — URGENCY / AVAILABILITY
+<section id="cta-tertiary">
+  <h2>[Service-anchored action heading — name the SERVICE (no city, no verbatim exact-match keyword), DISTINCT wording from §4 and §8, e.g. "Get Your Roof Restoration Scheduled"]</h2>
+  [A DISTINCT angle from §4 and §8: lead with urgency or availability — same-day/emergency response ONLY if it is in the business data; otherwise use non-fabricated urgency ("don't wait until the damage spreads", seasonal timing, "book before your preferred slot fills"). NEVER invent a timeframe. Include the phone. Do NOT reuse the earlier CTAs' wording.]
+</section>
 
 Section 12 — FAQ (min 4, max 7 entries — 40–80 words each)
 <section id="faq">
@@ -4216,7 +4229,11 @@ def compute_zone_targets(
     target. Using the 75th percentile (rather than max) avoids outlier competitor
     pages setting unrealistically high targets that inflate serp_signal_coverage
     scoring difficulty.
-    Also computes per-zone entity targets using the same 75th-percentile approach.
+    Also computes per-zone entity targets using the same 75th-percentile
+    approach — EXCEPT the H2/H3 and paragraph zones' entity targets, which are
+    benchmarked against the most aggressive competitor (trimmed max, spam
+    outliers excluded) to drive denser entity coverage in the subheadings and
+    body prose.
     """
     targets: Dict[str, dict] = {}
     entity_names = {e["name"].lower() for e in google_entities} if google_entities else set()
@@ -4227,6 +4244,24 @@ def compute_zone_targets(
         sorted_vals = sorted(values)
         idx = int(np.ceil(0.75 * len(sorted_vals))) - 1
         return sorted_vals[max(idx, 0)]
+
+    def _aggressive_max(values: list) -> int:
+        """Benchmark against the MOST AGGRESSIVE competitor, not the 75th
+        percentile — the highest per-page count after dropping spam outliers
+        (pages whose count exceeds 3× the median). So one keyword-stuffed
+        competitor cannot set an impossible bar, but a genuinely thorough
+        competitor does raise the target. Used for the H2/H3 entity target."""
+        if not values:
+            return 0
+        if len(values) < 3:
+            return max(values)
+        median = float(np.median(values))
+        if median > 0:
+            threshold = median * 3.0
+            filtered = [v for v in values if v <= threshold]
+            if filtered:
+                return max(filtered)
+        return max(values)
 
     for zone_name in ZONES:
         terms = getattr(related, zone_name, [])
@@ -4243,9 +4278,18 @@ def compute_zone_targets(
             if entity_names:
                 entity_counts.append(sum(1 for e in entity_names if e in cleaned))
 
+        # H2/H3 and paragraph entity targets are benchmarked against the most
+        # aggressive competitor to drive denser entity coverage in subheadings
+        # + body prose; the title/H1 entity targets and all keyword targets
+        # stay at the 75th percentile.
+        entity_target = (
+            _aggressive_max(entity_counts)
+            if zone_name in ("h2_h3", "paragraphs")
+            else _p75(entity_counts)
+        )
         targets[zone_name] = {
             "target":        _p75(term_counts),
-            "entity_target": _p75(entity_counts),
+            "entity_target": entity_target,
         }
 
     return targets

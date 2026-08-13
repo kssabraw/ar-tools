@@ -76,6 +76,23 @@ def decision_fit_directive(decision_fit: Optional[dict]) -> str:
     )
 
 
+def entity_coverage_directive(missing: list[str]) -> str:
+    """Directive appended to a section's brand_directive on the entity-coverage
+    rewrite pass. Names the competitor entities the page is under-covering so the
+    regenerated section works in the ones that genuinely fit its topic. Empty
+    string when nothing is missing."""
+    terms = [t for t in (missing or []) if t and t.strip()]
+    if not terms:
+        return ""
+    joined = ", ".join(terms[:25])
+    return (
+        "\n\nENTITY COVERAGE — REQUIRED: this page under-covers entities that the "
+        "top competitors include. Work as many of these as GENUINELY fit THIS "
+        "section's topic into the copy, naturally and factually — do not force "
+        f"irrelevant ones or list them mechanically: {joined}."
+    )
+
+
 def reopt_directive(deficiencies: list[dict], prior_sections: Optional[list[dict]] = None) -> str:
     """Build a reoptimization directive from the scorer's deficiencies (appended to
     the per-call brand_directive so every generation call addresses them). Empty
