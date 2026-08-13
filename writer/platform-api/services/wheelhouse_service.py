@@ -24,12 +24,35 @@ from services import wheelhouse_generate
 from services.wheelhouse_fields import FIELD_NAMES, validate_fields
 from services.wheelhouse_pages import (
     build_slug_path,
-    dry_run_leaf,
-    publish_leaf,
+    dry_run_hierarchy,
+    publish_hierarchy,
     slugify,
 )
 
 logger = logging.getLogger(__name__)
+
+PAGE_TYPES = ("service", "city")
+
+
+def _norm_page_type(page_type: Optional[str]) -> str:
+    return "city" if (page_type or "").lower() == "city" else "service"
+
+
+def _levels_for_page(page: dict) -> list[dict]:
+    """The publish hierarchy for a stored page, by page_type.
+
+    city    → [state hub, city page (leaf, carries ACF)]  → /florida/miami/
+    service → [state hub, city hub, service page (leaf)]  → /florida/miami/managed-it/
+    The city page and the service pages beneath it share the same /florida/miami/
+    WP page — a service run reuses the existing city page as its parent hub."""
+    state_slug, city_slug = slugify(page["state"]), slugify(page["city"])
+    title = page.get("title") or page["city"]
+    if _norm_page_type(page.get("page_type")) == "city":
+        return [{"slug": state_slug, "title": page["state"]},
+                {"slug": city_slug, "title": title}]
+    return [{"slug": state_slug, "title": page["state"]},
+            {"slug": city_slug, "title": page["city"]},
+            {"slug": slugify(page["service"]), "title": title}]
 
 
 # ── client + gate ────────────────────────────────────────────────────────────
@@ -60,6 +83,7 @@ def _row_to_page(row: dict) -> dict:
     return {
         "id": row["id"],
         "client_id": row["client_id"],
+        "page_type": row.get("page_type") or "service",
         "state": row["state"],
         "city": row["city"],
         "service": row["service"],
@@ -80,11 +104,13 @@ def _row_to_page(row: dict) -> dict:
     }
 
 
-def _find_live_row_id(supabase, client_id: str, state_slug: str, city_slug: str, service_slug: str):
+def _find_live_row_id(supabase, client_id: str, state_slug: str, city_slug: str,
+                      service_slug: str, page_type: str):
     res = (
         supabase.table("wheelhouse_pages").select("id")
         .eq("client_id", client_id).eq("state_slug", state_slug)
         .eq("city_slug", city_slug).eq("service_slug", service_slug)
+        .eq("page_type", page_type)
         .is_("deleted_at", "null").limit(1).execute()
     )
     return res.data[0]["id"] if res.data else None
@@ -92,10 +118,12 @@ def _find_live_row_id(supabase, client_id: str, state_slug: str, city_slug: str,
 
 def _upsert_draft(
     client_id: str, state: str, city: str, service: str, *,
-    acf: dict, field_sources: dict, warnings: list, title: str,
+    acf: dict, field_sources: dict, warnings: list, title: str, page_type: str,
 ) -> dict:
-    """Insert or update (by client+slug combo) the in-tool draft row.
+    """Insert or update (by client+slug+page_type combo) the in-tool draft row.
 
+    A city page stores an empty ``service`` and a 2-segment slug_path
+    (/florida/miami/); a service page stores the service + a 3-segment path.
     Regenerating/editing an existing row **resets status to 'draft'** — the stored
     content no longer matches what's live on WP — while PRESERVING the recorded WP
     ids (wp_page_id/published_url) so the UI can flag it as "modified, needs
@@ -104,16 +132,25 @@ def _upsert_draft(
     insert of the same combo (blocked by the partial unique index) falls back to an
     update instead of surfacing a 500."""
     supabase = get_supabase()
-    state_slug, city_slug, service_slug = slugify(state), slugify(city), slugify(service)
+    page_type = _norm_page_type(page_type)
+    state_slug, city_slug = slugify(state), slugify(city)
+    # City page: no service segment (it IS the local SEO page). Service page: the
+    # service is the leaf segment.
+    if page_type == "city":
+        service, service_slug = "", ""
+        slug_path = build_slug_path(state_slug, city_slug)
+    else:
+        service_slug = slugify(service)
+        slug_path = build_slug_path(state_slug, city_slug, service_slug)
     payload = {
-        "client_id": client_id,
+        "client_id": client_id, "page_type": page_type,
         "state": state.strip(), "city": city.strip(), "service": service.strip(),
         "state_slug": state_slug, "city_slug": city_slug, "service_slug": service_slug,
-        "slug_path": build_slug_path(state_slug, city_slug, service_slug),
+        "slug_path": slug_path,
         "acf": acf, "field_sources": field_sources, "validation_warnings": warnings,
         "title": title, "updated_at": "now()",
     }
-    row_id = _find_live_row_id(supabase, client_id, state_slug, city_slug, service_slug)
+    row_id = _find_live_row_id(supabase, client_id, state_slug, city_slug, service_slug, page_type)
     if row_id:
         res = supabase.table("wheelhouse_pages").update(
             {**payload, "status": "draft"}
@@ -123,7 +160,7 @@ def _upsert_draft(
         res = supabase.table("wheelhouse_pages").insert(payload).execute()
         return _row_to_page(res.data[0])
     except Exception:  # noqa: BLE001 — likely a concurrent insert hit the unique index
-        row_id = _find_live_row_id(supabase, client_id, state_slug, city_slug, service_slug)
+        row_id = _find_live_row_id(supabase, client_id, state_slug, city_slug, service_slug, page_type)
         if not row_id:
             raise
         res = supabase.table("wheelhouse_pages").update(
@@ -175,18 +212,19 @@ def purge(client_id: str, page_id: str) -> None:
 
 async def generate_one(
     client_id: str, state: str, city: str, service: str,
-    supplied: Optional[dict] = None,
+    supplied: Optional[dict] = None, page_type: str = "service",
 ) -> dict:
     """Generate (or, for a one-off, assemble from supplied+generated) the leaf's
     33 fields and persist as a draft. Returns the stored page."""
     get_enabled_client(client_id)
+    page_type = _norm_page_type(page_type)
     result = await wheelhouse_generate.generate_fields(
-        state=state, city=city, service=service, supplied=supplied,
+        state=state, city=city, service=service, supplied=supplied, page_type=page_type,
     )
     page = _upsert_draft(
         client_id, state, city, service,
         acf=result["acf"], field_sources=result["field_sources"],
-        warnings=result["warnings"], title=result["title"],
+        warnings=result["warnings"], title=result["title"], page_type=page_type,
     )
     page["generation_failed"] = result.get("generation_failed", False)
     return page
@@ -194,7 +232,7 @@ async def generate_one(
 
 async def preview_one(
     client_id: str, state: str, city: str, service: str,
-    supplied: Optional[dict] = None,
+    supplied: Optional[dict] = None, page_type: str = "service",
 ) -> dict:
     """Generate the fields WITHOUT persisting a row (the one-off form's 'Draft all'
     preview). Returns ``{acf, field_sources, warnings, title, generation_failed}``
@@ -202,6 +240,7 @@ async def preview_one(
     get_enabled_client(client_id)
     result = await wheelhouse_generate.generate_fields(
         state=state, city=city, service=service, supplied=supplied,
+        page_type=_norm_page_type(page_type),
     )
     return {
         "id": None,
@@ -215,6 +254,7 @@ async def preview_one(
 
 async def draft_single_field(
     client_id: str, state: str, city: str, service: str, field_name: str,
+    page_type: str = "service",
 ) -> str:
     """The one-off form's per-field 'Draft with AI'. Returns the field value only
     (no persistence — the form holds unsaved edits)."""
@@ -223,11 +263,13 @@ async def draft_single_field(
         raise HTTPException(status_code=422, detail="unknown_field")
     return await wheelhouse_generate.draft_field(
         state=state, city=city, service=service, field_name=field_name,
+        page_type=_norm_page_type(page_type),
     )
 
 
 def save_one_off(
     client_id: str, state: str, city: str, service: str, acf: dict,
+    page_type: str = "service",
 ) -> dict:
     """Persist a user-authored/edited ACF object as a draft (no generation).
 
@@ -237,8 +279,9 @@ def save_one_off(
     stays accurate across edits)."""
     get_enabled_client(client_id)
     from services.wheelhouse_fields import FIELD_BY_NAME, coerce_wysiwyg, merge_edit_sources
-    from services.wheelhouse_generate import compose_title
+    from services.wheelhouse_generate import title_for
 
+    page_type = _norm_page_type(page_type)
     acf = acf or {}
     clean: dict = {}
     for name in FIELD_NAMES:
@@ -249,11 +292,13 @@ def save_one_off(
         clean[name] = val
 
     supabase = get_supabase()
-    state_slug, city_slug, service_slug = slugify(state), slugify(city), slugify(service)
+    state_slug, city_slug = slugify(state), slugify(city)
+    service_slug = "" if page_type == "city" else slugify(service)
     existing = (
         supabase.table("wheelhouse_pages").select("acf, field_sources")
         .eq("client_id", client_id).eq("state_slug", state_slug)
         .eq("city_slug", city_slug).eq("service_slug", service_slug)
+        .eq("page_type", page_type)
         .is_("deleted_at", "null").limit(1).execute()
     )
     prev = existing.data[0] if existing.data else {}
@@ -261,7 +306,7 @@ def save_one_off(
     return _upsert_draft(
         client_id, state, city, service,
         acf=clean, field_sources=field_sources, warnings=validate_fields(clean),
-        title=compose_title(state, city, service),
+        title=title_for(page_type, state, city, service), page_type=page_type,
     )
 
 
@@ -275,31 +320,41 @@ def _bulk_scheduled_at(index: int) -> str:
 
 
 async def enqueue_mass(
-    client_id: str, state: str, city: str, services: list[str], user_id: str,
+    client_id: str, page_type: str, state: str, city: str, items: list[str], user_id: str,
 ) -> list[str]:
-    """Enqueue one `wheelhouse_generate` job per city×service. Returns job ids."""
+    """Enqueue one `wheelhouse_generate` job per item. For ``page_type='city'`` the
+    items are CITIES (one city page each, `city` input ignored); for
+    ``page_type='service'`` the items are SERVICES under the single `city`. Returns
+    the job ids."""
     get_enabled_client(client_id)
-    if not (state or "").strip() or not (city or "").strip():
-        raise HTTPException(status_code=422, detail="state_and_city_required")
+    page_type = _norm_page_type(page_type)
+    if not (state or "").strip():
+        raise HTTPException(status_code=422, detail="state_required")
+    if page_type == "service" and not (city or "").strip():
+        raise HTTPException(status_code=422, detail="city_required")
     rows = []
     seen = set()
-    for svc in services:
-        svc = (svc or "").strip()
-        key = svc.lower()
-        if not svc or key in seen:
+    for item in items:
+        item = (item or "").strip()
+        key = item.lower()
+        if not item or key in seen:
             continue
         seen.add(key)
+        # city mode → item is the city (no service); service mode → item is the service.
+        row_city = item if page_type == "city" else city.strip()
+        row_service = "" if page_type == "city" else item
         rows.append({
             "job_type": "wheelhouse_generate",
             "entity_id": client_id,
             "scheduled_at": _bulk_scheduled_at(len(rows)),
             "payload": {
-                "client_id": client_id, "state": state.strip(), "city": city.strip(),
-                "service": svc, "user_id": user_id,
+                "client_id": client_id, "page_type": page_type,
+                "state": state.strip(), "city": row_city,
+                "service": row_service, "user_id": user_id,
             },
         })
     if not rows:
-        raise HTTPException(status_code=422, detail="no_services")
+        raise HTTPException(status_code=422, detail="no_items")
     res = get_supabase().table("async_jobs").insert(rows).execute()
     return [r["id"] for r in (res.data or [])]
 
@@ -311,8 +366,8 @@ async def run_generate_job(job: dict) -> None:
     try:
         page = await generate_one(
             client_id=payload["client_id"], state=payload["state"],
-            city=payload["city"], service=payload["service"],
-            supplied=payload.get("supplied"),
+            city=payload["city"], service=payload.get("service", ""),
+            supplied=payload.get("supplied"), page_type=payload.get("page_type", "service"),
         )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": {"page_id": page["id"]}, "completed_at": "now()"}
@@ -357,16 +412,18 @@ def jobs_status(client_id: str, job_ids: list[str]) -> list[dict]:
 # ── publish + dry-run ────────────────────────────────────────────────────────
 
 async def publish(client_id: str, page_id: str, status: str = "draft") -> dict:
-    """Ensure the State→City parent chain and upsert the leaf with its ACF fields.
-    Persists the resolved WP ids + link back onto the row and returns the report."""
+    """Ensure the parent chain and upsert the leaf with its ACF fields (2-level city
+    page or 3-level service page). Persists the resolved WP ids + link back onto the
+    row and returns the report."""
     client = get_enabled_client(client_id)
     page = get_page(client_id, page_id)
-    result = await publish_leaf(
-        client=client, state=page["state"], city=page["city"], service=page["service"],
-        title=page["title"] or page["service"], acf=page["acf"], status=status,
+    result = await publish_hierarchy(
+        client=client, levels=_levels_for_page(page), acf=page["acf"], status=status,
     )
+    ancestors = result["ancestor_ids"]
     get_supabase().table("wheelhouse_pages").update({
-        "wp_state_id": result["wp_state_id"], "wp_city_id": result["wp_city_id"],
+        "wp_state_id": ancestors[0] if len(ancestors) >= 1 else None,
+        "wp_city_id": ancestors[1] if len(ancestors) >= 2 else None,
         "wp_page_id": result["wp_page_id"], "wp_status": result["status"],
         "published_url": result["link"], "edit_link": result["edit_link"],
         "slug_path": result["slug_path"], "status": "published", "updated_at": "now()",
@@ -379,9 +436,8 @@ async def dry_run(client_id: str, page_id: str, status: str = "draft") -> dict:
     would-POST payloads. Zero writes."""
     client = get_enabled_client(client_id)
     page = get_page(client_id, page_id)
-    return await dry_run_leaf(
-        client=client, state=page["state"], city=page["city"], service=page["service"],
-        title=page["title"] or page["service"], acf=page["acf"], status=status,
+    return await dry_run_hierarchy(
+        client=client, levels=_levels_for_page(page), acf=page["acf"], status=status,
     )
 
 

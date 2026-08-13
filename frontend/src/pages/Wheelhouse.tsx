@@ -16,7 +16,7 @@ type FieldSpec = {
 type Section = { section: string; fields: FieldSpec[] }
 type Warning = { field: string; issue: 'short' | 'long' | 'empty'; words: number; min_words: number; max_words: number }
 type Page = {
-  id: string; state: string; city: string; service: string; title: string
+  id: string; page_type?: 'city' | 'service'; state: string; city: string; service: string; title: string
   slug_path: string; acf: Record<string, string>; field_sources: Record<string, string>
   validation_warnings: Warning[]; status: 'draft' | 'published'; wp_status?: string | null
   wp_page_id?: number | null; published_url?: string | null; edit_link?: string | null
@@ -79,7 +79,8 @@ export function Wheelhouse() {
       </Link>
       <h1 style={{ fontSize: 24, fontWeight: 700, color: '#0f172a', margin: '4px 0 2px' }}>Wheelhouse Pages</h1>
       <p style={{ color: '#64748b', fontSize: 14, margin: '0 0 16px' }}>
-        Location/service landing pages (State → City → Service) published to WordPress as ACF-driven Pages.
+        Local SEO pages published to WordPress as ACF-driven Pages — city pages
+        (/florida/miami/) and the service pages nested beneath them.
       </p>
 
       {!wpConfigured && (
@@ -112,10 +113,28 @@ export function Wheelhouse() {
   )
 }
 
+// ── page-type toggle (shared) ────────────────────────────────────────────────
+type PageType = 'city' | 'service'
+function PageTypeToggle({ value, onChange }: { value: PageType; onChange: (v: PageType) => void }) {
+  const opt = (v: PageType, text: string) => (
+    <button style={{ ...outlineBtn, borderRadius: 8, padding: '7px 14px',
+      background: value === v ? '#6366f1' : '#fff', color: value === v ? '#fff' : '#0f172a',
+      borderColor: value === v ? '#6366f1' : '#e2e8f0' }} onClick={() => onChange(v)}>{text}</button>
+  )
+  return (
+    <div>
+      <label style={label}>Page type</label>
+      <div style={{ display: 'flex', gap: 8 }}>{opt('city', 'City pages')}{opt('service', 'Service pages')}</div>
+    </div>
+  )
+}
+
 // ── Mass Create ──────────────────────────────────────────────────────────────
 function MassCreate({ clientId, onDone }: { clientId: string; onDone: () => void }) {
+  const [pageType, setPageType] = useState<PageType>('city')
   const [state, setState] = useState('')
   const [city, setCity] = useState('')
+  const [citiesText, setCitiesText] = useState('Miami\nFort Lauderdale\nBoca Raton\nWest Palm Beach')
   const [servicesText, setServicesText] = useState('Managed IT\nCo-Managed IT\nCybersecurity\nIT Consulting')
   const [jobIds, setJobIds] = useState<string[]>([])
   const [jobs, setJobs] = useState<JobStatus[]>([])
@@ -123,8 +142,12 @@ function MassCreate({ clientId, onDone }: { clientId: string; onDone: () => void
   const [submitting, setSubmitting] = useState(false)
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const services = servicesText.split('\n').map((s) => s.trim()).filter(Boolean)
-  const combos = city && services.length ? services.map((s) => `${s} in ${city}`) : []
+  const isCity = pageType === 'city'
+  const items = (isCity ? citiesText : servicesText).split('\n').map((s) => s.trim()).filter(Boolean)
+  const combos = isCity
+    ? items.map((c) => `${c} IT Support Company`)
+    : (city && items.length ? items.map((s) => `${s} in ${city}`) : [])
+  const ready = Boolean(state) && items.length > 0 && (isCity || Boolean(city))
 
   useEffect(() => () => { if (timer.current) clearInterval(timer.current) }, [])
 
@@ -143,7 +166,9 @@ function MassCreate({ clientId, onDone }: { clientId: string; onDone: () => void
   const submit = async () => {
     setError(null); setSubmitting(true); setJobs([])
     try {
-      const res = await api.post<{ job_ids: string[] }>(`/clients/${clientId}/wheelhouse/generate-mass`, { state, city, services })
+      const res = await api.post<{ job_ids: string[] }>(
+        `/clients/${clientId}/wheelhouse/generate-mass`,
+        { page_type: pageType, state, city: isCity ? '' : city, items })
       setJobIds(res.job_ids); poll(res.job_ids)
     } catch (e) { setError(e instanceof Error ? e.message : 'Failed to start') } finally { setSubmitting(false) }
   }
@@ -153,23 +178,31 @@ function MassCreate({ clientId, onDone }: { clientId: string; onDone: () => void
   return (
     <div style={card}>
       <div style={{ display: 'grid', gap: 14 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <PageTypeToggle value={pageType} onChange={setPageType} />
+        <div style={{ display: 'grid', gridTemplateColumns: isCity ? '1fr' : '1fr 1fr', gap: 12 }}>
           <div><label style={label}>State</label><input style={input} value={state} onChange={(e) => setState(e.target.value)} placeholder="Florida" /></div>
-          <div><label style={label}>City</label><input style={input} value={city} onChange={(e) => setCity(e.target.value)} placeholder="Miami" /></div>
+          {!isCity && <div><label style={label}>City</label><input style={input} value={city} onChange={(e) => setCity(e.target.value)} placeholder="Miami" /></div>}
         </div>
-        <div>
-          <label style={label}>Services (one per line)</label>
-          <textarea style={{ ...input, minHeight: 110, fontFamily: 'inherit' }} value={servicesText} onChange={(e) => setServicesText(e.target.value)} />
-        </div>
+        {isCity ? (
+          <div>
+            <label style={label}>Cities (one per line)</label>
+            <textarea style={{ ...input, minHeight: 110, fontFamily: 'inherit' }} value={citiesText} onChange={(e) => setCitiesText(e.target.value)} />
+          </div>
+        ) : (
+          <div>
+            <label style={label}>Services (one per line)</label>
+            <textarea style={{ ...input, minHeight: 110, fontFamily: 'inherit' }} value={servicesText} onChange={(e) => setServicesText(e.target.value)} />
+          </div>
+        )}
         {combos.length > 0 && (
           <div style={{ fontSize: 13, color: '#475569' }}>
-            Will create <strong>{combos.length}</strong> page{combos.length === 1 ? '' : 's'}: {combos.join(' · ')}
+            Will create <strong>{combos.length}</strong> {isCity ? 'city' : 'service'} page{combos.length === 1 ? '' : 's'}: {combos.join(' · ')}
           </div>
         )}
         {error && <div style={errorBox}>{error}</div>}
         <div>
-          <button style={{ ...primaryBtn, opacity: submitting || !state || !city || !services.length ? 0.6 : 1 }}
-            disabled={submitting || !state || !city || !services.length} onClick={submit}>
+          <button style={{ ...primaryBtn, opacity: submitting || !ready ? 0.6 : 1 }}
+            disabled={submitting || !ready} onClick={submit}>
             <Sparkles size={16} /> {submitting ? 'Starting…' : `Generate ${combos.length || ''} page${combos.length === 1 ? '' : 's'}`}
           </button>
         </div>
@@ -202,13 +235,16 @@ function StatusDot({ status }: { status: string }) {
 
 // ── One-Off ──────────────────────────────────────────────────────────────────
 function OneOff({ clientId, sections, onSaved }: { clientId: string; sections: Section[]; onSaved: (id: string) => void }) {
+  const [pageType, setPageType] = useState<PageType>('city')
   const [state, setState] = useState('')
   const [city, setCity] = useState('')
   const [service, setService] = useState('')
   const [acf, setAcf] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const hasLocation = Boolean(state && city && service)
+  const isCity = pageType === 'city'
+  const hasLocation = Boolean(state && city && (isCity || service))
+  const body = () => ({ page_type: pageType, state, city, service: isCity ? '' : service })
 
   const setField = (name: string, value: string) => setAcf((a) => ({ ...a, [name]: value }))
 
@@ -218,7 +254,7 @@ function OneOff({ clientId, sections, onSaved }: { clientId: string; sections: S
       const supplied = Object.fromEntries(Object.entries(acf).filter(([, v]) => v && v.trim()))
       // persist:false → live preview, no Saved row until the user clicks Save.
       const res = await api.post<{ acf: Record<string, string>; generation_failed?: boolean }>(
-        `/clients/${clientId}/wheelhouse/generate-one`, { state, city, service, supplied, persist: false })
+        `/clients/${clientId}/wheelhouse/generate-one`, { ...body(), supplied, persist: false })
       setAcf(res.acf)
       if (res.generation_failed) setError('The AI writer returned nothing (it may be temporarily unavailable). Try again, or fill fields manually.')
     } catch (e) { setError(e instanceof Error ? e.message : 'Generation failed') } finally { setBusy(null) }
@@ -226,14 +262,14 @@ function OneOff({ clientId, sections, onSaved }: { clientId: string; sections: S
   const draftField = async (name: string) => {
     setBusy(name); setError(null)
     try {
-      const res = await api.post<{ value: string }>(`/clients/${clientId}/wheelhouse/draft-field`, { state, city, service, field_name: name })
+      const res = await api.post<{ value: string }>(`/clients/${clientId}/wheelhouse/draft-field`, { ...body(), field_name: name })
       if (res.value) setField(name, res.value)
     } catch (e) { setError(e instanceof Error ? e.message : 'Draft failed') } finally { setBusy(null) }
   }
   const save = async () => {
     setBusy('save'); setError(null)
     try {
-      const page = await api.post<Page>(`/clients/${clientId}/wheelhouse/one-off`, { state, city, service, acf })
+      const page = await api.post<Page>(`/clients/${clientId}/wheelhouse/one-off`, { ...body(), acf })
       onSaved(page.id)
     } catch (e) { setError(e instanceof Error ? e.message : 'Save failed') } finally { setBusy(null) }
   }
@@ -241,10 +277,11 @@ function OneOff({ clientId, sections, onSaved }: { clientId: string; sections: S
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <div style={card}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+        <div style={{ marginBottom: 12 }}><PageTypeToggle value={pageType} onChange={setPageType} /></div>
+        <div style={{ display: 'grid', gridTemplateColumns: isCity ? '1fr 1fr' : '1fr 1fr 1fr', gap: 12 }}>
           <div><label style={label}>State</label><input style={input} value={state} onChange={(e) => setState(e.target.value)} placeholder="Florida" /></div>
           <div><label style={label}>City</label><input style={input} value={city} onChange={(e) => setCity(e.target.value)} placeholder="Miami" /></div>
-          <div><label style={label}>Service</label><input style={input} value={service} onChange={(e) => setService(e.target.value)} placeholder="Managed IT" /></div>
+          {!isCity && <div><label style={label}>Service</label><input style={input} value={service} onChange={(e) => setService(e.target.value)} placeholder="Managed IT" /></div>}
         </div>
         <div style={{ marginTop: 12, display: 'flex', gap: 10, alignItems: 'center' }}>
           <button style={{ ...outlineBtn, opacity: hasLocation && !busy ? 1 : 0.6 }} disabled={!hasLocation || Boolean(busy)} onClick={generateAll}>
@@ -321,7 +358,7 @@ function PageList({ pages, loading, onOpen, emptyLabel }: {
       {pages.map((p) => (
         <button key={p.id} style={{ ...card, textAlign: 'left', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} onClick={() => onOpen(p.id)}>
           <div>
-            <div style={{ fontWeight: 600, color: '#0f172a' }}>{p.title || `${p.service} · ${p.city}`}</div>
+            <div style={{ fontWeight: 600, color: '#0f172a' }}>{p.title || (p.page_type === 'city' ? `${p.city} IT Support Company` : `${p.service} · ${p.city}`)}</div>
             <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>{p.slug_path}</div>
           </div>
           <StatusPill page={p} />
@@ -356,7 +393,7 @@ function DraftsList({ clientId, drafts, onChange }: { clientId: string; drafts: 
       {drafts.map((p) => (
         <div key={p.id} style={{ ...card, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
-            <div style={{ fontWeight: 600, color: '#0f172a' }}>{p.title || `${p.service} · ${p.city}`}</div>
+            <div style={{ fontWeight: 600, color: '#0f172a' }}>{p.title || (p.page_type === 'city' ? `${p.city} IT Support Company` : `${p.service} · ${p.city}`)}</div>
             <div style={{ fontSize: 12, color: '#94a3b8' }}>{p.slug_path}</div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -381,18 +418,19 @@ function PageDetail({ clientId, page, sections, wpConfigured, onClose, onChange 
   const dirty = useMemo(() => JSON.stringify(acf) !== JSON.stringify(page.acf), [acf, page.acf])
 
   const setField = (name: string, value: string) => setAcf((a) => ({ ...a, [name]: value }))
+  const saveBody = () => ({ page_type: page.page_type ?? 'service', state: page.state, city: page.city, service: page.service, acf })
 
   const saveEdits = async () => {
     setBusy('save'); setError(null); setMsg(null)
     try {
-      await api.post(`/clients/${clientId}/wheelhouse/one-off`, { state: page.state, city: page.city, service: page.service, acf })
+      await api.post(`/clients/${clientId}/wheelhouse/one-off`, saveBody())
       setMsg('Saved.'); onChange()
     } catch (e) { setError(e instanceof Error ? e.message : 'Save failed') } finally { setBusy(null) }
   }
   const publish = async (status: 'draft' | 'publish') => {
     setBusy(status); setError(null); setMsg(null)
     try {
-      if (dirty) await api.post(`/clients/${clientId}/wheelhouse/one-off`, { state: page.state, city: page.city, service: page.service, acf })
+      if (dirty) await api.post(`/clients/${clientId}/wheelhouse/one-off`, saveBody())
       const res = await api.post<{ link?: string; slug_path: string; acf_written?: boolean; hubs_promoted?: boolean }>(
         `/clients/${clientId}/wheelhouse/pages/${page.id}/publish`, { status })
       if (res.acf_written === false) {
@@ -406,7 +444,7 @@ function PageDetail({ clientId, page, sections, wpConfigured, onClose, onChange 
   const doDryRun = async () => {
     setBusy('dry'); setError(null); setDryRun(null)
     try {
-      if (dirty) await api.post(`/clients/${clientId}/wheelhouse/one-off`, { state: page.state, city: page.city, service: page.service, acf })
+      if (dirty) await api.post(`/clients/${clientId}/wheelhouse/one-off`, saveBody())
       const res = await api.post(`/clients/${clientId}/wheelhouse/pages/${page.id}/dry-run`, { status: 'draft' })
       setDryRun(res)
     } catch (e) { setError(e instanceof Error ? e.message : 'Dry-run failed') } finally { setBusy(null) }
@@ -421,7 +459,7 @@ function PageDetail({ clientId, page, sections, wpConfigured, onClose, onChange 
           <div>
             <div style={{ fontSize: 18, fontWeight: 700, color: '#0f172a' }}>{page.title}</div>
             <div style={{ fontSize: 13, color: '#64748b', marginTop: 2 }}>
-              {page.state} → {page.city} → {page.service} · <code>{page.slug_path}</code>
+              {page.state} → {page.city}{page.page_type !== 'city' && page.service ? ` → ${page.service}` : ''} · <code>{page.slug_path}</code>
             </div>
           </div>
           <StatusPill page={page} />

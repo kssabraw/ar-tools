@@ -136,6 +136,23 @@ def test_slugify_and_slug_path():
     assert wp.slugify("Managed IT") == "managed-it"
     assert wp.slugify("St. Petersburg") == "st-petersburg"
     assert wp.build_slug_path("florida", "miami", "managed-it") == "/florida/miami/managed-it/"
+    # Variadic → serves any depth (2-level city page).
+    assert wp.build_slug_path("florida", "miami") == "/florida/miami/"
+
+
+def test_city_title_and_dispatch():
+    assert wg.compose_city_title("Miami") == "Miami IT Support Company"
+    assert wg.title_for("city", "Florida", "Miami", "ignored") == "Miami IT Support Company"
+    assert wg.title_for("service", "Florida", "Miami", "Managed IT") == "Managed IT in Miami, FL"
+
+
+def test_generate_fields_city_uses_fixed_service_and_title():
+    good = {n: "word word word" for n in wf.GENERATED_FIELD_NAMES}
+    with patch.object(wg.report_llm, "run_forced_tool", new=AsyncMock(return_value=good)):
+        res = asyncio.run(wg.generate_fields(
+            state="Florida", city="Miami", service="", page_type="city"))
+    assert res["title"] == "Miami IT Support Company"
+    assert res["generation_failed"] is False
 
 
 # ── dry-run makes zero writes and needs no WP config ─────────────────────────
@@ -199,15 +216,33 @@ def test_generate_fields_reraises_transient_swallows_terminal():
     assert res["generation_failed"] is True
 
 
-def test_dry_run_zero_writes_without_config():
+def _levels(*parts):
+    return [{"slug": wp.slugify(p), "title": p} for p in parts]
+
+
+def test_dry_run_zero_writes_without_config_service():
     client = {"id": "c1"}  # no wordpress_* creds → lookups skipped, no network
-    out = asyncio.run(wp.dry_run_leaf(
-        client=client, state="Florida", city="Miami", service="Managed IT",
-        title="Managed IT in Miami, FL", acf={"hero_headline": "x"}, status="draft",
+    out = asyncio.run(wp.dry_run_hierarchy(
+        client=client, levels=_levels("Florida", "Miami", "Managed IT"),
+        acf={"hero_headline": "x"}, status="draft",
     ))
     assert out["writes"] == 0
     assert out["parents_resolved"] is False
     assert out["slug_path"] == "/florida/miami/managed-it/"
     assert out["leaf_payload"]["slug"] == "managed-it"
     assert out["leaf_payload"]["acf"] == {"hero_headline": "x"}
-    assert out["chain"]["state"]["parent"] == 0
+    assert out["chain"][0]["parent"] == 0
+    assert len(out["chain"]) == 3
+
+
+def test_dry_run_zero_writes_city_two_level():
+    client = {"id": "c1"}
+    out = asyncio.run(wp.dry_run_hierarchy(
+        client=client, levels=_levels("Florida", "Miami"),
+        acf={"hero_headline": "y"}, status="draft",
+    ))
+    assert out["writes"] == 0
+    assert out["slug_path"] == "/florida/miami/"
+    assert out["leaf_payload"]["slug"] == "miami"
+    assert len(out["chain"]) == 2
+    assert out["chain"][0]["parent"] == 0

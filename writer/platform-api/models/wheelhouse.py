@@ -7,11 +7,16 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 
+PageType = Literal["service", "city"]
+
+
 class WheelhouseMassRequest(BaseModel):
-    """Mass Create: one city + a list of services → one leaf page per city×service."""
+    """Mass Create. For page_type='city' the items are CITIES (one city page each,
+    `city` ignored); for page_type='service' the items are SERVICES under `city`."""
+    page_type: PageType = "service"
     state: str
-    city: str
-    services: list[str] = Field(default_factory=list)
+    city: str = ""
+    items: list[str] = Field(default_factory=list)
 
 
 class WheelhouseMassJob(BaseModel):
@@ -36,29 +41,33 @@ class WheelhouseJobsStatusRequest(BaseModel):
 
 
 class WheelhouseGenerateOneRequest(BaseModel):
-    """One-off: generate all missing fields for a single city×service; any
-    `supplied` fields are kept verbatim. `persist=False` returns the fields
-    WITHOUT creating a Saved row (the form's live 'Draft all' preview)."""
+    """One-off: generate all missing fields for a single page; any `supplied`
+    fields are kept verbatim. `persist=False` returns the fields WITHOUT creating a
+    Saved row (the form's live 'Draft all' preview). For page_type='city' the
+    service is fixed and may be omitted."""
+    page_type: PageType = "service"
     state: str
     city: str
-    service: str
+    service: str = ""
     supplied: Optional[dict] = None
     persist: bool = True
 
 
 class WheelhouseOneOffSaveRequest(BaseModel):
     """Save a fully user-authored/edited ACF object as a draft (no generation)."""
+    page_type: PageType = "service"
     state: str
     city: str
-    service: str
+    service: str = ""
     acf: dict = Field(default_factory=dict)
 
 
 class WheelhouseDraftFieldRequest(BaseModel):
     """Per-field 'Draft with AI' in the one-off form."""
+    page_type: PageType = "service"
     state: str
     city: str
-    service: str
+    service: str = ""
     field_name: str
 
 

@@ -80,10 +80,10 @@ async def get_wheelhouse_report(
 async def generate_mass(
     client_id: UUID, body: WheelhouseMassRequest, auth: dict = Depends(require_auth),
 ) -> WheelhouseMassJob:
-    """Mass Create: enqueue one generation job per city×service."""
+    """Mass Create: enqueue one generation job per item (city or service)."""
     assert_not_frozen(str(client_id))
     job_ids = await wheelhouse_service.enqueue_mass(
-        str(client_id), body.state, body.city, body.services, auth["user_id"],
+        str(client_id), body.page_type, body.state, body.city, body.items, auth["user_id"],
     )
     return WheelhouseMassJob(job_ids=job_ids)
 
@@ -99,10 +99,12 @@ async def generate_one(
     assert_not_frozen(str(client_id))
     if body.persist:
         return await wheelhouse_service.generate_one(
-            str(client_id), body.state, body.city, body.service, supplied=body.supplied,
+            str(client_id), body.state, body.city, body.service,
+            supplied=body.supplied, page_type=body.page_type,
         )
     return await wheelhouse_service.preview_one(
-        str(client_id), body.state, body.city, body.service, supplied=body.supplied,
+        str(client_id), body.state, body.city, body.service,
+        supplied=body.supplied, page_type=body.page_type,
     )
 
 
@@ -116,6 +118,7 @@ async def draft_field(
     """Draft a single ACF field with AI (the one-off form's per-field button)."""
     value = await wheelhouse_service.draft_single_field(
         str(client_id), body.state, body.city, body.service, body.field_name,
+        page_type=body.page_type,
     )
     return WheelhouseDraftFieldResult(field_name=body.field_name, value=value)
 
@@ -128,6 +131,7 @@ async def save_one_off(
     assert_not_frozen(str(client_id))
     return wheelhouse_service.save_one_off(
         str(client_id), body.state, body.city, body.service, body.acf,
+        page_type=body.page_type,
     )
 
 

@@ -220,66 +220,52 @@ async def _upsert_leaf(
     return result
 
 
-def build_slug_path(state_slug: str, city_slug: str, service_slug: str) -> str:
-    """The nested URL path for a leaf, e.g. ``/florida/miami/managed-it/``."""
-    return f"/{state_slug}/{city_slug}/{service_slug}/"
+def build_slug_path(*slugs: str) -> str:
+    """The nested URL path for a page, e.g. ``build_slug_path("florida","miami")``
+    → ``/florida/miami/``. Variadic so it serves any hierarchy depth (a 2-level
+    city page or a 3-level service page)."""
+    return "/" + "/".join(s for s in slugs if s) + "/"
 
 
-async def publish_leaf(
-    *,
-    client: dict,
-    state: str,
-    city: str,
-    service: str,
-    title: str,
-    acf: dict,
-    status: str = "draft",
-    state_slug: Optional[str] = None,
-    city_slug: Optional[str] = None,
-    service_slug: Optional[str] = None,
+async def publish_hierarchy(
+    *, client: dict, levels: list[dict], acf: dict, status: str = "draft",
 ) -> dict:
-    """Ensure the State→City parent chain, then upsert the Service leaf with its
-    ACF fields. Returns a report dict::
+    """Ensure the ancestor hubs, then upsert the leaf (last level) with its ACF.
 
-        {wp_state_id, wp_city_id, wp_page_id, created (leaf), state_created,
-         city_created, slug_path, link, edit_link, status, acf_written,
-         hubs_promoted}
+    ``levels`` is an ordered list ``[{"slug","title"}, …]`` top→down; every level
+    but the last is a hub (created/reused, and promoted to publish when going live
+    so the nested URL resolves), and the last carries the ACF payload. One engine
+    drives every page_type — a 2-level city page or a 3-level service page.
 
-    Hubs are created matching the leaf's publish state (``hub_status = status``),
-    and when publishing live, existing DRAFT ancestors are promoted to publish so
-    the nested URL resolves. ``acf_written`` is False when WordPress dropped the
-    ACF payload (a misconfigured field group). Raises WordPressPublishError on
-    missing config, a bad status, or a transport/API failure. Server-side only."""
+    Returns ``{ancestor_ids, wp_page_id, created, slug_path, link, edit_link,
+    status, acf_written, hubs_promoted}``. Raises WordPressPublishError on missing
+    config, a bad status, or a transport/API failure. Server-side only."""
     if status not in ALLOWED_STATUSES:
         raise WordPressPublishError("invalid_status")
-    state_slug = state_slug or slugify(state)
-    city_slug = city_slug or slugify(city)
-    service_slug = service_slug or slugify(service)
-    if not (state_slug and city_slug and service_slug):
+    if not levels or any(not (lvl.get("slug") or "") for lvl in levels):
         raise WordPressPublishError("invalid_slug")
 
-    # Hubs match the leaf's publish state; going live promotes existing draft hubs.
     hub_status = status
     promote = status == "publish"
-
     rest_base, site_root, headers = _rest_context(client)
     try:
         async with httpx.AsyncClient(
             timeout=60, follow_redirects=False, headers=_default_headers()
         ) as http:
-            state_hub = await ensure_page(
-                http, rest_base, site_root, headers,
-                slug=state_slug, title=state, parent=0,
-                hub_status=hub_status, promote=promote,
-            )
-            city_hub = await ensure_page(
-                http, rest_base, site_root, headers,
-                slug=city_slug, title=city, parent=state_hub["id"],
-                hub_status=hub_status, promote=promote,
-            )
+            parent = 0
+            ancestors: list[dict] = []
+            for lvl in levels[:-1]:
+                hub = await ensure_page(
+                    http, rest_base, site_root, headers,
+                    slug=lvl["slug"], title=lvl["title"], parent=parent,
+                    hub_status=hub_status, promote=promote,
+                )
+                parent = hub["id"]
+                ancestors.append(hub)
+            leaf_lvl = levels[-1]
             leaf = await _upsert_leaf(
                 http, rest_base, site_root, headers,
-                slug=service_slug, title=title, parent=city_hub["id"],
+                slug=leaf_lvl["slug"], title=leaf_lvl["title"], parent=parent,
                 status=status, acf=acf,
             )
     except WordPressPublishError:
@@ -290,76 +276,56 @@ async def publish_leaf(
 
     leaf_id = int(leaf["id"])
     return {
-        "wp_state_id": state_hub["id"],
-        "wp_city_id": city_hub["id"],
+        "ancestor_ids": [a["id"] for a in ancestors],
         "wp_page_id": leaf_id,
-        "state_created": state_hub["created"],
-        "city_created": city_hub["created"],
         "created": bool(leaf.get("_created")),
-        "slug_path": build_slug_path(state_slug, city_slug, service_slug),
+        "slug_path": build_slug_path(*[lvl["slug"] for lvl in levels]),
         "link": leaf.get("link"),
         "edit_link": edit_link_for(client["wordpress_site_url"], leaf_id),
         "status": leaf.get("status", status),
         "acf_written": bool(leaf.get("_acf_ok", True)),
-        "hubs_promoted": bool(state_hub.get("promoted") or city_hub.get("promoted")),
+        "hubs_promoted": any(a.get("promoted") for a in ancestors),
     }
 
 
-async def dry_run_leaf(
-    *,
-    client: dict,
-    state: str,
-    city: str,
-    service: str,
-    title: str,
-    acf: dict,
-    status: str = "draft",
-    state_slug: Optional[str] = None,
-    city_slug: Optional[str] = None,
-    service_slug: Optional[str] = None,
+async def dry_run_hierarchy(
+    *, client: dict, levels: list[dict], acf: dict, status: str = "draft",
 ) -> dict:
-    """Assemble + resolve the parent chain and return the exact payloads that
-    *would* be POSTed, with **zero write calls**. Parent ids are resolved by
-    read-only slug lookups when WP is configured (so the chain is accurate),
-    otherwise reported as "would create". No POST is ever issued."""
-    state_slug = state_slug or slugify(state)
-    city_slug = city_slug or slugify(city)
-    service_slug = service_slug or slugify(service)
-    slug_path = build_slug_path(state_slug, city_slug, service_slug)
-
+    """Resolve the parent chain read-only and return the exact would-POST leaf
+    payload + the per-level chain, with **zero writes**. Depth-agnostic — the
+    ``chain`` is a list top→down. Parent ids resolve when WP is configured; a
+    missing ancestor stops resolution there (deeper levels read as "would
+    create")."""
+    slugs = [lvl.get("slug") or "" for lvl in levels]
+    slug_path = build_slug_path(*slugs)
+    chain = [
+        {"slug": lvl.get("slug"), "title": lvl.get("title"),
+         "parent": 0 if i == 0 else "<parentId>", "existing_id": None}
+        for i, lvl in enumerate(levels)
+    ]
     leaf_payload = {
-        "title": title, "slug": service_slug, "parent": "<cityId>",
-        "status": status, "acf": acf,
+        "title": levels[-1].get("title") if levels else None,
+        "slug": slugs[-1] if slugs else None,
+        "parent": "<parentId>", "status": status, "acf": acf,
     }
-    chain = {
-        "state": {"slug": state_slug, "title": state, "parent": 0, "existing_id": None},
-        "city": {"slug": city_slug, "title": city, "parent": "<stateId>", "existing_id": None},
-        "service": {"slug": service_slug, "title": title, "parent": "<cityId>", "existing_id": None},
-    }
-
     resolved = False
-    if client_is_configured(client):
+    if levels and client_is_configured(client):
         try:
             rest_base, _site_root, headers = _rest_context(client)
             async with httpx.AsyncClient(
                 timeout=30, follow_redirects=False, headers=_default_headers()
             ) as http:
-                state_hit = await _get_page_by_slug(http, rest_base, headers, state_slug, 0)
-                state_id = int(state_hit["id"]) if state_hit and state_hit.get("id") else None
-                chain["state"]["existing_id"] = state_id
-                city_id = None
-                if state_id is not None:
-                    city_hit = await _get_page_by_slug(http, rest_base, headers, city_slug, state_id)
-                    city_id = int(city_hit["id"]) if city_hit and city_hit.get("id") else None
-                    chain["city"]["parent"] = state_id
-                    chain["city"]["existing_id"] = city_id
-                if city_id is not None:
-                    leaf_hit = await _get_page_by_slug(http, rest_base, headers, service_slug, city_id)
-                    chain["service"]["parent"] = city_id
-                    chain["service"]["existing_id"] = (
-                        int(leaf_hit["id"]) if leaf_hit and leaf_hit.get("id") else None
-                    )
-                    leaf_payload["parent"] = city_id
+                parent = 0
+                for i, lvl in enumerate(levels):
+                    hit = await _get_page_by_slug(http, rest_base, headers, lvl["slug"], parent)
+                    hit_id = int(hit["id"]) if hit and hit.get("id") else None
+                    chain[i]["parent"] = parent
+                    chain[i]["existing_id"] = hit_id
+                    if i == len(levels) - 1:
+                        leaf_payload["parent"] = parent
+                    if hit_id is None:
+                        break  # can't resolve deeper without this ancestor
+                    parent = hit_id
             resolved = True
         except WordPressPublishError as exc:
             logger.info("wheelhouse_dryrun_lookup_skipped reason=%s", str(exc))

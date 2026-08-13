@@ -57,14 +57,29 @@ def state_abbrev(state: str) -> Optional[str]:
     return _STATE_ABBREV.get(s.lower())
 
 
+# The city page's fixed offering — WheelHouse IS an IT support company, so there
+# is one service and the city page IS the local SEO page.
+CITY_SERVICE_LABEL = "IT support company"
+
+
 def compose_title(state: str, city: str, service: str) -> str:
-    """The leaf WP post title, e.g. ``Managed IT in Miami, FL`` (the theme renders
-    it as the page's visible H1 slot; the ACF hero_headline is the on-page H1)."""
+    """The service-page WP post title, e.g. ``Managed IT in Miami, FL`` (the theme
+    renders it as the page's H1 slot; the ACF hero_headline is the on-page H1)."""
     city = (city or "").strip()
     service = (service or "").strip()
     abbrev = state_abbrev(state)
     where = f"{city}, {abbrev}" if (city and abbrev) else city
     return f"{service} in {where}".strip() if where else service
+
+
+def compose_city_title(city: str) -> str:
+    """The city-page WP post title, e.g. ``Miami IT Support Company``."""
+    city = (city or "").strip()
+    return f"{city} IT Support Company" if city else "IT Support Company"
+
+
+def title_for(page_type: str, state: str, city: str, service: str) -> str:
+    return compose_city_title(city) if page_type == "city" else compose_title(state, city, service)
 
 
 def _field_guide_lines(exclude: set) -> str:
@@ -110,13 +125,18 @@ def build_user_prompt(state: str, city: str, service: str, exclude: set) -> str:
 
 async def generate_fields(
     *, state: str, city: str, service: str, supplied: Optional[dict] = None,
+    page_type: str = "service",
 ) -> dict:
     """Generate the leaf page's ACF fields. Returns
-    ``{acf, field_sources, warnings, title}``.
+    ``{acf, field_sources, warnings, title, generation_failed}``.
 
+    For ``page_type='city'`` the offering is fixed to "IT support company" (the
+    city page IS the local SEO page) and the title is "[City] IT Support Company".
     Supplied fields are kept verbatim and excluded from the LLM call; the rest are
     generated in one forced-tool call. Best-effort: any missing field validates as
     empty rather than raising."""
+    if page_type == "city":
+        service = CITY_SERVICE_LABEL  # fixed offering woven into the city page
     supplied = {k: v for k, v in (supplied or {}).items()
                 if isinstance(v, str) and v.strip()}
     exclude = set(supplied.keys())
@@ -155,7 +175,7 @@ async def generate_fields(
         "acf": acf,
         "field_sources": field_sources,
         "warnings": validate_fields(acf),
-        "title": compose_title(state, city, service),
+        "title": title_for(page_type, state, city, service),
         # True when we attempted generation but nothing usable came back — the UI
         # shows an error instead of a silently-blank form.
         "generation_failed": bool(to_generate) and not produced,
@@ -164,12 +184,15 @@ async def generate_fields(
 
 async def draft_field(
     *, state: str, city: str, service: str, field_name: str,
+    page_type: str = "service",
 ) -> str:
     """Draft a single ACF field (the one-off form's per-field 'Draft with AI').
     Returns the field's value (HTML for wysiwyg). Empty string on failure."""
     spec = FIELD_BY_NAME.get(field_name)
     if not spec or spec.get("is_link"):
         return ""
+    if page_type == "city":
+        service = CITY_SERVICE_LABEL
     try:
         out = await report_llm.run_forced_tool(
             provider=settings.wheelhouse_provider,
