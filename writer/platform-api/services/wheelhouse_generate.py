@@ -136,19 +136,29 @@ async def generate_fields(
                 max_tokens=settings.wheelhouse_max_tokens,
                 log_tag="wheelhouse_generate",
             )
-        except Exception as exc:  # noqa: BLE001 — best-effort; degrade to supplied+defaults
+        except Exception as exc:  # noqa: BLE001 — classify: retry transient, degrade terminal
+            # A transient exhaustion (429/5xx/connection after all providers +
+            # retries) propagates so a mass job can be re-queued when the outage
+            # clears. A terminal error (bad key/request) degrades to an empty draft
+            # with a surfaced flag rather than failing forever.
+            if report_llm.is_transient_llm_error(exc):
+                raise
             logger.error("wheelhouse_generate_llm_failed city=%s service=%s error=%s",
                          city, service, str(exc))
             generated = {}
     if not isinstance(generated, dict):
         generated = {}
 
+    produced = [n for n in to_generate if isinstance(generated.get(n), str) and generated[n].strip()]
     acf, field_sources = merge_supplied(generated, supplied)
     return {
         "acf": acf,
         "field_sources": field_sources,
         "warnings": validate_fields(acf),
         "title": compose_title(state, city, service),
+        # True when we attempted generation but nothing usable came back — the UI
+        # shows an error instead of a silently-blank form.
+        "generation_failed": bool(to_generate) and not produced,
     }
 
 

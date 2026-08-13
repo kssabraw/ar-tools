@@ -37,11 +37,13 @@ class WheelhouseJobsStatusRequest(BaseModel):
 
 class WheelhouseGenerateOneRequest(BaseModel):
     """One-off: generate all missing fields for a single city×service; any
-    `supplied` fields are kept verbatim."""
+    `supplied` fields are kept verbatim. `persist=False` returns the fields
+    WITHOUT creating a Saved row (the form's live 'Draft all' preview)."""
     state: str
     city: str
     service: str
     supplied: Optional[dict] = None
+    persist: bool = True
 
 
 class WheelhouseOneOffSaveRequest(BaseModel):

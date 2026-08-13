@@ -93,9 +93,15 @@ async def generate_one(
     client_id: UUID, body: WheelhouseGenerateOneRequest, auth: dict = Depends(require_auth),
 ) -> dict:
     """One-off: synchronously generate all missing fields for a single
-    city×service (supplied fields kept verbatim) and save as a draft."""
+    city×service (supplied fields kept verbatim). ``persist=True`` (default) saves
+    a draft and returns it; ``persist=False`` returns the fields only (live form
+    preview — no Saved row created)."""
     assert_not_frozen(str(client_id))
-    return await wheelhouse_service.generate_one(
+    if body.persist:
+        return await wheelhouse_service.generate_one(
+            str(client_id), body.state, body.city, body.service, supplied=body.supplied,
+        )
+    return await wheelhouse_service.preview_one(
         str(client_id), body.state, body.city, body.service, supplied=body.supplied,
     )
 

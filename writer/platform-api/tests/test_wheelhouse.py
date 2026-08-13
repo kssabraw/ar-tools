@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -138,6 +139,65 @@ def test_slugify_and_slug_path():
 
 
 # ── dry-run makes zero writes and needs no WP config ─────────────────────────
+
+def test_acf_write_ok_detects_dropped_payload():
+    # Sent content but WP echoed no acf → the field group isn't REST-exposed.
+    assert wp.acf_write_ok({"hero_headline": "x"}, {"hero_headline": "x"}) is True
+    assert wp.acf_write_ok({"hero_headline": "x"}, None) is False
+    assert wp.acf_write_ok({"hero_headline": "x"}, {}) is False
+    # Sent nothing meaningful → nothing to drop, always ok.
+    assert wp.acf_write_ok({"a": "", "b": "  "}, None) is True
+    assert wp.acf_write_ok({}, None) is True
+
+
+def test_merge_edit_sources_preserves_provenance():
+    prev_acf = {"hero_headline": "Old H", "hero_body": "<p>b</p>"}
+    prev_sources = {"hero_headline": "generated", "hero_body": "generated"}
+    new_acf = {"hero_headline": "Old H", "hero_body": "<p>changed</p>", "switch_headline": "Brand new"}
+    out = wf.merge_edit_sources(new_acf, prev_acf, prev_sources)
+    assert out["hero_headline"] == "generated"   # unchanged → keep provenance
+    assert out["hero_body"] == "supplied"        # changed → supplied
+    assert out["switch_headline"] == "supplied"  # newly filled → supplied
+    assert out["valueband_eyebrow"] == "generated"  # empty, no prior → generated
+    assert set(out.keys()) == set(wf.FIELD_NAMES)
+
+
+def test_generate_fields_flags_failure_and_keeps_defaults():
+    # Empty LLM return → generation_failed True, but the 33-field shape + link
+    # defaults still assemble (never a hard crash).
+    with patch.object(wg.report_llm, "run_forced_tool", new=AsyncMock(return_value={})):
+        res = asyncio.run(wg.generate_fields(state="Florida", city="Miami", service="Managed IT"))
+    assert res["generation_failed"] is True
+    assert set(res["acf"].keys()) == set(wf.FIELD_NAMES)
+    assert res["acf"]["otherservices_link_01"] == "IT Consulting"
+
+
+def test_generate_fields_success_not_flagged():
+    good = {n: "word word word" for n in wf.GENERATED_FIELD_NAMES}
+    with patch.object(wg.report_llm, "run_forced_tool", new=AsyncMock(return_value=good)):
+        res = asyncio.run(wg.generate_fields(state="Florida", city="Miami", service="Managed IT"))
+    assert res["generation_failed"] is False
+
+
+def test_generate_fields_reraises_transient_swallows_terminal():
+    class Boom(Exception):
+        pass
+
+    # Transient exhaustion → propagate (so a mass job can be re-queued).
+    with patch.object(wg.report_llm, "run_forced_tool", new=AsyncMock(side_effect=Boom())), \
+         patch.object(wg.report_llm, "is_transient_llm_error", return_value=True):
+        try:
+            asyncio.run(wg.generate_fields(state="Florida", city="Miami", service="Managed IT"))
+            raise AssertionError("expected transient error to propagate")
+        except Boom:
+            pass
+
+    # Terminal error → swallowed, degrades to an empty flagged draft.
+    with patch.object(wg.report_llm, "run_forced_tool", new=AsyncMock(side_effect=Boom())), \
+         patch.object(wg.report_llm, "is_transient_llm_error", return_value=False):
+        res = asyncio.run(wg.generate_fields(state="Florida", city="Miami", service="Managed IT"))
+    assert res["generation_failed"] is True
+
 
 def test_dry_run_zero_writes_without_config():
     client = {"id": "c1"}  # no wordpress_* creds → lookups skipped, no network

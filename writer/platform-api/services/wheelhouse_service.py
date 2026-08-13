@@ -80,12 +80,29 @@ def _row_to_page(row: dict) -> dict:
     }
 
 
+def _find_live_row_id(supabase, client_id: str, state_slug: str, city_slug: str, service_slug: str):
+    res = (
+        supabase.table("wheelhouse_pages").select("id")
+        .eq("client_id", client_id).eq("state_slug", state_slug)
+        .eq("city_slug", city_slug).eq("service_slug", service_slug)
+        .is_("deleted_at", "null").limit(1).execute()
+    )
+    return res.data[0]["id"] if res.data else None
+
+
 def _upsert_draft(
     client_id: str, state: str, city: str, service: str, *,
     acf: dict, field_sources: dict, warnings: list, title: str,
 ) -> dict:
-    """Insert or update (by client+slug combo) the in-tool draft row. Never
-    downgrades a published row's WP ids; status resets to draft on regeneration."""
+    """Insert or update (by client+slug combo) the in-tool draft row.
+
+    Regenerating/editing an existing row **resets status to 'draft'** — the stored
+    content no longer matches what's live on WP — while PRESERVING the recorded WP
+    ids (wp_page_id/published_url) so the UI can flag it as "modified, needs
+    republish" rather than pretending it's still published. On insert the DB
+    default (draft) applies. The check-then-insert is race-guarded: a concurrent
+    insert of the same combo (blocked by the partial unique index) falls back to an
+    update instead of surfacing a 500."""
     supabase = get_supabase()
     state_slug, city_slug, service_slug = slugify(state), slugify(city), slugify(service)
     payload = {
@@ -96,18 +113,23 @@ def _upsert_draft(
         "acf": acf, "field_sources": field_sources, "validation_warnings": warnings,
         "title": title, "updated_at": "now()",
     }
-    existing = (
-        supabase.table("wheelhouse_pages").select("id")
-        .eq("client_id", client_id).eq("state_slug", state_slug)
-        .eq("city_slug", city_slug).eq("service_slug", service_slug)
-        .is_("deleted_at", "null").limit(1).execute()
-    )
-    if existing.data:
-        row_id = existing.data[0]["id"]
-        res = supabase.table("wheelhouse_pages").update(payload).eq("id", row_id).execute()
+    row_id = _find_live_row_id(supabase, client_id, state_slug, city_slug, service_slug)
+    if row_id:
+        res = supabase.table("wheelhouse_pages").update(
+            {**payload, "status": "draft"}
+        ).eq("id", row_id).execute()
         return _row_to_page(res.data[0])
-    res = supabase.table("wheelhouse_pages").insert(payload).execute()
-    return _row_to_page(res.data[0])
+    try:
+        res = supabase.table("wheelhouse_pages").insert(payload).execute()
+        return _row_to_page(res.data[0])
+    except Exception:  # noqa: BLE001 — likely a concurrent insert hit the unique index
+        row_id = _find_live_row_id(supabase, client_id, state_slug, city_slug, service_slug)
+        if not row_id:
+            raise
+        res = supabase.table("wheelhouse_pages").update(
+            {**payload, "status": "draft"}
+        ).eq("id", row_id).execute()
+        return _row_to_page(res.data[0])
 
 
 def get_page(client_id: str, page_id: str) -> dict:
@@ -161,11 +183,34 @@ async def generate_one(
     result = await wheelhouse_generate.generate_fields(
         state=state, city=city, service=service, supplied=supplied,
     )
-    return _upsert_draft(
+    page = _upsert_draft(
         client_id, state, city, service,
         acf=result["acf"], field_sources=result["field_sources"],
         warnings=result["warnings"], title=result["title"],
     )
+    page["generation_failed"] = result.get("generation_failed", False)
+    return page
+
+
+async def preview_one(
+    client_id: str, state: str, city: str, service: str,
+    supplied: Optional[dict] = None,
+) -> dict:
+    """Generate the fields WITHOUT persisting a row (the one-off form's 'Draft all'
+    preview). Returns ``{acf, field_sources, warnings, title, generation_failed}``
+    so the form populates without creating a Saved page until the user saves."""
+    get_enabled_client(client_id)
+    result = await wheelhouse_generate.generate_fields(
+        state=state, city=city, service=service, supplied=supplied,
+    )
+    return {
+        "id": None,
+        "acf": result["acf"],
+        "field_sources": result["field_sources"],
+        "validation_warnings": result["warnings"],
+        "title": result["title"],
+        "generation_failed": result.get("generation_failed", False),
+    }
 
 
 async def draft_single_field(
@@ -184,17 +229,38 @@ async def draft_single_field(
 def save_one_off(
     client_id: str, state: str, city: str, service: str, acf: dict,
 ) -> dict:
-    """Persist a fully user-authored/edited ACF object as a draft (one-off save,
-    no generation). All fields marked 'supplied'."""
+    """Persist a user-authored/edited ACF object as a draft (no generation).
+
+    wysiwyg fields are coerced to HTML (matching the generate path), and a field's
+    generated/supplied provenance is PRESERVED for values unchanged from the stored
+    row — only a field the user actually changed becomes 'supplied' (so the report
+    stays accurate across edits)."""
     get_enabled_client(client_id)
-    clean = {k: (v if isinstance(v, str) else "") for k, v in (acf or {}).items()
-             if k in FIELD_NAMES}
-    field_sources = {name: "supplied" for name in FIELD_NAMES}
+    from services.wheelhouse_fields import FIELD_BY_NAME, coerce_wysiwyg, merge_edit_sources
     from services.wheelhouse_generate import compose_title
+
+    acf = acf or {}
+    clean: dict = {}
+    for name in FIELD_NAMES:
+        raw = acf.get(name)
+        val = raw.strip() if isinstance(raw, str) else ""
+        if FIELD_BY_NAME[name]["type"] == "wysiwyg" and val:
+            val = coerce_wysiwyg(val)
+        clean[name] = val
+
+    supabase = get_supabase()
+    state_slug, city_slug, service_slug = slugify(state), slugify(city), slugify(service)
+    existing = (
+        supabase.table("wheelhouse_pages").select("acf, field_sources")
+        .eq("client_id", client_id).eq("state_slug", state_slug)
+        .eq("city_slug", city_slug).eq("service_slug", service_slug)
+        .is_("deleted_at", "null").limit(1).execute()
+    )
+    prev = existing.data[0] if existing.data else {}
+    field_sources = merge_edit_sources(clean, prev.get("acf"), prev.get("field_sources"))
     return _upsert_draft(
         client_id, state, city, service,
-        acf={name: clean.get(name, "") for name in FIELD_NAMES},
-        field_sources=field_sources, warnings=validate_fields(clean),
+        acf=clean, field_sources=field_sources, warnings=validate_fields(clean),
         title=compose_title(state, city, service),
     )
 

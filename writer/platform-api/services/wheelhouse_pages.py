@@ -147,22 +147,45 @@ async def ensure_page(
     title: str,
     parent: int,
     hub_status: str = "draft",
+    promote: bool = False,
 ) -> dict:
-    """Idempotent ensure(slug, title, parent) → ``{id, created, link}``.
+    """Idempotent ensure(slug, title, parent) → ``{id, created, promoted, link}``.
 
-    Returns the existing page's id when one already exists under ``parent`` (never
-    touches its status/title — hubs are curated by hand once created), else
-    creates a lightweight hub page and returns the new id. Used for the State and
-    City levels of the tree."""
+    Returns the existing page's id when one already exists under ``parent``, else
+    creates a lightweight hub page. When ``promote`` is set and the target status
+    is ``publish``, an existing DRAFT ancestor is promoted to publish — otherwise
+    a live leaf under a draft ancestor would 404 (WordPress won't serve a
+    published child under a draft parent). Title is never rewritten. Used for the
+    State and City levels of the tree."""
     hit = await _get_page_by_slug(http, rest_base, headers, slug, parent)
     if hit and hit.get("id"):
-        return {"id": int(hit["id"]), "created": False, "link": hit.get("link")}
+        page_id = int(hit["id"])
+        promoted = False
+        if promote and hub_status == "publish" and hit.get("status") not in ("publish", None):
+            primary, fallback = _pages_urls(rest_base, site_root, page_id)
+            await _rest_create(http, primary, fallback, {"status": "publish"}, headers, "pages")
+            promoted = True
+        return {"id": page_id, "created": False, "promoted": promoted, "link": hit.get("link")}
     primary, fallback = _pages_urls(rest_base, site_root)
     body = {"title": title, "slug": slug, "parent": parent, "status": hub_status}
     result = await _rest_create(http, primary, fallback, body, headers, "pages")
     if not isinstance(result, dict) or not result.get("id"):
         raise WordPressPublishError("wordpress_unexpected_response")
-    return {"id": int(result["id"]), "created": True, "link": result.get("link")}
+    return {"id": int(result["id"]), "created": True, "promoted": False, "link": result.get("link")}
+
+
+def acf_write_ok(sent_acf: dict, returned_acf) -> bool:
+    """Heuristic: did the ACF write actually land?
+
+    WordPress echoes a populated ``acf`` object in the response only when the field
+    group is Show-in-REST AND assigned to this post type. If we sent non-empty ACF
+    and the response carries no ``acf``, the key was silently dropped (a
+    misconfigured field group — exactly the WP-side prerequisite) and the page was
+    created/updated with empty content. Pure — unit-tested."""
+    sent_nonempty = any(isinstance(v, str) and v.strip() for v in (sent_acf or {}).values())
+    if not sent_nonempty:
+        return True
+    return bool(returned_acf)
 
 
 async def _upsert_leaf(
@@ -193,6 +216,7 @@ async def _upsert_leaf(
     if not isinstance(result, dict) or not result.get("id"):
         raise WordPressPublishError("wordpress_unexpected_response")
     result["_created"] = created
+    result["_acf_ok"] = acf_write_ok(acf, result.get("acf"))
     return result
 
 
@@ -210,7 +234,6 @@ async def publish_leaf(
     title: str,
     acf: dict,
     status: str = "draft",
-    hub_status: str = "draft",
     state_slug: Optional[str] = None,
     city_slug: Optional[str] = None,
     service_slug: Optional[str] = None,
@@ -219,10 +242,14 @@ async def publish_leaf(
     ACF fields. Returns a report dict::
 
         {wp_state_id, wp_city_id, wp_page_id, created (leaf), state_created,
-         city_created, slug_path, link, edit_link, status}
+         city_created, slug_path, link, edit_link, status, acf_written,
+         hubs_promoted}
 
-    Raises WordPressPublishError on missing config, a bad status, or a
-    transport/API failure. All calls are server-side."""
+    Hubs are created matching the leaf's publish state (``hub_status = status``),
+    and when publishing live, existing DRAFT ancestors are promoted to publish so
+    the nested URL resolves. ``acf_written`` is False when WordPress dropped the
+    ACF payload (a misconfigured field group). Raises WordPressPublishError on
+    missing config, a bad status, or a transport/API failure. Server-side only."""
     if status not in ALLOWED_STATUSES:
         raise WordPressPublishError("invalid_status")
     state_slug = state_slug or slugify(state)
@@ -231,6 +258,10 @@ async def publish_leaf(
     if not (state_slug and city_slug and service_slug):
         raise WordPressPublishError("invalid_slug")
 
+    # Hubs match the leaf's publish state; going live promotes existing draft hubs.
+    hub_status = status
+    promote = status == "publish"
+
     rest_base, site_root, headers = _rest_context(client)
     try:
         async with httpx.AsyncClient(
@@ -238,11 +269,13 @@ async def publish_leaf(
         ) as http:
             state_hub = await ensure_page(
                 http, rest_base, site_root, headers,
-                slug=state_slug, title=state, parent=0, hub_status=hub_status,
+                slug=state_slug, title=state, parent=0,
+                hub_status=hub_status, promote=promote,
             )
             city_hub = await ensure_page(
                 http, rest_base, site_root, headers,
-                slug=city_slug, title=city, parent=state_hub["id"], hub_status=hub_status,
+                slug=city_slug, title=city, parent=state_hub["id"],
+                hub_status=hub_status, promote=promote,
             )
             leaf = await _upsert_leaf(
                 http, rest_base, site_root, headers,
@@ -267,6 +300,8 @@ async def publish_leaf(
         "link": leaf.get("link"),
         "edit_link": edit_link_for(client["wordpress_site_url"], leaf_id),
         "status": leaf.get("status", status),
+        "acf_written": bool(leaf.get("_acf_ok", True)),
+        "hubs_promoted": bool(state_hub.get("promoted") or city_hub.get("promoted")),
     }
 
 

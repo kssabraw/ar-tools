@@ -20,6 +20,7 @@ type Page = {
   slug_path: string; acf: Record<string, string>; field_sources: Record<string, string>
   validation_warnings: Warning[]; status: 'draft' | 'published'; wp_status?: string | null
   wp_page_id?: number | null; published_url?: string | null; edit_link?: string | null
+  generation_failed?: boolean
 }
 type JobStatus = { job_id: string; status: string; page_id?: string | null; error?: string | null }
 type Tab = 'mass' | 'oneoff' | 'saved' | 'drafts'
@@ -215,8 +216,11 @@ function OneOff({ clientId, sections, onSaved }: { clientId: string; sections: S
     setBusy('all'); setError(null)
     try {
       const supplied = Object.fromEntries(Object.entries(acf).filter(([, v]) => v && v.trim()))
-      const page = await api.post<Page>(`/clients/${clientId}/wheelhouse/generate-one`, { state, city, service, supplied })
-      setAcf(page.acf)
+      // persist:false → live preview, no Saved row until the user clicks Save.
+      const res = await api.post<{ acf: Record<string, string>; generation_failed?: boolean }>(
+        `/clients/${clientId}/wheelhouse/generate-one`, { state, city, service, supplied, persist: false })
+      setAcf(res.acf)
+      if (res.generation_failed) setError('The AI writer returned nothing (it may be temporarily unavailable). Try again, or fill fields manually.')
     } catch (e) { setError(e instanceof Error ? e.message : 'Generation failed') } finally { setBusy(null) }
   }
   const draftField = async (name: string) => {
@@ -330,9 +334,15 @@ function PageList({ pages, loading, onOpen, emptyLabel }: {
 function StatusPill({ page }: { page: Page }) {
   const published = page.status === 'published'
   const wpPublished = page.wp_status === 'publish'
-  const bg = published ? (wpPublished ? '#dcfce7' : '#e0e7ff') : '#f1f5f9'
-  const fg = published ? (wpPublished ? '#166534' : '#3730a3') : '#475569'
-  const text = published ? (wpPublished ? 'Published' : 'On WP (draft)') : 'Not posted'
+  const modified = !published && Boolean(page.wp_page_id)  // posted to WP, then edited
+  let bg = '#f1f5f9', fg = '#475569', text = 'Not posted'
+  if (published) {
+    bg = wpPublished ? '#dcfce7' : '#e0e7ff'
+    fg = wpPublished ? '#166534' : '#3730a3'
+    text = wpPublished ? 'Published' : 'On WP (draft)'
+  } else if (modified) {
+    bg = '#fef3c7'; fg = '#92400e'; text = 'Modified — needs republish'
+  }
   return <span style={{ background: bg, color: fg, fontSize: 12, fontWeight: 600, borderRadius: 999, padding: '4px 10px' }}>{text}</span>
 }
 
@@ -383,8 +393,14 @@ function PageDetail({ clientId, page, sections, wpConfigured, onClose, onChange 
     setBusy(status); setError(null); setMsg(null)
     try {
       if (dirty) await api.post(`/clients/${clientId}/wheelhouse/one-off`, { state: page.state, city: page.city, service: page.service, acf })
-      const res = await api.post<{ link?: string; slug_path: string }>(`/clients/${clientId}/wheelhouse/pages/${page.id}/publish`, { status })
-      setMsg(`Published (${status}) → ${res.slug_path}`); onChange()
+      const res = await api.post<{ link?: string; slug_path: string; acf_written?: boolean; hubs_promoted?: boolean }>(
+        `/clients/${clientId}/wheelhouse/pages/${page.id}/publish`, { status })
+      if (res.acf_written === false) {
+        setError(`Page posted to ${res.slug_path}, but WordPress ignored the ACF fields — the field group isn't exposed to REST / assigned to Pages. Check the ACF prerequisites, then republish.`)
+      } else {
+        setMsg(`Published (${status}) → ${res.slug_path}${res.hubs_promoted ? ' (parent pages promoted to live)' : ''}`)
+      }
+      onChange()
     } catch (e) { setError(e instanceof Error ? e.message : 'Publish failed') } finally { setBusy(null) }
   }
   const doDryRun = async () => {

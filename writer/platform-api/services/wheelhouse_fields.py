@@ -240,6 +240,30 @@ def generation_schema(exclude: Optional[set] = None) -> dict:
     }
 
 
+def merge_edit_sources(new_acf: dict, prev_acf: Optional[dict], prev_sources: Optional[dict]) -> dict:
+    """Field-source map for a manual edit-save that PRESERVES provenance.
+
+    A field whose value is unchanged from the stored row keeps its recorded source
+    (so a page's generated/supplied breakdown survives an unrelated edit); a field
+    the user actually changed becomes 'supplied'; an emptied field keeps its prior
+    source (or 'generated'). Pure — unit-tested."""
+    prev_acf = prev_acf or {}
+    prev_sources = prev_sources or {}
+    out: dict = {}
+    for name in FIELD_NAMES:
+        nv = new_acf.get(name)
+        nv = nv.strip() if isinstance(nv, str) else ""
+        pv = prev_acf.get(name)
+        pv = pv.strip() if isinstance(pv, str) else ""
+        if nv == pv and name in prev_sources:
+            out[name] = prev_sources[name]
+        elif nv:
+            out[name] = "supplied"
+        else:
+            out[name] = prev_sources.get(name, "generated")
+    return out
+
+
 def merge_supplied(generated: dict, supplied: Optional[dict]) -> tuple[dict, dict]:
     """Assemble the final 33-field ACF object + a per-field source map.
 
