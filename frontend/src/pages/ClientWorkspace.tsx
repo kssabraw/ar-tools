@@ -5,7 +5,7 @@ import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, CalendarClock, CalendarPlus,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
-  ClipboardList, BookOpen, Share2, Target, Swords, Link2, KanbanSquare, Radar, ShoppingBag, Megaphone, Globe2,
+  ClipboardList, BookOpen, Share2, Target, Swords, Link2, KanbanSquare, Radar, ShoppingBag, Megaphone, Globe2, Server,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 import { FreezeBanner } from '../components/FreezeBanner'
@@ -190,6 +190,15 @@ export function ClientWorkspace() {
             ) : undefined
           }
         />
+        {client?.wheelhouse_cpt_enabled && (
+          <ActionCard
+            icon={<Server size={22} />}
+            label="Wheelhouse Pages"
+            description="Generate & publish WheelHouse IT location/service landing pages (State → City → Service) straight to WordPress as ACF-driven Pages — mass city×service runs or a single one-off."
+            to={id ? `/clients/${id}/wheelhouse` : undefined}
+            cta="Open"
+          />
+        )}
         <ActionCard
           icon={<FileText size={22} />}
           label="Create Service Pages"

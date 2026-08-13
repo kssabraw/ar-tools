@@ -28,6 +28,7 @@ interface FormData {
   wordpress_username: string
   wordpress_app_password: string
   wordpress_app_password_set: boolean
+  wheelhouse_cpt_enabled: boolean
   logo_url: string
   gsc_property: string
   business_location: string
@@ -69,6 +70,7 @@ const empty: FormData = {
   github_repo: '', github_branch: '', github_content_path: '',
   gh_blog_post: '', gh_service_page: '', gh_location_page: '',
   wordpress_site_url: '', wordpress_username: '', wordpress_app_password: '', wordpress_app_password_set: false,
+  wheelhouse_cpt_enabled: false,
   logo_url: '', gsc_property: '', business_location: '', target_cities: '', gbp_place_id: null, gbp: null,
   ps_local_landing: '', ps_service: '', ps_location: '', ps_blog_post: '', ps_product: '', ps_solution: '',
   ps_mode: emptyPsRecord('url'), ps_guidelines: emptyPsRecord(''), ps_filename: emptyPsRecord(''),
@@ -236,6 +238,7 @@ export function ClientForm() {
         wordpress_username: existing.wordpress_username ?? '',
         wordpress_app_password: '',
         wordpress_app_password_set: existing.wordpress_app_password_set ?? false,
+        wheelhouse_cpt_enabled: existing.wheelhouse_cpt_enabled ?? false,
         logo_url: existing.logo_url ?? '',
         gsc_property: existing.gsc_property ?? '',
         business_location: existing.business_location ?? '',
@@ -338,6 +341,7 @@ export function ClientForm() {
         // Only send the password when the user typed a new one; an empty field
         // leaves the stored secret untouched (omit the key entirely).
         ...(form.wordpress_app_password ? { wordpress_app_password: form.wordpress_app_password } : {}),
+        wheelhouse_cpt_enabled: form.wheelhouse_cpt_enabled,
         logo_url: form.logo_url || null,
         gsc_property: form.gsc_property || null,
         business_location: form.business_location || null,
@@ -890,6 +894,19 @@ export function ClientForm() {
             {form.wordpress_app_password_set
               ? 'A password is stored. Leave blank to keep it, or type a new one to replace it.'
               : 'Stored securely and never shown again. Spaces are fine — paste it exactly as WordPress displays it.'}
+          </p>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#334155', marginTop: 14, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={form.wheelhouse_cpt_enabled}
+              onChange={(e) => setForm(f => ({ ...f, wheelhouse_cpt_enabled: e.target.checked }))}
+            />
+            Enable the WheelHouse IT page poster for this client
+          </label>
+          <p style={hintStyle}>
+            Adds a "Wheelhouse Pages" tool to this client's workspace: generate & publish location/service
+            landing Pages (State → City → Service) with 33 ACF fields. Requires the ACF field group assigned to
+            Pages with Show-in-REST on. Leave off for every other client.
           </p>
         </div>
 
