@@ -159,6 +159,58 @@ def test_local_seo_title_and_generation():
     assert res["generation_failed"] is False
 
 
+# The distinctive injected-block headers (bare "CLIENT BRAND VOICE" / "TARGET
+# AUDIENCE" also appear in the RULES line, so tests key on the full header).
+_VOICE_HEADER = "CLIENT BRAND VOICE (authoritative"
+_ICP_HEADER = "TARGET AUDIENCE / ICP (write for"
+
+
+def test_build_system_injects_client_voice_and_icp():
+    sys_prompt = wg.build_system(
+        brand_voice="Warm, plainspoken, no jargon.",
+        icp="IT directors at 50-200 seat law firms who hate downtime.",
+    )
+    assert _VOICE_HEADER in sys_prompt
+    assert "Warm, plainspoken, no jargon." in sys_prompt
+    assert _ICP_HEADER in sys_prompt
+    assert "law firms" in sys_prompt
+    # The client's real voice replaces the static fallback line.
+    assert f"VOICE: {wf.GLOBAL_VOICE}" not in sys_prompt
+    # Hard proof points are always present.
+    assert "BRAND FACTS" in sys_prompt
+
+
+def test_build_system_falls_back_to_static_voice_when_absent():
+    sys_prompt = wg.build_system()
+    assert f"VOICE: {wf.GLOBAL_VOICE}" in sys_prompt
+    assert _VOICE_HEADER not in sys_prompt
+    assert _ICP_HEADER not in sys_prompt
+    assert "BRAND FACTS" in sys_prompt
+
+
+def test_build_system_clips_overlong_assets():
+    long_voice = "START" + "v" * (wg._BRAND_VOICE_CHAR_CAP + 500) + "VOICE_END"
+    long_icp = "BEGIN" + "i" * (wg._ICP_CHAR_CAP + 500) + "ICP_END"
+    sys_prompt = wg.build_system(brand_voice=long_voice, icp=long_icp)
+    # Heads survive, tails are dropped past the cap, an ellipsis marks the cut.
+    assert "START" in sys_prompt and "VOICE_END" not in sys_prompt
+    assert "BEGIN" in sys_prompt and "ICP_END" not in sys_prompt
+    assert "…" in sys_prompt
+
+
+def test_generate_fields_threads_voice_icp_into_system_prompt():
+    good = {n: "word word word" for n in wf.GENERATED_FIELD_NAMES}
+    mock = AsyncMock(return_value=good)
+    with patch.object(wg.report_llm, "run_forced_tool", new=mock):
+        asyncio.run(wg.generate_fields(
+            state="Florida", city="Miami", service="Managed IT",
+            brand_voice="Warm, plainspoken.", icp="Law-firm IT directors.",
+        ))
+    system = mock.await_args.kwargs["system"]
+    assert "CLIENT BRAND VOICE" in system and "Warm, plainspoken." in system
+    assert "TARGET AUDIENCE / ICP" in system and "Law-firm IT directors." in system
+
+
 def test_generate_fields_city_uses_fixed_service_and_title():
     good = {n: "word word word" for n in wf.GENERATED_FIELD_NAMES}
     with patch.object(wg.report_llm, "run_forced_tool", new=AsyncMock(return_value=good)):

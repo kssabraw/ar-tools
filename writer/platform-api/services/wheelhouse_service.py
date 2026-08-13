@@ -105,6 +105,26 @@ def get_enabled_client(client_id: str) -> dict:
     return client
 
 
+def _client_voice_icp(client: dict) -> tuple[str, str]:
+    """Resolve the client's real brand voice + ICP text via the suite's canonical
+    resolvers. Best-effort: any failure or missing record yields empty strings, so
+    generation falls back to the static WheelHouse voice constants rather than
+    erroring (a page must never fail to generate over a voice lookup)."""
+    try:
+        from services.brand_voice_service import resolve_brand_guide_text
+        brand_voice = resolve_brand_guide_text(client) or ""
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("wheelhouse.brand_voice_resolve_failed error=%s", str(exc))
+        brand_voice = ""
+    try:
+        from services.icp_service import resolve_icp_text
+        icp = resolve_icp_text(client) or ""
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("wheelhouse.icp_resolve_failed error=%s", str(exc))
+        icp = ""
+    return brand_voice, icp
+
+
 # ── persistence ──────────────────────────────────────────────────────────────
 
 def _row_to_page(row: dict) -> dict:
@@ -244,11 +264,13 @@ async def generate_one(
 ) -> dict:
     """Generate (or, for a one-off, assemble from supplied+generated) the leaf's
     33 fields and persist as a draft. Returns the stored page."""
-    get_enabled_client(client_id)
+    client = get_enabled_client(client_id)
     page_type = _norm_page_type(page_type)
     _require_service(page_type, service)
+    brand_voice, icp = _client_voice_icp(client)
     result = await wheelhouse_generate.generate_fields(
         state=state, city=city, service=service, supplied=supplied, page_type=page_type,
+        brand_voice=brand_voice, icp=icp,
     )
     page = _upsert_draft(
         client_id, state, city, service,
@@ -266,11 +288,12 @@ async def preview_one(
     """Generate the fields WITHOUT persisting a row (the one-off form's 'Draft all'
     preview). Returns ``{acf, field_sources, warnings, title, generation_failed}``
     so the form populates without creating a Saved page until the user saves."""
-    get_enabled_client(client_id)
+    client = get_enabled_client(client_id)
     _require_service(page_type, service)
+    brand_voice, icp = _client_voice_icp(client)
     result = await wheelhouse_generate.generate_fields(
         state=state, city=city, service=service, supplied=supplied,
-        page_type=_norm_page_type(page_type),
+        page_type=_norm_page_type(page_type), brand_voice=brand_voice, icp=icp,
     )
     return {
         "id": None,
@@ -288,12 +311,13 @@ async def draft_single_field(
 ) -> str:
     """The one-off form's per-field 'Draft with AI'. Returns the field value only
     (no persistence — the form holds unsaved edits)."""
-    get_enabled_client(client_id)
+    client = get_enabled_client(client_id)
     if field_name not in FIELD_NAMES:
         raise HTTPException(status_code=422, detail="unknown_field")
+    brand_voice, icp = _client_voice_icp(client)
     return await wheelhouse_generate.draft_field(
         state=state, city=city, service=service, field_name=field_name,
-        page_type=_norm_page_type(page_type),
+        page_type=_norm_page_type(page_type), brand_voice=brand_voice, icp=icp,
     )
 
 
