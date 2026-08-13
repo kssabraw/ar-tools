@@ -193,8 +193,8 @@ export function ClientWorkspace() {
         {client?.wheelhouse_cpt_enabled && (
           <ActionCard
             icon={<Server size={22} />}
-            label="Wheelhouse Pages"
-            description="Generate & publish WheelHouse IT location/service landing pages (State → City → Service) straight to WordPress as ACF-driven Pages — mass city×service runs or a single one-off."
+            label="WHIT Posting"
+            description="Generate & publish WheelHouse IT city, service & local SEO pages to WordPress as ACF-driven Pages under the Florida or New York silo — mass runs or a single one-off."
             to={id ? `/clients/${id}/wheelhouse` : undefined}
             cta="Open"
           />

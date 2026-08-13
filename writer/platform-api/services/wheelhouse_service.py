@@ -31,11 +31,16 @@ from services.wheelhouse_pages import (
 
 logger = logging.getLogger(__name__)
 
-PAGE_TYPES = ("service", "city")
+PAGE_TYPES = ("service", "city", "local_seo")
+# Page types that carry the 33 ACF fields at a 2-level (silo → leaf) depth and use
+# the local-seo writer: a city page (leaf = a city) and a local SEO page (leaf = a
+# freely-named page/keyword). A service page is 3-level (silo → city → service).
+TWO_LEVEL_TYPES = ("city", "local_seo")
 
 
 def _norm_page_type(page_type: Optional[str]) -> str:
-    return "city" if (page_type or "").lower() == "city" else "service"
+    pt = (page_type or "").lower()
+    return pt if pt in PAGE_TYPES else "service"
 
 
 def _require_service(page_type: str, service: str) -> None:
@@ -68,7 +73,8 @@ def _levels_for_page(page: dict) -> list[dict]:
     WP page — a service run reuses the existing city page as its parent hub."""
     state_slug, city_slug = slugify(page["state"]), slugify(page["city"])
     title = page.get("title") or page["city"]
-    if _norm_page_type(page.get("page_type")) == "city":
+    if _norm_page_type(page.get("page_type")) in TWO_LEVEL_TYPES:
+        # silo → leaf (city page or local SEO page carries the 33 ACF fields).
         return [{"slug": state_slug, "title": page["state"]},
                 {"slug": city_slug, "title": title}]
     return [{"slug": state_slug, "title": page["state"]},
@@ -155,9 +161,9 @@ def _upsert_draft(
     supabase = get_supabase()
     page_type = _norm_page_type(page_type)
     state_slug, city_slug = slugify(state), slugify(city)
-    # City page: no service segment (it IS the local SEO page). Service page: the
-    # service is the leaf segment.
-    if page_type == "city":
+    # City / local SEO page: no service segment, the leaf IS the page (2-level).
+    # Service page: the service is the leaf segment (3-level).
+    if page_type in TWO_LEVEL_TYPES:
         service, service_slug = "", ""
         slug_path = build_slug_path(state_slug, city_slug)
     else:
@@ -364,9 +370,10 @@ async def enqueue_mass(
         if not item or key in seen:
             continue
         seen.add(key)
-        # city mode → item is the city (no service); service mode → item is the service.
-        row_city = item if page_type == "city" else city.strip()
-        row_service = "" if page_type == "city" else item
+        # city/local_seo mode → item is the leaf (city or page name), no service;
+        # service mode → item is the service under the single `city`.
+        row_city = item if page_type in TWO_LEVEL_TYPES else city.strip()
+        row_service = "" if page_type in TWO_LEVEL_TYPES else item
         rows.append({
             "job_type": "wheelhouse_generate",
             "entity_id": client_id,

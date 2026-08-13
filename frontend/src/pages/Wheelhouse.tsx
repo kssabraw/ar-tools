@@ -16,7 +16,7 @@ type FieldSpec = {
 type Section = { section: string; fields: FieldSpec[] }
 type Warning = { field: string; issue: 'short' | 'long' | 'empty'; words: number; min_words: number; max_words: number }
 type Page = {
-  id: string; page_type?: 'city' | 'service'; state: string; city: string; service: string; title: string
+  id: string; page_type?: 'city' | 'service' | 'local_seo'; state: string; city: string; service: string; title: string
   slug_path: string; acf: Record<string, string>; field_sources: Record<string, string>
   validation_warnings: Warning[]; status: 'draft' | 'published'; wp_status?: string | null
   wp_page_id?: number | null; published_url?: string | null; edit_link?: string | null
@@ -77,10 +77,10 @@ export function Wheelhouse() {
       <Link to={`/clients/${clientId}`} style={{ ...backLink, textDecoration: 'none' }}>
         <ArrowLeft size={14} /> Back to workspace
       </Link>
-      <h1 style={{ fontSize: 24, fontWeight: 700, color: '#0f172a', margin: '4px 0 2px' }}>Wheelhouse Pages</h1>
+      <h1 style={{ fontSize: 24, fontWeight: 700, color: '#0f172a', margin: '4px 0 2px' }}>WHIT Posting</h1>
       <p style={{ color: '#64748b', fontSize: 14, margin: '0 0 16px' }}>
-        Local SEO pages published to WordPress as ACF-driven Pages — city pages
-        (/florida/miami/) and the service pages nested beneath them.
+        Generate & publish ACF-driven WordPress Pages under the Florida or New York
+        silo — city pages, service pages, and local SEO pages.
       </p>
 
       {!wpConfigured && (
@@ -113,18 +113,39 @@ export function Wheelhouse() {
   )
 }
 
-// ── page-type toggle (shared) ────────────────────────────────────────────────
-type PageType = 'city' | 'service'
-function PageTypeToggle({ value, onChange }: { value: PageType; onChange: (v: PageType) => void }) {
-  const opt = (v: PageType, text: string) => (
+// ── page-type + silo pickers (shared) ────────────────────────────────────────
+type PageType = 'city' | 'service' | 'local_seo'
+const SILOS = ['Florida', 'New York'] as const
+type Silo = typeof SILOS[number]
+
+function Pill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
     <button style={{ ...outlineBtn, borderRadius: 8, padding: '7px 14px',
-      background: value === v ? '#6366f1' : '#fff', color: value === v ? '#fff' : '#0f172a',
-      borderColor: value === v ? '#6366f1' : '#e2e8f0' }} onClick={() => onChange(v)}>{text}</button>
+      background: active ? '#6366f1' : '#fff', color: active ? '#fff' : '#0f172a',
+      borderColor: active ? '#6366f1' : '#e2e8f0' }} onClick={onClick}>{children}</button>
   )
+}
+
+function PageTypeToggle({ value, onChange }: { value: PageType; onChange: (v: PageType) => void }) {
   return (
     <div>
       <label style={label}>Page type</label>
-      <div style={{ display: 'flex', gap: 8 }}>{opt('city', 'City pages')}{opt('service', 'Service pages')}</div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <Pill active={value === 'city'} onClick={() => onChange('city')}>City page</Pill>
+        <Pill active={value === 'service'} onClick={() => onChange('service')}>Service page</Pill>
+        <Pill active={value === 'local_seo'} onClick={() => onChange('local_seo')}>Local SEO page</Pill>
+      </div>
+    </div>
+  )
+}
+
+function SiloToggle({ value, onChange }: { value: Silo; onChange: (v: Silo) => void }) {
+  return (
+    <div>
+      <label style={label}>Silo</label>
+      <div style={{ display: 'flex', gap: 8 }}>
+        {SILOS.map((s) => <Pill key={s} active={value === s} onClick={() => onChange(s)}>{s}{s === 'New York' ? ' (new)' : ''}</Pill>)}
+      </div>
     </div>
   )
 }
@@ -132,22 +153,24 @@ function PageTypeToggle({ value, onChange }: { value: PageType; onChange: (v: Pa
 // ── Mass Create ──────────────────────────────────────────────────────────────
 function MassCreate({ clientId, onDone }: { clientId: string; onDone: () => void }) {
   const [pageType, setPageType] = useState<PageType>('city')
-  const [state, setState] = useState('')
+  const [silo, setSilo] = useState<Silo>('Florida')
   const [city, setCity] = useState('')
-  const [citiesText, setCitiesText] = useState('Miami\nFort Lauderdale\nBoca Raton\nWest Palm Beach')
-  const [servicesText, setServicesText] = useState('Managed IT\nCo-Managed IT\nCybersecurity\nIT Consulting')
+  const [itemsText, setItemsText] = useState('Miami\nFort Lauderdale\nBoca Raton\nWest Palm Beach')
   const [jobIds, setJobIds] = useState<string[]>([])
   const [jobs, setJobs] = useState<JobStatus[]>([])
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const isCity = pageType === 'city'
-  const items = (isCity ? citiesText : servicesText).split('\n').map((s) => s.trim()).filter(Boolean)
-  const combos = isCity
-    ? items.map((c) => `${c} IT Support Company`)
+  const isService = pageType === 'service'
+  const items = itemsText.split('\n').map((s) => s.trim()).filter(Boolean)
+  const itemsLabel = pageType === 'city' ? 'Cities (one per line)'
+    : pageType === 'local_seo' ? 'Page names / keywords (one per line)'
+    : 'Services (one per line)'
+  const combos = pageType === 'city' ? items.map((c) => `${c} IT Support Company`)
+    : pageType === 'local_seo' ? items
     : (city && items.length ? items.map((s) => `${s} in ${city}`) : [])
-  const ready = Boolean(state) && items.length > 0 && (isCity || Boolean(city))
+  const ready = items.length > 0 && (!isService || Boolean(city))
 
   useEffect(() => () => { if (timer.current) clearInterval(timer.current) }, [])
 
@@ -171,7 +194,7 @@ function MassCreate({ clientId, onDone }: { clientId: string; onDone: () => void
     try {
       const res = await api.post<{ job_ids: string[] }>(
         `/clients/${clientId}/wheelhouse/generate-mass`,
-        { page_type: pageType, state, city: isCity ? '' : city, items })
+        { page_type: pageType, state: silo, city: isService ? city : '', items })
       setJobIds(res.job_ids); poll(res.job_ids)
     } catch (e) { setError(e instanceof Error ? e.message : 'Failed to start') } finally { setSubmitting(false) }
   }
@@ -181,25 +204,23 @@ function MassCreate({ clientId, onDone }: { clientId: string; onDone: () => void
   return (
     <div style={card}>
       <div style={{ display: 'grid', gap: 14 }}>
-        <PageTypeToggle value={pageType} onChange={setPageType} />
-        <div style={{ display: 'grid', gridTemplateColumns: isCity ? '1fr' : '1fr 1fr', gap: 12 }}>
-          <div><label style={label}>State</label><input style={input} value={state} onChange={(e) => setState(e.target.value)} placeholder="Florida" /></div>
-          {!isCity && <div><label style={label}>City</label><input style={input} value={city} onChange={(e) => setCity(e.target.value)} placeholder="Miami" /></div>}
+        <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+          <PageTypeToggle value={pageType} onChange={setPageType} />
+          <SiloToggle value={silo} onChange={setSilo} />
         </div>
-        {isCity ? (
-          <div>
-            <label style={label}>Cities (one per line)</label>
-            <textarea style={{ ...input, minHeight: 110, fontFamily: 'inherit' }} value={citiesText} onChange={(e) => setCitiesText(e.target.value)} />
-          </div>
-        ) : (
-          <div>
-            <label style={label}>Services (one per line)</label>
-            <textarea style={{ ...input, minHeight: 110, fontFamily: 'inherit' }} value={servicesText} onChange={(e) => setServicesText(e.target.value)} />
+        {isService && (
+          <div style={{ maxWidth: 260 }}>
+            <label style={label}>City</label>
+            <input style={input} value={city} onChange={(e) => setCity(e.target.value)} placeholder="Miami" />
           </div>
         )}
+        <div>
+          <label style={label}>{itemsLabel}</label>
+          <textarea style={{ ...input, minHeight: 110, fontFamily: 'inherit' }} value={itemsText} onChange={(e) => setItemsText(e.target.value)} />
+        </div>
         {combos.length > 0 && (
           <div style={{ fontSize: 13, color: '#475569' }}>
-            Will create <strong>{combos.length}</strong> {isCity ? 'city' : 'service'} page{combos.length === 1 ? '' : 's'}: {combos.join(' · ')}
+            Will create <strong>{combos.length}</strong> {pageType === 'service' ? 'service' : pageType === 'local_seo' ? 'local SEO' : 'city'} page{combos.length === 1 ? '' : 's'} under <strong>/{silo.toLowerCase().replace(/\s+/g, '-')}/</strong>: {combos.join(' · ')}
           </div>
         )}
         {error && <div style={errorBox}>{error}</div>}
@@ -239,15 +260,18 @@ function StatusDot({ status }: { status: string }) {
 // ── One-Off ──────────────────────────────────────────────────────────────────
 function OneOff({ clientId, sections, onSaved }: { clientId: string; sections: Section[]; onSaved: (id: string) => void }) {
   const [pageType, setPageType] = useState<PageType>('city')
-  const [state, setState] = useState('')
+  const [silo, setSilo] = useState<Silo>('Florida')
   const [city, setCity] = useState('')
   const [service, setService] = useState('')
   const [acf, setAcf] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const isCity = pageType === 'city'
-  const hasLocation = Boolean(state && city && (isCity || service))
-  const body = () => ({ page_type: pageType, state, city, service: isCity ? '' : service })
+  const isService = pageType === 'service'
+  // The leaf input: a city (city page), a page name/keyword (local SEO), or the
+  // city that a service nests under. All carried in `city`.
+  const leafLabel = pageType === 'city' ? 'City' : pageType === 'local_seo' ? 'Page name / keyword' : 'City'
+  const hasLocation = Boolean(city && (!isService || service))
+  const body = () => ({ page_type: pageType, state: silo, city, service: isService ? service : '' })
 
   const setField = (name: string, value: string) => setAcf((a) => ({ ...a, [name]: value }))
 
@@ -280,11 +304,13 @@ function OneOff({ clientId, sections, onSaved }: { clientId: string; sections: S
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <div style={card}>
-        <div style={{ marginBottom: 12 }}><PageTypeToggle value={pageType} onChange={setPageType} /></div>
-        <div style={{ display: 'grid', gridTemplateColumns: isCity ? '1fr 1fr' : '1fr 1fr 1fr', gap: 12 }}>
-          <div><label style={label}>State</label><input style={input} value={state} onChange={(e) => setState(e.target.value)} placeholder="Florida" /></div>
-          <div><label style={label}>City</label><input style={input} value={city} onChange={(e) => setCity(e.target.value)} placeholder="Miami" /></div>
-          {!isCity && <div><label style={label}>Service</label><input style={input} value={service} onChange={(e) => setService(e.target.value)} placeholder="Managed IT" /></div>}
+        <div style={{ marginBottom: 12, display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+          <PageTypeToggle value={pageType} onChange={setPageType} />
+          <SiloToggle value={silo} onChange={setSilo} />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: isService ? '1fr 1fr' : '1fr', gap: 12 }}>
+          <div><label style={label}>{leafLabel}</label><input style={input} value={city} onChange={(e) => setCity(e.target.value)} placeholder={pageType === 'local_seo' ? 'IT Support Boca Raton' : 'Miami'} /></div>
+          {isService && <div><label style={label}>Service</label><input style={input} value={service} onChange={(e) => setService(e.target.value)} placeholder="Managed IT" /></div>}
         </div>
         <div style={{ marginTop: 12, display: 'flex', gap: 10, alignItems: 'center' }}>
           <button style={{ ...outlineBtn, opacity: hasLocation && !busy ? 1 : 0.6 }} disabled={!hasLocation || Boolean(busy)} onClick={generateAll}>
@@ -362,7 +388,7 @@ function PageList({ pages, loading, onOpen, emptyLabel }: {
         <button key={p.id} style={{ ...card, textAlign: 'left', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} onClick={() => onOpen(p.id)}>
           <div>
             <div style={{ fontWeight: 600, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <TypeBadge page={p} />{p.title || (p.page_type === 'city' ? `${p.city} IT Support Company` : `${p.service} · ${p.city}`)}
+              <TypeBadge page={p} />{p.title || (p.page_type === 'service' ? `${p.service} · ${p.city}` : p.city)}
             </div>
             <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>{p.slug_path}</div>
           </div>
@@ -374,10 +400,12 @@ function PageList({ pages, loading, onOpen, emptyLabel }: {
 }
 
 function TypeBadge({ page }: { page: Page }) {
-  const city = page.page_type === 'city'
+  const pt = page.page_type ?? 'service'
+  const meta = pt === 'city' ? { t: 'City', bg: '#e0e7ff', fg: '#3730a3' }
+    : pt === 'local_seo' ? { t: 'Local SEO', bg: '#dcfce7', fg: '#166534' }
+    : { t: 'Service', bg: '#f1f5f9', fg: '#475569' }
   return <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase',
-    background: city ? '#e0e7ff' : '#f1f5f9', color: city ? '#3730a3' : '#475569',
-    borderRadius: 5, padding: '2px 6px' }}>{city ? 'City' : 'Service'}</span>
+    background: meta.bg, color: meta.fg, borderRadius: 5, padding: '2px 6px' }}>{meta.t}</span>
 }
 
 function StatusPill({ page }: { page: Page }) {
@@ -406,7 +434,7 @@ function DraftsList({ clientId, drafts, onChange }: { clientId: string; drafts: 
         <div key={p.id} style={{ ...card, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <div style={{ fontWeight: 600, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <TypeBadge page={p} />{p.title || (p.page_type === 'city' ? `${p.city} IT Support Company` : `${p.service} · ${p.city}`)}
+              <TypeBadge page={p} />{p.title || (p.page_type === 'service' ? `${p.service} · ${p.city}` : p.city)}
             </div>
             <div style={{ fontSize: 12, color: '#94a3b8' }}>{p.slug_path}</div>
           </div>
@@ -476,7 +504,7 @@ function PageDetail({ clientId, page, sections, wpConfigured, onClose, onChange 
           <div>
             <div style={{ fontSize: 18, fontWeight: 700, color: '#0f172a' }}>{page.title}</div>
             <div style={{ fontSize: 13, color: '#64748b', marginTop: 2 }}>
-              {page.state} → {page.city}{page.page_type !== 'city' && page.service ? ` → ${page.service}` : ''} · <code>{page.slug_path}</code>
+              {page.state} → {page.city}{page.page_type === 'service' && page.service ? ` → ${page.service}` : ''} · <code>{page.slug_path}</code>
             </div>
           </div>
           <StatusPill page={page} />
