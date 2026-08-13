@@ -54,6 +54,16 @@ def detect_scope(open_drop_count: int, tracked_count: int) -> str:
     return "specific"
 
 
+def count_sudden_drops(drops: list[dict]) -> int:
+    """Open drops that count toward the §A sitewide-decline scope. Pure.
+
+    Sitewide is a SUDDEN cross-keyword signal (algo update / manual action /
+    technical accident), so gradual_drop rows — individual slow multi-week
+    slides — are excluded; a cluster of them is not a sitewide emergency.
+    """
+    return sum(1 for d in drops if d.get("alert_type") != "gradual_drop")
+
+
 def summarize_window(rows: list[dict]) -> Optional[dict]:
     """Aggregate rank_keyword_metrics rows into one window read:
     {impressions, clicks, ctr, position}. Position is the impressions-weighted
@@ -371,7 +381,7 @@ def classify_client_drops(client_id: str, drops: list[dict]) -> dict:
     # Sitewide scope (§A — the algo/manual-action/technical emergency ladder) is a
     # SUDDEN cross-keyword signal, so gradual_drop rows (individual slow slides)
     # must not inflate the count and trip a false sitewide banner.
-    sudden_drops = sum(1 for d in drops if d.get("alert_type") != "gradual_drop")
+    sudden_drops = count_sudden_drops(drops)
     scope = detect_scope(sudden_drops, tracked_count)
     cannibalized = _cannibalized_queries(supabase, client_id)
 

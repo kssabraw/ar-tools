@@ -29,6 +29,35 @@ def test_scope_specific():
 
 
 # ---------------------------------------------------------------------------
+# count_sudden_drops — gradual slides don't count toward §A sitewide scope
+# ---------------------------------------------------------------------------
+def test_count_sudden_drops_excludes_gradual():
+    drops = (
+        [{"alert_type": "gradual_drop", "keyword": f"g{i}"} for i in range(4)]
+        + [{"alert_type": "weekly_drop", "keyword": "w"}]
+        + [{"alert_type": "deindexed", "keyword": "d"}]
+    )
+    assert dc.count_sudden_drops(drops) == 2  # only the weekly_drop + deindexed
+
+
+def test_count_sudden_drops_all_gradual_is_zero():
+    drops = [{"alert_type": "gradual_drop", "keyword": f"g{i}"} for i in range(6)]
+    assert dc.count_sudden_drops(drops) == 0
+
+
+def test_gradual_cluster_is_not_sitewide():
+    # 6 gradual slides, no sudden drops → NOT a §A sitewide emergency (would have
+    # been, spuriously, if all open alerts were counted).
+    drops = [{"alert_type": "gradual_drop", "keyword": f"g{i}"} for i in range(6)]
+    assert dc.detect_scope(dc.count_sudden_drops(drops), 20) == "specific"
+
+
+def test_sudden_cluster_still_sitewide():
+    drops = [{"alert_type": "weekly_drop", "keyword": f"w{i}"} for i in range(5)]
+    assert dc.detect_scope(dc.count_sudden_drops(drops), 100) == "sitewide"
+
+
+# ---------------------------------------------------------------------------
 # summarize_window + triage_gsc — position vs impressions vs CTR
 # ---------------------------------------------------------------------------
 def _rows(days: int, clicks: int, impressions: int, position: float) -> list[dict]:
