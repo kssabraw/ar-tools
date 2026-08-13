@@ -254,9 +254,11 @@ class BlogReoptimizeBulkRequest(BaseModel):
 
 
 class ReoptimizeExistingBulkResponse(BaseModel):
-    # One spawned run per item; the frontend polls each run like any other.
+    # One spawned run per valid item; the frontend polls each run like any other.
+    # `skipped` lists the items that couldn't start (missing keyword or url/html)
+    # so the UI can surface them as terminal rows.
     runs: list[dict[str, Any]] = Field(default_factory=list)
-    skipped: int = 0
+    skipped: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class BlogReoptimizeRequest(BaseModel):

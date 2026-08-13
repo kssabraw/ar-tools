@@ -717,13 +717,17 @@ def _spawn_reoptimize_existing_runs(
     client = client_result.data
 
     runs: list[dict] = []
-    skipped = 0
+    skipped: list[dict] = []
     for item in items:
         keyword = (item.keyword or "").strip()
         source_url = (item.source_url or "").strip()
         source_html = (item.source_html or "").strip()
         if not keyword or not (source_url or source_html):
-            skipped += 1
+            skipped.append({
+                "keyword": keyword or None,
+                "source_url": source_url or None,
+                "reason": "Missing a keyword or a URL / pasted content.",
+            })
             continue
         run_id = create_run_and_snapshot(
             client=client,
