@@ -27,6 +27,7 @@ from services.local_seo_service import (
 )
 from services.local_seo_silo import run_silo_plan_job
 from services import ecommerce_service
+from services import wheelhouse_service
 from services.rank_location import run_rank_location_derive_job
 from services.service_page_plan import run_service_plan_job
 from services import service_page_score
@@ -808,6 +809,8 @@ async def _process_job(job: dict) -> None:
         await ecommerce_service.run_reoptimize_url_job(job)
     elif job_type == "ecommerce_action":
         await ecommerce_service.run_ecommerce_action_job(job)
+    elif job_type == "wheelhouse_generate":
+        await wheelhouse_service.run_generate_job(job)
     elif job_type == "service_page_plan":
         await run_service_plan_job(job)
     elif job_type == "service_page_score":

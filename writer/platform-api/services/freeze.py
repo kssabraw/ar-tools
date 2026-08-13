@@ -51,6 +51,7 @@ FREEZE_GATED_JOB_TYPES = {
     "local_seo_reoptimize_page",
     "ecommerce_generate",
     "ecommerce_reoptimize_url",
+    "wheelhouse_generate",
     "syndication_item",
     "content_batch_item",
     "gbp_post_publish",
