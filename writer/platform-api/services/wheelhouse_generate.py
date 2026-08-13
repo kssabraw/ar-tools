@@ -105,21 +105,60 @@ def _field_guide_lines(exclude: set) -> str:
     return "\n".join(lines)
 
 
-_SYSTEM = (
-    "You are an expert local-SEO and conversion copywriter for WheelHouse IT, a "
-    "managed IT services provider (MSP). You write the on-page copy for a specific "
-    "city + service landing page, field by field.\n\n"
-    f"VOICE: {GLOBAL_VOICE}\n\n"
-    f"BRAND FACTS (keep consistent, never contradict): {BRAND_FACTS}.\n\n"
-    "RULES:\n"
-    "- Write each field within its word range and to its stated focus.\n"
-    "- Weave the CITY into the location headlines and reflect the SERVICE, so each "
-    "city×service page reads distinctly (never the same body under a different H1).\n"
-    "- wysiwyg fields must be valid HTML with <p>…</p> paragraphs; text/textarea "
-    "fields are plain (no HTML).\n"
-    "- Do not invent statistics, certifications, or claims beyond the brand facts.\n"
-    "- Return every requested field via the emit_page_fields tool."
-)
+# Bound the injected client assets so the system prompt stays reasonable even
+# though a brand_voice / ICP document can run long (12k / 7k chars for this
+# client). Best-effort truncation — the head carries the highest-signal guidance.
+_BRAND_VOICE_CHAR_CAP = 9000
+_ICP_CHAR_CAP = 6000
+
+
+def _clip(text: str, cap: int) -> str:
+    text = (text or "").strip()
+    return text if len(text) <= cap else text[:cap].rstrip() + " …"
+
+
+def build_system(brand_voice: str = "", icp: str = "") -> str:
+    """Assemble the generation system prompt.
+
+    When the client's real brand voice and/or ICP are supplied they become the
+    authoritative voice/audience guidance; absent them, the module falls back to
+    the static WheelHouse ``GLOBAL_VOICE``. The hard ``BRAND_FACTS`` proof points
+    are always included and always win on facts."""
+    brand_voice = (brand_voice or "").strip()
+    icp = (icp or "").strip()
+    voice_block = (
+        f"CLIENT BRAND VOICE (authoritative — match this voice exactly):\n"
+        f"{_clip(brand_voice, _BRAND_VOICE_CHAR_CAP)}"
+        if brand_voice
+        else f"VOICE: {GLOBAL_VOICE}"
+    )
+    audience_block = (
+        "\n\nTARGET AUDIENCE / ICP (write for this reader — mirror their "
+        f"priorities, pains, and language):\n{_clip(icp, _ICP_CHAR_CAP)}"
+        if icp
+        else ""
+    )
+    return (
+        "You are an expert local-SEO and conversion copywriter for WheelHouse IT, a "
+        "managed IT services provider (MSP). You write the on-page copy for a specific "
+        "city + service landing page, field by field.\n\n"
+        f"{voice_block}{audience_block}\n\n"
+        f"BRAND FACTS (keep consistent, never contradict): {BRAND_FACTS}.\n\n"
+        "RULES:\n"
+        "- Write each field within its word range and to its stated focus.\n"
+        "- Follow the CLIENT BRAND VOICE and TARGET AUDIENCE above when present; the "
+        "BRAND FACTS always win on any factual claim.\n"
+        "- Weave the CITY into the location headlines and reflect the SERVICE, so each "
+        "city×service page reads distinctly (never the same body under a different H1).\n"
+        "- wysiwyg fields must be valid HTML with <p>…</p> paragraphs; text/textarea "
+        "fields are plain (no HTML).\n"
+        "- Do not invent statistics, certifications, or claims beyond the brand facts.\n"
+        "- Return every requested field via the emit_page_fields tool."
+    )
+
+
+# Module default (no client assets) — kept for back-compat with any importer.
+_SYSTEM = build_system()
 
 
 def build_user_prompt(state: str, city: str, service: str, exclude: set) -> str:
@@ -132,7 +171,7 @@ def build_user_prompt(state: str, city: str, service: str, exclude: set) -> str:
 
 async def generate_fields(
     *, state: str, city: str, service: str, supplied: Optional[dict] = None,
-    page_type: str = "service",
+    page_type: str = "service", brand_voice: str = "", icp: str = "",
 ) -> dict:
     """Generate the leaf page's ACF fields. Returns
     ``{acf, field_sources, warnings, title, generation_failed}``.
@@ -155,7 +194,7 @@ async def generate_fields(
             generated = await report_llm.run_forced_tool(
                 provider=settings.wheelhouse_provider,
                 model=settings.wheelhouse_model,
-                system=_SYSTEM,
+                system=build_system(brand_voice, icp),
                 user=build_user_prompt(state, city, service, exclude),
                 tool_name="emit_page_fields",
                 tool_description="Emit the WheelHouse location/service page ACF field values.",
@@ -191,7 +230,7 @@ async def generate_fields(
 
 async def draft_field(
     *, state: str, city: str, service: str, field_name: str,
-    page_type: str = "service",
+    page_type: str = "service", brand_voice: str = "", icp: str = "",
 ) -> str:
     """Draft a single ACF field (the one-off form's per-field 'Draft with AI').
     Returns the field's value (HTML for wysiwyg). Empty string on failure."""
@@ -204,7 +243,7 @@ async def draft_field(
         out = await report_llm.run_forced_tool(
             provider=settings.wheelhouse_provider,
             model=settings.wheelhouse_model,
-            system=_SYSTEM,
+            system=build_system(brand_voice, icp),
             user=(
                 f"State: {state}\nCity: {city}\nService: {service}\n\n"
                 f"Write ONLY this field:\n{_field_guide_lines(set(GENERATED_FIELD_NAMES) - {field_name})}"
