@@ -33,6 +33,7 @@ from modules.brief.parsers import parse_aio_insights, parse_serp
 from modules.sie.entities import extract_entities
 
 from .competitor import derive_gaps, teardown_competitors
+from .entity_benchmark import aggressive_entity_target, counts_from_source_urls
 from .errors import ServiceBriefError
 from .serp import (
     band_for_word_count,
@@ -145,6 +146,7 @@ async def run_research(
 
     # ---- Stage 3: Entity & term coverage (reuse already-scraped pages) ----
     entity_coverage: list[EntityCoverageItem] = []
+    entity_benchmark_target = 0
     if page_zones:
         try:
             entities, failed = await extract_entities(page_zones, keyword=anchor)
@@ -155,6 +157,12 @@ async def run_research(
                     pages_found=ent.pages_found,
                     salience=round(ent.avg_salience, 3),
                 ))
+            # Benchmark the required entity count against the most aggressive
+            # competitor: the single page covering the most distinct entities
+            # (spam outliers excluded). Uses each entity's source_urls to derive
+            # per-competitor distinct-entity counts.
+            per_url = counts_from_source_urls(ent.source_urls for ent in entities)
+            entity_benchmark_target = aggressive_entity_target(per_url.values())
             if failed:
                 notes.append(f"entity_extract_failed:{len(failed)}")
         except Exception as exc:
@@ -219,6 +227,7 @@ async def run_research(
         competitor_skeletons=skeletons,
         gaps=gaps,
         entity_coverage=entity_coverage,
+        entity_benchmark_target=entity_benchmark_target,
         questions=questions,
         aio_presence=aio_presence,
         degraded_notes=notes,

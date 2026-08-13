@@ -242,6 +242,13 @@ class Settings(BaseSettings):
     writer_entity_rewrite_enabled: bool = True
     writer_entity_rewrite_max_sections: int = 3
 
+    # Service page entity-coverage enforcement (Option B) — benchmark the
+    # required entity count against the most aggressive competitor, then rewrite
+    # the weakest content sections when the page covers fewer than
+    # floor × benchmark distinct entities.
+    service_entity_coverage_floor: float = 0.75
+    service_entity_rewrite_max_sections: int = 3
+
     # ------------------------------------------------------------
     # Service Page Brief Generator (PRD §7 - model tiering + cache)
     # ------------------------------------------------------------
