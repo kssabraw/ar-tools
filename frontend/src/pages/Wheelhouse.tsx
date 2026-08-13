@@ -157,7 +157,10 @@ function MassCreate({ clientId, onDone }: { clientId: string; onDone: () => void
       try {
         const res = await api.post<{ jobs: JobStatus[] }>(`/clients/${clientId}/wheelhouse/jobs/status`, { job_ids: ids })
         setJobs(res.jobs)
-        const done = res.jobs.length === ids.length && res.jobs.every((j) => ['complete', 'failed', 'cancelled'].includes(j.status))
+        // Done when every job we can still see is terminal. A deleted job simply
+        // drops out of the response (so a missing row can't wedge the poll), while
+        // in-flight jobs are always present as non-terminal.
+        const done = res.jobs.length > 0 && res.jobs.every((j) => ['complete', 'failed', 'cancelled'].includes(j.status))
         if (done) { if (timer.current) clearInterval(timer.current); onDone() }
       } catch { /* keep polling */ }
     }, 3000)
@@ -358,7 +361,9 @@ function PageList({ pages, loading, onOpen, emptyLabel }: {
       {pages.map((p) => (
         <button key={p.id} style={{ ...card, textAlign: 'left', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} onClick={() => onOpen(p.id)}>
           <div>
-            <div style={{ fontWeight: 600, color: '#0f172a' }}>{p.title || (p.page_type === 'city' ? `${p.city} IT Support Company` : `${p.service} · ${p.city}`)}</div>
+            <div style={{ fontWeight: 600, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <TypeBadge page={p} />{p.title || (p.page_type === 'city' ? `${p.city} IT Support Company` : `${p.service} · ${p.city}`)}
+            </div>
             <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>{p.slug_path}</div>
           </div>
           <StatusPill page={p} />
@@ -366,6 +371,13 @@ function PageList({ pages, loading, onOpen, emptyLabel }: {
       ))}
     </div>
   )
+}
+
+function TypeBadge({ page }: { page: Page }) {
+  const city = page.page_type === 'city'
+  return <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase',
+    background: city ? '#e0e7ff' : '#f1f5f9', color: city ? '#3730a3' : '#475569',
+    borderRadius: 5, padding: '2px 6px' }}>{city ? 'City' : 'Service'}</span>
 }
 
 function StatusPill({ page }: { page: Page }) {
@@ -393,7 +405,9 @@ function DraftsList({ clientId, drafts, onChange }: { clientId: string; drafts: 
       {drafts.map((p) => (
         <div key={p.id} style={{ ...card, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
-            <div style={{ fontWeight: 600, color: '#0f172a' }}>{p.title || (p.page_type === 'city' ? `${p.city} IT Support Company` : `${p.service} · ${p.city}`)}</div>
+            <div style={{ fontWeight: 600, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <TypeBadge page={p} />{p.title || (p.page_type === 'city' ? `${p.city} IT Support Company` : `${p.service} · ${p.city}`)}
+            </div>
             <div style={{ fontSize: 12, color: '#94a3b8' }}>{p.slug_path}</div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -431,10 +445,13 @@ function PageDetail({ clientId, page, sections, wpConfigured, onClose, onChange 
     setBusy(status); setError(null); setMsg(null)
     try {
       if (dirty) await api.post(`/clients/${clientId}/wheelhouse/one-off`, saveBody())
-      const res = await api.post<{ link?: string; slug_path: string; acf_written?: boolean; hubs_promoted?: boolean }>(
+      const res = await api.post<{ link?: string; slug_path: string; acf_written?: boolean; hubs_promoted?: boolean; city_page_unpublished?: boolean }>(
         `/clients/${clientId}/wheelhouse/pages/${page.id}/publish`, { status })
       if (res.acf_written === false) {
         setError(`Page posted to ${res.slug_path}, but WordPress ignored the ACF fields — the field group isn't exposed to REST / assigned to Pages. Check the ACF prerequisites, then republish.`)
+      } else if (res.city_page_unpublished) {
+        const cityPath = res.slug_path.replace(/[^/]+\/$/, '')  // strip the service segment
+        setMsg(`Published (${status}) → ${res.slug_path}. Note: the parent city page ${cityPath} isn't published yet, so it renders empty until you publish the City page for ${page.city}.`)
       } else {
         setMsg(`Published (${status}) → ${res.slug_path}${res.hubs_promoted ? ' (parent pages promoted to live)' : ''}`)
       }

@@ -257,7 +257,7 @@ async def publish_hierarchy(
             for lvl in levels[:-1]:
                 hub = await ensure_page(
                     http, rest_base, site_root, headers,
-                    slug=lvl["slug"], title=lvl["title"], parent=parent,
+                    slug=lvl["slug"], title=(lvl.get("title") or lvl["slug"]), parent=parent,
                     hub_status=hub_status, promote=promote,
                 )
                 parent = hub["id"]
@@ -265,7 +265,7 @@ async def publish_hierarchy(
             leaf_lvl = levels[-1]
             leaf = await _upsert_leaf(
                 http, rest_base, site_root, headers,
-                slug=leaf_lvl["slug"], title=leaf_lvl["title"], parent=parent,
+                slug=leaf_lvl["slug"], title=(leaf_lvl.get("title") or leaf_lvl["slug"]), parent=parent,
                 status=status, acf=acf,
             )
     except WordPressPublishError:

@@ -38,6 +38,27 @@ def _norm_page_type(page_type: Optional[str]) -> str:
     return "city" if (page_type or "").lower() == "city" else "service"
 
 
+def _require_service(page_type: str, service: str) -> None:
+    """A service page needs a non-empty service (its leaf URL segment); without one
+    the page is unpublishable (invalid_slug). Guard at the entry points so a bad
+    row is never created. City pages have no service by design."""
+    if _norm_page_type(page_type) == "service" and not (service or "").strip():
+        raise HTTPException(status_code=422, detail="service_required")
+
+
+def _has_published_city_page(client_id: str, state: str, city: str) -> bool:
+    """True when a *published* city page exists for this city — so a service
+    publish can warn when the parent /state/city/ would otherwise be a live but
+    empty hub."""
+    res = (
+        get_supabase().table("wheelhouse_pages").select("status")
+        .eq("client_id", client_id).eq("state_slug", slugify(state))
+        .eq("city_slug", slugify(city)).eq("page_type", "city")
+        .is_("deleted_at", "null").limit(1).execute()
+    )
+    return bool(res.data and res.data[0].get("status") == "published")
+
+
 def _levels_for_page(page: dict) -> list[dict]:
     """The publish hierarchy for a stored page, by page_type.
 
@@ -218,6 +239,7 @@ async def generate_one(
     33 fields and persist as a draft. Returns the stored page."""
     get_enabled_client(client_id)
     page_type = _norm_page_type(page_type)
+    _require_service(page_type, service)
     result = await wheelhouse_generate.generate_fields(
         state=state, city=city, service=service, supplied=supplied, page_type=page_type,
     )
@@ -238,6 +260,7 @@ async def preview_one(
     preview). Returns ``{acf, field_sources, warnings, title, generation_failed}``
     so the form populates without creating a Saved page until the user saves."""
     get_enabled_client(client_id)
+    _require_service(page_type, service)
     result = await wheelhouse_generate.generate_fields(
         state=state, city=city, service=service, supplied=supplied,
         page_type=_norm_page_type(page_type),
@@ -282,6 +305,7 @@ def save_one_off(
     from services.wheelhouse_generate import title_for
 
     page_type = _norm_page_type(page_type)
+    _require_service(page_type, service)
     acf = acf or {}
     clean: dict = {}
     for name in FIELD_NAMES:
@@ -428,7 +452,14 @@ async def publish(client_id: str, page_id: str, status: str = "draft") -> dict:
         "published_url": result["link"], "edit_link": result["edit_link"],
         "slug_path": result["slug_path"], "status": "published", "updated_at": "now()",
     }).eq("id", page_id).execute()
-    return {**result, "page_id": page_id}
+    # A service page nests under /state/city/; if that city page isn't published,
+    # the parent URL is a live-but-empty hub. Flag it so the UI can prompt the user
+    # to publish the city page (the page still publishes — this is advisory).
+    city_page_unpublished = (
+        _norm_page_type(page.get("page_type")) == "service"
+        and not _has_published_city_page(client_id, page["state"], page["city"])
+    )
+    return {**result, "page_id": page_id, "city_page_unpublished": city_page_unpublished}
 
 
 async def dry_run(client_id: str, page_id: str, status: str = "draft") -> dict:
