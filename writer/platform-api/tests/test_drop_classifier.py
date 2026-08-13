@@ -143,8 +143,28 @@ def test_default_is_b5():
     assert dc.classify_drop({"keyword": "x"})["classification"] == "B5"
 
 
+def test_gradual_drop_gets_dedicated_playbook():
+    # A gradual_drop routes to GRADUAL, NOT the sudden-drop cascade — even when a
+    # recent-window SERP shift or triage signal is (spuriously) present.
+    r = dc.classify_drop(
+        {"alert_type": "gradual_drop", "keyword": "roof repair tampa"},
+        serp_shift={"aio_appeared": True},
+        triage="ctr_drop",
+    )
+    assert r["classification"] == "GRADUAL" and r["reason"] == "gradual_erosion"
+
+
+def test_gradual_drop_cannibalization_still_wins():
+    # A concrete own-house problem outranks the generic erosion playbook.
+    r = dc.classify_drop(
+        {"alert_type": "gradual_drop", "keyword": "Roof Repair Tampa"},
+        cannibalized={"roof repair tampa"},
+    )
+    assert r["classification"] == "B1"
+
+
 def test_playbook_covers_every_classification():
-    for c in ("B1", "B2", "B3", "B4", "B5"):
+    for c in ("B1", "B2", "B3", "B4", "B5", "GRADUAL"):
         assert c in dc.RESPONSE_PLAYBOOK
         assert dc.RESPONSE_PLAYBOOK[c]["recommendation"]
 
