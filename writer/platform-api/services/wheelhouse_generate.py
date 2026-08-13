@@ -82,9 +82,10 @@ def title_for(page_type: str, state: str, city: str, service: str) -> str:
     if page_type == "city":
         return compose_city_title(city)
     if page_type == "local_seo":
-        # A local SEO page is named freely; the leaf name (carried in `city`) is
-        # the WP post title. The ACF hero_headline is the generated on-page H1.
-        return (city or "").strip() or "IT Support"
+        # A local SEO page is 3-level (/city/<leaf>/); the leaf (carried in
+        # `service`) names the page/keyword and is the WP post title. The ACF
+        # hero_headline is the generated on-page H1.
+        return (service or "").strip() or "IT Support"
     return compose_title(state, city, service)
 
 
@@ -141,8 +142,8 @@ async def generate_fields(
     Supplied fields are kept verbatim and excluded from the LLM call; the rest are
     generated in one forced-tool call. Best-effort: any missing field validates as
     empty rather than raising."""
-    if page_type in ("city", "local_seo"):
-        service = CITY_SERVICE_LABEL  # fixed offering woven into the local SEO page
+    if page_type == "city":
+        service = CITY_SERVICE_LABEL  # the city page's fixed offering
     supplied = {k: v for k, v in (supplied or {}).items()
                 if isinstance(v, str) and v.strip()}
     exclude = set(supplied.keys())
@@ -197,7 +198,7 @@ async def draft_field(
     spec = FIELD_BY_NAME.get(field_name)
     if not spec or spec.get("is_link"):
         return ""
-    if page_type in ("city", "local_seo"):
+    if page_type == "city":
         service = CITY_SERVICE_LABEL
     try:
         out = await report_llm.run_forced_tool(

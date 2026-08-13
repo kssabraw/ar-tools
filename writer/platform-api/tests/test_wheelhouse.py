@@ -147,13 +147,14 @@ def test_city_title_and_dispatch():
 
 
 def test_local_seo_title_and_generation():
-    # A local SEO page's freely-named leaf (carried in `city`) IS its WP title.
-    assert wg.title_for("local_seo", "Florida", "IT Support Boca Raton", "") == "IT Support Boca Raton"
-    assert wg.title_for("local_seo", "Florida", "  ", "") == "IT Support"
+    # A local SEO page is 3-level (/city/<leaf>/); the leaf (carried in `service`)
+    # names it and IS the WP title.
+    assert wg.title_for("local_seo", "Florida", "Miami", "IT Support Boca Raton") == "IT Support Boca Raton"
+    assert wg.title_for("local_seo", "Florida", "Miami", "  ") == "IT Support"
     good = {n: "word word word" for n in wf.GENERATED_FIELD_NAMES}
     with patch.object(wg.report_llm, "run_forced_tool", new=AsyncMock(return_value=good)):
         res = asyncio.run(wg.generate_fields(
-            state="Florida", city="IT Support Boca Raton", service="", page_type="local_seo"))
+            state="Florida", city="Miami", service="IT Support Boca Raton", page_type="local_seo"))
     assert res["title"] == "IT Support Boca Raton"
     assert res["generation_failed"] is False
 

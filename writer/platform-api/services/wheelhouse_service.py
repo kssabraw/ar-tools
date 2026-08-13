@@ -32,10 +32,10 @@ from services.wheelhouse_pages import (
 logger = logging.getLogger(__name__)
 
 PAGE_TYPES = ("service", "city", "local_seo")
-# Page types that carry the 33 ACF fields at a 2-level (silo → leaf) depth and use
-# the local-seo writer: a city page (leaf = a city) and a local SEO page (leaf = a
-# freely-named page/keyword). A service page is 3-level (silo → city → service).
-TWO_LEVEL_TYPES = ("city", "local_seo")
+# Only the city page is 2-level (silo → city). Service AND local SEO pages are
+# 3-level (silo → city → leaf), i.e. /florida/<city>/<service>/. City + local SEO
+# pages share the 33-field local-seo writer; the service page keeps its writer.
+TWO_LEVEL_TYPES = ("city",)
 
 
 def _norm_page_type(page_type: Optional[str]) -> str:
@@ -44,10 +44,11 @@ def _norm_page_type(page_type: Optional[str]) -> str:
 
 
 def _require_service(page_type: str, service: str) -> None:
-    """A service page needs a non-empty service (its leaf URL segment); without one
-    the page is unpublishable (invalid_slug). Guard at the entry points so a bad
-    row is never created. City pages have no service by design."""
-    if _norm_page_type(page_type) == "service" and not (service or "").strip():
+    """A 3-level page (service or local SEO) needs a non-empty leaf/service (its
+    leaf URL segment); without one the page is unpublishable (invalid_slug). Guard
+    at the entry points so a bad row is never created. City pages (2-level) have no
+    service by design."""
+    if _norm_page_type(page_type) not in TWO_LEVEL_TYPES and not (service or "").strip():
         raise HTTPException(status_code=422, detail="service_required")
 
 
@@ -360,7 +361,7 @@ async def enqueue_mass(
     page_type = _norm_page_type(page_type)
     if not (state or "").strip():
         raise HTTPException(status_code=422, detail="state_required")
-    if page_type == "service" and not (city or "").strip():
+    if page_type not in TWO_LEVEL_TYPES and not (city or "").strip():
         raise HTTPException(status_code=422, detail="city_required")
     rows = []
     seen = set()
@@ -459,11 +460,12 @@ async def publish(client_id: str, page_id: str, status: str = "draft") -> dict:
         "published_url": result["link"], "edit_link": result["edit_link"],
         "slug_path": result["slug_path"], "status": "published", "updated_at": "now()",
     }).eq("id", page_id).execute()
-    # A service page nests under /state/city/; if that city page isn't published,
-    # the parent URL is a live-but-empty hub. Flag it so the UI can prompt the user
-    # to publish the city page (the page still publishes — this is advisory).
+    # A 3-level page (service or local SEO) nests under /state/city/; if that city
+    # page isn't published, the parent URL is a live-but-empty hub. Flag it so the
+    # UI can prompt the user to publish the city page (the page still publishes —
+    # this is advisory).
     city_page_unpublished = (
-        _norm_page_type(page.get("page_type")) == "service"
+        _norm_page_type(page.get("page_type")) not in TWO_LEVEL_TYPES
         and not _has_published_city_page(client_id, page["state"], page["city"])
     )
     return {**result, "page_id": page_id, "city_page_unpublished": city_page_unpublished}
