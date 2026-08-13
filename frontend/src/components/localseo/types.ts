@@ -99,6 +99,7 @@ export interface LocalSeoPageDetail extends LocalSeoPageListItem {
   published_url: string | null
   published_at: string | null
   featured_image_url: string | null
+  social_posts?: SocialPostsResult | null
   updated_at: string
 }
 

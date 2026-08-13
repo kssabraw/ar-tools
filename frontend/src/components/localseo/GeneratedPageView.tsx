@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, ArrowRight, Check, Copy, Download, ExternalLink, TrendingUp, Wand2, Megaphone,
+  ArrowLeft, ArrowRight, Check, Copy, Download, ExternalLink, TrendingUp, Wand2, Megaphone, RefreshCw,
 } from 'lucide-react'
 import { GbpWorkspace } from '../../pages/GbpPosts'
 import { localSeoApi } from './api'
@@ -134,10 +134,11 @@ export function GeneratedPageView({
     }
   }
 
-  // Social posts — lazily generated when the tab is first opened (each call
-  // costs an LLM round-trip; suite doesn't persist them). Runs as a background
-  // job, persisted per page, so navigating away and back reconnects to it.
-  const [social, setSocial] = useState<SocialPostsResult | null>(null)
+  const queryClient = useQueryClient()
+  // Social posts — generated ONCE and saved on the page (page.social_posts), so
+  // re-opening the tab re-reads them instead of paying for a fresh generation.
+  // Seeded from the saved set; an explicit Regenerate overwrites it.
+  const [social, setSocial] = useState<SocialPostsResult | null>(page.social_posts ?? null)
   const [socialError, setSocialError] = useState('')
   const [copiedPost, setCopiedPost] = useState<string | null>(null)
   const [gbpSeed, setGbpSeed] = useState<{ text: string; nonce: number } | undefined>(undefined)
@@ -150,7 +151,10 @@ export function GeneratedPageView({
         ? { status: st.status, result: (st.result as SocialPostsResult | null) ?? null, error: st.error }
         : { status: 'running' }
     },
-    onComplete: (data) => { if (data) setSocial(data); else setSocialError('No posts returned.') },
+    onComplete: (data) => {
+      if (data) { setSocial(data); queryClient.invalidateQueries({ queryKey: ['local-seo-pages', clientId] }) }
+      else setSocialError('No posts returned.')
+    },
     onError: (err) => setSocialError(err || 'Could not generate posts'),
   })
   const socialLoading = socialJob.running
@@ -162,7 +166,6 @@ export function GeneratedPageView({
   const relatedRequested = useRef(false)
   // Multi-select bulk creation of the missing related pages (same flow as the
   // Plan Silo tab). Refresh the saved-pages list as pages land.
-  const queryClient = useQueryClient()
   const bulk = useBulkCreate(clientId, () =>
     queryClient.invalidateQueries({ queryKey: ['local-seo-pages', clientId] }),
   )
@@ -171,7 +174,7 @@ export function GeneratedPageView({
     setSocialError('')
     await socialJob.start(async () => {
       const { job_id } = await localSeoApi.socialPosts(clientId, {
-        keyword, location, page_content: htmlToText(content_html),
+        keyword, location, page_content: htmlToText(content_html), page_id: page.id,
       })
       return job_id
     }, null)
@@ -374,9 +377,12 @@ export function GeneratedPageView({
           )}
           {!socialLoading && social && (
             <>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
                 <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>Suggested posts for this page — send one to the composer below to add an image, schedule, or publish it.</p>
-                <button style={outlineBtn} onClick={downloadSocial}><Download size={14} /> Download all</button>
+                <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                  <button style={outlineBtn} onClick={fetchSocial} title="Generate a fresh set of suggestions"><RefreshCw size={14} /> Regenerate</button>
+                  <button style={outlineBtn} onClick={downloadSocial}><Download size={14} /> Download all</button>
+                </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {social.gbp.map((post, i) => {

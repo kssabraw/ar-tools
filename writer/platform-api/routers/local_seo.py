@@ -313,6 +313,7 @@ async def social_posts_local_seo(
         {
             "keyword": body.keyword, "location": body.location,
             "page_content": body.page_content, "serp_analysis": body.serp_analysis,
+            "page_id": str(body.page_id) if body.page_id else None,
         },
         auth["user_id"],
     )
