@@ -161,7 +161,7 @@ export const localSeoApi = {
   // Background job — poll jobsStatus for the SocialPostsResult in `result`.
   socialPosts: (
     clientId: string,
-    body: { keyword: string; location: string; page_content: string; serp_analysis?: AnalysisResult | null },
+    body: { keyword: string; location: string; page_content: string; serp_analysis?: AnalysisResult | null; page_id?: string },
   ) => api.post<{ job_id: string; status: string }>(`/clients/${clientId}/local-seo/social-posts`, body),
 
   listPages: (clientId: string) =>

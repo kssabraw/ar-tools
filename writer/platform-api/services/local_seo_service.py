@@ -1181,11 +1181,14 @@ async def social_posts(
     location: str,
     page_content: str,
     serp_analysis: Optional[dict],
+    page_id: Optional[str] = None,
 ) -> dict:
-    """Generate GBP social posts from a generated page's text."""
+    """Generate GBP social posts from a generated page's text. When ``page_id`` is
+    given, save the result on the page so re-opening the tab re-reads it instead
+    of regenerating (an explicit Regenerate overwrites)."""
     client = _get_client(client_id)
     fields = _business_fields(client)
-    return await _post_nlp("/generate-social-posts", {
+    result = await _post_nlp("/generate-social-posts", {
         "keyword": keyword,
         "location": location,
         "business_name": fields["business_name"],
@@ -1198,6 +1201,15 @@ async def social_posts(
         "detected_icp": client.get("detected_icp"),
         "differentiators": client.get("differentiators") or [],
     })
+    if page_id and isinstance(result, dict):
+        try:
+            get_supabase().table("local_seo_pages").update(
+                {"social_posts": result, "updated_at": "now()"}
+            ).eq("id", page_id).eq("client_id", client_id).execute()
+        except Exception as exc:  # noqa: BLE001 — persistence is best-effort
+            logger.warning("local_seo.social_posts_save_failed",
+                           extra={"page_id": page_id, "error": str(exc)[:200]})
+    return result
 
 
 # ── interactive actions as background jobs ───────────────────────────────────
@@ -1270,6 +1282,7 @@ async def _run_action(action: str, client_id: str, args: dict, user_id: str) -> 
         return await social_posts(
             client_id=client_id, keyword=args["keyword"], location=args["location"],
             page_content=args["page_content"], serp_analysis=args.get("serp_analysis"),
+            page_id=args.get("page_id"),
         )
     raise HTTPException(status_code=400, detail="unknown_local_seo_action")
 

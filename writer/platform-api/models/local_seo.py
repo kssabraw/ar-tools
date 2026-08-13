@@ -262,6 +262,9 @@ class LocalSeoSocialPostsRequest(BaseModel):
     location: str = Field(..., min_length=1)
     page_content: str = Field(..., min_length=1)
     serp_analysis: Optional[dict[str, Any]] = None
+    # When set, the generated suggestions are saved on the page so re-opening the
+    # tab re-reads them instead of regenerating (an explicit Regenerate overwrites).
+    page_id: Optional[UUID] = None
 
 
 class LocalSeoRankabilityRequest(BaseModel):
@@ -338,6 +341,8 @@ class LocalSeoPageDetail(BaseModel):
     # SEO/AEO only. Both null when the client has no brand guide on file.
     voice_violations: Optional[dict[str, Any]] = None
     voice_score: Optional[float] = None
+    # Saved GBP post suggestions for this page (generated once, re-read on return).
+    social_posts: Optional[dict[str, Any]] = None
     mode: str
     token_usage: Optional[dict[str, Any]] = None
     cost_breakdown: Optional[dict[str, Any]] = None
