@@ -282,7 +282,14 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
 
             # Collect rank-drop alert signals for this keyword (reconciled below).
             alert_inputs.append(
-                (kw["id"], kw["keyword"], rank_alerts.detect_alerts(kw["keyword"], merged, primary, status, today))
+                (
+                    kw["id"],
+                    kw["keyword"],
+                    rank_alerts.detect_alerts(
+                        kw["keyword"], merged, primary, status, today,
+                        include_gradual=settings.rank_gradual_drop_enabled,
+                    ),
+                )
             )
 
             update = {

@@ -196,8 +196,12 @@ def run_trend_sweep() -> dict:
     today = date.today()
     cutoff = (today - timedelta(days=_LOOKBACK_DAYS)).isoformat()
     try:
+        # Exclude gradual_drop: an algo update is a SUDDEN cross-client move, so
+        # slow multi-week slides (which open on an arbitrary day when they cross
+        # their cumulative threshold) would only manufacture false algo clusters.
         alerts = (
             supabase.table("rank_alerts").select("client_id, created_at")
+            .neq("alert_type", "gradual_drop")
             .gte("created_at", cutoff).execute()
         ).data or []
         client_ids = {
