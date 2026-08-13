@@ -385,6 +385,14 @@ def test_no_gradual_decline_on_old_cliff():
     assert _gd(pts) == []
 
 
+def test_no_gradual_decline_on_boundary_straddling_cliff():
+    # A one-scan cliff that lands mid-segment (day ~32). The smoothed 3-segment
+    # test used to miss it (means [3, 7, 9] → max step 4 ≤ 0.75·6); the raw
+    # consecutive-step test catches it wherever it falls (one step = the whole 6).
+    pts = _pts([(o, 3.0 if o >= 32 else 9.0, 80.0) for o in _WEEKLY])
+    assert _gd(pts) == []
+
+
 def test_no_gradual_decline_when_recovered_mid_window():
     def ar(o):
         if o >= 42:

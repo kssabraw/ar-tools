@@ -780,7 +780,8 @@ class Settings(BaseSettings):
     maps_gradual_min_points: int = 4        # scan points (per metric) needed to judge a trend
     maps_gradual_rank_drop: float = 3.0     # cumulative avg-grid-rank worsening (spots) to fire
     maps_gradual_top3_drop: float = 15.0    # cumulative Top-3 coverage fall (points) to fire
-    maps_gradual_max_scans: int = 20        # safety cap on scans loaded for the window
+    maps_gradual_max_scans: int = 60        # ABSOLUTE ceiling on scans loaded (bounds load); the
+                                            # operative cap is derived from the window (see _gradual_signals)
 
     # Competitor GBP intelligence (Tier B / B1): how many of the latest scan's
     # top local-pack competitors to fetch full GBP profiles for (each fetch is an

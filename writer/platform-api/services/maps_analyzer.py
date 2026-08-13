@@ -400,23 +400,29 @@ def _gradual_metric(
     if worsening < min_delta:
         return None
 
+    # Steady (no mid-window recovery): tested on the SMOOTHED 3-segment means, so
+    # a single noisy up-tick between weekly scans doesn't disqualify a real slide.
     means = _segment_means_over(win, lo, today_ord, GRADUAL_SEGMENTS)
     if any(m is None for m in means):
         return None  # need coverage across the whole window to judge the shape
-    oriented = means if lower_is_better else [-m for m in means]  # higher = worse
+    oriented_means = means if lower_is_better else [-m for m in means]  # higher = worse
+    for i in range(1, len(oriented_means)):
+        if oriented_means[i] - oriented_means[i - 1] < -noise:
+            return None  # recovered mid-window → not a steady slide
 
-    steps: list[float] = []
-    prev: Optional[float] = None
-    for m in oriented:
-        if prev is not None:
-            step = m - prev
-            if step < -noise:
-                return None  # recovered mid-window → not a steady slide
-            steps.append(step)
-        prev = m
-    span = oriented[-1] - oriented[0]
-    if span > 0 and steps and max(steps) > GRADUAL_MAX_STEP_SHARE * span:
-        return None  # one segment carries the move → a cliff, not a slide
+    # Not a cliff: no single scan-over-scan step carries most of the move. Measured
+    # on the RAW consecutive points (not the smoothed segments), so a one-scan
+    # cliff is caught wherever it falls — including straddling a segment boundary,
+    # which smears across a segment mean and slipped the old segment-based test.
+    # `worsening` is the sum of these steps and is > 0 here (>= min_delta), so this
+    # gate always applies (no degenerate span<=0 skip).
+    oriented_raw = [v if lower_is_better else -v for _, v in win]
+    max_step = max(
+        (oriented_raw[i] - oriented_raw[i - 1] for i in range(1, len(oriented_raw))),
+        default=0.0,
+    )
+    if max_step > GRADUAL_MAX_STEP_SHARE * worsening:
+        return None  # a cliff, not a gradual slide
     return round(baseline, 2), round(current, 2), worsening
 
 
@@ -973,6 +979,14 @@ def _gradual_signals(supabase, client_id: str, today: date) -> dict[str, list[Ma
     min_points = settings.maps_gradual_min_points
     start = (today - timedelta(days=window_days)).isoformat()
 
+    # Derive the scan cap from the window so widening maps_gradual_window_days
+    # can't silently truncate the series (a fixed cap would): weekly cadence
+    # yields ~ceil(window/7) scans, and 2x + min_points leaves generous headroom.
+    # Bounded by the absolute ceiling to cap load. DESC order means any truncation
+    # keeps the most recent scans, so the effect is a conservative shorter window
+    # (an under-alert), never a false positive.
+    expected_weekly = -(-window_days // 7)  # ceil(window_days / 7)
+    scan_cap = min(settings.maps_gradual_max_scans, 2 * expected_weekly + min_points)
     scans = (
         maps_reporting.only_reporting(
             supabase.table("maps_scans")
@@ -982,11 +996,19 @@ def _gradual_signals(supabase, client_id: str, today: date) -> dict[str, list[Ma
         )
         .gte("completed_at", start)
         .order("completed_at", desc=True)
-        .limit(settings.maps_gradual_max_scans)
+        .limit(scan_cap)
         .execute()
     ).data or []
     if len(scans) < min_points:
         return {}
+    if len(scans) >= scan_cap:
+        # Hit the cap — more scheduled scans in the window than expected (a faster
+        # cadence than weekly). We kept the most recent; the gradual window is
+        # effectively shorter this run. Observable rather than silent.
+        logger.info(
+            "maps_gradual_window_truncated",
+            extra={"client_id": client_id, "scan_cap": scan_cap, "window_days": window_days},
+        )
     meta = {s["id"]: s for s in scans}
 
     results = (
