@@ -52,6 +52,9 @@ FREEZE_GATED_JOB_TYPES = {
     "ecommerce_generate",
     "ecommerce_reoptimize_url",
     "wheelhouse_generate",
+    # Blog reoptimize regenerates + re-runs sources_cited (output). Blog scoring
+    # is observation and stays ungated.
+    "blog_reoptimize",
     "syndication_item",
     "content_batch_item",
     "gbp_post_publish",

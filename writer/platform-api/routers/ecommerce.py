@@ -62,6 +62,7 @@ async def generate_ecommerce_page_async(
         user_id=auth["user_id"],
         page_template_url=body.page_template_url,
         notes=body.notes,
+        entity_provider=body.entity_provider,
     )
     return EcommerceGenerateJob(job_id=job_id, status="pending")
 
@@ -109,6 +110,7 @@ async def generate_ecommerce_pages_bulk(
     assert_not_frozen(str(client_id))
     job_ids = await ecommerce_service.enqueue_generate_bulk(
         str(client_id), body.keywords, body.page_type, auth["user_id"], notes=body.notes,
+        entity_provider=body.entity_provider,
     )
     return EcommerceBulkGenerateJob(job_ids=job_ids)
 
@@ -130,6 +132,7 @@ async def reoptimize_ecommerce_pages_bulk(
         score_threshold=body.score_threshold,
         publish_to_doc=body.publish_to_doc,
         notes=body.notes,
+        entity_provider=body.entity_provider,
     )
     return EcommerceReoptimizeBulkJob(jobs=jobs)
 
@@ -159,6 +162,7 @@ async def score_ecommerce_page(
         {
             "keyword": body.keyword, "page_type": body.page_type,
             "page_url": body.page_url, "page_content": body.page_content,
+            "entity_provider": body.entity_provider,
         },
         auth["user_id"],
     )

@@ -23,6 +23,7 @@ import { ReoptimizeView } from '../components/localseo/ReoptimizeView'
 import { ScoreHistoryView } from '../components/localseo/ScoreHistoryView'
 import { RankabilityReport } from '../components/localseo/RankabilityReport'
 import { Spinner } from '../components/localseo/Spinner'
+import { EntityProviderSelect, type EntityProvider } from '../components/EntityProviderSelect'
 import {
   backLink, card, errorBox, input, label, outlineBtn, primaryBtn, relativeTime, scoreColor,
 } from '../components/localseo/shared'
@@ -86,6 +87,8 @@ export function LocalSeoContent() {
   const [forceRefresh, setForceRefresh] = useState(false)
   // Phase 3 — mirror an existing page's structure. Blank → the client's saved default.
   const [pageTemplateUrl, setPageTemplateUrl] = useState('')
+  // Which entity-extraction engine the nlp SERP analysis uses (default TextRazor).
+  const [entityProvider, setEntityProvider] = useState<EntityProvider>('textrazor')
   const [savingTemplateDefault, setSavingTemplateDefault] = useState(false)
   const [error, setError] = useState('')
   // Advanced options (page template + cache refresh) collapse, hidden by default.
@@ -189,6 +192,7 @@ export function LocalSeoContent() {
       const { job_id } = await localSeoApi.generateAsync(clientId, {
         keyword: kw, location: location.trim(), location_code: locationCode,
         force_refresh: forceRefresh, page_template_url: pageTemplateUrl.trim() || null,
+        entity_provider: entityProvider,
       })
       const poll = async () => {
         if (genCancelledRef.current) return
@@ -688,6 +692,9 @@ export function LocalSeoContent() {
                   <input type="checkbox" checked={forceRefresh} onChange={e => setForceRefresh(e.target.checked)} />
                   Refresh competitor data (ignore the 14-day cache — slower, re-scrapes)
                 </label>
+
+                {/* Entity-extraction engine for the competitor SERP analysis. */}
+                <EntityProviderSelect value={entityProvider} onChange={setEntityProvider} />
               </div>
             )}
           </div>

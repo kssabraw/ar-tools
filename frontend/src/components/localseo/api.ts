@@ -30,6 +30,8 @@ export const localSeoApi = {
       location_code?: number | null
       force_refresh?: boolean
       page_template_url?: string | null
+      // Entity-extraction engine for the nlp SERP analysis ("textrazor"|"google").
+      entity_provider?: string | null
     },
   ) => api.post<{ job_id: string; status: string }>(`/clients/${clientId}/local-seo/generate-async`, body),
 
@@ -47,6 +49,7 @@ export const localSeoApi = {
       location_code?: number | null
       force_refresh?: boolean
       page_template_url?: string | null
+      entity_provider?: string | null
     },
   ) => api.post<{ job_ids: string[] }>(`/clients/${clientId}/local-seo/generate-bulk`, body),
 
@@ -57,6 +60,8 @@ export const localSeoApi = {
       targets: Array<{ page_url: string; keyword?: string; location?: string; location_code?: number | null }>
       score_threshold?: number | null
       publish_to_doc?: boolean
+      // Entity-extraction engine for the nlp SERP analysis ("textrazor"|"google").
+      entity_provider?: string | null
     },
   ) => api.post<{ jobs: Array<{ job_id: string; page_url: string }> }>(
     `/clients/${clientId}/local-seo/reoptimize-bulk`, body,

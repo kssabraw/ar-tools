@@ -135,6 +135,9 @@ class Settings(BaseSettings):
         # while these execute (formerly in-request SSE; jobs so a deploy can't
         # kill them). Same must-not-queue rationale as local_seo_action.
         "service_page_score", "service_page_reoptimize",
+        # Blog article score / reoptimize (blog/AEO rubric) — same on-screen,
+        # deploy-proof rationale as the service-page pair above.
+        "blog_score", "blog_reoptimize",
         # User-awaited on-demand actions moved from synchronous requests to jobs
         # (so the user can navigate away): the PDF reports (WeasyPrint render) and
         # the backlink lookup (DataForSEO pull on a cache miss).

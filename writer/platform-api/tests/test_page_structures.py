@@ -250,6 +250,66 @@ def test_extract_outline_from_html():
     assert analysis["elements"]["has_faq"] is True
 
 
+def test_extract_outline_from_html_ignores_stray_article_and_uses_content():
+    """Regression: on an Elementor/WordPress page the pasted content sits in a
+    <div data-elementor-type="single-post"> (NO <article>), while the Related
+    Posts widget emits stray <article> cards. Blindly taking the first <article>
+    scoped the outline to a related-post card and dropped every real heading (a
+    reference scrape returned 0 sections despite dozens of headings in the HTML).
+    The extractor must skip the low-heading <article> and segment the content."""
+    from services.page_structure_eval import extract_outline_from_html
+
+    html = """
+    <main class="site-main">
+      <div data-elementor-type="single-post" class="elementor">
+        <div class="elementor-widget-container">
+          <h1>What Is a Transportation Management System</h1>
+          <h2>Why You Need a TMS</h2>
+          <p>A TMS streamlines freight operations across carriers and modes.</p>
+          <h2>Core Capabilities</h2>
+          <p>Rating, routing, tendering, and settlement in one platform.</p>
+          <h3>Freight Audit</h3>
+          <p>Automated invoice validation catches billing errors.</p>
+        </div>
+      </div>
+      <section class="elementor-widget-posts">
+        <article class="elementor-post"><h3><a href="#">Related: 3PL basics</a></h3></article>
+        <article class="elementor-post"><h3><a href="#">Related: LTL vs FTL</a></h3></article>
+      </section>
+    </main>
+    """
+    analysis = extract_outline_from_html(html)
+    headings = [it["heading"] for it in analysis["outline"]]
+    # The real content headings are captured (not scoped away to a related card).
+    assert "What Is a Transportation Management System" in headings
+    assert "Why You Need a TMS" in headings
+    assert "Core Capabilities" in headings
+    assert "Freight Audit" in headings
+    assert analysis["elements"]["section_count"] >= 2  # the two content H2s
+
+
+def test_extract_outline_prefers_article_when_it_holds_the_content():
+    """The flip side: when a semantic <article>/<main> genuinely holds (nearly)
+    all the headings, it is still used as the tight root — the generators emit
+    flat <article> HTML and normal posts wrap content in <article>."""
+    from services.page_structure_eval import extract_outline_from_html
+
+    html = """
+    <body>
+      <main>
+        <article>
+          <h1>Post Title</h1>
+          <h2>Section A</h2><p>body</p>
+          <h2>Section B</h2><p>body</p>
+        </article>
+      </main>
+    </body>
+    """
+    analysis = extract_outline_from_html(html)
+    assert [it["heading"] for it in analysis["outline"]] == ["Post Title", "Section A", "Section B"]
+    assert analysis["elements"]["section_count"] == 2
+
+
 def test_extract_outline_from_markdown():
     from services.page_structure_eval import extract_outline_from_markdown
 

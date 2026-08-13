@@ -7,6 +7,8 @@ import { useResumableJob } from '../lib/useResumableJob'
 import { useBulkPublish, type PublishItem } from '../components/publish/useBulkPublish'
 import { BulkPublishBar } from '../components/publish/BulkPublishBar'
 import { usePagedPublish, PublishTabs, Pager, PublishBadges } from '../components/publish/PublishFilter'
+import { ReoptimizePanel } from '../components/reoptimize/ReoptimizePanel'
+import { serviceAdapter } from '../components/reoptimize/adapters'
 import type { Client, RunListResponse, RunStatus } from '../lib/types'
 
 const TERMINAL: RunStatus[] = ['complete', 'failed', 'cancelled']
@@ -28,6 +30,8 @@ export function ServicePages() {
   const { id } = useParams<{ id: string }>()
   const qc = useQueryClient()
   const [text, setText] = useState('')
+  // Create pages vs Reoptimize existing ones (bulk external URL / paste).
+  const [mode, setMode] = useState<'create' | 'reopt'>('create')
 
   // Service-page planner state.
   const [plan, setPlan] = useState<PlanResult | null>(null)
@@ -190,6 +194,26 @@ export function ServicePages() {
         service per line to bulk-create several at once.
       </p>
 
+      {/* Create vs Reoptimize */}
+      <div style={{ display: 'inline-flex', gap: 4, background: '#f1f5f9', borderRadius: 8, padding: 4, margin: '4px 0 12px' }}>
+        {(['create', 'reopt'] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => setMode(m)}
+            style={{
+              padding: '6px 14px', fontSize: 13, fontWeight: 600, borderRadius: 6, cursor: 'pointer', border: 'none',
+              background: mode === m ? '#fff' : 'transparent', color: mode === m ? '#0f172a' : '#64748b',
+              boxShadow: mode === m ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+            }}
+          >{m === 'create' ? 'Create pages' : 'Reoptimize'}</button>
+        ))}
+      </div>
+
+      {mode === 'reopt' ? (
+        <ReoptimizePanel adapter={serviceAdapter(id ?? '')} />
+      ) : (
+      <>
       {/* Planner */}
       <div style={plannerCardStyle}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
@@ -409,6 +433,8 @@ export function ServicePages() {
         )}
         <Pager page={pub.page} pageCount={pub.pageCount} total={pub.total} pageSize={pub.pageSize} onPage={pub.setPage} />
         </>
+      )}
+      </>
       )}
     </div>
   )

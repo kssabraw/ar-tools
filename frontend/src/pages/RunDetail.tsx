@@ -14,6 +14,7 @@ import { sectionsToHtml, escapeHtml } from '../lib/sectionsToHtml'
 import { FeedbackButton } from '../components/FeedbackButton'
 import { ServicePageRunView } from '../components/ServicePageRunView'
 import { FeaturedImagePicker } from '../components/FeaturedImagePicker'
+import { BlogScorePanel } from '../components/reoptimize/BlogScorePanel'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -798,6 +799,14 @@ export function RunDetail() {
             {fmt === 'html' ? fullHtml : fullMarkdown}
           </pre>
         </div>
+      )}
+
+      {/* Score + reoptimize this completed article in place (8-engine rubric). */}
+      {run.status === 'complete' && articleMarkdown && (
+        <BlogScorePanel
+          runId={run.id}
+          onReoptimized={() => queryClient.invalidateQueries({ queryKey: ['run', id] })}
+        />
       )}
 
       {/* Per-zone term usage breakdown — what related keywords, entities,
