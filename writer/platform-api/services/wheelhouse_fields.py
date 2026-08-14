@@ -155,6 +155,18 @@ def word_count(value: str, *, is_html: bool = False) -> int:
     return len(text.split()) if text else 0
 
 
+# Em/en dashes (and the horizontal bar) + their HTML-entity forms → a plain
+# hyphen. Mirrors the Blog Writer's `_strip_em_dashes` convention; applied to
+# LLM-generated copy only. A prompt rule alone is unreliable — the model reaches
+# for em-dashes anyway — so this deterministic pass is the real enforcement.
+_EM_DASH_RE = re.compile(r"—|–|―|&mdash;|&ndash;|&#8212;|&#8211;|&#x201[34];", re.IGNORECASE)
+
+
+def strip_em_dashes(text: str) -> str:
+    """Replace em/en dashes (unicode or HTML entity) with a plain hyphen."""
+    return _EM_DASH_RE.sub("-", text) if isinstance(text, str) else text
+
+
 def coerce_wysiwyg(value: str) -> str:
     """Ensure a wysiwyg value is HTML: if it carries no tag, wrap each blank-line-
     separated paragraph in <p>…</p> (the ACF wysiwyg field expects HTML)."""
@@ -277,9 +289,10 @@ def merge_supplied(generated: dict, supplied: Optional[dict]) -> tuple[dict, dic
         name = spec["name"]
         sup = supplied.get(name)
         if isinstance(sup, str) and sup.strip():
-            value, src = sup.strip(), "supplied"
+            value, src = sup.strip(), "supplied"  # user's text kept verbatim
         elif isinstance(generated.get(name), str) and generated[name].strip():
-            value, src = generated[name].strip(), "generated"
+            # LLM-authored → de-em-dash it (user-supplied text above is untouched).
+            value, src = strip_em_dashes(generated[name].strip()), "generated"
         elif spec.get("is_link"):
             value, src = spec["default"], "default"
         else:

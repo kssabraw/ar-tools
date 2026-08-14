@@ -165,6 +165,36 @@ _VOICE_HEADER = "CLIENT BRAND VOICE (authoritative"
 _ICP_HEADER = "TARGET AUDIENCE / ICP (write for"
 
 
+def test_strip_em_dashes_unicode_and_entities():
+    assert wf.strip_em_dashes("fast—reliable IT") == "fast-reliable IT"
+    assert wf.strip_em_dashes("a – b") == "a - b"                     # en dash
+    assert wf.strip_em_dashes("x&mdash;y &#8212; z &#x2014; w") == "x-y - z - w"
+    assert wf.strip_em_dashes("plain hyphen - stays") == "plain hyphen - stays"
+    assert wf.strip_em_dashes("") == ""
+
+
+def test_merge_supplied_strips_em_dashes_from_generated_only():
+    generated = {n: "word word word" for n in wf.GENERATED_FIELD_NAMES}
+    generated["hero_headline"] = "Fast—reliable IT support"          # generated → stripped
+    supplied = {"hero_body": "We keep it — verbatim"}                # user text → kept
+    acf, sources = wf.merge_supplied(generated, supplied)
+    assert "—" not in acf["hero_headline"] and acf["hero_headline"] == "Fast-reliable IT support"
+    assert "—" in acf["hero_body"]                                   # supplied dash untouched
+    assert sources["hero_body"] == "supplied"
+
+
+def test_generated_acf_has_no_em_dashes_end_to_end():
+    good = {n: "clean copy here" for n in wf.GENERATED_FIELD_NAMES}
+    good["valueband_body"] = "<p>Downtime hurts—we fix it.</p>"
+    with patch.object(wg.report_llm, "run_forced_tool", new=AsyncMock(return_value=good)):
+        res = asyncio.run(wg.generate_fields(state="Florida", city="Miami", service="Managed IT"))
+    assert all("—" not in v for v in res["acf"].values() if isinstance(v, str))
+
+
+def test_system_prompt_forbids_em_dashes():
+    assert "em-dashes" in wg.build_system().lower() or "em-dash" in wg.build_system().lower()
+
+
 def test_build_system_injects_client_voice_and_icp():
     sys_prompt = wg.build_system(
         brand_voice="Warm, plainspoken, no jargon.",

@@ -146,6 +146,8 @@ def build_system(brand_voice: str = "", icp: str = "") -> str:
         f"BRAND FACTS (keep consistent, never contradict): {BRAND_FACTS}.\n\n"
         "RULES:\n"
         "- Write each field within its word range and to its stated focus.\n"
+        "- Never use em-dashes or en-dashes (—, –). Use a comma, a colon, a plain "
+        "hyphen, or split into two sentences instead.\n"
         "- Follow the CLIENT BRAND VOICE and TARGET AUDIENCE above when present; the "
         "BRAND FACTS always win on any factual claim.\n"
         "- Weave the CITY into the location headlines and reflect the SERVICE, so each "
@@ -260,5 +262,6 @@ async def draft_field(
     value = out.get(field_name) if isinstance(out, dict) else None
     if not isinstance(value, str):
         return ""
-    from services.wheelhouse_fields import coerce_wysiwyg
+    from services.wheelhouse_fields import coerce_wysiwyg, strip_em_dashes
+    value = strip_em_dashes(value)  # LLM-authored → de-em-dash (matches generate path)
     return coerce_wysiwyg(value) if spec["type"] == "wysiwyg" else value.strip()
