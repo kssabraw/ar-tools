@@ -6,6 +6,7 @@ import { AppShell } from "../shared/AppShell";
 import { CancelRunButton } from "../shared/CancelRunButton";
 import { CostBanner } from "../shared/CostBanner";
 import { friendlyError } from "../shared/errors";
+import { ResumeReview } from "../shared/ResumeReview";
 import { SessionIdChip } from "../shared/SessionIdChip";
 import { hasResults, isLiveStatus, statusClass, statusLabel } from "../shared/sessionStatus";
 
@@ -131,7 +132,9 @@ export function SessionWorkspace() {
       </div>
 
       <main className="content content-wide">
-        {(session.isLoading || summary.isLoading) && <p className="muted">Loading session…</p>}
+        {(session.isLoading || summary.isLoading || me.isLoading) && (
+          <p className="muted">Loading session…</p>
+        )}
         {session.isError && <p className="form-error">Couldn’t load this session.</p>}
 
         {status === "queued" && (
@@ -168,14 +171,30 @@ export function SessionWorkspace() {
           </div>
         )}
 
+        {/* Editable pre-run states: resume silo review in-place (review → deep-mine
+            → confirm → run), rather than stranding the session with no way to
+            review its silos. `rejected` is the same flow — adjust and resubmit. */}
+        {(status === "awaiting_silo_review" || status === "rejected") && !me.isLoading && (
+          <>
+            {status === "rejected" && summary.data?.approval.note && (
+              <div className="banner">Note from the Owner: {summary.data.approval.note}</div>
+            )}
+            {/* Wait for `me` to settle so `role` is authoritative — the deep-mine
+                cap and approval gating below depend on it (owner vs VA). */}
+            <ResumeReview sessionId={sessionId} role={role} />
+          </>
+        )}
+
         {status && status !== "running" && status !== "queued" && status !== "cancelled" &&
+          status !== "awaiting_silo_review" && status !== "rejected" &&
           !hasResults(status) && (
           <div className="card">
             <p style={{ margin: 0, fontWeight: 600 }}>This session hasn’t produced results yet.</p>
             <p className="muted" style={{ marginBottom: 0 }}>
-              It’s at the “{statusLabel(status)}” stage. Resuming an in-progress run from the UI
-              arrives later; for now, open it from the creation flow or run the remaining pipeline
-              steps via the API.
+              It’s at the “{statusLabel(status)}” stage
+              {status === "pending_approval"
+                ? " — waiting on Owner approval before the run can start."
+                : ". Resuming this stage from the UI isn’t available yet; run the remaining pipeline steps via the API."}
             </p>
           </div>
         )}
