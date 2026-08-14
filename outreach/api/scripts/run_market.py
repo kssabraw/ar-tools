@@ -827,9 +827,15 @@ def cmd_probe_enrich(args) -> int:
     return 1 if errors and not records else 0
 
 
+# Throttle state for the free tech-backlog drain: the monotonic time of its last run in THIS
+# process, so the always-on `tick-loop` runs it at most once per `tech_scan_min_interval_seconds`
+# rather than every ~8s heartbeat. None in a fresh cron process, so the cron always runs it.
+_last_tech_backlog_monotonic: "float | None" = None
+
+
 def cmd_tick(args) -> int:
     """One heartbeat: collect (always, free) + execute at most ONE scan order + at most ONE
-    onboard order + drain enrichment orders.
+    onboard order + drain enrichment orders + a throttled free tech-signal backlog.
 
     This is what the §11 cron runs. It replaces nothing — `collect` remains the pure free
     command — it drains the `scan_request` orders the UI places (DECISIONS.md 2026-08-06) and the
@@ -846,6 +852,7 @@ def cmd_tick(args) -> int:
     next heartbeat starting before it finishes.
     """
     import asyncio as _asyncio
+    import time as _time
 
     from api.services import (
         ai_scan_queue,
@@ -853,6 +860,7 @@ def cmd_tick(args) -> int:
         onboard_queue,
         organic_scan_queue,
         scan_queue,
+        scan_tech,
     )
 
     code = cmd_collect(args)
@@ -880,6 +888,29 @@ def cmd_tick(args) -> int:
         if not r.claimed:
             break
         ai_drains.append(r)
+    # Site tech signals — FREE (own HTTP GET, same posture as `collect`), idempotent, and bounded
+    # (`tech_scan_per_tick`). Fetches prospects lacking a CURRENT tech signal so every scored
+    # prospect carries the Slice-B1 money signal automatically: each new run's survivors, plus any
+    # market scanned before auto-tech existed. No order/token — it bills nothing. Best-effort: a
+    # site that blocks a bot is normal and does not fail the tick. Throttled off the ~8s tick-loop
+    # to at most once per `tech_scan_min_interval_seconds` so its two reads + any fetch batch don't
+    # block order-draining every heartbeat; a fresh cron process (state None) always runs it.
+    global _last_tech_backlog_monotonic
+    if scan_tech.backlog_due(
+        _last_tech_backlog_monotonic, _time.monotonic(), settings.tech_scan_min_interval_seconds
+    ):
+        tech = _asyncio.run(scan_tech.run_tech_backlog(client, settings))
+        _last_tech_backlog_monotonic = _time.monotonic()
+        tech_out = {
+            "considered": tech.considered,
+            "fetched_ok": tech.fetched_ok,
+            "failed": tech.failed,
+            "with_pixel": tech.with_pixel,
+            "with_vendor": tech.with_vendor,
+            "stored": tech.stored,
+        }
+    else:
+        tech_out = {"skipped": "throttled"}
     print(
         json.dumps(
             {
@@ -945,6 +976,7 @@ def cmd_tick(args) -> int:
                     }
                     for o in ai_drains
                 ],
+                "tech": tech_out,
             },
             indent=2,
         )

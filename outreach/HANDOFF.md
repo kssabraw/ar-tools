@@ -244,7 +244,7 @@ Status as of 2026-08-10 (the first live scan is DONE; heatmap slices 1–2, the 
 | AI-visibility scan | `api/services/ai_visibility.py` + `scan-ai` + `ai_region`/`ai_scan_result` (`20260808140000`) | **built + merged** (#617). PAID + gated; ChatGPT + Google AIO per region×keyword; `ai_region` seeded with 11 LA names. **Never run** |
 | Client-report storage | `report_approval` (`20260808160000`) + `report_pdf_storage` (`20260808180000`) + private `outreach-reports` bucket | **applied live**, empty. Approval record (actor + content_hash + storage_path) + signed-URL delivery on Supabase Storage (reporting §5, not R2) |
 | Paid placement (Slice A) | `organic_scan.py` paid/LSA parse + `outreach_report.derive_paid_signal` | **built + merged** (#621). Presence from the SERP already on disk — no new paid call. Reads `not_scanned` until `scan-organic` runs |
-| Site tech signals (Slice B1) | `api/services/tech_signals.py` + `scan_tech.py` + `prospect_tech_signal` (`20260808200000`) | **built + merged** (#621), migration applied live. FREE (`scan-tech` is NOT in PAID_COMMANDS). **Never run** |
+| Site tech signals (Slice B1) | `api/services/tech_signals.py` + `scan_tech.py` + `prospect_tech_signal` (`20260808200000`) | **built + merged** (#621), migration applied live. FREE (`scan-tech` is NOT in PAID_COMMANDS). **Auto-runs each `tick`** (`run_tech_backlog`, throttled to `tech_scan_min_interval_seconds`; DECISIONS 2026-08-14); manual `scan-tech` remains for a single seeded market |
 | §16a.1 pixel spike | `api/services/pixel_probe.py` + `probe-pixel-field` | **built** (#621). PAID + gated; decides whether the Outscraper pull supplies Meta pixel near-free (I-003). **Never run** |
 | Ad-spend magnitude (Slice B2) | — | **NOT built**, deliberately — gated behind the Labs yield spike (I-098) |
 | I-004 spike | `api/services/ai_granularity.py` + `probe-ai-granularity` | **built** (#556), **never run** — needs a Deploy + confirm token |
@@ -944,7 +944,8 @@ In rough value order:
       CallRail/Podium/Birdeye) from a **free** direct site fetch (PRD §B3) — **BUILT** (`scan-tech`, NOT
       in PAID_COMMANDS; `services/tech_signals.py` pure + `scan_tech.py` producer + migration
       `20260808200000_prospect_tech_signal` applied live; a failed fetch stores `unknown`, never
-      `absent`; GTM container-follow behind `tech_follow_gtm`, off until §16a.1 decides — I-097). **B2
+      `absent`; GTM container-follow behind `tech_follow_gtm`, off until §16a.1 decides — I-097; now
+      auto-runs each `tick` via `run_tech_backlog`, DECISIONS 2026-08-14). **B2
       ad-spend MAGNITUDE** (>$2k/mo bands) from DataForSEO Labs — **PAID and DEFERRED** behind a yield
       spike (Labs paid data is likely sparse for small local advertisers — I-098; Labs endpoints added to
       the free probe set). The **§16a.1 pixel spike** (`probe-pixel-field`, gated) is built to decide

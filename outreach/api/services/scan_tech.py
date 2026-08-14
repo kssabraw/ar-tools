@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 import httpx
@@ -185,6 +186,26 @@ async def run_tech_scan(
         prospects = prospects[:limit]
     report.considered = len(prospects)
 
+    await _scan_prospects(db, settings, prospects, fetch=fetch, report=report)
+    return report
+
+
+async def _scan_prospects(
+    db: Any,
+    settings: Settings,
+    prospects: list[dict[str, Any]],
+    *,
+    fetch: FetchFn | None,
+    report: TechScanReport,
+) -> TechScanReport:
+    """Fetch + store tech signals for an already-selected prospect list, tallying into `report`.
+
+    The shared core of the market-scoped `run_tech_scan` and the tick-driven `run_tech_backlog`:
+    bounded concurrency, one site's failure never ends the batch, chunked store. Does NOT set
+    `report.considered` — the caller owns selection and its count."""
+    if not prospects:
+        return report
+
     timeout = settings.tech_fetch_timeout_seconds
     owns = fetch is None
     client = None if not owns else httpx.AsyncClient(
@@ -238,7 +259,111 @@ async def run_tech_scan(
 
     logger.info(
         "tech scan complete",
-        extra={"market_id": market_id, "ok": report.fetched_ok, "failed": report.failed,
+        extra={"market_id": report.market_id, "ok": report.fetched_ok, "failed": report.failed,
                "pixel": report.with_pixel, "ads": report.with_ads, "vendor": report.with_vendor},
     )
+    return report
+
+
+def pick_backlog(
+    candidates: list[dict[str, Any]], signaled: set[str], limit: int | None
+) -> list[dict[str, Any]]:
+    """Prospects that need a tech fetch — a fetchable website AND no current signal — capped at
+    `limit`. Pure, so the "who is due" decision is testable without a DB. Ordering follows
+    `candidates` (the caller orders by ingested_at, so the oldest un-scanned prospects go first and
+    a backlog drains deterministically rather than re-picking the same head every tick)."""
+    out: list[dict[str, Any]] = []
+    for p in candidates:
+        if p.get("id") in signaled:
+            continue
+        if not normalize_site_url(p.get("website")):
+            continue
+        out.append(p)
+        if limit and len(out) >= limit:
+            break
+    return out
+
+
+def backlog_due(
+    last_run_monotonic: float | None, now_monotonic: float, min_interval_seconds: float
+) -> bool:
+    """Whether `tick` should run the tech-backlog drain this heartbeat. Pure.
+
+    Throttles the drain off the hot tick-loop (every ~`tick_loop_interval_seconds`) down to at most
+    once per `min_interval_seconds`, so its two portfolio-sized reads and any site-fetch batch don't
+    run — and block order-draining — every 8s. A caller with no prior run (`None`, e.g. a fresh cron
+    process) always runs it; `min_interval_seconds <= 0` disables the throttle."""
+    if last_run_monotonic is None or min_interval_seconds <= 0:
+        return True
+    return (now_monotonic - last_run_monotonic) >= min_interval_seconds
+
+
+def _signaled_prospect_ids(
+    db: Any, prospect_ids: list[str], *, cutoff_iso: str | None
+) -> set[str]:
+    """Which of `prospect_ids` already carry a CURRENT tech signal. Scoped to the candidate ids
+    (chunked `.in_`, the `enrich_queue._already_enriched` precedent) so the read is bounded by the
+    candidate set, never the whole signal history. `cutoff_iso` None counts ANY signal ever
+    (fetch-once); a timestamp counts only signals at/after it, so an older signal reads as stale and
+    its prospect is re-fetched."""
+    done: set[str] = set()
+    for start in range(0, len(prospect_ids), 500):
+        chunk = prospect_ids[start : start + 500]
+        if not chunk:
+            continue
+
+        def _q(chunk=chunk):
+            b = db.table("prospect_tech_signal").select("prospect_id").in_("prospect_id", chunk)
+            if cutoff_iso is not None:
+                b = b.gte("fetched_at", cutoff_iso)
+            return b
+
+        for row in fetch_all(_q):
+            if row.get("prospect_id"):
+                done.add(row["prospect_id"])
+    return done
+
+
+async def run_tech_backlog(
+    db: Any,
+    settings: Settings,
+    *,
+    limit: int | None = None,
+    refresh_days: int | None = None,
+    fetch: FetchFn | None = None,
+) -> TechScanReport:
+    """Fetch tech signals for prospects lacking a CURRENT one, across every market. FREE + idempotent.
+
+    This is the `tick` drain (owner ruling 2026-08-14: scan-tech runs automatically each cycle). It
+    covers every new run's survivors the cycle after they land AND backfills any market scanned
+    before auto-tech existed — including the any-city onboard markets, which have no definition file
+    for the market-scoped `run_tech_scan` to target. Bounded by `limit` (`tech_scan_per_tick`) so a
+    heartbeat cannot run unboundedly; `refresh_days` (`tech_refresh_days`, 0 = fetch once) decides
+    when an existing signal is stale enough to re-fetch. A tick that finds nothing due costs two
+    reads and stores nothing."""
+    limit = settings.tech_scan_per_tick if limit is None else limit
+    refresh_days = settings.tech_refresh_days if refresh_days is None else refresh_days
+    report = TechScanReport()
+    if limit <= 0:
+        return report
+
+    cutoff_iso: str | None = None
+    if refresh_days > 0:
+        cutoff_iso = (datetime.now(timezone.utc) - timedelta(days=refresh_days)).isoformat()
+
+    def _q():
+        return (
+            db.table("prospect")
+            .select("id, name, website")
+            .not_.is_("website", "null")
+            .order("ingested_at", desc=False)
+        )
+
+    candidates = fetch_all(_q)
+    signaled = _signaled_prospect_ids(
+        db, [p["id"] for p in candidates if p.get("id")], cutoff_iso=cutoff_iso
+    )
+    prospects = pick_backlog(candidates, signaled, limit)
+    report.considered = len(prospects)
+    await _scan_prospects(db, settings, prospects, fetch=fetch, report=report)
     return report
