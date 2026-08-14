@@ -1832,3 +1832,62 @@ the always-on worker:
   `enrich_queue._already_enriched` precedent — so the read is bounded by the candidate set, not the
   whole signal history. This also closes the fetch-once (`tech_refresh_days=0`) path's unfiltered
   full-history read.
+
+---
+
+## 2026-08-14 — Enigma enrichment: owner + contact fallback for what Outscraper couldn't get (NEW VENDOR, gated inert)
+
+Owner request: use Enigma to fill the contact numbers / emails / owner names that Outscraper's
+website scrape (prospect_enrichment / prospect_contact) could not. Enigma resolves a business to its
+LEGAL ENTITY and the people on its government registration — its genuine strength — plus whatever
+contact coordinates and card revenue / growth / location-count it carries. Built the full backend
+layer; no Enigma account exists yet (owner is signing up), so everything is GATED INERT.
+
+**New vendor, so it follows the spend + provenance discipline exactly, as its own tables.** Mirrors
+Outscraper enrichment: a signed order (`enigma_request`) is the spend confirmation, drained by
+`tick`; idempotent (a prospect already `resolved`/`no_match`/`no_contacts` is skipped, never
+re-billed; only `failed` retries); budget-gated (per-order estimate + `budget_denial`); cost_ledger
+write. DELIBERATELY separate tables (`prospect_enigma`) rather than writing into `prospect_contact` —
+that table's store path does an UNSCOPED delete-by-prospect_id, so Enigma rows there would be
+clobbered by a later Outscraper re-enrichment. The `prospect` table stays pristine.
+
+**Gated inert — applying this changes nothing.** Every path checks `settings.enigma_api_key`;
+`enigma_queue.drain` returns immediately when it is blank, so the tick claims no Enigma order and
+spends nothing. `cmd_tick` calls the drain unconditionally (it self-gates). Activation is: apply the
+migration to the Outreacher Supabase project, set `ENIGMA_API_KEY`, done — the code defaults stay
+inert so a fresh environment ships dark. Migration NOT auto-applied here (the Supabase MCP in this
+environment targets AR-Internal-Tools, not Outreacher — two databases; applying an outreach
+migration through the suite connection would be wrong).
+
+**Two paid-signal invariants carried forward (I-099):**
+- **Fabrication gate.** An owner/contact is asserted ONLY when the entity match clears
+  `enigma_min_match_score` (default 0.7). Below it the prospect is `no_match` and NO owner /
+  economics are written — a wrong entity match must never manufacture a false owner or phone. When
+  Enigma returns no confidence of its own, `compute_match_score` derives one from name + phone +
+  website agreement (name alone = 0.55, below the gate on purpose: local businesses share names —
+  proposal §22).
+- **Which source fired.** The chosen owner carries `owner_evidence` (gov_registration | contact_data
+  | both), so a surface claims only what that source measured.
+
+**Owner choice is role-scored, not first-returned.** `enigma_enrich.role_score` encodes the
+proposal's role→priority table; `choose_owner` picks the highest and REFUSES anyone below
+`DECISION_MAKER_FLOOR` (40) — so an entity whose only person is a registered agent (an attorney /
+filing service, score 20) yields NO owner, never a false one. All candidates are kept in `officers`
+(jsonb) for inspection.
+
+**Economics captured, NOT scored.** card_revenue / growth / location_count land on `prospect_enigma`
+for qualification / segmentation / a future tool, but are NOT wired into the scorecard — the
+2026-08 analysis stands: under flat pricing the value dimension is inert for ranking (scoring-spec
+§4). The scorecard is unchanged.
+
+**Response shape is provisional (I-114).** No live Enigma call has run, so the GraphQL selection-set
+field names (`enigma_client._SELECTION`) and the person-provenance heuristic are best-effort against
+Enigma's published shape (Relay edges/node; Brand/LegalEntity/Person; `x-api-key`; the
+`search(searchInput:{name,entityType,address})` example). GraphQL fails the whole query on a wrong
+field, so the client surfaces a GraphQL `errors` block as a RETRYABLE failure (never a silent
+no_match) — the first live run reports exactly which fields to fix, in the one isolated place, and
+the parse is already shape-tolerant with `raw` kept for recovery (the domains_service precedent).
+
+**Scope this slice:** outreach backend only (migration, config, `enigma_client` / `enigma_enrich` /
+`enigma_queue`, tick wiring, 18 unit tests). The platform-api surface (estimate / place order / list
+/ read) + the UI (a sibling of the Outscraper Enrichment panel) are the next slice.
