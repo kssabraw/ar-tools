@@ -219,6 +219,7 @@ def build_sie_output(
     avoid: list[str] | None = None,
     warnings: list[str] | None = None,
     analyzed_pages: list | None = None,
+    entity_benchmark_target: int = 0,
 ):
     """Assemble the SIEOutput (Writer Input C, schema 1.4). `required` must already
     be scored + filtered; `entities` are models.Entity; the target keyword is merged
@@ -281,6 +282,7 @@ def build_sie_output(
         terms=Terms(required=req_models, avoid=list(avoid or [])),
         usage_recommendations=usage,
         entities=[e if isinstance(e, Entity) else Entity(**e) for e in entities],
+        entity_benchmark_target=entity_benchmark_target,
         warnings=list(warnings or []),
         pages=list(analyzed_pages or []),
     )

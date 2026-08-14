@@ -105,6 +105,11 @@ class SIEOutput(BaseModel):
     terms: Terms
     usage_recommendations: list[UsageRecommendation] = Field(default_factory=list)
     entities: list[Entity] = Field(default_factory=list)
+    # Distinct entities the MOST AGGRESSIVE competitor covers (trimmed max of
+    # per-competitor distinct-entity counts). Sizes how many entities the writer
+    # surfaces + must cover. Additive to schema 1.4 — old cached analyses that
+    # predate it deserialize to 0, and the writer falls back to its default count.
+    entity_benchmark_target: int = 0
     # M12 extras (Writer-ignored): degraded-confidence / conflict warnings, and the
     # analyzed/excluded URL provenance for the owner report (plan §6).
     warnings: list[str] = Field(default_factory=list)
