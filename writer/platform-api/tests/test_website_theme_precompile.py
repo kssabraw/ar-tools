@@ -14,6 +14,7 @@ restatement of whatever the code happened to produce.
 from __future__ import annotations
 
 import pathlib
+import re
 
 import pytest
 
@@ -256,3 +257,143 @@ class TestResidue:
     )
     def test_each_kind_of_residue_is_named(self, markup, expected):
         assert expected in pc.residue(markup)
+
+
+class TestLayoutSelection:
+    """The layout manifest — which house-component variant each screen renders.
+
+    Deterministic like the token pass: the hero image's side is read from the
+    screen's own DOM order, and only ever moved between the sides the template
+    implements — never to a value that could break a build.
+    """
+
+    def test_hero_after_heading_is_right(self):
+        html = '<section><h1>We fix roofs</h1><div>[hero photo: a roof]</div></section>'
+        assert pc.hero_image_position(html) == "right"
+
+    def test_hero_before_heading_is_left(self):
+        html = '<section><div>[hero photo: a roof]</div><h1>We fix roofs</h1></section>'
+        assert pc.hero_image_position(html) == "left"
+
+    def test_no_hero_image_is_none(self):
+        # A text-only screen: the compiler omits it so the resolver's default
+        # (show a generated hero on the right) applies — the compiler moves an
+        # image, it never suppresses one.
+        html = '<section><h1>About us</h1><p>Prose only.</p></section>'
+        assert pc.hero_image_position(html) is None
+
+    def test_non_hero_thumbnail_does_not_count_as_a_hero(self):
+        # A card thumbnail is not a banner; only a hero-labelled slot decides the
+        # hero layout.
+        html = '<section><div>[photo: a small card thumbnail]</div><h1>Topics</h1></section>'
+        assert pc.hero_image_position(html) is None
+
+    def test_hero_with_no_heading_defaults_to_right(self):
+        html = '<section><div>[hero photo: a roof]</div></section>'
+        assert pc.hero_image_position(html) == "right"
+
+    def test_clamp_rejects_anything_off_the_whitelist(self):
+        assert pc._clamp_hero_image("sideways") is None
+        assert pc._clamp_hero_image(None) is None
+        for good in pc.HERO_IMAGE_POSITIONS:
+            assert pc._clamp_hero_image(good) == good
+
+    def test_manifest_over_the_real_export(self, result):
+        # The reference export's home and article carry hero photos that sit
+        # after their headings; the other four screens carry none.
+        manifest = pc.build_layout_manifest(result)
+        assert manifest["version"] == pc.LAYOUT_MANIFEST_VERSION
+        assert set(manifest["screens"]) == {"home", "article"}
+        assert manifest["screens"]["home"]["hero"]["image"] == "right"
+        assert manifest["screens"]["article"]["hero"]["image"] == "right"
+
+    def test_manifest_only_names_implemented_variants(self, result):
+        # Every value the compiler emits must be one the template can render, or
+        # the site ships a layout that does not exist.
+        manifest = pc.build_layout_manifest(result)
+        for sel in manifest["screens"].values():
+            assert sel["hero"]["image"] in pc.HERO_IMAGE_POSITIONS
+
+
+class TestCardGridDensity:
+    """Card-grid column density — a theme-wide trait read from the design's own
+    declared `grid-template-columns`. Only symmetric grids count; an asymmetric
+    value is a content split, not a card row."""
+
+    def test_symmetric_grid_gives_its_track_count(self):
+        assert pc._grid_column_count("1fr 1fr 1fr") == 3
+        assert pc._grid_column_count("1fr 1fr") == 2
+
+    def test_repeat_form_is_read(self):
+        assert pc._grid_column_count("repeat(4, 1fr)") == 4
+
+    def test_asymmetric_split_is_not_a_card_grid(self):
+        # A media/content split, not a row of equal cards.
+        assert pc._grid_column_count("1.35fr 1fr") is None
+        assert pc._grid_column_count("2fr 1fr") is None
+
+    def test_out_of_range_track_counts_are_ignored(self):
+        assert pc._grid_column_count("1fr") is None
+        assert pc._grid_column_count("1fr 1fr 1fr 1fr 1fr") is None
+        assert pc._grid_column_count("repeat(8, 1fr)") is None
+
+    def test_dominant_count_wins(self):
+        pre = pc.Precompiled(
+            screens=[
+                pc.Screen(key="a", flag="isA", html='<div style="grid-template-columns:1fr 1fr 1fr"></div>'),
+                pc.Screen(key="b", flag="isB", html='<div style="grid-template-columns:1fr 1fr 1fr"></div>'),
+                pc.Screen(key="c", flag="isC", html='<div style="grid-template-columns:1fr 1fr"></div>'),
+            ]
+        )
+        assert pc.card_grid_columns(pre) == 3
+
+    def test_no_grid_declares_nothing(self):
+        pre = pc.Precompiled(screens=[pc.Screen(key="a", flag="isA", html="<div>no grid here</div>")])
+        assert pc.card_grid_columns(pre) is None
+
+    def test_clamp_rejects_off_whitelist(self):
+        assert pc._clamp_columns(7) is None
+        assert pc._clamp_columns(None) is None
+        for good in pc.CARD_COLUMN_CHOICES:
+            assert pc._clamp_columns(good) == good
+
+    def test_manifest_carries_card_columns_over_the_real_export(self, result):
+        # The reference export's card grids are predominantly three-up.
+        manifest = pc.build_layout_manifest(result)
+        assert manifest["components"]["cardColumns"] == 3
+
+    def test_manifest_omits_components_when_undeclared(self):
+        pre = pc.Precompiled(screens=[pc.Screen(key="home", flag="isHome", html="<div>prose</div>")])
+        manifest = pc.build_layout_manifest(pre)
+        # No card grid measured → no components block → the grids keep their own min.
+        assert "components" not in manifest
+
+
+class TestWhitelistContractWithTemplate:
+    """The one real risk in the layout design: the compiler's whitelists (here)
+    and the template resolver's whitelists (src/lib/layouts.ts) drifting apart.
+    If the compiler emits a value the template doesn't list, the resolver's
+    default silently swallows it — a fidelity choice lost with no error. This
+    locks the two sides together, the same way the vendored-doc sync tests do."""
+
+    LAYOUTS_TS = (
+        pathlib.Path(__file__).resolve().parents[3]
+        / "site-template" / "src" / "lib" / "layouts.ts"
+    )
+
+    def _ts_source(self) -> str:
+        return self.LAYOUTS_TS.read_text(encoding="utf-8")
+
+    def test_hero_image_positions_match(self):
+        src = self._ts_source()
+        m = re.search(r"HERO_IMAGE_POSITIONS\s*=\s*new Set<[^>]+>\(\[([^\]]*)\]\)", src)
+        assert m, "could not find HERO_IMAGE_POSITIONS in layouts.ts"
+        ts_values = tuple(re.findall(r"'([^']+)'", m.group(1)))
+        assert set(ts_values) == set(pc.HERO_IMAGE_POSITIONS)
+
+    def test_card_columns_match(self):
+        src = self._ts_source()
+        m = re.search(r"CARD_COLUMNS\s*=\s*new Set<[^>]+>\(\[([^\]]*)\]\)", src)
+        assert m, "could not find CARD_COLUMNS in layouts.ts"
+        ts_values = tuple(int(n) for n in re.findall(r"\d+", m.group(1)))
+        assert set(ts_values) == set(pc.CARD_COLUMN_CHOICES)

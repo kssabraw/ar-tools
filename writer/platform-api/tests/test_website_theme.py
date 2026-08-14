@@ -262,7 +262,8 @@ class TestCompileWiring:
         monkeypatch.setattr(wt.fonts, "fetch_font_bundle", fake_fonts)
 
         files, record, _pre = await wt.compile_design(design.encode("utf-8"))
-        assert set(files) == {"tokens.css", "fonts/space-grotesk-400-latin.woff2"}
+        # layouts.json is always emitted alongside tokens.css (the layout manifest).
+        assert set(files) == {"tokens.css", "layouts.json", "fonts/space-grotesk-400-latin.woff2"}
         # The @font-face block must precede :root, or the family it declares is
         # named by a variable nothing has loaded yet.
         css = files["tokens.css"].decode()
@@ -283,7 +284,7 @@ class TestCompileWiring:
         files, record, _pre = await wt.compile_design(design.encode("utf-8"))
         # Degrades to naming the families — the behaviour before self-hosting
         # existed — rather than refusing to produce a theme.
-        assert set(files) == {"tokens.css"}
+        assert set(files) == {"tokens.css", "layouts.json"}
         assert record["selfHostedFonts"] == 0
         assert record["webFonts"] == ["Space Grotesk", "Libre Franklin"]
 

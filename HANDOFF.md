@@ -1,10 +1,10 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-07 · **Website Builder — theme compiler + core-pages writer + imagery (PR #575, open/draft)** (latest)
+## ⏩ Update — 2026-08-07 · **Website Builder — theme compiler + core-pages writer + imagery (PR #575, MERGED)** (latest)
 
 Closes the owner's four-step arc — *upload a Claude design → write the pages →
 generate images → push to a repo*. Three slices on **`claude/website-builder-slice-3-9an50d`**,
-three commits, CI green, **not yet merged**. Still dark behind
+three commits, CI green, **merged to `main` 2026-08-07**. Still dark behind
 `website_builder_enabled`; imagery additionally behind `website_images_enabled`
 (both default False — unchanged, nothing has run).
 

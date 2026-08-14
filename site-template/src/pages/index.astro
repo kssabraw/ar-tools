@@ -8,6 +8,7 @@ import TrustBadgeRow from '../theme/components/TrustBadgeRow.astro';
 import CTABand from '../theme/components/CTABand.astro';
 import ReviewStrip from '../theme/components/ReviewStrip.astro';
 import { site, isLocal, has } from '../lib/site';
+import { heroImagePosition } from '../lib/layouts';
 import { allPosts, routedPages, corePage } from '../lib/content';
 
 const home = await corePage('home');
@@ -39,6 +40,7 @@ const latest = posts.slice(0, isLocal ? 3 : 6);
     secondaryHref={isLocal && services.length > 0 ? '/sitemap/' : undefined}
     image={home?.data.heroImage}
     imageAlt={home?.data.heroImageAlt}
+    imagePosition={heroImagePosition('home')}
   />
 
   <ServiceCardGrid
