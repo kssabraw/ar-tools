@@ -27,9 +27,15 @@ const HERO_IMAGE_POSITIONS = new Set<HeroImagePosition>(['right', 'left', 'none'
 // theme) renders exactly as before this seam existed.
 const HERO_IMAGE_DEFAULT: HeroImagePosition = 'right';
 
+/** How many columns the card grids use. A theme-wide trait, not per-screen. */
+export type CardColumns = 2 | 3 | 4;
+
+const CARD_COLUMNS = new Set<CardColumns>([2, 3, 4]);
+
 interface LayoutManifest {
   version?: number;
   screens?: Record<string, { hero?: { image?: string } }>;
+  components?: { cardColumns?: number };
 }
 
 const manifest = raw as unknown as LayoutManifest;
@@ -40,4 +46,15 @@ export function heroImagePosition(screen: string): HeroImagePosition {
   return HERO_IMAGE_POSITIONS.has(value as HeroImagePosition)
     ? (value as HeroImagePosition)
     : HERO_IMAGE_DEFAULT;
+}
+
+/**
+ * The card-grid column count the theme selects, or `undefined` when the design
+ * didn't declare one — in which case each grid keeps its own content-tuned
+ * density (the house behaviour). Validated against the fixed set so a compiled
+ * theme can never ask for a column count the grid can't render.
+ */
+export function cardColumns(): CardColumns | undefined {
+  const value = manifest.components?.cardColumns;
+  return CARD_COLUMNS.has(value as CardColumns) ? (value as CardColumns) : undefined;
 }

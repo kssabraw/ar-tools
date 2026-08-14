@@ -425,19 +425,76 @@ def _clamp_hero_image(value: Optional[str]) -> Optional[str]:
     return value if value in HERO_IMAGE_POSITIONS else None
 
 
-def build_layout_manifest(pre: "Precompiled") -> dict:
-    """The ``layouts.json`` a compiled theme ships: per-screen variant selections.
+# Card-grid density — how many columns the design's own card grids use. The
+# template's CardGridBase otherwise derives columns from a fixed min width and
+# so never honours a design that is, say, deliberately 2-up and spacious. This
+# is a theme-wide trait (a design's card density is one choice, not per screen),
+# read from the design's declared `grid-template-columns`.
+CARD_COLUMN_CHOICES = (2, 3, 4)
 
-    Pure: measurements in, the manifest dict out. Screens with no hero image
-    slot are omitted rather than forced to a default, so the file stays a record
-    of what was actually measured.
+_GRID_TEMPLATE_COLUMNS_RE = re.compile(r"grid-template-columns\s*:\s*([^;\"']+)", re.I)
+_GRID_REPEAT_RE = re.compile(r"repeat\(\s*(\d+)\s*,", re.I)
+
+
+def _grid_column_count(value: str) -> Optional[int]:
+    """Columns declared by one `grid-template-columns` value, if it is a card grid.
+
+    Only *symmetric* grids count: card grids use equal tracks (`1fr 1fr 1fr`),
+    while an asymmetric value (`1.35fr 1fr`) is a content/media split, not a card
+    row, and must not be read as a column choice. Returns None outside 2–4.
+    """
+    text = value.strip()
+    repeat = _GRID_REPEAT_RE.search(text)
+    if repeat:
+        count = int(repeat.group(1))
+        return count if count in CARD_COLUMN_CHOICES else None
+    tracks = text.split()
+    if len(tracks) not in CARD_COLUMN_CHOICES:
+        return None
+    # Equal tracks only — one distinct track width means a real card grid.
+    if len(set(tracks)) != 1:
+        return None
+    return len(tracks)
+
+
+def card_grid_columns(pre: "Precompiled") -> Optional[int]:
+    """The design's dominant card-grid column count, or None when unmeasured."""
+    counts = [
+        count
+        for screen in pre.screens
+        for match in _GRID_TEMPLATE_COLUMNS_RE.finditer(screen.html or "")
+        if (count := _grid_column_count(match.group(1)))
+    ]
+    if not counts:
+        return None
+    return Counter(counts).most_common(1)[0][0]
+
+
+def _clamp_columns(value: Optional[int]) -> Optional[int]:
+    """Whitelist guard for the card-grid column choice."""
+    return value if value in CARD_COLUMN_CHOICES else None
+
+
+def build_layout_manifest(pre: "Precompiled") -> dict:
+    """The ``layouts.json`` a compiled theme ships: per-screen + theme-wide selections.
+
+    Pure: measurements in, the manifest dict out. A screen with no hero image
+    slot, or a theme-wide trait the design didn't declare, is omitted rather
+    than forced to a default, so the file stays a record of what was actually
+    measured.
     """
     screens: dict[str, dict] = {}
     for screen in pre.screens:
         position = _clamp_hero_image(hero_image_position(screen.html))
         if position:
             screens[screen.key] = {"hero": {"image": position}}
-    return {"version": LAYOUT_MANIFEST_VERSION, "screens": screens}
+
+    manifest: dict = {"version": LAYOUT_MANIFEST_VERSION, "screens": screens}
+
+    columns = _clamp_columns(card_grid_columns(pre))
+    if columns:
+        manifest["components"] = {"cardColumns": columns}
+    return manifest
 
 
 def _sample_arrays(script: str) -> dict[str, str]:

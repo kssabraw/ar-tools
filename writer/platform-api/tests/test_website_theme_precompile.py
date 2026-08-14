@@ -312,3 +312,57 @@ class TestLayoutSelection:
         manifest = pc.build_layout_manifest(result)
         for sel in manifest["screens"].values():
             assert sel["hero"]["image"] in pc.HERO_IMAGE_POSITIONS
+
+
+class TestCardGridDensity:
+    """Card-grid column density — a theme-wide trait read from the design's own
+    declared `grid-template-columns`. Only symmetric grids count; an asymmetric
+    value is a content split, not a card row."""
+
+    def test_symmetric_grid_gives_its_track_count(self):
+        assert pc._grid_column_count("1fr 1fr 1fr") == 3
+        assert pc._grid_column_count("1fr 1fr") == 2
+
+    def test_repeat_form_is_read(self):
+        assert pc._grid_column_count("repeat(4, 1fr)") == 4
+
+    def test_asymmetric_split_is_not_a_card_grid(self):
+        # A media/content split, not a row of equal cards.
+        assert pc._grid_column_count("1.35fr 1fr") is None
+        assert pc._grid_column_count("2fr 1fr") is None
+
+    def test_out_of_range_track_counts_are_ignored(self):
+        assert pc._grid_column_count("1fr") is None
+        assert pc._grid_column_count("1fr 1fr 1fr 1fr 1fr") is None
+        assert pc._grid_column_count("repeat(8, 1fr)") is None
+
+    def test_dominant_count_wins(self):
+        pre = pc.Precompiled(
+            screens=[
+                pc.Screen(key="a", flag="isA", html='<div style="grid-template-columns:1fr 1fr 1fr"></div>'),
+                pc.Screen(key="b", flag="isB", html='<div style="grid-template-columns:1fr 1fr 1fr"></div>'),
+                pc.Screen(key="c", flag="isC", html='<div style="grid-template-columns:1fr 1fr"></div>'),
+            ]
+        )
+        assert pc.card_grid_columns(pre) == 3
+
+    def test_no_grid_declares_nothing(self):
+        pre = pc.Precompiled(screens=[pc.Screen(key="a", flag="isA", html="<div>no grid here</div>")])
+        assert pc.card_grid_columns(pre) is None
+
+    def test_clamp_rejects_off_whitelist(self):
+        assert pc._clamp_columns(7) is None
+        assert pc._clamp_columns(None) is None
+        for good in pc.CARD_COLUMN_CHOICES:
+            assert pc._clamp_columns(good) == good
+
+    def test_manifest_carries_card_columns_over_the_real_export(self, result):
+        # The reference export's card grids are predominantly three-up.
+        manifest = pc.build_layout_manifest(result)
+        assert manifest["components"]["cardColumns"] == 3
+
+    def test_manifest_omits_components_when_undeclared(self):
+        pre = pc.Precompiled(screens=[pc.Screen(key="home", flag="isHome", html="<div>prose</div>")])
+        manifest = pc.build_layout_manifest(pre)
+        # No card grid measured → no components block → the grids keep their own min.
+        assert "components" not in manifest
