@@ -284,17 +284,44 @@ def pick_backlog(
     return out
 
 
-def _signaled_prospect_ids(db: Any, *, cutoff_iso: str | None) -> set[str]:
-    """prospect_ids that already carry a CURRENT tech signal. `cutoff_iso` None counts ANY signal
-    ever (fetch-once); a timestamp counts only signals at/after it, so an older signal reads as
-    stale and its prospect is re-fetched."""
-    def _q():
-        b = db.table("prospect_tech_signal").select("prospect_id")
-        if cutoff_iso is not None:
-            b = b.gte("fetched_at", cutoff_iso)
-        return b
+def backlog_due(
+    last_run_monotonic: float | None, now_monotonic: float, min_interval_seconds: float
+) -> bool:
+    """Whether `tick` should run the tech-backlog drain this heartbeat. Pure.
 
-    return {r["prospect_id"] for r in fetch_all(_q) if r.get("prospect_id")}
+    Throttles the drain off the hot tick-loop (every ~`tick_loop_interval_seconds`) down to at most
+    once per `min_interval_seconds`, so its two portfolio-sized reads and any site-fetch batch don't
+    run — and block order-draining — every 8s. A caller with no prior run (`None`, e.g. a fresh cron
+    process) always runs it; `min_interval_seconds <= 0` disables the throttle."""
+    if last_run_monotonic is None or min_interval_seconds <= 0:
+        return True
+    return (now_monotonic - last_run_monotonic) >= min_interval_seconds
+
+
+def _signaled_prospect_ids(
+    db: Any, prospect_ids: list[str], *, cutoff_iso: str | None
+) -> set[str]:
+    """Which of `prospect_ids` already carry a CURRENT tech signal. Scoped to the candidate ids
+    (chunked `.in_`, the `enrich_queue._already_enriched` precedent) so the read is bounded by the
+    candidate set, never the whole signal history. `cutoff_iso` None counts ANY signal ever
+    (fetch-once); a timestamp counts only signals at/after it, so an older signal reads as stale and
+    its prospect is re-fetched."""
+    done: set[str] = set()
+    for start in range(0, len(prospect_ids), 500):
+        chunk = prospect_ids[start : start + 500]
+        if not chunk:
+            continue
+
+        def _q(chunk=chunk):
+            b = db.table("prospect_tech_signal").select("prospect_id").in_("prospect_id", chunk)
+            if cutoff_iso is not None:
+                b = b.gte("fetched_at", cutoff_iso)
+            return b
+
+        for row in fetch_all(_q):
+            if row.get("prospect_id"):
+                done.add(row["prospect_id"])
+    return done
 
 
 async def run_tech_backlog(
@@ -323,7 +350,6 @@ async def run_tech_backlog(
     cutoff_iso: str | None = None
     if refresh_days > 0:
         cutoff_iso = (datetime.now(timezone.utc) - timedelta(days=refresh_days)).isoformat()
-    signaled = _signaled_prospect_ids(db, cutoff_iso=cutoff_iso)
 
     def _q():
         return (
@@ -333,7 +359,11 @@ async def run_tech_backlog(
             .order("ingested_at", desc=False)
         )
 
-    prospects = pick_backlog(fetch_all(_q), signaled, limit)
+    candidates = fetch_all(_q)
+    signaled = _signaled_prospect_ids(
+        db, [p["id"] for p in candidates if p.get("id")], cutoff_iso=cutoff_iso
+    )
+    prospects = pick_backlog(candidates, signaled, limit)
     report.considered = len(prospects)
     await _scan_prospects(db, settings, prospects, fetch=fetch, report=report)
     return report

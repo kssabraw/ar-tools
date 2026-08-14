@@ -1813,3 +1813,22 @@ NOT-EXISTS view / RPC — cheapest-to-reverse, so deferred until it bites.
 `_scan_prospects`; add `pick_backlog` + `run_tech_backlog`), `run_market.py` (`cmd_tick` drain +
 output block), `tests/test_scan_tech.py`. No migration — `prospect_tech_signal` already exists and
 the write path is unchanged.
+
+**Addendum (same day, adversarial self-review).** Two corrections after tracing the drain against
+the always-on worker:
+
+- **Throttle — the drain runs on the ~8s `tick-loop`, not the 15-min cron.** The paragraph above
+  said "two cheap reads per tick"; under `cmd_tick_loop` (`tick_loop_interval_seconds`=8) that is
+  ~two portfolio reads every 8s forever, and a real backlog's synchronous site-fetch batch (up to
+  `tech_scan_per_tick`/`tech_scan_concurrency` × `tech_fetch_timeout_seconds`) blocks the next
+  heartbeat — the one that drains newly-placed enrich/scan orders. So the drain is now throttled by
+  the pure `scan_tech.backlog_due(last, now, tech_scan_min_interval_seconds)` (default 300s), keyed
+  off a monotonic timestamp held in a `run_market` module global: a fresh cron process (state None)
+  always runs it, the daemon runs it at most every ~5 min. `tech_scan_per_tick` was also lowered
+  100→50 to halve the worst-case iteration block (~75s at 50/8/12). A throttled heartbeat emits
+  `"tech": {"skipped": "throttled"}`.
+- **Scoped signal read.** `_signaled_prospect_ids` now takes the candidate prospect ids and queries
+  `prospect_tech_signal` with a chunked `.in_` (+ the `fetched_at` cutoff) — the
+  `enrich_queue._already_enriched` precedent — so the read is bounded by the candidate set, not the
+  whole signal history. This also closes the fetch-once (`tech_refresh_days=0`) path's unfiltered
+  full-history read.

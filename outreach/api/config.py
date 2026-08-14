@@ -291,8 +291,19 @@ class Settings(BaseSettings):
     # without a manual `scan-tech` per market (which needs a definition file the any-city onboard
     # path has none of). FREE — an own HTTP GET, same posture as `collect` — idempotent (a prospect
     # already carrying a CURRENT signal is skipped, never re-fetched), and bounded per heartbeat so
-    # one large market cannot monopolize a tick. 0 disables the drain entirely.
-    tech_scan_per_tick: int = 100
+    # one large market cannot monopolize a tick. 0 disables the drain entirely. Kept modest because
+    # the drain runs synchronously inside the tick: worst-case iteration time is roughly
+    # per_tick / tech_scan_concurrency × tech_fetch_timeout_seconds (≈75s at 50/8/12), and while it
+    # runs the tick-loop's next iteration — which drains newly-placed enrich/scan orders — cannot
+    # start, so this caps how long an order can wait behind a tech batch.
+    tech_scan_per_tick: int = 50
+    # The tech backlog does two portfolio-sized reads (candidate prospects + their signals), so on
+    # the always-on `tick-loop` (every `tick_loop_interval_seconds`, ~8s) running it every heartbeat
+    # would be constant read load for a drain that is empty most of the time. Throttle it to at most
+    # once per this many seconds: a fresh cron process (long-lived state absent) always runs it, and
+    # the daemon runs it occasionally so order-draining stays near-instant between tech batches. 0
+    # disables the throttle (run every tick).
+    tech_scan_min_interval_seconds: int = 300
     # Re-fetch a prospect's site once its latest tech signal is older than this many days. Tech
     # stacks change on a scale of months (a business installs CallRail once), and re-fetching hits
     # third-party sites, so a light cadence keeps the vendor-failing pairing honest (tech present +

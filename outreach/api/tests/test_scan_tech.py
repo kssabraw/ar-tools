@@ -158,6 +158,7 @@ class _BacklogTable:
         self.name = name
         self._lo = self._hi = None
         self._gte = None
+        self._in = None
 
     def select(self, *_a): return self
     def eq(self, *_a): return self
@@ -169,6 +170,10 @@ class _BacklogTable:
 
     def gte(self, _col, value):
         self._gte = value
+        return self
+
+    def in_(self, _col, values):
+        self._in = set(values)
         return self
 
     def range(self, lo, hi):
@@ -185,7 +190,8 @@ class _BacklogTable:
         elif self.name == "prospect_tech_signal":
             rows = [
                 s for s in self.store.get("signals", [])
-                if self._gte is None or s.get("fetched_at", "") >= self._gte
+                if (self._gte is None or s.get("fetched_at", "") >= self._gte)
+                and (self._in is None or s.get("prospect_id") in self._in)
             ]
         else:
             rows = []
@@ -252,3 +258,15 @@ def test_run_tech_backlog_disabled_when_per_tick_zero():
     report = _run(scan_tech.run_tech_backlog(db, _settings(tech_scan_per_tick=0), fetch=fetch))
     assert report.considered == 0 and report.stored == 0
     assert "inserted" not in store
+
+
+def test_backlog_due_throttles_off_the_hot_loop():
+    # No prior run this process (a fresh cron tick) -> always due.
+    assert scan_tech.backlog_due(None, 1000.0, 300) is True
+    # Throttle disabled -> always due.
+    assert scan_tech.backlog_due(1000.0, 1000.0, 0) is True
+    # Inside the window -> skip this heartbeat.
+    assert scan_tech.backlog_due(1000.0, 1200.0, 300) is False
+    # At/after the window -> due (>=).
+    assert scan_tech.backlog_due(1000.0, 1300.0, 300) is True
+    assert scan_tech.backlog_due(1000.0, 1600.0, 300) is True
