@@ -58,6 +58,7 @@ from fanout.pipeline.recursive_fanout import (
     run_recursive_expansion,
 )
 from fanout.storage import silo as store
+from fanout.storage.write_retry import call_with_transport_retry
 from fanout import prepublish_rank
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,44 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pipeline")
 
 def _short(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"[:500]
+
+
+def _log_write_retry(what: str, session_id: str):
+    def _cb(exc: BaseException, attempt: int) -> None:
+        logger.warning(
+            "db_write_retry",
+            extra={"event": "db_write_retry", "what": what,
+                   "session_id": session_id, "attempt": attempt,
+                   "reason": repr(exc)},
+        )
+    return _cb
+
+
+def _persist_gated_pool(session_id: str, per_topic_gated) -> None:
+    """Replace the session's keyword pool with the freshly-gated one, retried on a
+    transient Supabase transport drop. Delete-then-insert runs as ONE idempotent
+    unit: a retry re-runs the delete first, so a batch that committed server-side
+    before the connection dropped is cleared rather than duplicated. This is the
+    write that stranded session BPC-157 (2026-08-14) — a single
+    `RemoteProtocolError: Server disconnected` mid-insert aborted the whole expand
+    job, leaving a complete pool with no clustering log and status=error."""
+
+    def _do() -> None:
+        store.delete_keywords_for_session(session_id)
+        store.insert_classified_keywords(session_id, per_topic_gated)
+
+    call_with_transport_retry(_do, on_retry=_log_write_retry("persist_pool", session_id))
+
+
+def _finalize_with_retry(session_id: str, fields: dict) -> bool:
+    """Write a job's terminal status + clustering log, retried on a transient
+    transport drop. Idempotent: `try_finalize_running` is guarded on
+    status='running', so a retry after a committed-but-disconnected write simply
+    matches no row and returns False."""
+    return call_with_transport_retry(
+        lambda: store.try_finalize_running(session_id, fields),
+        on_retry=_log_write_retry("finalize", session_id),
+    )
 
 
 @lru_cache(maxsize=4)
@@ -341,10 +380,9 @@ def run_expand_job(session_id: str) -> None:
             source_guard_min_score=s.fanout_source_guard_min_score,
             source_guard_min_seed_tokens=s.fanout_source_guard_min_seed_tokens,
         )
-        store.delete_keywords_for_session(session_id)
-        store.insert_classified_keywords(session_id, result.per_topic_gated)
+        _persist_gated_pool(session_id, result.per_topic_gated)
         _maybe_enrich_metrics(session, result.per_topic_gated)
-        store.try_finalize_running(
+        _finalize_with_retry(
             session_id,
             {
                 "statistical_clustering_log": result.clustering_log,
@@ -499,10 +537,9 @@ def run_regate_job(
             source_guard_min_seed_tokens=s.fanout_source_guard_min_seed_tokens,
         )
         store.reset_article_planning(session_id)
-        store.delete_keywords_for_session(session_id)
-        store.insert_classified_keywords(session_id, gc.per_topic_gated)
+        _persist_gated_pool(session_id, gc.per_topic_gated)
         _maybe_enrich_metrics(session, gc.per_topic_gated)
-        store.try_finalize_running(
+        _finalize_with_retry(
             session_id,
             {
                 "statistical_clustering_log": gc.clustering_log,
@@ -594,11 +631,10 @@ def run_fanout_job(
             source_guard_min_seed_tokens=s.fanout_source_guard_min_seed_tokens,
         )
         store.reset_article_planning(session_id)
-        store.delete_keywords_for_session(session_id)
-        store.insert_classified_keywords(session_id, gc.per_topic_gated)
+        _persist_gated_pool(session_id, gc.per_topic_gated)
         _maybe_enrich_metrics(session, gc.per_topic_gated)
         new_settings = {**(session.get("settings") or {}), "recursive_fanout": True}
-        store.try_finalize_running(
+        _finalize_with_retry(
             session_id,
             {
                 "settings": new_settings,
