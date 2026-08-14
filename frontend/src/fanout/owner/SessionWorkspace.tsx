@@ -100,6 +100,21 @@ export function SessionWorkspace() {
   const topicName = (tid: string) => topics.find((t) => t.id === tid)?.name ?? "Unknown topic";
   const tabs = role === "owner" ? OWNER_TABS : VA_TABS;
 
+  // A run that errored *after* its keyword pool was persisted — e.g. a transient
+  // Supabase disconnect between the keyword insert and the clustering-log write,
+  // the failure that stranded a $7 pool on 2026-08-14 — leaves a complete,
+  // resumable pool with only the clustering log missing. Re-gate rebuilds the
+  // clustering from the stored keywords with no new expansion spend, so an errored
+  // owner session that still has keywords on file offers recovery instead of only
+  // "start over". Gated on a non-empty pool so a run that died mid-expansion (no
+  // usable pool) still points at a fresh session.
+  const poolCounts = summary.data?.expansion?.counts;
+  const savedPoolSize = poolCounts
+    ? poolCounts.active + poolCounts.filtered_relevance + poolCounts.filtered_junk +
+      (poolCounts.filtered_language ?? 0)
+    : 0;
+  const canRecoverError = role === "owner" && savedPoolSize > 0;
+
   return (
     <AppShell>
       <div className="workspace-head">
@@ -186,26 +201,74 @@ export function SessionWorkspace() {
         )}
 
         {/* An errored run is terminal, not a "come back later" stage: surface the
-            real reason (e.g. a deploy interrupted the run) and point at the one
-            recovery path — a fresh session — rather than a dead-end API hint. */}
+            real reason (e.g. a transient disconnect mid-persist, or a deploy
+            interrupting the run). If the keyword pool was already saved before the
+            failure (canRecoverError), offer a no-new-spend re-gate to rebuild the
+            clustering and continue; otherwise point at a fresh session rather than a
+            dead-end API hint. */}
         {status === "error" && (
           <div className="card">
             <p style={{ margin: 0, fontWeight: 600 }}>This run hit an error.</p>
             <p className="muted" style={{ margin: "6px 0" }}>
               {friendlyError(summary.data?.last_error, "The pipeline failed before it finished.")}
             </p>
-            <p className="muted" style={{ margin: "0 0 12px" }}>
-              Anything collected before the failure was saved, but the keyword pool is
-              incomplete, so this run can’t be resumed. Start a new session for this seed
-              to try again.
-            </p>
-            <Link
-              className="btn btn-primary"
-              style={{ width: "auto" }}
-              to={role === "owner" ? "/fanout/session/new" : "/fanout/wizard"}
-            >
-              Start a new session
-            </Link>
+            {canRecoverError ? (
+              <>
+                <p className="muted" style={{ margin: "0 0 12px" }}>
+                  The {savedPoolSize.toLocaleString()} keywords collected before the
+                  failure were saved. You can re-cluster them into silos and continue —
+                  no new expansion spend. If the pool looks incomplete, start a fresh
+                  session instead.
+                </p>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  <button
+                    className="btn btn-primary"
+                    style={{ width: "auto" }}
+                    disabled={regateMut.isPending}
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          `Recover this run by re-clustering the ${savedPoolSize.toLocaleString()} ` +
+                            `saved keywords?\n\nThis reuses the keywords already collected — no new ` +
+                            `expansion spend — and lands the session ready to plan articles.`,
+                        )
+                      ) {
+                        regateMut.mutate();
+                      }
+                    }}
+                  >
+                    {regateMut.isPending ? "Recovering…" : "Re-gate to recover"}
+                  </button>
+                  <Link
+                    className="btn btn-ghost"
+                    style={{ width: "auto" }}
+                    to="/fanout/session/new"
+                  >
+                    Start a new session
+                  </Link>
+                </div>
+                {regateMut.isError && (
+                  <p className="form-error">
+                    {friendlyError(regateMut.error, "Couldn’t start recovery.")}
+                  </p>
+                )}
+              </>
+            ) : (
+              <>
+                <p className="muted" style={{ margin: "0 0 12px" }}>
+                  Anything collected before the failure was saved, but the keyword pool is
+                  incomplete, so this run can’t be resumed. Start a new session for this seed
+                  to try again.
+                </p>
+                <Link
+                  className="btn btn-primary"
+                  style={{ width: "auto" }}
+                  to={role === "owner" ? "/fanout/session/new" : "/fanout/wizard"}
+                >
+                  Start a new session
+                </Link>
+              </>
+            )}
           </div>
         )}
 
