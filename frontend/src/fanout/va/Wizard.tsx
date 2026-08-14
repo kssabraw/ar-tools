@@ -213,6 +213,9 @@ export function Wizard() {
         {step === "deepmine" && sessionId && (
           <DeepMineStep
             sessionId={sessionId}
+            // Seed from the carried selection so returning here from the cost
+            // step (Back) preserves the ticked silos instead of resetting.
+            initialGated={gated}
             onBack={() => setStep("review")}
             onNext={(ids) => {
               setError(null);
@@ -548,7 +551,9 @@ function ReviewStep(p: {
         />
         <button
           className="btn btn-ghost"
-          disabled={audienceMut.isPending}
+          // Backend requires a non-empty audience (min_length=1); disable rather
+          // than let an empty save round-trip to a 422.
+          disabled={audienceMut.isPending || !audienceValue.trim()}
           onClick={() => audienceMut.mutate(audienceValue.trim())}
         >
           {audienceMut.isPending ? "Saving…" : "Save"}
@@ -597,6 +602,13 @@ function SiloCard(p: { silo: Silo; onEdit: (body: EditTopicBody) => void; onDele
   const [name, setName] = useState(silo.name);
   const [rationale, setRationale] = useState(silo.rationale ?? "");
   const [rel, setRel] = useState<RelationshipType>(silo.relationship_type);
+  // Re-seed the form from the current persisted silo whenever it opens/closes,
+  // so an abandoned edit (or a since-updated prop) never resurfaces stale text.
+  const resetFields = () => {
+    setName(silo.name);
+    setRationale(silo.rationale ?? "");
+    setRel(silo.relationship_type);
+  };
 
   if (editing) {
     return (
@@ -627,7 +639,15 @@ function SiloCard(p: { silo: Silo; onEdit: (body: EditTopicBody) => void; onDele
           >
             Save
           </button>
-          <button className="link-btn" onClick={() => setEditing(false)}>Cancel</button>
+          <button
+            className="link-btn"
+            onClick={() => {
+              resetFields();
+              setEditing(false);
+            }}
+          >
+            Cancel
+          </button>
         </div>
       </div>
     );
@@ -638,7 +658,15 @@ function SiloCard(p: { silo: Silo; onEdit: (body: EditTopicBody) => void; onDele
       <div className="silo-head">
         <p className="silo-name">{silo.name}</p>
         <div className="silo-actions">
-          <button className="link-btn" onClick={() => setEditing(true)}>Edit</button>
+          <button
+            className="link-btn"
+            onClick={() => {
+              resetFields();
+              setEditing(true);
+            }}
+          >
+            Edit
+          </button>
           <button className="link-btn" onClick={p.onDelete}>Remove</button>
         </div>
       </div>
@@ -707,11 +735,14 @@ function AddSiloRow(p: { onAdd: (body: AddTopicBody) => void; adding: boolean })
 // ---------------------------------------------------------------------------
 function DeepMineStep(p: {
   sessionId: string;
+  initialGated: string[];
   onBack: () => void;
   onNext: (gatedTopicIds: string[]) => void;
 }) {
   const q = useQuery({ queryKey: ["session", p.sessionId], queryFn: () => getSession(p.sessionId) });
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Initialize from the carried selection (runs once per mount): re-entering
+  // this step from the cost step keeps the previously ticked silos.
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(p.initialGated));
   // Live cost estimate as boxes are checked (PRD §7.2 #2). React Query caches per
   // selection count, so toggling is instant after the first fetch of each count.
   const est = useQuery({

@@ -132,7 +132,9 @@ export function SessionWorkspace() {
       </div>
 
       <main className="content content-wide">
-        {(session.isLoading || summary.isLoading) && <p className="muted">Loading session…</p>}
+        {(session.isLoading || summary.isLoading || me.isLoading) && (
+          <p className="muted">Loading session…</p>
+        )}
         {session.isError && <p className="form-error">Couldn’t load this session.</p>}
 
         {status === "queued" && (
@@ -172,11 +174,13 @@ export function SessionWorkspace() {
         {/* Editable pre-run states: resume silo review in-place (review → deep-mine
             → confirm → run), rather than stranding the session with no way to
             review its silos. `rejected` is the same flow — adjust and resubmit. */}
-        {(status === "awaiting_silo_review" || status === "rejected") && (
+        {(status === "awaiting_silo_review" || status === "rejected") && !me.isLoading && (
           <>
             {status === "rejected" && summary.data?.approval.note && (
               <div className="banner">Note from the Owner: {summary.data.approval.note}</div>
             )}
+            {/* Wait for `me` to settle so `role` is authoritative — the deep-mine
+                cap and approval gating below depend on it (owner vs VA). */}
             <ResumeReview sessionId={sessionId} role={role} />
           </>
         )}
