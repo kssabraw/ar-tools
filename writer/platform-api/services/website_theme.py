@@ -38,6 +38,7 @@ from services import website_theme_fonts as fonts
 from services.website_theme_precompile import (
     Precompiled,
     PrecompileError,
+    build_layout_manifest,
     pick_design,
     precompile,
 )
@@ -489,11 +490,19 @@ async def compile_design(data: bytes) -> tuple[dict[str, bytes], dict, Precompil
         fonts.wanted_weights(pre.tokens.font_weights),
     )
 
+    # Layout intent as pure data — which house-component variant each screen
+    # renders. Committed beside tokens.css and read by the template's resolver;
+    # the house default omits it, so a screen we don't map renders as before.
+    layout_manifest = build_layout_manifest(pre)
+
     out: dict[str, bytes] = {
         "tokens.css": render_tokens_css(tokens, pre, font_css=font_css).encode("utf-8"),
+        "layouts.json": (json.dumps(layout_manifest, indent=2) + "\n").encode("utf-8"),
     }
     out.update(font_files)
-    return out, theme_record(pre, tokens, self_hosted_fonts=len(font_files)), pre
+    record = theme_record(pre, tokens, self_hosted_fonts=len(font_files))
+    record["layouts"] = layout_manifest
+    return out, record, pre
 
 
 # The compiled files live under the theme id and are committed verbatim, so a
@@ -504,7 +513,7 @@ BUILT_PREFIX = "built"
 # only theme-specific directory, so a swap touches nothing else.
 REPO_THEME_DIR = "src/theme"
 
-_CONTENT_TYPES = {".css": "text/css", ".woff2": "font/woff2"}
+_CONTENT_TYPES = {".css": "text/css", ".woff2": "font/woff2", ".json": "application/json"}
 
 
 def built_path(theme_id: str, name: str) -> str:

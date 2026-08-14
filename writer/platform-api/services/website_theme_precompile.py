@@ -369,6 +369,77 @@ def harvest_image_slots(
     return out
 
 
+# --------------------------------------------------------------------------
+# Layout selection
+#
+# The token compile reskins; this carries *layout* intent one level up — which
+# variant of a robust house component a screen should render — as pure data the
+# page templates read (src/theme/layouts.json), never as generated markup. It is
+# deterministic on purpose: image side is measured from the screen's own DOM
+# order, the same "measure, don't guess" rule the token census follows, and
+# every value is clamped to a fixed whitelist so the manifest can only ever name
+# a layout the template implements (mirrors `validate_roles` for tokens).
+# --------------------------------------------------------------------------
+
+LAYOUT_MANIFEST_VERSION = 1
+
+# In lockstep with src/lib/layouts.ts HERO_IMAGE_POSITIONS. A value one side
+# knows and the other doesn't is exactly what the resolver's default guards
+# against, but keeping the sets equal is what makes the guard rarely fire.
+HERO_IMAGE_POSITIONS = ("right", "left", "none")
+_HERO_IMAGE_DEFAULT = "right"
+
+# A lead heading — where the screen's copy begins. Real prototypes emit <h1>/<h2>
+# for the hero headline; DOM order of the hero image against it says which side
+# the image is on.
+_LEAD_HEADING_RE = re.compile(r"<h[12]\b", re.I)
+
+
+def hero_image_position(screen_html: str) -> Optional[str]:
+    """Which side a screen's hero image sits on, by DOM order vs the lead heading.
+
+    Returns ``'left'``/``'right'`` when the screen carries a hero image slot, or
+    ``None`` when it carries none. An omitted screen defaults to the house
+    ``'right'`` in the resolver, so a screen without a measured hero never
+    suppresses a hero the imagery step generates — the compiler only ever *moves*
+    the image, it does not drop it. (``'none'`` stays a valid manifest value the
+    template honours, reserved for a later, more confident text-only signal.)
+    """
+    html = screen_html or ""
+    hero_off: Optional[int] = None
+    for match in _PLACEHOLDER_RE.finditer(html):
+        label = match.group(1)
+        if _IMAGE_HINT_RE.search(label) and _HERO_HINT_RE.search(label):
+            hero_off = match.start()
+            break
+    if hero_off is None:
+        return None
+    head = _LEAD_HEADING_RE.search(html)
+    if head is None:
+        return _HERO_IMAGE_DEFAULT
+    return "left" if hero_off < head.start() else "right"
+
+
+def _clamp_hero_image(value: Optional[str]) -> Optional[str]:
+    """Whitelist guard: anything the template can't render is dropped (→ default)."""
+    return value if value in HERO_IMAGE_POSITIONS else None
+
+
+def build_layout_manifest(pre: "Precompiled") -> dict:
+    """The ``layouts.json`` a compiled theme ships: per-screen variant selections.
+
+    Pure: measurements in, the manifest dict out. Screens with no hero image
+    slot are omitted rather than forced to a default, so the file stays a record
+    of what was actually measured.
+    """
+    screens: dict[str, dict] = {}
+    for screen in pre.screens:
+        position = _clamp_hero_image(hero_image_position(screen.html))
+        if position:
+            screens[screen.key] = {"hero": {"image": position}}
+    return {"version": LAYOUT_MANIFEST_VERSION, "screens": screens}
+
+
 def _sample_arrays(script: str) -> dict[str, str]:
     """Each `const name = [ … ]` block, so its placeholder labels stay attributed."""
     out: dict[str, str] = {}

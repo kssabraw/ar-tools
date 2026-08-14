@@ -256,3 +256,59 @@ class TestResidue:
     )
     def test_each_kind_of_residue_is_named(self, markup, expected):
         assert expected in pc.residue(markup)
+
+
+class TestLayoutSelection:
+    """The layout manifest — which house-component variant each screen renders.
+
+    Deterministic like the token pass: the hero image's side is read from the
+    screen's own DOM order, and only ever moved between the sides the template
+    implements — never to a value that could break a build.
+    """
+
+    def test_hero_after_heading_is_right(self):
+        html = '<section><h1>We fix roofs</h1><div>[hero photo: a roof]</div></section>'
+        assert pc.hero_image_position(html) == "right"
+
+    def test_hero_before_heading_is_left(self):
+        html = '<section><div>[hero photo: a roof]</div><h1>We fix roofs</h1></section>'
+        assert pc.hero_image_position(html) == "left"
+
+    def test_no_hero_image_is_none(self):
+        # A text-only screen: the compiler omits it so the resolver's default
+        # (show a generated hero on the right) applies — the compiler moves an
+        # image, it never suppresses one.
+        html = '<section><h1>About us</h1><p>Prose only.</p></section>'
+        assert pc.hero_image_position(html) is None
+
+    def test_non_hero_thumbnail_does_not_count_as_a_hero(self):
+        # A card thumbnail is not a banner; only a hero-labelled slot decides the
+        # hero layout.
+        html = '<section><div>[photo: a small card thumbnail]</div><h1>Topics</h1></section>'
+        assert pc.hero_image_position(html) is None
+
+    def test_hero_with_no_heading_defaults_to_right(self):
+        html = '<section><div>[hero photo: a roof]</div></section>'
+        assert pc.hero_image_position(html) == "right"
+
+    def test_clamp_rejects_anything_off_the_whitelist(self):
+        assert pc._clamp_hero_image("sideways") is None
+        assert pc._clamp_hero_image(None) is None
+        for good in pc.HERO_IMAGE_POSITIONS:
+            assert pc._clamp_hero_image(good) == good
+
+    def test_manifest_over_the_real_export(self, result):
+        # The reference export's home and article carry hero photos that sit
+        # after their headings; the other four screens carry none.
+        manifest = pc.build_layout_manifest(result)
+        assert manifest["version"] == pc.LAYOUT_MANIFEST_VERSION
+        assert set(manifest["screens"]) == {"home", "article"}
+        assert manifest["screens"]["home"]["hero"]["image"] == "right"
+        assert manifest["screens"]["article"]["hero"]["image"] == "right"
+
+    def test_manifest_only_names_implemented_variants(self, result):
+        # Every value the compiler emits must be one the template can render, or
+        # the site ships a layout that does not exist.
+        manifest = pc.build_layout_manifest(result)
+        for sel in manifest["screens"].values():
+            assert sel["hero"]["image"] in pc.HERO_IMAGE_POSITIONS
