@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Sparkles, Trash2, RotateCcw, Upload, Eye, ExternalLink } from 'lucide-react'
+import { ArrowLeft, Sparkles, Trash2, RotateCcw, Upload, Eye, ExternalLink, Copy, Check } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import { Spinner } from '../components/localseo/Spinner'
@@ -447,6 +447,33 @@ function DraftsList({ clientId, drafts, onChange }: { clientId: string; drafts: 
   )
 }
 
+// A read-only URL with an open link + a copy-to-clipboard button.
+function CopyableUrl({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false)
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch { /* clipboard blocked (insecure context) — the link is still selectable */ }
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: '#6366f1', wordBreak: 'break-all', display: 'inline-flex', gap: 5, alignItems: 'center' }}>
+        <ExternalLink size={13} style={{ flexShrink: 0 }} /> {url}
+      </a>
+      <button
+        type="button"
+        onClick={copy}
+        style={{ ...outlineBtn, padding: '3px 8px', fontSize: 12, display: 'inline-flex', gap: 4, alignItems: 'center' }}
+      >
+        {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? 'Copied' : 'Copy'}
+      </button>
+    </div>
+  )
+}
+
+
 // ── page detail (edit + publish + dry-run + report) ──────────────────────────
 function PageDetail({ clientId, page, sections, wpConfigured, onClose, onChange }: {
   clientId: string; page: Page; sections: Section[]; wpConfigured: boolean; onClose: () => void; onChange: () => void
@@ -456,6 +483,9 @@ function PageDetail({ clientId, page, sections, wpConfigured, onClose, onChange 
   const [error, setError] = useState<string | null>(null)
   const [dryRun, setDryRun] = useState<unknown | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
+  // The just-published page's live URL + wp-admin edit link, surfaced immediately
+  // after a publish (before the list refetch repopulates page.published_url).
+  const [published, setPublished] = useState<{ link?: string; editLink?: string; status: 'draft' | 'publish' } | null>(null)
   const dirty = useMemo(() => JSON.stringify(acf) !== JSON.stringify(page.acf), [acf, page.acf])
 
   const setField = (name: string, value: string) => setAcf((a) => ({ ...a, [name]: value }))
@@ -469,18 +499,20 @@ function PageDetail({ clientId, page, sections, wpConfigured, onClose, onChange 
     } catch (e) { setError(e instanceof Error ? e.message : 'Save failed') } finally { setBusy(null) }
   }
   const publish = async (status: 'draft' | 'publish') => {
-    setBusy(status); setError(null); setMsg(null)
+    setBusy(status); setError(null); setMsg(null); setPublished(null)
     try {
       if (dirty) await api.post(`/clients/${clientId}/wheelhouse/one-off`, saveBody())
-      const res = await api.post<{ link?: string; slug_path: string; acf_written?: boolean; hubs_promoted?: boolean; city_page_unpublished?: boolean }>(
+      const res = await api.post<{ link?: string; edit_link?: string; slug_path: string; acf_written?: boolean; hubs_promoted?: boolean; city_page_unpublished?: boolean }>(
         `/clients/${clientId}/wheelhouse/pages/${page.id}/publish`, { status })
       if (res.acf_written === false) {
         setError(`Page posted to ${res.slug_path}, but WordPress ignored the ACF fields — the field group isn't exposed to REST / assigned to Pages. Check the ACF prerequisites, then republish.`)
       } else if (res.city_page_unpublished) {
         const cityPath = res.slug_path.replace(/[^/]+\/$/, '')  // strip the service segment
-        setMsg(`Published (${status}) → ${res.slug_path}. Note: the parent city page ${cityPath} isn't published yet, so it renders empty until you publish the City page for ${page.city}.`)
+        setMsg(`Published (${status}). Note: the parent city page ${cityPath} isn't published yet, so it renders empty until you publish the City page for ${page.city}.`)
+        setPublished({ link: res.link, editLink: res.edit_link, status })
       } else {
-        setMsg(`Published (${status}) → ${res.slug_path}${res.hubs_promoted ? ' (parent pages promoted to live)' : ''}`)
+        setMsg(`Published (${status})${res.hubs_promoted ? ' — parent pages promoted to live' : ''}`)
+        setPublished({ link: res.link, editLink: res.edit_link, status })
       }
       onChange()
     } catch (e) { setError(e instanceof Error ? e.message : 'Publish failed') } finally { setBusy(null) }
@@ -525,6 +557,26 @@ function PageDetail({ clientId, page, sections, wpConfigured, onClose, onChange 
         )}
         {error && <div style={{ ...errorBox, marginTop: 12 }}>{error}</div>}
         {msg && <div style={{ marginTop: 12, fontSize: 13, color: '#166534', background: '#dcfce7', borderRadius: 8, padding: '8px 12px' }}>{msg}</div>}
+        {published && (
+          <div style={{ marginTop: 10, fontSize: 13, background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '10px 12px', display: 'grid', gap: 8 }}>
+            {published.link && (
+              <div>
+                <div style={{ fontSize: 12, color: '#166534', fontWeight: 600, marginBottom: 3 }}>Page URL</div>
+                <CopyableUrl url={published.link} />
+                {published.status === 'draft' && (
+                  <div style={{ fontSize: 12, color: '#65783f', marginTop: 4 }}>
+                    This is the eventual public URL — it goes live once you publish the draft. Use “Edit in wp-admin” to review it now.
+                  </div>
+                )}
+              </div>
+            )}
+            {published.editLink && (
+              <a href={published.editLink} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: '#6366f1', display: 'inline-flex', gap: 5, alignItems: 'center' }}>
+                <ExternalLink size={13} /> Edit in wp-admin
+              </a>
+            )}
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
           <button style={{ ...outlineBtn, opacity: busy ? 0.6 : 1 }} disabled={Boolean(busy)} onClick={saveEdits}>{busy === 'save' ? <Spinner /> : null} Save edits</button>
           <button style={{ ...outlineBtn, opacity: busy ? 0.6 : 1 }} disabled={Boolean(busy)} onClick={doDryRun}><Eye size={14} /> Dry-run</button>
