@@ -185,8 +185,32 @@ export function SessionWorkspace() {
           </>
         )}
 
+        {/* An errored run is terminal, not a "come back later" stage: surface the
+            real reason (e.g. a deploy interrupted the run) and point at the one
+            recovery path — a fresh session — rather than a dead-end API hint. */}
+        {status === "error" && (
+          <div className="card">
+            <p style={{ margin: 0, fontWeight: 600 }}>This run hit an error.</p>
+            <p className="muted" style={{ margin: "6px 0" }}>
+              {friendlyError(summary.data?.last_error, "The pipeline failed before it finished.")}
+            </p>
+            <p className="muted" style={{ margin: "0 0 12px" }}>
+              Anything collected before the failure was saved, but the keyword pool is
+              incomplete, so this run can’t be resumed. Start a new session for this seed
+              to try again.
+            </p>
+            <Link
+              className="btn btn-primary"
+              style={{ width: "auto" }}
+              to={role === "owner" ? "/fanout/session/new" : "/fanout/wizard"}
+            >
+              Start a new session
+            </Link>
+          </div>
+        )}
+
         {status && status !== "running" && status !== "queued" && status !== "cancelled" &&
-          status !== "awaiting_silo_review" && status !== "rejected" &&
+          status !== "awaiting_silo_review" && status !== "rejected" && status !== "error" &&
           !hasResults(status) && (
           <div className="card">
             <p style={{ margin: 0, fontWeight: 600 }}>This session hasn’t produced results yet.</p>
