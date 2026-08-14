@@ -148,11 +148,15 @@ a manual phone workflow: emit records the outcome and reports `delivered:false`,
 webhook-free `touch` path is the real capture. Wire a URL (Zapier / Make / a custom endpoint) only
 if the team ever adopts an automated sender.
 
-**FOUR paid producers are built and have NEVER RUN** — `scan-organic`, `scan-ai`,
-`probe-pixel-field` (and the free `scan-tech`). HANDOFF §8.1 2c already made the argument that each
-additional unrun layer raises the chance the first run surfaces several faults at once, interacting,
-in a batch that has been paid for. That argument is stronger now than when it was written, so prefer
-RUNNING a built layer over building a fifth.
+**THREE paid producers are built and have NEVER RUN** — `scan-organic`, `scan-ai`,
+`probe-pixel-field`. HANDOFF §8.1 2c already made the argument that each additional unrun layer
+raises the chance the first run surfaces several faults at once, interacting, in a batch that has
+been paid for. That argument is stronger now than when it was written, so prefer RUNNING a built
+layer over building a fourth. **The free `scan-tech` now RUNS AUTOMATICALLY each `tick`**
+(`scan_tech.run_tech_backlog`, DECISIONS 2026-08-14): a free, idempotent, bounded backlog drain that
+fetches tech signals for any prospect with a website and no current signal — covering each new run's
+survivors and backfilling pre-existing markets (incl. the any-city onboard markets the manual
+`scan-tech` cannot target). Config `tech_scan_per_tick` (0 disables) / `tech_refresh_days`.
 
 **LEAD ENRICHMENT IS BUILT (2026-08-10) — contact NAMES / PHONES / EMAILS per prospect, on demand.**
 A prospect (or a selection / all) is enriched via Outscraper's "Emails & Contacts"-style enrichers.

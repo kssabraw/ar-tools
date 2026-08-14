@@ -853,6 +853,7 @@ def cmd_tick(args) -> int:
         onboard_queue,
         organic_scan_queue,
         scan_queue,
+        scan_tech,
     )
 
     code = cmd_collect(args)
@@ -880,6 +881,12 @@ def cmd_tick(args) -> int:
         if not r.claimed:
             break
         ai_drains.append(r)
+    # Site tech signals — FREE (own HTTP GET, same posture as `collect`), idempotent, and bounded
+    # (`tech_scan_per_tick`). Fetches prospects lacking a CURRENT tech signal so every scored
+    # prospect carries the Slice-B1 money signal automatically: each new run's survivors the cycle
+    # after they land, plus any market scanned before auto-tech existed. No order/token — it bills
+    # nothing. Best-effort: a site that blocks a bot is normal and does not fail the tick.
+    tech = _asyncio.run(scan_tech.run_tech_backlog(client, settings))
     print(
         json.dumps(
             {
@@ -945,6 +952,14 @@ def cmd_tick(args) -> int:
                     }
                     for o in ai_drains
                 ],
+                "tech": {
+                    "considered": tech.considered,
+                    "fetched_ok": tech.fetched_ok,
+                    "failed": tech.failed,
+                    "with_pixel": tech.with_pixel,
+                    "with_vendor": tech.with_vendor,
+                    "stored": tech.stored,
+                },
             },
             indent=2,
         )

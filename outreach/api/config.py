@@ -287,6 +287,19 @@ class Settings(BaseSettings):
     # is built either way, this only decides whether it runs by default.
     tech_follow_gtm: bool = False
 
+    # `tick` auto-runs the tech scan so every scored prospect carries the Slice-B1 money signal
+    # without a manual `scan-tech` per market (which needs a definition file the any-city onboard
+    # path has none of). FREE — an own HTTP GET, same posture as `collect` — idempotent (a prospect
+    # already carrying a CURRENT signal is skipped, never re-fetched), and bounded per heartbeat so
+    # one large market cannot monopolize a tick. 0 disables the drain entirely.
+    tech_scan_per_tick: int = 100
+    # Re-fetch a prospect's site once its latest tech signal is older than this many days. Tech
+    # stacks change on a scale of months (a business installs CallRail once), and re-fetching hits
+    # third-party sites, so a light cadence keeps the vendor-failing pairing honest (tech present +
+    # a fresh coverage delta) without re-hammering every site each 15-day cycle. 0 = fetch a
+    # prospect's tech once and never auto-refresh.
+    tech_refresh_days: int = 45
+
     # --- Lead enrichment (contact names / phones / emails via Outscraper) ------------------
     # A SEPARATE, spend-gated, per-selection action — NOT the mass ingest, which hardcodes
     # `enrichment=""` with a hard invariant so a market pull can never silently bill per-place

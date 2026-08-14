@@ -1763,3 +1763,53 @@ to the manual seed modal, untouched.
 **Scope.** platform-api `services/outreach.py` only; no migration, no new config, no change to the
 outreach drain or the manual `create_ai_region` route. Tests in `tests/test_outreach_onboard.py`
 (auto-seed on whole-city, no-seed on sub-area, seed failure never fails the order).
+
+---
+
+## 2026-08-14 — `scan-tech` runs automatically in `tick` (free, idempotent, bounded)
+
+Owner ruling: the free site-tech scan (paid-placement Slice B1) should run on its own each cycle
+rather than as a manual `scan-tech` per market, and the already-completed Inglewood run's prospects
+should get covered too. Added `scan_tech.run_tech_backlog`, drained by `cmd_tick` after the enrich
+drain.
+
+**Why it belongs in `tick`, unlike the manual command.** `cmd_scan_tech` takes a market-definition
+FILE and scans that market. The any-city onboard path (Inglewood, LA-emergency-plumber) creates its
+market dynamically and has no file, so the manual command cannot target those markets at all. A
+DB-driven backlog drain has no such limit: it finds every prospect with a website and no CURRENT
+tech signal, across all markets, and fetches them. That single mechanism covers each new run's
+survivors the cycle after they land AND backfills any pre-existing market — Inglewood included — with
+no operator step, which is exactly what was asked for.
+
+**Free, so it drains like `collect`, not like a signed order.** `scan-tech` makes no paid provider
+call (own HTTP GET — DECISIONS 2026-08-08 B1), so it is not in PAID_COMMANDS and needs no order row
+or env token. It rides `tick` the same way `collect` does. A tech-fetch failure (a site blocking a
+bot is routine) is best-effort and deliberately does NOT change the tick exit code — only a failed
+paid ORDER does.
+
+**Idempotent + bounded, so a perpetual cron cannot churn or run away.** `pick_backlog` (pure,
+unit-tested) skips any prospect already carrying a current signal, so a drained backlog costs two
+reads and stores nothing on later ticks. `tech_scan_per_tick` (default 100 ≈ one market's survivors)
+bounds one heartbeat's fetches — worst case ~100/`tech_scan_concurrency` × timeout — so a large
+market can't monopolize a tick or overrun the cron interval; 0 disables the drain. This preserves
+the measured-vs-found discipline unchanged (a failed fetch still stores a `fetch_status`, never
+`absent`) — the store path is the same `_scan_prospects` core the manual command now shares.
+
+**Refresh cadence over fetch-once.** `tech_refresh_days` (default 45 ≈ three scan cycles, ~the
+`max_delta_span_days` window) re-fetches a prospect's site once its latest signal ages past the
+window, so the vendor-failing pairing (tech present + a fresh coverage delta) stays honest when a
+business installs CallRail after we first looked — without re-hammering every site every 15-day
+cycle. `tech_refresh_days = 0` reverts to fetch-once. Re-fetching costs nothing in dollars, only
+politeness/wall-clock, so the light cadence is the conservative-honest default; a one-line config
+change moves it either way.
+
+**Scale assumption, stated.** The drain reads all website-carrying prospects and all current
+tech-signal ids per tick, then diffs in Python (the `enrich_queue._already_enriched` precedent). At
+the current portfolio size (hundreds–low thousands) that is two cheap paginated reads. If the
+prospect table grows large enough that a full read per tick matters, replace the diff with a
+NOT-EXISTS view / RPC — cheapest-to-reverse, so deferred until it bites.
+
+**Scope.** Outreacher `api/` only: `config.py` (two settings), `scan_tech.py` (extract
+`_scan_prospects`; add `pick_backlog` + `run_tech_backlog`), `run_market.py` (`cmd_tick` drain +
+output block), `tests/test_scan_tech.py`. No migration — `prospect_tech_signal` already exists and
+the write path is unchanged.
