@@ -366,3 +366,33 @@ class TestCardGridDensity:
         manifest = pc.build_layout_manifest(pre)
         # No card grid measured → no components block → the grids keep their own min.
         assert "components" not in manifest
+
+
+class TestWhitelistContractWithTemplate:
+    """The one real risk in the layout design: the compiler's whitelists (here)
+    and the template resolver's whitelists (src/lib/layouts.ts) drifting apart.
+    If the compiler emits a value the template doesn't list, the resolver's
+    default silently swallows it — a fidelity choice lost with no error. This
+    locks the two sides together, the same way the vendored-doc sync tests do."""
+
+    LAYOUTS_TS = (
+        pathlib.Path(__file__).resolve().parents[3]
+        / "site-template" / "src" / "lib" / "layouts.ts"
+    )
+
+    def _ts_source(self) -> str:
+        return self.LAYOUTS_TS.read_text(encoding="utf-8")
+
+    def test_hero_image_positions_match(self):
+        src = self._ts_source()
+        m = re.search(r"HERO_IMAGE_POSITIONS\s*=\s*new Set<[^>]+>\(\[([^\]]*)\]\)", src)
+        assert m, "could not find HERO_IMAGE_POSITIONS in layouts.ts"
+        ts_values = tuple(re.findall(r"'([^']+)'", m.group(1)))
+        assert set(ts_values) == set(pc.HERO_IMAGE_POSITIONS)
+
+    def test_card_columns_match(self):
+        src = self._ts_source()
+        m = re.search(r"CARD_COLUMNS\s*=\s*new Set<[^>]+>\(\[([^\]]*)\]\)", src)
+        assert m, "could not find CARD_COLUMNS in layouts.ts"
+        ts_values = tuple(int(n) for n in re.findall(r"\d+", m.group(1)))
+        assert set(ts_values) == set(pc.CARD_COLUMN_CHOICES)
