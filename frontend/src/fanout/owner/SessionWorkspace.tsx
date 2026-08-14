@@ -6,6 +6,7 @@ import { AppShell } from "../shared/AppShell";
 import { CancelRunButton } from "../shared/CancelRunButton";
 import { CostBanner } from "../shared/CostBanner";
 import { friendlyError } from "../shared/errors";
+import { ResumeReview } from "../shared/ResumeReview";
 import { SessionIdChip } from "../shared/SessionIdChip";
 import { hasResults, isLiveStatus, statusClass, statusLabel } from "../shared/sessionStatus";
 
@@ -168,14 +169,28 @@ export function SessionWorkspace() {
           </div>
         )}
 
+        {/* Editable pre-run states: resume silo review in-place (review → deep-mine
+            → confirm → run), rather than stranding the session with no way to
+            review its silos. `rejected` is the same flow — adjust and resubmit. */}
+        {(status === "awaiting_silo_review" || status === "rejected") && (
+          <>
+            {status === "rejected" && summary.data?.approval.note && (
+              <div className="banner">Note from the Owner: {summary.data.approval.note}</div>
+            )}
+            <ResumeReview sessionId={sessionId} role={role} />
+          </>
+        )}
+
         {status && status !== "running" && status !== "queued" && status !== "cancelled" &&
+          status !== "awaiting_silo_review" && status !== "rejected" &&
           !hasResults(status) && (
           <div className="card">
             <p style={{ margin: 0, fontWeight: 600 }}>This session hasn’t produced results yet.</p>
             <p className="muted" style={{ marginBottom: 0 }}>
-              It’s at the “{statusLabel(status)}” stage. Resuming an in-progress run from the UI
-              arrives later; for now, open it from the creation flow or run the remaining pipeline
-              steps via the API.
+              It’s at the “{statusLabel(status)}” stage
+              {status === "pending_approval"
+                ? " — waiting on Owner approval before the run can start."
+                : ". Resuming this stage from the UI isn’t available yet; run the remaining pipeline steps via the API."}
             </p>
           </div>
         )}
