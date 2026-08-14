@@ -14,6 +14,7 @@ restatement of whatever the code happened to produce.
 from __future__ import annotations
 
 import pathlib
+import re
 
 import pytest
 

@@ -19,8 +19,8 @@ import raw from '../theme/layouts.json' with { type: 'json' };
 export type HeroImagePosition = 'right' | 'left' | 'none';
 
 // The set this template version can actually render. Kept in lockstep with the
-// compiler's `validate_layouts` whitelist — a value one side knows and the
-// other doesn't is exactly what the default guards against.
+// compiler's HERO_IMAGE_POSITIONS whitelist (a cross-language test asserts it) —
+// a value one side knows and the other doesn't is what the default guards against.
 const HERO_IMAGE_POSITIONS = new Set<HeroImagePosition>(['right', 'left', 'none']);
 
 // Matches the current hardcoded behaviour, so an absent manifest (the house
