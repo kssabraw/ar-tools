@@ -9,10 +9,15 @@ invent. Output entities not traceable to an input name/variant are dropped.
 
 from __future__ import annotations
 
+import statistics
 from dataclasses import dataclass, field
 
 from .ngrams import AggregatedTerm, LemmaFn
 from .textrazor_client import NerEntity
+
+# A competitor page whose distinct-entity count exceeds this multiple of the
+# median is treated as a spam outlier and dropped before taking the max.
+_ENTITY_OUTLIER_MULT = 3.0
 
 
 @dataclass
@@ -157,3 +162,60 @@ def merge_entities_into_terms(
                 passes_coverage=True, passes_tfidf=True, passes_semantic=True,
             )
     return terms
+
+
+# --- Entity-density benchmark (most aggressive competitor) -------------------
+# Sizes how many entities the writer surfaces + must cover. Self-contained in the
+# fanout copy (the pipeline-api trimmed-max logic lives in a different codebase).
+
+
+def aggressive_entity_target(
+    raw_entities: list[RawEntity], kept_names: set[str] | None = None
+) -> int:
+    """PURE. Distinct-entity count of the MOST AGGRESSIVE competitor page.
+
+    Uses each RawEntity's ``source_urls`` to derive one distinct-entity count per
+    competitor page, then returns the highest after dropping spam outliers (a page
+    whose count exceeds 3× the median). With fewer than three competitors there is
+    no stable median, so the plain max is returned. When ``kept_names`` is given
+    (lowercased entity names + variants that survived pass-2 categorization), only
+    those entities are counted, so junk NER the LLM dropped can't inflate the bar.
+    """
+    per_url: dict[str, int] = {}
+    for r in raw_entities:
+        if kept_names is not None:
+            names = {r.name.lower(), *(v.lower() for v in r.ner_variants)}
+            if not (names & kept_names):
+                continue
+        for url in r.source_urls:
+            if url:
+                per_url[url] = per_url.get(url, 0) + 1
+    counts = [c for c in per_url.values() if c > 0]
+    if not counts:
+        return 0
+    if len(counts) >= 3:
+        median = statistics.median(counts)
+        if median > 0:
+            trimmed = [c for c in counts if c <= median * _ENTITY_OUTLIER_MULT]
+            if trimmed:
+                counts = trimmed
+    return max(counts)
+
+
+def select_key_entities(entities, benchmark: int, *, default: int, cap: int) -> list[str]:
+    """PURE. The top entity terms to require in the writer prompt, sized to the
+    aggressive-competitor ``benchmark``.
+
+    Entities (any objects with ``.term`` + ``.recommendation_score``) are ordered
+    by score descending; the count is the benchmark, or ``default`` when the
+    benchmark is 0/unavailable (e.g. an old cached SIE that predates the field),
+    clamped to what exists and to ``cap`` so the prompt stays bounded.
+    """
+    ordered = sorted(
+        (e for e in entities if (getattr(e, "term", "") or "").strip()),
+        key=lambda e: getattr(e, "recommendation_score", 0.0),
+        reverse=True,
+    )
+    n = benchmark if benchmark and benchmark > 0 else default
+    n = max(0, min(n, len(ordered), cap))
+    return [e.term.strip() for e in ordered[:n]]

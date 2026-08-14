@@ -32,12 +32,18 @@ from .models import (
     WriterAbort,
     WriterOutput,
 )
+from fanout.sie.entities import select_key_entities
 from .serialize import to_html, to_markdown
 from .templates import cta_template, h2_body_floor
 
 logger = logging.getLogger(__name__)
 EmbedFn = Callable[[list[str]], list[list[float]]]
 TAKEAWAY_PAIR_COSINE = 0.85          # §5.12 — over this -> drop one of the pair
+# Entity surfacing: how many of the SIE's key entities to require in each section
+# prompt, sized to the aggressive-competitor benchmark. The default is used when a
+# (cached, pre-benchmark) SIE reports 0; the cap bounds the prompt.
+_ENTITY_COVER_DEFAULT = 12
+_ENTITY_COVER_CAP = 30
 
 
 @dataclass
@@ -160,6 +166,13 @@ def _write_group(
     main_entity = _main_entity_label(brief)
     required = ", ".join(t.term for t in sie.terms.required[:20])
     avoid = ", ".join(sie.terms.avoid[:20])
+    # Surface the SIE's key entities as entities (they were computed but never
+    # reached the prompt), sized to the most-aggressive-competitor benchmark.
+    key_entities = select_key_entities(
+        sie.entities, getattr(sie, "entity_benchmark_target", 0),
+        default=_ENTITY_COVER_DEFAULT, cap=_ENTITY_COVER_CAP,
+    )
+    entities_line = ", ".join(key_entities)
     fd = brief.format_directives
     fmt_bits = []
     if fd.require_bulleted_lists:
@@ -175,6 +188,10 @@ def _write_group(
            if group.children else "")
         + f"Target length: ~{section_budget} words.\n"
         + (f"Weave in these terms naturally where relevant: {required}\n" if required else "")
+        + (f"KEY ENTITIES — the strongest ranking competitor covers ~{len(key_entities)} of "
+           f"these across the page. Work every one that fits THIS section into the copy as a "
+           f"real, factual point (never a stuffed list or forced mention), and ensure the "
+           f"article as a whole names them all: {entities_line}\n" if entities_line else "")
         + (f"Do NOT use these terms: {avoid}\n" if avoid else "")
         + (f"Formatting: {', '.join(fmt_bits)}.\n" if fmt_bits else "")
         + "Open with at least one answer-first paragraph (lead with a direct answer "

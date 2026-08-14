@@ -157,6 +157,14 @@ def analyze(
     categorized = ent.categorize_entities(raw_entities, keyword, deps.entity_llm)
     ent.merge_entities_into_terms(terms, categorized, deps.lemma_fn)
 
+    # Entity-density benchmark: distinct entities the most aggressive competitor
+    # covers. Restricted to entities that survived pass-2 (raw NER source_urls
+    # keyed by the kept names) so dropped junk can't inflate the target.
+    kept_entity_names = {e.term.lower() for e in categorized} | {
+        v.lower() for e in categorized for v in (e.ner_variants or [])
+    }
+    entity_benchmark_target = ent.aggressive_entity_target(raw_entities, kept_entity_names)
+
     # Selection: survivors of coverage + tfidf + semantic, minus boilerplate.
     required = [
         t for t in terms.values()
@@ -183,6 +191,7 @@ def analyze(
         keyword=keyword, target_keyword=keyword, required=required,
         entities=categorized, pages=pages, word_count=(wc_min, wc_target, wc_max),
         mode=outlier_mode, avoid=avoid, warnings=warnings, analyzed_pages=analyzed_pages,
+        entity_benchmark_target=entity_benchmark_target,
     )
 
 
