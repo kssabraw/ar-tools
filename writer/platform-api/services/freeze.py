@@ -55,6 +55,9 @@ FREEZE_GATED_JOB_TYPES = {
     # Blog reoptimize regenerates + re-runs sources_cited (output). Blog scoring
     # is observation and stays ungated.
     "blog_reoptimize",
+    # Fan-out blog reoptimize runs the same blog rewrite spine (output).
+    # fanout_blog_score is observation and stays ungated.
+    "fanout_blog_reoptimize",
     "syndication_item",
     "content_batch_item",
     "gbp_post_publish",

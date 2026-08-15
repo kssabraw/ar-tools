@@ -823,6 +823,14 @@ async def _process_job(job: dict) -> None:
         await blog_page_score.run_score_job(job)
     elif job_type == "blog_reoptimize":
         await blog_page_score.run_reoptimize_job(job)
+    elif job_type == "fanout_blog_score":
+        from fanout import reoptimize as fanout_reoptimize
+
+        await fanout_reoptimize.run_score_job(job)
+    elif job_type == "fanout_blog_reoptimize":
+        from fanout import reoptimize as fanout_reoptimize
+
+        await fanout_reoptimize.run_reoptimize_job(job)
     elif job_type == "rank_location_derive":
         await run_rank_location_derive_job(job)
     elif job_type == "brand_scan":

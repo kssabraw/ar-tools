@@ -1092,9 +1092,32 @@ export interface ArticleListItem {
   cost_usd: number | null;
   generated_at: string | null;
   scheduled: boolean;
+  // Reoptimization is available only for client-linked articles (mirrored into a
+  // suite blog run); the latest blog composite score is shown as a badge.
+  reoptimizable?: boolean;
+  composite_score?: number | null;
+  composite_status?: string | null;
 }
 export const listArticles = (sessionId: string) =>
   request<{ articles: ArticleListItem[]; count: number }>(`/sessions/${sessionId}/articles`);
+
+// ── Reoptimize a Fan-out article (via its mirrored suite blog run) ──
+export interface ReoptJobStatus {
+  job_id: string;
+  status: string; // queued | running | complete | failed
+  result?: { composite_score?: number | null; prev_score?: number | null; new_score?: number | null } | null;
+  error?: string | null;
+}
+export const scoreArticle = (sessionId: string, clusterId: string) =>
+  request<{ job_id: string; cluster_id: string }>(
+    `/sessions/${sessionId}/clusters/${clusterId}/reopt-score`, { method: "POST" });
+export const reoptimizeArticle = (sessionId: string, clusterId: string) =>
+  request<{ job_id: string; cluster_id: string }>(
+    `/sessions/${sessionId}/clusters/${clusterId}/reopt`, { method: "POST" });
+export const reoptJobsStatus = (sessionId: string, jobIds: string[]) =>
+  request<{ jobs: ReoptJobStatus[] }>(
+    `/sessions/${sessionId}/reopt-jobs/status`,
+    { method: "POST", body: JSON.stringify({ job_ids: jobIds }) });
 export const downloadAllArticles = (sessionId: string) =>
   request<{ download_url: string; count: number }>(
     `/sessions/${sessionId}/articles/download-all`, { method: "POST" });

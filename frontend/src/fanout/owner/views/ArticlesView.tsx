@@ -8,20 +8,32 @@ import {
   publishClusterDrive,
   publishClusterGithub,
   publishClusterWordpress,
+  reoptimizeArticle,
+  reoptJobsStatus,
+  scoreArticle,
   setPublishConfig,
   type ArticleListItem,
 } from "../../shared/api";
 import ArticlePanel from "./ArticlePanel";
 import { useSession } from "../SessionWorkspace";
+import { ReoptimizePanel } from "../../../components/reoptimize/ReoptimizePanel";
+import { fanoutAdapter } from "../../../components/reoptimize/adapters";
+
+// Per-row reoptimize state for the inline Score / Reoptimize actions.
+type ReoptRow =
+  | { status: "working"; kind: "score" | "reopt" }
+  | { status: "done"; kind: "score" | "reopt"; prev?: number | null; next?: number | null }
+  | { status: "failed"; error: string };
 
 // M15 follow-on — Articles library (owner). Lists every written article (latest per cluster);
 // read the full Markdown + Copy / Download .md; bulk .zip; and publish to a GitHub repo as
 // Astro content Markdown (single + push-all). Articles live in fanout.article_outputs as the
 // source of truth; these are export/publish copies.
 export function ArticlesView() {
-  const { sessionId } = useSession();
+  const { sessionId, clientId } = useSession();
   const [openCluster, setOpenCluster] = useState<{ id: string; name: string } | null>(null);
   const [showGh, setShowGh] = useState(false);
+  const [showReopt, setShowReopt] = useState(false);
   // WordPress publish status for both the single "Website" button and the bulk
   // action: draft (default, safe) or publish (live).
   const [wpStatus, setWpStatus] = useState<"draft" | "publish">("draft");
@@ -76,6 +88,57 @@ export function ArticlesView() {
   const [wpResults, setWpResults] = useState<
     Record<string, { status: "done" | "failed"; url?: string | null; edit_url?: string | null; error?: string }>
   >({});
+
+  // Inline per-row reoptimize: Score (re-run the blog/AEO scorer) or Reoptimize
+  // (score → rewrite-to-threshold → reflect the improved article back). Each runs
+  // as a background job; we poll it and refetch the list so the score badge
+  // updates. Leaving the tab keeps the job running server-side (async_jobs).
+  const [reoptRows, setReoptRows] = useState<Record<string, ReoptRow>>({});
+
+  const pollReoptJob = async (clusterId: string, jobId: string, kind: "score" | "reopt") => {
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 5000));
+      try {
+        const { jobs } = await reoptJobsStatus(sessionId, [jobId]);
+        const st = jobs.find((j) => j.job_id === jobId);
+        if (!st) continue;
+        if (st.status === "complete") {
+          const res = st.result ?? {};
+          setReoptRows((r) => ({
+            ...r,
+            [clusterId]:
+              kind === "score"
+                ? { status: "done", kind, next: res.composite_score ?? null }
+                : { status: "done", kind, prev: res.prev_score ?? null, next: res.new_score ?? null },
+          }));
+          void q.refetch();
+          return;
+        }
+        if (st.status === "failed") {
+          setReoptRows((r) => ({ ...r, [clusterId]: { status: "failed", error: st.error ?? "Failed" } }));
+          return;
+        }
+      } catch {
+        // transient poll failure — keep waiting
+      }
+    }
+  };
+
+  const startReopt = async (clusterId: string, kind: "score" | "reopt") => {
+    setReoptRows((r) => ({ ...r, [clusterId]: { status: "working", kind } }));
+    try {
+      const { job_id } =
+        kind === "score"
+          ? await scoreArticle(sessionId, clusterId)
+          : await reoptimizeArticle(sessionId, clusterId);
+      void pollReoptJob(clusterId, job_id, kind);
+    } catch (e) {
+      setReoptRows((r) => ({
+        ...r,
+        [clusterId]: { status: "failed", error: e instanceof Error ? e.message : "Failed" },
+      }));
+    }
+  };
 
   if (q.isLoading) return <p className="muted">Loading articles…</p>;
   if (q.isError) return <p className="form-error">Couldn’t load articles.</p>;
@@ -194,6 +257,16 @@ export function ArticlesView() {
         <button className="btn btn-ghost" style={{ width: "auto" }} onClick={() => setShowGh((s) => !s)}>
           Publish settings
         </button>
+        {clientId && (
+          <button
+            className="btn btn-ghost"
+            style={{ width: "auto" }}
+            title="Score and rewrite existing articles to fix their weaknesses (bulk)"
+            onClick={() => setShowReopt((s) => !s)}
+          >
+            {showReopt ? "Hide reoptimize" : "Reoptimize articles"}
+          </button>
+        )}
         <button
           className="btn btn-ghost"
           style={{ width: "auto" }}
@@ -257,6 +330,12 @@ export function ArticlesView() {
         />
       )}
 
+      {showReopt && clientId && (
+        <div style={{ marginBottom: 14 }}>
+          <ReoptimizePanel adapter={fanoutAdapter(clientId)} />
+        </div>
+      )}
+
       {articles.length === 0 ? (
         <p className="muted">No articles written yet for this session.</p>
       ) : (
@@ -275,13 +354,14 @@ export function ArticlesView() {
                     />
                   </th>
                 )}
-                <th>Article</th><th>Words</th><th>Cost</th><th>Source</th><th>Written</th><th></th>
+                <th>Article</th><th>Words</th><th>Cost</th><th>Source</th><th>Score</th><th>Written</th><th></th>
               </tr>
             </thead>
             <tbody>
               {articles.map((a: ArticleListItem) => {
                 const dr = driveResults[a.cluster_id];
                 const wr = wpResults[a.cluster_id];
+                const rr = reoptRows[a.cluster_id];
                 return (
                 <tr key={a.cluster_id}>
                   {bulkSelectable && (
@@ -298,6 +378,7 @@ export function ArticlesView() {
                   <td>{a.total_word_count ?? "—"}</td>
                   <td>{a.cost_usd != null ? `$${Number(a.cost_usd).toFixed(2)}` : "—"}</td>
                   <td><span className="badge">{a.scheduled ? "scheduled" : "ad-hoc"}</span></td>
+                  <td>{a.composite_score != null ? Math.round(a.composite_score) : "—"}</td>
                   <td className="cell-muted">
                     {a.generated_at ? new Date(a.generated_at).toLocaleString() : "—"}
                   </td>
@@ -305,6 +386,43 @@ export function ArticlesView() {
                     <button className="link-btn" onClick={() => setOpenCluster({ id: a.cluster_id, name: a.name })}>
                       Read
                     </button>
+                    {a.reoptimizable && (
+                      <>
+                        <button
+                          className="link-btn"
+                          style={{ marginLeft: 10 }}
+                          disabled={rr?.status === "working"}
+                          title="Score this article against the blog/AEO rubric"
+                          onClick={() => void startReopt(a.cluster_id, "score")}
+                        >
+                          Score
+                        </button>
+                        <button
+                          className="link-btn"
+                          style={{ marginLeft: 10 }}
+                          disabled={rr?.status === "working"}
+                          title="Score, then rewrite this article to fix its weaknesses"
+                          onClick={() => void startReopt(a.cluster_id, "reopt")}
+                        >
+                          Reoptimize
+                        </button>
+                        {rr?.status === "working" && (
+                          <span style={{ marginLeft: 10, color: "#64748b" }}>
+                            {rr.kind === "score" ? "Scoring…" : "Reoptimizing…"}
+                          </span>
+                        )}
+                        {rr?.status === "done" && (
+                          <span style={{ marginLeft: 10, color: "#16a34a", fontWeight: 600 }}>
+                            {rr.kind === "score"
+                              ? `Scored ${rr.next != null ? Math.round(rr.next) : "—"}`
+                              : `${rr.prev != null ? Math.round(rr.prev) : "—"} → ${rr.next != null ? Math.round(rr.next) : "—"}`}
+                          </span>
+                        )}
+                        {rr?.status === "failed" && (
+                          <span style={{ marginLeft: 10, color: "#dc2626" }} title={rr.error}>Reopt failed</span>
+                        )}
+                      </>
+                    )}
                     {repoConfigured && (
                       <button
                         className="link-btn"

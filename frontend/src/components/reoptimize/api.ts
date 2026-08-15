@@ -78,4 +78,22 @@ export const reoptApi = {
 
   blogScoreJob: (runId: string, jobId: string) =>
     api.get<BlogScoreJobPoll>(`/runs/${runId}/blog-score-jobs/${jobId}`),
+
+  // ── Fan-out (Mass Posts) blog reoptimize — client-scoped, picks existing ──
+  // Fan-out articles (mirrored suite blog runs). Hits the /fanout sub-app on the
+  // same platform API.
+  fanoutList: (clientId: string) =>
+    api.get<{ articles: Array<{ cluster_id: string; name: string; composite_score: number | null; generated_at: string | null }> }>(
+      `/fanout/clients/${clientId}/reoptimizable-articles`,
+    ),
+
+  fanoutReoptimizeBulk: (clientId: string, clusterIds: string[]) =>
+    api.post<{ jobs: Array<{ cluster_id: string; job_id: string }>; skipped: Array<{ cluster_id: string; reason: string }> }>(
+      `/fanout/clients/${clientId}/reopt-bulk`, { cluster_ids: clusterIds },
+    ),
+
+  fanoutJobsStatus: (clientId: string, jobIds: string[]) =>
+    api.post<{ jobs: Array<{ job_id: string; status: string; result?: { prev_score?: number | null; new_score?: number | null } | null; error?: string | null }> }>(
+      `/fanout/clients/${clientId}/reopt-jobs/status`, { job_ids: jobIds },
+    ),
 }

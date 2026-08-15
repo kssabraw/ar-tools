@@ -246,6 +246,7 @@ export function ReoptimizePanel({ adapter, pageType: pageTypeProp }: Props) {
       .filter(it => selectedExisting.has(it.id))
       .map(it => ({
         url: it.url ?? undefined,
+        existingId: it.id,
         keyword: (it.keyword || keyword.trim()),
         pageType: pageType || undefined,
         label: it.label,

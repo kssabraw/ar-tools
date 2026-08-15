@@ -17,7 +17,8 @@ def list_session_articles(session_id: str) -> list[dict]:
     while True:
         rows = (client.table("article_outputs")
                 .select("id, cluster_id, total_word_count, cost_usd, schema_version_effective, "
-                        "generated_at, scheduled_article_run_id")
+                        "generated_at, scheduled_article_run_id, suite_run_id, "
+                        "composite_score, composite_status")
                 .eq("session_id", session_id).order("generated_at", desc=True)
                 .range(page * 1000, page * 1000 + 999).execute().data or [])
         for r in rows:
@@ -84,6 +85,8 @@ def save_article(
     *, cluster_id: str, session_id: str, article_json: dict, article_markdown: str,
     article_html: str, total_word_count: int | None, cost_usd: float | None,
     schema_version_effective: str, scheduled_article_run_id: str | None = None,
+    suite_run_id: str | None = None, composite_score: float | None = None,
+    composite_status: str | None = None,
 ) -> dict:
     res = (
         get_service_client()
@@ -94,6 +97,8 @@ def save_article(
             "article_html": article_html, "total_word_count": total_word_count,
             "cost_usd": cost_usd, "schema_version_effective": schema_version_effective,
             "scheduled_article_run_id": scheduled_article_run_id,
+            "suite_run_id": suite_run_id, "composite_score": composite_score,
+            "composite_status": composite_status,
         })
         .execute()
     )
@@ -106,6 +111,17 @@ def set_suite_run_id(article_output_id: str, suite_run_id: str) -> None:
         get_service_client()
         .table("article_outputs")
         .update({"suite_run_id": suite_run_id})
+        .eq("id", article_output_id)
+        .execute()
+    )
+
+
+def set_scores(article_output_id: str, composite_score: float | None, composite_status: str | None) -> None:
+    """Persist the latest blog composite score on a Fan-out article (score-only pass)."""
+    (
+        get_service_client()
+        .table("article_outputs")
+        .update({"composite_score": composite_score, "composite_status": composite_status})
         .eq("id", article_output_id)
         .execute()
     )
