@@ -130,6 +130,14 @@ class Settings(BaseSettings):
     # instant fallback. When off, no fanout_expand rows are ever enqueued and the
     # dedicated lane idles.
     fanout_durable_expand_enabled: bool = False
+    # Checkpoint each silo's expansion + the shared seed-level work to
+    # sessions.expansion_checkpoint so a requeued durable expand re-pays only the
+    # unfinished silos, not the whole 6-10 min run (issue #686 Phase 2). Only
+    # takes effect on the durable path (needs a requeue to matter). OFF by
+    # default: the non-resumable path is unchanged, and the resumable path's pool
+    # differs slightly (per-silo autocomplete) so it wants a live flagged run to
+    # validate before it's trusted.
+    fanout_resumable_expand_enabled: bool = False
     # Interactive worker lane: a second in-process claim loop dedicated to
     # short, user-awaited job types so a just-clicked action never queues
     # behind long background work (brand scans, DataForSEO rank pulls were

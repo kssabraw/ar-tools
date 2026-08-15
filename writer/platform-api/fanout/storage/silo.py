@@ -330,6 +330,48 @@ def set_active_job(session_id: str, payload: dict) -> None:
     )
 
 
+def get_expansion_checkpoint(session_id: str) -> dict | None:
+    """The resumable-expansion checkpoint (issue #686 Phase 2): the per-silo raw
+    pool + the shared seed pool + done flags, so a requeued expand run skips the
+    silos it already finished. None when unset (fresh run / non-resumable path)."""
+    res = (
+        get_service_client()
+        .table("sessions")
+        .select("expansion_checkpoint")
+        .eq("id", session_id)
+        .limit(1)
+        .execute()
+    )
+    if res.data:
+        return res.data[0].get("expansion_checkpoint")
+    return None
+
+
+def set_expansion_checkpoint(session_id: str, checkpoint: dict) -> None:
+    """Persist the resumable-expansion checkpoint (written after the seed unit and
+    after each silo completes)."""
+    (
+        get_service_client()
+        .table("sessions")
+        .update({"expansion_checkpoint": checkpoint})
+        .eq("id", session_id)
+        .execute()
+    )
+
+
+def clear_expansion_checkpoint(session_id: str) -> None:
+    """Drop the checkpoint — on a successful expand (its pool is now persisted as
+    keywords) or a terminal error/cancel (a later expand must start fresh, not
+    resume stale work). A crash leaves it in place so the requeue resumes."""
+    (
+        get_service_client()
+        .table("sessions")
+        .update({"expansion_checkpoint": None})
+        .eq("id", session_id)
+        .execute()
+    )
+
+
 def list_resume_pending() -> list[dict]:
     """Sessions an interrupted run left at awaiting_article_planning with a
     resume directive (active_job.resume_pending) — the delayed startup executor
