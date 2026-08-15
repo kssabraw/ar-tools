@@ -60,20 +60,25 @@ def test_try_claim_run_false_when_already_claimed():
         assert silo.try_claim_run("s1") is False
 
 
-def test_try_mark_started_flips_only_queued():
+def test_try_mark_running_durable_flips_queued_or_running():
+    """The durable claim flips a queued OR already-running session to running (so
+    a reaper/drain requeue after a crash re-runs) — unlike the retired
+    queued-only try_mark_started."""
     seen: dict = {}
     with patch.object(silo, "get_service_client",
                       return_value=_client(_patch_row_response(seen, [{"id": "s1"}]))):
-        assert silo.try_mark_started("s1") is True
+        assert silo.try_mark_running_durable("s1") is True
     assert '"status": "running"' in seen["body"] or '"status":"running"' in seen["body"]
-    assert "status=eq.queued" in seen["url"]
+    assert "in.%28queued%2Crunning%29" in seen["url"] or "in.(queued,running)" in seen["url"]
 
 
-def test_try_mark_started_false_when_cancelled_while_queued():
+def test_try_mark_running_durable_false_when_not_runnable():
+    """A cancelled/finished session (not queued/running) isn't claimable, so a
+    requeued row skips instead of re-running."""
     seen: dict = {}
     with patch.object(silo, "get_service_client",
                       return_value=_client(_patch_row_response(seen, []))):
-        assert silo.try_mark_started("s1") is False
+        assert silo.try_mark_running_durable("s1") is False
 
 
 def test_try_mark_cancelled_covers_queued_and_running():

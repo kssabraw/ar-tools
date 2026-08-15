@@ -617,7 +617,6 @@ def _plan_core(session_id: str, direct: bool = False) -> None:
     Owns its own terminal status (complete / degraded-error); an unexpected
     failure propagates to the durable envelope, and CancelledByUser (a
     BaseException) passes through the `except Exception` below to the envelope."""
-    bind_session_id(session_id)
     try:
         session = store.get_session(session_id)
         log_topics = (session.get("statistical_clustering_log") or {}).get("topics") or {}
@@ -714,7 +713,6 @@ def _regate_core(
     clustering granularity, skipping DataForSEO. Clears any prior article plan.
     `silo_margin` None → the configured default; a per-call value lets the owner
     A/B soft routing on one session without changing global config."""
-    bind_session_id(session_id)
     try:
         session = store.get_session(session_id)
         pool = store.list_all_keyword_pool(session_id)
@@ -779,7 +777,6 @@ def _fanout_core(
     representatives as sub-anchors, merge the new keywords into the stored pool,
     then re-run the gate + clustering on the enlarged pool. Mining stays off at
     this level. Depth is capped at 1 — this never recurses on its own output."""
-    bind_session_id(session_id)
     try:
         session = store.get_session(session_id)
         topics = store.list_run_topics(session_id)
@@ -871,7 +868,6 @@ def _architecture_core(session_id: str) -> None:
     linking matrix, persisted to site_architecture. Reads the article plan
     produced by /plan-articles; never re-plans. Idempotent — re-running upserts
     the architecture row (PRD §9.3 "Regenerate architecture")."""
-    bind_session_id(session_id)
     try:
         session = store.get_session(session_id)
         clusters = store.list_clusters(session_id)

@@ -239,10 +239,11 @@ def try_claim_run(session_id: str) -> bool:
     (prevents duplicate rows + double API spend on a double-submit/retry).
     Clears any stale last_error from a prior failed run.
 
-    The claim is `queued`, not `running`: the worker pool caps concurrent runs,
-    so a submitted job may wait for a slot — `try_mark_started` flips it to
-    `running` when a worker actually picks it up. (Previously the claim itself
-    was `running`, so a queued run was indistinguishable from an executing one.)
+    The claim is `queued`, not `running`: the durable worker lane caps concurrent
+    runs, so a submitted job may wait for a slot — `try_mark_running_durable`
+    flips it to `running` when a worker actually picks the async_jobs row up.
+    (Previously the claim itself was `running`, so a queued run was
+    indistinguishable from an executing one.)
     """
     res = (
         get_service_client()
@@ -255,72 +256,10 @@ def try_claim_run(session_id: str) -> bool:
     return bool(res.data)
 
 
-_RECOVERY_COLS = "id, status, seed_keyword, statistical_clustering_log, active_job"
-
-
-def get_live_sessions(session_ids: list[str]) -> list[dict]:
-    """The named sessions that are still in a live status. The shutdown hook's
-    read: it recovers only the runs this process owns, so it asks for those ids
-    rather than everything that looks live (see `fanout/run_recovery.py`)."""
-    if not session_ids:
-        return []
-    res = (
-        get_service_client()
-        .table("sessions")
-        .select(_RECOVERY_COLS)
-        .in_("id", session_ids)
-        .in_("status", ("queued", "running"))
-        .execute()
-    )
-    return res.data or []
-
-
-def list_live_sessions() -> list[dict]:
-    """Every session the DB still marks as claimed by a worker — the fallback
-    sweep's read, for runs whose process died too hard to run its shutdown hook.
-    Only safe to act on once the deploy handover window has closed; see
-    `fanout/run_recovery.py`."""
-    res = (
-        get_service_client()
-        .table("sessions")
-        .select(_RECOVERY_COLS)
-        .in_("status", ("queued", "running"))
-        .execute()
-    )
-    return res.data or []
-
-
-def recover_orphaned_session(
-    session_id: str, status: str, note: str, active_job: dict | None = None
-) -> bool:
-    """Return one orphaned session to an actionable status, recording why.
-    `active_job`, when given, carries the resume directive (run_recovery decided
-    the interrupted job can restart automatically) — written in the same guarded
-    UPDATE so the directive can never land on a row a worker has since finished.
-
-    Guarded on the session still being live, so this can never overwrite a status
-    a real worker has since written — the sweep reads and writes as two steps, and
-    on the read side a row is only a candidate because no process owns it."""
-    fields: dict = {"status": status, "last_error": note}
-    if active_job is not None:
-        fields["active_job"] = active_job
-    res = (
-        get_service_client()
-        .table("sessions")
-        .update(fields)
-        .eq("id", session_id)
-        .in_("status", ("queued", "running"))
-        .execute()
-    )
-    return bool(res.data)
-
-
 def set_active_job(session_id: str, payload: dict) -> None:
-    """Record which pipeline job holds the session's run claim (kind + its
-    replayable args). Written at submit time and overwritten by every subsequent
-    submit, so for a session stuck in a live status it always describes the
-    interrupted job — which is what run_recovery needs to decide whether the run
-    can auto-resume."""
+    """Record which pipeline stage holds the session's run claim (kind + args) —
+    advisory metadata surfaced in the workspace UI. Written at submit time and
+    overwritten by every subsequent submit."""
     (
         get_service_client()
         .table("sessions")
@@ -372,44 +311,14 @@ def clear_expansion_checkpoint(session_id: str) -> None:
     )
 
 
-def list_resume_pending() -> list[dict]:
-    """Sessions an interrupted run left at awaiting_article_planning with a
-    resume directive (active_job.resume_pending) — the delayed startup executor
-    re-runs article planning on these (see fanout/run_recovery.py)."""
-    res = (
-        get_service_client()
-        .table("sessions")
-        .select(_RECOVERY_COLS)
-        .eq("status", "awaiting_article_planning")
-        .eq("active_job->>resume_pending", "true")
-        .execute()
-    )
-    return res.data or []
-
-
-def try_mark_started(session_id: str) -> bool:
-    """Flip a queued claim to running — called by the worker when it actually
-    picks the job up. Returns False if the session is no longer queued (the user
-    cancelled while it waited for a slot), in which case the job must not run."""
-    res = (
-        get_service_client()
-        .table("sessions")
-        .update({"status": "running"})
-        .eq("id", session_id)
-        .eq("status", "queued")
-        .execute()
-    )
-    return bool(res.data)
-
-
 def try_mark_running_durable(session_id: str) -> bool:
     """Idempotent claim for the durable (async_jobs) expand path: flip a session
     that is queued OR already running to running. Returns True if the session was
     in a runnable state (so the job should proceed), False otherwise.
 
-    Unlike `try_mark_started` (queued-only), a durable job's atomic claim is the
-    async_jobs row, not the session status — so a reaper/drain requeue after a
-    crash finds the session already at 'running' and must still proceed. A session
+    A durable job's atomic claim is the async_jobs row, not the session status —
+    so this accepts a session already at 'running' too: a reaper/drain requeue
+    after a crash finds the session at 'running' and must still proceed. A session
     the user cancelled (or that already reached a terminal status like
     awaiting_article_planning) is not in ('queued','running'), so the flip lands
     on nothing and returns False, which both aborts a cancelled run and prevents a
@@ -431,7 +340,8 @@ def try_mark_cancelled(session_id: str) -> bool:
     (status was already cancelled, complete, error, awaiting_*, etc.).
     Mirrors the try_claim_run check-and-set so two concurrent /cancel calls
     can't both claim a cancel. Cancelling a still-queued run needs no worker
-    cooperation — the worker's try_mark_started fails and the job never runs."""
+    cooperation — the durable claim (try_mark_running_durable) then finds the
+    session no longer queued/running and the job never runs."""
     res = (
         get_service_client()
         .table("sessions")

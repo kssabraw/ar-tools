@@ -375,17 +375,6 @@ class Settings(BaseSettings):
     scheduler_concurrency_cap: int = 3        # in-flight article writes (LLM rate-limit guard)
     scheduler_stuck_minutes: int = 30         # startup sweep: running rows older than this requeue
     scheduler_shutdown_grace_s: float = 20.0  # max wait for in-flight writes on shutdown
-    # Fallback sweep for pipeline runs orphaned by a kill too hard for the
-    # shutdown hook (OOM / SIGKILL). Delayed rather than run at startup: during a
-    # deploy the outgoing container is still working for ~15s after the new one
-    # boots, and a sweep that early would reap its live run. See run_recovery.py.
-    orphan_sweep_delay_s: float = 120.0
-    # How many times an article-planning run interrupted by a deploy is
-    # auto-resumed (run_recovery re-submits planning on the new container)
-    # before recovery falls back to the manual "Plan articles" click. Mirrors
-    # the Blog Writer orchestrator's run_auto_resume_max: a run that keeps
-    # dying (e.g. planning itself crashes the process) must not crash-loop.
-    plan_auto_resume_max: int = 2
     # Bounded retry for transient generation failures (LLM overload / 529, research
     # timeout, a DataForSEO hiccup, a worker restart mid-write). A failed run is
     # requeued with exponential backoff up to this many total attempts, then

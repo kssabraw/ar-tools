@@ -136,6 +136,13 @@ class Settings(BaseSettings):
         "fanout_expand", "fanout_plan", "fanout_regate", "fanout_fanout",
         "fanout_architecture",
     ]
+    # How many concurrent workers the dedicated fanout lane runs (issue #686
+    # Phase 3). Before Phase 3 the pipeline stages ran on a 2-slot
+    # ThreadPoolExecutor; once they all moved to this single lane, cross-session
+    # pipeline work serialized. 2 restores that parallelism (the async_jobs claim
+    # is an atomic guarded UPDATE, so N workers never double-claim a row). Set to
+    # 1 to throttle to one paid DataForSEO pipeline run at a time.
+    fanout_lane_workers: int = 2
     # NOTE: the fanout_resumable_expand_enabled flag (issue #686 Phase 2) lives in
     # the VENDORED fanout config (fanout/config.py), not here — fanout/jobs.py
     # reads it via fanout.config.get_settings(), a different Settings class, so a

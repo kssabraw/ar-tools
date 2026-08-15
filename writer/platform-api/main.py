@@ -142,11 +142,15 @@ async def lifespan(app: FastAPI):
         if settings.interactive_job_types
         else None
     )
-    fanout_worker_task = (
+    # N concurrent fanout-lane workers (issue #686 Phase 3): the pipeline stages
+    # all run on this dedicated lane now, so >1 worker restores the cross-session
+    # parallelism the old 2-slot executor had. The async_jobs claim is atomic, so
+    # the workers never double-claim a row.
+    _fanout_worker_count = max(1, settings.fanout_lane_workers) if _fanout_types else 0
+    fanout_worker_tasks = [
         asyncio.create_task(job_worker(job_types=_fanout_types, lane="fanout"))
-        if _fanout_types
-        else None
-    )
+        for _ in range(_fanout_worker_count)
+    ]
     scheduler_task = asyncio.create_task(gsc_scheduler())
     # Start the Topic Fanout in-process content scheduler (its own asyncio loop;
     # claims due scheduled article runs). Driven explicitly here rather than via
@@ -170,7 +174,8 @@ async def lifespan(app: FastAPI):
     # still self-heals via the reaper.
     tasks = [
         t
-        for t in (worker_task, interactive_worker_task, fanout_worker_task, scheduler_task)
+        for t in (worker_task, interactive_worker_task, scheduler_task,
+                  *fanout_worker_tasks)
         if t
     ]
     for task in tasks:
