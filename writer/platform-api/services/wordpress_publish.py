@@ -410,17 +410,54 @@ def _ssh_enabled_for(client: dict) -> bool:
     return True
 
 
-def _ssh_private_key() -> str:
-    """The configured private key, tolerating an escaped-newline PEM.
+def _normalize_private_key(raw: str) -> str:
+    """Coerce a configured private key into the exact bytes asyncssh expects.
 
-    A PEM is multi-line, and pasting one into a KEY=VALUE environment editor
-    commonly flattens it into literal backslash-n sequences. A real PEM never
-    contains a backslash, so unescaping is unambiguous and saves a confusing
-    "invalid key" failure at publish time."""
-    key = settings.wordpress_ssh_private_key or ""
-    if "\\n" in key:
-        key = key.replace("\\n", "\n")
+    Pasting a multi-line PEM / OpenSSH key into a KEY=VALUE environment editor
+    mangles it two common ways, both of which asyncssh rejects as a bare
+    "Invalid private key":
+    - the newlines become literal backslash escapes (`\\n`, or `\\r\\n` from a
+      Windows paste). A real key body is base64 + dashes and never contains a
+      backslash, so unescaping is unambiguous.
+    - the key carries carriage returns (a CRLF paste, or a stray `\\r`). The
+      OpenSSH-format parser is CR-intolerant and fails on them.
+
+    Normalize both — unescape backslash sequences, then collapse any real CRLF /
+    CR to LF — and re-emit with a single trailing newline. A clean key (real
+    newlines, no CR, no backslash) passes through unchanged."""
+    key = raw or ""
+    if "\\" in key:
+        key = (
+            key.replace("\\r\\n", "\n")
+            .replace("\\n", "\n")
+            .replace("\\r", "\n")
+        )
+    key = key.replace("\r\n", "\n").replace("\r", "\n")
     return key.strip() + "\n"
+
+
+def _ssh_private_key() -> str:
+    """The configured private key, normalized for asyncssh (see
+    `_normalize_private_key`)."""
+    return _normalize_private_key(settings.wordpress_ssh_private_key or "")
+
+
+def _key_shape() -> str:
+    """A safe, secret-free structural description of the configured key, appended
+    to a load-failure detail so a bad paste is diagnosable from the log without
+    exposing key material. The PEM header line names the format (OpenSSH vs
+    RSA/EC PEM vs a PuTTY .ppk asyncssh can't import); line count + length catch
+    truncation; the CR / backslash flags catch a mangled paste."""
+    raw = settings.wordpress_ssh_private_key or ""
+    key = _ssh_private_key()
+    lines = key.splitlines()
+    header = (lines[0] if lines else "")[:45]
+    has_cr = "\r" in raw
+    has_backslash = "\\" in raw
+    return (
+        f" [header={header!r} lines={len(lines)} len={len(key)}"
+        f" raw_has_cr={has_cr} raw_has_backslash={has_backslash}]"
+    )
 
 
 async def ssh_selftest() -> Optional[dict]:
@@ -456,7 +493,7 @@ async def ssh_selftest() -> Optional[dict]:
     try:
         connect_kwargs["client_keys"] = [asyncssh.import_private_key(_ssh_private_key())]
     except Exception as exc:  # noqa: BLE001 — a malformed/passphrased key
-        return {"ok": False, "detail": f"private key could not be loaded: {exc}"}
+        return {"ok": False, "detail": f"private key could not be loaded: {exc}{_key_shape()}"}
 
     command = f"cd {shlex.quote(settings.wordpress_ssh_wp_path)} && wp option get home"
     try:
