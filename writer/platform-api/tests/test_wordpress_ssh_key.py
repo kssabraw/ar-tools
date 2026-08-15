@@ -9,6 +9,7 @@ the same clean key, and that a clean key passes through unchanged.
 (CI-only: importing services.wordpress_publish pulls the config/settings chain.)
 """
 
+import services.wordpress_publish as wordpress_publish
 from services.wordpress_publish import _normalize_private_key
 
 _BODY = (
@@ -53,3 +54,35 @@ def test_empty_is_just_a_newline():
     # An unset key is guarded earlier (ssh_selftest returns before this); the
     # helper itself must not crash on empty.
     assert _normalize_private_key("") == "\n"
+
+
+# ---- _key_shape: a load-failure diagnostic that must never leak key material --
+
+def test_key_shape_logs_a_recognised_pem_header(monkeypatch):
+    """A valid key opens with `-----BEGIN ... PRIVATE KEY-----`, which is a public
+    marker (no secret material) — so the diagnostic keeps it, which is the whole
+    point (it names the format)."""
+    key = _BODY  # opens with -----BEGIN OPENSSH PRIVATE KEY-----
+    monkeypatch.setattr(wordpress_publish.settings, "wordpress_ssh_private_key", key)
+    shape = wordpress_publish._key_shape()
+    assert "-----BEGIN OPENSSH PRIVATE KEY-----" in shape
+    assert "raw_has_cr=False" in shape and "raw_has_backslash=False" in shape
+
+
+def test_key_shape_redacts_a_headerless_key(monkeypatch):
+    """A headerless paste (raw base64 body) must NOT have its first line logged —
+    that would leak key material. It's redacted instead."""
+    secret_body = "b3BlbnNzaHNlY3JldGtleWJvZHl2ZXJ5bG9uZ2Jhc2U2NA=="
+    monkeypatch.setattr(wordpress_publish.settings, "wordpress_ssh_private_key", secret_body)
+    shape = wordpress_publish._key_shape()
+    assert "<no PEM header>" in shape
+    assert secret_body[:20] not in shape  # no key body leaked
+
+
+def test_key_shape_flags_a_crlf_paste(monkeypatch):
+    """The CR flag is what identifies the suspected production cause (a CRLF paste
+    of an OpenSSH key)."""
+    monkeypatch.setattr(
+        wordpress_publish.settings, "wordpress_ssh_private_key", _BODY.replace("\n", "\r\n")
+    )
+    assert "raw_has_cr=True" in wordpress_publish._key_shape()

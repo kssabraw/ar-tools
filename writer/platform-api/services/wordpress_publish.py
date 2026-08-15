@@ -451,7 +451,12 @@ def _key_shape() -> str:
     raw = settings.wordpress_ssh_private_key or ""
     key = _ssh_private_key()
     lines = key.splitlines()
-    header = (lines[0] if lines else "")[:45]
+    first = lines[0] if lines else ""
+    # Only a recognised armor/marker line is safe to log — a valid private key
+    # always opens with `-----BEGIN ... PRIVATE KEY-----` (or a PuTTY header).
+    # Anything else (e.g. a headerless base64 paste) would be raw key body, so
+    # redact it rather than leak up to a line of the secret.
+    header = first[:45] if first.startswith(("-----", "PuTTY-User-Key-File")) else "<no PEM header>"
     has_cr = "\r" in raw
     has_backslash = "\\" in raw
     return (
