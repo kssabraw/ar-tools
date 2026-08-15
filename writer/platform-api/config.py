@@ -110,7 +110,26 @@ class Settings(BaseSettings):
         # (before the source_ref dedupe) spawned a duplicate article; 90 min
         # keeps the reaper as a real backstop without firing on healthy runs.
         "content_batch_item": 90,
+        # A Fanout expansion (expand + competitor mining) compounds two ~4-min
+        # budgets plus autocomplete/gate, so it can legitimately run well past the
+        # 30-min default. The reaper requeue is a re-run from scratch, so it MUST
+        # exceed the longest real run or it would spawn a second concurrent
+        # expansion (double spend). 45 min keeps it a genuine backstop only.
+        "fanout_expand": 45,
     }
+    # Dedicated worker lane for the (long, blocking) Fanout pipeline jobs, so a
+    # ~10-min expansion can't tie up the MAIN lane — which owns the stale-job
+    # reaper and every other background job. The MAIN lane excludes these types;
+    # this lane claims only them. Empty list disables the dedicated lane (the
+    # types then fall back to the MAIN lane). See issue #686 Phase 1.
+    fanout_job_types: List[str] = ["fanout_expand"]
+    # Route Fanout expansion through the durable async_jobs queue (survives a
+    # platform-api restart via the shared worker's drain/reaper) instead of the
+    # per-process ThreadPoolExecutor. OFF by default: flipping it on is the whole
+    # behaviour change of issue #686 Phase 1, and the executor path stays the
+    # instant fallback. When off, no fanout_expand rows are ever enqueued and the
+    # dedicated lane idles.
+    fanout_durable_expand_enabled: bool = False
     # Interactive worker lane: a second in-process claim loop dedicated to
     # short, user-awaited job types so a just-clicked action never queues
     # behind long background work (brand scans, DataForSEO rank pulls were

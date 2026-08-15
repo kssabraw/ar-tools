@@ -360,6 +360,29 @@ def try_mark_started(session_id: str) -> bool:
     return bool(res.data)
 
 
+def try_mark_running_durable(session_id: str) -> bool:
+    """Idempotent claim for the durable (async_jobs) expand path: flip a session
+    that is queued OR already running to running. Returns True if the session was
+    in a runnable state (so the job should proceed), False otherwise.
+
+    Unlike `try_mark_started` (queued-only), a durable job's atomic claim is the
+    async_jobs row, not the session status — so a reaper/drain requeue after a
+    crash finds the session already at 'running' and must still proceed. A session
+    the user cancelled (or that already reached a terminal status like
+    awaiting_article_planning) is not in ('queued','running'), so the flip lands
+    on nothing and returns False, which both aborts a cancelled run and prevents a
+    requeued row from re-running an already-finished expansion."""
+    res = (
+        get_service_client()
+        .table("sessions")
+        .update({"status": "running"})
+        .eq("id", session_id)
+        .in_("status", ("queued", "running"))
+        .execute()
+    )
+    return bool(res.data)
+
+
 def try_mark_cancelled(session_id: str) -> bool:
     """Atomically flip a queued-or-running session to cancelled. Returns True if
     this caller landed the transition, False if there was no run to cancel

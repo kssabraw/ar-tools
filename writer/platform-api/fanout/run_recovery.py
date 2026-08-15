@@ -134,6 +134,11 @@ def _recover(sessions: list[dict], store, max_resumes: int = 0) -> int:
     update must not stop the rest. Returns how many were recovered."""
     recovered = 0
     for session in sessions:
+        # A durable run (issue #686) is managed by the async_jobs drain/reaper, not
+        # this status-based sweep — touching it here would race that machinery
+        # (e.g. flip a live-but-requeued run to error). Leave it alone.
+        if (session.get("active_job") or {}).get("durable"):
+            continue
         status, note = orphan_recovery_target(session)
         directive = None
         if status == "awaiting_article_planning":
