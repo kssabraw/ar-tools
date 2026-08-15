@@ -182,7 +182,15 @@ def test_classify_prefers_collection_over_loose_product_hint():
 # ── discovery orchestration ──────────────────────────────────────────────────
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # A fresh loop per call: sibling tests use asyncio.run(), which sets the
+    # thread's current loop to None on exit, so asyncio.get_event_loop() here
+    # raises "no current event loop" depending on test order (surfaced once CI
+    # ran the full suite). An owned loop is order-independent.
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 def _supabase_with_client(client_row):
