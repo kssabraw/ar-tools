@@ -89,12 +89,23 @@ async def resolve_locations(auth: dict = Depends(require_auth)) -> ResolveLocati
     )
 
 
+# GBP performance data lands ~3–5 days late. We over-fetch by this many days
+# past the two comparison windows so that, once we anchor those windows at the
+# last day with data (rather than today), the older window is still fully
+# covered by the read.
+_GBP_LAG_BUFFER_DAYS = 10
+
+
 def _fetch_metric_rows(supabase, loc_ids: list[str], start: date, end: date) -> list[dict]:
     """Read every gbp_metric_daily row for the locations over [start, end].
 
     Paginated in 1000-row pages: a 365-day window across 8 metrics is ~2,920 rows
     for one location, past PostgREST's default cap — an unpaged read would silently
-    truncate the oldest days and skew the growth math."""
+    truncate the oldest days and skew the growth math. Ordered on the full primary
+    key (date, metric, location_row_id) so the ordering is *total*: ordering on
+    ``date`` alone leaves a single day's ~8 metric rows in an arbitrary,
+    run-to-run-unstable order, which offset pagination can split across a page
+    boundary and duplicate or drop."""
     rows: list[dict] = []
     page = 1000
     offset = 0
@@ -106,6 +117,8 @@ def _fetch_metric_rows(supabase, loc_ids: list[str], start: date, end: date) -> 
             .gte("date", start.isoformat())
             .lte("date", end.isoformat())
             .order("date")
+            .order("metric")
+            .order("location_row_id")
             .range(offset, offset + page - 1)
             .execute()
         ).data or []
@@ -138,15 +151,20 @@ async def gbp_dashboard(
     location_models = [GbpLocation(**row) for row in locs]
     ok_ids = [row["id"] for row in locs if row.get("access_status") == "ok"]
 
-    end = date.today()
-    start = end - timedelta(days=window - 1)
-    # Pull current + prior window so compute_metric_growth has both to compare.
-    fetch_start = end - timedelta(days=window * 2)
+    today = date.today()
+    # Fetch two windows plus a lag buffer, then anchor the comparison at the last
+    # day that actually has data. Anchoring at `today` would compare a current
+    # window still missing its most recent (not-yet-arrived) days against a
+    # complete prior window — making every metric read as a spurious decline.
+    fetch_start = today - timedelta(days=window * 2 + _GBP_LAG_BUFFER_DAYS)
 
-    rows = _fetch_metric_rows(supabase, ok_ids, fetch_start, end) if ok_ids else []
-    cards = gbp_metrics_read.build_growth_cards(rows, end, window)
-    window_rows = [r for r in rows if (r.get("date") or "") >= start.isoformat()]
-    series = gbp_metrics_read.build_series(window_rows, start, end)
+    rows = _fetch_metric_rows(supabase, ok_ids, fetch_start, today) if ok_ids else []
+    anchor = gbp_metrics_read.last_data_date(rows) or today
+    win_start = anchor - timedelta(days=window - 1)
+
+    cards = gbp_metrics_read.build_growth_cards(rows, anchor, window)
+    window_rows = [r for r in rows if (r.get("date") or "") >= win_start.isoformat()]
+    series = gbp_metrics_read.build_series(window_rows, win_start, anchor)
 
     synced = [row.get("last_synced_at") for row in locs if row.get("last_synced_at")]
     last_synced_at = max(synced) if synced else None
@@ -156,8 +174,8 @@ async def gbp_dashboard(
         connected=bool(ok_ids),
         locations=location_models,
         window_days=window,
-        date_start=start.isoformat(),
-        date_end=end.isoformat(),
+        date_start=win_start.isoformat(),
+        date_end=anchor.isoformat(),
         last_synced_at=last_synced_at,
         metrics=[GbpMetricGrowth(**c) for c in cards],
         series=[GbpSeriesPoint(**p) for p in series],

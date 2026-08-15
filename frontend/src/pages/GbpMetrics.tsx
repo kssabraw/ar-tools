@@ -22,7 +22,8 @@ const WINDOWS: [number, string][] = [
 export function GbpMetrics() {
   const { id: clientId } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const [window, setWindow] = useState(90)
+  // Not `window` — that shadows the global and would break any window.* call.
+  const [windowDays, setWindowDays] = useState(90)
 
   const { data: client } = useQuery<Client>({
     queryKey: ['client', clientId],
@@ -30,9 +31,9 @@ export function GbpMetrics() {
     enabled: Boolean(clientId),
   })
 
-  const { data, isLoading } = useQuery<GbpDashboard>({
-    queryKey: ['gbp-dashboard', clientId, window],
-    queryFn: () => api.get<GbpDashboard>(`/clients/${clientId}/gbp-metrics/dashboard?window=${window}`),
+  const { data, isLoading, error } = useQuery<GbpDashboard>({
+    queryKey: ['gbp-dashboard', clientId, windowDays],
+    queryFn: () => api.get<GbpDashboard>(`/clients/${clientId}/gbp-metrics/dashboard?window=${windowDays}`),
     enabled: Boolean(clientId),
   })
 
@@ -50,12 +51,14 @@ export function GbpMetrics() {
             website clicks, direction requests &amp; messages over time, from the Business Profile Performance API.
           </p>
         </div>
-        <select style={select} value={window} onChange={(e) => setWindow(Number(e.target.value))}>
+        <select style={select} value={windowDays} onChange={(e) => setWindowDays(Number(e.target.value))}>
           {WINDOWS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
         </select>
       </div>
 
-      {isLoading || !data ? (
+      {error ? (
+        <div style={{ ...emptyBox, color: '#b91c1c' }}>Couldn't load GBP data: {(error as Error).message}</div>
+      ) : isLoading || !data ? (
         <div style={emptyBox}>Loading…</div>
       ) : !data.enabled ? (
         <NotEnabled />
