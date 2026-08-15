@@ -123,21 +123,12 @@ class Settings(BaseSettings):
     # this lane claims only them. Empty list disables the dedicated lane (the
     # types then fall back to the MAIN lane). See issue #686 Phase 1.
     fanout_job_types: List[str] = ["fanout_expand"]
-    # Route Fanout expansion through the durable async_jobs queue (survives a
-    # platform-api restart via the shared worker's drain/reaper) instead of the
-    # per-process ThreadPoolExecutor. OFF by default: flipping it on is the whole
-    # behaviour change of issue #686 Phase 1, and the executor path stays the
-    # instant fallback. When off, no fanout_expand rows are ever enqueued and the
-    # dedicated lane idles.
-    fanout_durable_expand_enabled: bool = False
-    # Checkpoint each silo's expansion + the shared seed-level work to
-    # sessions.expansion_checkpoint so a requeued durable expand re-pays only the
-    # unfinished silos, not the whole 6-10 min run (issue #686 Phase 2). Only
-    # takes effect on the durable path (needs a requeue to matter). OFF by
-    # default: the non-resumable path is unchanged, and the resumable path's pool
-    # differs slightly (per-silo autocomplete) so it wants a live flagged run to
-    # validate before it's trusted.
-    fanout_resumable_expand_enabled: bool = False
+    # NOTE: the fanout_durable_expand_enabled / fanout_resumable_expand_enabled
+    # flags (issue #686 Phases 1 & 2) live in the VENDORED fanout config
+    # (fanout/config.py), not here — fanout/jobs.py reads them via
+    # fanout.config.get_settings(), a different Settings class, so a copy here is
+    # dead. The env vars (FANOUT_DURABLE_EXPAND_ENABLED /
+    # FANOUT_RESUMABLE_EXPAND_ENABLED on PLATFORM) are read there.
     # Interactive worker lane: a second in-process claim loop dedicated to
     # short, user-awaited job types so a just-clicked action never queues
     # behind long background work (brand scans, DataForSEO rank pulls were

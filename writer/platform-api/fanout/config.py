@@ -270,6 +270,16 @@ class Settings(BaseSettings):
     fanout_cost_multiplier_low: float = 5.0
     fanout_cost_multiplier_high: float = 8.0
 
+    # Durable / resumable expand (issue #686). These gate the durable async_jobs
+    # envelope around the expand pipeline (Phase 1) and its per-silo checkpoint
+    # (Phase 2). They MUST live here, in the vendored fanout config, because
+    # fanout/jobs.py reads them via `fanout.config.get_settings()` — the sibling
+    # platform-api config.py is a different Settings class that fanout/jobs.py
+    # never sees. The env vars (FANOUT_DURABLE_EXPAND_ENABLED /
+    # FANOUT_RESUMABLE_EXPAND_ENABLED, set on PLATFORM) are read by field name.
+    fanout_durable_expand_enabled: bool = False
+    fanout_resumable_expand_enabled: bool = False
+
     # M6 site architecture (PRD §7.11). Fully deterministic — no LLM (the writer
     # module owns pillar editorial as of 2026-06-09); only the linking matrix +
     # placeholder editorial fields are produced here.

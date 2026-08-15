@@ -102,6 +102,32 @@ def test_durable_cancel_is_recorded_as_cancelled(monkeypatch):
     assert [f[1]["status"] for f in store.finalized] == ["cancelled"]
 
 
+def test_durable_error_clears_checkpoint_when_resumable(monkeypatch):
+    """Flag on (Phase 2): a terminal error clears the resumable checkpoint so a
+    requeue starts fresh rather than resuming stale partial work. (Flag off, the
+    other durable tests prove the clear is a no-op — the store's checkpoint
+    methods are never touched.)"""
+    store = _Store(runnable=True)
+    cleared: list[str] = []
+    store.clear_expansion_checkpoint = lambda sid: cleared.append(sid)
+    monkeypatch.setattr(jobs, "store", store)
+    monkeypatch.setattr(jobs, "metered_run", _noop_meter)
+    monkeypatch.setattr(jobs, "bind_session_id", lambda *_a, **_k: None)
+    monkeypatch.setattr(jobs.cancellation, "clear", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        jobs, "get_settings",
+        lambda: types.SimpleNamespace(fanout_resumable_expand_enabled=True),
+    )
+
+    def boom(_sid):
+        raise RuntimeError("dfs 500")
+
+    monkeypatch.setattr(jobs, "_run_expand_core", boom)
+    jobs.run_expand_durable("s1")
+    assert cleared == ["s1"]
+    assert [f[1]["status"] for f in store.finalized] == ["error"]
+
+
 # ---- enqueue + durable-marker handshake -----------------------------------
 
 class _Tbl:
