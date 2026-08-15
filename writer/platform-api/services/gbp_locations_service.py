@@ -28,10 +28,12 @@ from __future__ import annotations
 import logging
 import math
 import re
+from datetime import date, timedelta
 from typing import Optional
 
 from fastapi import HTTPException
 
+from config import settings
 from db.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -378,3 +380,131 @@ def unregister_location(client_id: str, row_id: str) -> None:
     )
     if not res.data:
         raise HTTPException(status_code=404, detail="gbp_location_not_found")
+
+
+# ── bulk onboarding ──────────────────────────────────────────────────────────
+def _client_gbp_identity(client: dict) -> dict:
+    """Everything the matchers need about a client's captured GBP. ``place_id`` is
+    read from the top-level ``gbp_place_id`` column first (the JSONB ``gbp.place_id``
+    is often absent), then the JSONB — either exact key pins the match."""
+    gbp = client.get("gbp") or {}
+    return {
+        "name": gbp.get("business_name") or client.get("name"),
+        "latlng": parse_latlng_from_maps_uri(gbp.get("google_maps_uri")),
+        "cid": parse_cid(gbp.get("google_maps_uri")),
+        "place_id": client.get("gbp_place_id") or gbp.get("place_id"),
+        "has_gbp": bool(gbp.get("business_name") or client.get("gbp_place_id") or gbp.get("place_id")),
+    }
+
+
+def _match_from_resolved(ident: dict, locations: list[dict]) -> Optional[dict]:
+    """Pick the one listing that is this client's GBP from an already-resolved set
+    — exact identity (Place ID / CID) first, else the top name+geo match if it
+    clears the confidence bar. Pure. None when nothing is confident."""
+    exact = find_exact_match(ident["cid"], ident["place_id"], locations)
+    if exact:
+        return {**exact, "score": 1.0}
+    ranked = rank_matches(ident["name"], ident["latlng"], locations)
+    top = ranked[0] if ranked else None
+    return top if (top and top.get("score", 0) >= _CONFIDENT) else None
+
+
+def _enqueue_backfill(supabase, location_row_id: str) -> None:
+    """Queue a ~18-month historical metrics pull for a freshly registered location."""
+    end = date.today()
+    start = end - timedelta(days=settings.gbp_metrics_backfill_days)
+    supabase.table("async_jobs").insert(
+        {
+            "job_type": "gbp_metrics_ingest",
+            "entity_id": str(location_row_id),
+            "payload": {
+                "location_row_id": str(location_row_id),
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+            },
+        }
+    ).execute()
+
+
+def onboard_eligible_clients(user_id: Optional[str] = None) -> dict:
+    """Auto-register every client that has a captured GBP but no ``gbp_locations``
+    row, matching against the connected account's managed listings, and kick off a
+    backfill for each. Resolves the listing set ONCE (one Google round-trip), then
+    matches with the pure helpers. Best-effort per client — one failure is recorded
+    and skipped, never aborts the batch.
+
+    Returns ``{resolved, onboarded:[…], skipped:[{name, reason}], detail}``.
+    """
+    supabase = get_supabase()
+    resolved = resolve_connected_locations()
+    locations = resolved.get("locations") or []
+    if not locations:
+        return {
+            "resolved": 0, "onboarded": [], "skipped": [],
+            "detail": resolved.get("detail") or "no_locations_visible",
+        }
+
+    try:
+        clients = (
+            supabase.table("clients").select("id, name, gbp, gbp_place_id").execute().data or []
+        )
+        reg = supabase.table("gbp_locations").select("client_id, location_id").execute().data or []
+    except Exception as exc:  # noqa: BLE001
+        logger.error("gbp_onboard.load_failed", extra={"error": str(exc)})
+        return {"resolved": len(locations), "onboarded": [], "skipped": [], "detail": "load_failed"}
+
+    registered_clients = {r["client_id"] for r in reg}
+    used_location_ids = {r["location_id"] for r in reg}  # a listing already assigned to someone
+
+    onboarded: list[dict] = []
+    skipped: list[dict] = []
+    for c in clients:
+        cid = c["id"]
+        if cid in registered_clients:
+            continue
+        ident = _client_gbp_identity(c)
+        if not ident["has_gbp"]:
+            continue  # client has no captured GBP — nothing to onboard
+        matched = _match_from_resolved(ident, locations)
+        if not matched:
+            skipped.append({"client_id": cid, "name": c.get("name"), "reason": "no_confident_match"})
+            continue
+        loc_id = matched.get("location_id")
+        if loc_id in used_location_ids or matched.get("registered_client_id"):
+            skipped.append({"client_id": cid, "name": c.get("name"), "reason": "listing_already_assigned"})
+            continue
+        try:
+            row = register_location(
+                cid, loc_id, matched.get("account_id"),
+                matched.get("place_id") or ident["place_id"],
+                matched.get("title") or ident["name"], user_id,
+            )
+            _enqueue_backfill(supabase, row["id"])
+        except Exception as exc:  # noqa: BLE001 — one client's failure isn't the batch's
+            logger.error("gbp_onboard.register_failed", extra={"client_id": cid, "error": str(exc)})
+            skipped.append({"client_id": cid, "name": c.get("name"), "reason": "register_failed"})
+            continue
+        used_location_ids.add(loc_id)
+        onboarded.append(
+            {"client_id": cid, "name": c.get("name"), "location_id": loc_id,
+             "title": matched.get("title"), "score": matched.get("score")}
+        )
+
+    return {"resolved": len(locations), "onboarded": onboarded, "skipped": skipped, "detail": None}
+
+
+async def run_gbp_onboard_job(job: dict) -> None:
+    """async_jobs handler for job_type='gbp_onboard' — bulk-onboard eligible clients."""
+    payload = job.get("payload") or {}
+    job_id = job["id"]
+    supabase = get_supabase()
+    try:
+        result = onboard_eligible_clients(user_id=payload.get("user_id"))
+        supabase.table("async_jobs").update(
+            {"status": "complete", "result": result, "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("gbp_onboard.job_failed", extra={"error": str(exc)})
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": str(exc)[:1000], "completed_at": "now()"}
+        ).eq("id", job_id).execute()

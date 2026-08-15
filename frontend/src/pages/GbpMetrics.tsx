@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, RefreshCw, PlugZap, CheckCircle2, AlertTriangle, History } from 'lucide-react'
+import { ArrowLeft, RefreshCw, PlugZap, CheckCircle2, AlertTriangle, History, Users } from 'lucide-react'
 import { api } from '../lib/api'
+import { useAuth } from '../context/AuthContext'
 import type {
   Client, GbpDashboard, GbpLocation, GbpMetricGrowth, GbpResolvedLocation, GbpSeriesPoint,
 } from '../lib/types'
@@ -134,6 +135,64 @@ function NotEnabled() {
   )
 }
 
+// Admin-only agency-wide action: bulk-onboard every client that has a captured
+// GBP but no registered location (resolve once → auto-match → register + backfill).
+function OnboardAllButton() {
+  const { isAdmin } = useAuth()
+  const queryClient = useQueryClient()
+
+  const { data: status } = useQuery<{ status: string; result?: { onboarded: unknown[]; skipped: unknown[] } }>({
+    queryKey: ['gbp-onboard-status'],
+    queryFn: () => api.get('/gbp/onboard/status'),
+    enabled: isAdmin,
+    refetchInterval: (q) => {
+      const s = (q.state.data as { status?: string } | undefined)?.status
+      return s === 'pending' || s === 'running' ? 2500 : false
+    },
+  })
+
+  const start = useMutation({
+    mutationFn: () => api.post<{ status: string; job_id: string }>('/gbp/onboard', {}),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['gbp-onboard-status'] }),
+  })
+
+  // When a run completes, refresh this client's dashboard (it may have just been onboarded).
+  useEffect(() => {
+    if (status?.status === 'complete') void queryClient.invalidateQueries({ queryKey: ['gbp-dashboard'] })
+  }, [status?.status, queryClient])
+
+  if (!isAdmin) return null
+  const running = start.isPending || status?.status === 'pending' || status?.status === 'running'
+  const result = status?.status === 'complete' ? status.result : undefined
+
+  return (
+    <div style={{ ...noticeCard, marginBottom: 12, background: '#f8fafc' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Users size={16} color="#6366f1" />
+          <div>
+            <strong style={{ fontSize: 13, color: '#0f172a' }}>Onboard all clients</strong>
+            <div style={{ fontSize: 12, color: '#94a3b8' }}>
+              Auto-match every client's Google Business Profile and start an 18-month backfill.
+            </div>
+          </div>
+        </div>
+        <button style={primaryBtn} onClick={() => start.mutate()} disabled={running}>
+          <RefreshCw size={14} style={running ? spinStyle : undefined} />
+          {running ? 'Onboarding…' : 'Auto-onboard all'}
+        </button>
+      </div>
+      {start.isError && <div style={errText}>{(start.error as Error).message}</div>}
+      {result && (
+        <div style={{ fontSize: 12.5, color: '#334155', marginTop: 10 }}>
+          Onboarded <strong>{result.onboarded.length}</strong>, skipped <strong>{result.skipped.length}</strong>.
+          {result.onboarded.length > 0 && ' Backfills are running — data appears in a few minutes.'}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Connect flow (resolve → register → verify → backfill) ────────────────────
 function ConnectPanel({ clientId, locations }: { clientId: string; locations: GbpLocation[] }) {
   const queryClient = useQueryClient()
@@ -158,6 +217,7 @@ function ConnectPanel({ clientId, locations }: { clientId: string; locations: Gb
 
   return (
     <div>
+      <OnboardAllButton />
       <div style={noticeCard}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
           <PlugZap size={16} color="#6366f1" />

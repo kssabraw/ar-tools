@@ -90,6 +90,46 @@ async def resolve_locations(auth: dict = Depends(require_auth)) -> ResolveLocati
     )
 
 
+@router.post("/gbp/onboard")
+async def onboard_all_clients(auth: dict = Depends(require_admin)) -> dict:
+    """Admin: bulk-onboard every client with a captured GBP but no registered
+    location. Enqueues a single ``gbp_onboard`` job (resolve the connected
+    account's listings once → auto-match each client → register + backfill).
+    Idempotent: reuses an in-flight job instead of queuing a second."""
+    supabase = get_supabase()
+    pending = (
+        supabase.table("async_jobs")
+        .select("id")
+        .eq("job_type", "gbp_onboard")
+        .in_("status", ["pending", "running"])
+        .limit(1)
+        .execute()
+    ).data or []
+    if pending:
+        return {"status": "already_running", "job_id": pending[0]["id"]}
+    res = (
+        supabase.table("async_jobs")
+        .insert({"job_type": "gbp_onboard", "payload": {"user_id": auth["user_id"]}})
+        .execute()
+    )
+    return {"status": "queued", "job_id": res.data[0]["id"]}
+
+
+@router.get("/gbp/onboard/status")
+async def onboard_status(auth: dict = Depends(require_admin)) -> dict:
+    """Admin: the latest bulk-onboard job's status + result (for the button poll)."""
+    supabase = get_supabase()
+    rows = (
+        supabase.table("async_jobs")
+        .select("id, status, result, error, created_at, completed_at")
+        .eq("job_type", "gbp_onboard")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    ).data or []
+    return rows[0] if rows else {"status": "none"}
+
+
 def _latest_metric_date(supabase, loc_ids: list[str]) -> Optional[date]:
     """The most recent date any of the locations has metric data for (a single
     indexed ``max(date)`` read). This anchors the comparison windows exactly, so
