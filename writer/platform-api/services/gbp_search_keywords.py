@@ -169,18 +169,27 @@ async def run_gbp_search_keywords_job(job: dict) -> None:
 # ----------------------------------------------------------------------------
 # Read
 # ----------------------------------------------------------------------------
-def read_keywords(client_id: str, month: Optional[str] = None, limit: int = 25) -> dict:
-    """Top search keywords for a client's verified locations. Defaults to the
-    latest month with data; ``month`` (YYYY-MM-01) picks a specific one. Returns
-    ``{month, months:[…available], keywords:[…], total}``."""
+def read_keywords(
+    client_id: str, month: Optional[str] = None, months: Optional[int] = None, limit: int = 25
+) -> dict:
+    """Top search keywords for a client's verified locations, summed across
+    locations. GBP reports keywords per calendar month, so a range is the most
+    recent ``months`` calendar months summed per keyword.
+
+    ``months`` (int > 0) → aggregate the most recent N months (a "last 30/60/90
+    days" or 6/12-month view; ``month`` is ignored). Otherwise ``month``
+    (YYYY-MM-01) picks one; default is the latest month with data. Returns
+    ``{month, months:[…available], keywords:[…], total, range_months}`` — ``month``
+    is None for a range; ``range_months`` is how many months were aggregated."""
     supabase = get_supabase()
     locs = (
         supabase.table("gbp_locations").select("id")
         .eq("client_id", client_id).eq("access_status", "ok").execute()
     ).data or []
     loc_ids = [row["id"] for row in locs]
+    empty = {"month": None, "months": [], "keywords": [], "total": 0, "range_months": 0}
     if not loc_ids:
-        return {"month": None, "months": [], "keywords": [], "total": 0}
+        return empty
 
     # Distinct months present. Paginated on the full PK (month, location_row_id,
     # keyword) past PostgREST's ~1000-row default cap — an unpaged read would drop
@@ -202,18 +211,26 @@ def read_keywords(client_id: str, month: Optional[str] = None, limit: int = 25) 
         offset += page
     available = sorted(available_set, reverse=True)
     if not available:
-        return {"month": None, "months": [], "keywords": [], "total": 0}
-    target = month if (month and month in available) else available[0]
+        return empty
 
-    # Paginated too (a multi-location client can exceed the ~1000-row cap in a
-    # single month), so the cross-location aggregate can't silently undercount.
+    # Range (most recent N months) vs a single month.
+    if months and months > 0:
+        target_months = available[:months]  # available is newest-first
+        target = None
+    else:
+        single = month if (month and month in available) else available[0]
+        target_months = [single]
+        target = single
+
+    # Paginated (a multi-location, multi-month read easily exceeds the ~1000-row
+    # cap), so the aggregate can't silently undercount.
     rows: list[dict] = []
     offset = 0
     while True:
         batch = (
-            supabase.table("gbp_search_keyword_monthly").select("keyword, value, is_threshold, location_row_id")
-            .in_("location_row_id", loc_ids).eq("month", target)
-            .order("location_row_id").order("keyword")
+            supabase.table("gbp_search_keyword_monthly").select("keyword, value, is_threshold, location_row_id, month")
+            .in_("location_row_id", loc_ids).in_("month", target_months)
+            .order("month").order("location_row_id").order("keyword")
             .range(offset, offset + page - 1).execute()
         ).data or []
         rows.extend(batch)
@@ -221,4 +238,5 @@ def read_keywords(client_id: str, month: Optional[str] = None, limit: int = 25) 
             break
         offset += page
     keywords, total = aggregate_keywords(rows, limit)
-    return {"month": target, "months": available, "keywords": keywords, "total": total}
+    return {"month": target, "months": available, "keywords": keywords, "total": total,
+            "range_months": len(target_months)}

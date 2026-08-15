@@ -422,15 +422,30 @@ function Dashboard({ clientId, data, periodQs }: { clientId: string; data: GbpDa
 // Search terms that drove impressions (monthly). Fetched separately from the
 // daily dashboard — the data is monthly and independent of the window. Loads up
 // to 500 terms, shown in a scrollable viewport with client-side search + sort.
+// Range options → number of most-recent calendar months to aggregate (GBP
+// keyword data is monthly, so a "last N days" view sums the recent month(s)).
+const KEYWORD_RANGES: [string, string, number][] = [
+  ['30d', 'Last 30 days', 1],
+  ['60d', 'Last 60 days', 2],
+  ['90d', 'Last 90 days', 3],
+  ['6mo', 'Last 6 months', 6],
+  ['12mo', 'Last 12 months', 12],
+]
+
 function SearchKeywordsPanel({ clientId }: { clientId: string }) {
-  const [month, setMonth] = useState<string | undefined>(undefined)
+  // '' = default (latest month); a range token ('30d'…) or a month ('YYYY-MM-01').
+  const [selection, setSelection] = useState('')
   const [q, setQ] = useState('')
   const [sortAlpha, setSortAlpha] = useState(false)
+  const rangeMonths = KEYWORD_RANGES.find(([tok]) => tok === selection)?.[2]
   const { data, isLoading, isError } = useQuery<GbpSearchKeywords>({
-    queryKey: ['gbp-search-keywords', clientId, month ?? 'latest'],
-    queryFn: () => api.get<GbpSearchKeywords>(
-      `/clients/${clientId}/gbp-metrics/search-keywords?limit=500${month ? `&month=${month}` : ''}`,
-    ),
+    queryKey: ['gbp-search-keywords', clientId, selection || 'latest'],
+    queryFn: () => {
+      const qs = rangeMonths ? `&months=${rangeMonths}` : selection ? `&month=${selection}` : ''
+      return api.get<GbpSearchKeywords>(
+        `/clients/${clientId}/gbp-metrics/search-keywords?limit=500${qs}`,
+      )
+    },
     enabled: Boolean(clientId),
   })
   const muted: React.CSSProperties = { fontSize: 12.5, color: '#94a3b8', padding: '6px 0' }
@@ -452,11 +467,21 @@ function SearchKeywordsPanel({ clientId }: { clientId: string }) {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#64748b' }}>
             <Search size={14} color="#6366f1" />
-            {data?.total ? <span><strong style={{ color: '#0f172a' }}>{data.total.toLocaleString()}</strong> impressions from search terms</span> : 'Top search terms'}
+            {data?.total ? (
+              <span>
+                <strong style={{ color: '#0f172a' }}>{data.total.toLocaleString()}</strong> impressions from search terms
+                {rangeMonths && data.range_months > 1 && <span style={{ color: '#94a3b8' }}> · {data.range_months} months</span>}
+              </span>
+            ) : 'Top search terms'}
           </div>
           {data && data.months.length > 0 && (
-            <select style={{ ...select, padding: '6px 8px' }} value={data.month ?? ''} onChange={(e) => setMonth(e.target.value)}>
-              {data.months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+            <select style={{ ...select, padding: '6px 8px' }} value={selection || (data.month ?? '')} onChange={(e) => setSelection(e.target.value)}>
+              <optgroup label="Ranges">
+                {KEYWORD_RANGES.map(([tok, label]) => <option key={tok} value={tok}>{label}</option>)}
+              </optgroup>
+              <optgroup label="By month">
+                {data.months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+              </optgroup>
             </select>
           )}
         </div>

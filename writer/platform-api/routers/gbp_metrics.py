@@ -392,15 +392,20 @@ async def gbp_metrics_export(
 
 @router.get("/clients/{client_id}/gbp-metrics/search-keywords", response_model=GbpSearchKeywordsResponse)
 async def gbp_search_keywords_read(
-    client_id: UUID, month: str | None = None, limit: int = 25, auth: dict = Depends(require_auth)
+    client_id: UUID, month: str | None = None, months: int | None = None,
+    limit: int = 25, auth: dict = Depends(require_auth)
 ) -> GbpSearchKeywordsResponse:
     """Top search terms that drove impressions for the client's verified
-    locations. Defaults to the latest month with data; ``month`` (YYYY-MM-01)
-    picks a specific one. Monthly data — low-volume terms are privacy-floored."""
+    locations. ``months`` (int) aggregates the most recent N calendar months (a
+    last-30/60/90-day or 6/12-month view); otherwise ``month`` (YYYY-MM-01) picks
+    one, defaulting to the latest. Monthly data — low-volume terms are privacy-floored."""
     from services import gbp_search_keywords as skw
 
+    months_n = max(1, min(int(months), 24)) if months else None
     try:
-        data = skw.read_keywords(str(client_id), month=month, limit=max(1, min(int(limit), 500)))
+        data = skw.read_keywords(
+            str(client_id), month=month, months=months_n, limit=max(1, min(int(limit), 500))
+        )
     except Exception as exc:
         logger.error("gbp_search_keywords_read_failed", extra={"client_id": str(client_id), "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error")
