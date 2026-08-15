@@ -519,6 +519,49 @@ def _section_performance(data: dict) -> str:
     )
 
 
+def _section_ga4(data: dict) -> str:
+    """GA4 website-traffic section (visits/visitors/conversions + top channels).
+    Client-facing tone, degrades cleanly. Client Reporting Phase 2."""
+    g = data.get("ga4")
+    if not g:
+        return ""
+    rows = []
+    for key, label in (("sessions", "Website visits"), ("users", "Visitors"),
+                       ("conversions", "Conversions")):
+        m = g.get(key)
+        if not m or not m.get("current"):
+            continue
+        prev = m.get("previous")
+        prev_txt = _fmt_int(prev) if prev is not None else "—"
+        rows.append(_perf_row(label, _fmt_int(m["current"]), prev_txt, _fmt_pct(m.get("change"))))
+    if not rows:
+        return ""
+    table = (
+        "<table><thead><tr><th>Metric</th><th class='num'>This period</th>"
+        "<th class='num'>Previous period</th><th class='num'>Change</th></tr></thead>"
+        "<tbody>" + "".join(rows) + "</tbody></table>"
+    )
+    channels = g.get("channels") or []
+    ch_html = ""
+    if channels:
+        ch_rows = "".join(
+            f"<tr><td>{_esc(c['name'])}</td><td class='num'>{_fmt_int(c['sessions'])}</td>"
+            f"<td class='num'>{_esc(c['pct'])}%</td></tr>"
+            for c in channels
+        )
+        ch_html = (
+            "<p class='note'>Where your visits came from this period.</p>"
+            "<table><thead><tr><th>Channel</th><th class='num'>Visits</th>"
+            "<th class='num'>Share</th></tr></thead><tbody>" + ch_rows + "</tbody></table>"
+        )
+    return (
+        "<section><h2>Website traffic</h2>"
+        "<p class='note'>Visits to your website and what they did, from Google "
+        "Analytics — this period vs the period just before it.</p>"
+        + table + ch_html + "</section>"
+    )
+
+
 def _section_ai_visibility(data: dict) -> str:
     a = data.get("ai_visibility")
     if not a or not a.get("engines"):
@@ -804,6 +847,11 @@ def _kpi_strip(data: dict) -> str:
     # there's no comparable previous period).
     if impr_change and impr_change > 0:
         cards.append(_kpi("Search visibility", _fmt_pct(impr_change), "vs the previous period"))
+    # GA4 website visits (Phase 2) — a hero number only on a genuine gain.
+    sess = (data.get("ga4") or {}).get("sessions") or {}
+    sess_change = sess.get("change")
+    if sess_change and sess_change > 0:
+        cards.append(_kpi("Website visits", _fmt_pct(sess_change), "vs the previous period"))
     rank = comp.get("rank") or {}
     rank_change = (rank or {}).get("change_positions")
     if rank_change and rank_change > 0:
@@ -826,7 +874,7 @@ def build_report_html(data: dict) -> str:
     kpis = _kpi_strip(data)
     sections = "".join(
         s for s in (_section_exec(data), _section_goals(data), _section_performance(data),
-                    _section_work_delivered(data), _section_organic(data),
+                    _section_ga4(data), _section_work_delivered(data), _section_organic(data),
                     _section_geogrid(data), _section_ai_visibility(data), _section_gbp(data)) if s
     )
     if not (kpis or sections):
@@ -1020,6 +1068,68 @@ def _gather_gsc_traffic(supabase, client_id: str, today: date) -> Optional[list[
     except Exception as exc:
         logger.warning("report_gsc_traffic_failed", extra={"client_id": client_id, "error": str(exc)})
         return None
+
+
+def _gather_ga4(supabase, client_id: str, period_start: date, period_end: date) -> Optional[dict]:
+    """GA4 website traffic (visits/visitors/conversions + top channels) for the
+    report period vs the previous same-length period. None when the client has no
+    verified GA4 property or no data in the window. Client Reporting Phase 2 —
+    reads ga4_daily (populated by the daily ga4_ingest, dormant until enabled)."""
+    prop = (
+        supabase.table("ga4_properties").select("id")
+        .eq("client_id", client_id).eq("access_status", "ok").limit(1).execute()
+    ).data
+    if not prop:
+        return None
+    cutoff = date.fromordinal(period_end.toordinal() - _COMPARISON_LOOKBACK_DAYS).isoformat()
+    rows = (
+        supabase.table("ga4_daily")
+        .select("date, sessions, total_users, screen_page_views, conversions, channels")
+        .eq("property_id", prop[0]["id"])
+        .gte("date", cutoff)
+        .execute()
+    ).data or []
+    if not rows:
+        return None
+
+    prev_start, prev_end = previous_period(period_start, period_end)
+
+    def _metric(field: str) -> Optional[dict]:
+        by_date = _accum_by_date(rows, field)  # skips null-field rows (e.g. no conversions)
+        cur = _sum_between(by_date, period_start, period_end)
+        if cur is None:
+            return None
+        covered = bool(by_date) and min(by_date) <= prev_start
+        prev = _sum_between(by_date, prev_start, prev_end) if covered else None
+        return {"current": cur, "previous": prev, "change": _pct(cur, prev)}
+
+    # Top channels by sessions over the report period.
+    channel_totals: dict[str, int] = {}
+    for r in rows:
+        try:
+            d = date.fromisoformat(str(r.get("date"))[:10])
+        except (TypeError, ValueError):
+            continue
+        if not (period_start < d <= period_end):
+            continue
+        for name, sess in (r.get("channels") or {}).items():
+            channel_totals[name] = channel_totals.get(name, 0) + int(sess or 0)
+    total_ch = sum(channel_totals.values())
+    channels = [
+        {"name": n, "sessions": s, "pct": round(s / total_ch * 100) if total_ch else 0}
+        for n, s in sorted(channel_totals.items(), key=lambda kv: kv[1], reverse=True)[:6]
+    ]
+
+    sessions = _metric("sessions")
+    if not sessions:
+        # No visits signal at all — nothing worth a "Website traffic" section.
+        return None
+    return {
+        "sessions": sessions,
+        "users": _metric("total_users"),
+        "conversions": _metric("conversions"),
+        "channels": channels,
+    }
 
 
 def _latest_reporting_scan(supabase, client_id: str, on_or_before: date):
@@ -1303,6 +1413,7 @@ def gather_report_data(client_id: str, period_start: date, period_end: date) -> 
     for key, fn in (
         ("goals", lambda: _gather_goals(supabase, client_id, period_start, period_end)),
         ("organic", lambda: _gather_organic(supabase, client_id, period_start, period_end)),
+        ("ga4", lambda: _gather_ga4(supabase, client_id, period_start, period_end)),
         ("work_delivered", lambda: _gather_work_delivered(supabase, client_id, period_start, period_end)),
         ("geogrid", lambda: _gather_geogrid(supabase, client_id, period_start, period_end)),
         ("ai_visibility", lambda: _gather_ai_visibility(supabase, client_id, period_start, period_end)),
