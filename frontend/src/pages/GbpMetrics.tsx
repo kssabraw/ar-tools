@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, RefreshCw, PlugZap, CheckCircle2, AlertTriangle, History, Users, Lightbulb, Star, Download } from 'lucide-react'
+import { ArrowLeft, RefreshCw, PlugZap, CheckCircle2, AlertTriangle, History, Users, Lightbulb, Star, Download, Search } from 'lucide-react'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import type {
   Client, GbpDashboard, GbpLocation, GbpMetricGrowth, GbpResolvedLocation, GbpSeriesPoint,
-  GbpBreakdownItem, GbpActionsSummary, GbpReviewsSummary,
+  GbpBreakdownItem, GbpActionsSummary, GbpReviewsSummary, GbpSearchKeywords,
 } from '../lib/types'
 
 const WINDOWS: [number, string][] = [
@@ -398,6 +398,8 @@ function Dashboard({ clientId, data, periodQs }: { clientId: string; data: GbpDa
             </div>
           )}
 
+          <SearchKeywordsPanel clientId={clientId} />
+
           <SectionHeading>Customer actions — what they did next</SectionHeading>
           {data.actions && <ActionsHeadline actions={data.actions} />}
           <div style={tileGrid}>
@@ -412,6 +414,55 @@ function Dashboard({ clientId, data, periodQs }: { clientId: string; data: GbpDa
         </>
       )}
     </div>
+  )
+}
+
+// Search terms that drove impressions (monthly). Fetched separately from the
+// daily dashboard — the data is monthly and independent of the window.
+function SearchKeywordsPanel({ clientId }: { clientId: string }) {
+  const [month, setMonth] = useState<string | undefined>(undefined)
+  const { data } = useQuery<GbpSearchKeywords>({
+    queryKey: ['gbp-search-keywords', clientId, month ?? 'latest'],
+    queryFn: () => api.get<GbpSearchKeywords>(
+      `/clients/${clientId}/gbp-metrics/search-keywords${month ? `?month=${month}` : ''}`,
+    ),
+    enabled: Boolean(clientId),
+  })
+
+  return (
+    <>
+      <SectionHeading>Search keywords — what people searched to find this business</SectionHeading>
+      <div style={tile}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#64748b' }}>
+            <Search size={14} color="#6366f1" />
+            {data?.total ? <span><strong style={{ color: '#0f172a' }}>{data.total.toLocaleString()}</strong> impressions from search terms</span> : 'Top search terms'}
+          </div>
+          {data && data.months.length > 0 && (
+            <select style={{ ...select, padding: '6px 8px' }} value={data.month ?? ''} onChange={(e) => setMonth(e.target.value)}>
+              {data.months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+            </select>
+          )}
+        </div>
+        {!data || data.keywords.length === 0 ? (
+          <div style={{ fontSize: 12.5, color: '#94a3b8', padding: '6px 0' }}>
+            No search-keyword data yet. GBP reports these monthly (about a month behind) — it fills in after the next monthly sync.
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: 4 }}>
+            {data.keywords.map((k) => (
+              <div key={k.keyword} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5, padding: '3px 0', borderBottom: '1px solid #f8fafc' }}>
+                <span style={{ color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.keyword}</span>
+                <span style={{ color: '#64748b', flexShrink: 0 }}>{k.is_threshold ? `<${k.value.toLocaleString()}` : k.value.toLocaleString()}</span>
+              </div>
+            ))}
+            <div style={{ fontSize: 10.5, color: '#cbd5e1', marginTop: 4 }}>
+              "&lt;N" = Google's privacy floor for low-volume terms.
+            </div>
+          </div>
+        )}
+      </div>
+    </>
   )
 }
 
@@ -660,6 +711,13 @@ function MiniSpark({ values, color, width = 200, height = 40 }: { values: number
       <path d={line} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
     </svg>
   )
+}
+
+// "2026-07-01" → "Jul 2026". Parsed as local time-of-day to avoid a UTC
+// off-by-one shoving the 1st into the prior month.
+function monthLabel(m: string): string {
+  const d = new Date(m + 'T00:00:00')
+  return isNaN(d.getTime()) ? m : d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })
 }
 
 function AccessBadge({ status }: { status: GbpLocation['access_status'] }) {

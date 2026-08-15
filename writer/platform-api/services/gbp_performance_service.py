@@ -341,6 +341,56 @@ def fetch_daily_metrics(
     return parse_time_series(resp)
 
 
+def parse_search_keywords(payload: dict) -> list[dict]:
+    """Map a ``searchkeywords.impressions.monthly`` response to flat records.
+
+    Each ``searchKeywordsCounts`` entry is a keyword + an ``insightsValue`` that is
+    either an exact ``value`` or, below Google's privacy floor, a ``threshold``
+    (report "fewer than N"). Returns ``[{keyword, value, is_threshold}]``. Pure."""
+    out: list[dict] = []
+    for item in payload.get("searchKeywordsCounts", []) or []:
+        kw = item.get("searchKeyword")
+        if not kw:
+            continue
+        iv = item.get("insightsValue") or {}
+        if "value" in iv:
+            out.append({"keyword": kw, "value": _to_int(iv.get("value")), "is_threshold": False})
+        elif "threshold" in iv:
+            out.append({"keyword": kw, "value": _to_int(iv.get("threshold")), "is_threshold": True})
+        else:
+            out.append({"keyword": kw, "value": 0, "is_threshold": False})
+    return out
+
+
+def fetch_search_keywords(location_id: str, month: date, client=None) -> list[dict]:
+    """Fetch the search terms that drove impressions for one location in one
+    calendar ``month`` (start==end month). Returns parsed records (see
+    ``parse_search_keywords``). Raises on API error so the caller can classify."""
+    client = client or build_performance_client()
+    out: list[dict] = []
+    page_token: Optional[str] = None
+    while True:
+        params = {
+            "monthlyRange_startMonth_year": month.year,
+            "monthlyRange_startMonth_month": month.month,
+            "monthlyRange_endMonth_year": month.year,
+            "monthlyRange_endMonth_month": month.month,
+            "pageSize": 100,
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        resp = (
+            client.locations().searchkeywords().impressions().monthly()
+            .list(parent=location_id, **params)
+            .execute()
+        )
+        out.extend(parse_search_keywords(resp))
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            break
+    return out
+
+
 def verify_location_access(location_id: str) -> VerifyResult:
     """Prove read access by fetching a tiny 1-day window. Classifies the result."""
     if not settings.gbp_metrics_enabled:

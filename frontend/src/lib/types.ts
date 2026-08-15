@@ -1961,6 +1961,19 @@ export interface GbpReviewsSummary {
   items: GbpReview[]
 }
 
+export interface GbpSearchKeyword {
+  keyword: string
+  value: number
+  is_threshold: boolean
+}
+
+export interface GbpSearchKeywords {
+  month: string | null
+  months: string[]
+  keywords: GbpSearchKeyword[]
+  total: number
+}
+
 export interface GbpSeriesPoint {
   date: string
   values: Record<string, number>
