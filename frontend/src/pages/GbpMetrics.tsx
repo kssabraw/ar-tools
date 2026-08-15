@@ -6,7 +6,7 @@ import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import type {
   Client, GbpDashboard, GbpLocation, GbpMetricGrowth, GbpResolvedLocation, GbpSeriesPoint,
-  GbpBreakdownItem, GbpActionsSummary, GbpReviewsSummary, GbpSearchKeywords,
+  GbpBreakdownItem, GbpActionsSummary, GbpReviewsSummary, GbpSearchKeywords, GbpPeriodReviews,
 } from '../lib/types'
 
 const WINDOWS: [number, string][] = [
@@ -385,6 +385,8 @@ function Dashboard({ clientId, data, periodQs }: { clientId: string; data: GbpDa
             <ReviewsPanel reviews={data.reviews} />
           )}
 
+          <PeriodReviewsPanel clientId={clientId} start={data.date_start} end={data.date_end} />
+
           <TrendChart data={data} />
 
           <SectionHeading>Visibility — how many people saw this business</SectionHeading>
@@ -522,6 +524,71 @@ function ReviewsPanel({ reviews }: { reviews: GbpReviewsSummary }) {
         </div>
       )}
     </div>
+  )
+}
+
+// Reviews actually posted during the reporting window (first-party v4), fetched
+// separately with the dashboard's resolved date range so it matches the period.
+function PeriodReviewsPanel({ clientId, start, end }: { clientId: string; start: string; end: string }) {
+  const { data, isLoading, isError } = useQuery<GbpPeriodReviews>({
+    queryKey: ['gbp-period-reviews', clientId, start, end],
+    queryFn: () => api.get<GbpPeriodReviews>(
+      `/clients/${clientId}/gbp-metrics/reviews?start=${start}&end=${end}`,
+    ),
+    enabled: Boolean(clientId && start && end),
+  })
+  const muted: React.CSSProperties = { fontSize: 12.5, color: '#94a3b8', padding: '6px 0' }
+  const stars = (n: number | null) => (n != null ? '★'.repeat(Math.round(n)) + '☆'.repeat(Math.max(0, 5 - Math.round(n))) : '')
+
+  return (
+    <>
+      <SectionHeading>Reviews posted this period</SectionHeading>
+      <div style={tile}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#64748b' }}>
+            <Star size={14} color="#f59e0b" fill="#f59e0b" />
+            {data ? (
+              <span>
+                <strong style={{ color: '#0f172a' }}>{data.count.toLocaleString()}</strong> new review{data.count === 1 ? '' : 's'}
+                {data.average_rating != null && <> · avg <strong style={{ color: '#0f172a' }}>{data.average_rating.toFixed(1)}</strong>
+                  <span style={{ color: '#f59e0b' }}> {stars(data.average_rating)}</span></>}
+              </span>
+            ) : 'New reviews'}
+          </div>
+          {data && data.overall_rating != null && (
+            <div style={{ fontSize: 11.5, color: '#94a3b8' }}>
+              all-time {Number(data.overall_rating).toFixed(1)}★ · {data.overall_count.toLocaleString()} reviews
+            </div>
+          )}
+        </div>
+        {isLoading ? (
+          <div style={muted}>Loading reviews…</div>
+        ) : isError ? (
+          <div style={muted}>Couldn't load reviews right now — try refreshing.</div>
+        ) : !data || data.items.length === 0 ? (
+          <div style={muted}>
+            No new reviews posted in this period.{data && data.count === 0 && data.overall_count === 0 ? ' Reviews sync daily once connected.' : ''}
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: 10 }}>
+            {data.items.map((r, i) => (
+              <div key={i} style={{ borderBottom: i < data.items.length - 1 ? '1px solid #f1f5f9' : 'none', paddingBottom: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 3 }}>
+                  <span style={{ color: '#f59e0b', fontSize: 12.5 }}>{stars(r.rating)}</span>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: '#334155' }}>{r.reviewer || 'Anonymous'}</span>
+                  <span style={{ fontSize: 11.5, color: '#94a3b8' }}>{r.date}</span>
+                  {r.has_reply && <span style={{ fontSize: 10.5, color: '#0369a1', background: '#e0f2fe', borderRadius: 4, padding: '1px 6px' }}>replied</span>}
+                </div>
+                {r.text && <div style={{ fontSize: 12.5, color: '#475569', lineHeight: 1.45 }}>{r.text}</div>}
+              </div>
+            ))}
+            {data.count > data.items.length && (
+              <div style={{ fontSize: 11, color: '#cbd5e1' }}>Showing {data.items.length} of {data.count.toLocaleString()} this period.</div>
+            )}
+          </div>
+        )}
+      </div>
+    </>
   )
 }
 

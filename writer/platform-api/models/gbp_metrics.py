@@ -152,6 +152,20 @@ class GbpReviewItem(BaseModel):
     rating: Optional[float] = None
     text: str = ""
     date: str = ""
+    has_reply: bool = False  # whether the business has replied (v4 reviews only)
+
+
+class GbpPeriodReviews(BaseModel):
+    """Reviews posted within the dashboard's reporting window (first-party v4),
+    plus the all-time rating/count for context."""
+
+    count: int = 0
+    average_rating: Optional[float] = None
+    items: list[GbpReviewItem] = []
+    overall_rating: Optional[float] = None
+    overall_count: int = 0
+    start: Optional[str] = None
+    end: Optional[str] = None
 
 
 class GbpReviews(BaseModel):

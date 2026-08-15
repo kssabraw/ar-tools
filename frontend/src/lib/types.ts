@@ -1986,6 +1986,24 @@ export interface GbpReviewsSummary {
   items: GbpReview[]
 }
 
+export interface GbpPeriodReviewItem {
+  reviewer: string
+  rating: number | null
+  text: string
+  date: string
+  has_reply: boolean
+}
+
+export interface GbpPeriodReviews {
+  count: number
+  average_rating: number | null
+  items: GbpPeriodReviewItem[]
+  overall_rating: number | null
+  overall_count: number
+  start: string | null
+  end: string | null
+}
+
 export interface GbpSearchKeyword {
   keyword: string
   value: number
