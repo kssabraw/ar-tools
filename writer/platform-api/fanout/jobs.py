@@ -439,6 +439,115 @@ def _expand_core(session_id: str) -> None:
     )
 
 
+def _expand_core_resumable(session_id: str) -> None:
+    """Resumable variant of `_expand_core` (issue #686 Phase 2, gated behind
+    fanout_resumable_expand_enabled). Identical gate/cluster/persist/finalize
+    tail, but the expensive expansion + mining is checkpointed per silo (via
+    `run_resumable_expansion` → sessions.expansion_checkpoint), so a requeue after
+    a crash re-pays only the unfinished silos. The checkpoint is cleared once the
+    pool is persisted as keywords; a terminal error/cancel clears it in the caller
+    so only an uncatchable crash leaves it for the requeue to resume."""
+    from fanout.pipeline.resumable import (
+        ExpandParams,
+        ResumableTopic,
+        run_resumable_expansion,
+    )
+
+    session = store.get_session(session_id)
+    topics = store.list_run_topics(session_id)
+    embeddings = store.get_topic_embeddings(session_id)
+    s = get_settings()
+    coverage_mode = (session.get("settings") or {}).get("coverage_mode", "standard")
+    top_n = (
+        s.competitor_top_n_comprehensive
+        if coverage_mode == "comprehensive"
+        else s.competitor_top_n_standard
+    )
+    seed = session["seed_keyword"]
+    pipeline_topics = [
+        PipelineTopic(
+            id=t["id"],
+            name=t["name"],
+            embedding=embeddings.get(t["id"]),
+            gated=bool(t.get("is_gated_for_competitor_mining")),
+        )
+        for t in topics
+    ]
+    params = ExpandParams(
+        keyword_ideas_limit=s.keyword_ideas_limit,
+        keyword_suggestions_limit=s.keyword_suggestions_limit,
+        query_fanouts_limit=s.query_fanouts_limit,
+        paa_tier1_seeds=s.paa_tier1_seeds,
+        paa_tier2_cap=s.paa_tier2_cap,
+        autocomplete_max=s.autocomplete_max,
+        expansion_max_workers=s.expansion_max_workers,
+        expansion_time_budget_s=s.expansion_time_budget_s,
+        competitor_top_n=top_n,
+        ranked_keywords_limit=s.ranked_keywords_limit,
+        competitor_max_position=s.competitor_max_position,
+        competitor_max_workers=s.competitor_max_workers,
+        competitor_time_budget_s=s.competitor_time_budget_s,
+    )
+    checkpoint = store.get_expansion_checkpoint(session_id) or {}
+    per_topic_lists, degraded_notes = run_resumable_expansion(
+        seed=seed,
+        topics=[
+            ResumableTopic(id=t.id, name=t.name, gated=t.gated) for t in pipeline_topics
+        ],
+        dfs=get_dataforseo(store.session_location_code(session)),
+        params=params,
+        checkpoint=checkpoint,
+        save=lambda cp: store.set_expansion_checkpoint(session_id, cp),
+        raise_if_cancelled=cancellation.raise_if_cancelled,
+    )
+    result = gate_and_cluster(
+        per_topic_lists=per_topic_lists,
+        topic_names={t.id: t.name for t in pipeline_topics},
+        topic_embeddings={t.id: t.embedding for t in pipeline_topics},
+        embed_fn=get_llm().embed,
+        relevance_threshold=s.relevance_threshold,
+        relevance_embed_batch=s.relevance_embed_batch,
+        clustering_edge_threshold=s.clustering_edge_threshold,
+        clustering_resolution=s.clustering_resolution,
+        clustering_max_nodes=s.clustering_max_nodes,
+        active_per_silo_cap=s.active_per_silo_cap,
+        seed_terms=[seed, *(session.get("aliases") or [])],
+        peer_terms=session.get("peer_entities") or [],
+        assign_best_silo=s.relevance_assign_best_silo,
+        silo_margin=s.relevance_silo_margin,
+        llm_router=_maybe_llm_router(seed, topics),
+        llm_router_margin=s.llm_routing_margin_threshold,
+        language_filter=_maybe_language_filter(),
+        seed=seed,
+        source_guard_enabled=s.fanout_source_guard_enabled,
+        source_guard_min_score=s.fanout_source_guard_min_score,
+        source_guard_min_seed_tokens=s.fanout_source_guard_min_seed_tokens,
+    )
+    _persist_gated_pool(session_id, result.per_topic_gated)
+    _maybe_enrich_metrics(session, result.per_topic_gated)
+    _finalize_with_retry(
+        session_id,
+        {
+            "statistical_clustering_log": result.clustering_log,
+            "status": "awaiting_article_planning",
+        },
+    )
+    store.clear_expansion_checkpoint(session_id)
+    logger.info(
+        "step_complete",
+        extra={"event": "step_complete", "step": "expand_resumable",
+               "degraded": bool(degraded_notes), **result.counts()},
+    )
+
+
+def _run_expand_core(session_id: str) -> None:
+    """Pick the resumable expansion path (Phase 2) or the plain one, by flag."""
+    if get_settings().fanout_resumable_expand_enabled:
+        _expand_core_resumable(session_id)
+    else:
+        _expand_core(session_id)
+
+
 @_claims_start
 @_metered("expand")
 @_cancellable
@@ -487,12 +596,13 @@ def run_expand_durable(session_id: str) -> None:
     try:
         with metered_run(session_id, "expand"):
             try:
-                _expand_core(session_id)
+                _run_expand_core(session_id)
             except CancelledByUser:
                 logger.info(
                     "step_cancelled",
                     extra={"event": "step_cancelled", "step": "expand_durable"},
                 )
+                _clear_checkpoint_best_effort(session_id)
                 store.try_finalize_running(
                     session_id,
                     {"status": "cancelled", "last_error": "Cancelled by user"},
@@ -503,12 +613,30 @@ def run_expand_durable(session_id: str) -> None:
                     extra={"event": "step_failed", "step": "expand_durable",
                            "reason": repr(exc)},
                 )
+                _clear_checkpoint_best_effort(session_id)
                 store.try_finalize_running(
                     session_id, {"status": "error", "last_error": _short(exc)}
                 )
     finally:
         # Drop any cancellation event `/cancel` created so a later run starts fresh.
         cancellation.clear(session_id)
+
+
+def _clear_checkpoint_best_effort(session_id: str) -> None:
+    """Clear the resumable-expansion checkpoint on a code-reachable terminal path
+    (error / cancel), so only an uncatchable crash leaves it for a requeue to
+    resume. Best-effort + flag-gated: a no-op on the non-resumable path, and a
+    failure here must not mask the terminal status write that follows."""
+    if not get_settings().fanout_resumable_expand_enabled:
+        return
+    try:
+        store.clear_expansion_checkpoint(session_id)
+    except Exception as exc:  # noqa: BLE001 — never break the terminal write
+        logger.warning(
+            "expansion_checkpoint_clear_failed",
+            extra={"event": "expansion_checkpoint_clear_failed",
+                   "session_id": session_id, "reason": repr(exc)},
+        )
 
 
 @_claims_start
