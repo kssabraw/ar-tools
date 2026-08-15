@@ -137,6 +137,35 @@ def test_owned_recovery_never_raises_when_the_read_fails():
     assert run_recovery.recover_owned_runs(_Broken(), owned_ids=["s1"]) == 0
 
 
+# ---- durable runs are the async_jobs queue's job, not this sweep's (#686) ----
+
+def test_recover_leaves_durable_runs_to_async_jobs():
+    """A durable expand run (issue #686 Phase 1) is claimed and recovered by the
+    async_jobs drain/reaper. This status-based sweep must skip it — touching a
+    live-but-requeued durable run would race that machinery — while still
+    recovering a legacy executor run alongside it."""
+    store = _Store([
+        {"id": "durable", "status": "running", "statistical_clustering_log": None,
+         "active_job": {"kind": "expand", "durable": True}},
+        {"id": "legacy", "status": "running", "statistical_clustering_log": None,
+         "active_job": {"kind": "plan"}},
+    ])
+    assert run_recovery.recover_orphaned_runs(store) == 1
+    assert [c[0] for c in store.calls] == ["legacy"]
+
+
+def test_recover_owned_also_skips_durable_runs():
+    """The shutdown path shares the same `_recover`, so it skips durable runs too
+    (belt-and-suspenders: a durable run normally isn't in the cancellation
+    registry, but a same-process /cancel could put it there)."""
+    store = _Store([
+        {"id": "durable", "status": "running", "statistical_clustering_log": _DONE_EXPANDING,
+         "active_job": {"kind": "expand", "durable": True}},
+    ])
+    assert run_recovery.recover_owned_runs(store, owned_ids=["durable"]) == 0
+    assert store.calls == []
+
+
 # ---- fallback sweep (hard kills) -------------------------------------------
 
 def test_sweep_recovers_each_live_session():

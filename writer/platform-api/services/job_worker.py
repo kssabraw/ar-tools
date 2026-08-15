@@ -111,9 +111,13 @@ _inflight_jobs: set[str] = set()
 _CLAIM_SCAN_LIMIT = 10
 
 
-async def _claim_next_job(job_types: list[str] | None = None) -> dict | None:
+async def _claim_next_job(
+    job_types: list[str] | None = None, exclude_types: list[str] | None = None
+) -> dict | None:
     """Claim the oldest claimable pending job (optionally restricted to
-    `job_types` — the interactive lane's filter) and atomically mark it running.
+    `job_types` — the interactive/fanout lane's filter — or with `exclude_types`
+    held back for the MAIN lane, so long dedicated-lane jobs never block it) and
+    atomically mark it running.
 
     Scans a small window of the oldest rows rather than just the single oldest:
     an exhausted (`attempts >= max_attempts`) pending row would otherwise sit at
@@ -127,6 +131,8 @@ async def _claim_next_job(job_types: list[str] | None = None) -> dict | None:
         query = supabase.table("async_jobs").select("*").eq("status", "pending")
         if job_types:
             query = query.in_("job_type", job_types)
+        if exclude_types:
+            query = query.not_.in_("job_type", exclude_types)
         result = query.order("scheduled_at").limit(_CLAIM_SCAN_LIMIT).execute()
         jobs = result.data or []
 
@@ -903,6 +909,14 @@ async def _process_job(job: dict) -> None:
     elif job_type == "fanout_report":
         from fanout.report_runner import run_report_job as run_fanout_report_job
         await run_fanout_report_job(job)
+    elif job_type == "fanout_expand":
+        # Durable Fanout expansion (issue #686). Runs the blocking pipeline in a
+        # thread so it doesn't stall this (dedicated) lane's event loop; the row
+        # settles complete after it returns, or stays running for the drain/reaper
+        # to requeue on a crash.
+        from fanout.jobs import run_expand_durable
+        session_id = (job.get("payload") or {}).get("session_id") or job.get("entity_id")
+        await asyncio.to_thread(run_expand_durable, session_id)
     elif job_type == "deliverables_log":
         await run_deliverables_log_job(job)
     elif job_type == "deliverable_notes_scan":
@@ -953,13 +967,19 @@ async def _process_job(job: dict) -> None:
             )
 
 
-async def job_worker(job_types: list[str] | None = None, lane: str = "main") -> None:
+async def job_worker(
+    job_types: list[str] | None = None,
+    lane: str = "main",
+    exclude_types: list[str] | None = None,
+) -> None:
     """Background loop: poll async_jobs every N seconds and process one job per tick.
 
-    Two lanes run in-process (ops fix 2026-07-12): the MAIN lane claims
-    everything (and owns the stale-job reaper), while the INTERACTIVE lane is
-    restricted to short, user-awaited job types (`interactive_job_types`) so a
-    just-clicked action never waits 10–20 min behind a long background job.
+    Lanes run in-process (ops fix 2026-07-12): the MAIN lane claims everything
+    (and owns the stale-job reaper) EXCEPT `exclude_types` — the long, blocking
+    Fanout pipeline jobs, which get their own dedicated lane so a ~10-min run
+    can't stall the reaper or other background work (issue #686). The INTERACTIVE
+    lane is restricted to short, user-awaited job types (`interactive_job_types`)
+    so a just-clicked action never waits behind a long background job.
     The claim's status='pending' guard makes the lanes race-safe.
     """
     interval = settings.job_worker_poll_interval_seconds
@@ -969,7 +989,7 @@ async def job_worker(job_types: list[str] | None = None, lane: str = "main") -> 
         try:
             if lane == "main":
                 await _reap_stale_jobs()
-            job = await _claim_next_job(job_types)
+            job = await _claim_next_job(job_types, exclude_types)
             if job:
                 logger.info(
                     "async_job_claimed",

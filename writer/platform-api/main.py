@@ -154,12 +154,23 @@ async def lifespan(app: FastAPI):
             logger.error("wordpress_ssh_selftest_failed detail=%s", _ssh_check["detail"])
     except Exception as exc:  # pragma: no cover - startup best-effort
         logger.warning("wordpress_ssh_selftest_error error=%s", str(exc))
-    worker_task = asyncio.create_task(job_worker())
+    # MAIN lane claims everything except the long, blocking Fanout pipeline jobs
+    # (issue #686) — those get a dedicated lane so a ~10-min expansion can't tie up
+    # the reaper or other background work.
+    _fanout_types = list(settings.fanout_job_types)
+    worker_task = asyncio.create_task(
+        job_worker(exclude_types=_fanout_types or None)
+    )
     interactive_worker_task = (
         asyncio.create_task(
             job_worker(job_types=list(settings.interactive_job_types), lane="interactive")
         )
         if settings.interactive_job_types
+        else None
+    )
+    fanout_worker_task = (
+        asyncio.create_task(job_worker(job_types=_fanout_types, lane="fanout"))
+        if _fanout_types
         else None
     )
     scheduler_task = asyncio.create_task(gsc_scheduler())
@@ -186,7 +197,11 @@ async def lifespan(app: FastAPI):
     # so the next container claims it immediately instead of waiting out the
     # stale-job reaper. Best-effort — a hard SIGKILL that skips this whole path
     # still self-heals via the reaper.
-    tasks = [t for t in (worker_task, interactive_worker_task, scheduler_task) if t]
+    tasks = [
+        t
+        for t in (worker_task, interactive_worker_task, fanout_worker_task, scheduler_task)
+        if t
+    ]
     for task in tasks:
         task.cancel()
     for task in tasks:
