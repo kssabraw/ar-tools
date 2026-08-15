@@ -105,3 +105,42 @@ class GbpPerformanceDiagnostic(BaseModel):
     performance_status: Optional[int] = None
     detail: Optional[str] = None
     steps: list[GbpDiagnosticStep] = []
+
+
+# ── Reporting dashboard ──────────────────────────────────────────────────────
+class GbpMetricGrowth(BaseModel):
+    """One headline metric's period-over-period growth (a dashboard KPI tile)."""
+
+    metric: str  # folded key ("profile_views") or raw Performance metric name
+    label: str
+    current: int
+    previous: int
+    delta: int
+    pct: Optional[float] = None  # None when the prior window was zero
+
+
+class GbpSeriesPoint(BaseModel):
+    """A single day of the dashboard time series; ``values`` carries every
+    dashboard metric's value for that day (zero-filled)."""
+
+    date: str
+    values: dict[str, int]
+
+
+class GbpDashboardResponse(BaseModel):
+    """Everything the GBP Insights page needs in one read: connection state,
+    the client's registered locations, growth KPI tiles, and a daily series.
+
+    ``enabled`` is the server ``gbp_metrics_enabled`` flag; ``connected`` is true
+    once at least one location has verified (``ok``) access. When not connected
+    the metric/series lists are empty and the UI shows the connect flow."""
+
+    enabled: bool
+    connected: bool
+    locations: list[GbpLocation] = []
+    window_days: int
+    date_start: str
+    date_end: str
+    last_synced_at: Optional[str] = None
+    metrics: list[GbpMetricGrowth] = []
+    series: list[GbpSeriesPoint] = []
