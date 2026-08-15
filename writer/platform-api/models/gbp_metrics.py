@@ -147,6 +147,37 @@ class GbpActionsSummary(BaseModel):
     engagement_previous: Optional[float] = None
 
 
+class GbpReviewItem(BaseModel):
+    reviewer: str = ""
+    rating: Optional[float] = None
+    text: str = ""
+    date: str = ""
+
+
+class GbpReviews(BaseModel):
+    """Profile-health review summary from the client's captured GBP."""
+
+    rating: Optional[float] = None
+    review_count: int = 0
+    items: list[GbpReviewItem] = []
+
+
+class GbpSearchKeyword(BaseModel):
+    keyword: str
+    value: int
+    is_threshold: bool = False  # true = Google privacy floor ("fewer than N")
+
+
+class GbpSearchKeywordsResponse(BaseModel):
+    """Top search terms that drove impressions for a client's locations in a
+    calendar month (``month`` = YYYY-MM-01); ``months`` lists the available ones."""
+
+    month: Optional[str] = None
+    months: list[str] = []
+    keywords: list[GbpSearchKeyword] = []
+    total: int = 0
+
+
 class GbpSeriesPoint(BaseModel):
     """A single day of the dashboard time series; ``values`` carries every
     dashboard metric's value for that day (zero-filled)."""
@@ -176,5 +207,6 @@ class GbpDashboardResponse(BaseModel):
     breakdown: GbpBreakdown = GbpBreakdown()
     actions: Optional[GbpActionsSummary] = None
     insights: list[str] = []
+    reviews: GbpReviews = GbpReviews()
     series: list[GbpSeriesPoint] = []
     compare_series: list[GbpSeriesPoint] = []  # prior-window daily, for the overlay

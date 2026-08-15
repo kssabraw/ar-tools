@@ -193,6 +193,48 @@ def enqueue_due_gbp_metrics() -> int:
     return enqueued
 
 
+def enqueue_due_gbp_search_keywords() -> int:
+    """Monthly: enqueue a gbp_search_keywords job for each verified GBP location,
+    once per calendar month. GBP search keywords are monthly data, so a daily tick
+    fires this at most once per location per month (gated on whether a
+    gbp_search_keywords job already ran for the location this calendar month —
+    robust even when a month has zero keywords). Gated on ``gbp_metrics_enabled``."""
+    if not settings.gbp_metrics_enabled:
+        return 0
+    from datetime import date  # noqa: PLC0415
+
+    supabase = get_supabase()
+    month_start = date.today().replace(day=1).isoformat()
+    locs = (
+        supabase.table("gbp_locations").select("id").eq("access_status", "ok").execute()
+    ).data or []
+    loc_ids = [loc["id"] for loc in locs]
+    if not loc_ids:
+        return 0
+    # One query (not one per location): which of these already ran this month?
+    ran = (
+        supabase.table("async_jobs").select("entity_id")
+        .eq("job_type", "gbp_search_keywords").in_("entity_id", loc_ids)
+        .gte("created_at", month_start).execute()
+    ).data or []
+    done = {r["entity_id"] for r in ran}
+    enqueued = 0
+    for lid in loc_ids:
+        if lid in done:
+            continue
+        supabase.table("async_jobs").insert(
+            {
+                "job_type": "gbp_search_keywords",
+                "entity_id": lid,
+                "payload": {"location_row_id": lid, "months_back": 2},
+            }
+        ).execute()
+        enqueued += 1
+    if enqueued:
+        logger.info("gsc_scheduler.gbp_search_keywords_enqueued", extra={"jobs": enqueued})
+    return enqueued
+
+
 def enqueue_due_dataforseo() -> int:
     """Daily: enqueue a DataForSEO rank job for each client whose per-client
     fetch schedule is due today.
@@ -548,6 +590,7 @@ async def gsc_scheduler() -> None:
                 _safe("gsc_ingests", enqueue_due_ingests)
                 # Daily GBP performance-metrics ingest (no-op until enabled).
                 _safe("gbp_metrics", enqueue_due_gbp_metrics)
+                _safe("gbp_search_keywords", enqueue_due_gbp_search_keywords)
                 # GBP Posts — daily live-state reconciliation (catches async
                 # REJECTED + imports external posts). The recurring-draft tick +
                 # one-off scheduled publishes are evaluated PER-CYCLE below so

@@ -148,6 +148,46 @@ def build_actions_summary(daily_rows: list[dict], end: date, window_days: int) -
     }
 
 
+def build_reviews(gbp: Optional[dict]) -> dict:
+    """Profile-health review summary from the client's captured GBP: star rating,
+    total review count, and any stored recent-review texts (normalized). Pure —
+    reads the ``clients.gbp`` JSONB shape (``gbp_rating`` / ``gbp_review_count`` /
+    ``reviews``). Returns ``{rating, review_count, items:[…]}``; empty when absent."""
+    gbp = gbp or {}
+    rating = gbp.get("gbp_rating")
+    try:
+        rating = round(float(rating), 1) if rating is not None else None
+    except (TypeError, ValueError):
+        rating = None
+    try:
+        count = int(gbp.get("gbp_review_count") or 0)
+    except (TypeError, ValueError):
+        count = 0
+    items: list[dict] = []
+    for r in (gbp.get("reviews") or [])[:8]:
+        if isinstance(r, str):
+            items.append({"reviewer": "", "rating": None, "text": r, "date": ""})
+        elif isinstance(r, dict):
+            items.append({
+                "reviewer": r.get("reviewer") or r.get("author") or "",
+                "rating": r.get("rating"),
+                "text": r.get("text") or r.get("review") or "",
+                "date": r.get("date") or r.get("when") or "",
+            })
+    return {"rating": rating, "review_count": count, "items": items}
+
+
+def csv_rows(series: list[dict]) -> list[list]:
+    """Pivot the folded daily series into CSV rows: a header + one row per day
+    (Date + each dashboard metric). Pure — the export endpoint writes these out."""
+    header = ["Date"] + [label for _, label in METRIC_LABELS]
+    rows: list[list] = [header]
+    for p in series:
+        vals = p.get("values") or {}
+        rows.append([p.get("date", "")] + [vals.get(k, 0) for k in _ORDER])
+    return rows
+
+
 def _trend_word(pct: Optional[float]) -> str:
     if pct is None:
         return "started this period"

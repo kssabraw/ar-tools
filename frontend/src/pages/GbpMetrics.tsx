@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, RefreshCw, PlugZap, CheckCircle2, AlertTriangle, History, Users, Lightbulb } from 'lucide-react'
+import { ArrowLeft, RefreshCw, PlugZap, CheckCircle2, AlertTriangle, History, Users, Lightbulb, Star, Download, Search } from 'lucide-react'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import type {
   Client, GbpDashboard, GbpLocation, GbpMetricGrowth, GbpResolvedLocation, GbpSeriesPoint,
-  GbpBreakdownItem, GbpActionsSummary,
+  GbpBreakdownItem, GbpActionsSummary, GbpReviewsSummary, GbpSearchKeywords,
 } from '../lib/types'
 
 const WINDOWS: [number, string][] = [
@@ -112,7 +112,7 @@ export function GbpMetrics() {
       ) : !data.connected ? (
         <ConnectPanel clientId={clientId!} locations={data.locations} />
       ) : (
-        <Dashboard clientId={clientId!} data={data} />
+        <Dashboard clientId={clientId!} data={data} periodQs={qs} />
       )}
       <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
     </div>
@@ -317,9 +317,10 @@ function LocationRow({ clientId, loc, onChange }: { clientId: string; loc: GbpLo
 }
 
 // ── The dashboard itself ─────────────────────────────────────────────────────
-function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard }) {
+function Dashboard({ clientId, data, periodQs }: { clientId: string; data: GbpDashboard; periodQs: string }) {
   const queryClient = useQueryClient()
   const okLocations = data.locations.filter((l) => l.access_status === 'ok')
+  const [exporting, setExporting] = useState(false)
 
   const sync = useMutation({
     // Trigger an ingest for each verified location, then refresh the view.
@@ -328,6 +329,18 @@ function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard })
     ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['gbp-dashboard', clientId] }),
   })
+
+  async function exportCsv() {
+    setExporting(true)
+    try {
+      await api.download(
+        `/clients/${clientId}/gbp-metrics/export?${periodQs}`,
+        `gbp-metrics-${data.date_start}-to-${data.date_end}.csv`,
+      )
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const hasData = data.metrics.length > 0
   // Tolerate a backend that predates these fields (e.g. during a deploy where the
@@ -346,10 +359,17 @@ function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard })
           {okLocations.length} location{okLocations.length === 1 ? '' : 's'} connected
           {data.last_synced_at && <span>· last synced {new Date(data.last_synced_at).toLocaleString()}</span>}
         </div>
-        <button style={secondaryBtn} onClick={() => sync.mutate()} disabled={sync.isPending}>
-          <RefreshCw size={13} style={sync.isPending ? spinStyle : undefined} />
-          {sync.isPending ? 'Syncing…' : 'Sync now'}
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {hasData && (
+            <button style={secondaryBtn} onClick={exportCsv} disabled={exporting}>
+              <Download size={13} /> {exporting ? 'Exporting…' : 'Export CSV'}
+            </button>
+          )}
+          <button style={secondaryBtn} onClick={() => sync.mutate()} disabled={sync.isPending}>
+            <RefreshCw size={13} style={sync.isPending ? spinStyle : undefined} />
+            {sync.isPending ? 'Syncing…' : 'Sync now'}
+          </button>
+        </div>
       </div>
 
       {!hasData ? (
@@ -360,6 +380,10 @@ function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard })
       ) : (
         <>
           {insights.length > 0 && <InsightsPanel lines={insights} />}
+
+          {data.reviews && (data.reviews.rating != null || data.reviews.review_count > 0) && (
+            <ReviewsPanel reviews={data.reviews} />
+          )}
 
           <TrendChart data={data} />
 
@@ -373,6 +397,8 @@ function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard })
               <BreakdownCard title="By device" items={breakdown.device} />
             </div>
           )}
+
+          <SearchKeywordsPanel clientId={clientId} />
 
           <SectionHeading>Customer actions — what they did next</SectionHeading>
           {data.actions && <ActionsHeadline actions={data.actions} />}
@@ -388,6 +414,60 @@ function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard })
         </>
       )}
     </div>
+  )
+}
+
+// Search terms that drove impressions (monthly). Fetched separately from the
+// daily dashboard — the data is monthly and independent of the window.
+function SearchKeywordsPanel({ clientId }: { clientId: string }) {
+  const [month, setMonth] = useState<string | undefined>(undefined)
+  const { data, isLoading, isError } = useQuery<GbpSearchKeywords>({
+    queryKey: ['gbp-search-keywords', clientId, month ?? 'latest'],
+    queryFn: () => api.get<GbpSearchKeywords>(
+      `/clients/${clientId}/gbp-metrics/search-keywords${month ? `?month=${month}` : ''}`,
+    ),
+    enabled: Boolean(clientId),
+  })
+  const muted: React.CSSProperties = { fontSize: 12.5, color: '#94a3b8', padding: '6px 0' }
+
+  return (
+    <>
+      <SectionHeading>Search keywords — what people searched to find this business</SectionHeading>
+      <div style={tile}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#64748b' }}>
+            <Search size={14} color="#6366f1" />
+            {data?.total ? <span><strong style={{ color: '#0f172a' }}>{data.total.toLocaleString()}</strong> impressions from search terms</span> : 'Top search terms'}
+          </div>
+          {data && data.months.length > 0 && (
+            <select style={{ ...select, padding: '6px 8px' }} value={data.month ?? ''} onChange={(e) => setMonth(e.target.value)}>
+              {data.months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+            </select>
+          )}
+        </div>
+        {isLoading ? (
+          <div style={muted}>Loading search keywords…</div>
+        ) : isError ? (
+          <div style={muted}>Couldn't load search keywords right now — try refreshing.</div>
+        ) : !data || data.keywords.length === 0 ? (
+          <div style={muted}>
+            No search-keyword data yet. GBP reports these monthly (about a month behind) — it fills in after the next monthly sync.
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: 4 }}>
+            {data.keywords.map((k) => (
+              <div key={k.keyword} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5, padding: '3px 0', borderBottom: '1px solid #f8fafc' }}>
+                <span style={{ color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.keyword}</span>
+                <span style={{ color: '#64748b', flexShrink: 0 }}>{k.is_threshold ? `<${k.value.toLocaleString()}` : k.value.toLocaleString()}</span>
+              </div>
+            ))}
+            <div style={{ fontSize: 10.5, color: '#cbd5e1', marginTop: 4 }}>
+              "&lt;N" = Google's privacy floor for low-volume terms.
+            </div>
+          </div>
+        )}
+      </div>
+    </>
   )
 }
 
@@ -409,6 +489,38 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
   return (
     <div style={{ fontSize: 12.5, fontWeight: 700, color: '#0f172a', margin: '20px 0 10px', letterSpacing: '-0.01em' }}>
       {children}
+    </div>
+  )
+}
+
+function ReviewsPanel({ reviews }: { reviews: GbpReviewsSummary }) {
+  const rating = reviews.rating
+  const full = rating != null ? Math.round(rating) : 0
+  return (
+    <div style={{ ...tile, marginBottom: 16, display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+      <div style={{ flexShrink: 0 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b', marginBottom: 3 }}>Google reviews</div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          <div style={{ fontSize: 26, fontWeight: 700, color: '#0f172a' }}>{rating != null ? rating.toFixed(1) : '—'}</div>
+          <div style={{ display: 'flex', gap: 1 }}>
+            {[0, 1, 2, 3, 4].map((i) => (
+              <Star key={i} size={14} fill={i < full ? '#f59e0b' : 'none'} color={i < full ? '#f59e0b' : '#cbd5e1'} />
+            ))}
+          </div>
+        </div>
+        <div style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 2 }}>{reviews.review_count.toLocaleString()} reviews</div>
+      </div>
+      {reviews.items.length > 0 && (
+        <div style={{ flex: '1 1 320px', minWidth: 0, display: 'grid', gap: 6 }}>
+          {reviews.items.slice(0, 3).map((r, i) => (
+            <div key={i} style={{ fontSize: 12.5, color: '#475569' }}>
+              {r.rating != null && <span style={{ color: '#f59e0b' }}>{'★'.repeat(Math.round(r.rating))} </span>}
+              <span style={{ fontStyle: 'italic' }}>"{r.text}"</span>
+              {r.reviewer && <span style={{ color: '#94a3b8' }}> — {r.reviewer}</span>}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -548,6 +660,11 @@ function ActionsHeadline({ actions }: { actions: GbpActionsSummary }) {
 
 function MetricTile({ metric, series }: { metric: GbpMetricGrowth; series: GbpSeriesPoint[] }) {
   const daily = useMemo(() => series.map((p) => p.values[metric.metric] ?? 0), [series, metric.metric])
+  const busiest = useMemo(() => {
+    let bi = -1, bv = -1
+    daily.forEach((v, i) => { if (v > bv) { bv = v; bi = i } })
+    return bi >= 0 && bv > 0 ? { date: series[bi]?.date, value: bv } : null
+  }, [daily, series])
   const pct = metric.pct
   const dir = pct == null ? 'new' : pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat'
   const badge = { up: '#15803d', down: '#b91c1c', flat: '#64748b', new: '#6366f1' }[dir]
@@ -572,6 +689,11 @@ function MetricTile({ metric, series }: { metric: GbpMetricGrowth; series: GbpSe
       <div style={{ marginTop: 8 }}>
         <MiniSpark values={daily} color={dir === 'down' ? '#f87171' : '#6366f1'} />
       </div>
+      {busiest && (
+        <div style={{ fontSize: 10.5, color: '#94a3b8', marginTop: 5 }}>
+          Busiest: {new Date(busiest.date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ({busiest.value.toLocaleString()})
+        </div>
+      )}
     </div>
   )
 }
@@ -594,6 +716,13 @@ function MiniSpark({ values, color, width = 200, height = 40 }: { values: number
       <path d={line} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
     </svg>
   )
+}
+
+// "2026-07-01" → "Jul 2026". Parsed as local time-of-day to avoid a UTC
+// off-by-one shoving the 1st into the prior month.
+function monthLabel(m: string): string {
+  const d = new Date(m + 'T00:00:00')
+  return isNaN(d.getTime()) ? m : d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })
 }
 
 function AccessBadge({ status }: { status: GbpLocation['access_status'] }) {
