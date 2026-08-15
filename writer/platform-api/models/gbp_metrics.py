@@ -190,6 +190,7 @@ class GbpSearchKeywordsResponse(BaseModel):
     months: list[str] = []
     keywords: list[GbpSearchKeyword] = []
     total: int = 0
+    range_months: int = 1  # months aggregated (1 = single month; N = a range view)
 
 
 class GbpSeriesPoint(BaseModel):

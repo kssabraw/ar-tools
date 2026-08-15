@@ -2015,6 +2015,7 @@ export interface GbpSearchKeywords {
   months: string[]
   keywords: GbpSearchKeyword[]
   total: number
+  range_months: number
 }
 
 export interface GbpSeriesPoint {
