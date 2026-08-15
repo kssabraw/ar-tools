@@ -95,6 +95,7 @@ def accept_all() -> dict:
                 if resp.status_code == 200:
                     accepted.append(inv.get("business"))
             except Exception as exc:  # noqa: BLE001 — one failure must not stop the rest
-                logger.info("gbp_invitations.accept_failed", extra={"name": name, "error": str(exc)})
+                logger.info("gbp_invitations.accept_failed",
+                            extra={"invitation_name": name, "error": str(exc)})
     logger.info("gbp_invitations.accepted", extra={"count": len(accepted)})
     return {"accepted": len(accepted), "businesses": [b for b in accepted if b], "pending": len(pending)}

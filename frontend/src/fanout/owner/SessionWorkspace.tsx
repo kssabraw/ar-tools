@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, NavLink, Outlet, useOutletContext, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { getMe, getSession, getSummary, planArticles, regate, type Silo } from "../shared/api";
+import { getMe, getSession, getSummary, planArticles, regate, type RegateBody, type Silo } from "../shared/api";
 import { AppShell } from "../shared/AppShell";
 import { CancelRunButton } from "../shared/CancelRunButton";
 import { CostBanner } from "../shared/CostBanner";
@@ -82,18 +82,65 @@ export function SessionWorkspace() {
   // so it costs no expansion spend) but nothing in the UI reached it. Owner-only,
   // matching the endpoint. It clears any existing article plan, so it has to be
   // followed by a fresh "Plan articles" — hence the confirm.
+  // Re-gate tuning. Threshold trims the pool; granularity (clustering resolution)
+  // and per-silo cap control how big a chunk the editorial orchestrator sees — the
+  // levers that turn a "planned nothing → error" seed (a near-homogeneous pool the
+  // orchestrator can't merge) into a plannable one. All optional; blank = the
+  // env default. Owner-only, matching the endpoint.
   const [threshold, setThreshold] = useState("");
+  const [resolution, setResolution] = useState("");
+  const [perSiloCap, setPerSiloCap] = useState("");
+  const regateBody = (): RegateBody => {
+    const body: RegateBody = {};
+    const t = parseFloat(threshold);
+    if (Number.isFinite(t)) body.relevance_threshold = t;
+    const r = parseFloat(resolution);
+    if (Number.isFinite(r) && r > 0) body.clustering_resolution = r;
+    const c = parseInt(perSiloCap, 10);
+    if (Number.isFinite(c) && c > 0) body.active_per_silo_cap = c;
+    return body;
+  };
   const regateMut = useMutation({
-    mutationFn: () => {
-      const t = parseFloat(threshold);
-      return regate(sessionId, Number.isFinite(t) ? { relevance_threshold: t } : {});
-    },
+    mutationFn: () => regate(sessionId, regateBody()),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["summary", sessionId] }),
   });
-  const thresholdValid = threshold.trim() === "" || (() => {
-    const t = parseFloat(threshold);
-    return Number.isFinite(t) && t > 0 && t < 1;
-  })();
+  const inRange = (v: string, lo: number, hi: number, int = false) => {
+    if (v.trim() === "") return true;
+    const n = int ? parseInt(v, 10) : parseFloat(v);
+    return Number.isFinite(n) && n >= lo && n <= hi;
+  };
+  const thresholdValid = inRange(threshold, 0.05, 0.99);
+  const resolutionValid = inRange(resolution, 0.5, 20);
+  const capValid = inRange(perSiloCap, 10, 50000, true);
+  const regateInputsValid = thresholdValid && resolutionValid && capValid;
+  // Shared tuning inputs — rendered both on the errored-session recovery card and
+  // the results-view "Tighten the keyword pool" panel, so a run that errored can be
+  // recovered with adjusted settings (not just re-tried at the same ones).
+  const regateTuningInputs = (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+      <input
+        type="number" min="0.05" max="0.99" step="0.01" placeholder="0.65"
+        value={threshold} onChange={(e) => setThreshold(e.target.value)}
+        aria-label="Relevance threshold"
+        title="Relevance threshold (0–1). Higher = stricter, fewer keywords."
+        style={{ width: 84 }}
+      />
+      <input
+        type="number" min="0.5" max="20" step="0.5" placeholder="1.0"
+        value={resolution} onChange={(e) => setResolution(e.target.value)}
+        aria-label="Cluster granularity"
+        title="Cluster granularity (resolution). Higher = more, smaller groupings the orchestrator can plan."
+        style={{ width: 84 }}
+      />
+      <input
+        type="number" min="10" step="50" placeholder="1000"
+        value={perSiloCap} onChange={(e) => setPerSiloCap(e.target.value)}
+        aria-label="Keywords per silo"
+        title="Max active keywords per silo. Lower = smaller planning inputs."
+        style={{ width: 96 }}
+      />
+    </div>
+  );
 
   const status = summary.data?.status ?? session.data?.status;
   const topics = session.data?.silos ?? [];
@@ -220,11 +267,17 @@ export function SessionWorkspace() {
                   no new expansion spend. If the pool looks incomplete, start a fresh
                   session instead.
                 </p>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <p className="muted" style={{ margin: "0 0 6px", fontSize: 13 }}>
+                  Optional — tune before recovering (threshold · granularity · keywords/silo;
+                  blank = defaults). If a previous attempt planned nothing, raise the granularity
+                  or lower the keywords/silo so the planner gets smaller groupings.
+                </p>
+                {regateTuningInputs}
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
                   <button
                     className="btn btn-primary"
                     style={{ width: "auto" }}
-                    disabled={regateMut.isPending}
+                    disabled={regateMut.isPending || !regateInputsValid}
                     onClick={() => {
                       if (
                         window.confirm(
@@ -247,6 +300,11 @@ export function SessionWorkspace() {
                     Start a new session
                   </Link>
                 </div>
+                {!regateInputsValid && (
+                  <p className="form-error">
+                    Threshold 0.05–0.99, granularity 0.5–20, keywords/silo ≥ 10.
+                  </p>
+                )}
                 {regateMut.isError && (
                   <p className="form-error">
                     {friendlyError(regateMut.error, "Couldn’t start recovery.")}
@@ -313,34 +371,25 @@ export function SessionWorkspace() {
             <div>
               <p style={{ margin: 0, fontWeight: 600 }}>Tighten the keyword pool</p>
               <p className="muted" style={{ margin: "2px 0 0" }}>
-                Re-run the relevance gate at a stricter cutoff to drop off-topic keywords,
-                then re-cluster. Uses the keywords already collected — no new expansion
-                spend. Leave blank for the default. <strong>Clears the current article
-                plan</strong>, so run “Plan articles” again afterwards.
+                Re-gate + re-cluster the keywords already collected — no new expansion spend.
+                Threshold drops off-topic keywords; granularity and keywords/silo control how
+                big a chunk the planner sees (raise granularity / lower keywords/silo if a plan
+                came back thin). Blank = defaults. <strong>Clears the current article plan</strong>,
+                so run “Plan articles” again afterwards.
               </p>
             </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <input
-                type="number"
-                min="0.05"
-                max="0.99"
-                step="0.01"
-                placeholder="0.65"
-                value={threshold}
-                onChange={(e) => setThreshold(e.target.value)}
-                aria-label="Relevance threshold"
-                style={{ width: 90 }}
-              />
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-start" }}>
+              {regateTuningInputs}
               <button
                 className="btn btn-ghost"
                 style={{ width: "auto" }}
-                disabled={regateMut.isPending || !thresholdValid}
+                disabled={regateMut.isPending || !regateInputsValid}
                 onClick={() => {
-                  const at = threshold.trim() === "" ? "the default threshold" : threshold.trim();
                   if (
                     window.confirm(
-                      `Re-gate this session at ${at}?\n\nThis discards the current article plan ` +
-                        `and re-clusters the keyword pool. You'll need to run "Plan articles" again.`,
+                      `Re-gate this session?\n\nThis discards the current article plan and ` +
+                        `re-clusters the keyword pool with your settings (blank = defaults). ` +
+                        `You'll need to run "Plan articles" again.`,
                     )
                   ) {
                     regateMut.mutate();
@@ -352,8 +401,10 @@ export function SessionWorkspace() {
             </div>
           </div>
         )}
-        {!thresholdValid && (
-          <p className="form-error">Threshold must be between 0 and 1 (e.g. 0.75).</p>
+        {!regateInputsValid && (
+          <p className="form-error">
+            Threshold 0.05–0.99, granularity 0.5–20, keywords/silo ≥ 10.
+          </p>
         )}
         {regateMut.isError && (
           <p className="form-error">
