@@ -979,8 +979,8 @@ def fanout_session(
     _assert_embedding_current(session)
     bind_session_id(session_id)
     clustering_log = session.get("statistical_clustering_log") or {}
-    # Run scope, so the previewed sub-anchor plan matches what run_fanout_job
-    # will actually re-expand.
+    # Run scope, so the previewed sub-anchor plan matches what the durable
+    # recursive-fanout stage will actually re-expand.
     topics = store.list_run_topics(session_id)
     topic_ids = [t["id"] for t in topics]
     sub_anchors = derive_sub_anchors(

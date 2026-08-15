@@ -116,19 +116,40 @@ class Settings(BaseSettings):
         # exceed the longest real run or it would spawn a second concurrent
         # expansion (double spend). 45 min keeps it a genuine backstop only.
         "fanout_expand": 45,
+        # The remaining durable Fanout pipeline stages (issue #686 Phase 3). Same
+        # rule: the reaper requeue re-runs the stage, so the timeout must exceed
+        # the longest real run. plan (SERP + per-silo orchestrator) and recursive
+        # fanout (paid re-expansion, up to a 15-min budget) both re-spend on
+        # requeue; regate + architecture are cheap re-derivations. 45 min keeps
+        # the reaper a genuine backstop for all of them.
+        "fanout_plan": 45,
+        "fanout_regate": 45,
+        "fanout_fanout": 45,
+        "fanout_architecture": 45,
     }
     # Dedicated worker lane for the (long, blocking) Fanout pipeline jobs, so a
     # ~10-min expansion can't tie up the MAIN lane — which owns the stale-job
     # reaper and every other background job. The MAIN lane excludes these types;
     # this lane claims only them. Empty list disables the dedicated lane (the
     # types then fall back to the MAIN lane). See issue #686 Phase 1.
-    fanout_job_types: List[str] = ["fanout_expand"]
-    # NOTE: the fanout_durable_expand_enabled / fanout_resumable_expand_enabled
-    # flags (issue #686 Phases 1 & 2) live in the VENDORED fanout config
-    # (fanout/config.py), not here — fanout/jobs.py reads them via
-    # fanout.config.get_settings(), a different Settings class, so a copy here is
-    # dead. The env vars (FANOUT_DURABLE_EXPAND_ENABLED /
-    # FANOUT_RESUMABLE_EXPAND_ENABLED on PLATFORM) are read there.
+    fanout_job_types: List[str] = [
+        "fanout_expand", "fanout_plan", "fanout_regate", "fanout_fanout",
+        "fanout_architecture",
+    ]
+    # How many concurrent workers the dedicated fanout lane runs (issue #686
+    # Phase 3). Before Phase 3 the pipeline stages ran on a 2-slot
+    # ThreadPoolExecutor; once they all moved to this single lane, cross-session
+    # pipeline work serialized. 2 restores that parallelism (the async_jobs claim
+    # is an atomic guarded UPDATE, so N workers never double-claim a row). Set to
+    # 1 to throttle to one paid DataForSEO pipeline run at a time.
+    fanout_lane_workers: int = 2
+    # NOTE: the fanout_resumable_expand_enabled flag (issue #686 Phase 2) lives in
+    # the VENDORED fanout config (fanout/config.py), not here — fanout/jobs.py
+    # reads it via fanout.config.get_settings(), a different Settings class, so a
+    # copy here is dead. (fanout_durable_expand_enabled was retired in Phase 3:
+    # every pipeline stage is durable unconditionally now, so the flag and the old
+    # in-process executor path are gone. FANOUT_DURABLE_EXPAND_ENABLED on PLATFORM
+    # is now an inert leftover env var and can be removed.)
     # Interactive worker lane: a second in-process claim loop dedicated to
     # short, user-awaited job types so a just-clicked action never queues
     # behind long background work (brand scans, DataForSEO rank pulls were
