@@ -208,15 +208,19 @@ def enqueue_due_gbp_search_keywords() -> int:
     locs = (
         supabase.table("gbp_locations").select("id").eq("access_status", "ok").execute()
     ).data or []
+    loc_ids = [loc["id"] for loc in locs]
+    if not loc_ids:
+        return 0
+    # One query (not one per location): which of these already ran this month?
+    ran = (
+        supabase.table("async_jobs").select("entity_id")
+        .eq("job_type", "gbp_search_keywords").in_("entity_id", loc_ids)
+        .gte("created_at", month_start).execute()
+    ).data or []
+    done = {r["entity_id"] for r in ran}
     enqueued = 0
-    for loc in locs:
-        lid = loc["id"]
-        ran = (
-            supabase.table("async_jobs").select("id")
-            .eq("job_type", "gbp_search_keywords").eq("entity_id", lid)
-            .gte("created_at", month_start).limit(1).execute()
-        ).data
-        if ran:
+    for lid in loc_ids:
+        if lid in done:
             continue
         supabase.table("async_jobs").insert(
             {

@@ -147,7 +147,15 @@ async def run_gbp_search_keywords_job(job: dict) -> None:
             {"status": "failed", "error": "missing location_row_id", "completed_at": "now()"}
         ).eq("id", job_id).execute()
         return
-    result = ingest_location_keywords(location_row_id, int(payload.get("months_back", 2)))
+    try:
+        result = ingest_location_keywords(location_row_id, int(payload.get("months_back", 2)))
+    except Exception as exc:  # noqa: BLE001 — record the failure rather than wedge the job
+        logger.error("gbp_search_keywords_job_failed",
+                     extra={"job_id": job_id, "location_row_id": location_row_id, "error": str(exc)})
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": str(exc)[:500], "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+        return
     supabase.table("async_jobs").update(
         {
             "status": "complete" if result.status == "ok" else "failed",

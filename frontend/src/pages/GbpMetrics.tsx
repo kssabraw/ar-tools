@@ -421,13 +421,14 @@ function Dashboard({ clientId, data, periodQs }: { clientId: string; data: GbpDa
 // daily dashboard — the data is monthly and independent of the window.
 function SearchKeywordsPanel({ clientId }: { clientId: string }) {
   const [month, setMonth] = useState<string | undefined>(undefined)
-  const { data } = useQuery<GbpSearchKeywords>({
+  const { data, isLoading, isError } = useQuery<GbpSearchKeywords>({
     queryKey: ['gbp-search-keywords', clientId, month ?? 'latest'],
     queryFn: () => api.get<GbpSearchKeywords>(
       `/clients/${clientId}/gbp-metrics/search-keywords${month ? `?month=${month}` : ''}`,
     ),
     enabled: Boolean(clientId),
   })
+  const muted: React.CSSProperties = { fontSize: 12.5, color: '#94a3b8', padding: '6px 0' }
 
   return (
     <>
@@ -444,8 +445,12 @@ function SearchKeywordsPanel({ clientId }: { clientId: string }) {
             </select>
           )}
         </div>
-        {!data || data.keywords.length === 0 ? (
-          <div style={{ fontSize: 12.5, color: '#94a3b8', padding: '6px 0' }}>
+        {isLoading ? (
+          <div style={muted}>Loading search keywords…</div>
+        ) : isError ? (
+          <div style={muted}>Couldn't load search keywords right now — try refreshing.</div>
+        ) : !data || data.keywords.length === 0 ? (
+          <div style={muted}>
             No search-keyword data yet. GBP reports these monthly (about a month behind) — it fills in after the next monthly sync.
           </div>
         ) : (
