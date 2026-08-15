@@ -142,6 +142,22 @@ def test_single_job_notification_unregistered_or_running_is_none():
     assert activity.single_job_notification("nope", "Acme", "complete") is None
 
 
+def test_fanout_blog_reoptimize_notifies_on_completion():
+    note = activity.single_job_notification("fanout_blog_reoptimize", "Acme", "complete")
+    assert note is not None
+    assert "reoptimization" in note["title"].lower()
+    assert "acme" in note["summary"].lower()
+
+
+def test_fanout_reopt_registered_but_score_stays_silent():
+    # The multi-minute reoptimize is a registered walk-away job (pings + activity
+    # feed); the fast, inline score is deliberately NOT registered (no ping, no
+    # feed entry).
+    assert "fanout_blog_reoptimize" in activity.ACTIVITY_JOB_TYPES
+    assert "fanout_blog_score" not in activity.ACTIVITY_JOB_TYPES
+    assert activity.single_job_notification("fanout_blog_score", "Acme", "complete") is None
+
+
 def test_job_item_single_registered():
     job = {
         "id": "j1", "job_type": "keyword_research", "entity_id": "c1",
