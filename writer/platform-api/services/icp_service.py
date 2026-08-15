@@ -277,6 +277,10 @@ def _render_icp_block(detected_icp: dict | None, max_segments: int = 3) -> str:
     if raw:
         return raw  # unwrapped — identical to the legacy icp_text value
     segments = detected_icp.get("segments") or []
+    # Defensive: a malformed/partial scan can leave non-dict segments (e.g. bare
+    # strings). This renders inside best-effort voice sourcing for every generator,
+    # so a bad segment must be skipped, not crash page generation on `.get`.
+    segments = [s for s in segments if isinstance(s, dict)]
     if not segments:
         return ""
 
