@@ -583,6 +583,9 @@ export interface RegateBody {
   clustering_edge_threshold?: number;
   clustering_resolution?: number;
   active_per_silo_cap?: number;
+  // Soft-routing cosine margin (0 = pure argmax). Keeps a keyword active in every
+  // silo within this margin of its best — repopulates silos starved by argmax.
+  silo_margin?: number;
 }
 
 export const regate = (id: string, body: RegateBody = {}) =>

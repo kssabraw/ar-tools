@@ -102,6 +102,9 @@ class RegateBody(BaseModel):
     # Hard cap on active keywords per silo (post-gate, top-N by relevance). 0 =
     # no cap. Owner-only override; the env default is `active_per_silo_cap`.
     active_per_silo_cap: int | None = Field(default=None, ge=0, le=50000)
+    # Soft-routing cosine margin (0 = pure argmax). Per-call so soft routing can be
+    # A/B'd on one session without touching the global `relevance_silo_margin` env.
+    silo_margin: float | None = Field(default=None, ge=0.0, le=1.0)
     # Peer-entity filter overrides (for testing on sessions whose grounding ran
     # before this existed). Omitted -> use the session's stored lists.
     aliases: list[str] | None = None
@@ -938,7 +941,13 @@ def regate_session(
         if body.active_per_silo_cap is not None
         else s.active_per_silo_cap
     )
-    jobs.submit_regate(session_id, threshold, edge, resolution, cap, seed_terms, peer_terms)
+    margin = (
+        body.silo_margin
+        if body.silo_margin is not None
+        else s.relevance_silo_margin
+    )
+    jobs.submit_regate(session_id, threshold, edge, resolution, cap, seed_terms,
+                       peer_terms, silo_margin=margin)
     return {
         "status": "queued",
         "session_id": session_id,
@@ -946,6 +955,7 @@ def regate_session(
         "clustering_edge_threshold": edge,
         "clustering_resolution": resolution,
         "active_per_silo_cap": cap,
+        "silo_margin": margin,
         "peer_entities": peer_terms,
     }
 
