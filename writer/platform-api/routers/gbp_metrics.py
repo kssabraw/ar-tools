@@ -400,7 +400,7 @@ async def gbp_search_keywords_read(
     from services import gbp_search_keywords as skw
 
     try:
-        data = skw.read_keywords(str(client_id), month=month, limit=max(1, min(int(limit), 100)))
+        data = skw.read_keywords(str(client_id), month=month, limit=max(1, min(int(limit), 500)))
     except Exception as exc:
         logger.error("gbp_search_keywords_read_failed", extra={"client_id": str(client_id), "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error")

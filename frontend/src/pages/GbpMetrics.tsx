@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, RefreshCw, PlugZap, CheckCircle2, AlertTriangle, History, Users, Lightbulb, Star, Download, Search } from 'lucide-react'
+import { ArrowLeft, RefreshCw, PlugZap, CheckCircle2, AlertTriangle, History, Users, Lightbulb, Star, Download, Search, ArrowUpDown } from 'lucide-react'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import type {
@@ -400,13 +400,13 @@ function Dashboard({ clientId, data, periodQs }: { clientId: string; data: GbpDa
             </div>
           )}
 
-          <SearchKeywordsPanel clientId={clientId} />
-
           <SectionHeading>Customer actions — what they did next</SectionHeading>
           {data.actions && <ActionsHeadline actions={data.actions} />}
           <div style={tileGrid}>
             {actions.map((m) => <MetricTile key={m.metric} metric={m} series={data.series} />)}
           </div>
+
+          <SearchKeywordsPanel clientId={clientId} />
 
           <div style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 16 }}>
             {data.date_start} – {data.date_end} ({data.window_days} days) vs. the prior period
@@ -420,17 +420,30 @@ function Dashboard({ clientId, data, periodQs }: { clientId: string; data: GbpDa
 }
 
 // Search terms that drove impressions (monthly). Fetched separately from the
-// daily dashboard — the data is monthly and independent of the window.
+// daily dashboard — the data is monthly and independent of the window. Loads up
+// to 500 terms, shown in a scrollable viewport with client-side search + sort.
 function SearchKeywordsPanel({ clientId }: { clientId: string }) {
   const [month, setMonth] = useState<string | undefined>(undefined)
+  const [q, setQ] = useState('')
+  const [sortAlpha, setSortAlpha] = useState(false)
   const { data, isLoading, isError } = useQuery<GbpSearchKeywords>({
     queryKey: ['gbp-search-keywords', clientId, month ?? 'latest'],
     queryFn: () => api.get<GbpSearchKeywords>(
-      `/clients/${clientId}/gbp-metrics/search-keywords${month ? `?month=${month}` : ''}`,
+      `/clients/${clientId}/gbp-metrics/search-keywords?limit=500${month ? `&month=${month}` : ''}`,
     ),
     enabled: Boolean(clientId),
   })
   const muted: React.CSSProperties = { fontSize: 12.5, color: '#94a3b8', padding: '6px 0' }
+
+  // Filter by substring, then sort A–Z or keep the backend's volume-desc order.
+  const shown = useMemo(() => {
+    const all = data?.keywords ?? []
+    const needle = q.trim().toLowerCase()
+    const filtered = needle ? all.filter((k) => k.keyword.toLowerCase().includes(needle)) : all
+    return sortAlpha ? [...filtered].sort((a, b) => a.keyword.localeCompare(b.keyword)) : filtered
+  }, [data, q, sortAlpha])
+
+  const hasData = Boolean(data && data.keywords.length > 0)
 
   return (
     <>
@@ -451,22 +464,43 @@ function SearchKeywordsPanel({ clientId }: { clientId: string }) {
           <div style={muted}>Loading search keywords…</div>
         ) : isError ? (
           <div style={muted}>Couldn't load search keywords right now — try refreshing.</div>
-        ) : !data || data.keywords.length === 0 ? (
+        ) : !hasData ? (
           <div style={muted}>
             No search-keyword data yet. GBP reports these monthly (about a month behind) — it fills in after the next monthly sync.
           </div>
         ) : (
-          <div style={{ display: 'grid', gap: 4 }}>
-            {data.keywords.map((k) => (
-              <div key={k.keyword} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5, padding: '3px 0', borderBottom: '1px solid #f8fafc' }}>
-                <span style={{ color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.keyword}</span>
-                <span style={{ color: '#64748b', flexShrink: 0 }}>{k.is_threshold ? `<${k.value.toLocaleString()}` : k.value.toLocaleString()}</span>
-              </div>
-            ))}
-            <div style={{ fontSize: 10.5, color: '#cbd5e1', marginTop: 4 }}>
-              "&lt;N" = Google's privacy floor for low-volume terms.
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Search keywords…"
+                style={{ flex: '1 1 200px', minWidth: 140, fontSize: 12.5, padding: '6px 9px', border: '1px solid #e2e8f0', borderRadius: 8, outline: 'none', color: '#334155' }}
+              />
+              <button
+                style={{ ...secondaryBtn, padding: '6px 10px' }}
+                onClick={() => setSortAlpha((s) => !s)}
+                title={sortAlpha ? 'Sorted A–Z — click for volume' : 'Sorted by volume — click for A–Z'}
+              >
+                <ArrowUpDown size={13} /> {sortAlpha ? 'A–Z' : 'Volume'}
+              </button>
             </div>
-          </div>
+            {shown.length === 0 ? (
+              <div style={muted}>No keywords match “{q.trim()}”.</div>
+            ) : (
+              <div style={{ maxHeight: 'min(1000px, 72vh)', overflowY: 'auto', display: 'grid', gap: 2, paddingRight: 4 }}>
+                {shown.map((k) => (
+                  <div key={k.keyword} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5, padding: '3px 0', borderBottom: '1px solid #f8fafc' }}>
+                    <span style={{ color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.keyword}</span>
+                    <span style={{ color: '#64748b', flexShrink: 0 }}>{k.is_threshold ? `<${k.value.toLocaleString()}` : k.value.toLocaleString()}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ fontSize: 10.5, color: '#cbd5e1', marginTop: 6 }}>
+              Showing {shown.length.toLocaleString()} of {data!.keywords.length.toLocaleString()} keyword{data!.keywords.length === 1 ? '' : 's'} · “&lt;N” = Google's privacy floor for low-volume terms.
+            </div>
+          </>
         )}
       </div>
     </>
