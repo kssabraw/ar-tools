@@ -1,11 +1,11 @@
-"""Queued-run claim lifecycle (fanout storage/silo.py + jobs._claims_start).
+"""Queued-run claim lifecycle (fanout storage/silo.py).
 
-The pipeline worker pool caps concurrent runs, so a submitted job can wait for
-a slot. Endpoints claim runs as `queued` (try_claim_run); the worker flips the
-claim to `running` when it actually picks the job up (try_mark_started); a
-/cancel while still queued lands `cancelled` and the worker then skips the job
-entirely. These tests wire the real supabase client to an httpx.MockTransport
-and pin the guarded transitions.
+Endpoints claim runs as `queued` (try_claim_run); the durable worker then flips
+the claim to `running` when it picks the job up (try_mark_running_durable, tested
+in test_fanout_durable_expand.py); a /cancel while still queued lands `cancelled`
+(try_mark_cancelled) and the durable claim then refuses the run. These tests wire
+the real supabase client to an httpx.MockTransport and pin the guarded
+transitions.
 """
 
 from unittest.mock import patch
@@ -82,26 +82,6 @@ def test_try_mark_cancelled_covers_queued_and_running():
                       return_value=_client(_patch_row_response(seen, [{"id": "s1"}]))):
         assert silo.try_mark_cancelled("s1") is True
     assert "in.%28queued%2Crunning%29" in seen["url"] or "in.(queued,running)" in seen["url"]
-
-
-def test_claims_start_skips_job_when_no_longer_queued():
-    """A run cancelled while waiting for a worker slot must never execute —
-    no metering, no external calls."""
-    from fanout import jobs
-
-    ran = []
-
-    @jobs._claims_start
-    def fake_job(session_id: str) -> None:
-        ran.append(session_id)
-
-    with patch.object(jobs.store, "try_mark_started", return_value=False):
-        assert fake_job("s1") is None
-    assert ran == []
-
-    with patch.object(jobs.store, "try_mark_started", return_value=True):
-        fake_job("s2")
-    assert ran == ["s2"]
 
 
 def test_summary_short_circuits_queued_to_cheap_payload():

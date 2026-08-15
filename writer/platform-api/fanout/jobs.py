@@ -1,25 +1,30 @@
 """Background execution for the long pipeline operations.
 
-`/expand`, `/plan-articles`, and `/regate` exceed Railway's ~5-min edge cap when
-run inside the request, so the endpoints claim the run (atomic status flip to
-`queued`), submit the work here, and return 202 immediately. The frontend polls
-session status. When a pool worker actually picks the job up it flips the claim
-to `running` (`_claims_start` -> try_mark_started), so a run waiting for a slot
-is visibly *queued*, not indistinguishable from an executing one. Each job owns
-its terminal status: it sets `awaiting_article_planning` / `complete` on
-success, or `error` + `last_error` on failure.
+`/expand`, `/plan-articles`, `/regate`, `/fanout` and `/architecture` exceed
+Railway's ~5-min edge cap when run inside the request, so the endpoints claim the
+run (atomic status flip to `queued`), submit the work here, and return 202
+immediately. The frontend polls session status.
 
-A bounded pool caps concurrent pipeline runs per process; the per-session run
-guard (try_claim_run) prevents the same session running twice. Jobs use the
-service client (no user token — the request already authorized the caller).
+Since issue #686 (Phases 1-3) every pipeline stage runs **durably**, as an
+`async_jobs` row (`fanout_expand` / `fanout_plan` / `fanout_regate` /
+`fanout_fanout` / `fanout_architecture`) claimed by the suite's shared worker via
+`_enqueue_durable` -> `_run_pipeline_durable`. The row IS the durable claim: a
+platform-api restart mid-run no longer strands the session — the graceful
+shutdown drain requeues the in-flight row immediately, and a hard SIGKILL falls
+back to the stale-job reaper, so the run finishes on the next container instead
+of being orphaned at `running`. This replaces the old in-process
+`ThreadPoolExecutor` + `run_recovery.py` shutdown/startup salvage (both retired
+in Phase 3). Each stage owns its terminal status: it sets
+`awaiting_article_planning` / `complete` on success, or `error` + `last_error` on
+failure; the envelope only writes a terminal status for an unexpected crash or a
+`CancelledByUser`.
 
-A process restart mid-job strands the session at status='running' (or 'queued' if
-it never started — that distinction tells you whether any spend happened), since
-a SIGKILL never reaches the job's own `except`. A startup sweep now recovers those
-rows: `fanout/run_recovery.py`, run from the app lifespan, returns a run killed
-after expansion to `awaiting_article_planning` (its keywords are durable, so only
-planning is re-spent) and records the rest as `error` with the reason. The durable
-queue that would remove the failure mode entirely is still the real fix.
+The per-cluster article-generation jobs (SIE / brief / article / prepublish rank
+check) are short and cheap and still run on the in-process `_EXECUTOR` — they do
+not ride session status and were never the deploy-kills-an-expensive-run problem.
+
+Jobs use the service client (no user token — the request already authorized the
+caller).
 """
 
 import logging
@@ -204,30 +209,6 @@ def _metered(step: str):
     return decorator
 
 
-def _claims_start(fn):
-    """Flip the endpoint's `queued` claim to `running` when a worker actually
-    picks the job up. If the flip doesn't land, the session is no longer queued
-    — the user cancelled while it waited for a slot (or the state was reset) —
-    so skip the run entirely: no metering, no cancellation registration, no
-    external calls. Outermost of the job decorators for exactly that reason.
-    Only the session-status pipeline jobs (expand / plan / regate / fanout /
-    architecture) use this; the per-cluster jobs (SIE / brief / article) don't
-    ride session status."""
-
-    @wraps(fn)
-    def wrapper(session_id: str, *args, **kwargs):
-        if not store.try_mark_started(session_id):
-            logger.info(
-                "job_skipped_not_queued",
-                extra={"event": "job_skipped_not_queued", "step": fn.__name__,
-                       "session_id": session_id},
-            )
-            return None
-        return fn(session_id, *args, **kwargs)
-
-    return wrapper
-
-
 def _cancellable(fn):
     """Register the session's cancellation event for the job's lifetime and
     convert `CancelledByUser` into a clean `status='cancelled'` finish.
@@ -266,13 +247,10 @@ def _cancellable(fn):
 
 
 def _record_active_job(session_id: str, kind: str, **params) -> None:
-    """Best-effort note of which job holds the session's run claim (+ its
-    replayable args), so run_recovery can tell an interrupted planning run
-    (safe to auto-resume — expansion is durable, planning replayable) from an
-    interrupted regate/fanout/architecture run (not: auto-replanning those
-    would wipe a completed plan or run a step the user didn't ask for). A
-    write failure must never block the submit — recovery then just degrades
-    to the manual path."""
+    """Best-effort advisory note of which stage holds the session's run claim
+    (surfaced in the workspace UI). Since Phase 3 recovery is handled by the
+    async_jobs drain/reaper, not this marker, so it is purely informational — a
+    write failure must never block the submit."""
     try:
         store.set_active_job(session_id, {"kind": kind, **params})
     except Exception as exc:  # noqa: BLE001 — advisory metadata only
@@ -283,47 +261,37 @@ def _record_active_job(session_id: str, kind: str, **params) -> None:
         )
 
 
-def _enqueue_durable_expand(session_id: str) -> None:
-    """Durable path (issue #686 Phase 1): run expansion as an async_jobs row so a
+def _enqueue_durable(
+    session_id: str, job_type: str, kind: str, payload_extra: dict | None = None
+) -> None:
+    """Durable path (issue #686): run a pipeline stage as an async_jobs row so a
     platform-api restart recovers it via the shared worker's drain/reaper instead
-    of stranding it in the per-process executor.
+    of stranding it in a per-process executor. Since Phase 3 this is the ONLY path
+    for every pipeline stage (expand / plan / regate / fanout / architecture) —
+    the in-process executor and run_recovery salvage are gone.
 
-    Order matters: mark the session's active_job `durable` FIRST so run_recovery
-    leaves this run to the async_jobs machinery, then enqueue. If the enqueue
-    fails, REVERT the marker so the (still-queued) session falls back to
-    run_recovery salvage rather than being ignored by both."""
-    _record_active_job(session_id, "expand", durable=True)
+    Mark the session's active_job `durable` FIRST (advisory metadata the UI reads),
+    then enqueue. If the enqueue fails, revert the marker and re-raise so the
+    endpoint surfaces the failure rather than leaving a queued-but-unworked run."""
+    _record_active_job(session_id, kind, durable=True)
     from db.supabase_client import get_supabase
 
+    payload = {"session_id": session_id, **(payload_extra or {})}
     try:
         get_supabase().table("async_jobs").insert(
-            {
-                "job_type": "fanout_expand",
-                "entity_id": session_id,
-                "payload": {"session_id": session_id},
-            }
+            {"job_type": job_type, "entity_id": session_id, "payload": payload}
         ).execute()
     except Exception:
-        _record_active_job(session_id, "expand")  # revert the durable marker
+        _record_active_job(session_id, kind)  # revert the durable marker
         raise
 
 
 def submit_expand(session_id: str) -> None:
-    if get_settings().fanout_durable_expand_enabled:
-        _enqueue_durable_expand(session_id)
-        return
-    _record_active_job(session_id, "expand")
-    _EXECUTOR.submit(run_expand_job, session_id)
+    _enqueue_durable(session_id, "fanout_expand", "expand")
 
 
-def submit_plan(session_id: str, direct: bool = False, resumes: int = 0) -> None:
-    """`resumes` is the auto-resume attempt this submit represents — 0 for a
-    human click (a fresh click resets the crash-loop budget, mirroring the
-    orchestrator's resume_count semantics), N when run_recovery re-submits an
-    interrupted planning run. Recorded on active_job so a run that keeps dying
-    stops auto-resuming past plan_auto_resume_max instead of crash-looping."""
-    _record_active_job(session_id, "plan", direct=direct, resumes=resumes)
-    _EXECUTOR.submit(run_plan_job, session_id, direct)
+def submit_plan(session_id: str, direct: bool = False) -> None:
+    _enqueue_durable(session_id, "fanout_plan", "plan", {"direct": bool(direct)})
 
 
 def submit_regate(
@@ -336,10 +304,15 @@ def submit_regate(
     peer_terms: list[str],
     silo_margin: float | None = None,
 ) -> None:
-    _record_active_job(session_id, "regate")
-    _EXECUTOR.submit(run_regate_job, session_id, threshold, edge_threshold,
-                     resolution, active_per_silo_cap, seed_terms, peer_terms,
-                     silo_margin)
+    _enqueue_durable(session_id, "fanout_regate", "regate", {
+        "threshold": threshold,
+        "edge_threshold": edge_threshold,
+        "resolution": resolution,
+        "active_per_silo_cap": active_per_silo_cap,
+        "seed_terms": seed_terms,
+        "peer_terms": peer_terms,
+        "silo_margin": silo_margin,
+    })
 
 
 def submit_fanout(
@@ -351,22 +324,26 @@ def submit_fanout(
     seed_terms: list[str],
     peer_terms: list[str],
 ) -> None:
-    _record_active_job(session_id, "fanout")
-    _EXECUTOR.submit(run_fanout_job, session_id, threshold, edge_threshold,
-                     resolution, active_per_silo_cap, seed_terms, peer_terms)
+    _enqueue_durable(session_id, "fanout_fanout", "fanout", {
+        "threshold": threshold,
+        "edge_threshold": edge_threshold,
+        "resolution": resolution,
+        "active_per_silo_cap": active_per_silo_cap,
+        "seed_terms": seed_terms,
+        "peer_terms": peer_terms,
+    })
 
 
 def submit_architecture(session_id: str) -> None:
-    _record_active_job(session_id, "architecture")
-    _EXECUTOR.submit(run_architecture_job, session_id)
+    _enqueue_durable(session_id, "fanout_architecture", "architecture")
 
 
 def _expand_core(session_id: str) -> None:
     """§7.3–§7.9: expansion + competitor mining + relevance gate + clustering, then
     persist the gated pool + clustering log and finalize the session to
-    awaiting_article_planning. Raises on failure — the caller writes the terminal
-    error/cancelled status. Shared by the executor path (`run_expand_job`) and the
-    durable async_jobs path (`run_expand_durable`)."""
+    awaiting_article_planning. Raises on failure — the durable envelope
+    (`run_expand_durable` -> `_run_pipeline_durable`) writes the terminal
+    error/cancelled status."""
     session = store.get_session(session_id)
     # Run scope, not every finalized silo: a silo the user left out of the run
     # is never expanded, gated or clustered (the deep-mine gate below is the
@@ -548,61 +525,45 @@ def _run_expand_core(session_id: str) -> None:
         _expand_core(session_id)
 
 
-@_claims_start
-@_metered("expand")
-@_cancellable
-def run_expand_job(session_id: str) -> None:
-    """Executor path for expand (used when `fanout_durable_expand_enabled` is off).
-    The @_cancellable decorator handles CancelledByUser; a genuine failure is
-    written as the terminal error status here."""
-    bind_session_id(session_id)
-    try:
-        _expand_core(session_id)
-    except Exception as exc:  # noqa: BLE001 — terminal status carries the failure
-        logger.error(
-            "step_failed",
-            extra={"event": "step_failed", "step": "expand_job", "reason": repr(exc)},
-        )
-        store.try_finalize_running(
-            session_id, {"status": "error", "last_error": _short(exc)}
-        )
+def _run_pipeline_durable(session_id, meter_label, core, *, on_terminal=None):
+    """Shared async_jobs envelope for every durable Fanout pipeline stage
+    (issue #686). The async_jobs row is the atomic claim, so the session-status
+    flip is idempotent (queued OR running -> running via `try_mark_running_durable`)
+    rather than the queued-only guard of the old executor path: a reaper/drain
+    requeue after a crash finds the session already at 'running' and must proceed,
+    not skip. A session the user cancelled — or an already-finished run whose row
+    got requeued — is no longer in ('queued','running'), so the claim returns
+    False and we skip (no re-run, no double spend).
 
-
-def run_expand_durable(session_id: str) -> None:
-    """async_jobs handler for a durable expand run (issue #686 Phase 1).
-
-    The async_jobs row is the atomic claim, so the session-status flip is
-    idempotent (queued OR running -> running via `try_mark_running_durable`)
-    rather than the queued-only guard of the executor path: a reaper/drain
-    requeue after a crash finds the session already at 'running' and must
-    proceed, not skip. A session the user cancelled — or an already-finished run
-    whose row got requeued — is no longer in ('queued','running'), so the claim
-    returns False and we skip (no re-run, no double spend).
-
-    Cancellation is DB-first (the claim check above) plus the existing in-flight
+    Cancellation is DB-first (the claim check) plus the in-flight
     `raise_if_cancelled` checkpoints, which fire on a same-process /cancel via the
     event `set_cancelled` creates on demand — so no `_cancellable` registration is
-    needed. Every path is caught here so the async_jobs row settles `complete`
-    (a deterministic pipeline error must not auto-retry and re-spend); a process
-    death leaves the row `running` for the drain/reaper to requeue."""
+    needed. Every terminal path is caught here so the async_jobs row settles
+    `complete` (a deterministic pipeline error must not auto-retry and re-spend);
+    a process death leaves the row `running` for the drain/reaper to requeue.
+
+    `core(session_id)` runs the stage and owns its own success terminal status
+    (like the old *_job bodies did). `on_terminal(session_id)` (optional) runs
+    cleanup before the error/cancel status write."""
     bind_session_id(session_id)
     if not store.try_mark_running_durable(session_id):
         logger.info(
-            "durable_expand_skipped_not_runnable",
-            extra={"event": "durable_expand_skipped_not_runnable",
+            "durable_skipped_not_runnable",
+            extra={"event": "durable_skipped_not_runnable", "step": meter_label,
                    "session_id": session_id},
         )
         return
     try:
-        with metered_run(session_id, "expand"):
+        with metered_run(session_id, meter_label):
             try:
-                _run_expand_core(session_id)
+                core(session_id)
             except CancelledByUser:
                 logger.info(
                     "step_cancelled",
-                    extra={"event": "step_cancelled", "step": "expand_durable"},
+                    extra={"event": "step_cancelled", "step": meter_label},
                 )
-                _clear_checkpoint_best_effort(session_id)
+                if on_terminal:
+                    on_terminal(session_id)
                 store.try_finalize_running(
                     session_id,
                     {"status": "cancelled", "last_error": "Cancelled by user"},
@@ -610,16 +571,27 @@ def run_expand_durable(session_id: str) -> None:
             except Exception as exc:  # noqa: BLE001 — terminal status carries the failure
                 logger.error(
                     "step_failed",
-                    extra={"event": "step_failed", "step": "expand_durable",
+                    extra={"event": "step_failed", "step": meter_label,
                            "reason": repr(exc)},
                 )
-                _clear_checkpoint_best_effort(session_id)
+                if on_terminal:
+                    on_terminal(session_id)
                 store.try_finalize_running(
                     session_id, {"status": "error", "last_error": _short(exc)}
                 )
     finally:
         # Drop any cancellation event `/cancel` created so a later run starts fresh.
         cancellation.clear(session_id)
+
+
+def run_expand_durable(session_id: str) -> None:
+    """async_jobs handler for a durable expand run (issue #686). Clears the
+    resumable-expansion checkpoint on a caught error/cancel so only an uncatchable
+    crash leaves it for a requeue to resume."""
+    _run_pipeline_durable(
+        session_id, "expand", _run_expand_core,
+        on_terminal=_clear_checkpoint_best_effort,
+    )
 
 
 def _clear_checkpoint_best_effort(session_id: str) -> None:
@@ -639,12 +611,12 @@ def _clear_checkpoint_best_effort(session_id: str) -> None:
         )
 
 
-@_claims_start
-@_metered("article_planning")
-@_cancellable
-def run_plan_job(session_id: str, direct: bool = False) -> None:
+def _plan_core(session_id: str, direct: bool = False) -> None:
     """§7.10: SERP for candidate primaries + per-silo orchestrator + dedup.
-    With direct=True, skips the orchestrator (groupings -> articles + dedup)."""
+    With direct=True, skips the orchestrator (groupings -> articles + dedup).
+    Owns its own terminal status (complete / degraded-error); an unexpected
+    failure propagates to the durable envelope, and CancelledByUser (a
+    BaseException) passes through the `except Exception` below to the envelope."""
     bind_session_id(session_id)
     try:
         session = store.get_session(session_id)
@@ -733,10 +705,7 @@ def run_plan_job(session_id: str, direct: bool = False) -> None:
         )
 
 
-@_claims_start
-@_metered("regate")
-@_cancellable
-def run_regate_job(
+def _regate_core(
     session_id: str, threshold: float, edge_threshold: float, resolution: float,
     active_per_silo_cap: int, seed_terms: list[str], peer_terms: list[str],
     silo_margin: float | None = None,
@@ -802,10 +771,7 @@ def run_regate_job(
         )
 
 
-@_claims_start
-@_metered("recursive_fanout")
-@_cancellable
-def run_fanout_job(
+def _fanout_core(
     session_id: str, threshold: float, edge_threshold: float, resolution: float,
     active_per_silo_cap: int, seed_terms: list[str], peer_terms: list[str],
 ) -> None:
@@ -900,10 +866,7 @@ def run_fanout_job(
         )
 
 
-@_claims_start
-@_metered("architecture")
-@_cancellable
-def run_architecture_job(session_id: str) -> None:
+def _architecture_core(session_id: str) -> None:
     """§7.11 Site Architecture: one pillar per article-bearing silo + the internal
     linking matrix, persisted to site_architecture. Reads the article plan
     produced by /plan-articles; never re-plans. Idempotent — re-running upserts
@@ -991,6 +954,41 @@ def run_architecture_job(session_id: str) -> None:
         store.try_finalize_running(
             session_id, {"status": "error", "last_error": _short(exc)}
         )
+
+
+def run_plan_durable(session_id: str, direct: bool = False) -> None:
+    """async_jobs handler for durable article planning (issue #686 Phase 3)."""
+    _run_pipeline_durable(session_id, "article_planning", lambda sid: _plan_core(sid, direct))
+
+
+def run_regate_durable(
+    session_id: str, threshold: float, edge_threshold: float, resolution: float,
+    active_per_silo_cap: int, seed_terms: list[str], peer_terms: list[str],
+    silo_margin: float | None = None,
+) -> None:
+    """async_jobs handler for a durable re-gate (issue #686 Phase 3)."""
+    _run_pipeline_durable(
+        session_id, "regate",
+        lambda sid: _regate_core(sid, threshold, edge_threshold, resolution,
+                                 active_per_silo_cap, seed_terms, peer_terms, silo_margin),
+    )
+
+
+def run_fanout_durable(
+    session_id: str, threshold: float, edge_threshold: float, resolution: float,
+    active_per_silo_cap: int, seed_terms: list[str], peer_terms: list[str],
+) -> None:
+    """async_jobs handler for a durable recursive fanout (issue #686 Phase 3)."""
+    _run_pipeline_durable(
+        session_id, "recursive_fanout",
+        lambda sid: _fanout_core(sid, threshold, edge_threshold, resolution,
+                                 active_per_silo_cap, seed_terms, peer_terms),
+    )
+
+
+def run_architecture_durable(session_id: str) -> None:
+    """async_jobs handler for durable site architecture (issue #686 Phase 3)."""
+    _run_pipeline_durable(session_id, "architecture", _architecture_core)
 
 
 # ----- M12 SIE Term & Entity analysis ---------------------------------------

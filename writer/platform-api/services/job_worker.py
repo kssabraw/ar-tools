@@ -915,14 +915,41 @@ async def _process_job(job: dict) -> None:
     elif job_type == "fanout_report":
         from fanout.report_runner import run_report_job as run_fanout_report_job
         await run_fanout_report_job(job)
-    elif job_type == "fanout_expand":
-        # Durable Fanout expansion (issue #686). Runs the blocking pipeline in a
-        # thread so it doesn't stall this (dedicated) lane's event loop; the row
-        # settles complete after it returns, or stays running for the drain/reaper
-        # to requeue on a crash.
-        from fanout.jobs import run_expand_durable
-        session_id = (job.get("payload") or {}).get("session_id") or job.get("entity_id")
-        await asyncio.to_thread(run_expand_durable, session_id)
+    elif job_type in (
+        "fanout_expand", "fanout_plan", "fanout_regate", "fanout_fanout",
+        "fanout_architecture",
+    ):
+        # Durable Fanout pipeline stages (issue #686). Each runs the blocking
+        # pipeline in a thread so it doesn't stall this (dedicated) lane's event
+        # loop; the row settles complete after it returns, or stays running for
+        # the drain/reaper to requeue on a crash. The payload carries the stage's
+        # params (mirrors the old submit_* signatures).
+        import fanout.jobs as _fjobs
+        payload = job.get("payload") or {}
+        session_id = payload.get("session_id") or job.get("entity_id")
+        if job_type == "fanout_expand":
+            await asyncio.to_thread(_fjobs.run_expand_durable, session_id)
+        elif job_type == "fanout_plan":
+            await asyncio.to_thread(
+                _fjobs.run_plan_durable, session_id, bool(payload.get("direct"))
+            )
+        elif job_type == "fanout_regate":
+            await asyncio.to_thread(
+                _fjobs.run_regate_durable, session_id,
+                payload.get("threshold"), payload.get("edge_threshold"),
+                payload.get("resolution"), payload.get("active_per_silo_cap"),
+                payload.get("seed_terms") or [], payload.get("peer_terms") or [],
+                payload.get("silo_margin"),
+            )
+        elif job_type == "fanout_fanout":
+            await asyncio.to_thread(
+                _fjobs.run_fanout_durable, session_id,
+                payload.get("threshold"), payload.get("edge_threshold"),
+                payload.get("resolution"), payload.get("active_per_silo_cap"),
+                payload.get("seed_terms") or [], payload.get("peer_terms") or [],
+            )
+        else:  # fanout_architecture
+            await asyncio.to_thread(_fjobs.run_architecture_durable, session_id)
     elif job_type == "deliverables_log":
         await run_deliverables_log_job(job)
     elif job_type == "deliverable_notes_scan":
