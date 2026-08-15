@@ -219,6 +219,14 @@ class Settings(BaseSettings):
     # silo anchor) instead of keeping it active in every silo it passes in. Kills
     # the cross-silo duplication that dedup otherwise has to clean up.
     relevance_assign_best_silo: bool = True
+    # Soft routing (0 = off = pure argmax, the default). A positive cosine margin
+    # keeps a keyword active not only in its argmax silo but in every silo within
+    # `silo_margin` of the top cosine — so overlapping-anchor silos aren't starved
+    # (hard argmax emptied 3 of 5 silos on a single-entity seed). The keyword still
+    # has to clear each silo's own relevance threshold, and cross-topic dedup
+    # collapses the duplicate articles the overlap can create. Tune up from 0 (e.g.
+    # 0.03–0.06) when narrow silos come back empty; higher = more overlap.
+    relevance_silo_margin: float = 0.0
     relevance_embed_batch: int = 1000        # keywords per embedding request
     clustering_edge_threshold: float = 0.55  # min cosine for a graph edge
     # Louvain resolution: >1 favors more, smaller communities (finer granularity).

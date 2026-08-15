@@ -306,10 +306,12 @@ def submit_regate(
     active_per_silo_cap: int,
     seed_terms: list[str],
     peer_terms: list[str],
+    silo_margin: float | None = None,
 ) -> None:
     _record_active_job(session_id, "regate")
     _EXECUTOR.submit(run_regate_job, session_id, threshold, edge_threshold,
-                     resolution, active_per_silo_cap, seed_terms, peer_terms)
+                     resolution, active_per_silo_cap, seed_terms, peer_terms,
+                     silo_margin)
 
 
 def submit_fanout(
@@ -368,6 +370,7 @@ def run_expand_job(session_id: str) -> None:
             seed_terms=[seed, *(session.get("aliases") or [])],
             peer_terms=session.get("peer_entities") or [],
             assign_best_silo=s.relevance_assign_best_silo,
+            silo_margin=s.relevance_silo_margin,
             keyword_ideas_limit=s.keyword_ideas_limit,
             keyword_suggestions_limit=s.keyword_suggestions_limit,
             query_fanouts_limit=s.query_fanouts_limit,
@@ -517,9 +520,12 @@ def run_plan_job(session_id: str, direct: bool = False) -> None:
 def run_regate_job(
     session_id: str, threshold: float, edge_threshold: float, resolution: float,
     active_per_silo_cap: int, seed_terms: list[str], peer_terms: list[str],
+    silo_margin: float | None = None,
 ) -> None:
     """Re-gate + re-cluster a session's stored keyword pool at a new threshold and
-    clustering granularity, skipping DataForSEO. Clears any prior article plan."""
+    clustering granularity, skipping DataForSEO. Clears any prior article plan.
+    `silo_margin` None → the configured default; a per-call value lets the owner
+    A/B soft routing on one session without changing global config."""
     bind_session_id(session_id)
     try:
         session = store.get_session(session_id)
@@ -542,6 +548,7 @@ def run_regate_job(
             seed_terms=seed_terms,
             peer_terms=peer_terms,
             assign_best_silo=s.relevance_assign_best_silo,
+            silo_margin=(s.relevance_silo_margin if silo_margin is None else silo_margin),
             llm_router=_maybe_llm_router(session["seed_keyword"], topics),
             llm_router_margin=s.llm_routing_margin_threshold,
             language_filter=_maybe_language_filter(),
@@ -636,6 +643,7 @@ def run_fanout_job(
             seed_terms=seed_terms,
             peer_terms=peer_terms,
             assign_best_silo=s.relevance_assign_best_silo,
+            silo_margin=s.relevance_silo_margin,
             llm_router=_maybe_llm_router(session["seed_keyword"], topics),
             llm_router_margin=s.llm_routing_margin_threshold,
             language_filter=_maybe_language_filter(),
