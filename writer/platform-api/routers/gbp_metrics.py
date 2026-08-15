@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta, timezone
+from typing import Optional
 from uuid import UUID
 
 from config import settings
@@ -89,11 +90,46 @@ async def resolve_locations(auth: dict = Depends(require_auth)) -> ResolveLocati
     )
 
 
-# GBP performance data lands ~3–5 days late. We over-fetch by this many days
-# past the two comparison windows so that, once we anchor those windows at the
-# last day with data (rather than today), the older window is still fully
-# covered by the read.
-_GBP_LAG_BUFFER_DAYS = 10
+def _latest_metric_date(supabase, loc_ids: list[str]) -> Optional[date]:
+    """The most recent date any of the locations has metric data for (a single
+    indexed ``max(date)`` read). This anchors the comparison windows exactly, so
+    staleness of any size is handled — the read is scoped to two full windows
+    ending here rather than guessing a lag buffer back from today."""
+    res = (
+        supabase.table("gbp_metric_daily")
+        .select("date")
+        .in_("location_row_id", loc_ids)
+        .order("date", desc=True)
+        .limit(1)
+        .execute()
+    ).data or []
+    if not res:
+        return None
+    d = res[0].get("date")
+    if isinstance(d, date):
+        return d
+    try:
+        return date.fromisoformat(d) if d else None
+    except ValueError:
+        return None
+
+
+def _latest_timestamp(values: list[Optional[str]]) -> Optional[str]:
+    """The latest ISO timestamp among values, chosen by parsed instant rather
+    than a lexicographic string max (which would misorder mixed offset/precision
+    forms). Returns the original string so the response keeps the DB format."""
+    best: Optional[str] = None
+    best_dt: Optional[datetime] = None
+    for v in values:
+        if not v:
+            continue
+        try:
+            dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            continue
+        if best_dt is None or dt > best_dt:
+            best_dt, best = dt, v
+    return best
 
 
 def _fetch_metric_rows(supabase, loc_ids: list[str], start: date, end: date) -> list[dict]:
@@ -141,33 +177,44 @@ async def gbp_dashboard(
     prior equal window; clamped to [7, 365]."""
     window = max(7, min(int(window), 365))
     supabase = get_supabase()
-    locs = (
-        supabase.table("gbp_locations")
-        .select("*")
-        .eq("client_id", str(client_id))
-        .order("created_at")
-        .execute()
-    ).data or []
+    try:
+        locs = (
+            supabase.table("gbp_locations")
+            .select("*")
+            .eq("client_id", str(client_id))
+            .order("created_at")
+            .execute()
+        ).data or []
+    except Exception as exc:  # DB read failure → clean 500, not a stack trace
+        logger.error("gbp_dashboard_locations_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error")
+
     location_models = [GbpLocation(**row) for row in locs]
     ok_ids = [row["id"] for row in locs if row.get("access_status") == "ok"]
 
     today = date.today()
-    # Fetch two windows plus a lag buffer, then anchor the comparison at the last
-    # day that actually has data. Anchoring at `today` would compare a current
-    # window still missing its most recent (not-yet-arrived) days against a
-    # complete prior window — making every metric read as a spurious decline.
-    fetch_start = today - timedelta(days=window * 2 + _GBP_LAG_BUFFER_DAYS)
+    anchor = today
+    rows: list[dict] = []
+    if ok_ids:
+        # Anchor the two comparison windows at the last day that actually has
+        # data, not today: anchoring at today would compare a current window
+        # still missing its most recent (not-yet-arrived) days against a
+        # complete prior window — making every metric read as a spurious
+        # decline. A max(date) pre-query makes this exact for any staleness.
+        try:
+            anchor = _latest_metric_date(supabase, ok_ids) or today
+            fetch_start = anchor - timedelta(days=window * 2)
+            rows = _fetch_metric_rows(supabase, ok_ids, fetch_start, anchor)
+        except Exception as exc:
+            logger.error("gbp_dashboard_metrics_failed", extra={"client_id": str(client_id), "error": str(exc)})
+            raise HTTPException(status_code=500, detail="internal_error")
 
-    rows = _fetch_metric_rows(supabase, ok_ids, fetch_start, today) if ok_ids else []
-    anchor = gbp_metrics_read.last_data_date(rows) or today
     win_start = anchor - timedelta(days=window - 1)
-
     cards = gbp_metrics_read.build_growth_cards(rows, anchor, window)
     window_rows = [r for r in rows if (r.get("date") or "") >= win_start.isoformat()]
     series = gbp_metrics_read.build_series(window_rows, win_start, anchor)
 
-    synced = [row.get("last_synced_at") for row in locs if row.get("last_synced_at")]
-    last_synced_at = max(synced) if synced else None
+    last_synced_at = _latest_timestamp([row.get("last_synced_at") for row in locs])
 
     return GbpDashboardResponse(
         enabled=settings.gbp_metrics_enabled,
