@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, RefreshCw, PlugZap, CheckCircle2, AlertTriangle, History, Users, Lightbulb } from 'lucide-react'
+import { ArrowLeft, RefreshCw, PlugZap, CheckCircle2, AlertTriangle, History, Users, Lightbulb, Star, Download } from 'lucide-react'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import type {
   Client, GbpDashboard, GbpLocation, GbpMetricGrowth, GbpResolvedLocation, GbpSeriesPoint,
-  GbpBreakdownItem, GbpActionsSummary,
+  GbpBreakdownItem, GbpActionsSummary, GbpReviewsSummary,
 } from '../lib/types'
 
 const WINDOWS: [number, string][] = [
@@ -112,7 +112,7 @@ export function GbpMetrics() {
       ) : !data.connected ? (
         <ConnectPanel clientId={clientId!} locations={data.locations} />
       ) : (
-        <Dashboard clientId={clientId!} data={data} />
+        <Dashboard clientId={clientId!} data={data} periodQs={qs} />
       )}
       <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
     </div>
@@ -317,9 +317,10 @@ function LocationRow({ clientId, loc, onChange }: { clientId: string; loc: GbpLo
 }
 
 // ── The dashboard itself ─────────────────────────────────────────────────────
-function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard }) {
+function Dashboard({ clientId, data, periodQs }: { clientId: string; data: GbpDashboard; periodQs: string }) {
   const queryClient = useQueryClient()
   const okLocations = data.locations.filter((l) => l.access_status === 'ok')
+  const [exporting, setExporting] = useState(false)
 
   const sync = useMutation({
     // Trigger an ingest for each verified location, then refresh the view.
@@ -328,6 +329,18 @@ function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard })
     ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['gbp-dashboard', clientId] }),
   })
+
+  async function exportCsv() {
+    setExporting(true)
+    try {
+      await api.download(
+        `/clients/${clientId}/gbp-metrics/export?${periodQs}`,
+        `gbp-metrics-${data.date_start}-to-${data.date_end}.csv`,
+      )
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const hasData = data.metrics.length > 0
   // Tolerate a backend that predates these fields (e.g. during a deploy where the
@@ -346,10 +359,17 @@ function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard })
           {okLocations.length} location{okLocations.length === 1 ? '' : 's'} connected
           {data.last_synced_at && <span>· last synced {new Date(data.last_synced_at).toLocaleString()}</span>}
         </div>
-        <button style={secondaryBtn} onClick={() => sync.mutate()} disabled={sync.isPending}>
-          <RefreshCw size={13} style={sync.isPending ? spinStyle : undefined} />
-          {sync.isPending ? 'Syncing…' : 'Sync now'}
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {hasData && (
+            <button style={secondaryBtn} onClick={exportCsv} disabled={exporting}>
+              <Download size={13} /> {exporting ? 'Exporting…' : 'Export CSV'}
+            </button>
+          )}
+          <button style={secondaryBtn} onClick={() => sync.mutate()} disabled={sync.isPending}>
+            <RefreshCw size={13} style={sync.isPending ? spinStyle : undefined} />
+            {sync.isPending ? 'Syncing…' : 'Sync now'}
+          </button>
+        </div>
       </div>
 
       {!hasData ? (
@@ -360,6 +380,10 @@ function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard })
       ) : (
         <>
           {insights.length > 0 && <InsightsPanel lines={insights} />}
+
+          {data.reviews && (data.reviews.rating != null || data.reviews.review_count > 0) && (
+            <ReviewsPanel reviews={data.reviews} />
+          )}
 
           <TrendChart data={data} />
 
@@ -409,6 +433,38 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
   return (
     <div style={{ fontSize: 12.5, fontWeight: 700, color: '#0f172a', margin: '20px 0 10px', letterSpacing: '-0.01em' }}>
       {children}
+    </div>
+  )
+}
+
+function ReviewsPanel({ reviews }: { reviews: GbpReviewsSummary }) {
+  const rating = reviews.rating
+  const full = rating != null ? Math.round(rating) : 0
+  return (
+    <div style={{ ...tile, marginBottom: 16, display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+      <div style={{ flexShrink: 0 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b', marginBottom: 3 }}>Google reviews</div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          <div style={{ fontSize: 26, fontWeight: 700, color: '#0f172a' }}>{rating != null ? rating.toFixed(1) : '—'}</div>
+          <div style={{ display: 'flex', gap: 1 }}>
+            {[0, 1, 2, 3, 4].map((i) => (
+              <Star key={i} size={14} fill={i < full ? '#f59e0b' : 'none'} color={i < full ? '#f59e0b' : '#cbd5e1'} />
+            ))}
+          </div>
+        </div>
+        <div style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 2 }}>{reviews.review_count.toLocaleString()} reviews</div>
+      </div>
+      {reviews.items.length > 0 && (
+        <div style={{ flex: '1 1 320px', minWidth: 0, display: 'grid', gap: 6 }}>
+          {reviews.items.slice(0, 3).map((r, i) => (
+            <div key={i} style={{ fontSize: 12.5, color: '#475569' }}>
+              {r.rating != null && <span style={{ color: '#f59e0b' }}>{'★'.repeat(Math.round(r.rating))} </span>}
+              <span style={{ fontStyle: 'italic' }}>"{r.text}"</span>
+              {r.reviewer && <span style={{ color: '#94a3b8' }}> — {r.reviewer}</span>}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -548,6 +604,11 @@ function ActionsHeadline({ actions }: { actions: GbpActionsSummary }) {
 
 function MetricTile({ metric, series }: { metric: GbpMetricGrowth; series: GbpSeriesPoint[] }) {
   const daily = useMemo(() => series.map((p) => p.values[metric.metric] ?? 0), [series, metric.metric])
+  const busiest = useMemo(() => {
+    let bi = -1, bv = -1
+    daily.forEach((v, i) => { if (v > bv) { bv = v; bi = i } })
+    return bi >= 0 && bv > 0 ? { date: series[bi]?.date, value: bv } : null
+  }, [daily, series])
   const pct = metric.pct
   const dir = pct == null ? 'new' : pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat'
   const badge = { up: '#15803d', down: '#b91c1c', flat: '#64748b', new: '#6366f1' }[dir]
@@ -572,6 +633,11 @@ function MetricTile({ metric, series }: { metric: GbpMetricGrowth; series: GbpSe
       <div style={{ marginTop: 8 }}>
         <MiniSpark values={daily} color={dir === 'down' ? '#f87171' : '#6366f1'} />
       </div>
+      {busiest && (
+        <div style={{ fontSize: 10.5, color: '#94a3b8', marginTop: 5 }}>
+          Busiest: {new Date(busiest.date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ({busiest.value.toLocaleString()})
+        </div>
+      )}
     </div>
   )
 }

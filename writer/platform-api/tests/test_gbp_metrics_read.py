@@ -182,3 +182,32 @@ def test_build_insights_sentences_and_empty():
     lines = read.build_insights(cards, read.build_breakdown(rows, _END, _W), read.build_actions_summary(rows, _END, _W))
     assert lines and any("profile was seen" in ln for ln in lines)
     assert read.build_insights([], {"surface": [], "device": []}, {"current": 0, "previous": 0}) == []
+
+
+# ----------------------------------------------------------------------------
+# reviews / csv export
+# ----------------------------------------------------------------------------
+def test_build_reviews():
+    gbp = {
+        "gbp_rating": "4.8", "gbp_review_count": "77",
+        "reviews": [{"reviewer": "Jane", "rating": 5, "text": "Great!", "date": "2026-08-01"}, "Loved it"],
+    }
+    r = read.build_reviews(gbp)
+    assert r["rating"] == 4.8 and r["review_count"] == 77
+    assert r["items"][0] == {"reviewer": "Jane", "rating": 5, "text": "Great!", "date": "2026-08-01"}
+    assert r["items"][1]["text"] == "Loved it"
+
+
+def test_build_reviews_empty():
+    assert read.build_reviews(None) == {"rating": None, "review_count": 0, "items": []}
+    r = read.build_reviews({"gbp_rating": None, "gbp_review_count": None})
+    assert r["rating"] is None and r["review_count"] == 0 and r["items"] == []
+
+
+def test_csv_rows():
+    series = [{"date": "2026-08-06", "values": {
+        "profile_views": 100, "CALL_CLICKS": 3, "WEBSITE_CLICKS": 5,
+        "BUSINESS_DIRECTION_REQUESTS": 2, "BUSINESS_CONVERSATIONS": 0}}]
+    rows = read.csv_rows(series)
+    assert rows[0] == ["Date", "Profile views", "Calls", "Website clicks", "Direction requests", "Messages"]
+    assert rows[1] == ["2026-08-06", 100, 3, 5, 2, 0]

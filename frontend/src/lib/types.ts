@@ -1955,6 +1955,12 @@ export interface GbpActionsSummary {
   engagement_previous: number | null
 }
 
+export interface GbpReviewsSummary {
+  rating: number | null
+  review_count: number
+  items: GbpReview[]
+}
+
 export interface GbpSeriesPoint {
   date: string
   values: Record<string, number>
@@ -1974,6 +1980,7 @@ export interface GbpDashboard {
   breakdown: GbpBreakdown
   actions: GbpActionsSummary | null
   insights: string[]
+  reviews: GbpReviewsSummary
   series: GbpSeriesPoint[]
   compare_series: GbpSeriesPoint[]
 }

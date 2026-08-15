@@ -147,6 +147,21 @@ class GbpActionsSummary(BaseModel):
     engagement_previous: Optional[float] = None
 
 
+class GbpReviewItem(BaseModel):
+    reviewer: str = ""
+    rating: Optional[float] = None
+    text: str = ""
+    date: str = ""
+
+
+class GbpReviews(BaseModel):
+    """Profile-health review summary from the client's captured GBP."""
+
+    rating: Optional[float] = None
+    review_count: int = 0
+    items: list[GbpReviewItem] = []
+
+
 class GbpSeriesPoint(BaseModel):
     """A single day of the dashboard time series; ``values`` carries every
     dashboard metric's value for that day (zero-filled)."""
@@ -176,5 +191,6 @@ class GbpDashboardResponse(BaseModel):
     breakdown: GbpBreakdown = GbpBreakdown()
     actions: Optional[GbpActionsSummary] = None
     insights: list[str] = []
+    reviews: GbpReviews = GbpReviews()
     series: list[GbpSeriesPoint] = []
     compare_series: list[GbpSeriesPoint] = []  # prior-window daily, for the overlay

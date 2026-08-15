@@ -11,6 +11,8 @@ The whole surface no-ops with clear errors while ``gbp_metrics_enabled`` is off.
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
@@ -31,6 +33,7 @@ from models.gbp_metrics import (
     GbpLocationCreateRequest,
     GbpMetricGrowth,
     GbpPerformanceDiagnostic,
+    GbpReviews,
     GbpSeriesPoint,
     GbpServiceAccountInfo,
     GbpSyncRun,
@@ -307,6 +310,16 @@ async def gbp_dashboard(
 
     last_synced_at = _latest_timestamp([row.get("last_synced_at") for row in locs])
 
+    reviews = {"rating": None, "review_count": 0, "items": []}
+    try:  # profile-health review summary — best-effort, never blocks the dashboard
+        crow = (
+            supabase.table("clients").select("gbp").eq("id", str(client_id)).limit(1).execute()
+        ).data or []
+        if crow:
+            reviews = gbp_metrics_read.build_reviews(crow[0].get("gbp"))
+    except Exception as exc:
+        logger.info("gbp_dashboard_reviews_failed", extra={"client_id": str(client_id), "error": str(exc)})
+
     return GbpDashboardResponse(
         enabled=settings.gbp_metrics_enabled,
         connected=bool(ok_ids),
@@ -321,8 +334,57 @@ async def gbp_dashboard(
         breakdown=GbpBreakdown(**breakdown),
         actions=GbpActionsSummary(**actions),
         insights=insights,
+        reviews=GbpReviews(**reviews),
         series=[GbpSeriesPoint(**p) for p in series],
         compare_series=[GbpSeriesPoint(**p) for p in compare_series],
+    )
+
+
+@router.get("/clients/{client_id}/gbp-metrics/export")
+async def gbp_metrics_export(
+    client_id: UUID,
+    window: int = 30,
+    start: str | None = None,
+    end: str | None = None,
+    auth: dict = Depends(require_auth),
+) -> Response:
+    """Download the client's GBP daily metrics as CSV over the same period the
+    dashboard shows (preset ``window`` or explicit ``start``/``end``)."""
+    custom = bool(start or end)
+    if custom and not (start and end):
+        raise HTTPException(status_code=422, detail="start and end are both required")
+    if custom:
+        cs, ce = _parse_custom_range(start, end)  # type: ignore[arg-type]
+        cur_end, window_days = ce, (ce - cs).days + 1
+    else:
+        window_days = max(7, min(int(window), 365))
+        cur_end = None  # resolved below
+
+    supabase = get_supabase()
+    try:
+        ok = (
+            supabase.table("gbp_locations").select("id")
+            .eq("client_id", str(client_id)).eq("access_status", "ok").execute()
+        ).data or []
+        ok_ids = [r["id"] for r in ok]
+        if cur_end is None:
+            cur_end = (_latest_metric_date(supabase, ok_ids) if ok_ids else None) or date.today()
+        cur_start = cur_end - timedelta(days=window_days - 1)
+        rows = _fetch_metric_rows(supabase, ok_ids, cur_start, cur_end) if ok_ids else []
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("gbp_export_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error")
+
+    series = gbp_metrics_read.build_series(rows, cur_start, cur_end)
+    buf = io.StringIO()
+    csv.writer(buf).writerows(gbp_metrics_read.csv_rows(series))
+    filename = f"gbp-metrics-{cur_start.isoformat()}-to-{cur_end.isoformat()}.csv"
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
