@@ -24,6 +24,15 @@ export function GbpMetrics() {
   const navigate = useNavigate()
   // Not `window` — that shadows the global and would break any window.* call.
   const [windowDays, setWindowDays] = useState(90)
+  const [mode, setMode] = useState<'preset' | 'custom'>('preset')
+  const [customStart, setCustomStart] = useState('')
+  const [customEnd, setCustomEnd] = useState('')
+
+  const today = new Date().toISOString().slice(0, 10)
+  const customReady = mode === 'custom' && Boolean(customStart && customEnd)
+  // Preset window OR an explicit start/end range; the backend compares either
+  // against the equal-length window immediately before it.
+  const qs = customReady ? `start=${customStart}&end=${customEnd}` : `window=${windowDays}`
 
   const { data: client } = useQuery<Client>({
     queryKey: ['client', clientId],
@@ -32,10 +41,26 @@ export function GbpMetrics() {
   })
 
   const { data, isLoading, error } = useQuery<GbpDashboard>({
-    queryKey: ['gbp-dashboard', clientId, windowDays],
-    queryFn: () => api.get<GbpDashboard>(`/clients/${clientId}/gbp-metrics/dashboard?window=${windowDays}`),
-    enabled: Boolean(clientId),
+    queryKey: ['gbp-dashboard', clientId, qs],
+    queryFn: () => api.get<GbpDashboard>(`/clients/${clientId}/gbp-metrics/dashboard?${qs}`),
+    enabled: Boolean(clientId) && (mode === 'preset' || customReady),
   })
+
+  function onPeriodChange(value: string) {
+    if (value === 'custom') {
+      setMode('custom')
+      // Seed a 30-day range so the view loads immediately; the user adjusts from there.
+      if (!customStart || !customEnd) {
+        const startD = new Date()
+        startD.setDate(startD.getDate() - 29)
+        setCustomStart(startD.toISOString().slice(0, 10))
+        setCustomEnd(today)
+      }
+    } else {
+      setMode('preset')
+      setWindowDays(Number(value))
+    }
+  }
 
   return (
     <div style={{ padding: 32, maxWidth: 1080 }}>
@@ -43,7 +68,7 @@ export function GbpMetrics() {
         <ArrowLeft size={14} /> Back to Workspace
       </button>
 
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, marginBottom: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, marginBottom: 18, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: 0 }}>GBP Insights</h1>
           <p style={{ fontSize: 13, color: '#94a3b8', margin: '4px 0 0', maxWidth: 640 }}>
@@ -51,9 +76,29 @@ export function GbpMetrics() {
             website clicks, direction requests &amp; messages over time, from the Business Profile Performance API.
           </p>
         </div>
-        <select style={select} value={windowDays} onChange={(e) => setWindowDays(Number(e.target.value))}>
-          {WINDOWS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
-        </select>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <select
+            style={select}
+            value={mode === 'custom' ? 'custom' : String(windowDays)}
+            onChange={(e) => onPeriodChange(e.target.value)}
+          >
+            {WINDOWS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+            <option value="custom">Custom range…</option>
+          </select>
+          {mode === 'custom' && (
+            <>
+              <input
+                type="date" style={select} max={customEnd || today}
+                value={customStart} onChange={(e) => setCustomStart(e.target.value)}
+              />
+              <span style={{ color: '#94a3b8', fontSize: 13 }}>→</span>
+              <input
+                type="date" style={select} max={today} min={customStart || undefined}
+                value={customEnd} onChange={(e) => setCustomEnd(e.target.value)}
+              />
+            </>
+          )}
+        </div>
       </div>
 
       {error ? (
@@ -252,9 +297,9 @@ function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard })
             ))}
           </div>
           <div style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 14 }}>
-            Totals over the last {data.window_days} days vs. the prior {data.window_days} days
-            ({data.date_start} – {data.date_end}). GBP reports performance data with a 3–5 day lag, so the
-            most recent days may still be filling in.
+            {data.date_start} – {data.date_end} ({data.window_days} days) vs. the prior period
+            ({data.compare_start} – {data.compare_end}). GBP reports performance data with a 3–5 day lag,
+            so the most recent days may still be filling in.
           </div>
         </>
       )}

@@ -165,17 +165,54 @@ def _fetch_metric_rows(supabase, loc_ids: list[str], start: date, end: date) -> 
     return rows
 
 
+_MAX_CUSTOM_RANGE_DAYS = 366
+
+
+def _parse_custom_range(start: str, end: str) -> tuple[date, date]:
+    """Validate a custom [start, end] date range → (start, end). Raises 422."""
+    try:
+        cur_start = date.fromisoformat(start)
+        cur_end = date.fromisoformat(end)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="invalid_date: use YYYY-MM-DD")
+    if cur_end < cur_start:
+        raise HTTPException(status_code=422, detail="invalid_range: end before start")
+    if (cur_end - cur_start).days + 1 > _MAX_CUSTOM_RANGE_DAYS:
+        raise HTTPException(status_code=422, detail="range_too_large: max 366 days")
+    return cur_start, cur_end
+
+
 @router.get("/clients/{client_id}/gbp-metrics/dashboard", response_model=GbpDashboardResponse)
 async def gbp_dashboard(
-    client_id: UUID, window: int = 30, auth: dict = Depends(require_auth)
+    client_id: UUID,
+    window: int = 30,
+    start: str | None = None,
+    end: str | None = None,
+    auth: dict = Depends(require_auth),
 ) -> GbpDashboardResponse:
     """The GBP Insights read: connection state + registered locations + growth
     KPI tiles + a daily series, aggregated across the client's verified (``ok``)
     locations. Mirrors the client PDF report's GBP-metrics gathering.
 
-    ``window`` is the trailing period (days) each metric is summed over vs. the
-    prior equal window; clamped to [7, 365]."""
-    window = max(7, min(int(window), 365))
+    Two ways to pick the period, both compared against the equal-length window
+    immediately before it:
+      * ``window`` — a trailing preset (days), clamped [7, 365]; the period ends
+        at the last day with data (so GBP's reporting lag doesn't skew growth).
+      * ``start`` + ``end`` (YYYY-MM-DD, both required) — an explicit range,
+        honored as given; max 366 days.
+    """
+    custom = bool(start or end)
+    if custom and not (start and end):
+        raise HTTPException(status_code=422, detail="start and end are both required")
+
+    if custom:
+        cs, ce = _parse_custom_range(start, end)  # type: ignore[arg-type]
+        cur_end_fixed: Optional[date] = ce
+        window_days = (ce - cs).days + 1
+    else:
+        window_days = max(7, min(int(window), 365))
+        cur_end_fixed = None
+
     supabase = get_supabase()
     try:
         locs = (
@@ -193,26 +230,30 @@ async def gbp_dashboard(
     ok_ids = [row["id"] for row in locs if row.get("access_status") == "ok"]
 
     today = date.today()
-    anchor = today
     rows: list[dict] = []
-    if ok_ids:
-        # Anchor the two comparison windows at the last day that actually has
-        # data, not today: anchoring at today would compare a current window
-        # still missing its most recent (not-yet-arrived) days against a
-        # complete prior window — making every metric read as a spurious
-        # decline. A max(date) pre-query makes this exact for any staleness.
-        try:
-            anchor = _latest_metric_date(supabase, ok_ids) or today
-            fetch_start = anchor - timedelta(days=window * 2)
-            rows = _fetch_metric_rows(supabase, ok_ids, fetch_start, anchor)
-        except Exception as exc:
-            logger.error("gbp_dashboard_metrics_failed", extra={"client_id": str(client_id), "error": str(exc)})
-            raise HTTPException(status_code=500, detail="internal_error")
+    try:
+        # Custom range: honor the given end. Preset: anchor at the last day that
+        # actually has data (a max(date) pre-query) — anchoring at today would
+        # compare a current window still missing its not-yet-arrived days
+        # against a complete prior window, reading as a spurious decline.
+        if cur_end_fixed is not None:
+            cur_end = cur_end_fixed
+        elif ok_ids:
+            cur_end = _latest_metric_date(supabase, ok_ids) or today
+        else:
+            cur_end = today
+        cur_start = cur_end - timedelta(days=window_days - 1)
+        prev_end = cur_start - timedelta(days=1)
+        prev_start = prev_end - timedelta(days=window_days - 1)
+        if ok_ids:
+            rows = _fetch_metric_rows(supabase, ok_ids, prev_start, cur_end)
+    except Exception as exc:
+        logger.error("gbp_dashboard_metrics_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error")
 
-    win_start = anchor - timedelta(days=window - 1)
-    cards = gbp_metrics_read.build_growth_cards(rows, anchor, window)
-    window_rows = [r for r in rows if (r.get("date") or "") >= win_start.isoformat()]
-    series = gbp_metrics_read.build_series(window_rows, win_start, anchor)
+    cards = gbp_metrics_read.build_growth_cards(rows, cur_end, window_days)
+    window_rows = [r for r in rows if (r.get("date") or "") >= cur_start.isoformat()]
+    series = gbp_metrics_read.build_series(window_rows, cur_start, cur_end)
 
     last_synced_at = _latest_timestamp([row.get("last_synced_at") for row in locs])
 
@@ -220,9 +261,11 @@ async def gbp_dashboard(
         enabled=settings.gbp_metrics_enabled,
         connected=bool(ok_ids),
         locations=location_models,
-        window_days=window,
-        date_start=win_start.isoformat(),
-        date_end=anchor.isoformat(),
+        window_days=window_days,
+        date_start=cur_start.isoformat(),
+        date_end=cur_end.isoformat(),
+        compare_start=prev_start.isoformat(),
+        compare_end=prev_end.isoformat(),
         last_synced_at=last_synced_at,
         metrics=[GbpMetricGrowth(**c) for c in cards],
         series=[GbpSeriesPoint(**p) for p in series],

@@ -19,8 +19,11 @@ Google client libraries are imported lazily so this module (and its unit tests)
 import cleanly where the libraries aren't installed. The pure parse/classify
 helpers have no Google dependency and are independently unit-tested.
 
-⚠️ This path is dormant until Google approves Business Profile API quota for the
-GCP project (0 QPM by default) — nothing here returns data before that.
+Live in production since 2026-08-15. Quota is granted and the daily ingest
+returns data. Credentials are **OAuth-preferred** (``_auth_credentials`` →
+``gbp_auth.credentials()``): GBP is OAuth-first, so the agency service account —
+usually not a listing Manager — 404s ('location not recognized') on listings
+that only the agency OAuth account manages; the SA is the fallback only.
 
 See: docs/modules/client-reporting-prd-v1_0.md (Phase 2 — GBP Performance).
 """

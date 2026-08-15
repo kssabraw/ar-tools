@@ -141,6 +141,8 @@ class GbpDashboardResponse(BaseModel):
     window_days: int
     date_start: str
     date_end: str
+    compare_start: str  # start of the prior equal-length comparison window
+    compare_end: str  # end of the prior equal-length comparison window
     last_synced_at: Optional[str] = None
     metrics: list[GbpMetricGrowth] = []
     series: list[GbpSeriesPoint] = []
