@@ -1944,6 +1944,8 @@ export interface GbpDashboard {
   window_days: number
   date_start: string
   date_end: string
+  compare_start: string
+  compare_end: string
   last_synced_at: string | null
   metrics: GbpMetricGrowth[]
   series: GbpSeriesPoint[]
