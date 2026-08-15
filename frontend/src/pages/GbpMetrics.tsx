@@ -9,7 +9,7 @@ import type {
 } from '../lib/types'
 
 const WINDOWS: [number, string][] = [
-  [28, 'Last 28 days'],
+  [30, 'Last 30 days'],
   [90, 'Last 90 days'],
   [180, 'Last 6 months'],
   [365, 'Last 12 months'],
@@ -24,7 +24,7 @@ export function GbpMetrics() {
   const { id: clientId } = useParams<{ id: string }>()
   const navigate = useNavigate()
   // Not `window` — that shadows the global and would break any window.* call.
-  const [windowDays, setWindowDays] = useState(90)
+  const [windowDays, setWindowDays] = useState(30)
   const [mode, setMode] = useState<'preset' | 'custom'>('preset')
   const [customStart, setCustomStart] = useState('')
   const [customEnd, setCustomEnd] = useState('')
