@@ -765,6 +765,9 @@ async def _process_job(job: dict) -> None:
     elif job_type == "gbp_search_keywords":
         from services import gbp_search_keywords
         await gbp_search_keywords.run_gbp_search_keywords_job(job)
+    elif job_type == "gbp_reviews":
+        from services import gbp_reviews_ingest
+        await gbp_reviews_ingest.run_gbp_reviews_job(job)
     elif job_type == "gbp_post_publish":
         await gbp_posts_service.run_publish_job(job)
     elif job_type == "gbp_post_generate":
