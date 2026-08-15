@@ -174,18 +174,43 @@ def read_keywords(client_id: str, month: Optional[str] = None, limit: int = 25) 
     if not loc_ids:
         return {"month": None, "months": [], "keywords": [], "total": 0}
 
-    months_rows = (
-        supabase.table("gbp_search_keyword_monthly").select("month")
-        .in_("location_row_id", loc_ids).order("month", desc=True).execute()
-    ).data or []
-    available = sorted({r["month"] for r in months_rows}, reverse=True)
+    # Distinct months present. Paginated on the full PK (month, location_row_id,
+    # keyword) past PostgREST's ~1000-row default cap — an unpaged read would drop
+    # the oldest rows, silently losing older months from the picker once a few
+    # months of history exist (a 12-month backfill across N locations far exceeds
+    # the cap). A total order keeps offset pages from splitting/dropping rows.
+    available_set: set[str] = set()
+    page, offset = 1000, 0
+    while True:
+        batch = (
+            supabase.table("gbp_search_keyword_monthly").select("month")
+            .in_("location_row_id", loc_ids)
+            .order("month", desc=True).order("location_row_id").order("keyword")
+            .range(offset, offset + page - 1).execute()
+        ).data or []
+        available_set.update(r["month"] for r in batch)
+        if len(batch) < page:
+            break
+        offset += page
+    available = sorted(available_set, reverse=True)
     if not available:
         return {"month": None, "months": [], "keywords": [], "total": 0}
     target = month if (month and month in available) else available[0]
 
-    rows = (
-        supabase.table("gbp_search_keyword_monthly").select("keyword, value, is_threshold")
-        .in_("location_row_id", loc_ids).eq("month", target).execute()
-    ).data or []
+    # Paginated too (a multi-location client can exceed the ~1000-row cap in a
+    # single month), so the cross-location aggregate can't silently undercount.
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        batch = (
+            supabase.table("gbp_search_keyword_monthly").select("keyword, value, is_threshold, location_row_id")
+            .in_("location_row_id", loc_ids).eq("month", target)
+            .order("location_row_id").order("keyword")
+            .range(offset, offset + page - 1).execute()
+        ).data or []
+        rows.extend(batch)
+        if len(batch) < page:
+            break
+        offset += page
     keywords, total = aggregate_keywords(rows, limit)
     return {"month": target, "months": available, "keywords": keywords, "total": total}

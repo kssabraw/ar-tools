@@ -46,7 +46,7 @@ alter table public.async_jobs add constraint async_jobs_job_type_check check (
     'deliverables_sheet_provision', 'deliverables_log', 'deliverable_notes_scan',
     'service_page_score', 'service_page_reoptimize', 'keyword_topic_research',
     'keyword_research_report', 'backlink_lookup', 'fanout_report', 'blog_score',
-    'blog_reoptimize', 'fanout_expand', 'gbp_onboard',
+    'blog_reoptimize', 'fanout_expand', 'gbp_onboard', 'ga4_ingest',
     'gbp_search_keywords'
   ]::text[])
 );
