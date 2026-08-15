@@ -14,11 +14,15 @@ are reused UNCHANGED — each silo is one `run_expansion([silo], include_seed_le
 once. Nothing in the non-resumable (flag-off) path is touched, so it stays
 byte-identical. The whole thing is gated behind `fanout_resumable_expand_enabled`.
 
-Known, deliberate difference from the non-resumable pool: autocomplete runs
-per-silo on that silo's ideas+PAA rather than once on the fully-merged pool
-(incl. the fanned seed-level keywords), so autocomplete coverage differs
-slightly. The gate/cluster stage is identical. Validate on a live flagged run
-before trusting it — the pipeline can't be exercised in the sandbox.
+Known, deliberate differences from the non-resumable pool: (1) autocomplete
+runs per-silo on that silo's ideas+PAA rather than once on the fully-merged
+pool (incl. the fanned seed-level keywords), so autocomplete coverage differs
+slightly; (2) the expansion / mining time budgets are split across the silos
+that consume them (sequential per-silo, vs the shared-budget concurrent path)
+so total wall-clock stays comparable — a slow silo gets a smaller slice than
+it would in the concurrent run. The gate/cluster stage is identical. Validate
+on a live flagged run before trusting it — the pipeline can't be exercised in
+the sandbox.
 
 The heavy pipeline imports are deferred into the compute functions so the pure
 checkpoint helpers below (and their tests) load without the DataForSEO/pipeline
@@ -29,6 +33,14 @@ import logging
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+# Floor for a single silo's divided time budget (see run_resumable_expansion):
+# the budgets are split across silos to bound total wall-clock, but no silo
+# should get so little time that its base expansion / mining can't complete a
+# useful pass. At this floor, worst-case total is silo_count x floor, which
+# stays well under the fanout_expand stale-job reaper window (45 min) for any
+# realistic silo count.
+_MIN_SILO_BUDGET_S = 30.0
 
 
 # ---------------------------------------------------------------------------
@@ -152,11 +164,19 @@ def _compute_seed_pool(seed: str, dfs, params: ExpandParams) -> tuple[dict[str, 
 
 
 def _compute_topic_pool(
-    seed: str, topic: ResumableTopic, dfs, params: ExpandParams, autocomplete_cap: int
+    seed: str,
+    topic: ResumableTopic,
+    dfs,
+    params: ExpandParams,
+    autocomplete_cap: int,
+    expansion_time_budget_s: float,
+    competitor_time_budget_s: float,
 ) -> tuple[dict[str, list[str]], list[str]]:
     """One silo's own pool: ideas + PAA + per-silo autocomplete (via the
     production run_expansion, seed-level suppressed) plus, if gated, its
-    competitor keywords."""
+    competitor keywords. The two time budgets are the PER-SILO shares computed
+    by run_resumable_expansion (not the full run budgets), so the sequential
+    per-silo passes together stay within the shared-budget path's total."""
     from fanout.pipeline.expansion import run_expansion, ExpansionTopic, build_anchor
     from fanout.pipeline.competitor import run_competitor_mining, MineTopic
 
@@ -172,7 +192,7 @@ def _compute_topic_pool(
         paa_tier2_cap=params.paa_tier2_cap,
         autocomplete_max=autocomplete_cap,
         max_workers=params.expansion_max_workers,
-        time_budget_s=params.expansion_time_budget_s,
+        time_budget_s=expansion_time_budget_s,
         include_seed_level=False,
     )
     pool: dict[str, set[str]] = {
@@ -187,7 +207,7 @@ def _compute_topic_pool(
             ranked_keywords_limit=params.ranked_keywords_limit,
             max_position=params.competitor_max_position,
             max_workers=params.competitor_max_workers,
-            time_budget_s=params.competitor_time_budget_s,
+            time_budget_s=competitor_time_budget_s,
         )
         for kw, sources in cm.per_topic.get(topic.id, {}).items():
             pool.setdefault(kw, set()).update(sources)
@@ -222,17 +242,31 @@ def run_resumable_expansion(
         checkpoint["degraded_notes"].extend(notes)
         save(checkpoint)
 
-    # Split the global autocomplete budget across silos so the total is bounded
-    # to roughly the non-resumable run's cap (which interleaved round-robin).
+    # The non-resumable path runs all silos concurrently under ONE shared time
+    # budget (expansion + a separate one for gated mining). Running them
+    # sequentially per silo with the FULL budget each would multiply worst-case
+    # wall-clock by the silo count and risk the fanout_expand stale-job reaper
+    # (45 min) requeuing a slow run mid-flight into a concurrent double-run.
+    # Split each budget across the silos that consume it (all silos for
+    # expansion; only gated silos for mining — the seed mine keeps its own full
+    # budget in _compute_seed_pool, matching the shared-budget path's separate
+    # seed-mine call), floored so a single silo still gets a useful pass. The
+    # autocomplete cap is likewise split so total autocomplete stays bounded.
     n = max(1, len(topics))
+    n_gated = max(1, sum(1 for t in topics if t.gated))
     autocomplete_cap = max(0, params.autocomplete_max // n)
+    expansion_budget_s = max(_MIN_SILO_BUDGET_S, params.expansion_time_budget_s / n)
+    mining_budget_s = max(_MIN_SILO_BUDGET_S, params.competitor_time_budget_s / n_gated)
 
     for topic in topics:
         if topic.id in checkpoint["topics"]:
             continue
         if raise_if_cancelled:
             raise_if_cancelled()
-        pool, notes = _compute_topic_pool(seed, topic, dfs, params, autocomplete_cap)
+        pool, notes = _compute_topic_pool(
+            seed, topic, dfs, params, autocomplete_cap,
+            expansion_budget_s, mining_budget_s,
+        )
         checkpoint["topics"][topic.id] = pool
         checkpoint["degraded_notes"].extend(notes)
         save(checkpoint)

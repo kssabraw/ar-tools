@@ -61,13 +61,15 @@ def test_expansion_complete():
 
 # ---- orchestration (compute units faked) -----------------------------------
 
-def _fake_units(monkeypatch, seed_calls, topic_calls):
+def _fake_units(monkeypatch, seed_calls, topic_calls, budget_calls=None):
     def fake_seed(seed, dfs, params):
         seed_calls.append(seed)
         return {"seedkw": ["keyword_suggestions"]}, ["seed note"]
 
-    def fake_topic(seed, topic, dfs, params, cap):
+    def fake_topic(seed, topic, dfs, params, cap, exp_budget, mine_budget):
         topic_calls.append(topic.id)
+        if budget_calls is not None:
+            budget_calls.append((topic.id, cap, exp_budget, mine_budget))
         return {f"{topic.id}_kw": ["paa_t1"]}, []
 
     monkeypatch.setattr(resumable, "_compute_seed_pool", fake_seed)
@@ -116,6 +118,48 @@ def test_resume_skips_finished_seed_and_silo(monkeypatch):
     assert len(saves) == 1           # one save (t2)
     assert per_topic["t1"] == {"t1_kw": ["paa_t1"], "seedkw": ["keyword_suggestions"]}
     assert per_topic["t2"] == {"t2_kw": ["paa_t1"], "seedkw": ["keyword_suggestions"]}
+
+
+def test_time_budgets_split_across_silos(monkeypatch):
+    """Each silo gets a divided time-budget share (not the full run budget), so
+    the sequential per-silo passes together stay within the shared-budget path's
+    total and can't multiply wall-clock into the reaper window. autocomplete_max
+    1500 / expansion 240s over 4 silos; mining 240s over the 2 gated silos."""
+    seed_calls, topic_calls, budgets = [], [], []
+    _fake_units(monkeypatch, seed_calls, topic_calls, budget_calls=budgets)
+    topics = [
+        ResumableTopic("t1", "One", True),
+        ResumableTopic("t2", "Two", False),
+        ResumableTopic("t3", "Three", True),
+        ResumableTopic("t4", "Four", False),
+    ]
+    run_resumable_expansion(
+        seed="acme", topics=topics, dfs=None, params=_params(),
+        checkpoint={}, save=lambda cp: None,
+    )
+    caps = {tid: (cap, exp, mine) for tid, cap, exp, mine in budgets}
+    # autocomplete 1500 // 4 = 375; expansion 240 / 4 = 60; mining 240 / 2 gated = 120
+    for tid in ("t1", "t2", "t3", "t4"):
+        cap, exp, mine = caps[tid]
+        assert cap == 375
+        assert exp == 60.0
+        assert mine == 120.0
+
+
+def test_time_budget_floor_applies_for_many_silos(monkeypatch):
+    """With enough silos the divided share would fall below the floor; the floor
+    (30s) wins so no silo is starved. 10 silos: expansion 240/10 = 24 -> 30."""
+    seed_calls, topic_calls, budgets = [], [], []
+    _fake_units(monkeypatch, seed_calls, topic_calls, budget_calls=budgets)
+    topics = [ResumableTopic(f"t{i}", f"S{i}", False) for i in range(10)]
+    run_resumable_expansion(
+        seed="acme", topics=topics, dfs=None, params=_params(),
+        checkpoint={}, save=lambda cp: None,
+    )
+    # no gated silos -> mining divisor floors at 1, but 240/1=240 is not the
+    # point here; expansion 240/10=24 is below the 30s floor -> 30.
+    exp_budgets = {exp for _tid, _cap, exp, _mine in budgets}
+    assert exp_budgets == {resumable._MIN_SILO_BUDGET_S}
 
 
 def test_cancellation_between_units_aborts(monkeypatch):

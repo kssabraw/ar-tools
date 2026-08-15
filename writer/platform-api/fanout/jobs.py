@@ -489,7 +489,7 @@ def _expand_core_resumable(session_id: str) -> None:
         competitor_time_budget_s=s.competitor_time_budget_s,
     )
     checkpoint = store.get_expansion_checkpoint(session_id) or {}
-    per_topic_lists, _degraded = run_resumable_expansion(
+    per_topic_lists, degraded_notes = run_resumable_expansion(
         seed=seed,
         topics=[
             ResumableTopic(id=t.id, name=t.name, gated=t.gated) for t in pipeline_topics
@@ -535,7 +535,8 @@ def _expand_core_resumable(session_id: str) -> None:
     store.clear_expansion_checkpoint(session_id)
     logger.info(
         "step_complete",
-        extra={"event": "step_complete", "step": "expand_resumable", **result.counts()},
+        extra={"event": "step_complete", "step": "expand_resumable",
+               "degraded": bool(degraded_notes), **result.counts()},
     )
 
 
