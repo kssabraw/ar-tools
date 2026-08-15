@@ -91,6 +91,10 @@ SINGLE_JOB_REGISTRY: dict[str, dict[str, Any]] = {
     # The Fanout keyword report is session-scoped; it links to the Fanout app
     # (not a client page) and only pings when the session is client-linked.
     "fanout_report":          {"label": "Keyword report",          "path": "fanout",                         "notify": True},
+    # Fanout blog reoptimize is a multi-minute walk-away job (spawns + runs a
+    # full suite pipeline) — ping the initiator's bell when it settles. The
+    # fast score job (fanout_blog_score) is inline and deliberately unregistered.
+    "fanout_blog_reoptimize": {"label": "Article reoptimization",   "path": "fanout",                         "notify": True},
 }
 
 # Every job_type the Activity indicator reads: content page jobs (batch-tracked)
