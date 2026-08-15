@@ -117,12 +117,15 @@ def list_reviews(account_id: str, location_id: str, client: Optional[httpx.Clien
     pages = 0
     owns = client is None
     client = client or httpx.Client(timeout=_TIMEOUT)
+    # Mint the bearer once per call (each _headers() does a token-endpoint refresh);
+    # an OAuth token easily outlives a multi-page fetch, so reuse it across pages.
+    headers = _headers()
     try:
         while True:
             params: dict = {"pageSize": _PAGE_SIZE}
             if token:
                 params["pageToken"] = token
-            resp = client.get(f"{_V4_BASE}/{parent}/reviews", headers=_headers(), params=params)
+            resp = client.get(f"{_V4_BASE}/{parent}/reviews", headers=headers, params=params)
             _raise_for(resp)
             data = resp.json()
             reviews.extend(parse_reviews(data))
