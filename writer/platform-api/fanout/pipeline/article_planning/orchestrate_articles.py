@@ -338,6 +338,24 @@ def _merge_chunk_plans(topic_id: str, chunk_plans: list[TopicPlan]) -> TopicPlan
     return merged
 
 
+def orchestrator_noop(plan: TopicPlan, *, had_groupings: bool) -> bool:
+    """True when a non-degraded silo yielded ZERO articles AND zero drops from real
+    statistical groupings — i.e. the orchestrator returned a valid-but-empty plan.
+
+    This is distinct from a degraded silo (a transport/shape failure, which already
+    falls back to passthrough). A *successful* call that plans nothing was not being
+    caught: orphan promotion then turned the silo's entire active pool into singleton
+    articles. A BPC-157 run hit exactly this — both silos returned article_count=0,
+    dropped_count=0, degraded=false, and orphan promotion produced 1,000 one-keyword
+    articles per silo (2,000 total). Treating it as an orchestrator failure lets the
+    caller recover the statistical groupings as passthrough articles instead.
+
+    A silo that produced even one article (the intended orphan-promotion case, e.g.
+    retatrutide: real articles + a long tail of promoted orphans) is left untouched,
+    as is a silo that deliberately dropped keywords."""
+    return had_groupings and not plan.degraded and not plan.articles and not plan.dropped
+
+
 def direct_plan_topic(topic: TopicInput) -> TopicPlan:
     """Direct mode (no LLM): every grouping becomes an article — representative as
     primary, the rest as supporting keywords. Singletons are included as
@@ -470,8 +488,19 @@ def run_article_planning(
                 TopicPlan(topic_id=topic.id,
                           log={"degraded": False, "article_count": 0, "note": "no groupings"})
             )
-        else:
-            result.per_topic.append(_merge_chunk_plans(topic.id, chunks))
+            continue
+        merged = _merge_chunk_plans(topic.id, chunks)
+        # A non-degraded silo that planned nothing (0 articles, 0 drops) is an
+        # orchestrator no-op, NOT a signal to orphan-promote the whole pool into
+        # singletons. Recover its statistical groupings as passthrough articles —
+        # the same fallback a transport failure uses — so the silo either yields
+        # real multi-keyword articles or (if every silo no-ops) degrades honestly
+        # into the all_degraded error path instead of shipping thousands of
+        # one-keyword articles.
+        if orchestrator_noop(merged, had_groupings=bool(topic.groupings)):
+            merged = _passthrough_plan(topic, serp.per_keyword,
+                                       reason="orchestrator returned no articles")
+        result.per_topic.append(merged)
 
     if peer_grouping:
         group_by_peer_entity(result, seed_terms=seed_terms or [],
