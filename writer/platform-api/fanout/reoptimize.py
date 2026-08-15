@@ -63,7 +63,7 @@ def resolve_article(cluster_id: str) -> dict:
     if not suite_run_id:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="not_client_linked")
     run = (
-        _suite_sb().table("runs").select("id, client_id").eq("id", suite_run_id).limit(1).execute()
+        _suite_sb().table("runs").select("id, client_id, keyword").eq("id", suite_run_id).limit(1).execute()
     ).data or []
     client_id = (run[0].get("client_id") if run else None)
     if not client_id:
@@ -74,6 +74,10 @@ def resolve_article(cluster_id: str) -> dict:
         "client_id": client_id,
         "session_id": row.get("session_id"),
         "cluster_id": cluster_id,
+        # The mirrored run's keyword IS the cluster's primary keyword (the real
+        # SEO seed) — not the article title (an H1 sentence). Reopt seeds the new
+        # run's brief with this.
+        "keyword": run[0].get("keyword") if run else None,
     }
 
 
@@ -139,6 +143,7 @@ def _enqueue(job_type: str, resolved: dict, user_id: Optional[str]) -> str:
         "session_id": resolved["session_id"],
         "suite_run_id": resolved["suite_run_id"],
         "client_id": resolved["client_id"],  # freeze gate reads payload.client_id
+        "keyword": resolved.get("keyword"),
         "user_id": user_id,
     }
     res = (
@@ -206,12 +211,10 @@ async def run_score_job(job: dict) -> None:
     await _finish_job(job["id"], work)
 
 
-def _reopt_source(article_row: dict) -> tuple[str, str]:
-    """(keyword, source_html) to seed the reoptimize-of-existing run from a Fan-out
-    article. HTML prefers the stored ``article_html``; falls back to rendering the
-    markdown. Keyword is the article title (the on-page H1)."""
+def _reopt_source_html(article_row: dict) -> str:
+    """The article's HTML to seed the reoptimize-of-existing run. Prefers the
+    stored ``article_html``; falls back to rendering the stored markdown."""
     aj = article_row.get("article_json") or {}
-    keyword = (aj.get("title") or "").strip() or (article_row.get("keyword") or "").strip()
     html = (aj.get("article_html") or article_row.get("article_html") or "").strip()
     if not html:
         md = (aj.get("article_markdown") or article_row.get("article_markdown") or "").strip()
@@ -219,7 +222,18 @@ def _reopt_source(article_row: dict) -> tuple[str, str]:
             from services.markdown_html import markdown_to_html
 
             html = markdown_to_html(md)
-    return keyword, html
+    return html
+
+
+def _module_composite(run_id: str, module: str) -> Optional[float]:
+    """Latest complete `composite_score` for a run's module, or None."""
+    rows = (
+        _suite_sb().table("module_outputs")
+        .select("output_payload, attempt_number")
+        .eq("run_id", run_id).eq("module", module).eq("status", "complete")
+        .order("attempt_number", desc=True).limit(1).execute()
+    ).data or []
+    return ((rows[0].get("output_payload") or {}).get("composite_score")) if rows else None
 
 
 async def run_reoptimize_job(job: dict) -> None:
@@ -248,18 +262,16 @@ async def run_reoptimize_job(job: dict) -> None:
 
     async def work() -> dict:
         article_row = article_store.get_latest_article(cluster_id) or {}
-        keyword, source_html = _reopt_source(article_row)
+        source_html = _reopt_source_html(article_row)
         if not source_html:
             raise RuntimeError("article_has_no_content")
+        # The mirrored run's keyword is the real SEO seed; fall back to the H1.
+        keyword = (payload.get("keyword") or "").strip() or (
+            (article_row.get("article_json") or {}).get("title") or ""
+        ).strip()
 
-        # Before-score: the current article (the thin mirror IS scorable).
-        prev_score = None
-        try:
-            prev = await blog_page_score.score_run(old_suite_run_id, user_id=user_id)
-            prev_score = prev.get("composite_score")
-        except Exception as exc:  # noqa: BLE001 — the before-score is a nicety, not load-bearing
-            logger.info("fanout.prev_score_skipped", extra={"cluster_id": cluster_id, "error": str(exc)})
-
+        if not client_id:
+            raise RuntimeError("client_unresolved")
         client = (
             _suite_sb().table("clients").select("*").eq("id", client_id).single().execute()
         ).data or {}
@@ -275,6 +287,9 @@ async def run_reoptimize_job(job: dict) -> None:
         )
         await orchestrate_run(new_run_id)
 
+        # The "before" score is the source score the orchestrator's Stage B′ already
+        # computed for free (blog_source_score); the "after" needs an explicit score.
+        prev_score = _module_composite(new_run_id, "blog_source_score")
         new_score = None
         try:
             scored = await blog_page_score.score_run(new_run_id, user_id=user_id)
