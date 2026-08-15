@@ -12,6 +12,7 @@ services/gsc_ingest.py.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -185,7 +186,11 @@ async def run_ga4_ingest_job(job: dict) -> None:
         ).eq("id", job_id).execute()
         return
 
-    result = ingest_property(property_row_id, payload.get("start_date"), payload.get("end_date"))
+    # ingest_property does blocking GA4 HTTP + DB I/O; keep it off the worker's
+    # event loop so a slow Google call can't stall the scheduler / other jobs.
+    result = await asyncio.to_thread(
+        ingest_property, property_row_id, payload.get("start_date"), payload.get("end_date")
+    )
     supabase.table("async_jobs").update(
         {
             "status": "complete" if result.status == "ok" else "failed",

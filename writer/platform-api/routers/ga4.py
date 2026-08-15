@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from starlette.concurrency import run_in_threadpool
 
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
@@ -50,7 +51,8 @@ async def list_property_summaries(auth: dict = Depends(require_auth)) -> list[Ga
     """Every GA4 property the service account can see (Admin API), so the connect
     UI can offer a picker instead of hand-typed numeric ids."""
     try:
-        summaries = ga4_service.list_property_summaries()
+        # Blocking Google HTTP call — run off the event loop.
+        summaries = await run_in_threadpool(ga4_service.list_property_summaries)
     except ga4_service.Ga4ApiError as exc:
         verdict = ga4_service.classify_access_error(exc.status_code, exc.message)
         # API not enabled or SA added nowhere yet — actionable setup states.
@@ -130,7 +132,8 @@ async def verify_property(property_id: UUID, auth: dict = Depends(require_auth))
         raise HTTPException(status_code=404, detail="not_found")
     prop = found.data[0]
 
-    result = ga4_service.verify_property_access(prop["property_id"])
+    # Blocking Google HTTP call — run off the event loop.
+    result = await run_in_threadpool(ga4_service.verify_property_access, prop["property_id"])
 
     if result.status in ("ok", "no_access"):
         now = datetime.now(timezone.utc).isoformat()
@@ -170,7 +173,10 @@ async def trigger_ingest(
     (poll ``GET .../ingest/{job_id}``). An explicit start_date/end_date runs
     synchronously — used for a bounded, deliberate re-pull/backfill."""
     if start_date or end_date:
-        result = ga4_ingest.ingest_property(str(property_id), start_date, end_date)
+        # Blocking (GA4 HTTP + DB) — run off the event loop for the sync path.
+        result = await run_in_threadpool(
+            ga4_ingest.ingest_property, str(property_id), start_date, end_date
+        )
         return Ga4IngestResponse(
             property_id=property_id, status=result.status, rows=result.rows, error=result.error
         )

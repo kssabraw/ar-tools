@@ -46,7 +46,7 @@ def test_parse_report_rows_dimension_and_metrics():
             {"dimensionValues": [{"value": "20260815"}], "metricValues": [{"value": "80"}, {"value": "60"}]},
         ],
     }
-    rows = ga4_service.parse_report_rows(resp, "date", ["sessions", "totalUsers"])
+    rows = ga4_service.parse_report_rows(resp)
     assert rows == [
         {"date": "20260814", "sessions": 120.0, "totalUsers": 95.0},
         {"date": "20260815", "sessions": 80.0, "totalUsers": 60.0},
@@ -58,12 +58,12 @@ def test_parse_report_rows_no_dimension():
         "metricHeaders": [{"name": "sessions"}],
         "rows": [{"metricValues": [{"value": "7"}]}],
     }
-    rows = ga4_service.parse_report_rows(resp, None, ["sessions"])
+    rows = ga4_service.parse_report_rows(resp)
     assert rows == [{"sessions": 7.0}]
 
 
 def test_parse_report_rows_empty_is_empty():
-    assert ga4_service.parse_report_rows({}, "date", ["sessions"]) == []
+    assert ga4_service.parse_report_rows({}) == []
 
 
 def test_parse_report_rows_bad_metric_value_coerces_zero():
@@ -72,7 +72,7 @@ def test_parse_report_rows_bad_metric_value_coerces_zero():
         "metricHeaders": [{"name": "sessions"}],
         "rows": [{"dimensionValues": [{"value": "20260814"}], "metricValues": [{"value": None}]}],
     }
-    rows = ga4_service.parse_report_rows(resp, "date", ["sessions"])
+    rows = ga4_service.parse_report_rows(resp)
     assert rows[0]["sessions"] == 0.0
 
 
@@ -203,23 +203,89 @@ def test_fetch_daily_metrics_folds_channels(monkeypatch):
     assert row["channels"] == {"Organic Search": 80, "Direct": 40}
 
 
-def test_fetch_daily_metrics_conversions_metric_unknown_falls_back(monkeypatch):
-    calls = {"n": 0}
+def test_fetch_daily_metrics_falls_back_to_legacy_conversions_name(monkeypatch):
+    # keyEvents 400s; the legacy "conversions" metric is accepted → conversions
+    # still reported (from the legacy field).
+    seen = []
 
     def fake_run_report(property_id, start, end, metrics, dimensions=None):
-        # First call includes keyEvents and 400s; retry without it succeeds.
-        if dimensions == ["date"] and ga4_service.CONVERSION_METRIC in metrics:
-            calls["n"] += 1
-            raise ga4_service.Ga4ApiError(400, "field keyEvents is not a valid metric")
         if dimensions == ["date"]:
-            return [{"date": "20260814", "sessions": 10.0, "totalUsers": 8.0, "screenPageViews": 20.0}]
-        return []  # channel report empty
+            seen.append(tuple(metrics))
+            if ga4_service.CONVERSION_METRIC in metrics:
+                raise ga4_service.Ga4ApiError(400, "field keyEvents is not a valid metric")
+            # legacy name present → return a row carrying "conversions"
+            return [{"date": "20260814", "sessions": 10.0, "totalUsers": 8.0,
+                     "screenPageViews": 20.0, "conversions": 2.0}]
+        return []
 
     monkeypatch.setattr(ga4_service, "run_report", fake_run_report)
     out = ga4_service.fetch_daily_metrics("properties/1", "2026-08-14", "2026-08-14")
-    assert calls["n"] == 1  # the keyEvents attempt happened and was caught
+    assert ga4_service.CONVERSION_METRIC_LEGACY in seen[-1]  # legacy attempt made
+    assert out[0]["conversions"] == 2
+    assert out[0]["sessions"] == 10
+
+
+def test_fetch_daily_metrics_drops_conversions_when_both_names_rejected(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_run_report(property_id, start, end, metrics, dimensions=None):
+        if dimensions == ["date"] and (
+            ga4_service.CONVERSION_METRIC in metrics
+            or ga4_service.CONVERSION_METRIC_LEGACY in metrics
+        ):
+            calls["n"] += 1
+            raise ga4_service.Ga4ApiError(400, "unknown metric")
+        if dimensions == ["date"]:  # core-metrics-only retry
+            return [{"date": "20260814", "sessions": 10.0, "totalUsers": 8.0, "screenPageViews": 20.0}]
+        return []
+
+    monkeypatch.setattr(ga4_service, "run_report", fake_run_report)
+    out = ga4_service.fetch_daily_metrics("properties/1", "2026-08-14", "2026-08-14")
+    assert calls["n"] == 2  # both keyEvents and conversions attempted
     assert out[0]["conversions"] is None
     assert out[0]["sessions"] == 10
+
+
+def test_run_report_paginates_on_row_count(monkeypatch):
+    monkeypatch.setattr(ga4_service, "_PAGE_SIZE", 2)
+    offsets = []
+    all_rows = [
+        {"dimensionValues": [{"value": f"2026080{i}"}], "metricValues": [{"value": str(i)}]}
+        for i in range(1, 4)  # 3 rows total, page size 2 → two pages
+    ]
+
+    def fake_post(url, body):
+        offsets.append(body["offset"])
+        page = all_rows[body["offset"]: body["offset"] + body["limit"]]
+        return {
+            "dimensionHeaders": [{"name": "date"}],
+            "metricHeaders": [{"name": "sessions"}],
+            "rows": page,
+            "rowCount": len(all_rows),
+        }
+
+    monkeypatch.setattr(ga4_service, "_post", fake_post)
+    rows = ga4_service.run_report("properties/1", "2026-08-01", "2026-08-03", ["sessions"], ["date"])
+    assert len(rows) == 3
+    assert offsets == [0, 2]  # paged twice, no third empty call
+
+
+def test_run_report_single_page_no_extra_call(monkeypatch):
+    monkeypatch.setattr(ga4_service, "_PAGE_SIZE", 100)
+    calls = {"n": 0}
+
+    def fake_post(url, body):
+        calls["n"] += 1
+        return {
+            "dimensionHeaders": [{"name": "date"}],
+            "metricHeaders": [{"name": "sessions"}],
+            "rows": [{"dimensionValues": [{"value": "20260801"}], "metricValues": [{"value": "5"}]}],
+            "rowCount": 1,
+        }
+
+    monkeypatch.setattr(ga4_service, "_post", fake_post)
+    rows = ga4_service.run_report("properties/1", "2026-08-01", "2026-08-01", ["sessions"], ["date"])
+    assert len(rows) == 1 and calls["n"] == 1
 
 
 def test_fetch_daily_metrics_reraises_non_400(monkeypatch):

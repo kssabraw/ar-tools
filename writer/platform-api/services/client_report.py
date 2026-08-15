@@ -547,8 +547,8 @@ def _section_ga4(data: dict) -> str:
     ch_html = ""
     if channels:
         ch_rows = "".join(
-            f"<tr><td>{_esc(c['name'])}</td><td class='num'>{_fmt_int(c['sessions'])}</td>"
-            f"<td class='num'>{_esc(c['pct'])}%</td></tr>"
+            f"<tr><td>{_esc(c.get('name'))}</td><td class='num'>{_fmt_int(c.get('sessions'))}</td>"
+            f"<td class='num'>{_esc(c.get('pct', 0))}%</td></tr>"
             for c in channels
         )
         ch_html = (

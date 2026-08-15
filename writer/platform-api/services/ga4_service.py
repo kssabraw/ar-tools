@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import httpx
@@ -50,9 +50,16 @@ AccessStatus = str  # 'ok' | 'no_access' | 'pending' | 'error'
 # ``conversions`` to ``keyEvents`` in 2024, so conversions is fetched
 # best-effort separately and never fails the core pull (see ``run_report``).
 CORE_METRICS = ["sessions", "totalUsers", "screenPageViews"]
+# GA4 renamed the conversions metric to ``keyEvents`` in 2024. Try the new name
+# first, fall back to the legacy one, and only then drop conversions — so a
+# property on either naming still reports conversions (fetch_daily_metrics).
 CONVERSION_METRIC = "keyEvents"
+CONVERSION_METRIC_LEGACY = "conversions"
 # The dimension the channel-breakdown report groups sessions by.
 CHANNEL_DIMENSION = "sessionDefaultChannelGroup"
+# Page size for runReport pagination. The Data API caps a request at 250k rows;
+# we page at 100k and loop on rowCount so a large window never silently truncates.
+_PAGE_SIZE = 100000
 
 
 @dataclass
@@ -70,14 +77,6 @@ class PropertySummary:
     property_id: str  # "properties/123456789"
     display_name: str
     account_name: str = ""
-
-
-@dataclass
-class ReportResult:
-    """A parsed date-level GA4 report."""
-
-    # {"2026-08-14": {"sessions": 120, "totalUsers": 90, ...}, ...}
-    by_date: dict[str, dict[str, float]] = field(default_factory=dict)
 
 
 # ----------------------------------------------------------------------------
@@ -108,14 +107,13 @@ def normalize_property_id(value: str) -> str:
     return candidate
 
 
-def parse_report_rows(
-    resp: dict, dimension: Optional[str], metrics: list[str]
-) -> list[dict]:
-    """Map a runReport response to flat rows keyed by dimension + metric names.
+def parse_report_rows(resp: dict) -> list[dict]:
+    """Map a runReport response to flat rows keyed by its own dimension + metric
+    header names — e.g. ``{"date": "20260814", "sessions": 120.0, ...}``.
 
-    Each returned row is ``{dimension_name: value, metric_a: float, ...}`` (the
-    dimension key omitted when ``dimension`` is None). GA4 returns every metric
-    value as a string, so we coerce to float. Pure — no network."""
+    Reads the header names straight from the response (not the request), so a
+    single- or multi-dimension report parses the same way. GA4 returns every
+    metric value as a string, so we coerce to float. Pure — no network."""
     dim_headers = [h.get("name") for h in resp.get("dimensionHeaders", []) or []]
     metric_headers = [h.get("name") for h in resp.get("metricHeaders", []) or []]
     rows: list[dict] = []
@@ -277,18 +275,54 @@ def run_report(
     metrics: list[str],
     dimensions: Optional[list[str]] = None,
 ) -> list[dict]:
-    """Run a GA4 report and return flat parsed rows. ``property_id`` must be
-    normalized. Raises Ga4ApiError on a non-200 so the caller can classify."""
+    """Run a GA4 report and return all flat parsed rows, paginating on rowCount
+    so a window larger than one page is never silently truncated. ``property_id``
+    must be normalized. Raises Ga4ApiError on a non-200 so the caller can
+    classify."""
     body: dict = {
         "dateRanges": [{"startDate": start_date, "endDate": end_date}],
         "metrics": [{"name": m} for m in metrics],
-        "limit": 100000,
     }
     if dimensions:
         body["dimensions"] = [{"name": d} for d in dimensions]
-    resp = _post(f"{DATA_API}/{property_id}:runReport", body)
-    single_dim = dimensions[0] if dimensions else None
-    return parse_report_rows(resp, single_dim, metrics)
+
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        body["limit"] = _PAGE_SIZE
+        body["offset"] = offset
+        resp = _post(f"{DATA_API}/{property_id}:runReport", body)
+        page = parse_report_rows(resp)
+        rows.extend(page)
+        row_count = int(resp.get("rowCount", 0) or 0)
+        # Stop on a short page (last page) or once we've covered rowCount. The
+        # short-page check also guarantees termination if rowCount is missing.
+        if len(page) < _PAGE_SIZE or offset + _PAGE_SIZE >= row_count:
+            break
+        offset += _PAGE_SIZE
+    return rows
+
+
+def _fetch_date_rows(
+    property_id: str, start_date: str, end_date: str, metrics: list[str]
+) -> tuple[list[dict], Optional[str]]:
+    """Date-level report + the conversion metric name that worked.
+
+    Tries ``keyEvents`` then the legacy ``conversions``; if both 400 (unknown
+    metric), pulls the core metrics only and returns ``None`` for the conversion
+    field. A non-400 error propagates so the ingest marks the pull failed."""
+    for candidate in (CONVERSION_METRIC, CONVERSION_METRIC_LEGACY):
+        try:
+            rows = run_report(
+                property_id, start_date, end_date, metrics + [candidate], ["date"]
+            )
+            return rows, candidate
+        except Ga4ApiError as exc:
+            if exc.status_code == 400:
+                continue  # unknown metric name — try the next candidate
+            raise
+    # Neither conversion name is accepted — core metrics only.
+    return run_report(property_id, start_date, end_date, metrics, ["date"]), None
 
 
 def fetch_daily_metrics(
@@ -301,23 +335,12 @@ def fetch_daily_metrics(
     default channel group to its session count. Two reports (date-level totals +
     date×channel) so the daily rows carry the channel split the report renders.
 
-    Conversions (``keyEvents``) are fetched best-effort in the same date report
-    but tolerated as 0 if a property/rejects the metric name — so a rename or an
-    older property never fails the whole ingest."""
+    Conversions are fetched best-effort: the modern ``keyEvents`` metric first,
+    then the legacy ``conversions`` name, and only if BOTH are rejected (400) is
+    conversions dropped (stored null) — so a property on either naming still
+    reports conversions and a rename never fails the whole ingest."""
     metrics = list(CORE_METRICS)
-    try:
-        date_rows = run_report(
-            property_id, start_date, end_date, metrics + [CONVERSION_METRIC], ["date"]
-        )
-        has_conversions = True
-    except Ga4ApiError as exc:
-        # A 400 usually means an unknown metric name (keyEvents vs conversions);
-        # retry without it rather than losing the whole pull.
-        if exc.status_code == 400:
-            date_rows = run_report(property_id, start_date, end_date, metrics, ["date"])
-            has_conversions = False
-        else:
-            raise
+    date_rows, conversion_field = _fetch_date_rows(property_id, start_date, end_date, metrics)
 
     by_date: dict[str, dict] = {}
     for row in date_rows:
@@ -331,7 +354,7 @@ def fetch_daily_metrics(
             "total_users": int(row.get("totalUsers", 0) or 0),
             "screen_page_views": int(row.get("screenPageViews", 0) or 0),
             "conversions": (
-                int(row.get(CONVERSION_METRIC, 0) or 0) if has_conversions else None
+                int(row.get(conversion_field, 0) or 0) if conversion_field else None
             ),
             "channels": {},
         }
