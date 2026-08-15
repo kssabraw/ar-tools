@@ -22,7 +22,9 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from db.supabase_client import get_supabase
 from middleware.auth import require_admin, require_auth
 from models.gbp_metrics import (
+    GbpActionsSummary,
     GbpBackfillResponse,
+    GbpBreakdown,
     GbpDashboardResponse,
     GbpIngestResponse,
     GbpLocation,
@@ -292,8 +294,16 @@ async def gbp_dashboard(
         raise HTTPException(status_code=500, detail="internal_error")
 
     cards = gbp_metrics_read.build_growth_cards(rows, cur_end, window_days)
-    window_rows = [r for r in rows if (r.get("date") or "") >= cur_start.isoformat()]
+    breakdown = gbp_metrics_read.build_breakdown(rows, cur_end, window_days)
+    actions = gbp_metrics_read.build_actions_summary(rows, cur_end, window_days)
+    insights = gbp_metrics_read.build_insights(cards, breakdown, actions)
+
+    cur_lo = cur_start.isoformat()
+    window_rows = [r for r in rows if (r.get("date") or "") >= cur_lo]
     series = gbp_metrics_read.build_series(window_rows, cur_start, cur_end)
+    prev_lo, prev_hi = prev_start.isoformat(), prev_end.isoformat()
+    prev_rows = [r for r in rows if prev_lo <= (r.get("date") or "") <= prev_hi]
+    compare_series = gbp_metrics_read.build_series(prev_rows, prev_start, prev_end)
 
     last_synced_at = _latest_timestamp([row.get("last_synced_at") for row in locs])
 
@@ -308,7 +318,11 @@ async def gbp_dashboard(
         compare_end=prev_end.isoformat(),
         last_synced_at=last_synced_at,
         metrics=[GbpMetricGrowth(**c) for c in cards],
+        breakdown=GbpBreakdown(**breakdown),
+        actions=GbpActionsSummary(**actions),
+        insights=insights,
         series=[GbpSeriesPoint(**p) for p in series],
+        compare_series=[GbpSeriesPoint(**p) for p in compare_series],
     )
 
 

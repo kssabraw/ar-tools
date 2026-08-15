@@ -41,6 +41,36 @@ METRIC_LABELS: list[tuple[str, str]] = [
 _LABELS = dict(METRIC_LABELS)
 _ORDER = [k for k, _ in METRIC_LABELS]
 
+# Which group each metric belongs to on the dashboard: how many people saw the
+# listing (visibility) vs what they did next (actions).
+_GROUP = {
+    "profile_views": "visibility",
+    "CALL_CLICKS": "actions",
+    "WEBSITE_CLICKS": "actions",
+    "BUSINESS_DIRECTION_REQUESTS": "actions",
+    "BUSINESS_CONVERSATIONS": "actions",
+}
+# The four raw impression sub-types decomposed by surface + device — for the
+# "where did your views come from" breakout the folded profile_views hides.
+_IMPRESSION_SURFACE = {
+    "BUSINESS_IMPRESSIONS_DESKTOP_SEARCH": "search",
+    "BUSINESS_IMPRESSIONS_MOBILE_SEARCH": "search",
+    "BUSINESS_IMPRESSIONS_DESKTOP_MAPS": "maps",
+    "BUSINESS_IMPRESSIONS_MOBILE_MAPS": "maps",
+}
+_IMPRESSION_DEVICE = {
+    "BUSINESS_IMPRESSIONS_DESKTOP_SEARCH": "desktop",
+    "BUSINESS_IMPRESSIONS_DESKTOP_MAPS": "desktop",
+    "BUSINESS_IMPRESSIONS_MOBILE_SEARCH": "mobile",
+    "BUSINESS_IMPRESSIONS_MOBILE_MAPS": "mobile",
+}
+_ACTION_METRICS = ["CALL_CLICKS", "WEBSITE_CLICKS", "BUSINESS_DIRECTION_REQUESTS", "BUSINESS_CONVERSATIONS"]
+
+
+def _pct(cur: int, prev: int) -> Optional[float]:
+    """Percent change, or None when the prior window was zero (no baseline)."""
+    return round((cur - prev) / prev * 100, 1) if prev else None
+
 
 def fold_metric(metric: Optional[str]) -> Optional[str]:
     """Collapse an impression sub-type to 'profile_views'; pass others through."""
@@ -67,10 +97,100 @@ def build_growth_cards(daily_rows: list[dict], end: date, window_days: int) -> l
     folded = fold_rows(daily_rows)
     growth = compute_metric_growth(folded, end, window_days)
     return [
-        {"metric": key, "label": label, **growth[key]}
+        {"metric": key, "label": label, "group": _GROUP.get(key, ""), **growth[key]}
         for key, label in METRIC_LABELS
         if key in growth
     ]
+
+
+def build_breakdown(daily_rows: list[dict], end: date, window_days: int) -> dict:
+    """Decompose profile views by **surface** (Search vs Maps) and **device**
+    (Desktop vs Mobile) over the trailing window vs the prior one — the cut the
+    folded "Profile views" headline hides. Returns
+    ``{surface:[{label,current,previous,pct,share}], device:[…]}`` (share = % of
+    the current total). Raw (unfolded) rows, so it reads the four sub-types."""
+    raw = compute_metric_growth(daily_rows, end, window_days)  # per raw metric
+
+    def _agg(mapping: dict, bucket: str) -> tuple[int, int]:
+        cur = sum(raw.get(m, {}).get("current", 0) for m, b in mapping.items() if b == bucket)
+        prev = sum(raw.get(m, {}).get("previous", 0) for m, b in mapping.items() if b == bucket)
+        return cur, prev
+
+    def _rows(mapping: dict, buckets: list[tuple[str, str]]) -> list[dict]:
+        pairs = [(label, *_agg(mapping, key)) for key, label in buckets]
+        total = sum(cur for _, cur, _ in pairs) or 0
+        return [
+            {
+                "label": label, "current": cur, "previous": prev, "pct": _pct(cur, prev),
+                "share": round(cur / total * 100, 1) if total else 0.0,
+            }
+            for label, cur, prev in pairs
+        ]
+
+    return {
+        "surface": _rows(_IMPRESSION_SURFACE, [("search", "Search"), ("maps", "Maps")]),
+        "device": _rows(_IMPRESSION_DEVICE, [("desktop", "Desktop"), ("mobile", "Mobile")]),
+    }
+
+
+def build_actions_summary(daily_rows: list[dict], end: date, window_days: int) -> dict:
+    """Total customer actions (calls + website clicks + directions + messages) and
+    the engagement rate (actions ÷ profile views), current vs prior window."""
+    raw = compute_metric_growth(daily_rows, end, window_days)
+    cur = sum(raw.get(m, {}).get("current", 0) for m in _ACTION_METRICS)
+    prev = sum(raw.get(m, {}).get("previous", 0) for m in _ACTION_METRICS)
+    views_cur = sum(raw.get(m, {}).get("current", 0) for m in IMPRESSION_METRICS)
+    views_prev = sum(raw.get(m, {}).get("previous", 0) for m in IMPRESSION_METRICS)
+    return {
+        "current": cur, "previous": prev, "delta": cur - prev, "pct": _pct(cur, prev),
+        "engagement_current": round(cur / views_cur * 100, 1) if views_cur else None,
+        "engagement_previous": round(prev / views_prev * 100, 1) if views_prev else None,
+    }
+
+
+def _trend_word(pct: Optional[float]) -> str:
+    if pct is None:
+        return "started this period"
+    if pct >= 5:
+        return f"up {abs(pct):g}%"
+    if pct <= -5:
+        return f"down {abs(pct):g}%"
+    return "about the same"
+
+
+def build_insights(cards: list[dict], breakdown: dict, actions: dict) -> list[str]:
+    """A few plain-English sentences an owner can read at a glance. Deterministic
+    — no LLM. Empty when there's nothing to say (no data)."""
+    out: list[str] = []
+    by_metric = {c["metric"]: c for c in cards}
+    views = by_metric.get("profile_views")
+    if views and (views["current"] or views["previous"]):
+        out.append(
+            f"Your profile was seen {views['current']:,} times — "
+            f"{_trend_word(views.get('pct'))} vs the previous period."
+        )
+    # Where the views came from (surface + device leaders).
+    surf = max(breakdown.get("surface") or [], key=lambda r: r["current"], default=None)
+    dev = max(breakdown.get("device") or [], key=lambda r: r["current"], default=None)
+    if surf and surf["current"] and dev and dev["current"]:
+        out.append(
+            f"Most views came from {surf['label']} ({surf['share']:g}%), "
+            f"mostly on {dev['label'].lower()} ({dev['share']:g}%)."
+        )
+    if actions.get("current") or actions.get("previous"):
+        eng = actions.get("engagement_current")
+        eng_txt = f" — {eng:g}% of viewers took an action" if eng is not None else ""
+        out.append(
+            f"Customers took {actions['current']:,} actions "
+            f"(calls, directions, clicks, messages), {_trend_word(actions.get('pct'))}{eng_txt}."
+        )
+    # Biggest action mover (only when there's a real, non-new swing).
+    movers = [c for c in cards if c["group"] == "actions" and c.get("pct") is not None and abs(c["pct"]) >= 15]
+    if movers:
+        top = max(movers, key=lambda c: abs(c["pct"]))
+        direction = "up" if top["pct"] > 0 else "down"
+        out.append(f"{top['label']} are {direction} {abs(top['pct']):g}% — the biggest change this period.")
+    return out
 
 
 def last_data_date(daily_rows: list[dict]) -> Optional[date]:

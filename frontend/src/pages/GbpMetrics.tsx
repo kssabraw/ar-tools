@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, RefreshCw, PlugZap, CheckCircle2, AlertTriangle, History, Users } from 'lucide-react'
+import { ArrowLeft, RefreshCw, PlugZap, CheckCircle2, AlertTriangle, History, Users, Lightbulb } from 'lucide-react'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import type {
   Client, GbpDashboard, GbpLocation, GbpMetricGrowth, GbpResolvedLocation, GbpSeriesPoint,
+  GbpBreakdownItem, GbpActionsSummary,
 } from '../lib/types'
 
 const WINDOWS: [number, string][] = [
@@ -329,6 +330,8 @@ function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard })
   })
 
   const hasData = data.metrics.length > 0
+  const visibility = data.metrics.filter((m) => m.group === 'visibility')
+  const actions = data.metrics.filter((m) => m.group === 'actions')
 
   return (
     <div>
@@ -351,17 +354,188 @@ function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard })
         </div>
       ) : (
         <>
+          {data.insights.length > 0 && <InsightsPanel lines={data.insights} />}
+
+          <TrendChart data={data} />
+
+          <SectionHeading>Visibility — how many people saw this business</SectionHeading>
           <div style={tileGrid}>
-            {data.metrics.map((m) => (
-              <MetricTile key={m.metric} metric={m} series={data.series} />
-            ))}
+            {visibility.map((m) => <MetricTile key={m.metric} metric={m} series={data.series} />)}
           </div>
-          <div style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 14 }}>
+          {(data.breakdown.surface.length > 0 || data.breakdown.device.length > 0) && (
+            <div style={breakdownGrid}>
+              <BreakdownCard title="Where views came from" items={data.breakdown.surface} />
+              <BreakdownCard title="By device" items={data.breakdown.device} />
+            </div>
+          )}
+
+          <SectionHeading>Customer actions — what they did next</SectionHeading>
+          {data.actions && <ActionsHeadline actions={data.actions} />}
+          <div style={tileGrid}>
+            {actions.map((m) => <MetricTile key={m.metric} metric={m} series={data.series} />)}
+          </div>
+
+          <div style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 16 }}>
             {data.date_start} – {data.date_end} ({data.window_days} days) vs. the prior period
             ({data.compare_start} – {data.compare_end}). GBP reports performance data with a 3–5 day lag,
             so the most recent days may still be filling in.
           </div>
         </>
+      )}
+    </div>
+  )
+}
+
+function InsightsPanel({ lines }: { lines: string[] }) {
+  return (
+    <div style={{ ...noticeCard, background: '#eef2ff', borderColor: '#c7d2fe', marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
+        <Lightbulb size={15} color="#4f46e5" />
+        <strong style={{ fontSize: 12.5, color: '#3730a3' }}>At a glance</strong>
+      </div>
+      <ul style={{ margin: 0, paddingLeft: 18, display: 'grid', gap: 4 }}>
+        {lines.map((l, i) => <li key={i} style={{ fontSize: 13, color: '#312e81' }}>{l}</li>)}
+      </ul>
+    </div>
+  )
+}
+
+function SectionHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ fontSize: 12.5, fontWeight: 700, color: '#0f172a', margin: '20px 0 10px', letterSpacing: '-0.01em' }}>
+      {children}
+    </div>
+  )
+}
+
+// Large interactive trend chart: this period (solid) vs the prior period (dashed),
+// aligned by day-of-period, with a metric selector and a hover tooltip.
+function TrendChart({ data }: { data: GbpDashboard }) {
+  const options = data.metrics.map((m) => ({ key: m.metric, label: m.label }))
+  const [metric, setMetric] = useState(options[0]?.key ?? 'profile_views')
+  const [hover, setHover] = useState<number | null>(null)
+
+  const cur = useMemo(() => data.series.map((p) => p.values[metric] ?? 0), [data.series, metric])
+  const prev = useMemo(() => data.compare_series.map((p) => p.values[metric] ?? 0), [data.compare_series, metric])
+  const dates = data.series.map((p) => p.date)
+  const label = options.find((o) => o.key === metric)?.label ?? metric
+
+  const width = 900, height = 260
+  const padL = 44, padR = 16, padT = 16, padB = 26
+  const span = Math.max(cur.length, prev.length, 2)
+  const maxV = Math.max(1, ...cur, ...prev)
+  const x = (i: number) => padL + (i / (span - 1)) * (width - padL - padR)
+  const y = (v: number) => padT + (1 - v / maxV) * (height - padT - padB)
+  const line = (vals: number[]) => vals.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
+  const curArea = cur.length
+    ? `${line(cur)} L${x(cur.length - 1).toFixed(1)},${height - padB} L${x(0).toFixed(1)},${height - padB} Z`
+    : ''
+
+  const onMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const f = (e.clientX - rect.left) / rect.width
+    const plotFrac = (f - padL / width) / ((width - padL - padR) / width)
+    setHover(Math.round(Math.max(0, Math.min(1, plotFrac)) * (cur.length - 1)))
+  }
+  const gridY = [0, 0.5, 1].map((f) => ({ v: Math.round(maxV * (1 - f)), yy: padT + f * (height - padT - padB) }))
+  const hi = hover != null && hover >= 0 && hover < cur.length ? hover : null
+
+  return (
+    <div style={{ ...tile, padding: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+        <select style={{ ...select, padding: '6px 8px' }} value={metric} onChange={(e) => setMetric(e.target.value)}>
+          {options.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+        </select>
+        <div style={{ display: 'flex', gap: 14, fontSize: 11.5, color: '#64748b' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ width: 14, height: 2, background: '#6366f1', display: 'inline-block' }} /> This period
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ width: 14, height: 0, borderTop: '2px dashed #94a3b8', display: 'inline-block' }} /> Previous
+          </span>
+        </div>
+      </div>
+      <div style={{ position: 'relative' }} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+        <svg width="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{ display: 'block', height: 260 }}>
+          {gridY.map((g, i) => (
+            <g key={i}>
+              <line x1={padL} y1={g.yy} x2={width - padR} y2={g.yy} stroke="#f1f5f9" strokeWidth={1} />
+              <text x={padL - 6} y={g.yy + 3} textAnchor="end" fontSize={10} fill="#94a3b8">{g.v.toLocaleString()}</text>
+            </g>
+          ))}
+          {curArea && <path d={curArea} fill="#6366f1" opacity={0.08} />}
+          {prev.length > 1 && <path d={line(prev)} fill="none" stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="4 3" strokeLinejoin="round" />}
+          {cur.length > 1 && <path d={line(cur)} fill="none" stroke="#6366f1" strokeWidth={2} strokeLinejoin="round" />}
+          {hi != null && (
+            <g>
+              <line x1={x(hi)} y1={padT} x2={x(hi)} y2={height - padB} stroke="#cbd5e1" strokeWidth={1} />
+              <circle cx={x(hi)} cy={y(cur[hi])} r={3} fill="#6366f1" />
+            </g>
+          )}
+          <text x={padL} y={height - 8} fontSize={10} fill="#94a3b8">{dates[0]}</text>
+          <text x={width - padR} y={height - 8} textAnchor="end" fontSize={10} fill="#94a3b8">{dates[dates.length - 1]}</text>
+        </svg>
+        {hi != null && (
+          <div style={{
+            position: 'absolute', left: `${(x(hi) / width) * 100}%`, top: 0, transform: 'translateX(-50%)',
+            background: '#0f172a', color: '#fff', fontSize: 11, borderRadius: 6, padding: '5px 8px',
+            pointerEvents: 'none', whiteSpace: 'nowrap',
+          }}>
+            <div style={{ opacity: 0.7 }}>{dates[hi]}</div>
+            <div><strong>{cur[hi].toLocaleString()}</strong> {label.toLowerCase()}</div>
+            {prev[hi] != null && <div style={{ opacity: 0.7 }}>prev: {prev[hi].toLocaleString()}</div>}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function BreakdownCard({ title, items }: { title: string; items: GbpBreakdownItem[] }) {
+  const colors = ['#6366f1', '#0ea5e9', '#14b8a6', '#f59e0b']
+  return (
+    <div style={tile}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b', marginBottom: 10 }}>{title}</div>
+      <div style={{ display: 'grid', gap: 10 }}>
+        {items.map((it, i) => (
+          <div key={it.label}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 3 }}>
+              <span style={{ color: '#334155', fontWeight: 600 }}>{it.label}</span>
+              <span style={{ color: '#64748b' }}>{it.current.toLocaleString()} · {it.share}%</span>
+            </div>
+            <div style={{ height: 7, background: '#f1f5f9', borderRadius: 999, overflow: 'hidden' }}>
+              <div style={{ width: `${Math.min(100, it.share)}%`, height: '100%', background: colors[i % colors.length], borderRadius: 999 }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ActionsHeadline({ actions }: { actions: GbpActionsSummary }) {
+  const pct = actions.pct
+  const dir = pct == null ? 'new' : pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat'
+  const c = { up: '#15803d', down: '#b91c1c', flat: '#64748b', new: '#6366f1' }[dir]
+  const cbg = { up: '#f0fdf4', down: '#fef2f2', flat: '#f1f5f9', new: '#eef2ff' }[dir]
+  const arrow = dir === 'up' ? '▲' : dir === 'down' ? '▼' : dir === 'flat' ? '▬' : '＋'
+  return (
+    <div style={{ ...tile, display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap', marginBottom: 12 }}>
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b' }}>Total customer actions</div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 2 }}>
+          <div style={{ fontSize: 26, fontWeight: 700, color: '#0f172a' }}>{actions.current.toLocaleString()}</div>
+          <span style={{ fontSize: 11.5, fontWeight: 600, color: c, background: cbg, borderRadius: 999, padding: '2px 8px' }}>
+            {pct == null ? 'new' : `${arrow} ${Math.abs(pct)}%`}
+          </span>
+        </div>
+      </div>
+      {actions.engagement_current != null && (
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b' }}>Engagement rate</div>
+          <div style={{ fontSize: 26, fontWeight: 700, color: '#0f172a', marginTop: 2 }}>{actions.engagement_current}%</div>
+          <div style={{ fontSize: 11, color: '#94a3b8' }}>of viewers took an action</div>
+        </div>
       )}
     </div>
   )
@@ -460,6 +634,9 @@ const resolvedRow: React.CSSProperties = {
 }
 const tileGrid: React.CSSProperties = {
   display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+}
+const breakdownGrid: React.CSSProperties = {
+  display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', marginTop: 12,
 }
 const tile: React.CSSProperties = {
   border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, background: '#fff',
