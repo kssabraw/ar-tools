@@ -520,14 +520,16 @@ def _section_performance(data: dict) -> str:
 
 
 def _section_ga4(data: dict) -> str:
-    """GA4 website-traffic section (visits/visitors/conversions + top channels).
-    Client-facing tone, degrades cleanly. Client Reporting Phase 2."""
+    """GA4 website-traffic section (visits/conversions + top channels).
+    Client-facing tone, degrades cleanly. Client Reporting Phase 2.
+
+    Deliberately no summed "visitors" row — GA4 totalUsers isn't additive across
+    days (see _gather_ga4). Visits (sessions) and conversions are additive."""
     g = data.get("ga4")
     if not g:
         return ""
     rows = []
-    for key, label in (("sessions", "Website visits"), ("users", "Visitors"),
-                       ("conversions", "Conversions")):
+    for key, label in (("sessions", "Website visits"), ("conversions", "Conversions")):
         m = g.get(key)
         if not m or not m.get("current"):
             continue
@@ -1124,9 +1126,16 @@ def _gather_ga4(supabase, client_id: str, period_start: date, period_end: date) 
     if not sessions:
         # No visits signal at all — nothing worth a "Website traffic" section.
         return None
+    # NOTE: deliberately NOT reporting total_users summed across days. GA4's
+    # totalUsers is de-duplicated per day, so summing daily values counts a
+    # returning visitor once per day they visit ("visitor-days", not unique
+    # visitors) and overstates the number to the client. Sessions and
+    # conversions (event counts) ARE additive, so they're safe to sum. True
+    # period-unique visitors need a separate window-level report (no date
+    # dimension); the per-day total_users column stays in ga4_daily for that
+    # future path. See the adversarial review 2026-08-15.
     return {
         "sessions": sessions,
-        "users": _metric("total_users"),
         "conversions": _metric("conversions"),
         "channels": channels,
     }

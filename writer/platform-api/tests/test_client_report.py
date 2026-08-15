@@ -557,7 +557,6 @@ def test_section_ga4_empty_without_data():
 def test_section_ga4_renders_visits_and_channels():
     data = _data(ga4={
         "sessions": {"current": 180, "previous": 50, "change": 260.0},
-        "users": {"current": 125, "previous": 40, "change": 212.5},
         "conversions": {"current": 5, "previous": 1, "change": 400.0},
         "channels": [{"name": "Organic Search", "sessions": 110, "pct": 61},
                      {"name": "Direct", "sessions": 70, "pct": 39}],
@@ -565,7 +564,27 @@ def test_section_ga4_renders_visits_and_channels():
     html = cr._section_ga4(data)
     assert "Website traffic" in html
     assert "Website visits" in html and "180" in html
+    assert "Conversions" in html
     assert "Organic Search" in html and "61%" in html
+
+
+def test_section_ga4_never_renders_summed_visitors():
+    # GA4 totalUsers isn't additive across days; a summed "Visitors" row must not
+    # appear even if a caller passes a users metric (regression guard).
+    data = _data(ga4={
+        "sessions": {"current": 180, "previous": 50, "change": 260.0},
+        "users": {"current": 3000, "previous": 900, "change": 233.0},
+        "channels": [],
+    })
+    html = cr._section_ga4(data)
+    assert "Visitors" not in html
+    assert "3,000" not in html
+
+
+def test_gather_ga4_omits_users_metric():
+    sb = _fake_ga4_supabase([{"id": "p1"}], _GA4_DAILY)
+    out = cr._gather_ga4(sb, "c1", _date(2026, 5, 1), _date(2026, 5, 31))
+    assert "users" not in out  # non-additive; deliberately not summed/reported
 
 
 def test_section_ga4_omits_zero_current_metric():

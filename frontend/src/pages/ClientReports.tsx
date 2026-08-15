@@ -283,6 +283,7 @@ function sectionsLabel(r: ClientReport): string {
 
 const SECTION_NAMES: Record<string, string> = {
   organic: 'Organic', geogrid: 'Maps', gbp: 'GBP', ai_visibility: 'AI Visibility',
+  ga4: 'Website traffic',
 }
 
 const TYPE_NAMES: Record<string, string> = {
