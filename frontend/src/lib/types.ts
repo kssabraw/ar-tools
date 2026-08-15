@@ -1926,10 +1926,33 @@ export interface GbpResolvedLocation {
 export interface GbpMetricGrowth {
   metric: string
   label: string
+  group: string
   current: number
   previous: number
   delta: number
   pct: number | null
+}
+
+export interface GbpBreakdownItem {
+  label: string
+  current: number
+  previous: number
+  pct: number | null
+  share: number
+}
+
+export interface GbpBreakdown {
+  surface: GbpBreakdownItem[]
+  device: GbpBreakdownItem[]
+}
+
+export interface GbpActionsSummary {
+  current: number
+  previous: number
+  delta: number
+  pct: number | null
+  engagement_current: number | null
+  engagement_previous: number | null
 }
 
 export interface GbpSeriesPoint {
@@ -1948,5 +1971,9 @@ export interface GbpDashboard {
   compare_end: string
   last_synced_at: string | null
   metrics: GbpMetricGrowth[]
+  breakdown: GbpBreakdown
+  actions: GbpActionsSummary | null
+  insights: string[]
   series: GbpSeriesPoint[]
+  compare_series: GbpSeriesPoint[]
 }

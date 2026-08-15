@@ -113,10 +113,38 @@ class GbpMetricGrowth(BaseModel):
 
     metric: str  # folded key ("profile_views") or raw Performance metric name
     label: str
+    group: str = ""  # "visibility" | "actions" (which dashboard section it belongs to)
     current: int
     previous: int
     delta: int
     pct: Optional[float] = None  # None when the prior window was zero
+
+
+class GbpBreakdownItem(BaseModel):
+    """One slice of the profile-views breakout (e.g. Search, or Mobile)."""
+
+    label: str
+    current: int
+    previous: int
+    pct: Optional[float] = None
+    share: float = 0.0  # % of the current-period total
+
+
+class GbpBreakdown(BaseModel):
+    surface: list[GbpBreakdownItem] = []  # Search vs Maps
+    device: list[GbpBreakdownItem] = []  # Desktop vs Mobile
+
+
+class GbpActionsSummary(BaseModel):
+    """Total customer actions (calls + website + directions + messages) and the
+    engagement rate (actions ÷ profile views), current vs prior."""
+
+    current: int
+    previous: int
+    delta: int
+    pct: Optional[float] = None
+    engagement_current: Optional[float] = None
+    engagement_previous: Optional[float] = None
 
 
 class GbpSeriesPoint(BaseModel):
@@ -145,4 +173,8 @@ class GbpDashboardResponse(BaseModel):
     compare_end: str  # end of the prior equal-length comparison window
     last_synced_at: Optional[str] = None
     metrics: list[GbpMetricGrowth] = []
+    breakdown: GbpBreakdown = GbpBreakdown()
+    actions: Optional[GbpActionsSummary] = None
+    insights: list[str] = []
     series: list[GbpSeriesPoint] = []
+    compare_series: list[GbpSeriesPoint] = []  # prior-window daily, for the overlay
