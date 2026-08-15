@@ -193,6 +193,46 @@ def enqueue_due_gbp_metrics() -> int:
     return enqueued
 
 
+def enqueue_due_ga4_ingest() -> int:
+    """Daily: enqueue a ga4_ingest job for each verified GA4 property.
+
+    Gated on ``ga4_ingest_enabled`` (dormant until the GA4 Data/Admin APIs are
+    enabled + the service account is added as a Viewer on each property). The
+    ingest re-pulls a trailing window, so a missed run self-heals; dedupes
+    against any in-flight job for the same property. Client Reporting Phase 2."""
+    if not settings.ga4_ingest_enabled:
+        return 0
+    supabase = get_supabase()
+    props = (
+        supabase.table("ga4_properties").select("id").eq("access_status", "ok").execute()
+    )
+    enqueued = 0
+    for prop in props.data or []:
+        property_row_id = prop["id"]
+        existing = (
+            supabase.table("async_jobs")
+            .select("id")
+            .eq("job_type", "ga4_ingest")
+            .eq("entity_id", property_row_id)
+            .in_("status", ["pending", "running"])
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            continue
+        supabase.table("async_jobs").insert(
+            {
+                "job_type": "ga4_ingest",
+                "entity_id": property_row_id,
+                "payload": {"property_id": property_row_id},
+            }
+        ).execute()
+        enqueued += 1
+    if enqueued:
+        logger.info("gsc_scheduler.ga4_enqueued", extra={"jobs": enqueued})
+    return enqueued
+
+
 def enqueue_due_dataforseo() -> int:
     """Daily: enqueue a DataForSEO rank job for each client whose per-client
     fetch schedule is due today.
@@ -548,6 +588,8 @@ async def gsc_scheduler() -> None:
                 _safe("gsc_ingests", enqueue_due_ingests)
                 # Daily GBP performance-metrics ingest (no-op until enabled).
                 _safe("gbp_metrics", enqueue_due_gbp_metrics)
+                # Daily GA4 metrics ingest (no-op until ga4_ingest_enabled).
+                _safe("ga4_ingest", enqueue_due_ga4_ingest)
                 # GBP Posts — daily live-state reconciliation (catches async
                 # REJECTED + imports external posts). The recurring-draft tick +
                 # one-off scheduled publishes are evaluated PER-CYCLE below so

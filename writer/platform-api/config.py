@@ -373,6 +373,27 @@ class Settings(BaseSettings):
     # Weekly query×page ingest window (canonical-URL resolution + Pages view).
     gsc_page_window_days: int = 30
     # ------------------------------------------------------------------
+    # Google Analytics (GA4) ingestion — Client Reporting Phase 2.
+    # DORMANT until (a) the GA4 Data + Admin APIs are enabled on the GCP
+    # project the service account lives in and (b) the service account is added
+    # as a Viewer on each client's GA4 property. Reuses
+    # `google_service_account_key` (with the added analytics.readonly scope) via
+    # REST + a minted token (no new dependency). Left off by default so the
+    # scheduler pass + ingest are no-ops until access lands. Run
+    # `scripts/verify_ga4_api_access.py` to confirm access before flipping this on.
+    # See docs/modules/client-reporting-prd-v1_0.md (Phase 2).
+    ga4_ingest_enabled: bool = False
+    # Each daily run re-pulls the trailing window (GA4 data settles over ~1–2
+    # days; idempotent upserts make the overlap harmless and a missed run
+    # self-heals on the next pull).
+    ga4_repull_days: int = 3
+    # The scheduler enqueues one ingest job per verified property once a day,
+    # after this hour (UTC), same shared loop as the GSC/GBP ingest.
+    ga4_ingest_hour_utc: int = 8
+    # One-time historical backfill window (days). GA4 keeps data for the
+    # property's retention setting; pull a generous window so the store keeps it.
+    ga4_backfill_days: int = 400
+    # ------------------------------------------------------------------
     # Google Business Profile (GBP) performance-metrics ingestion.
     # DORMANT until (a) Google approves Business Profile API quota for the GCP
     # project the service account lives in and (b) the service account is added
