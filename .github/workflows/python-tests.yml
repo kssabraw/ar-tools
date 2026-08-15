@@ -1,0 +1,55 @@
+name: platform-api tests
+
+# The fanout pipeline (and the rest of platform-api) had no automated test run —
+# the only PR check was the Netlify frontend build, so Python unit tests never
+# gated anything. This runs them, in an environment that mirrors the platform-api
+# Dockerfile (WeasyPrint system libs + the spaCy model) so the suite imports the
+# same way it does in production.
+
+on:
+  pull_request:
+    paths:
+      - "writer/platform-api/**"
+      - ".github/workflows/python-tests.yml"
+  push:
+    branches: [main]
+    paths:
+      - "writer/platform-api/**"
+      - ".github/workflows/python-tests.yml"
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: writer/platform-api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: writer/platform-api/requirements*.txt
+
+      # WeasyPrint (lazy-imported by the Client Reporting module) needs pango/cairo;
+      # mirror the Dockerfile so any eager import path resolves.
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 \
+            libffi-dev shared-mime-info fonts-dejavu-core
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      # The Topic Fanout SIE module loads the spaCy lemmatizer; baked into the
+      # Docker image, so install it here too.
+      - name: Download spaCy model
+        run: python -m spacy download en_core_web_sm
+
+      - name: Run tests
+        run: pytest -q

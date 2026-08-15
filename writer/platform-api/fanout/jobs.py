@@ -147,15 +147,29 @@ def _maybe_enrich_metrics(session: dict, per_topic_gated) -> None:
     })
     if not active_keywords:
         return
-    result = enrich_keywords(
-        keywords=active_keywords,
-        dfs=get_dataforseo(store.session_location_code(session)),
-        batch_size=s.metrics_batch_size,
-        max_workers=s.metrics_max_workers,
-        time_budget_s=float(s.metrics_time_budget_s),
-    )
-    if result.metrics:
-        store.update_keyword_metrics(session["id"], result.metrics)
+    # Best-effort, and it MUST stay that way: this runs between the pool insert and
+    # the clustering-log finalize, so a raised exception here skips the finalize and
+    # strands the session at status=error with a complete pool and no clustering log
+    # — the exact BPC-157 failure the retry wrappers around persist/finalize exist to
+    # prevent. enrich_keywords degrades internally, but update_keyword_metrics' id
+    # scan is a bare Supabase read that can raise a transient transport error, so
+    # guard the whole enrich here (metrics are optional; the run must still complete).
+    try:
+        result = enrich_keywords(
+            keywords=active_keywords,
+            dfs=get_dataforseo(store.session_location_code(session)),
+            batch_size=s.metrics_batch_size,
+            max_workers=s.metrics_max_workers,
+            time_budget_s=float(s.metrics_time_budget_s),
+        )
+        if result.metrics:
+            store.update_keyword_metrics(session["id"], result.metrics)
+    except Exception as exc:  # noqa: BLE001 — optional enrichment; never strand the run
+        logger.warning(
+            "metrics_enrich_failed",
+            extra={"event": "metrics_enrich_failed",
+                   "session_id": session.get("id"), "reason": repr(exc)},
+        )
 
 
 def _maybe_llm_router(seed: str, topics: list[dict]):

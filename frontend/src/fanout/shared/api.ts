@@ -582,6 +582,7 @@ export interface RegateBody {
   relevance_threshold?: number;
   clustering_edge_threshold?: number;
   clustering_resolution?: number;
+  active_per_silo_cap?: number;
 }
 
 export const regate = (id: string, body: RegateBody = {}) =>
