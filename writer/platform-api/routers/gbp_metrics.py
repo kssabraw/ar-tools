@@ -33,6 +33,7 @@ from models.gbp_metrics import (
     GbpLocationCreateRequest,
     GbpMetricGrowth,
     GbpPerformanceDiagnostic,
+    GbpPeriodReviews,
     GbpReviews,
     GbpSearchKeywordsResponse,
     GbpSeriesPoint,
@@ -404,6 +405,27 @@ async def gbp_search_keywords_read(
         logger.error("gbp_search_keywords_read_failed", extra={"client_id": str(client_id), "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error")
     return GbpSearchKeywordsResponse(**data)
+
+
+@router.get("/clients/{client_id}/gbp-metrics/reviews", response_model=GbpPeriodReviews)
+async def gbp_period_reviews(
+    client_id: UUID, start: str, end: str, limit: int = 50, auth: dict = Depends(require_auth)
+) -> GbpPeriodReviews:
+    """Reviews posted within ``[start, end]`` (YYYY-MM-DD, inclusive) across the
+    client's verified locations, from the first-party v4 reviews store. The
+    frontend passes the dashboard's resolved ``date_start`` / ``date_end`` so the
+    panel matches the shown period."""
+    cs, ce = _parse_custom_range(start, end)  # validates YYYY-MM-DD + ordering
+    from services import gbp_reviews_ingest
+
+    try:
+        data = gbp_reviews_ingest.read_period_reviews(
+            str(client_id), cs.isoformat(), ce.isoformat(), limit=max(1, min(int(limit), 200))
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("gbp_period_reviews_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error")
+    return GbpPeriodReviews(**data, start=cs.isoformat(), end=ce.isoformat())
 
 
 @router.get("/clients/{client_id}/gbp-locations", response_model=list[GbpLocation])

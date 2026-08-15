@@ -233,6 +233,40 @@ def enqueue_due_ga4_ingest() -> int:
     return enqueued
 
 
+def enqueue_due_gbp_reviews() -> int:
+    """Daily: enqueue a gbp_reviews job for each verified GBP location to refresh
+    the stored reviews (first-party v4) that feed the dashboard's "reviews this
+    period" panel. Gated on ``gbp_metrics_enabled``; dedupes against any in-flight
+    job for the same location (the daily cadence gives one refresh/location/day)."""
+    if not settings.gbp_metrics_enabled:
+        return 0
+    supabase = get_supabase()
+    locs = (
+        supabase.table("gbp_locations").select("id").eq("access_status", "ok").execute()
+    ).data or []
+    enqueued = 0
+    for loc in locs:
+        location_row_id = loc["id"]
+        existing = (
+            supabase.table("async_jobs").select("id")
+            .eq("job_type", "gbp_reviews").eq("entity_id", location_row_id)
+            .in_("status", ["pending", "running"]).limit(1).execute()
+        ).data
+        if existing:
+            continue
+        supabase.table("async_jobs").insert(
+            {
+                "job_type": "gbp_reviews",
+                "entity_id": location_row_id,
+                "payload": {"location_row_id": location_row_id},
+            }
+        ).execute()
+        enqueued += 1
+    if enqueued:
+        logger.info("gsc_scheduler.gbp_reviews_enqueued", extra={"jobs": enqueued})
+    return enqueued
+
+
 def enqueue_due_gbp_search_keywords() -> int:
     """Monthly: enqueue a gbp_search_keywords job for each verified GBP location,
     once per calendar month. GBP search keywords are monthly data, so a daily tick
@@ -633,6 +667,7 @@ async def gsc_scheduler() -> None:
                 # Daily GA4 metrics ingest (no-op until ga4_ingest_enabled).
                 _safe("ga4_ingest", enqueue_due_ga4_ingest)
                 _safe("gbp_search_keywords", enqueue_due_gbp_search_keywords)
+                _safe("gbp_reviews", enqueue_due_gbp_reviews)
                 # GBP Posts — daily live-state reconciliation (catches async
                 # REJECTED + imports external posts). The recurring-draft tick +
                 # one-off scheduled publishes are evaluated PER-CYCLE below so

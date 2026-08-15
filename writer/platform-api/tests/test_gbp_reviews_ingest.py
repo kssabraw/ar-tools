@@ -47,3 +47,19 @@ def test_summarize_period_none_rated():
 def test_summarize_period_empty():
     out = gr.summarize_period([], "2026-07-01", "2026-07-31")
     assert out == {"count": 0, "average_rating": None, "items": []}
+
+
+def test_review_rows_maps_and_drops_idless():
+    reviews = [
+        {"review_id": "a", "reviewer": "Jane", "rating": 5, "text": "Great",
+         "create_time": "2026-07-15T10:00:00Z", "update_time": "", "has_reply": True},
+        {"review_id": "", "reviewer": "X", "rating": 3},  # no id → dropped
+    ]
+    rows = gr._review_rows("loc-1", reviews)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["location_row_id"] == "loc-1" and r["review_id"] == "a"
+    assert r["rating"] == 5 and r["has_reply"] is True and r["reviewer"] == "Jane"
+    assert r["create_time"] == "2026-07-15T10:00:00Z"
+    assert r["update_time"] is None  # empty string normalized to None
+    assert r["updated_at"] == "now()"
