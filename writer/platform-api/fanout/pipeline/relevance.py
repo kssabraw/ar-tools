@@ -243,6 +243,30 @@ def _embed_unique(
     return out, degraded
 
 
+def _active_topics(
+    kw_scores: dict[str, dict[str, float]],
+    best_topic_for_kw: dict[str, str],
+    silo_margin: float,
+) -> dict[str, set[str]]:
+    """Per keyword, the silo(s) allowed to hold it active (pure).
+
+    `silo_margin <= 0` → exactly the keyword's argmax silo, byte-identical to the
+    prior hard-argmax behavior. `silo_margin > 0` → every silo whose cosine is
+    within `silo_margin` of the top, plus the recorded best silo (which an LLM
+    reroute may have moved below the raw-cosine margin). `best_topic_for_kw` is the
+    source of truth for the argmax path so an LLM reroute is always honored."""
+    if silo_margin > 0.0 and kw_scores:
+        out: dict[str, set[str]] = {}
+        for kw, scores in kw_scores.items():
+            top = max(scores.values())
+            keep = {tid for tid, s in scores.items() if s >= top - silo_margin}
+            if kw in best_topic_for_kw:
+                keep.add(best_topic_for_kw[kw])
+            out[kw] = keep
+        return out
+    return {kw: {tid} for kw, tid in best_topic_for_kw.items()}
+
+
 def run_relevance_gate(
     *,
     per_topic: dict[str, dict[str, list[str]]],
@@ -254,6 +278,7 @@ def run_relevance_gate(
     seed_terms: list[str] | None = None,
     peer_terms: list[str] | None = None,
     assign_best_silo: bool = False,
+    silo_margin: float = 0.0,
     llm_router=None,
     llm_router_margin: float = 0.04,
     current_year: int | None = None,
@@ -358,6 +383,14 @@ def run_relevance_gate(
     #     many silos then lands in exactly one — no cross-silo duplicate articles.
     #     Scored against its assigned silo; elsewhere it's filtered_relevance.
     best_topic_for_kw: dict[str, str] = {}
+    # Which silos may hold each routed keyword active. Hard argmax → exactly one
+    # (its best). Soft routing (silo_margin > 0) → every silo within `silo_margin`
+    # cosine of the best, so a keyword genuinely close to several overlapping silo
+    # anchors isn't starved into one silo — which is how hard argmax emptied the
+    # narrower silos on overlapping-anchor seeds. A multi-assigned keyword still
+    # has to clear each silo's own relevance threshold below, and cross-topic dedup
+    # collapses any duplicate articles the overlap produces.
+    active_topics_for_kw: dict[str, set[str]] = {}
     if assign_best_silo and emb_by_kw:
         # Pre-normalize anchors once so per-keyword cosine is a single dot product.
         anchor_vecs = {}
@@ -411,6 +444,8 @@ def run_relevance_gate(
                     if new_tid in kw_scores.get(kw, {}):
                         best_topic_for_kw[kw] = new_tid
 
+        active_topics_for_kw = _active_topics(kw_scores, best_topic_for_kw, silo_margin)
+
     # 3. Score per topic against that topic's own anchor.
     for tid, cands in cands_by_topic.items():
         classified: list[GatedKeyword] = (
@@ -441,8 +476,15 @@ def run_relevance_gate(
             sims = _cosine_to_anchor(vectors, anchor_vec)
             for (kw, src, emb), sim in zip(scorable, sims):
                 score = float(sim)
-                # Lever 3: only the keyword's best silo can hold it active.
-                if assign_best_silo and best_topic_for_kw.get(kw, tid) != tid:
+                # Lever 3: only the keyword's assigned silo(s) can hold it active
+                # (one under hard argmax; several within silo_margin under soft
+                # routing). A keyword absent from the map (e.g. embedding failed)
+                # is never demoted here — it stays active everywhere it appears.
+                if (
+                    assign_best_silo
+                    and kw in active_topics_for_kw
+                    and tid not in active_topics_for_kw[kw]
+                ):
                     classified.append(
                         GatedKeyword(kw, src, "filtered_relevance", relevance_score=score)
                     )

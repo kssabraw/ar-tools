@@ -90,6 +90,7 @@ export function SessionWorkspace() {
   const [threshold, setThreshold] = useState("");
   const [resolution, setResolution] = useState("");
   const [perSiloCap, setPerSiloCap] = useState("");
+  const [edge, setEdge] = useState("");
   const regateBody = (): RegateBody => {
     const body: RegateBody = {};
     const t = parseFloat(threshold);
@@ -98,6 +99,8 @@ export function SessionWorkspace() {
     if (Number.isFinite(r) && r > 0) body.clustering_resolution = r;
     const c = parseInt(perSiloCap, 10);
     if (Number.isFinite(c) && c > 0) body.active_per_silo_cap = c;
+    const ed = parseFloat(edge);
+    if (Number.isFinite(ed) && ed > 0) body.clustering_edge_threshold = ed;
     return body;
   };
   const regateMut = useMutation({
@@ -112,7 +115,8 @@ export function SessionWorkspace() {
   const thresholdValid = inRange(threshold, 0.05, 0.99);
   const resolutionValid = inRange(resolution, 0.5, 20);
   const capValid = inRange(perSiloCap, 10, 50000, true);
-  const regateInputsValid = thresholdValid && resolutionValid && capValid;
+  const edgeValid = inRange(edge, 0.3, 0.95);
+  const regateInputsValid = thresholdValid && resolutionValid && capValid && edgeValid;
   // Shared tuning inputs — rendered both on the errored-session recovery card and
   // the results-view "Tighten the keyword pool" panel, so a run that errored can be
   // recovered with adjusted settings (not just re-tried at the same ones).
@@ -138,6 +142,13 @@ export function SessionWorkspace() {
         aria-label="Keywords per silo"
         title="Max active keywords per silo. Lower = smaller planning inputs."
         style={{ width: 96 }}
+      />
+      <input
+        type="number" min="0.3" max="0.95" step="0.05" placeholder="0.55"
+        value={edge} onChange={(e) => setEdge(e.target.value)}
+        aria-label="Edge threshold"
+        title="Clustering edge threshold (min cosine for a graph edge). Higher = more, smaller groupings."
+        style={{ width: 84 }}
       />
     </div>
   );
@@ -268,9 +279,9 @@ export function SessionWorkspace() {
                   session instead.
                 </p>
                 <p className="muted" style={{ margin: "0 0 6px", fontSize: 13 }}>
-                  Optional — tune before recovering (threshold · granularity · keywords/silo;
-                  blank = defaults). If a previous attempt planned nothing, raise the granularity
-                  or lower the keywords/silo so the planner gets smaller groupings.
+                  Optional — tune before recovering (threshold · granularity · keywords/silo ·
+                  edge; blank = defaults). If a previous attempt planned nothing, raise the
+                  granularity or lower the keywords/silo so the planner gets smaller groupings.
                 </p>
                 {regateTuningInputs}
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
@@ -302,7 +313,7 @@ export function SessionWorkspace() {
                 </div>
                 {!regateInputsValid && (
                   <p className="form-error">
-                    Threshold 0.05–0.99, granularity 0.5–20, keywords/silo ≥ 10.
+                    Threshold 0.05–0.99, granularity 0.5–20, keywords/silo ≥ 10, edge 0.3–0.95.
                   </p>
                 )}
                 {regateMut.isError && (
@@ -403,7 +414,7 @@ export function SessionWorkspace() {
         )}
         {!regateInputsValid && (
           <p className="form-error">
-            Threshold 0.05–0.99, granularity 0.5–20, keywords/silo ≥ 10.
+            Threshold 0.05–0.99, granularity 0.5–20, keywords/silo ≥ 10, edge 0.3–0.95.
           </p>
         )}
         {regateMut.isError && (
