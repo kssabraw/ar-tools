@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, CalendarClock, Download, RefreshCw } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client, ClientReport, ReportPeriod, ReportSettings } from '../lib/types'
+import { Ga4ConnectCard } from '../components/reports/Ga4ConnectCard'
 
 const PERIOD_LABELS: [ReportPeriod, string][] = [
   ['30d', 'Last 30 days'],
@@ -96,6 +97,8 @@ export function ClientReports() {
       </div>
 
       <SettingsCard clientId={clientId!} />
+
+      <Ga4ConnectCard clientId={clientId!} />
 
       {isLoading ? (
         <div style={emptyBox}>Loading…</div>
