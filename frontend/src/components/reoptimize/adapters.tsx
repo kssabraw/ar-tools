@@ -252,3 +252,63 @@ export function blogAdapter(clientId: string): ReoptAdapter {
     poll: runPoll,
   }
 }
+
+// ── Mass Posts (Fan-out) — reoptimize existing Fan-out articles ──────────────
+// Job-based, client-scoped, "pick existing" only: a Fan-out article is
+// reoptimized via its mirrored suite run (score → rewrite-to-threshold) and the
+// improved article is reflected back into the Fan-out Articles library. Only
+// client-linked articles are listed.
+type FanoutJobStatus = { job_id: string; status: string; result?: { prev_score?: number | null; new_score?: number | null } | null; error?: string | null }
+
+function fanoutJobResult(id: string, label: string, st: FanoutJobStatus | undefined): ReoptResult {
+  if (!st) return { id, label, status: 'queued' }
+  if (st.status === 'complete') {
+    return { id, label, status: 'done', prevScore: st.result?.prev_score ?? null, newScore: st.result?.new_score ?? null }
+  }
+  if (st.status === 'failed') return { id, label, status: 'failed', reason: st.error ?? 'Reoptimization failed' }
+  if (st.status === 'running') return { id, label, status: 'working' }
+  return { id, label, status: 'queued' }
+}
+
+export function fanoutAdapter(clientId: string): ReoptAdapter {
+  return {
+    toolLabel: 'Mass Posts (Fan-out)',
+    storageKey: `reopt:fanout:${clientId}`,
+    clientId,
+    itemNoun: 'article',
+    supportsUrl: false,
+    supportsPaste: false,
+    supportsExisting: true,
+    requiresKeyword: false,
+    introText:
+      'Reoptimize blog articles created by the Mass Posts (Fan-out) tool for this client. Each is re-scored against the blog/AEO rubric, rewritten to fix its weaknesses, then updated in place in the Fan-out Articles library. Only client-linked articles appear here.',
+    async listExisting() {
+      const res = await reoptApi.fanoutList(clientId)
+      return (res.articles ?? []).map(a => ({
+        id: a.cluster_id,
+        label: a.composite_score != null ? `${a.name} · score ${Math.round(a.composite_score)}` : a.name,
+      }))
+    },
+    async start(items) {
+      const labelByCluster = new Map(items.map(t => [t.existingId ?? '', t.label ?? t.existingId ?? '']))
+      const clusterIds = items.map(t => t.existingId).filter((x): x is string => Boolean(x))
+      const res = await reoptApi.fanoutReoptimizeBulk(clientId, clusterIds)
+      const jobs: ReoptHandle[] = (res.jobs ?? []).map(j => ({
+        kind: 'job' as const, id: j.job_id, jobId: j.job_id, label: labelByCluster.get(j.cluster_id) || j.cluster_id,
+      }))
+      const skipped: ReoptHandle[] = (res.skipped ?? []).map((s, i) => ({
+        kind: 'skipped' as const, id: `skip:${i}:${s.cluster_id}`,
+        label: labelByCluster.get(s.cluster_id) || s.cluster_id,
+        reason: s.reason ?? 'Skipped — not client-linked or no article.',
+      }))
+      return [...jobs, ...skipped]
+    },
+    async poll(handles) {
+      const jobIds = handles.map(h => (h.kind === 'job' ? h.jobId : '')).filter(Boolean)
+      if (!jobIds.length) return []
+      const res = await reoptApi.fanoutJobsStatus(clientId, jobIds)
+      const byId = new Map(res.jobs.map(s => [s.job_id, s]))
+      return handles.map(h => fanoutJobResult(h.id, h.label, h.kind === 'job' ? byId.get(h.jobId) : undefined))
+    },
+  }
+}

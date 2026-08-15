@@ -25,6 +25,9 @@ export interface ReoptItem {
   location?: string | null
   locationCode?: number | null
   pageType?: string | null
+  // Identity of an item picked from the `existing` list (e.g. a Fan-out article's
+  // cluster id) — carried through so an adapter can dispatch by id, not URL.
+  existingId?: string | null
   // Original textarea line / display label (for invalid-line warnings + rows).
   raw?: string
   label?: string

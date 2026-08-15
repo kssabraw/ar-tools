@@ -1924,6 +1924,12 @@ def list_articles(
         "cost_usd": r.get("cost_usd"),
         "generated_at": r.get("generated_at"),
         "scheduled": r.get("scheduled_article_run_id") is not None,
+        # Reoptimization is available only for client-linked articles (those
+        # mirrored into a suite blog run); the latest composite score is shown
+        # as a badge when a score/reopt has run.
+        "reoptimizable": r.get("suite_run_id") is not None,
+        "composite_score": r.get("composite_score"),
+        "composite_status": r.get("composite_status"),
     } for r in rows]
     items.sort(key=lambda x: x["generated_at"] or "", reverse=True)
     return {"articles": items, "count": len(items)}
