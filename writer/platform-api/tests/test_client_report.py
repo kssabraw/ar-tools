@@ -486,3 +486,123 @@ def test_fmt_goal_value_by_type():
     assert cr._fmt_goal_value("keyword_position", 3) == "position 3"
     assert cr._fmt_goal_value("ai_visibility", 40) == "40%"
     assert cr._fmt_goal_value("keyword_position", None) == "—"
+
+
+# ---------------------------------------------------------------------------
+# GA4 website-traffic section (Client Reporting Phase 2)
+# ---------------------------------------------------------------------------
+from datetime import date as _date  # noqa: E402
+from unittest.mock import MagicMock  # noqa: E402
+
+
+def _fake_ga4_supabase(properties, daily):
+    """Chainable supabase stub for _gather_ga4: ga4_properties + ga4_daily reads."""
+    def table(name):
+        t = MagicMock()
+        for m in ("select", "eq", "gte", "order", "limit"):
+            getattr(t, m).return_value = t
+        t.execute.return_value = MagicMock(
+            data=properties if name == "ga4_properties" else daily
+        )
+        return t
+
+    sb = MagicMock()
+    sb.table.side_effect = table
+    return sb
+
+
+_GA4_DAILY = [
+    {"date": "2026-04-01", "sessions": 10, "total_users": 8, "screen_page_views": 20,
+     "conversions": None, "channels": {"Direct": 10}},
+    {"date": "2026-04-15", "sessions": 50, "total_users": 40, "screen_page_views": 100,
+     "conversions": 1, "channels": {"Organic Search": 50}},
+    {"date": "2026-05-15", "sessions": 100, "total_users": 70, "screen_page_views": 250,
+     "conversions": 3, "channels": {"Organic Search": 60, "Direct": 40}},
+    {"date": "2026-05-20", "sessions": 80, "total_users": 55, "screen_page_views": 180,
+     "conversions": 2, "channels": {"Organic Search": 50, "Direct": 30}},
+]
+
+
+def test_gather_ga4_none_without_property():
+    sb = _fake_ga4_supabase([], _GA4_DAILY)
+    assert cr._gather_ga4(sb, "c1", _date(2026, 5, 1), _date(2026, 5, 31)) is None
+
+
+def test_gather_ga4_none_without_data():
+    sb = _fake_ga4_supabase([{"id": "p1"}], [])
+    assert cr._gather_ga4(sb, "c1", _date(2026, 5, 1), _date(2026, 5, 31)) is None
+
+
+def test_gather_ga4_computes_period_and_channels():
+    sb = _fake_ga4_supabase([{"id": "p1"}], _GA4_DAILY)
+    out = cr._gather_ga4(sb, "c1", _date(2026, 5, 1), _date(2026, 5, 31))
+    assert out is not None
+    # current sessions = 100 + 80 = 180; previous (04-01<d<=05-01) = 50
+    assert out["sessions"]["current"] == 180
+    assert out["sessions"]["previous"] == 50
+    assert out["sessions"]["change"] == 260.0
+    assert out["conversions"]["current"] == 5
+    # channels aggregated over the report window, ranked, with share %
+    names = [c["name"] for c in out["channels"]]
+    assert names[0] == "Organic Search"  # 110 > 70
+    organic = next(c for c in out["channels"] if c["name"] == "Organic Search")
+    assert organic["sessions"] == 110
+    assert organic["pct"] == 61  # round(110/180*100)
+
+
+def test_section_ga4_empty_without_data():
+    assert cr._section_ga4(_data()) == ""
+
+
+def test_section_ga4_renders_visits_and_channels():
+    data = _data(ga4={
+        "sessions": {"current": 180, "previous": 50, "change": 260.0},
+        "conversions": {"current": 5, "previous": 1, "change": 400.0},
+        "channels": [{"name": "Organic Search", "sessions": 110, "pct": 61},
+                     {"name": "Direct", "sessions": 70, "pct": 39}],
+    })
+    html = cr._section_ga4(data)
+    assert "Website traffic" in html
+    assert "Website visits" in html and "180" in html
+    assert "Conversions" in html
+    assert "Organic Search" in html and "61%" in html
+
+
+def test_section_ga4_never_renders_summed_visitors():
+    # GA4 totalUsers isn't additive across days; a summed "Visitors" row must not
+    # appear even if a caller passes a users metric (regression guard).
+    data = _data(ga4={
+        "sessions": {"current": 180, "previous": 50, "change": 260.0},
+        "users": {"current": 3000, "previous": 900, "change": 233.0},
+        "channels": [],
+    })
+    html = cr._section_ga4(data)
+    assert "Visitors" not in html
+    assert "3,000" not in html
+
+
+def test_gather_ga4_omits_users_metric():
+    sb = _fake_ga4_supabase([{"id": "p1"}], _GA4_DAILY)
+    out = cr._gather_ga4(sb, "c1", _date(2026, 5, 1), _date(2026, 5, 31))
+    assert "users" not in out  # non-additive; deliberately not summed/reported
+
+
+def test_section_ga4_omits_zero_current_metric():
+    data = _data(ga4={"sessions": {"current": 0, "previous": 5, "change": -100.0}, "channels": []})
+    assert cr._section_ga4(data) == ""
+
+
+def test_build_html_includes_ga4_section():
+    data = _data(ga4={"sessions": {"current": 180, "previous": 50, "change": 260.0}, "channels": []})
+    assert "Website traffic" in cr.build_report_html(data)
+
+
+def test_kpi_strip_includes_ga4_visits_on_gain():
+    data = _data(ga4={"sessions": {"current": 180, "previous": 50, "change": 260.0}, "channels": []})
+    html = cr._kpi_strip(data)
+    assert "Website visits" in html
+
+
+def test_kpi_strip_omits_ga4_visits_when_flat_or_down():
+    data = _data(ga4={"sessions": {"current": 50, "previous": 80, "change": -37.5}, "channels": []})
+    assert "Website visits" not in cr._kpi_strip(data)

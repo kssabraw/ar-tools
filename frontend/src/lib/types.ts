@@ -158,6 +158,31 @@ export interface SyncRun {
   error: string | null
 }
 
+// GA4 (Google Analytics) connection — Client Reporting Phase 2.
+export interface Ga4Property {
+  id: string
+  client_id: string
+  property_id: string // "properties/123456789"
+  display_name: string | null
+  access_status: 'ok' | 'no_access' | 'pending'
+  last_verified_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface Ga4VerifyResponse {
+  property_id: string
+  access_status: 'ok' | 'no_access' | 'pending'
+  detail: string | null
+  last_verified_at: string | null
+}
+
+export interface Ga4PropertySummary {
+  property_id: string
+  display_name: string
+  account_name: string
+}
+
 export interface IngestResponse {
   property_id: string
   // A dateless "Sync now" enqueues a background job ("queued" + job_id); an
