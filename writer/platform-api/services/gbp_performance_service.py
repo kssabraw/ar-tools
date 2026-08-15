@@ -19,8 +19,11 @@ Google client libraries are imported lazily so this module (and its unit tests)
 import cleanly where the libraries aren't installed. The pure parse/classify
 helpers have no Google dependency and are independently unit-tested.
 
-⚠️ This path is dormant until Google approves Business Profile API quota for the
-GCP project (0 QPM by default) — nothing here returns data before that.
+Live in production since 2026-08-15. Quota is granted and the daily ingest
+returns data. Credentials are **OAuth-preferred** (``_auth_credentials`` →
+``gbp_auth.credentials()``): GBP is OAuth-first, so the agency service account —
+usually not a listing Manager — 404s ('location not recognized') on listings
+that only the agency OAuth account manages; the SA is the fallback only.
 
 See: docs/modules/client-reporting-prd-v1_0.md (Phase 2 — GBP Performance).
 """
@@ -336,6 +339,56 @@ def fetch_daily_metrics(
     )
     resp = request.execute()
     return parse_time_series(resp)
+
+
+def parse_search_keywords(payload: dict) -> list[dict]:
+    """Map a ``searchkeywords.impressions.monthly`` response to flat records.
+
+    Each ``searchKeywordsCounts`` entry is a keyword + an ``insightsValue`` that is
+    either an exact ``value`` or, below Google's privacy floor, a ``threshold``
+    (report "fewer than N"). Returns ``[{keyword, value, is_threshold}]``. Pure."""
+    out: list[dict] = []
+    for item in payload.get("searchKeywordsCounts", []) or []:
+        kw = item.get("searchKeyword")
+        if not kw:
+            continue
+        iv = item.get("insightsValue") or {}
+        if "value" in iv:
+            out.append({"keyword": kw, "value": _to_int(iv.get("value")), "is_threshold": False})
+        elif "threshold" in iv:
+            out.append({"keyword": kw, "value": _to_int(iv.get("threshold")), "is_threshold": True})
+        else:
+            out.append({"keyword": kw, "value": 0, "is_threshold": False})
+    return out
+
+
+def fetch_search_keywords(location_id: str, month: date, client=None) -> list[dict]:
+    """Fetch the search terms that drove impressions for one location in one
+    calendar ``month`` (start==end month). Returns parsed records (see
+    ``parse_search_keywords``). Raises on API error so the caller can classify."""
+    client = client or build_performance_client()
+    out: list[dict] = []
+    page_token: Optional[str] = None
+    while True:
+        params = {
+            "monthlyRange_startMonth_year": month.year,
+            "monthlyRange_startMonth_month": month.month,
+            "monthlyRange_endMonth_year": month.year,
+            "monthlyRange_endMonth_month": month.month,
+            "pageSize": 100,
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        resp = (
+            client.locations().searchkeywords().impressions().monthly()
+            .list(parent=location_id, **params)
+            .execute()
+        )
+        out.extend(parse_search_keywords(resp))
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            break
+    return out
 
 
 def verify_location_access(location_id: str) -> VerifyResult:

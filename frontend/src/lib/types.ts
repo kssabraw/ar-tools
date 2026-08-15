@@ -1951,10 +1951,52 @@ export interface GbpResolvedLocation {
 export interface GbpMetricGrowth {
   metric: string
   label: string
+  group: string
   current: number
   previous: number
   delta: number
   pct: number | null
+}
+
+export interface GbpBreakdownItem {
+  label: string
+  current: number
+  previous: number
+  pct: number | null
+  share: number
+}
+
+export interface GbpBreakdown {
+  surface: GbpBreakdownItem[]
+  device: GbpBreakdownItem[]
+}
+
+export interface GbpActionsSummary {
+  current: number
+  previous: number
+  delta: number
+  pct: number | null
+  engagement_current: number | null
+  engagement_previous: number | null
+}
+
+export interface GbpReviewsSummary {
+  rating: number | null
+  review_count: number
+  items: GbpReview[]
+}
+
+export interface GbpSearchKeyword {
+  keyword: string
+  value: number
+  is_threshold: boolean
+}
+
+export interface GbpSearchKeywords {
+  month: string | null
+  months: string[]
+  keywords: GbpSearchKeyword[]
+  total: number
 }
 
 export interface GbpSeriesPoint {
@@ -1969,7 +2011,14 @@ export interface GbpDashboard {
   window_days: number
   date_start: string
   date_end: string
+  compare_start: string
+  compare_end: string
   last_synced_at: string | null
   metrics: GbpMetricGrowth[]
+  breakdown: GbpBreakdown
+  actions: GbpActionsSummary | null
+  insights: string[]
+  reviews: GbpReviewsSummary
   series: GbpSeriesPoint[]
+  compare_series: GbpSeriesPoint[]
 }

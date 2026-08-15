@@ -1,14 +1,16 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, RefreshCw, PlugZap, CheckCircle2, AlertTriangle, History } from 'lucide-react'
+import { ArrowLeft, RefreshCw, PlugZap, CheckCircle2, AlertTriangle, History, Users, Lightbulb, Star, Download, Search } from 'lucide-react'
 import { api } from '../lib/api'
+import { useAuth } from '../context/AuthContext'
 import type {
   Client, GbpDashboard, GbpLocation, GbpMetricGrowth, GbpResolvedLocation, GbpSeriesPoint,
+  GbpBreakdownItem, GbpActionsSummary, GbpReviewsSummary, GbpSearchKeywords,
 } from '../lib/types'
 
 const WINDOWS: [number, string][] = [
-  [28, 'Last 28 days'],
+  [30, 'Last 30 days'],
   [90, 'Last 90 days'],
   [180, 'Last 6 months'],
   [365, 'Last 12 months'],
@@ -23,7 +25,16 @@ export function GbpMetrics() {
   const { id: clientId } = useParams<{ id: string }>()
   const navigate = useNavigate()
   // Not `window` — that shadows the global and would break any window.* call.
-  const [windowDays, setWindowDays] = useState(90)
+  const [windowDays, setWindowDays] = useState(30)
+  const [mode, setMode] = useState<'preset' | 'custom'>('preset')
+  const [customStart, setCustomStart] = useState('')
+  const [customEnd, setCustomEnd] = useState('')
+
+  const today = new Date().toISOString().slice(0, 10)
+  const customReady = mode === 'custom' && Boolean(customStart && customEnd)
+  // Preset window OR an explicit start/end range; the backend compares either
+  // against the equal-length window immediately before it.
+  const qs = customReady ? `start=${customStart}&end=${customEnd}` : `window=${windowDays}`
 
   const { data: client } = useQuery<Client>({
     queryKey: ['client', clientId],
@@ -32,10 +43,26 @@ export function GbpMetrics() {
   })
 
   const { data, isLoading, error } = useQuery<GbpDashboard>({
-    queryKey: ['gbp-dashboard', clientId, windowDays],
-    queryFn: () => api.get<GbpDashboard>(`/clients/${clientId}/gbp-metrics/dashboard?window=${windowDays}`),
-    enabled: Boolean(clientId),
+    queryKey: ['gbp-dashboard', clientId, qs],
+    queryFn: () => api.get<GbpDashboard>(`/clients/${clientId}/gbp-metrics/dashboard?${qs}`),
+    enabled: Boolean(clientId) && (mode === 'preset' || customReady),
   })
+
+  function onPeriodChange(value: string) {
+    if (value === 'custom') {
+      setMode('custom')
+      // Seed a 30-day range so the view loads immediately; the user adjusts from there.
+      if (!customStart || !customEnd) {
+        const startD = new Date()
+        startD.setDate(startD.getDate() - 29)
+        setCustomStart(startD.toISOString().slice(0, 10))
+        setCustomEnd(today)
+      }
+    } else {
+      setMode('preset')
+      setWindowDays(Number(value))
+    }
+  }
 
   return (
     <div style={{ padding: 32, maxWidth: 1080 }}>
@@ -43,7 +70,7 @@ export function GbpMetrics() {
         <ArrowLeft size={14} /> Back to Workspace
       </button>
 
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, marginBottom: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, marginBottom: 18, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: 0 }}>GBP Insights</h1>
           <p style={{ fontSize: 13, color: '#94a3b8', margin: '4px 0 0', maxWidth: 640 }}>
@@ -51,9 +78,29 @@ export function GbpMetrics() {
             website clicks, direction requests &amp; messages over time, from the Business Profile Performance API.
           </p>
         </div>
-        <select style={select} value={windowDays} onChange={(e) => setWindowDays(Number(e.target.value))}>
-          {WINDOWS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
-        </select>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <select
+            style={select}
+            value={mode === 'custom' ? 'custom' : String(windowDays)}
+            onChange={(e) => onPeriodChange(e.target.value)}
+          >
+            {WINDOWS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+            <option value="custom">Custom range…</option>
+          </select>
+          {mode === 'custom' && (
+            <>
+              <input
+                type="date" style={select} max={customEnd || today}
+                value={customStart} onChange={(e) => setCustomStart(e.target.value)}
+              />
+              <span style={{ color: '#94a3b8', fontSize: 13 }}>→</span>
+              <input
+                type="date" style={select} max={today} min={customStart || undefined}
+                value={customEnd} onChange={(e) => setCustomEnd(e.target.value)}
+              />
+            </>
+          )}
+        </div>
       </div>
 
       {error ? (
@@ -65,7 +112,7 @@ export function GbpMetrics() {
       ) : !data.connected ? (
         <ConnectPanel clientId={clientId!} locations={data.locations} />
       ) : (
-        <Dashboard clientId={clientId!} data={data} />
+        <Dashboard clientId={clientId!} data={data} periodQs={qs} />
       )}
       <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
     </div>
@@ -85,6 +132,64 @@ function NotEnabled() {
         An admin can confirm live API access with <code>GET /gbp/diagnose-performance</code>, then turn the flag on.
         Once enabled, connect a location here and the daily ingest starts populating this dashboard.
       </p>
+    </div>
+  )
+}
+
+// Admin-only agency-wide action: bulk-onboard every client that has a captured
+// GBP but no registered location (resolve once → auto-match → register + backfill).
+function OnboardAllButton() {
+  const { isAdmin } = useAuth()
+  const queryClient = useQueryClient()
+
+  const { data: status } = useQuery<{ status: string; result?: { onboarded: unknown[]; skipped: unknown[] } }>({
+    queryKey: ['gbp-onboard-status'],
+    queryFn: () => api.get('/gbp/onboard/status'),
+    enabled: isAdmin,
+    refetchInterval: (q) => {
+      const s = (q.state.data as { status?: string } | undefined)?.status
+      return s === 'pending' || s === 'running' ? 2500 : false
+    },
+  })
+
+  const start = useMutation({
+    mutationFn: () => api.post<{ status: string; job_id: string }>('/gbp/onboard', {}),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['gbp-onboard-status'] }),
+  })
+
+  // When a run completes, refresh this client's dashboard (it may have just been onboarded).
+  useEffect(() => {
+    if (status?.status === 'complete') void queryClient.invalidateQueries({ queryKey: ['gbp-dashboard'] })
+  }, [status?.status, queryClient])
+
+  if (!isAdmin) return null
+  const running = start.isPending || status?.status === 'pending' || status?.status === 'running'
+  const result = status?.status === 'complete' ? status.result : undefined
+
+  return (
+    <div style={{ ...noticeCard, marginBottom: 12, background: '#f8fafc' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Users size={16} color="#6366f1" />
+          <div>
+            <strong style={{ fontSize: 13, color: '#0f172a' }}>Onboard all clients</strong>
+            <div style={{ fontSize: 12, color: '#94a3b8' }}>
+              Auto-match every client's Google Business Profile and start an 18-month backfill.
+            </div>
+          </div>
+        </div>
+        <button style={primaryBtn} onClick={() => start.mutate()} disabled={running}>
+          <RefreshCw size={14} style={running ? spinStyle : undefined} />
+          {running ? 'Onboarding…' : 'Auto-onboard all'}
+        </button>
+      </div>
+      {start.isError && <div style={errText}>{(start.error as Error).message}</div>}
+      {result && (
+        <div style={{ fontSize: 12.5, color: '#334155', marginTop: 10 }}>
+          Onboarded <strong>{result.onboarded.length}</strong>, skipped <strong>{result.skipped.length}</strong>.
+          {result.onboarded.length > 0 && ' Backfills are running — data appears in a few minutes.'}
+        </div>
+      )}
     </div>
   )
 }
@@ -113,6 +218,7 @@ function ConnectPanel({ clientId, locations }: { clientId: string; locations: Gb
 
   return (
     <div>
+      <OnboardAllButton />
       <div style={noticeCard}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
           <PlugZap size={16} color="#6366f1" />
@@ -211,9 +317,10 @@ function LocationRow({ clientId, loc, onChange }: { clientId: string; loc: GbpLo
 }
 
 // ── The dashboard itself ─────────────────────────────────────────────────────
-function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard }) {
+function Dashboard({ clientId, data, periodQs }: { clientId: string; data: GbpDashboard; periodQs: string }) {
   const queryClient = useQueryClient()
   const okLocations = data.locations.filter((l) => l.access_status === 'ok')
+  const [exporting, setExporting] = useState(false)
 
   const sync = useMutation({
     // Trigger an ingest for each verified location, then refresh the view.
@@ -223,7 +330,26 @@ function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard })
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['gbp-dashboard', clientId] }),
   })
 
+  async function exportCsv() {
+    setExporting(true)
+    try {
+      await api.download(
+        `/clients/${clientId}/gbp-metrics/export?${periodQs}`,
+        `gbp-metrics-${data.date_start}-to-${data.date_end}.csv`,
+      )
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const hasData = data.metrics.length > 0
+  // Tolerate a backend that predates these fields (e.g. during a deploy where the
+  // frontend ships before the API) — degrade, never white-screen.
+  const insights = data.insights ?? []
+  const breakdown = data.breakdown ?? { surface: [], device: [] }
+  const isVisibility = (m: GbpMetricGrowth) => (m.group ? m.group === 'visibility' : m.metric === 'profile_views')
+  const visibility = data.metrics.filter(isVisibility)
+  const actions = data.metrics.filter((m) => !isVisibility(m))
 
   return (
     <div>
@@ -233,10 +359,17 @@ function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard })
           {okLocations.length} location{okLocations.length === 1 ? '' : 's'} connected
           {data.last_synced_at && <span>· last synced {new Date(data.last_synced_at).toLocaleString()}</span>}
         </div>
-        <button style={secondaryBtn} onClick={() => sync.mutate()} disabled={sync.isPending}>
-          <RefreshCw size={13} style={sync.isPending ? spinStyle : undefined} />
-          {sync.isPending ? 'Syncing…' : 'Sync now'}
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {hasData && (
+            <button style={secondaryBtn} onClick={exportCsv} disabled={exporting}>
+              <Download size={13} /> {exporting ? 'Exporting…' : 'Export CSV'}
+            </button>
+          )}
+          <button style={secondaryBtn} onClick={() => sync.mutate()} disabled={sync.isPending}>
+            <RefreshCw size={13} style={sync.isPending ? spinStyle : undefined} />
+            {sync.isPending ? 'Syncing…' : 'Sync now'}
+          </button>
+        </div>
       </div>
 
       {!hasData ? (
@@ -246,15 +379,37 @@ function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard })
         </div>
       ) : (
         <>
+          {insights.length > 0 && <InsightsPanel lines={insights} />}
+
+          {data.reviews && (data.reviews.rating != null || data.reviews.review_count > 0) && (
+            <ReviewsPanel reviews={data.reviews} />
+          )}
+
+          <TrendChart data={data} />
+
+          <SectionHeading>Visibility — how many people saw this business</SectionHeading>
           <div style={tileGrid}>
-            {data.metrics.map((m) => (
-              <MetricTile key={m.metric} metric={m} series={data.series} />
-            ))}
+            {visibility.map((m) => <MetricTile key={m.metric} metric={m} series={data.series} />)}
           </div>
-          <div style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 14 }}>
-            Totals over the last {data.window_days} days vs. the prior {data.window_days} days
-            ({data.date_start} – {data.date_end}). GBP reports performance data with a 3–5 day lag, so the
-            most recent days may still be filling in.
+          {(breakdown.surface.length > 0 || breakdown.device.length > 0) && (
+            <div style={breakdownGrid}>
+              <BreakdownCard title="Where views came from" items={breakdown.surface} />
+              <BreakdownCard title="By device" items={breakdown.device} />
+            </div>
+          )}
+
+          <SearchKeywordsPanel clientId={clientId} />
+
+          <SectionHeading>Customer actions — what they did next</SectionHeading>
+          {data.actions && <ActionsHeadline actions={data.actions} />}
+          <div style={tileGrid}>
+            {actions.map((m) => <MetricTile key={m.metric} metric={m} series={data.series} />)}
+          </div>
+
+          <div style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 16 }}>
+            {data.date_start} – {data.date_end} ({data.window_days} days) vs. the prior period
+            ({data.compare_start} – {data.compare_end}). GBP reports performance data with a 3–5 day lag,
+            so the most recent days may still be filling in.
           </div>
         </>
       )}
@@ -262,8 +417,254 @@ function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard })
   )
 }
 
+// Search terms that drove impressions (monthly). Fetched separately from the
+// daily dashboard — the data is monthly and independent of the window.
+function SearchKeywordsPanel({ clientId }: { clientId: string }) {
+  const [month, setMonth] = useState<string | undefined>(undefined)
+  const { data, isLoading, isError } = useQuery<GbpSearchKeywords>({
+    queryKey: ['gbp-search-keywords', clientId, month ?? 'latest'],
+    queryFn: () => api.get<GbpSearchKeywords>(
+      `/clients/${clientId}/gbp-metrics/search-keywords${month ? `?month=${month}` : ''}`,
+    ),
+    enabled: Boolean(clientId),
+  })
+  const muted: React.CSSProperties = { fontSize: 12.5, color: '#94a3b8', padding: '6px 0' }
+
+  return (
+    <>
+      <SectionHeading>Search keywords — what people searched to find this business</SectionHeading>
+      <div style={tile}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#64748b' }}>
+            <Search size={14} color="#6366f1" />
+            {data?.total ? <span><strong style={{ color: '#0f172a' }}>{data.total.toLocaleString()}</strong> impressions from search terms</span> : 'Top search terms'}
+          </div>
+          {data && data.months.length > 0 && (
+            <select style={{ ...select, padding: '6px 8px' }} value={data.month ?? ''} onChange={(e) => setMonth(e.target.value)}>
+              {data.months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+            </select>
+          )}
+        </div>
+        {isLoading ? (
+          <div style={muted}>Loading search keywords…</div>
+        ) : isError ? (
+          <div style={muted}>Couldn't load search keywords right now — try refreshing.</div>
+        ) : !data || data.keywords.length === 0 ? (
+          <div style={muted}>
+            No search-keyword data yet. GBP reports these monthly (about a month behind) — it fills in after the next monthly sync.
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: 4 }}>
+            {data.keywords.map((k) => (
+              <div key={k.keyword} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5, padding: '3px 0', borderBottom: '1px solid #f8fafc' }}>
+                <span style={{ color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.keyword}</span>
+                <span style={{ color: '#64748b', flexShrink: 0 }}>{k.is_threshold ? `<${k.value.toLocaleString()}` : k.value.toLocaleString()}</span>
+              </div>
+            ))}
+            <div style={{ fontSize: 10.5, color: '#cbd5e1', marginTop: 4 }}>
+              "&lt;N" = Google's privacy floor for low-volume terms.
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  )
+}
+
+function InsightsPanel({ lines }: { lines: string[] }) {
+  return (
+    <div style={{ ...noticeCard, background: '#eef2ff', borderColor: '#c7d2fe', marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
+        <Lightbulb size={15} color="#4f46e5" />
+        <strong style={{ fontSize: 12.5, color: '#3730a3' }}>At a glance</strong>
+      </div>
+      <ul style={{ margin: 0, paddingLeft: 18, display: 'grid', gap: 4 }}>
+        {lines.map((l, i) => <li key={i} style={{ fontSize: 13, color: '#312e81' }}>{l}</li>)}
+      </ul>
+    </div>
+  )
+}
+
+function SectionHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ fontSize: 12.5, fontWeight: 700, color: '#0f172a', margin: '20px 0 10px', letterSpacing: '-0.01em' }}>
+      {children}
+    </div>
+  )
+}
+
+function ReviewsPanel({ reviews }: { reviews: GbpReviewsSummary }) {
+  const rating = reviews.rating
+  const full = rating != null ? Math.round(rating) : 0
+  return (
+    <div style={{ ...tile, marginBottom: 16, display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+      <div style={{ flexShrink: 0 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b', marginBottom: 3 }}>Google reviews</div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          <div style={{ fontSize: 26, fontWeight: 700, color: '#0f172a' }}>{rating != null ? rating.toFixed(1) : '—'}</div>
+          <div style={{ display: 'flex', gap: 1 }}>
+            {[0, 1, 2, 3, 4].map((i) => (
+              <Star key={i} size={14} fill={i < full ? '#f59e0b' : 'none'} color={i < full ? '#f59e0b' : '#cbd5e1'} />
+            ))}
+          </div>
+        </div>
+        <div style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 2 }}>{reviews.review_count.toLocaleString()} reviews</div>
+      </div>
+      {reviews.items.length > 0 && (
+        <div style={{ flex: '1 1 320px', minWidth: 0, display: 'grid', gap: 6 }}>
+          {reviews.items.slice(0, 3).map((r, i) => (
+            <div key={i} style={{ fontSize: 12.5, color: '#475569' }}>
+              {r.rating != null && <span style={{ color: '#f59e0b' }}>{'★'.repeat(Math.round(r.rating))} </span>}
+              <span style={{ fontStyle: 'italic' }}>"{r.text}"</span>
+              {r.reviewer && <span style={{ color: '#94a3b8' }}> — {r.reviewer}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Large interactive trend chart: this period (solid) vs the prior period (dashed),
+// aligned by day-of-period, with a metric selector and a hover tooltip.
+function TrendChart({ data }: { data: GbpDashboard }) {
+  const options = data.metrics.map((m) => ({ key: m.metric, label: m.label }))
+  const [metric, setMetric] = useState(options[0]?.key ?? 'profile_views')
+  const [hover, setHover] = useState<number | null>(null)
+
+  const cur = useMemo(() => (data.series ?? []).map((p) => p.values[metric] ?? 0), [data.series, metric])
+  const prev = useMemo(() => (data.compare_series ?? []).map((p) => p.values[metric] ?? 0), [data.compare_series, metric])
+  const dates = (data.series ?? []).map((p) => p.date)
+  const label = options.find((o) => o.key === metric)?.label ?? metric
+
+  const width = 900, height = 260
+  const padL = 44, padR = 16, padT = 16, padB = 26
+  const span = Math.max(cur.length, prev.length, 2)
+  const maxV = Math.max(1, ...cur, ...prev)
+  const x = (i: number) => padL + (i / (span - 1)) * (width - padL - padR)
+  const y = (v: number) => padT + (1 - v / maxV) * (height - padT - padB)
+  const line = (vals: number[]) => vals.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
+  const curArea = cur.length
+    ? `${line(cur)} L${x(cur.length - 1).toFixed(1)},${height - padB} L${x(0).toFixed(1)},${height - padB} Z`
+    : ''
+
+  const onMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const f = (e.clientX - rect.left) / rect.width
+    const plotFrac = (f - padL / width) / ((width - padL - padR) / width)
+    setHover(Math.round(Math.max(0, Math.min(1, plotFrac)) * (cur.length - 1)))
+  }
+  const gridY = [0, 0.5, 1].map((f) => ({ v: Math.round(maxV * (1 - f)), yy: padT + f * (height - padT - padB) }))
+  const hi = hover != null && hover >= 0 && hover < cur.length ? hover : null
+
+  return (
+    <div style={{ ...tile, padding: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+        <select style={{ ...select, padding: '6px 8px' }} value={metric} onChange={(e) => setMetric(e.target.value)}>
+          {options.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+        </select>
+        <div style={{ display: 'flex', gap: 14, fontSize: 11.5, color: '#64748b' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ width: 14, height: 2, background: '#6366f1', display: 'inline-block' }} /> This period
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ width: 14, height: 0, borderTop: '2px dashed #94a3b8', display: 'inline-block' }} /> Previous
+          </span>
+        </div>
+      </div>
+      <div style={{ position: 'relative' }} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+        <svg width="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{ display: 'block', height: 260 }}>
+          {gridY.map((g, i) => (
+            <g key={i}>
+              <line x1={padL} y1={g.yy} x2={width - padR} y2={g.yy} stroke="#f1f5f9" strokeWidth={1} />
+              <text x={padL - 6} y={g.yy + 3} textAnchor="end" fontSize={10} fill="#94a3b8">{g.v.toLocaleString()}</text>
+            </g>
+          ))}
+          {curArea && <path d={curArea} fill="#6366f1" opacity={0.08} />}
+          {prev.length > 1 && <path d={line(prev)} fill="none" stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="4 3" strokeLinejoin="round" />}
+          {cur.length > 1 && <path d={line(cur)} fill="none" stroke="#6366f1" strokeWidth={2} strokeLinejoin="round" />}
+          {hi != null && (
+            <g>
+              <line x1={x(hi)} y1={padT} x2={x(hi)} y2={height - padB} stroke="#cbd5e1" strokeWidth={1} />
+              <circle cx={x(hi)} cy={y(cur[hi])} r={3} fill="#6366f1" />
+            </g>
+          )}
+          <text x={padL} y={height - 8} fontSize={10} fill="#94a3b8">{dates[0]}</text>
+          <text x={width - padR} y={height - 8} textAnchor="end" fontSize={10} fill="#94a3b8">{dates[dates.length - 1]}</text>
+        </svg>
+        {hi != null && (
+          <div style={{
+            position: 'absolute', left: `${(x(hi) / width) * 100}%`, top: 0, transform: 'translateX(-50%)',
+            background: '#0f172a', color: '#fff', fontSize: 11, borderRadius: 6, padding: '5px 8px',
+            pointerEvents: 'none', whiteSpace: 'nowrap',
+          }}>
+            <div style={{ opacity: 0.7 }}>{dates[hi]}</div>
+            <div><strong>{cur[hi].toLocaleString()}</strong> {label.toLowerCase()}</div>
+            {prev[hi] != null && <div style={{ opacity: 0.7 }}>prev: {prev[hi].toLocaleString()}</div>}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function BreakdownCard({ title, items }: { title: string; items: GbpBreakdownItem[] }) {
+  const colors = ['#6366f1', '#0ea5e9', '#14b8a6', '#f59e0b']
+  return (
+    <div style={tile}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b', marginBottom: 10 }}>{title}</div>
+      <div style={{ display: 'grid', gap: 10 }}>
+        {items.map((it, i) => (
+          <div key={it.label}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 3 }}>
+              <span style={{ color: '#334155', fontWeight: 600 }}>{it.label}</span>
+              <span style={{ color: '#64748b' }}>{it.current.toLocaleString()} · {it.share}%</span>
+            </div>
+            <div style={{ height: 7, background: '#f1f5f9', borderRadius: 999, overflow: 'hidden' }}>
+              <div style={{ width: `${Math.min(100, it.share)}%`, height: '100%', background: colors[i % colors.length], borderRadius: 999 }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ActionsHeadline({ actions }: { actions: GbpActionsSummary }) {
+  const pct = actions.pct
+  const dir = pct == null ? 'new' : pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat'
+  const c = { up: '#15803d', down: '#b91c1c', flat: '#64748b', new: '#6366f1' }[dir]
+  const cbg = { up: '#f0fdf4', down: '#fef2f2', flat: '#f1f5f9', new: '#eef2ff' }[dir]
+  const arrow = dir === 'up' ? '▲' : dir === 'down' ? '▼' : dir === 'flat' ? '▬' : '＋'
+  return (
+    <div style={{ ...tile, display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap', marginBottom: 12 }}>
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b' }}>Total customer actions</div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 2 }}>
+          <div style={{ fontSize: 26, fontWeight: 700, color: '#0f172a' }}>{actions.current.toLocaleString()}</div>
+          <span style={{ fontSize: 11.5, fontWeight: 600, color: c, background: cbg, borderRadius: 999, padding: '2px 8px' }}>
+            {pct == null ? 'new' : `${arrow} ${Math.abs(pct)}%`}
+          </span>
+        </div>
+      </div>
+      {actions.engagement_current != null && (
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b' }}>Engagement rate</div>
+          <div style={{ fontSize: 26, fontWeight: 700, color: '#0f172a', marginTop: 2 }}>{actions.engagement_current}%</div>
+          <div style={{ fontSize: 11, color: '#94a3b8' }}>of viewers took an action</div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function MetricTile({ metric, series }: { metric: GbpMetricGrowth; series: GbpSeriesPoint[] }) {
   const daily = useMemo(() => series.map((p) => p.values[metric.metric] ?? 0), [series, metric.metric])
+  const busiest = useMemo(() => {
+    let bi = -1, bv = -1
+    daily.forEach((v, i) => { if (v > bv) { bv = v; bi = i } })
+    return bi >= 0 && bv > 0 ? { date: series[bi]?.date, value: bv } : null
+  }, [daily, series])
   const pct = metric.pct
   const dir = pct == null ? 'new' : pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat'
   const badge = { up: '#15803d', down: '#b91c1c', flat: '#64748b', new: '#6366f1' }[dir]
@@ -288,6 +689,11 @@ function MetricTile({ metric, series }: { metric: GbpMetricGrowth; series: GbpSe
       <div style={{ marginTop: 8 }}>
         <MiniSpark values={daily} color={dir === 'down' ? '#f87171' : '#6366f1'} />
       </div>
+      {busiest && (
+        <div style={{ fontSize: 10.5, color: '#94a3b8', marginTop: 5 }}>
+          Busiest: {new Date(busiest.date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ({busiest.value.toLocaleString()})
+        </div>
+      )}
     </div>
   )
 }
@@ -310,6 +716,13 @@ function MiniSpark({ values, color, width = 200, height = 40 }: { values: number
       <path d={line} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
     </svg>
   )
+}
+
+// "2026-07-01" → "Jul 2026". Parsed as local time-of-day to avoid a UTC
+// off-by-one shoving the 1st into the prior month.
+function monthLabel(m: string): string {
+  const d = new Date(m + 'T00:00:00')
+  return isNaN(d.getTime()) ? m : d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })
 }
 
 function AccessBadge({ status }: { status: GbpLocation['access_status'] }) {
@@ -355,6 +768,9 @@ const resolvedRow: React.CSSProperties = {
 }
 const tileGrid: React.CSSProperties = {
   display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+}
+const breakdownGrid: React.CSSProperties = {
+  display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', marginTop: 12,
 }
 const tile: React.CSSProperties = {
   border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, background: '#fff',

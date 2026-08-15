@@ -113,10 +113,69 @@ class GbpMetricGrowth(BaseModel):
 
     metric: str  # folded key ("profile_views") or raw Performance metric name
     label: str
+    group: str = ""  # "visibility" | "actions" (which dashboard section it belongs to)
     current: int
     previous: int
     delta: int
     pct: Optional[float] = None  # None when the prior window was zero
+
+
+class GbpBreakdownItem(BaseModel):
+    """One slice of the profile-views breakout (e.g. Search, or Mobile)."""
+
+    label: str
+    current: int
+    previous: int
+    pct: Optional[float] = None
+    share: float = 0.0  # % of the current-period total
+
+
+class GbpBreakdown(BaseModel):
+    surface: list[GbpBreakdownItem] = []  # Search vs Maps
+    device: list[GbpBreakdownItem] = []  # Desktop vs Mobile
+
+
+class GbpActionsSummary(BaseModel):
+    """Total customer actions (calls + website + directions + messages) and the
+    engagement rate (actions ÷ profile views), current vs prior."""
+
+    current: int
+    previous: int
+    delta: int
+    pct: Optional[float] = None
+    engagement_current: Optional[float] = None
+    engagement_previous: Optional[float] = None
+
+
+class GbpReviewItem(BaseModel):
+    reviewer: str = ""
+    rating: Optional[float] = None
+    text: str = ""
+    date: str = ""
+
+
+class GbpReviews(BaseModel):
+    """Profile-health review summary from the client's captured GBP."""
+
+    rating: Optional[float] = None
+    review_count: int = 0
+    items: list[GbpReviewItem] = []
+
+
+class GbpSearchKeyword(BaseModel):
+    keyword: str
+    value: int
+    is_threshold: bool = False  # true = Google privacy floor ("fewer than N")
+
+
+class GbpSearchKeywordsResponse(BaseModel):
+    """Top search terms that drove impressions for a client's locations in a
+    calendar month (``month`` = YYYY-MM-01); ``months`` lists the available ones."""
+
+    month: Optional[str] = None
+    months: list[str] = []
+    keywords: list[GbpSearchKeyword] = []
+    total: int = 0
 
 
 class GbpSeriesPoint(BaseModel):
@@ -141,6 +200,13 @@ class GbpDashboardResponse(BaseModel):
     window_days: int
     date_start: str
     date_end: str
+    compare_start: str  # start of the prior equal-length comparison window
+    compare_end: str  # end of the prior equal-length comparison window
     last_synced_at: Optional[str] = None
     metrics: list[GbpMetricGrowth] = []
+    breakdown: GbpBreakdown = GbpBreakdown()
+    actions: Optional[GbpActionsSummary] = None
+    insights: list[str] = []
+    reviews: GbpReviews = GbpReviews()
     series: list[GbpSeriesPoint] = []
+    compare_series: list[GbpSeriesPoint] = []  # prior-window daily, for the overlay

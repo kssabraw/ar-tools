@@ -131,3 +131,83 @@ def test_build_series_folds_impressions_into_profile_views():
 
 def test_build_series_empty_when_no_data():
     assert read.build_series([], date(2026, 8, 1), date(2026, 8, 10)) == []
+
+
+# ----------------------------------------------------------------------------
+# groups / breakdown / actions / insights
+# ----------------------------------------------------------------------------
+_CS = date(2026, 8, 6)   # current window start (end 2026-08-10, window 5)
+_END = date(2026, 8, 10)
+_W = 5
+
+
+def test_group_tag_on_cards():
+    rows = _daily(5, "CALL_CLICKS", 2, _CS) + _daily(5, "BUSINESS_IMPRESSIONS_MOBILE_SEARCH", 20, _CS)
+    groups = {c["metric"]: c["group"] for c in read.build_growth_cards(rows, _END, _W)}
+    assert groups["profile_views"] == "visibility"
+    assert groups["CALL_CLICKS"] == "actions"
+
+
+def test_build_breakdown_surface_device_share():
+    rows = (
+        _daily(5, "BUSINESS_IMPRESSIONS_DESKTOP_SEARCH", 10, _CS)
+        + _daily(5, "BUSINESS_IMPRESSIONS_MOBILE_SEARCH", 20, _CS)
+        + _daily(5, "BUSINESS_IMPRESSIONS_DESKTOP_MAPS", 5, _CS)
+        + _daily(5, "BUSINESS_IMPRESSIONS_MOBILE_MAPS", 15, _CS)
+    )
+    bd = read.build_breakdown(rows, _END, _W)
+    surf = {r["label"]: r for r in bd["surface"]}
+    assert surf["Search"]["current"] == 150 and surf["Maps"]["current"] == 100
+    assert surf["Search"]["share"] == 60.0 and surf["Maps"]["share"] == 40.0
+    dev = {r["label"]: r for r in bd["device"]}
+    assert dev["Desktop"]["current"] == 75 and dev["Mobile"]["current"] == 175
+    assert dev["Mobile"]["share"] == 70.0
+
+
+def test_build_actions_summary_engagement():
+    rows = (
+        _daily(5, "BUSINESS_IMPRESSIONS_MOBILE_SEARCH", 50, _CS)  # 250 views
+        + _daily(5, "CALL_CLICKS", 2, _CS)
+        + _daily(5, "WEBSITE_CLICKS", 4, _CS)
+        + _daily(5, "BUSINESS_DIRECTION_REQUESTS", 1, _CS)  # 35 actions
+    )
+    a = read.build_actions_summary(rows, _END, _W)
+    assert a["current"] == 35
+    assert a["engagement_current"] == 14.0  # 35 / 250
+
+
+def test_build_insights_sentences_and_empty():
+    rows = _daily(5, "BUSINESS_IMPRESSIONS_MOBILE_SEARCH", 50, _CS) + _daily(5, "CALL_CLICKS", 2, _CS)
+    cards = read.build_growth_cards(rows, _END, _W)
+    lines = read.build_insights(cards, read.build_breakdown(rows, _END, _W), read.build_actions_summary(rows, _END, _W))
+    assert lines and any("profile was seen" in ln for ln in lines)
+    assert read.build_insights([], {"surface": [], "device": []}, {"current": 0, "previous": 0}) == []
+
+
+# ----------------------------------------------------------------------------
+# reviews / csv export
+# ----------------------------------------------------------------------------
+def test_build_reviews():
+    gbp = {
+        "gbp_rating": "4.8", "gbp_review_count": "77",
+        "reviews": [{"reviewer": "Jane", "rating": 5, "text": "Great!", "date": "2026-08-01"}, "Loved it"],
+    }
+    r = read.build_reviews(gbp)
+    assert r["rating"] == 4.8 and r["review_count"] == 77
+    assert r["items"][0] == {"reviewer": "Jane", "rating": 5, "text": "Great!", "date": "2026-08-01"}
+    assert r["items"][1]["text"] == "Loved it"
+
+
+def test_build_reviews_empty():
+    assert read.build_reviews(None) == {"rating": None, "review_count": 0, "items": []}
+    r = read.build_reviews({"gbp_rating": None, "gbp_review_count": None})
+    assert r["rating"] is None and r["review_count"] == 0 and r["items"] == []
+
+
+def test_csv_rows():
+    series = [{"date": "2026-08-06", "values": {
+        "profile_views": 100, "CALL_CLICKS": 3, "WEBSITE_CLICKS": 5,
+        "BUSINESS_DIRECTION_REQUESTS": 2, "BUSINESS_CONVERSATIONS": 0}}]
+    rows = read.csv_rows(series)
+    assert rows[0] == ["Date", "Profile views", "Calls", "Website clicks", "Direction requests", "Messages"]
+    assert rows[1] == ["2026-08-06", 100, 3, 5, 2, 0]

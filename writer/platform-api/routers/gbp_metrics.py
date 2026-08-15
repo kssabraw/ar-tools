@@ -11,6 +11,8 @@ The whole surface no-ops with clear errors while ``gbp_metrics_enabled`` is off.
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
@@ -22,13 +24,17 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from db.supabase_client import get_supabase
 from middleware.auth import require_admin, require_auth
 from models.gbp_metrics import (
+    GbpActionsSummary,
     GbpBackfillResponse,
+    GbpBreakdown,
     GbpDashboardResponse,
     GbpIngestResponse,
     GbpLocation,
     GbpLocationCreateRequest,
     GbpMetricGrowth,
     GbpPerformanceDiagnostic,
+    GbpReviews,
+    GbpSearchKeywordsResponse,
     GbpSeriesPoint,
     GbpServiceAccountInfo,
     GbpSyncRun,
@@ -88,6 +94,46 @@ async def resolve_locations(auth: dict = Depends(require_auth)) -> ResolveLocati
         ],
         detail=result.detail,
     )
+
+
+@router.post("/gbp/onboard")
+async def onboard_all_clients(auth: dict = Depends(require_admin)) -> dict:
+    """Admin: bulk-onboard every client with a captured GBP but no registered
+    location. Enqueues a single ``gbp_onboard`` job (resolve the connected
+    account's listings once → auto-match each client → register + backfill).
+    Idempotent: reuses an in-flight job instead of queuing a second."""
+    supabase = get_supabase()
+    pending = (
+        supabase.table("async_jobs")
+        .select("id")
+        .eq("job_type", "gbp_onboard")
+        .in_("status", ["pending", "running"])
+        .limit(1)
+        .execute()
+    ).data or []
+    if pending:
+        return {"status": "already_running", "job_id": pending[0]["id"]}
+    res = (
+        supabase.table("async_jobs")
+        .insert({"job_type": "gbp_onboard", "payload": {"user_id": auth["user_id"]}})
+        .execute()
+    )
+    return {"status": "queued", "job_id": res.data[0]["id"]}
+
+
+@router.get("/gbp/onboard/status")
+async def onboard_status(auth: dict = Depends(require_admin)) -> dict:
+    """Admin: the latest bulk-onboard job's status + result (for the button poll)."""
+    supabase = get_supabase()
+    rows = (
+        supabase.table("async_jobs")
+        .select("id, status, result, error, created_at, completed_at")
+        .eq("job_type", "gbp_onboard")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    ).data or []
+    return rows[0] if rows else {"status": "none"}
 
 
 def _latest_metric_date(supabase, loc_ids: list[str]) -> Optional[date]:
@@ -165,17 +211,54 @@ def _fetch_metric_rows(supabase, loc_ids: list[str], start: date, end: date) -> 
     return rows
 
 
+_MAX_CUSTOM_RANGE_DAYS = 366
+
+
+def _parse_custom_range(start: str, end: str) -> tuple[date, date]:
+    """Validate a custom [start, end] date range → (start, end). Raises 422."""
+    try:
+        cur_start = date.fromisoformat(start)
+        cur_end = date.fromisoformat(end)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="invalid_date: use YYYY-MM-DD")
+    if cur_end < cur_start:
+        raise HTTPException(status_code=422, detail="invalid_range: end before start")
+    if (cur_end - cur_start).days + 1 > _MAX_CUSTOM_RANGE_DAYS:
+        raise HTTPException(status_code=422, detail="range_too_large: max 366 days")
+    return cur_start, cur_end
+
+
 @router.get("/clients/{client_id}/gbp-metrics/dashboard", response_model=GbpDashboardResponse)
 async def gbp_dashboard(
-    client_id: UUID, window: int = 30, auth: dict = Depends(require_auth)
+    client_id: UUID,
+    window: int = 30,
+    start: str | None = None,
+    end: str | None = None,
+    auth: dict = Depends(require_auth),
 ) -> GbpDashboardResponse:
     """The GBP Insights read: connection state + registered locations + growth
     KPI tiles + a daily series, aggregated across the client's verified (``ok``)
     locations. Mirrors the client PDF report's GBP-metrics gathering.
 
-    ``window`` is the trailing period (days) each metric is summed over vs. the
-    prior equal window; clamped to [7, 365]."""
-    window = max(7, min(int(window), 365))
+    Two ways to pick the period, both compared against the equal-length window
+    immediately before it:
+      * ``window`` — a trailing preset (days), clamped [7, 365]; the period ends
+        at the last day with data (so GBP's reporting lag doesn't skew growth).
+      * ``start`` + ``end`` (YYYY-MM-DD, both required) — an explicit range,
+        honored as given; max 366 days.
+    """
+    custom = bool(start or end)
+    if custom and not (start and end):
+        raise HTTPException(status_code=422, detail="start and end are both required")
+
+    if custom:
+        cs, ce = _parse_custom_range(start, end)  # type: ignore[arg-type]
+        cur_end_fixed: Optional[date] = ce
+        window_days = (ce - cs).days + 1
+    else:
+        window_days = max(7, min(int(window), 365))
+        cur_end_fixed = None
+
     supabase = get_supabase()
     try:
         locs = (
@@ -193,40 +276,134 @@ async def gbp_dashboard(
     ok_ids = [row["id"] for row in locs if row.get("access_status") == "ok"]
 
     today = date.today()
-    anchor = today
     rows: list[dict] = []
-    if ok_ids:
-        # Anchor the two comparison windows at the last day that actually has
-        # data, not today: anchoring at today would compare a current window
-        # still missing its most recent (not-yet-arrived) days against a
-        # complete prior window — making every metric read as a spurious
-        # decline. A max(date) pre-query makes this exact for any staleness.
-        try:
-            anchor = _latest_metric_date(supabase, ok_ids) or today
-            fetch_start = anchor - timedelta(days=window * 2)
-            rows = _fetch_metric_rows(supabase, ok_ids, fetch_start, anchor)
-        except Exception as exc:
-            logger.error("gbp_dashboard_metrics_failed", extra={"client_id": str(client_id), "error": str(exc)})
-            raise HTTPException(status_code=500, detail="internal_error")
+    try:
+        # Custom range: honor the given end. Preset: anchor at the last day that
+        # actually has data (a max(date) pre-query) — anchoring at today would
+        # compare a current window still missing its not-yet-arrived days
+        # against a complete prior window, reading as a spurious decline.
+        if cur_end_fixed is not None:
+            cur_end = cur_end_fixed
+        elif ok_ids:
+            cur_end = _latest_metric_date(supabase, ok_ids) or today
+        else:
+            cur_end = today
+        cur_start = cur_end - timedelta(days=window_days - 1)
+        prev_end = cur_start - timedelta(days=1)
+        prev_start = prev_end - timedelta(days=window_days - 1)
+        if ok_ids:
+            rows = _fetch_metric_rows(supabase, ok_ids, prev_start, cur_end)
+    except Exception as exc:
+        logger.error("gbp_dashboard_metrics_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error")
 
-    win_start = anchor - timedelta(days=window - 1)
-    cards = gbp_metrics_read.build_growth_cards(rows, anchor, window)
-    window_rows = [r for r in rows if (r.get("date") or "") >= win_start.isoformat()]
-    series = gbp_metrics_read.build_series(window_rows, win_start, anchor)
+    cards = gbp_metrics_read.build_growth_cards(rows, cur_end, window_days)
+    breakdown = gbp_metrics_read.build_breakdown(rows, cur_end, window_days)
+    actions = gbp_metrics_read.build_actions_summary(rows, cur_end, window_days)
+    insights = gbp_metrics_read.build_insights(cards, breakdown, actions)
+
+    cur_lo = cur_start.isoformat()
+    window_rows = [r for r in rows if (r.get("date") or "") >= cur_lo]
+    series = gbp_metrics_read.build_series(window_rows, cur_start, cur_end)
+    prev_lo, prev_hi = prev_start.isoformat(), prev_end.isoformat()
+    prev_rows = [r for r in rows if prev_lo <= (r.get("date") or "") <= prev_hi]
+    compare_series = gbp_metrics_read.build_series(prev_rows, prev_start, prev_end)
 
     last_synced_at = _latest_timestamp([row.get("last_synced_at") for row in locs])
+
+    reviews = {"rating": None, "review_count": 0, "items": []}
+    try:  # profile-health review summary — best-effort, never blocks the dashboard
+        crow = (
+            supabase.table("clients").select("gbp").eq("id", str(client_id)).limit(1).execute()
+        ).data or []
+        if crow:
+            reviews = gbp_metrics_read.build_reviews(crow[0].get("gbp"))
+    except Exception as exc:
+        logger.info("gbp_dashboard_reviews_failed", extra={"client_id": str(client_id), "error": str(exc)})
 
     return GbpDashboardResponse(
         enabled=settings.gbp_metrics_enabled,
         connected=bool(ok_ids),
         locations=location_models,
-        window_days=window,
-        date_start=win_start.isoformat(),
-        date_end=anchor.isoformat(),
+        window_days=window_days,
+        date_start=cur_start.isoformat(),
+        date_end=cur_end.isoformat(),
+        compare_start=prev_start.isoformat(),
+        compare_end=prev_end.isoformat(),
         last_synced_at=last_synced_at,
         metrics=[GbpMetricGrowth(**c) for c in cards],
+        breakdown=GbpBreakdown(**breakdown),
+        actions=GbpActionsSummary(**actions),
+        insights=insights,
+        reviews=GbpReviews(**reviews),
         series=[GbpSeriesPoint(**p) for p in series],
+        compare_series=[GbpSeriesPoint(**p) for p in compare_series],
     )
+
+
+@router.get("/clients/{client_id}/gbp-metrics/export")
+async def gbp_metrics_export(
+    client_id: UUID,
+    window: int = 30,
+    start: str | None = None,
+    end: str | None = None,
+    auth: dict = Depends(require_auth),
+) -> Response:
+    """Download the client's GBP daily metrics as CSV over the same period the
+    dashboard shows (preset ``window`` or explicit ``start``/``end``)."""
+    custom = bool(start or end)
+    if custom and not (start and end):
+        raise HTTPException(status_code=422, detail="start and end are both required")
+    if custom:
+        cs, ce = _parse_custom_range(start, end)  # type: ignore[arg-type]
+        cur_end, window_days = ce, (ce - cs).days + 1
+    else:
+        window_days = max(7, min(int(window), 365))
+        cur_end = None  # resolved below
+
+    supabase = get_supabase()
+    try:
+        ok = (
+            supabase.table("gbp_locations").select("id")
+            .eq("client_id", str(client_id)).eq("access_status", "ok").execute()
+        ).data or []
+        ok_ids = [r["id"] for r in ok]
+        if cur_end is None:
+            cur_end = (_latest_metric_date(supabase, ok_ids) if ok_ids else None) or date.today()
+        cur_start = cur_end - timedelta(days=window_days - 1)
+        rows = _fetch_metric_rows(supabase, ok_ids, cur_start, cur_end) if ok_ids else []
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("gbp_export_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error")
+
+    series = gbp_metrics_read.build_series(rows, cur_start, cur_end)
+    buf = io.StringIO()
+    csv.writer(buf).writerows(gbp_metrics_read.csv_rows(series))
+    filename = f"gbp-metrics-{cur_start.isoformat()}-to-{cur_end.isoformat()}.csv"
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/clients/{client_id}/gbp-metrics/search-keywords", response_model=GbpSearchKeywordsResponse)
+async def gbp_search_keywords_read(
+    client_id: UUID, month: str | None = None, limit: int = 25, auth: dict = Depends(require_auth)
+) -> GbpSearchKeywordsResponse:
+    """Top search terms that drove impressions for the client's verified
+    locations. Defaults to the latest month with data; ``month`` (YYYY-MM-01)
+    picks a specific one. Monthly data — low-volume terms are privacy-floored."""
+    from services import gbp_search_keywords as skw
+
+    try:
+        data = skw.read_keywords(str(client_id), month=month, limit=max(1, min(int(limit), 100)))
+    except Exception as exc:
+        logger.error("gbp_search_keywords_read_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error")
+    return GbpSearchKeywordsResponse(**data)
 
 
 @router.get("/clients/{client_id}/gbp-locations", response_model=list[GbpLocation])
