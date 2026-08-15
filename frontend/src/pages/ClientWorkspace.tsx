@@ -5,7 +5,7 @@ import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, CalendarClock, CalendarPlus,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
-  ClipboardList, BookOpen, Share2, Target, Swords, Link2, KanbanSquare, Radar, ShoppingBag, Megaphone, Globe2, Server,
+  ClipboardList, BookOpen, Share2, Target, Swords, Link2, KanbanSquare, Radar, ShoppingBag, Megaphone, Globe2, Server, BarChart3,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 import { FreezeBanner } from '../components/FreezeBanner'
@@ -430,6 +430,13 @@ export function ClientWorkspace() {
         title="Reporting"
         subtitle="Generate client-facing performance reports."
       >
+        <ActionCard
+          icon={<BarChart3 size={22} />}
+          label="GBP Insights"
+          description="Google Business Profile performance over time — profile views, calls, website clicks, direction requests & messages, with period-over-period growth pulled from the Business Profile Performance API."
+          to={id ? `/clients/${id}/gbp-metrics` : undefined}
+          cta="Open"
+        />
         <ActionCard
           icon={<FileBarChart size={22} />}
           label="Client Reports"

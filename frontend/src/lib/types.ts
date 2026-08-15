@@ -1897,3 +1897,54 @@ export interface QaReview {
   trigger: string
   created_at: string
 }
+
+// ── GBP performance-metrics reporting dashboard ──────────────────────────────
+export type GbpAccessStatus = 'ok' | 'no_access' | 'pending' | 'error'
+
+export interface GbpLocation {
+  id: string
+  client_id: string
+  location_id: string
+  account_id: string | null
+  place_id: string | null
+  title: string | null
+  access_status: GbpAccessStatus
+  last_verified_at: string | null
+  last_synced_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface GbpResolvedLocation {
+  location_id: string
+  account_id: string | null
+  title: string | null
+  address: string | null
+  place_id: string | null
+}
+
+export interface GbpMetricGrowth {
+  metric: string
+  label: string
+  current: number
+  previous: number
+  delta: number
+  pct: number | null
+}
+
+export interface GbpSeriesPoint {
+  date: string
+  values: Record<string, number>
+}
+
+export interface GbpDashboard {
+  enabled: boolean
+  connected: boolean
+  locations: GbpLocation[]
+  window_days: number
+  date_start: string
+  date_end: string
+  last_synced_at: string | null
+  metrics: GbpMetricGrowth[]
+  series: GbpSeriesPoint[]
+}

@@ -22,17 +22,20 @@ from db.supabase_client import get_supabase
 from middleware.auth import require_admin, require_auth
 from models.gbp_metrics import (
     GbpBackfillResponse,
+    GbpDashboardResponse,
     GbpIngestResponse,
     GbpLocation,
     GbpLocationCreateRequest,
+    GbpMetricGrowth,
     GbpPerformanceDiagnostic,
+    GbpSeriesPoint,
     GbpServiceAccountInfo,
     GbpSyncRun,
     GbpVerifyResponse,
     ResolvedLocation,
     ResolveLocationsResponse,
 )
-from services import gbp_metrics_ingest
+from services import gbp_metrics_ingest, gbp_metrics_read
 from services import gbp_performance_service as gbp
 
 logger = logging.getLogger(__name__)
@@ -83,6 +86,81 @@ async def resolve_locations(auth: dict = Depends(require_auth)) -> ResolveLocati
             for loc in result.locations
         ],
         detail=result.detail,
+    )
+
+
+def _fetch_metric_rows(supabase, loc_ids: list[str], start: date, end: date) -> list[dict]:
+    """Read every gbp_metric_daily row for the locations over [start, end].
+
+    Paginated in 1000-row pages: a 365-day window across 8 metrics is ~2,920 rows
+    for one location, past PostgREST's default cap — an unpaged read would silently
+    truncate the oldest days and skew the growth math."""
+    rows: list[dict] = []
+    page = 1000
+    offset = 0
+    while True:
+        batch = (
+            supabase.table("gbp_metric_daily")
+            .select("date, metric, value")
+            .in_("location_row_id", loc_ids)
+            .gte("date", start.isoformat())
+            .lte("date", end.isoformat())
+            .order("date")
+            .range(offset, offset + page - 1)
+            .execute()
+        ).data or []
+        rows.extend(batch)
+        if len(batch) < page:
+            break
+        offset += page
+    return rows
+
+
+@router.get("/clients/{client_id}/gbp-metrics/dashboard", response_model=GbpDashboardResponse)
+async def gbp_dashboard(
+    client_id: UUID, window: int = 30, auth: dict = Depends(require_auth)
+) -> GbpDashboardResponse:
+    """The GBP Insights read: connection state + registered locations + growth
+    KPI tiles + a daily series, aggregated across the client's verified (``ok``)
+    locations. Mirrors the client PDF report's GBP-metrics gathering.
+
+    ``window`` is the trailing period (days) each metric is summed over vs. the
+    prior equal window; clamped to [7, 365]."""
+    window = max(7, min(int(window), 365))
+    supabase = get_supabase()
+    locs = (
+        supabase.table("gbp_locations")
+        .select("*")
+        .eq("client_id", str(client_id))
+        .order("created_at")
+        .execute()
+    ).data or []
+    location_models = [GbpLocation(**row) for row in locs]
+    ok_ids = [row["id"] for row in locs if row.get("access_status") == "ok"]
+
+    end = date.today()
+    start = end - timedelta(days=window - 1)
+    # Pull current + prior window so compute_metric_growth has both to compare.
+    fetch_start = end - timedelta(days=window * 2)
+
+    rows = _fetch_metric_rows(supabase, ok_ids, fetch_start, end) if ok_ids else []
+    cards = gbp_metrics_read.build_growth_cards(rows, end, window)
+    window_rows = [r for r in rows if (r.get("date") or "") >= start.isoformat()]
+    series = gbp_metrics_read.build_series(window_rows, start, end)
+
+    synced = [row.get("last_synced_at") for row in locs if row.get("last_synced_at")]
+    last_synced_at = max(synced) if synced else None
+
+    return GbpDashboardResponse(
+        enabled=settings.gbp_metrics_enabled,
+        connected=bool(ok_ids),
+        locations=location_models,
+        window_days=window,
+        date_start=start.isoformat(),
+        date_end=end.isoformat(),
+        last_synced_at=last_synced_at,
+        metrics=[GbpMetricGrowth(**c) for c in cards],
+        series=[GbpSeriesPoint(**p) for p in series],
     )
 
 
