@@ -330,8 +330,13 @@ function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard })
   })
 
   const hasData = data.metrics.length > 0
-  const visibility = data.metrics.filter((m) => m.group === 'visibility')
-  const actions = data.metrics.filter((m) => m.group === 'actions')
+  // Tolerate a backend that predates these fields (e.g. during a deploy where the
+  // frontend ships before the API) — degrade, never white-screen.
+  const insights = data.insights ?? []
+  const breakdown = data.breakdown ?? { surface: [], device: [] }
+  const isVisibility = (m: GbpMetricGrowth) => (m.group ? m.group === 'visibility' : m.metric === 'profile_views')
+  const visibility = data.metrics.filter(isVisibility)
+  const actions = data.metrics.filter((m) => !isVisibility(m))
 
   return (
     <div>
@@ -354,7 +359,7 @@ function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard })
         </div>
       ) : (
         <>
-          {data.insights.length > 0 && <InsightsPanel lines={data.insights} />}
+          {insights.length > 0 && <InsightsPanel lines={insights} />}
 
           <TrendChart data={data} />
 
@@ -362,10 +367,10 @@ function Dashboard({ clientId, data }: { clientId: string; data: GbpDashboard })
           <div style={tileGrid}>
             {visibility.map((m) => <MetricTile key={m.metric} metric={m} series={data.series} />)}
           </div>
-          {(data.breakdown.surface.length > 0 || data.breakdown.device.length > 0) && (
+          {(breakdown.surface.length > 0 || breakdown.device.length > 0) && (
             <div style={breakdownGrid}>
-              <BreakdownCard title="Where views came from" items={data.breakdown.surface} />
-              <BreakdownCard title="By device" items={data.breakdown.device} />
+              <BreakdownCard title="Where views came from" items={breakdown.surface} />
+              <BreakdownCard title="By device" items={breakdown.device} />
             </div>
           )}
 
@@ -415,9 +420,9 @@ function TrendChart({ data }: { data: GbpDashboard }) {
   const [metric, setMetric] = useState(options[0]?.key ?? 'profile_views')
   const [hover, setHover] = useState<number | null>(null)
 
-  const cur = useMemo(() => data.series.map((p) => p.values[metric] ?? 0), [data.series, metric])
-  const prev = useMemo(() => data.compare_series.map((p) => p.values[metric] ?? 0), [data.compare_series, metric])
-  const dates = data.series.map((p) => p.date)
+  const cur = useMemo(() => (data.series ?? []).map((p) => p.values[metric] ?? 0), [data.series, metric])
+  const prev = useMemo(() => (data.compare_series ?? []).map((p) => p.values[metric] ?? 0), [data.compare_series, metric])
+  const dates = (data.series ?? []).map((p) => p.date)
   const label = options.find((o) => o.key === metric)?.label ?? metric
 
   const width = 900, height = 260
