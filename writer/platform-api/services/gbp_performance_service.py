@@ -195,11 +195,27 @@ def _credentials():
     )
 
 
+def _auth_credentials():
+    """OAuth-preferred credentials (the connected agency OAuth account when
+    configured, else the agency service account).
+
+    GBP is OAuth-first: a bare service account is usually NOT a listing Manager,
+    so the SA-only path returns 404 ``location_not_recognized`` on listings that
+    only the agency OAuth account manages. ``diagnose_performance`` already
+    builds its clients on ``gbp_auth.credentials()``; the ingest/verify/resolve
+    clients must use the same identity or they silently authenticate as the SA
+    and can't see the listings. Lazy import breaks the gbp_auth ↔ this-module
+    cycle."""
+    from services import gbp_auth  # noqa: PLC0415
+
+    return gbp_auth.credentials()
+
+
 def _build(service_name: str, version: str = "v1", creds=None):
     from googleapiclient.discovery import build  # noqa: PLC0415
 
     return build(
-        service_name, version, credentials=creds or _credentials(), cache_discovery=False
+        service_name, version, credentials=creds or _auth_credentials(), cache_discovery=False
     )
 
 
