@@ -449,8 +449,9 @@ function KwDelta({ k }: { k: GbpSearchKeyword }) {
 }
 
 function SearchKeywordsPanel({ clientId }: { clientId: string }) {
-  // '' = default (latest month); a range token ('30d'…) or a month ('YYYY-MM-01').
-  const [selection, setSelection] = useState('')
+  // Default to the "Last 30 days" range (the most recent month of GBP keyword
+  // data); a range token ('30d'…), a month ('YYYY-MM-01'), or '' (= latest month).
+  const [selection, setSelection] = useState('30d')
   const [q, setQ] = useState('')
   const [sortAlpha, setSortAlpha] = useState(false)
   const rangeMonths = KEYWORD_RANGES.find(([tok]) => tok === selection)?.[2]
