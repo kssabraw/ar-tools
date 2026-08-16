@@ -38,6 +38,18 @@ def test_aggregate_keywords_limit():
     assert len(items) == 5 and items[0]["keyword"] == "k29"
 
 
+def test_sum_by_keyword():
+    rows = [
+        {"keyword": "plumber", "value": 100},
+        {"keyword": "plumber", "value": 20},   # another location/month
+        {"keyword": "drain", "value": 5},
+        {"keyword": "", "value": 9},            # no keyword → skipped
+        {"value": 3},                            # missing keyword → skipped
+    ]
+    assert skw.sum_by_keyword(rows) == {"plumber": 120, "drain": 5}
+    assert skw.sum_by_keyword([]) == {}
+
+
 def test_parse_search_keywords():
     payload = {"searchKeywordsCounts": [
         {"searchKeyword": "plumber", "insightsValue": {"value": "340"}},
