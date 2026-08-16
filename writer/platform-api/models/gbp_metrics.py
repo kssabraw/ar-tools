@@ -180,6 +180,8 @@ class GbpSearchKeyword(BaseModel):
     keyword: str
     value: int
     is_threshold: bool = False  # true = Google privacy floor ("fewer than N")
+    previous: Optional[int] = None  # prior-period impressions (None = no comparison)
+    delta: Optional[int] = None  # value - previous
 
 
 class GbpSearchKeywordsResponse(BaseModel):
@@ -191,6 +193,8 @@ class GbpSearchKeywordsResponse(BaseModel):
     keywords: list[GbpSearchKeyword] = []
     total: int = 0
     range_months: int = 1  # months aggregated (1 = single month; N = a range view)
+    prev_total: int = 0  # prior-period total impressions (for the header comparison)
+    compared: bool = False  # whether a full prior period existed to compare against
 
 
 class GbpSeriesPoint(BaseModel):

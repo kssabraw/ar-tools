@@ -6,7 +6,7 @@ import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import type {
   Client, GbpDashboard, GbpLocation, GbpMetricGrowth, GbpResolvedLocation, GbpSeriesPoint,
-  GbpBreakdownItem, GbpActionsSummary, GbpReviewsSummary, GbpSearchKeywords, GbpPeriodReviews,
+  GbpBreakdownItem, GbpActionsSummary, GbpReviewsSummary, GbpSearchKeywords, GbpSearchKeyword, GbpPeriodReviews,
 } from '../lib/types'
 
 const WINDOWS: [number, string][] = [
@@ -432,6 +432,22 @@ const KEYWORD_RANGES: [string, string, number][] = [
   ['12mo', 'Last 12 months', 12],
 ]
 
+// Per-keyword change vs the prior period: a "new" tag for terms absent before,
+// else a coloured ▲/▼ absolute delta. Renders nothing when there's no comparison.
+function KwDelta({ k }: { k: GbpSearchKeyword }) {
+  if (k.previous == null) return null
+  if (k.previous === 0) {
+    return <span style={{ fontSize: 10, color: '#0369a1', background: '#e0f2fe', borderRadius: 4, padding: '0 5px' }}>new</span>
+  }
+  const d = k.delta ?? k.value - k.previous
+  if (d === 0) return <span style={{ fontSize: 10.5, color: '#cbd5e1' }}>—</span>
+  return (
+    <span style={{ fontSize: 10.5, fontWeight: 600, color: d > 0 ? '#15803d' : '#b91c1c' }}>
+      {d > 0 ? '▲' : '▼'} {Math.abs(d).toLocaleString()}
+    </span>
+  )
+}
+
 function SearchKeywordsPanel({ clientId }: { clientId: string }) {
   // '' = default (latest month); a range token ('30d'…) or a month ('YYYY-MM-01').
   const [selection, setSelection] = useState('')
@@ -471,6 +487,16 @@ function SearchKeywordsPanel({ clientId }: { clientId: string }) {
               <span>
                 <strong style={{ color: '#0f172a' }}>{data.total.toLocaleString()}</strong> impressions from search terms
                 {rangeMonths && data.range_months > 1 && <span style={{ color: '#94a3b8' }}> · {data.range_months} months</span>}
+                {data.compared && (() => {
+                  const d = data.total - data.prev_total
+                  const pct = data.prev_total > 0 ? Math.round((d / data.prev_total) * 100) : null
+                  return (
+                    <span style={{ marginLeft: 6, fontWeight: 600, color: d >= 0 ? '#15803d' : '#b91c1c' }}>
+                      {d >= 0 ? '▲' : '▼'} {pct != null ? `${Math.abs(pct)}%` : Math.abs(d).toLocaleString()}
+                      <span style={{ color: '#94a3b8', fontWeight: 400 }}> vs prior</span>
+                    </span>
+                  )
+                })()}
               </span>
             ) : 'Top search terms'}
           </div>
@@ -517,7 +543,10 @@ function SearchKeywordsPanel({ clientId }: { clientId: string }) {
                 {shown.map((k) => (
                   <div key={k.keyword} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5, padding: '3px 0', borderBottom: '1px solid #f8fafc' }}>
                     <span style={{ color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.keyword}</span>
-                    <span style={{ color: '#64748b', flexShrink: 0 }}>{k.is_threshold ? `<${k.value.toLocaleString()}` : k.value.toLocaleString()}</span>
+                    <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      {data!.compared && <KwDelta k={k} />}
+                      <span style={{ color: '#64748b', minWidth: 34, textAlign: 'right' }}>{k.is_threshold ? `<${k.value.toLocaleString()}` : k.value.toLocaleString()}</span>
+                    </span>
                   </div>
                 ))}
               </div>

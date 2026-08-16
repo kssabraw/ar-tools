@@ -2008,6 +2008,8 @@ export interface GbpSearchKeyword {
   keyword: string
   value: number
   is_threshold: boolean
+  previous?: number | null
+  delta?: number | null
 }
 
 export interface GbpSearchKeywords {
@@ -2016,6 +2018,8 @@ export interface GbpSearchKeywords {
   keywords: GbpSearchKeyword[]
   total: number
   range_months: number
+  prev_total: number
+  compared: boolean
 }
 
 export interface GbpSeriesPoint {

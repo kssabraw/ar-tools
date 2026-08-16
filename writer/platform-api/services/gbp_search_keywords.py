@@ -74,6 +74,18 @@ def aggregate_keywords(rows: list[dict], limit: int = 25) -> tuple[list[dict], i
     return items[:limit], total
 
 
+def sum_by_keyword(rows: list[dict]) -> dict[str, int]:
+    """Sum each keyword's value across rows → ``{keyword: total}`` (the prior-period
+    lookup for period-over-period keyword comparison). Pure."""
+    out: dict[str, int] = {}
+    for r in rows:
+        kw = r.get("keyword")
+        if not kw:
+            continue
+        out[kw] = out.get(kw, 0) + int(r.get("value", 0) or 0)
+    return out
+
+
 # ----------------------------------------------------------------------------
 # Ingestion
 # ----------------------------------------------------------------------------
@@ -213,30 +225,50 @@ def read_keywords(
     if not available:
         return empty
 
-    # Range (most recent N months) vs a single month.
+    # Current period (target) + the equal-length prior period, both from `available`
+    # (newest-first). A single month compares vs the previous month; a range vs the
+    # N months immediately before it.
     if months and months > 0:
-        target_months = available[:months]  # available is newest-first
+        n = min(months, len(available))
+        target_months = available[:n]
+        prior_months = available[n:2 * n]
         target = None
     else:
         single = month if (month and month in available) else available[0]
+        idx = available.index(single)
         target_months = [single]
+        prior_months = available[idx + 1:idx + 2]
         target = single
+    # Only compare against a FULL prior period — a short/absent prior window would
+    # overstate growth.
+    compared = len(prior_months) == len(target_months)
 
-    # Paginated (a multi-location, multi-month read easily exceeds the ~1000-row
-    # cap), so the aggregate can't silently undercount.
-    rows: list[dict] = []
-    offset = 0
-    while True:
-        batch = (
-            supabase.table("gbp_search_keyword_monthly").select("keyword, value, is_threshold, location_row_id, month")
-            .in_("location_row_id", loc_ids).in_("month", target_months)
-            .order("month").order("location_row_id").order("keyword")
-            .range(offset, offset + page - 1).execute()
-        ).data or []
-        rows.extend(batch)
-        if len(batch) < page:
-            break
-        offset += page
-    keywords, total = aggregate_keywords(rows, limit)
+    def _fetch(months_list: list[str]) -> list[dict]:
+        # Paginated (a multi-location, multi-month read easily exceeds the ~1000-row
+        # cap), so the aggregate can't silently undercount.
+        out: list[dict] = []
+        off = 0
+        while True:
+            batch = (
+                supabase.table("gbp_search_keyword_monthly")
+                .select("keyword, value, is_threshold, location_row_id, month")
+                .in_("location_row_id", loc_ids).in_("month", months_list)
+                .order("month").order("location_row_id").order("keyword")
+                .range(off, off + page - 1).execute()
+            ).data or []
+            out.extend(batch)
+            if len(batch) < page:
+                break
+            off += page
+        return out
+
+    keywords, total = aggregate_keywords(_fetch(target_months), limit)
+    prev_total = 0
+    if compared:
+        prior_map = sum_by_keyword(_fetch(prior_months))
+        prev_total = sum(prior_map.values())
+        for k in keywords:
+            k["previous"] = prior_map.get(k["keyword"], 0)
+            k["delta"] = k["value"] - k["previous"]
     return {"month": target, "months": available, "keywords": keywords, "total": total,
-            "range_months": len(target_months)}
+            "range_months": len(target_months), "prev_total": prev_total, "compared": compared}
