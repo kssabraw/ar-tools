@@ -966,6 +966,204 @@ def _ctx_reports(supabase, client_id: str, today: date) -> Optional[dict]:
     return out
 
 
+def _pct_change(cur: Optional[int], prev: Optional[int]) -> Optional[float]:
+    """Percent change, or None when there's no comparable prior window (prev is
+    None = not covered) or the prior window was zero (no baseline to grow from)."""
+    if prev in (None, 0):
+        return None
+    return round((cur - prev) / prev * 100, 1)
+
+
+def _ctx_gbp_metrics(supabase, client_id: str, today: date) -> Optional[dict]:
+    """GBP Insights — Google Business Profile *performance* over the trailing 30
+    days vs the prior 30, summed across the client's verified locations: profile
+    views (how many people saw the listing) + customer actions (calls, website
+    clicks, direction requests, messages).
+
+    Distinct from `setup.gbp`, which is the STATIC listing (rating, categories,
+    hours) — this is the performance trend the GBP Insights dashboard and the
+    client PDF report both read. Reuses the dashboard's own growth math
+    (`gbp_metrics_read.build_growth_cards`) so the assistant and the dashboard
+    agree to the number. Dormant until `gbp_metrics_enabled`.
+    """
+    if not settings.gbp_metrics_enabled:
+        return None
+    from services import gbp_metrics_read
+
+    locs = (
+        supabase.table("gbp_locations")
+        .select("id")
+        .eq("client_id", client_id)
+        .eq("access_status", "ok")
+        .execute()
+    ).data or []
+    if not locs:
+        return None
+    loc_ids = [l["id"] for l in locs]
+    window = 30
+    # Anchor the comparison at the last date that actually has data. GBP
+    # performance lands ~3–5 days late, so anchoring at `today` would read the
+    # not-yet-arrived tail as a spurious decline (same rule as the dashboard).
+    latest = (
+        supabase.table("gbp_metric_daily")
+        .select("date")
+        .in_("location_row_id", loc_ids)
+        .order("date", desc=True)
+        .limit(1)
+        .execute()
+    ).data
+    if not latest:
+        return None
+    try:
+        end = date.fromisoformat(str(latest[0]["date"])[:10])
+    except (ValueError, TypeError, KeyError):
+        return None
+    start = end - timedelta(days=window * 2)
+    # Paginate: two 30-day windows × ~8 metrics × N locations can exceed
+    # PostgREST's default 1000-row cap, and a truncated read would skew the
+    # growth math toward the newest days (mirrors the dashboard's _fetch).
+    rows: list[dict] = []
+    page, offset = 1000, 0
+    while True:
+        batch = (
+            supabase.table("gbp_metric_daily")
+            .select("date, metric, value")
+            .in_("location_row_id", loc_ids)
+            .gte("date", start.isoformat())
+            .lte("date", end.isoformat())
+            .order("date")
+            .range(offset, offset + page - 1)
+            .execute()
+        ).data or []
+        rows.extend(batch)
+        if len(batch) < page:
+            break
+        offset += page
+    cards = gbp_metrics_read.build_growth_cards(rows, end, window)
+    if not cards:
+        return None
+    return {
+        "window_days": window,
+        "as_of": end.isoformat(),
+        "metrics": [
+            {
+                "metric": c["label"],
+                "current": c.get("current"),
+                "previous": c.get("previous"),
+                "pct_change": c.get("pct"),
+            }
+            for c in cards
+        ],
+        "note": (
+            "Google Business Profile performance over the trailing 30 days vs the "
+            "prior 30, across the client's verified locations. 'Profile views' is "
+            "how many people saw the listing on Search + Maps; calls / website "
+            "clicks / direction requests / messages are customer actions taken "
+            "from it. pct_change is None when the prior window had no baseline. "
+            "Data lands ~3–5 days late — `as_of` is the last day with data, not "
+            "today. This is the performance TREND; setup.gbp is the static listing."
+        ),
+    }
+
+
+def _ctx_ga4(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Google Analytics (GA4) — website traffic over the trailing 30 days vs the
+    prior 30: sessions (visits), pageviews, and conversions, plus the top traffic
+    channels. Reads `ga4_daily` (the daily ga4_ingest); None when the client has
+    no verified GA4 property or no data yet.
+
+    Deliberately does NOT sum `total_users` — GA4 de-duplicates users per day, so
+    summing daily values counts "visitor-days" and overstates unique visitors
+    (same rule as the client PDF report's GA4 gatherer).
+    """
+    prop = (
+        supabase.table("ga4_properties")
+        .select("id")
+        .eq("client_id", client_id)
+        .eq("access_status", "ok")
+        .limit(1)
+        .execute()
+    ).data
+    if not prop:
+        return None
+    window = 30
+    # 2 windows + a few days' settle buffer so the prior window is covered.
+    cutoff = (today - timedelta(days=window * 2 + 5)).isoformat()
+    rows = (
+        supabase.table("ga4_daily")
+        .select("date, sessions, screen_page_views, conversions, channels")
+        .eq("property_id", prop[0]["id"])
+        .gte("date", cutoff)
+        .order("date")
+        .execute()
+    ).data or []
+    parsed: list[tuple[date, dict]] = []
+    for r in rows:
+        try:
+            d = date.fromisoformat(str(r.get("date"))[:10])
+        except (ValueError, TypeError):
+            continue
+        parsed.append((d, r))
+    if not parsed:
+        return None
+    # Anchor at the last date with data (GA4 settles ~1–2 days late).
+    end = max(d for d, _ in parsed)
+    earliest = min(d for d, _ in parsed)
+    cur_start = end - timedelta(days=window - 1)
+    prev_end = cur_start - timedelta(days=1)
+    prev_start = prev_end - timedelta(days=window - 1)
+
+    def _sum(field: str, lo: date, hi: date) -> tuple[int, bool]:
+        total, seen = 0, False
+        for d, r in parsed:
+            if lo <= d <= hi and r.get(field) is not None:
+                total += int(r.get(field) or 0)
+                seen = True
+        return total, seen
+
+    def _metric(field: str) -> Optional[dict]:
+        cur, seen = _sum(field, cur_start, end)
+        if not seen:
+            return None
+        # Only report a prior figure when the data actually reaches back that far.
+        prev = _sum(field, prev_start, prev_end)[0] if earliest <= prev_start else None
+        return {"current": cur, "previous": prev, "pct_change": _pct_change(cur, prev)}
+
+    sessions = _metric("sessions")
+    if not sessions:
+        return None  # no visits signal at all — nothing worth reporting
+
+    channel_totals: dict[str, int] = {}
+    for d, r in parsed:
+        if cur_start <= d <= end:
+            for name, sess in (r.get("channels") or {}).items():
+                channel_totals[name] = channel_totals.get(name, 0) + int(sess or 0)
+    total_ch = sum(channel_totals.values())
+    channels = [
+        {"name": n, "sessions": s, "pct": round(s / total_ch * 100) if total_ch else 0}
+        for n, s in sorted(channel_totals.items(), key=lambda kv: kv[1], reverse=True)[:6]
+    ]
+
+    out: dict = {
+        "window_days": window,
+        "as_of": end.isoformat(),
+        "sessions": sessions,
+        "pageviews": _metric("screen_page_views"),
+        "conversions": _metric("conversions"),
+        "note": (
+            "GA4 website traffic over the trailing 30 days vs the prior 30. "
+            "'sessions' = visits, 'conversions' = key events (None when the "
+            "property tracks none). Unique-visitor totals are intentionally "
+            "omitted (GA4 de-dupes users per day, so a sum overstates them). "
+            "pct_change is None when the prior window isn't covered. `as_of` is "
+            "the last day with data."
+        ),
+    }
+    if channels:
+        out["top_channels"] = channels
+    return out
+
+
 def _ctx_sops(supabase, client_id: str, today: date) -> Optional[dict]:
     """Loaded SOPs — titles only (the Action Plan/strategist consume the bodies)."""
     from services import sop_store
@@ -1307,6 +1505,8 @@ _CONTEXT_PROVIDERS = [
     ("citations", _ctx_citations),
     ("syndication", _ctx_syndication),
     ("reports", _ctx_reports),
+    ("gbp_metrics", _ctx_gbp_metrics),
+    ("ga4", _ctx_ga4),
     ("sops", _ctx_sops),
     ("asana", _ctx_asana),
     ("health", _ctx_health),

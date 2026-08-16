@@ -167,6 +167,12 @@ differentiators and target_cities — a service the ICP names with no page, a se
 with no location page, a differentiator no content mentions, is a gap worth a proposal.
   - Timing (trends + forecast): rising seasonal demand is when content/GBP pushes land \
 hardest; quick-win keywords say where effort converts fastest.
+  - Demand realized (gbp_metrics + ga4): these measure whether visibility is turning into \
+attention and action — GBP profile views + calls/clicks/directions, and GA4 sessions/ \
+conversions by channel. Read them AGAINST rank: rising positions with flat organic \
+sessions/GBP views is a CTR/SERP-feature or listing-prominence problem, not a ranking one; \
+falling views/sessions with steady rank points at seasonality (cross-check trends), not a \
+drop. A strong action metric (e.g. calls up sharply) is proof a lever worked — name it.
 Heed each section's TRAP note; propose only what the evidence in front of you supports; \
 cite the owning SOP as usual, and if no SOP owns the action surface it as a question.
 Do NOT restate the Action Plan back — it's in your input. Add judgment, not inventory. An \
