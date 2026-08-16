@@ -448,6 +448,33 @@ function KwDelta({ k }: { k: GbpSearchKeyword }) {
   )
 }
 
+// Build + download a CSV of the given keyword rows (client-side; the data is
+// already loaded). Includes the prior-period columns when a comparison exists.
+function downloadKeywordsCsv(rows: GbpSearchKeyword[], compared: boolean, filename: string) {
+  const esc = (s: string | number) => `"${String(s).replace(/"/g, '""')}"`
+  const header = compared ? ['Keyword', 'Impressions', 'Previous', 'Change'] : ['Keyword', 'Impressions']
+  const lines = [header.join(',')]
+  for (const k of rows) {
+    const impr = k.is_threshold ? `<${k.value}` : String(k.value)
+    const cells = compared
+      ? [esc(k.keyword), esc(impr),
+         k.previous == null ? '' : String(k.previous),
+         k.previous == null ? '' : String(k.delta ?? k.value - k.previous)]
+      : [esc(k.keyword), esc(impr)]
+    lines.push(cells.join(','))
+  }
+  // BOM + CRLF so Excel reads UTF-8 keywords correctly.
+  const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
 function SearchKeywordsPanel({ clientId }: { clientId: string }) {
   // Default to the "Last 30 days" range (the most recent month of GBP keyword
   // data); a range token ('30d'…), a month ('YYYY-MM-01'), or '' (= latest month).
@@ -535,6 +562,14 @@ function SearchKeywordsPanel({ clientId }: { clientId: string }) {
                 title={sortAlpha ? 'Sorted A–Z — click for volume' : 'Sorted by volume — click for A–Z'}
               >
                 <ArrowUpDown size={13} /> {sortAlpha ? 'A–Z' : 'Volume'}
+              </button>
+              <button
+                style={{ ...secondaryBtn, padding: '6px 10px' }}
+                onClick={() => downloadKeywordsCsv(shown, data!.compared, `gbp-keywords-${(data!.month ?? selection) || 'latest'}.csv`)}
+                disabled={shown.length === 0}
+                title="Download the shown keywords as CSV"
+              >
+                <Download size={13} /> CSV
               </button>
             </div>
             {shown.length === 0 ? (
