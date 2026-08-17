@@ -105,13 +105,11 @@ def test_build_html_includes_present_sections():
     out = cr.build_report_html(data)
     assert "Organic rankings" in out
     assert "emergency plumber" in out
-    assert "Google Business Profile" in out
-    assert "4.8" in out and "Great service" in out
     assert "No report data is available" not in out
-    # escaping: a malicious review can't inject markup
-    data["gbp"]["top_reviews"] = ["<script>x</script>"]
-    assert "<script>x</script>" not in cr.build_report_html(data)
-    assert "&lt;script&gt;" in cr.build_report_html(data)
+    # GBP is removed from the client PDF report for now — the section and its
+    # review content must not render even when gbp data is present.
+    assert "Google Business Profile" not in out
+    assert "Great service" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +348,9 @@ def test_section_organic_does_not_pad_with_decliner():
     assert "-2 positions" not in out
 
 
+# NOTE: GBP is removed from the assembled client PDF report for now (not in
+# build_report_html's section list). These tests exercise _section_gbp directly
+# so its rendering stays covered for when the section is re-mounted.
 def test_gbp_review_period_renders():
     """GBP section shows new reviews this vs last period, a rating climb, and
     recent-review highlights (positive framing)."""
@@ -362,20 +363,22 @@ def test_gbp_review_period_renders():
             "highlights": ["Fantastic team, fixed our servers fast"],
         },
     })
-    out = cr.build_report_html(data)
+    out = cr._section_gbp(data)
     assert "Google Business Profile" in out
     assert "gained" in out and "6" in out and "vs 4 the previous period" in out
     assert "up from 4.5★" in out
     assert "Recent reviews this period" in out and "Fantastic team" in out
     # the generic top-review list is dropped when we have this-period highlights
     assert "generic old review" not in out
+    # and it is not mounted in the assembled report
+    assert "Google Business Profile" not in cr.build_report_html(data)
 
 
 def test_gbp_review_period_absent_degrades():
     # no review_period → section still renders with rating/reviews, no crash
     data = _data(gbp={"business_name": "X", "rating": 4.6, "review_count": 84,
                       "top_reviews": ["nice"], "review_period": None})
-    out = cr.build_report_html(data)
+    out = cr._section_gbp(data)
     assert "Google Business Profile" in out and "nice" in out
     assert "gained" not in out
 
