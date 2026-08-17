@@ -877,7 +877,10 @@ def build_report_html(data: dict) -> str:
     sections = "".join(
         s for s in (_section_exec(data), _section_goals(data), _section_performance(data),
                     _section_ga4(data), _section_work_delivered(data), _section_organic(data),
-                    _section_geogrid(data), _section_ai_visibility(data), _section_gbp(data)) if s
+                    _section_geogrid(data), _section_ai_visibility(data)) if s
+        # GBP section removed from the client PDF for now (re-add _section_gbp(data)
+        # above to restore). _gather_gbp still runs so review snapshots keep
+        # recording and the historical series stays continuous.
     )
     if not (kpis or sections):
         sections = "<section><p class='lead'>No report data is available for this client yet.</p></section>"
@@ -1620,7 +1623,7 @@ def generate_exec_summary(client_name: Optional[str], period: dict, data: dict, 
                 for k in ((data.get("geogrid") or {}).get("keywords") or [])
             ],
         },
-        "google_business_profile": data.get("gbp"),
+        # GBP removed from the client PDF report for now — not fed to the exec summary.
         "ai_search_visibility": data.get("ai_visibility"),
         "work_delivered": data.get("work_delivered"),
         **signals,
