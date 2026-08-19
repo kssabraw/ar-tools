@@ -60,6 +60,22 @@ class AnthropicLLM:
         max_transport_attempts: int = 4,
     ):
         self._client = Anthropic(api_key=api_key, timeout=timeout_s)
+        # Second Anthropic account (same model) for SAME-MODEL failover under
+        # load: when the primary account's transport retries can't clear a
+        # transient 429/5xx, _invoke retries on this account. Kept separate from
+        # _client (rather than a prebuilt list) so a caller that swaps _client
+        # still drives the primary path. Best-effort — a config hiccup degrades
+        # to primary-only, never breaks construction.
+        self._secondary_client = None
+        try:
+            from fanout.config import get_settings
+
+            s = get_settings()
+            sec = getattr(s, "anthropic_api_key_secondary", "")
+            if getattr(s, "anthropic_key_failover_enabled", True) and sec and sec != api_key:
+                self._secondary_client = Anthropic(api_key=sec, timeout=timeout_s)
+        except Exception:  # noqa: BLE001 — failover is optional; never fail to build
+            pass
         self._model = model
         self._max_tokens = max_tokens
         self._max_transport_attempts = max(1, max_transport_attempts)
@@ -79,21 +95,41 @@ class AnthropicLLM:
         raise_if_cancelled()
         started = time.perf_counter()
         resp = None
-        for attempt in range(self._max_transport_attempts):
-            try:
-                with self._client.messages.stream(
-                    model=self._model, **create_kwargs
-                ) as stream:
-                    resp = stream.get_final_message()
+        last_exc: Exception | None = None
+        # Outer loop: each Anthropic account, in failover order (built here so a
+        # caller that swapped _client still drives the primary path). Inner loop:
+        # the existing per-account transport-retry budget. When an account's
+        # retries are spent on a transient error, fail over to the next account
+        # (same model); a non-retryable error fails fast on the first account.
+        clients = [self._client] + ([self._secondary_client] if self._secondary_client is not None else [])
+        for acct_idx, client in enumerate(clients):
+            for attempt in range(self._max_transport_attempts):
+                try:
+                    with client.messages.stream(
+                        model=self._model, **create_kwargs
+                    ) as stream:
+                        resp = stream.get_final_message()
+                    break
+                except Exception as exc:  # noqa: BLE001 — surfaced as AnthropicError
+                    # Retry only transient transport errors (rate-limit / overload /
+                    # timeout); anything else (auth, bad-request, …) fails fast.
+                    if _is_retryable(exc) and attempt < self._max_transport_attempts - 1:
+                        # Exponential backoff with jitter (1.5s, 3s, 6s, capped at 8s).
+                        time.sleep(min(8.0, 1.5 * (2 ** attempt)) + random.uniform(0, 0.5))
+                        continue
+                    if _is_retryable(exc) and acct_idx < len(clients) - 1:
+                        # This account's budget is spent — fail over to the next.
+                        last_exc = exc
+                        logger.warning(
+                            "anthropic_account_failover",
+                            extra={"from_account": acct_idx + 1, "purpose": purpose, "error": str(exc)[:200]},
+                        )
+                        break
+                    raise AnthropicError(f"Anthropic call failed ({purpose}): {exc}") from exc
+            if resp is not None:
                 break
-            except Exception as exc:  # noqa: BLE001 — surfaced as AnthropicError
-                # Retry only transient transport errors (rate-limit / overload /
-                # timeout); anything else (auth, bad-request, …) fails fast.
-                if _is_retryable(exc) and attempt < self._max_transport_attempts - 1:
-                    # Exponential backoff with jitter (1.5s, 3s, 6s, capped at 8s).
-                    time.sleep(min(8.0, 1.5 * (2 ** attempt)) + random.uniform(0, 0.5))
-                    continue
-                raise AnthropicError(f"Anthropic call failed ({purpose}): {exc}") from exc
+        if resp is None:  # every account exhausted transiently
+            raise AnthropicError(f"Anthropic call failed ({purpose}): {last_exc}") from last_exc
         latency_ms = round((time.perf_counter() - started) * 1000, 2)
 
         usage = getattr(resp, "usage", None)

@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     # Anthropic — article planning orchestrator (Claude Opus 4.7, tool-use /
     # strict-schema JSON; PRD §7.10, §14.2). Reuses the AR Tools ANTHROPIC_API_KEY.
     anthropic_api_key: str = ""
+    # Second Anthropic account (same models) for SAME-MODEL failover under load.
+    # When the primary account's in-process transport retries can't clear a
+    # transient 429/5xx, the same call is retried on this account's key. Empty ⇒
+    # primary only. Reuses the AR Tools ANTHROPIC_API_KEY_SECONDARY.
+    anthropic_api_key_secondary: str = ""
+    anthropic_key_failover_enabled: bool = True
     orchestrator_model: str = "claude-opus-4-7"
     orchestrator_max_tokens: int = 16000
     orchestrator_timeout_s: int = 120         # PRD §16.2: >120s -> retry once then degrade
