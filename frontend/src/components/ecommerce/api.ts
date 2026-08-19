@@ -151,7 +151,13 @@ export const ecommerceApi = {
   // Publish a saved page to a Google Doc (default) or the client's WordPress site.
   publishPage: (
     pageId: string,
-    opts: { destination?: 'google_docs' | 'wordpress'; status?: 'draft' | 'publish' } = {},
+    opts: {
+      destination?: 'google_docs' | 'wordpress'
+      status?: 'draft' | 'publish'
+      // Deliberate override after the brand-guide block. Only ever set from an
+      // explicit second click, never a default.
+      force_voice?: boolean
+    } = {},
   ) =>
     api.post<{
       success: boolean

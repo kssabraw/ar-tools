@@ -24,8 +24,9 @@ import { ScoreHistoryView } from '../components/localseo/ScoreHistoryView'
 import { RankabilityReport } from '../components/localseo/RankabilityReport'
 import { Spinner } from '../components/localseo/Spinner'
 import { EntityProviderSelect, type EntityProvider } from '../components/EntityProviderSelect'
+import { ErrorDetails } from '../components/ErrorDetails'
 import {
-  backLink, card, errorBox, input, label, outlineBtn, primaryBtn, relativeTime, scoreColor,
+  backLink, card, input, label, outlineBtn, primaryBtn, relativeTime, scoreColor,
 } from '../components/localseo/shared'
 
 type View =
@@ -550,7 +551,7 @@ export function LocalSeoContent() {
             />
           </div>
 
-          {planError && <div style={errorBox}>{planError}</div>}
+          {planError && <ErrorDetails message={planError} />}
 
           <button
             style={{ ...primaryBtn, width: '100%', opacity: (planScanning || planBulk.creating || !keyword.trim() || !location.trim()) ? 0.5 : 1, cursor: (planScanning || planBulk.creating || !keyword.trim() || !location.trim()) ? 'not-allowed' : 'pointer' }}
@@ -699,7 +700,7 @@ export function LocalSeoContent() {
             )}
           </div>
 
-          {error && <div style={errorBox}>{error}</div>}
+          {error && <ErrorDetails message={error} />}
 
           {/* SAB city — service-area businesses hide their address, so the user
               supplies the city they're physically in for the map-pack distance check. */}

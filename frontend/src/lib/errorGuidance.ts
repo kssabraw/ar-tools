@@ -55,6 +55,159 @@ const GENERIC: ErrorGuidance = {
 // which returns the first code that appears in the message — so list more
 // specific codes before any that are substrings of others.
 const REGISTRY: Record<string, ErrorGuidance> = {
+  concurrency_limit: {
+    title: 'Too many runs at once',
+    meaning:
+      'The server caps how many generation jobs run at the same time, and ' +
+      'that cap is currently reached.',
+    steps: [
+      'Wait a minute for in-flight work to finish, then try again.',
+      'Bulk jobs run at background priority, so a big batch elsewhere can hold the queue briefly.',
+    ],
+  },
+  bulk_limit_exceeded: {
+    title: 'Too many pages selected for one batch',
+    meaning: 'This bulk request is over the per-batch limit.',
+    steps: [
+      'Select fewer pages and run it in a couple of smaller batches.',
+    ],
+  },
+  no_valid_keywords: {
+    title: 'No usable keywords in this request',
+    meaning:
+      'None of the selected items had a keyword the generator could use ' +
+      '(blank, duplicate, or filtered out).',
+    steps: [
+      'Check the selection — each page needs a real keyword.',
+      'Re-select and try again.',
+    ],
+  },
+  no_valid_items: {
+    title: 'Nothing valid to generate',
+    meaning: 'None of the selected items could be turned into a page request.',
+    steps: ['Re-check the selection and try again.'],
+  },
+  keyword_required: {
+    title: 'A keyword is required',
+    meaning: 'This page can’t be generated without a target keyword.',
+    steps: ['Enter a keyword, then try again.'],
+  },
+  location_required: {
+    title: 'A location is required',
+    meaning: 'A local page needs a target location (city / area).',
+    steps: ['Set the location, then try again.'],
+  },
+  services_required: {
+    title: 'At least one service is required',
+    meaning: 'A location page needs the services it should cover.',
+    steps: ['Add one or more services, then try again.'],
+  },
+  client_has_no_website: {
+    title: 'This client has no website set',
+    meaning:
+      'This step reads the client’s live site (e.g. to find existing pages), ' +
+      'and no website is configured.',
+    steps: [
+      'Open Client → Edit and add the website URL.',
+      'Save, then try again.',
+    ],
+  },
+  client_has_no_gbp_category: {
+    title: 'This client has no Google Business Profile category',
+    meaning:
+      'This step needs the client’s GBP primary category and none is on file.',
+    steps: [
+      'Connect / select the client’s Google Business Profile (Client → Edit), then try again.',
+    ],
+  },
+  local_seo_provider_error: {
+    title: 'The page generator hit an upstream error',
+    meaning:
+      'The Local SEO generation service (competitor analysis + writer) failed ' +
+      'partway. This is usually transient — a slow or rate-limited upstream.',
+    steps: [
+      'Try again — most provider errors clear on a retry.',
+      'If it keeps failing, share the raw code below with the team.',
+    ],
+  },
+  ecommerce_provider_error: {
+    title: 'The page generator hit an upstream error',
+    meaning:
+      'The Ecommerce generation service failed partway. This is usually ' +
+      'transient — a slow or rate-limited upstream.',
+    steps: [
+      'Try again — most provider errors clear on a retry.',
+      'If it keeps failing, share the raw code below with the team.',
+    ],
+  },
+  local_seo_no_result: {
+    title: 'Generation finished without a page',
+    meaning: 'The run completed but produced no usable page.',
+    steps: ['Try again; if it repeats, share the raw code below with the team.'],
+  },
+  ecommerce_no_result: {
+    title: 'Generation finished without a page',
+    meaning: 'The run completed but produced no usable page.',
+    steps: ['Try again; if it repeats, share the raw code below with the team.'],
+  },
+  apps_script_call_failed: {
+    title: 'Couldn’t reach Google Drive',
+    meaning:
+      'The Apps Script webhook that creates the Google Doc didn’t respond.',
+    steps: [
+      'Try publishing again — this is often a transient hiccup.',
+      'If it persists, it’s a server-side setting — flag it to the team.',
+    ],
+  },
+  apps_script_http_error: {
+    title: 'Google Drive returned an error',
+    meaning:
+      'The Apps Script webhook responded with an error while creating the Doc.',
+    steps: [
+      'Try again; if it persists, flag the Apps Script deployment to the team.',
+    ],
+  },
+  github_repo_not_set: {
+    title: 'No GitHub repo configured for this client',
+    meaning: 'Publishing to GitHub needs the client’s repo, which isn’t set.',
+    steps: [
+      'Open Client → Edit and set the GitHub repository.',
+      'Save, then publish again.',
+    ],
+  },
+  github_not_configured: {
+    title: 'GitHub publishing isn’t set up on the server',
+    meaning: 'The server-side GitHub credentials for site publishing aren’t configured.',
+    steps: [
+      'This is a server setting — flag it to the team.',
+      'Publish to Google Docs or WordPress in the meantime.',
+    ],
+  },
+  wordpress_rest_api_unreachable: {
+    title: 'Couldn’t reach the WordPress site',
+    meaning:
+      'The client’s WordPress REST API didn’t respond — the site may block ' +
+      'REST, be behind a firewall, or be temporarily down.',
+    steps: [
+      'Confirm the site URL is correct and reachable (Client → Edit).',
+      'Check that the WordPress REST API isn’t disabled by a security plugin.',
+      'Try again once the site responds.',
+    ],
+  },
+  wordpress_image_too_large: {
+    title: 'The featured image is too large for WordPress',
+    meaning: 'WordPress rejected the image because it exceeds the size limit.',
+    steps: [
+      'Use a smaller featured image, then publish again.',
+    ],
+  },
+  run_not_resumable: {
+    title: 'This run can’t be resumed',
+    meaning: 'The run isn’t in a state that supports resuming.',
+    steps: [
+      'Start a fresh run instead.',
+    ],
+  },
   voice_violation: {
     title: 'Blocked by the client’s brand guide',
     meaning:
@@ -160,6 +313,18 @@ export function parseError(raw: string | null | undefined): ParsedError {
     }
   }
   return { code: 'unknown', raw: message, terms: [], guidance: GENERIC }
+}
+
+/**
+ * Whether a raw message reads like a backend error code (`snake_case`, no
+ * spaces) rather than a human sentence. Lets a surface show tailored/generic
+ * guidance for real codes while rendering already-friendly messages plainly.
+ * The token before any `":"` is what's judged, so `"voice_violation: cheapest"`
+ * still counts as a code.
+ */
+export function looksLikeErrorCode(raw: string | null | undefined): boolean {
+  const head = (raw ?? '').split(':')[0].trim()
+  return /^[a-z][a-z0-9_]{2,}$/.test(head)
 }
 
 // The backend appends offending values after the code as `"<code>: a, b, c"`.

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react'
-import { parseError } from '../lib/errorGuidance'
+import { parseError, looksLikeErrorCode } from '../lib/errorGuidance'
 
 interface ErrorDetailsProps {
   /** The raw error message / code from the failed request. */
@@ -32,6 +32,29 @@ export function ErrorDetails({ message, onOverride, overriding, style }: ErrorDe
 
   const { code, raw, terms, guidance } = parseError(message)
   const showOverride = Boolean(guidance.override && onOverride)
+
+  // An already-friendly sentence (a message, not a code we can map) has no plan
+  // of action to add — render it as a plain error line so ErrorDetails is a
+  // safe drop-in anywhere, upgrading only the messages it actually recognizes.
+  if (code === 'unknown' && !looksLikeErrorCode(raw)) {
+    return (
+      <div
+        style={{
+          marginBottom: 12,
+          padding: '10px 12px',
+          background: '#fef2f2',
+          border: '1px solid #fecaca',
+          borderRadius: 8,
+          color: '#991b1b',
+          fontSize: 12,
+          lineHeight: 1.5,
+          ...style,
+        }}
+      >
+        {raw}
+      </div>
+    )
+  }
 
   return (
     <div
