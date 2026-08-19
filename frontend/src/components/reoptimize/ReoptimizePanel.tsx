@@ -7,7 +7,8 @@ import { useResumableBatch, type BatchJobRow } from '../../lib/useResumableBatch
 import { EntityProviderSelect, type EntityProvider } from '../EntityProviderSelect'
 import { LocationAutocomplete } from '../localseo/LocationAutocomplete'
 import { Spinner } from '../localseo/Spinner'
-import { card, errorBox, input, label, outlineBtn, primaryBtn, scoreColor } from '../localseo/shared'
+import { card, input, label, outlineBtn, primaryBtn, scoreColor } from '../localseo/shared'
+import { ErrorDetails } from '../ErrorDetails'
 import { PasteEditor } from './PasteEditor'
 import type {
   ReoptAdapter,
@@ -500,7 +501,7 @@ export function ReoptimizePanel({ adapter, pageType: pageTypeProp }: Props) {
           >
             {discovering ? <Spinner size={14} /> : <Search size={14} />} {discovering ? 'Scanning site…' : `Discover ${pageType ? pageType + ' ' : ''}pages`}
           </button>
-          {discoverError && <div style={errorBox}>{discoverError}</div>}
+          {discoverError && <ErrorDetails message={discoverError} />}
           {discoverNote && <p style={{ fontSize: 12, color: '#92400e', margin: 0 }}>{discoverNote}</p>}
           {discoverItems && discoverItems.length === 0 && !discovering && (
             <p style={{ fontSize: 13, color: '#64748b', textAlign: 'center', padding: 16 }}>No pages found on this client's site.</p>
@@ -538,7 +539,7 @@ export function ReoptimizePanel({ adapter, pageType: pageTypeProp }: Props) {
       {mode === 'existing' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {loadingExisting && <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#64748b' }}><Spinner size={14} /> Loading pages…</div>}
-          {existingError && <div style={errorBox}>{existingError}</div>}
+          {existingError && <ErrorDetails message={existingError} />}
           {existingItems && existingItems.length === 0 && !loadingExisting && (
             <p style={{ fontSize: 13, color: '#64748b', textAlign: 'center', padding: 16 }}>No existing pages to reoptimize.</p>
           )}
@@ -618,7 +619,7 @@ export function ReoptimizePanel({ adapter, pageType: pageTypeProp }: Props) {
         </label>
       ) : null}
 
-      {error && <div style={errorBox}>{error}</div>}
+      {error && <ErrorDetails message={error} />}
       {built.blockReason && !error && validTargets.length === 0 && (
         <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>{built.blockReason}</p>
       )}

@@ -14,6 +14,7 @@ import { useSiloPlan } from './useSiloPlan'
 import { useBulkCreate } from './useBulkCreate'
 import { Spinner } from './Spinner'
 import { FeaturedImagePicker } from '../FeaturedImagePicker'
+import { ErrorDetails } from '../ErrorDetails'
 import {
   backLink, card, downloadFile, errorBox, formatHtml, htmlToText, outlineBtn,
   primaryBtn, relativeTime, scoreBg, scoreBorder, scoreColor, statusLabel, wordCount,
@@ -75,11 +76,11 @@ export function GeneratedPageView({
     setFeaturedImageUrl(url)
   }
 
-  // Set when the server refused the publish because the page uses wording the
-  // brand guide forbids. Surfacing an override rather than a dead end: the
-  // forbidden list is distilled from the guide by an LLM, so a wrong extraction
-  // must not lock the page permanently — but it takes a second, deliberate click.
-  const [voiceBlocked, setVoiceBlocked] = useState(false)
+  // Re-runs whichever publish destination was blocked, with force_voice — wired
+  // to the error accordion's "Publish anyway" override so a brand-guide block
+  // (an LLM-distilled never-use list can misfire) isn't a dead end. The raw
+  // error code is stored as-is; ErrorDetails turns it into guidance.
+  const forceRetry = useRef<(() => void) | null>(null)
 
   const handlePublish = async (forceVoice = false) => {
     setPublishing(true)
@@ -89,46 +90,29 @@ export function GeneratedPageView({
         page.id, forceVoice ? { force_voice: true } : {},
       )
       setPublishedUrl(res.doc_url ?? null)
-      setVoiceBlocked(false)
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Publish failed'
-      if (msg.includes('voice_violation')) {
-        setVoiceBlocked(true)
-        setPublishError(
-          'Not published — this page uses wording the client’s brand guide forbids. '
-          + 'See the Brand voice panel below for the exact words.',
-        )
-      } else {
-        setPublishError(
-          msg.includes('missing_google_drive_folder_id')
-            ? 'Set this client’s Google Drive folder first (Client → Edit), then publish.'
-            : msg.includes('publish_not_configured')
-              ? 'Publishing isn’t configured on the server (no Apps Script URL).'
-              : msg,
-        )
-      }
+      forceRetry.current = () => handlePublish(true)
+      setPublishError(msg)
     } finally {
       setPublishing(false)
     }
   }
 
-  const handleWpPublish = async () => {
+  const handleWpPublish = async (forceVoice = false) => {
     setWpPublishing(true)
     setPublishError('')
     try {
-      const res = await localSeoApi.publishPage(page.id, { destination: 'wordpress', status: wpStatus })
+      const res = await localSeoApi.publishPage(page.id, {
+        destination: 'wordpress', status: wpStatus, ...(forceVoice ? { force_voice: true } : {}),
+      })
       const link = res.edit_url || res.url || null
       setWpUrl(link)
       if (link) window.open(link, '_blank')
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Publish failed'
-      setPublishError(
-        msg.includes('wordpress_not_configured')
-          ? 'Add this client’s WordPress site + Application Password first (Client → Edit), then publish.'
-          : msg.includes('wordpress_auth_failed')
-            ? 'WordPress rejected the credentials — check the username and Application Password.'
-            : msg,
-      )
+      forceRetry.current = () => handleWpPublish(true)
+      setPublishError(msg)
     } finally {
       setWpPublishing(false)
     }
@@ -500,7 +484,7 @@ export function GeneratedPageView({
             </select>
             <button
               style={{ ...outlineBtn, border: 'none', borderLeft: '1px solid #cbd5e1', borderRadius: 0 }}
-              onClick={handleWpPublish}
+              onClick={() => handleWpPublish()}
               disabled={wpPublishing}
             >
               <ExternalLink size={14} /> {wpPublishing ? 'Publishing…' : wpUrl ? 'Re-publish to WordPress' : 'Publish to WordPress'}
@@ -514,20 +498,11 @@ export function GeneratedPageView({
           )}
         </div>
         {publishError && (
-          <div style={errorBox}>
-            {publishError}
-            {voiceBlocked && (
-              <div style={{ marginTop: 8 }}>
-                <button
-                  style={outlineBtn}
-                  disabled={publishing}
-                  onClick={() => handlePublish(true)}
-                >
-                  Publish anyway
-                </button>
-              </div>
-            )}
-          </div>
+          <ErrorDetails
+            message={publishError}
+            overriding={publishing || wpPublishing}
+            onOverride={() => forceRetry.current?.()}
+          />
         )}
         <button onClick={onNewPage} style={{ ...backLink, alignSelf: 'center', marginBottom: 0 }}>← Start a new page</button>
       </div>

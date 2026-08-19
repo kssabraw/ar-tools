@@ -7,8 +7,9 @@ import { useResumableJob } from '../../lib/useResumableJob'
 import type { AnalysisResult, Deficiency, LocalSeoPageDetail, ScoreResult } from './types'
 import { Spinner } from './Spinner'
 import {
-  backLink, card, errorBox, outlineBtn, primaryBtn, scoreColor,
+  backLink, card, outlineBtn, primaryBtn, scoreColor,
 } from './shared'
+import { ErrorDetails } from '../ErrorDetails'
 
 interface Props {
   clientId: string
@@ -183,7 +184,7 @@ export function PageScoreView({
         {pageUrl && <> · <a href={pageUrl} target="_blank" rel="noreferrer" style={{ color: '#6366f1' }}>{pageUrl}</a></>}
       </p>
 
-      {error && <div style={{ ...errorBox, marginBottom: 16 }}>{error}</div>}
+      {error && <ErrorDetails message={error} style={{ marginBottom: 16 }} />}
 
       {!result && (
         <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 14, alignItems: 'center' }}>

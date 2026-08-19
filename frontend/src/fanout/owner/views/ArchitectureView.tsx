@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { ErrorDetails } from "../../../components/ErrorDetails";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   generateArchitecture,
@@ -64,7 +65,7 @@ export function ArchitectureView() {
             <button className="btn btn-primary" style={{ width: "auto" }} disabled={busy || regen.isPending} onClick={() => regen.mutate()}>
               {busy || regen.isPending ? <><span className="spinner-sm" />Generating…</> : "Generate architecture"}
             </button>
-            {genError && <p className="form-error">{genError}</p>}
+            {genError && <ErrorDetails variant="fanout" message={genError} />}
           </>
         )}
       </div>
@@ -100,7 +101,7 @@ export function ArchitectureView() {
           </button>
         )}
       </div>
-      {genError && <p className="form-error">{genError}</p>}
+      {genError && <ErrorDetails variant="fanout" message={genError} />}
       <ArchPanels arch={a} selected={selected} onSelect={setSelected} />
     </div>
   );

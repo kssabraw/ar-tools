@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react'
 import { Gauge, Sparkles } from 'lucide-react'
 import { useResumableJob } from '../../lib/useResumableJob'
 import { Spinner } from '../localseo/Spinner'
+import { ErrorDetails } from '../ErrorDetails'
 import { scoreColor } from '../localseo/shared'
 import type { ScoreResult } from '../localseo/types'
 import { reoptApi } from './api'
@@ -88,7 +89,7 @@ export function BlogScorePanel({ runId, onReoptimized }: { runId: string; onReop
         {job.running && <Spinner size={14} />}
       </div>
 
-      {jobError && <div style={errStyle}>{jobError}</div>}
+      {jobError && <ErrorDetails message={jobError} />}
       {reoptimizing && (
         <div style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>
           Rewriting the article to fix the selected issues — this can take a couple of minutes, then it re-scores.
@@ -148,6 +149,5 @@ export function BlogScorePanel({ runId, onReoptimized }: { runId: string; onReop
 
 const cardStyle: CSSProperties = { background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', padding: 24, marginBottom: 20 }
 const btnStyle: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, padding: '6px 12px', border: '1px solid #e2e8f0', borderRadius: 8, background: '#fff', color: '#334155', cursor: 'pointer' }
-const errStyle: CSSProperties = { color: '#dc2626', fontSize: 13, marginTop: 8 }
 const defRow: CSSProperties = { display: 'block', border: '1px solid #e2e8f0', borderRadius: 8, padding: 10, marginBottom: 8, cursor: 'pointer' }
 const defListStyle: CSSProperties = { margin: '6px 0 0 26px', padding: 0, fontSize: 12.5, color: '#64748b', lineHeight: 1.5 }

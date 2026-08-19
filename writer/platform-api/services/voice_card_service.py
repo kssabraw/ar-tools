@@ -216,9 +216,35 @@ def assert_voice_publishable(verdict: Optional[dict], force: bool = False) -> No
 
     Raises 409 `voice_violation`; the caller already has the verdict and can
     render exactly which words offended.
+
+    The offending terms ride along in the detail string, so a surface that only
+    sees the error (rather than the full verdict) can still name them. The
+    format stays backwards-compatible: the code is always the token before the
+    first colon, so `detail.startswith("voice_violation")` and
+    `"voice_violation" in detail` both keep working; terms follow as
+    `"voice_violation: cheapest, budget"` when we have them.
     """
     if force or not isinstance(verdict, dict):
         return
     if not verdict.get("critical_count"):
         return
-    raise HTTPException(status_code=409, detail="voice_violation")
+    terms = _critical_terms(verdict)
+    detail = f"voice_violation: {', '.join(terms)}" if terms else "voice_violation"
+    raise HTTPException(status_code=409, detail=detail)
+
+
+def _critical_terms(verdict: dict) -> list[str]:
+    """The forbidden words that made this verdict critical, de-duplicated in
+    order. Best-effort: a malformed violations list yields no terms (the gate
+    still blocks — the words are a nicety, the block is the contract)."""
+    seen: list[str] = []
+    for finding in verdict.get("violations") or []:
+        if not isinstance(finding, dict):
+            continue
+        if finding.get("severity") != "critical":
+            continue
+        for term in finding.get("terms") or []:
+            text = str(term).strip()
+            if text and text.lower() not in {s.lower() for s in seen}:
+                seen.append(text)
+    return seen

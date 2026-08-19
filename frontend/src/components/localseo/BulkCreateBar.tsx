@@ -2,7 +2,8 @@ import { Sparkles } from 'lucide-react'
 import type { RelatedPageItem } from './types'
 import type { useBulkCreate } from './useBulkCreate'
 import { Spinner } from './Spinner'
-import { card, errorBox, primaryBtn } from './shared'
+import { ErrorDetails } from '../ErrorDetails'
+import { card, primaryBtn } from './shared'
 
 interface Props {
   items: RelatedPageItem[]
@@ -32,7 +33,7 @@ export function BulkCreateBar({ items, bulk, location, locationCode, onViewSaved
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {error && <div style={errorBox}>{error}</div>}
+      {error && <ErrorDetails message={error} />}
       {missingKws.length > 0 && !creating && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, color: '#94a3b8', flexWrap: 'wrap' }}>
           <span>Tick the missing pages you want, then create them in one batch.</span>

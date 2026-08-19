@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { ErrorDetails } from "../../components/ErrorDetails";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addTopic,
@@ -205,7 +206,7 @@ export function SiloDiscovery({
             Back to sessions
           </button>
         </div>
-        {error && <p className="form-error">{error}</p>}
+        {error && <ErrorDetails variant="fanout" message={error} />}
 
         {busy && (
           <WorkingProgress
