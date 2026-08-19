@@ -1,6 +1,38 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-07 · **Website Builder — theme compiler + core-pages writer + imagery (PR #575, MERGED)** (latest)
+## ⏩ Update — 2026-08-19 · **Second-Anthropic-account failover (concurrency headroom)** (latest)
+
+Concurrency limits (429s) on the shared Anthropic account can now fail over to a
+**second Anthropic account** — same Claude models, so output quality is
+unchanged. This is distinct from the existing cross-*provider* fallback
+(Anthropic→OpenAI→Gemini in `report_llm.py`), which swaps models; the second
+account is tried **first**, before any provider swap. Reactive failover only
+(the primary stays primary; the secondary is used only when the primary hits a
+transient 429/5xx that outlasts its retry budget). Covers all four Anthropic
+call surfaces: the report fan-out + brand/AI scans + agentic loops
+(Slack/SerMastr, strategist, PACE, QA) in **platform-api**, blog/service
+generation in **pipeline-api**, Local SEO/Ecommerce generation in **nlp-api**,
+and the Topic Fanout backend.
+
+**To activate — set ONE env var per service** (empty ⇒ no failover, so the code
+ships dark until you set it). The var is a **second Anthropic account's API key**
+(a genuinely separate account/org, not a second key on the same account — same
+account shares the same concurrency limit):
+
+| Railway service | Var to set |
+|---|---|
+| `PLATFORM` (platform-api + the vendored fanout) | `ANTHROPIC_API_KEY_SECONDARY` |
+| `pipeline` (pipeline-api) | `ANTHROPIC_API_KEY_SECONDARY` |
+| `nlp` (nlp-api) | `ANTHROPIC_API_KEY_SECONDARY` |
+
+Each service also honours `ANTHROPIC_KEY_FAILOVER_ENABLED` (default `true`; set
+`false` to disable without unsetting the key). Read the live Railway config
+before/after setting these (see the CLAUDE.md "read the live config" rule). No
+migration, no schema change, no new dependency.
+
+---
+
+## ⏩ Update — 2026-08-07 · **Website Builder — theme compiler + core-pages writer + imagery (PR #575, MERGED)**
 
 Closes the owner's four-step arc — *upload a Claude design → write the pages →
 generate images → push to a repo*. Three slices on **`claude/website-builder-slice-3-9an50d`**,
