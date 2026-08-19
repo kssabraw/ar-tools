@@ -208,6 +208,45 @@ const REGISTRY: Record<string, ErrorGuidance> = {
       'Start a fresh run instead.',
     ],
   },
+  not_client_linked: {
+    title: 'This session isn’t linked to a client',
+    meaning:
+      'Scoring / reoptimizing an article needs a client-linked session — an ' +
+      'unlinked session has no suite run and no brand-voice / ICP context to ' +
+      'reoptimize against.',
+    steps: [
+      'Link this session to a client (Copy to client / the session’s client selector).',
+      'Then run Score / Reoptimize again.',
+    ],
+  },
+  read_only_role: {
+    title: 'You don’t have edit access here',
+    meaning: 'This action needs an owner role; your account is read-only for it.',
+    steps: [
+      'Ask an owner/admin to make the change, or to grant you access.',
+    ],
+  },
+  session_not_found: {
+    title: 'This session no longer exists',
+    meaning: 'The session was deleted or isn’t reachable anymore.',
+    steps: [
+      'Go back to the sessions list and pick a current session.',
+    ],
+  },
+  article_not_found: {
+    title: 'This article couldn’t be found',
+    meaning: 'The article was removed or its run no longer resolves.',
+    steps: [
+      'Refresh the articles list and try again.',
+    ],
+  },
+  cluster_not_in_client: {
+    title: 'This article isn’t under the expected client',
+    meaning: 'The article’s cluster doesn’t belong to this client’s session.',
+    steps: [
+      'Refresh and retry from the correct client’s session.',
+    ],
+  },
   voice_violation: {
     title: 'Blocked by the client’s brand guide',
     meaning:

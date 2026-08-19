@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ErrorDetails } from "../../../components/ErrorDetails";
 import {
   getTermAnalysis,
   startTermAnalysis,
@@ -101,7 +102,7 @@ export default function TermAnalysisPanel(props: {
             </p>
           </div>
         )}
-        {status === "error" && <p className="banner banner-error">{error}</p>}
+        {status === "error" && <ErrorDetails variant="fanout" message={error} />}
 
         {report && (
           <div style={{ display: "grid", gap: 18 }}>

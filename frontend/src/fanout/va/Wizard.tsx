@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { ErrorDetails } from "../../components/ErrorDetails";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -164,7 +165,7 @@ export function Wizard() {
     <AppShell>
       <div className="content" style={{ maxWidth: 720 }}>
         <StepRail current={step} />
-        {error && <p className="form-error">{error}</p>}
+        {error && <ErrorDetails variant="fanout" message={error} />}
 
         {working && (
           <div className="card" style={{ textAlign: "center" }}>

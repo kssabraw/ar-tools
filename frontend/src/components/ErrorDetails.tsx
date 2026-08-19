@@ -2,6 +2,31 @@ import { useState } from 'react'
 import { AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react'
 import { parseError, looksLikeErrorCode } from '../lib/errorGuidance'
 
+interface Palette {
+  bg: string
+  border: string
+  headline: string
+  body: string
+  chipText: string
+  chipBorder: string
+  overrideText: string
+  overrideBorder: string
+}
+
+// The suite's red-box palette (hardcoded hex) and the fanout palette, which
+// tracks fanout's `--danger` theme token so the accordion looks native inside
+// the `.fanout-app` subtree (its `.form-error` uses the same box + `--danger`).
+const PALETTES: Record<'default' | 'fanout', Palette> = {
+  default: {
+    bg: '#fef2f2', border: '#fecaca', headline: '#991b1b', body: '#7f1d1d',
+    chipText: '#b91c1c', chipBorder: '#fecaca', overrideText: '#b91c1c', overrideBorder: '#fca5a5',
+  },
+  fanout: {
+    bg: '#fef2f2', border: '#fecaca', headline: 'var(--danger, #dc2626)', body: 'var(--danger, #dc2626)',
+    chipText: 'var(--danger, #dc2626)', chipBorder: '#fecaca', overrideText: 'var(--danger, #dc2626)', overrideBorder: '#fca5a5',
+  },
+}
+
 interface ErrorDetailsProps {
   /** The raw error message / code from the failed request. */
   message: string | null | undefined
@@ -13,6 +38,12 @@ interface ErrorDetailsProps {
   onOverride?: () => void
   /** True while the override action is running (disables + relabels the button). */
   overriding?: boolean
+  /**
+   * Visual theme. `default` is the suite's inline-styled red box; `fanout`
+   * themes off fanout's `--danger` token so it matches that subtree's own
+   * error styling. Only the palette changes — the accordion behaviour is one.
+   */
+  variant?: 'default' | 'fanout'
   /** Extra styles for the outer container. */
   style?: React.CSSProperties
 }
@@ -26,10 +57,11 @@ interface ErrorDetailsProps {
  * The guidance itself lives in `lib/errorGuidance`, so this component is generic
  * across every surface that surfaces a backend error.
  */
-export function ErrorDetails({ message, onOverride, overriding, style }: ErrorDetailsProps) {
+export function ErrorDetails({ message, onOverride, overriding, variant = 'default', style }: ErrorDetailsProps) {
   const [open, setOpen] = useState(false)
   if (!message) return null
 
+  const c = PALETTES[variant]
   const { code, raw, terms, guidance } = parseError(message)
   const showOverride = Boolean(guidance.override && onOverride)
 
@@ -42,10 +74,10 @@ export function ErrorDetails({ message, onOverride, overriding, style }: ErrorDe
         style={{
           marginBottom: 12,
           padding: '10px 12px',
-          background: '#fef2f2',
-          border: '1px solid #fecaca',
+          background: c.bg,
+          border: `1px solid ${c.border}`,
           borderRadius: 8,
-          color: '#991b1b',
+          color: c.headline,
           fontSize: 12,
           lineHeight: 1.5,
           ...style,
@@ -60,10 +92,10 @@ export function ErrorDetails({ message, onOverride, overriding, style }: ErrorDe
     <div
       style={{
         marginBottom: 12,
-        background: '#fef2f2',
-        border: '1px solid #fecaca',
+        background: c.bg,
+        border: `1px solid ${c.border}`,
         borderRadius: 8,
-        color: '#991b1b',
+        color: c.headline,
         fontSize: 12,
         overflow: 'hidden',
         ...style,
@@ -105,11 +137,11 @@ export function ErrorDetails({ message, onOverride, overriding, style }: ErrorDe
                   key={t}
                   style={{
                     background: '#fff',
-                    border: '1px solid #fecaca',
+                    border: `1px solid ${c.chipBorder}`,
                     borderRadius: 4,
                     padding: '1px 6px',
                     fontSize: 12,
-                    color: '#b91c1c',
+                    color: c.chipText,
                   }}
                 >
                   {t}
@@ -119,10 +151,10 @@ export function ErrorDetails({ message, onOverride, overriding, style }: ErrorDe
           )}
 
           <div style={{ fontWeight: 600, marginBottom: 4 }}>What this means</div>
-          <p style={{ margin: '0 0 10px', lineHeight: 1.5, color: '#7f1d1d' }}>{guidance.meaning}</p>
+          <p style={{ margin: '0 0 10px', lineHeight: 1.5, color: c.body }}>{guidance.meaning}</p>
 
           <div style={{ fontWeight: 600, marginBottom: 4 }}>How to fix it</div>
-          <ol style={{ margin: '0 0 4px', paddingLeft: 18, lineHeight: 1.6, color: '#7f1d1d' }}>
+          <ol style={{ margin: '0 0 4px', paddingLeft: 18, lineHeight: 1.6, color: c.body }}>
             {guidance.steps.map((s, i) => (
               <li key={i}>{s}</li>
             ))}
@@ -136,9 +168,9 @@ export function ErrorDetails({ message, onOverride, overriding, style }: ErrorDe
                 marginTop: 10,
                 padding: '6px 12px',
                 background: '#fff',
-                border: '1px solid #fca5a5',
+                border: `1px solid ${c.overrideBorder}`,
                 borderRadius: 6,
-                color: '#b91c1c',
+                color: c.overrideText,
                 fontSize: 12,
                 fontWeight: 600,
                 cursor: overriding ? 'default' : 'pointer',

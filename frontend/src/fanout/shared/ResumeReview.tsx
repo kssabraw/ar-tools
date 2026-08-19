@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ErrorDetails } from "../../components/ErrorDetails";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addTopic,
@@ -45,7 +46,7 @@ export function ResumeReview(p: { sessionId: string; role: "owner" | "va" }) {
 
   return (
     <div style={{ maxWidth: 720 }}>
-      {error && <p className="form-error">{error}</p>}
+      {error && <ErrorDetails variant="fanout" message={error} />}
 
       {step === "review" && (
         <ReviewStep

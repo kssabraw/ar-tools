@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ErrorDetails } from "../../../components/ErrorDetails";
 import {
   getArticle,
   splitUncovered,
@@ -174,7 +175,7 @@ export default function ArticlePanel(props: {
             )}
           </div>
         )}
-        {status === "error" && <p className="banner banner-error">{error}</p>}
+        {status === "error" && <ErrorDetails variant="fanout" message={error} />}
 
         {article && (
           <div style={{ display: "grid", gap: 14 }}>
