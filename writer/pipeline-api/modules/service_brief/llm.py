@@ -17,8 +17,8 @@ from typing import Any, Optional
 from config import settings
 from modules.brief.llm import (
     _STRICT_JSON_SUFFIX,
+    _create_message,
     _extract_json_payload,
-    _get_anthropic_semaphore,
     get_anthropic,
 )
 
@@ -53,19 +53,20 @@ async def claude_json_model(
     unwrapped instead of retried.
     """
     client = get_anthropic()
-    semaphore = _get_anthropic_semaphore()
 
     last_error: Optional[Exception] = None
     for attempt in range(2):
         sys_prompt = system if attempt == 0 else system + _STRICT_JSON_SUFFIX
-        async with semaphore:
-            message = await client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system=sys_prompt,
-                messages=[{"role": "user", "content": user}],
-            )
+        # Route through the brief module's shared transport: semaphore-guarded,
+        # transient-retried, AND failed over to the secondary Anthropic account
+        # on a saturated primary (same model).
+        message = await _create_message(client, {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "system": sys_prompt,
+            "messages": [{"role": "user", "content": user}],
+        })
         text = "".join(
             block.text for block in message.content if getattr(block, "type", "") == "text"
         )
