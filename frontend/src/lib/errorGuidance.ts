@@ -366,16 +366,17 @@ export function looksLikeErrorCode(raw: string | null | undefined): boolean {
   return /^[a-z][a-z0-9_]{2,}$/.test(head)
 }
 
-// The backend appends offending values after the code as `"<code>: a, b, c"`.
-// Only pull them for codes we know carry them, so a plain sentence that happens
-// to contain a colon isn't mis-parsed into "terms".
+// The backend appends offending values after the code as `"<code>: a | b | c"`.
+// Pipe-delimited (not comma) so a distilled never-use phrase with an internal
+// comma stays one term. Only pull them for codes we know carry them, so a plain
+// sentence that happens to contain a colon isn't mis-parsed into "terms".
 function extractTerms(code: string, message: string): string[] {
   if (code !== 'voice_violation') return []
   const idx = message.indexOf(`${code}:`)
   if (idx < 0) return []
   return message
     .slice(idx + code.length + 1)
-    .split(',')
+    .split('|')
     .map(t => t.trim())
     .filter(Boolean)
 }

@@ -222,14 +222,17 @@ def assert_voice_publishable(verdict: Optional[dict], force: bool = False) -> No
     format stays backwards-compatible: the code is always the token before the
     first colon, so `detail.startswith("voice_violation")` and
     `"voice_violation" in detail` both keep working; terms follow as
-    `"voice_violation: cheapest, budget"` when we have them.
+    `"voice_violation: cheapest | budget"` when we have them.
+
+    Terms are joined with " | " rather than ", " so a distilled never-use
+    *phrase* that itself contains a comma isn't split into two by the reader.
     """
     if force or not isinstance(verdict, dict):
         return
     if not verdict.get("critical_count"):
         return
     terms = _critical_terms(verdict)
-    detail = f"voice_violation: {', '.join(terms)}" if terms else "voice_violation"
+    detail = f"voice_violation: {' | '.join(terms)}" if terms else "voice_violation"
     raise HTTPException(status_code=409, detail=detail)
 
 

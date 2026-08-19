@@ -774,8 +774,12 @@ export function RunDetail() {
                 : ghPublishMutation.isError
                   ? ghPublishMutation
                   : null
-            const message = ghError
-              || (failed?.error instanceof Error ? failed.error.message : 'unknown error')
+            // Message tracks whichever source the override would re-run: the
+            // errored mutation when there is one, else the async GitHub job's
+            // error. This keeps the shown error and the override in sync.
+            const message = failed
+              ? (failed.error instanceof Error ? failed.error.message : 'unknown error')
+              : (ghError || 'unknown error')
             return (
               <ErrorDetails
                 message={message}

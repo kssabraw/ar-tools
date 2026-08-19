@@ -255,8 +255,23 @@ def test_publish_block_names_the_forbidden_terms():
     detail = exc.value.detail
     assert detail.split(":")[0] == "voice_violation"
     assert "voice_violation" in detail
-    # De-duplicated case-insensitively, warnings excluded.
-    assert detail == "voice_violation: cheapest, budget"
+    # De-duplicated case-insensitively, warnings excluded, pipe-delimited so a
+    # phrase with an internal comma survives round-tripping to the reader.
+    assert detail == "voice_violation: cheapest | budget"
+
+
+def test_publish_block_term_with_internal_comma_survives():
+    """A distilled never-use *phrase* containing a comma stays one term."""
+    verdict = {
+        "critical_count": 1,
+        "violations": [
+            {"check": "never_use_terms", "severity": "critical",
+             "terms": ["fast, cheap and easy", "budget"]},
+        ],
+    }
+    with pytest.raises(HTTPException) as exc:
+        vcs.assert_voice_publishable(verdict)
+    assert exc.value.detail == "voice_violation: fast, cheap and easy | budget"
 
 
 def test_publish_allowed_when_only_warnings():
