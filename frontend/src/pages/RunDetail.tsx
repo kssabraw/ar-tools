@@ -593,8 +593,16 @@ export function RunDetail() {
               <strong>Auto-retry{run.error_stage ? ` (${run.error_stage})` : ''}:</strong> {run.error_message}
             </div>
           ) : (
-            <div style={{ marginTop: 14, padding: '12px 14px', background: '#fef2f2', borderRadius: 8, color: '#dc2626', fontSize: 13 }}>
-              <strong>Error{run.error_stage ? ` (${run.error_stage})` : ''}:</strong> {run.error_message}
+            // A pipeline generation failure. Keep the failing stage visible
+            // (it's the fastest triage signal) and hand the message to the
+            // shared accordion for a plain-English explanation + plan of action.
+            <div style={{ marginTop: 14 }}>
+              {run.error_stage && (
+                <div style={{ fontSize: 12, fontWeight: 600, color: '#991b1b', marginBottom: 4 }}>
+                  Failed at the {run.error_stage} stage
+                </div>
+              )}
+              <ErrorDetails message={run.error_message} />
             </div>
           )
         )}
