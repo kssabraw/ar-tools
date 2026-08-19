@@ -6,6 +6,7 @@ import { api } from '../lib/api'
 import { useResumableJob } from '../lib/useResumableJob'
 import type { RunDetail as RunDetailType, ServiceWriterOutput } from '../lib/types'
 import type { ScoreResult } from './localseo/types'
+import { ErrorDetails } from './ErrorDetails'
 
 // What the score-jobs poll endpoint returns on completion: the score (both job
 // kinds) and, for a reoptimize, the new page — both read server-side from
@@ -75,7 +76,8 @@ export function ServicePageRunView({ run }: { run: RunDetailType }) {
   const scoreNote = isLocation ? 'local engines, incl. geo' : 'location-agnostic'
 
   const publishMutation = useMutation({
-    mutationFn: () => api.post<{ doc_url: string }>(`/runs/${run.id}/publish`, {}),
+    mutationFn: (opts?: { force_voice?: boolean }) =>
+      api.post<{ doc_url: string }>(`/runs/${run.id}/publish`, opts ?? {}),
     onSuccess: (data) => {
       setPublishedUrl(data.doc_url)
       window.open(data.doc_url, '_blank')
@@ -83,8 +85,8 @@ export function ServicePageRunView({ run }: { run: RunDetailType }) {
   })
   // Publish straight to the client's WordPress site (as a Page), draft or live.
   const wpPublishMutation = useMutation({
-    mutationFn: () => api.post<{ url: string; edit_url: string }>(
-      `/runs/${run.id}/publish`, { destination: 'wordpress', status: wpStatus },
+    mutationFn: (opts?: { force_voice?: boolean }) => api.post<{ url: string; edit_url: string }>(
+      `/runs/${run.id}/publish`, { destination: 'wordpress', status: wpStatus, ...(opts ?? {}) },
     ),
     onSuccess: (data) => {
       const link = data.edit_url || data.url
@@ -218,7 +220,7 @@ export function ServicePageRunView({ run }: { run: RunDetailType }) {
             <button type="button" onClick={() => download(rendering, `${run.keyword}.${ext}`, 'text/plain')} style={btnStyle}>
               <Download size={14} /> Download
             </button>
-            <button type="button" onClick={() => publishMutation.mutate()} disabled={publishMutation.isPending} style={{ ...btnStyle, color: '#fff', background: '#6366f1', borderColor: '#6366f1' }}>
+            <button type="button" onClick={() => publishMutation.mutate({})} disabled={publishMutation.isPending} style={{ ...btnStyle, color: '#fff', background: '#6366f1', borderColor: '#6366f1' }}>
               {publishMutation.isPending ? 'Publishing…' : 'Publish to Google Doc'}
             </button>
             {publishedUrl && (
@@ -243,7 +245,7 @@ export function ServicePageRunView({ run }: { run: RunDetailType }) {
                 </select>
                 <button
                   type="button"
-                  onClick={() => wpPublishMutation.mutate()}
+                  onClick={() => wpPublishMutation.mutate({})}
                   disabled={wpPublishMutation.isPending}
                   style={{ ...btnStyle, border: 'none', borderLeft: '1px solid #c7d2fe', borderRadius: 0, color: '#6366f1' }}
                   title="Publish directly to the client's WordPress site"
@@ -253,11 +255,17 @@ export function ServicePageRunView({ run }: { run: RunDetailType }) {
               </div>
             )}
           </div>
-          {(publishMutation.error || wpPublishMutation.error) && (
-            <div style={errStyle}>
-              {((publishMutation.error || wpPublishMutation.error) as Error).message}
-            </div>
-          )}
+          {(publishMutation.isError || wpPublishMutation.isError) && (() => {
+            const failed = publishMutation.isError ? publishMutation : wpPublishMutation
+            const message = failed.error instanceof Error ? failed.error.message : 'unknown error'
+            return (
+              <ErrorDetails
+                message={message}
+                overriding={failed.isPending}
+                onOverride={() => failed.mutate({ force_voice: true })}
+              />
+            )
+          })()}
           {fmt === 'wordpress' && (
             <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 8px' }}>
               Gutenberg block markup — paste into the WordPress block editor (Code editor) and it converts to native blocks.

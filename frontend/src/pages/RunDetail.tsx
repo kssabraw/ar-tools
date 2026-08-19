@@ -14,6 +14,7 @@ import { sectionsToHtml, escapeHtml } from '../lib/sectionsToHtml'
 import { FeedbackButton } from '../components/FeedbackButton'
 import { ServicePageRunView } from '../components/ServicePageRunView'
 import { FeaturedImagePicker } from '../components/FeaturedImagePicker'
+import { ErrorDetails } from '../components/ErrorDetails'
 import { BlogScorePanel } from '../components/reoptimize/BlogScorePanel'
 
 // ---------------------------------------------------------------------------
@@ -304,15 +305,16 @@ export function RunDetail() {
   const [ghQueueAhead, setGhQueueAhead] = useState<number | null>(null)
   const [fmt, setFmt] = useState<'markdown' | 'html'>('markdown')
   const publishMutation = useMutation({
-    mutationFn: () => api.post<{ doc_url: string }>(`/runs/${id}/publish`, {}),
+    mutationFn: (opts?: { force_voice?: boolean }) =>
+      api.post<{ doc_url: string }>(`/runs/${id}/publish`, opts ?? {}),
     onSuccess: (data) => {
       setPublishedUrl(data.doc_url)
       window.open(data.doc_url, '_blank')
     },
   })
   const wpPublishMutation = useMutation({
-    mutationFn: () => api.post<{ url: string; edit_url: string }>(
-      `/runs/${id}/publish`, { destination: 'wordpress', status: wpStatus },
+    mutationFn: (opts?: { force_voice?: boolean }) => api.post<{ url: string; edit_url: string }>(
+      `/runs/${id}/publish`, { destination: 'wordpress', status: wpStatus, ...(opts ?? {}) },
     ),
     onSuccess: (data) => {
       const link = data.edit_url || data.url
@@ -349,8 +351,8 @@ export function RunDetail() {
   })
 
   const ghPublishMutation = useMutation({
-    mutationFn: () => api.post<{ url?: string; path?: string; status?: string; job_id?: string }>(
-      `/runs/${id}/publish`, { destination: 'github' },
+    mutationFn: (opts?: { force_voice?: boolean }) => api.post<{ url?: string; path?: string; status?: string; job_id?: string }>(
+      `/runs/${id}/publish`, { destination: 'github', ...(opts ?? {}) },
     ),
     onSuccess: (data) => {
       setGhError(null)
@@ -683,7 +685,7 @@ export function RunDetail() {
                 </a>
               ) : (
                 <button
-                  onClick={() => publishMutation.mutate()}
+                  onClick={() => publishMutation.mutate({})}
                   disabled={publishMutation.isPending}
                   style={{ ...ghostBtn, color: '#6366f1', borderColor: '#c7d2fe' }}
                   title="Publish to the client's Google Drive folder"
@@ -708,7 +710,7 @@ export function RunDetail() {
                     <option value="publish">Publish</option>
                   </select>
                   <button
-                    onClick={() => wpPublishMutation.mutate()}
+                    onClick={() => wpPublishMutation.mutate({})}
                     disabled={wpPublishMutation.isPending}
                     style={{ ...ghostBtn, border: 'none', borderLeft: '1px solid #c7d2fe', borderRadius: 0, color: '#6366f1' }}
                     title="Publish directly to the client's WordPress site"
@@ -724,7 +726,7 @@ export function RunDetail() {
                 </a>
               ) : (
                 <button
-                  onClick={() => ghPublishMutation.mutate()}
+                  onClick={() => ghPublishMutation.mutate({})}
                   disabled={ghPublishMutation.isPending || ghJob.running}
                   style={{ ...ghostBtn, color: '#334155', borderColor: '#cbd5e1' }}
                   title="Generate images and commit this post to the client's configured GitHub repo"
@@ -753,11 +755,27 @@ export function RunDetail() {
                 : 'Generating hero + body images and committing to GitHub… you can leave this page; it finishes in the background. You\'ll get a notification when it\'s live.'}
             </div>
           )}
-          {(publishMutation.isError || wpPublishMutation.isError || ghPublishMutation.isError || ghError) && (
-            <div style={{ marginBottom: 12, padding: '10px 12px', background: '#fef2f2', borderRadius: 6, color: '#dc2626', fontSize: 12 }}>
-              Failed to publish: {ghError || ((publishMutation.error || wpPublishMutation.error || ghPublishMutation.error) instanceof Error ? ((publishMutation.error || wpPublishMutation.error || ghPublishMutation.error) as Error).message : 'unknown error')}
-            </div>
-          )}
+          {(publishMutation.isError || wpPublishMutation.isError || ghPublishMutation.isError || ghError) && (() => {
+            // Surface whichever publish destination failed, with a plan of
+            // action and — for a brand-voice block — a one-click override that
+            // re-runs that same destination with force_voice.
+            const failed = publishMutation.isError
+              ? publishMutation
+              : wpPublishMutation.isError
+                ? wpPublishMutation
+                : ghPublishMutation.isError
+                  ? ghPublishMutation
+                  : null
+            const message = ghError
+              || (failed?.error instanceof Error ? failed.error.message : 'unknown error')
+            return (
+              <ErrorDetails
+                message={message}
+                overriding={failed?.isPending}
+                onOverride={failed ? () => failed.mutate({ force_voice: true }) : undefined}
+              />
+            )
+          })()}
           {(runImagesQuery.data?.images?.length ?? 0) > 0 && (
             <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid #f1f5f9' }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: '#475569', marginBottom: 8 }}>

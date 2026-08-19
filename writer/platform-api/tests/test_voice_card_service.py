@@ -234,7 +234,29 @@ def test_publish_blocked_by_a_forbidden_word():
     with pytest.raises(HTTPException) as exc:
         vcs.assert_voice_publishable(verdict)
     assert exc.value.status_code == 409
+    # No terms on this verdict, so the detail stays the bare code.
     assert exc.value.detail == "voice_violation"
+
+
+def test_publish_block_names_the_forbidden_terms():
+    """The offending words ride along in the detail so a surface that only sees
+    the error can name them — while the code stays parseable before the colon."""
+    verdict = {
+        "critical_count": 1,
+        "passed": False,
+        "violations": [
+            {"check": "never_use_terms", "severity": "critical",
+             "terms": ["cheapest", "Cheapest", "budget"]},
+            {"check": "must_use_terms", "severity": "warning", "terms": ["Expert"]},
+        ],
+    }
+    with pytest.raises(HTTPException) as exc:
+        vcs.assert_voice_publishable(verdict)
+    detail = exc.value.detail
+    assert detail.split(":")[0] == "voice_violation"
+    assert "voice_violation" in detail
+    # De-duplicated case-insensitively, warnings excluded.
+    assert detail == "voice_violation: cheapest, budget"
 
 
 def test_publish_allowed_when_only_warnings():
