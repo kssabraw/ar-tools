@@ -463,8 +463,6 @@ async def run_strategy_review(
 ) -> dict:
     """Execute one strategist run and persist the strategy_reviews row.
     Returns the completed row. Raises on hard failure (caller marks the job)."""
-    import anthropic
-
     from services import strategist_tools
 
     supabase = get_supabase()
@@ -502,23 +500,25 @@ async def run_strategy_review(
     )
 
     tools = strategist_tools.anthropic_tool_defs() + [_EMIT_TOOL]
-    api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=_LLM_TIMEOUT)
+    from services import anthropic_failover
+
+    clients = anthropic_failover.build_async_clients(timeout=_LLM_TIMEOUT)
     messages: list[dict] = [{"role": "user", "content": user}]
     usage = {"input_tokens": 0, "output_tokens": 0}
     drilldowns: list[dict] = []
     paid_used = 0
     emitted: Optional[dict] = None
 
-    # Transient-retry each round: a single 429 (the shared Anthropic account
-    # saturates under scan/report bursts) previously failed the entire review
-    # job — one of the most expensive artifacts in the suite to lose.
-    from services.report_llm import retry_transient
-
+    # Transient-retry each round AND fail over to the secondary Anthropic account
+    # (same model): a single 429 (the primary account saturates under scan/report
+    # bursts) previously failed the entire review job — one of the most expensive
+    # artifacts in the suite to lose.
     # loop bound: every non-emit round consumes ≥1 drill-down, +2 slack rounds
     for round_no in range(max_dd + 3):
         force_emit = round_no >= max_dd + 1 or len(drilldowns) >= max_dd
-        resp = await retry_transient(
-            lambda: api.messages.create(
+        resp = await anthropic_failover.call_failover(
+            clients,
+            lambda c: c.messages.create(
                 model=settings.strategist_model,
                 max_tokens=settings.strategist_max_tokens,
                 system=_SYSTEM,

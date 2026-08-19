@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     scrapeowl_api_key: str = ""
     openai_api_key: str = ""
     anthropic_api_key: str = ""
+    # Secondary Anthropic account key for SAME-MODEL failover. When the primary
+    # Anthropic account hits a *transient* concurrency/rate limit (429) or 5xx
+    # overload that outlasts its per-key retry budget, the SAME call is retried on
+    # this second account's key — same Claude models, so output quality is
+    # identical (unlike the cross-provider fallback below, which swaps models).
+    # Empty ⇒ no second key and every failover path degrades to primary-only. Set
+    # on all three services (PLATFORM/pipeline/nlp) since each calls Anthropic.
+    anthropic_api_key_secondary: str = ""
     # AI Visibility module (Brand Strength) — the two scan engines whose keys
     # aren't already shared. Absent either, that engine fails its scans with a
     # "not configured" reason; the other engines (chatgpt/claude via the keys
@@ -88,6 +96,18 @@ class Settings(BaseSettings):
     # the chain reaches an alternate provider quickly rather than exhausting a
     # long backoff on a saturated primary (2 → ~2s + 4s, then advance).
     llm_fallback_max_retries_per_provider: int = 2
+    # ── Second-Anthropic-account failover (SAME model, distinct account) ──────
+    # Independent of the cross-provider chain above and tried FIRST: an Anthropic
+    # call that a transient limit outlasts is retried on `anthropic_api_key_secondary`
+    # (same models) before any thought of OpenAI/Gemini. No-op when the secondary
+    # key is unset, so it's safe to leave enabled. Covers both the non-agentic
+    # report_llm chain AND the agentic loops (Slack/strategist/PACE), which the
+    # cross-provider chain deliberately does not.
+    anthropic_key_failover_enabled: bool = True
+    # Backoff attempts on the PRIMARY Anthropic key before switching to the
+    # secondary account. Low, so a saturated primary yields to the second account
+    # quickly instead of burning a long backoff (2 → ~2s + 4s, then switch).
+    anthropic_key_failover_max_retries: int = 2
     job_worker_poll_interval_seconds: int = 10
     # Stale-job reaper. In-process jobs (asyncio.to_thread) aren't resumable, so a
     # redeploy or crash mid-run orphans them as status='running' forever. Each

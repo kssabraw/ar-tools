@@ -14,6 +14,14 @@ skipped. The chain and per-provider fallback models are config-driven
 (`llm_fallback_*` in config.py), so the whole behavior is one env change to tune
 or disable.
 
+Before advancing off Anthropic to another *provider*, the chain first tries a
+**second Anthropic account** (`anthropic_api_key_secondary`) — same Claude
+models, more concurrency headroom — so a transient limit on the primary account
+fails over to identical-quality output before any model swap. No-op when the
+secondary key is unset. The agentic loops route their second-account failover
+through `services/anthropic_failover.py` instead (they can't use this chain
+because of Anthropic-only server tools).
+
 Two shapes are supported, each in an async and a sync flavour:
   * `run_forced_tool` / `run_forced_tool_sync` — one forced tool call, returns the
     tool arguments dict (raises when no provider emitted the tool).
@@ -152,6 +160,23 @@ def _provider_key_ok(provider: str) -> bool:
     }.get(provider))
 
 
+def _anthropic_keys() -> list[str]:
+    """Ordered Anthropic account keys to try before advancing off the anthropic
+    provider: the primary, then the secondary account (same models, more
+    capacity) when failover is enabled and its key is set + distinct. This is the
+    second-account axis the owner asked for — tried FIRST, ahead of any
+    cross-provider (OpenAI/Gemini) fallback."""
+    keys = [settings.anthropic_api_key]
+    secondary = getattr(settings, "anthropic_api_key_secondary", "")
+    if (
+        getattr(settings, "anthropic_key_failover_enabled", True)
+        and secondary
+        and secondary != settings.anthropic_api_key
+    ):
+        keys.append(secondary)
+    return [k for k in keys if k]
+
+
 def _model_for(provider: str, primary: str, primary_model: Optional[str], overrides: Optional[dict]) -> str:
     """The model to use for `provider`: an explicit override wins; the primary
     provider keeps the caller's model; a fallback provider uses its config
@@ -180,30 +205,35 @@ async def _chain_async(
     for provider in chain:
         if not _provider_key_ok(provider):
             continue
-        tried_any = True
         model = _model_for(provider, primary, primary_model, fallback_models)
-        try:
-            result = await retry_transient(
-                lambda p=provider, m=model: call(p, m),
-                max_retries=settings.llm_fallback_max_retries_per_provider,
-                log_tag=f"{log_tag}:{provider}",
-            )
-        except Exception as exc:  # noqa: BLE001 — classify: fall back only on transient
-            if is_transient_llm_error(exc):
-                last_exc = exc
-                logger.warning(
-                    "llm_fallback_provider_exhausted",
-                    extra={"log_tag": log_tag, "provider": provider, "error": str(exc)[:200]},
+        # Anthropic gets a second axis before we advance to the next provider:
+        # each configured account key, tried in order (same model, more capacity).
+        keys = _anthropic_keys() if provider == "anthropic" else [None]
+        for key_idx, api_key in enumerate(keys):
+            tried_any = True
+            tag = f"{log_tag}:{provider}" + (f":acct{key_idx + 1}" if len(keys) > 1 else "")
+            try:
+                result = await retry_transient(
+                    lambda p=provider, m=model, k=api_key: call(p, m, k),
+                    max_retries=settings.llm_fallback_max_retries_per_provider,
+                    log_tag=tag,
                 )
+            except Exception as exc:  # noqa: BLE001 — classify: fall back only on transient
+                if is_transient_llm_error(exc):
+                    last_exc = exc
+                    logger.warning(
+                        "llm_fallback_provider_exhausted",
+                        extra={"log_tag": log_tag, "provider": provider, "account": key_idx + 1, "error": str(exc)[:200]},
+                    )
+                    continue  # next account key, else next provider
+                raise
+            if empty_check(result):
+                last_exc = RuntimeError(empty_detail(provider))
+                logger.warning("llm_fallback_empty_result", extra={"log_tag": log_tag, "provider": provider})
                 continue
-            raise
-        if empty_check(result):
-            last_exc = RuntimeError(empty_detail(provider))
-            logger.warning("llm_fallback_empty_result", extra={"log_tag": log_tag, "provider": provider})
-            continue
-        if provider != chain[0]:
-            logger.info("llm_fallback_used", extra={"log_tag": log_tag, "provider": provider})
-        return result
+            if provider != chain[0] or key_idx > 0:
+                logger.info("llm_fallback_used", extra={"log_tag": log_tag, "provider": provider, "account": key_idx + 1})
+            return result
     if last_exc:
         raise last_exc
     raise RuntimeError(f"{log_tag}_no_provider_available (no configured API key)" if not tried_any else f"{log_tag}_all_providers_failed")
@@ -220,30 +250,33 @@ def _chain_sync(
     for provider in chain:
         if not _provider_key_ok(provider):
             continue
-        tried_any = True
         model = _model_for(provider, primary, primary_model, fallback_models)
-        try:
-            result = retry_transient_sync(
-                lambda p=provider, m=model: call(p, m),
-                max_retries=settings.llm_fallback_max_retries_per_provider,
-                log_tag=f"{log_tag}:{provider}",
-            )
-        except Exception as exc:  # noqa: BLE001
-            if is_transient_llm_error(exc):
-                last_exc = exc
-                logger.warning(
-                    "llm_fallback_provider_exhausted",
-                    extra={"log_tag": log_tag, "provider": provider, "error": str(exc)[:200]},
+        keys = _anthropic_keys() if provider == "anthropic" else [None]
+        for key_idx, api_key in enumerate(keys):
+            tried_any = True
+            tag = f"{log_tag}:{provider}" + (f":acct{key_idx + 1}" if len(keys) > 1 else "")
+            try:
+                result = retry_transient_sync(
+                    lambda p=provider, m=model, k=api_key: call(p, m, k),
+                    max_retries=settings.llm_fallback_max_retries_per_provider,
+                    log_tag=tag,
                 )
+            except Exception as exc:  # noqa: BLE001
+                if is_transient_llm_error(exc):
+                    last_exc = exc
+                    logger.warning(
+                        "llm_fallback_provider_exhausted",
+                        extra={"log_tag": log_tag, "provider": provider, "account": key_idx + 1, "error": str(exc)[:200]},
+                    )
+                    continue
+                raise
+            if empty_check(result):
+                last_exc = RuntimeError(empty_detail(provider))
+                logger.warning("llm_fallback_empty_result", extra={"log_tag": log_tag, "provider": provider})
                 continue
-            raise
-        if empty_check(result):
-            last_exc = RuntimeError(empty_detail(provider))
-            logger.warning("llm_fallback_empty_result", extra={"log_tag": log_tag, "provider": provider})
-            continue
-        if provider != chain[0]:
-            logger.info("llm_fallback_used", extra={"log_tag": log_tag, "provider": provider})
-        return result
+            if provider != chain[0] or key_idx > 0:
+                logger.info("llm_fallback_used", extra={"log_tag": log_tag, "provider": provider, "account": key_idx + 1})
+            return result
     if last_exc:
         raise last_exc
     raise RuntimeError(f"{log_tag}_no_provider_available (no configured API key)" if not tried_any else f"{log_tag}_all_providers_failed")
@@ -255,10 +288,11 @@ def _chain_sync(
 async def _run_anthropic(
     *, model: str, system: str, user: str, tool_name: str,
     tool_description: str, input_schema: dict, max_tokens: int,
+    api_key: Optional[str] = None,
 ) -> tuple[Optional[dict], object]:
     import anthropic  # lazy
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    client = anthropic.AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
     response = await client.messages.create(
         model=model,
         max_tokens=max_tokens,
@@ -325,10 +359,10 @@ async def _run_gemini(
 # ---------------------------------------------------------------------------
 # Per-provider runners — plain text completion → str.
 # ---------------------------------------------------------------------------
-async def _run_anthropic_text(*, model: str, system: str, user: str, max_tokens: int) -> str:
+async def _run_anthropic_text(*, model: str, system: str, user: str, max_tokens: int, api_key: Optional[str] = None) -> str:
     import anthropic  # lazy
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    client = anthropic.AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
     kwargs: dict = {"model": model, "max_tokens": max_tokens, "messages": [{"role": "user", "content": user}]}
     if system:
         kwargs["system"] = system
@@ -362,10 +396,11 @@ async def _run_gemini_text(*, model: str, system: str, user: str, max_tokens: in
 def _run_anthropic_sync(
     *, model: str, system: str, user: str, tool_name: str,
     tool_description: str, input_schema: dict, max_tokens: int,
+    api_key: Optional[str] = None,
 ) -> tuple[Optional[dict], object]:
     import anthropic  # lazy
 
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    client = anthropic.Anthropic(api_key=api_key or settings.anthropic_api_key)
     response = client.messages.create(
         model=model,
         max_tokens=max_tokens,
@@ -429,10 +464,10 @@ def _run_gemini_sync(
     return _gemini_function_args(data, tool_name), _gemini_finish(data)
 
 
-def _run_anthropic_text_sync(*, model: str, system: str, user: str, max_tokens: int) -> str:
+def _run_anthropic_text_sync(*, model: str, system: str, user: str, max_tokens: int, api_key: Optional[str] = None) -> str:
     import anthropic  # lazy
 
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    client = anthropic.Anthropic(api_key=api_key or settings.anthropic_api_key)
     kwargs: dict = {"model": model, "max_tokens": max_tokens, "messages": [{"role": "user", "content": user}]}
     if system:
         kwargs["system"] = system
@@ -574,11 +609,12 @@ async def run_forced_tool(
     providers on a transient failure. Returns the tool arguments dict. Raises
     RuntimeError('report_no_tool_use ...') only when NO provider emitted the tool
     (the caller decides whether that's retryable)."""
-    async def call(p: str, m: str):
+    async def call(p: str, m: str, api_key: Optional[str] = None):
         runner = {"openai": _run_openai, "gemini": _run_gemini}.get(p, _run_anthropic)
+        extra = {"api_key": api_key} if runner is _run_anthropic else {}
         out, _stop = await runner(
             model=m, system=system, user=user, tool_name=tool_name,
-            tool_description=tool_description, input_schema=input_schema, max_tokens=max_tokens,
+            tool_description=tool_description, input_schema=input_schema, max_tokens=max_tokens, **extra,
         )
         return out
 
@@ -603,11 +639,12 @@ def run_forced_tool_sync(
     log_tag: str = "forced_tool",
 ) -> dict:
     """Synchronous twin of :func:`run_forced_tool`."""
-    def call(p: str, m: str):
+    def call(p: str, m: str, api_key: Optional[str] = None):
         runner = {"openai": _run_openai_sync, "gemini": _run_gemini_sync}.get(p, _run_anthropic_sync)
+        extra = {"api_key": api_key} if runner is _run_anthropic_sync else {}
         out, _stop = runner(
             model=m, system=system, user=user, tool_name=tool_name,
-            tool_description=tool_description, input_schema=input_schema, max_tokens=max_tokens,
+            tool_description=tool_description, input_schema=input_schema, max_tokens=max_tokens, **extra,
         )
         return out
 
@@ -631,9 +668,10 @@ async def generate_text(
     """One plain completion on `provider`, falling back to the configured
     providers on a transient failure. Returns the response text (raises when
     every provider fails or all returned empty text)."""
-    async def call(p: str, m: str):
+    async def call(p: str, m: str, api_key: Optional[str] = None):
         runner = {"openai": _run_openai_text, "gemini": _run_gemini_text}.get(p, _run_anthropic_text)
-        return await runner(model=m, system=system, user=user, max_tokens=max_tokens)
+        extra = {"api_key": api_key} if runner is _run_anthropic_text else {}
+        return await runner(model=m, system=system, user=user, max_tokens=max_tokens, **extra)
 
     return await _chain_async(
         primary=provider, primary_model=model, fallback_models=fallback_models, log_tag=log_tag,
@@ -653,9 +691,10 @@ def generate_text_sync(
     log_tag: str = "llm_text",
 ) -> str:
     """Synchronous twin of :func:`generate_text`."""
-    def call(p: str, m: str):
+    def call(p: str, m: str, api_key: Optional[str] = None):
         runner = {"openai": _run_openai_text_sync, "gemini": _run_gemini_text_sync}.get(p, _run_anthropic_text_sync)
-        return runner(model=m, system=system, user=user, max_tokens=max_tokens)
+        extra = {"api_key": api_key} if runner is _run_anthropic_text_sync else {}
+        return runner(model=m, system=system, user=user, max_tokens=max_tokens, **extra)
 
     return _chain_sync(
         primary=provider, primary_model=model, fallback_models=fallback_models, log_tag=log_tag,

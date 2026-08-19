@@ -165,9 +165,10 @@ async def judge_render(image: bytes, media_type: str) -> tuple[Optional[bool], s
     """One vision call: is the rendered page visually broken? Returns the
     check's (ok, note) via the pure mapping. Best-effort → (None, note)."""
     try:
-        import anthropic
+        from services import anthropic_failover
 
-        api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=90.0)
+        # Same-model failover to the secondary Anthropic account on a transient limit.
+        api = anthropic_failover.FailoverAsyncAnthropic(timeout=90.0)
         msg = await api.messages.create(
             model=settings.qa_visual_model,
             max_tokens=settings.qa_visual_max_tokens,

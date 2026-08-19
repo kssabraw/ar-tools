@@ -1394,7 +1394,7 @@ async def capture_memories(
     if not client_id or len(reply or "") < settings.slack_assistant_memory_min_reply_chars:
         return 0
     try:
-        import anthropic
+        from services import anthropic_failover
 
         def _read_existing() -> list[str]:
             return [
@@ -1411,7 +1411,8 @@ async def capture_memories(
         # every in-flight stream for the round-trip.
         existing = await asyncio.to_thread(_read_existing)
         known = ("\n".join(f"- {c}" for c in existing)) or "(none yet)"
-        api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=30.0)
+        # Same-model failover to the secondary Anthropic account on a transient limit.
+        api = anthropic_failover.FailoverAsyncAnthropic(timeout=30.0)
         resp = await api.messages.create(
             model=settings.slack_assistant_memory_model,
             max_tokens=500,
