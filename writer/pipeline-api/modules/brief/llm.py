@@ -75,6 +75,34 @@ def get_anthropic() -> AsyncAnthropic:
     return _anthropic
 
 
+# Second Anthropic account (same models) for SAME-MODEL failover under load. When
+# the primary account's transient-retry budget is exhausted, `_create_message`
+# retries the call on this account before giving up. No-op when the secondary key
+# is unset — every call site behaves exactly as before.
+_anthropic_secondary: Optional[AsyncAnthropic] = None
+
+
+def get_anthropic_secondary() -> Optional[AsyncAnthropic]:
+    """The secondary-account client, or None when failover is disabled / its key
+    is unset or identical to the primary."""
+    global _anthropic_secondary
+    key = settings.anthropic_api_key_secondary
+    if not (settings.anthropic_key_failover_enabled and key and key != settings.anthropic_api_key):
+        return None
+    if _anthropic_secondary is None:
+        _anthropic_secondary = AsyncAnthropic(api_key=key)
+    return _anthropic_secondary
+
+
+def _failover_clients(primary: AsyncAnthropic) -> list[AsyncAnthropic]:
+    """`primary` first, then the secondary account when configured."""
+    clients = [primary]
+    secondary = get_anthropic_secondary()
+    if secondary is not None and secondary is not primary:
+        clients.append(secondary)
+    return clients
+
+
 # ---- Anthropic helpers ----
 
 _STRICT_JSON_SUFFIX = (
@@ -102,27 +130,42 @@ async def _create_message(client: AsyncAnthropic, create_kwargs: dict[str, Any])
     backing-off call never holds a concurrency slot, and jitter (0.5-1.5x)
     de-synchronizes parallel fan-out calls so they don't re-collide."""
     semaphore = _get_anthropic_semaphore()
-    attempt = 0
-    while True:
-        try:
-            async with semaphore:
-                return await client.messages.create(**create_kwargs)
-        except Exception as exc:  # noqa: BLE001 — classify, re-raise if terminal
-            if attempt >= settings.anthropic_max_retries or not _is_transient_anthropic_error(exc):
-                raise
-            delay = settings.anthropic_retry_base_seconds * (2 ** attempt) * (
-                0.5 + secrets.randbelow(1000) / 1000.0
-            )
-            logger.warning(
-                "anthropic_transient_retry",
-                extra={
-                    "attempt": attempt + 1,
-                    "delay_s": round(delay, 1),
-                    "error": str(exc)[:200],
-                },
-            )
-            await asyncio.sleep(delay)
-            attempt += 1
+    clients = _failover_clients(client)
+    last_exc: Optional[Exception] = None
+    for acct_idx, acct_client in enumerate(clients):
+        attempt = 0
+        while True:
+            try:
+                async with semaphore:
+                    return await acct_client.messages.create(**create_kwargs)
+            except Exception as exc:  # noqa: BLE001 — classify, re-raise if terminal
+                if not _is_transient_anthropic_error(exc):
+                    raise
+                if attempt >= settings.anthropic_max_retries:
+                    # This account's retry budget is spent — fail over to the
+                    # next Anthropic account (same model) if one is configured.
+                    last_exc = exc
+                    if acct_idx < len(clients) - 1:
+                        logger.warning(
+                            "anthropic_account_failover",
+                            extra={"from_account": acct_idx + 1, "error": str(exc)[:200]},
+                        )
+                    break
+                delay = settings.anthropic_retry_base_seconds * (2 ** attempt) * (
+                    0.5 + secrets.randbelow(1000) / 1000.0
+                )
+                logger.warning(
+                    "anthropic_transient_retry",
+                    extra={
+                        "account": acct_idx + 1,
+                        "attempt": attempt + 1,
+                        "delay_s": round(delay, 1),
+                        "error": str(exc)[:200],
+                    },
+                )
+                await asyncio.sleep(delay)
+                attempt += 1
+    raise last_exc  # every account exhausted transiently
 
 
 def _extract_json_payload(text: str) -> Any:

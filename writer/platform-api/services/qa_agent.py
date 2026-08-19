@@ -301,7 +301,9 @@ async def interpret_qa(question: str, client: Optional[dict], context: dict,
         blocks.append("Scope: the whole agency (every client's QA reviews).")
     blocks.append("QA data (JSON):\n" + json.dumps(context, default=str, ensure_ascii=False))
     blocks.append(f"Latest message: {question}")
-    api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=60.0, max_retries=2)
+    from services import anthropic_failover
+
+    clients = anthropic_failover.build_async_clients(timeout=60.0, max_retries=2)
     messages = [{"role": "user", "content": "\n\n".join(blocks)}]
 
     async def on_text(delta: str) -> None:
@@ -317,9 +319,13 @@ async def interpret_qa(question: str, client: Optional[dict], context: dict,
     try:
         for round_no in range(_QA_TOOL_ROUNDS):
             final = round_no == _QA_TOOL_ROUNDS - 1
-            resp = await _one_llm_call(
-                api, _QA_SYSTEM, messages, [] if final else _QA_TOOLS,
-                _kw(final), on_text if on_event else None,
+            resp = await anthropic_failover.call_failover(
+                clients,
+                lambda c: _one_llm_call(
+                    c, _QA_SYSTEM, messages, [] if final else _QA_TOOLS,
+                    _kw(final), on_text if on_event else None,
+                ),
+                log_tag="qa_agent",
             )
             for b in resp.content:
                 if getattr(b, "type", None) != "tool_use":

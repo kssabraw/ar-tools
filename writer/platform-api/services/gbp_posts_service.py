@@ -737,7 +737,7 @@ async def draft_summary(
     """One bounded Claude call returning post body text, grounded in the client's
     distilled Voice & Audience Card when present (with a corrective pass if a
     forbidden term slips through). Raises on hard failure."""
-    import anthropic  # lazy
+    from services import anthropic_failover  # lazy
 
     from services.report_llm import retry_transient
 
@@ -764,7 +764,8 @@ async def draft_summary(
     if voice_block:
         user += "\n\n" + voice_block
 
-    api_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=60)
+    # Same-model failover to the secondary Anthropic account on a transient limit.
+    api_client = anthropic_failover.FailoverAsyncAnthropic(timeout=60)
 
     async def _one_call(content: str) -> str:
         resp = await retry_transient(

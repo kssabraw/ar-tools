@@ -271,9 +271,7 @@ async def run_topic_strategy(client_id: str, ctx: dict, evidence: dict) -> Optio
     return the emitted topical-authority plan (or None). Best-effort."""
     if not settings.anthropic_api_key:
         return None
-    import anthropic
-
-    from services.report_llm import retry_transient
+    from services import anthropic_failover
 
     loc = dataforseo_labs.labs_location_code(ctx.get("rank_tracking_location_code"))
     lang = settings.dataforseo_default_language_code
@@ -284,7 +282,7 @@ async def run_topic_strategy(client_id: str, ctx: dict, evidence: dict) -> Optio
     max_dd = settings.keyword_topic_max_drilldowns
 
     tools = list(_TOOL_DEFS) + [_EMIT_TOOL]
-    api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=_LLM_TIMEOUT)
+    clients = anthropic_failover.build_async_clients(timeout=_LLM_TIMEOUT)
     messages: list[dict] = [{"role": "user", "content": _prompt(sop_block, client_ctx, evidence_text, max_dd)}]
     drilldowns = 0
     emitted: Optional[dict] = None
@@ -296,8 +294,9 @@ async def run_topic_strategy(client_id: str, ctx: dict, evidence: dict) -> Optio
         # pillar plan before it's forced; forcing on drilldowns>=cap made it dump
         # its plan into the assessment and emit pillars:[] (observed 2026-08-08).
         force_emit = round_no >= max_dd + 2
-        resp = await retry_transient(
-            lambda: api.messages.create(
+        resp = await anthropic_failover.call_failover(
+            clients,
+            lambda c: c.messages.create(
                 model=settings.keyword_topic_model,
                 max_tokens=settings.keyword_topic_strategist_max_tokens,
                 system=_SYSTEM,

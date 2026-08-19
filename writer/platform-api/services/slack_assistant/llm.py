@@ -769,8 +769,12 @@ async def interpret(
                 "section):\n" + sops
             )
     user = "\n\n".join(blocks)
-    api = anthropic.AsyncAnthropic(
-        api_key=settings.anthropic_api_key,
+    from services import anthropic_failover
+
+    # One client per Anthropic account; each model call fails over to the
+    # secondary account on a transient concurrency limit (same model, so the
+    # web_search server tool + streaming behave identically).
+    clients = anthropic_failover.build_async_clients(
         timeout=_LLM_TIMEOUT,
         max_retries=_LLM_MAX_RETRIES,
     )
@@ -803,10 +807,14 @@ async def interpret(
     for round_no in range(max_rounds + 1):
         final_round = round_no == max_rounds
         try:
-            resp = await _create_with_continuation(
-                api, system, messages, tools,
-                tool_choice={"type": "none"} if final_round else None,
-                on_text=on_text if on_event else None,
+            resp = await anthropic_failover.call_failover(
+                clients,
+                lambda c: _create_with_continuation(
+                    c, system, messages, tools,
+                    tool_choice={"type": "none"} if final_round else None,
+                    on_text=on_text if on_event else None,
+                ),
+                log_tag="assistant_llm",
             )
         except anthropic.APIStatusError as exc:
             # Capacity exhaustion (retries included) is transient, not a fault —
@@ -893,8 +901,9 @@ async def interpret_portfolio(
         "Portfolio snapshot (JSON):\n"
         + json.dumps(portfolio, default=str, ensure_ascii=False)
     )
-    api = anthropic.AsyncAnthropic(
-        api_key=settings.anthropic_api_key,
+    from services import anthropic_failover
+
+    clients = anthropic_failover.build_async_clients(
         timeout=_LLM_TIMEOUT,
         max_retries=_LLM_MAX_RETRIES,
     )
@@ -913,10 +922,14 @@ async def interpret_portfolio(
     try:
         for round_no in range(3):
             final = round_no == 2
-            resp = await _one_llm_call(
-                api, system, messages, [] if final else tools,
-                {"tool_choice": {"type": "none"}} if final else {},
-                on_text if on_event else None,
+            resp = await anthropic_failover.call_failover(
+                clients,
+                lambda c: _one_llm_call(
+                    c, system, messages, [] if final else tools,
+                    {"tool_choice": {"type": "none"}} if final else {},
+                    on_text if on_event else None,
+                ),
+                log_tag="assistant_portfolio",
             )
             calls = [b for b in resp.content
                      if getattr(b, "type", None) == "tool_use"

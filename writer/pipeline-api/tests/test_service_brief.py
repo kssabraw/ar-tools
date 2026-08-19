@@ -456,9 +456,12 @@ def _claude_client_returning(*texts: str):
 
 
 def _patch_llm_client(client):
+    # claude_json_model now routes through modules.brief.llm._create_message, which
+    # acquires the brief module's semaphore — so patch it there (service_brief no
+    # longer imports the semaphore helper).
     return (
         patch(f"{_PREFIX}.llm.get_anthropic", return_value=client),
-        patch(f"{_PREFIX}.llm._get_anthropic_semaphore", return_value=asyncio.Semaphore(1)),
+        patch("modules.brief.llm._get_anthropic_semaphore", return_value=asyncio.Semaphore(1)),
     )
 
 

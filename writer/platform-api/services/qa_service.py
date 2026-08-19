@@ -328,9 +328,10 @@ async def _judge_assertion(page_text: str, business_name: str, service: str) -> 
     if not (business_name or "").strip():
         return None, "no business name on file to assert against"
     try:
-        import anthropic
+        from services import anthropic_failover
 
-        api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=60.0)
+        # Same-model failover to the secondary Anthropic account on a transient limit.
+        api = anthropic_failover.FailoverAsyncAnthropic(timeout=60.0)
         clipped = page_text[:6000]
         msg = await api.messages.create(
             model=settings.qa_assertion_model,
@@ -370,7 +371,7 @@ async def _synthesize_narrative(
     On-Page-Criteria section it's grounded in. The verdict and the check
     results are inputs it must restate, never recompute. Best-effort → None."""
     try:
-        import anthropic
+        from services import anthropic_failover
 
         from services.sop_library import qa_sops_text
 
@@ -383,7 +384,8 @@ async def _synthesize_narrative(
             + (f" — {c['note']}" if c.get("note") else "")
             for c in checks
         )
-        api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=60.0)
+        # Same-model failover to the secondary Anthropic account on a transient limit.
+        api = anthropic_failover.FailoverAsyncAnthropic(timeout=60.0)
         msg = await api.messages.create(
             model=settings.qa_narrative_model,
             max_tokens=settings.qa_narrative_max_tokens,
