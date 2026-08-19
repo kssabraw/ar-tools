@@ -140,6 +140,18 @@ ANTHROPIC_API_KEY    = os.environ.get("ANTHROPIC_API_KEY", "")
 # the shared account is saturated by the rest of the suite — a 429 on the main
 # generation call then failed the whole local_seo_generate job.
 ANTHROPIC_MAX_RETRIES = int(os.environ.get("ANTHROPIC_MAX_RETRIES", "5"))
+# Second Anthropic account (same models) for SAME-MODEL failover, when the
+# primary account's SDK retries can't clear a transient concurrency/rate limit.
+# Logic lives in the sibling `anthropic_failover` module (unit-testable without
+# importing this file); `_anthropic_client(...)` is the drop-in used at every
+# call site (constructor name only changed — `.messages.create` is unchanged).
+import anthropic_failover as _anthropic_failover  # noqa: E402
+
+
+def _anthropic_client(**client_kwargs):
+    """Failover-capable async Anthropic client. `client_kwargs` (max_retries,
+    timeout, …) apply to every account's underlying SDK client."""
+    return _anthropic_failover.client(**client_kwargs)
 # ScrapeOwl 429 handling: retry in place with backoff (honoring Retry-After) at
 # the same price tier instead of letting a rate-limited scrape escalate to the
 # ~2× JS-render tier.
@@ -2589,7 +2601,7 @@ async def _classify_urls_with_ai(urls: List[str]) -> Dict[str, str]:
         import anthropic
         import json as json_lib
 
-        client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+        client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
 
         url_list = "\n".join(urls)
         prompt = f"""Classify each URL from a business website. Return ONLY a JSON object mapping URL→type.
@@ -2738,7 +2750,7 @@ async def analyze_business_with_anthropic(
         import anthropic
         import json as json_lib
 
-        client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+        client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
 
         has_pages = bool(pages)
 
@@ -2923,7 +2935,7 @@ async def analyze_brand_voice_with_anthropic(page_contents: List[str], business_
     has_content = bool(page_contents)
     content_text = "\n\n---\n\n".join(page_contents) if page_contents else ""
 
-    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+    client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
 
     # Tool definitions force structured JSON output — Anthropic validates against
     # the schema server-side, so we can't hit a JSON parse error from unescaped
@@ -3392,7 +3404,7 @@ async def distill_voice_card(request: Request, body: DistillVoiceCardRequest):
     if not ANTHROPIC_API_KEY:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
     import anthropic as _anthropic
-    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    client = _anthropic_client()
     card = await _distill_voice_card(client, body.brand_voice, body.detected_icp)
     return DistillVoiceCardResponse(
         voice_card=card,
@@ -5274,7 +5286,7 @@ async def find_page_for_keyword(request: Request, body: FindPageRequest):
             if ANTHROPIC_API_KEY and candidate_pool:
                 try:
                     import anthropic  # local import — matches every other LLM call site here
-                    _ac = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+                    _ac = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
                     url_list_text = "\n".join(f"{i+1}. {u}" for i, u in enumerate(candidate_pool))
 
                     # Build location context line
@@ -5398,7 +5410,7 @@ async def score_page(request: Request, body: ScorePageRequest):
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
     import anthropic as _anthropic
-    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+    client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
 
     # geo_mode: "national" service-page scoring drops the geo engines + de-geos
     # gbp_maps/entity_establishment (location-agnostic). Default "local" is the
@@ -5922,7 +5934,7 @@ async def augment_page(request: Request, body: AugmentPageRequest):
     user_prompt = "\n".join(parts)
 
     import anthropic as _anthropic
-    aclient = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+    aclient = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
 
     msg = None
     for attempt in range(2):
@@ -6199,7 +6211,7 @@ async def generate_page(request: Request, body: GeneratePageRequest):
     import anthropic as _anthropic
 
     async def _worker(q: asyncio.Queue):
-        client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+        client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
         city = body.location.split(",")[0].strip()
         _worker_start = time.monotonic()
 
@@ -6735,7 +6747,7 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
     import anthropic as _anthropic
 
     async def _worker(q: asyncio.Queue):
-        client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+        client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
         city = body.location.split(",")[0].strip()
         _worker_start = time.monotonic()
 
@@ -7121,7 +7133,7 @@ async def reoptimize_section(request: Request, body: ReoptimizeSectionRequest):
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
     import anthropic as _anthropic
-    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+    client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
 
     engine_label = _SECTION_ENGINE_LABELS.get(body.engine, body.engine)
     city = body.location.split(",")[0].strip()
@@ -7209,7 +7221,7 @@ async def related_pages(request: Request, body: RelatedPagesRequest):
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
     import anthropic as _anthropic
-    haiku_client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+    haiku_client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
 
     total_input_tokens = 0
     total_output_tokens = 0
@@ -7334,7 +7346,7 @@ async def generate_social_posts(request: Request, body: SocialPostsRequest):
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
     import anthropic as _anthropic
-    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+    client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
 
     city = body.location.split(",")[0].strip()
     page_text = body.page_content[:4000]  # cap context to keep cost low
@@ -7976,7 +7988,7 @@ async def generate_press_release(request: Request, body: PressReleaseGenerationR
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
     import anthropic as _anthropic
-    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+    client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
 
     city = body.location.split(",")[0].strip()
     page_url = (body.page_url or body.website or "").strip()
@@ -8472,7 +8484,7 @@ async def score_ecommerce_page(request: Request, body: EcommerceScoreRequest):
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
     import anthropic as _anthropic
-    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+    client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
     page_type = "collection" if (body.page_type or "").lower() == "collection" else "product"
 
     # SERP analysis inline if not supplied (national scope — ecommerce is not geo-local).
@@ -8710,7 +8722,7 @@ async def score_blog_page(request: Request, body: BlogScoreRequest):
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
     import anthropic as _anthropic
-    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+    client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
 
     # SERP analysis inline if not supplied (national scope — blog topics rank nationally).
     inline_serp = None
@@ -8999,7 +9011,7 @@ async def generate_ecommerce_page(request: Request, body: GenerateEcommerceReque
     page_type = "collection" if (body.page_type or "").lower() == "collection" else "product"
 
     async def _worker(q: asyncio.Queue):
-        client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+        client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
         await q.put({"step": "progress", "progress": 5, "message": "Starting…"})
 
         # SERP analysis (national scope) unless supplied or explicitly skipped.
@@ -9303,7 +9315,7 @@ async def reoptimize_ecommerce_page(request: Request, body: ReoptimizeEcommerceR
     page_type = "collection" if (body.page_type or "").lower() == "collection" else "product"
 
     async def _worker(q: asyncio.Queue):
-        client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+        client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
         await q.put({"step": "progress", "progress": 10, "message": "Fetching existing page…"})
 
         existing_html = body.existing_page_html or ""
