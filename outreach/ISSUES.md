@@ -2431,3 +2431,37 @@ excluded from `to_enrich`, so the order's `enriched_count + skipped_count + fail
 `progress.done`) is less than `requested_count`. **Cosmetic only** — the order still resolves to
 `done` and the UI batch completes (useResumableBatch keys on the order STATUS, not the counts), so
 nothing hangs. Left as-is; if a precise reconciliation is ever wanted, add a `vanished_count`.
+
+---
+
+## I-114 — Enigma GraphQL request/response SHAPE is unconfirmed (confirm on first live run)
+
+**Status:** OPEN (by design — no Enigma account exists yet). Not a bug; the honest state of a vendor
+integration built before credentials exist.
+
+The Enigma layer (DECISIONS 2026-08-14) is grounded in Enigma's PUBLISHED shape — endpoint
+`https://api.enigma.com/graphql`, POST, `x-api-key` header, Relay `edges/node` connections, entities
+Brand / LegalEntity / OperatingLocation / Person, and the `search(searchInput:{name,entityType,
+address})` form from Enigma's own curl example. But the exact selection-set field names for
+firmographics (`cardRevenueAmount`, `cardRevenueGrowth`, `locationCount`) and for people
+(`people` / `fullName` / `title` / `email` / `phone`) are NOT confirmed against a live schema (the
+docs domains developers.enigma.com / documentation.enigma.com are egress-blocked from the build
+environment, and Enigma requires an account).
+
+**Two places to correct, both isolated:**
+- `enigma_client._SELECTION` — the GraphQL selection set. GraphQL validates the whole query and
+  fails on any unknown field, so a wrong name fails the request with an `errors` block. The client
+  surfaces that as a RETRYABLE `EnigmaQueryError` (never a silent `no_match`), so the first live
+  run's failed orders will name exactly which fields are wrong. Fix them here.
+- `enigma_enrich._person_source` provenance heuristic (role → gov_registration, contact-only →
+  contact_data, both → both) is an approximation of Enigma's real provenance, which the response may
+  carry explicitly; refine once the shape is known.
+
+The PARSE is already shape-tolerant (`parse_candidate` uses a bounded key search, asserts no path,
+and the untouched response is kept in `prospect_enigma.raw`), so a corrected field path needs no
+re-pull — the measure-don't-infer / raw-recovery discipline (the Outscraper `domains_service`
+precedent, I-109). The LOGIC (role scoring, match gate, owner evidence) is shape-independent and unit
+-tested (test_enigma_enrich.py), so only the wire field names await the first response.
+
+**Also confirm on first run:** `enigma_cost_per_prospect_cents` (15c placeholder) against the real
+Enigma plan/credit tiers, and `enigma_min_match_score` (0.7) against observed match scores.

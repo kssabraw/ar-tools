@@ -185,6 +185,22 @@ surfaces the website in the contacts UI. The `domains_service` FIELD SHAPE is st
 next real run — parser stays defensive, `raw` is the recovery path (I-109). Config rates remain placeholders
 (I-111).
 
+**ENIGMA ENRICHMENT — owner + contact fallback — BUILT + GATED INERT (2026-08-14).** The fallback
+for the contacts Outscraper's site scrape couldn't get: Enigma resolves a business to its legal
+entity + the people on its government registration (owner NAME), plus contact coordinates and card
+revenue / growth / location-count. Signed-order + idempotent + budget-gated exactly like Outscraper
+enrichment, but its OWN tables (`enigma_request` + `prospect_enigma`, migration
+`20260814130000`) — NOT prospect_contact, whose unscoped delete would clobber Enigma rows.
+Backend: `services/enigma_client.py` (GraphQL, `x-api-key`), `enigma_enrich.py` (pure — role-scored
+owner choice, fabrication gate `enigma_min_match_score`, `owner_evidence` which-source-fired,
+defensive parse), `enigma_queue.py` (drain, gated on `enigma_api_key`), wired into `cmd_tick`.
+Economics captured but NOT scored (inert under flat pricing — DECISIONS). **NO Enigma account yet —
+inert:** every path checks `enigma_api_key`, blank does nothing. **Activation:** apply
+`20260814130000` to the Outreacher Supabase project + set `ENIGMA_API_KEY`. **Response shape is
+provisional (I-114)** — the GraphQL field names await the first live run (surfaced as retryable
+errors, corrected in `enigma_client._SELECTION`; parse is tolerant, `raw` is the recovery path).
+Platform-api surface + UI are the next slice. DECISIONS 2026-08-14.
+
 **The pipeline is an AR Tools SUITE MODULE, not a standalone tool** (owner ruling, HANDOFF §2).
 The database stays in the Outreacher project; the API and UI belong in `platform-api` and the
 suite SPA. Retool is dropped; access is service-role only. Anything you read that says to create

@@ -374,6 +374,36 @@ class Settings(BaseSettings):
     # is cheap. Kept off the floor so the DB / free-endpoint polling stays modest.
     tick_loop_interval_seconds: float = 8.0
 
+    # --- Enigma enrichment — owner identity + contact + firmographics --------------------
+    # The fallback layer for the contacts Outscraper's website scrape could not get. A NEW PAID
+    # VENDOR, gated inert: every Enigma path checks `enigma_api_key` and does nothing when it is
+    # blank, so an unprovisioned environment (the current state — no account yet) spends nothing and
+    # the tick drain skips Enigma entirely. Set the key on the outreach service to activate.
+    enigma_api_key: str = ""
+    # Enigma's GraphQL endpoint. POST with the key in the `x-api-key` header (per Enigma's docs).
+    enigma_api_url: str = "https://api.enigma.com/graphql"
+    # Per-request timeout for a single-business Enigma lookup (its own, clear of the 60s base).
+    enigma_request_timeout_seconds: float = 45.0
+
+    # The confidence FLOOR (0..1) an entity match must clear before ANY owner/contact is asserted
+    # (the I-099 fabrication gate). Below it the prospect is recorded `no_match` and no owner is
+    # written — a wrong entity match must never manufacture a false owner or phone. Conservative by
+    # default; tune from real match scores once a live run exists.
+    enigma_min_match_score: float = 0.7
+
+    # Enigma bills per resolved business (credit-based, per-attribute tiering). Like every other rate
+    # here this is a CONFIGURED number reconciled against the Enigma dashboard (I-022) — a placeholder
+    # until the real plan is known. Keep in sync with platform-api's per-user budget guard.
+    enigma_cost_per_prospect_cents: int = 15
+    # Businesses per concurrent batch inside one order (each is its own GraphQL request, so a failure
+    # loses one business, not the batch — the enrich_client per-place-isolation lesson).
+    enigma_chunk_size: int = 8
+    # Orders drained per tick. Batchable + cheap like Outscraper enrichment, so NOT held to the ≤1
+    # heavy-scan cadence.
+    enigma_orders_per_tick: int = 3
+    # Defensive per-order ceiling so one order can never run unboundedly (platform-api caps it too).
+    enigma_max_prospects_per_order: int = 200
+
     # --- Scoring model — Phase 4 Stage 1 (scoring-spec.md) --------------------------------
     # EVERYTHING here is a CONFIG value. Zero hardcoded betas, ever (CLAUDE.md invariant). The
     # scalar knobs live here; the full coefficient REGISTRY (the elicited priors, ~40 bins) lives
