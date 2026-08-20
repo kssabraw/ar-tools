@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import uuid4
 
+import httpx
 from fastapi import HTTPException
 
 from config import settings
@@ -423,10 +424,15 @@ def list_reusable_images(client_id: str) -> list[dict]:
 # ───────────────────────────────────────────────────────────────────────────
 def _insert_publish_job(client_id: str, post_id: str) -> str:
     """Insert a ``gbp_post_publish`` async job (no status/validation side effects).
-    Shared by the interactive publish-now path and the due-scheduled sweep."""
+    Shared by the interactive publish-now path and the due-scheduled sweep.
+
+    ``max_attempts`` is raised above the queue default so a transient Google
+    publish error (see ``gbp_posts_api.is_transient_post_error``) is re-queued on
+    the shared retry ladder instead of failing the post on the first blip."""
     res = (
         get_supabase().table("async_jobs")
         .insert({"job_type": "gbp_post_publish", "entity_id": client_id,
+                 "max_attempts": settings.gbp_post_publish_max_attempts,
                  "payload": {"client_id": client_id, "post_id": post_id}})
         .execute()
     )
@@ -540,15 +546,50 @@ def enqueue_due_gbp_scheduled_posts() -> int:
     return count
 
 
+def publish_failure_is_transient(exc: Exception) -> bool:
+    """Whether a publish failure should be retried rather than failing the post.
+
+    A v4-wrapper error is an ``HTTPException`` whose ``detail`` is a classified
+    code (``gbp_posts_api.classify_post_error``) — the code decides (see
+    ``is_transient_post_error``; note the wrapper maps EVERY non-2xx to a 502, so
+    the HTTP status can't classify — the detail code must). A raw transport error
+    (connection reset / timeout with no response) is transient too. Pure."""
+    detail = getattr(exc, "detail", None)
+    if detail is not None:
+        return api.is_transient_post_error(str(detail))
+    return isinstance(exc, (httpx.HTTPError, ConnectionError, TimeoutError, asyncio.TimeoutError))
+
+
 async def run_publish_job(job: dict) -> None:
     """Handler for job_type='gbp_post_publish'. Builds the v4 body, creates the
-    post on Google, persists the result, and schedules a state re-check."""
+    post on Google, persists the result, and schedules a state re-check.
+
+    Transient Google failures (a propagation-flake 403 / quota 429 / 5xx / a
+    transport blip) are re-queued on the shared retry ladder with backoff while
+    attempts remain — only a terminal failure or an exhausted retry budget marks
+    the post ``failed`` and alerts the team (see ``publish_failure_is_transient``)."""
     payload = job.get("payload") or {}
     post_id = payload.get("post_id")
     client_id = payload.get("client_id")
     supabase = get_supabase()
     try:
         post = get_post(post_id)
+        # Idempotency: a prior attempt may have created the post on Google but
+        # failed to settle its row (e.g. a transport timeout AFTER creation),
+        # leaving google_name set. Re-creating would duplicate it — reconcile the
+        # existing post instead and let the sync job confirm its live state.
+        if post.get("google_name"):
+            supabase.table("gbp_posts").update({
+                "status": api.state_to_status(post.get("google_state")),
+                "error": None, "updated_at": "now()",
+            }).eq("id", post_id).execute()
+            supabase.table("async_jobs").update(
+                {"status": "complete", "result": {"post_id": post_id, "already_published": True},
+                 "completed_at": "now()"}
+            ).eq("id", job["id"]).execute()
+            _enqueue_sync(client_id, delay_seconds=60)
+            logger.info("gbp_posts.publish_already_created", extra={"post_id": post_id})
+            return
         location = _location(post["location_row_id"], client_id)
         if location.get("access_status") != "ok":
             raise HTTPException(status_code=409, detail="gbp_location_not_verified")
@@ -576,19 +617,35 @@ async def run_publish_job(job: dict) -> None:
         # Re-check state shortly after (catches an async REJECTED verdict).
         _enqueue_sync(client_id, delay_seconds=900)
         logger.info("gbp_posts.published", extra={"post_id": post_id, "state": created.get("google_state")})
-    except Exception as exc:  # noqa: BLE001 — record failure for the poller + alert
-        detail = getattr(exc, "detail", None) or str(exc)
+    except Exception as exc:  # noqa: BLE001 — retry a transient blip, else fail + alert
+        from services.job_worker import plan_job_retry  # lazy: avoids import cycle
+
+        detail = str(getattr(exc, "detail", None) or exc)
+        attempts = int(job.get("attempts") or 1)
+        max_attempts = int(job.get("max_attempts") or settings.gbp_post_publish_max_attempts)
+        job_update, outcome = plan_job_retry(
+            attempts, max_attempts, publish_failure_is_transient(exc), detail
+        )
+        supabase.table("async_jobs").update(job_update).eq("id", job["id"]).execute()
+        if outcome == "requeued":
+            # Keep the post in-flight (no scary 'failed', no alert) while it retries.
+            supabase.table("gbp_posts").update(
+                {"status": "publishing",
+                 "error": f"Transient publish error; retrying automatically ({attempts}/{max_attempts}).",
+                 "updated_at": "now()"}
+            ).eq("id", post_id).execute()
+            logger.info("gbp_posts.publish_retry",
+                        extra={"post_id": post_id, "attempt": attempts,
+                               "max_attempts": max_attempts, "error": detail[:200]})
+            return
         supabase.table("gbp_posts").update(
-            {"status": "failed", "error": str(detail)[:500], "updated_at": "now()"}
+            {"status": "failed", "error": detail[:500], "updated_at": "now()"}
         ).eq("id", post_id).execute()
-        supabase.table("async_jobs").update(
-            {"status": "failed", "error": str(detail)[:500], "completed_at": "now()"}
-        ).eq("id", job["id"]).execute()
         notifications.emit(
             client_id, "gbp_post_failed", "GBP post failed to publish",
-            summary=str(detail)[:200], severity="warning", payload={"post_id": post_id},
+            summary=detail[:200], severity="warning", payload={"post_id": post_id},
         )
-        logger.warning("gbp_posts.publish_failed", extra={"post_id": post_id, "error": str(detail)})
+        logger.warning("gbp_posts.publish_failed", extra={"post_id": post_id, "error": detail})
 
 
 # ───────────────────────────────────────────────────────────────────────────
