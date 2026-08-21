@@ -189,9 +189,80 @@ def _city_center(city_id: int) -> Optional[tuple[float, float]]:
 def _market_pins(city_id: int, category_id: str) -> list[dict[str, Any]]:
     from db.supabase_client import get_supabase
     return (get_supabase().table("competitor_locations")
-            .select("business_name, review_count, lat, lng")
+            .select("business_name, review_count, lat, lng, rank_position")
             .eq("city_id", city_id).eq("category_id", category_id)
             .not_.is_("lat", "null").execute().data or [])
+
+
+def _map_pins(center_lat: float, center_lng: float,
+              pins: list[dict[str, Any]],
+              radius_miles: float) -> list[dict[str, Any]]:
+    """The plottable competitor pin set for the market map: the in-radius
+    geocoded rows with rounded coordinates, name, review count, SERP rank and
+    distance. Same radius gate as the octant analysis so the map matches the
+    bars. Sorted nearest-first purely for stable rendering order."""
+    out = []
+    for p in pins:
+        lat, lng = p.get("lat"), p.get("lng")
+        if lat is None or lng is None:
+            continue
+        lat, lng = float(lat), float(lng)
+        d = haversine_miles(center_lat, center_lng, lat, lng)
+        if d > radius_miles:
+            continue
+        out.append({
+            "name": p.get("business_name"),
+            "lat": round(lat, 6), "lng": round(lng, 6),
+            "reviews": int(p.get("review_count") or 0),
+            "rank": p.get("rank_position"),
+            "rating": p.get("rating"),
+            "place_id": p.get("place_id"),
+            "miles": round(d, 1),
+        })
+    return sorted(out, key=lambda p: p["miles"])
+
+
+def _join_human(items: list[str]) -> str:
+    """"a" / "a and b" / "a, b and c" — for readable octant/target lists."""
+    items = [i for i in items if i]
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    return f"{', '.join(items[:-1])} and {items[-1]}"
+
+
+def placement_recommendation(result: dict[str, Any]) -> Optional[str]:
+    """A plain-English "where to place a GBP" line derived deterministically
+    from a proximity result (owner request 2026-08-21). None when the field is
+    thin or has no clearly undefended bearing — the caller then shows the
+    "field is evenly spread" note instead. Pure."""
+    if result.get("thin_data"):
+        return None
+    weak = result.get("underserved") or []
+    if not weak:
+        return None
+    weak = weak[:2]
+    radius = result.get("radius_miles")
+    targets = []
+    for p in (result.get("placement") or [])[:2]:
+        oc, loc, rmi = p.get("octant"), p.get("locality"), p.get("radius_mi")
+        targets.append(f"near {loc} (~{rmi} mi {oc} of the city centre)" if loc
+                       else f"to the {oc} (~{rmi} mi out)")
+    dists = [a.get("miles") for o in (result.get("octants") or [])
+             for a in (o.get("anchors") or []) if a.get("miles") is not None]
+    nearest = min(dists) if dists else None
+
+    parts = [f"The competitor field is weakest to the {_join_human(weak)}."]
+    if targets:
+        parts.append("Best place to plant a GBP: " + _join_human(targets) + ".")
+    bearing_word = "that bearing" if len(weak) == 1 else "those bearings"
+    tail = (f"No ranked competitor is anchored in {bearing_word} within "
+            f"{radius:g} miles")
+    tail += (f"; the nearest ranked competitor overall sits {nearest:g} mi "
+             f"from the centre." if nearest is not None else ".")
+    parts.append(tail)
+    return " ".join(parts)
 
 
 def market_proximity_score(city_id: int, category_id: str) -> Optional[float]:
@@ -216,23 +287,38 @@ def market_proximity_score(city_id: int, category_id: str) -> Optional[float]:
 
 async def market_proximity(city_id: int, category_id: str) -> dict[str, Any]:
     """The proximity read for one market. Degrades explicitly, never raises
-    to the caller: no city coords / no geocoded pins → {available: False}."""
+    to the caller: no city coords / no pins → {available: False}.
+
+    Prefers the LIVE GBP pins captured by scout/tryout (real competitor
+    locations) when a market has been scouted; falls back to the imported
+    Census pins otherwise. The map layer (centre + plottable pins + a plain-
+    English placement recommendation) is attached ONLY for the live-GBP source,
+    so the market map appears after a scout/tryout — never off Census pins
+    (owner ruling 2026-08-21). The Census path still returns the octant read.
+    """
     from config import settings
+    from services.leadoff_gbp_pins import read_gbp_pins
 
     center = _city_center(city_id)
     if center is None:
         return {"available": False, "reason": "city_has_no_coordinates"}
-    pins = _market_pins(city_id, category_id)
+
+    live = read_gbp_pins(city_id, category_id)
+    source = "gbp_serp" if live else "census"
+    pins = live if live else _market_pins(city_id, category_id)
     if not pins:
         return {"available": False, "reason": "no_geocoded_competitors",
-                "hint": ("This market's competitors were not in the imported "
-                         "scan (e.g. a tryout market) or none geocoded.")}
+                "source": source, "scouted": False,
+                "hint": ("Scout this market (or run a Tryout) to plot the live "
+                         "competitor GBPs and get a placement plan.")}
     result = build_proximity(
         center[0], center[1], pins,
         radius_miles=settings.leadoff_proximity_radius_miles,
         min_pins=settings.leadoff_proximity_min_pins,
         weak_frac=settings.leadoff_proximity_weak_frac,
     )
+    result["source"] = source
+    result["scouted"] = source == "gbp_serp"
     # Best-effort zone naming (plan §2.2/§2.3): label each suggested pin with
     # its nearest locality via the geo-grid's cached reverse geocoder, and DROP
     # pins that name to nothing (water / unpopulated land — an empty octant
@@ -255,4 +341,11 @@ async def market_proximity(city_id: int, category_id: str) -> dict[str, Any]:
             result["placement"] = kept
         except Exception:
             logger.warning("leadoff_proximity.naming_failed", exc_info=True)
+    # Map layer — live GBP only (real locations), so the map is a scout/tryout
+    # deliverable. Census pins feed the grade elsewhere and stay display-free.
+    if source == "gbp_serp":
+        result["center"] = {"lat": round(center[0], 6), "lng": round(center[1], 6)}
+        result["pins"] = _map_pins(center[0], center[1], pins,
+                                   settings.leadoff_proximity_radius_miles)
+        result["recommendation"] = placement_recommendation(result)
     return result
