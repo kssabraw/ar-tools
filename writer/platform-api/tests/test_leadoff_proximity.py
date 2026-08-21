@@ -1,5 +1,6 @@
 """Unit tests for the LeadOff proximity pure core (no network/DB)."""
 from services.leadoff_proximity import (
+    _map_pins,
     bearing_deg,
     build_octant_coverage,
     build_proximity,
@@ -113,6 +114,28 @@ class TestPlacementAndPayload:
         assert result["thin_data"] is True
         assert result["underserved"] == [] and result["opportunity"] == 0.0
 
+class TestMapPins:
+    def test_in_radius_pins_shape_and_sort(self):
+        lat, lng = KC
+        rows = [
+            {"business_name": "Far", "review_count": 5, "lat": lat + 0.2, "lng": lng, "rank_position": 3},
+            {"business_name": "Near", "review_count": 50, "lat": lat + 0.01, "lng": lng, "rank_position": 1},
+            {"business_name": "Mid", "review_count": 20, "lat": lat + 0.05, "lng": lng, "rank_position": 2},
+        ]
+        out = _map_pins(lat, lng, rows, radius_miles=10)
+        # Far pin (~13.8 mi) is dropped; the rest are nearest-first.
+        assert [p["name"] for p in out] == ["Near", "Mid"]
+        p0 = out[0]
+        assert p0["reviews"] == 50 and p0["rank"] == 1
+        assert p0["lat"] == round(lat + 0.01, 6) and "miles" in p0
+
+    def test_null_coords_skipped(self):
+        lat, lng = KC
+        rows = [{"business_name": "NoGeo", "review_count": 9, "lat": None, "lng": None, "rank_position": 4}]
+        assert _map_pins(lat, lng, rows, radius_miles=10) == []
+
+
+class TestPayloadShape:
     def test_full_payload_shape(self):
         lat, lng = KC
         # a field anchored north+east, nothing south/west

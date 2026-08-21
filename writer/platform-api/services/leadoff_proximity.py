@@ -189,9 +189,35 @@ def _city_center(city_id: int) -> Optional[tuple[float, float]]:
 def _market_pins(city_id: int, category_id: str) -> list[dict[str, Any]]:
     from db.supabase_client import get_supabase
     return (get_supabase().table("competitor_locations")
-            .select("business_name, review_count, lat, lng")
+            .select("business_name, review_count, lat, lng, rank_position")
             .eq("city_id", city_id).eq("category_id", category_id)
             .not_.is_("lat", "null").execute().data or [])
+
+
+def _map_pins(center_lat: float, center_lng: float,
+              pins: list[dict[str, Any]],
+              radius_miles: float) -> list[dict[str, Any]]:
+    """The plottable competitor pin set for the market map: the in-radius
+    geocoded rows with rounded coordinates, name, review count, SERP rank and
+    distance. Same radius gate as the octant analysis so the map matches the
+    bars. Sorted nearest-first purely for stable rendering order."""
+    out = []
+    for p in pins:
+        lat, lng = p.get("lat"), p.get("lng")
+        if lat is None or lng is None:
+            continue
+        lat, lng = float(lat), float(lng)
+        d = haversine_miles(center_lat, center_lng, lat, lng)
+        if d > radius_miles:
+            continue
+        out.append({
+            "name": p.get("business_name"),
+            "lat": round(lat, 6), "lng": round(lng, 6),
+            "reviews": int(p.get("review_count") or 0),
+            "rank": p.get("rank_position"),
+            "miles": round(d, 1),
+        })
+    return sorted(out, key=lambda p: p["miles"])
 
 
 def market_proximity_score(city_id: int, category_id: str) -> Optional[float]:
@@ -233,6 +259,13 @@ async def market_proximity(city_id: int, category_id: str) -> dict[str, Any]:
         min_pins=settings.leadoff_proximity_min_pins,
         weak_frac=settings.leadoff_proximity_weak_frac,
     )
+    # Map-plottable data for the market map (owner request 2026-08-21): the
+    # market centre + the in-radius competitor pins, so the frontend can plot
+    # them over a static map alongside the octant bars. Additive — the octant
+    # analysis above is unchanged.
+    result["center"] = {"lat": round(center[0], 6), "lng": round(center[1], 6)}
+    result["pins"] = _map_pins(center[0], center[1], pins,
+                               settings.leadoff_proximity_radius_miles)
     # Best-effort zone naming (plan §2.2/§2.3): label each suggested pin with
     # its nearest locality via the geo-grid's cached reverse geocoder, and DROP
     # pins that name to nothing (water / unpopulated land — an empty octant
