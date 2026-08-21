@@ -7,6 +7,7 @@ from services.leadoff_proximity import (
     haversine_miles,
     octant_of,
     placement_pins,
+    placement_recommendation,
     proximity_opportunity,
     underserved_octants,
 )
@@ -133,6 +134,48 @@ class TestMapPins:
         lat, lng = KC
         rows = [{"business_name": "NoGeo", "review_count": 9, "lat": None, "lng": None, "rank_position": 4}]
         assert _map_pins(lat, lng, rows, radius_miles=10) == []
+
+
+class TestPlacementRecommendation:
+    def _concentrated(self):
+        lat, lng = KC
+        pins = ([pin(lat + 0.05, lng, 100)] * 3       # N
+                + [pin(lat, lng + 0.06, 80)] * 3       # E
+                + [pin(lat + 0.04, lng + 0.04, 60)] * 2)
+        return build_proximity(lat, lng, pins,
+                               radius_miles=10, min_pins=5, weak_frac=0.5)
+
+    def test_recommends_weak_bearings(self):
+        rec = placement_recommendation(self._concentrated())
+        assert rec is not None
+        assert "weakest to the" in rec
+        # a weak bearing (S/SW/W) should be named
+        assert any(o in rec for o in ("S", "SW", "W"))
+        assert "within 10 miles" in rec
+
+    def test_uses_localities_when_present(self):
+        result = self._concentrated()
+        # simulate the reverse-geocode naming step
+        for p in result["placement"]:
+            p["locality"] = "Testville"
+        rec = placement_recommendation(result)
+        assert "near Testville" in rec
+
+    def test_none_when_thin(self):
+        lat, lng = KC
+        result = build_proximity(lat, lng, [pin(lat + 0.05, lng)],
+                                 radius_miles=10, min_pins=5, weak_frac=0.5)
+        assert placement_recommendation(result) is None
+
+    def test_none_when_evenly_spread(self):
+        lat, lng = KC
+        # one pin per octant, equal weight → no underserved bearing
+        offs = [(0.05, 0), (0.035, 0.035), (0, 0.05), (-0.035, 0.035),
+                (-0.05, 0), (-0.035, -0.035), (0, -0.05), (0.035, -0.035)]
+        pins = [pin(lat + dy, lng + dx, 50) for dy, dx in offs]
+        result = build_proximity(lat, lng, pins,
+                                 radius_miles=10, min_pins=5, weak_frac=0.25)
+        assert placement_recommendation(result) is None
 
 
 class TestPayloadShape:

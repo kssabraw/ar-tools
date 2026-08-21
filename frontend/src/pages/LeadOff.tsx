@@ -107,6 +107,7 @@ interface Neighborhood {
 }
 interface TryoutRow {
   grade: string
+  category_id?: string | null
   field_pages_med?: number | null
   field_mentions_med?: number | null
   natl_pct: number
@@ -124,6 +125,7 @@ interface TryoutRow {
 }
 interface Tryout {
   id: string
+  city_id: number | null
   city_name: string
   state_code: string
   status: 'pending' | 'running' | 'complete' | 'failed'
@@ -872,6 +874,9 @@ function TryoutsView() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [openId, setOpenId] = useState<string | null>(null)
+  // Which category row's live-GBP map is expanded (owner request 2026-08-21).
+  const [mapCat, setMapCat] = useState<string | null>(null)
+  useEffect(() => { setMapCat(null) }, [openId])
   const { data } = useQuery<{ tryouts: Tryout[] }>({
     queryKey: ['leadoff-tryouts'],
     queryFn: () => api.get('/leadoff/tryouts?limit=20'),
@@ -968,13 +973,17 @@ function TryoutsView() {
                 <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 780, fontSize: 13 }}>
                   <thead>
                     <tr>{['Grade', 'Category', 'Exp $/mo', 'ROI $/rev', 'Demand', 'Supply',
-                          'Rev to win', 'Field ★', 'Cat open', 'Field pages', 'Field mentions'].map(h => (
+                          'Rev to win', 'Field ★', 'Cat open', 'Field pages', 'Field mentions', 'Map'].map(h => (
                       <th key={h} style={thStyle}>{h}</th>
                     ))}</tr>
                   </thead>
                   <tbody>
-                    {(open.results ?? []).map((r, i) => (
-                      <tr key={i}>
+                    {(open.results ?? []).map((r, i) => {
+                      const canMap = !!r.category_id && open.city_id != null
+                      const expanded = canMap && mapCat === r.category_id
+                      return (
+                      <Fragment key={i}>
+                      <tr>
                         <td style={tdStyle}><GradeChip grade={r.grade} /></td>
                         <td style={{ ...tdStyle, fontWeight: 600 }}>{r.category}</td>
                         <td style={{ ...tdStyle, fontWeight: 600 }}>{usd(r.exp_val)}</td>
@@ -986,8 +995,28 @@ function TryoutsView() {
                         <td style={tdStyle}>{r.exact_open}</td>
                         <td style={tdStyle} title="median indexed pages across the category's top-5 (site: estimate)">{compact(r.field_pages_med)}</td>
                         <td style={tdStyle} title="median web-mention count across the top-5 (generic names inflate — context only)">{compact(r.field_mentions_med)}</td>
+                        <td style={tdStyle}>
+                          {canMap ? (
+                            <button type="button"
+                              onClick={() => setMapCat(expanded ? null : r.category_id!)}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 8px',
+                                background: expanded ? '#0e7d6f' : '#fff', color: expanded ? '#fff' : '#0e7d6f',
+                                border: '1px solid #0e7d6f', borderRadius: 6, cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>
+                              <Compass size={12} /> {expanded ? 'Hide' : 'Map'}
+                            </button>
+                          ) : <span style={{ color: '#cbd5e1' }}>—</span>}
+                        </td>
                       </tr>
-                    ))}
+                      {expanded && (
+                        <tr>
+                          <td colSpan={12} style={{ padding: '10px 14px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                            <TryoutCategoryMap cityId={open.city_id!} categoryId={r.category_id!} />
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1026,9 +1055,15 @@ interface ProximityRead {
   opportunity?: number
   note?: string
   // Map-plottable data: the market centre + in-radius competitor pins.
+  // Pin source: 'gbp_serp' = live GBP locations captured by scout/tryout (the
+  // map + recommendation are attached only for this); 'census' = imported
+  // street-centroid pins (octant bars only, no map). scouted mirrors it.
+  source?: 'gbp_serp' | 'census'
+  scouted?: boolean
+  recommendation?: string | null
   center?: { lat: number; lng: number }
   pins?: { name: string | null; lat: number; lng: number; reviews: number
-    rank?: number | null; miles?: number }[]
+    rank?: number | null; rating?: number | null; miles?: number }[]
 }
 
 interface GbpResolveResponse {
@@ -1041,11 +1076,34 @@ function ProximityCard({ cityId, categoryId }: { cityId: number; categoryId: str
     queryKey: ['leadoff-proximity', cityId, categoryId],
     queryFn: () => api.get(`/leadoff/proximity?city_id=${cityId}&category_id=${encodeURIComponent(categoryId)}`),
   })
+  return (
+    <>
+      <SectionTitle>Proximity (where the field sits)</SectionTitle>
+      {isLoading && <div style={{ fontSize: 12, color: '#94a3b8' }}>Reading competitor pins…</div>}
+      {px && !px.available && (
+        <div style={{ fontSize: 12, color: '#94a3b8' }}>
+          {px.reason === 'no_geocoded_competitors'
+            ? (px.hint ?? 'No geocoded competitors for this market.')
+            : 'Proximity read unavailable for this market.'}
+        </div>
+      )}
+      {px?.available && <ProximityDetail px={px} cityId={cityId} categoryId={categoryId} />}
+    </>
+  )
+}
 
-  // GBP reference pin (owner request 2026-08-21): paste a Maps link / share
-  // link / place ID → drop the business on the market map. Reference only — it
-  // does not re-anchor the proximity math. Transient (not persisted), and reset
-  // whenever the selected market changes.
+// The proximity body — shared by the brief's ProximityCard and the Tryout map.
+// The live GBP map + placement plan render only for the 'gbp_serp' source (real
+// competitor locations captured by scout/tryout); the Census source shows the
+// octant bars plus a nudge to scout, per the owner ruling (2026-08-21).
+function ProximityDetail({ px, cityId, categoryId }: {
+  px: ProximityRead; cityId: number; categoryId: string
+}) {
+  const live = px.source === 'gbp_serp' && !!px.center && (px.pins?.length ?? 0) > 0
+
+  // GBP reference pin: paste a Maps link / share link / place ID → drop the
+  // business on the map. Reference only — does not re-anchor the proximity math.
+  // Transient (not persisted); reset when the market changes.
   const [gbp, setGbp] = useState<MarketMapGbp | null>(null)
   const [gbpInput, setGbpInput] = useState('')
   const [gbpResolving, setGbpResolving] = useState(false)
@@ -1075,115 +1133,127 @@ function ProximityCard({ cityId, categoryId }: { cityId: number; categoryId: str
 
   return (
     <>
-      <SectionTitle>Proximity (where the field sits)</SectionTitle>
-      {isLoading && <div style={{ fontSize: 12, color: '#94a3b8' }}>Reading competitor pins…</div>}
-      {px && !px.available && (
-        <div style={{ fontSize: 12, color: '#94a3b8' }}>
-          {px.reason === 'no_geocoded_competitors'
-            ? (px.hint ?? 'No geocoded competitors for this market.')
-            : 'Proximity read unavailable for this market.'}
+      {live && (
+        <div style={{ marginBottom: 10 }}>
+          <MarketMap
+            center={px.center!}
+            pins={px.pins ?? []}
+            placement={px.placement ?? []}
+            gbp={gbp}
+            radiusMiles={px.radius_miles ?? 10}
+          />
+          {px.recommendation && (
+            <div style={{ marginTop: 8, fontSize: 12.5, color: '#0f172a', background: '#ecfdf5',
+              border: '1px solid #a7f3d0', borderRadius: 8, padding: '8px 10px', lineHeight: 1.45 }}>
+              <strong style={{ color: '#047857' }}>Placement plan: </strong>{px.recommendation}
+            </div>
+          )}
+          <div style={{ marginTop: 8 }}>
+            {gbp ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#475569' }}>
+                <MapPin size={13} color="#4f46e5" />
+                <span>Showing <strong>{gbp.name ?? 'business'}</strong> on the map.</span>
+                <button type="button" onClick={() => setGbp(null)}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: '2px 6px',
+                    background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer',
+                    color: '#64748b', fontSize: 11 }}>
+                  <X size={11} /> Clear
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: 6 }}>
+                <div style={{ position: 'relative', flex: 1 }}>
+                  <Link2 size={13} style={{ position: 'absolute', left: 9, top: '50%',
+                    transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                  <input
+                    value={gbpInput}
+                    onChange={e => { setGbpInput(e.target.value); setGbpError(null) }}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); resolveGbp() } }}
+                    placeholder="Add a GBP: Maps link, share link, or place ID…"
+                    style={{ width: '100%', padding: '7px 10px 7px 28px', border: '1px solid #d1d5db',
+                      borderRadius: 8, fontSize: 12, color: '#0f172a', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <button type="button" onClick={resolveGbp}
+                  disabled={gbpResolving || gbpInput.trim().length === 0}
+                  style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 56,
+                    padding: '0 12px', background: '#4f46e5', color: '#fff', border: 'none', borderRadius: 8,
+                    fontSize: 12, fontWeight: 600, cursor: gbpResolving ? 'default' : 'pointer',
+                    opacity: gbpInput.trim().length === 0 ? 0.6 : 1 }}>
+                  {gbpResolving ? <Loader2 size={13} className="spin" /> : 'Add'}
+                </button>
+              </div>
+            )}
+            {gbpError && <div style={{ color: '#dc2626', fontSize: 11, marginTop: 4 }}>{gbpError}</div>}
+          </div>
         </div>
       )}
-      {px?.available && (
-        <>
-          {px.center && (px.pins?.length ?? 0) > 0 && (
-            <div style={{ marginBottom: 10 }}>
-              <MarketMap
-                center={px.center}
-                pins={px.pins ?? []}
-                placement={px.placement ?? []}
-                gbp={gbp}
-                radiusMiles={px.radius_miles ?? 10}
-              />
-              <div style={{ marginTop: 8 }}>
-                {gbp ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#475569' }}>
-                    <MapPin size={13} color="#4f46e5" />
-                    <span>Showing <strong>{gbp.name ?? 'business'}</strong> on the map.</span>
-                    <button type="button" onClick={() => setGbp(null)}
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: '2px 6px',
-                        background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer',
-                        color: '#64748b', fontSize: 11 }}>
-                      <X size={11} /> Clear
-                    </button>
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <div style={{ position: 'relative', flex: 1 }}>
-                      <Link2 size={13} style={{ position: 'absolute', left: 9, top: '50%',
-                        transform: 'translateY(-50%)', color: '#94a3b8' }} />
-                      <input
-                        value={gbpInput}
-                        onChange={e => { setGbpInput(e.target.value); setGbpError(null) }}
-                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); resolveGbp() } }}
-                        placeholder="Add a GBP: Maps link, share link, or place ID…"
-                        style={{ width: '100%', padding: '7px 10px 7px 28px', border: '1px solid #d1d5db',
-                          borderRadius: 8, fontSize: 12, color: '#0f172a', boxSizing: 'border-box' }}
-                      />
-                    </div>
-                    <button type="button" onClick={resolveGbp}
-                      disabled={gbpResolving || gbpInput.trim().length === 0}
-                      style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 56,
-                        padding: '0 12px', background: '#4f46e5', color: '#fff', border: 'none', borderRadius: 8,
-                        fontSize: 12, fontWeight: 600, cursor: gbpResolving ? 'default' : 'pointer',
-                        opacity: gbpInput.trim().length === 0 ? 0.6 : 1 }}>
-                      {gbpResolving ? <Loader2 size={13} className="spin" /> : 'Add'}
-                    </button>
-                  </div>
-                )}
-                {gbpError && <div style={{ color: '#dc2626', fontSize: 11, marginTop: 4 }}>{gbpError}</div>}
-              </div>
-            </div>
-          )}
-          {px.thin_data && (
-            <div style={{ fontSize: 12, color: '#b45309', marginBottom: 6 }}>
-              Thin data — only {px.pins_used} pinned competitor{px.pins_used === 1 ? '' : 's'};
-              below the floor for an underserved-zone verdict.
-            </div>
-          )}
-          <div style={{ display: 'grid', gridTemplateColumns: '28px 1fr 44px', gap: '3px 8px', alignItems: 'center' }}>
-            {(px.octants ?? []).map(o => (
-              <Fragment key={o.octant}>
-                <span style={{ fontSize: 11, fontWeight: 600, color: px.underserved?.includes(o.octant) ? '#b45309' : '#475569' }}>
-                  {o.octant}
-                </span>
-                <div style={{ background: '#f1f5f9', borderRadius: 3, height: 10, overflow: 'hidden' }}
-                  title={o.anchors.map(a => `${a.name} (${a.reviews} rev @ ${a.miles}mi)`).join(', ') || 'no ranked competitor anchored here'}>
-                  <div style={{ width: `${o.bar_pct}%`, height: '100%', background: '#0e7d6f', opacity: 0.85 }} />
-                </div>
-                <span style={{ fontSize: 11, color: '#94a3b8', textAlign: 'right' }}>{o.count || '—'}</span>
-              </Fragment>
-            ))}
-          </div>
-          {!px.thin_data && (px.underserved?.length ?? 0) > 0 && (
-            <div style={{ marginTop: 8 }}>
-              <KV k="Underserved octants" v={px.underserved!.join(', ')} strong
-                hint="defense below ¼ of the median defended octant — no ranked competitor is anchored there (someone may still serve it)" />
-              {(px.placement ?? []).map(p => (
-                <div key={p.octant} style={{ fontSize: 12, padding: '2px 0' }}>
-                  <a href={p.maps_url} target="_blank" rel="noreferrer" style={{ color: '#0e7d6f', fontWeight: 600 }}>
-                    Suggested GBP zone: {p.octant}{p.locality ? ` — near ${p.locality}` : ''} ({p.radius_mi} mi out) ↗
-                  </a>
-                </div>
-              ))}
-              <KV k="Proximity opportunity" v={px.opportunity?.toFixed(2)}
-                hint="0–1 share of the demand-space weakly defended. Context only — never in the grade." />
-            </div>
-          )}
-          {!px.thin_data && (px.underserved?.length ?? 0) === 0 && (
-            <div style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>
-              Field is spread across all octants — no clearly undefended bearing.
-            </div>
-          )}
-          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6, lineHeight: 1.4 }}>
-            {px.pins_used} pins within {px.radius_miles} mi (street-centroid resolution).
-            Empty octant = no <em>ranked</em> competitor anchored there — pre-client forecast;
-            the geo-grid verifies it post-client.
-          </div>
-        </>
+      {!px.scouted && (
+        <div style={{ fontSize: 12, color: '#0e7d6f', background: '#f0fdfa', border: '1px solid #99f6e4',
+          borderRadius: 8, padding: '7px 10px', marginBottom: 8 }}>
+          Scout this market (or run a Tryout) to plot the live competitor GBPs and get a placement plan.
+        </div>
       )}
+      {px.thin_data && (
+        <div style={{ fontSize: 12, color: '#b45309', marginBottom: 6 }}>
+          Thin data — only {px.pins_used} pinned competitor{px.pins_used === 1 ? '' : 's'};
+          below the floor for an underserved-zone verdict.
+        </div>
+      )}
+      <div style={{ display: 'grid', gridTemplateColumns: '28px 1fr 44px', gap: '3px 8px', alignItems: 'center' }}>
+        {(px.octants ?? []).map(o => (
+          <Fragment key={o.octant}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: px.underserved?.includes(o.octant) ? '#b45309' : '#475569' }}>
+              {o.octant}
+            </span>
+            <div style={{ background: '#f1f5f9', borderRadius: 3, height: 10, overflow: 'hidden' }}
+              title={o.anchors.map(a => `${a.name} (${a.reviews} rev @ ${a.miles}mi)`).join(', ') || 'no ranked competitor anchored here'}>
+              <div style={{ width: `${o.bar_pct}%`, height: '100%', background: '#0e7d6f', opacity: 0.85 }} />
+            </div>
+            <span style={{ fontSize: 11, color: '#94a3b8', textAlign: 'right' }}>{o.count || '—'}</span>
+          </Fragment>
+        ))}
+      </div>
+      {!px.thin_data && (px.underserved?.length ?? 0) > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <KV k="Underserved octants" v={px.underserved!.join(', ')} strong
+            hint="defense below ¼ of the median defended octant — no ranked competitor is anchored there (someone may still serve it)" />
+          {(px.placement ?? []).map(p => (
+            <div key={p.octant} style={{ fontSize: 12, padding: '2px 0' }}>
+              <a href={p.maps_url} target="_blank" rel="noreferrer" style={{ color: '#0e7d6f', fontWeight: 600 }}>
+                Suggested GBP zone: {p.octant}{p.locality ? ` — near ${p.locality}` : ''} ({p.radius_mi} mi out) ↗
+              </a>
+            </div>
+          ))}
+          <KV k="Proximity opportunity" v={px.opportunity?.toFixed(2)}
+            hint="0–1 share of the demand-space weakly defended. Context only — never in the grade." />
+        </div>
+      )}
+      {!px.thin_data && (px.underserved?.length ?? 0) === 0 && (
+        <div style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>
+          Field is spread across all octants — no clearly undefended bearing.
+        </div>
+      )}
+      <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6, lineHeight: 1.4 }}>
+        {px.pins_used} pins within {px.radius_miles} mi
+        {live ? ' (live GBP locations from the last scan).' : ' (imported street-centroid resolution).'}
+        {' '}Empty octant = no <em>ranked</em> competitor anchored there
+        {live ? '.' : ' — pre-client forecast; the geo-grid verifies it post-client.'}
+      </div>
     </>
   )
+}
+
+// The live-GBP map for one Tryout category — reuses the proximity read path
+// (the tryout persisted its pins keyed by the same city_id/category_id).
+function TryoutCategoryMap({ cityId, categoryId }: { cityId: number; categoryId: string }) {
+  const { data: px, isLoading } = useQuery<ProximityRead>({
+    queryKey: ['leadoff-proximity', cityId, categoryId],
+    queryFn: () => api.get(`/leadoff/proximity?city_id=${cityId}&category_id=${encodeURIComponent(categoryId)}`),
+  })
+  if (isLoading) return <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading map…</div>
+  if (!px?.available) return <div style={{ fontSize: 12, color: '#94a3b8' }}>No live-GBP map for this category yet.</div>
+  return <ProximityDetail px={px} cityId={cityId} categoryId={categoryId} />
 }
 
 function ScoutCard({ cityId, categoryId }: { cityId: number; categoryId: string }) {
@@ -1204,6 +1274,8 @@ function ScoutCard({ cityId, categoryId }: { cityId: number; categoryId: string 
         if (job.status === 'failed') setError(job.error ?? 'scout_failed')
         qc.invalidateQueries({ queryKey: ['leadoff-brief'] })
         qc.invalidateQueries({ queryKey: ['leadoff-scout-est', cityId, categoryId] })
+        // Scout just captured the live GBP pins — refresh the market map.
+        qc.invalidateQueries({ queryKey: ['leadoff-proximity', cityId, categoryId] })
       }
       return job
     },

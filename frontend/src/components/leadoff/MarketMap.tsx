@@ -14,6 +14,7 @@ export interface MarketMapPin {
   lng: number
   reviews: number
   rank?: number | null
+  rating?: number | null
   miles?: number
 }
 export interface MarketMapPlacement {
@@ -155,6 +156,7 @@ export function MarketMap({ center, pins, placement = [], gbp = null, radiusMile
 function pinTitle(p: MarketMapPin): string {
   const bits = [p.name || 'Competitor']
   if (p.rank != null) bits.push(`rank ${p.rank}`)
+  if (p.rating != null) bits.push(`★ ${p.rating}`)
   bits.push(`${p.reviews} review${p.reviews === 1 ? '' : 's'}`)
   if (p.miles != null) bits.push(`${p.miles} mi`)
   return bits.join(' · ')
