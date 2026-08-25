@@ -133,6 +133,55 @@ async def get_proximity(
         return {"available": False, "reason": "proximity_error"}
 
 
+@router.get("/leadoff/placement")
+async def get_placement(
+    city_id: int,
+    category_id: str,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """The demand-aware GBP Placement Advisor for one market (placement plan
+    §3/§5): ranked neighborhood-sized zones where reachable Census demand is high
+    and competitive pressure is low, scored on the geo-grid's 1-mile lattice.
+    Advice/display only — never a grade input (grade safety, plan §7). Degrades
+    to {available:false, reason} instead of 404 (no pins → nudge to the ~$0.004
+    map refresh; census_not_cached → a job_id to poll)."""
+    if not settings.leadoff_placement_enabled:
+        return {"available": False, "reason": "placement_disabled"}
+    from services.census_demand import market_placement
+    try:
+        return await market_placement(city_id, category_id)
+    except Exception:
+        logger.warning("leadoff.placement_failed", exc_info=True)
+        return {"available": False, "reason": "placement_error"}
+
+
+class PlacementPointRequest(BaseModel):
+    city_id: int
+    category_id: str
+    lat: float = Field(..., ge=-90, le=90)
+    lng: float = Field(..., ge=-180, le=180)
+
+
+@router.post("/leadoff/placement/score-point")
+async def score_placement_point(
+    body: PlacementPointRequest,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Score an arbitrary point (dropped pin / pasted address) against the
+    market's zones on the same market-relative scale (placement plan §5.2):
+    its 0-100 score, percentile vs the market, nearest competitor, and distance
+    to the best zone. $0 — pure recomputation over the already-cached surface."""
+    if not settings.leadoff_placement_enabled:
+        return {"available": False, "reason": "placement_disabled"}
+    from services.census_demand import score_market_point
+    try:
+        return await score_market_point(body.city_id, body.category_id,
+                                        body.lat, body.lng)
+    except Exception:
+        logger.warning("leadoff.placement_point_failed", exc_info=True)
+        return {"available": False, "reason": "placement_error"}
+
+
 @router.post("/leadoff/signals/refresh", status_code=202)
 async def refresh_signals(auth: dict = Depends(require_staff)) -> dict:
     """Seed / refresh the board's market-signal cache (proximity + footprint
@@ -526,7 +575,8 @@ async def get_leadoff_job(job_id: str, auth: dict = Depends(require_auth)) -> di
     rows = (get_supabase().table("async_jobs")
             .select("id,job_type,status,error,result,created_at,completed_at")
             .eq("id", job_id)
-            .in_("job_type", ["leadoff_tryout", "leadoff_scout", "leadoff_map_refresh"])
+            .in_("job_type", ["leadoff_tryout", "leadoff_scout",
+                              "leadoff_map_refresh", "leadoff_placement"])
             .limit(1).execute().data or [])
     if not rows:
         raise HTTPException(status_code=404, detail="not_found")

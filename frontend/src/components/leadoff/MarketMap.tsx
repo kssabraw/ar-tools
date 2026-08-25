@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { MapPin, ExternalLink } from 'lucide-react'
-import { buildBaseMapUrl, projectToPixel, fitZoom, MAP_SIZE } from '../maps/visuals'
+import { buildBaseMapUrl, projectToPixel, pixelToLatLng, fitZoom, MAP_SIZE } from '../maps/visuals'
 
 // The LeadOff market map: competitor pins (live GBPs from a scout/tryout),
 // the market centre, suggested GBP placement zones, and an optional pasted GBP
@@ -29,10 +29,29 @@ export interface MarketMapPlacement {
   lng: number
   locality?: string | null
 }
+// A ranked GBP Placement Advisor zone (demand-aware). When zones are present
+// they REPLACE the octant placement diamonds — the advisor has run, so the
+// numbered, demand-scored zones are the answer (placement plan §5.1).
+export interface MarketMapZone {
+  rank: number
+  score: number
+  lat: number
+  lng: number
+  locality?: string | null
+  is_top?: boolean
+}
 export interface MarketMapGbp {
   name: string | null
   lat: number
   lng: number
+}
+// A scored candidate location (Phase 2 "Both" — click-to-drop / pasted address).
+export interface MarketMapCandidate {
+  id: string
+  letter: string       // A / B / C … for the compare panel cross-reference
+  lat: number
+  lng: number
+  score?: number | null
 }
 
 // Local great-circle distance (miles) — just for framing the GBP reference pin.
@@ -54,11 +73,19 @@ function gbpUrl(p: MarketMapPin): string {
   return `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`
 }
 
-export function MarketMap({ center, pins, placement = [], gbp = null, radiusMiles, browseQuery }: {
+export function MarketMap({ center, pins, placement = [], zones = [], candidates = [], gbp = null, onMapClick, radiusMiles, browseQuery }: {
   center: { lat: number; lng: number }
   pins: MarketMapPin[]
   placement?: MarketMapPlacement[]
+  // Ranked demand-aware placement zones. When non-empty they replace the octant
+  // placement diamonds (the advisor has run).
+  zones?: MarketMapZone[]
+  // Scored candidate pins (Phase 2). Rendered as lettered indigo markers.
+  candidates?: MarketMapCandidate[]
   gbp?: MarketMapGbp | null
+  // Click-to-drop: when set, clicking the base map inverse-projects the pixel to
+  // lat/lng and calls this (the caller scores the point). Enables a crosshair.
+  onMapClick?: (lat: number, lng: number) => void
   radiusMiles: number
   // The market's category (e.g. "chimney sweep"). When set, a clearly-separate
   // "Browse all … on Google" link is offered BELOW the map — this opens Google's
@@ -120,9 +147,16 @@ export function MarketMap({ center, pins, placement = [], gbp = null, radiusMile
           than our captured competitors and reads as a mismatch. Instead, each
           competitor pin links to its exact Google listing. */}
       <div style={mapOuter}>
-        <div style={mapFrame}>
+        <div style={{ ...mapFrame, cursor: onMapClick ? 'crosshair' : 'default' }}
+          onClick={onMapClick ? (e) => {
+            const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect()
+            const xL = ((e.clientX - rect.left) / rect.width) * MAP_SIZE
+            const yL = ((e.clientY - rect.top) / rect.height) * MAP_SIZE
+            const { lat, lng } = pixelToLatLng(xL, yL, center.lat, center.lng, zoom)
+            onMapClick(lat, lng)
+          } : undefined}>
           <img src={mapUrl} alt="Market map" onError={() => setImgError(true)}
-            style={{ width: '100%', height: '100%', display: 'block' }} />
+            style={{ width: '100%', height: '100%', display: 'block', pointerEvents: 'none' }} />
         </div>
 
         {/* Competitor pins — teal, sized by reviews, ranked ones show the rank.
@@ -171,8 +205,9 @@ export function MarketMap({ center, pins, placement = [], gbp = null, radiusMile
         })}
 
         {/* Suggested GBP placement zones — amber diamonds along weak bearings.
-            Decorative: pointer-events off so a click falls through to the map. */}
-        {placement.map((p, i) => {
+            Decorative: pointer-events off so a click falls through to the map.
+            Hidden once the demand-aware advisor has run (zones replace them). */}
+        {zones.length === 0 && placement.map((p, i) => {
           const pos = project(p.lat, p.lng)
           if (!pos.inView) return null
           return (
@@ -182,6 +217,48 @@ export function MarketMap({ center, pins, placement = [], gbp = null, radiusMile
                 background: '#f59e0b', color: '#fff', fontSize: 9, fontWeight: 700, zIndex: 2,
                 borderRadius: 3, transform: 'translate(-50%, -50%) rotate(45deg)', pointerEvents: 'none' }}>
               <span style={{ transform: 'rotate(-45deg)' }}>{p.octant[0]}</span>
+            </div>
+          )
+        })}
+
+        {/* Demand-aware placement zones — numbered, top zone highlighted. The
+            answer to "where should the GBP live" (placement plan §5.1). */}
+        {zones.map((z, i) => {
+          const pos = project(z.lat, z.lng)
+          if (!pos.inView) return null
+          return (
+            <div key={`zone-${i}`}
+              title={`Zone ${z.rank}: scores ${z.score}/100${z.locality ? ` — near ${z.locality}` : ''}`}
+              style={{ ...pinBase, left: pos.left, top: pos.top, width: 22, height: 22,
+                background: z.is_top ? '#7c3aed' : '#a78bfa', color: '#fff',
+                fontSize: 11, fontWeight: 800, zIndex: z.is_top ? 8 : 7,
+                border: '2px solid #fff', pointerEvents: 'none',
+                boxShadow: '0 1px 5px rgba(15,23,42,.4)' }}>
+              {z.rank}
+            </div>
+          )
+        })}
+
+        {/* Scored candidate pins (Phase 2) — lettered indigo markers with the
+            score below; keyed to the compare panel. Decorative (a re-click drops
+            another candidate). */}
+        {candidates.map((c) => {
+          const pos = project(c.lat, c.lng)
+          if (!pos.inView) return null
+          return (
+            <div key={c.id}
+              title={`Candidate ${c.letter}${c.score != null ? ` — scores ${c.score}/100` : ''}`}
+              style={{ ...pinBase, left: pos.left, top: pos.top, width: 22, height: 22,
+                background: '#4f46e5', color: '#fff', fontSize: 12, fontWeight: 800, zIndex: 9,
+                border: '2px solid #fff', pointerEvents: 'none',
+                boxShadow: '0 1px 5px rgba(15,23,42,.45)' }}>
+              {c.letter}
+              {c.score != null && (
+                <span style={{ position: 'absolute', top: 24, left: '50%', transform: 'translateX(-50%)',
+                  fontSize: 10, fontWeight: 700, color: '#4338ca', whiteSpace: 'nowrap' }}>
+                  {c.score}
+                </span>
+              )}
             </div>
           )
         })}
@@ -208,12 +285,16 @@ export function MarketMap({ center, pins, placement = [], gbp = null, radiusMile
       <div style={legend}>
         <LegendDot color="#0e7d6f" label="Competitor (size = reviews)" />
         <LegendDot color="#475569" label="Market centre" ring />
-        {placement.length > 0 && <LegendDot color="#f59e0b" label="Suggested zone" diamond />}
+        {zones.length > 0 && <LegendDot color="#7c3aed" label="Placement zone (ranked)" />}
+        {zones.length === 0 && placement.length > 0 && <LegendDot color="#f59e0b" label="Suggested zone" diamond />}
+        {candidates.length > 0 && <LegendDot color="#4f46e5" label="Scored candidate" />}
         {gbp && <LegendDot color="#4f46e5" label={gbp.name ? `GBP: ${gbp.name}` : 'Your GBP'} />}
       </div>
 
       <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
-        Hover a competitor pin for its rating and reviews, or click it to open that business's Google listing.
+        {onMapClick
+          ? 'Click anywhere on the map to score that spot against the zones. Hover a competitor pin for its details.'
+          : "Hover a competitor pin for its rating and reviews, or click it to open that business's Google listing."}
       </div>
 
       {/* A clearly-separate escape hatch to Google's FULL directory — labelled as

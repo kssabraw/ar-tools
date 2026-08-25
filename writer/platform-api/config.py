@@ -1724,6 +1724,29 @@ class Settings(BaseSettings):
     leadoff_proximity_radius_miles: float = 10.0
     leadoff_proximity_min_pins: int = 5
     leadoff_proximity_weak_frac: float = 0.25
+    # GBP Placement Advisor (leadoff-gbp-placement-plan-v1_0.md §10): the
+    # demand-aware "where should the GBP live" read. Free core = the Census
+    # ACS block-group demand surface (census_demand.py, $0) ÷ the live
+    # competitor-GBP pressure field, scored on the same 1-mile lattice as the
+    # geo-grid and computed on read by leadoff_placement.py. Advice/display
+    # only — NEVER a grade input (grade safety, plan §7).
+    leadoff_placement_enabled: bool = True
+    placement_analysis_radius_miles: float = 10.0   # the candidate lattice extent
+    placement_demand_decay_miles: float = 5.0       # D_DEMAND — customers travel far
+    placement_pressure_decay_miles: float = 2.0     # D_DECAY — locked to proximity's
+    placement_zone_count: int = 4                   # top zones surfaced
+    placement_min_separation_miles: float = 2.0     # neighborhood-sized, not clumped
+    placement_min_pins: int = 5                     # thin-data floor (== proximity)
+    placement_min_blockgroups: int = 8              # below this the advisor declines
+    # w_cat demand weights on the same free Census pull — ships ON but weight-0
+    # until the calibration loop (plan §8) earns them; 0 → pure households.
+    placement_income_weight: float = 0.0
+    placement_housing_age_weight: float = 0.0
+    # Phase 3 opt-in paid ZIP-volume layer (gated on the §4.3.2 feasibility
+    # probe passing) — off until then; a scan is "inconclusive" when more than
+    # this share of ZIPs return null volume (Google thresholds small geos).
+    leadoff_zip_demand_enabled: bool = False
+    placement_zip_null_share_inconclusive: float = 0.6
     # Score enrichment (owner ruling 2026-07-12): today's context signals are
     # promoted to grade inputs as bounded, config-weighted multipliers on the
     # winnability (rankability) and demand pillars. Deliberately conservative
