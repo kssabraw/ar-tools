@@ -176,6 +176,18 @@ _INTENT_TOOL = {
                                "that stay on the business's topic — the kind a "
                                "keyword tool expands. Not questions, not brand names.",
             },
+            "relevant_site_topics": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "ONLY the site topics from the provided list that are "
+                               "genuinely about the SAME subject as the seeds — "
+                               "copied VERBATIM from that list. Omit blog/news/PR/"
+                               "award/event/company-update pages and anything off "
+                               "the seed topic. Empty if none were provided or none "
+                               "fit. These become the relevance anchor set, so "
+                               "including an off-topic page here widens the results "
+                               "with junk.",
+            },
         },
         "required": ["intents", "expansion_seeds"],
     },
@@ -207,22 +219,42 @@ def _intent_prompt(seeds: list[str], context: str, site_topics: list[str], count
         "NOT emit a bare adjacent-industry term whose meaning leaves the domain "
         "(e.g. \"commercial property valuation\" for a claims business — say "
         "\"commercial property claims\" instead).\n"
+        "- relevant_site_topics: from the site-topics list above (if any), copy back "
+        "VERBATIM only the ones genuinely about the seed subject. These anchor the "
+        "relevance filter, so leave out blog/news/award/event/company-update pages "
+        "and anything off-topic — an off-topic anchor pulls in unrelated keywords.\n"
         "- Return via the emit_topics tool."
     )
 
 
+def select_relevant_site_topics(
+    returned: list[str], site_topics: list[str]
+) -> list[str]:
+    """Keep only the LLM-returned site topics that are VERBATIM members of the
+    discovered site-topic list (case-insensitive), preserving the discovered
+    order. Guards against a model that paraphrases or invents a topic — an anchor
+    must be a topic the site actually covers. Pure."""
+    if not returned or not site_topics:
+        return []
+    wanted = {(t or "").strip().lower() for t in returned}
+    return [t for t in site_topics if t.strip().lower() in wanted]
+
+
 def fanout_intents(
     seeds: list[str], client: dict, site_topics: list[str]
-) -> tuple[list[str], list[str]]:
-    """One LLM call → (intents, expansion_seeds), grounded on the seeds + client
-    business context + site topics. Best-effort: returns ([], []) when no LLM key
-    is configured or the call fails, so the run degrades to the token gates + site
-    topics as anchors."""
+) -> tuple[list[str], list[str], list[str]]:
+    """One LLM call → (intents, expansion_seeds, relevant_site_topics), grounded on
+    the seeds + client business context + site topics. The third value is the
+    on-mission SUBSET of ``site_topics`` the model selected as relevance anchors
+    (verbatim-guarded), so raw blog/PR/award slugs no longer pollute the anchor
+    set. Best-effort: returns ([], [], []) when no LLM key is configured or the
+    call fails, so the run degrades to the token gates + the full site topics as
+    anchors (prior behaviour)."""
     have_key = bool(
         settings.anthropic_api_key or settings.openai_api_key or settings.gemini_api_key
     )
     if not have_key:
-        return [], []
+        return [], [], []
     context = keyword_research_seeds.build_seed_context(client)
     try:
         from services import report_llm
@@ -241,7 +273,7 @@ def fanout_intents(
         ) or {}
     except Exception as exc:  # noqa: BLE001 — best-effort
         logger.warning("keyword_research_topics.fanout_failed", extra={"error": str(exc)})
-        return [], []
+        return [], [], []
 
     intents = [str(x).strip() for x in (result.get("intents") or []) if str(x).strip()]
     raw_expansion = [str(x).strip() for x in (result.get("expansion_seeds") or []) if str(x).strip()]
@@ -249,7 +281,9 @@ def fanout_intents(
         raw_expansion, seeds, client.get("name"),
         cap=settings.keyword_research_intent_expansion_cap,
     )
-    return intents[: settings.keyword_research_intent_max], expansion
+    relevant_topics = select_relevant_site_topics(
+        [str(x) for x in (result.get("relevant_site_topics") or [])], site_topics)
+    return intents[: settings.keyword_research_intent_max], expansion, relevant_topics
 
 
 # ---------------------------------------------------------------------------
@@ -287,17 +321,32 @@ async def research_topics(
 
     intents: list[str] = []
     expansion: list[str] = []
+    anchor_topics: list[str] = []
     if settings.keyword_research_intent_fanout:
-        intents, expansion = fanout_intents(seeds, client, site_topics)
+        intents, expansion, anchor_topics = fanout_intents(seeds, client, site_topics)
 
     descriptor = keyword_research_seeds.build_seed_context(client) or None
     # The descriptor can be long; anchor on just its first line (name + type).
     descriptor_head = descriptor.splitlines()[0] if descriptor else None
-    anchors = build_anchors(seeds, intents, site_topics, descriptor_head)
+    # Anchor the relevance gate on the CURATED site topics when the fan-out actually
+    # returned a subset, rather than every discovered slug. Dumping raw blog/PR/award
+    # slugs into the anchor set let generic keywords score above the floor
+    # (FreightOptics: "supply chain awards"/"pros to know" anchored the whole
+    # management-software category). Fall back to the FULL site topics whenever the
+    # curated list is empty — no LLM key, the call failed, the model paraphrased so
+    # nothing matched verbatim, or it declined to populate the new field. That keeps
+    # this "never worse than prior behaviour": we only NARROW when the model gave us
+    # a concrete on-mission subset, never silently drop every site anchor because of
+    # a model that ignored one tool field.
+    anchor_site_topics = anchor_topics or site_topics
+    anchors = build_anchors(seeds, intents, anchor_site_topics, descriptor_head)
 
     return {
         "enabled": True,
-        "site": {"source": site_source, "topics": site_topics},
+        # `topics` = everything discovered (shown in the UI panel); `anchor_topics`
+        # = the on-mission subset actually used to anchor the relevance gate.
+        "site": {"source": site_source, "topics": site_topics,
+                 "anchor_topics": anchor_site_topics},
         "intents": intents,
         "expansion_seeds": expansion,
         "anchors": anchors,

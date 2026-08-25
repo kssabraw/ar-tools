@@ -54,6 +54,22 @@ def test_build_anchors_handles_empty_groups():
     assert top.build_anchors(["a"], [], [], None) == ["a"]
 
 
+def test_select_relevant_site_topics_keeps_verbatim_members_in_order():
+    site = ["parcel audit services", "supply chain awards", "carrier negotiation",
+            "pros to know"]
+    # The LLM returns the on-mission subset (one case-mismatched, one hallucinated).
+    returned = ["Parcel Audit Services", "carrier negotiation", "made up topic"]
+    kept = top.select_relevant_site_topics(returned, site)
+    assert kept == ["parcel audit services", "carrier negotiation"]  # verbatim, discovered order
+    assert "supply chain awards" not in kept   # off-mission slug excluded
+    assert "made up topic" not in kept         # hallucination rejected
+
+
+def test_select_relevant_site_topics_empty_inputs():
+    assert top.select_relevant_site_topics([], ["a"]) == []
+    assert top.select_relevant_site_topics(["a"], []) == []
+
+
 def test_domain_anchored_requires_shared_seed_token():
     from services import keyword_research as kr
     seed_tokens = set()

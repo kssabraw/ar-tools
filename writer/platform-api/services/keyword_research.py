@@ -241,6 +241,88 @@ def cluster_keywords(rows: list[dict]) -> list[dict]:
     return clusters
 
 
+_CLUSTER_DOMINANCE_MIN_FRACTION = 0.4   # a cluster this share of the run is "dominant"
+_CLUSTER_DOMINANCE_MIN_COUNT = 20       # ...but only warn on runs at least this big
+
+
+def detect_cluster_dominance(
+    clusters: list[dict],
+    total: int,
+    seeds: list[str],
+    *,
+    min_fraction: float = _CLUSTER_DOMINANCE_MIN_FRACTION,
+    min_count: int = _CLUSTER_DOMINANCE_MIN_COUNT,
+) -> Optional[dict]:
+    """A post-merge safety net for category drift the token gates missed: warn when
+    one cluster is an outsized share of the run under a head token that is NOT one
+    of the seed terms.
+
+    A cluster forming under a seed token is expected and healthy — "<service>
+    <city>" queries all cluster under the service — so those never warn (that
+    exclusion is what keeps this off legitimate runs). A cluster forming under a
+    NON-seed token is the signature of an expansion that wandered (the residue of a
+    brand/homonym or a category word no seed contains). Returns {label, count,
+    fraction} for the dominant off-seed cluster, or None. Pure — no I/O."""
+    if total < min_count or not clusters:
+        return None
+    seed_toks: set[str] = set()
+    for s in seeds or []:
+        seed_toks |= token_set(s)
+    top = max(clusters, key=lambda c: c.get("keyword_count", 0) or 0)
+    label = (top.get("label") or "").strip()
+    n = top.get("keyword_count", 0) or 0
+    frac = (n / total) if total else 0.0
+    if frac < min_fraction or not label or label == "other":
+        return None
+    # The cluster head IS a seed term (or its plural) → expected structure, not drift.
+    if _stem(label) in seed_toks:
+        return None
+    return {"label": label, "count": n, "fraction": round(frac, 2)}
+
+
+_DROPPED_SAMPLE_CAP = 60  # dropped keywords stored per run for the "filtered out" panel
+
+
+def build_filter_summary(
+    *,
+    raw_pool: int,
+    kept: int,
+    dropped_detail: list[dict],
+    final_keywords: list[str],
+    filter_warnings: list[str],
+    cap: int = _DROPPED_SAMPLE_CAP,
+) -> dict:
+    """Assemble the run's filter-transparency blob for the "what we filtered and
+    why" panel.
+
+    Reconciles the per-gate dropped lists: a keyword dropped by one gate but still
+    present in the final results (it arrived via another source too) is NOT reported
+    as dropped. Dedupes by normalized keyword keeping the first reason, tallies per
+    reason, and caps the stored sample. Returns {raw_pool, kept, dropped_total,
+    by_reason, dropped, warnings}. Pure — no I/O."""
+    final = {normalize_keyword(k) for k in final_keywords}
+    seen: set[str] = set()
+    reconciled: list[dict] = []
+    for d in dropped_detail:
+        nk = normalize_keyword(d.get("keyword"))
+        if not nk or nk in final or nk in seen:
+            continue
+        seen.add(nk)
+        reconciled.append({"keyword": d.get("keyword"), "reason": d.get("reason")})
+    by_reason: dict[str, int] = {}
+    for d in reconciled:
+        by_reason[d["reason"]] = by_reason.get(d["reason"], 0) + 1
+    return {
+        "raw_pool": raw_pool,
+        "kept": kept,
+        "dropped_total": len(reconciled),
+        "by_reason": [{"reason": r, "count": c} for r, c in
+                      sorted(by_reason.items(), key=lambda x: x[1], reverse=True)],
+        "dropped": reconciled[:cap],
+        "warnings": list(filter_warnings or []),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Relevance gate + brand guard (pure) — keep topic drift out of the results.
 #
@@ -299,9 +381,16 @@ def filter_relevant_ideas(
     if not enabled:
         return idea_rows, report
 
+    # Per-seed token sets (for the coherence keep-test) AND their union (for the
+    # anchor scan + the short-seed brand-homonym gate). The coherence gate keys off
+    # the PER-SEED sets, never the union — see the keep-test below.
+    seed_token_sets: list[set[str]] = []
     seed_toks: set[str] = set()
     for s in seeds or []:
-        seed_toks |= token_set(s)
+        st = token_set(s)
+        if st:
+            seed_token_sets.append(st)
+            seed_toks |= st
     if not seed_toks:
         return idea_rows, report
 
@@ -311,12 +400,12 @@ def filter_relevant_ideas(
     # Cache each idea's token set once (reused by anchor detection + the gates).
     idea_tokens = [token_set(r.get("keyword")) for r in idea_rows]
 
-    # Coherence gate → require ≥2 overlap with the FULL seed tokens so a lone
+    # Coherence gate → require ≥2 overlap with the tokens of ONE seed, so a lone
     # generic word ("law", "historic") can't drag in its whole category. Keyed on
-    # the full seed (NOT brand-subtracted): a brand token is often also a real
-    # topic word ("architect" for client "Henson Architect"), and subtracting it
-    # would silently shrink the seed out of the gate. It runs when EITHER:
-    #   * the seed has ≥3 tokens (specific by construction), OR
+    # the full per-seed tokens (NOT brand-subtracted): a brand token is often also a
+    # real topic word ("architect" for client "Henson Architect"), and subtracting
+    # it would silently shrink the seed out of the gate. It runs when EITHER:
+    #   * a single seed has ≥3 tokens (specific by construction), OR
     #   * a seed token is a drift anchor — present in ≥60% of the returned ideas
     #     (catches 2-word entity seeds like "historic preservation" whose single
     #     dominant token would otherwise pass unfiltered).
@@ -330,11 +419,23 @@ def filter_relevant_ideas(
             sum(1 for rt in idea_tokens if t in rt) >= _COHERENCE_ANCHOR_FRACTION * n
             for t in (seed_toks - brand)
         )
-    if len(seed_toks) >= _COHERENCE_MIN_SEED_TOKENS or (anchor and len(seed_toks) >= 2):
+    # Specificity is judged PER SEED, never on the pooled union: a multi-seed run of
+    # short clean service seeds ("emergency plumber" + "drain cleaning") has a
+    # 4-token union but no single specific seed, so it keeps its broadening.
+    specific = any(len(st) >= _COHERENCE_MIN_SEED_TOKENS for st in seed_token_sets)
+    if specific or (anchor and len(seed_toks) >= 2):
         kept: list[dict] = []
         off_topic = 0
         for r, rt in zip(idea_rows, idea_tokens):
-            if len(rt & seed_toks) >= _COHERENCE_MIN_OVERLAP:
+            # Require the ≥2 overlap to come from ONE seed, not the pooled union.
+            # Pooling let a 4-seed run admit "password management software" via
+            # "management" (from "Parcel Spend Management") + "software" (from "3pl
+            # audit software") — two tokens no single seed contains together, so the
+            # keyword is on NEITHER seed's topic. Per-seed overlap is the real
+            # "shares this seed's topic" signal (measured live: it removes the
+            # 183-keyword generic-SaaS flood from FreightOptics run bedc615e while
+            # keeping genuinely on-topic ideas like "3pl invoice audit").
+            if any(len(rt & st) >= _COHERENCE_MIN_OVERLAP for st in seed_token_sets):
                 kept.append(r)
             else:
                 off_topic += 1
@@ -823,6 +924,28 @@ async def run_keyword_research(
 
     cost = 0.0
 
+    # Filter transparency (surfaced in the run's "what we filtered and why" panel).
+    # `raw_candidate_keys` = every unique keyword the paid sources returned before
+    # any gate (the raw pool — a small pool means the seeds were too narrow, not the
+    # tool over-filtering). `dropped_detail` = each gated keyword + a plain-English
+    # reason, so a VA can SEE what was cut instead of guessing why the run is thin.
+    raw_candidate_keys: set[str] = set()
+    dropped_detail: list[dict] = []
+
+    def _note_candidates(rowlist: list[dict]) -> None:
+        for r in rowlist:
+            nk = normalize_keyword(r.get("keyword"))
+            if nk:
+                raw_candidate_keys.add(nk)
+
+    def _capture_dropped(before: list[dict], after: list[dict], reason: str) -> None:
+        after_keys = {normalize_keyword(r.get("keyword")) for r in after}
+        for r in before:
+            nk = normalize_keyword(r.get("keyword"))
+            if nk and nk not in after_keys:
+                dropped_detail.append(
+                    {"keyword": (r.get("keyword") or "").strip(), "reason": reason})
+
     # Per-keyword seed attribution: which of the run's seeds produced each keyword,
     # so a user can later remove ONE seed and take its keywords with it (see
     # remove_seed). A keyword can come from several seeds (the pipeline dedupes
@@ -980,6 +1103,10 @@ async def run_keyword_research(
                     "search_intent": m.get("search_intent"),
                 })
 
+    # Everything the paid sources returned, before any gate → the raw pool.
+    _note_candidates(trusted_rows)
+    _note_candidates(related_rows)
+
     # Two conservative gates clean the trusted related adjacency layer before it
     # merges. Both key off the seed token set, so compute it once.
     seed_toks: set[str] = set()
@@ -996,10 +1123,10 @@ async def run_keyword_research(
         min_count=settings.keyword_research_brand_flood_min,
     )
     if flood_tokens:
-        related_rows = [
-            r for r in related_rows
-            if not is_brand_flooded(r.get("keyword"), seed_toks, flood_tokens)
-        ]
+        _kept = [r for r in related_rows
+                 if not is_brand_flooded(r.get("keyword"), seed_toks, flood_tokens)]
+        _capture_dropped(related_rows, _kept, "Unrelated brand or namespace")
+        related_rows = _kept
 
     # (2) Generic filler-token drift gate: drop keywords whose only tie to a
     # multi-word entity seed is a bleached filler word ("party" from "third party
@@ -1010,10 +1137,10 @@ async def run_keyword_research(
         min_count=settings.keyword_research_generic_drift_min,
     )
     if drift_tokens:
-        related_rows = [
-            r for r in related_rows
-            if not is_generic_drift(r.get("keyword"), seed_toks, drift_tokens)
-        ]
+        _kept = [r for r in related_rows
+                 if not is_generic_drift(r.get("keyword"), seed_toks, drift_tokens)]
+        _capture_dropped(related_rows, _kept, "Only matched a generic word in your seed")
+        related_rows = _kept
     trusted_rows += related_rows
 
     # OPT-IN BROADENER — category-based ideas, passed through the relevance gate to
@@ -1027,10 +1154,13 @@ async def run_keyword_research(
             limit=settings.keyword_research_idea_limit,
         )
         cost += cost_ideas or 0.0
+        _note_candidates(idea_rows)
+        _ideas_raw = idea_rows
         idea_rows, filter_report = filter_relevant_ideas(
             idea_rows, seed_list, client_name,
             enabled=settings.keyword_research_relevance_filter,
         )
+        _capture_dropped(_ideas_raw, idea_rows, "Off your seed topic (category drift)")
 
     # Merge + dedupe (build_research_rows keeps the highest-volume instance per
     # normalized keyword, so a keyword in several sources collapses to one row).
@@ -1046,9 +1176,11 @@ async def run_keyword_research(
     if settings.keyword_research_semantic_relevance:
         from services import keyword_research_relevance
         anchors = topic_research.get("anchors") or list(seed_list)
+        _rel_before = rows
         rows, relevance_report = await keyword_research_relevance.score_relevance(
             rows, anchors, seed_list, settings.keyword_research_relevance_floor,
         )
+        _capture_dropped(_rel_before, rows, "Not topically relevant to the seeds or business")
     topic_research["relevance"] = relevance_report
 
     # Audience-fit filter: drop keywords targeting the WRONG audience for the
@@ -1057,7 +1189,9 @@ async def run_keyword_research(
     # but useless to a B2B TPA. Runs on the relevance survivors, before clustering.
     audience_report = {"gate": "off"}
     from services import keyword_research_audience
+    _aud_before = rows
     rows, audience_report = keyword_research_audience.filter_by_audience(rows, ctx, seed_list)
+    _capture_dropped(_aud_before, rows, "Wrong audience (job-seeker / off-audience)")
     topic_research["audience"] = audience_report
 
     # Navigational + competitor-brand filter: drop support/lookup keywords
@@ -1067,52 +1201,90 @@ async def run_keyword_research(
     # target. Runs after audience, before clustering.
     nav_report = {"gate": "off"}
     from services import keyword_research_navigational
+    _nav_before = rows
     rows, nav_report = keyword_research_navigational.filter_navigational(rows, client_id)
+    _capture_dropped(_nav_before, rows, "Navigational / competitor lookup (not a topic)")
     topic_research["navigational"] = nav_report
 
-    warnings = seed_warnings(
+    clusters = cluster_keywords(rows)
+    label_for = {kw: c["label"] for c in clusters for kw in c["keywords"]}
+
+    # Base advisories about the seeds themselves (recomputed on read in get_run).
+    seed_advisories = seed_warnings(
         seed_list, client_name, filter_report,
         ratio_threshold=settings.keyword_research_brand_seed_ratio,
         total_results=len(rows),
     )
+    # Filter advisories — what the gates removed, plus the drift + thin-pool safety
+    # nets. Kept SEPARATE from seed advisories and persisted in filter_summary so
+    # re-opening a run still shows "what we filtered and why" (seed advisories are
+    # recomputed; these are not derivable from the stored keyword rows alone).
+    filter_warnings: list[str] = []
     if flood_report.get("dropped"):
-        warnings.append(
+        filter_warnings.append(
             f"Filtered {flood_report['dropped']} related keyword(s) that looked "
             f"like an unrelated brand/namespace ({', '.join(flood_report['flood_tokens'])})."
         )
     if drift_report.get("dropped"):
         drift_words = ", ".join(f"“{t}”" for t in drift_report["drift_tokens"])
-        warnings.append(
+        filter_warnings.append(
             f"Filtered {drift_report['dropped']} related keyword(s) that only matched "
             f"a generic word in your seed ({drift_words}) rather than the actual topic."
         )
     if relevance_report.get("dropped"):
-        warnings.append(
+        filter_warnings.append(
             f"Filtered {relevance_report['dropped']} keyword(s) that weren't topically "
             "relevant to the seeds or the client's business."
         )
     _aud_dropped = (audience_report.get("dropped_job_seeker", 0)
                     + audience_report.get("dropped_off_audience", 0))
     if _aud_dropped:
-        warnings.append(
+        filter_warnings.append(
             f"Filtered {_aud_dropped} keyword(s) that target the wrong audience "
             "(job-seekers / careers / off-audience), not the client's buyer."
         )
     _nav_dropped = (nav_report.get("dropped_navigational", 0)
                     + nav_report.get("dropped_competitor", 0))
     if _nav_dropped:
-        warnings.append(
+        filter_warnings.append(
             f"Filtered {_nav_dropped} navigational / competitor-lookup keyword(s) "
             "(e.g. “<competitor> phone number”, logins) that aren't content topics."
         )
+    # (#3) Post-merge dominance safety net — an outsized cluster under a non-seed
+    # token is the signature of drift the token gates missed.
+    dominance = detect_cluster_dominance(clusters, len(rows), seed_list)
+    if dominance:
+        pct = int(round(dominance["fraction"] * 100))
+        filter_warnings.append(
+            f"{pct}% of results cluster under “{dominance['label']}”, which isn't one "
+            "of your seed terms — the expansion may have drifted. Review that group "
+            "or narrow your seeds."
+        )
+    # (#5) Thin raw pool — the seeds are too specific for the expansion sources to
+    # find much (distinct from over-filtering: this is measured on the RAW pool, so
+    # a big pool cut down by the gates never triggers it).
+    raw_pool = len(raw_candidate_keys)
+    if raw_pool and raw_pool < settings.keyword_research_thin_pool_min:
+        filter_warnings.append(
+            f"Your seeds returned only {raw_pool} raw keyword candidate(s) — they may "
+            "be too specific. Try a broader core term (drop a qualifier), add more "
+            "seeds, or use “Suggest topics” for ideas."
+        )
+
+    warnings = seed_advisories + filter_warnings
+    filter_summary = build_filter_summary(
+        raw_pool=raw_pool,
+        kept=len(rows),
+        dropped_detail=dropped_detail,
+        final_keywords=[r["keyword"] for r in rows],
+        filter_warnings=filter_warnings,
+    )
     if warnings:
         logger.info("keyword_research.seed_warnings",
                     extra={"client_id": client_id, "seeds": seed_list,
                            "filter": filter_report, "brand_flood": flood_report,
                            "generic_drift": drift_report, "relevance": relevance_report,
                            "warnings": warnings})
-    clusters = cluster_keywords(rows)
-    label_for = {kw: c["label"] for c in clusters for kw in c["keywords"]}
 
     run = (
         supabase.table("keyword_research_runs").insert({
@@ -1126,6 +1298,7 @@ async def run_keyword_research(
             "cost_usd": round(cost or 0.0, 4),
             "serp_intel": serp_intel or None,
             "topic_research": topic_research or None,
+            "filter_summary": filter_summary or None,
         }).execute()
     ).data[0]
 
@@ -1344,11 +1517,15 @@ def get_run(client_id: str, run_id: str) -> Optional[dict]:
     ).data or []
     clusters = _clusters_from_rows(kws)
     # Recompute the branded-seed advisory on read (deterministic from the stored
-    # seeds + the client's name), so re-opening a run still shows the guidance.
+    # seeds + the client's name), then append the persisted filter advisories (what
+    # the gates removed / drift / thin-pool) — those can't be re-derived from the
+    # surviving keyword rows, so they're stored on the run in filter_summary.
     warnings = seed_warnings(
         runs[0].get("seeds") or [], _client_context(client_id).get("name"),
         ratio_threshold=settings.keyword_research_brand_seed_ratio,
     )
+    fs = runs[0].get("filter_summary") or {}
+    warnings = warnings + [w for w in (fs.get("warnings") or []) if w not in warnings]
     return {"run": runs[0], "keywords": kws, "clusters": clusters, "warnings": warnings}
 
 
