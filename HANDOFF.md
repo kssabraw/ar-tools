@@ -1,6 +1,77 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-19 · **Second-Anthropic-account failover (concurrency headroom)** (latest)
+## ⏩ Update — 2026-08-25 · **LeadOff live-GBP market map from Scout/Tryout + placement plan (PR #719, MERGED + DEPLOYED)** (latest)
+
+The LeadOff market brief now shows a **map of the actual competitor Google
+Business Profiles** for a market, plus a plain-English **placement plan**
+("where should we plant a GBP"). Shipped in **PR #719**, squash-merged to `main`
+as `d075d8d`, auto-deployed to `PLATFORM` (deploy SUCCESS on `d075d8d`), frontend
+live via Netlify. **No feature flag — it's on.**
+
+### What it does
+- **Scout a market** (or run a **Tryout**) → the live competitor GBPs are plotted
+  over a Google static map (teal dots sized by review count, ranked ones
+  labelled), with the market centre, suggested placement zones, and an optional
+  pasted-GBP reference pin. A deterministic **placement plan** names the weakest
+  bearings + the best place to plant a GBP (near the nearest real town) + the
+  nearest-competitor distance.
+- **Where to see it:** LeadOff (sidebar Radar icon / `/leadoff`) → filter to a
+  market → click its row → the **"Proximity (where the field sits)"** card. The
+  map renders only **after** a scout/tryout (source `gbp_serp`); before that the
+  card shows the octant bars + a "Scout this market" nudge. Also on the **Tryouts**
+  tab: a per-result-row **Map** button.
+
+### The cheap-win insight
+Scout and Tryout **already fire a live Google Maps SERP** whose items carry each
+competitor's GBP **coordinates / place_id / rating / review count** — the parsers
+just kept name/domain/phone. So plotting the real GBPs needs **no new paid call**;
+scout still fires a single Maps SERP (its phones also feed the existing NAP
+footprint step).
+
+### Architecture / decisions worth knowing
+- **Grade safety.** Live pins live in a **new, separate** `public.leadoff_gbp_pins`
+  table — deliberately NOT in `competitor_locations`, whose Census pins feed
+  `proximity_opportunity` (a board grade input). So scouting improves a market's
+  **map** without shifting its **grade**. The grade path
+  (`leadoff_proximity.market_proximity_score`) still reads Census pins, unchanged.
+- **`market_proximity(prefer_live=True)`** prefers live GBP pins → attaches the map
+  layer only for the `gbp_serp` source. The **create-client handoff** calls it with
+  `prefer_live=False` so the campaign-goal placement text + the calibration-frozen
+  proximity stay aligned with the grade's Census read even on a scouted market.
+- **Persistence is insert-then-delete-stale** (`services/leadoff_gbp_pins.py`,
+  keyed on a per-batch `captured_at` stamp) so a failed insert never wipes a
+  market's prior pins; tryout writes all categories in one batched insert + delete.
+- **Rural fallback:** if every competitor sits beyond the 10-mi analysis radius
+  (octant read empty), the map still shows all captured GBPs, framed by a
+  `map_radius_miles`, instead of reading "unavailable".
+- Migration **`20260821140000_leadoff_gbp_pins.sql`** (table + index + RLS-on,
+  service-role-only like every sibling LeadOff table) — **applied live** to
+  `AR-Internal-Tools`.
+
+### Verified in production (2026-08-25)
+Ran one real scout on the deployed worker for **Little Rock, AR / chimney_sweep**
+(city_id `4119403`) — everything else cached, so ≈ one $0.004 Maps SERP. Result
+`gbp_pins: 2`, no error; the two real GBPs (JMI Masonry Chimney Inspection ★3.8;
+Clean Sweep Management ★5) persisted with coords/place_ids and the batch stamp,
+both inside the 10-mi radius → the read flips to `source=gbp_serp` and serves the
+map. (Those 2 rows are real scout output — left in place.)
+
+### Known limits / follow-ups (owner: "not perfect, a start")
+- Sparse categories (like the chimney_sweep test, 2 pins) correctly show a "thin
+  data" note and **no** placement plan — you need ≥5 in-radius pins for the plan.
+- **Re-generating the map on an already-fully-cached scout** isn't offerable yet
+  (the first scout always captures pins; a later refresh needs cache expiry). A
+  "refresh map" affordance is an easy follow-up.
+- Deliberately not built (owner chose reference-pin-only for v1): **click-to-drop**
+  a candidate pin anywhere, and **re-anchoring** the proximity math on a chosen
+  location.
+- The map image needs `VITE_GOOGLE_MAPS_API_KEY` in the Netlify build (same key
+  the geo-grid map uses). Absent it, the card shows a "needs a Maps key" note +
+  the octant bars (pins/logic still present).
+
+---
+
+## ⏩ Update — 2026-08-19 · **Second-Anthropic-account failover (concurrency headroom)**
 
 Concurrency limits (429s) on the shared Anthropic account can now fail over to a
 **second Anthropic account** — same Claude models, so output quality is
