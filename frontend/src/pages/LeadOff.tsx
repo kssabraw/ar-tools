@@ -1,7 +1,7 @@
 import { Fragment, useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Radar, Download, Search, X, Flame, Snowflake, AlertTriangle, Loader2, UserPlus, Binoculars, FlaskConical, Compass, Hammer, ArrowUp, ArrowDown, ChevronsUpDown, Sparkles, ChevronLeft, ChevronRight, MapPin, Link2 } from 'lucide-react'
+import { Radar, Download, Search, X, Flame, Snowflake, AlertTriangle, Loader2, UserPlus, Binoculars, FlaskConical, Compass, Hammer, ArrowUp, ArrowDown, ChevronsUpDown, Sparkles, ChevronLeft, ChevronRight, MapPin, Link2, RefreshCw } from 'lucide-react'
 import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
 import { MarketMap, type MarketMapGbp } from '../components/leadoff/MarketMap'
@@ -1067,7 +1067,7 @@ interface ProximityRead {
   // to include them while the octant read below still counts within radius_miles.
   map_radius_miles?: number
   pins?: { name: string | null; lat: number; lng: number; reviews: number
-    rank?: number | null; rating?: number | null; miles?: number }[]
+    rank?: number | null; rating?: number | null; miles?: number; place_id?: string | null }[]
 }
 
 interface GbpResolveResponse {
@@ -1089,6 +1089,12 @@ function ProximityCard({ cityId, categoryId }: { cityId: number; categoryId: str
           {px.reason === 'no_geocoded_competitors'
             ? (px.hint ?? 'No geocoded competitors for this market.')
             : 'Proximity read unavailable for this market.'}
+          {px.reason === 'no_geocoded_competitors' && (
+            <div style={{ marginTop: 6 }}>
+              <MapRefreshButton cityId={cityId} categoryId={categoryId}
+                label="Plot the live GBPs (~$0.004)" />
+            </div>
+          )}
         </div>
       )}
       {px?.available && <ProximityDetail px={px} cityId={cityId} categoryId={categoryId} />}
@@ -1145,6 +1151,7 @@ function ProximityDetail({ px, cityId, categoryId }: {
             placement={px.placement ?? []}
             gbp={gbp}
             radiusMiles={px.map_radius_miles ?? px.radius_miles ?? 10}
+            browseQuery={categoryId.replace(/_/g, ' ')}
           />
           {(px.map_radius_miles ?? 0) > (px.radius_miles ?? 0) && (
             <div style={{ fontSize: 11, color: '#b45309', marginTop: 6, lineHeight: 1.4 }}>
@@ -1196,12 +1203,20 @@ function ProximityDetail({ px, cityId, categoryId }: {
             )}
             {gbpError && <div style={{ color: '#dc2626', fontSize: 11, marginTop: 4 }}>{gbpError}</div>}
           </div>
+          <div style={{ marginTop: 8, display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+            <MapRefreshButton cityId={cityId} categoryId={categoryId} label="Refresh map (~$0.004)" />
+            <span style={{ fontSize: 11, color: '#94a3b8' }}>Re-pulls the live competitor GBPs (one Maps SERP).</span>
+          </div>
         </div>
       )}
       {!px.scouted && (
         <div style={{ fontSize: 12, color: '#0e7d6f', background: '#f0fdfa', border: '1px solid #99f6e4',
-          borderRadius: 8, padding: '7px 10px', marginBottom: 8 }}>
+          borderRadius: 8, padding: '8px 10px', marginBottom: 8, lineHeight: 1.5 }}>
           Scout this market (or run a Tryout) to plot the live competitor GBPs and get a placement plan.
+          <div style={{ marginTop: 6 }}>
+            <MapRefreshButton cityId={cityId} categoryId={categoryId}
+              label="Just plot the live GBPs (~$0.004)" />
+          </div>
         </div>
       )}
       {px.thin_data && (
@@ -1251,6 +1266,80 @@ function ProximityDetail({ px, cityId, categoryId }: {
         {live ? '.' : ' — pre-client forecast; the geo-grid verifies it post-client.'}
       </div>
     </>
+  )
+}
+
+// Re-pull just the market map's live competitor GBP pins (one Maps SERP,
+// ~$0.004) — decoupled from a full scout. Used two ways: "Refresh map" on a
+// market whose map is already showing (competitors move; a fully-cached scout
+// can't re-fire the SERP), and "Plot live GBPs" on a not-yet-scouted market as
+// the cheap alternative to a full ~$0.70 scout just to get the map.
+function MapRefreshButton({ cityId, categoryId, label, tone = 'teal' }: {
+  cityId: number; categoryId: string; label: string; tone?: 'teal' | 'muted'
+}) {
+  const qc = useQueryClient()
+  const [jobId, setJobId] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [empty, setEmpty] = useState(false)
+
+  useQuery<{ status: string; error: string | null; result?: { gbp_pins?: number } }>({
+    queryKey: ['leadoff-map-refresh-job', jobId],
+    queryFn: async () => {
+      const job = await api.get<{ status: string; error: string | null; result?: { gbp_pins?: number } }>(`/leadoff/jobs/${jobId}`)
+      if (job.status === 'complete' || job.status === 'failed') {
+        setJobId(null)
+        if (job.status === 'failed') setError(job.error ?? 'map_refresh_failed')
+        // A 0-pin pull leaves the prior map intact (backend skips the wipe); say so
+        // rather than silently doing nothing.
+        else if ((job.result?.gbp_pins ?? 0) === 0) setEmpty(true)
+        qc.invalidateQueries({ queryKey: ['leadoff-proximity', cityId, categoryId] })
+        qc.invalidateQueries({ queryKey: ['leadoff-brief'] })
+      }
+      return job
+    },
+    enabled: Boolean(jobId),
+    refetchInterval: jobId ? 4000 : false,
+  })
+
+  const start = async () => {
+    if (busy || jobId) return
+    setBusy(true); setError(null); setEmpty(false)
+    try {
+      const res = await api.post<{ job_id: string | null }>('/leadoff/map-refresh', {
+        city_id: cityId, category_id: categoryId,
+      })
+      if (res.job_id) setJobId(res.job_id)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'map_refresh_failed'
+      setError(msg === 'budget_exceeded'
+        ? 'Daily LeadOff budget reached — try tomorrow or raise the budget.' : msg)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (jobId) {
+    return (
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#0f766e' }}>
+        <Loader2 size={13} className="spin" /> Pulling live GBPs…
+      </div>
+    )
+  }
+  const color = tone === 'teal' ? '#0e7d6f' : '#64748b'
+  return (
+    <div>
+      <button type="button" onClick={start} disabled={busy}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: 0, background: 'none',
+          border: 'none', color, fontSize: 12, fontWeight: 600, cursor: busy ? 'default' : 'pointer' }}>
+        {busy ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
+        {label}
+      </button>
+      {empty && <div style={{ fontSize: 11, color: '#b45309', marginTop: 3 }}>
+        No live competitor GBPs found for this market right now — the map is unchanged.
+      </div>}
+      {error && <div style={{ fontSize: 11, color: '#b91c1c', marginTop: 3 }}>{error}</div>}
+    </div>
   )
 }
 

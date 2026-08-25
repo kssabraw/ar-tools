@@ -67,6 +67,7 @@ COST_TRYOUT = 1.00                # whole tryout run incl. footprint (planning)
 COST_RD_PER_DOMAIN = 0.005        # bulk_referring_domains, per miss
 COST_VELOCITY_PER_BIZ = 0.0023    # reviews task depth 30, per miss
 COST_TREND_TASK = 0.05            # one Google Ads keyword task (per-task billing)
+COST_MAP_REFRESH = 0.004          # one Maps SERP (13z) — just the market-map pins
 
 # DataForSEO task status codes (lesson #2)
 _CODE_OK = 20000
@@ -743,6 +744,74 @@ async def run_scout_job(job: dict) -> None:
             "city_id": city_id, "category_id": category_id, **summary})
     except Exception as exc:
         logger.error("leadoff_scout.failed", extra={"job_id": job_id, "error": str(exc)})
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": str(exc)[:500], "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+
+
+# ── Map refresh (light, ~$0.004) ──────────────────────────────────────────────
+# Re-pull ONLY the live competitor GBP pins for a market — the single Maps SERP a
+# full scout also fires (leadoff_brand.fetch_market_pins), decoupled from the
+# RD/velocity/trend/footprint enrichment. This exists so a fully-cached scout (or
+# a never-scouted market) can (re)generate its market map for the price of one
+# Maps call, instead of a full ~$0.70 scout or waiting 90 days for cache expiry.
+
+def market_display(city_id: int, category_id: str) -> dict[str, Any] | None:
+    """The board row (category display name + city name/state) for a market, or
+    None when the market isn't on the scanned board. Light single read — the
+    map refresh only needs the category name to key the Maps SERP."""
+    rows = (_ms("leadoff_board")
+            .select("city_id,category_id,category,city_name,state_code")
+            .eq("city_id", city_id).eq("category_id", category_id)
+            .limit(1).execute().data or [])
+    return rows[0] if rows else None
+
+
+def enqueue_map_refresh(user_id: str, city_id: int, category_id: str) -> dict[str, Any]:
+    job = get_supabase().table("async_jobs").insert({
+        "job_type": "leadoff_map_refresh",
+        "entity_id": str(uuid.uuid4()),
+        "payload": {"city_id": city_id, "category_id": category_id,
+                    "user_id": user_id, "est_cost": COST_MAP_REFRESH},
+    }).execute().data[0]
+    return {"job_id": job["id"]}
+
+
+async def run_map_refresh_job(job: dict) -> None:
+    supabase = get_supabase()
+    job_id = job["id"]
+    payload = job.get("payload") or {}
+    city_id = int(payload["city_id"])
+    category_id = str(payload["category_id"])
+    try:
+        market = market_display(city_id, category_id)
+        if market is None:
+            raise RuntimeError("market_not_found")
+        city = (_ms("cities").select("*")
+                .eq("city_id", city_id).limit(1).execute().data or [None])[0]
+        if not city:
+            raise RuntimeError("city_not_found")
+
+        from services.leadoff_brand import fetch_market_pins
+        from services.leadoff_gbp_pins import persist_gbp_pins
+        async with httpx.AsyncClient() as client:
+            gbp_pins = await fetch_market_pins(
+                client, market.get("category") or "", city)
+        # Only persist a NON-empty pull: persist_gbp_pins_batch's delete-stale
+        # step would wipe the market's prior pins if handed an empty batch, so a
+        # failed/empty SERP (fetch_market_pins returns [] on any error) must
+        # leave the existing map intact rather than blank it.
+        written = persist_gbp_pins("scout", city_id, category_id, gbp_pins) \
+            if gbp_pins else 0
+        supabase.table("async_jobs").update({
+            "status": "complete", "completed_at": "now()",
+            "result": {"gbp_pins": written},
+        }).eq("id", job_id).execute()
+        logger.info("leadoff_map_refresh.complete", extra={
+            "city_id": city_id, "category_id": category_id, "gbp_pins": written})
+    except Exception as exc:
+        logger.error("leadoff_map_refresh.failed",
+                     extra={"job_id": job_id, "error": str(exc)})
         supabase.table("async_jobs").update(
             {"status": "failed", "error": str(exc)[:500], "completed_at": "now()"}
         ).eq("id", job_id).execute()

@@ -1,6 +1,47 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-25 · **LeadOff live-GBP market map from Scout/Tryout + placement plan (PR #719, MERGED + DEPLOYED)** (latest)
+## ⏩ Update — 2026-08-25 · **LeadOff market-map "Refresh map" affordance (follow-up #3)** (latest)
+
+Follow-up to the live-GBP market map below. Closes the gap where a **fully-cached
+scout can't (re)generate its map**: `fetch_market_pins` (the ~$0.004 Maps SERP
+that captures GBP pins) only fired inside a full scout, and a fully-cached scout
+returns `{job_id: null}` and runs nothing — so every market scouted before the
+pins feature shipped (2026-08-21) showed octant bars but **no map**, with no way
+to get one short of 90-day cache expiry.
+
+**What it adds:** a lightweight **`leadoff_map_refresh`** async job that re-pulls
+ONLY the market's live competitor GBP pins (one Maps SERP, `COST_MAP_REFRESH` =
+$0.004), decoupled from the RD/velocity/trend/footprint enrichment. Surfaced as a
+**"Refresh map (~$0.004)"** link on a market whose map is already showing, and as
+**"Plot the live GBPs (~$0.004)"** on a not-yet-scouted market (the cheap
+alternative to a full ~$0.70 scout just to get the map) — including the
+`no_geocoded_competitors` empty state.
+
+**Files:** `services/leadoff_actions.py` (`COST_MAP_REFRESH`, `market_display`,
+`enqueue_map_refresh`, `run_map_refresh_job`), `services/job_worker.py` (dispatch),
+`routers/leadoff.py` (`POST /leadoff/map-refresh`, staff-gated + budget-checked +
+spend-recorded as `"map_refresh"`; job added to the `/leadoff/jobs/{id}`
+allowlist), `frontend/src/pages/LeadOff.tsx` (`MapRefreshButton`, wired into
+`ProximityCard`/`ProximityDetail`).
+
+**Safety:** an empty/failed SERP (`fetch_market_pins` returns `[]` on any error)
+**skips persist entirely** — `persist_gbp_pins_batch`'s delete-stale step would
+otherwise wipe the market's prior pins on an empty batch, so a bad pull leaves the
+existing map intact (unit-tested). Reuses the separate `leadoff_gbp_pins` table,
+so a refresh still never shifts the board grade (Census pins unchanged).
+
+**Migration `20260825140000_leadoff_map_refresh_job.sql`** (adds the job type to
+the `async_jobs` CHECK) — **applied live** to `AR-Internal-Tools`. Tests:
+`tests/test_leadoff_map_refresh.py` (persist-only-non-empty, empty-preserves,
+unknown-market-fails); 115 leadoff tests green + frontend build clean.
+
+**Still open (deliberately deferred, owner "v1 is a start"):** click-to-drop a
+candidate pin (#1) + re-anchoring the octant math on a chosen point (#2), and the
+sparse-category (<5 pin) read polish (#4).
+
+---
+
+## ⏩ Update — 2026-08-25 · **LeadOff live-GBP market map from Scout/Tryout + placement plan (PR #719, MERGED + DEPLOYED)**
 
 The LeadOff market brief now shows a **map of the actual competitor Google
 Business Profiles** for a market, plus a plain-English **placement plan**
