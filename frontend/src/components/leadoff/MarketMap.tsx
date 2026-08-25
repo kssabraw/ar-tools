@@ -29,6 +29,17 @@ export interface MarketMapPlacement {
   lng: number
   locality?: string | null
 }
+// A ranked GBP Placement Advisor zone (demand-aware). When zones are present
+// they REPLACE the octant placement diamonds — the advisor has run, so the
+// numbered, demand-scored zones are the answer (placement plan §5.1).
+export interface MarketMapZone {
+  rank: number
+  score: number
+  lat: number
+  lng: number
+  locality?: string | null
+  is_top?: boolean
+}
 export interface MarketMapGbp {
   name: string | null
   lat: number
@@ -54,10 +65,13 @@ function gbpUrl(p: MarketMapPin): string {
   return `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`
 }
 
-export function MarketMap({ center, pins, placement = [], gbp = null, radiusMiles, browseQuery }: {
+export function MarketMap({ center, pins, placement = [], zones = [], gbp = null, radiusMiles, browseQuery }: {
   center: { lat: number; lng: number }
   pins: MarketMapPin[]
   placement?: MarketMapPlacement[]
+  // Ranked demand-aware placement zones. When non-empty they replace the octant
+  // placement diamonds (the advisor has run).
+  zones?: MarketMapZone[]
   gbp?: MarketMapGbp | null
   radiusMiles: number
   // The market's category (e.g. "chimney sweep"). When set, a clearly-separate
@@ -171,8 +185,9 @@ export function MarketMap({ center, pins, placement = [], gbp = null, radiusMile
         })}
 
         {/* Suggested GBP placement zones — amber diamonds along weak bearings.
-            Decorative: pointer-events off so a click falls through to the map. */}
-        {placement.map((p, i) => {
+            Decorative: pointer-events off so a click falls through to the map.
+            Hidden once the demand-aware advisor has run (zones replace them). */}
+        {zones.length === 0 && placement.map((p, i) => {
           const pos = project(p.lat, p.lng)
           if (!pos.inView) return null
           return (
@@ -182,6 +197,24 @@ export function MarketMap({ center, pins, placement = [], gbp = null, radiusMile
                 background: '#f59e0b', color: '#fff', fontSize: 9, fontWeight: 700, zIndex: 2,
                 borderRadius: 3, transform: 'translate(-50%, -50%) rotate(45deg)', pointerEvents: 'none' }}>
               <span style={{ transform: 'rotate(-45deg)' }}>{p.octant[0]}</span>
+            </div>
+          )
+        })}
+
+        {/* Demand-aware placement zones — numbered, top zone highlighted. The
+            answer to "where should the GBP live" (placement plan §5.1). */}
+        {zones.map((z, i) => {
+          const pos = project(z.lat, z.lng)
+          if (!pos.inView) return null
+          return (
+            <div key={`zone-${i}`}
+              title={`Zone ${z.rank}: scores ${z.score}/100${z.locality ? ` — near ${z.locality}` : ''}`}
+              style={{ ...pinBase, left: pos.left, top: pos.top, width: 22, height: 22,
+                background: z.is_top ? '#7c3aed' : '#a78bfa', color: '#fff',
+                fontSize: 11, fontWeight: 800, zIndex: z.is_top ? 8 : 7,
+                border: '2px solid #fff', pointerEvents: 'none',
+                boxShadow: '0 1px 5px rgba(15,23,42,.4)' }}>
+              {z.rank}
             </div>
           )
         })}
@@ -208,7 +241,8 @@ export function MarketMap({ center, pins, placement = [], gbp = null, radiusMile
       <div style={legend}>
         <LegendDot color="#0e7d6f" label="Competitor (size = reviews)" />
         <LegendDot color="#475569" label="Market centre" ring />
-        {placement.length > 0 && <LegendDot color="#f59e0b" label="Suggested zone" diamond />}
+        {zones.length > 0 && <LegendDot color="#7c3aed" label="Placement zone (ranked)" />}
+        {zones.length === 0 && placement.length > 0 && <LegendDot color="#f59e0b" label="Suggested zone" diamond />}
         {gbp && <LegendDot color="#4f46e5" label={gbp.name ? `GBP: ${gbp.name}` : 'Your GBP'} />}
       </div>
 

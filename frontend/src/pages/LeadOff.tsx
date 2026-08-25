@@ -1075,6 +1075,34 @@ interface GbpResolveResponse {
   gbp: { business_name: string | null; latitude: number | null; longitude: number | null } | null
 }
 
+// The demand-aware GBP Placement Advisor read (placement plan §3/§5): ranked
+// neighborhood-sized zones where reachable Census demand is high and competitive
+// pressure is low. Advice/display only — never a grade input.
+interface PlacementZone {
+  rank: number
+  is_top?: boolean
+  score: number
+  lat: number
+  lng: number
+  locality?: string | null
+  households_reachable?: number
+  nearest_competitor_miles?: number | null
+  pressure_norm?: number
+  narrative?: string
+  maps_url?: string
+}
+interface PlacementRead {
+  available: boolean
+  reason?: string
+  hint?: string
+  job_id?: string | null
+  thin_field?: boolean
+  block_groups?: number
+  catchment_miles?: number
+  zones?: PlacementZone[]
+  note?: string
+}
+
 function ProximityCard({ cityId, categoryId }: { cityId: number; categoryId: string }) {
   const { data: px, isLoading } = useQuery<ProximityRead>({
     queryKey: ['leadoff-proximity', cityId, categoryId],
@@ -1110,6 +1138,19 @@ function ProximityDetail({ px, cityId, categoryId }: {
   px: ProximityRead; cityId: number; categoryId: string
 }) {
   const live = px.source === 'gbp_serp' && !!px.center && (px.pins?.length ?? 0) > 0
+
+  // The demand-aware placement zones (plan §3/§5). Only meaningful once live GBP
+  // pins exist; polls itself while the Census demand surface is being built.
+  const { data: placement, isLoading: placementLoading } = useQuery<PlacementRead>({
+    queryKey: ['leadoff-placement', cityId, categoryId],
+    queryFn: () => api.get(`/leadoff/placement?city_id=${cityId}&category_id=${encodeURIComponent(categoryId)}`),
+    enabled: live,
+    refetchInterval: q => {
+      const d = q.state.data as PlacementRead | undefined
+      return d && !d.available && d.reason === 'census_not_cached' ? 5000 : false
+    },
+  })
+  const zones = placement?.available && !placement.thin_field ? (placement.zones ?? []) : []
 
   // GBP reference pin: paste a Maps link / share link / place ID → drop the
   // business on the map. Reference only — does not re-anchor the proximity math.
@@ -1149,6 +1190,8 @@ function ProximityDetail({ px, cityId, categoryId }: {
             center={px.center!}
             pins={px.pins ?? []}
             placement={px.placement ?? []}
+            zones={zones.map(z => ({ rank: z.rank, score: z.score, lat: z.lat, lng: z.lng,
+              locality: z.locality, is_top: z.is_top }))}
             gbp={gbp}
             radiusMiles={px.map_radius_miles ?? px.radius_miles ?? 10}
             browseQuery={categoryId.replace(/_/g, ' ')}
@@ -1162,9 +1205,11 @@ function ProximityDetail({ px, cityId, categoryId }: {
           {px.recommendation && (
             <div style={{ marginTop: 8, fontSize: 12.5, color: '#0f172a', background: '#ecfdf5',
               border: '1px solid #a7f3d0', borderRadius: 8, padding: '8px 10px', lineHeight: 1.45 }}>
-              <strong style={{ color: '#047857' }}>Placement plan: </strong>{px.recommendation}
+              <strong style={{ color: '#047857' }}>Where competitors aren't: </strong>{px.recommendation}
             </div>
           )}
+          <PlacementZones data={placement} loading={placementLoading}
+            cityId={cityId} categoryId={categoryId} />
           <div style={{ marginTop: 8 }}>
             {gbp ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#475569' }}>
@@ -1269,6 +1314,104 @@ function ProximityDetail({ px, cityId, categoryId }: {
   )
 }
 
+// The demand-aware placement answer (plan §5): ranked neighborhood-sized zones
+// where reachable Census demand is high and competitive pressure is low. Shown
+// below the live map (its numbered pins mirror these cards). Degrades explicitly:
+// while the Census demand surface is being built the card shows a poll spinner;
+// too-few-block-groups / thin-field states say why there's no ranking.
+function PlacementZones({ data, loading, cityId, categoryId }: {
+  data?: PlacementRead; loading: boolean; cityId: number; categoryId: string
+}) {
+  if (loading && !data) {
+    return (
+      <div style={{ marginTop: 10, fontSize: 12, color: '#94a3b8' }}>
+        <Loader2 size={12} className="spin" style={{ verticalAlign: -2, marginRight: 5 }} />
+        Scoring placement zones…
+      </div>
+    )
+  }
+  if (!data) return null
+
+  if (!data.available) {
+    if (data.reason === 'census_not_cached') {
+      return (
+        <div style={{ marginTop: 10, fontSize: 12, color: '#7c3aed', background: '#f5f3ff',
+          border: '1px solid #ddd6fe', borderRadius: 8, padding: '8px 10px', lineHeight: 1.5 }}>
+          <Loader2 size={12} className="spin" style={{ verticalAlign: -2, marginRight: 5 }} />
+          Building the demand surface from Census data for this market — this runs
+          once (free) and takes a moment. The ranked placement zones will appear here.
+        </div>
+      )
+    }
+    if (data.reason === 'too_few_blockgroups') {
+      return (
+        <div style={{ marginTop: 10, fontSize: 12, color: '#64748b', lineHeight: 1.5 }}>
+          {data.hint ?? 'Too few Census block groups here for a meaningful sub-city placement question.'}
+        </div>
+      )
+    }
+    if (data.reason === 'no_gbp_pins') {
+      return (
+        <div style={{ marginTop: 10, fontSize: 12, color: '#64748b' }}>
+          <div style={{ marginBottom: 6 }}>{data.hint ?? 'Plot the live competitor GBPs first.'}</div>
+          <MapRefreshButton cityId={cityId} categoryId={categoryId} label="Plot the live GBPs (~$0.004)" />
+        </div>
+      )
+    }
+    return null   // placement_disabled / placement_error — stay quiet (octant read still shows)
+  }
+
+  if (data.thin_field) {
+    return (
+      <div style={{ marginTop: 10, fontSize: 12, color: '#b45309', lineHeight: 1.5 }}>
+        {data.note ?? 'Field too thin to rank placement zones against.'}
+      </div>
+    )
+  }
+
+  const zones = data.zones ?? []
+  if (zones.length === 0) return null
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: '#5b21b6', marginBottom: 6 }}>
+        Best areas to plant a GBP (demand-aware)
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+        {zones.map(z => (
+          <div key={z.rank} style={{ display: 'flex', gap: 9, alignItems: 'flex-start',
+            background: z.is_top ? '#f5f3ff' : '#fafafa', border: '1px solid #ede9fe',
+            borderRadius: 8, padding: '8px 10px' }}>
+            <div style={{ flexShrink: 0, width: 24, height: 24, borderRadius: '50%',
+              background: z.is_top ? '#7c3aed' : '#a78bfa', color: '#fff', fontWeight: 800,
+              fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {z.rank}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>
+                  {z.locality ? `Near ${z.locality}` : `Zone ${z.rank}`}
+                </span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#5b21b6' }}>{z.score}/100</span>
+                {z.maps_url && (
+                  <a href={z.maps_url} target="_blank" rel="noreferrer"
+                    style={{ fontSize: 11.5, color: '#7c3aed', fontWeight: 600 }}>open in Maps ↗</a>
+                )}
+              </div>
+              <div style={{ fontSize: 12, color: '#475569', marginTop: 2, lineHeight: 1.45 }}>
+                {z.narrative}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      {data.note && (
+        <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6, lineHeight: 1.4 }}>{data.note}</div>
+      )}
+    </div>
+  )
+}
+
 // Re-pull just the market map's live competitor GBP pins (one Maps SERP,
 // ~$0.004) — decoupled from a full scout. Used two ways: "Refresh map" on a
 // market whose map is already showing (competitors move; a fully-cached scout
@@ -1294,6 +1437,7 @@ function MapRefreshButton({ cityId, categoryId, label, tone = 'teal' }: {
         // rather than silently doing nothing.
         else if ((job.result?.gbp_pins ?? 0) === 0) setEmpty(true)
         qc.invalidateQueries({ queryKey: ['leadoff-proximity', cityId, categoryId] })
+        qc.invalidateQueries({ queryKey: ['leadoff-placement', cityId, categoryId] })
         qc.invalidateQueries({ queryKey: ['leadoff-brief'] })
       }
       return job

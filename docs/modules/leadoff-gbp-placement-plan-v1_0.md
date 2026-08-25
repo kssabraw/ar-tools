@@ -222,6 +222,57 @@ then, no dollars in the UI.
 - **Later (out of this plan's scope):** client-workspace version fed by
   geo-grid + client GBP; dollar layer post-calibration.
 
+## 9a. Phase 0a findings + Phase 1 build status (2026-08-25)
+
+**Phase 0a (Census probe) — GO, validated via the worker path.** The session
+sandbox egress proxy blocks census.gov (`api.census.gov:443` → `403 CONNECT
+policy denial`), so the ACS/TIGERweb probe could not run from the sandbox
+(anticipated). It didn't need to: the deployed worker's reachability of
+census.gov is already proven by three live integrations —
+`leadoff_income` (api.census.gov ACS5), `leadoff_geocode`
+(geocoding.geo.census.gov batch), `leadoff_counties`
+(geocoding.geo.census.gov geographies/coordinates) — and every ACS mechanic
+(browser-UA + JSON Accept past Akamai, optional `CENSUS_API_KEY`,
+retry/backoff, `leadoff_income_acs_year`=2023) is reused from those precedents.
+The **one unproven host is TIGERweb** (`tigerweb.geo.census.gov`, block-group
+centroids — the ACS API returns no geometry). The `leadoff_placement` job
+resolves the block-group layer id from the service metadata (robust to vintage
+drift) and **reports centroid coverage + a 5-row sample on every run**, so the
+first live run against Little Rock (city_id 4119403) confirms it; if TIGERweb
+is unreachable, `merge_demand_rows` yields 0 rows and the advisor degrades to
+`available:false` with an explicit note (no crash). Phase 0b (paid ZIP probe)
+NOT run — it only gates Phase 3.
+
+**Phase 1 — BUILT (behind `leadoff_placement_enabled`, default True; not yet
+live-verified).**
+- Pure core `services/leadoff_placement.py` (`build_demand_surface`/`score_grid`/
+  `score_point`/`select_zones`/`build_zones`/narrative) — zero impure imports,
+  reuses `leadoff_proximity.haversine_miles` + the `maps_grid` 1-mile lattice.
+  Unit-tested `tests/test_leadoff_placement.py` (21 cases: weight-0 households
+  parity, gravity decay, market-relative min-max, 2-mi zone spacing, point
+  percentile, empty/flat edges).
+- `services/census_demand.py` — ACS block-group + TIGERweb centroid fetch,
+  county discovery via edge-point `geographies/coordinates`, cache upsert, the
+  `leadoff_placement` async job, and the impure market read (`market_placement`/
+  `score_market_point`) tying pins + cache + pure core + reverse-geocode naming.
+  Pure helpers unit-tested `tests/test_census_demand.py` (11 cases).
+- Cache table `census_block_demand` (migration `20260825150000`, applied live)
+  + `async_jobs` CHECK recreated with `leadoff_placement` (`20260825160000`,
+  applied live).
+- `GET /leadoff/placement` + `POST /leadoff/placement/score-point` (the §5.2
+  "Both" backend half) on `routers/leadoff.py`; job dispatch in `job_worker`.
+- Frontend: ranked zones as a numbered pin class on `MarketMap` (replacing the
+  octant diamonds once the advisor has run) + a "Best areas to plant a GBP"
+  card list in `ProximityDetail`, with every degraded state (`no_gbp_pins` →
+  map-refresh nudge; `census_not_cached` → poll spinner; `too_few_blockgroups`;
+  `thin_field`). Config knobs per §10.
+- **Grade safety honored:** placement reads only `leadoff_gbp_pins` +
+  `census_block_demand` and writes only its own cache — never the board grade,
+  `competitor_locations`, or `proximity_opportunity`.
+- **Not yet built:** Phase 2 frontend (click-to-drop / paste-address compare UI,
+  octant re-anchor — the backend `score-point` endpoint exists); Phase 3 paid
+  ZIP layer; the calibration freeze (§8).
+
 ## 10. Config (planned knobs, `config.py`)
 
 `leadoff_placement_enabled`, `placement_demand_decay_miles` (D_DEMAND, ~5),
