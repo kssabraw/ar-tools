@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, CalendarPlus, ChevronDown, Download, FileText, Filter, HelpCircle, Lightbulb, MessageCircleQuestion, Plus, RefreshCw, Search, Sparkles, Trash2, Trophy } from 'lucide-react'
+import { ArrowLeft, CalendarPlus, ChevronDown, Compass, Download, FileText, Filter, HelpCircle, Lightbulb, MessageCircleQuestion, Plus, RefreshCw, Search, Sparkles, Trash2, Trophy } from 'lucide-react'
 import { api } from '../lib/api'
 import { useResumableJob } from '../lib/useResumableJob'
 import type { Client } from '../lib/types'
@@ -124,6 +124,13 @@ interface ReportRow {
 }
 const num = (n: number | null | undefined, digits = 0) =>
   n === null || n === undefined ? '—' : n.toLocaleString(undefined, { maximumFractionDigits: digits })
+
+// A run with fewer than this many keywords reads as "not much to choose from" and
+// gets the dedicated thin-result callout. A raw candidate pool below RAW_POOL_NARROW
+// means the SEEDS were too narrow (vs. the sources returning plenty that the gates
+// then filtered) — this mirrors the backend's keyword_research_thin_pool_min.
+const THIN_RESULT_MAX = 20
+const RAW_POOL_NARROW = 25
 
 // The seed keyword for a Blog Writer run from a topic card: its highest-volume
 // supporting keyword (the term the brief/outline is built on), falling back to
@@ -349,6 +356,32 @@ export function KeywordResearch() {
     if (onlyQuestions) ks = ks.filter((k) => k.is_question)
     return ks
   }, [keywords, activeCluster, onlyQuestions])
+
+  // --- Thin-result detection (few keywords to choose from) ---
+  // A run is "thin" when it produced fewer than THIN_RESULT_MAX keywords. Two
+  // causes get different copy: NARROW seeds (the sources found little — raw_pool is
+  // small) vs HEAVILY FILTERED (sources found plenty, the gates cut most as
+  // off-topic/wrong-audience). raw_pool/kept come from filter_summary (absent on
+  // pre-feature runs → treated as generic thin).
+  const isThinRun = Boolean(runData?.run) && !running && keywords.length < THIN_RESULT_MAX
+  const rawPool = filterSummary?.raw_pool ?? null
+  const thinKind: 'narrow' | 'filtered' | 'generic' =
+    rawPool === null ? 'generic'
+    : rawPool < RAW_POOL_NARROW ? 'narrow'
+    : 'filtered'
+
+  // Auto-fetch broader seed suggestions ONCE per thin run so the callout can show
+  // them inline (item 2). Guarded by a ref keyed on the run id so it fires at most
+  // once per run and never loops on an error. suggest.mutate() is a side-effect
+  // call (not a setState), so it doesn't trip the set-state-in-effect rule.
+  const autoSuggestRunRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (isThinRun && runId && suggested === null && !suggest.isPending
+        && autoSuggestRunRef.current !== runId) {
+      autoSuggestRunRef.current = runId
+      suggest.mutate()
+    }
+  }, [isThinRun, runId, suggested, suggest])
 
   // --- Selection + "Send to Content Scheduler" ---
   const allShownSelected = filtered.length > 0 && filtered.every((k) => selected.has(k.keyword))
@@ -655,6 +688,73 @@ export function KeywordResearch() {
         <div style={emptyBox}>{running ? 'Research in progress…' : 'No run found.'}</div>
       ) : (
         <>
+          {/* Thin-result callout (items 1-3) — prominent, above the advisories.
+              Names the situation (narrow seeds vs heavily filtered), auto-shows
+              broader seed suggestions inline, and points at Topic Research as the
+              better tool when keyword expansion comes back thin. */}
+          {isThinRun && (
+            <div style={thinCallout}>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                <Compass size={18} style={{ flexShrink: 0, marginTop: 1, color: '#0369a1' }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: '#0c4a6e', marginBottom: 4 }}>
+                    Not many keywords to choose from{keywords.length > 0 ? ` — ${num(keywords.length)}` : ''}
+                  </div>
+                  <div style={{ fontSize: 13, color: '#0c4a6e', lineHeight: 1.5, marginBottom: 10 }}>
+                    {thinKind === 'narrow' && (
+                      <>The keyword sources only found {num(rawPool)} candidate{rawPool === 1 ? '' : 's'} for these
+                      seeds — they're quite specific. A broader core term (drop a qualifier like a brand,
+                      model, or "software/company/platform") usually returns more to work with.</>
+                    )}
+                    {thinKind === 'filtered' && (
+                      <>We found {num(rawPool)} candidates but only {num(keywords.length)} matched this client's
+                      topic and audience. Open <strong>"What we filtered &amp; why"</strong> below to see what was
+                      cut — if too much of it looks on-topic, broaden or add seeds.</>
+                    )}
+                    {thinKind === 'generic' && (
+                      <>This run returned only {num(keywords.length)} keyword{keywords.length === 1 ? '' : 's'}.
+                      Try a broader core term, or add more seeds.</>
+                    )}
+                  </div>
+
+                  {/* Item 2 — broader seed suggestions, auto-fetched, click to add */}
+                  {suggest.isPending ? (
+                    <div style={{ fontSize: 12, color: '#0369a1', marginBottom: 10 }}>Finding broader topics…</div>
+                  ) : (suggested && suggested.length > 0) ? (
+                    <div style={{ marginBottom: 10 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: '#075985', marginBottom: 6 }}>
+                        Broader topics to try — click to add a seed:
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {suggested.map((s) => (
+                          <button key={s} style={suggestChip} onClick={() => addSeed(s)} title="Add to seeds">
+                            <Plus size={12} /> {s}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* Item 3 — Topic Research is the better tool for a narrow seed */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <button
+                      style={{ ...primaryBtn, background: '#7c3aed', height: 32, padding: '6px 12px' }}
+                      onClick={runTopics}
+                      disabled={topicRunning}
+                      title="Research the client's buyer problems and site themes instead of seed variations"
+                    >
+                      <Sparkles size={14} /> {topicRunning ? 'Researching…' : 'Research topics instead'}
+                    </button>
+                    <span style={{ fontSize: 11.5, color: '#0369a1' }}>
+                      Topic Research works from the client's problems &amp; site themes — better than seed
+                      variations when a seed is narrow.
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Relevance / brand-seed advisories */}
           {(runData?.warnings?.length ?? 0) > 0 && (
             <div style={warnBox}>
@@ -663,17 +763,6 @@ export function KeywordResearch() {
                 {runData!.warnings!.map((w, i) => (
                   <div key={i} style={{ marginBottom: i < runData!.warnings!.length - 1 ? 4 : 0 }}>{w}</div>
                 ))}
-                {/* Thin raw pool → the guidance names "Suggest topics"; put the
-                    button right here so it's one click, not a scroll back up. */}
-                {(filterSummary?.raw_pool ?? 99) < 25 && (
-                  <button
-                    style={{ ...ghostBtn, marginTop: 8, height: 28, padding: '3px 10px', fontSize: 12 }}
-                    onClick={() => suggest.mutate()}
-                    disabled={suggest.isPending}
-                  >
-                    <Lightbulb size={13} /> {suggest.isPending ? 'Thinking…' : 'Suggest broader topics'}
-                  </button>
-                )}
               </div>
             </div>
           )}
@@ -1078,6 +1167,7 @@ const seedChip: React.CSSProperties = { display: 'inline-flex', alignItems: 'cen
 const seedRemoveBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, marginLeft: 2, padding: 0, background: 'transparent', color: '#6366f1', border: 'none', borderRadius: 999, fontSize: 14, lineHeight: 1, cursor: 'pointer' }
 const intelCard: React.CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 10, padding: '12px 14px', background: '#fff' }
 const filterCard: React.CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 10, padding: '12px 14px', background: '#f8fafc', marginBottom: 16 }
+const thinCallout: React.CSSProperties = { border: '1px solid #bae6fd', borderRadius: 12, padding: '14px 16px', background: '#f0f9ff', marginBottom: 16 }
 const reasonChip: React.CSSProperties = { padding: '3px 9px', background: '#fff', color: '#475569', border: '1px solid #e2e8f0', borderRadius: 999, fontSize: 12 }
 const intelHead: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: '#334155', marginBottom: 4 }
 const clusterChipActive: React.CSSProperties = { background: '#eff6ff', color: '#1d4ed8', borderColor: '#93c5fd', fontWeight: 600 }
