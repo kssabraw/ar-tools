@@ -338,8 +338,10 @@ export function KeywordResearch() {
   const serpIntel = runData?.run?.serp_intel ?? null
   const topicResearch = runData?.run?.topic_research ?? null
   const filterSummary = runData?.run?.filter_summary ?? null
+  // Expand state for the filtered-out list. Not reset on run change — the panel is
+  // hidden when a run has nothing filtered, so a persisted "expanded" is harmless
+  // and avoids a set-state-in-effect (matching how the results panels behave).
   const [showFiltered, setShowFiltered] = useState(false)
-  useEffect(() => { setShowFiltered(false) }, [runId])
 
   const filtered = useMemo(() => {
     let ks = keywords

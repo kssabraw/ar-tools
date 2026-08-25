@@ -322,21 +322,23 @@ async def research_topics(
     intents: list[str] = []
     expansion: list[str] = []
     anchor_topics: list[str] = []
-    fanout_ran = False
     if settings.keyword_research_intent_fanout:
         intents, expansion, anchor_topics = fanout_intents(seeds, client, site_topics)
-        fanout_ran = bool(intents or expansion or anchor_topics)
 
     descriptor = keyword_research_seeds.build_seed_context(client) or None
     # The descriptor can be long; anchor on just its first line (name + type).
     descriptor_head = descriptor.splitlines()[0] if descriptor else None
-    # Anchor the relevance gate on the CURATED site topics when the fan-out ran
-    # (the on-mission subset it selected) rather than every discovered slug. Dumping
-    # raw blog/PR/award slugs into the anchor set let generic keywords score above
-    # the floor (FreightOptics: "supply chain awards"/"pros to know" anchored the
-    # whole management-software category). When the fan-out didn't run (no key /
-    # failure), fall back to the full site topics — prior behaviour, never worse.
-    anchor_site_topics = anchor_topics if fanout_ran else site_topics
+    # Anchor the relevance gate on the CURATED site topics when the fan-out actually
+    # returned a subset, rather than every discovered slug. Dumping raw blog/PR/award
+    # slugs into the anchor set let generic keywords score above the floor
+    # (FreightOptics: "supply chain awards"/"pros to know" anchored the whole
+    # management-software category). Fall back to the FULL site topics whenever the
+    # curated list is empty — no LLM key, the call failed, the model paraphrased so
+    # nothing matched verbatim, or it declined to populate the new field. That keeps
+    # this "never worse than prior behaviour": we only NARROW when the model gave us
+    # a concrete on-mission subset, never silently drop every site anchor because of
+    # a model that ignored one tool field.
+    anchor_site_topics = anchor_topics or site_topics
     anchors = build_anchors(seeds, intents, anchor_site_topics, descriptor_head)
 
     return {
