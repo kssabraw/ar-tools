@@ -302,6 +302,14 @@ exposed, fixed in the follow-up:
   row when centroids still come back empty, so a remaining failure is
   debuggable without hitting the endpoint by hand.
 
+**Second verification round (2026-08-25).** After the #728 fixes, the TIGERweb
+centroid query *still* returned 0 features — the `tigerweb_diag` revealed the
+true cause: `_resolve_bg_layer` matched the first layer named "…block group",
+but `tigerWMS_Current` lists **"Tribal Block Groups" (id 6) before "Census Block
+Groups" (id 10)**, so every query hit the tribal layer (empty for normal county
+GEOIDs). Fixed by matching **"Census Block Groups"** specifically (excluding
+`tribal` + label layers), extracted as the pure, unit-tested `pick_bg_layer`.
+
 - **Not yet built:** Phase 3 paid ZIP layer; the calibration freeze (§8).
 
 ## 10. Config (planned knobs, `config.py`)
