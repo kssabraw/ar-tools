@@ -430,6 +430,7 @@ async def run_tryout_job(job: dict) -> None:
             return
         cats = _categories()
         names = [c["category_name"] for c in cats]
+        name_to_id = {c["category_name"]: c["category_id"] for c in cats}
         capture = float(payload.get("capture") or 0.10)
         lead_tier = payload.get("lead_tier") or "mid"
 
@@ -458,9 +459,9 @@ async def run_tryout_job(job: dict) -> None:
             sem = asyncio.Semaphore(10)
             coord = f"{city['latitude']},{city['longitude']},13z"
 
-            from services.leadoff_brand import top5_from_items
+            from services.leadoff_brand import map_pins_from_items, top5_from_items
 
-            async def pull(cat: str) -> tuple[str, dict | None, list[dict]]:
+            async def pull(cat: str) -> tuple[str, dict | None, list[dict], list[dict]]:
                 async with sem:
                     try:
                         d = await _dfs_post(
@@ -471,19 +472,31 @@ async def run_tryout_job(job: dict) -> None:
                         t0 = _task0(d)
                         _check_money_limit(t0)
                         if t0.get("status_code") == _CODE_NO_RESULTS:
-                            return cat, field_stats([], cat), []  # a VALID zero
+                            return cat, field_stats([], cat), [], []  # a VALID zero
                         items = ((t0.get("result") or [{}])[0] or {}).get("items") or []
-                        return cat, field_stats(items, cat), top5_from_items(items)
+                        return (cat, field_stats(items, cat),
+                                top5_from_items(items), map_pins_from_items(items))
                     except RuntimeError:
                         raise
                     except Exception as exc:
                         logger.warning("leadoff_tryout.serp_failed",
                                        extra={"category": cat, "error": str(exc)})
-                        return cat, None, []
+                        return cat, None, [], []
 
             results = await asyncio.gather(*(pull(c) for c in gated))
-            field = {cat: stats for cat, stats, _ in results if stats is not None}
-            top5_by_cat = {cat: top5 for cat, _, top5 in results}
+            field = {cat: stats for cat, stats, *_ in results if stats is not None}
+            top5_by_cat = {cat: top5 for cat, _, top5, _ in results}
+            # Persist the live competitor GBP pins per category for the market
+            # map (owner request 2026-08-21) — free (the SERP items are already
+            # in hand). Keyed by (city_id, category_id) so /leadoff/proximity
+            # serves the same live-GBP map for a tryout as for a scout. One
+            # batched write (single insert + delete) rather than 2×N calls.
+            from services.leadoff_gbp_pins import persist_gbp_pins_batch
+            by_cat = {cid: mp
+                      for cat_name, _stats, _top5, mp in results
+                      if (cid := name_to_id.get(cat_name)) and mp}
+            if by_cat:
+                persist_gbp_pins_batch("tryout", payload["city_id"], by_cat)
 
             # brand footprint for the field (first-pass LIGHT tier): distinct
             # businesses across all gated categories, cache-missed pieces
@@ -515,6 +528,8 @@ async def run_tryout_job(job: dict) -> None:
         # 3) economics + grade vs the national reference
         rows = tryout_rows(demand, field, _lead_values(lead_tier),
                            _breakpoints(), capture)
+        for r in rows:  # so the frontend can open each row's live-GBP map
+            r["category_id"] = name_to_id.get(r["category"])
         try:
             site_lookup, mention_rows = footprint_lookups(all_biz)
             rows = attach_footprint(
@@ -670,18 +685,29 @@ async def run_scout_job(job: dict) -> None:
                     _ms("business_reviews").insert(vel_rows).execute()
                     summary["velocity_pulled"] = len(vel_rows)
 
+            # Live competitor GBP pins for the market map (owner request
+            # 2026-08-21) — ONE Maps SERP, whose phones also feed the NAP
+            # footprint step below, so scout still fires a single maps call.
+            from services.leadoff_brand import (brand_key, fetch_footprint,
+                                                fetch_market_pins)
+            from services.leadoff_gbp_pins import persist_gbp_pins
+            gbp_pins: list[dict[str, Any]] = []
+            if city:
+                gbp_pins = await fetch_market_pins(
+                    client, state["market"].get("category") or "", city)
+                if gbp_pins:
+                    summary["gbp_pins"] = persist_gbp_pins(
+                        "scout", city_id, category_id, gbp_pins)
+            pin_phones = {brand_key(p["business_name"]): p.get("phone")
+                          for p in gbp_pins if p.get("business_name")}
+
             # brand footprint (deep tier) — site: indexed counts + mentions/
-            # unlinked/NAP for the top-5. serp_top5 never stored phones, so
-            # one Maps SERP recovers them for the NAP queries (~$0.004).
-            from services.leadoff_brand import fetch_footprint, fetch_top5_phones
+            # unlinked/NAP for the top-5, using the phones recovered above.
             misses = state.get("mention_misses") or {}
+            if misses and not any(v.get("phone") for v in misses.values()):
+                for k, v in misses.items():
+                    v["phone"] = v.get("phone") or pin_phones.get(k)
             if state.get("site_misses") or misses:
-                if misses and city and not any(v.get("phone")
-                                               for v in misses.values()):
-                    phones = await fetch_top5_phones(
-                        client, state["market"].get("category") or "", city)
-                    for k, v in misses.items():
-                        v["phone"] = v.get("phone") or phones.get(k)
                 pulled = await fetch_footprint(
                     client, state.get("site_misses") or [], misses, now,
                     city_name=state["market"].get("city_name") or "", deep=True)

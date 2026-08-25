@@ -12,10 +12,45 @@ from services.leadoff_brand import (
     parse_mentions_summary,
     parse_referring_domains,
     parse_search_rows,
+    map_pins_from_items,
     parse_site_count,
     top5_from_items,
     unlinked_count,
 )
+
+
+class TestMapPins:
+    def _item(self, rank, name, lat, lng, reviews=10, rating=4.5,
+              place_id="p", gps=False):
+        it = {"rank_group": rank, "title": name, "place_id": place_id,
+              "domain": "x.com", "phone": "+1 555",
+              "rating": {"value": rating, "votes_count": reviews}}
+        if gps:
+            it["gps_coordinates"] = {"latitude": lat, "longitude": lng}
+        else:
+            it["latitude"], it["longitude"] = lat, lng
+        return it
+
+    def test_keeps_coords_place_id_rating_reviews(self):
+        pins = map_pins_from_items([self._item(1, "A", 39.1, -94.6, 120, 4.8)])
+        assert len(pins) == 1
+        p = pins[0]
+        assert (p["lat"], p["lng"]) == (39.1, -94.6)
+        assert p["place_id"] == "p" and p["rating"] == 4.8
+        assert p["review_count"] == 120 and p["rank_position"] == 1
+        assert p["phone"] == "+1 555"
+
+    def test_drops_items_without_coordinates(self):
+        it = {"rank_group": 2, "title": "NoGeo", "rating": {}}
+        assert map_pins_from_items([it]) == []
+
+    def test_reads_nested_gps_coordinates(self):
+        pins = map_pins_from_items([self._item(1, "B", 39.2, -94.7, gps=True)])
+        assert (pins[0]["lat"], pins[0]["lng"]) == (39.2, -94.7)
+
+    def test_cap_limits_results(self):
+        items = [self._item(i, f"C{i}", 39.0 + i / 100, -94.6) for i in range(1, 30)]
+        assert len(map_pins_from_items(items, cap=5)) == 5
 
 
 class TestKeysAndCosts:

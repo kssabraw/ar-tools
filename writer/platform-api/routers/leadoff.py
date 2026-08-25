@@ -329,10 +329,14 @@ async def create_client_from_market(
                 "error": str(exc)})
 
     # Distance-pillar read for the handoff (placement recommendation) +
-    # calibration (proximity_opportunity the geo-grid later verifies).
+    # calibration (proximity_opportunity the geo-grid later verifies). Force the
+    # Census read (prefer_live=False) so the frozen prediction + placement text
+    # stay aligned with the grade's Census-based proximity signal, even if this
+    # market was scouted first (whose live-GBP read would otherwise diverge).
     from services.leadoff_proximity import market_proximity
     try:
-        proximity = await market_proximity(body.city_id, body.category_id)
+        proximity = await market_proximity(body.city_id, body.category_id,
+                                           prefer_live=False)
     except Exception as exc:
         logger.warning("leadoff_proximity_lookup_failed", extra={
             "client_id": client_id, "error": str(exc)})
