@@ -71,6 +71,7 @@ from services.backlink_explorer import run_backlink_snapshot_job
 from services.backlink_explorer import run_lookup_job as run_backlink_lookup_job
 from services.content_intel import run_content_intel_job
 from services.leadoff_actions import (
+    run_map_refresh_job as run_leadoff_map_refresh_job,
     run_scout_job as run_leadoff_scout_job,
     run_tryout_job as run_leadoff_tryout_job,
 )
@@ -891,6 +892,8 @@ async def _process_job(job: dict) -> None:
         await run_leadoff_tryout_job(job)
     elif job_type == "leadoff_scout":
         await run_leadoff_scout_job(job)
+    elif job_type == "leadoff_map_refresh":
+        await run_leadoff_map_refresh_job(job)
     elif job_type == "leadoff_ai_probe":
         await run_leadoff_ai_probe_job(job)
     elif job_type == "leadoff_permits":

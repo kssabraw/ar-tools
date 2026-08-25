@@ -496,11 +496,37 @@ async def start_scout(
             "fully_cached": False}
 
 
+@router.post("/leadoff/map-refresh", status_code=202)
+async def start_map_refresh(
+    body: ScoutRequest,
+    auth: dict = Depends(require_staff),
+) -> dict:
+    """Re-pull just the live competitor GBP pins for a market's map (~$0.004,
+    one Maps SERP) — decoupled from a full scout. Lets a fully-cached scout (or
+    a never-scouted market) (re)generate its market map without the ~$0.70
+    enrichment pull or a 90-day cache wait. Poll GET /leadoff/jobs/{job_id}."""
+    market = leadoff_actions.market_display(body.city_id, body.category_id)
+    if market is None:
+        raise HTTPException(status_code=404, detail="not_found")
+    try:
+        leadoff_actions.check_budget(auth["user_id"], leadoff_actions.COST_MAP_REFRESH)
+    except leadoff_actions.BudgetExceeded as exc:
+        raise HTTPException(status_code=422, detail="budget_exceeded") from exc
+    out = leadoff_actions.enqueue_map_refresh(
+        auth["user_id"], body.city_id, body.category_id)
+    leadoff_actions.record_spend(
+        auth["user_id"], "map_refresh", leadoff_actions.COST_MAP_REFRESH,
+        city_id=body.city_id, category_id=body.category_id,
+        city_name=market.get("city_name"), state_code=market.get("state_code"))
+    return {"job_id": out["job_id"], "est_cost": leadoff_actions.COST_MAP_REFRESH}
+
+
 @router.get("/leadoff/jobs/{job_id}")
 async def get_leadoff_job(job_id: str, auth: dict = Depends(require_auth)) -> dict:
     rows = (get_supabase().table("async_jobs")
             .select("id,job_type,status,error,result,created_at,completed_at")
-            .eq("id", job_id).in_("job_type", ["leadoff_tryout", "leadoff_scout"])
+            .eq("id", job_id)
+            .in_("job_type", ["leadoff_tryout", "leadoff_scout", "leadoff_map_refresh"])
             .limit(1).execute().data or [])
     if not rows:
         raise HTTPException(status_code=404, detail="not_found")
