@@ -132,29 +132,6 @@ const num = (n: number | null | undefined, digits = 0) =>
 const THIN_RESULT_MAX = 20
 const RAW_POOL_NARROW = 25
 
-// Tiny stoplist for the client-side over-specific-seed hint (pre-run, no network).
-// Mirrors the intent of the backend's sparse-long-seed advisory: a seed carrying
-// several distinctive words tends to return few results. Kept deliberately small —
-// this is an advisory nudge, not the backend's tokenizer.
-const _SEED_HINT_STOP = new Set([
-  'the', 'a', 'an', 'and', 'or', 'of', 'for', 'to', 'in', 'on', 'at', 'by',
-  'with', 'from', 'near', 'vs', 'my', 'your', 'best', 'top',
-])
-
-// Seeds that look over-specified (≥4 significant words) — likely to return few
-// keywords. Returns the offending seed strings (empty when none). Pure, no network.
-function overSpecificSeeds(text: string): string[] {
-  return text
-    .split(/[\n,]+/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .filter((s) => {
-      const words = s.toLowerCase().match(/[a-z0-9]+/g) || []
-      const significant = words.filter((w) => w.length >= 2 && !_SEED_HINT_STOP.has(w))
-      return significant.length >= 4
-    })
-}
-
 // The seed keyword for a Blog Writer run from a topic card: its highest-volume
 // supporting keyword (the term the brief/outline is built on), falling back to
 // the theme/title. Capped to the run keyword's 150-char limit.
@@ -406,10 +383,6 @@ export function KeywordResearch() {
     }
   }, [isThinRun, runId, suggested, suggest])
 
-  // Pre-run advisory (item 4): which of the currently-typed seeds look very
-  // specific. Computed once per seed-text change.
-  const overSpecific = useMemo(() => overSpecificSeeds(seeds), [seeds])
-
   // --- Selection + "Send to Content Scheduler" ---
   const allShownSelected = filtered.length > 0 && filtered.every((k) => selected.has(k.keyword))
   const toggleAllShown = () => setSelected((prev) => {
@@ -557,20 +530,6 @@ export function KeywordResearch() {
           </button>
         </div>
       </div>
-
-      {/* Item 4 — pre-run advisory: a very specific seed tends to return few
-          keywords. Client-side + advisory only (no spend, no gating of submit). */}
-      {!running && overSpecific.length > 0 && (
-        <div style={{ ...warnBox, background: '#f0f9ff', color: '#0c4a6e', borderColor: '#bae6fd' }}>
-          <HelpCircle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
-          <span>
-            {overSpecific.length === 1
-              ? <>“{overSpecific[0]}” is very specific — it may return only a handful of keywords.</>
-              : <>{overSpecific.length} of your seeds are very specific — they may return only a handful of keywords each.</>}
-            {' '}A broader core term (drop a qualifier) returns more to choose from. You can still run it as-is.
-          </span>
-        </div>
-      )}
 
       {/* Seed suggestions */}
       {suggest.isError && <div style={errBox}>{(suggest.error as Error)?.message ?? 'Could not suggest topics.'}</div>}
