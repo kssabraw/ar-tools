@@ -489,12 +489,14 @@ async def run_tryout_job(job: dict) -> None:
             # Persist the live competitor GBP pins per category for the market
             # map (owner request 2026-08-21) — free (the SERP items are already
             # in hand). Keyed by (city_id, category_id) so /leadoff/proximity
-            # serves the same live-GBP map for a tryout as for a scout.
-            from services.leadoff_gbp_pins import persist_gbp_pins
-            for cat_name, _stats, _top5, mp in results:
-                cid = name_to_id.get(cat_name)
-                if cid and mp:
-                    persist_gbp_pins("tryout", payload["city_id"], cid, mp)
+            # serves the same live-GBP map for a tryout as for a scout. One
+            # batched write (single insert + delete) rather than 2×N calls.
+            from services.leadoff_gbp_pins import persist_gbp_pins_batch
+            by_cat = {cid: mp
+                      for cat_name, _stats, _top5, mp in results
+                      if (cid := name_to_id.get(cat_name)) and mp}
+            if by_cat:
+                persist_gbp_pins_batch("tryout", payload["city_id"], by_cat)
 
             # brand footprint for the field (first-pass LIGHT tier): distinct
             # businesses across all gated categories, cache-missed pieces

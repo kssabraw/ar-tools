@@ -1062,6 +1062,10 @@ interface ProximityRead {
   scouted?: boolean
   recommendation?: string | null
   center?: { lat: number; lng: number }
+  // Frame radius for the map (≥ radius_miles). Larger only in the rural case
+  // where every competitor sits beyond the analysis radius; then the map widens
+  // to include them while the octant read below still counts within radius_miles.
+  map_radius_miles?: number
   pins?: { name: string | null; lat: number; lng: number; reviews: number
     rank?: number | null; rating?: number | null; miles?: number }[]
 }
@@ -1140,8 +1144,14 @@ function ProximityDetail({ px, cityId, categoryId }: {
             pins={px.pins ?? []}
             placement={px.placement ?? []}
             gbp={gbp}
-            radiusMiles={px.radius_miles ?? 10}
+            radiusMiles={px.map_radius_miles ?? px.radius_miles ?? 10}
           />
+          {(px.map_radius_miles ?? 0) > (px.radius_miles ?? 0) && (
+            <div style={{ fontSize: 11, color: '#b45309', marginTop: 6, lineHeight: 1.4 }}>
+              Nearest competitors sit beyond the {px.radius_miles}-mi analysis radius — shown on
+              the map, but the octant read below only counts within {px.radius_miles} mi.
+            </div>
+          )}
           {px.recommendation && (
             <div style={{ marginTop: 8, fontSize: 12.5, color: '#0f172a', background: '#ecfdf5',
               border: '1px solid #a7f3d0', borderRadius: 8, padding: '8px 10px', lineHeight: 1.45 }}>

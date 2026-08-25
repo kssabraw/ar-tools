@@ -135,6 +135,14 @@ class TestMapPins:
         rows = [{"business_name": "NoGeo", "review_count": 9, "lat": None, "lng": None, "rank_position": 4}]
         assert _map_pins(lat, lng, rows, radius_miles=10) == []
 
+    def test_none_radius_keeps_far_pins(self):
+        # rural fallback: no radius filter → a competitor ~14 mi out is kept.
+        lat, lng = KC
+        rows = [{"business_name": "Far", "review_count": 5, "lat": lat + 0.2, "lng": lng, "rank_position": 1}]
+        assert _map_pins(lat, lng, rows, radius_miles=10) == []      # filtered out
+        far = _map_pins(lat, lng, rows, radius_miles=None)           # kept
+        assert len(far) == 1 and far[0]["name"] == "Far" and far[0]["miles"] > 10
+
 
 class TestPlacementRecommendation:
     def _concentrated(self):

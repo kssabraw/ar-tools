@@ -196,11 +196,12 @@ def _market_pins(city_id: int, category_id: str) -> list[dict[str, Any]]:
 
 def _map_pins(center_lat: float, center_lng: float,
               pins: list[dict[str, Any]],
-              radius_miles: float) -> list[dict[str, Any]]:
-    """The plottable competitor pin set for the market map: the in-radius
-    geocoded rows with rounded coordinates, name, review count, SERP rank and
-    distance. Same radius gate as the octant analysis so the map matches the
-    bars. Sorted nearest-first purely for stable rendering order."""
+              radius_miles: Optional[float]) -> list[dict[str, Any]]:
+    """The plottable competitor pin set for the market map: the geocoded rows
+    with rounded coordinates, name, review count, SERP rank and distance. When
+    `radius_miles` is set, drops rows beyond it (matches the octant analysis and
+    trims stray geocodes); when None, keeps every geocoded pin (the rural
+    fallback — see market_proximity). Sorted nearest-first for stable order."""
     out = []
     for p in pins:
         lat, lng = p.get("lat"), p.get("lng")
@@ -208,7 +209,7 @@ def _map_pins(center_lat: float, center_lng: float,
             continue
         lat, lng = float(lat), float(lng)
         d = haversine_miles(center_lat, center_lng, lat, lng)
-        if d > radius_miles:
+        if radius_miles is not None and d > radius_miles:
             continue
         out.append({
             "name": p.get("business_name"),
@@ -285,7 +286,8 @@ def market_proximity_score(city_id: int, category_id: str) -> Optional[float]:
     return None if result.get("thin_data") else result.get("opportunity")
 
 
-async def market_proximity(city_id: int, category_id: str) -> dict[str, Any]:
+async def market_proximity(city_id: int, category_id: str, *,
+                           prefer_live: bool = True) -> dict[str, Any]:
     """The proximity read for one market. Degrades explicitly, never raises
     to the caller: no city coords / no pins → {available: False}.
 
@@ -295,6 +297,11 @@ async def market_proximity(city_id: int, category_id: str) -> dict[str, Any]:
     English placement recommendation) is attached ONLY for the live-GBP source,
     so the market map appears after a scout/tryout — never off Census pins
     (owner ruling 2026-08-21). The Census path still returns the octant read.
+
+    `prefer_live=False` forces the Census read (ignores any live pins) — used by
+    the create-client handoff so the placement text + calibration freeze stay
+    aligned with the grade's Census-based proximity signal, regardless of
+    whether the market happens to have been scouted first.
     """
     from config import settings
     from services.leadoff_gbp_pins import read_gbp_pins
@@ -303,7 +310,7 @@ async def market_proximity(city_id: int, category_id: str) -> dict[str, Any]:
     if center is None:
         return {"available": False, "reason": "city_has_no_coordinates"}
 
-    live = read_gbp_pins(city_id, category_id)
+    live = read_gbp_pins(city_id, category_id) if prefer_live else []
     source = "gbp_serp" if live else "census"
     pins = live if live else _market_pins(city_id, category_id)
     if not pins:
@@ -344,8 +351,24 @@ async def market_proximity(city_id: int, category_id: str) -> dict[str, Any]:
     # Map layer — live GBP only (real locations), so the map is a scout/tryout
     # deliverable. Census pins feed the grade elsewhere and stay display-free.
     if source == "gbp_serp":
+        cfg_radius = settings.leadoff_proximity_radius_miles
+        # In-radius pins first (matches the octant bars, trims stray geocodes).
+        map_pins = _map_pins(center[0], center[1], pins, cfg_radius)
+        map_radius = cfg_radius
+        if not map_pins:
+            # Rural market: every competitor sits beyond the analysis radius, so
+            # the octant read is empty (available=False). We still captured real
+            # GBPs — show them all, framed to include the farthest, rather than a
+            # blank/"unavailable" panel next to a completed scout.
+            map_pins = _map_pins(center[0], center[1], pins, None)
+            if map_pins:
+                map_radius = round(max(cfg_radius, map_pins[-1]["miles"]), 1)
         result["center"] = {"lat": round(center[0], 6), "lng": round(center[1], 6)}
-        result["pins"] = _map_pins(center[0], center[1], pins,
-                                   settings.leadoff_proximity_radius_miles)
+        result["pins"] = map_pins
+        result["map_radius_miles"] = map_radius
+        # Real GBP pins are worth rendering even when the octant coverage is too
+        # thin/out-of-radius to be "available" on its own.
+        if map_pins and not result.get("available"):
+            result["available"] = True
         result["recommendation"] = placement_recommendation(result)
     return result
