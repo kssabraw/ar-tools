@@ -1151,7 +1151,6 @@ function ProximityDetail({ px, cityId, categoryId }: {
             placement={px.placement ?? []}
             gbp={gbp}
             radiusMiles={px.map_radius_miles ?? px.radius_miles ?? 10}
-            searchQuery={categoryId.replace(/_/g, ' ')}
           />
           {(px.map_radius_miles ?? 0) > (px.radius_miles ?? 0) && (
             <div style={{ fontSize: 11, color: '#b45309', marginTop: 6, lineHeight: 1.4 }}>

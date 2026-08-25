@@ -54,16 +54,12 @@ function gbpUrl(p: MarketMapPin): string {
   return `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`
 }
 
-export function MarketMap({ center, pins, placement = [], gbp = null, radiusMiles, searchQuery }: {
+export function MarketMap({ center, pins, placement = [], gbp = null, radiusMiles }: {
   center: { lat: number; lng: number }
   pins: MarketMapPin[]
   placement?: MarketMapPlacement[]
   gbp?: MarketMapGbp | null
   radiusMiles: number
-  // When set (the market's category, e.g. "chimney sweep"), the "Open in Maps"
-  // action runs that search at the market centre so Google Maps actually shows
-  // the competing businesses — a bare @lat,lng view carries no markers.
-  searchQuery?: string
 }) {
   const [imgError, setImgError] = useState(false)
   const [hovered, setHovered] = useState<number | null>(null)
@@ -77,14 +73,6 @@ export function MarketMap({ center, pins, placement = [], gbp = null, radiusMile
   const spanMiles = includeGbp ? Math.max(radiusMiles * 2, gbpMiles * 2 + 2) : radiusMiles * 2
   const zoom = fitZoom(center.lat, spanMiles)
   const mapUrl = buildBaseMapUrl(center.lat, center.lng, zoom)
-  // "Closer look": open the interactive Google Map at the same view. With a
-  // category search term, this lands on the live local businesses around the
-  // centre (the competitors); without one, a bare camera view (no markers).
-  const q = (searchQuery || '').trim()
-  const interactiveUrl = q
-    ? `https://www.google.com/maps/search/${encodeURIComponent(q)}/@${center.lat},${center.lng},${zoom}z`
-    : `https://www.google.com/maps/@${center.lat},${center.lng},${zoom}z`
-  const openLabel = q ? 'See competitors in Google Maps' : 'Open this area in Google Maps'
 
   if (!mapUrl || imgError) {
     return (
@@ -115,19 +103,16 @@ export function MarketMap({ center, pins, placement = [], gbp = null, radiusMile
   return (
     <div>
       {/* Outer keeps overflow visible so a pin's hover card can spill past the
-          map edges; the image itself gets the rounded/clipped border. */}
+          map edges; the image frame gets the rounded/clipped border. The base
+          map is a static snapshot (not a link) — a whole-map "open in Google
+          Maps" would show Google's full live directory, which is a larger set
+          than our captured competitors and reads as a mismatch. Instead, each
+          competitor pin links to its exact Google listing. */}
       <div style={mapOuter}>
-        <a href={interactiveUrl} target="_blank" rel="noreferrer" style={mapImageLink}
-          title={openLabel} aria-label={openLabel}>
+        <div style={mapFrame}>
           <img src={mapUrl} alt="Market map" onError={() => setImgError(true)}
             style={{ width: '100%', height: '100%', display: 'block' }} />
-        </a>
-
-        {/* Corner affordance for the click-to-open behaviour. */}
-        <a href={interactiveUrl} target="_blank" rel="noreferrer" style={openPill}
-          title={openLabel}>
-          <ExternalLink size={11} /> Open in Maps
-        </a>
+        </div>
 
         {/* Competitor pins — teal, sized by reviews, ranked ones show the rank.
             Each links to its GBP; hovering shows a details card with the link. */}
@@ -217,8 +202,7 @@ export function MarketMap({ center, pins, placement = [], gbp = null, radiusMile
       </div>
 
       <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
-        {q ? 'Click the map to see these competitors in Google Maps'
-           : 'Click the map for a closer look'}, or a competitor pin to open its Google listing.
+        Hover a competitor pin for its rating and reviews, or click it to open that business's Google listing.
       </div>
 
       {gbp && gbpPos && !gbpPos.inView && (
@@ -248,16 +232,9 @@ function LegendDot({ color, label, ring, diamond }: {
 const mapOuter: React.CSSProperties = {
   position: 'relative', width: '100%', maxWidth: MAP_SIZE, aspectRatio: '1 / 1',
 }
-const mapImageLink: React.CSSProperties = {
+const mapFrame: React.CSSProperties = {
   position: 'absolute', inset: 0, display: 'block',
   borderRadius: 8, border: '1px solid #e2e8f0', overflow: 'hidden',
-}
-const openPill: React.CSSProperties = {
-  position: 'absolute', top: 8, right: 8, zIndex: 8,
-  display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 7px',
-  background: 'rgba(255,255,255,.92)', color: '#0f172a', fontSize: 11, fontWeight: 600,
-  borderRadius: 6, border: '1px solid #e2e8f0', textDecoration: 'none',
-  boxShadow: '0 1px 3px rgba(0,0,0,.15)',
 }
 const pinBase: React.CSSProperties = {
   position: 'absolute', transform: 'translate(-50%, -50%)', borderRadius: '50%',
