@@ -54,12 +54,16 @@ function gbpUrl(p: MarketMapPin): string {
   return `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`
 }
 
-export function MarketMap({ center, pins, placement = [], gbp = null, radiusMiles }: {
+export function MarketMap({ center, pins, placement = [], gbp = null, radiusMiles, searchQuery }: {
   center: { lat: number; lng: number }
   pins: MarketMapPin[]
   placement?: MarketMapPlacement[]
   gbp?: MarketMapGbp | null
   radiusMiles: number
+  // When set (the market's category, e.g. "chimney sweep"), the "Open in Maps"
+  // action runs that search at the market centre so Google Maps actually shows
+  // the competing businesses — a bare @lat,lng view carries no markers.
+  searchQuery?: string
 }) {
   const [imgError, setImgError] = useState(false)
   const [hovered, setHovered] = useState<number | null>(null)
@@ -73,8 +77,14 @@ export function MarketMap({ center, pins, placement = [], gbp = null, radiusMile
   const spanMiles = includeGbp ? Math.max(radiusMiles * 2, gbpMiles * 2 + 2) : radiusMiles * 2
   const zoom = fitZoom(center.lat, spanMiles)
   const mapUrl = buildBaseMapUrl(center.lat, center.lng, zoom)
-  // "Closer look": the same view as an interactive (draggable/zoomable) map.
-  const interactiveUrl = `https://www.google.com/maps/@${center.lat},${center.lng},${zoom}z`
+  // "Closer look": open the interactive Google Map at the same view. With a
+  // category search term, this lands on the live local businesses around the
+  // centre (the competitors); without one, a bare camera view (no markers).
+  const q = (searchQuery || '').trim()
+  const interactiveUrl = q
+    ? `https://www.google.com/maps/search/${encodeURIComponent(q)}/@${center.lat},${center.lng},${zoom}z`
+    : `https://www.google.com/maps/@${center.lat},${center.lng},${zoom}z`
+  const openLabel = q ? 'See competitors in Google Maps' : 'Open this area in Google Maps'
 
   if (!mapUrl || imgError) {
     return (
@@ -108,14 +118,14 @@ export function MarketMap({ center, pins, placement = [], gbp = null, radiusMile
           map edges; the image itself gets the rounded/clipped border. */}
       <div style={mapOuter}>
         <a href={interactiveUrl} target="_blank" rel="noreferrer" style={mapImageLink}
-          title="Open this area in Google Maps" aria-label="Open this area in Google Maps">
+          title={openLabel} aria-label={openLabel}>
           <img src={mapUrl} alt="Market map" onError={() => setImgError(true)}
             style={{ width: '100%', height: '100%', display: 'block' }} />
         </a>
 
         {/* Corner affordance for the click-to-open behaviour. */}
         <a href={interactiveUrl} target="_blank" rel="noreferrer" style={openPill}
-          title="Open this area in Google Maps">
+          title={openLabel}>
           <ExternalLink size={11} /> Open in Maps
         </a>
 
@@ -207,7 +217,8 @@ export function MarketMap({ center, pins, placement = [], gbp = null, radiusMile
       </div>
 
       <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
-        Click the map for a closer look, or a competitor pin to open its Google listing.
+        {q ? 'Click the map to see these competitors in Google Maps'
+           : 'Click the map for a closer look'}, or a competitor pin to open its Google listing.
       </div>
 
       {gbp && gbpPos && !gbpPos.inView && (
