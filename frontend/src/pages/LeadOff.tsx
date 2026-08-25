@@ -1067,7 +1067,7 @@ interface ProximityRead {
   // to include them while the octant read below still counts within radius_miles.
   map_radius_miles?: number
   pins?: { name: string | null; lat: number; lng: number; reviews: number
-    rank?: number | null; rating?: number | null; miles?: number }[]
+    rank?: number | null; rating?: number | null; miles?: number; place_id?: string | null }[]
 }
 
 interface GbpResolveResponse {
