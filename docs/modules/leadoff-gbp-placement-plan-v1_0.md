@@ -269,9 +269,21 @@ live-verified).**
 - **Grade safety honored:** placement reads only `leadoff_gbp_pins` +
   `census_block_demand` and writes only its own cache — never the board grade,
   `competitor_locations`, or `proximity_opportunity`.
-- **Not yet built:** Phase 2 frontend (click-to-drop / paste-address compare UI,
-  octant re-anchor — the backend `score-point` endpoint exists); Phase 3 paid
-  ZIP layer; the calibration freeze (§8).
+**Phase 2 — BUILT (the "Both" experience, §5.2/§5.3).**
+- `pixelToLatLng` (inverse of `projectToPixel`) added to `components/maps/visuals.tsx`.
+- `MarketMap` gained a `candidates` pin class + an `onMapClick` click-to-drop
+  handler (crosshair cursor; competitor pins keep their own click).
+- `ProximityDetail` scores dropped/pasted points via
+  `POST /leadoff/placement/score-point` and compares them side-by-side
+  (`CandidateScorer`): per-candidate score, market percentile, reachable
+  households, nearest competitor, and delta-vs-best-zone; paste reuses
+  `/clients/gbp/resolve`; capped at 6. The optional **octant re-anchor** toggle
+  re-centres the octant defense bars on a candidate client-side (view only —
+  never re-anchors the market's grade), reusing the proximity `1/(1+d/2mi)`
+  defense. Only active when zones are available; the legacy GBP reference-pin
+  input stays for the proximity-only (no-zones) path. `tsc -b` clean.
+
+- **Not yet built:** Phase 3 paid ZIP layer; the calibration freeze (§8).
 
 ## 10. Config (planned knobs, `config.py`)
 

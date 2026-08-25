@@ -38,6 +38,22 @@ export function projectToPixel(lat: number, lng: number, centerLat: number, cent
   return { x: px(lng) - px(centerLng) + MAP_SIZE / 2, y: py(lat) - py(centerLat) + MAP_SIZE / 2 }
 }
 
+// Inverse of projectToPixel: a logical pixel (x,y within a MAP_SIZE square) back
+// to lat/lng, given the same center + zoom. Used by the placement advisor's
+// click-to-drop (Phase 2) to turn a map click into a scoreable coordinate.
+export function pixelToLatLng(x: number, y: number, centerLat: number, centerLng: number, zoom: number) {
+  const worldSize = 256 * 2 ** zoom
+  const pxCenterLng = ((centerLng + 180) / 360) * worldSize
+  const sC = Math.max(-0.9999, Math.min(0.9999, Math.sin((centerLat * Math.PI) / 180)))
+  const pyCenterLat = (0.5 - Math.log((1 + sC) / (1 - sC)) / (4 * Math.PI)) * worldSize
+  const pxLng = x - MAP_SIZE / 2 + pxCenterLng
+  const pyLat = y - MAP_SIZE / 2 + pyCenterLat
+  const lng = (pxLng / worldSize) * 360 - 180
+  const t = (0.5 - pyLat / worldSize) * 4 * Math.PI
+  const lat = (Math.asin(Math.tanh(t / 2)) * 180) / Math.PI
+  return { lat, lng }
+}
+
 // The base (marker-less) Google Static Map centered on the scan, at a zoom that
 // frames the grid. Null when no API key is configured (→ circular fallback).
 export function buildBaseMapUrl(centerLat: number | null, centerLng: number | null, zoom: number): string | null {

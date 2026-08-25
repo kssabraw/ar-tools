@@ -1103,6 +1103,80 @@ interface PlacementRead {
   note?: string
 }
 
+// Phase 2 "Both": scoring an arbitrary point (dropped pin / pasted address)
+// against the market's zones on the same market-relative scale.
+interface PlacementPoint {
+  lat: number
+  lng: number
+  score: number
+  percentile: number | null
+  demand_norm: number
+  pressure_norm: number
+  households_reachable: number
+  nearest_competitor_miles: number | null
+  best_zone_score?: number
+  best_zone_miles?: number
+  best_zone_locality?: string | null
+}
+interface PlacementPointScore {
+  available: boolean
+  reason?: string
+  point?: PlacementPoint
+}
+interface ScoredCandidate {
+  id: string
+  source: 'click' | 'paste'
+  label: string
+  lat: number
+  lng: number
+  loading: boolean
+  result?: PlacementPoint
+  error?: string
+}
+
+// Client-side octant recompute for the optional "re-anchor" toggle (plan §5.3):
+// the octant defense bars re-centred on a candidate — "what does the field look
+// like from here". Display-only; mirrors leadoff_proximity's review-weighted
+// 1/(1+d/2mi) defense so the bars match the backend's read.
+const OCTS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+function haversineMi(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const r = 3958.8, toRad = (d: number) => (d * Math.PI) / 180
+  const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1)
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2
+  return 2 * r * Math.asin(Math.sqrt(a))
+}
+function bearingDeg(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const toRad = (d: number) => (d * Math.PI) / 180, toDeg = (r: number) => (r * 180) / Math.PI
+  const f1 = toRad(lat1), f2 = toRad(lat2), dl = toRad(lng2 - lng1)
+  const y = Math.sin(dl) * Math.cos(f2)
+  const x = Math.cos(f1) * Math.sin(f2) - Math.sin(f1) * Math.cos(f2) * Math.cos(dl)
+  return (toDeg(Math.atan2(y, x)) + 360) % 360
+}
+type OctantRow = NonNullable<ProximityRead['octants']>[number]
+function computeOctantsFrom(lat: number, lng: number,
+  pins: NonNullable<ProximityRead['pins']>, radiusMiles: number): OctantRow[] {
+  const per: Record<string, OctantRow> = Object.fromEntries(
+    OCTS.map(o => [o, { octant: o, count: 0, reviews: 0, defense: 0, bar_pct: 0, anchors: [] }]))
+  for (const p of pins) {
+    if (p.lat == null || p.lng == null) continue
+    const d = haversineMi(lat, lng, p.lat, p.lng)
+    if (d > radiusMiles) continue
+    const o = OCTS[Math.floor((((bearingDeg(lat, lng, p.lat, p.lng)) + 22.5) % 360) / 45)]
+    const rev = p.reviews || 0
+    per[o].count++; per[o].reviews += rev; per[o].defense += Math.max(rev, 1) * (1 / (1 + d / 2))
+  }
+  const top = Math.max(0, ...OCTS.map(o => per[o].defense))
+  return OCTS.map(o => ({ ...per[o], defense: Math.round(per[o].defense * 10) / 10,
+    bar_pct: top > 0 ? Math.round((100 * per[o].defense) / top) : 0 }))
+}
+function weakOctants(octs: OctantRow[]): string[] {
+  const nz = octs.map(o => o.defense).filter(d => d > 0).sort((a, b) => a - b)
+  if (!nz.length) return []
+  const m = nz.length % 2 ? nz[(nz.length - 1) / 2] : (nz[nz.length / 2 - 1] + nz[nz.length / 2]) / 2
+  const cut = 0.25 * m
+  return octs.filter(o => o.defense < cut).map(o => o.octant)
+}
+
 function ProximityCard({ cityId, categoryId }: { cityId: number; categoryId: string }) {
   const { data: px, isLoading } = useQuery<ProximityRead>({
     queryKey: ['leadoff-proximity', cityId, categoryId],
@@ -1151,6 +1225,27 @@ function ProximityDetail({ px, cityId, categoryId }: {
     },
   })
   const zones = placement?.available && !placement.thin_field ? (placement.zones ?? []) : []
+  const zonesAvailable = zones.length > 0
+
+  // Phase 2 "Both": scored candidates (click-to-drop / pasted address) + the
+  // optional octant re-anchor. Transient; reset when the market changes.
+  const [candidates, setCandidates] = useState<ScoredCandidate[]>([])
+  const [anchorId, setAnchorId] = useState<string | null>(null)
+
+  async function scoreCandidate(lat: number, lng: number, label: string, source: 'click' | 'paste') {
+    if (candidates.length >= 6) return
+    const id = `${Date.now()}-${Math.round(Math.random() * 1e6)}`
+    setCandidates(cs => [...cs, { id, source, label, lat, lng, loading: true }])
+    try {
+      const res = await api.post<PlacementPointScore>('/leadoff/placement/score-point',
+        { city_id: cityId, category_id: categoryId, lat, lng })
+      setCandidates(cs => cs.map(c => c.id === id
+        ? { ...c, loading: false, ...(res.available && res.point ? { result: res.point } : { error: res.reason || 'score_failed' }) }
+        : c))
+    } catch (e) {
+      setCandidates(cs => cs.map(c => c.id === id ? { ...c, loading: false, error: (e as Error).message } : c))
+    }
+  }
 
   // GBP reference pin: paste a Maps link / share link / place ID → drop the
   // business on the map. Reference only — does not re-anchor the proximity math.
@@ -1159,7 +1254,37 @@ function ProximityDetail({ px, cityId, categoryId }: {
   const [gbpInput, setGbpInput] = useState('')
   const [gbpResolving, setGbpResolving] = useState(false)
   const [gbpError, setGbpError] = useState<string | null>(null)
-  useEffect(() => { setGbp(null); setGbpInput(''); setGbpError(null) }, [cityId, categoryId])
+  useEffect(() => {
+    setGbp(null); setGbpInput(''); setGbpError(null)
+    setCandidates([]); setAnchorId(null)
+  }, [cityId, categoryId])
+
+  // Score a pasted address / GBP link as a candidate (the paste half of "Both"),
+  // reusing the existing GBP resolver.
+  async function resolveAndScore() {
+    const value = gbpInput.trim()
+    if (!value) return
+    setGbpError(null); setGbpResolving(true)
+    try {
+      const res = await api.get<GbpResolveResponse>(`/clients/gbp/resolve?input=${encodeURIComponent(value)}`)
+      const lat = res.gbp?.latitude, lng = res.gbp?.longitude
+      if (lat == null || lng == null) { setGbpError('No coordinates found for that location.'); return }
+      await scoreCandidate(lat, lng, res.gbp?.business_name ?? 'Pasted location', 'paste')
+      setGbpInput('')
+    } catch (e) {
+      setGbpError((e as Error).message || 'Could not resolve that location.')
+    } finally { setGbpResolving(false) }
+  }
+
+  const anchor = candidates.find(c => c.id === anchorId && c.result)
+  const displayOctants: OctantRow[] = anchor
+    ? computeOctantsFrom(anchor.lat, anchor.lng, px.pins ?? [], px.radius_miles ?? 10)
+    : (px.octants ?? [])
+  const displayUnderserved = anchor ? weakOctants(displayOctants) : (px.underserved ?? [])
+  const candidateMarkers = candidates.map((c, i) => ({
+    id: c.id, letter: String.fromCharCode(65 + i), lat: c.lat, lng: c.lng,
+    score: c.result?.score ?? null,
+  }))
 
   async function resolveGbp() {
     const value = gbpInput.trim()
@@ -1192,7 +1317,9 @@ function ProximityDetail({ px, cityId, categoryId }: {
             placement={px.placement ?? []}
             zones={zones.map(z => ({ rank: z.rank, score: z.score, lat: z.lat, lng: z.lng,
               locality: z.locality, is_top: z.is_top }))}
-            gbp={gbp}
+            candidates={candidateMarkers}
+            onMapClick={zonesAvailable ? (lat, lng) => scoreCandidate(lat, lng, 'Dropped pin', 'click') : undefined}
+            gbp={zonesAvailable ? null : gbp}
             radiusMiles={px.map_radius_miles ?? px.radius_miles ?? 10}
             browseQuery={categoryId.replace(/_/g, ' ')}
           />
@@ -1210,44 +1337,56 @@ function ProximityDetail({ px, cityId, categoryId }: {
           )}
           <PlacementZones data={placement} loading={placementLoading}
             cityId={cityId} categoryId={categoryId} />
-          <div style={{ marginTop: 8 }}>
-            {gbp ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#475569' }}>
-                <MapPin size={13} color="#4f46e5" />
-                <span>Showing <strong>{gbp.name ?? 'business'}</strong> on the map.</span>
-                <button type="button" onClick={() => setGbp(null)}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: '2px 6px',
-                    background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer',
-                    color: '#64748b', fontSize: 11 }}>
-                  <X size={11} /> Clear
-                </button>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', gap: 6 }}>
-                <div style={{ position: 'relative', flex: 1 }}>
-                  <Link2 size={13} style={{ position: 'absolute', left: 9, top: '50%',
-                    transform: 'translateY(-50%)', color: '#94a3b8' }} />
-                  <input
-                    value={gbpInput}
-                    onChange={e => { setGbpInput(e.target.value); setGbpError(null) }}
-                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); resolveGbp() } }}
-                    placeholder="Add a GBP: Maps link, share link, or place ID…"
-                    style={{ width: '100%', padding: '7px 10px 7px 28px', border: '1px solid #d1d5db',
-                      borderRadius: 8, fontSize: 12, color: '#0f172a', boxSizing: 'border-box' }}
-                  />
+          {zonesAvailable ? (
+            <CandidateScorer
+              candidates={candidates} anchorId={anchorId}
+              gbpInput={gbpInput} gbpResolving={gbpResolving} gbpError={gbpError}
+              onGbpInput={v => { setGbpInput(v); setGbpError(null) }}
+              onResolve={resolveAndScore}
+              onRemove={id => { setCandidates(cs => cs.filter(c => c.id !== id)); if (anchorId === id) setAnchorId(null) }}
+              onClear={() => { setCandidates([]); setAnchorId(null) }}
+              onAnchor={id => setAnchorId(a => (a === id ? null : id))}
+            />
+          ) : (
+            <div style={{ marginTop: 8 }}>
+              {gbp ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#475569' }}>
+                  <MapPin size={13} color="#4f46e5" />
+                  <span>Showing <strong>{gbp.name ?? 'business'}</strong> on the map.</span>
+                  <button type="button" onClick={() => setGbp(null)}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: '2px 6px',
+                      background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer',
+                      color: '#64748b', fontSize: 11 }}>
+                    <X size={11} /> Clear
+                  </button>
                 </div>
-                <button type="button" onClick={resolveGbp}
-                  disabled={gbpResolving || gbpInput.trim().length === 0}
-                  style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 56,
-                    padding: '0 12px', background: '#4f46e5', color: '#fff', border: 'none', borderRadius: 8,
-                    fontSize: 12, fontWeight: 600, cursor: gbpResolving ? 'default' : 'pointer',
-                    opacity: gbpInput.trim().length === 0 ? 0.6 : 1 }}>
-                  {gbpResolving ? <Loader2 size={13} className="spin" /> : 'Add'}
-                </button>
-              </div>
-            )}
-            {gbpError && <div style={{ color: '#dc2626', fontSize: 11, marginTop: 4 }}>{gbpError}</div>}
-          </div>
+              ) : (
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <div style={{ position: 'relative', flex: 1 }}>
+                    <Link2 size={13} style={{ position: 'absolute', left: 9, top: '50%',
+                      transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                    <input
+                      value={gbpInput}
+                      onChange={e => { setGbpInput(e.target.value); setGbpError(null) }}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); resolveGbp() } }}
+                      placeholder="Add a GBP: Maps link, share link, or place ID…"
+                      style={{ width: '100%', padding: '7px 10px 7px 28px', border: '1px solid #d1d5db',
+                        borderRadius: 8, fontSize: 12, color: '#0f172a', boxSizing: 'border-box' }}
+                    />
+                  </div>
+                  <button type="button" onClick={resolveGbp}
+                    disabled={gbpResolving || gbpInput.trim().length === 0}
+                    style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 56,
+                      padding: '0 12px', background: '#4f46e5', color: '#fff', border: 'none', borderRadius: 8,
+                      fontSize: 12, fontWeight: 600, cursor: gbpResolving ? 'default' : 'pointer',
+                      opacity: gbpInput.trim().length === 0 ? 0.6 : 1 }}>
+                    {gbpResolving ? <Loader2 size={13} className="spin" /> : 'Add'}
+                  </button>
+                </div>
+              )}
+              {gbpError && <div style={{ color: '#dc2626', fontSize: 11, marginTop: 4 }}>{gbpError}</div>}
+            </div>
+          )}
           <div style={{ marginTop: 8, display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
             <MapRefreshButton cityId={cityId} categoryId={categoryId} label="Refresh map (~$0.004)" />
             <span style={{ fontSize: 11, color: '#94a3b8' }}>Re-pulls the live competitor GBPs (one Maps SERP).</span>
@@ -1270,15 +1409,22 @@ function ProximityDetail({ px, cityId, categoryId }: {
           below the floor for an underserved-zone verdict.
         </div>
       )}
+      {anchor && (
+        <div style={{ fontSize: 11, color: '#4338ca', background: '#eef2ff', border: '1px solid #c7d2fe',
+          borderRadius: 6, padding: '5px 8px', marginBottom: 6, lineHeight: 1.4 }}>
+          Octant bars re-centred on candidate <strong>{candidateMarkers.find(m => m.id === anchor.id)?.letter}</strong>
+          {' '}— the field as seen from that spot (view only; the market's grade never re-anchors).
+        </div>
+      )}
       <div style={{ display: 'grid', gridTemplateColumns: '28px 1fr 44px', gap: '3px 8px', alignItems: 'center' }}>
-        {(px.octants ?? []).map(o => (
+        {displayOctants.map(o => (
           <Fragment key={o.octant}>
-            <span style={{ fontSize: 11, fontWeight: 600, color: px.underserved?.includes(o.octant) ? '#b45309' : '#475569' }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: displayUnderserved.includes(o.octant) ? '#b45309' : '#475569' }}>
               {o.octant}
             </span>
             <div style={{ background: '#f1f5f9', borderRadius: 3, height: 10, overflow: 'hidden' }}
               title={o.anchors.map(a => `${a.name} (${a.reviews} rev @ ${a.miles}mi)`).join(', ') || 'no ranked competitor anchored here'}>
-              <div style={{ width: `${o.bar_pct}%`, height: '100%', background: '#0e7d6f', opacity: 0.85 }} />
+              <div style={{ width: `${o.bar_pct}%`, height: '100%', background: anchor ? '#4f46e5' : '#0e7d6f', opacity: 0.85 }} />
             </div>
             <span style={{ fontSize: 11, color: '#94a3b8', textAlign: 'right' }}>{o.count || '—'}</span>
           </Fragment>
@@ -1407,6 +1553,122 @@ function PlacementZones({ data, loading, cityId, categoryId }: {
       </div>
       {data.note && (
         <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6, lineHeight: 1.4 }}>{data.note}</div>
+      )}
+    </div>
+  )
+}
+
+// Phase 2 "Both": score any location against the market's zones. Click the map
+// (handled by ProximityDetail's onMapClick) or paste an address/GBP → each point
+// is scored via /leadoff/placement/score-point on the SAME market-relative scale,
+// and compared side-by-side. Optional per-candidate "re-anchor" re-centres the
+// octant bars on that spot (view only). $0 — pure recompute over the cache.
+function CandidateScorer({ candidates, anchorId, gbpInput, gbpResolving, gbpError,
+  onGbpInput, onResolve, onRemove, onClear, onAnchor }: {
+  candidates: ScoredCandidate[]; anchorId: string | null
+  gbpInput: string; gbpResolving: boolean; gbpError: string | null
+  onGbpInput: (v: string) => void; onResolve: () => void
+  onRemove: (id: string) => void; onClear: () => void; onAnchor: (id: string) => void
+}) {
+  const reasonText = (r?: string) =>
+    r === 'census_not_cached' ? 'Demand surface still building — try again in a moment.'
+    : r === 'no_gbp_pins' ? 'No competitor pins to score against.'
+    : r === 'city_has_no_coordinates' ? 'Market has no coordinates.'
+    : (r ? `Couldn't score (${r}).` : "Couldn't score this point.")
+  const atCap = candidates.length >= 6
+  return (
+    <div style={{ marginTop: 12, borderTop: '1px dashed #e2e8f0', paddingTop: 10 }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: '#3730a3', marginBottom: 3 }}>
+        Score a specific location
+      </div>
+      <div style={{ fontSize: 11.5, color: '#94a3b8', marginBottom: 7, lineHeight: 1.4 }}>
+        Click anywhere on the map, or paste an address / GBP link, to score that exact spot against these zones.
+      </div>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ position: 'relative', flex: 1 }}>
+          <Link2 size={13} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+          <input
+            value={gbpInput}
+            onChange={e => onGbpInput(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); onResolve() } }}
+            placeholder="Score an address, Maps link, or place ID…"
+            disabled={atCap}
+            style={{ width: '100%', padding: '7px 10px 7px 28px', border: '1px solid #d1d5db',
+              borderRadius: 8, fontSize: 12, color: '#0f172a', boxSizing: 'border-box',
+              background: atCap ? '#f8fafc' : '#fff' }}
+          />
+        </div>
+        <button type="button" onClick={onResolve}
+          disabled={gbpResolving || gbpInput.trim().length === 0 || atCap}
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 64,
+            padding: '0 12px', background: '#4f46e5', color: '#fff', border: 'none', borderRadius: 8,
+            fontSize: 12, fontWeight: 600, cursor: gbpResolving || atCap ? 'default' : 'pointer',
+            opacity: gbpInput.trim().length === 0 || atCap ? 0.6 : 1 }}>
+          {gbpResolving ? <Loader2 size={13} className="spin" /> : 'Score'}
+        </button>
+      </div>
+      {gbpError && <div style={{ color: '#dc2626', fontSize: 11, marginTop: 4 }}>{gbpError}</div>}
+      {atCap && <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>Up to 6 candidates — remove one to add another.</div>}
+
+      {candidates.length > 0 && (
+        <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 7 }}>
+          {candidates.map((c, i) => {
+            const letter = String.fromCharCode(65 + i)
+            const isAnchor = anchorId === c.id
+            return (
+              <div key={c.id} style={{ display: 'flex', gap: 9, alignItems: 'flex-start',
+                background: isAnchor ? '#eef2ff' : '#fafafa', border: `1px solid ${isAnchor ? '#c7d2fe' : '#eef2ff'}`,
+                borderRadius: 8, padding: '8px 10px' }}>
+                <div style={{ flexShrink: 0, width: 24, height: 24, borderRadius: '50%', background: '#4f46e5',
+                  color: '#fff', fontWeight: 800, fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {letter}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 700, color: '#0f172a' }}>{c.label}</span>
+                    {c.result && <span style={{ fontSize: 12, fontWeight: 700, color: '#3730a3' }}>{c.result.score}/100</span>}
+                    {c.result?.percentile != null && (
+                      <span style={{ fontSize: 11, color: '#64748b' }}>{c.result.percentile}th pct in market</span>
+                    )}
+                  </div>
+                  {c.loading && <div style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 2 }}>
+                    <Loader2 size={11} className="spin" style={{ verticalAlign: -1, marginRight: 4 }} />Scoring…</div>}
+                  {c.error && <div style={{ fontSize: 11.5, color: '#b45309', marginTop: 2 }}>{reasonText(c.error)}</div>}
+                  {c.result && (
+                    <div style={{ fontSize: 11.5, color: '#475569', marginTop: 2, lineHeight: 1.45 }}>
+                      ≈{c.result.households_reachable.toLocaleString()} households within 5 mi
+                      {c.result.nearest_competitor_miles != null && ` · nearest competitor ${c.result.nearest_competitor_miles} mi`}
+                      {c.result.best_zone_score != null && (
+                        <> · <span style={{ color: c.result.score >= c.result.best_zone_score ? '#047857' : '#b45309' }}>
+                          {c.result.score >= c.result.best_zone_score ? 'matches' : `${(c.result.best_zone_score - c.result.score).toFixed(0)} below`} the best zone
+                        </span> ({c.result.best_zone_score}/100{c.result.best_zone_locality ? ` near ${c.result.best_zone_locality}` : ''}, {c.result.best_zone_miles} mi away)</>
+                      )}
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', gap: 10, marginTop: 5 }}>
+                    {c.result && (
+                      <button type="button" onClick={() => onAnchor(c.id)}
+                        style={{ padding: 0, background: 'none', border: 'none', cursor: 'pointer',
+                          fontSize: 11, fontWeight: 600, color: isAnchor ? '#4338ca' : '#7c3aed' }}>
+                        {isAnchor ? 'Reset octants to centre' : 'Re-anchor octants here'}
+                      </button>
+                    )}
+                    <button type="button" onClick={() => onRemove(c.id)}
+                      style={{ padding: 0, background: 'none', border: 'none', cursor: 'pointer',
+                        fontSize: 11, fontWeight: 600, color: '#94a3b8' }}>
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+          <button type="button" onClick={onClear}
+            style={{ alignSelf: 'flex-start', padding: 0, background: 'none', border: 'none', cursor: 'pointer',
+              fontSize: 11, fontWeight: 600, color: '#94a3b8' }}>
+            Clear all candidates
+          </button>
+        </div>
       )}
     </div>
   )
