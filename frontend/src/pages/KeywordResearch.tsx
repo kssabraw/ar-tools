@@ -182,9 +182,11 @@ export function KeywordResearch() {
   const [activeCluster, setActiveCluster] = useState<string | null>(null)
   const [downloadErr, setDownloadErr] = useState<string | null>(null)
   const [onlyQuestions, setOnlyQuestions] = useState(false)
+  // Selection is per-run — cleared explicitly at each run switch (see clearSelection
+  // used alongside every setRunId) rather than via a reactive effect, so there's no
+  // set-state-in-effect and no stale-selection flash.
   const [selected, setSelected] = useState<Set<string>>(new Set())
-  // Selection is per-run — clear it when the run changes.
-  useEffect(() => { setSelected(new Set()) }, [runId])
+  const clearSelection = () => setSelected(new Set())
 
   // Open the newest run by default once history loads.
   const [pickedInitial, setPickedInitial] = useState(false)
@@ -211,7 +213,7 @@ export function KeywordResearch() {
     },
     onComplete: (result) => {
       queryClient.invalidateQueries({ queryKey: ['keyword-research', id] })
-      if (result?.run_id) { setRunId(result.run_id); setActiveCluster(null) }
+      if (result?.run_id) { setRunId(result.run_id); setActiveCluster(null); clearSelection() }
     },
     onError: (err) => setResearchError(err === 'job_failed' ? '' : err),
     intervalMs: 2500,
@@ -251,10 +253,15 @@ export function KeywordResearch() {
     },
     onError: () => setTopicError(true),
   })
-  const runTopics = () => {
+  // Start a Topic Research run. Defaults to the current seed box; a caller can
+  // pass an explicit seed set (the callout passes the VIEWED run's seeds so the
+  // CTA researches the run you're looking at, not whatever's in the textarea).
+  // The topic-research endpoint accepts a string or a list, so both are valid.
+  const runTopics = (seedsOverride?: string[]) => {
     setTopicError(false)
+    const payloadSeeds = seedsOverride ?? seeds
     void topicJob.start(async () => {
-      const r = await api.post<{ job_id: string }>(`/clients/${id}/topic-research`, { seeds })
+      const r = await api.post<{ job_id: string }>(`/clients/${id}/topic-research`, { seeds: payloadSeeds })
       return r.job_id
     }, undefined)
   }
@@ -312,6 +319,7 @@ export function KeywordResearch() {
       setRunId(null)
       researchJob.reset()
       setActiveCluster(null)
+      clearSelection()
       setPickedInitial(true) // don't auto-reopen a run after clearing
       queryClient.invalidateQueries({ queryKey: ['keyword-research', id] })
       queryClient.invalidateQueries({ queryKey: ['keyword-research-reports', id] })
@@ -531,9 +539,11 @@ export function KeywordResearch() {
         </div>
       </div>
 
-      {/* Seed suggestions */}
+      {/* Seed suggestions (near the seed box). Suppressed while a thin-result
+          callout is on screen — the callout renders the same chips down at the
+          results, so this avoids showing them twice. */}
       {suggest.isError && <div style={errBox}>{(suggest.error as Error)?.message ?? 'Could not suggest topics.'}</div>}
-      {suggested !== null && (
+      {suggested !== null && !isThinRun && (
         suggested.length ? (
           <div style={{ ...warnBox, background: '#f0f9ff', color: '#0c4a6e', borderColor: '#bae6fd', flexDirection: 'column', alignItems: 'stretch' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, marginBottom: 8 }}>
@@ -564,7 +574,7 @@ export function KeywordResearch() {
           {history!.runs.map((r) => (
             <button
               key={r.id}
-              onClick={() => { setRunId(r.id); setActiveCluster(null) }}
+              onClick={() => { setRunId(r.id); setActiveCluster(null); clearSelection() }}
               style={{ ...chip, ...(runId === r.id ? chipActive : {}) }}
               title={`${r.keyword_count} keywords · ${new Date(r.created_at).toLocaleString()}`}
             >
@@ -599,7 +609,7 @@ export function KeywordResearch() {
             </div>
           </div>
           <button style={{ ...primaryBtn, background: '#7c3aed' }}
-            onClick={runTopics} disabled={topicRunning}>
+            onClick={() => runTopics()} disabled={topicRunning}>
             <Sparkles size={14} /> {topicRunning ? 'Researching…' : topics.length ? 'Re-research topics' : 'Research topics'}
           </button>
         </div>
@@ -701,11 +711,15 @@ export function KeywordResearch() {
                     Not many keywords to choose from{keywords.length > 0 ? ` — ${num(keywords.length)}` : ''}
                   </div>
                   <div style={{ fontSize: 13, color: '#0c4a6e', lineHeight: 1.5, marginBottom: 10 }}>
-                    {thinKind === 'narrow' && (
+                    {thinKind === 'narrow' && (rawPool === 0 ? (
+                      <>The keyword sources didn't return any candidates for these seeds — they're very specific
+                      or unusual. Try a broader core term (drop a qualifier like a brand, model, or
+                      "software/company/platform").</>
+                    ) : (
                       <>The keyword sources only found {num(rawPool)} candidate{rawPool === 1 ? '' : 's'} for these
                       seeds — they're quite specific. A broader core term (drop a qualifier like a brand,
                       model, or "software/company/platform") usually returns more to work with.</>
-                    )}
+                    ))}
                     {thinKind === 'filtered' && (
                       <>We found {num(rawPool)} candidates but only {num(keywords.length)} matched this client's
                       topic and audience. Open <strong>"What we filtered &amp; why"</strong> below to see what was
@@ -726,8 +740,8 @@ export function KeywordResearch() {
                         Broader topics to try — click to add a seed:
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {suggested.map((s) => (
-                          <button key={s} style={suggestChip} onClick={() => addSeed(s)} title="Add to seeds">
+                        {suggested.map((s, i) => (
+                          <button key={`${s}-${i}`} style={suggestChip} onClick={() => addSeed(s)} title="Add to seeds">
                             <Plus size={12} /> {s}
                           </button>
                         ))}
@@ -739,7 +753,7 @@ export function KeywordResearch() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                     <button
                       style={{ ...primaryBtn, background: '#7c3aed', height: 32, padding: '6px 12px' }}
-                      onClick={runTopics}
+                      onClick={() => runTopics(runData?.run?.seeds ?? undefined)}
                       disabled={topicRunning}
                       title="Research the client's buyer problems and site themes instead of seed variations"
                     >
