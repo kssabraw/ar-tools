@@ -6,7 +6,31 @@ from services.census_demand import (
     merge_demand_rows,
     parse_acs_blockgroups,
     parse_tigerweb_centroids,
+    pick_bg_layer,
 )
+
+
+class TestPickBgLayer:
+    # The real tigerWMS_Current layer list (abridged): Tribal Block Groups (6)
+    # comes BEFORE Census Block Groups (10), and each has a Labels twin.
+    LAYERS = [
+        {"id": 6, "name": "Tribal Block Groups"},
+        {"id": 7, "name": "Tribal Block Groups Labels"},
+        {"id": 10, "name": "Census Block Groups"},
+        {"id": 11, "name": "Census Block Groups Labels"},
+    ]
+
+    def test_picks_census_not_tribal_not_label(self):
+        # The live-verification bug: must land on 10, never 6 or 11.
+        assert pick_bg_layer(self.LAYERS) == 10
+
+    def test_fallback_when_no_census_named(self):
+        assert pick_bg_layer([{"id": 3, "name": "Block Groups"},
+                              {"id": 4, "name": "Block Groups Labels"}]) == 3
+
+    def test_none_when_absent(self):
+        assert pick_bg_layer([{"id": 1, "name": "Census Tracts"}]) is None
+        assert pick_bg_layer([]) is None
 
 
 class TestCoerce:

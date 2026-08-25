@@ -241,14 +241,33 @@ async def _fetch_acs_county(client, state: str, county: str) -> list[dict[str, A
 
 
 async def _resolve_bg_layer(client) -> Optional[int]:
-    """Find the TIGERweb layer id whose name is the block-group layer, from the
-    service metadata (robust to layer-id drift across TIGER vintages)."""
+    """The TIGERweb layer id for the **Census Block Groups** polygon layer, from
+    the service metadata (robust to layer-id drift across TIGER vintages).
+
+    Must match "Census Block Groups" specifically: tigerWMS_Current also carries
+    a "Tribal Block Groups" layer AND a "Census Block Groups Labels" annotation
+    layer, and lists Tribal Block Groups (id 6) BEFORE Census Block Groups (id
+    10) — so a bare "block group" substring match picks the wrong (tribal) layer,
+    which has no features for a normal county's GEOIDs (the live-verification
+    bug). Prefer the exact census layer; fall back to any non-tribal, non-label
+    block-group layer."""
     meta = await _get_json(client, _TIGERWEB_SERVICE, {"f": "json"})
     if not isinstance(meta, dict):
         return None
-    for layer in (meta.get("layers") or []):
+    return pick_bg_layer(meta.get("layers") or [])
+
+
+def pick_bg_layer(layers: list[dict[str, Any]]) -> Optional[int]:
+    """Pure layer selection (unit-tested): the Census Block Groups polygon layer
+    id, preferring the exact "census block group" name and excluding label +
+    tribal layers; fallback to any non-tribal, non-label block-group layer."""
+    for layer in layers:
         name = str(layer.get("name") or "").lower()
-        if "block group" in name:
+        if "census block group" in name and "label" not in name:
+            return layer.get("id")
+    for layer in layers:
+        name = str(layer.get("name") or "").lower()
+        if "block group" in name and "tribal" not in name and "label" not in name:
             return layer.get("id")
     return None
 
