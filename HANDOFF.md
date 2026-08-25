@@ -1,6 +1,47 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-25 · **LeadOff market-map "Refresh map" affordance (follow-up #3)** (latest)
+## ⏩ Update — 2026-08-25 · **LeadOff market-map interactions + two-maps sync (PR #721, MERGED + DEPLOYED)** (latest)
+
+Owner-driven UX polish on the live-GBP market map, shipped in the **same PR #721**
+as the Refresh-map affordance below (squash-merged to `main` as `f2da79d`,
+auto-deploys PLATFORM + rebuilds the Netlify frontend). All in
+`frontend/src/components/leadoff/MarketMap.tsx` (+ a `place_id` field threaded
+through `ProximityRead.pins` / `MarketMapPin` in `pages/LeadOff.tsx`).
+
+**What changed, in order of how it landed:**
+- **Per-pin interactivity.** Each competitor pin is a link to its **exact GBP**
+  (`place_id` → `maps/place/?q=place_id:…`, else a name/coord search), and
+  hovering shows a card with the business **name / ★ rating / reviews / distance**
+  plus a "View on Google" link. The hover card flips below the pin for top-row
+  pins and spills past the map edge (outer container `overflow: visible`; the
+  image keeps its clipped rounded border). `place_id` was already captured for
+  live pins by `_map_pins`; it just wasn't typed on the frontend.
+- **Two-maps sync (owner: "users are going to get confused").** The map + pins
+  show only the **ranked competitors we captured** (bounded: SERP depth ~20,
+  coords-required, within the analysis radius, exact keyword). A Google Maps link
+  can't be limited to that exact set — it always renders Google's **full live
+  directory** — so a whole-map "Open in Maps" jump read as the two maps
+  disagreeing. **Resolution (owner chose "exact links only"):** the base map is a
+  **static snapshot, not a link**; the only place-level jump to Google is
+  **per-pin** (place_id-exact, always in sync with what's plotted).
+- **Separate "Browse all …" escape hatch (owner request).** A **clearly-distinct,
+  labelled** link *below* the map — `Browse all "<category>" businesses on Google
+  Maps` with a sub-note that it opens Google's full live directory (more listings
+  than the ranked field above). Framed as its own action, never as "the same
+  map". Driven by a new optional `browseQuery` prop (the market's humanized
+  category slug).
+
+**Why the counts differ (for future reference):** the tool map is the *ranked
+competitive field for one keyword* (a curated, bounded snapshot from a single
+DataForSEO Maps SERP), not the exhaustive local directory Google shows live. This
+is by design; the per-pin `place_id` links are the only guaranteed-exact bridge
+between the two.
+
+Frontend-only; `tsc` + `vite build` clean; platform-api tests green on the merge.
+
+---
+
+## ⏩ Update — 2026-08-25 · **LeadOff market-map "Refresh map" affordance (follow-up #3)**
 
 Follow-up to the live-GBP market map below. Closes the gap where a **fully-cached
 scout can't (re)generate its map**: `fetch_market_pins` (the ~$0.004 Maps SERP
