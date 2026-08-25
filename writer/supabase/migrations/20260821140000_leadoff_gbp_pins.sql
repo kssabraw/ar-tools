@@ -33,3 +33,9 @@ create table if not exists public.leadoff_gbp_pins (
 
 create index if not exists leadoff_gbp_pins_market_idx
   on public.leadoff_gbp_pins (city_id, category_id);
+
+-- RLS on with no policy (service-role only) — mirrors every sibling app-owned
+-- LeadOff table (competitor_locations, leadoff_market_signals, …). The backend
+-- reads/writes with the service role (bypasses RLS); the anon/authenticated
+-- PostgREST roles get no direct access.
+alter table public.leadoff_gbp_pins enable row level security;
