@@ -54,15 +54,21 @@ function gbpUrl(p: MarketMapPin): string {
   return `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`
 }
 
-export function MarketMap({ center, pins, placement = [], gbp = null, radiusMiles }: {
+export function MarketMap({ center, pins, placement = [], gbp = null, radiusMiles, browseQuery }: {
   center: { lat: number; lng: number }
   pins: MarketMapPin[]
   placement?: MarketMapPlacement[]
   gbp?: MarketMapGbp | null
   radiusMiles: number
+  // The market's category (e.g. "chimney sweep"). When set, a clearly-separate
+  // "Browse all … on Google" link is offered BELOW the map — this opens Google's
+  // full live directory (more businesses than the ranked field we plot), so it's
+  // labelled as its own thing, never as "the same map".
+  browseQuery?: string
 }) {
   const [imgError, setImgError] = useState(false)
   const [hovered, setHovered] = useState<number | null>(null)
+  const browse = (browseQuery || '').trim()
 
   // Frame the ~2×radius-mile-wide market. A pasted GBP can sit outside the
   // market, so widen the frame to include it — but only when it's reasonably
@@ -73,6 +79,11 @@ export function MarketMap({ center, pins, placement = [], gbp = null, radiusMile
   const spanMiles = includeGbp ? Math.max(radiusMiles * 2, gbpMiles * 2 + 2) : radiusMiles * 2
   const zoom = fitZoom(center.lat, spanMiles)
   const mapUrl = buildBaseMapUrl(center.lat, center.lng, zoom)
+  // The separate "browse Google's full directory" action (a live category search
+  // at the market centre) — distinct from what the map plots.
+  const browseUrl = browse
+    ? `https://www.google.com/maps/search/${encodeURIComponent(browse)}/@${center.lat},${center.lng},${zoom}z`
+    : null
 
   if (!mapUrl || imgError) {
     return (
@@ -205,6 +216,20 @@ export function MarketMap({ center, pins, placement = [], gbp = null, radiusMile
         Hover a competitor pin for its rating and reviews, or click it to open that business's Google listing.
       </div>
 
+      {/* A clearly-separate escape hatch to Google's FULL directory — labelled as
+          its own thing, since it returns more businesses than the ranked field
+          plotted above (which is why it's not the base-map click). */}
+      {browseUrl && (
+        <div style={{ marginTop: 6 }}>
+          <a href={browseUrl} target="_blank" rel="noreferrer" style={browseLink}>
+            <ExternalLink size={12} /> Browse all "{browse}" businesses on Google Maps
+          </a>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
+            Opens Google's full live directory for this area — more listings than the ranked competitors shown above.
+          </div>
+        </div>
+      )}
+
       {gbp && gbpPos && !gbpPos.inView && (
         <p style={{ fontSize: 11, color: '#b45309', margin: '4px 0 0' }}>
           {gbp.name ?? 'The GBP'} is {gbpMiles.toFixed(1)} mi from the market centre — outside the map view.
@@ -264,4 +289,8 @@ const popoverLink: React.CSSProperties = {
 }
 const legend: React.CSSProperties = {
   display: 'flex', flexWrap: 'wrap', gap: '4px 12px', marginTop: 8,
+}
+const browseLink: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600,
+  color: '#475569', textDecoration: 'none',
 }
