@@ -308,6 +308,108 @@ def test_filter_disabled_keeps_everything():
     assert report["gate"] == "off"
 
 
+def test_filter_per_seed_overlap_kills_multiseed_pooling_flood():
+    # The reported FreightOptics failure (run bedc615e): 4 three-token seeds. The
+    # pooled union {3pl, audit, software, company, platform, parcel, spend,
+    # management} let "password management software" pass on management(one seed) +
+    # software(another) — two tokens NO single seed contains together. Per-seed
+    # overlap drops the whole "X management software" flood while keeping genuinely
+    # on-topic ideas that share ≥2 tokens with ONE real seed.
+    seeds = ["3pl audit software", "3pl audit company",
+             "3pl audit platform", "parcel spend management"]
+    rows = _ideas(
+        "3pl invoice audit",              # {3pl, audit} vs "3pl audit software" = 2 → keep
+        "3pl audit companies",            # {3pl, audit} → keep
+        "password management software",   # management + software (diff seeds) → drop
+        "project management software",    # management + software → drop
+        "property management software",   # management + software → drop
+        "parcel spend analysis",          # {parcel, spend} vs "parcel spend management" = 2 → keep
+    )
+    kept, report = kr.filter_relevant_ideas(rows, seeds, "FreightOptics")
+    kws = {r["keyword"] for r in kept}
+    assert report["gate"] == "coherence"
+    assert "3pl invoice audit" in kws
+    assert "3pl audit companies" in kws
+    assert "parcel spend analysis" in kws
+    assert "password management software" not in kws
+    assert "project management software" not in kws
+    assert "property management software" not in kws
+
+
+def test_filter_multiseed_short_service_seeds_still_broaden():
+    # Two short clean service seeds (no single seed ≥3 tokens, no drift anchor) →
+    # gate stays OFF so cross-topic broadening survives, even though the pooled
+    # union is 4 tokens. The old union rule (len(union) >= 3) would have engaged.
+    rows = _ideas("blocked drain", "hot water repair", "burst pipe")
+    kept, report = kr.filter_relevant_ideas(
+        rows, ["emergency plumber", "drain cleaning"], "Acme Plumbing")
+    assert len(kept) == 3
+    assert report["gate"] == "none"
+
+
+# --- detect_cluster_dominance -------------------------------------------------
+def test_cluster_dominance_flags_offseed_majority():
+    clusters = [
+        {"label": "management", "keyword_count": 60, "total_volume": 100},
+        {"label": "audit", "keyword_count": 40, "total_volume": 50},
+    ]
+    d = kr.detect_cluster_dominance(clusters, 100, ["3pl audit", "parcel spend"])
+    assert d is not None and d["label"] == "management" and d["fraction"] == 0.6
+
+
+def test_cluster_dominance_silent_when_head_is_a_seed_term():
+    # "<service> <city>" runs legitimately cluster under the service (a seed token).
+    clusters = [{"label": "plumber", "keyword_count": 70, "total_volume": 100}]
+    assert kr.detect_cluster_dominance(clusters, 100, ["emergency plumber"]) is None
+
+
+def test_cluster_dominance_silent_on_small_run_and_other():
+    big = [{"label": "widget", "keyword_count": 9, "total_volume": 10}]
+    assert kr.detect_cluster_dominance(big, 10, ["gadget"]) is None   # below min_count
+    other = [{"label": "other", "keyword_count": 60, "total_volume": 0}]
+    assert kr.detect_cluster_dominance(other, 100, ["gadget"]) is None
+
+
+def test_cluster_dominance_silent_below_fraction():
+    clusters = [{"label": "management", "keyword_count": 30, "total_volume": 10},
+                {"label": "audit", "keyword_count": 70, "total_volume": 10}]
+    # Top cluster "audit" is 70% but IS a seed term; "management" is only 30%.
+    assert kr.detect_cluster_dominance(clusters, 100, ["3pl audit"]) is None
+
+
+# --- build_filter_summary -----------------------------------------------------
+def test_build_filter_summary_reconciles_and_tallies():
+    dropped = [
+        {"keyword": "project management software", "reason": "Off your seed topic (category drift)"},
+        {"keyword": "password manager", "reason": "Off your seed topic (category drift)"},
+        {"keyword": "3pl invoice audit", "reason": "Not topically relevant"},  # survived elsewhere
+        {"keyword": "PROJECT management software", "reason": "dup"},           # dupe (normalized)
+    ]
+    fs = kr.build_filter_summary(
+        raw_pool=50, kept=8, dropped_detail=dropped,
+        final_keywords=["3pl invoice audit", "freight audit"],
+        filter_warnings=["Filtered 2 keywords."],
+    )
+    assert fs["raw_pool"] == 50 and fs["kept"] == 8
+    kws = {d["keyword"] for d in fs["dropped"]}
+    # a keyword present in final results is never reported as dropped
+    assert "3pl invoice audit" not in kws
+    # deduped by normalized keyword (kept first reason)
+    assert fs["dropped_total"] == 2
+    assert fs["by_reason"][0]["reason"] == "Off your seed topic (category drift)"
+    assert fs["by_reason"][0]["count"] == 2
+    assert fs["warnings"] == ["Filtered 2 keywords."]
+
+
+def test_build_filter_summary_caps_sample():
+    dropped = [{"keyword": f"kw {i}", "reason": "drift"} for i in range(200)]
+    fs = kr.build_filter_summary(
+        raw_pool=200, kept=0, dropped_detail=dropped,
+        final_keywords=[], filter_warnings=[], cap=10)
+    assert len(fs["dropped"]) == 10
+    assert fs["dropped_total"] == 200
+
+
 def test_looks_like_brand_seed():
     assert kr.looks_like_brand_seed("henson architect", "Henson Architects")
     assert kr.looks_like_brand_seed("henson architects sydney", "Henson Architects")  # 2/3 brand

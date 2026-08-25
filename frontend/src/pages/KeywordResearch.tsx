@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, CalendarPlus, Download, FileText, HelpCircle, Lightbulb, MessageCircleQuestion, Plus, RefreshCw, Search, Sparkles, Trash2, Trophy } from 'lucide-react'
+import { ArrowLeft, CalendarPlus, ChevronDown, Download, FileText, Filter, HelpCircle, Lightbulb, MessageCircleQuestion, Plus, RefreshCw, Search, Sparkles, Trash2, Trophy } from 'lucide-react'
 import { api } from '../lib/api'
 import { useResumableJob } from '../lib/useResumableJob'
 import type { Client } from '../lib/types'
@@ -67,11 +67,19 @@ interface TopicRun {
 }
 interface TopicResearch {
   enabled: boolean
-  site: { source: string; topics: string[] }
+  site: { source: string; topics: string[]; anchor_topics?: string[] }
   intents: string[]
   expansion_seeds: string[]
   anchors: string[]
   relevance?: { gate: string; floor?: number; scored?: number; kept?: number; dropped?: number }
+}
+interface FilterSummary {
+  raw_pool: number
+  kept: number
+  dropped_total: number
+  by_reason: { reason: string; count: number }[]
+  dropped: { keyword: string; reason: string }[]
+  warnings?: string[]
 }
 interface ClusterSummary {
   label: string
@@ -101,7 +109,7 @@ interface SerpIntel {
   paa: string[]
 }
 interface RunResponse {
-  run: (RunSummary & { location_code: number | null; language_code: string | null; serp_intel: SerpIntel | null; topic_research: TopicResearch | null; blog_topics: BlogTopic[] | null }) | null
+  run: (RunSummary & { location_code: number | null; language_code: string | null; serp_intel: SerpIntel | null; topic_research: TopicResearch | null; blog_topics: BlogTopic[] | null; filter_summary: FilterSummary | null }) | null
   keywords: ResearchKeyword[]
   clusters: ClusterSummary[]
   warnings?: string[]
@@ -329,6 +337,9 @@ export function KeywordResearch() {
   const clusters = useMemo(() => runData?.clusters ?? [], [runData])
   const serpIntel = runData?.run?.serp_intel ?? null
   const topicResearch = runData?.run?.topic_research ?? null
+  const filterSummary = runData?.run?.filter_summary ?? null
+  const [showFiltered, setShowFiltered] = useState(false)
+  useEffect(() => { setShowFiltered(false) }, [runId])
 
   const filtered = useMemo(() => {
     let ks = keywords
@@ -646,11 +657,74 @@ export function KeywordResearch() {
           {(runData?.warnings?.length ?? 0) > 0 && (
             <div style={warnBox}>
               <HelpCircle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
-              <div>
+              <div style={{ flex: 1 }}>
                 {runData!.warnings!.map((w, i) => (
                   <div key={i} style={{ marginBottom: i < runData!.warnings!.length - 1 ? 4 : 0 }}>{w}</div>
                 ))}
+                {/* Thin raw pool → the guidance names "Suggest topics"; put the
+                    button right here so it's one click, not a scroll back up. */}
+                {(filterSummary?.raw_pool ?? 99) < 25 && (
+                  <button
+                    style={{ ...ghostBtn, marginTop: 8, height: 28, padding: '3px 10px', fontSize: 12 }}
+                    onClick={() => suggest.mutate()}
+                    disabled={suggest.isPending}
+                  >
+                    <Lightbulb size={13} /> {suggest.isPending ? 'Thinking…' : 'Suggest broader topics'}
+                  </button>
+                )}
               </div>
+            </div>
+          )}
+
+          {/* Filter transparency — "what we filtered and why" (#4). Shows the raw
+              pool → kept counts, per-reason tallies, and an expandable list of the
+              actual dropped keywords so a VA can SEE what was cut, not guess. */}
+          {filterSummary && filterSummary.dropped_total > 0 && (
+            <div style={filterCard}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{ ...intelHead, marginBottom: 0 }}><Filter size={14} /> What we filtered &amp; why</div>
+                <span style={{ fontSize: 12, color: '#64748b' }}>
+                  {num(filterSummary.raw_pool)} candidate{filterSummary.raw_pool === 1 ? '' : 's'} found
+                  {' · '}{num(filterSummary.kept)} kept
+                  {' · '}{num(filterSummary.dropped_total)} filtered out
+                </span>
+              </div>
+              <div style={{ fontSize: 11, color: '#94a3b8', margin: '4px 0 8px' }}>
+                Filtering keeps the results on-topic and buyer-relevant. Everything removed is listed below.
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {filterSummary.by_reason.map((r) => (
+                  <span key={r.reason} style={reasonChip}>
+                    <strong>{num(r.count)}</strong> · {r.reason}
+                  </span>
+                ))}
+              </div>
+              {filterSummary.dropped.length > 0 && (
+                <>
+                  <button
+                    style={{ ...linkBtn, display: 'inline-flex', alignItems: 'center', gap: 3, marginTop: 10 }}
+                    onClick={() => setShowFiltered((v) => !v)}
+                  >
+                    {showFiltered ? 'Hide' : `Show the ${num(filterSummary.dropped.length)} filtered-out keyword${filterSummary.dropped.length === 1 ? '' : 's'}`}
+                    <ChevronDown size={13} style={{ transform: showFiltered ? 'rotate(180deg)' : undefined, transition: 'transform 120ms' }} />
+                  </button>
+                  {showFiltered && (
+                    <div style={{ marginTop: 8, maxHeight: 260, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
+                      {filterSummary.dropped.map((d, i) => (
+                        <div key={`${d.keyword}-${i}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '5px 10px', borderTop: i ? '1px solid #f1f5f9' : undefined, fontSize: 12 }}>
+                          <span style={{ color: '#475569', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.keyword}</span>
+                          <span style={{ color: '#94a3b8', flexShrink: 0 }}>{d.reason}</span>
+                        </div>
+                      ))}
+                      {filterSummary.dropped_total > filterSummary.dropped.length && (
+                        <div style={{ padding: '5px 10px', borderTop: '1px solid #f1f5f9', fontSize: 11, color: '#94a3b8' }}>
+                          Showing {num(filterSummary.dropped.length)} of {num(filterSummary.dropped_total)} filtered keywords.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           )}
 
@@ -1001,6 +1075,8 @@ const suggestChip: React.CSSProperties = { display: 'inline-flex', alignItems: '
 const seedChip: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px 4px 12px', background: '#eef2ff', color: '#3730a3', border: '1px solid #c7d2fe', borderRadius: 999, fontSize: 12, fontWeight: 500 }
 const seedRemoveBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, marginLeft: 2, padding: 0, background: 'transparent', color: '#6366f1', border: 'none', borderRadius: 999, fontSize: 14, lineHeight: 1, cursor: 'pointer' }
 const intelCard: React.CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 10, padding: '12px 14px', background: '#fff' }
+const filterCard: React.CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 10, padding: '12px 14px', background: '#f8fafc', marginBottom: 16 }
+const reasonChip: React.CSSProperties = { padding: '3px 9px', background: '#fff', color: '#475569', border: '1px solid #e2e8f0', borderRadius: 999, fontSize: 12 }
 const intelHead: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: '#334155', marginBottom: 4 }
 const clusterChipActive: React.CSSProperties = { background: '#eff6ff', color: '#1d4ed8', borderColor: '#93c5fd', fontWeight: 600 }
 const th: React.CSSProperties = { textAlign: 'left', padding: '9px 12px', background: '#f8fafc', color: '#475569', fontWeight: 600, fontSize: 12, whiteSpace: 'nowrap' }

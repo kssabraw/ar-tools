@@ -959,6 +959,11 @@ class Settings(BaseSettings):
     # A seed is flagged as "essentially the business name" (advisory warning) when
     # at least this fraction of its tokens are the client's brand tokens.
     keyword_research_brand_seed_ratio: float = 0.6
+    # Below this many RAW keyword candidates (unique, before any gate), a run warns
+    # that the seeds are too specific for the expansion sources — the niche-seed
+    # guidance. Measured on the raw pool, so a big pool trimmed by the gates never
+    # trips it. FreightOptics' 3-word "3pl audit software" seeds returned ~16.
+    keyword_research_thin_pool_min: int = 25
     # Primary expansion source: keyword_suggestions (phrase-containment — every
     # result contains the seed phrase, so it stays tightly on-topic). One billed
     # call per seed. Set False to use keyword_ideas alone (the old behaviour).
