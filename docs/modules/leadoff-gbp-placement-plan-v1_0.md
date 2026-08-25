@@ -283,6 +283,25 @@ live-verified).**
   defense. Only active when zones are available; the legacy GBP reference-pin
   input stays for the proximity-only (no-zones) path. `tsc -b` clean.
 
+**Prod verification (2026-08-25, PR #725 merged + deployed).** A live
+`leadoff_placement` run on the seeded KC / pest_control market confirmed: **ACS
+works in prod** (Jackson County MO 631 block groups; 1,494 across the 5
+auto-discovered KC-metro counties — county discovery correct), and **TIGERweb
+metadata is reachable** (block-group layer id 6 resolved). Two bugs the run
+exposed, fixed in the follow-up:
+- `enqueue_placement` set `entity_id = str(city_id)`, but `async_jobs.entity_id`
+  is a **UUID** column — so the auto-enqueue on an uncached market would throw
+  (placement stuck at `placement_error`). Now stamps `uuid4()` and dedupes an
+  in-flight job by the payload's `city_id`.
+- The TIGERweb per-county centroid query (`STATE='..' AND COUNTY='..'`,
+  `outFields=GEOID,CENTLAT,CENTLON`) returned **0 features**, so every row
+  dropped (`block_groups_written: 0`). Made robust — query by `GEOID LIKE
+  '<fips>%'` with `outFields=*` (immune to STATE/COUNTY/CENTLAT field-name
+  drift; the parser reads CENTLAT/CENTLON or INTPTLAT/INTPTLON) + a one-shot
+  `tigerweb_diag` (layer list + raw one-row query shape) persisted on the job
+  row when centroids still come back empty, so a remaining failure is
+  debuggable without hitting the endpoint by hand.
+
 - **Not yet built:** Phase 3 paid ZIP layer; the calibration freeze (§8).
 
 ## 10. Config (planned knobs, `config.py`)

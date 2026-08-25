@@ -255,15 +255,47 @@ async def _resolve_bg_layer(client) -> Optional[int]:
 
 async def _fetch_centroids_county(client, state: str, county: str,
                                   layer_id: int) -> dict[str, tuple[float, float]]:
+    """Block-group centroids for a county from TIGERweb. Queries by GEOID prefix
+    (state+county) with outFields=* — robust to STATE/COUNTY/CENTLAT field-name
+    differences across TIGER vintages; parse_tigerweb_centroids reads CENTLAT/
+    CENTLON or the INTPTLAT/INTPTLON internal point."""
     url = f"{_TIGERWEB_SERVICE}/{layer_id}/query"
     params = {
-        "where": f"STATE='{state}' AND COUNTY='{county}'",
-        "outFields": "GEOID,CENTLAT,CENTLON",
+        "where": f"GEOID LIKE '{state}{county}%'",
+        "outFields": "*",
         "returnGeometry": "false",
         "f": "json",
     }
     data = await _get_json(client, url, params)
     return parse_tigerweb_centroids(data) if isinstance(data, dict) else {}
+
+
+async def _tigerweb_diag(client, state: str, county: str,
+                         layer_id: Optional[int]) -> dict[str, Any]:
+    """One-shot diagnostic when centroids come back empty: the resolved layer
+    list + a raw one-row county query (response keys / feature count / any error
+    / the first feature's attribute names) so a failed TIGERweb pull is
+    debuggable from the job row without hitting the endpoint by hand."""
+    out: dict[str, Any] = {}
+    meta = await _get_json(client, _TIGERWEB_SERVICE, {"f": "json"})
+    if isinstance(meta, dict):
+        out["layers"] = [{"id": lyr.get("id"), "name": lyr.get("name")}
+                         for lyr in (meta.get("layers") or [])][:40]
+    if layer_id is not None:
+        data = await _get_json(client, f"{_TIGERWEB_SERVICE}/{layer_id}/query", {
+            "where": f"GEOID LIKE '{state}{county}%'", "outFields": "*",
+            "returnGeometry": "false", "resultRecordCount": 1, "f": "json"})
+        if isinstance(data, dict):
+            feats = data.get("features") or []
+            out["query_keys"] = list(data.keys())
+            out["feature_count"] = len(feats)
+            if "error" in data:
+                out["error"] = str(data.get("error"))[:400]
+            if feats:
+                out["first_attrs"] = list((feats[0].get("attributes") or {}).keys())
+        else:
+            out["query_raw_type"] = str(type(data))
+    return out
 
 
 # ── Cache access ──────────────────────────────────────────────────────────────
@@ -325,9 +357,12 @@ def enqueue_placement(city_id: int, category_id: str,
     is already pending/running for this market. Returns the job id to poll."""
     from db.supabase_client import get_supabase
     supabase = get_supabase()
+    # async_jobs.entity_id is a UUID column, so the market key lives in the
+    # payload (which run_placement_job reads) — dedupe an in-flight job for this
+    # market via the payload's city_id, and stamp a real UUID entity_id.
     existing = (supabase.table("async_jobs").select("id")
                 .eq("job_type", "leadoff_placement")
-                .eq("entity_id", str(city_id))
+                .eq("payload->>city_id", str(city_id))
                 .in_("status", ["pending", "running"]).limit(1)
                 .execute().data or [])
     if existing:
@@ -336,7 +371,7 @@ def enqueue_placement(city_id: int, category_id: str,
     if user_id:
         payload["user_id"] = user_id
     row = (supabase.table("async_jobs").insert({
-        "job_type": "leadoff_placement", "entity_id": str(city_id),
+        "job_type": "leadoff_placement", "entity_id": str(uuid.uuid4()),
         "payload": payload, "max_attempts": 3}).execute().data or [])
     return row[0]["id"] if row else None
 
@@ -366,6 +401,7 @@ async def run_placement_job(job: dict) -> None:
 
         per_county: dict[str, dict[str, Any]] = {}
         centroid_sample: list[dict[str, Any]] = []
+        tigerweb_diag: Optional[dict[str, Any]] = None
         async with httpx.AsyncClient(follow_redirects=True) as client:
             counties = await discover_counties(client, center[0], center[1],
                                                radius, primary)
@@ -391,6 +427,16 @@ async def run_placement_job(job: dict) -> None:
                                     "written": len(rows)}
                 await asyncio.sleep(_STATE_PAUSE)
 
+            # If TIGERweb yielded no centroids despite ACS data, capture the raw
+            # response shape (layers + one-row query) so the failure is
+            # debuggable from the job row (runs while the client is still open).
+            if (sum(v.get("written", 0) for v in per_county.values()) == 0
+                    and any(v.get("acs", 0) for v in per_county.values())):
+                probe = primary or (sorted(counties)[0] if counties else None)
+                if probe:
+                    tigerweb_diag = await _tigerweb_diag(
+                        client, probe[:2], probe[2:], layer_id)
+
         total_written = sum(v.get("written", 0) for v in per_county.values())
         result = {
             "city_id": city_id, "primary_county": primary,
@@ -399,6 +445,7 @@ async def run_placement_job(job: dict) -> None:
             "tigerweb_layer_id": layer_id,
             "block_groups_written": total_written,
             "centroid_sample": centroid_sample,
+            "tigerweb_diag": tigerweb_diag,
             "acs_year": settings.leadoff_income_acs_year,
             "note": ("Demand surface cached; placement zones are computed on "
                      "read. If centroids=0 for every county, TIGERweb "
