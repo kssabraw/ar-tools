@@ -316,14 +316,22 @@ _OWNER_RELATIONS = ("founder", "founders")
 _STAFF_RELATIONS = ("employee", "employees", "member", "members")
 
 
-def _iter_json_nodes(node: Any):
+# A depth bound on the JSON-LD walk so a maliciously (or accidentally) deep structure can't blow the
+# recursion limit — `extract_names` promises never to raise, and the producer treats a raise as a
+# per-prospect failure. Real schema.org graphs are a handful of levels deep.
+_JSONLD_MAX_DEPTH = 200
+
+
+def _iter_json_nodes(node: Any, _depth: int = 0):
+    if _depth > _JSONLD_MAX_DEPTH:
+        return
     if isinstance(node, dict):
         yield node
         for value in node.values():
-            yield from _iter_json_nodes(value)
+            yield from _iter_json_nodes(value, _depth + 1)
     elif isinstance(node, list):
         for item in node:
-            yield from _iter_json_nodes(item)
+            yield from _iter_json_nodes(item, _depth + 1)
 
 
 def _person_name(node: Any) -> str | None:
@@ -364,7 +372,9 @@ def _extract_jsonld(html: str, *, business_tokens: frozenset[str],
         raw = _html.unescape(block).strip()
         try:
             data = json.loads(raw)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
+            # Malformed OR pathologically deep — either way, skip this block. extract_names must
+            # never raise (the producer treats a raise as a per-prospect failure).
             continue
         for node in _iter_json_nodes(data):
             if not isinstance(node, dict):
