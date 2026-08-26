@@ -1,6 +1,161 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-26 · **LeadOff GBP Placement Advisor — built + LIVE + prod-verified** (latest)
+## ⏩ Update — 2026-08-26 · **Website Builder — where it actually stands, and the informational content creator (NOT built, next build)** (latest)
+
+Nothing was built in this pass. This section records **what is finished**, the
+one thing that was silently broken and is now fixed, and a precise map of the
+**informational gap** — written so the next chat can start building instead of
+re-deriving it.
+
+### Finished since the 2026-08-07 section
+
+- **PR #575 merged** (`6e12bbb`) — theme compiler, core-pages writer, imagery.
+- **PR #577 merged** (`473feee`) — the **per-site business-facts Settings tab**
+  (`services/website_settings.py` + `components/website/SettingsTab.tsx`). Seven
+  editable NAP/business facts, each stamped `provenance:"user"` so a later GBP
+  re-scan fills **gaps only** and never overwrites a typed value; clearing a
+  field drops the value *and* its stamp so it hands back to GBP. Saving
+  re-commits `site.config.json` via `record_deploy(..., trigger="config")`. The
+  pure helpers are tested against the **real** `build_site_config` fill step,
+  because the editor and the fill step are only correct together.
+- **PR #622 merged** (`c0397f7`) — ten defects from an adversarial re-read.
+- **PR #624 / #681** — flags-on record, then design-fidelity layout variants.
+- **Flags ON in production** (`WEBSITE_BUILDER_ENABLED` +
+  `WEBSITE_IMAGES_ENABLED` on PLATFORM). Code defaults stay `False`, so a fresh
+  environment still ships dark. Verified **behaviourally** (Railway redacts
+  variable values for OAuth callers): the logs show `enqueue_due_deploy_polls`
+  running its query, which returns early when the flag is off.
+- **Nothing has ever been created by the module.** `websites`, `website_themes`,
+  `website_pages`, `website_deploys` are all **0 rows**. (The 16 `website_*`
+  jobs in `async_jobs` are the unrelated `website_scrape` client-site scraper.)
+
+### The two bugs worth remembering
+
+**1 · The narrowed select.** `website_generate` fetched the site row with
+`.select("id, client_id, name")`. Every downstream writer therefore saw
+`config == {}` and `site_type == "informational"` — so a business fact typed into
+the Settings tab was silently ignored in favour of GBP, the tagline never reached
+the prompt, and **every local site would have been written with informational
+framing**. Fixed to `.select("*")`.
+
+The part worth keeping: **my first regression test passed against the broken
+code.** The test fake ignored column projection and returned whole rows whatever
+was asked for. A fake more generous than the real dependency cannot catch that
+class of bug. `tests/test_website_generate.py::_supabase` now honours
+`.select(...)`, and the fix was verified fail-on-old / pass-on-new.
+
+**2 · The stale template repo.** `kssabraw/ar-site-template` — the repo every
+site is minted from — had not been synced since 2026-08-03. It was missing the
+`site.ts` crash fix, the `hubs.ts`/nav fix, both hub routes and
+`[...path].astro`. **Every site provisioned from it would have failed its first
+build.** Full tree replacement pushed as `24e8416`. There is no automation
+keeping `site-template/` and the GitHub template repo in sync; that is a real
+gap, and re-checking it is cheap.
+
+The other eight fixes, briefly: fonts failing open when the census measured none
+(the one case the model had nothing to copy from was the one case it was free to
+invent — now `no_fonts_measured`); raw `website_deploys` inserts bypassing
+`record_deploy`, so a deploy chip sat at `queued` until the next scheduler sweep;
+`site_type` never reaching the core-pages prompt (it is live now, with an
+explicit informational framing that forbids sales copy); `_clean` treating a JSON
+*number* as a clear, which deleted a field and dropped its `user` stamp;
+`business.hours`/`areaServed` missing from `build_site_config`, which would have
+crashed the **first** contact-page build of any local site (fixed at both the
+producer and the template layer); six reads per save; a provision/settings config
+clobber; brand tone read from the wrong nesting level; and a dead
+`website_image_provider` setting, removed.
+
+### Is it usable end to end?
+
+**Local / lead-gen: yes, on paper** — design → theme → provision → plan →
+generate → publish → deploy is wired and each stage is tested. **It has never
+been run against a real design for a real client**, so the first live run should
+be treated as a smoke test, not a delivery.
+
+**Informational: no.** A plan for an informational site contains four content
+pages and a blog archive with nothing in it.
+
+### The informational gap, precisely
+
+The **rendering half is already complete** — this is the surprising part, and it
+means the build is smaller than it looks:
+
+| Already built | Where |
+|---|---|
+| `posts` collection, five formats (`informational_cluster`/`listicle`/`comparison`/`local_geo`/`news`) | `site-template/src/content.config.ts:100` |
+| `/blog/[...slug]` route + archive | `site-template/src/pages/blog/` |
+| `post` → `posts` collection mapping | `website_content.py:41` |
+| Post-specific `entry_id` (entry id IS the slug — a full-path id would publish `/blog/blog-my-post/`) | `website_content.py:122` |
+| The **strict** post publish gate | `website_content.py:272` |
+| Post body assembled from a blog run's `module_outputs` markdown | `website_publish.resolve_source`, `kind == "run"` |
+| `post` is hero-eligible and its image prompt is never geo-tagged | `website_images.py` |
+
+The post gate is deliberately stricter than anywhere a human is in the loop,
+because auto-publish means nobody reads a post before the public does: a critical
+voice violation and a `-degraded` writer run are **non-overridable**; frontmatter
+must carry title/description/format; a `news` post must carry `reviewBy`
+(non-evergreen + auto-publish + no expiry is how a site ranks on stale
+information indefinitely). Keep that; do not soften it to make the first post
+ship.
+
+**What is missing is the planning and generation half — five things:**
+
+1. **`website_plan.build_plan` never plans a post.** Every non-geo site falls
+   through the `else` branch, so an informational plan is home / about-us /
+   contact-us / privacy-policy / sitemap / blog. No pillars, no clusters, no
+   posts. (`website_plan.py:608`)
+2. **No `post` engine.** `generation_inputs` returns `{"engine": None}` for any
+   page type outside `NLP_PAGE_TYPES` ∪ `CORE_PAGE_TYPES` ∪
+   `TEMPLATE_ONLY_PAGE_TYPES`, so a planned post would report
+   `engine_unavailable:post`. (`website_plan.py:635`, `:717`)
+3. **No post frontmatter.** `frontmatter_extra` has no `post` branch, so
+   `format`/`silo`/`cluster` would be absent and the publish gate would —
+   correctly — refuse the page. (`website_plan.py:645`)
+4. **No generation branch.** `website_generate` has no path that starts a Blog
+   Writer run and links it back as `content_source="run"` +
+   `source_id=<run_id>`. The publish side of that contract already exists.
+5. **Pillar / Hub does not exist at all.** Reference §5.3: `/{topic-slug}/`,
+   2,000–4,000 words, Writer #6, planner trigger *a cluster of ≥ 5 posts*. No
+   page type, no collection, no route — yet it is the parent every cluster post
+   links up to, so a cluster of posts with no pillar is not the page type the
+   reference describes.
+
+**The cluster map already exists and is unwired.**
+`keyword_topic_strategist` emits exactly the shape the planner needs:
+
+```
+{assessment, pillars: [{pillar, rationale,
+  clusters: [{title, buyer_problem, search_intent, funnel_stage,
+              target_keywords, questions, priority, rationale}]}]}
+```
+
+and `keyword_research_handoff` already turns selected keywords into a Fanout
+session whose scheduler writes blog posts (`content_type` blog_post |
+local_seo_page). `website_plan`'s own docstring records the standing assumption
+that *"the fan-out owns an informational site's post plan"*.
+
+**That assumption is the first decision of the next build**, and it should be
+made explicitly rather than inherited: either the site plan *reads* an existing
+strategist/Fanout plan (cheap, reuses a tested path, but couples site structure
+to a research run), or the Website Builder owns its own cluster inventory
+(more work, but the plan is then a property of the site and survives a
+re-research). Both are defensible; picking silently is not.
+
+Two reference rules the planner must encode either way: **blog posts are planned
+per cluster, never ad hoc** — every post carries a silo and a target format
+*before* generation — and the `news` format is **non-evergreen and excluded from
+pillar-cluster math**.
+
+### Verification rule that keeps earning its keep
+
+Build **both** site types in `site-template/` — not just the unit tests. That is
+what caught the variable-font duplication (same bytes downloaded 3× under 3
+names, masked by the bundler's content hashing), the `sections` key missing from
+the frontmatter order (home copy silently dropped while reporting success), and
+the contact-page crash. Unit tests found none of the three.
+
+
+## ⏩ Update — 2026-08-26 · **LeadOff GBP Placement Advisor — built + LIVE + prod-verified**
 
 The demand-aware **"where should the GBP live"** module — the demand-side upgrade
 of the competition-only Proximity signal (an empty octant can be empty of
