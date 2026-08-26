@@ -518,16 +518,15 @@ def _rebuild_after_content_plan(website_id: str) -> dict:
 async def set_content_plan(
     website_id: str, body: ContentPlanRequest, auth: dict = Depends(require_staff)
 ) -> dict:
-    """Set an informational site's content plan, then rebuild the plan rows.
+    """Set a site's blog content plan, then rebuild the plan rows.
 
-    The content plan is the site's own inventory; a geo site has none, so this is
-    refused for a non-informational site rather than storing a plan nothing reads.
+    Valid for every site type: blog posts are cross-family (reference §5.3), so a
+    local site's content plan seeds its blog alongside its service/location pages,
+    and an informational site's IS its whole inventory.
     """
     _enabled()
     website = _load_site(website_id)
     assert_not_frozen(website["client_id"])
-    if (website.get("site_type") or "") != "informational":
-        raise HTTPException(status_code=409, detail="content_plan_only_for_informational_sites")
 
     config = dict(website.get("config") or {})
     config["content_plan"] = body.content_plan or {}

@@ -464,3 +464,42 @@ class TestInformationalPlan:
         )
         plan = wp.build_plan(site_type="informational", catalog=[], cities=[], content_plan=cp)
         assert any(i.kind == "reserved_slug" and i.blocking for i in plan.issues)
+
+
+class TestLocalSiteBlog:
+    def test_a_local_site_with_a_content_plan_gets_both_geo_and_blog(self):
+        # Reference §5.3: blog posts are cross-family, so a local business's blog
+        # is planned from its content plan ON TOP of its service/location pages.
+        cp = _content_plan([("Roof care tips", "listicle")], pillar="Roof Care", slug="roof-care")
+        plan = wp.build_plan(
+            site_type="local_business", catalog=CATALOG, cities=CITIES, content_plan=cp
+        )
+        types = {p.page_type for p in plan.pages}
+        assert {"service", "location", "local_landing"} <= types  # geo half
+        assert "post" in types                                     # blog half
+        assert "/blog/roof-care-tips/" in {p.path for p in plan.pages}
+
+    def test_a_local_site_without_a_content_plan_is_unchanged(self):
+        plan = wp.build_plan(site_type="local_business", catalog=CATALOG, cities=CITIES)
+        assert not any(p.page_type in {"post", "pillar"} for p in plan.pages)
+
+    def test_a_local_blog_cluster_of_five_earns_a_pillar(self):
+        cp = _content_plan(
+            [(f"Post {i}", "informational_cluster") for i in range(5)],
+            pillar="Roofing Guide", slug="roofing-guide",
+        )
+        plan = wp.build_plan(
+            site_type="local_business", catalog=CATALOG, cities=CITIES, content_plan=cp
+        )
+        assert "/roofing-guide/" in {p.path for p in plan.pages if p.page_type == "pillar"}
+
+    def test_a_pillar_colliding_with_a_service_slug_is_a_planning_error(self):
+        # The pillar's top-level slug shares the local root namespace with
+        # services, so a clash is a duplicate_path the reviewer must resolve.
+        cp = _content_plan(
+            [(f"P{i}", "informational_cluster") for i in range(5)],
+            pillar="Roof Repair", slug="roof-repair",
+        )
+        catalog = [svc("Roof Repair", order=10)]
+        plan = wp.build_plan(site_type="local_business", catalog=catalog, cities=CITIES, content_plan=cp)
+        assert any(i.kind == "duplicate_path" and i.blocking for i in plan.issues)

@@ -218,9 +218,7 @@ def import_from_fanout(
     client_id; an unlinked one carries none and is allowed, since option 1 needs
     only the keywords).
     """
-    if (website.get("site_type") or "") != "informational":
-        raise SeedError("content_plan_only_for_informational_sites")
-
+    # Valid for any site type — a local site's blog seeds from a Fanout run too.
     config = dict(website.get("config") or {})
     existing = config.get("content_plan") or {}
     if (existing.get("pillars") or []) and not replace:
@@ -322,9 +320,8 @@ def import_from_strategist(website: dict, *, replace: bool = False) -> dict:
     """
     from services import keyword_topic_research
 
-    if (website.get("site_type") or "") not in ("informational",):
-        raise SeedError("content_plan_only_for_informational_sites")
-
+    # Every site type has a blog (reference §5.3: posts are cross-family), so a
+    # content plan is valid on a local site too — it seeds that site's blog.
     config = dict(website.get("config") or {})
     existing = config.get("content_plan") or {}
     if (existing.get("pillars") or []) and not replace:

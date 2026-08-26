@@ -855,15 +855,18 @@ def build_plan(
 ) -> SitePlan:
     """The full inventory for a site, ordered by priority tier.
 
-    A geo site is planned from its service catalog x cities; an informational
-    site is planned from its own `content_plan` (pillars -> posts). The two are
-    disjoint by construction — a geo site has no content plan pages and an
-    informational site has no matrix — so a site is never both.
+    A geo site is planned from its service catalog x cities; the content plan
+    (pillars -> posts) is planned for EVERY site type on top of that, because
+    blog posts are cross-family (reference §5.3: "every site family uses them")
+    — a local business's blog is where its informational cluster posts and its
+    SOP-sanctioned Local Geo posts live, feeding the same silos as its money
+    pages. An informational site simply has no geo half. So the two halves
+    compose; a local site with a content plan gets both, and its blog archive is
+    no longer a page with nothing planned to fill it.
     """
     catalog = list(catalog)
     cities = list(cities)
     multi_city = len(cities) > 1
-    pillars: list[PillarEntry] = []
 
     pages = core_pages(site_type)
     if site_type in GEO_SITE_TYPES:
@@ -874,8 +877,11 @@ def build_plan(
         pages += conditional_pages(catalog, cities, multi_city=multi_city)
     else:
         matrix = []
-        pillars = content_plan_pillars(content_plan)
-        pages += informational_pages(pillars)
+
+    # The blog: planned for every site type from its own content plan (empty when
+    # a site has none, so this is inert on a geo site that hasn't seeded one).
+    pillars = content_plan_pillars(content_plan)
+    pages += informational_pages(pillars)
 
     links = links_per_index(pages)
     # A pillar links down to every child post in its silo (reference §5.3). The

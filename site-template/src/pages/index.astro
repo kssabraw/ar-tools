@@ -26,8 +26,9 @@ const posts = await allPosts();
 const pages = isLocal ? await routedPages() : [];
 const services = pages.filter((p) => p.pageType === 'service');
 const locations = pages.filter((p) => p.pageType === 'location');
-// Informational sites lead with their pillar hubs, not services/cities.
-const pillars = isLocal ? [] : await pillarRoutedPages();
+// Pillar/hub guides — shown on any site that has them (a local business's blog
+// can have topic hubs too, reference §5.3). Empty -> the grid hides itself.
+const pillars = await pillarRoutedPages();
 const latest = posts.slice(0, isLocal ? 3 : 6);
 ---
 
