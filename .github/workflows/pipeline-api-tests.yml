@@ -1,0 +1,47 @@
+name: pipeline-api tests
+
+# Mirrors python-tests.yml (platform-api) for the pipeline-api service — the five
+# Blog Writer generation modules (brief, sie, research, writer, sources_cited).
+# Its pytest suite, including the writer's brand-voice article judge
+# (modules/writer/voice_review.py), had no CI gate: python-tests.yml only runs on
+# writer/platform-api/**, so a change to a pipeline-api prompt or pure helper
+# could break its tests with nothing red. This closes that gap.
+#
+# The spaCy lemmatizer the brief main-entity step loads is pinned as a model
+# wheel in requirements.txt, so (unlike the platform-api job) no separate
+# `python -m spacy download` step is needed. pytest + pytest-asyncio come from
+# requirements-dev.txt, and asyncio_mode=auto is set in pyproject.toml.
+
+on:
+  pull_request:
+    paths:
+      - "writer/pipeline-api/**"
+      - ".github/workflows/pipeline-api-tests.yml"
+  push:
+    branches: [main]
+    paths:
+      - "writer/pipeline-api/**"
+      - ".github/workflows/pipeline-api-tests.yml"
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: writer/pipeline-api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: writer/pipeline-api/requirements*.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest -q

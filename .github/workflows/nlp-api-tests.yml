@@ -1,0 +1,47 @@
+name: nlp-api tests
+
+# Mirrors python-tests.yml (platform-api) for the nlp-api service — the private
+# Local SEO / Ecommerce analysis + page generation/scoring service. Its pytest
+# suite (voice_card, blog_structure, ecommerce_*, anthropic_failover) had no CI
+# gate: python-tests.yml only runs on writer/platform-api/**, so a change to the
+# voice-scoring rubric or a pure helper here could break its tests with nothing
+# red. This closes that gap.
+#
+# The tests import the production packages (anthropic, the nlp modules), so the
+# job installs the full requirements.txt; pytest itself comes from a CI-only
+# requirements-dev.txt (nlp-api has no async tests, so no pytest-asyncio). No
+# WeasyPrint/spaCy here — nlp-api uses neither.
+
+on:
+  pull_request:
+    paths:
+      - "writer/nlp-api/**"
+      - ".github/workflows/nlp-api-tests.yml"
+  push:
+    branches: [main]
+    paths:
+      - "writer/nlp-api/**"
+      - ".github/workflows/nlp-api-tests.yml"
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: writer/nlp-api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: writer/nlp-api/requirements*.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest -q
