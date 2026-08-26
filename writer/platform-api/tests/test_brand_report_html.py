@@ -122,6 +122,23 @@ def test_render_html_month_over_month():
     assert "▲" in html and "100" in html
 
 
+def test_render_html_multi_horizon_visibility():
+    data = aggregate_range([_row("emergency plumber", "chatgpt", True)], LABELS)
+    html = render_html(
+        client={"name": "Acme", "website_url": None, "gbp": {}},
+        agency_name="Amazing Rankings", date_range_label="range",
+        tracked_keywords=[], data=data,
+        vis_horizons={
+            "30d": {"now": 60.0, "prev": 50.0, "change": 10.0},
+            "90d": {"now": 60.0, "prev": 30.0, "change": 30.0},
+            "since_start": {"now": 60.0, "prev": 10.0, "change": 50.0},
+        },
+        generated_on="today",
+    )
+    assert "Visibility trend" in html
+    assert "30 days: ▲ 10%" in html and "90 days: ▲ 30%" in html and "since start: ▲ 50%" in html
+
+
 def test_render_html_no_mom_without_prev():
     data = aggregate_range([_row("emergency plumber", "chatgpt", True)], LABELS)
     html = render_html(

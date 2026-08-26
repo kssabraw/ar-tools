@@ -264,6 +264,37 @@ def _mom_badge(change: Optional[float], suffix: str = "", up_good: bool = True,
             f"{abs(change):g}{_esc(suffix)} {_esc(label)}</span>")
 
 
+_HORIZON_LABELS = (("30d", "30 days"), ("90d", "90 days"), ("since_start", "since start"))
+
+
+def _horizon_badge(label: str, change: Optional[float], suffix: str = "", up_good: bool = True) -> str:
+    """One '<label>: ▲/▼ X' chip for a fixed-horizon change. Pure."""
+    if change is None:
+        return f"<span class='mom mom-flat'>{_esc(label)}: —</span>"
+    if change == 0:
+        return f"<span class='mom mom-flat'>{_esc(label)}: ▬ no change</span>"
+    up = change > 0
+    good = up if up_good else not up
+    color = "#166534" if good else "#b91c1c"
+    arrow = "▲" if up else "▼"
+    return (f"<span class='mom' style='color:{color}'>{_esc(label)}: "
+            f"{arrow} {abs(change):g}{_esc(suffix)}</span>")
+
+
+def _horizon_callout(lead_html: str, horizons: Optional[dict], suffix: str = "", up_good: bool = True) -> str:
+    """A '30 days · 90 days · since start' row of change chips for the given
+    horizons dict ({key: {"change": v}}). Empty when no horizon is available. Pure."""
+    if not horizons:
+        return ""
+    badges = [
+        _horizon_badge(label, (horizons.get(key) or {}).get("change"), suffix, up_good)
+        for key, label in _HORIZON_LABELS if key in horizons
+    ]
+    if not badges:
+        return ""
+    return f"<p class='mom-callout'>{lead_html} &nbsp; {' · '.join(badges)}</p>"
+
+
 def _maps_presence_line(g: dict) -> str:
     """A plain-English local-pack presence line with this-period vs previous-period
     movement (positive framing — a gain is called out; a dip is stated neutrally)."""
@@ -313,12 +344,20 @@ def _section_geogrid(data: dict) -> str:
         )
     # Prominent overall month-over-month callout (top-3 presence across the grid).
     now_p, prev_p = g.get("presence_now"), g.get("presence_prev")
-    overall_change = round(now_p - prev_p, 1) if (now_p is not None and prev_p is not None) else None
-    overall_mom = _mom_badge(overall_change, suffix=" pts", up_good=True)
-    mom_callout = (
-        f"<p class='mom-callout'>Top-3 map presence: <strong>{round(now_p)}%</strong> "
-        f"{overall_mom}</p>" if overall_mom and now_p is not None else ""
-    )
+    # Prefer the 30d/90d/since-start callout; fall back to the single vs-last-month
+    # delta when the multi-horizon scans aren't available.
+    if now_p is not None and g.get("presence_horizons"):
+        mom_callout = _horizon_callout(
+            f"Top-3 map presence: <strong>{round(now_p)}%</strong>",
+            g.get("presence_horizons"), suffix=" pts", up_good=True,
+        )
+    else:
+        overall_change = round(now_p - prev_p, 1) if (now_p is not None and prev_p is not None) else None
+        overall_mom = _mom_badge(overall_change, suffix=" pts", up_good=True)
+        mom_callout = (
+            f"<p class='mom-callout'>Top-3 map presence: <strong>{round(now_p)}%</strong> "
+            f"{overall_mom}</p>" if overall_mom and now_p is not None else ""
+        )
     presence_html = _maps_presence_line(g)
     weak = g.get("weak_areas") or []
     weak_html = (
@@ -515,6 +554,91 @@ def build_comparisons(
     return out or None
 
 
+# Fixed comparison horizons — a 30-day window is volatile, so the report shows
+# 30-day, 90-day and since-start deltas side by side (longer windows reveal wins).
+_MULTI_HORIZONS = ((30, "30d"), (90, "90d"))
+_SINCE_START_WINDOW = 30  # the recent/earliest window length for the since-start delta
+
+
+def _rank_by_date(metric_rows: list[dict]) -> dict:
+    """{date: mean position across keywords that day} — GSC position preferred,
+    tracked_rank fallback. Pure (shared by the comparison builders)."""
+    rsum, rn = {}, {}
+    for r in metric_rows or []:
+        try:
+            d = date.fromisoformat(str(r.get("date"))[:10])
+        except (TypeError, ValueError):
+            continue
+        pos = r.get("gsc_position")
+        if pos is None:
+            pos = r.get("tracked_rank")
+        if pos is not None:
+            rsum[d] = rsum.get(d, 0) + pos
+            rn[d] = rn.get(d, 0) + 1
+    return {d: rsum[d] / rn[d] for d in rsum}
+
+
+def build_multi_comparisons(
+    metric_rows: list[dict], period_end: date,
+    traffic_rows: Optional[list[dict]] = None,
+) -> Optional[dict]:
+    """Per-metric change over fixed 30-day, 90-day and since-start horizons —
+    each anchored at the report's period_end (the report's own coverage window no
+    longer decides the comparison length, so a 30-day report isn't stuck showing
+    only a volatile 30-day delta). Pure.
+
+    For each metric returns {"30d": h, "90d": h, "since_start": h} where a present
+    horizon `h` is {current, previous, change} (volume: % change) or
+    {current, previous, change_positions} (rank: positions gained, +ve = better).
+    A horizon is omitted when the data doesn't span both of its windows, so a
+    young campaign never shows a misleading partial delta."""
+    traffic_src = traffic_rows if traffic_rows is not None else metric_rows
+    impr = _accum_by_date(traffic_src, "impressions")
+    clk = _accum_by_date(traffic_src, "clicks")
+    rank = _rank_by_date(metric_rows)
+
+    def _horizons(by_date: dict, volume: bool) -> Optional[dict]:
+        if not by_date:
+            return None
+        mn = min(by_date)
+        agg = _sum_between if volume else _avg_between
+
+        def _entry(cur, prev):
+            if volume:
+                return {"current": cur, "previous": prev, "change": _pct(cur, prev)}
+            change = None if (cur is None or prev is None) else round(prev - cur, 1)
+            return {"current": cur, "previous": prev, "change_positions": change}
+
+        hz: dict = {}
+        for days, key in _MULTI_HORIZONS:
+            cur_start = period_end - timedelta(days=days)
+            prev_start = cur_start - timedelta(days=days)
+            cur = agg(by_date, cur_start, period_end)
+            if cur is None:
+                continue
+            # Only compare when the data actually spans the previous window.
+            prev = agg(by_date, prev_start, cur_start) if mn <= prev_start else None
+            hz[key] = _entry(cur, prev)
+        # Since start: the recent window vs the campaign's earliest window (shown
+        # only when the campaign is old enough for the two to be distinct).
+        recent_start = period_end - timedelta(days=_SINCE_START_WINDOW)
+        earliest_end = mn + timedelta(days=_SINCE_START_WINDOW)
+        cur = agg(by_date, recent_start, period_end)
+        if cur is not None and earliest_end <= recent_start:
+            prev = agg(by_date, mn - timedelta(days=1), earliest_end)
+            hz["since_start"] = _entry(cur, prev)
+        return hz or None
+
+    out: dict = {}
+    if (h := _horizons(impr, True)):
+        out["impressions"] = h
+    if (h := _horizons(clk, True)):
+        out["clicks"] = h
+    if (h := _horizons(rank, False)):
+        out["rank"] = h
+    return out or None
+
+
 def _fmt_int(v) -> str:
     try:
         return f"{int(round(float(v))):,}"
@@ -545,35 +669,58 @@ def _perf_row(label, current, previous, change) -> str:
             f"<td class='num pos'>{_esc(change)}</td></tr>")
 
 
+def _perf_change_cell(entry: Optional[dict], volume: bool) -> str:
+    """A single 30d/90d/since-start change cell: % for volume, positions for rank.
+    '—' when the horizon isn't available (data doesn't span it yet)."""
+    if not entry:
+        return "<td class='num'>—</td>"
+    if volume:
+        return f"<td class='num pos'>{_esc(_fmt_pct(entry.get('change')))}</td>"
+    return f"<td class='num pos'>{_esc(_fmt_positions(entry.get('change_positions')))}</td>"
+
+
 def _section_performance(data: dict) -> str:
-    comp = (data.get("organic") or {}).get("comparisons")
-    if not comp:
+    # Fixed-horizon comparisons (30d / 90d / since start) — a single-window delta
+    # is too volatile to show wins, so we present all three side by side.
+    multi = (data.get("organic") or {}).get("comparisons_multi")
+    if not multi:
         return ""
     rows = []
-    for key, label, fmt_val, change_key, fmt_change in (
-        ("impressions", "Impressions", _fmt_int, "change", _fmt_pct),
-        ("clicks", "Organic clicks", _fmt_int, "change", _fmt_pct),
-        ("rank", "Average ranking", _fmt_pos, "change_positions", _fmt_positions),
+    for key, label, fmt_val, volume in (
+        ("impressions", "Impressions", _fmt_int, True),
+        ("clicks", "Organic clicks", _fmt_int, True),
+        ("rank", "Average ranking", _fmt_pos, False),
     ):
-        m = comp.get(key)
-        if not m or m.get("current") is None:
+        hz = multi.get(key)
+        if not hz:
             continue
-        # A volume metric with a zero current window means the source has no traffic
-        # for this period (a GSC gap, or a stale feed) — showing "0 ▼ -100%" reads
-        # as a collapse to a client. Omit it rather than fabricate a scary delta.
-        if key in ("impressions", "clicks") and not m.get("current"):
+        # "Now" = the most recent 30-day window (current value of the 30d horizon,
+        # falling back to the 90d window if 30d is absent).
+        now_entry = hz.get("30d") or hz.get("90d") or hz.get("since_start")
+        now = now_entry.get("current") if now_entry else None
+        if now is None:
             continue
-        prev = m.get("previous")
-        prev_txt = fmt_val(prev) if prev is not None else "—"
-        rows.append(_perf_row(label, fmt_val(m["current"]), prev_txt, fmt_change(m.get(change_key))))
+        # A volume metric with a zero recent window means no traffic (GSC gap / stale
+        # feed) — omit rather than headline a scary "0 / -100%".
+        if volume and not now:
+            continue
+        rows.append(
+            f"<tr><td>{_esc(label)}</td><td class='num'>{_esc(fmt_val(now))}</td>"
+            + _perf_change_cell(hz.get("30d"), volume)
+            + _perf_change_cell(hz.get("90d"), volume)
+            + _perf_change_cell(hz.get("since_start"), volume)
+            + "</tr>"
+        )
     if not rows:
         return ""
     return (
         "<section><h2>Performance highlights</h2>"
-        "<p class='note'>How you’re doing this period compared with the period just "
-        "before it (the same number of days).</p>"
-        "<table><thead><tr><th>Metric</th><th class='num'>This period</th>"
-        "<th class='num'>Previous period</th><th class='num'>Change</th>"
+        "<p class='note'>Your progress over three time frames. A single 30-day "
+        "window bounces around, so we also show 90 days and the whole campaign — "
+        "the longer views are where the real trend shows.</p>"
+        "<table><thead><tr><th>Metric</th><th class='num'>Now (last 30 days)</th>"
+        "<th class='num'>vs prev 30 days</th><th class='num'>vs prev 90 days</th>"
+        "<th class='num'>Since we started</th>"
         "</tr></thead><tbody>"
         + "".join(rows) + "</tbody></table></section>"
     )
@@ -633,12 +780,13 @@ def _section_ai_visibility(data: dict) -> str:
         for e, v in a["engines"].items()
     )
     now, prev = a.get("visibility_now"), a.get("visibility_prev")
-    change = round(now - prev, 1) if (now is not None and prev is not None) else None
-    mom = _mom_badge(change, suffix="%", up_good=True)
-    mom_callout = (
-        f"<p class='mom-callout'>Recommended in <strong>{round(now)}%</strong> of AI answers "
-        f"{mom}</p>" if mom and now is not None else ""
-    )
+    lead = f"Recommended in <strong>{round(now)}%</strong> of AI answers" if now is not None else ""
+    if now is not None and a.get("visibility_horizons"):
+        mom_callout = _horizon_callout(lead, a.get("visibility_horizons"), suffix="%", up_good=True)
+    else:
+        change = round(now - prev, 1) if (now is not None and prev is not None) else None
+        mom = _mom_badge(change, suffix="%", up_good=True)
+        mom_callout = f"<p class='mom-callout'>{lead} {mom}</p>" if mom and now is not None else ""
     return (
         "<section><h2>AI search visibility</h2>"
         "<p class='note'>How often your brand is recommended when AI assistants "
@@ -1121,17 +1269,18 @@ def _gather_organic(supabase, client_id: str, period_start: date, period_end: da
             "change": change,
             "sparkline": s.get("sparkline") or [],
         })
+    # Volume metrics come from the property-level GSC daily totals (same source as
+    # the campaign goals) so Performance highlights agrees with the goals and never
+    # shows the stale-per-keyword "0 / -100%" artifact; ranking stays from the
+    # per-keyword series (flat_rows).
+    traffic = _gather_gsc_traffic(supabase, client_id, period_end)
     return {
         "keywords": keywords,
         "summary": {"tracked": len(keywords), "top10": top10, "improved": improved, "declined": declined},
-        # Volume metrics come from the property-level GSC daily totals (same source
-        # as the campaign goals) so Performance highlights agrees with the goals and
-        # never shows the stale-per-keyword "0 / -100%" artifact; ranking stays from
-        # the per-keyword series (flat_rows).
-        "comparisons": build_comparisons(
-            flat_rows, period_start, period_end,
-            traffic_rows=_gather_gsc_traffic(supabase, client_id, period_end),
-        ),
+        # Single-window comparison (kept for the KPI strip); the Performance table
+        # renders the fixed 30d/90d/since-start horizons below.
+        "comparisons": build_comparisons(flat_rows, period_start, period_end, traffic_rows=traffic),
+        "comparisons_multi": build_multi_comparisons(flat_rows, period_end, traffic_rows=traffic),
     }
 
 
@@ -1253,6 +1402,53 @@ def _scan_presence(supabase, scan_id: str) -> Optional[float]:
     return round(100.0 * top3 / total, 1) if total else None
 
 
+def _parse_iso_date(raw) -> Optional[date]:
+    """Date from an ISO timestamp/date string (tolerates a trailing Z). None on
+    anything unparseable. Pure."""
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).date()
+    except ValueError:
+        try:
+            return date.fromisoformat(str(raw)[:10])
+        except ValueError:
+            return None
+
+
+def _first_reporting_scan(supabase, client_id: str):
+    """The oldest scheduled (reporting) complete scan — the since-start baseline."""
+    rows = (
+        maps_reporting.only_reporting(supabase.table("maps_scans").select("id, created_at"))
+        .eq("client_id", client_id).eq("status", "complete")
+        .order("created_at").limit(1).execute()
+    ).data
+    return rows[0] if rows else None
+
+
+def _presence_horizons(supabase, client_id: str, latest_scan_id: str,
+                       presence_now: Optional[float], latest_date: date) -> Optional[dict]:
+    """Overall top-3 presence change vs the scan nearest ~30 and ~90 days before the
+    latest scan, and vs the first scan (since start). Each entry is
+    {now, prev, change} (change in percentage points). Omitted when not comparable."""
+    if presence_now is None:
+        return None
+
+    def _entry(prev_scan) -> Optional[dict]:
+        if not prev_scan or prev_scan["id"] == latest_scan_id:
+            return None
+        pp = _scan_presence(supabase, prev_scan["id"])
+        return {"now": presence_now, "prev": pp, "change": round(presence_now - pp, 1)} if pp is not None else None
+
+    hz: dict = {}
+    for days, key in _MULTI_HORIZONS:
+        if (e := _entry(_latest_reporting_scan(supabase, client_id, latest_date - timedelta(days=days)))):
+            hz[key] = e
+    if (e := _entry(_first_reporting_scan(supabase, client_id))):
+        hz["since_start"] = e
+    return hz or None
+
+
 def _gather_geogrid(supabase, client_id: str, period_start: date, period_end: date) -> Optional[dict]:
     # The client-facing PDF reports the scheduled series only — a one-off run the
     # team did to check something is not this client's local-pack record.
@@ -1310,10 +1506,13 @@ def _gather_geogrid(supabase, client_id: str, period_start: date, period_end: da
             "rank_change": _rank_delta(prev.get("average_rank") if prev else None, r.get("average_rank")),
         }
 
+    latest_date = _parse_iso_date(scan.get("created_at")) or period_end
     return {
         "scan_at": scan.get("created_at"),
         "presence_now": presence_now,
         "presence_prev": presence_prev,
+        # 30d / 90d / since-start presence deltas (vs the scan nearest each horizon).
+        "presence_horizons": _presence_horizons(supabase, client_id, scan["id"], presence_now, latest_date),
         "keywords": [_kw(r) for r in results],
         "weak_areas": weak[:8],
     }
@@ -1661,11 +1860,37 @@ def _gather_ai_visibility(supabase, client_id: str, period_start: date, period_e
     total_cells = sum(v["total"] for v in per.values())
     found_cells = sum(v["found"] for v in per.values())
     visibility_now = round(100.0 * found_cells / total_cells, 1) if total_cells else None
+
+    # 30d / 90d / since-start overall-visibility horizons (vs the batch nearest each
+    # target date, and the first batch). Cheap — ≤3 extra batch reads.
+    latest_ai_date = next(
+        (_parse_iso_date(r.get("created_at")) for r in noncomp if r["scan_batch_id"] == batch), None
+    ) or period_end
+
+    def _batch_on_or_before(target: date):
+        return next((r["scan_batch_id"] for r in noncomp
+                     if (d := _parse_iso_date(r.get("created_at"))) and d <= target), None)
+
+    def _vis_entry(prev_bid) -> Optional[dict]:
+        if not prev_bid or prev_bid == batch or visibility_now is None:
+            return None
+        pv = _batch_overall_visibility(supabase, client_id, prev_bid)
+        return {"now": visibility_now, "prev": pv, "change": round(visibility_now - pv, 1)} if pv is not None else None
+
+    vis_hz: dict = {}
+    for days, key in _MULTI_HORIZONS:
+        if (e := _vis_entry(_batch_on_or_before(latest_ai_date - timedelta(days=days)))):
+            vis_hz[key] = e
+    first_bid = noncomp[-1]["scan_batch_id"] if noncomp else None
+    if (e := _vis_entry(first_bid)):
+        vis_hz["since_start"] = e
+
     return {
         "engines": {e: f"{v['found']} of {v['total']} answers" for e, v in per.items()},
         "keywords": keywords,
         "visibility_now": visibility_now,
         "visibility_prev": visibility_prev,
+        "visibility_horizons": vis_hz or None,
     }
 
 
