@@ -2385,6 +2385,34 @@ the placeholder still drives the list even after a `score` run populates the fit
 
 ## Lead enrichment (2026-08-10)
 
+### I-109 RESOLVED (2026-08-26) · TWO stacked bugs — sync mode AND the wrong enricher slug; fixed to async + `leads_n_contacts`
+Enrichment was broken two ways at once, which is why every prior single-cause theory (wrong validator
+set, parser aliases) only half-explained it:
+
+1. **Sync mode** returned the base listing before the enrichers ran (see the update below) → fixed to
+   async submit+poll (`enrich_client._enrich_one`, merged in #756).
+2. **Wrong enricher slug.** Even async, `domains_service` (+ validators) returned no contacts. The
+   owner's Outscraper **dashboard export** for the CSV that DID have people revealed the real slug:
+   **`enrichments: ["leads_n_contacts"]`** — Outscraper's "Leads & Contacts" enricher (emails / phones /
+   socials / domain + decision-maker `full_name`·`first_name`·`last_name`·`title` where they exist).
+   `domains_service` is a bare website scraper; it was never the right one.
+
+**Validated live (2026-08-26).** Re-enriched 5 LA plumbers that were email-null / business-name-only
+under `domains_service`; under `leads_n_contacts` (async) all 5 returned real emails
+(info@mlplumbing.net, fast24plumbing@gmail.com, …) plus domain + company socials, and the raw now
+carries the full contact column set. Person names came back empty for these five specifically — the
+raw `first_name`/`last_name`/`title` are genuinely null (not a parser miss): they are small
+owner-operated businesses with no Apollo/ZoomInfo decision-maker record, so `leads_n_contacts` fell
+back to their scraped site emails. A business WITH a decision-maker record (the hearing-aid stores in
+the source CSV) populates the person fields — that is the whole point of the enricher.
+
+**Fix shipped:** default `enrich_enrichments` → `["leads_n_contacts"]` (outreach api) and
+`outreach_enrich_enrichments` → `"leads_n_contacts"` (platform-api). The public `/maps/search-v3`
+endpoint accepts the slug on our async place_id call (no `/tasks` endpoint or category-search shape
+needed). **Remaining:** cost per record for `leads_n_contacts` is unconfirmed (the placeholder
+`enrich_cost_per_place_cents`=5 stands; the export carried `est:10` — likely pricier than a base pull),
+tracked under I-111.
+
 ### I-109 UPDATE (2026-08-26) · ROOT CAUSE FOUND — enrichment was called SYNCHRONOUSLY, which returns the base listing with NO enrichers run; fixed to async submit+poll
 The "Enrich just restates the business name" complaint traced to a fundamental integration bug, not a
 wrong enricher set or a parser alias. `enrich_client._enrich_one` called `/maps/search-v3` with
