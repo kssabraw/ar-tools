@@ -566,10 +566,47 @@ def test_context_providers_cover_all_modules():
     for expected in (
         "campaign_goals", "competitors", "forecast", "trends", "organic_rank",
         "maps_geogrid", "ai_visibility", "content", "keyword_research",
+        "keyword_research_runs",
         "task_plan", "citations", "syndication", "reports", "sops", "asana",
         "health", "strategist_review", "setup",
     ):
         assert expected in keys
+
+
+def test_ctx_keyword_research_runs_reads_standalone_tables():
+    fake = _FakeSupabase({
+        "keyword_research_runs": [[
+            {"seeds": ["3pl audit software"], "keyword_count": 59,
+             "cluster_count": 7, "status": "complete",
+             "created_at": "2026-08-25T00:00:00Z"},
+            {"seeds": ["parcel spend management"], "keyword_count": 40,
+             "cluster_count": 5, "status": "complete",
+             "created_at": "2026-08-20T00:00:00Z"},
+        ]],
+        "keyword_topic_research_runs": [[
+            {"seeds": ["third party claims administrator"], "topic_count": 12,
+             "topics": [{"title": "Reducing claims leakage", "priority": "high",
+                         "coverage": "gap"}],
+             "plan": {"pillars": [{"pillar": "Claims operations"}]},
+             "assessment": "Strong buyer-topic demand; thin authority.",
+             "status": "complete", "created_at": "2026-08-25T00:00:00Z"},
+        ]],
+    })
+    out = slack_assistant._ctx_keyword_research_runs(fake, "c1", date(2026, 8, 26))
+    assert out["keyword_explorer"]["run_count"] == 2
+    assert out["keyword_explorer"]["latest"]["keyword_count"] == 59
+    assert "3pl audit software" in out["keyword_explorer"]["recent_seeds"]
+    assert out["topic_research"]["topic_count"] == 12
+    assert out["topic_research"]["top_topics"][0]["title"] == "Reducing claims leakage"
+    assert out["topic_research"]["pillars"] == ["Claims operations"]
+
+
+def test_ctx_keyword_research_runs_empty_is_none():
+    fake = _FakeSupabase({
+        "keyword_research_runs": [[]],
+        "keyword_topic_research_runs": [[]],
+    })
+    assert slack_assistant._ctx_keyword_research_runs(fake, "c1", date(2026, 8, 26)) is None
 
 
 def test_format_history_labels_roles_and_skips_empty():
