@@ -26,10 +26,25 @@ For every page carrying a voice score (``local_seo_pages`` + ``ecommerce_pages``
      and the headline distribution (min/avg/median/max, count<80, count>=90)
      for both eras.
 
-It is READ-ONLY by default: it records a benign score-run history row (same as a
-UI score) but never touches the page's ``voice_score`` / ``voice_violations``
-baseline. Pass ``--write`` to persist the new scorecard onto the page rows once
-you trust it (the in-memory before/after is still printed first).
+It is READ-ONLY w.r.t. the baseline by default: like clicking "Score" in the UI
+it DOES insert one score-history row (``local_seo_page_scores`` /
+``ecommerce_page_scores``, best-effort), but it never touches the page's
+``voice_score`` / ``voice_violations`` baseline, so the comparison stays intact.
+Pass ``--write`` to persist the new scorecard onto the page rows once you trust
+it (the in-memory before/after is still printed first).
+
+Two caveats to read the output with:
+
+  * Re-score uses the client's CURRENT voice card. If a client edited their
+    brand guide since a page was first scored, that page's before/after mixes
+    the guide change with the rubric change — so this is a clean rubric
+    comparison only for pages whose guide is unchanged (all the recently-scored
+    ones). It is NOT a way to re-score old pages against their original guide.
+  * A local page whose stored ``location`` is empty or no longer resolves
+    against the client's country list makes ``score_page`` raise
+    ``location_not_recognized`` (there is no ``location_code`` on the page row
+    to bypass resolution). Such pages surface as ``ERROR`` rows and drop out of
+    the comparison — watch the error count, they are excluded, not scored 0.
 
 Where to run it
 ---------------
@@ -71,13 +86,27 @@ DIMENSIONS = [
 
 
 def _dim_scores(voice_violations: Optional[dict]) -> dict[str, Optional[float]]:
-    """Pull the per-dimension scores out of a stored/returned scorecard."""
+    """Per-dimension scores from a stored/returned scorecard.
+
+    Mirrors ``voice_card._dimension_score``: a dimension the judge marked
+    ``applicable: false`` contributes None, not its placeholder score. Those
+    dimensions are renormalized out of the headline score, so counting a
+    placeholder 0 in a per-dimension mean would understate that dimension for
+    every guide that happens to be silent on it. ``bool`` is excluded too — a
+    JSON ``true``/``false`` in the score slot is malformed, not a 0/1."""
     dims = (voice_violations or {}).get("dimensions") or {}
     out: dict[str, Optional[float]] = {}
     for key in DIMENSIONS:
         entry = dims.get(key)
-        score = entry.get("score") if isinstance(entry, dict) else None
-        out[key] = float(score) if isinstance(score, (int, float)) else None
+        if not isinstance(entry, dict) or entry.get("applicable") is False:
+            out[key] = None
+            continue
+        score = entry.get("score")
+        out[key] = (
+            float(score)
+            if isinstance(score, (int, float)) and not isinstance(score, bool)
+            else None
+        )
     return out
 
 
@@ -167,7 +196,10 @@ async def main() -> int:
     parser.add_argument("--limit", type=int, default=0,
                         help="Re-score at most N pages (smoke test). 0 = all.")
     parser.add_argument("--concurrency", type=int, default=2,
-                        help="Pages scored in parallel (nlp /score-page is 10/min).")
+                        help="Pages scored in parallel (nlp /score-page is 10/min). "
+                             "score_page mixes sync Supabase reads with async SERP/LLM "
+                             "calls, so this overlaps the slow network waits, not the "
+                             "blocking DB reads — raising it past ~3 buys little.")
     parser.add_argument("--write", action="store_true",
                         help="Persist the new scorecard onto the page rows "
                              "(overwrites the stored baseline).")
@@ -254,7 +286,16 @@ async def main() -> int:
 
     errors = [r for r in results if r["error"]]
     if errors:
-        print(f"\n{len(errors)} page(s) errored (reported above); the rest completed.")
+        loc_errors = [r for r in errors if "location_not_recognized" in (r["error"] or "")]
+        print(f"\n{len(errors)} page(s) errored and are EXCLUDED from the "
+              f"distributions above (not scored 0).")
+        if loc_errors:
+            print(f"  {len(loc_errors)} were location-resolution failures "
+                  f"(empty/unrecognized stored location) — see caveat below.")
+
+    print("\nCaveat: re-scores use each client's CURRENT voice card, so a "
+          "before/after is a clean rubric comparison only where the guide is "
+          "unchanged since the page was first scored.")
 
     if args.csv:
         with open(args.csv, "w", newline="") as fh:
