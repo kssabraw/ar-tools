@@ -106,10 +106,10 @@ def test_build_html_includes_present_sections():
     assert "Organic rankings" in out
     assert "emergency plumber" in out
     assert "No report data is available" not in out
-    # GBP is removed from the client PDF report for now — the section and its
-    # review content must not render even when gbp data is present.
-    assert "Google Business Profile" not in out
-    assert "Great service" not in out
+    # GBP Insights is now included in the client PDF report (rating/reviews +
+    # performance-metric growth) — the section and its review content render.
+    assert "Google Business Profile" in out
+    assert "Great service" in out
 
 
 # ---------------------------------------------------------------------------
@@ -370,8 +370,8 @@ def test_gbp_review_period_renders():
     assert "Recent reviews this period" in out and "Fantastic team" in out
     # the generic top-review list is dropped when we have this-period highlights
     assert "generic old review" not in out
-    # and it is not mounted in the assembled report
-    assert "Google Business Profile" not in cr.build_report_html(data)
+    # and the GBP section is mounted in the assembled report
+    assert "Google Business Profile" in cr.build_report_html(data)
 
 
 def test_gbp_review_period_absent_degrades():
@@ -609,3 +609,56 @@ def test_kpi_strip_includes_ga4_visits_on_gain():
 def test_kpi_strip_omits_ga4_visits_when_flat_or_down():
     data = _data(ga4={"sessions": {"current": 50, "previous": 80, "change": -37.5}, "channels": []})
     assert "Website visits" not in cr._kpi_strip(data)
+
+
+# --- Month-over-month helpers + rendering (pure) ----------------------------
+def test_pin_presence():
+    assert cr._pin_presence(6, 97) == 6.2
+    assert cr._pin_presence(0, 0) is None
+    assert cr._pin_presence(None, None) is None
+    assert cr._pin_presence(50, 100) == 50.0
+
+
+def test_rank_delta_positive_is_improvement():
+    # A lower rank number is better, so prev 12 → now 8 is +4 (improved).
+    assert cr._rank_delta(12, 8) == 4.0
+    assert cr._rank_delta(8, 12) == -4.0
+    assert cr._rank_delta(None, 5) is None
+
+
+def test_mom_badge_direction_and_color():
+    up = cr._mom_badge(5, suffix=" pts", up_good=True)
+    assert "▲" in up and "#166534" in up and "vs last month" in up
+    down = cr._mom_badge(-3, suffix="%", up_good=True)
+    assert "▼" in down and "#b91c1c" in down
+    # up_good=False flips the colour meaning (an increase is bad).
+    bad_up = cr._mom_badge(5, up_good=False)
+    assert "▲" in bad_up and "#b91c1c" in bad_up
+    assert cr._mom_badge(None) == ""
+    assert "no change" in cr._mom_badge(0)
+
+
+def test_section_geogrid_shows_mom_callout_and_per_keyword():
+    g = {
+        "presence_now": 25.0, "presence_prev": 18.0, "weak_areas": [],
+        "keywords": [{
+            "keyword": "roofer", "average_rank": 8.0, "top3_pins": 20, "total_pins": 80,
+            "rank_grid": None, "map_image": None,
+            "presence_change_pts": 7.0, "rank_change": 2.0,
+        }],
+    }
+    out = cr._section_geogrid({"geogrid": g})
+    assert "Top-3 map presence" in out and "25%" in out
+    assert "7 pts vs last month" in out        # per-keyword presence delta
+    assert "2 places vs last month" in out     # per-keyword rank delta
+
+
+def test_ai_matrix_mom_column_conditional():
+    with_prev = cr._ai_keyword_matrix([
+        {"keyword": "q1", "engines": {"chatgpt": True}, "found_count": 1, "total": 1, "change": 1},
+    ])
+    assert "vs last month" in with_prev
+    no_prev = cr._ai_keyword_matrix([
+        {"keyword": "q1", "engines": {"chatgpt": True}, "found_count": 1, "total": 1, "change": None},
+    ])
+    assert "vs last month" not in no_prev
