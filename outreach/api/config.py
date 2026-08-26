@@ -311,6 +311,57 @@ class Settings(BaseSettings):
     # prospect's tech once and never auto-refresh.
     tech_refresh_days: int = 45
 
+    # --- Site name-scrape (FREE owner/manager fallback) ------------------------------------
+    # `scan-names` / the `name_scrape_request` order fetch a prospect's OWN site and pull the
+    # owner/manager NAME when Outscraper enrichment couldn't. FREE (own HTTP GET, the `scan-tech`
+    # posture — NOT in PAID_COMMANDS). Owners are rarely on the homepage, so a bounded same-host
+    # crawl fetches the homepage + a few likely pages (about/team/contact/meet); this cap is the
+    # whole-crawl bound so one prospect can never fan out.
+    name_scrape_max_pages: int = 5
+    name_scrape_max_names: int = 8
+    name_scrape_fetch_timeout_seconds: float = 12.0
+    name_scrape_max_page_bytes: int = 1_500_000
+    # Concurrency ACROSS prospects (each prospect's own pages are fetched sequentially). Doubles as
+    # nothing else — a chunk of this many is scraped, stored, then the next, so a crash mid-order
+    # marks the finished prospects (idempotent skip on re-order).
+    name_scrape_concurrency: int = 6
+    name_scrape_chunk_size: int = 6
+    # A name-scrape order is batchable + free (like enrichment, unlike the ≤1/tick geogrid scan), so
+    # the tick drains several per heartbeat.
+    name_scrape_orders_per_tick: int = 5
+    # Defensive ceiling on one order's selection (the placement layer caps it too). A bigger
+    # "select all" is split into several orders.
+    name_scrape_max_places_per_order: int = 200
+    # Max prospects FETCHED per tick, across all orders AND within a single order. Unlike enrichment
+    # (one cheap provider call per place), a name-scrape does up to `name_scrape_max_pages` sequential
+    # site fetches per prospect, so a 200-prospect order could otherwise block the tick loop for many
+    # minutes. This budget caps the wall-time per heartbeat (the `tech_scan_per_tick` discipline): an
+    # order larger than the remaining budget is scraped up to it and left PENDING to resume next tick
+    # — the marker-based idempotent skip means a resume re-scrapes only the un-done prospects, so no
+    # work is lost or repeated. <=0 means no cap (process whole orders up to name_scrape_orders_per_tick).
+    name_scrape_per_tick: int = 60
+
+    # --- Web-search owner/manager name (PAID third-rung fallback) --------------------------
+    # When enrichment AND the free site-scrape both found no name, a paid web search looks the owner
+    # up (OpenAI Responses API + web_search, reuses OUTREACH_OPENAI_API_KEY). BILLS one search per
+    # prospect, so it is a signed/admin-gated/budget-guarded order (the enrichment model), NOT free.
+    # The model + tool mirror the suite's brand scan (gpt-5.4 + the web_search tool).
+    name_search_model: str = "gpt-5.4"
+    name_search_web_search_tool: str = "web_search"
+    # A web search + tool round-trip is slow — its own generous timeout, clear of the 60s chat base.
+    name_search_request_timeout_seconds: float = 120.0
+    # Concurrency across prospects (doubles as the drain's chunk size).
+    name_search_chunk_size: int = 4
+    name_search_orders_per_tick: int = 3
+    name_search_max_places_per_order: int = 100
+    # At most this many names kept per prospect (an owner is usually one person).
+    name_search_max_names: int = 2
+    # OpenAI returns no per-call cost, so — like every rate here — this is a CONFIGURED estimate
+    # reconciled against the dashboard (I-022). A web-search Responses call is a few cents; keep in
+    # sync with platform-api's outreach_name_search_cost_cents (that one drives the budget guard,
+    # this one the drain's cost_ledger write).
+    name_search_cost_cents: int = 3
+
     # --- Lead enrichment (contact names / phones / emails via Outscraper) ------------------
     # A SEPARATE, spend-gated, per-selection action — NOT the mass ingest, which hardcodes
     # `enrichment=""` with a hard invariant so a market pull can never silently bill per-place

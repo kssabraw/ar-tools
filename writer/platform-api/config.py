@@ -1896,6 +1896,20 @@ class Settings(BaseSettings):
     # "select all" is split into several orders by the UI.
     outreach_enrich_max_places_per_order: int = 200
 
+    # Site name-scrape (the FREE owner/manager fallback). A per-selection cap mirroring the enrich
+    # one; the outreach job's name_scrape_max_places_per_order enforces the same bound in the drain.
+    # No cost/budget keys — the scrape is an own HTTP GET and spends nothing (PRD §B3), so unlike
+    # enrichment it is staff-gated, not admin-gated + budget-guarded.
+    outreach_name_scrape_max_places_per_order: int = 200
+
+    # Web-search owner-name (the PAID third-rung fallback). BILLS one OpenAI web-search call per
+    # prospect, so it mirrors enrichment's spend model: this drives the free preflight estimate + the
+    # per-user daily budget guard; keep the cost rate in sync with the outreach job's
+    # name_search_cost_cents (that one drives the drain's cost_ledger write).
+    outreach_name_search_cost_cents: int = 3
+    outreach_name_search_daily_budget_usd: float = 10.0
+    outreach_name_search_max_places_per_order: int = 100
+
     leadoff_income_acs_year: int = 2023
     leadoff_income_refresh_days: int = 365
     # Per-city county map (public.city_counties) — reverse-geocoded from each
