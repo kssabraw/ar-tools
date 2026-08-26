@@ -1,6 +1,95 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-25 · **LeadOff market-map interactions + two-maps sync (PR #721, MERGED + DEPLOYED)** (latest)
+## ⏩ Update — 2026-08-26 · **LeadOff GBP Placement Advisor — built + LIVE + prod-verified** (latest)
+
+The demand-aware **"where should the GBP live"** module — the demand-side upgrade
+of the competition-only Proximity signal (an empty octant can be empty of
+*people*, not just of competitors). Shipped across **8 PRs, all merged to `main`
++ deployed** (#725 Phases 1+2, #728 + #730 prod-verification fixes, #731
+calibration freeze, #732 Phase-0b probe, #733 + #735 docs), building on the
+live-GBP market map (#719/#721). Authoritative doc:
+**`docs/modules/leadoff-gbp-placement-plan-v1_0.md`** (owner decisions §1;
+build-status + prod findings §9a). Full writeup is in that doc + CLAUDE.md's
+LeadOff section — this is the operational handoff summary.
+
+**What it does (deterministic, no LLM):** for any point `c`,
+`placement_score(c) = 100 × norm(demand_access) × (1 − norm(pressure))` — `demand_access`
+sums Census block-group **households** with a `1/(1+d/5mi)` decay; `pressure`
+sums competitor GBPs review-weighted with proximity's verbatim `1/(1+d/2mi)`
+decay; `norm()` is min-max over the market's OWN 1-mile lattice (market-relative,
+never comparable across markets). It surfaces 3–5 ranked, ≥2-mi-apart,
+locality-named zones ("Near Maumelle") on the market map + a "Best areas to plant
+a GBP" card list, plus a **Phase 2 "Both"** score-any-location panel (click the
+map / paste an address or GBP → scored against the zones, side-by-side compare,
+optional octant re-anchor).
+
+**Free, $0/market beyond captured pins.** Core: `services/leadoff_placement.py`
+(pure) + `services/census_demand.py` (ACS block groups + TIGERweb centroids →
+`census_block_demand` cache, filled by the `leadoff_placement` async job). API
+`GET /leadoff/placement` + `POST /leadoff/placement/score-point`. Behind
+**`leadoff_placement_enabled` (default True — ON in prod)**.
+
+**Activation / env (already set on PLATFORM):** needs **`CENSUS_API_KEY`** (ACS)
++ **`GOOGLE_MAPS_API_KEY`** (zone naming + the static map) + the existing
+DataForSEO creds (only for the map-refresh pin pull, not the advisor itself). No
+dashboard setup needed. Opening a scouted market with ≥5 live pins auto-enqueues
+the Census demand fill on first view (poll `job_id`); markets with <5 pins show
+the honest `thin_field` state and a nudge to Refresh map (~$0.004).
+
+**Prod verification earned its keep** — three real bugs, each caught live and
+pinpointed by the self-diagnostic built into the job, none catchable by unit
+tests:
+1. `enqueue_placement` wrote a non-UUID `entity_id` (the column is UUID) → the
+   auto-enqueue would throw. Fixed to `uuid4()` + dedupe by `payload->>city_id`.
+2. The TIGERweb centroid query used `STATE=/COUNTY=` field names that returned 0
+   features. Fixed to `GEOID LIKE '<fips>%'` + `outFields=*`, with a persisted
+   `tigerweb_diag` on the job row.
+3. `_resolve_bg_layer` matched **"Tribal Block Groups"** (layer 6, listed first)
+   instead of **"Census Block Groups"** (layer 10) → all-null centroids. Fixed to
+   select the Census layer specifically (`pick_bg_layer`, unit-tested).
+After the third fix, a live KC run wrote **1,494 real ACS block groups** and
+produced sensible zones — verified end-to-end.
+
+**Phase 3 (paid per-ZIP demand layer) — PROBED & DROPPED.** The ~$0.05 Phase-0b
+feasibility probe (`services/leadoff_zip_demand.py`, `leadoff_zip_demand` job) ran
+live: 10 Chicago ZIPs (60601–60610) × "plumber" all queried cleanly but returned
+`search_volume: null` (`null_share` 1.0 → `inconclusive`). Google thresholds Ads
+search volume at ZIP granularity even for a high-demand trade in a major metro,
+so a per-ZIP re-weight adds no signal over the free households surface → **not
+built**; `leadoff_zip_demand_enabled` stays False, the probe is the record. Total
+paid spend for the whole module: **~$0.05**, on the probe that prevented a wasted
+build.
+
+**Calibration freeze (§8, built):** the create-client handoff freezes the market's
+zone set into `leadoff_predictions.placement` (jsonb) alongside the existing
+`proximity` freeze, so the post-client geo-grid can later grade whether high-score
+zones matched better pack outcomes — the loop that eventually earns the dollar
+layer (still off). Read-only instrumentation; nothing feeds scoring.
+
+**Grade safety is absolute:** placement reads only `leadoff_gbp_pins` +
+`census_block_demand` and writes only its own cache — **never** the board grade,
+`competitor_locations`, or `proximity_opportunity`.
+
+**Demo market left in place (owner):** **Kansas City / pest_control_service** is
+seeded as a working demo — 5 real competitor pins in `leadoff_gbp_pins` + 1,494
+real ACS rows cached. To remove the pin seed later:
+```sql
+delete from public.leadoff_gbp_pins where city_id=4393217 and category_id='pest_control_service';
+```
+(The `census_block_demand` rows are legitimate real ACS cache — fine to keep.)
+
+**Migrations (all applied live):** `20260825140000` (map refresh),
+`20260825150000` (`census_block_demand`) + `20260825160000` (async_jobs CHECK),
+`20260826120000` (`leadoff_predictions.placement`), `20260826130000` (async_jobs
+CHECK + `leadoff_zip_demand`).
+
+**Remaining (owner call, not started):** the **dollar layer** — gated on the §8
+calibration loop showing signal (needs real post-client geo-grid outcomes to
+accrue first).
+
+---
+
+## ⏩ Update — 2026-08-25 · **LeadOff market-map interactions + two-maps sync (PR #721, MERGED + DEPLOYED)**
 
 Owner-driven UX polish on the live-GBP market map, shipped in the **same PR #721**
 as the Refresh-map affordance below (squash-merged to `main` as `f2da79d`,
