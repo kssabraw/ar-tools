@@ -135,6 +135,24 @@ def test_section_exec_renders_positive_no_health_label_and_escapes():
     assert "<b>up</b>" not in out and "&lt;b&gt;up&lt;/b&gt;" in out
 
 
+def test_section_exec_renders_long_term_progress():
+    data = _data(exec={
+        "headline": "Steady month.",
+        "long_term_progress": "Since we started, your average position has climbed 12 places.",
+        "highlights": ["Impressions up 8% this month"],
+        "focus_next": ["Keep publishing local pages"],
+    })
+    out = cr.build_report_html(data)
+    assert "The bigger picture" in out
+    assert "climbed 12 places" in out
+
+
+def test_section_exec_no_long_term_line_when_absent():
+    # older summaries (no long_term_progress key) still render cleanly
+    out = cr._section_exec(_data(exec={"headline": "Hi", "highlights": ["x"], "focus_next": []}))
+    assert "Executive summary" in out and "The bigger picture" not in out
+
+
 def test_generate_exec_summary_no_key_returns_none(monkeypatch):
     from config import settings
     monkeypatch.setattr(settings, "anthropic_api_key", "")
