@@ -203,6 +203,7 @@ def summarize(predictions: list[dict[str, Any]],
             "market": f"{p.get('category')} @ {p.get('city_name')}, {p.get('state_code')}",
             "as_of": p.get("as_of"), "created_at": p.get("created_at"),
             "predicted": p.get("predicted"),
+            "placement": p.get("placement"),
             "months_elapsed": (latest or {}).get("months_elapsed"),
             "latest_outcome": out or None,
             "latest_errors": errs or None,
@@ -231,9 +232,34 @@ def summarize(predictions: list[dict[str, Any]],
 
 # ── Capture (at the create-client seam) ───────────────────────────────────────
 
+def placement_prediction(placement: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Compact the GBP Placement Advisor read into the frozen prediction (plan
+    §8): the ranked zone set + demand-surface size, so the post-client geo-grid
+    can later grade whether the advisor's high-score zones actually matched
+    better pack outcomes. None when the advisor wasn't available at capture (no
+    live competitor pins / demand surface not cached / field too thin) —
+    placement calibration is opportunistic, never blocks the handoff. Pure."""
+    if (not placement or not placement.get("available")
+            or placement.get("thin_field")):
+        return None
+    zones = placement.get("zones") or []
+    if not zones:
+        return None
+    return {
+        "zones": [{k: z.get(k) for k in (
+            "rank", "score", "lat", "lng", "locality",
+            "households_reachable", "nearest_competitor_miles", "pressure_norm")}
+            for z in zones],
+        "block_groups": placement.get("block_groups"),
+        "catchment_miles": placement.get("catchment_miles"),
+        "radius_miles": placement.get("radius_miles"),
+    }
+
+
 def capture_prediction(client_id: str, brief: dict[str, Any], capture: float,
                        lead_tier: str, user_id: Optional[str],
-                       proximity: Optional[dict[str, Any]] = None) -> Optional[str]:
+                       proximity: Optional[dict[str, Any]] = None,
+                       placement: Optional[dict[str, Any]] = None) -> Optional[str]:
     """Freeze the full prediction vector at engagement creation. Best-effort —
     never fails the client (same policy as competitor/goal seeding).
 
@@ -272,6 +298,7 @@ def capture_prediction(client_id: str, brief: dict[str, Any], capture: float,
                            "placement": proximity.get("placement"),
                            "pins_used": proximity.get("pins_used")}
                           if proximity and proximity.get("available") else None),
+            "placement": placement_prediction(placement),
             "model_version": MODEL_VERSION,
             "created_by": user_id,
         }).execute().data[0]
