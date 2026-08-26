@@ -1,6 +1,78 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-26 · **Website Builder — where it actually stands, and the informational content creator (NOT built, next build)** (latest)
+## ⏩ Update — 2026-08-26 · **Client Reporting — four report-content upgrades (all merged + live)** (latest)
+
+Four improvements to the client-facing PDF report shipped this session — each
+its own PR, squash-merged to `main`, auto-deployed to PLATFORM (each verified
+`SUCCESS`), and gated by the platform-api `pytest` GitHub Actions workflow. All
+are additive rendering changes in `services/client_report.py` +
+`services/brand_report_html.py`; two carry additive migrations (applied live).
+Toggles default off, so nothing changes for a client until an account manager
+opts in on the ClientReports **Delivery & schedule** card.
+
+- **#741 (`ad26fb1`) — scheduled standalone report types.** The recurring
+  schedule (`client_report_schedule.enqueue_due_report_schedules`) now also
+  emits, per opt-in, the **AI Visibility** report (`report_type="ai_visibility"`
+  — the 2026-07-06 fold-in decision finally executed) and a **new Local Rank
+  (Maps) report** (`report_type="maps"`, `_build_maps_report` — a self-contained
+  geo-grid PDF reusing the combined report's own `_gather_geogrid` +
+  `_section_geogrid`; deterministic, no LLM, on purpose). Opt-in via
+  `client_report_settings.ai_visibility_enabled` / `maps_enabled` (migrations
+  `20260826140000` + `20260826150000`; the latter also widened the
+  `client_reports.report_type` CHECK to include `maps`). Gated on the client
+  actually tracking the matching keywords (empty-report guard); the pending-report
+  guard is now `report_type`-scoped so the three deliverables don't block each
+  other; delivery reads the report row generically so both new PDFs email +
+  Drive-copy unchanged. The per-keyword Maps **Local Rank Analysis Docs** stay a
+  separate on-scan-completion deliverable — not folded in.
+- **#742 (`779f670`) — clearer Rank trend + month-over-month + GBP Insights.**
+  The organic "Trend" column is relabeled **"Rank trend (last 90 days)"** with a
+  legend (the sparkline already plots better ranks higher — it just had no
+  label). Maps + AI-visibility gained month-over-month callouts with
+  **per-keyword deltas** (`_gather_geogrid` pulls the previous reporting scan's
+  per-keyword rows; `_gather_ai_visibility` the previous batch's found-counts;
+  standalone `brand_report_html` gained a prev-period overall + per-keyword
+  column). The **GBP Insights** section (`_section_gbp` — rating + new reviews +
+  highlights + the `_gather_gbp_metric_growth` performance table) was
+  **re-enabled** in the combined report (it was built-but-disabled) and added to
+  the standalone Maps report. Note: `gbp_metric_daily` is keyed by
+  `location_row_id`, **not** `client_id` — a naive `client_id` count reads 0 even
+  for clients that have data (it joins through `gbp_locations`).
+- **#744 (`3f70b96`) — 30d / 90d / since-start comparison horizons.** A
+  single-window comparison tied to the report period is volatile (a 30-day
+  report only ever showed a 30-day delta), which the owner flagged as hiding
+  wins. **Performance highlights** now shows **Now / vs prev 30d / vs prev 90d /
+  since-we-started** columns — pure `build_multi_comparisons` anchored at
+  `period_end`, each horizon **omitted ("—") when the data doesn't span both its
+  windows** (no fabricated partial deltas). Maps (`presence_horizons`) and
+  AI-visibility (`visibility_horizons`) get the same section-level three-horizon
+  callout (vs the scan/batch nearest each horizon + the first scan/batch). The
+  single-window `build_comparisons` is kept for the KPI strip.
+- **#745 (`d3b3a55`) — executive summary longer time frame.** The `emit_summary`
+  tool gained a required **`long_term_progress`** field rendered as a green
+  **"The bigger picture"** callout under the headline; the exec context now
+  carries the three horizon sets so the model cites the durable 90d/since-start
+  trend positively, leading with the longer view when a single month dipped and
+  saying "early and building momentum" (never an invented number) when long-term
+  data isn't there yet.
+
+**Live-data caveat (tell whoever tests this):** the horizons + month-over-month
+only render where the history supports them. **Organic rank** runs long, so
+Performance shows all three horizons today (verified on First Class Roofing:
+Feb→Aug). **Maps + AI-visibility** scan history is younger than 90 days for
+every current client, so their 90d/since-start rows correctly read "—" and fill
+in over the coming months. A good end-to-end test client is **First Class
+Roofing** (real previous Maps scan for MoM + real GBP metric growth; its AI
+scans are a single day so AI MoM won't show).
+
+**Infra note — the pytest gate is intermittent.** The platform-api `pytest`
+workflow (added 2026-08-15, path filter `writer/platform-api/**`) **triggered for
+#744/#745 but did NOT fire for #741/#742** despite matching the same filter and
+firing normally on other `claude/*` PRs. All four were validated locally (76–80
+report tests green) and merged clean. Unresolved; worth a glance if a
+platform-api PR merges without its Python tests having gated it.
+
+## ⏩ Update — 2026-08-26 · **Website Builder — where it actually stands, and the informational content creator (NOT built, next build)**
 
 Nothing was built in this pass. This section records **what is finished**, the
 one thing that was silently broken and is now fixed, and a precise map of the
