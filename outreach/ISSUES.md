@@ -2002,3 +2002,45 @@ must show what it spent.
 
 **What this does NOT remove:** the one-time Railway setup (the cron running `tick`) and the I-088
 auto-deploy question. A webpage cannot wake a server on a schedule; the engine still has to exist.
+
+### I-089 · The geo-grid scan drops `rating.votes_count`, so it cannot audit the inferred-zero flag
+Found 2026-08-25 while verifying the first live scans (four completed: LA, Whittier, Inglewood,
+Van Nuys — all 81/81, clean). HANDOFF §9 states the inferred-zero decision on the **105
+prospects** (`review_count_inferred_zero=true`, `review_count` NULL) would be **audited by the
+geo-grid scan**: *"The geo-grid scan will eventually return `rating.votes_count` for these same
+listings. That is the first source that can contradict the flag."* The audit mechanism is built
+and waiting — `review_inferred_zero_audit` + the `prospect_audit_inferred_zero` BEFORE UPDATE
+trigger fire when a real count lands on a flagged prospect (I-067).
+
+**It cannot fire, because the scan never writes a review count.** `maps_scan.GridRow` keeps only
+`point_seq`, `place_id`, `rank` (`parse_grid_result`), and `grid_result` has only
+`(snapshot_id, scan_month, point_seq, place_id, rank)` — no review column anywhere. The scan
+reads map RANK, not review counts. So after four completed scans covering real plumbers:
+`review_inferred_zero_audit` = **0 rows**, `contradicted` = **0**, `still_flagged` = **105**. The
+105 flags stand un-audited, and will stay that way no matter how many geo-grids run.
+
+Note the DataForSEO Maps response DOES carry `rating.votes_count` — `maps_scan.py`'s own module
+docstring names it as an available field (lines 11–12) — the parser simply does not read it, and
+there is nowhere to store it if it did.
+
+**Not a scan bug** — the scan does exactly its job (measure map coverage) and `grid_result` is
+deliberately thin for storage reasons (storage spec §5: no per-row columns beyond the join key +
+rank; 58M rows/year). The gap is between §9's *expectation* and what the scanner *keeps*.
+
+**Three ways to close it, cheapest first (all deferred — decide before relying on the audit):**
+1. **Withdraw the §9 expectation.** Accept that the geo-grid is not the inferred-zero instrument
+   and that the 105 flags are a standing inference, audited (if ever) by a different source — e.g.
+   a targeted `my_business_info` re-pull of just the 105 (the same call `verify-reviews` already
+   uses, I-066). Cheapest; changes a doc, not the scan.
+2. **Capture votes_count at collect time onto `scan_task`** (NOT `grid_result` — one number per
+   PROSPECT-bearing point, not per row), then a small reconciliation job UPDATEs
+   `prospect.review_count` for matched flagged prospects, which trips the existing audit trigger.
+   This is the shape I-074 already anticipated for the "nearest-result distance" capture — same
+   place, same reasoning. Medium.
+3. **A dedicated per-prospect review-count sweep** decoupled from the geo-grid. Most work, but the
+   cleanest separation (map coverage and review counts are different measurements).
+
+Recommendation: **option 1 unless/until the review-count signal is actually needed by scoring** —
+the flag exists to keep the filter honest (`review_count_min`), and it is already doing that job;
+nothing downstream currently needs the 105 audited. Whoever builds Phase 4 scoring decides, since
+that is the first consumer that reads review counts as a feature.

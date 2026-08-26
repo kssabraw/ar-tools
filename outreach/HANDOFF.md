@@ -458,7 +458,18 @@ One submarket × one keyword exercises submission, collection, finalization, the
 
 **Why it was decided rather than left open.** No source will ever affirmatively report zero — that *is* the convention under test — so waiting for an explicit `0` means waiting forever. An inference held open indefinitely is not caution; it is a decision never made.
 
-**How it gets audited — this is the important part.** The geo-grid scan will eventually return `rating.votes_count` for these same listings. That is the first source that can *contradict* the flag, and the moment it does is the moment the contradiction is easiest to lose. So it is caught structurally, not by convention:
+> **⚠ CORRECTED 2026-08-25 — I-089.** The paragraph below assumed the geo-grid scan would return
+> `rating.votes_count` and audit the flag automatically. **It does not.** The scan parser
+> (`maps_scan.GridRow` / `parse_grid_result`) keeps only `place_id` and map `rank`, and
+> `grid_result` has no review column — so after four completed scans covering these listings,
+> `review_inferred_zero_audit` is still empty and all 105 flags stand un-audited. The audit
+> mechanism below is real and correct; nothing ever trips it, because no review count is written.
+> Closing the gap needs a deliberate choice (withdraw the expectation, capture votes_count at
+> collect time, or a dedicated review sweep) — see **ISSUES I-089**. The flag is still doing its
+> only load-bearing job (keeping the `review_count_min` filter honest); nothing downstream needs
+> the 105 audited until Phase 4 scoring reads review counts as a feature.
+
+**How it gets audited — this is the important part.** ~~The geo-grid scan will eventually return `rating.votes_count` for these same listings.~~ (See the correction above — it does not.) That is the first source that *could* contradict the flag, and the moment it does is the moment the contradiction is easiest to lose. So it is caught structurally, not by convention:
 
 - `review_inferred_zero_audit` + the `prospect_audit_inferred_zero` BEFORE UPDATE trigger record any real count landing on a flagged row (`verdict: contradicted | confirmed`), `raise warning` to the server log, and clear the flag so the **measurement wins**.
 - The `inferred_zero_requires_null_count` CHECK would otherwise have made that write ERROR — loud, but the wrong loud: it aborts the backfill instead of recording what was learned.
