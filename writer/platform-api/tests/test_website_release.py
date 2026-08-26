@@ -32,7 +32,8 @@ class TestReleasable:
     def test_published_or_claimed_or_wrong_type_is_not(self):
         assert not wr.is_releasable(page("a", status="published"))
         assert not wr.is_releasable(page("a", released_at="2026-01-01T00:00:00Z"))
-        assert not wr.is_releasable(page("a", page_type="service"))
+        # A core page is not dripped — it's the site's frame, published up front.
+        assert not wr.is_releasable(page("a", page_type="home"))
 
 
 class TestSelectBatch:
@@ -130,3 +131,24 @@ class TestAdvance:
         patch = wr.advance({"mode": "daily"}, 5, self.NOW)
         assert "status" not in patch  # stays active
         assert patch["next_run_at"] == (self.NOW + timedelta(days=1)).isoformat()
+
+
+class TestLocalSiteReleasability:
+    def test_local_content_pages_are_releasable(self):
+        for pt in ("service", "location", "local_landing", "neighborhood", "sub_service"):
+            assert wr.is_releasable(page("x", page_type=pt)), pt
+
+    def test_core_and_template_only_pages_are_never_dripped(self):
+        # The site's frame publishes up front / trivially, not through the drip.
+        for pt in ("home", "about", "contact", "privacy", "blog_archive",
+                   "sitemap", "services_index", "areas_we_serve"):
+            assert not wr.is_releasable(page("x", page_type=pt)), pt
+
+    def test_local_order_foundation_before_matrix_before_longtail(self):
+        pages = [
+            page("nb", page_type="neighborhood", tier=3, route="/anaheim/downtown/"),
+            page("mx", page_type="local_landing", tier=1, route="/anaheim/ac-repair/"),
+            page("svc", page_type="service", tier=1, route="/ac-repair/"),
+            page("city", page_type="location", tier=1, route="/anaheim/"),
+        ]
+        assert [p["id"] for p in wr.select_batch(pages, 4)] == ["svc", "city", "mx", "nb"]

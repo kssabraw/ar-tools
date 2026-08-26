@@ -36,13 +36,24 @@ from typing import Iterable, Optional
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import website_plan
 
 logger = logging.getLogger(__name__)
 
-# The drip acts on the informational content plan's pages. Local geo pages keep
-# the manual generate/publish flow for now; extending the drip to them is a
-# deliberate follow-up, not a silent widening.
-RELEASE_PAGE_TYPES = frozenset({"post", "pillar"})
+# The drip acts on every page type a generator writes a body for — the nlp-engine
+# local pages (service / location / matrix, on a local_business or lead_gen site)
+# AND the run-engine informational pages (post / pillar). Derived from the
+# planner's own engine sets so a new generable page type is covered automatically.
+#
+# Deliberately EXCLUDED: core pages (home/about/contact/privacy) and the
+# template-only hubs (blog archive, sitemap, services index, Areas We Serve).
+# Those are the site's frame — you want them up front, not dripped — and the
+# template-only ones have no body to generate, so they publish trivially through
+# the normal flow rather than through a generate+publish release.
+#
+# A site only ever has one family present (a local site has no posts, an
+# informational site has no service pages), so one unified set serves both.
+RELEASE_PAGE_TYPES = website_plan.NLP_PAGE_TYPES | website_plan.RUN_PAGE_TYPES
 
 VALID_MODES = frozenset({"daily", "weekly", "monthly"})
 
@@ -61,11 +72,24 @@ def is_releasable(page: dict) -> bool:
     )
 
 
+# Release priority by page type: the pages other pages link INTO go first, so a
+# hub or matrix page ships with its targets already live. Foundation pages
+# (services, cities) before the matrix before the long tail; a post before the
+# pillar that lists it. Anything unlisted sorts after the named types.
+_TYPE_PRIORITY = {
+    "service": 0,
+    "location": 0,
+    "sub_service": 1,
+    "local_landing": 2,
+    "neighborhood": 3,
+    "post": 4,
+    "pillar": 5,
+}
+
+
 def _order_key(page: dict) -> tuple:
-    # Posts (0) before pillars (1), then the plan's own tier + route order, so a
-    # release is deterministic and a pillar trails the posts it links to.
-    is_pillar = 1 if (page.get("page_type") == "pillar") else 0
-    return (is_pillar, page.get("tier") or 0, page.get("route") or "")
+    prio = _TYPE_PRIORITY.get(page.get("page_type") or "", 9)
+    return (prio, page.get("tier") or 0, page.get("route") or "")
 
 
 def select_batch(pages: Iterable[dict], count: int) -> list[dict]:
