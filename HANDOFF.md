@@ -1,6 +1,69 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-26 · **Brand-voice QA: the judge was too generous — hardened the scoring rubric across both writers + turned on nlp/pipeline CI** (latest)
+## ⏩ Update — 2026-08-26 · **The Apps Script publish webhook: which project, which deployment, and how to redeploy it** (latest)
+
+**Why this entry exists.** Closing out the deploy-safety work needed one webhook
+change, and finding *which script to edit* took longer than writing the change.
+Nothing recorded the project name or the deployment id — only "the 2026-07-07
+deployment". Two traps cost the time; both are written down here so they cost it
+once.
+
+**The live webhook.** Apps Script project **"AR Tools Google Docs Webhook"**,
+script id `1EoBPm2VqU-GlloClByKq6BVqIs9-6AsZVbraw9DahEG_1NBBmHSiduep`
+(https://script.google.com/d/1EoBPm2VqU-GlloClByKq6BVqIs9-6AsZVbraw9DahEG_1NBBmHSiduep/edit).
+Source of truth in-repo: `writer/apps-script/publish_webhook.gs`. It serves the
+doc / `type:"sheet"` / `type:"pdf"` branches, `share`, `format:"html"`, image
+embedding, and (2026-08-26) `dedupe_by_name`.
+
+**Trap 1 — the decoy project.** A second project, **"AR Tools Publisher"**
+(created 2026-05-01, untouched since), is the *original markdown-only* script:
+no `sheet`, no `pdf`, no `share`, no `format`. It is NOT the webhook. Editing it
+changes nothing, and because it looks plausible it is the one you find first.
+Consider renaming it `AR Tools Publisher (OLD — unused)`.
+
+*How it was ruled out, if you ever need to redo this:* `upload_pdf` hard-fails
+with `pdf_not_supported` unless the webhook returns a `file_id`, and the decoy
+has no `pdf` branch — yet 20 of 26 `client_reports` rows carry successful Drive
+delivery. So the live script could not be that one. The definitive check is
+comparing a deployment's exec URL against `GOOGLE_APPS_SCRIPT_URL` on the
+PLATFORM Railway service.
+
+**Trap 2 — two active deployments.** The real project has two, differing only
+after `/macros/s/`:
+
+| Prefix | Was | Now |
+|---|---|---|
+| `AKfycbxTjwbZYB…` | Version 8 (Jul 6) — the one prod most likely calls | Version 10 |
+| `AKfycbyfvDYYs…` | Version 1 (Jun 27) | Version 9 |
+
+Which one `GOOGLE_APPS_SCRIPT_URL` holds is still unconfirmed (the value is
+redacted to tooling; read it in the Railway dashboard). **This did not need to
+be resolved:** webhook changes here are additive and opt-in, so bumping BOTH is
+safe and removes the guess. Do that by default.
+
+**Redeploy procedure.** Edit the code → save → **Deploy → Manage deployments →
+pencil icon → Version: "New version" → Deploy**. ⚠️ **Never "New deployment"** —
+that mints a *different* exec URL while `GOOGLE_APPS_SCRIPT_URL` keeps pointing
+at the old one, so prod silently keeps running the old code with no error
+anywhere. Authorization is only re-prompted when a change introduces a NEW
+Google service (Sheets, UrlFetchApp did; `dedupe_by_name` did not — it reuses
+`DriveApp`).
+
+**Verifying a deploy landed.** Two options, in order of convenience:
+1. Read the project source back through Drive (`download_file_content` with
+   `exportMimeType: application/vnd.google-apps.script+json`) and confirm the
+   code is present — this is how the 2026-08-26 change was verified, and it
+   works from an agent session.
+2. Exercise it: POST the same `{folder_id, title, …, dedupe_by_name: true}`
+   twice against a scratch folder; the second reply should carry the SAME id
+   plus `"reused": true`. **Note the sandbox cannot do this** — the agent proxy
+   denies `script.google.com` (403 on CONNECT), so run it from a real terminal.
+
+**Current state.** Both deployments serve the 2026-08-26 code; the syndication
+duplicate-Doc guard (PR #758) is live. The un-run item is option 2 above — a
+live round-trip test, which only matters on a retry path and is not blocking.
+
+## ⏩ Update — 2026-08-26 · **Brand-voice QA: the judge was too generous — hardened the scoring rubric across both writers + turned on nlp/pipeline CI**
 
 **Problem.** The separate brand-voice scorecard (the 8-dimension LLM judge, not
 the deterministic checks) was scoring off-brand pages "fine." Pulled the real
