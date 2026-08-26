@@ -2,7 +2,22 @@
 
 **Read this first, then `CLAUDE.md` → `START-HERE.md` → `ISSUES.md` → `DECISIONS.md`.**
 
-Status as of 2026-08-10 (the first live scan is DONE; heatmap slices 1–2, the any-city scan, **the per-prospect report — call hook + 3 signals + approval-gated client PDF**, **the paid-placement 4th signal**, and **`outcome` + `touch` + the emit webhook** — all MERGED to `main`; **lead enrichment + the report-signal UI triggers built on draft PRs**):
+Status as of 2026-08-26 (**FOUR live geogrid scans are DONE and independently verified** — the pipeline is proven in production, not just built; heatmap slices 1–2, the any-city scan, **the per-prospect report — call hook + 3 signals + approval-gated client PDF**, **the paid-placement 4th signal**, **`outcome` + `touch` + the emit webhook**, and **lead enrichment + the report-signal UI triggers** — all MERGED to `main`):
+
+- **FOUR LIVE SCANS COMPLETE + VERIFIED (through 2026-08-25).** The full scan → collect → rollup →
+  coverage pipeline has now run end-to-end on real DataForSEO data four times, each 81/81 points
+  collected, `complete=true`, rolled up with its `rank_vector`, cost-tracked in `cost_ledger` (stage
+  `b1_geogrid`, 81¢/scan), zero month-straddle, zero duplicate grid rows:
+  - **Los Angeles × `emergency plumber`** — 119 coverage rows (the first live scan, any-city onboard path).
+  - **Whittier × `plumber`** — 90 coverage rows.
+  - **Inglewood × `Plumbing contractor`** — 144 coverage rows.
+  - **Van Nuys × `plumber`** — order `0771ac6c`, snapshot `27982fd0-624e-4f25-8eae-bb8635e6656d`,
+    154 coverage rows (verified 2026-08-25: 81/81, 1,620 grid rows, rolled up, 81¢).
+  Data-quality caveat (honest, not a defect): the placeholder "most invisible" lists are cluttered
+  with non-target businesses (suppliers / remodelers / restoration). Measurement is correct; turning
+  these into a clean call list needs category cleanup or Phase 4 scoring. The review-count / inferred-zero
+  audit gap (scan keeps only place_id + rank, drops `rating.votes_count`; 105 inferred-zero flags still
+  un-audited) is **I-045 — logged, still unbuilt** (§9).
 
 - **CALL HOOK — LOSS-FRAMED + PER-PROSPECT (2026-08-10, draft PR).** The "Why call?" hook read
   generic/identical for prospects in one submarket (one template led with the shared coverage line).
