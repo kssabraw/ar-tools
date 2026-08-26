@@ -241,12 +241,20 @@ function SettingsCard({ clientId }: { clientId: string }) {
         <label style={toggleLabel}>
           <input type="checkbox" checked={s.drive_enabled} onChange={(e) => set({ drive_enabled: e.target.checked })} /> Drive copy
         </label>
+        <label style={toggleLabel} title="Also generate and deliver the AI Visibility report on this schedule">
+          <input
+            type="checkbox"
+            checked={s.ai_visibility_enabled}
+            onChange={(e) => set({ ai_visibility_enabled: e.target.checked })}
+          /> AI Visibility report
+        </label>
         <button
           style={{ ...primaryBtn, padding: '8px 14px' }}
           disabled={save.isPending}
           onClick={() => save.mutate({
             recipients, cadence: s.cadence, day_of_week: s.day_of_week, day_of_month: s.day_of_month,
             hour_utc: s.hour_utc, period: s.period, email_enabled: s.email_enabled, drive_enabled: s.drive_enabled,
+            ai_visibility_enabled: s.ai_visibility_enabled,
           })}
         >
           {save.isPending ? 'Saving…' : 'Save'}
@@ -256,6 +264,8 @@ function SettingsCard({ clientId }: { clientId: string }) {
       <div style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 8 }}>
         Scheduled reports email the recipients (PDF attached) and save a copy to the client's Drive folder.
         Email needs SMTP configured on the server; the Drive copy needs the updated Apps Script deployment.
+        “AI Visibility report” additionally generates the AI-visibility deliverable on the same schedule
+        (only for clients that track AI-visibility keywords).
       </div>
     </div>
   )

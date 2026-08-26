@@ -6,7 +6,11 @@ module); scheduler/delivery I/O paths are exercised on the deployed worker."""
 from datetime import date
 
 from services.client_report import PERIOD_CHOICES, period_start_for
-from services.client_report_schedule import format_report_email, parse_recipients
+from services.client_report_schedule import (
+    _default_settings,
+    format_report_email,
+    parse_recipients,
+)
 
 
 def test_parse_recipients_string_and_list():
@@ -46,6 +50,12 @@ def test_period_start_for_day_tokens():
     # No/unknown token → None (builder default window).
     assert period_start_for(None, None, today) is None
     assert period_start_for("bogus", None, today) is None
+
+
+def test_default_settings_ai_visibility_off():
+    # AI Visibility scheduling is opt-in — a fresh client's schedule never emits
+    # the AI-visibility report until the toggle is turned on.
+    assert _default_settings("client-1")["ai_visibility_enabled"] is False
 
 
 def test_period_start_for_campaign_start():

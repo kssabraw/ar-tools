@@ -38,7 +38,7 @@ _WEEKLY_PERIOD_DAYS = 7
 
 _SETTINGS_COLS = (
     "client_id, recipients, cadence, day_of_week, day_of_month, hour_utc, "
-    "period, email_enabled, drive_enabled, last_run_at, next_run_at"
+    "period, email_enabled, drive_enabled, ai_visibility_enabled, last_run_at, next_run_at"
 )
 
 
@@ -94,6 +94,7 @@ def _default_settings(client_id: str) -> dict:
         "period": "auto",
         "email_enabled": True,
         "drive_enabled": True,
+        "ai_visibility_enabled": False,
         "last_run_at": None,
         "next_run_at": None,
     }
@@ -120,6 +121,7 @@ def upsert_settings(
     email_enabled: bool,
     drive_enabled: bool,
     period: str = "auto",
+    ai_visibility_enabled: bool = False,
 ) -> dict:
     """Save settings and (re)compute the schedule clock. Raises HTTPException on
     an invalid cadence (via compute_next_run_at)."""
@@ -135,6 +137,7 @@ def upsert_settings(
         "period": period,
         "email_enabled": email_enabled,
         "drive_enabled": drive_enabled,
+        "ai_visibility_enabled": ai_visibility_enabled,
         "next_run_at": next_run.isoformat() if next_run else None,
         "updated_at": now.isoformat(),
     }
@@ -148,13 +151,24 @@ def upsert_settings(
 # ----------------------------------------------------------------------------
 # Scheduler tick.
 # ----------------------------------------------------------------------------
-def _has_pending_report(supabase, client_id: str) -> bool:
-    rows = (
+def _has_pending_report(supabase, client_id: str, report_type: Optional[str] = None) -> bool:
+    q = (
         supabase.table("client_reports").select("id")
         .eq("client_id", client_id).in_("status", ["pending", "running"])
-        .limit(1).execute()
-    ).data
-    return bool(rows)
+    )
+    if report_type is not None:
+        q = q.eq("report_type", report_type)
+    return bool(q.limit(1).execute().data)
+
+
+def _client_tracks_ai_visibility(supabase, client_id: str) -> bool:
+    """True when the client has at least one AI-visibility tracked keyword — so an
+    accidentally-enabled toggle on a client that never runs AI-visibility scans
+    doesn't ship an empty 'No completed scans' report."""
+    return bool(
+        supabase.table("brand_tracked_keywords").select("id")
+        .eq("client_id", client_id).limit(1).execute().data
+    )
 
 
 def enqueue_due_report_schedules() -> int:
@@ -184,8 +198,6 @@ def enqueue_due_report_schedules() -> int:
             "next_run_at": next_run.isoformat() if next_run else None,
         }).eq("client_id", client_id).execute()
 
-        if _has_pending_report(supabase, client_id):
-            continue
         report_type = "weekly" if sched["cadence"] == "weekly" else "monthly"
         period = sched.get("period") or "auto"
         if period == "auto":
@@ -195,15 +207,40 @@ def enqueue_due_report_schedules() -> int:
         else:
             period_start = None
             period_token = period
-        try:
-            enqueue_client_report(
-                client_id, report_type,
-                period_start=period_start, period_end=now.date(),
-                deliver=True, period=period_token,
-            )
-            enqueued += 1
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("report_schedule.enqueue_failed", extra={"client_id": client_id, "error": str(exc)})
+
+        # The main combined PDF (monthly/weekly). Skip if one is already in flight.
+        if not _has_pending_report(supabase, client_id, report_type):
+            try:
+                enqueue_client_report(
+                    client_id, report_type,
+                    period_start=period_start, period_end=now.date(),
+                    deliver=True, period=period_token,
+                )
+                enqueued += 1
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("report_schedule.enqueue_failed", extra={"client_id": client_id, "error": str(exc)})
+
+        # The AI Visibility white-label report, on the same clock + delivery, when
+        # the client opted in AND actually tracks AI-visibility keywords. A
+        # separate deliverable (distinct report_type), guarded by its own pending
+        # check so it isn't blocked by an in-flight combined PDF.
+        if (
+            sched.get("ai_visibility_enabled")
+            and not _has_pending_report(supabase, client_id, "ai_visibility")
+            and _client_tracks_ai_visibility(supabase, client_id)
+        ):
+            try:
+                enqueue_client_report(
+                    client_id, "ai_visibility",
+                    period_start=period_start, period_end=now.date(),
+                    deliver=True, period=period_token,
+                )
+                enqueued += 1
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "report_schedule.ai_visibility_enqueue_failed",
+                    extra={"client_id": client_id, "error": str(exc)},
+                )
     if enqueued:
         logger.info("report_schedule.enqueued", extra={"clients": enqueued})
     return enqueued
