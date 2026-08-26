@@ -540,19 +540,123 @@ def enqueue_due_gbp_scheduled_posts() -> int:
     return count
 
 
+def match_existing_post(post: dict, live: list[dict], claimed: set[str]) -> dict | None:
+    """The live Google post that `post` already created, if one is there. Pure.
+
+    Matches on the summary + topic type, skipping any resource name another local
+    row has already recorded — so a genuine repeat of the same copy can't adopt
+    the earlier post, only the orphan its own interrupted attempt left behind.
+    """
+    summary = (post.get("summary") or "").strip()
+    if not summary:
+        return None
+    topic = (post.get("topic_type") or "standard").strip().lower()
+    for candidate in live:
+        name = candidate.get("google_name")
+        if not name or name in claimed:
+            continue
+        if (candidate.get("summary") or "").strip() != summary:
+            continue
+        if (candidate.get("topic_type") or "standard").strip().lower() != topic:
+            continue
+        return candidate
+    return None
+
+
+def _claimed_post_names(location_row_id: str) -> set[str]:
+    """Google resource names already recorded against this location's posts."""
+    rows = (
+        get_supabase().table("gbp_posts")
+        .select("google_name").eq("location_row_id", location_row_id)
+        .not_.is_("google_name", "null").execute()
+    ).data or []
+    return {r["google_name"] for r in rows if r.get("google_name")}
+
+
+async def _adopt_orphan_post(post: dict, parent: str) -> dict | None:
+    """Find the post a previous, interrupted attempt already created on Google.
+
+    `status='publishing'` is written immediately BEFORE `create_post`, so a row
+    still carrying it when the job re-runs means an attempt reached Google and
+    never recorded the answer — the deploy-mid-publish shape. Google's v4
+    localPosts API takes no client idempotency key, so the only way not to post
+    twice is to go look. Best-effort: if the lookup itself fails we fall through
+    to creating, because a failed publish is a smaller problem than a post that
+    never goes out.
+    """
+    try:
+        live = await asyncio.to_thread(api.list_posts, parent)
+        claimed = await asyncio.to_thread(_claimed_post_names, post["location_row_id"])
+    except Exception as exc:  # noqa: BLE001 — never block the publish on the probe
+        logger.warning(
+            "gbp_posts.orphan_probe_failed",
+            extra={"post_id": post.get("id"), "error": str(exc)},
+        )
+        return None
+    return match_existing_post(post, live, claimed)
+
+
 async def run_publish_job(job: dict) -> None:
     """Handler for job_type='gbp_post_publish'. Builds the v4 body, creates the
-    post on Google, persists the result, and schedules a state re-check."""
+    post on Google, persists the result, and schedules a state re-check.
+
+    Idempotent against a requeue: a deploy's drain (or the stale-job reaper) can
+    re-run this handler after an attempt already created the post on Google, and
+    a duplicate here is a real duplicate on the client's public profile. Two
+    guards below cover the two shapes — the result was recorded (google_name set)
+    and the result was lost (`status='publishing'`).
+    """
     payload = job.get("payload") or {}
     post_id = payload.get("post_id")
     client_id = payload.get("client_id")
     supabase = get_supabase()
     try:
         post = get_post(post_id)
+        # Guard 1 — the previous attempt finished and recorded it. Nothing to do
+        # but settle this duplicate job; creating again would post twice.
+        if post.get("google_name"):
+            logger.info(
+                "gbp_posts.publish_already_done",
+                extra={"post_id": post_id, "google_name": post["google_name"]},
+            )
+            supabase.table("async_jobs").update(
+                {"status": "complete",
+                 "result": {"post_id": post_id, "state": post.get("google_state"),
+                            "already_published": True},
+                 "completed_at": "now()"}
+            ).eq("id", job["id"]).execute()
+            return
         location = _location(post["location_row_id"], client_id)
         if location.get("access_status") != "ok":
             raise HTTPException(status_code=409, detail="gbp_location_not_verified")
         parent = _parent_for(location)
+        # Guard 2 — the previous attempt reached Google but its answer was lost
+        # (the status below is written immediately before the create call, so a
+        # row still in it was interrupted mid-publish). Adopt the orphan rather
+        # than creating its twin. Only costs a list call on the retry path; a
+        # first publish is 'scheduled' here and skips it.
+        if post.get("status") == "publishing":
+            orphan = await _adopt_orphan_post(post, parent)
+            if orphan:
+                logger.warning(
+                    "gbp_posts.adopted_orphan",
+                    extra={"post_id": post_id, "google_name": orphan.get("google_name")},
+                )
+                supabase.table("gbp_posts").update({
+                    "status": orphan["status"], "google_name": orphan.get("google_name"),
+                    "google_state": orphan.get("google_state"),
+                    "search_url": orphan.get("search_url"),
+                    "published_at": "now()", "scheduled_at": None, "error": None,
+                    "updated_at": "now()",
+                }).eq("id", post_id).execute()
+                supabase.table("async_jobs").update(
+                    {"status": "complete",
+                     "result": {"post_id": post_id, "state": orphan.get("google_state"),
+                                "adopted_orphan": True},
+                     "completed_at": "now()"}
+                ).eq("id", job["id"]).execute()
+                _enqueue_sync(client_id, delay_seconds=900)
+                return
         client = _client(client_id)
         cta_url = post.get("cta_url")
         if cta_url and settings.gbp_post_default_utm:
