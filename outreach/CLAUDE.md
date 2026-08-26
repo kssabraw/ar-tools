@@ -181,16 +181,20 @@ first order drained in 5s; it exposed that the enricher set was wrong (validator
 `name_for_emails` but no emails), now corrected to **`domains_service,emails_validator_service,phones_enricher_service`**
 (`domains_service` is the one that scrapes emails/contacts from the business's GBP website; I-109 UPDATE).
 Enrichment also **backfills `prospect.website`** from the GBP/Outscraper response when it's blank and
-surfaces the website in the contacts UI. **Async fix (2026-08-26, I-109):** the deeper root cause of
-"Enrich just restates the business name" was that `enrich_client` called Outscraper **synchronously**
-(`async=false`), which returns the base Maps listing BEFORE the enrichers run — zero emails/contacts/
-people, only `name_for_emails` (the business name). Two `probe-enrich` runs proved it (even
-`domains_service` on a contact-rich business came back bare). `_enrich_one` now **submits `async=true`
-and polls the archive** (`fetch_result`, `enrich_poll_timeout_seconds`=300s per place), the same pair
-the mass ingest uses — the only path that returns the enrichers' output; `submit_maps_search`'s
-`enrichment=""` invariant untouched (`tests/test_enrich_client.py`). **Validate on a live async
-re-enrich** — whether `domains_service` alone surfaces the Apollo/ZoomInfo *people* vs. site emails is
-the remaining field-shape question. Config rates remain placeholders
+surfaces the website in the contacts UI. **I-109 RESOLVED (2026-08-26) — two stacked bugs:** (1) the
+call was **synchronous** (`async=false`), which returns the base Maps listing BEFORE the enrichers run
+(zero emails/contacts, only `name_for_emails`), and (2) even async, the **enricher slug was wrong** —
+`domains_service` is a bare website scraper that returned no contacts. The owner's Outscraper dashboard
+export named the real slug: **`leads_n_contacts`** (Outscraper's "Leads & Contacts" — emails / phones /
+socials / domain + decision-maker `full_name`/`first_name`/`last_name`/`title` where they exist). Fixes:
+`_enrich_one` **submits `async=true` and polls the archive** (`fetch_result`, `enrich_poll_timeout_seconds`
+=300s/place; `submit_maps_search`'s `enrichment=""` invariant untouched; `tests/test_enrich_client.py`,
+merged in #756), and the default enricher set is now **`leads_n_contacts`** in both configs
+(`enrich_enrichments` / `outreach_enrich_enrichments`). **Validated live:** 5 LA plumbers that were
+email-null / business-name-only under `domains_service` returned real emails + domain + company socials
+under `leads_n_contacts`; person names populate for businesses with an Apollo/ZoomInfo record (small
+owner-operated ones fall back to scraped site emails). Cost per `leads_n_contacts` record is unconfirmed
+(export `est:10`, likely pricier) — config rates remain placeholders
 (I-111).
 
 **The pipeline is an AR Tools SUITE MODULE, not a standalone tool** (owner ruling, HANDOFF §2).

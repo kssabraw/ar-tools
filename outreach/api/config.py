@@ -370,15 +370,17 @@ class Settings(BaseSettings):
     # (`enrichment_request`) is its own spend confirmation; the `tick` command drains it.
 
     # The enricher set requested by default (the fallback; an order freezes its own set at placement).
-    # Outscraper takes a LIST, called BY place_id. `domains_service` is the SCRAPER that pulls emails +
-    # contact names + phones from the business's website (the repo's contact-pull convention); the
-    # other two post-process it (email validation → email.emails_validator.status; phone carrier). The
-    # first live run requested the validators WITHOUT the scraper and got name_for_emails but no emails
-    # (I-109). The parser still never asserts a field it hasn't seen — `probe-enrich` confirms the shape.
+    # Outscraper takes a LIST, called BY place_id. The correct slug is **`leads_n_contacts`** — the
+    # "Leads & Contacts" enricher, confirmed 2026-08-26 from a real dashboard export (I-109) and
+    # validated live: it returns the full contact shape (emails / phones / socials / domain / and the
+    # decision-maker person fields full_name·first_name·last_name·title where Outscraper has them). The
+    # earlier `domains_service` (+ validators) was the wrong enricher — a bare website scraper that
+    # returned no contacts on our calls; five LA plumbers that came back email-null under it returned
+    # real emails under `leads_n_contacts`. Person names populate for businesses with an Apollo/ZoomInfo/
+    # LinkedIn record; small owner-operated businesses fall back to their scraped site emails. The parser
+    # still never asserts a field it hasn't seen — `probe-enrich` confirms the shape for any new slug.
     enrich_enrichments: list[str] = Field(
-        default_factory=lambda: [
-            "domains_service", "emails_validator_service", "phones_enricher_service"
-        ]
+        default_factory=lambda: ["leads_n_contacts"]
     )
 
     # Outscraper enrichment is billed per record. The API returns no per-request cost, so like every

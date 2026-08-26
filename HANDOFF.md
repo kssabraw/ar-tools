@@ -49,6 +49,16 @@ anywhere. Authorization is only re-prompted when a change introduces a NEW
 Google service (Sheets, UrlFetchApp did; `dedupe_by_name` did not — it reuses
 `DriveApp`).
 
+**Deployment labels vanish on every redeploy — this is expected.** The name shown
+in the Manage-deployments list is just a mirror of the deployment's Description,
+and **cutting a new version resets it to "Untitled"**. That is why the 2026-08-26
+redeploy appeared to wipe the "AR Tools Google Docs Webhook" label, and it cost
+confusion twice in one session. Two consequences: (1) after any redeploy, expect
+to re-enter the descriptions; (2) **always identify a deployment by its version
+number or its `AKfyc…` deployment ID, never by the list label** — the label may
+be blank, stale, or duplicated across both. Editing a description alone does NOT
+cut a version (verified: the list still topped out at Version 10 afterwards).
+
 **Verifying a deploy landed.** Two options, in order of convenience:
 1. Read the project source back through Drive (`download_file_content` with
    `exportMimeType: application/vnd.google-apps.script+json`) and confirm the
