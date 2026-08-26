@@ -1,11 +1,79 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-26 · **Website Builder — where it actually stands, and the informational content creator (NOT built, next build)** (latest)
+## ⏩ Update — 2026-08-26 (pm) · **Website Builder — informational content creator + drip-publish release schedule BUILT (PR #740)** (latest)
+
+The gap mapped in the section below is **built**. PR
+[#740](https://github.com/kssabraw/ar-tools/pull/740) (draft, green CI,
+`mergeable_state: clean`) is on branch
+`claude/website-builder-content-creator-70iu8b`. Nothing is merged yet — it is
+ready for the owner to review/merge. What follows is the "so the next chat
+doesn't re-derive it" summary; CLAUDE.md's Website Builder bullet carries the
+durable version.
+
+### The decision that was surfaced first (owner-confirmed)
+
+**Who owns an informational site's cluster inventory?** Confirmed: the **Website
+Builder owns it** in `websites.config.content_plan` — editable, durable across a
+re-research, reviewed/approved through the same plan flow as the geo matrix —
+rather than reading a research run at build time. A **one-shot seed bridge**
+copies a research plan in once; after that it is the site's own data. This keeps
+informational sites inside the existing plan → approve → generate → publish
+machinery instead of coupling site structure to a research run.
+
+### What was built (5 commits on the branch)
+
+1. **The five planning/generation pieces** (`website_plan.py`,
+   `website_content.py`, `website_generate.py`, `website_publish.py`): the
+   `content_plan` model (`PostEntry`/`PillarEntry`), posts at `/blog/{slug}/`, a
+   **pillar/hub** at top-level `/{topic-slug}/` once a silo has ≥5 **evergreen**
+   posts (`news` excluded), a **`run` engine** (a blog Writer run whose angle
+   rides on `writer_notes`, linked back `content_source="run"`), the effective-
+   frontmatter publish gate + first-paragraph meta description. **No migration**
+   — reuses the `website_page_generate` job, `content_source='run'`, and the
+   free-text `page_type` column.
+2. **Template** (`site-template`): a `pillars` collection + top-level route via
+   `[...path]`, pillars surfaced on home/nav/sitemap. Verified by **building both
+   site types** (the rule that keeps earning its keep).
+3. **Strategist seed bridge** — `import_from_strategist` maps the client's latest
+   `keyword_topic_strategist` plan into `content_plan`.
+4. **Fanout seed bridge** — `import_from_fanout(session_id)` maps a finished
+   Topic Fanout session's silos/clusters in. **Owner ruling: OPTION 1, always
+   regenerate fresh** — copies only the topics/keywords, never links the
+   session's already-generated articles.
+5. **Release (drip-publish) schedule** (`website_release.py` + `website_releases`
+   table + `website_pages.released_at`, migration `20260826140000` applied live)
+   — publish an immediate batch, then N per **day/week/month**. **Owner ruling:
+   generate + publish on the drip** (Fanout-style, just-in-time), via a
+   `publish_after` flag on the existing generate job — **no new job type**.
+6. **Cross-family fix** (owner caught it): blog posts are planned for **every**
+   site type, so a **local SEO site's `/blog/` is filled from its content plan**
+   alongside its service/location pages, and the release schedule drips **both**
+   its geo pages and its blog (acts on `NLP_PAGE_TYPES ∪ RUN_PAGE_TYPES`).
+
+### What is NOT built (deliberate follow-ups)
+
+- **Frontend UI** for the content plan, the two seed buttons, and the release
+  schedule — backend + template only, consistent with the module's build so far.
+- **Local-site pillar hubs** are reachable (home Guides grid + sitemap + own URL
+  + they link down to posts) but a **post→pillar up-link** and **pillar-in-local-
+  nav** are not wired.
+- Local geo pages already drip; a per-page-type immediate-vs-drip split beyond
+  ordering is not built.
+
+### Verification rule that keeps earning its keep
+
+Still true, and used again this pass: **build both site types in `site-template`**,
+not just the unit tests. The local-with-a-blog build (geo pages + posts + a
+pillar, 14 pages, no namespace conflict) is what confirmed the cross-family fix.
+
+---
+
+## ⏩ Update — 2026-08-26 (am) · **Website Builder — where it stood before PR #740, and the informational gap that is now built above**
 
 Nothing was built in this pass. This section records **what is finished**, the
 one thing that was silently broken and is now fixed, and a precise map of the
-**informational gap** — written so the next chat can start building instead of
-re-deriving it.
+**informational gap** — which is **now built (see the section above)**, kept here
+for the reasoning trail.
 
 ### Finished since the 2026-08-07 section
 
