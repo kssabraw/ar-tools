@@ -20,6 +20,7 @@ from typing import Any, Protocol
 logger = logging.getLogger(__name__)
 
 PROVIDER_OUTSCRAPER = "outscraper"
+PROVIDER_ENIGMA = "enigma"
 
 STAGE_INGEST = "a1_ingest"
 STAGE_FILTER = "a2_filter"

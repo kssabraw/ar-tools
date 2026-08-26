@@ -856,6 +856,7 @@ def cmd_tick(args) -> int:
 
     from api.services import (
         ai_scan_queue,
+        enigma_queue,
         enrich_queue,
         onboard_queue,
         organic_scan_queue,
@@ -873,6 +874,11 @@ def cmd_tick(args) -> int:
     # the one-per-tick cadence — several orders per heartbeat. Order-gated (each signed order is its
     # own confirmation), so no env token, same as the drains above.
     enriched = _asyncio.run(enrich_queue.drain(client, settings))
+    # Enigma owner/contact enrichment — the fallback for contacts Outscraper couldn't get. Same
+    # signed-order + batchable model as Outscraper enrichment. GATED INERT: `enigma_queue.drain`
+    # returns immediately when `enigma_api_key` is unset (the current state — no account yet), so an
+    # unprovisioned environment claims nothing and spends nothing.
+    enigma_drained = _asyncio.run(enigma_queue.drain(client, settings))
     # Report signal scans (organic / AI-visibility UI triggers). Each is one cheap paid call, drained
     # ≤ its configured per-tick count (default 1), same signed-order + terminal-outcome model. A drain
     # that claims nothing ends the loop early, so an empty queue costs one read, not N.
@@ -954,6 +960,22 @@ def cmd_tick(args) -> int:
                         for o in enriched.orders
                     ],
                 },
+                "enigma": {
+                    "orders_processed": enigma_drained.orders_processed,
+                    "orders": [
+                        {
+                            "order_id": o.order_id,
+                            "outcome": o.outcome,
+                            "resolved": o.resolved,
+                            "owners": o.owners,
+                            "contacts": o.contacts,
+                            "skipped": o.skipped,
+                            "failed": o.failed,
+                            "error": o.error,
+                        }
+                        for o in enigma_drained.orders
+                    ],
+                },
                 "organic": [
                     {
                         "order_id": o.order_id,
@@ -985,12 +1007,14 @@ def cmd_tick(args) -> int:
     # queue whose orders quietly fail is the "green badge over a crashed job" shape (§6.2), and the
     # exit code is the only summary a cron run leaves besides its logs.
     enrich_failed = any(o.outcome == "failed" for o in enriched.orders)
+    enigma_failed = any(o.outcome == "failed" for o in enigma_drained.orders)
     signal_failed = any(
         o.outcome == "failed" for o in (*organic_drains, *ai_drains)
     )
     return (
         1
-        if enrich_failed or signal_failed or "failed" in (drained.outcome, onboarded.outcome)
+        if enrich_failed or enigma_failed or signal_failed
+        or "failed" in (drained.outcome, onboarded.outcome)
         else code
     )
 
