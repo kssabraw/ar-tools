@@ -2458,6 +2458,34 @@ the `prospect_name_scrape.raw` evidence against the live sites and tune the role
 what it missed or over-matched (the `raw` evidence makes this a re-read, not a re-fetch). Recall is the
 likelier weakness (a site that names the owner only in an image, a PDF, or JS-rendered content is a miss).
 
+**UPDATE — first live run (2026-08-26).** Ran `name_scrape_request` over all 84 website-carrying
+prospects of the LA emergency-plumber market (`9238e737…`): 14 found / 20 names / 15 unreachable, and the
+paid `name_search_request` over 5 no-website prospects: 3 cited names / 2 correctly dropped (~15¢). The high-
+confidence JSON-LD names are clean (8 at 82–100: *Roy Riddle, Founder* / *Jay Morton, Founder* / *Shane
+Lucas, Founder* …), which confirms the extractor's precision on the structured-data path. Two live over-match
+cases on the *text* path (both landed in the medium band, so the confidence layer contained them — but the
+extractor did not reject either):
+
+  1. **A PLACE NAME matched as a person.** "Los Angeles" was extracted as a "Founder" (A-1 Total Service
+     Plumbing, `source_kind=text`, conf 62). The Title-Case 2–3-token shape + role-anchor accepts a
+     multi-token toponym because it is neither a business token nor a stopword. Cheapest fix: add a small
+     curated place-name / toponym stoplist to `is_plausible_name` (the market's own city + common US
+     locality words), OR reject a candidate that is entirely city/region tokens the way the business-name
+     guard already rejects business tokens (one-directional, I-099). Do NOT reach for NER — it reintroduces
+     the fabrication surface the whole module avoids.
+
+  2. **A non-owner "Manager" from a mis-ingested prospect.** "Carol P. Parks, General Manager"
+     (emergency.lacity.gov) and "Aril Aril, Office Manager" (a SERVPRO franchise) were named because a city
+     emergency-management office and a restoration franchise were ingested as "emergency plumber" prospects
+     in the FIRST place. The scraper did its job; this is a prospect-INGEST precision question (the filter
+     upstream of the fallback), not an extractor defect — logged here only because the live run surfaced it.
+     Track under the ingest/filter work, not I-114's tuning.
+
+Recall (the predicted likelier weakness) held up: the 15 `unreachable` sites are the recall ceiling for now,
+not extraction misses on reachable pages. Web-search soft-match note: *Fast Water Heater → "Jason
+Hanleybrown, CEO"* cited to a national chain's blog page — a local listing attributed to the national brand's
+officer; the blended confidence correctly ranked it lowest (51) and the "verify" framing is exactly for this.
+
 ### I-115 · Name-scrape `unreachable`/`failed` are retried on every re-order (no backoff)
 The drain treats `found`/`no_names` as durable (never re-scraped) but `unreachable`/`failed` as retryable,
 so a re-placed order re-fetches a site that was down. That is the intended semantics (a site up now that was
