@@ -115,6 +115,7 @@ async def create_google_doc(
     *,
     content_format: str = "markdown",
     share: str = "private",
+    dedupe_by_name: bool = False,
 ) -> dict:
     """Create a Google Doc in `folder_id`; returns {doc_id, doc_url}.
 
@@ -122,7 +123,13 @@ async def create_google_doc(
     `share` is one of SHARE_MODES — "private" (default, unchanged), "link"
     (anyone with the link can view), or "public" (findable/indexable by search
     engines). Sharing requires a webhook deployment that honours the `share`
-    field; older deployments ignore it and the Doc stays private."""
+    field; older deployments ignore it and the Doc stays private.
+
+    `dedupe_by_name` makes the create idempotent for callers that can be retried
+    after an interrupted request: the webhook returns the existing Doc of that
+    title in the folder instead of a second copy. Same deployment caveat — an
+    older webhook ignores the field and creates as before, so the caller gets
+    today's behaviour rather than an error."""
     if not folder_id:
         raise GoogleDocError("missing_google_drive_folder_id")
     body = {
@@ -132,8 +139,14 @@ async def create_google_doc(
         "format": content_format,
         "share": share if share in SHARE_MODES else "private",
     }
+    if dedupe_by_name:
+        body["dedupe_by_name"] = True
     result = await _call_apps_script(body)
-    return {"doc_id": result.get("doc_id"), "doc_url": result.get("doc_url")}
+    return {
+        "doc_id": result.get("doc_id"),
+        "doc_url": result.get("doc_url"),
+        "reused": bool(result.get("reused")),
+    }
 
 
 async def upload_pdf(folder_id: str, title: str, pdf: bytes) -> dict:
@@ -167,6 +180,7 @@ async def create_google_sheet(
     rows: list[list[str]],
     *,
     share: str = "private",
+    dedupe_by_name: bool = False,
 ) -> dict:
     """Create a Google Sheet in `folder_id` from `rows`; returns {sheet_id, sheet_url}.
 
@@ -186,10 +200,16 @@ async def create_google_sheet(
         "rows": rows,
         "share": share if share in SHARE_MODES else "private",
     }
+    if dedupe_by_name:
+        body["dedupe_by_name"] = True
     result = await _call_apps_script(body)
     sheet_id = result.get("sheet_id")
     if not sheet_id:
         # success=true but no sheet_id ⇒ the deployed webhook predates the Sheets
         # support and made a Doc. Fail clearly so the item is marked failed.
         raise GoogleDocError("sheet_not_supported: redeploy the Apps Script webhook (no sheet_id returned)")
-    return {"sheet_id": sheet_id, "sheet_url": result.get("sheet_url")}
+    return {
+        "sheet_id": sheet_id,
+        "sheet_url": result.get("sheet_url"),
+        "reused": bool(result.get("reused")),
+    }
