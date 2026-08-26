@@ -1,0 +1,4 @@
+# CI-only test dependencies for nlp-api (not installed into the Docker image,
+# which uses requirements.txt). The suite has no async tests, so pytest alone is
+# enough — no pytest-asyncio. Pinned to match the other services' pytest.
+pytest==8.3.3

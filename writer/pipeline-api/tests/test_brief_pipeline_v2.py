@@ -398,11 +398,18 @@ async def test_pipeline_metadata_threshold_echo():
         result = await run_brief(req)
 
     m = result.metadata
-    assert m.relevance_floor_threshold == 0.55
-    assert m.restatement_ceiling_threshold == 0.78
-    assert m.inter_heading_threshold == 0.75
-    assert m.edge_threshold == 0.65
-    assert m.mmr_lambda == 0.7
+    # Assert the metadata ECHOES the configured thresholds, not hardcoded
+    # literals. These defaults are tuned periodically (e.g. #688 raised
+    # relevance_floor 0.55->0.65, restatement_ceiling 0.78->0.87,
+    # inter_heading 0.75->0.90, edge 0.65->0.80), and the hardcoded copies here
+    # silently drifted stale until CI began running this suite. Asserting
+    # against settings verifies the echo (the test's purpose) and can't drift.
+    from config import settings
+    assert m.relevance_floor_threshold == settings.brief_relevance_floor
+    assert m.restatement_ceiling_threshold == settings.brief_restatement_ceiling
+    assert m.inter_heading_threshold == settings.brief_inter_heading_threshold
+    assert m.edge_threshold == settings.brief_edge_threshold
+    assert m.mmr_lambda == settings.brief_mmr_lambda
     # Region detection ran
     assert m.regions_detected >= 1
 
