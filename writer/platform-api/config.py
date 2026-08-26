@@ -1747,6 +1747,13 @@ class Settings(BaseSettings):
     # this share of ZIPs return null volume (Google thresholds small geos).
     leadoff_zip_demand_enabled: bool = False
     placement_zip_null_share_inconclusive: float = 0.6
+    # Phase 0b feasibility probe (services/leadoff_zip_demand.py): a ~$0.05
+    # DataForSEO check on a known high-volume market (default Chicago ZIPs,
+    # "plumber") confirming per-ZIP volumes come back non-null before Phase 3 is
+    # built. Prefix is a leading ZIP substring ('606' = Chicago, '900' = LA).
+    leadoff_zip_probe_keyword: str = "plumber"
+    leadoff_zip_probe_zip_prefix: str = "606"
+    leadoff_zip_probe_count: int = 10
     # Score enrichment (owner ruling 2026-07-12): today's context signals are
     # promoted to grade inputs as bounded, config-weighted multipliers on the
     # winnability (rankability) and demand pillars. Deliberately conservative

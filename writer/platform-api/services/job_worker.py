@@ -82,6 +82,7 @@ from services.leadoff_signals import run_signal_refresh_job as run_leadoff_signa
 from services.leadoff_income import run_income_backfill_job as run_leadoff_income_backfill_job
 from services.leadoff_counties import run_county_backfill_job as run_leadoff_county_backfill_job
 from services.census_demand import run_placement_job as run_leadoff_placement_job
+from services.leadoff_zip_demand import run_zip_demand_probe_job as run_leadoff_zip_demand_job
 from services.leadoff_finder import run_city_finder_job as run_leadoff_city_finder_job
 from services.local_relevance import run_local_relevance_job
 from services.page_structure_scraper import analyze_page_structure
@@ -909,6 +910,8 @@ async def _process_job(job: dict) -> None:
         await run_leadoff_county_backfill_job(job)
     elif job_type == "leadoff_placement":
         await run_leadoff_placement_job(job)
+    elif job_type == "leadoff_zip_demand":
+        await run_leadoff_zip_demand_job(job)
     elif job_type == "leadoff_city_finder":
         await run_leadoff_city_finder_job(job)
     elif job_type == "domain_overview":
