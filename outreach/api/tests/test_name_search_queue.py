@@ -123,15 +123,16 @@ def _order(id="ord-1", prospect_ids=("p1",), status="pending", **kw):
                  "status": status, "created_at": "2026-08-26T01:00:00+00:00"}, **kw)
 
 
-def _result(pid, *, status, name=None, citation="https://x.com/o"):
+def _result(pid, *, status, name=None, citation="https://x.com/o", model_confidence=None,
+            citations=None):
     names = ()
     if name:
         names = (name_search.SearchedName(full_name=name, title="Owner", citation=citation,
                                           evidence="web search", first_name=name.split()[0],
-                                          last_name=name.split()[-1]),)
+                                          last_name=name.split()[-1], model_confidence=model_confidence),)
+    cites = tuple(citations) if citations is not None else ((citation,) if name else ())
     return name_search.NameSearchResult(prospect_id=pid, status=status, names=names,
-                                        model="gpt-5.4",
-                                        citations=(citation,) if name else (), raw={"text": ""})
+                                        model="gpt-5.4", citations=cites, raw={"text": ""})
 
 
 def _stub(monkeypatch, by_id, errors=None, raises=None):
@@ -161,9 +162,29 @@ def test_found_stores_web_search_contact_ledger_and_done(monkeypatch):
     c = db.tables["prospect_contact"]
     assert len(c) == 1 and c[0]["source"] == "web_search" and c[0]["full_name"] == "Bob Lee"
     assert c[0]["raw"]["citation"] == "https://x.com/o"
+    # a blended confidence rides the contact (1 citation, no website, no model → deterministic 40/low)
+    assert c[0]["confidence"] == 40 and c[0]["confidence_band"] == "low"
     assert db.tables["prospect_name_search"][0]["status"] == "found"
     assert db.tables["cost_ledger"][0]["units"] == 1 and db.tables["cost_ledger"][0]["provider"] == "openai"
     assert db.tables["name_search_request"][0]["status"] == "done"
+
+
+def test_confidence_blends_model_rating_and_corroboration(monkeypatch):
+    db = _FakeDB()
+    _seed(db, prospects=[{"id": "p1", "place_id": "pl1", "market_id": "m1", "name": "Acme",
+                          "website": "https://acme.com"}],
+          orders=[_order(prospect_ids=["p1"])])
+    # 3 distinct domains (one is the business's own) + a confident model → High.
+    _stub(monkeypatch, {"p1": _result(
+        "p1", status="found", name="Bob Lee", model_confidence=90,
+        citations=["https://acme.com/about", "https://news.example/x", "https://directory.example/y"])})
+
+    asyncio.run(name_search_queue.drain(db, _Settings()))
+
+    c = db.tables["prospect_contact"][0]
+    # deterministic 40 + 20 (3 domains) + 10 (own domain) = 70; blend 0.65*70 + 0.35*90 = 77 → high
+    assert c["confidence"] == 77 and c["confidence_band"] == "high"
+    assert c["raw"]["model_confidence"] == 90
 
 
 def test_no_names_still_bills(monkeypatch):

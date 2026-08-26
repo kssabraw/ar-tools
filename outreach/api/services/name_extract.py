@@ -31,7 +31,7 @@ from __future__ import annotations
 import html as _html
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 # --- role vocabulary -------------------------------------------------------------------------
@@ -146,6 +146,10 @@ class ExtractedName:
     evidence: str
     first_name: str | None = None
     last_name: str | None = None
+    # How many fetched pages of the site named this person — a corroboration signal the confidence
+    # scorer reads. extract_names (one page) leaves it 1; merge_names (several pages) stamps the real
+    # count.
+    page_count: int = 1
 
     def as_contact(self) -> dict[str, Any]:
         """The name/title fields of a `prospect_contact` row (the queue adds join keys + source)."""
@@ -445,10 +449,18 @@ def merge_names(*groups: list[ExtractedName], max_names: int = 8) -> list[Extrac
     (the producer scans several pages; the homepage's hits come first). Pure.
 
     `_add` re-derives first/last from the full name (which every validated extraction carries as
-    ≥2 tokens), so the merged rows are complete without threading the source rows' split fields."""
+    ≥2 tokens), so the merged rows are complete without threading the source rows' split fields.
+    `page_count` is stamped with how many distinct GROUPS (= pages) named the person — the
+    corroboration signal the confidence scorer reads."""
     out: list[ExtractedName] = []
     seen: dict[str, int] = {}
+    pages: dict[str, int] = {}
     for group in groups:
+        counted_this_group: set[str] = set()
         for name in group:
+            key = _key(name.full_name)
+            if key and key not in counted_this_group:
+                pages[key] = pages.get(key, 0) + 1
+                counted_this_group.add(key)
             _add(out, seen, name.full_name, name.title, name.source_kind, name.evidence)
-    return out[:max_names]
+    return [replace(n, page_count=pages.get(_key(n.full_name), 1)) for n in out[:max_names]]

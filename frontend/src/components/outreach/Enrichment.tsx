@@ -23,6 +23,10 @@ interface Contact {
   phone: string | null
   phone_type: string | null
   source?: string | null
+  // Confidence in a researched name (site-scrape / web-search sources): 0-100 + High/Medium/Low.
+  // Null for Outscraper contacts (their trust is a validated email, a different thing).
+  confidence?: number | null
+  confidence_band?: 'high' | 'medium' | 'low' | null
 }
 // The FREE site name-scrape's per-prospect status (owner/manager fallback). Distinct from
 // `enrichment` (the paid Outscraper pull) — a prospect can carry both.
@@ -517,6 +521,27 @@ export interface ProspectContacts {
   contacts: Contact[]
 }
 
+// A small confidence chip for a researched (site-scrape / web-search) name — colour by band, the
+// numeric score in the tooltip. Confidence is a caller aid, not a guarantee (these names are badged
+// "verify"), so it reads as a quiet chip, not a headline.
+function ConfidenceChip({ score, band }: { score: number; band?: 'high' | 'medium' | 'low' | null }) {
+  const b = band ?? (score >= 75 ? 'high' : score >= 50 ? 'medium' : 'low')
+  const c = b === 'high'
+    ? { fg: '#15803d', bg: '#f0fdf4', bd: '#bbf7d0' }
+    : b === 'medium'
+      ? { fg: '#b45309', bg: '#fffbeb', bd: '#fde68a' }
+      : { fg: '#b91c1c', bg: '#fef2f2', bd: '#fecaca' }
+  return (
+    <span
+      title={`Confidence ${score}/100 (${b}) — a researched name, verify before using`}
+      style={{ fontSize: 10, color: c.fg, background: c.bg, border: `1px solid ${c.bd}`,
+        borderRadius: 4, padding: '0 4px' }}
+    >
+      {b} · {score}
+    </span>
+  )
+}
+
 // ── Per-row contacts + single "Enrich" button ───────────────────────────────────────────────────
 // `provided` is the batched read (the coverage table fetches all rows' contacts in ONE call and
 // passes each row's slice, or `null` when a prospect has no enrichment yet — avoiding an N+1 of one
@@ -605,6 +630,7 @@ export function ContactCell({
                     </span>
                   )
                 ) : null}
+                {c.confidence != null ? <ConfidenceChip score={c.confidence} band={c.confidence_band} /> : null}
               </span>
             )}
             {c.email && (

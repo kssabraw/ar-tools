@@ -175,6 +175,14 @@ def test_merge_preserves_order_and_dedups():
     assert [n.full_name for n in merged] == ["Amy Cole", "Ben Diaz"]
 
 
+def test_merge_stamps_page_count_for_corroboration():
+    home = ne.extract_names("<p>Amy Cole, Owner</p>")
+    about = ne.extract_names("<p>Amy Cole, Owner</p><p>Ben Diaz, Manager</p>")
+    by = {n.full_name: n for n in ne.merge_names(home, about)}
+    assert by["Amy Cole"].page_count == 2   # named on both pages
+    assert by["Ben Diaz"].page_count == 1   # one page only
+
+
 def test_empty_and_none_are_safe():
     assert ne.extract_names(None) == []
     assert ne.extract_names("") == []

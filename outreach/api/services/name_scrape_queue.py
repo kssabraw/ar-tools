@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..config import Settings
-from . import name_scrape
+from . import name_confidence, name_scrape
 
 logger = logging.getLogger(__name__)
 
@@ -145,16 +145,22 @@ def _contact_rows(result: name_scrape.NameScrapeResult, place_id: str) -> list[d
     contacts. The evidence + which page it came from ride in `raw`."""
     rows: list[dict[str, Any]] = []
     for idx, name in enumerate(result.names):
+        conf = name_confidence.score_site_scrape(
+            source_kind=name.source_kind, title=name.title, page_count=name.page_count
+        )
         rows.append(
             {
                 "prospect_id": result.prospect_id,
                 "place_id": place_id,
                 "contact_index": idx,
                 "source": CONTACT_SOURCE,
+                "confidence": conf.score,
+                "confidence_band": conf.band,
                 "raw": {
                     "source_kind": name.source_kind,
                     "evidence": name.evidence,
                     "source_urls": list(result.source_urls),
+                    "confidence": conf.factors,
                 },
                 **name.as_contact(),
             }

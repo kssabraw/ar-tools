@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..config import Settings
-from . import cost, name_search
+from . import cost, name_confidence, name_search
 from .scan_queue import budget_denial
 
 logger = logging.getLogger(__name__)
@@ -119,22 +119,35 @@ def _already_searched(db: Any, prospect_ids: list[str]) -> set[str]:
     return done
 
 
-def _contact_rows(result: name_search.NameSearchResult, place_id: str) -> list[dict[str, Any]]:
+def _contact_rows(
+    result: name_search.NameSearchResult, place_id: str, business_website: str | None = None
+) -> list[dict[str, Any]]:
     """`prospect_contact` insert rows for a search result. `source='web_search'`; the citation +
-    model ride in `raw` so a caller can verify the low-trust name against its source."""
+    model ride in `raw` so a caller can verify the low-trust name against its source. Confidence is
+    BLENDED (deterministic corroboration across the search's citations + the model's self-rating)."""
     rows: list[dict[str, Any]] = []
     for idx, name in enumerate(result.names):
+        conf = name_confidence.score_web_search(
+            model_confidence=name.model_confidence,
+            citations=result.citations,
+            business_website=business_website,
+        )
         rows.append(
             {
                 "prospect_id": result.prospect_id,
                 "place_id": place_id,
                 "contact_index": idx,
                 "source": CONTACT_SOURCE,
+                "confidence": conf.score,
+                "confidence_band": conf.band,
                 "raw": {
                     "source_kind": "web_search",
                     "citation": name.citation,
                     "evidence": name.evidence,
                     "model": result.model,
+                    "model_confidence": name.model_confidence,
+                    "model_reason": name.model_reason,
+                    "confidence": conf.factors,
                 },
                 **name.as_contact(),
             }
@@ -142,10 +155,13 @@ def _contact_rows(result: name_search.NameSearchResult, place_id: str) -> list[d
     return rows
 
 
-def _store_result(db: Any, result: name_search.NameSearchResult, place_id: str, order_id: str) -> int:
+def _store_result(
+    db: Any, result: name_search.NameSearchResult, place_id: str, order_id: str,
+    business_website: str | None = None,
+) -> int:
     """Persist one search result. Replaces THIS prospect's web_search contacts (never the Outscraper
     or site-scrape ones) and upserts the marker. Contacts first, then the marker."""
-    rows = _contact_rows(result, place_id)
+    rows = _contact_rows(result, place_id, business_website)
     db.table(_CONTACT).delete().eq("prospect_id", result.prospect_id).eq(
         "source", CONTACT_SOURCE
     ).execute()
@@ -261,7 +277,8 @@ async def process_order(db: Any, settings: Settings, order: dict[str, Any]) -> N
                              error=_first_error(errors, pid) if pid in failed_ids else "no result")
                 report.failed += 1
                 continue
-            written = _store_result(db, result, by_id[pid]["place_id"], report.order_id)
+            written = _store_result(db, result, by_id[pid]["place_id"], report.order_id,
+                                    by_id[pid].get("website"))
             report.searched += 1
             report.names += written
             if result.status == "found":

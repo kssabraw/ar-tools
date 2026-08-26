@@ -64,6 +64,22 @@ def test_malformed_output_is_empty_not_raised():
     assert _names("") == []
 
 
+def test_model_self_rating_is_parsed():
+    got = _names('{"found": true, "name": "John Smith", "source_url": "https://x.com", '
+                 '"confidence": 80, "confidence_reason": "named on their own about page"}')
+    assert got[0].model_confidence == 80 and got[0].model_reason == "named on their own about page"
+
+
+def test_model_confidence_tolerates_a_fraction():
+    got = _names('{"found": true, "name": "John Smith", "source_url": "https://x.com", "confidence": 0.8}')
+    assert got[0].model_confidence == 80
+
+
+def test_model_confidence_absent_is_none():
+    got = _names('{"found": true, "name": "John Smith", "source_url": "https://x.com"}')
+    assert got[0].model_confidence is None
+
+
 # --- extract_output: OpenAI Responses shape ---------------------------------------------------
 
 
