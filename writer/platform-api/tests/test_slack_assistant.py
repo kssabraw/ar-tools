@@ -574,6 +574,8 @@ def test_context_providers_cover_all_modules():
 
 
 def test_ctx_keyword_research_runs_reads_standalone_tables():
+    from datetime import date
+
     fake = _FakeSupabase({
         "keyword_research_runs": [[
             {"seeds": ["3pl audit software"], "keyword_count": 59,
@@ -602,6 +604,8 @@ def test_ctx_keyword_research_runs_reads_standalone_tables():
 
 
 def test_ctx_keyword_research_runs_empty_is_none():
+    from datetime import date
+
     fake = _FakeSupabase({
         "keyword_research_runs": [[]],
         "keyword_topic_research_runs": [[]],
