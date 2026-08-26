@@ -495,6 +495,14 @@ class ContentPlanSeedRequest(BaseModel):
     replace: bool = False
 
 
+class ContentPlanSeedFanoutRequest(BaseModel):
+    # The finished Fanout session whose silos/clusters seed the plan. Option 1
+    # (always regenerate fresh): only the topics/keywords are copied — the site
+    # writes its own posts and never links the session's generated articles.
+    session_id: str = Field(min_length=1)
+    replace: bool = False
+
+
 def _rebuild_after_content_plan(website_id: str) -> dict:
     """Rebuild the plan rows after the content plan changed, and return them."""
     website = _load_site(website_id)
@@ -546,6 +554,30 @@ async def seed_content_plan(
     assert_not_frozen(website["client_id"])
     try:
         seeded = website_content_plan.import_from_strategist(website, replace=body.replace)
+    except website_content_plan.SeedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"seeded": seeded, **_rebuild_after_content_plan(website_id)}
+
+
+@router.post("/websites/{website_id}/content-plan/seed-fanout")
+async def seed_content_plan_from_fanout(
+    website_id: str,
+    body: ContentPlanSeedFanoutRequest,
+    auth: dict = Depends(require_staff),
+) -> dict:
+    """Seed the content plan from a finished Fanout session's silos/clusters.
+
+    A one-shot import (like the strategist seed): after it, the plan is the
+    site's own data. Always regenerates fresh — the session's own generated
+    articles are not linked.
+    """
+    _enabled()
+    website = _load_site(website_id)
+    assert_not_frozen(website["client_id"])
+    try:
+        seeded = website_content_plan.import_from_fanout(
+            website, session_id=body.session_id, replace=body.replace
+        )
     except website_content_plan.SeedError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return {"seeded": seeded, **_rebuild_after_content_plan(website_id)}
