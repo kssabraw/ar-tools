@@ -1,6 +1,78 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-26 · **Client Reporting — four report-content upgrades (all merged + live)** (latest)
+## ⏩ Update — 2026-08-26 · **Brand-voice QA: the judge was too generous — hardened the scoring rubric across both writers + turned on nlp/pipeline CI** (latest)
+
+**Problem.** The separate brand-voice scorecard (the 8-dimension LLM judge, not
+the deterministic checks) was scoring off-brand pages "fine." Pulled the real
+distribution from `<page>.voice_violations` to confirm — across **all 17 pages
+scored since the voice system shipped 2026-07-31** (the other 200 are pre-guide
+and correctly unscored): composites clustered **81–87** (Local SEO avg 84.2,
+Ecommerce 81.3), nothing ≥90, almost nothing <80. Textbook LLM-judge
+central-tendency.
+
+**The insight that wrote the fix.** Per-dimension, the **only** dimension
+producing honest, well-spread scores was `distinctiveness` (avg **71.5**, range
+55–82) — and it is the **only** dimension whose prompt line was already framed
+adversarially ("could a competitor use this by swapping the name? score LOW").
+The other seven ("score how faithfully it follows the guide") inflated: tone
+86.8, writing_style 84.3, vocabulary 80.4. So it was a controlled experiment —
+adversarial framing works; extend it to the other seven.
+
+**What changed (PR #743, open).** Hardened **both** judge prompts — they are
+separate and have **no sync-guard** (unlike `voice_card.py`):
+- `nlp-api/main.py::_VOICE_SCORE_PROMPT_SUFFIX` — the page judge, consumed by all
+  four page scorers (`_score_system_prompt_for` local/national,
+  `_ecommerce_score_system_prompt_for`, `_blog_score_system_prompt_for`).
+- `pipeline-api/modules/writer/voice_review.py::_SCORE_SYSTEM` — the blog/service
+  **article** judge (its own rubric; would have stayed generous otherwise).
+
+Each got: anchored 0–100 bands with **60–74 "competent but anonymous" as the
+DEFAULT** for a page that reads fine but isn't distinctly the client; "never
+award 75+ for the mere absence of errors"; **worst-section evidence** (quote
+where it drifts, score to that); an 85+ justification guardrail; per-dimension
+"what LOW looks like" cues. **Output contracts unchanged** (page: `brand_voice`
+key; article: bare 8-dim object) → parsers, `voice_scorecard` math, weights,
+`VOICE_PASS_THRESHOLD` (80), deterministic caps all untouched. Verified locally
+as far as the sandbox allows (py_compile; `test_voice_card` 54 pass; isolated
+article-path integration).
+
+**Validation — the next real step, must run on PLATFORM.**
+`platform-api/scripts/revalidate_voice_scores.py` re-scores the baseline pages
+through the deployed nlp path and prints before→after distributions +
+per-dimension means. Read-only w.r.t. the stored baseline (records a score-run
+history row like a UI "Score", never overwrites `voice_score`/`voice_violations`;
+`--write` persists once trusted; `--limit` smoke-tests). The **sandbox can't
+reach the private nlp service**, so run it in a Railway shell on PLATFORM.
+Expected: the 81–87 mass spreads to **~62–80**, on-brand pages still reaching
+high 80s. Caveats it prints: re-score uses the client's *current* voice card
+(clean rubric comparison only where the guide is unchanged); local pages with an
+empty/unrecognized `location` error out (excluded, not scored 0).
+
+**Deferred until that re-score is measured (do NOT guess now):** raise the
+`distinctiveness` weight (.10→.15) and revisit `VOICE_PASS_THRESHOLD`. Scores are
+stored, so recalibration needs no re-billing beyond the one re-score.
+
+**CI coverage (PR #746, open).** Only platform-api ran in CI, so both prompt
+changes above had **no automated gate**. Added `.github/workflows/
+nlp-api-tests.yml` + `pipeline-api-tests.yml` (mirror `python-tests.yml`; nlp got
+a CI-only `requirements-dev.txt`). nlp-api went green; **pipeline-api immediately
+caught two pre-existing failures** (1327 passed, 2 failed) invisible because the
+suite never ran — both fixed in the same PR:
+1. `test_pipeline_metadata_threshold_echo` — stale assertion (0.55) vs
+   `config.brief_relevance_floor` raised to 0.65 in #688.
+2. **Real bug** in `brief/assembly.py::_apply_title_case` — it title-cased each
+   content H2 but left child H3s' `parent_h2_text` on the old casing, so an H3
+   referenced a "nonexistent" parent. Fixed by realigning H3 parent pointers to
+   the re-cased H2 in the same pass (idempotent).
+
+**Open items for the next session:** (1) run the re-score on PLATFORM and record
+the spread; (2) recalibrate weight+threshold from it; (3) land #746 green (CI
+re-running after the two fixes) then #743; (4) longer-term, fold the two judge
+prompts into one seam so they can't drift again (the scorecard math is already
+shared; the prompts are not); (5) 146 live pre-guide pages still carry no voice
+verdict — a backfill via voice-aware reoptimization.
+
+## ⏩ Update — 2026-08-26 · **Client Reporting — four report-content upgrades (all merged + live)**
 
 Four improvements to the client-facing PDF report shipped this session — each
 its own PR, squash-merged to `main`, auto-deployed to PLATFORM (each verified

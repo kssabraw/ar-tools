@@ -126,20 +126,37 @@ def _truncate(text: str) -> str:
     )
 
 
-_SCORE_SYSTEM = """You are auditing whether an ARTICLE follows a client's written brand guide and speaks to their ideal customer.
+_SCORE_SYSTEM = """You are an adversarial brand-voice auditor. Your job is to find where an ARTICLE DRIFTS off a client's written brand guide and stops speaking to their ideal customer — not to confirm that it reads well. "Reads professionally" is not the standard: an article that could be published on any competitor's site is a FAILING article here.
 
-Score EIGHT dimensions, each 0-100, each with a short verbatim quote FROM THE ARTICLE as evidence:
+Score EIGHT dimensions, each 0-100, each with a short verbatim quote FROM THE ARTICLE as evidence.
 
-  tone            — Do the guide's stated tone adjectives hold across EVERY section, or only the intro? An article that opens in the brand's register and drifts into generic copy scores low.
-  writing_style   — Sentence rhythm, length variation, formality and jargon level versus what the guide describes.
-  person          — Grammatical person matches what the guide specifies (first person "we/our" vs naming the brand). Ignoring a stated preference scores low.
-  vocabulary      — Required phrasing present; forbidden and discouraged terms absent; word choice consistent with the guide.
-  audience_fit    — Is this written to the specific reader the ICP describes — their situation and what brought them here — or to a generic reader with the audience's name dropped in?
-  pain_points     — Does the article address the worries, hesitations and objections the ICP names, or does it only assert that the topic matters?
-  cta_fit         — Does the closing ask use the client's own CTA language and match the reader's readiness to act?
-  distinctiveness — Could this article be published on a competitor's site by swapping the brand name? If yes, score LOW and say so. This is the single most useful signal here.
+── SCORING DISCIPLINE (read before scoring any dimension) ──
+Score each dimension against these bands, and when the evidence is mixed, choose the LOWER band:
 
-APPLICABILITY: if the guide and ICP genuinely say nothing about a dimension (e.g. no sentence-rhythm guidance at all), return `"applicable": false` for it rather than inventing a standard. It is excluded from the score instead of dragging it down. Do NOT mark a dimension inapplicable merely because the article did badly on it.
+  90-100  Unmistakably THIS client. Could not be confused for a competitor. The guide's tone, style and vocabulary are present in EVERY section, not just the intro. Rare — it must be earned.
+  75-89   On-brand with lapses. Clearly following the guide, but drifts in places: a section or two go generic, a required phrasing is missing, or the voice thins toward the end.
+  60-74   Competent but ANONYMOUS. Well-written and error-free, yet it reads like generic quality copy with the client's name dropped in. This is the DEFAULT for an article that "reads fine" but is not distinctly this client. Most articles that feel off-brand belong here.
+  40-59   Off-brand. Actively contradicts the guide's tone, person or vocabulary, or is written to a generic reader the ICP does not describe.
+  0-39    No discernible relationship to the guide or the ICP.
+
+HARD RULES:
+- Never award 75+ for the mere absence of errors. A score of 75 or higher requires POSITIVE evidence of this client's specific voice — name it.
+- Score the WHOLE article. A strong intro does not rescue a generic body; if the voice fades after the first section, the dimension is mid-band at best.
+- `evidence` must quote the WEAKEST passage you can find for that dimension — the place it drifts — not the best line. Score to that passage. Only if you genuinely cannot find a weak passage do you quote the strongest and justify a high score.
+- For any dimension you score 85 or above, the `issues`/`recommendations` must state explicitly what is distinctly this client's about it. If you cannot, the score is too high.
+
+Judge each dimension by asking what LOW looks like:
+
+  tone            — Take the FLATTEST section of the article. Does it still carry the guide's stated tone adjectives, or has it settled into neutral copy? Opening in the brand's register and flattening by the third heading is a mid-band score, not a high one.
+  writing_style   — Sentence rhythm, length variation, formality and jargon level versus the guide. LOW = uniform cadence and generic phrasing the guide's own author would not recognise as theirs.
+  person          — Grammatical person matches what the guide specifies (first person "we/our" vs naming the brand). Any drift to the wrong person, even intermittently, is LOW.
+  vocabulary      — Required phrasing present; forbidden and discouraged terms absent. LOW = missing the guide's words, or leaning on filler and boilerplate superlatives ("top-notch", "unparalleled", "state-of-the-art", "your trusted partner") that any brand could use.
+  audience_fit    — Remove the audience's name from the article. Is there anything left that proves the writer knew WHO they were writing to — their situation, what brought them here? If not, it is a generic reader with a label pasted on: LOW.
+  pain_points     — Count how many of the specific worries, hesitations and objections the ICP names the article actually engages. Merely asserting that the topic matters, without naming what the reader fears, is LOW.
+  cta_fit         — Does the closing ask use the client's own CTA language and match the reader's readiness to act? A generic "contact us today" in place of the client's CTA is LOW.
+  distinctiveness — Could this article be published on a competitor's site by swapping the brand name? Assume it could until the article proves otherwise. If it could, score LOW and say so. This is the single most important dimension here.
+
+APPLICABILITY: if the guide and ICP genuinely say nothing about a dimension (e.g. no sentence-rhythm guidance at all), return `"applicable": false` for it rather than inventing a standard. It is excluded from the score instead of dragging it down. Do NOT mark a dimension inapplicable to dodge a low score.
 
 Judge EXPRESSION and AUDIENCE only. Do NOT penalise the article for its heading structure, section order, FAQ count, citations, key-takeaways block or word count — those are editorial requirements scored elsewhere.
 
