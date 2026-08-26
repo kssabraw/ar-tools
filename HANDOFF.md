@@ -72,11 +72,12 @@ prompts into one seam so they can't drift again (the scorecard math is already
 shared; the prompts are not); (5) 146 live pre-guide pages still carry no voice
 verdict — a backfill via voice-aware reoptimization.
 
-## ⏩ Update — 2026-08-26 · **Client Reporting — four report-content upgrades (all merged + live)**
+## ⏩ Update — 2026-08-26 · **Client Reporting — report-content upgrades (all merged + live)**
 
-Four improvements to the client-facing PDF report shipped this session — each
+A run of improvements to the client-facing PDF report shipped this session — each
 its own PR, squash-merged to `main`, auto-deployed to PLATFORM (each verified
-`SUCCESS`), and gated by the platform-api `pytest` GitHub Actions workflow. All
+`SUCCESS`), and gated by the platform-api `pytest` GitHub Actions workflow (five
+code PRs #741/#742/#744/#745/#748 + a docs PR #747). All
 are additive rendering changes in `services/client_report.py` +
 `services/brand_report_html.py`; two carry additive migrations (applied live).
 Toggles default off, so nothing changes for a client until an account manager
@@ -127,6 +128,18 @@ opts in on the ClientReports **Delivery & schedule** card.
   trend positively, leading with the longer view when a single month dipped and
   saying "early and building momentum" (never an invented number) when long-term
   data isn't there yet.
+- **#748 (`a79c0cc`) — every tracked keyword in Organic rankings.** The combined
+  report's `_section_organic` trimmed to the top ~5 movers with a "remaining N —
+  full list on request" note; owner wants the full table. It now renders **every**
+  tracked keyword, sorted strongest current position first (unranked last), with
+  per-row Movement + rank-trend intact — so a slip shows honestly now (the old
+  design deliberately hid decliners). Dropped the top-movers selection + the
+  now-unused `_TOP_MOVERS` constant; raised `_gather_organic`'s `_MAX_KEYWORDS`
+  cap **40 → 250** (runaway ceiling, not a display trim) because several clients
+  track 50–96 keywords (UMH 96, Southwestern Hearing 60, EML 58, WheelHouse FL 50)
+  — those clients now get a **multi-page** organic table, which is the accepted
+  cost of "all keywords" (flag if a cap/hybrid is wanted for the very large ones).
+- **#747 (docs)** — recorded #741/#742/#744/#745 in CLAUDE.md + HANDOFF.md.
 
 **Live-data caveat (tell whoever tests this):** the horizons + month-over-month
 only render where the history supports them. **Organic rank** runs long, so
@@ -139,8 +152,8 @@ scans are a single day so AI MoM won't show).
 
 **Infra note — the pytest gate is intermittent.** The platform-api `pytest`
 workflow (added 2026-08-15, path filter `writer/platform-api/**`) **triggered for
-#744/#745 but did NOT fire for #741/#742** despite matching the same filter and
-firing normally on other `claude/*` PRs. All four were validated locally (76–80
+#744/#745/#748 but did NOT fire for #741/#742** despite matching the same filter
+and firing normally on other `claude/*` PRs. All were validated locally (74–80
 report tests green) and merged clean. Unresolved; worth a glance if a
 platform-api PR merges without its Python tests having gated it.
 
