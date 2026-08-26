@@ -283,7 +283,22 @@ VOICE_ENFORCEMENT_ENABLED = os.environ.get(
 # Corrective rewrite passes run when the deterministic check finds a violation
 # a page must not ship with. Separate from the score-driven auto-retry: a
 # forbidden word is a fact, not a score, and gets its own targeted pass.
-MAX_VOICE_CORRECTION_PASSES = int(os.environ.get("MAX_VOICE_CORRECTION_PASSES", "2"))
+MAX_VOICE_CORRECTION_PASSES = int(os.environ.get("MAX_VOICE_CORRECTION_PASSES", "3"))
+
+
+def _voice_rank_key(scorecard: Optional[dict]) -> tuple:
+    """Ranking key for keep-best voice correction: fewest critical violations
+    first, then highest voice score. A higher tuple = a better page to ship.
+
+    Used so a corrective rewrite loop ships its strongest pass, not merely its
+    last one — a targeted rewrite can score LOWER than the pass before it, and
+    keep-latest would then ship the regression. `None`/unscored ranks below any
+    real score (a scored page beats an unscored one at equal critical count)."""
+    sc = scorecard or {}
+    crit = sc.get("critical_count") or 0
+    score = sc.get("score")
+    score = score if isinstance(score, (int, float)) and not isinstance(score, bool) else float("-inf")
+    return (-crit, score)
 
 
 async def _distill_voice_card(client, brand_voice: Optional[dict], detected_icp: Optional[dict]) -> dict:
@@ -6651,6 +6666,11 @@ Full location: {body.location}
         # named words to remove and the failing dimensions with their evidence
         # quotes, which is far better rewrite input than a bare score.
         if voice_scorecard and voice_scorecard.get("needs_rewrite"):
+            # Keep-best: track the strongest state seen (initial + every pass) so
+            # a corrective rewrite that scores lower than its predecessor doesn't
+            # get shipped just because it ran last.
+            _best = {"html": content_html, "schema": schema_json, "title": page_title,
+                     "score": inline_score, "scores": inline_scores, "voice": voice_scorecard}
             for _fix_pass in range(1, MAX_VOICE_CORRECTION_PASSES + 1):
                 await q.put({
                     "step": "progress", "progress": 92,
@@ -6701,14 +6721,21 @@ Full location: {body.location}
                 except Exception as _re:
                     logger.warning(f"generate-page: voice re-score {_fix_pass} failed: {_re}")
                     break
+                if _voice_rank_key(voice_scorecard) > _voice_rank_key(_best["voice"]):
+                    _best = {"html": content_html, "schema": schema_json, "title": page_title,
+                             "score": inline_score, "scores": inline_scores, "voice": voice_scorecard}
                 if not (voice_scorecard or {}).get("needs_rewrite"):
                     break
+            # Ship the best pass, not merely the last (also keeps html + scorecard
+            # consistent if a re-score failed mid-loop).
+            content_html, schema_json, page_title = _best["html"], _best["schema"], _best["title"]
+            inline_score, inline_scores, voice_scorecard = _best["score"], _best["scores"], _best["voice"]
             if (voice_scorecard or {}).get("needs_rewrite"):
                 # Flagged, not silently shipped.
                 logger.warning(
                     "generate-page: page still off brand voice after "
                     f"{MAX_VOICE_CORRECTION_PASSES} passes for '{body.keyword}' "
-                    f"(score={voice_scorecard.get('score')})"
+                    f"(best score={voice_scorecard.get('score')})"
                 )
 
         # Build combined cost breakdown
@@ -7064,6 +7091,10 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                 except Exception as _ce:
                     logger.warning(f"reoptimize-page: checklist build for voice pass failed: {_ce}")
                     seo_checklist = ""
+            # Keep-best: ship the strongest pass, not merely the last one.
+            _best = {"html": content_html, "schema": schema_json, "title": page_title,
+                     "score": inline_score, "defs": inline_defs, "scores": inline_scores,
+                     "voice": voice_scorecard}
             for _fix_pass in range(1, MAX_VOICE_CORRECTION_PASSES + 1):
                 await q.put({
                     "step": "progress", "progress": 93,
@@ -7107,13 +7138,22 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                 except Exception as _re:
                     logger.warning(f"reoptimize-page: voice re-score {_fix_pass} failed: {_re}")
                     break
+                if _voice_rank_key(voice_scorecard) > _voice_rank_key(_best["voice"]):
+                    _best = {"html": content_html, "schema": schema_json, "title": page_title,
+                             "score": inline_score, "defs": inline_defs, "scores": inline_scores,
+                             "voice": voice_scorecard}
                 if not (voice_scorecard or {}).get("needs_rewrite"):
                     break
+            # Ship the best pass, not merely the last (also keeps html + scorecard
+            # consistent if a re-score failed mid-loop).
+            content_html, schema_json, page_title = _best["html"], _best["schema"], _best["title"]
+            inline_score, inline_defs = _best["score"], _best["defs"]
+            inline_scores, voice_scorecard = _best["scores"], _best["voice"]
             if (voice_scorecard or {}).get("needs_rewrite"):
                 logger.warning(
                     "reoptimize-page: page still off brand voice after "
                     f"{MAX_VOICE_CORRECTION_PASSES} passes for '{body.keyword}' "
-                    f"(score={voice_scorecard.get('score')})"
+                    f"(best score={voice_scorecard.get('score')})"
                 )
 
         await q.put({"step": "progress", "progress": 95, "message": "Finishing up…"})
@@ -8988,6 +9028,9 @@ async def _ecommerce_fix_voice(
     if not (scorecard or {}).get("needs_rewrite"):
         return content_html, schema_json, page_title, content_gaps, scorecard, spend
 
+    # Keep-best: ship the strongest pass, not merely the last one.
+    _best = {"html": content_html, "schema": schema_json, "title": page_title,
+             "gaps": content_gaps, "sc": scorecard}
     for _pass in range(1, MAX_VOICE_CORRECTION_PASSES + 1):
         corrections = "\n\n".join(part for part in (
             vcard.violations_to_corrections(scorecard.get("violations")),
@@ -9037,13 +9080,20 @@ fact, spec value, heading structure, table, list and schema exactly as it is):
         except Exception as exc:
             logger.warning(f"ecommerce voice re-score {_pass} failed: {exc}")
             break
+        if _voice_rank_key(scorecard) > _voice_rank_key(_best["sc"]):
+            _best = {"html": content_html, "schema": schema_json, "title": page_title,
+                     "gaps": content_gaps, "sc": scorecard}
         if not (scorecard or {}).get("needs_rewrite"):
             break
 
+    # Ship the best pass, not merely the last (also keeps html + scorecard
+    # consistent if a re-score failed mid-loop).
+    content_html, schema_json, page_title = _best["html"], _best["schema"], _best["title"]
+    content_gaps, scorecard = _best["gaps"], _best["sc"]
     if (scorecard or {}).get("needs_rewrite"):
         logger.warning(
             f"ecommerce: page still off brand voice after {MAX_VOICE_CORRECTION_PASSES} "
-            f"passes for '{keyword}' (score={scorecard.get('score')})"
+            f"passes for '{keyword}' (best score={scorecard.get('score')})"
         )
     return content_html, schema_json, page_title, content_gaps, scorecard, spend
 
