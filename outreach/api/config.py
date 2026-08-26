@@ -404,9 +404,16 @@ class Settings(BaseSettings):
     # into several orders.
     enrich_max_places_per_order: int = 200
 
-    # A synchronous enriched pull for a chunk of place_ids can take longer than the base search; its
-    # own timeout, clear of the 60s base request timeout.
+    # A single enrichment HTTP request (the async submit, or one poll of the archive) can take
+    # longer than the base search; its own per-request timeout, clear of the 60s base.
     enrich_request_timeout_seconds: float = 180.0
+
+    # Enrichments run ASYNC on Outscraper: a synchronous (async=false) call returns the base Maps
+    # record BEFORE the enrichers finish, i.e. with no emails/contacts/people at all (confirmed live
+    # 2026-08-26 by two probe-enrich runs — I-109). So `enrich_client` submits async and polls the
+    # archive to completion. This is the per-place poll ceiling: a stuck-Pending enrichment fails
+    # THAT place after this long rather than hanging the whole tick for the mass-ingest 1h timeout.
+    enrich_poll_timeout_seconds: float = 300.0
 
     # --- Report signal scans (organic / AI-visibility UI triggers, 2026-08-10) -----------
     # The per-prospect report's ORGANIC and AI sections are filled by two signed-order queues

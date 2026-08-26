@@ -2385,6 +2385,33 @@ the placeholder still drives the list even after a `score` run populates the fit
 
 ## Lead enrichment (2026-08-10)
 
+### I-109 UPDATE (2026-08-26) · ROOT CAUSE FOUND — enrichment was called SYNCHRONOUSLY, which returns the base listing with NO enrichers run; fixed to async submit+poll
+The "Enrich just restates the business name" complaint traced to a fundamental integration bug, not a
+wrong enricher set or a parser alias. `enrich_client._enrich_one` called `/maps/search-v3` with
+`async=false`, and **Outscraper runs enrichments asynchronously** — a synchronous call returns the base
+Maps record BEFORE the enrichers finish, so the response carries no `emails`, no scraped contacts, no
+person fields at all, only `name_for_emails` (the business name). The parser then correctly fell back to
+that business name. Every LA-plumber "contact" was this fallback over an un-enriched record, and a live
+inspection confirmed the stored `raw` for those rows is a pure Maps record (no `emails`/`website_title`).
+
+Confirmed by two `probe-enrich` runs (2026-08-26, owner-authorized, ~one billed record each, cron reverted
+after each): (1) `company_insights_service` → firmographics only (employees/founded_year), no people;
+(2) **our production set `domains_service,emails_validator_service,phones_enricher_service` against
+Enhanced Hearing Center** — a business KNOWN to have LinkedIn/Apollo contact data (owner "Rex McGee" in a
+real Outscraper dashboard export) — STILL returned a bare Maps record with `with_email:0` and
+`full_name`=the business name. So sync mode yields nothing whatever the enricher set or the business.
+
+**Fixed:** `_enrich_one` now submits `async=true` and polls the archive with `fetch_result` to completion
+(the same submit/poll pair the mass ingest uses — the only path that returns the enrichers' output). New
+`enrich_poll_timeout_seconds` (300s) is a per-place ceiling so one stuck-Pending place fails on its own
+instead of hanging the tick for the mass-ingest 1h timeout. `fetch_result` gained an optional
+`poll_timeout`. `submit_maps_search`'s `enrichment=""` base-tier invariant is untouched. Unit-tested in
+`tests/test_enrich_client.py` (submit carries `async=true`, polls past Pending, tags by place_id,
+per-place isolation). **Validate on a live re-enrich** before trusting output — the async path is the
+proven fix for "returns nothing", but whether `domains_service` alone surfaces the Apollo/ZoomInfo *people*
+(vs. site-scraped emails only) is the remaining field-shape question below; add the people-enricher slug
+once a live async run shows what comes back.
+
 ### I-109 UPDATE (2026-08-10) · The enricher SET was wrong — corrected against a real response; domains_service field shape still to confirm
 The first live enrichment ran (order drained in 5s, 1 contact) and produced the evidence the probe was
 meant to: the response carried `name_for_emails` + the base listing `phone` + `website`, but **ZERO
@@ -2457,6 +2484,34 @@ using it on a call. **Action:** once the first real `scan-names` / `name_scrape_
 the `prospect_name_scrape.raw` evidence against the live sites and tune the role vocabulary / patterns from
 what it missed or over-matched (the `raw` evidence makes this a re-read, not a re-fetch). Recall is the
 likelier weakness (a site that names the owner only in an image, a PDF, or JS-rendered content is a miss).
+
+**UPDATE — first live run (2026-08-26).** Ran `name_scrape_request` over all 84 website-carrying
+prospects of the LA emergency-plumber market (`9238e737…`): 14 found / 20 names / 15 unreachable, and the
+paid `name_search_request` over 5 no-website prospects: 3 cited names / 2 correctly dropped (~15¢). The high-
+confidence JSON-LD names are clean (8 at 82–100: *Roy Riddle, Founder* / *Jay Morton, Founder* / *Shane
+Lucas, Founder* …), which confirms the extractor's precision on the structured-data path. Two live over-match
+cases on the *text* path (both landed in the medium band, so the confidence layer contained them — but the
+extractor did not reject either):
+
+  1. **A PLACE NAME matched as a person.** "Los Angeles" was extracted as a "Founder" (A-1 Total Service
+     Plumbing, `source_kind=text`, conf 62). The Title-Case 2–3-token shape + role-anchor accepts a
+     multi-token toponym because it is neither a business token nor a stopword. Cheapest fix: add a small
+     curated place-name / toponym stoplist to `is_plausible_name` (the market's own city + common US
+     locality words), OR reject a candidate that is entirely city/region tokens the way the business-name
+     guard already rejects business tokens (one-directional, I-099). Do NOT reach for NER — it reintroduces
+     the fabrication surface the whole module avoids.
+
+  2. **A non-owner "Manager" from a mis-ingested prospect.** "Carol P. Parks, General Manager"
+     (emergency.lacity.gov) and "Aril Aril, Office Manager" (a SERVPRO franchise) were named because a city
+     emergency-management office and a restoration franchise were ingested as "emergency plumber" prospects
+     in the FIRST place. The scraper did its job; this is a prospect-INGEST precision question (the filter
+     upstream of the fallback), not an extractor defect — logged here only because the live run surfaced it.
+     Track under the ingest/filter work, not I-114's tuning.
+
+Recall (the predicted likelier weakness) held up: the 15 `unreachable` sites are the recall ceiling for now,
+not extraction misses on reachable pages. Web-search soft-match note: *Fast Water Heater → "Jason
+Hanleybrown, CEO"* cited to a national chain's blog page — a local listing attributed to the national brand's
+officer; the blended confidence correctly ranked it lowest (51) and the "verify" framing is exactly for this.
 
 ### I-115 · Name-scrape `unreachable`/`failed` are retried on every re-order (no backoff)
 The drain treats `found`/`no_names` as durable (never re-scraped) but `unreachable`/`failed` as retryable,

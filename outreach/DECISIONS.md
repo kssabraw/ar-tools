@@ -1983,3 +1983,30 @@ each contact's `raw.confidence` for replay. Frontend: a `ConfidenceChip` (colour
 the tooltip) beside the "from website" / "from web search — verify" provenance badge. Contacts read
 (`_CONTACT_COLUMNS` + single read) now returns the two columns. Unvalidated like every name signal
 (I-114) — calibrate the weights from real `raw.confidence` factors after the first live runs.
+
+---
+
+## 2026-08-26 · Enrichment must be ASYNC — sync returns the base listing with no enrichers run (I-109)
+
+A coworker reported the Enrich button "just restates the business name." Root cause was not the
+enricher set or a parser alias (the two prior I-109 theories) but the **call mode**: `enrich_client`
+called Outscraper synchronously (`async=false`), and Outscraper runs enrichments asynchronously, so a
+sync call returns the base Maps record BEFORE the enrichers finish — no emails, no contacts, no
+people, only `name_for_emails` (the business name), which the parser then falls back to.
+
+**Confirmed, not inferred** (the module's measure-don't-infer law): two owner-authorized `probe-enrich`
+runs. `company_insights_service` returned firmographics only. Our production set
+`domains_service,emails_validator_service,phones_enricher_service` against a business KNOWN to have
+LinkedIn/Apollo people (Enhanced Hearing Center / "Rex McGee") STILL returned a bare Maps record
+(`with_email:0`, `full_name`=business name). Sync yields nothing regardless of enricher set or business.
+
+**Decision:** submit `async=true` and poll the archive (`fetch_result`) to completion — the same pair
+the mass ingest already uses — with a dedicated `enrich_poll_timeout_seconds` (300s) per-place ceiling
+so a stuck place fails on its own rather than hanging the tick. This is a smaller, correct fix than
+building a separate "Contacts Finder" producer (the initially-requested approach): the CSV's rich
+people data is what async `domains_service` returns; there was never a missing *product*, only a
+missing *async*. `submit_maps_search`'s `enrichment=""` base-tier invariant is untouched.
+
+**Deliberately deferred:** whether async `domains_service` alone surfaces the Apollo/ZoomInfo *people*
+(vs. site-scraped emails only) is confirmed on the next LIVE async re-enrich, and the exact
+people-enricher slug (if a distinct one is needed) is added then — not guessed now.
