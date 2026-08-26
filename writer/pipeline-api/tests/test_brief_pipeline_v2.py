@@ -398,7 +398,9 @@ async def test_pipeline_metadata_threshold_echo():
         result = await run_brief(req)
 
     m = result.metadata
-    assert m.relevance_floor_threshold == 0.55
+    # config.brief_relevance_floor default (raised 0.55 -> 0.65 in #688); the
+    # pipeline echoes it into metadata via settings.brief_relevance_floor.
+    assert m.relevance_floor_threshold == 0.65
     assert m.restatement_ceiling_threshold == 0.78
     assert m.inter_heading_threshold == 0.75
     assert m.edge_threshold == 0.65
