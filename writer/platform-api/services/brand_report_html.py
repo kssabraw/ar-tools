@@ -18,6 +18,7 @@ from __future__ import annotations
 import html as html_mod
 import logging
 from datetime import date, datetime, timedelta, timezone
+from typing import Optional
 
 from fastapi import HTTPException
 
@@ -157,12 +158,29 @@ def _pct_span(p: float) -> str:
     return f'<span style="color:{score_color(p)};font-weight:600">{p:g}%</span>'
 
 
+def _mom_delta(now: Optional[float], prev: Optional[float], suffix: str = "%") -> str:
+    """A small ▲/▼ 'vs previous period' visibility chip. Empty when not comparable.
+    Higher is better (more visibility), so an increase is green. Pure."""
+    if now is None or prev is None:
+        return ""
+    change = round(now - prev, 1)
+    if change == 0:
+        return '<span style="font-size:11px;color:#94a3b8">▬ no change vs previous period</span>'
+    up = change > 0
+    color = "#16a34a" if up else "#dc2626"
+    return (f'<span style="font-size:11px;font-weight:700;color:{color}">'
+            f'{"▲" if up else "▼"} {abs(change):g}{suffix} vs previous period</span>')
+
+
 def render_html(*, client: dict, agency_name: str, date_range_label: str,
                 tracked_keywords: list[dict], data: dict,
-                generated_on: str) -> str:
+                generated_on: str, prev: Optional[dict] = None) -> str:
     """The full standalone report document. Pure string building, all inline
-    CSS (it must survive being saved/emailed/printed on its own)."""
+    CSS (it must survive being saved/emailed/printed on its own). `prev` is the
+    previous-period aggregate (same shape as `data`) for month-over-month deltas."""
     totals = data["totals"]
+    prev_totals = (prev or {}).get("totals") or {}
+    prev_kw_pct = {k["keyword"]: k.get("pct") for k in (prev or {}).get("keywords") or []}
     gbp = client.get("gbp") or {}
 
     # 1 — white-label header
@@ -225,6 +243,12 @@ def render_html(*, client: dict, agency_name: str, date_range_label: str,
   </div>
 </div>''')
 
+    # Overall month-over-month visibility change (vs the previous same-length period).
+    overall_mom = _mom_delta(totals.get("visibility_pct"), prev_totals.get("visibility_pct"))
+    if overall_mom:
+        parts.append(f'<div style="margin:0 0 18px;padding:8px 14px;background:{_BOX};'
+                     f'border-left:3px solid {_BRAND};border-radius:6px">{overall_mom}</div>')
+
     if data.get("truncated"):
         parts.append(f'<div style="font-size:12px;color:{_MUTED};margin-bottom:18px">'
                      f'Note: this date range exceeded {_MAX_REPORT_ROWS:,} scan results — '
@@ -246,13 +270,25 @@ def render_html(*, client: dict, agency_name: str, date_range_label: str,
     if data["keywords"]:
         parts.append('<div class="page-break"></div>')
         parts.append(_h2("Keyword Performance"))
+        # Show the month-over-month column only when a previous period exists.
+        show_mom = bool(prev_kw_pct)
+        mom_th = (f'<th style="{_TH};background:{_TABLE_HEAD};text-align:center">vs previous period</th>'
+                  if show_mom else "")
+
+        def _kw_mom_cell(k: dict) -> str:
+            if not show_mom:
+                return ""
+            badge = _mom_delta(k.get("pct"), prev_kw_pct.get(k["keyword"]), suffix="%")
+            return f'<td style="{_TD};text-align:center">{badge or "—"}</td>'
+
         kw_rows = "".join(
             f'<tr><td style="{_TD}">{_esc(k["keyword"])}</td><td style="{_TD};text-align:center">{k["scans"]}</td>'
-            f'<td style="{_TD};text-align:center">{k["mentions"]}</td><td style="{_TD};text-align:center">{_pct_span(k["pct"])}</td></tr>'
+            f'<td style="{_TD};text-align:center">{k["mentions"]}</td><td style="{_TD};text-align:center">{_pct_span(k["pct"])}</td>'
+            f'{_kw_mom_cell(k)}</tr>'
             for k in data["keywords"]
         )
         parts.append(f'''<table style="{_TABLE}">
-<thead><tr><th style="{_TH};background:{_TABLE_HEAD}">Keyword</th><th style="{_TH};background:{_TABLE_HEAD};text-align:center">Scans</th><th style="{_TH};background:{_TABLE_HEAD};text-align:center">Mentions</th><th style="{_TH};background:{_TABLE_HEAD};text-align:center">Visibility</th></tr></thead>
+<thead><tr><th style="{_TH};background:{_TABLE_HEAD}">Keyword</th><th style="{_TH};background:{_TABLE_HEAD};text-align:center">Scans</th><th style="{_TH};background:{_TABLE_HEAD};text-align:center">Mentions</th><th style="{_TH};background:{_TABLE_HEAD};text-align:center">Visibility</th>{mom_th}</tr></thead>
 <tbody>{kw_rows}</tbody></table>''')
 
     # 7 — competitor benchmarking (You first, highlighted)
@@ -358,6 +394,19 @@ async def generate_html_report(client_id: str, start_date: str | None, end_date:
     data = aggregate_range(rows, keyword_labels)
     data["truncated"] = truncated
 
+    # Previous window of the same length, immediately before this one, for the
+    # month-over-month comparison. Best-effort — None when there's no prior data.
+    length = max((end - start).days, 1)
+    prev_end = start - timedelta(days=1)
+    prev_start = prev_end - timedelta(days=length)
+    prev_data = None
+    try:
+        prev_rows, _ = _fetch_mention_rows(supabase, client_id, prev_start, prev_end)
+        if prev_rows:
+            prev_data = aggregate_range(prev_rows, keyword_labels)
+    except Exception:  # noqa: BLE001 — the comparison is optional
+        prev_data = None
+
     range_label = f"{start.strftime('%b %d, %Y')} – {end.strftime('%b %d, %Y')}"
 
     html = render_html(
@@ -366,6 +415,7 @@ async def generate_html_report(client_id: str, start_date: str | None, end_date:
         date_range_label=range_label,
         tracked_keywords=keywords,
         data=data,
+        prev=prev_data,
         generated_on=datetime.now(timezone.utc).strftime("%b %d, %Y"),
     )
     return {"html": html}

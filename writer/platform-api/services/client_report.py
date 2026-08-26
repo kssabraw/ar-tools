@@ -213,9 +213,55 @@ def _section_organic(data: dict) -> str:
     return (
         "<section><h2>Organic rankings</h2>" + summary
         + "<table><thead><tr><th>Keyword</th><th class='num'>Current</th>"
-        "<th class='num'>Movement</th><th>Trend</th></tr></thead><tbody>"
-        + "".join(rows) + "</tbody></table></section>"
+        "<th class='num'>Movement</th><th>Rank trend (last 90 days)</th></tr></thead><tbody>"
+        + "".join(rows) + "</tbody></table>"
+        + "<p class='legend'><strong>Rank trend</strong> traces the keyword’s Google "
+        "position over the last ~90 days. Higher on the line is a better position, so "
+        "a line climbing to the top means the ranking is improving — "
+        "<span style='color:#16a34a;font-weight:600'>green</span> lines are improving, "
+        "<span style='color:#ef4444;font-weight:600'>red</span> are slipping. "
+        "<strong>Movement</strong> is the change in position vs the previous month "
+        "(a <span style='color:#166534;font-weight:600'>+</span> value means you moved up).</p>"
+        + "</section>"
     )
+
+
+def _pin_presence(top3, total) -> Optional[float]:
+    """Top-3 local-pack presence for one keyword = share of grid pins ranking in
+    the top 3, as a percent. None when the scan has no pins. Pure."""
+    try:
+        t = float(total or 0)
+        return round(100.0 * float(top3 or 0) / t, 1) if t else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _rank_delta(prev, now) -> Optional[float]:
+    """Change in average rank, positive = improved (a lower rank number is better,
+    so improvement = prev - now). None when either side is missing. Pure."""
+    try:
+        if prev is None or now is None:
+            return None
+        return round(float(prev) - float(now), 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def _mom_badge(change: Optional[float], suffix: str = "", up_good: bool = True,
+               label: str = "vs last month") -> str:
+    """A small coloured ▲/▼ month-over-month change chip. `change` > 0 is an
+    increase; `up_good` says whether an increase is good (green) or bad (red).
+    Empty string when there's no comparable previous month. Pure."""
+    if change is None:
+        return ""
+    if change == 0:
+        return f"<span class='mom mom-flat'>▬ no change {_esc(label)}</span>"
+    up = change > 0
+    good = up if up_good else not up
+    arrow = "▲" if up else "▼"
+    color = "#166534" if good else "#b91c1c"
+    return (f"<span class='mom' style='color:{color}'>{arrow} "
+            f"{abs(change):g}{_esc(suffix)} {_esc(label)}</span>")
 
 
 def _maps_presence_line(g: dict) -> str:
@@ -251,14 +297,28 @@ def _section_geogrid(data: dict) -> str:
             f"<img class='grid-img' src='{img}' alt='Local rank map'/>" if img
             else svg_geogrid(k.get("rank_grid"))
         )
+        # Per-keyword month-over-month: change in top-3 pin presence + avg rank.
+        mom = _mom_badge(k.get("presence_change_pts"), suffix=" pts", up_good=True)
+        rank_mom = _mom_badge(k.get("rank_change"), up_good=True, label="places vs last month")
+        mom_html = (f"<div class='grid-mom'>{mom}{rank_mom}</div>"
+                    if (mom or rank_mom) else "")
         cards.append(
             "<div class='grid-card'>"
             f"<div class='grid-kw'>{_esc(k.get('keyword'))}</div>"
             f"<div>{visual}</div>"
             f"<div class='grid-meta'>avg rank {_esc(avg)} · "
             f"top-3 in {_esc(k.get('top3_pins', 0))}/{_esc(k.get('total_pins', 0))} pins</div>"
-            "</div>"
+            + mom_html
+            + "</div>"
         )
+    # Prominent overall month-over-month callout (top-3 presence across the grid).
+    now_p, prev_p = g.get("presence_now"), g.get("presence_prev")
+    overall_change = round(now_p - prev_p, 1) if (now_p is not None and prev_p is not None) else None
+    overall_mom = _mom_badge(overall_change, suffix=" pts", up_good=True)
+    mom_callout = (
+        f"<p class='mom-callout'>Top-3 map presence: <strong>{round(now_p)}%</strong> "
+        f"{overall_mom}</p>" if overall_mom and now_p is not None else ""
+    )
     presence_html = _maps_presence_line(g)
     weak = g.get("weak_areas") or []
     weak_html = (
@@ -276,7 +336,7 @@ def _section_geogrid(data: dict) -> str:
         "<section><h2>Local pack / Maps coverage</h2>"
         "<p class='note'>How visible your business is on Google Maps across your "
         "service area — green means you’re at the top of the map.</p>"
-        + presence_html + weak_html + legend
+        + mom_callout + presence_html + weak_html + legend
         + "<div class='grid-cards'>" + "".join(cards) + "</div></section>"
     )
 
@@ -572,10 +632,18 @@ def _section_ai_visibility(data: dict) -> str:
         f"<li><strong>{_esc(_ENGINE_LABELS.get(e, e))}</strong>: appears in {_esc(v)}</li>"
         for e, v in a["engines"].items()
     )
+    now, prev = a.get("visibility_now"), a.get("visibility_prev")
+    change = round(now - prev, 1) if (now is not None and prev is not None) else None
+    mom = _mom_badge(change, suffix="%", up_good=True)
+    mom_callout = (
+        f"<p class='mom-callout'>Recommended in <strong>{round(now)}%</strong> of AI answers "
+        f"{mom}</p>" if mom and now is not None else ""
+    )
     return (
         "<section><h2>AI search visibility</h2>"
         "<p class='note'>How often your brand is recommended when AI assistants "
         "answer questions like your customers'.</p>"
+        + mom_callout
         + _ai_visibility_headline(a)
         + "<p class='lead'>Across the AI tools we track:</p>"
         f"<ul class='reviews'>{items}</ul>"
@@ -609,6 +677,8 @@ def _ai_keyword_matrix(keywords: list[dict]) -> str:
     client sees exactly which questions they win and which they're missing from."""
     if not keywords:
         return ""
+    # Only show the month-over-month column when a previous month exists to compare.
+    show_mom = any(k.get("change") is not None for k in keywords)
     rows = ""
     for k in keywords:
         eng = k.get("engines") or {}
@@ -619,11 +689,19 @@ def _ai_keyword_matrix(keywords: list[dict]) -> str:
             cls = "aiyes" if eng[e] else "aino"
             chips += f"<span class='aichip {cls}'>{_esc(_AI_ENGINE_SHORT[e])}</span>"
         count = f"{k.get('found_count', 0)}/{k.get('total', 0)}"
+        # Per-keyword month-over-month: change in the number of AI tools recommending
+        # the brand for this question (positive = more tools than last month).
+        mom_cell = ""
+        if show_mom:
+            badge = _mom_badge(k.get("change"), up_good=True, label="vs last month")
+            mom_cell = f"<td class='num'>{badge or '—'}</td>"
         rows += (
             f"<tr><td class='aiq'>{_esc(_shorten(k.get('keyword'), 120))}</td>"
             f"<td class='aichips'>{chips}</td>"
-            f"<td class='num aicount'>{_esc(count)}</td></tr>"
+            f"<td class='num aicount'>{_esc(count)}</td>"
+            f"{mom_cell}</tr>"
         )
+    mom_header = "<th class='num'>vs last month</th>" if show_mom else ""
     invisible = [k for k in keywords if not k.get("found_count")]
     note = ""
     if invisible:
@@ -635,7 +713,8 @@ def _ai_keyword_matrix(keywords: list[dict]) -> str:
     return (
         "<p class='lead' style='margin-top:12px'>Which AI tools recommend you, question by question:</p>"
         "<table class='aimatrix'><thead><tr><th>Question a customer might ask</th>"
-        "<th>AI tools recommending you</th><th class='num'>Score</th></tr></thead>"
+        "<th>AI tools recommending you</th><th class='num'>Score</th>"
+        f"{mom_header}</tr></thead>"
         f"<tbody>{rows}</tbody></table>{note}"
     )
 
@@ -877,10 +956,7 @@ def build_report_html(data: dict) -> str:
     sections = "".join(
         s for s in (_section_exec(data), _section_goals(data), _section_performance(data),
                     _section_ga4(data), _section_work_delivered(data), _section_organic(data),
-                    _section_geogrid(data), _section_ai_visibility(data)) if s
-        # GBP section removed from the client PDF for now (re-add _section_gbp(data)
-        # above to restore). _gather_gbp still runs so review snapshots keep
-        # recording and the historical series stays continuous.
+                    _section_geogrid(data), _section_gbp(data), _section_ai_visibility(data)) if s
     )
     if not (kpis or sections):
         sections = "<section><p class='lead'>No report data is available for this client yet.</p></section>"
@@ -934,6 +1010,12 @@ td.num, th.num { text-align:right; }
 .grid-meta { color:#64748b; font-size:10px; margin-top:6px; }
 .legend { color:#64748b; font-size:9px; }
 .legend .sw { display:inline-block; width:9px; height:9px; border-radius:2px; margin:0 3px 0 10px; vertical-align:middle; }
+.mom { font-size:9.5px; font-weight:600; white-space:nowrap; }
+.mom-flat { color:#94a3b8; }
+.mom-callout { background:#f8fafc; border:1px solid #e2e8f0; border-left:3px solid #6366f1; border-radius:6px; padding:8px 12px; font-size:12px; color:#334155; margin:2px 0 8px; }
+.mom-callout strong { color:#0f172a; }
+.grid-mom { margin-top:4px; display:flex; flex-direction:column; gap:2px; }
+.gbp-metrics th, .gbp-metrics td { font-size:11px; }
 .reviews { color:#334155; } .reviews li { margin-bottom:4px; }
 .gchip { font-weight:700; font-size:10px; }
 .gprog { width:34%; }
@@ -1191,29 +1273,48 @@ def _gather_geogrid(supabase, client_id: str, period_start: date, period_end: da
         for city in _weak_area_names(r.get("report_weak_locations")):
             if city not in weak:
                 weak.append(city)
-    # Local-pack presence this period vs the previous period's scan.
+    # Local-pack presence this period vs the previous period's scan — overall and,
+    # for the month-over-month view, per keyword (top-3 pin presence + avg rank).
     presence_now = _scan_presence(supabase, scan["id"])
     presence_prev = None
+    prev_by_kw: dict = {}
     prev_scan = _latest_reporting_scan(supabase, client_id, period_start)
     if prev_scan and prev_scan["id"] != scan["id"]:
         presence_prev = _scan_presence(supabase, prev_scan["id"])
+        prev_rows = (
+            supabase.table("maps_scan_results")
+            .select("keyword, average_rank, top3_pins, total_pins")
+            .eq("scan_id", prev_scan["id"]).execute()
+        ).data or []
+        prev_by_kw = {r.get("keyword"): r for r in prev_rows}
+
+    def _kw(r: dict) -> dict:
+        prev = prev_by_kw.get(r.get("keyword"))
+        now_pct = _pin_presence(r.get("top3_pins"), r.get("total_pins"))
+        prev_pct = _pin_presence(prev.get("top3_pins"), prev.get("total_pins")) if prev else None
+        return {
+            "keyword": r.get("keyword"),
+            "average_rank": r.get("average_rank"),
+            "top3_pins": r.get("top3_pins"),
+            "total_pins": r.get("total_pins"),
+            "rank_grid": r.get("rank_grid"),
+            # Prefer the saved map PNG (Google tile + numbered pins) inlined as
+            # a data URI so the PDF is self-contained; fall back to the SVG grid.
+            "map_image": _png_data_uri(r.get("map_image_url")),
+            # Month-over-month: top-3 presence now vs the previous scan, and the
+            # change in average rank (positive = improved, since a lower rank is better).
+            "presence_pct": now_pct,
+            "presence_prev_pct": prev_pct,
+            "presence_change_pts": (round(now_pct - prev_pct, 1)
+                                    if now_pct is not None and prev_pct is not None else None),
+            "rank_change": _rank_delta(prev.get("average_rank") if prev else None, r.get("average_rank")),
+        }
+
     return {
         "scan_at": scan.get("created_at"),
         "presence_now": presence_now,
         "presence_prev": presence_prev,
-        "keywords": [
-            {
-                "keyword": r.get("keyword"),
-                "average_rank": r.get("average_rank"),
-                "top3_pins": r.get("top3_pins"),
-                "total_pins": r.get("total_pins"),
-                "rank_grid": r.get("rank_grid"),
-                # Prefer the saved map PNG (Google tile + numbered pins) inlined as
-                # a data URI so the PDF is self-contained; fall back to the SVG grid.
-                "map_image": _png_data_uri(r.get("map_image_url")),
-            }
-            for r in results
-        ],
+        "keywords": [_kw(r) for r in results],
         "weak_areas": weak[:8],
     }
 
@@ -1498,10 +1599,21 @@ def _gather_ai_visibility(supabase, client_id: str, period_start: date, period_e
     if not batch:
         return None
     prev_batch = _batch_before(period_start.isoformat())
-    visibility_prev = (
-        _batch_overall_visibility(supabase, client_id, prev_batch)
-        if prev_batch and prev_batch != batch else None
-    )
+    has_prev = bool(prev_batch and prev_batch != batch)
+    visibility_prev = _batch_overall_visibility(supabase, client_id, prev_batch) if has_prev else None
+    # Per-keyword found-count in the previous month's batch, for the MoM deltas.
+    prev_found_by_kw: dict = {}
+    if has_prev:
+        for r in (
+            supabase.table("brand_mention_history")
+            .select("mention_found, keyword_id, is_competitor_scan")
+            .eq("client_id", client_id).eq("scan_batch_id", prev_batch).execute()
+        ).data or []:
+            if r.get("is_competitor_scan") or not r.get("keyword_id"):
+                continue
+            prev_found_by_kw.setdefault(r["keyword_id"], 0)
+            if r.get("mention_found"):
+                prev_found_by_kw[r["keyword_id"]] += 1
     rows = [
         r for r in (
             supabase.table("brand_mention_history")
@@ -1532,12 +1644,17 @@ def _gather_ai_visibility(supabase, client_id: str, period_start: date, period_e
             pe["found"] += 1
         kid = r.get("keyword_id")
         if kid and kid in kw_map:
-            by_kw.setdefault(kid, {"keyword": kw_map[kid], "engines": {}})["engines"][e] = found
+            by_kw.setdefault(kid, {"keyword": kw_map[kid], "engines": {}, "kid": kid})["engines"][e] = found
 
     keywords = []
     for b in by_kw.values():
         found_count = sum(1 for v in b["engines"].values() if v)
-        keywords.append({**b, "found_count": found_count, "total": len(b["engines"])})
+        # Month-over-month: this keyword's mentions vs the previous month's batch.
+        fp = prev_found_by_kw.get(b["kid"]) if has_prev else None
+        change = (found_count - fp) if fp is not None else None
+        keywords.append({"keyword": b["keyword"], "engines": b["engines"],
+                         "found_count": found_count, "total": len(b["engines"]),
+                         "found_prev": fp, "change": change})
     # Most-visible first; the brand-invisible queries sort to the bottom where the
     # "not yet appearing" note draws the eye.
     keywords.sort(key=lambda k: (-k["found_count"], k["keyword"]))
@@ -1717,7 +1834,7 @@ def _build_maps_report(client_id: str, period_start: date, period_end: date) -> 
     separate on-scan-completion deliverable."""
     supabase = get_supabase()
     rows = (
-        supabase.table("clients").select("name, logo_url")
+        supabase.table("clients").select("id, name, logo_url, gbp")
         .eq("id", client_id).limit(1).execute()
     ).data
     client = rows[0] if rows else {}
@@ -1731,6 +1848,14 @@ def _build_maps_report(client_id: str, period_start: date, period_end: date) -> 
             "completed for this period yet — your next scheduled scan will "
             "populate this report.</p></section>"
         )
+    # GBP is a local signal, so the Local Rank report carries the Google Business
+    # Profile section too (rating/reviews + performance-metric growth). Best-effort.
+    try:
+        gbp_section = _section_gbp({"gbp": _gather_gbp(supabase, client_id, client, period_start, period_end)})
+    except Exception as exc:  # noqa: BLE001 — GBP is additive; never fail the report
+        logger.warning("maps_report_gbp_failed", extra={"client_id": client_id, "error": str(exc)})
+        gbp_section = ""
+    body += gbp_section
     logo = client.get("logo_url")
     logo_html = f'<img class="logo" src="{_esc(logo)}"/>' if logo else ""
     agency = settings.client_report_agency_name or "Amazing Rankings"
