@@ -3705,38 +3705,85 @@ A. OVERRIDE for icp_alignment: score it against the SUPPLIED ICP, not against a
    specific one scores LOW here, however polished it reads.
 
 B. BRAND VOICE SCORECARD — score how faithfully the page follows the client's
-   guide, as EIGHT separate dimensions, each 0-100 with a verbatim quote from
-   the page as evidence. This is scored and reported SEPARATELY from the SEO
-   composite, so judge it on its own terms and do not soften a dimension
-   because the page is otherwise well optimised.
+   guide, as EIGHT separate dimensions, each 0-100. This is scored and reported
+   SEPARATELY from the SEO composite, so judge it on its own terms and do not
+   soften a dimension because the page is otherwise well optimised.
 
-   tone            — Do the guide's stated tone adjectives hold across EVERY
-                     section, or only the intro? A page that opens in voice and
-                     drifts into generic copy by the third heading scores low.
+   ── SCORING DISCIPLINE (read before scoring any dimension) ──
+   You are an adversarial brand-voice auditor. Your job is to find where the
+   page DRIFTS off this client's voice, not to confirm that it reads well.
+   "Reads professionally" is not the standard — a competent page that could
+   belong to any competitor is a FAILING page here.
+
+   Score each dimension against these bands, and when the evidence is mixed,
+   choose the LOWER band:
+
+     90-100  Unmistakably THIS client. Could not be confused for a competitor.
+             The guide's tone, style and vocabulary are present in EVERY
+             section, not just the opening. Rare — it must be earned.
+     75-89   On-brand with lapses. Clearly following the guide, but drifts in
+             places: a section or two go generic, a required phrasing is
+             missing, or the voice thins toward the end.
+     60-74   Competent but ANONYMOUS. Well-written and error-free, yet it reads
+             like generic quality copy with the client's name dropped in. This
+             is the DEFAULT for a page that "reads fine" but is not distinctly
+             this client. Most pages that feel off-brand belong here.
+     40-59   Off-brand. Actively contradicts the guide's tone, person or
+             vocabulary, or is written to a generic buyer the ICP does not
+             describe.
+     0-39    No discernible relationship to the guide or the ICP.
+
+   HARD RULES:
+   - Never award 75+ for the mere absence of errors. A score of 75 or higher
+     requires POSITIVE evidence of this client's specific voice — name it.
+   - Score the WHOLE page. A strong intro does not rescue a generic body; if
+     the voice fades after the first section, the dimension is mid-band at best.
+   - `evidence` must quote the WEAKEST passage you can find for that dimension —
+     the place it drifts — not the best line. Score to that passage. Only if you
+     genuinely cannot find a weak passage do you quote the strongest and justify
+     a high score.
+   - For any dimension you score 85 or above, the `issues`/`recommendations`
+     must state explicitly what is distinctly this client's about it. If you
+     cannot, the score is too high.
+
+   Judge each dimension by asking what LOW looks like:
+
+   tone            — Take the FLATTEST section of the page. Does it still carry
+                     the guide's stated tone adjectives, or has it settled into
+                     neutral marketing copy? Opening in voice and flattening by
+                     the third heading is a mid-band score, not a high one.
    writing_style   — Sentence rhythm, length variation, formality and jargon
-                     level versus what the guide describes.
+                     level versus the guide. LOW = uniform cadence and generic
+                     phrasing the guide's own author would not recognise as
+                     theirs.
    person          — Grammatical person matches what the guide specifies (first
-                     person "we/our" vs naming the brand). Ignoring a stated
-                     preference scores low.
+                     person "we/our" vs naming the brand). Any drift to the wrong
+                     person, even intermittently, is LOW.
    vocabulary      — Required phrasing present; forbidden and discouraged terms
-                     absent; word choice generally consistent with the guide.
-   audience_fit    — Is this written to the specific customer the ICP describes
-                     — their situation, their trigger for searching now — or to
-                     a generic buyer with the audience's name dropped in?
-   pain_points     — Does the page actually address the worries, hesitations
-                     and objections the ICP names, or does it only assert that
-                     the service is good?
+                     absent. LOW = missing the guide's words, or leaning on
+                     filler and boilerplate superlatives ("top-notch",
+                     "unparalleled", "state-of-the-art", "your trusted partner")
+                     that any brand could use.
+   audience_fit    — Remove the audience's name from the page. Is there anything
+                     left that proves the writer knew WHO they were writing to —
+                     their situation, their trigger for searching now? If not,
+                     it is a generic buyer with a label pasted on: LOW.
+   pain_points     — Count how many of the specific worries, hesitations and
+                     objections the ICP names the page actually engages. Merely
+                     asserting the service is good, without naming what the
+                     customer fears, is LOW.
    cta_fit         — Do the calls to action use the client's own CTA language
-                     and match the audience's readiness to act?
+                     and match the audience's readiness to act? A generic
+                     "contact us today" in place of the client's CTA is LOW.
    distinctiveness — Could this copy be dropped onto a competitor's site by
-                     swapping the business name? If yes, score LOW and say so.
-                     This is the single most useful signal on the scorecard.
+                     swapping the business name? Assume it could until the page
+                     proves otherwise. If it could, score LOW and say so. This
+                     is the single most important dimension on the scorecard.
 
    APPLICABILITY: if the guide and ICP genuinely say nothing about a dimension
    (e.g. no sentence-rhythm guidance at all), return `"applicable": false` for
    it rather than inventing a standard. It is excluded from the score instead of
-   dragging it down. Do NOT mark a dimension inapplicable merely because the
-   page did badly on it.
+   dragging it down. Do NOT mark a dimension inapplicable to dodge a low score.
 
    Judge EXPRESSION and AUDIENCE only. Do NOT penalise the scorecard for
    answer-first openings, short paragraphs, lists, tables, headings or schema —
@@ -3755,9 +3802,9 @@ listed above:
     "distinctiveness": {"score": 0, "applicable": true, "evidence": "", "issues": [], "recommendations": []}
   }
 
-`evidence` must be a short verbatim quote FROM THE PAGE that shows why you
-scored the dimension as you did. A recommendation that does not name the
-offending sentence is not actionable."""
+`evidence` must be a short verbatim quote FROM THE PAGE — the weakest passage for
+that dimension. A recommendation that does not name the offending sentence is not
+actionable."""
 
 
 def _score_system_prompt_for(geo_mode: str = "local", voice_card: Optional[dict] = None) -> str:
