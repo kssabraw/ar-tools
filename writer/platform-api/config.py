@@ -22,6 +22,17 @@ class Settings(BaseSettings):
     # times per run; past the cap the run fails with the old "Service restarted
     # mid-run" message. 0 disables auto-resume (always fail, the old behavior).
     run_auto_resume_max: int = 2
+    # How long after boot the orphan-run recovery sweep waits before it looks.
+    # MUST outlast Railway's deploy handover: the incoming container is live
+    # while the outgoing one keeps working for ~15s, so a sweep at second 0
+    # re-dispatches runs that are still genuinely executing over there — two
+    # orchestrators driving one run, double module spend, racing module_outputs
+    # writes. (The retired fanout orphan sweep delayed itself for exactly this
+    # reason; this path never got the same treatment.) The cost of waiting is
+    # only that a genuinely-orphaned run resumes a couple of minutes later —
+    # it has been stalled since the previous deploy anyway. 0 = sweep inline at
+    # startup (the old, racy behavior).
+    run_recovery_delay_seconds: float = 120.0
     # Run-level transient-failure auto-retry (resilience layer, distinct from the
     # orphan-recovery resume above). When a run fails at a stage because a
     # transient upstream outage (a multi-minute DataForSEO SERP outage, an
@@ -130,6 +141,20 @@ class Settings(BaseSettings):
         # (before the source_ref dedupe) spawned a duplicate article; 90 min
         # keeps the reaper as a real backstop without firing on healthy runs.
         "content_batch_item": 90,
+        # Ecommerce generation chains a 600s nlp generate with up to
+        # `ecommerce_structure_max_passes` (2) structure-gate regenerations at
+        # 600s each, plus the score call — ~35 min worst case, PAST the 30-min
+        # default while perfectly healthy. The reaper doesn't cancel the running
+        # asyncio task, so firing early means the original finishes and persists
+        # a page while a second worker re-runs the whole thing: two
+        # `ecommerce_pages` rows and double the SERP + Claude spend. Unlike Local
+        # SEO there is no cached SERP analysis to soften the re-run, so the
+        # backstop has to clear the real ceiling.
+        "ecommerce_generate": 60,
+        # Same rule for reoptimize-by-URL: scrape + score (300s) + a rewrite pass
+        # that itself loops up to MAX_ECOMMERCE_AUTO_PASSES inside nlp (600s).
+        # Its requeue re-scrapes and re-scores from scratch too.
+        "ecommerce_reoptimize_url": 60,
         # A Fanout expansion (expand + competitor mining) compounds two ~4-min
         # budgets plus autocomplete/gate, so it can legitimately run well past the
         # 30-min default. The reaper requeue is a re-run from scratch, so it MUST
