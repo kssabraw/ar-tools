@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 _REPORTS_BUCKET = "reports"
 _SIGNED_URL_TTL = 60 * 60 * 24 * 7  # 7 days
 _LLM_TIMEOUT = 60.0                 # bound the campaign-health Claude call
-_MAX_KEYWORDS = 40
+_MAX_KEYWORDS = 250  # the report shows every tracked keyword; this is just a runaway ceiling
 _DEFAULT_PERIOD_DAYS = 30
 _COMPARISON_LOOKBACK_DAYS = 400  # history window for 30/90/since-start comparisons
 
@@ -136,8 +136,6 @@ def _weak_area_names(report_weak_locations) -> list[str]:
     return out
 
 
-_TOP_MOVERS = 5
-
 
 def _keyword_change(summary: dict):
     """Positions gained recently for one keyword (positive = improved). Pure.
@@ -159,38 +157,17 @@ def _section_organic(data: dict) -> str:
     if not o or not o.get("keywords"):
         return ""
     kws = o["keywords"]
-    # Lead with wins: feature the keywords that improved most, then the strongest
-    # current rankings (page 1 first). A keyword is never featured purely because it
-    # slipped — the story a client should see is where they're winning and gaining.
-    # Figures stay accurate (a featured keyword shows its real movement, gain or
-    # small dip); we just don't headline the losers.
+
+    # Show EVERY tracked keyword (owner request), strongest current position first;
+    # unranked keywords sort to the bottom. Movement + rank trend stay accurate per
+    # row, so a slip shows honestly in the Movement column.
     def _rank_of(k):
         r = k.get("current_rank")
         return r if isinstance(r, (int, float)) and r > 0 else 10_000
 
-    gainers = sorted((k for k in kws if (k.get("change") or 0) > 0),
-                     key=lambda k: k.get("change") or 0, reverse=True)
-    # Only genuine wins are showcased: keywords that improved, or that rank on
-    # page 1. A mid-pack or slipping keyword is NOT pulled in just to fill the
-    # table (a client with only a few page-1 rankings would otherwise see a
-    # decline padded into the list).
-    page_one = sorted((k for k in kws if _rank_of(k) <= 10), key=_rank_of)
-    featured, seen = [], set()
-    for k in gainers + page_one:
-        key = k.get("keyword")
-        if key in seen:
-            continue
-        seen.add(key)
-        featured.append(k)
-        if len(featured) >= _TOP_MOVERS:
-            break
-    if not featured:
-        # Nothing on page 1 or improving yet → show the closest-to-the-top few so
-        # the section still reflects real positions (never headlining a decline).
-        ranked = sorted((k for k in kws if _rank_of(k) < 10_000), key=_rank_of)
-        featured = ranked[:_TOP_MOVERS] or kws[:_TOP_MOVERS]
+    ordered = sorted(kws, key=lambda k: (_rank_of(k), str(k.get("keyword") or "").lower()))
     rows = []
-    for k in featured:
+    for k in ordered:
         rank = k.get("current_rank")
         rank_txt = "—" if rank is None else (f"{rank}" if rank else "—")
         rows.append(
@@ -200,15 +177,13 @@ def _section_organic(data: dict) -> str:
             f"<td>{svg_sparkline(k.get('sparkline') or [])}</td></tr>"
         )
     s = o.get("summary", {})
-    extra = max((s.get("tracked", 0) or 0) - len(featured), 0)
-    more = f" The remaining {extra} are tracked too — full list available on request." if extra else ""
     improving = s.get("improved", 0) or 0
     improving_txt = f" · {improving} improving" if improving else ""
     summary = (
-        f"<p class='note'>Where your website shows up in Google for the searches that "
-        f"matter to your business — highlighting your strongest rankings and recent gains.</p>"
+        "<p class='note'>Where your website shows up in Google for every keyword we "
+        "track for your business — sorted with your strongest positions first.</p>"
         f"<p class='lead'>{s.get('tracked', 0)} tracked keywords · "
-        f"{s.get('top10', 0)} ranking on page 1 of Google{improving_txt}.{more}</p>"
+        f"{s.get('top10', 0)} ranking on page 1 of Google{improving_txt}.</p>"
     )
     return (
         "<section><h2>Organic rankings</h2>" + summary

@@ -337,48 +337,44 @@ def test_keyword_change_from_averages_and_sparkline():
 
 
 # ---------------------------------------------------------------------------
-# organic section trims to top movers + Movement column
+# organic section shows EVERY tracked keyword (owner request), best position first
 # ---------------------------------------------------------------------------
-def test_section_organic_shows_top_movers_only():
+def test_section_organic_shows_all_keywords():
     kws = [{"keyword": f"kw{i}", "current_rank": 5, "avg_30d": 5,
             "change": float(i), "sparkline": [9, 5]} for i in range(10)]
     data = _data(organic={"keywords": kws,
                           "summary": {"tracked": 10, "top10": 4, "improved": 6, "declined": 1}})
     out = cr.build_report_html(data)
     assert "Movement" in out
-    # biggest gainer (kw9, change 9) shown; smallest non-mover trimmed
-    assert "kw9" in out and "kw1<" not in out
-    assert "remaining 5 are tracked" in out
+    # all ten keywords render, not just the top movers
+    for i in range(10):
+        assert f"kw{i}<" in out, f"kw{i}"
+    # no "remaining N ... on request" trim copy any more
+    assert "remaining" not in out and "available on request" not in out
 
 
-def test_section_organic_leads_with_wins_not_lone_decliner():
-    """Positive framing: feature the strongest rankings, never headline a keyword
-    purely because it slipped, and no negative ('to watch') copy."""
-    wins = [{"keyword": f"win{i}", "current_rank": r, "change": None, "sparkline": []}
-            for i, r in enumerate([3, 4, 5, 8, 10])]
-    decliner = {"keyword": "slipped kw", "current_rank": 12, "change": -2.0, "sparkline": [10, 12]}
-    data = _data(organic={"keywords": wins + [decliner],
-                          "summary": {"tracked": 40, "top10": 5, "improved": 0, "declined": 1}})
+def test_section_organic_includes_decliners_and_unranked():
+    """All keywords render, including a slipping keyword (its real movement shown)
+    and an unranked keyword (Current shows '—')."""
+    kws = [{"keyword": "strong kw", "current_rank": 3, "change": None, "sparkline": []},
+           {"keyword": "slipped kw", "current_rank": 12, "change": -2.0, "sparkline": [10, 12]},
+           {"keyword": "unranked kw", "current_rank": None, "change": None, "sparkline": []}]
+    data = _data(organic={"keywords": kws,
+                          "summary": {"tracked": 3, "top10": 1, "improved": 0, "declined": 1}})
     out = cr.build_report_html(data)
-    assert "win0" in out and "win4" in out          # strongest rankings featured
-    assert "slipped kw" not in out                   # lone poor-ranked decliner not featured
-    assert "to watch" not in out                     # no negative summary copy
+    assert "strong kw" in out and "slipped kw" in out and "unranked kw" in out
+    assert "-2 positions" in out          # the decline shows honestly now
     assert "ranking on page 1 of Google" in out
 
 
-def test_section_organic_does_not_pad_with_decliner():
-    """The real WheelHouse case: only 4 page-1 keywords, and the 5th-best rank is a
-    mid-pack decliner. It must NOT be pulled into the table just to reach 5 rows."""
-    kws = [{"keyword": "w1", "current_rank": 3, "change": None, "sparkline": []},
-           {"keyword": "w2", "current_rank": 4, "change": None, "sparkline": []},
-           {"keyword": "w3", "current_rank": 5, "change": None, "sparkline": []},
-           {"keyword": "w4", "current_rank": 8, "change": None, "sparkline": []},
-           {"keyword": "decliner kw", "current_rank": 12, "change": -2.0, "sparkline": [10, 12]}]
-    data = _data(organic={"keywords": kws, "summary": {"tracked": 40, "top10": 4, "improved": 0, "declined": 1}})
-    out = cr.build_report_html(data)
-    assert "w1" in out and "w4" in out
-    assert "decliner kw" not in out
-    assert "-2 positions" not in out
+def test_section_organic_sorted_best_position_first():
+    kws = [{"keyword": "deep kw", "current_rank": 22, "change": None, "sparkline": []},
+           {"keyword": "unranked kw", "current_rank": None, "change": None, "sparkline": []},
+           {"keyword": "top kw", "current_rank": 2, "change": None, "sparkline": []}]
+    out = cr._section_organic(_data(organic={
+        "keywords": kws, "summary": {"tracked": 3, "top10": 1, "improved": 0, "declined": 0}}))
+    # strongest position first, unranked last
+    assert out.index("top kw") < out.index("deep kw") < out.index("unranked kw")
 
 
 # NOTE: GBP is removed from the assembled client PDF report for now (not in
