@@ -896,10 +896,16 @@ def _section_exec(data: dict) -> str:
         return f"<div class='hcol'><h4>{title}</h4><ul>{lis}</ul></div>" if lis else ""
 
     cols = _list("Highlights", e.get("highlights")) + _list("What we’re focused on next", e.get("focus_next"))
+    long_term = e.get("long_term_progress")
+    long_term_html = (
+        f"<p class='longterm'><strong>The bigger picture:</strong> {_esc(long_term)}</p>"
+        if long_term and str(long_term).strip() else ""
+    )
     return (
         "<section class='exec'><h2>Executive summary</h2>"
         f"<p class='headline'>{_esc(e.get('headline'))}</p>"
-        f"<div class='hcols'>{cols}</div></section>"
+        + long_term_html
+        + f"<div class='hcols'>{cols}</div></section>"
     )
 
 
@@ -1181,6 +1187,8 @@ td.num, th.num { text-align:right; }
 .aicount { font-weight:700; color:#166534; white-space:nowrap; }
 footer { margin-top:24px; padding-top:8px; border-top:1px solid #e2e8f0; color:#94a3b8; font-size:9px; text-align:center; }
 .exec .headline { font-size:13px; color:#0f172a; font-weight:600; }
+.exec .longterm { font-size:11.5px; color:#334155; background:#f0fdf4; border-left:3px solid #16a34a; border-radius:6px; padding:8px 12px; margin:8px 0 4px; }
+.exec .longterm strong { color:#166534; }
 td.num.pos { font-weight:600; color:#166534; }
 .hcols { display:flex; gap:16px; margin-top:8px; }
 .hcol { flex:1; } .hcol h4 { font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:#94a3b8; margin:0 0 4px; }
@@ -1906,7 +1914,18 @@ _EXEC_SYSTEM = (
     "specific numbers (e.g. 'impressions are up 24% this month'). Base everything "
     "ONLY on the supplied data; never invent numbers. Keep each bullet to one "
     "short, encouraging sentence. 'focus_next' should frame upcoming work as "
-    "opportunities, not problems."
+    "opportunities, not problems.\n\n"
+    "IMPORTANT — the longer view: a single 30-day window bounces around, so the "
+    "durable story is over 90 days and since the campaign started. The supplied "
+    "data includes 90-day and since-start comparisons (performance_horizons, "
+    "maps_presence_horizons, ai_visibility_horizons — each with a 'since_start' "
+    "and/or '90d' change). Use them. 'long_term_progress' MUST describe how the "
+    "campaign is trending over that longer time frame, citing the 90-day or "
+    "since-start numbers where available (e.g. 'since we started, your average "
+    "position has climbed 12 places'). Stay positive: if the recent month dipped "
+    "but the longer trend is up, lead with the longer trend. If the campaign is "
+    "still young and long-term data isn't available yet, say it's early and "
+    "building momentum — never invent a number to fill the gap."
 )
 _EXEC_TOOL = {
     "name": "emit_summary",
@@ -1915,12 +1934,20 @@ _EXEC_TOOL = {
         "type": "object",
         "properties": {
             "headline": {"type": "string", "description": "1–2 sentence upbeat headline of the month's progress."},
+            "long_term_progress": {
+                "type": "string",
+                "description": "1–2 encouraging sentences on how the campaign is trending over the LONGER "
+                               "time frame — 90 days and since it started — citing the since-start / 90-day "
+                               "numbers where the data provides them. A single month is volatile, so this "
+                               "frames the durable progress. If long-term data isn't available yet, say the "
+                               "campaign is early and building momentum (no invented numbers).",
+            },
             "highlights": {"type": "array", "items": {"type": "string"},
                            "description": "Up to 5 concrete wins, each with its number where available."},
             "focus_next": {"type": "array", "items": {"type": "string"},
                            "description": "Up to 4 opportunities/next steps, framed positively."},
         },
-        "required": ["headline", "highlights", "focus_next"],
+        "required": ["headline", "long_term_progress", "highlights", "focus_next"],
     },
 }
 
@@ -1952,21 +1979,28 @@ def generate_exec_summary(client_name: Optional[str], period: dict, data: dict, 
     OpenAI→Gemini fallback on a transient failure."""
     if not (settings.anthropic_api_key or settings.openai_api_key or settings.gemini_api_key):
         return None
+    organic = data.get("organic") or {}
+    geogrid = data.get("geogrid") or {}
+    ai = data.get("ai_visibility") or {}
     context = {
         "client": client_name,
         "period": period,
-        "performance_changes": (data.get("organic") or {}).get("comparisons"),
-        "rankings_summary": (data.get("organic") or {}).get("summary"),
-        "top_keywords": ((data.get("organic") or {}).get("keywords") or [])[:15],
+        "performance_changes": organic.get("comparisons"),
+        # 30d / 90d / since-start horizons so the summary can speak to the longer
+        # trend (a single month is volatile; the durable story is 90d + since start).
+        "performance_horizons": organic.get("comparisons_multi"),
+        "maps_presence_horizons": geogrid.get("presence_horizons"),
+        "ai_visibility_horizons": ai.get("visibility_horizons"),
+        "rankings_summary": organic.get("summary"),
+        "top_keywords": (organic.get("keywords") or [])[:15],
         "local_maps": {
             "keywords": [
                 {"keyword": k.get("keyword"), "average_rank": k.get("average_rank"),
                  "top3_pins": k.get("top3_pins"), "total_pins": k.get("total_pins")}
-                for k in ((data.get("geogrid") or {}).get("keywords") or [])
+                for k in (geogrid.get("keywords") or [])
             ],
         },
-        # GBP removed from the client PDF report for now — not fed to the exec summary.
-        "ai_search_visibility": data.get("ai_visibility"),
+        "ai_search_visibility": ai or None,
         "work_delivered": data.get("work_delivered"),
         **signals,
     }
