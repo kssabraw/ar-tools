@@ -94,6 +94,8 @@ def card_to_dict(card: Optional[BrandVoiceCard]) -> dict:
         "must_use_terms": list(card.preferred_terms or []),
         "never_use_terms": list(card.banned_terms or []),
         "discouraged_terms": list(card.discouraged_terms or []),
+        "differentiators": list(card.differentiators or []),
+        "signature_phrases": list(card.signature_phrases or []),
         "cta_language": list(card.cta_language or []),
         "audience_label": label,
         "audience_summary": card.audience_summary,

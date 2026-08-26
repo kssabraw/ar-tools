@@ -119,6 +119,11 @@ class BrandVoiceCard(BaseModel):
     preferred_terms: list[str] = []
     banned_terms: list[str] = []
     discouraged_terms: list[str] = []
+    # The distinctive raw material the write-time distinctiveness directive
+    # leads with — what makes THIS client not a generic competitor. Feeds the
+    # `distinctiveness` scorecard dimension the hardened judge weights heaviest.
+    differentiators: list[str] = []
+    signature_phrases: list[str] = []
     client_services: list[str] = []
     client_locations: list[str] = []
     client_contact_info: ClientContactInfo = ClientContactInfo()

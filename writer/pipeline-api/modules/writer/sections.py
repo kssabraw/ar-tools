@@ -30,6 +30,7 @@ from modules.brief.llm import claude_json
 
 from .banned_terms import BannedTermLeakage, find_banned
 from .brand_placement import H2PlacementDirective
+from .voice_directive import distinctiveness_directive
 from .reconciliation import FilteredSIETerms, ReconciledTerm
 
 logger = logging.getLogger(__name__)
@@ -246,6 +247,7 @@ def _build_section_user_prompt(
 
     if brand_voice_card:
         parts.append("\nBRAND_VOICE (write the section in this voice - these are not optional):")
+        parts.append(distinctiveness_directive(brand_voice_card))
         if brand_voice_card.brand_name:
             parts.append(f"  brand_name: {brand_voice_card.brand_name}")
         if brand_voice_card.tone_adjectives:
