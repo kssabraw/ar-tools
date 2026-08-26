@@ -1711,6 +1711,7 @@ export interface ReportSettings {
   email_enabled: boolean
   drive_enabled: boolean
   ai_visibility_enabled: boolean
+  maps_enabled: boolean
   last_run_at: string | null
   next_run_at: string | null
 }

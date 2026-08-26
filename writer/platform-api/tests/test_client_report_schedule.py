@@ -52,10 +52,12 @@ def test_period_start_for_day_tokens():
     assert period_start_for("bogus", None, today) is None
 
 
-def test_default_settings_ai_visibility_off():
-    # AI Visibility scheduling is opt-in — a fresh client's schedule never emits
-    # the AI-visibility report until the toggle is turned on.
-    assert _default_settings("client-1")["ai_visibility_enabled"] is False
+def test_default_settings_extra_reports_off():
+    # AI Visibility + Local Rank (Maps) scheduling are opt-in — a fresh client's
+    # schedule never emits either standalone report until its toggle is turned on.
+    defaults = _default_settings("client-1")
+    assert defaults["ai_visibility_enabled"] is False
+    assert defaults["maps_enabled"] is False
 
 
 def test_period_start_for_campaign_start():

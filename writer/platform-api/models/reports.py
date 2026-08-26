@@ -45,6 +45,7 @@ class ReportSettings(BaseModel):
     email_enabled: bool = True
     drive_enabled: bool = True
     ai_visibility_enabled: bool = False   # also emit the AI Visibility report on the schedule
+    maps_enabled: bool = False            # also emit the Local Rank (Maps) report on the schedule
     last_run_at: Optional[str] = None
     next_run_at: Optional[str] = None
 
@@ -59,3 +60,4 @@ class ReportSettingsUpdateRequest(BaseModel):
     email_enabled: bool = True
     drive_enabled: bool = True
     ai_visibility_enabled: bool = False
+    maps_enabled: bool = False
