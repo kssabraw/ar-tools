@@ -441,6 +441,82 @@ def _ctx_keyword_research(supabase, client_id: str, today: date) -> Optional[dic
     }
 
 
+def _ctx_keyword_research_runs(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Standalone Keyword Research module — the client-workspace 'Keyword
+    Research' card's output (public schema), distinct from `keyword_research`
+    (which reads the vendored Fanout / 'Create Mass Posts' sessions):
+
+    - `keyword_research_runs`       — the seed-keyword explorer (clusters).
+    - `keyword_topic_research_runs` — problem-first Topic Research + the
+      strategist-grade topical-authority plan (assessment + pillars).
+    """
+    out: dict = {}
+
+    runs = (
+        supabase.table("keyword_research_runs")
+        .select("seeds, keyword_count, cluster_count, status, created_at")
+        .eq("client_id", client_id)
+        .order("created_at", desc=True)
+        .limit(5)
+        .execute()
+    ).data or []
+    if runs:
+        recent_seeds: list[str] = []
+        for r in runs:
+            for s in r.get("seeds") or []:
+                if s and s not in recent_seeds:
+                    recent_seeds.append(s)
+        latest = runs[0]
+        out["keyword_explorer"] = {
+            "run_count": len(runs),
+            "latest": {
+                "seeds": latest.get("seeds") or [],
+                "keyword_count": latest.get("keyword_count"),
+                "cluster_count": latest.get("cluster_count"),
+                "status": latest.get("status"),
+                "created_at": latest.get("created_at"),
+            },
+            "recent_seeds": recent_seeds[:8],
+        }
+
+    topic = (
+        supabase.table("keyword_topic_research_runs")
+        .select("seeds, topic_count, topics, plan, assessment, status, created_at")
+        .eq("client_id", client_id)
+        .eq("status", "complete")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    ).data
+    if topic:
+        t = topic[0]
+        topics = t.get("topics") or []
+        plan = t.get("plan") if isinstance(t.get("plan"), dict) else {}
+        pillars = plan.get("pillars") if isinstance(plan, dict) else None
+        out["topic_research"] = {
+            "researched_at": t.get("created_at"),
+            "seeds": t.get("seeds") or [],
+            "topic_count": t.get("topic_count") or len(topics),
+            "assessment": (t.get("assessment") or "")[:1000] or None,
+            "top_topics": [
+                {
+                    "title": c.get("title") or c.get("theme"),
+                    "priority": c.get("priority_label") or c.get("priority"),
+                    "coverage": c.get("coverage"),
+                }
+                for c in topics[:8]
+                if isinstance(c, dict)
+            ],
+            "pillars": (
+                [p.get("pillar") for p in pillars if isinstance(p, dict) and p.get("pillar")]
+                if isinstance(pillars, list)
+                else None
+            ),
+        }
+
+    return out or None
+
+
 def _ctx_setup(supabase, client_id: str, today: date) -> Optional[dict]:
     """The client's full configured business profile.
 
@@ -1500,6 +1576,7 @@ _CONTEXT_PROVIDERS = [
     ("content", _ctx_content),
     ("site_inventory", _ctx_site_inventory),
     ("keyword_research", _ctx_keyword_research),
+    ("keyword_research_runs", _ctx_keyword_research_runs),
     ("budget", _ctx_budget),
     ("task_plan", _ctx_task_plan),
     ("qa", _ctx_qa),
