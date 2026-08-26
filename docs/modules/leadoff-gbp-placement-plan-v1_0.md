@@ -324,7 +324,23 @@ handoff); the calibration report surfaces the frozen `placement` per engagement.
 Read-only instrumentation — nothing feeds back into scoring (Phase 1 tuning stays
 gated on N≥15, ≥6-month tenure). Dollars stay off until this loop shows signal.
 
-- **Not yet built:** Phase 3 paid ZIP layer; the dollar layer (post-calibration).
+**Phase 3 (paid ZIP demand layer) — DROPPED from v1 (probe failed, 2026-08-26).**
+The §4.3.2 feasibility probe ran live in prod (`leadoff_zip_demand` job in probe
+mode, `services/leadoff_zip_demand.py`): 10 Chicago ZIPs (60601–60610) × the
+high-volume keyword "plumber", all queried cleanly (no errors — DataForSEO
+resolved the postal-code `location_code`s and ran the tasks), and **all 10
+returned `search_volume: null`** — `null_share = 1.0` against the 0.6 bar →
+verdict **`inconclusive`**. Google thresholds Ads search volume at ZIP
+granularity even for a high-demand trade in a major metro, so a demand surface
+re-weighted by per-ZIP volume is identical to the free surface — the paid layer
+adds no signal. Per the plan's honesty rule, Phase 3 is **not built**;
+`leadoff_zip_demand_enabled` stays False and the probe job + its ~$0.05 cost are
+the record. (A different demand-intensity source — not Google-Ads per-ZIP volume
+— would be needed to revisit this; the census households surface remains the
+demand signal.)
+
+- **Not yet built:** the dollar layer (post-calibration, gated on the §8 loop
+  showing signal). Phase 3 (paid ZIP layer) is dropped — see above.
 
 ## 10. Config (planned knobs, `config.py`)
 
