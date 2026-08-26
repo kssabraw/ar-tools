@@ -341,6 +341,27 @@ class Settings(BaseSettings):
     # work is lost or repeated. <=0 means no cap (process whole orders up to name_scrape_orders_per_tick).
     name_scrape_per_tick: int = 60
 
+    # --- Web-search owner/manager name (PAID third-rung fallback) --------------------------
+    # When enrichment AND the free site-scrape both found no name, a paid web search looks the owner
+    # up (OpenAI Responses API + web_search, reuses OUTREACH_OPENAI_API_KEY). BILLS one search per
+    # prospect, so it is a signed/admin-gated/budget-guarded order (the enrichment model), NOT free.
+    # The model + tool mirror the suite's brand scan (gpt-5.4 + the web_search tool).
+    name_search_model: str = "gpt-5.4"
+    name_search_web_search_tool: str = "web_search"
+    # A web search + tool round-trip is slow — its own generous timeout, clear of the 60s chat base.
+    name_search_request_timeout_seconds: float = 120.0
+    # Concurrency across prospects (doubles as the drain's chunk size).
+    name_search_chunk_size: int = 4
+    name_search_orders_per_tick: int = 3
+    name_search_max_places_per_order: int = 100
+    # At most this many names kept per prospect (an owner is usually one person).
+    name_search_max_names: int = 2
+    # OpenAI returns no per-call cost, so — like every rate here — this is a CONFIGURED estimate
+    # reconciled against the dashboard (I-022). A web-search Responses call is a few cents; keep in
+    # sync with platform-api's outreach_name_search_cost_cents (that one drives the budget guard,
+    # this one the drain's cost_ledger write).
+    name_search_cost_cents: int = 3
+
     # --- Lead enrichment (contact names / phones / emails via Outscraper) ------------------
     # A SEPARATE, spend-gated, per-selection action — NOT the mass ingest, which hardcodes
     # `enrichment=""` with a hard invariant so a market pull can never silently bill per-place

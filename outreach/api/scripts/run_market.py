@@ -898,6 +898,7 @@ def cmd_tick(args) -> int:
         ai_scan_queue,
         enrich_queue,
         name_scrape_queue,
+        name_search_queue,
         onboard_queue,
         organic_scan_queue,
         scan_queue,
@@ -918,6 +919,10 @@ def cmd_tick(args) -> int:
     # so several drain per heartbeat. The owner/manager fallback the UI places when Outscraper found
     # no name. Order-gated (the order row is its confirmation), no env token — it bills nothing.
     named = _asyncio.run(name_scrape_queue.drain(client, settings))
+    # Web-search owner-name orders — PAID (one OpenAI web-search call per prospect) but order-gated
+    # (the signed order is its confirmation, like enrichment), so no env token. The third-rung
+    # fallback the UI places when enrichment AND the free site-scrape both found no name.
+    searched_names = _asyncio.run(name_search_queue.drain(client, settings))
     # Report signal scans (organic / AI-visibility UI triggers). Each is one cheap paid call, drained
     # ≤ its configured per-tick count (default 1), same signed-order + terminal-outcome model. A drain
     # that claims nothing ends the loop early, so an empty queue costs one read, not N.
@@ -1013,6 +1018,22 @@ def cmd_tick(args) -> int:
                             "error": o.error,
                         }
                         for o in named.orders
+                    ],
+                },
+                "name_search": {
+                    "orders_processed": searched_names.orders_processed,
+                    "orders": [
+                        {
+                            "order_id": o.order_id,
+                            "outcome": o.outcome,
+                            "searched": o.searched,
+                            "found": o.found,
+                            "names": o.names,
+                            "skipped": o.skipped,
+                            "failed": o.failed,
+                            "error": o.error,
+                        }
+                        for o in searched_names.orders
                     ],
                 },
                 "organic": [

@@ -33,10 +33,20 @@ export interface NameScrapeStatus {
   error: string | null
   scraped_at: string
 }
+// The PAID web-search fallback's per-prospect status (the third rung — when enrichment AND the site
+// scrape both found no name). `citations` are the source URLs a caller verifies the low-trust name at.
+export interface NameSearchStatus {
+  status: 'found' | 'no_names' | 'failed'
+  name_count: number
+  citations: string[] | null
+  error: string | null
+  searched_at: string
+}
 interface ContactsResp {
   prospect_id: string
   enrichment: { status: string; contact_count: number; error: string | null; enriched_at: string } | null
   name_scrape?: NameScrapeStatus | null
+  name_search?: NameSearchStatus | null
   website?: string | null
   contacts: Contact[]
 }
@@ -217,6 +227,155 @@ export function NameScrapeBar({
   )
 }
 
+// ── The PAID web-search controller (third-rung owner/manager fallback) ───────────────────────────
+// Mirrors useEnrichment (paid, with a cost estimate + budget guard) rather than useNameScrape (free):
+// placing an order BILLS one OpenAI web search per prospect on the next tick.
+interface NameSearchOrder {
+  id: string
+  status: 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
+  error?: string | null
+  progress?: { requested: number; done: number; searched: number; found: number; names: number; skipped: number; failed: number }
+}
+export interface NameSearchEstimate {
+  selected: number
+  already_searched: number
+  already_named: number
+  unknown: number
+  billable: number
+  est_cost_cents: number
+  est_cost_usd: number
+  spent_today_cents: number
+  daily_budget_usd: number
+  allowed: boolean
+  denial: string | null
+}
+export function useNameSearch(scopeKey: string) {
+  const qc = useQueryClient()
+  const batch = useResumableBatch<{ n: number }>({
+    storageKey: `outreach-namesearch-${scopeKey}`,
+    poll: (ids) =>
+      Promise.all(
+        ids.map(async (id) => {
+          const r = await api.get<{ name_search_request: NameSearchOrder }>(`/outreach/name-search/${id}`)
+          const o = r.name_search_request
+          const status = o.status === 'done' ? 'complete' : o.status
+          return { id, status, error: o.error ?? null, result: (o.progress ?? {}) as Record<string, unknown> }
+        }),
+      ),
+    onDone: () => {
+      qc.invalidateQueries({ queryKey: ['outreach-contacts'] })
+      qc.invalidateQueries({ queryKey: ['outreach-contacts-batch'] })
+    },
+  })
+  const create = useMutation({
+    mutationFn: (prospectIds: string[]) =>
+      prospectIds.length === 1
+        ? api.post<{ name_search_request: NameSearchOrder }>(`/outreach/prospects/${prospectIds[0]}/search-name`, {})
+        : api.post<{ name_search_request: NameSearchOrder }>(`/outreach/name-search`, { prospect_ids: prospectIds }),
+    onSuccess: (data) => {
+      const existing = batch.batch?.jobIds ?? []
+      const ids = [...new Set([...existing, data.name_search_request.id])]
+      batch.start(ids, { n: ids.length })
+    },
+  })
+  return { batch, create }
+}
+type NameSearchController = ReturnType<typeof useNameSearch>
+
+// ── The bulk web-search bar (select-all → estimate → Search). PAID, so it mirrors EnrichmentBar ──
+export function NameSearchBar({
+  selectedIds,
+  controller,
+  onCleared,
+}: {
+  selectedIds: string[]
+  controller: NameSearchController
+  onCleared: () => void
+}) {
+  const [confirming, setConfirming] = useState(false)
+  const estimate = useQuery<NameSearchEstimate>({
+    queryKey: ['outreach-namesearch-estimate', [...selectedIds].sort()],
+    queryFn: () => api.post<NameSearchEstimate>('/outreach/name-search/estimate', { prospect_ids: selectedIds }),
+    enabled: confirming && selectedIds.length > 0,
+  })
+  const running = controller.batch.running
+  const progress = controller.batch.rows.reduce(
+    (acc, r) => {
+      const p = (r.result ?? {}) as Record<string, number>
+      acc.found += p.found ?? 0
+      acc.names += p.names ?? 0
+      acc.failed += p.failed ?? 0
+      return acc
+    },
+    { found: 0, names: 0, failed: 0 },
+  )
+  if (running) {
+    return (
+      <div style={{ ...barStyle, borderColor: '#fde68a', background: '#fffbeb' }}>
+        <Loader2 size={14} className="animate-spin" />
+        <span style={{ fontSize: 13 }}>
+          Searching the web for owners… {controller.batch.finished}/{controller.batch.total} · {progress.found} found
+          {progress.failed ? ` · ${progress.failed} failed` : ''}
+        </span>
+        <button onClick={() => controller.batch.detach()} style={ghostBtn}>Leave & finish in the background</button>
+      </div>
+    )
+  }
+  if (selectedIds.length === 0) return null
+  if (!confirming) {
+    return (
+      <div style={{ ...barStyle, borderColor: '#fde68a', background: '#fffbeb' }}>
+        <Globe size={14} color="#b45309" />
+        <span style={{ fontSize: 13, fontWeight: 600 }}>{selectedIds.length} selected</span>
+        <button onClick={() => setConfirming(true)} style={{ ...primaryBtn, background: '#b45309' }}>
+          Search the web for owners…
+        </button>
+        <button onClick={onCleared} style={ghostBtn}>Clear</button>
+      </div>
+    )
+  }
+  const est = estimate.data
+  return (
+    <div style={{ ...barStyle, borderColor: '#fde68a', background: '#fffbeb', flexWrap: 'wrap' }}>
+      <Globe size={14} color="#b45309" />
+      {estimate.isError ? (
+        <>
+          <span style={{ fontSize: 12, color: '#b91c1c' }}>
+            {(estimate.error as { message?: string })?.message ?? 'Could not estimate — try again'}
+          </span>
+          <button onClick={() => estimate.refetch()} style={ghostBtn}>Retry</button>
+          <button onClick={() => setConfirming(false)} style={ghostBtn}>Cancel</button>
+        </>
+      ) : estimate.isLoading || !est ? (
+        <span style={{ fontSize: 13 }}>Estimating…</span>
+      ) : (
+        <>
+          <span style={{ fontSize: 13 }}>
+            {est.billable} to search (~${est.est_cost_usd.toFixed(2)})
+            {est.already_named ? ` · ${est.already_named} already have a name` : ''}
+            {est.already_searched ? ` · ${est.already_searched} already searched` : ''}
+            {' · '}${(est.spent_today_cents / 100).toFixed(2)}/${est.daily_budget_usd.toFixed(2)} spent today
+          </span>
+          {!est.allowed ? (
+            <span style={{ fontSize: 12, color: '#b91c1c' }}>{est.denial}</span>
+          ) : est.billable === 0 ? (
+            <span style={{ fontSize: 12, color: '#b45309' }}>Nothing to search in this selection.</span>
+          ) : (
+            <button
+              onClick={() => { controller.create.mutate(selectedIds); setConfirming(false); onCleared() }}
+              disabled={controller.create.isPending}
+              style={{ ...primaryBtn, background: '#b45309' }}
+            >
+              Search {est.billable} (~${est.est_cost_usd.toFixed(2)})
+            </button>
+          )}
+          <button onClick={() => setConfirming(false)} style={ghostBtn}>Cancel</button>
+        </>
+      )}
+    </div>
+  )
+}
+
 // ── The bulk bar (select-all → estimate → Enrich) ───────────────────────────────────────────────
 export function EnrichmentBar({
   selectedIds,
@@ -336,6 +495,7 @@ export function LeadContacts(
 ) {
   const controller = useEnrichment(`lead-${prospectId}`)
   const nameController = useNameScrape(`lead-${prospectId}`)
+  const nameSearchController = useNameSearch(`lead-${prospectId}`)
   return (
     <div style={{ marginTop: 14 }}>
       <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 4 }}>
@@ -343,7 +503,8 @@ export function LeadContacts(
       </div>
       <ContactCell prospectId={prospectId} isAdmin={isAdmin} isStaff={isStaff} controller={controller}
         batchRunning={controller.batch.running}
-        nameController={nameController} nameBatchRunning={nameController.batch.running} />
+        nameController={nameController} nameBatchRunning={nameController.batch.running}
+        nameSearchController={nameSearchController} nameSearchBatchRunning={nameSearchController.batch.running} />
     </div>
   )
 }
@@ -351,6 +512,7 @@ export function LeadContacts(
 export interface ProspectContacts {
   enrichment: ContactsResp['enrichment']
   name_scrape?: NameScrapeStatus | null
+  name_search?: NameSearchStatus | null
   website?: string | null
   contacts: Contact[]
 }
@@ -368,6 +530,8 @@ export function ContactCell({
   batchRunning,
   nameController,
   nameBatchRunning,
+  nameSearchController,
+  nameSearchBatchRunning,
   provided,
 }: {
   prospectId: string
@@ -377,6 +541,8 @@ export function ContactCell({
   batchRunning: boolean
   nameController?: NameController
   nameBatchRunning?: boolean
+  nameSearchController?: NameSearchController
+  nameSearchBatchRunning?: boolean
   provided?: ProspectContacts | null
 }) {
   const self = useQuery<ContactsResp>({
@@ -386,13 +552,16 @@ export function ContactCell({
     enabled: provided === undefined,
     // While a batch is draining, keep checking so freshly-written contacts appear without a manual
     // refresh (the order finishes on a tick, not synchronously).
-    refetchInterval: provided === undefined && (batchRunning || !!nameBatchRunning) ? 6000 : false,
+    refetchInterval: provided === undefined
+      && (batchRunning || !!nameBatchRunning || !!nameSearchBatchRunning) ? 6000 : false,
   })
 
   const enrichment = provided !== undefined ? provided?.enrichment : self.data?.enrichment
   const nameScrape = (provided !== undefined ? provided?.name_scrape : self.data?.name_scrape) ?? null
+  const nameSearch = (provided !== undefined ? provided?.name_search : self.data?.name_search) ?? null
   const contacts = (provided !== undefined ? provided?.contacts : self.data?.contacts) ?? []
   const website = (provided !== undefined ? provided?.website : self.data?.website) ?? null
+  const searchCitation = nameSearch?.citations?.[0] ?? null
 
   // The state-specific part (contacts / status / Enrich button) rendered UNDER the website line,
   // so the website shows in every state (enriched, not-yet, no-contacts, failed).
@@ -415,6 +584,26 @@ export function ContactCell({
                   >
                     <Globe size={9} /> from website
                   </span>
+                ) : null}
+                {c.source === 'web_search' ? (
+                  searchCitation ? (
+                    <a
+                      href={searchCitation} target="_blank" rel="noreferrer"
+                      title="Found by a web search — click to verify at the cited source"
+                      style={{ fontSize: 10, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a',
+                        borderRadius: 4, padding: '0 4px', display: 'inline-flex', gap: 2, alignItems: 'center' }}
+                    >
+                      <Search size={9} /> from web search — verify
+                    </a>
+                  ) : (
+                    <span
+                      title="Found by a web search — verify before using"
+                      style={{ fontSize: 10, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a',
+                        borderRadius: 4, padding: '0 4px', display: 'inline-flex', gap: 2, alignItems: 'center' }}
+                    >
+                      <Search size={9} /> from web search — verify
+                    </span>
+                  )
                 ) : null}
               </span>
             )}
@@ -518,10 +707,57 @@ export function ContactCell({
     }
   }
 
-  const bodyWithFallback = nameFallback ? (
+  // ── The PAID web-search fallback (third rung): only after the site scrape came up empty (or there
+  // is no site to scan), and only for admins (it bills). A web-searched name is the lowest-trust
+  // source, badged "from web search — verify" with its citation.
+  const siteExhausted = !website || nameScrape?.status === 'no_names'
+    || nameScrape?.status === 'unreachable' || nameScrape?.status === 'failed'
+  const searchWebBtn = (label: string) => (
+    <button
+      onClick={() => nameSearchController!.create.mutate([prospectId])}
+      disabled={nameSearchController!.create.isPending}
+      title="Web-search this business's owner/manager name — PAID (bills on the next run); the result is web-sourced, verify it"
+      style={{
+        fontSize: 12, border: '1px solid #fde68a', background: '#fff', borderRadius: 6,
+        padding: '2px 8px', cursor: 'pointer', display: 'inline-flex', gap: 4, alignItems: 'center',
+        color: '#b45309',
+      }}
+    >
+      <Globe size={12} /> {label}
+    </button>
+  )
+  const searchError = nameSearchController?.create.isError ? (
+    <span style={{ fontSize: 11, color: '#b91c1c' }}>
+      {(nameSearchController.create.error as { message?: string })?.message ?? 'Could not start the search'}
+    </span>
+  ) : null
+  let searchFallback: ReactElement | null = null
+  if (nameSearchController && isAdmin && !hasName && siteExhausted && nameSearch?.status !== 'found') {
+    if (nameSearchBatchRunning) {
+      searchFallback = <span style={{ fontSize: 11, color: '#b45309' }}>searching the web…</span>
+    } else if (nameSearch?.status === 'no_names') {
+      searchFallback = <span style={{ fontSize: 11, color: '#94a3b8' }}>no owner found on the web</span>
+    } else if (nameSearch?.status === 'failed') {
+      searchFallback = (
+        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 11, color: '#b45309' }}>web search failed</span>
+          {searchWebBtn('Retry')}{searchError}
+        </span>
+      )
+    } else {
+      searchFallback = (
+        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          {searchWebBtn('Search the web (paid)')}{searchError}
+        </span>
+      )
+    }
+  }
+
+  const bodyWithFallback = (nameFallback || searchFallback) ? (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start' }}>
       {body}
       {nameFallback}
+      {searchFallback}
     </div>
   ) : body
 

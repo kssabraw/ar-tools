@@ -1916,3 +1916,43 @@ An adversarial re-read of the site name-scrape produced five fixes:
 - **Frontend: staff-gate + error surfacing + dead-code removal.** The per-row "Scan site for names"
   button is gated on `isStaff` (the route is `require_staff`) and now surfaces a placement error
   instead of a silent 403. Removed dead backfill code in `merge_names`.
+
+## 2026-08-26 — Web-search owner name: the PAID third-rung fallback (a guarded LLM exception)
+
+**Decision.** Add a third owner/manager-name fallback below Outscraper enrichment and the free site
+scrape: when both come up empty, the team can PAY for a web search that looks the owner up (news,
+directories, licensing records, LinkedIn). OpenAI Responses API + `web_search` tool over httpx
+(reuses `OUTREACH_OPENAI_API_KEY`; no `openai` SDK dependency), grounded on the business's own
+name + address + category + website so the model resolves THIS business, not a namesake elsewhere.
+
+**This is a deliberate, GUARDED exception to the "deterministic, never an LLM guess, never fabricate"
+report ruling (2026-08-08).** A web search for "who owns X" is the single most fabrication-prone
+thing the module does, so the guard is the strictest of any producer:
+- **Require-citation (owner ruling).** A name is kept ONLY when the search returns a real SOURCE URL
+  that names the person; an uncited name is DROPPED (`name_search.parse_search_answer`). The model is
+  prompted for strict JSON `{found, name, title, source_url}` and told never to guess.
+- **Same plausibility guard as the site scrape.** The kept name must pass
+  `name_extract.is_plausible_name` (business-name/stopword rejection) — one definition of "is this a
+  real person, not the business".
+- **Surfaced as lowest-trust.** Stored `source='web_search'` with the citation in `raw`; the UI
+  badges it "from web search — verify" as a link to the source, and it carries no verified
+  email/phone. The report/scoring layers must continue to treat only the deterministic signals as
+  fact — a web-searched name is a caller aid, never a measured fact.
+
+**PAID, so it mirrors enrichment, not the free site scrape.** Signed `name_search_request` order
+(admin-gated + per-user daily budget guard + `cost_ledger` write + free preflight estimate); the
+`tick` drains it (`name_search_queue.py`, one OpenAI call per prospect, per-prospect isolation,
+idempotent skip). Config on the outreach service: `name_search_model` (gpt-5.4),
+`name_search_web_search_tool`, `_cost_cents`, `_chunk_size`, `_orders_per_tick`,
+`_max_places_per_order`, `_max_names`, `_request_timeout_seconds`; on PLATFORM:
+`outreach_name_search_cost_cents`/`_daily_budget_usd`/`_max_places_per_order`.
+
+**Placement gate.** The paid order refuses (`nothing_to_search`) any prospect that already has a name
+from ANY source or was already searched, so a bulk "search all" only bills the genuinely nameless.
+The UI offers the web-search rung only after the site scrape came up empty (or there is no site to
+scan), and only to admins.
+
+Migration `20260826140000_name_search.sql` (`name_search_request` + `prospect_name_search`) applied
+live to Outreacher. Names land in the existing `prospect_contact` (`source='web_search'`).
+Unvalidated like every other name source (I-114 applies): calibrate the model/prompt from real
+`prospect_name_search.raw` after the first live runs; the require-citation guard is the floor.

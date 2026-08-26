@@ -552,6 +552,15 @@ class NameScrapeRequestCreate(BaseModel):
     note: Optional[str] = None
 
 
+class NameSearchRequestCreate(BaseModel):
+    prospect_ids: list[str]
+    note: Optional[str] = None
+
+
+class NameSearchEstimateRequest(BaseModel):
+    prospect_ids: list[str]
+
+
 class ContactsBatchRequest(BaseModel):
     prospect_ids: list[str]
 
@@ -749,6 +758,90 @@ async def cancel_name_scrape_request(
     its own."""
     _require_outreach_ready()
     return _handle(outreach_service.cancel_name_scrape_request, request_id, auth["user_id"])
+
+
+# --- Web-search owner-name (PAID third-rung fallback — outreach DECISIONS.md) ------------------
+#
+# When enrichment AND the free site-scrape both found no name, a paid web search looks the owner up.
+# It BILLS one OpenAI web-search call per prospect, so it mirrors enrichment exactly: the estimate is
+# FREE (staff, read-only); placing an order is ADMIN-gated (the click is the spend authorization) +
+# per-user budget-guarded. platform-api never spends — it writes a signed `name_search_request` the
+# outreach `tick` drains. Reads (list/detail) are open to any authed staff.
+
+
+@router.post("/outreach/name-search/estimate")
+async def estimate_name_search(
+    payload: NameSearchEstimateRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Free preflight cost estimate for a web-search selection: billable count, est cost, today's
+    spend and whether the daily budget allows it. Spends nothing; shown before the admin confirms."""
+    _require_outreach_ready()
+    return _handle(outreach_service.estimate_name_search, payload.prospect_ids, auth["user_id"])
+
+
+@router.post("/outreach/prospects/{prospect_id}/search-name")
+async def search_prospect_name(
+    prospect_id: str, note: Optional[str] = None, auth: dict = Depends(require_admin)
+) -> dict:
+    """Web-search ONE prospect's owner name — the per-row button. Places a signed one-prospect PAID
+    order; the tick bills it. Admin-gated + budget-guarded. 422 `nothing_to_search` if it already has
+    a name or was already searched."""
+    _require_outreach_ready()
+    return {
+        "name_search_request": _handle(
+            outreach_service.create_name_search_request,
+            prospect_ids=[prospect_id],
+            note=note,
+            actor_id=auth["user_id"],
+        )
+    }
+
+
+@router.post("/outreach/name-search")
+async def create_name_search_request(
+    payload: NameSearchRequestCreate, auth: dict = Depends(require_admin)
+) -> dict:
+    """Web-search a SELECTION (bulk) — one signed PAID order carrying the whole list. Admin-gated +
+    budget-guarded; the estimate rides the response."""
+    _require_outreach_ready()
+    return {
+        "name_search_request": _handle(
+            outreach_service.create_name_search_request,
+            prospect_ids=payload.prospect_ids,
+            note=payload.note,
+            actor_id=auth["user_id"],
+        )
+    }
+
+
+@router.get("/outreach/name-search")
+async def list_name_search_requests(
+    status: Optional[str] = None,
+    limit: int = Query(default=outreach_service.DEFAULT_PAGE_SIZE, ge=1),
+    offset: int = Query(default=0, ge=0),
+    auth: dict = Depends(require_outreach),
+) -> dict:
+    return _handle(
+        outreach_service.list_name_search_requests, status=status, limit=limit, offset=offset
+    )
+
+
+@router.get("/outreach/name-search/{request_id}")
+async def name_search_request_detail(
+    request_id: str, auth: dict = Depends(require_outreach)
+) -> dict:
+    """One order + its progress counters — the poll the bulk bar's useResumableBatch reads."""
+    return _handle(outreach_service.name_search_request_detail, request_id)
+
+
+@router.post("/outreach/name-search/{request_id}/cancel")
+async def cancel_name_search_request(
+    request_id: str, auth: dict = Depends(require_admin)
+) -> dict:
+    """Withdraw a PENDING order. One the tick has claimed is already searching (real money) and
+    resolves on its own."""
+    _require_outreach_ready()
+    return _handle(outreach_service.cancel_name_search_request, request_id, auth["user_id"])
 
 
 # --- Any-city geo (read-only: resolve a typed city + list its verified sub-areas) --------------
