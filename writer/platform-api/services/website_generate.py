@@ -76,7 +76,8 @@ def _spaced_at(index: int) -> str:
 
 
 def enqueue_generation(
-    *, website_id: str, client_id: str, page_ids: list[str], user_id: str
+    *, website_id: str, client_id: str, page_ids: list[str], user_id: str,
+    publish_after: bool = False,
 ) -> list[str]:
     """One `website_page_generate` job per page, staggered.
 
@@ -84,6 +85,10 @@ def enqueue_generation(
     documents: each unit stays under the stale-job reaper's timeout (a batch job
     would be reaped mid-run and regenerate what it had already paid for), and
     the staggered `scheduled_at` lets interactive work overtake the batch.
+
+    `publish_after` is set by the release (drip) schedule: on a successful
+    generation the job auto-enqueues the page's publish, so a scheduled release
+    generates then publishes in one flow without a second job type.
     """
     rows = []
     for page_id in page_ids:
@@ -97,6 +102,7 @@ def enqueue_generation(
                     "client_id": client_id,
                     "page_id": page_id,
                     "user_id": user_id,
+                    "publish_after": bool(publish_after),
                 },
             }
         )
@@ -415,6 +421,19 @@ async def run_generate_job(job: dict) -> None:
         result = await generate_page(
             page_id=payload["page_id"], user_id=payload.get("user_id") or ""
         )
+        # Drip-release flow: a successful generation hands straight to publish, so
+        # a scheduled release generates then publishes without a second job type.
+        # Only on real output — a template/engine-unavailable page has nothing to
+        # commit, and a held/failed generation must not auto-ship.
+        if payload.get("publish_after") and result.get("generated"):
+            from services import website_publish
+
+            website_publish.enqueue_publish(
+                website_id=payload["website_id"],
+                client_id=payload.get("client_id") or "",
+                page_ids=[payload["page_id"]],
+                user_id=payload.get("user_id") or "",
+            )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": result, "completed_at": "now()"}
         ).eq("id", job["id"]).execute()

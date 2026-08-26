@@ -27,6 +27,7 @@ from services import (
     website_plan_store,
     website_provision,
     website_publish,
+    website_release,
     website_settings,
     website_theme,
 )
@@ -713,6 +714,77 @@ async def publish_pages(
         force=body.force,
     )
     return {"queued": len(job_ids), "job_ids": job_ids}
+
+
+class ReleaseScheduleRequest(BaseModel):
+    """A site's drip-publish schedule (PRD §5 — the content-scheduler analog).
+
+    `immediate_count` pages go out now; `per_release_count` more each cadence
+    tick. Each release generates then publishes the next planned posts, so the
+    site needs nothing generated up front.
+    """
+
+    mode: str = "daily"
+    # weekly: 0=Mon..6=Sun; monthly: 1..28. Filled from the setup day when unset.
+    weekday: Optional[int] = None
+    day_of_month: Optional[int] = None
+    immediate_count: int = Field(default=0, ge=0)
+    per_release_count: int = Field(default=1, ge=1)
+    enabled: bool = True
+
+
+@router.get("/websites/{website_id}/release-schedule")
+async def get_release_schedule(
+    website_id: str, auth: dict = Depends(require_auth)
+) -> dict:
+    """The site's release schedule plus how many pages are left to release."""
+    _enabled()
+    _load_site(website_id)
+    pages = website_plan_store.stored(website_id)
+    return {
+        "schedule": website_release.get_schedule(website_id),
+        "releasable": website_release.releasable_count(pages),
+    }
+
+
+@router.put("/websites/{website_id}/release-schedule")
+async def set_release_schedule(
+    website_id: str, body: ReleaseScheduleRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Set (or replace) the release schedule; publish the immediate batch now.
+
+    staff+ only, because a release publishes to the public internet — the same
+    bar as the manual publish route. Refused until the plan is approved and the
+    site provisioned, since a release cannot commit to a repo that doesn't exist.
+    """
+    _enabled()
+    website = _load_site(website_id)
+    assert_not_frozen(website["client_id"])
+    if not website.get("github_repo"):
+        raise HTTPException(status_code=409, detail="website_not_provisioned")
+    if not website_plan_store.is_approved(website):
+        raise HTTPException(status_code=409, detail="plan_not_approved")
+
+    try:
+        result = website_release.set_schedule(
+            website, body=body.model_dump(), user_id=auth.get("user_id") or ""
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return result
+
+
+@router.delete("/websites/{website_id}/release-schedule")
+async def delete_release_schedule(
+    website_id: str, auth: dict = Depends(require_staff)
+) -> dict:
+    """Stop the drip. Pages already released keep going; nothing new is enqueued."""
+    _enabled()
+    _load_site(website_id)
+    get_supabase().table("website_releases").delete().eq(
+        "website_id", website_id
+    ).execute()
+    return {"deleted": True}
 
 
 @router.post("/websites/{website_id}/pages/{page_id}/retry")
