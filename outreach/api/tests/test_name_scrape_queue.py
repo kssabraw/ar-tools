@@ -204,6 +204,8 @@ def test_a_found_order_stores_site_scrape_contacts_and_a_found_marker(monkeypatc
     assert o.outcome == "done" and o.found == 1 and o.names == 2
     contacts = db.tables["prospect_contact"]
     assert len(contacts) == 2 and all(c["source"] == "site_scrape" for c in contacts)
+    # a deterministic confidence rides each researched contact (text + Owner + 1 page = 62 → medium)
+    assert contacts[0]["confidence"] == 62 and contacts[0]["confidence_band"] == "medium"
     marker = db.tables["prospect_name_scrape"][0]
     assert marker["status"] == "found" and marker["name_count"] == 2
     assert db.tables["name_scrape_request"][0]["status"] == "done"

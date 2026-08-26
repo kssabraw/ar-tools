@@ -3170,7 +3170,7 @@ def list_prospect_contacts(prospect_id: str) -> dict[str, Any]:
         .select(
             "id, place_id, contact_index, full_name, first_name, last_name, title, name_for_emails, "
             "email, email_status, email_is_generic, phone, phone_type, phone_carrier, "
-            "source, enriched_at"
+            "source, confidence, confidence_band, enriched_at"
         )
         .eq("prospect_id", prospect_id)
         .order("contact_index")
@@ -3228,7 +3228,7 @@ def list_prospect_contacts(prospect_id: str) -> dict[str, Any]:
 _CONTACT_COLUMNS = (
     "prospect_id, id, place_id, contact_index, full_name, first_name, last_name, title, "
     "name_for_emails, email, email_status, email_is_generic, phone, phone_type, phone_carrier, "
-    "source, enriched_at"
+    "source, confidence, confidence_band, enriched_at"
 )
 
 

@@ -54,6 +54,11 @@ class SearchedName:
     evidence: str
     first_name: str | None = None
     last_name: str | None = None
+    # The model's OWN self-rating (0-100) that this person owns/runs THIS business + its reason. Raw
+    # signals only — the blended confidence score is computed downstream by `name_confidence` (the
+    # model moves the score, it doesn't set it).
+    model_confidence: int | None = None
+    model_reason: str | None = None
 
     def as_contact(self) -> dict[str, Any]:
         return {
@@ -105,7 +110,10 @@ def build_prompt(prospect: dict[str, Any]) -> str:
         + "\n\nRespond with ONLY a JSON object, no prose:\n"
         '{"found": true|false, "name": "Full Name" or null, '
         '"title": "Owner"|"Founder"|"President"|"General Manager"|... or null, '
-        '"source_url": "https://the-page-that-names-them" or null}\n'
+        '"source_url": "https://the-page-that-names-them" or null, '
+        '"confidence": 0-100, "confidence_reason": "one short sentence"}\n'
+        "`confidence` is how sure you are that THIS person owns/runs THIS EXACT business (0 = a "
+        "guess, 100 = an authoritative source states it plainly); be honest and conservative. "
         "Set found=true ONLY if a real, citable web source names the person for THIS business, and "
         "put that page's URL in source_url. If you cannot find a cited name, set found=false and "
         "name=null. Never invent a name or a source."
@@ -179,6 +187,9 @@ def parse_search_answer(
 
     title = obj.get("title")
     title = re.sub(r"\s+", " ", title).strip() if isinstance(title, str) and title.strip() else None
+    model_conf = _clean_confidence(obj.get("confidence"))
+    reason = obj.get("confidence_reason")
+    reason = re.sub(r"\s+", " ", reason).strip()[:300] if isinstance(reason, str) and reason.strip() else None
     parts = name.split(" ")
     first = parts[0] if parts else None
     last = parts[-1] if len(parts) > 1 else None
@@ -186,8 +197,23 @@ def parse_search_answer(
         SearchedName(
             full_name=name, title=title, citation=citation,
             evidence=f"web search — cited at {citation}", first_name=first, last_name=last,
+            model_confidence=model_conf, model_reason=reason,
         )
     ][:max_names]
+
+
+def _clean_confidence(value: Any) -> int | None:
+    """The model's self-rating as an int in [0,100], or None. Tolerant of a float, a numeric string,
+    or a 0-1 fraction (scaled up)."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    if 0.0 <= num <= 1.0:
+        num *= 100
+    return max(0, min(100, int(round(num))))
 
 
 def extract_output(output: list[Any]) -> tuple[str, list[str]]:

@@ -1956,3 +1956,30 @@ Migration `20260826140000_name_search.sql` (`name_search_request` + `prospect_na
 live to Outreacher. Names land in the existing `prospect_contact` (`source='web_search'`).
 Unvalidated like every other name source (I-114 applies): calibrate the model/prompt from real
 `prospect_name_search.raw` after the first live runs; the require-citation guard is the floor.
+
+## 2026-08-26 — Confidence scores for the additional-research name sources
+
+**Decision.** The site-scrape and web-search fallback names (both lower-trust than an Outscraper
+pull) now each carry a 0-100 `confidence` + a High/Medium/Low `confidence_band` on ONE shared scale
+(`prospect_contact.confidence`/`confidence_band`, migration `20260826160000`, applied live; Outscraper
+contacts leave them NULL — their trust is a validated email, a different thing). Owner ruling: score
+BOTH fallbacks, BLENDED method. Pure `services/name_confidence.py` (unit-tested), called from the two
+queues so "confidence" has one definition.
+
+- **Site scrape — DETERMINISTIC.** `score_site_scrape(source_kind, title, page_count)`: structured
+  JSON-LD (65) beats role-anchored text (45); an explicit senior-ownership title adds +12; a name
+  found on ≥2 fetched pages of the site adds +18 (corroboration — `merge_names` now stamps
+  `ExtractedName.page_count`). No model involved.
+- **Web search — BLENDED.** `score_web_search(model_confidence, citations, business_website)`: a
+  DETERMINISTIC corroboration backbone (distinct citing domains: +0/+12/+20; a citation on the
+  business's OWN domain: +10) is the primary signal, and the model's OWN self-rating — a new
+  `confidence` (0-100) + `confidence_reason` field in the strict-JSON answer — is blended in at 35%
+  (`0.65·deterministic + 0.35·model`). The model MOVES the score, it never SETS it: a 90-confident
+  model on a single uncorroborated citation lands 58 (Medium), not 90. This keeps the fact-grounded
+  posture while using the model's opinion as one input, per the owner ruling.
+
+Bands (High ≥75, Medium ≥50) + weights are module constants for calibration. Factors are stored in
+each contact's `raw.confidence` for replay. Frontend: a `ConfidenceChip` (colour by band, score in
+the tooltip) beside the "from website" / "from web search — verify" provenance badge. Contacts read
+(`_CONTACT_COLUMNS` + single read) now returns the two columns. Unvalidated like every name signal
+(I-114) — calibrate the weights from real `raw.confidence` factors after the first live runs.
