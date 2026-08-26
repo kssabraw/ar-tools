@@ -811,6 +811,19 @@ comparing the count of `review_count is null` before and after. Listings with ge
 reviews will mostly *not* appear in a pack, so a low resolution rate is itself evidence for
 reading 2 above rather than a failure of the backfill.
 
+**CONFIRMED STILL UNBUILT — 2026-08-25, after four completed live scans** (LA, Whittier,
+Inglewood, Van Nuys — all 81/81, rolled up). The scan writer does NOT yet do any of the above:
+`maps_scan.GridRow`/`parse_grid_result` keep only `place_id` + `rank`, `grid_result` has no review
+column, and the `votes_count` the response carries is dropped. Direct evidence:
+`review_inferred_zero_audit` = 0 rows, `contradicted` = 0, `review_count_inferred_zero` still set
+on **105** prospects — unchanged across four scans covering real plumbers. So HANDOFF §9's
+promise that "the geo-grid scan will audit the flag" cannot fire until this obligation is
+implemented; §9 now carries a correction marker pointing here. This is the canonical home for the
+gap (found independently while verifying the scans and reconciled to I-045 on merge — do NOT open
+a duplicate). Cheapest close if the review signal is never actually needed by scoring: withdraw
+§9's expectation rather than build the capture — decide when Phase 4 scoring first reads review
+counts as a feature.
+
 ### I-046 · Phase 5 precondition — unresolved filter evaluations gate SPEND, not the filter
 **Recorded now so it is not rediscovered at the moment money is committed.**
 
