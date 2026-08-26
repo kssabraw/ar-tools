@@ -213,9 +213,86 @@ def _section_organic(data: dict) -> str:
     return (
         "<section><h2>Organic rankings</h2>" + summary
         + "<table><thead><tr><th>Keyword</th><th class='num'>Current</th>"
-        "<th class='num'>Movement</th><th>Trend</th></tr></thead><tbody>"
-        + "".join(rows) + "</tbody></table></section>"
+        "<th class='num'>Movement</th><th>Rank trend (last 90 days)</th></tr></thead><tbody>"
+        + "".join(rows) + "</tbody></table>"
+        + "<p class='legend'><strong>Rank trend</strong> traces the keyword’s Google "
+        "position over the last ~90 days. Higher on the line is a better position, so "
+        "a line climbing to the top means the ranking is improving — "
+        "<span style='color:#16a34a;font-weight:600'>green</span> lines are improving, "
+        "<span style='color:#ef4444;font-weight:600'>red</span> are slipping. "
+        "<strong>Movement</strong> is the change in position vs the previous month "
+        "(a <span style='color:#166534;font-weight:600'>+</span> value means you moved up).</p>"
+        + "</section>"
     )
+
+
+def _pin_presence(top3, total) -> Optional[float]:
+    """Top-3 local-pack presence for one keyword = share of grid pins ranking in
+    the top 3, as a percent. None when the scan has no pins. Pure."""
+    try:
+        t = float(total or 0)
+        return round(100.0 * float(top3 or 0) / t, 1) if t else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _rank_delta(prev, now) -> Optional[float]:
+    """Change in average rank, positive = improved (a lower rank number is better,
+    so improvement = prev - now). None when either side is missing. Pure."""
+    try:
+        if prev is None or now is None:
+            return None
+        return round(float(prev) - float(now), 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def _mom_badge(change: Optional[float], suffix: str = "", up_good: bool = True,
+               label: str = "vs last month") -> str:
+    """A small coloured ▲/▼ month-over-month change chip. `change` > 0 is an
+    increase; `up_good` says whether an increase is good (green) or bad (red).
+    Empty string when there's no comparable previous month. Pure."""
+    if change is None:
+        return ""
+    if change == 0:
+        return f"<span class='mom mom-flat'>▬ no change {_esc(label)}</span>"
+    up = change > 0
+    good = up if up_good else not up
+    arrow = "▲" if up else "▼"
+    color = "#166534" if good else "#b91c1c"
+    return (f"<span class='mom' style='color:{color}'>{arrow} "
+            f"{abs(change):g}{_esc(suffix)} {_esc(label)}</span>")
+
+
+_HORIZON_LABELS = (("30d", "30 days"), ("90d", "90 days"), ("since_start", "since start"))
+
+
+def _horizon_badge(label: str, change: Optional[float], suffix: str = "", up_good: bool = True) -> str:
+    """One '<label>: ▲/▼ X' chip for a fixed-horizon change. Pure."""
+    if change is None:
+        return f"<span class='mom mom-flat'>{_esc(label)}: —</span>"
+    if change == 0:
+        return f"<span class='mom mom-flat'>{_esc(label)}: ▬ no change</span>"
+    up = change > 0
+    good = up if up_good else not up
+    color = "#166534" if good else "#b91c1c"
+    arrow = "▲" if up else "▼"
+    return (f"<span class='mom' style='color:{color}'>{_esc(label)}: "
+            f"{arrow} {abs(change):g}{_esc(suffix)}</span>")
+
+
+def _horizon_callout(lead_html: str, horizons: Optional[dict], suffix: str = "", up_good: bool = True) -> str:
+    """A '30 days · 90 days · since start' row of change chips for the given
+    horizons dict ({key: {"change": v}}). Empty when no horizon is available. Pure."""
+    if not horizons:
+        return ""
+    badges = [
+        _horizon_badge(label, (horizons.get(key) or {}).get("change"), suffix, up_good)
+        for key, label in _HORIZON_LABELS if key in horizons
+    ]
+    if not badges:
+        return ""
+    return f"<p class='mom-callout'>{lead_html} &nbsp; {' · '.join(badges)}</p>"
 
 
 def _maps_presence_line(g: dict) -> str:
@@ -251,13 +328,35 @@ def _section_geogrid(data: dict) -> str:
             f"<img class='grid-img' src='{img}' alt='Local rank map'/>" if img
             else svg_geogrid(k.get("rank_grid"))
         )
+        # Per-keyword month-over-month: change in top-3 pin presence + avg rank.
+        mom = _mom_badge(k.get("presence_change_pts"), suffix=" pts", up_good=True)
+        rank_mom = _mom_badge(k.get("rank_change"), up_good=True, label="places vs last month")
+        mom_html = (f"<div class='grid-mom'>{mom}{rank_mom}</div>"
+                    if (mom or rank_mom) else "")
         cards.append(
             "<div class='grid-card'>"
             f"<div class='grid-kw'>{_esc(k.get('keyword'))}</div>"
             f"<div>{visual}</div>"
             f"<div class='grid-meta'>avg rank {_esc(avg)} · "
             f"top-3 in {_esc(k.get('top3_pins', 0))}/{_esc(k.get('total_pins', 0))} pins</div>"
-            "</div>"
+            + mom_html
+            + "</div>"
+        )
+    # Prominent overall month-over-month callout (top-3 presence across the grid).
+    now_p, prev_p = g.get("presence_now"), g.get("presence_prev")
+    # Prefer the 30d/90d/since-start callout; fall back to the single vs-last-month
+    # delta when the multi-horizon scans aren't available.
+    if now_p is not None and g.get("presence_horizons"):
+        mom_callout = _horizon_callout(
+            f"Top-3 map presence: <strong>{round(now_p)}%</strong>",
+            g.get("presence_horizons"), suffix=" pts", up_good=True,
+        )
+    else:
+        overall_change = round(now_p - prev_p, 1) if (now_p is not None and prev_p is not None) else None
+        overall_mom = _mom_badge(overall_change, suffix=" pts", up_good=True)
+        mom_callout = (
+            f"<p class='mom-callout'>Top-3 map presence: <strong>{round(now_p)}%</strong> "
+            f"{overall_mom}</p>" if overall_mom and now_p is not None else ""
         )
     presence_html = _maps_presence_line(g)
     weak = g.get("weak_areas") or []
@@ -276,7 +375,7 @@ def _section_geogrid(data: dict) -> str:
         "<section><h2>Local pack / Maps coverage</h2>"
         "<p class='note'>How visible your business is on Google Maps across your "
         "service area — green means you’re at the top of the map.</p>"
-        + presence_html + weak_html + legend
+        + mom_callout + presence_html + weak_html + legend
         + "<div class='grid-cards'>" + "".join(cards) + "</div></section>"
     )
 
@@ -455,6 +554,91 @@ def build_comparisons(
     return out or None
 
 
+# Fixed comparison horizons — a 30-day window is volatile, so the report shows
+# 30-day, 90-day and since-start deltas side by side (longer windows reveal wins).
+_MULTI_HORIZONS = ((30, "30d"), (90, "90d"))
+_SINCE_START_WINDOW = 30  # the recent/earliest window length for the since-start delta
+
+
+def _rank_by_date(metric_rows: list[dict]) -> dict:
+    """{date: mean position across keywords that day} — GSC position preferred,
+    tracked_rank fallback. Pure (shared by the comparison builders)."""
+    rsum, rn = {}, {}
+    for r in metric_rows or []:
+        try:
+            d = date.fromisoformat(str(r.get("date"))[:10])
+        except (TypeError, ValueError):
+            continue
+        pos = r.get("gsc_position")
+        if pos is None:
+            pos = r.get("tracked_rank")
+        if pos is not None:
+            rsum[d] = rsum.get(d, 0) + pos
+            rn[d] = rn.get(d, 0) + 1
+    return {d: rsum[d] / rn[d] for d in rsum}
+
+
+def build_multi_comparisons(
+    metric_rows: list[dict], period_end: date,
+    traffic_rows: Optional[list[dict]] = None,
+) -> Optional[dict]:
+    """Per-metric change over fixed 30-day, 90-day and since-start horizons —
+    each anchored at the report's period_end (the report's own coverage window no
+    longer decides the comparison length, so a 30-day report isn't stuck showing
+    only a volatile 30-day delta). Pure.
+
+    For each metric returns {"30d": h, "90d": h, "since_start": h} where a present
+    horizon `h` is {current, previous, change} (volume: % change) or
+    {current, previous, change_positions} (rank: positions gained, +ve = better).
+    A horizon is omitted when the data doesn't span both of its windows, so a
+    young campaign never shows a misleading partial delta."""
+    traffic_src = traffic_rows if traffic_rows is not None else metric_rows
+    impr = _accum_by_date(traffic_src, "impressions")
+    clk = _accum_by_date(traffic_src, "clicks")
+    rank = _rank_by_date(metric_rows)
+
+    def _horizons(by_date: dict, volume: bool) -> Optional[dict]:
+        if not by_date:
+            return None
+        mn = min(by_date)
+        agg = _sum_between if volume else _avg_between
+
+        def _entry(cur, prev):
+            if volume:
+                return {"current": cur, "previous": prev, "change": _pct(cur, prev)}
+            change = None if (cur is None or prev is None) else round(prev - cur, 1)
+            return {"current": cur, "previous": prev, "change_positions": change}
+
+        hz: dict = {}
+        for days, key in _MULTI_HORIZONS:
+            cur_start = period_end - timedelta(days=days)
+            prev_start = cur_start - timedelta(days=days)
+            cur = agg(by_date, cur_start, period_end)
+            if cur is None:
+                continue
+            # Only compare when the data actually spans the previous window.
+            prev = agg(by_date, prev_start, cur_start) if mn <= prev_start else None
+            hz[key] = _entry(cur, prev)
+        # Since start: the recent window vs the campaign's earliest window (shown
+        # only when the campaign is old enough for the two to be distinct).
+        recent_start = period_end - timedelta(days=_SINCE_START_WINDOW)
+        earliest_end = mn + timedelta(days=_SINCE_START_WINDOW)
+        cur = agg(by_date, recent_start, period_end)
+        if cur is not None and earliest_end <= recent_start:
+            prev = agg(by_date, mn - timedelta(days=1), earliest_end)
+            hz["since_start"] = _entry(cur, prev)
+        return hz or None
+
+    out: dict = {}
+    if (h := _horizons(impr, True)):
+        out["impressions"] = h
+    if (h := _horizons(clk, True)):
+        out["clicks"] = h
+    if (h := _horizons(rank, False)):
+        out["rank"] = h
+    return out or None
+
+
 def _fmt_int(v) -> str:
     try:
         return f"{int(round(float(v))):,}"
@@ -485,35 +669,58 @@ def _perf_row(label, current, previous, change) -> str:
             f"<td class='num pos'>{_esc(change)}</td></tr>")
 
 
+def _perf_change_cell(entry: Optional[dict], volume: bool) -> str:
+    """A single 30d/90d/since-start change cell: % for volume, positions for rank.
+    '—' when the horizon isn't available (data doesn't span it yet)."""
+    if not entry:
+        return "<td class='num'>—</td>"
+    if volume:
+        return f"<td class='num pos'>{_esc(_fmt_pct(entry.get('change')))}</td>"
+    return f"<td class='num pos'>{_esc(_fmt_positions(entry.get('change_positions')))}</td>"
+
+
 def _section_performance(data: dict) -> str:
-    comp = (data.get("organic") or {}).get("comparisons")
-    if not comp:
+    # Fixed-horizon comparisons (30d / 90d / since start) — a single-window delta
+    # is too volatile to show wins, so we present all three side by side.
+    multi = (data.get("organic") or {}).get("comparisons_multi")
+    if not multi:
         return ""
     rows = []
-    for key, label, fmt_val, change_key, fmt_change in (
-        ("impressions", "Impressions", _fmt_int, "change", _fmt_pct),
-        ("clicks", "Organic clicks", _fmt_int, "change", _fmt_pct),
-        ("rank", "Average ranking", _fmt_pos, "change_positions", _fmt_positions),
+    for key, label, fmt_val, volume in (
+        ("impressions", "Impressions", _fmt_int, True),
+        ("clicks", "Organic clicks", _fmt_int, True),
+        ("rank", "Average ranking", _fmt_pos, False),
     ):
-        m = comp.get(key)
-        if not m or m.get("current") is None:
+        hz = multi.get(key)
+        if not hz:
             continue
-        # A volume metric with a zero current window means the source has no traffic
-        # for this period (a GSC gap, or a stale feed) — showing "0 ▼ -100%" reads
-        # as a collapse to a client. Omit it rather than fabricate a scary delta.
-        if key in ("impressions", "clicks") and not m.get("current"):
+        # "Now" = the most recent 30-day window (current value of the 30d horizon,
+        # falling back to the 90d window if 30d is absent).
+        now_entry = hz.get("30d") or hz.get("90d") or hz.get("since_start")
+        now = now_entry.get("current") if now_entry else None
+        if now is None:
             continue
-        prev = m.get("previous")
-        prev_txt = fmt_val(prev) if prev is not None else "—"
-        rows.append(_perf_row(label, fmt_val(m["current"]), prev_txt, fmt_change(m.get(change_key))))
+        # A volume metric with a zero recent window means no traffic (GSC gap / stale
+        # feed) — omit rather than headline a scary "0 / -100%".
+        if volume and not now:
+            continue
+        rows.append(
+            f"<tr><td>{_esc(label)}</td><td class='num'>{_esc(fmt_val(now))}</td>"
+            + _perf_change_cell(hz.get("30d"), volume)
+            + _perf_change_cell(hz.get("90d"), volume)
+            + _perf_change_cell(hz.get("since_start"), volume)
+            + "</tr>"
+        )
     if not rows:
         return ""
     return (
         "<section><h2>Performance highlights</h2>"
-        "<p class='note'>How you’re doing this period compared with the period just "
-        "before it (the same number of days).</p>"
-        "<table><thead><tr><th>Metric</th><th class='num'>This period</th>"
-        "<th class='num'>Previous period</th><th class='num'>Change</th>"
+        "<p class='note'>Your progress over three time frames. A single 30-day "
+        "window bounces around, so we also show 90 days and the whole campaign — "
+        "the longer views are where the real trend shows.</p>"
+        "<table><thead><tr><th>Metric</th><th class='num'>Now (last 30 days)</th>"
+        "<th class='num'>vs prev 30 days</th><th class='num'>vs prev 90 days</th>"
+        "<th class='num'>Since we started</th>"
         "</tr></thead><tbody>"
         + "".join(rows) + "</tbody></table></section>"
     )
@@ -572,10 +779,19 @@ def _section_ai_visibility(data: dict) -> str:
         f"<li><strong>{_esc(_ENGINE_LABELS.get(e, e))}</strong>: appears in {_esc(v)}</li>"
         for e, v in a["engines"].items()
     )
+    now, prev = a.get("visibility_now"), a.get("visibility_prev")
+    lead = f"Recommended in <strong>{round(now)}%</strong> of AI answers" if now is not None else ""
+    if now is not None and a.get("visibility_horizons"):
+        mom_callout = _horizon_callout(lead, a.get("visibility_horizons"), suffix="%", up_good=True)
+    else:
+        change = round(now - prev, 1) if (now is not None and prev is not None) else None
+        mom = _mom_badge(change, suffix="%", up_good=True)
+        mom_callout = f"<p class='mom-callout'>{lead} {mom}</p>" if mom and now is not None else ""
     return (
         "<section><h2>AI search visibility</h2>"
         "<p class='note'>How often your brand is recommended when AI assistants "
         "answer questions like your customers'.</p>"
+        + mom_callout
         + _ai_visibility_headline(a)
         + "<p class='lead'>Across the AI tools we track:</p>"
         f"<ul class='reviews'>{items}</ul>"
@@ -609,6 +825,8 @@ def _ai_keyword_matrix(keywords: list[dict]) -> str:
     client sees exactly which questions they win and which they're missing from."""
     if not keywords:
         return ""
+    # Only show the month-over-month column when a previous month exists to compare.
+    show_mom = any(k.get("change") is not None for k in keywords)
     rows = ""
     for k in keywords:
         eng = k.get("engines") or {}
@@ -619,11 +837,19 @@ def _ai_keyword_matrix(keywords: list[dict]) -> str:
             cls = "aiyes" if eng[e] else "aino"
             chips += f"<span class='aichip {cls}'>{_esc(_AI_ENGINE_SHORT[e])}</span>"
         count = f"{k.get('found_count', 0)}/{k.get('total', 0)}"
+        # Per-keyword month-over-month: change in the number of AI tools recommending
+        # the brand for this question (positive = more tools than last month).
+        mom_cell = ""
+        if show_mom:
+            badge = _mom_badge(k.get("change"), up_good=True, label="vs last month")
+            mom_cell = f"<td class='num'>{badge or '—'}</td>"
         rows += (
             f"<tr><td class='aiq'>{_esc(_shorten(k.get('keyword'), 120))}</td>"
             f"<td class='aichips'>{chips}</td>"
-            f"<td class='num aicount'>{_esc(count)}</td></tr>"
+            f"<td class='num aicount'>{_esc(count)}</td>"
+            f"{mom_cell}</tr>"
         )
+    mom_header = "<th class='num'>vs last month</th>" if show_mom else ""
     invisible = [k for k in keywords if not k.get("found_count")]
     note = ""
     if invisible:
@@ -635,7 +861,8 @@ def _ai_keyword_matrix(keywords: list[dict]) -> str:
     return (
         "<p class='lead' style='margin-top:12px'>Which AI tools recommend you, question by question:</p>"
         "<table class='aimatrix'><thead><tr><th>Question a customer might ask</th>"
-        "<th>AI tools recommending you</th><th class='num'>Score</th></tr></thead>"
+        "<th>AI tools recommending you</th><th class='num'>Score</th>"
+        f"{mom_header}</tr></thead>"
         f"<tbody>{rows}</tbody></table>{note}"
     )
 
@@ -669,10 +896,16 @@ def _section_exec(data: dict) -> str:
         return f"<div class='hcol'><h4>{title}</h4><ul>{lis}</ul></div>" if lis else ""
 
     cols = _list("Highlights", e.get("highlights")) + _list("What we’re focused on next", e.get("focus_next"))
+    long_term = e.get("long_term_progress")
+    long_term_html = (
+        f"<p class='longterm'><strong>The bigger picture:</strong> {_esc(long_term)}</p>"
+        if long_term and str(long_term).strip() else ""
+    )
     return (
         "<section class='exec'><h2>Executive summary</h2>"
         f"<p class='headline'>{_esc(e.get('headline'))}</p>"
-        f"<div class='hcols'>{cols}</div></section>"
+        + long_term_html
+        + f"<div class='hcols'>{cols}</div></section>"
     )
 
 
@@ -877,10 +1110,7 @@ def build_report_html(data: dict) -> str:
     sections = "".join(
         s for s in (_section_exec(data), _section_goals(data), _section_performance(data),
                     _section_ga4(data), _section_work_delivered(data), _section_organic(data),
-                    _section_geogrid(data), _section_ai_visibility(data)) if s
-        # GBP section removed from the client PDF for now (re-add _section_gbp(data)
-        # above to restore). _gather_gbp still runs so review snapshots keep
-        # recording and the historical series stays continuous.
+                    _section_geogrid(data), _section_gbp(data), _section_ai_visibility(data)) if s
     )
     if not (kpis or sections):
         sections = "<section><p class='lead'>No report data is available for this client yet.</p></section>"
@@ -934,6 +1164,12 @@ td.num, th.num { text-align:right; }
 .grid-meta { color:#64748b; font-size:10px; margin-top:6px; }
 .legend { color:#64748b; font-size:9px; }
 .legend .sw { display:inline-block; width:9px; height:9px; border-radius:2px; margin:0 3px 0 10px; vertical-align:middle; }
+.mom { font-size:9.5px; font-weight:600; white-space:nowrap; }
+.mom-flat { color:#94a3b8; }
+.mom-callout { background:#f8fafc; border:1px solid #e2e8f0; border-left:3px solid #6366f1; border-radius:6px; padding:8px 12px; font-size:12px; color:#334155; margin:2px 0 8px; }
+.mom-callout strong { color:#0f172a; }
+.grid-mom { margin-top:4px; display:flex; flex-direction:column; gap:2px; }
+.gbp-metrics th, .gbp-metrics td { font-size:11px; }
 .reviews { color:#334155; } .reviews li { margin-bottom:4px; }
 .gchip { font-weight:700; font-size:10px; }
 .gprog { width:34%; }
@@ -951,6 +1187,8 @@ td.num, th.num { text-align:right; }
 .aicount { font-weight:700; color:#166534; white-space:nowrap; }
 footer { margin-top:24px; padding-top:8px; border-top:1px solid #e2e8f0; color:#94a3b8; font-size:9px; text-align:center; }
 .exec .headline { font-size:13px; color:#0f172a; font-weight:600; }
+.exec .longterm { font-size:11.5px; color:#334155; background:#f0fdf4; border-left:3px solid #16a34a; border-radius:6px; padding:8px 12px; margin:8px 0 4px; }
+.exec .longterm strong { color:#166534; }
 td.num.pos { font-weight:600; color:#166534; }
 .hcols { display:flex; gap:16px; margin-top:8px; }
 .hcol { flex:1; } .hcol h4 { font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:#94a3b8; margin:0 0 4px; }
@@ -1039,17 +1277,18 @@ def _gather_organic(supabase, client_id: str, period_start: date, period_end: da
             "change": change,
             "sparkline": s.get("sparkline") or [],
         })
+    # Volume metrics come from the property-level GSC daily totals (same source as
+    # the campaign goals) so Performance highlights agrees with the goals and never
+    # shows the stale-per-keyword "0 / -100%" artifact; ranking stays from the
+    # per-keyword series (flat_rows).
+    traffic = _gather_gsc_traffic(supabase, client_id, period_end)
     return {
         "keywords": keywords,
         "summary": {"tracked": len(keywords), "top10": top10, "improved": improved, "declined": declined},
-        # Volume metrics come from the property-level GSC daily totals (same source
-        # as the campaign goals) so Performance highlights agrees with the goals and
-        # never shows the stale-per-keyword "0 / -100%" artifact; ranking stays from
-        # the per-keyword series (flat_rows).
-        "comparisons": build_comparisons(
-            flat_rows, period_start, period_end,
-            traffic_rows=_gather_gsc_traffic(supabase, client_id, period_end),
-        ),
+        # Single-window comparison (kept for the KPI strip); the Performance table
+        # renders the fixed 30d/90d/since-start horizons below.
+        "comparisons": build_comparisons(flat_rows, period_start, period_end, traffic_rows=traffic),
+        "comparisons_multi": build_multi_comparisons(flat_rows, period_end, traffic_rows=traffic),
     }
 
 
@@ -1171,6 +1410,53 @@ def _scan_presence(supabase, scan_id: str) -> Optional[float]:
     return round(100.0 * top3 / total, 1) if total else None
 
 
+def _parse_iso_date(raw) -> Optional[date]:
+    """Date from an ISO timestamp/date string (tolerates a trailing Z). None on
+    anything unparseable. Pure."""
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).date()
+    except ValueError:
+        try:
+            return date.fromisoformat(str(raw)[:10])
+        except ValueError:
+            return None
+
+
+def _first_reporting_scan(supabase, client_id: str):
+    """The oldest scheduled (reporting) complete scan — the since-start baseline."""
+    rows = (
+        maps_reporting.only_reporting(supabase.table("maps_scans").select("id, created_at"))
+        .eq("client_id", client_id).eq("status", "complete")
+        .order("created_at").limit(1).execute()
+    ).data
+    return rows[0] if rows else None
+
+
+def _presence_horizons(supabase, client_id: str, latest_scan_id: str,
+                       presence_now: Optional[float], latest_date: date) -> Optional[dict]:
+    """Overall top-3 presence change vs the scan nearest ~30 and ~90 days before the
+    latest scan, and vs the first scan (since start). Each entry is
+    {now, prev, change} (change in percentage points). Omitted when not comparable."""
+    if presence_now is None:
+        return None
+
+    def _entry(prev_scan) -> Optional[dict]:
+        if not prev_scan or prev_scan["id"] == latest_scan_id:
+            return None
+        pp = _scan_presence(supabase, prev_scan["id"])
+        return {"now": presence_now, "prev": pp, "change": round(presence_now - pp, 1)} if pp is not None else None
+
+    hz: dict = {}
+    for days, key in _MULTI_HORIZONS:
+        if (e := _entry(_latest_reporting_scan(supabase, client_id, latest_date - timedelta(days=days)))):
+            hz[key] = e
+    if (e := _entry(_first_reporting_scan(supabase, client_id))):
+        hz["since_start"] = e
+    return hz or None
+
+
 def _gather_geogrid(supabase, client_id: str, period_start: date, period_end: date) -> Optional[dict]:
     # The client-facing PDF reports the scheduled series only — a one-off run the
     # team did to check something is not this client's local-pack record.
@@ -1191,29 +1477,51 @@ def _gather_geogrid(supabase, client_id: str, period_start: date, period_end: da
         for city in _weak_area_names(r.get("report_weak_locations")):
             if city not in weak:
                 weak.append(city)
-    # Local-pack presence this period vs the previous period's scan.
+    # Local-pack presence this period vs the previous period's scan — overall and,
+    # for the month-over-month view, per keyword (top-3 pin presence + avg rank).
     presence_now = _scan_presence(supabase, scan["id"])
     presence_prev = None
+    prev_by_kw: dict = {}
     prev_scan = _latest_reporting_scan(supabase, client_id, period_start)
     if prev_scan and prev_scan["id"] != scan["id"]:
         presence_prev = _scan_presence(supabase, prev_scan["id"])
+        prev_rows = (
+            supabase.table("maps_scan_results")
+            .select("keyword, average_rank, top3_pins, total_pins")
+            .eq("scan_id", prev_scan["id"]).execute()
+        ).data or []
+        prev_by_kw = {r.get("keyword"): r for r in prev_rows}
+
+    def _kw(r: dict) -> dict:
+        prev = prev_by_kw.get(r.get("keyword"))
+        now_pct = _pin_presence(r.get("top3_pins"), r.get("total_pins"))
+        prev_pct = _pin_presence(prev.get("top3_pins"), prev.get("total_pins")) if prev else None
+        return {
+            "keyword": r.get("keyword"),
+            "average_rank": r.get("average_rank"),
+            "top3_pins": r.get("top3_pins"),
+            "total_pins": r.get("total_pins"),
+            "rank_grid": r.get("rank_grid"),
+            # Prefer the saved map PNG (Google tile + numbered pins) inlined as
+            # a data URI so the PDF is self-contained; fall back to the SVG grid.
+            "map_image": _png_data_uri(r.get("map_image_url")),
+            # Month-over-month: top-3 presence now vs the previous scan, and the
+            # change in average rank (positive = improved, since a lower rank is better).
+            "presence_pct": now_pct,
+            "presence_prev_pct": prev_pct,
+            "presence_change_pts": (round(now_pct - prev_pct, 1)
+                                    if now_pct is not None and prev_pct is not None else None),
+            "rank_change": _rank_delta(prev.get("average_rank") if prev else None, r.get("average_rank")),
+        }
+
+    latest_date = _parse_iso_date(scan.get("created_at")) or period_end
     return {
         "scan_at": scan.get("created_at"),
         "presence_now": presence_now,
         "presence_prev": presence_prev,
-        "keywords": [
-            {
-                "keyword": r.get("keyword"),
-                "average_rank": r.get("average_rank"),
-                "top3_pins": r.get("top3_pins"),
-                "total_pins": r.get("total_pins"),
-                "rank_grid": r.get("rank_grid"),
-                # Prefer the saved map PNG (Google tile + numbered pins) inlined as
-                # a data URI so the PDF is self-contained; fall back to the SVG grid.
-                "map_image": _png_data_uri(r.get("map_image_url")),
-            }
-            for r in results
-        ],
+        # 30d / 90d / since-start presence deltas (vs the scan nearest each horizon).
+        "presence_horizons": _presence_horizons(supabase, client_id, scan["id"], presence_now, latest_date),
+        "keywords": [_kw(r) for r in results],
         "weak_areas": weak[:8],
     }
 
@@ -1498,10 +1806,21 @@ def _gather_ai_visibility(supabase, client_id: str, period_start: date, period_e
     if not batch:
         return None
     prev_batch = _batch_before(period_start.isoformat())
-    visibility_prev = (
-        _batch_overall_visibility(supabase, client_id, prev_batch)
-        if prev_batch and prev_batch != batch else None
-    )
+    has_prev = bool(prev_batch and prev_batch != batch)
+    visibility_prev = _batch_overall_visibility(supabase, client_id, prev_batch) if has_prev else None
+    # Per-keyword found-count in the previous month's batch, for the MoM deltas.
+    prev_found_by_kw: dict = {}
+    if has_prev:
+        for r in (
+            supabase.table("brand_mention_history")
+            .select("mention_found, keyword_id, is_competitor_scan")
+            .eq("client_id", client_id).eq("scan_batch_id", prev_batch).execute()
+        ).data or []:
+            if r.get("is_competitor_scan") or not r.get("keyword_id"):
+                continue
+            prev_found_by_kw.setdefault(r["keyword_id"], 0)
+            if r.get("mention_found"):
+                prev_found_by_kw[r["keyword_id"]] += 1
     rows = [
         r for r in (
             supabase.table("brand_mention_history")
@@ -1532,23 +1851,54 @@ def _gather_ai_visibility(supabase, client_id: str, period_start: date, period_e
             pe["found"] += 1
         kid = r.get("keyword_id")
         if kid and kid in kw_map:
-            by_kw.setdefault(kid, {"keyword": kw_map[kid], "engines": {}})["engines"][e] = found
+            by_kw.setdefault(kid, {"keyword": kw_map[kid], "engines": {}, "kid": kid})["engines"][e] = found
 
     keywords = []
     for b in by_kw.values():
         found_count = sum(1 for v in b["engines"].values() if v)
-        keywords.append({**b, "found_count": found_count, "total": len(b["engines"])})
+        # Month-over-month: this keyword's mentions vs the previous month's batch.
+        fp = prev_found_by_kw.get(b["kid"]) if has_prev else None
+        change = (found_count - fp) if fp is not None else None
+        keywords.append({"keyword": b["keyword"], "engines": b["engines"],
+                         "found_count": found_count, "total": len(b["engines"]),
+                         "found_prev": fp, "change": change})
     # Most-visible first; the brand-invisible queries sort to the bottom where the
     # "not yet appearing" note draws the eye.
     keywords.sort(key=lambda k: (-k["found_count"], k["keyword"]))
     total_cells = sum(v["total"] for v in per.values())
     found_cells = sum(v["found"] for v in per.values())
     visibility_now = round(100.0 * found_cells / total_cells, 1) if total_cells else None
+
+    # 30d / 90d / since-start overall-visibility horizons (vs the batch nearest each
+    # target date, and the first batch). Cheap — ≤3 extra batch reads.
+    latest_ai_date = next(
+        (_parse_iso_date(r.get("created_at")) for r in noncomp if r["scan_batch_id"] == batch), None
+    ) or period_end
+
+    def _batch_on_or_before(target: date):
+        return next((r["scan_batch_id"] for r in noncomp
+                     if (d := _parse_iso_date(r.get("created_at"))) and d <= target), None)
+
+    def _vis_entry(prev_bid) -> Optional[dict]:
+        if not prev_bid or prev_bid == batch or visibility_now is None:
+            return None
+        pv = _batch_overall_visibility(supabase, client_id, prev_bid)
+        return {"now": visibility_now, "prev": pv, "change": round(visibility_now - pv, 1)} if pv is not None else None
+
+    vis_hz: dict = {}
+    for days, key in _MULTI_HORIZONS:
+        if (e := _vis_entry(_batch_on_or_before(latest_ai_date - timedelta(days=days)))):
+            vis_hz[key] = e
+    first_bid = noncomp[-1]["scan_batch_id"] if noncomp else None
+    if (e := _vis_entry(first_bid)):
+        vis_hz["since_start"] = e
+
     return {
         "engines": {e: f"{v['found']} of {v['total']} answers" for e, v in per.items()},
         "keywords": keywords,
         "visibility_now": visibility_now,
         "visibility_prev": visibility_prev,
+        "visibility_horizons": vis_hz or None,
     }
 
 
@@ -1564,7 +1914,18 @@ _EXEC_SYSTEM = (
     "specific numbers (e.g. 'impressions are up 24% this month'). Base everything "
     "ONLY on the supplied data; never invent numbers. Keep each bullet to one "
     "short, encouraging sentence. 'focus_next' should frame upcoming work as "
-    "opportunities, not problems."
+    "opportunities, not problems.\n\n"
+    "IMPORTANT — the longer view: a single 30-day window bounces around, so the "
+    "durable story is over 90 days and since the campaign started. The supplied "
+    "data includes 90-day and since-start comparisons (performance_horizons, "
+    "maps_presence_horizons, ai_visibility_horizons — each with a 'since_start' "
+    "and/or '90d' change). Use them. 'long_term_progress' MUST describe how the "
+    "campaign is trending over that longer time frame, citing the 90-day or "
+    "since-start numbers where available (e.g. 'since we started, your average "
+    "position has climbed 12 places'). Stay positive: if the recent month dipped "
+    "but the longer trend is up, lead with the longer trend. If the campaign is "
+    "still young and long-term data isn't available yet, say it's early and "
+    "building momentum — never invent a number to fill the gap."
 )
 _EXEC_TOOL = {
     "name": "emit_summary",
@@ -1573,12 +1934,20 @@ _EXEC_TOOL = {
         "type": "object",
         "properties": {
             "headline": {"type": "string", "description": "1–2 sentence upbeat headline of the month's progress."},
+            "long_term_progress": {
+                "type": "string",
+                "description": "1–2 encouraging sentences on how the campaign is trending over the LONGER "
+                               "time frame — 90 days and since it started — citing the since-start / 90-day "
+                               "numbers where the data provides them. A single month is volatile, so this "
+                               "frames the durable progress. If long-term data isn't available yet, say the "
+                               "campaign is early and building momentum (no invented numbers).",
+            },
             "highlights": {"type": "array", "items": {"type": "string"},
                            "description": "Up to 5 concrete wins, each with its number where available."},
             "focus_next": {"type": "array", "items": {"type": "string"},
                            "description": "Up to 4 opportunities/next steps, framed positively."},
         },
-        "required": ["headline", "highlights", "focus_next"],
+        "required": ["headline", "long_term_progress", "highlights", "focus_next"],
     },
 }
 
@@ -1610,21 +1979,28 @@ def generate_exec_summary(client_name: Optional[str], period: dict, data: dict, 
     OpenAI→Gemini fallback on a transient failure."""
     if not (settings.anthropic_api_key or settings.openai_api_key or settings.gemini_api_key):
         return None
+    organic = data.get("organic") or {}
+    geogrid = data.get("geogrid") or {}
+    ai = data.get("ai_visibility") or {}
     context = {
         "client": client_name,
         "period": period,
-        "performance_changes": (data.get("organic") or {}).get("comparisons"),
-        "rankings_summary": (data.get("organic") or {}).get("summary"),
-        "top_keywords": ((data.get("organic") or {}).get("keywords") or [])[:15],
+        "performance_changes": organic.get("comparisons"),
+        # 30d / 90d / since-start horizons so the summary can speak to the longer
+        # trend (a single month is volatile; the durable story is 90d + since start).
+        "performance_horizons": organic.get("comparisons_multi"),
+        "maps_presence_horizons": geogrid.get("presence_horizons"),
+        "ai_visibility_horizons": ai.get("visibility_horizons"),
+        "rankings_summary": organic.get("summary"),
+        "top_keywords": (organic.get("keywords") or [])[:15],
         "local_maps": {
             "keywords": [
                 {"keyword": k.get("keyword"), "average_rank": k.get("average_rank"),
                  "top3_pins": k.get("top3_pins"), "total_pins": k.get("total_pins")}
-                for k in ((data.get("geogrid") or {}).get("keywords") or [])
+                for k in (geogrid.get("keywords") or [])
             ],
         },
-        # GBP removed from the client PDF report for now — not fed to the exec summary.
-        "ai_search_visibility": data.get("ai_visibility"),
+        "ai_search_visibility": ai or None,
         "work_delivered": data.get("work_delivered"),
         **signals,
     }
@@ -1717,7 +2093,7 @@ def _build_maps_report(client_id: str, period_start: date, period_end: date) -> 
     separate on-scan-completion deliverable."""
     supabase = get_supabase()
     rows = (
-        supabase.table("clients").select("name, logo_url")
+        supabase.table("clients").select("id, name, logo_url, gbp")
         .eq("id", client_id).limit(1).execute()
     ).data
     client = rows[0] if rows else {}
@@ -1731,6 +2107,14 @@ def _build_maps_report(client_id: str, period_start: date, period_end: date) -> 
             "completed for this period yet — your next scheduled scan will "
             "populate this report.</p></section>"
         )
+    # GBP is a local signal, so the Local Rank report carries the Google Business
+    # Profile section too (rating/reviews + performance-metric growth). Best-effort.
+    try:
+        gbp_section = _section_gbp({"gbp": _gather_gbp(supabase, client_id, client, period_start, period_end)})
+    except Exception as exc:  # noqa: BLE001 — GBP is additive; never fail the report
+        logger.warning("maps_report_gbp_failed", extra={"client_id": client_id, "error": str(exc)})
+        gbp_section = ""
+    body += gbp_section
     logo = client.get("logo_url")
     logo_html = f'<img class="logo" src="{_esc(logo)}"/>' if logo else ""
     agency = settings.client_report_agency_name or "Amazing Rankings"

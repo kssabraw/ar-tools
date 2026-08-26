@@ -108,6 +108,48 @@ def test_render_html_structure():
     assert "(You)" in html
 
 
+def test_render_html_month_over_month():
+    # This period: brand mentioned on chatgpt (100%). Previous period: not mentioned (0%).
+    data = aggregate_range([_row("emergency plumber", "chatgpt", True)], LABELS)
+    prev = aggregate_range([_row("emergency plumber", "chatgpt", False)], LABELS)
+    html = render_html(
+        client={"name": "Acme", "website_url": None, "gbp": {}},
+        agency_name="Amazing Rankings", date_range_label="range",
+        tracked_keywords=[], data=data, prev=prev, generated_on="today",
+    )
+    # overall MoM callout + per-keyword column both present, showing the +100% gain
+    assert "vs previous period" in html
+    assert "▲" in html and "100" in html
+
+
+def test_render_html_multi_horizon_visibility():
+    data = aggregate_range([_row("emergency plumber", "chatgpt", True)], LABELS)
+    html = render_html(
+        client={"name": "Acme", "website_url": None, "gbp": {}},
+        agency_name="Amazing Rankings", date_range_label="range",
+        tracked_keywords=[], data=data,
+        vis_horizons={
+            "30d": {"now": 60.0, "prev": 50.0, "change": 10.0},
+            "90d": {"now": 60.0, "prev": 30.0, "change": 30.0},
+            "since_start": {"now": 60.0, "prev": 10.0, "change": 50.0},
+        },
+        generated_on="today",
+    )
+    assert "Visibility trend" in html
+    assert "30 days: ▲ 10%" in html and "90 days: ▲ 30%" in html and "since start: ▲ 50%" in html
+
+
+def test_render_html_no_mom_without_prev():
+    data = aggregate_range([_row("emergency plumber", "chatgpt", True)], LABELS)
+    html = render_html(
+        client={"name": "Acme", "website_url": None, "gbp": {}},
+        agency_name="Amazing Rankings", date_range_label="range",
+        tracked_keywords=[], data=data, generated_on="today",
+    )
+    # no previous period supplied → no MoM column/callout
+    assert "vs previous period" not in html
+
+
 def test_render_html_empty_range():
     data = aggregate_range([], LABELS)
     html = render_html(
