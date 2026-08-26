@@ -57,6 +57,8 @@ _EMPTY_CARD: dict[str, Any] = {
     "must_use_terms": [],
     "never_use_terms": [],
     "discouraged_terms": [],
+    "differentiators": [],
+    "signature_phrases": [],
     "cta_language": [],
     "audience_label": "",
     "audience_summary": "",
@@ -84,6 +86,8 @@ Output a single JSON object matching this exact schema:
   "must_use_terms": [string, max 15 - phrasings the guide REQUIRES or names as preferred],
   "never_use_terms": [string, max 30 - see the HIGH BAR rule below],
   "discouraged_terms": [string, max 20 - softer "avoid/prefer X over Y" preferences],
+  "differentiators": [string, max 6 - the concrete, specific things that make THIS brand distinct from a generic competitor: proof points, credentials, guarantees, signature methods, years/scale, service-area or process specifics. Extract only what the documents actually claim.],
+  "signature_phrases": [string, max 8 - verbatim taglines, slogans, or characteristic turns of phrase the brand uses for ITSELF that a competitor would not; empty list if none are stated],
   "cta_language": [string, max 8 - the call-to-action phrasings the guide or ICP calls for, verbatim],
   "audience_label": string (max 120 - a short name for the primary customer, e.g. "Melbourne homeowner with a 20+ year old tile roof"),
   "audience_summary": string (max 300),
@@ -100,6 +104,7 @@ CRITICAL RULES:
 - person: answer "first" only if the guide actually asks the writer to use we/our/us, and "third" only if it asks for the brand to be named instead. If the guide is silent, return "".
 - tone_adjectives, voice_directives, sentence_rhythm, must_use_terms, never_use_terms, discouraged_terms come from the BRAND GUIDE.
 - audience_* and cta_language come from the ICP (cta_language may also come from the brand guide when it specifies CTA wording).
+- differentiators and signature_phrases may come from EITHER the brand guide or the ICP. differentiators are what the brand claims sets it apart (only real, stated claims - a generic "quality service" is NOT a differentiator); signature_phrases are the brand's own verbatim wording. Do NOT invent either: an empty list is the correct answer when the documents state nothing distinctive.
 - If a field has no basis in the source documents, return an empty array, empty string, or "". Never fill a field to look complete."""
 
 
@@ -157,6 +162,8 @@ def parse_voice_card(raw: Any) -> dict[str, Any]:
     card["must_use_terms"] = _list("must_use_terms", 15, 80)
     card["never_use_terms"] = _sanitize_never_use(_list("never_use_terms", 30, 80))
     card["discouraged_terms"] = _list("discouraged_terms", 20, 80)
+    card["differentiators"] = _list("differentiators", 6, 200)
+    card["signature_phrases"] = _list("signature_phrases", 8, 120)
     card["cta_language"] = _list("cta_language", 8, 120)
     card["audience_pain_points"] = _list("audience_pain_points", 6)
     card["audience_triggers"] = _list("audience_triggers", 6)
@@ -237,7 +244,24 @@ def render_voice_card_block(card: Optional[dict]) -> str:
         "length, required lists/table, headings, schema) still apply: express them in this voice",
         "rather than abandoning them.",
         "",
+        "BE UNMISTAKABLY THIS CLIENT. This page is scored on one test above all: could it be",
+        "published on a competitor's site by swapping the brand name? If yes, it FAILS. Clean,",
+        "correct, generic copy is a failure here, not a pass. Lead with what only this client",
+        "can say — their specific proof, differentiators, and the exact concerns of the customer",
+        "described below — never generic benefit-claims any competitor in this trade could make.",
     ]
+
+    if card.get("differentiators"):
+        lines.append(
+            "What sets this client apart (foreground these — don't just list them): "
+            + "; ".join(card["differentiators"])
+        )
+    if card.get("signature_phrases"):
+        lines.append(
+            "This brand's own words (use where they fit naturally, never forced): "
+            + " / ".join(f'"{p}"' for p in card["signature_phrases"])
+        )
+    lines.append("")
 
     if card.get("brand_name"):
         lines.append(f"Brand: {card['brand_name']}")
