@@ -47,6 +47,27 @@ def test_parse_full_card_round_trips():
     assert card["audience_triggers"] == ["a storm just went through"]
 
 
+def test_parse_distinctiveness_fields_round_trip_and_cap():
+    card = vc.parse_voice_card({
+        "differentiators": ["50-year workmanship warranty", "only Malarkey-certified crew"]
+        + [f"extra{i}" for i in range(10)],
+        "signature_phrases": ["Roofs done right, rain or shine"]
+        + [f"phrase{i}" for i in range(20)],
+    })
+    assert card["differentiators"][0] == "50-year workmanship warranty"
+    assert len(card["differentiators"]) == 6   # capped
+    assert card["signature_phrases"][0] == "Roofs done right, rain or shine"
+    assert len(card["signature_phrases"]) == 8  # capped
+
+
+def test_parse_missing_distinctiveness_fields_default_empty():
+    """A legacy card (or a distillation that stated nothing distinctive) yields
+    empty lists, never a KeyError downstream."""
+    card = vc.parse_voice_card({"brand_name": "X"})
+    assert card["differentiators"] == []
+    assert card["signature_phrases"] == []
+
+
 def test_parse_never_raises_on_garbage():
     for raw in [None, "not a dict", 42, [], {"person": {"nested": True}}]:
         card = vc.parse_voice_card(raw)
@@ -85,6 +106,9 @@ def test_is_card_empty():
     # A guide that says only "write as we/our" is still worth enforcing —
     # it is exactly the rule the third-person default was overriding.
     assert not vc.is_card_empty(_card(person="first"))
+    # Distinctiveness raw material alone is enough to render + enforce.
+    assert not vc.is_card_empty(_card(differentiators=["50-year warranty"]))
+    assert not vc.is_card_empty(_card(signature_phrases=["rain or shine"]))
 
 
 def test_fingerprint_is_stable_and_change_sensitive():
@@ -169,6 +193,33 @@ def test_render_block_third_person_directive():
     block = vc.render_voice_card_block(_card(person="third", tone_adjectives=["formal"]))
     assert "THIRD PERSON" in block
     assert "FIRST PERSON" not in block
+
+
+def test_render_block_carries_the_distinctiveness_directive():
+    """The write-time mirror of the hardened judge: the writer is told it will
+    be scored on the name-swap test and handed the client's distinctive
+    material to lead with."""
+    card = _card(
+        tone_adjectives=["straight-talking"],
+        differentiators=["50-year workmanship warranty", "only Malarkey-certified crew"],
+        signature_phrases=["Roofs done right, rain or shine"],
+    )
+    block = vc.render_voice_card_block(card)
+    assert "BE UNMISTAKABLY THIS CLIENT" in block
+    assert "swapping the brand name" in block
+    assert "50-year workmanship warranty" in block
+    assert '"Roofs done right, rain or shine"' in block
+
+
+def test_render_block_directive_fires_without_distinctiveness_material():
+    """A thin/legacy card (no differentiators, missing keys entirely) still gets
+    the directive — it leans on the audience block — and never KeyErrors."""
+    block = vc.render_voice_card_block({"brand_name": "X", "tone_adjectives": ["bold"]})
+    assert "BE UNMISTAKABLY THIS CLIENT" in block
+    assert "Brand: X" in block
+    # No spurious differentiator/signature lines when the fields are absent.
+    assert "What sets this client apart" not in block
+    assert "This brand's own words" not in block
 
 
 # --- check_voice_compliance ------------------------------------------------
