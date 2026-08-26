@@ -108,6 +108,35 @@ SERVICES_INDEX_TRIGGER = 8
 # under the threshold is conformant without one.
 AREAS_WE_SERVE_TRIGGER = 6
 
+# Reference §5.3 (Pillar / Hub Page): "A topic cluster of >= 5 planned/existing
+# posts" triggers a pillar. The pillar is the cluster parent — a silo with fewer
+# than this many posts is not a pillar, just a handful of posts, so no hub page
+# is planned for it. Counted over EVERGREEN posts only: the reference is explicit
+# that News/Commentary is non-evergreen and "excluded from pillar-cluster math".
+PILLAR_CLUSTER_MIN = 5
+
+# The five blog formats the template's `posts` collection renders (reference
+# §5.3). `format` is a PLAN-time decision, not a writer-time one — it changes the
+# geo rule, the schema, and whether the post counts toward pillar-cluster math.
+POST_FORMATS = frozenset(
+    {"informational_cluster", "listicle", "comparison", "local_geo", "news"}
+)
+DEFAULT_POST_FORMAT = "informational_cluster"
+# News is the sole non-evergreen format (reference §5.3); everything else feeds a
+# pillar. The exclusion lives here so a change to the format set can't silently
+# drop it from the cluster math.
+EVERGREEN_FORMATS = POST_FORMATS - {"news"}
+
+# Human labels for the writer brief, so the notes read as a brief rather than a
+# machine token. Angle guidance stays in the content SOP; this only names the shape.
+_FORMAT_LABELS = {
+    "informational_cluster": "informational cluster post (answer-first, feeds its pillar)",
+    "listicle": "listicle / roundup post (N-item, scannable, deliberately ordered)",
+    "comparison": "informational comparison post (verdict-first, even-handed, never a sales page)",
+    "local_geo": "local geo post (genuinely useful local content with an organic service-area tie)",
+    "news": "news / commentary post (timely, dated, non-evergreen)",
+}
+
 PageType = Literal[
     "home",
     "about",
@@ -122,6 +151,8 @@ PageType = Literal[
     "location",
     "neighborhood",
     "local_landing",
+    "post",
+    "pillar",
 ]
 
 GEO_SITE_TYPES = frozenset({"local_business", "lead_gen"})
@@ -153,6 +184,56 @@ class CityEntry:
     # Only neighborhoods that passed the Maps entity test belong here; the
     # geocode containment check establishes location, not entity status.
     neighborhoods: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class PostEntry:
+    """One planned blog post — a cluster child (reference §5.3).
+
+    Planned per cluster, never ad hoc: every post carries a target `format` and a
+    `silo` (its pillar's slug) *before* generation, which is the reference's
+    explicit planner rule. `keyword` is the term the writer targets; the rest is
+    the editorial brief threaded into the Writer as run notes.
+    """
+
+    slug: str
+    title: str
+    silo: str
+    format: str = DEFAULT_POST_FORMAT
+    keyword: str = ""
+    cluster: str = ""
+    buyer_problem: str = ""
+    search_intent: str = ""
+    funnel_stage: str = ""
+    questions: tuple[str, ...] = ()
+    target_keywords: tuple[str, ...] = ()
+
+    @property
+    def is_evergreen(self) -> bool:
+        return self.format in EVERGREEN_FORMATS
+
+
+@dataclass(frozen=True)
+class PillarEntry:
+    """A topic silo and its planned posts (reference §5.3, Content & Authority).
+
+    A silo maps to the strategist's *pillar*; each of its posts maps to a
+    strategist *cluster*. A pillar/hub PAGE is only emitted for a silo once it
+    reaches PILLAR_CLUSTER_MIN evergreen posts — below that it is a cluster of
+    posts with no parent, which is not the page type the reference describes.
+    """
+
+    slug: str
+    title: str
+    posts: tuple[PostEntry, ...] = ()
+
+    @property
+    def evergreen_count(self) -> int:
+        return sum(1 for p in self.posts if p.is_evergreen)
+
+    @property
+    def has_pillar_page(self) -> bool:
+        return self.evergreen_count >= PILLAR_CLUSTER_MIN
 
 
 @dataclass(frozen=True)
@@ -381,6 +462,174 @@ def conditional_pages(
     return out
 
 
+# --------------------------------------------------------------------------
+# Content & Authority family (reference §5.3) — the informational site's plan
+# --------------------------------------------------------------------------
+
+
+def normalize_format(value: Optional[str]) -> str:
+    """A stored/posted format token, normalized to one the template renders."""
+    fmt = (value or "").strip().lower()
+    return fmt if fmt in POST_FORMATS else DEFAULT_POST_FORMAT
+
+
+def content_plan_pillars(content_plan: Optional[dict]) -> list[PillarEntry]:
+    """Parse the site-owned content plan (`websites.config.content_plan`).
+
+    The Website Builder OWNS this inventory (it does not read a research run at
+    build time): the strategist plan may *seed* it once, but after that it is a
+    durable property of the site, editable and surviving a re-research. The shape
+    mirrors what `keyword_topic_strategist` emits — pillars -> clusters — with
+    each strategist cluster becoming one post.
+
+    Post slugs are made unique site-wide (posts are flat under /blog/): a
+    collision is dropped here rather than left to surface as a duplicate-path
+    planning error, because two clusters legitimately titled the same thing under
+    different pillars is a naming quirk, not a plan error. The first wins.
+    """
+    out: list[PillarEntry] = []
+    seen_post_slugs: set[str] = set()
+    seen_pillar_slugs: set[str] = set()
+
+    for pillar in (content_plan or {}).get("pillars") or []:
+        title = (pillar.get("title") or pillar.get("pillar") or "").strip()
+        if not title:
+            continue
+        slug = slugify(pillar.get("slug") or title)
+        if not slug or slug in seen_pillar_slugs:
+            continue
+        seen_pillar_slugs.add(slug)
+
+        posts: list[PostEntry] = []
+        for raw in pillar.get("posts") or pillar.get("clusters") or []:
+            p_title = (raw.get("title") or "").strip()
+            if not p_title:
+                continue
+            p_slug = slugify(raw.get("slug") or p_title)
+            if not p_slug or p_slug in seen_post_slugs:
+                continue
+            seen_post_slugs.add(p_slug)
+            questions = tuple(
+                str(q).strip() for q in (raw.get("questions") or []) if str(q).strip()
+            )
+            target_kw = tuple(
+                str(k).strip()
+                for k in (raw.get("target_keywords") or [])
+                if str(k).strip()
+            )
+            posts.append(
+                PostEntry(
+                    slug=p_slug,
+                    title=p_title,
+                    silo=slug,
+                    format=normalize_format(raw.get("format")),
+                    keyword=(raw.get("keyword") or "").strip()
+                    or (target_kw[0] if target_kw else p_title),
+                    cluster=(raw.get("cluster") or "").strip() or title,
+                    buyer_problem=(raw.get("buyer_problem") or "").strip(),
+                    search_intent=(raw.get("search_intent") or "").strip().lower(),
+                    funnel_stage=(raw.get("funnel_stage") or "").strip().upper(),
+                    questions=questions,
+                    target_keywords=target_kw,
+                )
+            )
+        out.append(PillarEntry(slug=slug, title=title, posts=tuple(posts)))
+    return out
+
+
+def informational_pages(pillars: Iterable[PillarEntry]) -> list[PlannedPage]:
+    """Post pages, and a pillar/hub page for any silo that earns one (§5.3).
+
+    A post is `/blog/{slug}/` in the flat blog silo; a pillar is `/{topic-slug}/`
+    at top level. The pillar is emitted only once its silo reaches
+    PILLAR_CLUSTER_MIN evergreen posts — news posts don't count, so a silo of
+    five news reactions never mints a hub.
+    """
+    out: list[PlannedPage] = []
+    for pillar in pillars:
+        for post in pillar.posts:
+            out.append(
+                PlannedPage(
+                    _path("blog", post.slug),
+                    "post",
+                    post.title,
+                    f"cluster: {pillar.title}",
+                    tier=3,
+                )
+            )
+        if pillar.has_pillar_page:
+            out.append(
+                PlannedPage(
+                    _path(pillar.slug),
+                    "pillar",
+                    pillar.title,
+                    f"CORE-conditional (auto): {pillar.evergreen_count} evergreen "
+                    f"posts >= {PILLAR_CLUSTER_MIN}",
+                    tier=2,
+                )
+            )
+    return out
+
+
+def compose_post_notes(post: PostEntry, pillar_title: str) -> str:
+    """The editorial brief threaded into the blog Writer as per-run notes.
+
+    The blog brief is keyword-driven and globally cached, so it can't carry this
+    post's angle — the angle rides on writer notes instead, exactly as the
+    Keyword Research "Write this post" handoff does.
+    """
+    lines = [
+        f"Blog post for this site's content plan, in the \"{pillar_title}\" topic silo.",
+        f"Working title: {post.title}",
+        f"Format: {_FORMAT_LABELS.get(post.format, post.format)}.",
+    ]
+    if post.buyer_problem:
+        lines.append(f"Reader problem this must resolve: {post.buyer_problem}")
+    if post.search_intent or post.funnel_stage:
+        bits = [b for b in (post.search_intent, post.funnel_stage) if b]
+        lines.append("Search intent / funnel stage: " + " · ".join(bits))
+    if post.questions:
+        lines.append("Answer these reader questions: " + "; ".join(post.questions))
+    if post.target_keywords:
+        lines.append(
+            "Work these related keywords in naturally: "
+            + ", ".join(post.target_keywords)
+        )
+    lines.append(
+        "Follow the format's structure from the content SOP; the client brand "
+        "guide governs voice."
+    )
+    return "\n".join(lines)
+
+
+def pillar_title_for(
+    silo_slug: str, pillars: Optional[dict[str, PillarEntry]]
+) -> Optional[str]:
+    """The human pillar title for a silo slug, from a path-keyed pillar map."""
+    for pillar in (pillars or {}).values():
+        if pillar.slug == silo_slug:
+            return pillar.title
+    return None
+
+
+def compose_pillar_notes(pillar: PillarEntry) -> str:
+    """The brief for a pillar/hub — a comprehensive 2,000-4,000 word survey (§5.3)."""
+    children = [p.title for p in pillar.posts]
+    lines = [
+        f'Pillar / hub page: the authoritative parent for the "{pillar.title}" topic silo.',
+        "Cover the whole topic comprehensively at 2,000-4,000 words. Each section "
+        "must deliver standalone value AND route the reader to a deeper child post "
+        "— never a thin link list.",
+    ]
+    if children:
+        lines.append(
+            "Child posts in this cluster to summarise and link down to: "
+            + "; ".join(children)
+        )
+    lines.append("The client brand guide governs voice.")
+    return "\n".join(lines)
+
+
 def check_paths(pages: Iterable[PlannedPage]) -> list[PlanIssue]:
     """Reserved-slug collisions and two entries claiming one path.
 
@@ -418,6 +667,10 @@ def check_paths(pages: Iterable[PlannedPage]) -> list[PlanIssue]:
     return issues
 
 
+# Pillar is an index page too (it links down to every cluster child), but its
+# link count depends on the silo->post mapping that a flat PlannedPage list does
+# not carry, so it is injected in `build_plan` from the content plan rather than
+# derived here.
 INDEX_PAGE_TYPES = frozenset(
     {"location", "service", "services_index", "areas_we_serve", "blog_archive"}
 )
@@ -598,11 +851,19 @@ def build_plan(
     site_type: str,
     catalog: Iterable[ServiceEntry],
     cities: Iterable[CityEntry],
+    content_plan: Optional[dict] = None,
 ) -> SitePlan:
-    """The full inventory for a site, ordered by priority tier."""
+    """The full inventory for a site, ordered by priority tier.
+
+    A geo site is planned from its service catalog x cities; an informational
+    site is planned from its own `content_plan` (pillars -> posts). The two are
+    disjoint by construction — a geo site has no content plan pages and an
+    informational site has no matrix — so a site is never both.
+    """
     catalog = list(catalog)
     cities = list(cities)
     multi_city = len(cities) > 1
+    pillars: list[PillarEntry] = []
 
     pages = core_pages(site_type)
     if site_type in GEO_SITE_TYPES:
@@ -613,8 +874,18 @@ def build_plan(
         pages += conditional_pages(catalog, cities, multi_city=multi_city)
     else:
         matrix = []
+        pillars = content_plan_pillars(content_plan)
+        pages += informational_pages(pillars)
 
     links = links_per_index(pages)
+    # A pillar links down to every child post in its silo (reference §5.3). The
+    # count comes from the content plan, not the flat page list, so it is added
+    # here where both are in hand — then it rides the same link-budget gate.
+    planned_pillar_paths = {p.path for p in pages if p.page_type == "pillar"}
+    for pillar in pillars:
+        path = _path(pillar.slug)
+        if path in planned_pillar_paths:
+            links[path] = len(pillar.posts)
     issues = (
         check_paths(pages)
         + scale_gates(len(matrix), links)
@@ -637,6 +908,13 @@ NLP_PAGE_TYPES = frozenset({"service", "sub_service", "location", "neighborhood"
 # Written by the core-pages generator (plan §4.6), which is Phase 3 and unbuilt.
 CORE_PAGE_TYPES = frozenset({"home", "about", "contact", "privacy"})
 
+# Written by starting a suite blog Writer run and linking it back
+# (content_source="run") — the publish side already assembles the body from the
+# run's `module_outputs` markdown. A post is one cluster child; a pillar is the
+# comprehensive hub. Both are blog_post runs; the editorial angle rides on the
+# run's writer notes, since the blog brief is keyword-driven and globally cached.
+RUN_PAGE_TYPES = frozenset({"post", "pillar"})
+
 
 def _segments(path: str) -> list[str]:
     return [s for s in (path or "").split("/") if s]
@@ -647,6 +925,8 @@ def frontmatter_extra(
     *,
     services: dict[str, ServiceEntry],
     cities: dict[str, CityEntry],
+    posts: Optional[dict[str, PostEntry]] = None,
+    pillars: Optional[dict[str, PillarEntry]] = None,
 ) -> dict:
     """The collection-specific frontmatter fields this page's entry needs.
 
@@ -687,6 +967,25 @@ def frontmatter_extra(
         if svc:
             out["teaser"] = svc.teaser
 
+    elif page.page_type == "post":
+        # `format` is required by the publish gate (auto-publish means the format
+        # decides the geo rule and the schema), so it is declared here at plan
+        # time, never left to the writer. `silo`/`cluster`/`category` place the
+        # post in its topic silo so the pillar and blog archive can group it.
+        post = (posts or {}).get(page.path)
+        out["format"] = post.format if post else DEFAULT_POST_FORMAT
+        if post:
+            out["silo"] = post.silo
+            out["cluster"] = post.cluster
+            # The blog archive groups by category; the human silo name reads
+            # better than the slug.
+            out["category"] = pillar_title_for(post.silo, pillars) or post.cluster
+
+    elif page.page_type == "pillar":
+        pillar = (pillars or {}).get(page.path)
+        if pillar:
+            out["silo"] = pillar.slug
+
     return out
 
 
@@ -695,15 +994,18 @@ def generation_inputs(
     *,
     services: dict[str, ServiceEntry],
     cities: dict[str, CityEntry],
+    posts: Optional[dict[str, PostEntry]] = None,
+    pillars: Optional[dict[str, PillarEntry]] = None,
     primary_service: Optional[str] = None,
     primary_city: Optional[str] = None,
 ) -> dict:
     """What engine writes this page, and what it needs to be told.
 
-    Returns `{engine, keyword, location}` — `engine` is None when nothing in the
-    suite can write this page type, which is deliberately visible rather than
-    silently skipped (PRD §4.7: "the plan tab must not propose a page type
-    without showing its engine status").
+    Returns `{engine, keyword, location}` (plus `content_type`/`notes` for the
+    `run` engine) — `engine` is None when nothing in the suite can write this
+    page type, which is deliberately visible rather than silently skipped
+    (PRD §4.7: "the plan tab must not propose a page type without showing its
+    engine status").
 
     The keyword/location split follows the SOP's targeting rules, which differ
     by page type in a way the URL alone does not carry:
@@ -718,6 +1020,30 @@ def generation_inputs(
         return {"engine": "template", "keyword": None, "location": None}
     if page.page_type in CORE_PAGE_TYPES:
         return {"engine": "core_pages", "keyword": None, "location": None}
+
+    if page.page_type == "post":
+        post = (posts or {}).get(page.path)
+        return {
+            "engine": "run",
+            "content_type": "blog_post",
+            "keyword": (post.keyword if post else page.title),
+            "location": None,
+            "notes": compose_post_notes(
+                post, pillar_title_for(post.silo, pillars) or post.cluster
+            )
+            if post
+            else "",
+        }
+    if page.page_type == "pillar":
+        pillar = (pillars or {}).get(page.path)
+        return {
+            "engine": "run",
+            "content_type": "blog_post",
+            "keyword": (pillar.title if pillar else page.title),
+            "location": None,
+            "notes": compose_pillar_notes(pillar) if pillar else "",
+        }
+
     if page.page_type not in NLP_PAGE_TYPES:
         return {"engine": None, "keyword": None, "location": None}
 
@@ -769,6 +1095,8 @@ def plan_payload(
     *,
     services: dict[str, ServiceEntry],
     cities: dict[str, CityEntry],
+    posts: Optional[dict[str, PostEntry]] = None,
+    pillars: Optional[dict[str, PillarEntry]] = None,
     primary_service: Optional[str] = None,
     primary_city: Optional[str] = None,
 ) -> dict:
@@ -777,10 +1105,17 @@ def plan_payload(
         page,
         services=services,
         cities=cities,
+        posts=posts,
+        pillars=pillars,
         primary_service=primary_service,
         primary_city=primary_city,
     )
-    return {**inputs, "frontmatter": frontmatter_extra(page, services=services, cities=cities)}
+    return {
+        **inputs,
+        "frontmatter": frontmatter_extra(
+            page, services=services, cities=cities, posts=posts, pillars=pillars
+        ),
+    }
 
 
 def matrix_cells(routes: Iterable[str]) -> set[tuple[str, str]]:

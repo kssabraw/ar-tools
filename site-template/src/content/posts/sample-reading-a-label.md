@@ -4,6 +4,7 @@ description: The three lines that actually matter, and the ones you can skip.
 category: Nutrition
 readingTime: 6 min read
 author: Editorial team
+silo: basics
 publishDate: 2026-06-18
 ---
 

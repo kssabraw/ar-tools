@@ -348,3 +348,119 @@ class TestSiloDiscovery:
 
     def test_empty_input_is_safe(self):
         assert wp.cities_from_silo_plan([]) == []
+
+
+# --------------------------------------------------------------------------
+# Content & Authority family (reference §5.3) — informational sites
+# --------------------------------------------------------------------------
+
+
+def _content_plan(post_specs, *, pillar="Roof Care", slug="roof-care"):
+    """post_specs: list of (title, format). Keyword defaults to the title."""
+    return {
+        "pillars": [
+            {
+                "title": pillar,
+                "slug": slug,
+                "posts": [
+                    {"title": t, "format": f, "keyword": t.lower()} for t, f in post_specs
+                ],
+            }
+        ]
+    }
+
+
+class TestInformationalPlan:
+    def test_posts_route_into_the_flat_blog_silo(self):
+        cp = _content_plan([("Roof coatings", "informational_cluster")])
+        plan = wp.build_plan(site_type="informational", catalog=[], cities=[], content_plan=cp)
+        posts = [p for p in plan.pages if p.page_type == "post"]
+        assert [p.path for p in posts] == ["/blog/roof-coatings/"]
+
+    def test_geo_pages_are_never_planned_for_an_informational_site(self):
+        cp = _content_plan([("A", "informational_cluster")])
+        plan = wp.build_plan(site_type="informational", catalog=CATALOG, cities=CITIES, content_plan=cp)
+        assert not any(
+            p.page_type in {"service", "location", "local_landing"} for p in plan.pages
+        )
+
+    def test_pillar_page_is_emitted_at_five_evergreen_posts(self):
+        cp = _content_plan([(f"Post {i}", "informational_cluster") for i in range(5)])
+        plan = wp.build_plan(site_type="informational", catalog=[], cities=[], content_plan=cp)
+        pillars = [p for p in plan.pages if p.page_type == "pillar"]
+        assert [p.path for p in pillars] == ["/roof-care/"]
+
+    def test_pillar_is_not_emitted_below_the_threshold(self):
+        cp = _content_plan([(f"Post {i}", "informational_cluster") for i in range(4)])
+        plan = wp.build_plan(site_type="informational", catalog=[], cities=[], content_plan=cp)
+        assert not any(p.page_type == "pillar" for p in plan.pages)
+
+    def test_news_posts_do_not_count_toward_the_pillar_threshold(self):
+        # Four evergreen + two news = six posts but only four evergreen, so no
+        # pillar (reference §5.3: news is excluded from pillar-cluster math).
+        specs = [(f"Ever {i}", "informational_cluster") for i in range(4)]
+        specs += [("News A", "news"), ("News B", "news")]
+        cp = _content_plan(specs)
+        plan = wp.build_plan(site_type="informational", catalog=[], cities=[], content_plan=cp)
+        assert len([p for p in plan.pages if p.page_type == "post"]) == 6
+        assert not any(p.page_type == "pillar" for p in plan.pages)
+
+    def test_unknown_format_falls_back_to_the_default(self):
+        pillars = wp.content_plan_pillars(_content_plan([("X", "bogus")]))
+        assert pillars[0].posts[0].format == wp.DEFAULT_POST_FORMAT
+
+    def test_duplicate_post_slugs_are_dropped_first_wins(self):
+        cp = {
+            "pillars": [
+                {"title": "P", "slug": "p", "posts": [
+                    {"title": "Same Title", "format": "listicle"},
+                    {"title": "Same Title", "format": "comparison"},
+                ]},
+            ]
+        }
+        pillars = wp.content_plan_pillars(cp)
+        assert len(pillars[0].posts) == 1
+        assert pillars[0].posts[0].format == "listicle"
+
+    def test_post_generation_uses_the_run_engine_with_a_brief(self):
+        cp = _content_plan([("Roof coatings", "listicle")])
+        pillars = wp.content_plan_pillars(cp)
+        posts = {wp._path("blog", p.slug): p for pillar in pillars for p in pillar.posts}
+        page = next(p for p in wp.informational_pages(pillars) if p.page_type == "post")
+        inputs = wp.generation_inputs(page, services={}, cities={}, posts=posts, pillars={})
+        assert inputs["engine"] == "run"
+        assert inputs["content_type"] == "blog_post"
+        assert inputs["keyword"] == "roof coatings"
+        assert "listicle" in inputs["notes"]
+
+    def test_pillar_generation_uses_the_run_engine(self):
+        cp = _content_plan([(f"Post {i}", "informational_cluster") for i in range(5)])
+        pillars = wp.content_plan_pillars(cp)
+        pillars_map = {wp._path(pl.slug): pl for pl in pillars}
+        page = next(p for p in wp.informational_pages(pillars) if p.page_type == "pillar")
+        inputs = wp.generation_inputs(page, services={}, cities={}, posts={}, pillars=pillars_map)
+        assert inputs["engine"] == "run"
+        assert "authoritative parent" in inputs["notes"].lower()
+
+    def test_post_frontmatter_declares_format_and_silo(self):
+        cp = _content_plan([("Roof coatings", "comparison")])
+        pillars = wp.content_plan_pillars(cp)
+        posts = {wp._path("blog", p.slug): p for pillar in pillars for p in pillar.posts}
+        pillars_map = {wp._path(pl.slug): pl for pl in pillars}
+        page = next(p for p in wp.informational_pages(pillars) if p.page_type == "post")
+        fm = wp.frontmatter_extra(page, services={}, cities={}, posts=posts, pillars=pillars_map)
+        assert fm["format"] == "comparison"
+        assert fm["silo"] == "roof-care"
+        assert fm["category"] == "Roof Care"
+
+    def test_pillar_links_count_its_cluster_posts_for_the_link_budget(self):
+        cp = _content_plan([(f"Post {i}", "informational_cluster") for i in range(5)])
+        plan = wp.build_plan(site_type="informational", catalog=[], cities=[], content_plan=cp)
+        assert plan.links_per_index["/roof-care/"] == 5
+
+    def test_a_pillar_slug_colliding_with_a_reserved_root_is_a_planning_error(self):
+        cp = _content_plan(
+            [(f"P{i}", "informational_cluster") for i in range(5)], pillar="Blog", slug="blog"
+        )
+        plan = wp.build_plan(site_type="informational", catalog=[], cities=[], content_plan=cp)
+        assert any(i.kind == "reserved_slug" and i.blocking for i in plan.issues)

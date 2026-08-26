@@ -1,7 +1,7 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import PageHeader from '../theme/components/PageHeader.astro';
-import { routedPages, allPosts, categoriesOf } from '../lib/content';
+import { routedPages, pillarRoutedPages, allPosts, categoriesOf } from '../lib/content';
 import { isLocal } from '../lib/site';
 
 /**
@@ -14,6 +14,7 @@ import { isLocal } from '../lib/site';
  */
 const pages = isLocal ? await routedPages() : [];
 const posts = await allPosts();
+const pillars = await pillarRoutedPages();
 
 const services = pages.filter((p) => p.pageType === 'service');
 const cities = pages.filter((p) => p.pageType === 'location');
@@ -73,6 +74,15 @@ const categories = categoriesOf(posts);
               )}
             </li>
           ))}
+        </ul>
+      </section>
+    )}
+
+    {pillars.length > 0 && (
+      <section>
+        <h2>Guides</h2>
+        <ul>
+          {pillars.map((p) => <li><a href={p.path}>{p.title}</a></li>)}
         </ul>
       </section>
     )}

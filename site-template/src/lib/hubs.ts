@@ -81,6 +81,11 @@ export function globalNav(pages: RoutedPage[], hasPosts: boolean): NavItem[] {
       items.push(...services.slice(0, SERVICES_INDEX_TRIGGER).map((s) => ({ label: s.title, href: s.path })));
     }
     if (hasAreasWeServe(pages)) items.push({ label: 'Areas We Serve', href: '/areas-we-serve/' });
+  } else {
+    // An informational site leads with its pillar/hub guides (reference §5.3:
+    // pillars are linked from nav). Capped like the service bar.
+    const pillars = pages.filter((p) => p.pageType === 'pillar');
+    items.push(...pillars.slice(0, SERVICES_INDEX_TRIGGER).map((p) => ({ label: p.title, href: p.path })));
   }
 
   if (hasPosts) items.push({ label: 'Blog', href: '/blog/' });

@@ -21,6 +21,7 @@ from config import settings
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth, require_staff
 from services import (
+    website_content_plan,
     website_deploy,
     website_generate,
     website_plan_store,
@@ -475,6 +476,79 @@ async def get_plan(website_id: str, auth: dict = Depends(require_auth)) -> dict:
             for i in website_plan_store.conflict_issues(website)
         ],
     }
+
+
+class ContentPlanRequest(BaseModel):
+    """An informational site's cluster inventory (pillars -> posts).
+
+    Site-owned: stored on `config.content_plan`, editable, and durable across a
+    re-research. The shape is what `website_plan.content_plan_pillars` parses.
+    """
+
+    content_plan: dict = Field(default_factory=dict)
+
+
+class ContentPlanSeedRequest(BaseModel):
+    # A seed refuses to clobber an edited plan unless `replace` is set — the
+    # strategist plan is the seed, not a live dependency, so re-seeding is a
+    # deliberate act.
+    replace: bool = False
+
+
+def _rebuild_after_content_plan(website_id: str) -> dict:
+    """Rebuild the plan rows after the content plan changed, and return them."""
+    website = _load_site(website_id)
+    config = website.get("config") or {}
+    result = website_plan_store.build(
+        website, catalog=config.get("catalog") or [], cities=config.get("cities") or []
+    )
+    return {"plan": result, "pages": website_plan_store.stored(website_id)}
+
+
+@router.put("/websites/{website_id}/content-plan")
+async def set_content_plan(
+    website_id: str, body: ContentPlanRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Set an informational site's content plan, then rebuild the plan rows.
+
+    The content plan is the site's own inventory; a geo site has none, so this is
+    refused for a non-informational site rather than storing a plan nothing reads.
+    """
+    _enabled()
+    website = _load_site(website_id)
+    assert_not_frozen(website["client_id"])
+    if (website.get("site_type") or "") != "informational":
+        raise HTTPException(status_code=409, detail="content_plan_only_for_informational_sites")
+
+    config = dict(website.get("config") or {})
+    config["content_plan"] = body.content_plan or {}
+    get_supabase().table("websites").update(
+        {"config": config, "updated_at": "now()"}
+    ).eq("id", website_id).execute()
+
+    return {
+        "summary": website_content_plan.plan_summary(config["content_plan"]),
+        **_rebuild_after_content_plan(website_id),
+    }
+
+
+@router.post("/websites/{website_id}/content-plan/seed")
+async def seed_content_plan(
+    website_id: str, body: ContentPlanSeedRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Seed the content plan from the client's latest topic-strategist plan.
+
+    A one-shot import: after it, the plan is the site's own data. Rebuilds the
+    plan rows so the seeded pages are immediately reviewable.
+    """
+    _enabled()
+    website = _load_site(website_id)
+    assert_not_frozen(website["client_id"])
+    try:
+        seeded = website_content_plan.import_from_strategist(website, replace=body.replace)
+    except website_content_plan.SeedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"seeded": seeded, **_rebuild_after_content_plan(website_id)}
 
 
 @router.post("/websites/{website_id}/plan")

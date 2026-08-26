@@ -55,14 +55,18 @@ def has_brand_context(client: dict) -> bool:
 def generation_plan(page: dict) -> dict:
     """What this page needs to be generated, or why it cannot be.
 
-    Returns `{engine, keyword, location}`; `engine` of None means no writer in
-    the suite covers this page type.
+    Returns `{engine, keyword, location, content_type, notes}`; `engine` of None
+    means no writer in the suite covers this page type. `content_type`/`notes`
+    are carried only by the `run` engine (blog posts and pillar pages) and ignored
+    otherwise.
     """
     plan = page.get("plan") or {}
     return {
         "engine": plan.get("engine"),
         "keyword": plan.get("keyword"),
         "location": plan.get("location"),
+        "content_type": plan.get("content_type"),
+        "notes": plan.get("notes"),
     }
 
 
@@ -144,6 +148,11 @@ async def generate_page(*, page_id: str, user_id: str) -> dict:
 
     if engine == "core_pages":
         return await _generate_core_page(page=page, website=website, supabase=supabase)
+
+    if engine == "run":
+        return await _generate_run_page(
+            page=page, website=website, supabase=supabase, inputs=inputs, user_id=user_id
+        )
 
     if engine != "nlp":
         # A page type whose engine name we recognise but haven't built. None is
@@ -306,6 +315,96 @@ async def _generate_core_page(*, page: dict, website: dict, supabase) -> dict:
         extra={"page_id": page_id, "page_kind": page_type},
     )
     return {"page_id": page_id, "generated": True, "page_kind": page_type}
+
+
+def _blog_run_title(supabase, run_id: str) -> str:
+    """The SEO title the Brief Generator produced for a run, if any."""
+    rows = (
+        supabase.table("module_outputs")
+        .select("output_payload, attempt_number")
+        .eq("run_id", run_id)
+        .eq("module", "brief")
+        .eq("status", "complete")
+        .order("attempt_number", desc=True)
+        .limit(1)
+        .execute()
+    ).data or []
+    if not rows:
+        return ""
+    return ((rows[0].get("output_payload") or {}).get("title") or "").strip()
+
+
+async def _generate_run_page(
+    *, page: dict, website: dict, supabase, inputs: dict, user_id: str
+) -> dict:
+    """A blog post or pillar page: a suite blog Writer run, linked back.
+
+    Reuses the whole suite blog pipeline (brief -> sie -> research -> writer ->
+    sources_cited) rather than a new writer — the publish side already assembles
+    the body from the run's `module_outputs` markdown (`content_source="run"`).
+    The post's editorial angle rides on the run's `writer_notes`, since the blog
+    brief is keyword-driven and globally cached and cannot carry it.
+    """
+    page_id = page["id"]
+    keyword = (inputs.get("keyword") or "").strip()
+    if not keyword:
+        raise GenerateError("plan_row_has_no_keyword")
+
+    client = (
+        supabase.table("clients").select("*").eq("id", website["client_id"]).limit(1).execute()
+    ).data
+    if not client:
+        raise GenerateError("client_not_found")
+    # The same bar every generator holds: the suite has shipped one article with
+    # zero brand context, and an auto-published post written that way is public
+    # before anyone reads it.
+    if not has_brand_context(client[0]):
+        raise GenerateError("content_no_brand_context")
+
+    from services.orchestrator import orchestrate_run
+    from services.run_dispatch import create_run_and_snapshot
+
+    # Idempotent per page: a reaper requeue adopts the in-flight/complete run
+    # (create_run_and_snapshot's source_ref) instead of paying for a second one,
+    # and orchestrate_run resumes from completed stages.
+    run_id = create_run_and_snapshot(
+        client=client[0],
+        keyword=keyword,
+        content_type=(inputs.get("content_type") or "blog_post"),
+        writer_notes=(inputs.get("notes") or None),
+        created_by=user_id or None,
+        source_ref=f"website_page:{page_id}",
+    )
+    await orchestrate_run(run_id)
+
+    update = {
+        "content_source": "run",
+        "source_id": run_id,
+        "title": _blog_run_title(supabase, run_id) or page.get("title") or keyword,
+        "status": "draft",
+        "error": None,
+        # A fresh run invalidates any prior commit, so the next publish must not
+        # short-circuit on an unchanged hash.
+        "content_hash": None,
+        "updated_at": "now()",
+    }
+    # Posts and pillars are hero-eligible; the image rides in the page's own
+    # frontmatter (build_files merges it). generate_hero returns None for a page
+    # type it does not support, so this is safe for both.
+    hero = await _hero_for(page, client[0], website)
+    if hero:
+        update["content"] = {
+            **(page.get("content") or {}),
+            "frontmatter": {**((page.get("content") or {}).get("frontmatter") or {}), **hero},
+        }
+
+    supabase.table("website_pages").update(update).eq("id", page_id).execute()
+
+    logger.info(
+        "website_generate.run_page_written",
+        extra={"page_id": page_id, "run_id": run_id, "page_type": page.get("page_type")},
+    )
+    return {"page_id": page_id, "generated": True, "run_id": run_id}
 
 
 async def run_generate_job(job: dict) -> None:

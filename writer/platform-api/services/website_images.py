@@ -39,8 +39,13 @@ _BUCKET = "wordpress_images"
 # one obvious list rather than a condition scattered across the writer.
 HERO_PAGE_TYPES = frozenset(
     {"home", "service", "sub_service", "brand_service", "location",
-     "neighborhood", "local_landing", "hyper_local", "post"}
+     "neighborhood", "local_landing", "hyper_local", "post", "pillar"}
 )
+
+# Informational page types are NEVER geo-targeted (SOP / reference §5.3), so
+# their hero prompt and alt text carry no city — a pillar or blog post about a
+# topic must not be pinned to one place.
+_NEVER_GEO_PAGE_TYPES = frozenset({"post", "pillar"})
 
 
 def wants_hero(page_type: str) -> bool:
@@ -106,18 +111,19 @@ def build_prompt(page: dict, *, business: str, city: str, style: str) -> str:
 
     if page_type == "home":
         scene = f"the work and setting of {business or subject}"
-    elif page_type == "post":
+    elif page_type in _NEVER_GEO_PAGE_TYPES:
         scene = f"an editorial scene illustrating: {subject}"
     else:
         scene = f"a real-world scene of {subject}"
-    where = f" in {city}" if city and page_type != "post" else ""
+    where = f" in {city}" if city and page_type not in _NEVER_GEO_PAGE_TYPES else ""
 
     return f"{scene}{where}. {style}"
 
 
 def alt_text(page: dict, *, city: str) -> str:
     subject = (page.get("title") or "").strip() or "the business"
-    where = f" in {city}" if city and (page.get("page_type") or "") != "post" else ""
+    page_type = page.get("page_type") or ""
+    where = f" in {city}" if city and page_type not in _NEVER_GEO_PAGE_TYPES else ""
     return f"{subject}{where}"[:160]
 
 
