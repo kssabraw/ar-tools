@@ -2010,3 +2010,23 @@ missing *async*. `submit_maps_search`'s `enrichment=""` base-tier invariant is u
 **Deliberately deferred:** whether async `domains_service` alone surfaces the Apollo/ZoomInfo *people*
 (vs. site-scraped emails only) is confirmed on the next LIVE async re-enrich, and the exact
 people-enricher slug (if a distinct one is needed) is added then — not guessed now.
+
+---
+
+## 2026-08-26 · The enrichment slug is `leads_n_contacts`, not `domains_service` (I-109 fully resolved)
+
+The async fix (prior entry) was necessary but not sufficient — even async, `domains_service` returned
+no contacts. The owner's Outscraper dashboard export for the CSV that DID contain decision-maker people
+named the real enricher: **`enrichments: ["leads_n_contacts"]`** (Outscraper's "Leads & Contacts").
+`domains_service` is a bare website scraper and was simply the wrong enricher all along.
+
+**Decision:** default the enricher set to `["leads_n_contacts"]` in both configs (outreach api
+`enrich_enrichments`, platform-api `outreach_enrich_enrichments`). Validated live: five LA plumbers that
+returned email-null / business-name-only under `domains_service` returned real emails + domain + company
+socials under `leads_n_contacts` (async), with the full contact column set in the raw. Person names
+populate for businesses with an Apollo/ZoomInfo/LinkedIn record; small owner-operated businesses fall
+back to scraped site emails (genuinely empty person fields, not a parser miss).
+
+The public `/maps/search-v3` endpoint accepts `leads_n_contacts` on our async single-place_id call — no
+need for the dashboard's `/tasks` endpoint or its category+location search shape. Cost per record is
+unconfirmed (export carried `est:10`, likely pricier than a base pull) — tracked under I-111.
