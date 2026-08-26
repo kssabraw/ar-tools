@@ -391,6 +391,18 @@ async def create_client_from_market(
             "client_id": client_id, "error": str(exc)})
         proximity = None
 
+    # Demand-aware placement read for the calibration freeze (plan §8): the
+    # ranked zone set the post-client geo-grid later grades. Opportunistic —
+    # available only when the market has live competitor pins + a cached Census
+    # demand surface; None otherwise, never blocks the handoff.
+    from services.census_demand import market_placement
+    try:
+        placement = await market_placement(body.city_id, body.category_id)
+    except Exception as exc:
+        logger.warning("leadoff_placement_lookup_failed", extra={
+            "client_id": client_id, "error": str(exc)})
+        placement = None
+
     goal_created = False
     try:
         campaign_goals.create_goal(
@@ -408,7 +420,7 @@ async def create_client_from_market(
     from services import leadoff_calibration
     prediction_id = leadoff_calibration.capture_prediction(
         client_id, brief, DEFAULT_CAPTURE, DEFAULT_TIER, auth.get("user_id"),
-        proximity=proximity)
+        proximity=proximity, placement=placement)
 
     logger.info("leadoff_client_created", extra={
         "client_id": client_id, "city_id": body.city_id,

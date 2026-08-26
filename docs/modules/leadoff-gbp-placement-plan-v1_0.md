@@ -310,7 +310,21 @@ Groups" (id 10)**, so every query hit the tribal layer (empty for normal county
 GEOIDs). Fixed by matching **"Census Block Groups"** specifically (excluding
 `tribal` + label layers), extracted as the pure, unit-tested `pick_bg_layer`.
 
-- **Not yet built:** Phase 3 paid ZIP layer; the calibration freeze (§8).
+**Calibration freeze — BUILT (§8).** The create-client handoff now freezes the
+market's placement zone set into `leadoff_predictions.placement` (jsonb, migration
+`20260826120000`, applied live) alongside the existing `proximity` freeze, so the
+post-client geo-grid can later grade whether the advisor's high-score zones
+matched better pack outcomes — the loop that eventually earns the dollar layer.
+`leadoff_calibration.placement_prediction` (pure, unit-tested) compacts the zones
+(rank/score/lat-lng/locality/households/pressure) + demand-surface size;
+`capture_prediction` gained a `placement` param; `routers/leadoff.create_client_from_market`
+computes `census_demand.market_placement` and passes it (best-effort — None when
+the market has no live pins / uncached demand / thin field, never blocks the
+handoff); the calibration report surfaces the frozen `placement` per engagement.
+Read-only instrumentation — nothing feeds back into scoring (Phase 1 tuning stays
+gated on N≥15, ≥6-month tenure). Dollars stay off until this loop shows signal.
+
+- **Not yet built:** Phase 3 paid ZIP layer; the dollar layer (post-calibration).
 
 ## 10. Config (planned knobs, `config.py`)
 
