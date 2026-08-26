@@ -981,6 +981,9 @@ async def _process_job(job: dict) -> None:
         await run_illustrate_job(job)
     elif job_type == "blog_github_publish":
         await run_blog_media_publish_job(job)
+    elif job_type == "voice_revalidate":
+        from services import voice_revalidate
+        await voice_revalidate.run_revalidate_job(job)
     else:
         logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
         # Settle as failed, not complete: an unroutable job type is a real
