@@ -1707,6 +1707,51 @@ def campaign_start(supabase, client_id: str) -> Optional[date]:
         return None
 
 
+def _build_maps_report(client_id: str, period_start: date, period_end: date) -> tuple[str, str]:
+    """(html, title) for the 'maps' report type — a standalone, client-facing
+    Local Rank (Google Maps geo-grid) report. Reuses the combined report's
+    geo-grid gatherer + section builder, so this deliverable and the combined
+    PDF's Maps section stay identical. Deterministic (no LLM / no paid call) — a
+    scheduled fan-out of narrative calls is exactly what the maps module moved
+    off (CLAUDE.md); the per-keyword narrative Local Rank Analysis Docs stay a
+    separate on-scan-completion deliverable."""
+    supabase = get_supabase()
+    rows = (
+        supabase.table("clients").select("name, logo_url")
+        .eq("id", client_id).limit(1).execute()
+    ).data
+    client = rows[0] if rows else {}
+    name = client.get("name") or "Client"
+    g = _gather_geogrid(supabase, client_id, period_start, period_end)
+    if g and g.get("keywords"):
+        body = _section_geogrid({"geogrid": g})
+    else:
+        body = (
+            "<section><p class='lead'>No local-pack (Google Maps) scan has "
+            "completed for this period yet — your next scheduled scan will "
+            "populate this report.</p></section>"
+        )
+    logo = client.get("logo_url")
+    logo_html = f'<img class="logo" src="{_esc(logo)}"/>' if logo else ""
+    agency = settings.client_report_agency_name or "Amazing Rankings"
+    title = f"{name} — Local Rank Report ({period_end.isoformat()})"
+    html = (
+        '<!doctype html><html><head><meta charset="utf-8"/>'
+        f"<title>{_esc(title)}</title>"
+        f"<style>{_CSS}</style></head><body>"
+        '<header class="cover">'
+        f"{logo_html}"
+        f"<h1>{_esc(name)}</h1>"
+        '<div class="subtitle">Local Rank Report</div>'
+        f'<div class="period">{_esc(period_start.isoformat())} – {_esc(period_end.isoformat())}</div>'
+        "</header>"
+        f"<main>{body}</main>"
+        f"<footer>Prepared by {_esc(agency)} · {_esc(period_end.isoformat())}</footer>"
+        "</body></html>"
+    )
+    return html, title
+
+
 def _build_ai_visibility_report(client_id: str, period_start: date, period_end: date) -> tuple[str, str]:
     """(html, title) for the ai_visibility report type — the LABS-style
     white-label report folded in as a Client Reporting type (Phase 5, locked
@@ -1745,6 +1790,9 @@ def generate_client_report(
     if report_type == "ai_visibility":
         html, title = _build_ai_visibility_report(client_id, period_start, period_end)
         section_status: dict = {"ai_visibility": "ok"}
+    elif report_type == "maps":
+        html, title = _build_maps_report(client_id, period_start, period_end)
+        section_status = {"maps": "ok"}
     else:
         data = gather_report_data(client_id, period_start, period_end)
 
