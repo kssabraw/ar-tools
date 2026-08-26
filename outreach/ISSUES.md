@@ -2385,6 +2385,33 @@ the placeholder still drives the list even after a `score` run populates the fit
 
 ## Lead enrichment (2026-08-10)
 
+### I-109 UPDATE (2026-08-26) · ROOT CAUSE FOUND — enrichment was called SYNCHRONOUSLY, which returns the base listing with NO enrichers run; fixed to async submit+poll
+The "Enrich just restates the business name" complaint traced to a fundamental integration bug, not a
+wrong enricher set or a parser alias. `enrich_client._enrich_one` called `/maps/search-v3` with
+`async=false`, and **Outscraper runs enrichments asynchronously** — a synchronous call returns the base
+Maps record BEFORE the enrichers finish, so the response carries no `emails`, no scraped contacts, no
+person fields at all, only `name_for_emails` (the business name). The parser then correctly fell back to
+that business name. Every LA-plumber "contact" was this fallback over an un-enriched record, and a live
+inspection confirmed the stored `raw` for those rows is a pure Maps record (no `emails`/`website_title`).
+
+Confirmed by two `probe-enrich` runs (2026-08-26, owner-authorized, ~one billed record each, cron reverted
+after each): (1) `company_insights_service` → firmographics only (employees/founded_year), no people;
+(2) **our production set `domains_service,emails_validator_service,phones_enricher_service` against
+Enhanced Hearing Center** — a business KNOWN to have LinkedIn/Apollo contact data (owner "Rex McGee" in a
+real Outscraper dashboard export) — STILL returned a bare Maps record with `with_email:0` and
+`full_name`=the business name. So sync mode yields nothing whatever the enricher set or the business.
+
+**Fixed:** `_enrich_one` now submits `async=true` and polls the archive with `fetch_result` to completion
+(the same submit/poll pair the mass ingest uses — the only path that returns the enrichers' output). New
+`enrich_poll_timeout_seconds` (300s) is a per-place ceiling so one stuck-Pending place fails on its own
+instead of hanging the tick for the mass-ingest 1h timeout. `fetch_result` gained an optional
+`poll_timeout`. `submit_maps_search`'s `enrichment=""` base-tier invariant is untouched. Unit-tested in
+`tests/test_enrich_client.py` (submit carries `async=true`, polls past Pending, tags by place_id,
+per-place isolation). **Validate on a live re-enrich** before trusting output — the async path is the
+proven fix for "returns nothing", but whether `domains_service` alone surfaces the Apollo/ZoomInfo *people*
+(vs. site-scraped emails only) is the remaining field-shape question below; add the people-enricher slug
+once a live async run shows what comes back.
+
 ### I-109 UPDATE (2026-08-10) · The enricher SET was wrong — corrected against a real response; domains_service field shape still to confirm
 The first live enrichment ran (order drained in 5s, 1 contact) and produced the evidence the probe was
 meant to: the response carried `name_for_emails` + the base listing `phone` + `website`, but **ZERO
