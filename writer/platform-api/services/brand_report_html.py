@@ -172,12 +172,38 @@ def _mom_delta(now: Optional[float], prev: Optional[float], suffix: str = "%") -
             f'{"▲" if up else "▼"} {abs(change):g}{suffix} vs previous period</span>')
 
 
+def _horizon_visibility_row(vis_horizons: Optional[dict]) -> str:
+    """A '30 days · 90 days · since start' row of overall-visibility change chips.
+    Empty when no horizon is available. Pure."""
+    if not vis_horizons:
+        return ""
+    labels = (("30d", "30 days"), ("90d", "90 days"), ("since_start", "since start"))
+    chips = []
+    for key, label in labels:
+        h = vis_horizons.get(key)
+        if not h:
+            continue
+        c = h.get("change")
+        if c is None or c == 0:
+            chips.append(f'<span style="font-size:11px;color:#94a3b8">{label}: ▬</span>')
+        else:
+            up = c > 0
+            color = "#16a34a" if up else "#dc2626"
+            chips.append(f'<span style="font-size:11px;font-weight:700;color:{color}">'
+                         f'{label}: {"▲" if up else "▼"} {abs(c):g}%</span>')
+    if not chips:
+        return ""
+    return " &nbsp;·&nbsp; ".join(chips)
+
+
 def render_html(*, client: dict, agency_name: str, date_range_label: str,
                 tracked_keywords: list[dict], data: dict,
-                generated_on: str, prev: Optional[dict] = None) -> str:
+                generated_on: str, prev: Optional[dict] = None,
+                vis_horizons: Optional[dict] = None) -> str:
     """The full standalone report document. Pure string building, all inline
     CSS (it must survive being saved/emailed/printed on its own). `prev` is the
-    previous-period aggregate (same shape as `data`) for month-over-month deltas."""
+    previous-period aggregate (same shape as `data`) for the per-keyword deltas;
+    `vis_horizons` carries the 30d/90d/since-start overall-visibility changes."""
     totals = data["totals"]
     prev_totals = (prev or {}).get("totals") or {}
     prev_kw_pct = {k["keyword"]: k.get("pct") for k in (prev or {}).get("keywords") or []}
@@ -243,11 +269,16 @@ def render_html(*, client: dict, agency_name: str, date_range_label: str,
   </div>
 </div>''')
 
-    # Overall month-over-month visibility change (vs the previous same-length period).
-    overall_mom = _mom_delta(totals.get("visibility_pct"), prev_totals.get("visibility_pct"))
-    if overall_mom:
+    # Overall visibility trend — the fixed 30d/90d/since-start horizons when
+    # available (a single window is too volatile), else the vs-previous-period delta.
+    trend_row = _horizon_visibility_row(vis_horizons)
+    if not trend_row:
+        trend_row = _mom_delta(totals.get("visibility_pct"), prev_totals.get("visibility_pct"))
+    if trend_row:
+        lead = ('<span style="font-size:11px;color:#64748b;font-weight:600">Visibility trend:</span> '
+                if vis_horizons else "")
         parts.append(f'<div style="margin:0 0 18px;padding:8px 14px;background:{_BOX};'
-                     f'border-left:3px solid {_BRAND};border-radius:6px">{overall_mom}</div>')
+                     f'border-left:3px solid {_BRAND};border-radius:6px">{lead}{trend_row}</div>')
 
     if data.get("truncated"):
         parts.append(f'<div style="font-size:12px;color:{_MUTED};margin-bottom:18px">'
@@ -407,6 +438,43 @@ async def generate_html_report(client_id: str, start_date: str | None, end_date:
     except Exception:  # noqa: BLE001 — the comparison is optional
         prev_data = None
 
+    # Overall-visibility over fixed 30d / 90d / since-start horizons, anchored at
+    # the report's end date — a single window is too volatile to show real trend.
+    def _window_vis(s: date, e: date) -> Optional[float]:
+        try:
+            w_rows, _ = _fetch_mention_rows(supabase, client_id, s, e)
+        except Exception:  # noqa: BLE001
+            return None
+        return aggregate_range(w_rows, keyword_labels)["totals"]["visibility_pct"] if w_rows else None
+
+    def _horizon(days: int) -> Optional[dict]:
+        cur = _window_vis(end - timedelta(days=days), end)
+        prv = _window_vis(end - timedelta(days=2 * days), end - timedelta(days=days))
+        if cur is None or prv is None:
+            return None
+        return {"now": cur, "prev": prv, "change": round(cur - prv, 1)}
+
+    vis_horizons: dict = {}
+    for days, key in ((30, "30d"), (90, "90d")):
+        if (h := _horizon(days)):
+            vis_horizons[key] = h
+    # Since start: the recent 30-day window vs the campaign's earliest 30 days.
+    first_row = _safe(lambda: (
+        supabase.table("brand_mention_history").select("created_at")
+        .eq("client_id", client_id).eq("is_competitor_scan", False).eq("status", "completed")
+        .order("created_at").limit(1).execute()
+    ).data)
+    if first_row:
+        try:
+            first_dt = date.fromisoformat(str(first_row[0]["created_at"])[:10])
+        except (ValueError, KeyError, TypeError):
+            first_dt = None
+        if first_dt and first_dt + timedelta(days=30) <= end - timedelta(days=30):
+            cur = _window_vis(end - timedelta(days=30), end)
+            prv = _window_vis(first_dt - timedelta(days=1), first_dt + timedelta(days=30))
+            if cur is not None and prv is not None:
+                vis_horizons["since_start"] = {"now": cur, "prev": prv, "change": round(cur - prv, 1)}
+
     range_label = f"{start.strftime('%b %d, %Y')} – {end.strftime('%b %d, %Y')}"
 
     html = render_html(
@@ -416,6 +484,7 @@ async def generate_html_report(client_id: str, start_date: str | None, end_date:
         tracked_keywords=keywords,
         data=data,
         prev=prev_data,
+        vis_horizons=vis_horizons or None,
         generated_on=datetime.now(timezone.utc).strftime("%b %d, %Y"),
     )
     return {"html": html}

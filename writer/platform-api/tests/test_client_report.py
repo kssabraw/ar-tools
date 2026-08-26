@@ -215,29 +215,44 @@ def test_build_comparisons_suppresses_previous_without_coverage():
     assert "Search visibility" not in kpi  # no hero off a non-comparable metric
 
 
-def test_section_performance_renders_this_vs_previous():
+def test_section_performance_renders_multi_horizon():
     rows, ps, pe = _series_rows()
-    data = _data(organic={"comparisons": cr.build_comparisons(rows, ps, pe)})
+    data = _data(organic={"comparisons_multi": cr.build_multi_comparisons(rows, pe)})
     out = cr.build_report_html(data)
     assert "Performance highlights" in out
-    assert "This period" in out and "Previous period" in out and "Change" in out
+    # three fixed horizons instead of a single volatile window
+    assert "Now (last 30 days)" in out and "vs prev 30 days" in out
+    assert "vs prev 90 days" in out and "Since we started" in out
     assert "Impressions" in out and "Average ranking" in out
     assert "▲" in out  # positive change arrow
 
 
 def test_section_performance_omits_zero_volume_metric():
-    """A volume metric whose current period is 0 (a GSC gap) is dropped rather than
+    """A volume metric whose recent window is 0 (a GSC gap) is dropped rather than
     shown as a scary '0 ▼ -100%'; the ranking row still renders."""
-    comp = {
-        "impressions": {"current": 0, "previous": 100, "change": -100.0},
-        "clicks": {"current": 0, "previous": 5, "change": None},
-        "rank": {"current": 7.0, "previous": 8.0, "change_positions": 1.0},
+    multi = {
+        "impressions": {"30d": {"current": 0, "previous": 100, "change": -100.0}},
+        "clicks": {"30d": {"current": 0, "previous": 5, "change": None}},
+        "rank": {"30d": {"current": 7.0, "previous": 8.0, "change_positions": 1.0}},
     }
-    out = cr._section_performance(_data(organic={"comparisons": comp}))
+    out = cr._section_performance(_data(organic={"comparisons_multi": multi}))
     assert "Performance highlights" in out
     assert "Average ranking" in out
     assert "Impressions" not in out and "Organic clicks" not in out
     assert "-100" not in out and "100%" not in out
+
+
+def test_build_multi_comparisons_horizons():
+    rows, _ps, pe = _series_rows()  # 120 days of climbing impressions + improving rank
+    multi = cr.build_multi_comparisons(rows, pe)
+    assert multi is not None
+    impr = multi["impressions"]
+    # 30d has a comparable previous window; 90d's previous window predates the data
+    assert impr["30d"]["change"] is not None and impr["30d"]["change"] > 0
+    assert impr.get("90d", {}).get("change") is None  # not enough history → no delta
+    assert "since_start" in impr and impr["since_start"]["change"] > 0
+    # rank improved (positions gained is positive)
+    assert multi["rank"]["30d"]["change_positions"] > 0
 
 
 def test_period_over_period_extras_render():
@@ -651,6 +666,38 @@ def test_section_geogrid_shows_mom_callout_and_per_keyword():
     assert "Top-3 map presence" in out and "25%" in out
     assert "7 pts vs last month" in out        # per-keyword presence delta
     assert "2 places vs last month" in out     # per-keyword rank delta
+
+
+def test_section_geogrid_multi_horizon_callout():
+    g = {
+        "presence_now": 25.0, "presence_prev": 18.0, "weak_areas": [],
+        "presence_horizons": {
+            "30d": {"now": 25.0, "prev": 18.0, "change": 7.0},
+            "90d": {"now": 25.0, "prev": 12.0, "change": 13.0},
+            "since_start": {"now": 25.0, "prev": 5.0, "change": 20.0},
+        },
+        "keywords": [{"keyword": "roofer", "average_rank": 8.0, "top3_pins": 20,
+                      "total_pins": 80, "rank_grid": None, "map_image": None}],
+    }
+    out = cr._section_geogrid({"geogrid": g})
+    assert "Top-3 map presence" in out
+    assert "30 days: ▲ 7 pts" in out and "90 days: ▲ 13 pts" in out and "since start: ▲ 20 pts" in out
+
+
+def test_section_ai_visibility_multi_horizon_callout():
+    a = {
+        "engines": {"chatgpt": "3 of 4 answers"},
+        "visibility_now": 60.0, "visibility_prev": 50.0,
+        "visibility_horizons": {
+            "30d": {"now": 60.0, "prev": 50.0, "change": 10.0},
+            "90d": {"now": 60.0, "prev": 40.0, "change": 20.0},
+        },
+        "keywords": [{"keyword": "q", "engines": {"chatgpt": True}, "found_count": 1,
+                      "total": 1, "change": None}],
+    }
+    out = cr._section_ai_visibility({"ai_visibility": a})
+    assert "Recommended in" in out and "60%" in out
+    assert "30 days: ▲ 10%" in out and "90 days: ▲ 20%" in out
 
 
 def test_ai_matrix_mom_column_conditional():
