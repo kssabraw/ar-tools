@@ -71,9 +71,16 @@ _ROLE_CANON: tuple[tuple[str, str], ...] = (
 # The subset a role may anchor a name WITHOUT punctuation between them ("Owner John Smith"). Kept
 # strong because a bare "manager john" / "partner john" is far likelier to be prose than a byline;
 # the weaker roles need a comma/colon/"our"/"is our" to fire.
+#
+# President / CEO / Principal are DELIBERATELY EXCLUDED from the loose form: "President Joe Biden" /
+# "CEO Tim Cook" / "Principal Jane Doe" name people of OTHER entities all over ordinary prose
+# (testimonials, chamber-of-commerce mentions, industry figures, schools), so the punctuation-free
+# "<role> <Name>" byline is a false-positive magnet for them. They still fire on every PUNCTUATED
+# form ("Jane Doe, President", "President: Jane Doe", "our President Jane Doe"), which is how a real
+# business page actually credits them — only the bare loose form is withheld. Owner / Founder /
+# Proprietor read as the business's own byline in the loose form far more reliably.
 _STRONG_ROLES = frozenset(
-    {"Owner", "Owner/Operator", "Co-Owner", "Founder", "Co-Founder", "President",
-     "President & CEO", "CEO", "Proprietor", "Principal"}
+    {"Owner", "Owner/Operator", "Co-Owner", "Founder", "Co-Founder", "Proprietor"}
 )
 
 _ROLE_ALT = "|".join(f"(?:{pat})" for pat, _ in _ROLE_CANON)

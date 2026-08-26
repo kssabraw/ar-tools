@@ -91,6 +91,20 @@ def test_a_weak_role_needs_punctuation_not_a_loose_prose_hit():
     assert _names("<p>Our project manager Bob discussed the timeline.</p>") == []
 
 
+def test_president_and_ceo_do_not_fire_the_loose_form():
+    # These name people of OTHER entities all over ordinary prose — the bare "<role> <Name>" byline
+    # is withheld for them (they still fire on punctuated forms, tested below).
+    assert _names("<p>As President Joe Biden noted, small businesses matter.</p>") == []
+    assert _names("<p>CEO Tim Cook praised the design.</p>") == []
+    assert _names("<p>Principal Jane Doe spoke at the school.</p>") == []
+
+
+def test_president_still_fires_on_a_punctuated_byline():
+    # The real way a business page credits them — kept.
+    assert _names("<p>Jane Doe, President</p>") == ["Jane Doe"]
+    assert _names("<div>President: Robert King</div>") == ["Robert King"]
+
+
 def test_the_business_is_not_extracted_as_a_person():
     html = "<p>Acme Plumbing, proudly owner operated since 1995.</p>"
     assert _names(html, business_name="Acme Plumbing") == []
