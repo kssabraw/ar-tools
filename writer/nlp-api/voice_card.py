@@ -589,7 +589,14 @@ VOICE_DIMENSIONS: dict[str, dict] = {
 # A dimension the guide says nothing about must not drag the score down — a
 # guide that never mentions sentence rhythm is not a page failing at it. The
 # scorer marks those `applicable: false` and the remaining weights renormalize.
-VOICE_PASS_THRESHOLD = 80.0
+#
+# Raised 80 -> 87 (owner ruling 2026-08-26): an aspirational "distinctly this
+# client" bar the corrective-rewrite loop strives toward, not a "most pages
+# pass" line. The hardened-rubric re-score of existing pages topped out at 82,
+# so nearly every page reads below this and runs its full correction budget —
+# deliberate. Revisit if new generations consistently cap below it (the pass
+# state would never show).
+VOICE_PASS_THRESHOLD = 87.0
 
 # Deterministic findings outrank the judge on the things a regex can settle.
 # Without this a scorer can call vocabulary "strong" on a page that provably

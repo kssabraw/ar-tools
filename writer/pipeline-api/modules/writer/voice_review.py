@@ -55,7 +55,11 @@ _SCORE_TAIL_CHARS = 5000
 # would be a re-generation wearing a revision's clothes.
 _MAX_REVISED_SECTIONS = 6
 
-MAX_VOICE_REVISION_PASSES = 1
+# Match the nlp page path (MAX_VOICE_CORRECTION_PASSES): up to three revision
+# passes toward the voice bar, keeping the best-scoring one — a section revision
+# can score lower than the version before it, so keep-latest would ship the
+# regression.
+MAX_VOICE_REVISION_PASSES = 3
 
 
 def card_to_dict(card: Optional[BrandVoiceCard]) -> dict:
@@ -310,6 +314,17 @@ def apply_revisions(article: list, revisions: Any) -> int:
     return applied
 
 
+def _rank_key(scorecard: Optional[dict]) -> tuple:
+    """Keep-best ranking: fewest critical violations first, then highest voice
+    score. A higher tuple = a better article to ship. `None`/unscored ranks below
+    any real score. Mirrors nlp-api `main._voice_rank_key`."""
+    sc = scorecard or {}
+    crit = sc.get("critical_count") or 0
+    score = sc.get("score")
+    score = score if isinstance(score, (int, float)) and not isinstance(score, bool) else float("-inf")
+    return (-crit, score)
+
+
 async def review_article_voice(
     title: str,
     article: list[ArticleSection],
@@ -338,6 +353,21 @@ async def review_article_voice(
     dimensions = await score_article_voice(text, card, judge_fn)
     scorecard = vcard.voice_scorecard(dimensions, violations)
 
+    # Keep-best: a section-level revision can score LOWER than the version before
+    # it, so track the strongest article state (section bodies + its scorecard)
+    # and restore it at the end rather than shipping whatever the last pass left.
+    def _snapshot() -> list[str]:
+        return [getattr(s, "body", "") or "" for s in article]
+
+    def _restore(bodies: list[str]) -> None:
+        for section, body in zip(article, bodies):
+            section.body = body
+            if hasattr(section, "word_count"):
+                section.word_count = len(body.split())
+
+    best_bodies = _snapshot()
+    best_scorecard = scorecard
+
     for _pass in range(max(0, max_passes)):
         if not scorecard.get("needs_rewrite"):
             break
@@ -365,6 +395,13 @@ async def review_article_voice(
         text, violations = _measure()
         dimensions = await score_article_voice(text, card, judge_fn)
         scorecard = vcard.voice_scorecard(dimensions, violations)
+        if _rank_key(scorecard) > _rank_key(best_scorecard):
+            best_bodies = _snapshot()
+            best_scorecard = scorecard
+
+    # Ship the best pass, not merely the last.
+    _restore(best_bodies)
+    scorecard = best_scorecard
 
     if scorecard.get("needs_rewrite"):
         logger.warning(

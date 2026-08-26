@@ -354,9 +354,11 @@ def test_compute_voice_score_clamps_and_ignores_junk():
 
 
 def test_voice_band_thresholds():
+    # Bands reference VOICE_PASS_THRESHOLD (the "mostly on voice" floor) rather
+    # than a hardcoded literal, so raising the bar doesn't silently break this.
     assert vc.voice_band(95) == "on_voice"
-    assert vc.voice_band(80) == "mostly_on_voice"
-    assert vc.voice_band(79.9) == "drifting"
+    assert vc.voice_band(vc.VOICE_PASS_THRESHOLD) == "mostly_on_voice"
+    assert vc.voice_band(vc.VOICE_PASS_THRESHOLD - 0.1) == "drifting"
     assert vc.voice_band(59) == "off_voice"
     assert vc.voice_band(None) == "not_scored"
 
