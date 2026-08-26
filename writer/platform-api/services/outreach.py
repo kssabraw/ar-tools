@@ -3197,9 +3197,19 @@ def list_prospect_contacts(prospect_id: str) -> dict[str, Any]:
         .data
         or []
     )
+    name_scrape_rows = (
+        client.table("prospect_name_scrape")
+        .select("status, name_count, fetch_status, error, scraped_at")
+        .eq("prospect_id", prospect_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
     return {
         "prospect_id": prospect_id,
         "enrichment": status_rows[0] if status_rows else None,
+        "name_scrape": name_scrape_rows[0] if name_scrape_rows else None,
         "website": prospect_rows[0].get("website") if prospect_rows else None,
         "contacts": contacts,
     }
@@ -3224,6 +3234,7 @@ def list_prospect_contacts_batch(prospect_ids: list[str]) -> dict[str, Any]:
     client = get_outreach_client()
     contacts_by: dict[str, list[dict[str, Any]]] = {}
     enrichment_by: dict[str, dict[str, Any]] = {}
+    name_scrape_by: dict[str, dict[str, Any]] = {}
     website_by: dict[str, str | None] = {}
     for start in range(0, len(ids), 200):
         chunk = ids[start : start + 200]
@@ -3247,19 +3258,197 @@ def list_prospect_contacts_batch(prospect_ids: list[str]) -> dict[str, Any]:
         ):
             enrichment_by[row["prospect_id"]] = row
         for row in (
+            client.table("prospect_name_scrape")
+            .select("prospect_id, status, name_count, fetch_status, error, scraped_at")
+            .in_("prospect_id", chunk)
+            .execute()
+            .data
+            or []
+        ):
+            name_scrape_by[row["prospect_id"]] = row
+        for row in (
             client.table("prospect").select("id, website").in_("id", chunk).execute().data or []
         ):
             website_by[row["id"]] = row.get("website")
     by_prospect: dict[str, Any] = {}
-    # Key on every EXISTING prospect (website_by), plus any with contacts/enrichment, so a website
-    # shows for every row even before it is enriched.
-    for pid in set(website_by) | set(contacts_by) | set(enrichment_by):
+    # Key on every EXISTING prospect (website_by), plus any with contacts/enrichment/name_scrape, so a
+    # website shows for every row even before it is enriched.
+    for pid in set(website_by) | set(contacts_by) | set(enrichment_by) | set(name_scrape_by):
         # Sort each prospect's contacts by contact_index (the .order above is a global sort; grouping
         # preserves it, but be explicit so a provider quirk can't reorder a person's rows).
         rows = sorted(contacts_by.get(pid, []), key=lambda r: r.get("contact_index") or 0)
         by_prospect[pid] = {
             "enrichment": enrichment_by.get(pid),
+            "name_scrape": name_scrape_by.get(pid),
             "website": website_by.get(pid),
             "contacts": rows,
         }
     return {"by_prospect": by_prospect}
+
+
+# --- Site name-scrape (FREE owner/manager fallback — outreach DECISIONS.md) --------------------
+#
+# When Outscraper enrichment returns no NAME, scan the prospect's OWN site for the owner/manager.
+# FREE (own HTTP GET, the scan-tech posture), so unlike enrichment this is STAFF-gated (there is no
+# spend to authorize) and carries no cost estimate or budget guard. platform-api never fetches: it
+# writes a signed `name_scrape_request` the outreach job's `tick` drains.
+
+
+def validate_name_scrape_selection(prospect_ids: list[str], cap: int) -> list[str]:
+    """De-dupe and bound a name-scrape selection. Pure. Refuses an empty selection and one past the
+    per-order cap (a bigger 'select all' is split into several orders by the UI)."""
+    ids = [p for p in dict.fromkeys(prospect_ids) if p]
+    if not ids:
+        raise OutreachError("empty_selection", "select at least one prospect to scan")
+    if len(ids) > cap:
+        raise OutreachError(
+            "selection_too_large",
+            f"a single name-scrape order is capped at {cap} prospects (got {len(ids)}); "
+            "split a larger selection into several orders",
+        )
+    return ids
+
+
+def _name_scrape_actionable(client: Any, prospect_ids: list[str]) -> dict[str, Any]:
+    """Split a selection into scrapable vs not, so a no-op order is refused. A prospect is skippable
+    if it already carries a DURABLE name-scrape marker (found|no_names — never re-scraped); it is
+    unscrapable if it has no website (nothing to fetch). Reads are chunked under the 1000-row cap."""
+    ids = [p for p in dict.fromkeys(prospect_ids) if p]
+    done: set[str] = set()
+    has_site: dict[str, bool] = {}
+    for start in range(0, len(ids), 200):
+        chunk = ids[start : start + 200]
+        for row in (
+            client.table("prospect_name_scrape")
+            .select("prospect_id, status")
+            .in_("prospect_id", chunk)
+            .in_("status", ["found", "no_names"])
+            .execute()
+            .data
+            or []
+        ):
+            done.add(row["prospect_id"])
+        for row in (
+            client.table("prospect").select("id, website").in_("id", chunk).execute().data or []
+        ):
+            has_site[row["id"]] = bool((row.get("website") or "").strip())
+    actionable = [pid for pid in ids if pid not in done and has_site.get(pid)]
+    return {
+        "requested": len(ids),
+        "skippable": sum(1 for pid in ids if pid in done),
+        "no_website": sum(1 for pid in ids if pid not in done and not has_site.get(pid)),
+        "actionable": len(actionable),
+    }
+
+
+def create_name_scrape_request(
+    *, prospect_ids: list[str], note: str | None, actor_id: str
+) -> dict[str, Any]:
+    """Place a FREE name-scrape order. Staff-gated at the router — no spend to authorize. Refuses a
+    selection that would scrape nobody (all already scraped, or none has a website). platform-api
+    never fetches: the outreach `tick` drains the order."""
+    from config import settings
+
+    ids = validate_name_scrape_selection(
+        prospect_ids, settings.outreach_name_scrape_max_places_per_order
+    )
+    client = get_outreach_client()
+    counts = _name_scrape_actionable(client, ids)
+    if counts["actionable"] == 0:
+        raise OutreachError(
+            "nothing_to_scrape",
+            "every selected prospect is already name-scraped or has no website to scan",
+        )
+    row = {
+        "prospect_ids": ids,
+        "requested_by": actor_id,
+        "requested_count": len(ids),
+        "note": (note or "").strip() or None,
+    }
+    written = client.table("name_scrape_request").insert(row).execute().data or []
+    if not written:
+        raise OutreachError("name_scrape_request_not_created", "the order was not written")
+    order = written[0]
+    order["actionable"] = counts
+    return order
+
+
+def list_name_scrape_requests(
+    *, status: str | None = None, limit: int | None = None, offset: int | None = None
+) -> dict[str, Any]:
+    """Name-scrape orders, newest first — the queue/progress view."""
+    size, start = clamp_page(limit, offset)
+    query = (
+        get_outreach_client()
+        .table("name_scrape_request")
+        .select("*", count="exact")
+        .order("created_at", desc=True)
+        .range(start, start + size - 1)
+    )
+    if status:
+        query = query.eq("status", status)
+    response = query.execute()
+    return {
+        "name_scrape_requests": response.data or [],
+        "total": response.count or 0,
+        "limit": size,
+        "offset": start,
+    }
+
+
+def name_scrape_request_detail(request_id: str) -> dict[str, Any]:
+    """One order plus a small progress read (the counters live on the row itself) — the poll the
+    bulk bar's useResumableBatch reads."""
+    rows = (
+        get_outreach_client()
+        .table("name_scrape_request")
+        .select("*")
+        .eq("id", request_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise OutreachError("name_scrape_request_not_found", "no such order")
+    order = rows[0]
+    done = order["scraped_count"] + order["skipped_count"] + order["failed_count"]
+    order["progress"] = {
+        "requested": order["requested_count"],
+        "done": done,
+        "scraped": order["scraped_count"],
+        "found": order["found_count"],
+        "names": order["name_count"],
+        "skipped": order["skipped_count"],
+        "failed": order["failed_count"],
+    }
+    return {"name_scrape_request": order}
+
+
+def cancel_name_scrape_request(request_id: str, actor_id: str) -> dict[str, Any]:
+    """Withdraw a PENDING order. Conditional on status: one the tick has claimed is already scraping
+    and resolves on its own (it costs nothing, so this is only for tidying the queue)."""
+    from datetime import datetime, timezone
+
+    client = get_outreach_client()
+    hit = (
+        client.table("name_scrape_request")
+        .update({"status": "cancelled", "finished_at": datetime.now(timezone.utc).isoformat()})
+        .eq("id", request_id)
+        .eq("status", "pending")
+        .execute()
+        .data
+        or []
+    )
+    if hit:
+        return {"name_scrape_request": hit[0]}
+    existing = (
+        client.table("name_scrape_request").select("id, status").eq("id", request_id).limit(1)
+        .execute().data
+    )
+    if not existing:
+        raise OutreachError("name_scrape_request_not_found", "no such order")
+    raise OutreachError(
+        "name_scrape_request_not_cancellable",
+        f"order is {existing[0]['status']!r}; only a pending order can be withdrawn",
+    )

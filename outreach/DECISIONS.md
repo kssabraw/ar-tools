@@ -1832,3 +1832,58 @@ the always-on worker:
   `enrich_queue._already_enriched` precedent — so the read is bounded by the candidate set, not the
   whole signal history. This also closes the fetch-once (`tech_refresh_days=0`) path's unfiltered
   full-history read.
+
+## 2026-08-26 — Site name-scrape: a FREE owner/manager fallback when Outscraper returns no name
+
+**Decision.** Add an optional, user-triggered producer that scans a prospect's OWN website for the
+owner/manager NAME when Outscraper enrichment couldn't get one (status `no_contacts`, or contacts
+carrying an email/phone but no person). FREE — an own HTTP GET, the exact posture as `scan-tech`
+(PRD §B3 "own request, not a paid service") — so it is NOT in `PAID_COMMANDS`, places no billed
+order, and is STAFF-gated (not admin + budget-guarded, the enrichment bar): there is no spend to
+authorize, matching `promote`/`touch` (commitments, not spend).
+
+**Shape (mirrors the two proven siblings, no new architecture).**
+- `api/services/name_extract.py` — PURE, role-anchored + schema.org extractor (the crux). A name is
+  taken ONLY when tied to an explicit ownership/management role (`owner`/`founder`/`president`/…) or
+  carried by JSON-LD (`founder`/`employee` with a matching `jobTitle`). Conservative by design: a
+  bare Title-Case phrase with no role is nothing; the business name / nav chrome / trade words are
+  rejected; the business-name check is ONE-DIRECTIONAL (I-099). Evidence is kept for replay.
+- `api/services/name_scrape.py` — the producer: reuses `scan_tech.fetch_page` / `normalize_site_url`
+  (one definition of "how we fetch a prospect's site") and does a BOUNDED same-host crawl —
+  homepage + a few likely pages (about/team/contact/meet), capped by `name_scrape_max_pages` —
+  because owners are rarely on the homepage. Measured-vs-found: a failed homepage fetch is
+  `unreachable`, never "no owner named".
+- `api/services/name_scrape_queue.py` — the drain (sibling to `enrich_queue`, minus the money): a
+  `name_scrape_request` order, conditional claim, idempotent skip of `found`/`no_names` (retry
+  `unreachable`/`failed`), chunked for crash isolation, batchable (several orders/tick). Store
+  replaces ONLY the prospect's `source='site_scrape'` contacts — never the Outscraper ones (the two
+  producers are independent). Wired into `cmd_tick` after the enrich drain; also a free `scan-names`
+  CLI (`run_name_scrape_market`) for ops/backfill.
+- Migration `20260826120000_name_scrape.sql` — `name_scrape_request` (no cost/budget columns, unlike
+  enrichment) + `prospect_name_scrape` (per-prospect marker, `found|no_names|unreachable|failed`,
+  keeping the measured-vs-found distinction). Found names land in the EXISTING `prospect_contact`
+  with `source='site_scrape'` (no schema change there). Applied live to Outreacher.
+- platform-api: `create/list/detail/cancel_name_scrape_request` (staff-gated routes
+  `/outreach/prospects/{id}/scrape-names`, `/outreach/name-scrape`), the contacts reads now carry
+  `name_scrape` status + each contact's `source`. Frontend: `useNameScrape` + a per-row "Scan site
+  for names" fallback button (shown when the prospect has a website and no name is known yet), a free
+  bulk `NameScrapeBar`, and a "from website" provenance badge on site-scraped names.
+
+**Why a separate marker table, not reuse `prospect_enrichment`.** The two producers must be
+independent — an enriched prospect can still be name-scraped and vice versa — and merging their
+status would corrupt each drain's idempotent skip. Same reasoning as `prospect_tech_signal` sitting
+apart from `prospect_enrichment`.
+
+**Why user-triggered, not an auto-backlog.** The ask was to give the team the OPTION (owner request).
+Unlike `scan-tech`'s auto-backlog, this does not run on every prospect each tick — it only drains
+placed orders. An auto-backlog "scrape everyone who enrichment left nameless" is a clean follow-up on
+the same machinery if wanted, but was deliberately not built.
+
+**Config.** `api/config.py`: `name_scrape_max_pages` (5), `_max_names` (8),
+`_fetch_timeout_seconds` (12), `_max_page_bytes`, `_concurrency`/`_chunk_size` (6),
+`_orders_per_tick` (5), `_max_places_per_order` (200). platform-api:
+`outreach_name_scrape_max_places_per_order` (200; no cost/budget keys — it is free).
+
+**Unvalidated.** The extractor's PRECISION is unmeasured against real sites (I-114) — it is tuned to
+fail toward a miss, but a caller must still verify a scraped name (hence the "from website" badge and
+that these names carry no verified email/phone, unlike Outscraper contacts).

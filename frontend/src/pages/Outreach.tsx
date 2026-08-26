@@ -9,7 +9,7 @@ import { useAuth } from '../context/AuthContext'
 import { Tabs } from './OutreachLeads'
 import { Justification } from '../components/outreach/Justification'
 import { ProspectReportButtons } from '../components/outreach/ProspectReport'
-import { ContactCell, EnrichmentBar, useEnrichment } from '../components/outreach/Enrichment'
+import { ContactCell, EnrichmentBar, NameScrapeBar, useEnrichment, useNameScrape } from '../components/outreach/Enrichment'
 import type { ProspectContacts } from '../components/outreach/Enrichment'
 
 // ── Types (mirror routers/outreach.py's scan-order section) ──────────────────
@@ -833,7 +833,9 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
   const [openHook, setOpenHook] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const enrich = useEnrichment(submarketId)
+  const nameScrape = useNameScrape(submarketId)
   const batchRunning = enrich.batch.running
+  const nameBatchRunning = nameScrape.batch.running
   const toggle = (id: string) =>
     setSelected(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next })
   const promote = useMutation({
@@ -865,7 +867,7 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
     queryKey: ['outreach-contacts-batch', submarketId, visibleIds],
     queryFn: () => api.post('/outreach/contacts/batch', { prospect_ids: visibleIds }),
     enabled: visibleIds.length > 0,
-    refetchInterval: batchRunning ? 6000 : false,
+    refetchInterval: batchRunning || nameBatchRunning ? 6000 : false,
   })
 
   if (!submarketId) return null
@@ -929,6 +931,13 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
           onCleared={() => setSelected(new Set())}
         />
       )}
+      {isAdmin && (
+        <NameScrapeBar
+          selectedIds={[...selected]}
+          controller={nameScrape}
+          onCleared={() => setSelected(new Set())}
+        />
+      )}
       {/* Horizontal scroll: the coverage table has many columns (contacts + a wide actions
           group), so it can exceed the card width — scroll it rather than crush the columns.
           width:max-content sizes the table to its content (no crushing); we deliberately do NOT
@@ -970,6 +979,7 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
                 <td style={{ padding: '6px 8px' }}>
                   <ContactCell prospectId={s.prospect_id} isAdmin={isAdmin}
                     controller={enrich} batchRunning={batchRunning}
+                    nameController={nameScrape} nameBatchRunning={nameBatchRunning}
                     provided={contactsBatch?.by_prospect?.[s.prospect_id] ?? null} />
                 </td>
                 <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.coverage_pct?.toFixed(1)}%</td>

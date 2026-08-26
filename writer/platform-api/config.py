@@ -1896,6 +1896,12 @@ class Settings(BaseSettings):
     # "select all" is split into several orders by the UI.
     outreach_enrich_max_places_per_order: int = 200
 
+    # Site name-scrape (the FREE owner/manager fallback). A per-selection cap mirroring the enrich
+    # one; the outreach job's name_scrape_max_places_per_order enforces the same bound in the drain.
+    # No cost/budget keys — the scrape is an own HTTP GET and spends nothing (PRD §B3), so unlike
+    # enrichment it is staff-gated, not admin-gated + budget-guarded.
+    outreach_name_scrape_max_places_per_order: int = 200
+
     leadoff_income_acs_year: int = 2023
     leadoff_income_refresh_days: int = 365
     # Per-city county map (public.city_counties) — reverse-geocoded from each

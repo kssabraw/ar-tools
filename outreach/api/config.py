@@ -311,6 +311,28 @@ class Settings(BaseSettings):
     # prospect's tech once and never auto-refresh.
     tech_refresh_days: int = 45
 
+    # --- Site name-scrape (FREE owner/manager fallback) ------------------------------------
+    # `scan-names` / the `name_scrape_request` order fetch a prospect's OWN site and pull the
+    # owner/manager NAME when Outscraper enrichment couldn't. FREE (own HTTP GET, the `scan-tech`
+    # posture — NOT in PAID_COMMANDS). Owners are rarely on the homepage, so a bounded same-host
+    # crawl fetches the homepage + a few likely pages (about/team/contact/meet); this cap is the
+    # whole-crawl bound so one prospect can never fan out.
+    name_scrape_max_pages: int = 5
+    name_scrape_max_names: int = 8
+    name_scrape_fetch_timeout_seconds: float = 12.0
+    name_scrape_max_page_bytes: int = 1_500_000
+    # Concurrency ACROSS prospects (each prospect's own pages are fetched sequentially). Doubles as
+    # nothing else — a chunk of this many is scraped, stored, then the next, so a crash mid-order
+    # marks the finished prospects (idempotent skip on re-order).
+    name_scrape_concurrency: int = 6
+    name_scrape_chunk_size: int = 6
+    # A name-scrape order is batchable + free (like enrichment, unlike the ≤1/tick geogrid scan), so
+    # the tick drains several per heartbeat.
+    name_scrape_orders_per_tick: int = 5
+    # Defensive ceiling on one order's selection (the placement layer caps it too). A bigger
+    # "select all" is split into several orders.
+    name_scrape_max_places_per_order: int = 200
+
     # --- Lead enrichment (contact names / phones / emails via Outscraper) ------------------
     # A SEPARATE, spend-gated, per-selection action — NOT the mass ingest, which hardcodes
     # `enrichment=""` with a hard invariant so a market pull can never silently bill per-place

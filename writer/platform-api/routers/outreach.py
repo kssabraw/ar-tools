@@ -547,6 +547,11 @@ class EnrichRequestCreate(BaseModel):
     note: Optional[str] = None
 
 
+class NameScrapeRequestCreate(BaseModel):
+    prospect_ids: list[str]
+    note: Optional[str] = None
+
+
 class ContactsBatchRequest(BaseModel):
     prospect_ids: list[str]
 
@@ -670,6 +675,80 @@ async def list_prospect_contacts(
 ) -> dict:
     """A prospect's enriched contacts (names/phones/emails) + its enrichment status. Read-only."""
     return _handle(outreach_service.list_prospect_contacts, prospect_id)
+
+
+# --- Site name-scrape (FREE owner/manager fallback — outreach DECISIONS.md) --------------------
+#
+# When Outscraper enrichment returns no NAME, scan the prospect's OWN site for the owner/manager.
+# FREE — an own HTTP GET on the outreach job (the scan-tech posture), so unlike enrichment there is
+# NO spend to authorize: these are STAFF-gated (the bar for a commitment-not-spend action, like
+# promote/touch), not admin-gated + budget-guarded. platform-api never fetches — it writes a
+# `name_scrape_request` the outreach `tick` drains. Reads are open to any authed staff.
+
+
+@router.post("/outreach/prospects/{prospect_id}/scrape-names")
+async def scrape_prospect_names(
+    prospect_id: str, note: Optional[str] = None, auth: dict = Depends(require_staff)
+) -> dict:
+    """Scan ONE prospect's site for owner/manager names — the per-row fallback button. Places a free
+    one-prospect order; the tick scrapes it. 422 `nothing_to_scrape` if it is already scraped or has
+    no website."""
+    _require_outreach_ready()
+    return {
+        "name_scrape_request": _handle(
+            outreach_service.create_name_scrape_request,
+            prospect_ids=[prospect_id],
+            note=note,
+            actor_id=auth["user_id"],
+        )
+    }
+
+
+@router.post("/outreach/name-scrape")
+async def create_name_scrape_request(
+    payload: NameScrapeRequestCreate, auth: dict = Depends(require_staff)
+) -> dict:
+    """Scan a SELECTION of sites for owner/manager names (select-all / bulk) — one free order carrying
+    the whole list, drained batchable. Staff-gated; refuses a selection that would scrape nobody."""
+    _require_outreach_ready()
+    return {
+        "name_scrape_request": _handle(
+            outreach_service.create_name_scrape_request,
+            prospect_ids=payload.prospect_ids,
+            note=payload.note,
+            actor_id=auth["user_id"],
+        )
+    }
+
+
+@router.get("/outreach/name-scrape")
+async def list_name_scrape_requests(
+    status: Optional[str] = None,
+    limit: int = Query(default=outreach_service.DEFAULT_PAGE_SIZE, ge=1),
+    offset: int = Query(default=0, ge=0),
+    auth: dict = Depends(require_outreach),
+) -> dict:
+    return _handle(
+        outreach_service.list_name_scrape_requests, status=status, limit=limit, offset=offset
+    )
+
+
+@router.get("/outreach/name-scrape/{request_id}")
+async def name_scrape_request_detail(
+    request_id: str, auth: dict = Depends(require_outreach)
+) -> dict:
+    """One order + its progress counters — the poll the bulk bar's useResumableBatch reads."""
+    return _handle(outreach_service.name_scrape_request_detail, request_id)
+
+
+@router.post("/outreach/name-scrape/{request_id}/cancel")
+async def cancel_name_scrape_request(
+    request_id: str, auth: dict = Depends(require_staff)
+) -> dict:
+    """Withdraw a PENDING order. One the tick has claimed is already scraping (free) and resolves on
+    its own."""
+    _require_outreach_ready()
+    return _handle(outreach_service.cancel_name_scrape_request, request_id, auth["user_id"])
 
 
 # --- Any-city geo (read-only: resolve a typed city + list its verified sub-areas) --------------

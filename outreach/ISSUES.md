@@ -2444,3 +2444,25 @@ excluded from `to_enrich`, so the order's `enriched_count + skipped_count + fail
 `progress.done`) is less than `requested_count`. **Cosmetic only** — the order still resolves to
 `done` and the UI batch completes (useResumableBatch keys on the order STATUS, not the counts), so
 nothing hangs. Left as-is; if a precise reconciliation is ever wanted, add a `vanished_count`.
+
+### I-114 · Site name-scrape extraction PRECISION is unvalidated against real sites
+`name_extract.extract_names` is conservative by construction — role-anchored (a name only counts tied
+to an explicit `owner`/`founder`/`president`/… role or schema.org `founder`/`employee` with a matching
+`jobTitle`), with nav-chrome / trade-word / business-name (one-directional, I-099) rejection and a
+Title-Case 2–3-token name shape. It is tuned to FAIL TOWARD A MISS. But it has been tested only against
+hand-written golden fixtures (`tests/test_name_extract.py`), never against a corpus of real small-business
+sites, so its true precision/recall is unknown. A scraped name is therefore surfaced with a "from website"
+badge and carries NO verified email/phone (unlike an Outscraper contact) — a caller must verify it before
+using it on a call. **Action:** once the first real `scan-names` / `name_scrape_request` runs land, sample
+the `prospect_name_scrape.raw` evidence against the live sites and tune the role vocabulary / patterns from
+what it missed or over-matched (the `raw` evidence makes this a re-read, not a re-fetch). Recall is the
+likelier weakness (a site that names the owner only in an image, a PDF, or JS-rendered content is a miss).
+
+### I-115 · Name-scrape `unreachable`/`failed` are retried on every re-order (no backoff)
+The drain treats `found`/`no_names` as durable (never re-scraped) but `unreachable`/`failed` as retryable,
+so a re-placed order re-fetches a site that was down. That is the intended semantics (a site up now that was
+down before), but there is no per-prospect backoff or attempt cap — repeatedly re-ordering a selection that
+includes a permanently-dead domain re-fetches it each time. FREE (own HTTP GET, no spend), so this is only
+wasted work, not wasted money, and it is bounded by `name_scrape_max_places_per_order` per order. **Left
+as-is** — cheapest-to-reverse; add an `attempts` counter + a stale-retry cutoff on `prospect_name_scrape`
+if a dead-domain re-fetch loop ever shows up in practice.
