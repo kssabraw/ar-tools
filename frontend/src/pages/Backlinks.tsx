@@ -173,6 +173,17 @@ export function Backlinks() {
 
   const ov = data?.overview
   const looking = lookupJob.running
+  // A completed lookup whose target has NO backlinks indexed (common for deep
+  // pages/subdomains — the links point at the root domain). Distinguish this
+  // from "nothing loaded" so an empty result doesn't read as broken.
+  const isEmptyResult = Boolean(
+    data && ov && (ov.referring_domains ?? 0) === 0 && (ov.backlinks ?? 0) === 0 &&
+    data.pages.length === 0,
+  )
+  const domainSuggestion = data && data.target_type !== 'domain'
+    ? data.target.split('/')[0].replace(/^www\./, '')
+    : null
+  const showDomainSuggestion = Boolean(domainSuggestion && domainSuggestion !== data?.target)
 
   return (
     <div style={{ padding: 32, maxWidth: 1040 }}>
@@ -285,6 +296,23 @@ export function Backlinks() {
               )
             })()}
           </div>
+
+          {isEmptyResult && (
+            <div style={{ ...noticeBox, borderColor: '#fcd34d', background: '#fffbeb', color: '#92400e', display: 'block' }}>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>No backlinks found for this {data.target_type}.</div>
+              <div style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+                DataForSEO has no referring domains indexed for <strong>{data.target}</strong> — the lookup
+                succeeded, there simply aren't any backlinks to this exact {data.target_type}.
+                {data.target_type !== 'domain' && ' Deep pages and subdomains rarely have their own backlinks; a site’s links almost always point at its root domain.'}
+              </div>
+              {showDomainSuggestion && (
+                <button style={{ ...primaryBtn, marginTop: 10, padding: '6px 12px' }}
+                  onClick={() => { setQuery(domainSuggestion!); analyze(domainSuggestion!) }}>
+                  <Search size={13} /> Analyze {domainSuggestion} instead
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Overview stat strip */}
           <div style={statGrid}>
