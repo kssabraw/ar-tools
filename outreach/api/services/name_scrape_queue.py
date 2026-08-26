@@ -221,10 +221,71 @@ def _mark_failed(db: Any, *, prospect_id: str, order_id: str, error: str) -> Non
     ).execute()
 
 
+def _order_marker_tally(db: Any, order_id: str | None, prospect_ids: list[str]) -> dict[str, int]:
+    """This order's CUMULATIVE progress, read from the markers it wrote (so a multi-tick resume
+    reports the whole order, not just the last batch). Only markers carrying THIS order_id are
+    attributed — a durable marker left by a PRIOR order is a skip, not this order's work. Pure over
+    the DB read; chunked under the 1000-row cap."""
+    scraped = found = names = failed = 0
+    for start in range(0, len(prospect_ids), 500):
+        chunk = prospect_ids[start : start + 500]
+        if not chunk:
+            continue
+        for row in (
+            db.table(_MARKER)
+            .select("prospect_id, status, name_count, name_scrape_request_id")
+            .in_("prospect_id", chunk)
+            .execute()
+            .data
+            or []
+        ):
+            if str(row.get("name_scrape_request_id")) != str(order_id):
+                continue
+            status = row.get("status")
+            if status == "failed":
+                failed += 1
+            elif status in ("found", "no_names", "unreachable"):
+                scraped += 1
+            if status == "found":
+                found += 1
+                names += int(row.get("name_count") or 0)
+    return {"scraped": scraped, "found": found, "names": names, "failed": failed}
+
+
+def _write_order_progress(
+    db: Any, order_id: str, *, status: str, requested: int, no_website: int,
+    tally: dict[str, int],
+) -> None:
+    """Persist an order's cumulative counters (from the marker tally) + its status. `done` stamps
+    finished_at; `pending` (a partial left to resume) does not. `skipped` = the requested prospects
+    this order neither attempted nor found unscrapable — i.e. durable from a prior order."""
+    attempted = tally["scraped"] + tally["failed"]
+    counts = {
+        "status": status,
+        "requested_count": requested,
+        "skipped_count": max(0, requested - attempted - no_website),
+        "scraped_count": tally["scraped"],
+        "found_count": tally["found"],
+        "name_count": tally["names"],
+        "failed_count": tally["failed"],
+        "error": None,
+    }
+    if status == "done":
+        counts["finished_at"] = _now()
+    db.table(_TABLE).update(counts).eq("id", order_id).execute()
+
+
 async def process_order(
-    db: Any, settings: Settings, order: dict[str, Any]
-) -> NameScrapeOrderReport:
-    """Scrape one claimed order end to end. Never raises past recording the failure on the order."""
+    db: Any, settings: Settings, order: dict[str, Any], *, max_prospects: int
+) -> tuple[NameScrapeOrderReport, int, bool]:
+    """Scrape up to `max_prospects` of one claimed order's due prospects. Never raises past recording
+    the failure on the order.
+
+    Returns `(report, scraped_this_call, finished)`. When the order's due set is larger than
+    `max_prospects`, only that many are scraped this call and the order is left PENDING (finished
+    False) — the marker-based idempotent skip means the next tick's resume re-scrapes only the rest.
+    The order's persisted counters are the CUMULATIVE marker tally, so a resumed order still reports
+    its whole self."""
     report = NameScrapeOrderReport(order_id=str(order["id"]))
     prospect_ids = list(order.get("prospect_ids") or [])
     report.requested = len(prospect_ids)
@@ -234,7 +295,7 @@ async def process_order(
         report.error = "order has no prospects"
         _finish(db, report.order_id, {"status": "failed", "error": report.error,
                                       "requested_count": 0})
-        return report
+        return report, 0, True
 
     if len(prospect_ids) > settings.name_scrape_max_places_per_order:
         report.outcome = "failed"
@@ -244,11 +305,16 @@ async def process_order(
         )
         _finish(db, report.order_id, {"status": "failed", "error": report.error,
                                       "requested_count": report.requested})
-        return report
+        return report, 0, True
 
     prospects = _load_prospects(db, prospect_ids)
     skip = _already_scraped(db, prospect_ids)
     report.skipped = sum(1 for pid in prospect_ids if pid in skip)
+    # Existing prospects with no website — not scrapable, not an error, not "skipped" (never done).
+    no_website = sum(
+        1 for pid in prospect_ids
+        if pid not in skip and pid in prospects and not (prospects[pid].get("website") or "").strip()
+    )
 
     # Needs a website (nothing to fetch otherwise) AND a place_id (the contact row's NOT-NULL join
     # key). A prospect missing either is not an error — it just isn't scrapable.
@@ -261,30 +327,31 @@ async def process_order(
 
     if not to_scrape:
         report.outcome = "done"
-        _finish(
-            db, report.order_id,
-            {"status": "done", "requested_count": report.requested,
-             "skipped_count": report.skipped, "scraped_count": 0, "found_count": 0,
-             "name_count": 0, "failed_count": 0, "error": None},
-        )
-        return report
+        tally = _order_marker_tally(db, report.order_id, prospect_ids)
+        _write_order_progress(db, report.order_id, status="done", requested=report.requested,
+                              no_website=no_website, tally=tally)
+        return report, 0, True
 
-    await _scrape_and_store(db, settings, to_scrape, report.order_id, report)
+    # Budget: scrape at most `max_prospects` this call; leave the rest to resume next tick.
+    cap = max(1, max_prospects)
+    batch = to_scrape[:cap]
+    finished = len(to_scrape) <= cap
 
-    report.outcome = "done"
-    _finish(
-        db, report.order_id,
-        {"status": "done", "requested_count": report.requested,
-         "skipped_count": report.skipped, "scraped_count": report.scraped,
-         "found_count": report.found, "name_count": report.names,
-         "failed_count": report.failed, "error": None},
+    await _scrape_and_store(db, settings, batch, report.order_id, report)
+
+    tally = _order_marker_tally(db, report.order_id, prospect_ids)
+    _write_order_progress(
+        db, report.order_id, status="done" if finished else "pending",
+        requested=report.requested, no_website=no_website, tally=tally,
     )
+    report.outcome = "done" if finished else "partial"
     logger.info(
-        "name scrape order executed",
-        extra={"order_id": report.order_id, "scraped": report.scraped, "found": report.found,
-               "names": report.names, "failed": report.failed},
+        "name scrape order %s", "executed" if finished else "partial (resuming next tick)",
+        extra={"order_id": report.order_id, "scraped_this_call": len(batch),
+               "found_total": tally["found"], "names_total": tally["names"],
+               "failed_total": tally["failed"], "finished": finished},
     )
-    return report
+    return report, len(batch), finished
 
 
 async def _scrape_and_store(
@@ -370,16 +437,28 @@ def _first_error(errors: list[str], prospect_id: str) -> str:
 
 
 async def drain(
-    db: Any, settings: Settings, *, max_orders: int | None = None
+    db: Any, settings: Settings, *, max_orders: int | None = None,
+    max_prospects: int | None = None,
 ) -> NameScrapeDrainReport:
-    """Claim and process up to `max_orders` pending orders (default `name_scrape_orders_per_tick`).
-    FREE — no order spends, so this is order-gated only (no env token), like the enrich drain."""
+    """Claim and process pending orders, up to `max_orders` (default `name_scrape_orders_per_tick`)
+    and a per-tick prospect budget `max_prospects` (default `name_scrape_per_tick`; <=0 = no cap).
+    FREE — no order spends, so this is order-gated only (no env token), like the enrich drain.
+
+    The budget bounds the tick's wall-time: an order larger than the remaining budget is scraped up
+    to it and left PENDING to resume next tick (a partial ⟹ the budget is spent, so the loop stops).
+    """
     report = NameScrapeDrainReport()
-    limit = max_orders if max_orders is not None else settings.name_scrape_orders_per_tick
-    while report.orders_processed < max(0, limit):
+    order_limit = max_orders if max_orders is not None else settings.name_scrape_orders_per_tick
+    per_tick = max_prospects if max_prospects is not None else settings.name_scrape_per_tick
+    budget = per_tick if per_tick > 0 else 10**9  # <=0 → effectively no cap
+    while report.orders_processed < max(0, order_limit) and budget > 0:
         order = claim_next_order(db)
         if order is None:
             break
-        report.orders.append(await process_order(db, settings, order))
+        rep, scraped_n, finished = await process_order(db, settings, order, max_prospects=budget)
+        report.orders.append(rep)
         report.orders_processed += 1
+        budget -= scraped_n
+        if not finished:
+            break  # a partial means the budget is exhausted; the order resumes next tick
     return report

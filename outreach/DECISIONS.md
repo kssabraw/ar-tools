@@ -1887,3 +1887,32 @@ the same machinery if wanted, but was deliberately not built.
 **Unvalidated.** The extractor's PRECISION is unmeasured against real sites (I-114) — it is tuned to
 fail toward a miss, but a caller must still verify a scraped name (hence the "from website" badge and
 that these names carry no verified email/phone, unlike Outscraper contacts).
+
+## 2026-08-26 — Name-scrape adversarial-review fixes (loose-form precision, wall-time budget, SSRF)
+
+An adversarial re-read of the site name-scrape produced five fixes:
+
+- **Loose-byline precision.** The punctuation-free `<role> <Name>` form fabricated a person from any
+  page merely mentioning a president/CEO of another entity ("President Joe Biden" → "Joe Biden",
+  "CEO Tim Cook"). `President`/`President & CEO`/`CEO`/`Principal` were removed from `_STRONG_ROLES`
+  — they still extract on every PUNCTUATED byline ("Jane Doe, President", "President: …", "our
+  President Jane"), only the bare loose form is withheld. Owner/Founder/Proprietor keep it.
+- **`extract_names` truly never-raises.** A pathologically deep JSON-LD block could raise
+  `RecursionError` from `json.loads`/the node walk, escaping the narrow `except (ValueError,
+  TypeError)`. Added `_JSONLD_MAX_DEPTH` to `_iter_json_nodes` + caught `RecursionError` at parse.
+- **Per-tick wall-time budget (`name_scrape_per_tick`, default 60).** Unlike enrichment (one provider
+  call per place), a scrape does up to `name_scrape_max_pages` sequential fetches per prospect, so a
+  200-prospect order could block the tick loop for many minutes. The drain now bounds prospects
+  FETCHED per tick across and WITHIN orders: an order larger than the remaining budget is scraped up
+  to it and left PENDING to resume next tick — the marker-based idempotent skip means a resume
+  re-scrapes only the un-done prospects (no loss, no repeat). Order counters are the CUMULATIVE
+  marker tally (`_order_marker_tally`), so a resumed order still reports its whole self.
+- **SSRF guard (`name_scrape.is_public_host`).** The scrape reuses `scan_tech.fetch_page`
+  (`follow_redirects=True`), so a malicious prospect site could redirect the fetch to an internal
+  host (e.g. 169.254.169.254). The guard blocks localhost + IP-literal private/loopback/link-local/
+  reserved hosts BEFORE fetching AND on the post-fetch `final_url` (a same-host page 301-ing to an
+  internal address has its body discarded). Self-contained in `name_scrape` — `scan_tech` is
+  untouched. DNS-rebinding (a hostname resolving to a private IP) is explicitly out of scope (I-116).
+- **Frontend: staff-gate + error surfacing + dead-code removal.** The per-row "Scan site for names"
+  button is gated on `isStaff` (the route is `require_staff`) and now surfaces a placement error
+  instead of a silent 403. Removed dead backfill code in `merge_names`.

@@ -332,6 +332,14 @@ class Settings(BaseSettings):
     # Defensive ceiling on one order's selection (the placement layer caps it too). A bigger
     # "select all" is split into several orders.
     name_scrape_max_places_per_order: int = 200
+    # Max prospects FETCHED per tick, across all orders AND within a single order. Unlike enrichment
+    # (one cheap provider call per place), a name-scrape does up to `name_scrape_max_pages` sequential
+    # site fetches per prospect, so a 200-prospect order could otherwise block the tick loop for many
+    # minutes. This budget caps the wall-time per heartbeat (the `tech_scan_per_tick` discipline): an
+    # order larger than the remaining budget is scraped up to it and left PENDING to resume next tick
+    # — the marker-based idempotent skip means a resume re-scrapes only the un-done prospects, so no
+    # work is lost or repeated. <=0 means no cap (process whole orders up to name_scrape_orders_per_tick).
+    name_scrape_per_tick: int = 60
 
     # --- Lead enrichment (contact names / phones / emails via Outscraper) ------------------
     # A SEPARATE, spend-gated, per-selection action — NOT the mass ingest, which hardcodes

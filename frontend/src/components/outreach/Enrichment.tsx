@@ -330,7 +330,10 @@ export function EnrichmentBar({
 }
 
 // ── A single prospect's contacts block (the CRM lead drawer) ────────────────────────────────────
-export function LeadContacts({ prospectId, isAdmin }: { prospectId: string; isAdmin: boolean }) {
+export function LeadContacts(
+  { prospectId, isAdmin, isStaff = true }:
+  { prospectId: string; isAdmin: boolean; isStaff?: boolean },
+) {
   const controller = useEnrichment(`lead-${prospectId}`)
   const nameController = useNameScrape(`lead-${prospectId}`)
   return (
@@ -338,7 +341,7 @@ export function LeadContacts({ prospectId, isAdmin }: { prospectId: string; isAd
       <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 4 }}>
         Contacts
       </div>
-      <ContactCell prospectId={prospectId} isAdmin={isAdmin} controller={controller}
+      <ContactCell prospectId={prospectId} isAdmin={isAdmin} isStaff={isStaff} controller={controller}
         batchRunning={controller.batch.running}
         nameController={nameController} nameBatchRunning={nameController.batch.running} />
     </div>
@@ -360,6 +363,7 @@ export interface ProspectContacts {
 export function ContactCell({
   prospectId,
   isAdmin,
+  isStaff = true,
   controller,
   batchRunning,
   nameController,
@@ -368,6 +372,7 @@ export function ContactCell({
 }: {
   prospectId: string
   isAdmin: boolean
+  isStaff?: boolean
   controller: Controller
   batchRunning: boolean
   nameController?: NameController
@@ -457,8 +462,8 @@ export function ContactCell({
 
   // ── The FREE owner/manager fallback: scan the business's own site for a name when Outscraper
   // couldn't. Offered whenever the prospect has a website and no NAME is known yet (a contact may
-  // carry an email/phone but no person), and the site-scrape has no durable answer. Free + staff, so
-  // it is NOT gated on isAdmin.
+  // carry an email/phone but no person), and the site-scrape has no durable answer. Staff-gated (the
+  // route is `require_staff`) — the actionable buttons show only for staff, the status text for all.
   const hasName = contacts.some(c => c.full_name || c.name_for_emails)
   const scanNamesBtn = (label: string) => (
     <button
@@ -474,6 +479,12 @@ export function ContactCell({
       <Search size={12} /> {label}
     </button>
   )
+  // A 403 on the (staff-gated) scan route should never be silent — surface any placement error.
+  const scanError = nameController?.create.isError ? (
+    <span style={{ fontSize: 11, color: '#b91c1c' }}>
+      {(nameController.create.error as { message?: string })?.message ?? 'Could not start the scan'}
+    </span>
+  ) : null
   let nameFallback: ReactElement | null = null
   if (nameController && website && !hasName) {
     if (nameBatchRunning) {
@@ -484,18 +495,26 @@ export function ContactCell({
       nameFallback = (
         <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 11, color: '#b45309' }}>couldn’t read the site</span>
-          {scanNamesBtn('Retry')}
+          {isStaff ? scanNamesBtn('Retry') : null}
+          {scanError}
         </span>
       )
     } else if (nameScrape?.status === 'failed') {
       nameFallback = (
         <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 11, color: '#b45309' }}>site scan failed</span>
-          {scanNamesBtn('Retry')}
+          {isStaff ? scanNamesBtn('Retry') : null}
+          {scanError}
         </span>
       )
-    } else {
-      nameFallback = scanNamesBtn('Scan site for names')
+    } else if (isStaff) {
+      // No durable answer yet — offer the scan (staff only; the route is staff-gated).
+      nameFallback = (
+        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          {scanNamesBtn('Scan site for names')}
+          {scanError}
+        </span>
+      )
     }
   }
 

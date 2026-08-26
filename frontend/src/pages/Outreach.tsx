@@ -827,7 +827,7 @@ function OrderProgress({ id }: { id: string }) {
 // The ranked coverage table for ONE submarket — reused by the Coverage results card (with a
 // submarket picker) and by an onboard row's inline results (submarket fixed to that scan).
 function CoverageTable({ submarketId, submarketName }: { submarketId: string; submarketName?: string }) {
-  const { isAdmin } = useAuth()
+  const { isAdmin, isStaff } = useAuth()
   const [promoted, setPromoted] = useState<Record<string, boolean>>({})
   const [emitted, setEmitted] = useState<Record<string, { delivered: boolean; configured: boolean }>>({})
   const [openHook, setOpenHook] = useState<string | null>(null)
@@ -977,7 +977,7 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
                 <td style={{ padding: '6px 8px' }}>{s.name}</td>
                 <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{s.phone ?? '—'}</td>
                 <td style={{ padding: '6px 8px' }}>
-                  <ContactCell prospectId={s.prospect_id} isAdmin={isAdmin}
+                  <ContactCell prospectId={s.prospect_id} isAdmin={isAdmin} isStaff={isStaff}
                     controller={enrich} batchRunning={batchRunning}
                     nameController={nameScrape} nameBatchRunning={nameBatchRunning}
                     provided={contactsBatch?.by_prospect?.[s.prospect_id] ?? null} />

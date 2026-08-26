@@ -21,6 +21,7 @@ are reused verbatim from `scan_tech`, so "how we fetch a prospect's site" has ON
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import re
 from dataclasses import dataclass
@@ -88,6 +89,27 @@ def _canonical(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc.lower()}{path}{('?' + parts.query) if parts.query else ''}"
 
 
+def is_public_host(url: str) -> bool:
+    """Whether a URL's host is a public web host we'll fetch — an SSRF guard. Pure.
+
+    Blocks localhost and IP-LITERAL private/loopback/link-local/reserved addresses (e.g. the cloud
+    metadata endpoint 169.254.169.254, 127.0.0.1, 10.x, 192.168.x). A plain HOSTNAME is allowed — we
+    don't resolve DNS here, so DNS-rebinding is explicitly out of this guard's scope. Applied before
+    fetching AND to the post-fetch `final_url`, so a same-host page that 301-redirects to an internal
+    address is caught and its body discarded rather than parsed/stored."""
+    host = (urlsplit(url).hostname or "").lower()
+    if not host or host == "localhost" or host.endswith(".localhost"):
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return True  # a hostname, not an IP literal — allowed (no DNS resolution here)
+    return not (
+        ip.is_private or ip.is_loopback or ip.is_link_local
+        or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+    )
+
+
 def candidate_links(html: str | None, base_url: str, *, max_links: int) -> list[str]:
     """Likely owner-bio pages linked from a homepage, same-host, capped and priority-ordered. Pure.
 
@@ -114,6 +136,8 @@ def candidate_links(html: str | None, base_url: str, *, max_links: int) -> list[
         parts = urlsplit(absolute)
         if parts.scheme not in ("http", "https") or parts.netloc.lower() != base_host:
             continue
+        if not is_public_host(absolute):  # SSRF guard (also covers an IP-literal same "host")
+            continue
         key = _canonical(absolute)
         if key == home_key or key in seen:
             continue
@@ -138,13 +162,22 @@ async def scrape_one(
     url = normalize_site_url(prospect.get("website"))
     if not url:
         return None
+    if not is_public_host(url):
+        # A private/loopback/metadata host from a bad ingest — refuse to fetch (SSRF guard).
+        return NameScrapeResult(
+            prospect_id=prospect["id"], status="unreachable", fetch_status="blocked",
+            names=(), pages_fetched=0, source_urls=(url,),
+        )
 
     home = await fetch(url)
-    if home.status != STATUS_OK:
-        # Unknown, not absent — the site couldn't be read. No names, status carries why.
+    home_final = str(home.final_url or url)
+    if home.status != STATUS_OK or not is_public_host(home_final):
+        # Unknown, not absent — the site couldn't be read, OR a redirect landed on an internal host
+        # (SSRF guard: don't parse or store its body). Either way: no names, status carries why.
         return NameScrapeResult(
-            prospect_id=prospect["id"], status="unreachable", fetch_status=home.status,
-            names=(), pages_fetched=0, source_urls=(str(home.final_url or url),),
+            prospect_id=prospect["id"], status="unreachable",
+            fetch_status=home.status if home.status != STATUS_OK else "blocked",
+            names=(), pages_fetched=0, source_urls=(home_final,),
         )
 
     business_name = prospect.get("name")
@@ -152,15 +185,18 @@ async def scrape_one(
     groups: list[list[ExtractedName]] = [
         name_extract.extract_names(home.body, business_name=business_name, max_names=max_names)
     ]
-    fetched_urls = [str(home.final_url or url)]
+    fetched_urls = [home_final]
 
     follow = candidate_links(
-        home.body, str(home.final_url or url), max_links=max(0, settings.name_scrape_max_pages - 1)
+        home.body, home_final, max_links=max(0, settings.name_scrape_max_pages - 1)
     )
     for link in follow:
         page = await fetch(link)
-        fetched_urls.append(str(page.final_url or link))
-        if page.status == STATUS_OK and page.body:
+        page_final = str(page.final_url or link)
+        fetched_urls.append(page_final)
+        # Extract only from a public host that loaded — a followed page 301-ing to an internal host
+        # is caught here and its body ignored (SSRF guard on the post-redirect final_url).
+        if page.status == STATUS_OK and page.body and is_public_host(page_final):
             groups.append(
                 name_extract.extract_names(
                     page.body, business_name=business_name, max_names=max_names

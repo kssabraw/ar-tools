@@ -133,6 +133,7 @@ class _Settings:
     name_scrape_orders_per_tick = 5
     name_scrape_max_places_per_order = 200
     name_scrape_concurrency = 4
+    name_scrape_per_tick = 1000  # effectively no per-tick cap for most tests
 
 
 def _seed(db, *, prospects, orders):
@@ -398,6 +399,77 @@ def test_market_backfill_scrapes_due_prospects(monkeypatch):
 
     # p1 scraped (has website, not done); p2 has no website; p3 already found → skipped
     assert report.requested == 1 and report.found == 1
+
+
+# --- per-tick budget + resume -----------------------------------------------------------------
+
+
+def test_a_large_order_is_split_across_ticks_and_resumes(monkeypatch):
+    """The wall-time fix: an order larger than name_scrape_per_tick is scraped up to the budget and
+    left PENDING; the next tick resumes and (via the idempotent skip) scrapes only the rest."""
+    settings = _Settings()
+    settings.name_scrape_per_tick = 2
+    settings.name_scrape_chunk_size = 2
+    db = _FakeDB()
+    pros = [{"id": f"p{i}", "place_id": f"pl{i}", "name": f"B{i}", "website": f"https://{i}.com"}
+            for i in range(5)]
+    _seed(db, prospects=pros, orders=[_order(prospect_ids=[p["id"] for p in pros])])
+
+    calls = []
+
+    async def scrape_names(settings, prospects, **_k):
+        calls.append([p["id"] for p in prospects])
+        return [_result(p["id"], status="found", names=[f"Owner {p['id']}"]) for p in prospects], []
+
+    monkeypatch.setattr(name_scrape_queue.name_scrape, "scrape_names", scrape_names)
+
+    # tick 1: budget 2 → scrapes 2, order left pending
+    r1 = asyncio.run(name_scrape_queue.drain(db, settings))
+    assert r1.orders[0].outcome == "partial"
+    assert db.tables["name_scrape_request"][0]["status"] == "pending"
+    assert sum(len(c) for c in calls) == 2
+
+    # tick 2: budget 2 → scrapes 2 more of the REMAINING (idempotent skip), still pending
+    asyncio.run(name_scrape_queue.drain(db, settings))
+    assert db.tables["name_scrape_request"][0]["status"] == "pending"
+
+    # tick 3: 1 left → finishes
+    asyncio.run(name_scrape_queue.drain(db, settings))
+    row = db.tables["name_scrape_request"][0]
+    assert row["status"] == "done"
+    # every prospect scraped exactly once across the three ticks (no re-scrape, no loss)
+    scraped_ids = [pid for c in calls for pid in c]
+    assert sorted(scraped_ids) == [p["id"] for p in pros]
+    # cumulative counters on the finished order reflect the WHOLE order, not the last batch
+    assert row["found_count"] == 5 and row["name_count"] == 5 and row["scraped_count"] == 5
+
+
+def test_the_budget_stops_claiming_further_orders(monkeypatch):
+    settings = _Settings()
+    settings.name_scrape_per_tick = 1
+    db = _FakeDB()
+    _seed(
+        db,
+        prospects=[
+            {"id": "p1", "place_id": "pl1", "name": "A", "website": "https://a.com"},
+            {"id": "p2", "place_id": "pl2", "name": "B", "website": "https://b.com"},
+        ],
+        orders=[
+            _order(id="ord-1", prospect_ids=["p1"], created_at="2026-08-20T01:00:00+00:00"),
+            _order(id="ord-2", prospect_ids=["p2"], created_at="2026-08-20T02:00:00+00:00"),
+        ],
+    )
+    _stub(monkeypatch, {
+        "p1": _result("p1", status="found", names=["Amy Cole"]),
+        "p2": _result("p2", status="found", names=["Ben Diaz"]),
+    })
+
+    report = asyncio.run(name_scrape_queue.drain(db, settings))
+
+    # budget 1 → first order finishes (1 prospect), budget hits 0, second order untouched
+    assert report.orders_processed == 1
+    statuses = sorted(r["status"] for r in db.tables["name_scrape_request"])
+    assert statuses == ["done", "pending"]
 
 
 # --- command wiring ---------------------------------------------------------------------------

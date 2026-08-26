@@ -271,7 +271,7 @@ function AddLeadModal({ onClose }: { onClose: () => void }) {
 
 function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; onClose: () => void }) {
   const queryClient = useQueryClient()
-  const { isAdmin } = useAuth()
+  const { isAdmin, isStaff } = useAuth()
   const [note, setNote] = useState('')
   const [lostReason, setLostReason] = useState('')
   const [pendingStage, setPendingStage] = useState<string | null>(null)
@@ -374,7 +374,7 @@ function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; 
                   <Justification prospectId={lead.prospect_id} />
                 </div>
               )}
-              <LeadContacts prospectId={lead.prospect_id} isAdmin={isAdmin} />
+              <LeadContacts prospectId={lead.prospect_id} isAdmin={isAdmin} isStaff={isStaff} />
             </div>
           )}
 

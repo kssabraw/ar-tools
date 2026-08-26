@@ -2466,3 +2466,13 @@ includes a permanently-dead domain re-fetches it each time. FREE (own HTTP GET, 
 wasted work, not wasted money, and it is bounded by `name_scrape_max_places_per_order` per order. **Left
 as-is** — cheapest-to-reverse; add an `attempts` counter + a stale-retry cutoff on `prospect_name_scrape`
 if a dead-domain re-fetch loop ever shows up in practice.
+
+### I-116 · Name-scrape SSRF guard does not cover DNS-rebinding
+`name_scrape.is_public_host` blocks localhost + IP-LITERAL private/loopback/link-local/reserved hosts
+before fetching and on the post-redirect `final_url`, which stops the common metadata-endpoint /
+localhost vectors. It does NOT resolve hostnames, so a domain whose DNS resolves to a private IP (a
+rebinding attack) is not caught — resolving in-process would add latency + a TOCTOU gap and is out of
+scope for a best-effort site fetch. Same residual applies to `scan_tech`'s homepage fetch (shared
+`fetch_page`, `follow_redirects=True`). **Left as-is** — the prospect sites are agency-chosen targets,
+not arbitrary attacker input; revisit with an egress allowlist / resolving guard if the fetch surface
+ever widens to untrusted submissions.

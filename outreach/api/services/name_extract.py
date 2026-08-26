@@ -442,18 +442,13 @@ def extract_names(
 
 def merge_names(*groups: list[ExtractedName], max_names: int = 8) -> list[ExtractedName]:
     """Fold several pages' extractions into one de-duped list, preserving order and jsonld-upgrade
-    (the producer scans several pages; the homepage's hits come first). Pure."""
+    (the producer scans several pages; the homepage's hits come first). Pure.
+
+    `_add` re-derives first/last from the full name (which every validated extraction carries as
+    ≥2 tokens), so the merged rows are complete without threading the source rows' split fields."""
     out: list[ExtractedName] = []
     seen: dict[str, int] = {}
     for group in groups:
         for name in group:
             _add(out, seen, name.full_name, name.title, name.source_kind, name.evidence)
-            # carry the split names / exact fields through the merge
-            idx = seen[_key(name.full_name)]
-            if out[idx].first_name is None and name.first_name is not None:
-                out[idx] = ExtractedName(
-                    full_name=out[idx].full_name, title=out[idx].title,
-                    source_kind=out[idx].source_kind, evidence=out[idx].evidence,
-                    first_name=name.first_name, last_name=name.last_name,
-                )
     return out[:max_names]

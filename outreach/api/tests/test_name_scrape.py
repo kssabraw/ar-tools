@@ -147,6 +147,59 @@ def test_the_crawl_is_bounded_by_max_pages():
     assert len(fetched) == 2  # homepage + exactly one followed page
 
 
+# --- SSRF guard -------------------------------------------------------------------------------
+
+
+def test_is_public_host_blocks_private_and_metadata():
+    assert not name_scrape.is_public_host("http://localhost/")
+    assert not name_scrape.is_public_host("http://127.0.0.1/")
+    assert not name_scrape.is_public_host("http://169.254.169.254/latest/meta-data/")
+    assert not name_scrape.is_public_host("http://10.0.0.5/")
+    assert not name_scrape.is_public_host("http://192.168.1.1/admin")
+    assert name_scrape.is_public_host("https://acme.com/")
+    assert name_scrape.is_public_host("https://8.8.8.8/")  # a public IP literal
+
+
+def test_a_private_host_website_is_refused_without_fetching():
+    fetched = []
+
+    async def fetch(url):
+        fetched.append(url)
+        return FetchResult(STATUS_OK, url, "<p>Jane Doe, Owner</p>")
+
+    got = asyncio.run(
+        name_scrape.scrape_one(
+            {"id": "p1", "name": "A", "website": "http://169.254.169.254/"}, _Settings(), fetch=fetch
+        )
+    )
+    assert got.status == "unreachable" and got.fetch_status == "blocked"
+    assert fetched == [], "a private/metadata host must never be fetched"
+
+
+def test_a_redirect_to_an_internal_host_discards_the_body():
+    # The homepage fetch 'succeeds' but the final_url is an internal address — the body must not be
+    # parsed or stored.
+    async def fetch(url):
+        return FetchResult(STATUS_OK, "http://127.0.0.1:8080/", "<p>Secret Admin, Owner</p>")
+
+    got = asyncio.run(
+        name_scrape.scrape_one(
+            {"id": "p1", "name": "A", "website": "acme.com"}, _Settings(), fetch=fetch
+        )
+    )
+    assert got.status == "unreachable" and got.names == ()
+
+
+def test_candidate_links_guards_internal_hosts():
+    # A same-host link on an internal-IP base is dropped by the SSRF guard (would otherwise be a
+    # same-host candidate).
+    assert name_scrape.candidate_links('<a href="/about">About</a>', "http://192.168.0.10/",
+                                       max_links=10) == []
+    # A public relative link is kept (and normalised to https via the base).
+    assert name_scrape.candidate_links('<a href="/about">About</a>', "https://acme.com/",
+                                       max_links=10) == ["https://acme.com/about"]
+
+
 # --- scrape_names batch ----------------------------------------------------------------------
 
 
