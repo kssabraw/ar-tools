@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, Clock, Copy, Globe, History, MapPin, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { api } from '../../lib/api'
+import { useResumableJob } from '../../lib/useResumableJob'
 import type {
   FetchMode, FetchSchedule, GscProperty, IngestJobStatus, IngestResponse, RankLocation, SyncRun, VerifyAccessResponse,
 } from '../../lib/types'
@@ -358,31 +359,36 @@ function SyncStatus({ propertyId }: { propertyId: string }) {
     queryKey: ['gsc-sync-runs', propertyId],
     queryFn: () => api.get<SyncRun[]>(`/gsc-properties/${propertyId}/sync-runs`),
   })
-  // "Sync now" enqueues a background ingest (it survives leaving this page) and
-  // we poll the job to completion, refreshing the sync-run history when it lands.
-  const [ingestJobId, setIngestJobId] = useState<string | null>(null)
-  const ingestMut = useMutation({
-    mutationFn: () => api.post<IngestResponse>(`/gsc-properties/${propertyId}/ingest`, {}),
-    onSuccess: (data) => { if (data?.job_id) setIngestJobId(data.job_id) },
-  })
-  const { data: ingestJob } = useQuery<IngestJobStatus>({
-    queryKey: ['gsc-ingest-job', ingestJobId],
-    queryFn: () => api.get<IngestJobStatus>(`/gsc-properties/${propertyId}/ingest/${ingestJobId}`),
-    enabled: !!ingestJobId,
-    refetchInterval: (query) => {
-      const s = (query.state.data as IngestJobStatus | undefined)?.status
-      return s === 'complete' || s === 'failed' ? false : 4000
+  // "Sync now" enqueues a background ingest that runs server-side even if the user
+  // leaves. useResumableJob persists the in-flight job id, so navigating away and
+  // back reconnects and refreshes the sync-run history when it lands.
+  const [ingestOutcome, setIngestOutcome] = useState<{ status: 'failed'; error: string | null } | null>(null)
+  const ingestJob = useResumableJob<unknown, undefined>({
+    storageKey: `rank:gsc-ingest:${propertyId}`,
+    intervalMs: 4000,
+    poll: async (jobId) => {
+      const st = await api.get<IngestJobStatus>(`/gsc-properties/${propertyId}/ingest/${jobId}`)
+      return { status: st.status, error: st.error }
+    },
+    onComplete: () => {
+      setIngestOutcome(null)
+      queryClient.invalidateQueries({ queryKey: ['gsc-sync-runs', propertyId] })
+    },
+    onError: (error) => {
+      setIngestOutcome({ status: 'failed', error })
+      queryClient.invalidateQueries({ queryKey: ['gsc-sync-runs', propertyId] })
     },
   })
-  const ingestStatus = ingestJob?.status
-  useEffect(() => {
-    if (ingestStatus === 'complete' || ingestStatus === 'failed') {
-      queryClient.invalidateQueries({ queryKey: ['gsc-sync-runs', propertyId] })
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ingestStatus])
-  const ingestRunning = ingestMut.isPending
-    || (!!ingestJobId && ingestStatus !== 'complete' && ingestStatus !== 'failed')
+  const runIngest = () => {
+    setIngestOutcome(null)
+    void ingestJob.start(async () => {
+      const data = await api.post<IngestResponse>(`/gsc-properties/${propertyId}/ingest`, {})
+      if (!data?.job_id) throw new Error('ingest_enqueue_failed')
+      return data.job_id
+    }, undefined)
+  }
+  const ingestRunning = ingestJob.running
+  const ingestFailed = ingestOutcome?.status === 'failed'
   const backfillMut = useMutation({
     mutationFn: () => api.post(`/gsc-properties/${propertyId}/backfill`, {}),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['gsc-sync-runs', propertyId] }),
@@ -394,8 +400,8 @@ function SyncStatus({ propertyId }: { propertyId: string }) {
         <Clock size={12} color="#94a3b8" />
         {ingestRunning ? (
           <span style={{ color: '#4338ca' }}>Syncing in the background — you can leave this page.</span>
-        ) : ingestStatus === 'failed' ? (
-          <span style={{ color: '#b45309' }}>Sync failed{ingestJob?.error ? ` · ${ingestJob.error}` : ''}</span>
+        ) : ingestFailed ? (
+          <span style={{ color: '#b45309' }}>Sync failed{ingestOutcome?.error ? ` · ${ingestOutcome.error}` : ''}</span>
         ) : latest ? (
           latest.status === 'ok' ? (
             <span>Last sync {relativeTime(latest.run_at)} · {latest.rows.toLocaleString()} rows</span>
@@ -410,7 +416,7 @@ function SyncStatus({ propertyId }: { propertyId: string }) {
       </div>
       <div style={{ display: 'flex', gap: 6 }}>
         <button style={{ ...outlineBtn, padding: '5px 10px', fontSize: 12 }}
-          onClick={() => ingestMut.mutate()} disabled={ingestRunning}
+          onClick={runIngest} disabled={ingestRunning}
           title="Pull the latest Search Console data now (runs in the background)">
           <RefreshCw size={13} /> {ingestRunning ? 'Syncing…' : 'Sync now'}
         </button>

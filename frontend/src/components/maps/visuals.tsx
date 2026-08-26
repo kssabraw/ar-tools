@@ -7,7 +7,7 @@ import { rankColor, TREND_METRICS } from './rank'
 // per-keyword trend chart. Used by both the in-app module and the printable report.
 
 const GMAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined
-const MAP_SIZE = 480 // logical px of the square static map (requested at scale=2 for sharpness)
+export const MAP_SIZE = 480 // logical px of the square static map (requested at scale=2 for sharpness)
 const muted: React.CSSProperties = { fontSize: 13, color: '#94a3b8' }
 
 // Lat/lng of an in-circle grid cell: pins are spaced 1 mile, row 0 = north.
@@ -20,7 +20,7 @@ function cellLatLng(row: number, col: number, n: number, centerLat: number, cent
 
 // Largest integer Google zoom that fits the ~n-mile-wide grid into ~90% of the
 // image (floored so edge pins never spill outside the map and get clipped).
-function fitZoom(centerLat: number, n: number): number {
+export function fitZoom(centerLat: number, n: number): number {
   const target = (n * 1609.34) / (MAP_SIZE * 0.9) // meters per logical px wanted
   const z = Math.log2((156543.03392 * Math.cos((centerLat * Math.PI) / 180)) / target)
   return Math.max(1, Math.min(16, Math.floor(z)))
@@ -28,7 +28,7 @@ function fitZoom(centerLat: number, n: number): number {
 
 // Web-Mercator projection of a lat/lng to a pixel within a MAP_SIZE square map
 // centered on (centerLat, centerLng) at the given zoom.
-function projectToPixel(lat: number, lng: number, centerLat: number, centerLng: number, zoom: number) {
+export function projectToPixel(lat: number, lng: number, centerLat: number, centerLng: number, zoom: number) {
   const worldSize = 256 * 2 ** zoom
   const px = (lo: number) => ((lo + 180) / 360) * worldSize
   const py = (la: number) => {
@@ -38,9 +38,25 @@ function projectToPixel(lat: number, lng: number, centerLat: number, centerLng: 
   return { x: px(lng) - px(centerLng) + MAP_SIZE / 2, y: py(lat) - py(centerLat) + MAP_SIZE / 2 }
 }
 
+// Inverse of projectToPixel: a logical pixel (x,y within a MAP_SIZE square) back
+// to lat/lng, given the same center + zoom. Used by the placement advisor's
+// click-to-drop (Phase 2) to turn a map click into a scoreable coordinate.
+export function pixelToLatLng(x: number, y: number, centerLat: number, centerLng: number, zoom: number) {
+  const worldSize = 256 * 2 ** zoom
+  const pxCenterLng = ((centerLng + 180) / 360) * worldSize
+  const sC = Math.max(-0.9999, Math.min(0.9999, Math.sin((centerLat * Math.PI) / 180)))
+  const pyCenterLat = (0.5 - Math.log((1 + sC) / (1 - sC)) / (4 * Math.PI)) * worldSize
+  const pxLng = x - MAP_SIZE / 2 + pxCenterLng
+  const pyLat = y - MAP_SIZE / 2 + pyCenterLat
+  const lng = (pxLng / worldSize) * 360 - 180
+  const t = (0.5 - pyLat / worldSize) * 4 * Math.PI
+  const lat = (Math.asin(Math.tanh(t / 2)) * 180) / Math.PI
+  return { lat, lng }
+}
+
 // The base (marker-less) Google Static Map centered on the scan, at a zoom that
 // frames the grid. Null when no API key is configured (→ circular fallback).
-function buildBaseMapUrl(centerLat: number | null, centerLng: number | null, zoom: number): string | null {
+export function buildBaseMapUrl(centerLat: number | null, centerLng: number | null, zoom: number): string | null {
   if (!GMAPS_KEY || centerLat == null || centerLng == null) return null
   return `https://maps.googleapis.com/maps/api/staticmap?center=${centerLat},${centerLng}&zoom=${zoom}` +
     `&size=${MAP_SIZE}x${MAP_SIZE}&scale=2&maptype=roadmap&key=${GMAPS_KEY}`
@@ -172,6 +188,22 @@ export function TrendChart({ keywords, metric }: { keywords: MapsKeywordTrend[];
   const ticks = Array.from({ length: 5 }, (_, i) => yLo + ((yHi - yLo) * i) / 4)
   const fmt = (v: number | null) => (v == null ? '—' : `${metric.lowerIsBetter ? (Math.round(v * 10) / 10) : Math.round(v)}${metric.unit}`)
 
+  // Scans where the grid radius changed. Coverage % is a share of the area
+  // scanned, so widening the grid steps the line down with no ranking change.
+  // The line stays continuous (a break would imply lost history) and the step
+  // is labelled instead, so nobody reads a resize as a decline.
+  const byTime = new Map<number, number>()
+  for (const k of keywords) {
+    for (const p of k.points) {
+      const t = Date.parse(p.completed_at || '') || 0
+      if (p.radius_miles != null && !byTime.has(t)) byTime.set(t, p.radius_miles)
+    }
+  }
+  const ordered = [...byTime.entries()].sort((a, b) => a[0] - b[0])
+  const resizes = ordered
+    .map(([t, r], i) => (i > 0 && r !== ordered[i - 1][1] ? { t, from: ordered[i - 1][1], to: r } : null))
+    .filter((m): m is { t: number; from: number; to: number } => m !== null)
+
   return (
     <div>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W, display: 'block' }} role="img" aria-label={`${metric.label} trend`}>
@@ -179,6 +211,13 @@ export function TrendChart({ keywords, metric }: { keywords: MapsKeywordTrend[];
           <g key={i}>
             <line x1={padL} x2={W - padR} y1={y(tk)} y2={y(tk)} stroke="#eef2f7" strokeWidth={1} />
             <text x={padL - 6} y={y(tk) + 3} textAnchor="end" fontSize={9} fill="#94a3b8">{Math.round(tk)}{metric.unit}</text>
+          </g>
+        ))}
+        {resizes.map((m, i) => (
+          <g key={`resize-${i}`}>
+            <line x1={x(m.t)} x2={x(m.t)} y1={padT} y2={padT + plotH} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3 3" />
+            <text x={x(m.t) + 3} y={padT + 9} fontSize={9} fill="#64748b">{m.to} mi</text>
+            <title>{`Grid resized ${m.from} → ${m.to} miles here. A wider grid measures more outlying area, so coverage % steps even when rankings are unchanged.`}</title>
           </g>
         ))}
         {keywords.map((k, ki) => {
@@ -190,7 +229,7 @@ export function TrendChart({ keywords, metric }: { keywords: MapsKeywordTrend[];
               {pts.length > 1 && <polyline points={line} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />}
               {pts.map((p, i) => (
                 <circle key={i} cx={x(Date.parse(p.completed_at || '') || 0)} cy={y(val(p) as number)} r={2.8} fill={color}>
-                  <title>{`${k.keyword} · ${fmt(val(p))} · ${p.completed_at ? new Date(p.completed_at).toLocaleDateString() : ''}`}</title>
+                  <title>{`${k.keyword} · ${fmt(val(p))} · ${p.completed_at ? new Date(p.completed_at).toLocaleDateString() : ''}${p.radius_miles ? ` · ${p.radius_miles}-mile grid` : ''}`}</title>
                 </circle>
               ))}
             </g>
@@ -208,6 +247,15 @@ export function TrendChart({ keywords, metric }: { keywords: MapsKeywordTrend[];
           )
         })}
       </div>
+      {resizes.length > 0 && (
+        <p style={{ ...muted, marginBottom: 0, marginTop: 8 }}>
+          The dashed line marks where the scan radius changed
+          {` (${resizes.map(m => `${m.from} → ${m.to} mi`).join(', ')})`}. A wider grid
+          measures more outlying area, so coverage % steps down even when rankings
+          haven’t moved. Week-over-week changes and alerts compare only the area both
+          scans share, so they aren’t affected.
+        </p>
+      )}
       {metric.lowerIsBetter && <p style={{ ...muted, marginBottom: 0, marginTop: 8 }}>Lower is better — the line is drawn so up = improving.</p>}
     </div>
   )

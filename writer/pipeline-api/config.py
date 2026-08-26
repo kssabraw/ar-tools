@@ -149,6 +149,14 @@ class Settings(BaseSettings):
     anthropic_max_retries: int = 4
     anthropic_retry_base_seconds: float = 2.0
 
+    # Second Anthropic account for SAME-MODEL failover. When the primary account
+    # saturates (a 429/5xx that outlasts the retry budget above), the same Claude
+    # call is retried on this second account's key — same models, more concurrency
+    # headroom. Empty ⇒ primary only (no failover). Set on the `pipeline` Railway
+    # service alongside ANTHROPIC_API_KEY.
+    anthropic_api_key_secondary: str = ""
+    anthropic_key_failover_enabled: bool = True
+
     # SIE v1.1 - Hybrid entity scoring (replaces the prior hard
     # salience >= 0.40 gate at NLP-extract time). Google NLP returns
     # everything above the floor; entities are then scored on a
@@ -241,6 +249,13 @@ class Settings(BaseSettings):
     writer_entity_coverage_min: float = 0.75
     writer_entity_rewrite_enabled: bool = True
     writer_entity_rewrite_max_sections: int = 3
+
+    # Service page entity-coverage enforcement (Option B) — benchmark the
+    # required entity count against the most aggressive competitor, then rewrite
+    # the weakest content sections when the page covers fewer than
+    # floor × benchmark distinct entities.
+    service_entity_coverage_floor: float = 0.75
+    service_entity_rewrite_max_sections: int = 3
 
     # ------------------------------------------------------------
     # Service Page Brief Generator (PRD §7 - model tiering + cache)

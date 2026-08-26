@@ -54,6 +54,16 @@ def detect_scope(open_drop_count: int, tracked_count: int) -> str:
     return "specific"
 
 
+def count_sudden_drops(drops: list[dict]) -> int:
+    """Open drops that count toward the §A sitewide-decline scope. Pure.
+
+    Sitewide is a SUDDEN cross-keyword signal (algo update / manual action /
+    technical accident), so gradual_drop rows — individual slow multi-week
+    slides — are excluded; a cluster of them is not a sitewide emergency.
+    """
+    return sum(1 for d in drops if d.get("alert_type") != "gradual_drop")
+
+
 def summarize_window(rows: list[dict]) -> Optional[dict]:
     """Aggregate rank_keyword_metrics rows into one window read:
     {impressions, clicks, ctr, position}. Position is the impressions-weighted
@@ -152,6 +162,16 @@ def classify_drop(
 
     if alert.get("alert_type") == "deindexed":
         return {"classification": "B4", "reason": "deindexed_alert", "serp_shift": serp_shift}
+    # A slow, steady multi-week slide is its own diagnostic posture — content
+    # decay / competitor accretion / slow link loss, NOT the sudden-drop ladder.
+    # A concrete own-house problem (cannibalization) still wins if flagged;
+    # otherwise route to the dedicated GRADUAL playbook rather than falling
+    # through to the B2/B3/B4/B5 cascade (which reads recent-window signals a
+    # gradual erosion won't trip).
+    if alert.get("alert_type") == "gradual_drop":
+        if cannibalized and kw in cannibalized:
+            return {"classification": "B1", "reason": "cannibalization_flag", "serp_shift": serp_shift}
+        return {"classification": "GRADUAL", "reason": "gradual_erosion", "serp_shift": serp_shift}
     if cannibalized and kw in cannibalized:
         return {"classification": "B1", "reason": "cannibalization_flag", "serp_shift": serp_shift}
     if serp_shift.get("aio_appeared") or serp_shift.get("intent_changed"):
@@ -224,6 +244,29 @@ RESPONSE_PLAYBOOK: dict[str, dict] = {
             "6) competitor movement."
         ),
         "cta_label": "Open rank tracker",
+        "cta_kind": "rankings",
+    },
+    "GRADUAL": {
+        "label": "Slow multi-week decline",
+        "recommendation": (
+            "A steady slide over weeks, not a sudden break — the page is being out-worked over "
+            "time, not broken. This is content decay / freshness at the page level (SOP §A.6), plus "
+            "the B5 competitor + backlink tail. Don't emergency-triage a recent-window signal that "
+            "isn't there — work the erosion, in order: "
+            "1) Content decay — the page went stale while the SERP freshened: refresh & expand it "
+            "(update stats/dates, answer the current People-Also-Ask, deepen thin sections), then "
+            "re-run the page-type on-page agent (composite <90 → rewrite). "
+            "2) Competitor accretion — open the Organic Rank Analysis report to see who passed you "
+            "and why (authority, depth, freshness), and close that specific gap (SOP §B5.6). "
+            "3) Backlinks — a slow referring-domain slide vs competition (offpage agent): deficient "
+            "against the Link Building gates (×10 discount, within-25%) → fund a link round via the "
+            "Recipe Engine (SOP §B5.5). "
+            "4) Silo & internal links — confirm the silo is intact and interlinked so topical "
+            "authority isn't diluting. "
+            "Prefer refresh + link reinforcement over a rewrite-from-scratch; expect movement ~2 "
+            "weeks after changes, escalate to a Senior SEO strategy review at 6 weeks with no lift."
+        ),
+        "cta_label": "Review rank analysis",
         "cta_kind": "rankings",
     },
 }
@@ -335,15 +378,22 @@ def classify_client_drops(client_id: str, drops: list[dict]) -> dict:
     except Exception as exc:
         logger.warning("drop_classifier.tracked_count_failed", extra={"client_id": client_id, "error": str(exc)})
 
-    scope = detect_scope(len(drops), tracked_count)
+    # Sitewide scope (§A — the algo/manual-action/technical emergency ladder) is a
+    # SUDDEN cross-keyword signal, so gradual_drop rows (individual slow slides)
+    # must not inflate the count and trip a false sitewide banner.
+    sudden_drops = count_sudden_drops(drops)
+    scope = detect_scope(sudden_drops, tracked_count)
     cannibalized = _cannibalized_queries(supabase, client_id)
 
     classified = 0
     for d in drops:
         try:
             keyword_id = d.get("keyword_id")
-            shift = _keyword_serp_shift(supabase, keyword_id) if keyword_id else {}
-            triage = _keyword_triage(supabase, keyword_id) if keyword_id else None
+            # classify_drop ignores serp-shift/triage for a gradual_drop (it routes
+            # to GRADUAL or B1), so skip those per-drop reads for it.
+            is_gradual = d.get("alert_type") == "gradual_drop"
+            shift = _keyword_serp_shift(supabase, keyword_id) if (keyword_id and not is_gradual) else {}
+            triage = _keyword_triage(supabase, keyword_id) if (keyword_id and not is_gradual) else None
             result = classify_drop(d, cannibalized=cannibalized, serp_shift=shift, triage=triage)
             playbook = RESPONSE_PLAYBOOK[result["classification"]]
             d["classification"] = result["classification"]
@@ -365,5 +415,8 @@ def classify_client_drops(client_id: str, drops: list[dict]) -> dict:
                            extra={"client_id": client_id, "keyword": d.get("keyword"),
                                   "error": str(exc)})
 
+    # open_drops feeds the §A sitewide banner text ("N of M keywords down
+    # together"), so report the sudden count that actually defines the emergency,
+    # not the gradual slides excluded from the scope decision above.
     return {"scope": scope, "sitewide": scope == "sitewide", "classified": classified,
-            "open_drops": len(drops), "tracked_count": tracked_count}
+            "open_drops": sudden_drops, "tracked_count": tracked_count}

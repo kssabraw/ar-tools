@@ -6,7 +6,8 @@ import {
 import { localSeoApi } from './api'
 import type { ScoreHistoryRow, ScoreRunMode } from './types'
 import { Spinner } from './Spinner'
-import { card, errorBox, relativeTime, scoreColor, statusLabel } from './shared'
+import { ErrorDetails } from '../ErrorDetails'
+import { card, relativeTime, scoreColor, statusLabel } from './shared'
 
 // All eight engines, in the canonical order the scorer weights them. Includes the
 // deterministic SERP Signal Coverage engine (absent from the live-score view's
@@ -207,7 +208,7 @@ export function ScoreHistoryView({ clientId }: { clientId: string }) {
         </button>
       </div>
 
-      {error && <div style={errorBox}>{error instanceof Error ? error.message : 'Failed to load score history.'}</div>}
+      {error && <ErrorDetails message={error instanceof Error ? error.message : 'Failed to load score history.'} />}
 
       {isLoading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}><Spinner size={22} /></div>

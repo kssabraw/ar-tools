@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     scrapeowl_api_key: str = ""
     openai_api_key: str = ""
     anthropic_api_key: str = ""
+    # Secondary Anthropic account key for SAME-MODEL failover. When the primary
+    # Anthropic account hits a *transient* concurrency/rate limit (429) or 5xx
+    # overload that outlasts its per-key retry budget, the SAME call is retried on
+    # this second account's key — same Claude models, so output quality is
+    # identical (unlike the cross-provider fallback below, which swaps models).
+    # Empty ⇒ no second key and every failover path degrades to primary-only. Set
+    # on all three services (PLATFORM/pipeline/nlp) since each calls Anthropic.
+    anthropic_api_key_secondary: str = ""
     # AI Visibility module (Brand Strength) — the two scan engines whose keys
     # aren't already shared. Absent either, that engine fails its scans with a
     # "not configured" reason; the other engines (chatgpt/claude via the keys
@@ -63,6 +71,9 @@ class Settings(BaseSettings):
     illustration_image_model: str = "gpt-image-1"      # AI illustration renderer
     illustration_image_size: str = "1536x1024"         # landscape hero/body ratio
     illustration_brief_model: str = "gpt-5.4-mini"     # art-direction + chart-series extraction
+    # Nano Banana — Gemini 2.5 Flash Image text-to-image (reuses GEMINI_API_KEY).
+    # Overridable when Google rotates the image tier (e.g. gemini-3.1-flash-image).
+    nano_banana_model: str = "gemini-2.5-flash-image"
     # ── Cross-provider LLM fallback ──────────────────────────────────────────
     # When a primary-provider call (usually Anthropic) hits a *transient* failure
     # that outlasts its per-provider retry budget — a 429 rate/concurrency limit,
@@ -85,6 +96,18 @@ class Settings(BaseSettings):
     # the chain reaches an alternate provider quickly rather than exhausting a
     # long backoff on a saturated primary (2 → ~2s + 4s, then advance).
     llm_fallback_max_retries_per_provider: int = 2
+    # ── Second-Anthropic-account failover (SAME model, distinct account) ──────
+    # Independent of the cross-provider chain above and tried FIRST: an Anthropic
+    # call that a transient limit outlasts is retried on `anthropic_api_key_secondary`
+    # (same models) before any thought of OpenAI/Gemini. No-op when the secondary
+    # key is unset, so it's safe to leave enabled. Covers both the non-agentic
+    # report_llm chain AND the agentic loops (Slack/strategist/PACE), which the
+    # cross-provider chain deliberately does not.
+    anthropic_key_failover_enabled: bool = True
+    # Backoff attempts on the PRIMARY Anthropic key before switching to the
+    # secondary account. Low, so a saturated primary yields to the second account
+    # quickly instead of burning a long backoff (2 → ~2s + 4s, then switch).
+    anthropic_key_failover_max_retries: int = 2
     job_worker_poll_interval_seconds: int = 10
     # Stale-job reaper. In-process jobs (asyncio.to_thread) aren't resumable, so a
     # redeploy or crash mid-run orphans them as status='running' forever. Each
@@ -107,7 +130,46 @@ class Settings(BaseSettings):
         # (before the source_ref dedupe) spawned a duplicate article; 90 min
         # keeps the reaper as a real backstop without firing on healthy runs.
         "content_batch_item": 90,
+        # A Fanout expansion (expand + competitor mining) compounds two ~4-min
+        # budgets plus autocomplete/gate, so it can legitimately run well past the
+        # 30-min default. The reaper requeue is a re-run from scratch, so it MUST
+        # exceed the longest real run or it would spawn a second concurrent
+        # expansion (double spend). 45 min keeps it a genuine backstop only.
+        "fanout_expand": 45,
+        # The remaining durable Fanout pipeline stages (issue #686 Phase 3). Same
+        # rule: the reaper requeue re-runs the stage, so the timeout must exceed
+        # the longest real run. plan (SERP + per-silo orchestrator) and recursive
+        # fanout (paid re-expansion, up to a 15-min budget) both re-spend on
+        # requeue; regate + architecture are cheap re-derivations. 45 min keeps
+        # the reaper a genuine backstop for all of them.
+        "fanout_plan": 45,
+        "fanout_regate": 45,
+        "fanout_fanout": 45,
+        "fanout_architecture": 45,
     }
+    # Dedicated worker lane for the (long, blocking) Fanout pipeline jobs, so a
+    # ~10-min expansion can't tie up the MAIN lane — which owns the stale-job
+    # reaper and every other background job. The MAIN lane excludes these types;
+    # this lane claims only them. Empty list disables the dedicated lane (the
+    # types then fall back to the MAIN lane). See issue #686 Phase 1.
+    fanout_job_types: List[str] = [
+        "fanout_expand", "fanout_plan", "fanout_regate", "fanout_fanout",
+        "fanout_architecture",
+    ]
+    # How many concurrent workers the dedicated fanout lane runs (issue #686
+    # Phase 3). Before Phase 3 the pipeline stages ran on a 2-slot
+    # ThreadPoolExecutor; once they all moved to this single lane, cross-session
+    # pipeline work serialized. 2 restores that parallelism (the async_jobs claim
+    # is an atomic guarded UPDATE, so N workers never double-claim a row). Set to
+    # 1 to throttle to one paid DataForSEO pipeline run at a time.
+    fanout_lane_workers: int = 2
+    # NOTE: the fanout_resumable_expand_enabled flag (issue #686 Phase 2) lives in
+    # the VENDORED fanout config (fanout/config.py), not here — fanout/jobs.py
+    # reads it via fanout.config.get_settings(), a different Settings class, so a
+    # copy here is dead. (fanout_durable_expand_enabled was retired in Phase 3:
+    # every pipeline stage is durable unconditionally now, so the flag and the old
+    # in-process executor path are gone. FANOUT_DURABLE_EXPAND_ENABLED on PLATFORM
+    # is now an inert leftover env var and can be removed.)
     # Interactive worker lane: a second in-process claim loop dedicated to
     # short, user-awaited job types so a just-clicked action never queues
     # behind long background work (brand scans, DataForSEO rank pulls were
@@ -128,6 +190,17 @@ class Settings(BaseSettings):
         # User-awaited GitHub publish with image generation (minutes-long, like
         # local_seo_generate) — must not queue behind the daily scheduler burst.
         "blog_github_publish",
+        # Service-page score / reoptimize — the user is watching the run screen
+        # while these execute (formerly in-request SSE; jobs so a deploy can't
+        # kill them). Same must-not-queue rationale as local_seo_action.
+        "service_page_score", "service_page_reoptimize",
+        # Blog article score / reoptimize (blog/AEO rubric) — same on-screen,
+        # deploy-proof rationale as the service-page pair above.
+        "blog_score", "blog_reoptimize",
+        # User-awaited on-demand actions moved from synchronous requests to jobs
+        # (so the user can navigate away): the PDF reports (WeasyPrint render) and
+        # the backlink lookup (DataForSEO pull on a cache miss).
+        "keyword_research_report", "fanout_report", "backlink_lookup",
     ]
     # Freeze Protocol: daily homepage-indexation check (GSC URL Inspection with a
     # DataForSEO site: warn-only fallback) that can auto-open a deindexing freeze.
@@ -340,6 +413,27 @@ class Settings(BaseSettings):
     # Weekly query×page ingest window (canonical-URL resolution + Pages view).
     gsc_page_window_days: int = 30
     # ------------------------------------------------------------------
+    # Google Analytics (GA4) ingestion — Client Reporting Phase 2.
+    # DORMANT until (a) the GA4 Data + Admin APIs are enabled on the GCP
+    # project the service account lives in and (b) the service account is added
+    # as a Viewer on each client's GA4 property. Reuses
+    # `google_service_account_key` (with the added analytics.readonly scope) via
+    # REST + a minted token (no new dependency). Left off by default so the
+    # scheduler pass + ingest are no-ops until access lands. Run
+    # `scripts/verify_ga4_api_access.py` to confirm access before flipping this on.
+    # See docs/modules/client-reporting-prd-v1_0.md (Phase 2).
+    ga4_ingest_enabled: bool = False
+    # Each daily run re-pulls the trailing window (GA4 data settles over ~1–2
+    # days; idempotent upserts make the overlap harmless and a missed run
+    # self-heals on the next pull).
+    ga4_repull_days: int = 3
+    # The scheduler enqueues one ingest job per verified property once a day,
+    # after this hour (UTC), same shared loop as the GSC/GBP ingest.
+    ga4_ingest_hour_utc: int = 8
+    # One-time historical backfill window (days). GA4 keeps data for the
+    # property's retention setting; pull a generous window so the store keeps it.
+    ga4_backfill_days: int = 400
+    # ------------------------------------------------------------------
     # Google Business Profile (GBP) performance-metrics ingestion.
     # DORMANT until (a) Google approves Business Profile API quota for the GCP
     # project the service account lives in and (b) the service account is added
@@ -379,6 +473,12 @@ class Settings(BaseSettings):
     # Append utm_source=gbp&utm_medium=post&utm_campaign=<slug> to CTA links so
     # post→site clicks are attributable (GA4, once connected).
     gbp_post_default_utm: bool = True
+    # Bulk "create N posts from a page URL": the page content fed to each draft
+    # (chars), and the stagger between the per-post jobs (short — a draft is one
+    # fast Claude call, unlike the 180s local-seo page generation).
+    gbp_post_source_chars: int = 5000
+    gbp_post_bulk_spacing_seconds: int = 5
+    gbp_post_max_bulk: int = 99
     # Daily live-state reconciliation (catches async REJECTED + imports external
     # posts). One sync job per client with an ok location, after this hour (UTC).
     gbp_posts_sync_hour_utc: int = 9
@@ -419,6 +519,13 @@ class Settings(BaseSettings):
     # last `rank_gsc_coverage_days` days; otherwise it falls back to DataForSEO.
     dataforseo_rank_weekday: int = 0
     rank_gsc_coverage_days: int = 14
+    # Gradual-drop alert: a slow, sustained multi-week slide the window-over-window
+    # rank rules miss (e.g. ~1 spot/week erosion that never accumulates ≥6 spots
+    # inside a single 7- or 30-day window). Opens a `gradual_drop` rank alert with
+    # the same notification/episode machinery as the sudden drops. The numeric
+    # thresholds are module constants in services/rank_alerts.py; this only gates
+    # the detector on/off. Set False if it proves noisy.
+    rank_gradual_drop_enabled: bool = True
     dataforseo_serp_depth: int = 100  # find rank within the top 100, else "not ranking"
     dataforseo_default_location_code: int = 2840  # United States
     dataforseo_default_language_code: str = "en"
@@ -442,6 +549,11 @@ class Settings(BaseSettings):
     # Weekly geo-grid scans fire on this weekday (0=Mon..6=Sun) via the shared
     # scheduler; the scheduler also polls in-flight scans each tick until done.
     maps_scan_weekday: int = 1
+    # Default hour-of-day (0-23) a scheduled scan fires at, expressed in the
+    # CLIENT'S local timezone. Used when a config's own maps_scan_configs.scan_hour
+    # is unset/out-of-range. The scheduler evaluates maps due-ness every cycle so a
+    # client fires near this local hour rather than at a single global UTC time.
+    maps_scan_hour: int = 8
     # How long (minutes) to keep polling a scan before marking it failed.
     maps_scan_poll_timeout_minutes: int = 30
     # ── Maps geo-grid provider switch (Local Dominator → DataForSEO) ──────────
@@ -451,10 +563,17 @@ class Settings(BaseSettings):
     # DataForSEO dormant) | 'dataforseo'.
     maps_scan_provider: str = "local_dominator"
     # DataForSEO Maps SERP per-pin params. The zoom in location_coordinate
-    # ("lat,lng,<zoom>"): 15z ≈ a 1–2-mile viewport matching our 1-mile pin
-    # spacing (14z ≈ ~3 mi) — calibrated during the parallel-run (§7). depth 20
-    # mirrors LD's top-20/pin and fits DataForSEO's base price.
-    maps_dfs_zoom: str = "15z"
+    # ("lat,lng,<zoom>") sets the simulated viewport WIDTH at each pin, and the
+    # viewport must cover the pin→business distance (the grid RADIUS, not the
+    # pin spacing) or the client can't appear at outer pins at all: at 15z
+    # (~1-mile viewport) a 5-mile grid collapsed to the ~12 pins nearest the
+    # business (parallel-run finding, 2026-08-07 — LD found the client on 76–92
+    # of 97 pins where DFS found exactly 12). Zoom is therefore derived from
+    # each scan's radius_miles (maps_dataforseo.zoom_for_radius, anchored 5 mi
+    # ↔ 13z per the LeadOff scanner's calibration); this setting is a manual
+    # override — leave empty for auto. depth 20 mirrors LD's top-20/pin and
+    # fits DataForSEO's base price.
+    maps_dfs_zoom: str = ""
     maps_dfs_depth: int = 20
     # Per polling tick, per DataForSEO scan: cap on task_get calls (oldest pins
     # first) and how many run concurrently. task_get is free — this just paces
@@ -507,6 +626,17 @@ class Settings(BaseSettings):
     # Set RANK_ANALYSIS_PROVIDER=anthropic to revert (uses rank_analysis_model).
     rank_analysis_provider: str = "openai"        # openai | anthropic
     rank_analysis_openai_model: str = "gpt-5.4"
+
+    # Outreach "Why call?" hook — the loss-framed LLM phrasing pass over the deterministic
+    # justification facts (services/outreach_call_hook.py). ONE small call per report, cached per
+    # (prospect, snapshot), best-effort with a deterministic fallback, and a hard grounding guard
+    # (no invented money / lead-volume numbers). Low volume + cached, so it defaults to Anthropic
+    # (no fan-out 429 exposure like the maps report); flip the provider to reuse OpenAI's quota.
+    outreach_call_hook_llm_enabled: bool = True
+    outreach_call_hook_provider: str = "anthropic"   # anthropic | openai
+    outreach_call_hook_model: str = "claude-sonnet-4-6"
+    outreach_call_hook_openai_model: str = "gpt-5.4"
+    outreach_call_hook_max_tokens: int = 700
     rank_analysis_max_retries: int = 6
     rank_analysis_retry_base_seconds: float = 2.0
     # Weekly auto-generation: gated on this flag; runs the day after the weekly
@@ -555,6 +685,11 @@ class Settings(BaseSettings):
     client_report_health_max_tokens: int = 1100
     # White-label: the agency name shown in the client-facing report footer.
     client_report_agency_name: str = "Amazing Rankings"
+    # GBP reviews this-period-vs-last-period: fetch the dated review list (one paid
+    # Outscraper call per report) to count new reviews per period + surface recent
+    # highlights. Off → the report falls back to the review-count snapshot series.
+    client_report_gbp_reviews_enabled: bool = True
+    client_report_review_fetch_limit: int = 200
 
     # Reoptimization planner — turns rank-tracker signals (open drops, rankability
     # Quick wins, GSC-Research cannibalization/hidden-wins) into a ranked,
@@ -714,6 +849,19 @@ class Settings(BaseSettings):
     maps_alert_area_coverage_drop_pct: float = 25.0  # per-octant Top-3 coverage drop (pts) → area_decline
     maps_alert_area_rank_drop: float = 2.0          # per-octant avg-rank worsening (spots) → area_decline
     maps_alert_competitor_surge_pins: int = 5       # min newly-above pins for competitor_surge
+    # Gradual local-pack decline: a slow, sustained slide across many scheduled
+    # scans that no single scan-over-scan threshold catches (the local-pack
+    # analogue of the organic gradual_drop). Measured over a trailing window on
+    # the scan time series (grid-resize-normalized), opens a `gradual_decline`
+    # maps alert. Numeric bars are cumulative-over-the-window, deliberately below
+    # the per-scan sudden thresholds above. Set enabled False to disable.
+    maps_gradual_decline_enabled: bool = True
+    maps_gradual_window_days: int = 56      # ~8 weeks of scheduled scans
+    maps_gradual_min_points: int = 4        # scan points (per metric) needed to judge a trend
+    maps_gradual_rank_drop: float = 3.0     # cumulative avg-grid-rank worsening (spots) to fire
+    maps_gradual_top3_drop: float = 15.0    # cumulative Top-3 coverage fall (points) to fire
+    maps_gradual_max_scans: int = 60        # ABSOLUTE ceiling on scans loaded (bounds load); the
+                                            # operative cap is derived from the window (see _gradual_signals)
 
     # Competitor GBP intelligence (Tier B / B1): how many of the latest scan's
     # top local-pack competitors to fetch full GBP profiles for (each fetch is an
@@ -811,6 +959,11 @@ class Settings(BaseSettings):
     # A seed is flagged as "essentially the business name" (advisory warning) when
     # at least this fraction of its tokens are the client's brand tokens.
     keyword_research_brand_seed_ratio: float = 0.6
+    # Below this many RAW keyword candidates (unique, before any gate), a run warns
+    # that the seeds are too specific for the expansion sources — the niche-seed
+    # guidance. Measured on the raw pool, so a big pool trimmed by the gates never
+    # trips it. FreightOptics' 3-word "3pl audit software" seeds returned ~16.
+    keyword_research_thin_pool_min: int = 25
     # Primary expansion source: keyword_suggestions (phrase-containment — every
     # result contains the seed phrase, so it stays tightly on-topic). One billed
     # call per seed. Set False to use keyword_ideas alone (the old behaviour).
@@ -822,12 +975,42 @@ class Settings(BaseSettings):
     # facts"), and the phrase-containment suggestions alone give a rich, on-topic
     # set. Turn on for extra cross-topic reach at the cost of some noise. When
     # suggestions are off, ideas run regardless (there must be at least one source).
-    keyword_research_broaden_with_ideas: bool = False
+    keyword_research_broaden_with_ideas: bool = True
     # Broaden with related_keywords (Google's "searches related to" graph). ON by
     # default: unlike keyword_ideas it surfaces adjacent terms that don't contain
     # the seed phrase ("historic preservation" → "adaptive reuse") while staying
     # on Google's related graph, so it broadens without the category drift.
     keyword_research_broaden_with_related: bool = True
+    # Brand-flood gate on the related_keywords adjacency layer (KR's one ungated
+    # broadener). related_keywords can surface a competitor brand or homonym and
+    # then flood the run with its namespace — e.g. "third party claims adjuster"
+    # pulled a "Mitchell" (claims-software vendor) cluster of ~45 keywords
+    # ("mitchell connect", "mitchell prodemand") including homonym skincare
+    # ("mitchell usa serum"), ~14% of the whole run. The gate looks only at the
+    # SEEDLESS neighbours (those sharing no seed token — legit seed-anchored
+    # adjacency like "historic preservation office" is never a candidate) and
+    # drops any dominated by a single non-seed token that appears in >= _fraction
+    # AND >= _min of them; diverse legit adjacency ("adaptive reuse") has no
+    # dominant token and survives. Deliberately conservative (validated on live
+    # runs: catches Mitchell 73%/Frontline 76%, leaves lower-concentration topical
+    # drift and clean runs untouched). Set False to disable.
+    keyword_research_brand_flood_filter: bool = True
+    keyword_research_brand_flood_fraction: float = 0.4
+    keyword_research_brand_flood_min: int = 8
+    # Generic filler-token drift gate on the same related_keywords layer. A
+    # multi-word entity seed can carry a bleached filler word that is a huge
+    # standalone category — "third PARTY claims administrator" — and the related
+    # graph wanders into the filler's own sense ("party" → "party rentals",
+    # "birthday party"). Those share the filler SEED token, so the brand-flood
+    # gate (non-seed tokens only) and the ≥2-overlap coherence gate (withheld from
+    # the trusted related layer) both miss them. This gate drops a related keyword
+    # whose ONLY seed overlap is a single filler token, but ONLY when the seed has
+    # ≥2 DISTINCTIVE (non-filler) tokens carrying the topic — so a seed genuinely
+    # ABOUT the filler ("party rental company", "party planning") is never gated.
+    # A filler needs >= _min such solo-overlap keywords to be flagged. Set False
+    # to disable.
+    keyword_research_generic_drift_filter: bool = True
+    keyword_research_generic_drift_min: int = 5
     # related_keywords expansion hops (0 = seed only, 1 = its related searches,
     # 2 = related-of-related; higher = broader but more wander) + per-seed cap.
     keyword_research_related_depth: int = 2
@@ -842,11 +1025,108 @@ class Settings(BaseSettings):
     # scheduled articles (one article per keyword) — bounds the batch a user can
     # queue in one click.
     keyword_research_scheduler_max: int = 100
+    # SERP enrichment pass (People Also Ask + competitive intelligence). For the
+    # first _serp_max_seeds seeds, one live Google SERP call each yields BOTH the
+    # PAA questions (folded into the keyword universe AND surfaced as a list) and
+    # the SERP-competitor landscape (top organic domains across the seeds + who's
+    # cited in the AI Overview). One paid call per analyzed seed (~$0.002 each),
+    # metered against the daily budget. Set False to skip the pass entirely.
+    keyword_research_serp_enrichment: bool = True
+    keyword_research_serp_depth: int = 20          # SERP depth (top organic + PAA + AIO)
+    keyword_research_serp_max_seeds: int = 5       # cap SERP calls (first N seeds only)
+    keyword_research_serp_top_competitors: int = 10  # competitor domains surfaced
     # Client-facing keyword research PDF report: the exec-summary LLM (best-effort,
     # Anthropic with OpenAI→Gemini fallback via report_llm; deterministic fallback
     # summary when no key is set).
     keyword_research_report_model: str = "claude-sonnet-4-6"
     keyword_research_report_max_tokens: int = 600
+    # Seed/topic suggestions ("give me seeds to start with"): a cheap LLM call
+    # (Haiku — categorization only) grounded on the client's business context,
+    # with a deterministic GBP-derived fallback when no key is set.
+    keyword_research_seed_model: str = "claude-haiku-4-5-20251001"
+    keyword_research_seed_max_tokens: int = 400
+    # Client-grounded topical research (keyword_research_topics): read the client's
+    # site topics + fan out the seed INTENT, so the run researches the client's
+    # real topics (not just the literal seed string) and the relevance gate anchors
+    # on a rich on-topic set. Master switch + its parts (each best-effort — a
+    # missing site/LLM/key degrades to the token gates, never aborts the run).
+    keyword_research_topical: bool = True
+    keyword_research_site_topics: bool = True          # read the client's site pages for topics
+    keyword_research_site_topic_cap: int = 40          # max site topics harvested
+    keyword_research_intent_fanout: bool = True        # LLM fan-out of the seed intent
+    keyword_research_intent_model: str = "claude-haiku-4-5-20251001"
+    keyword_research_intent_max_tokens: int = 500
+    keyword_research_intent_max: int = 12              # max sub-intents surfaced/anchored
+    keyword_research_intent_expansion_cap: int = 4     # extra expansion seeds fed to suggestions
+    # Gemini semantic relevance gate (keyword_research_relevance): score each merged
+    # keyword by max cosine similarity to the anchor set (seeds + intents + site
+    # topics) and drop those below the floor (phrase-containment keywords are always
+    # kept). Best-effort — skipped when GEMINI_API_KEY is unset. The floor is
+    # calibrated conservatively for gemini-embedding-2 SEMANTIC_SIMILARITY cosine;
+    # every keyword keeps its score (relevance_score) so it's sortable and the floor
+    # is tunable from real runs. Set False to disable the semantic layer entirely.
+    keyword_research_semantic_relevance: bool = True
+    # Calibrated on a live BSA Claims run (2026-08-08): the on-topic core scores
+    # ≥ ~0.72, clear junk ("mattress firm warranty claim", "is life extension third
+    # party tested") sits below 0.70, and real competitor brands (Crawford ~0.67,
+    # Pilot Catastrophe ~0.58) sit in between. Set to 0.62 (owner ruling) to KEEP
+    # competitor-brand visibility while still trimming the clearest junk; the
+    # biggest drift source (a domain-ambiguous expansion seed) is removed at the
+    # source by domain_anchored, so the floor is only a backstop. Raise toward ~0.68
+    # for stricter, brand-free results.
+    keyword_research_relevance_floor: float = 0.62
+    keyword_research_relevance_anchor_cap: int = 60    # bound the embedded anchor set
+    keyword_research_embedding_model: str = "gemini-embedding-2"
+    # Audience-fit filter (keyword_research_audience): drop keywords that target the
+    # WRONG audience for the client's buyer — the universal job-seeker/career guard
+    # (salary/jobs/how-to-become/…) plus an ICP-grounded LLM pass that returns the
+    # client-specific wrong-audience vocabulary (for a B2B TPA: public-adjuster /
+    # licensing / DIY-consumer terms). Relevance ≠ buyer fit: "insurance adjuster
+    # salary" is on-topic but targets job-seekers, not the carriers who hire a TPA
+    # (55% of a live BSA Claims run). Best-effort — the ICP layer degrades to the
+    # universal guard; set _filter False to disable entirely.
+    # Navigational + competitor-brand filter (keyword_research_navigational): drop
+    # support/lookup keywords ("<brand> phone number", "login", "claim status") and
+    # competitor-brand lookups, keeping competitor COMPARISON keywords.
+    keyword_research_navigational_filter: bool = True
+    keyword_research_competitor_filter: bool = True    # the competitor-brand half
+    keyword_research_audience_filter: bool = True
+    keyword_research_audience_icp: bool = True         # the ICP-grounded LLM off-audience pass
+    keyword_research_audience_model: str = "claude-haiku-4-5-20251001"
+    keyword_research_audience_max_tokens: int = 400
+    keyword_research_audience_max_terms: int = 30      # cap ICP off-audience terms
+    # Blog-topic idea generator (keyword_research_content): on-demand, turns a run's
+    # BUYER-FIT keywords + the ICP into blog post ideas (title + angle + target
+    # keywords). One LLM call, cached on the run.
+    keyword_research_topic_model: str = "claude-sonnet-4-6"
+    keyword_research_topic_max_tokens: int = 1500
+    keyword_research_topic_count: int = 12             # blog ideas per generation
+    keyword_research_topic_keyword_cap: int = 60       # buyer-fit keywords fed to the LLM
+    # Problem-first Topic Research (keyword_topic_research): start from the buyer's
+    # PROBLEMS (ICP + differentiators + the client's own site themes), validate each
+    # theme with real demand (a live SERP → People Also Ask + suggestions), and mine
+    # the top competitors' informational keywords → ranked topic cards. Paid calls
+    # per run ≈ themes×2 + competitors, budget-metered on the shared keyword_research
+    # meter. Distinct from keyword expansion (which researches the seed's variations).
+    keyword_topic_model: str = "claude-sonnet-4-6"
+    keyword_topic_max_tokens: int = 2000
+    keyword_topic_max_themes: int = 8                  # buyer problem-themes per run
+    keyword_topic_serp_depth: int = 20                 # SERP depth per theme (PAA + organic)
+    keyword_topic_serp_top: int = 10                   # top organic results kept per theme
+    keyword_topic_suggestion_limit: int = 200          # suggestions fetched per theme
+    keyword_topic_max_competitors: int = 3             # competitor domains mined
+    keyword_topic_competitor_kw_limit: int = 300       # ranked keywords pulled per competitor
+    keyword_topic_competitor_sample: int = 15          # informational competitor kws kept
+    # Strategist-grade Topic Research (keyword_topic_strategist): a bounded tool-use
+    # reasoning loop that grounds the plan on the agency content SOPs (Seed Keyword /
+    # On-Page Coverage / AEO / Site Architecture) + the client's REAL position (from
+    # the shared context providers) and emits a topical-authority plan (pillars →
+    # clusters). Falls back to the deterministic topic cards when disabled/unavailable.
+    keyword_topic_strategist_enabled: bool = True
+    keyword_topic_strategist_max_tokens: int = 8000    # room for a full pillar/cluster plan
+    keyword_topic_max_drilldowns: int = 4              # investigation tool calls per run
+    keyword_topic_sop_char_budget: int = 16000         # SOP grounding block size
+    keyword_topic_context_char_budget: int = 12000     # client-position JSON size
 
     # On-site content comparison (Tier B / B5): how many competitor pages to
     # scrape per keyword, and the thresholds to flag a content gap (words thinner
@@ -964,6 +1244,16 @@ class Settings(BaseSettings):
     # empty (no gate). Keep ≳ a single item's runtime so an interactive job waits
     # behind at most the currently-running bulk item.
     local_seo_bulk_job_spacing_seconds: int = 180
+    # WheelHouse IT location/service page poster (client-gated via the per-client
+    # clients.wheelhouse_cpt_enabled flag). LLM that fills the 33 ACF fields.
+    wheelhouse_provider: str = "anthropic"
+    wheelhouse_model: str = "claude-sonnet-4-6"
+    # Headroom for 25 fields incl. a 200-word body + several 50–90-word bodies;
+    # too low truncates the tool_use JSON and silently drops fields.
+    wheelhouse_max_tokens: int = 6000
+    # Spacing between per-leaf jobs in a mass (city×service) run — same rationale
+    # as local_seo_bulk_job_spacing_seconds (background priority + reaper safety).
+    wheelhouse_bulk_job_spacing_seconds: int = 120
     # Content Scheduler (suite bulk page creation + scheduling). Max keywords per
     # batch; per-content-type $/page cost estimate (the deliberate fix for the
     # Fanout scheduler's caveat of estimating every type at the blog constant);
@@ -1434,6 +1724,36 @@ class Settings(BaseSettings):
     leadoff_proximity_radius_miles: float = 10.0
     leadoff_proximity_min_pins: int = 5
     leadoff_proximity_weak_frac: float = 0.25
+    # GBP Placement Advisor (leadoff-gbp-placement-plan-v1_0.md §10): the
+    # demand-aware "where should the GBP live" read. Free core = the Census
+    # ACS block-group demand surface (census_demand.py, $0) ÷ the live
+    # competitor-GBP pressure field, scored on the same 1-mile lattice as the
+    # geo-grid and computed on read by leadoff_placement.py. Advice/display
+    # only — NEVER a grade input (grade safety, plan §7).
+    leadoff_placement_enabled: bool = True
+    placement_analysis_radius_miles: float = 10.0   # the candidate lattice extent
+    placement_demand_decay_miles: float = 5.0       # D_DEMAND — customers travel far
+    placement_pressure_decay_miles: float = 2.0     # D_DECAY — locked to proximity's
+    placement_zone_count: int = 4                   # top zones surfaced
+    placement_min_separation_miles: float = 2.0     # neighborhood-sized, not clumped
+    placement_min_pins: int = 5                     # thin-data floor (== proximity)
+    placement_min_blockgroups: int = 8              # below this the advisor declines
+    # w_cat demand weights on the same free Census pull — ships ON but weight-0
+    # until the calibration loop (plan §8) earns them; 0 → pure households.
+    placement_income_weight: float = 0.0
+    placement_housing_age_weight: float = 0.0
+    # Phase 3 opt-in paid ZIP-volume layer (gated on the §4.3.2 feasibility
+    # probe passing) — off until then; a scan is "inconclusive" when more than
+    # this share of ZIPs return null volume (Google thresholds small geos).
+    leadoff_zip_demand_enabled: bool = False
+    placement_zip_null_share_inconclusive: float = 0.6
+    # Phase 0b feasibility probe (services/leadoff_zip_demand.py): a ~$0.05
+    # DataForSEO check on a known high-volume market (default Chicago ZIPs,
+    # "plumber") confirming per-ZIP volumes come back non-null before Phase 3 is
+    # built. Prefix is a leading ZIP substring ('606' = Chicago, '900' = LA).
+    leadoff_zip_probe_keyword: str = "plumber"
+    leadoff_zip_probe_zip_prefix: str = "606"
+    leadoff_zip_probe_count: int = 10
     # Score enrichment (owner ruling 2026-07-12): today's context signals are
     # promoted to grade inputs as bounded, config-weighted multipliers on the
     # winnability (rankability) and demand pillars. Deliberately conservative
@@ -1471,6 +1791,110 @@ class Settings(BaseSettings):
     # Kill switch independent of the credentials, so the module can be taken
     # off the suite without unsetting keys the Railway job also needs.
     outreach_enabled: bool = True
+
+    # --- Any-city onboarding: geo enumeration of a typed city's sub-areas -------
+    # A scan targets a submarket (a city sub-area) with a fixed 81-point grid. To
+    # let an operator type ANY city instead of picking a pre-seeded one, the suite
+    # resolves the city (Google geocoding), enumerates its real sub-areas from
+    # OpenStreetMap (`place=<type>` nodes via Overpass — Google has no
+    # "list a city's neighbourhoods" endpoint), then keeps only those Google
+    # geocoding VERIFIES as inside the city. Same pipeline the Local SEO
+    # neighbourhood silo rides; these knobs are outreach-scoped so tuning one
+    # tool never moves the other.
+    outreach_subarea_place_types: str = "suburb,neighbourhood,quarter,city_district,borough"
+    # Overpass search radius (km) around the city centre — only used as a fallback
+    # when the city's geocoded bounding box is unavailable (rare); normally the
+    # box drives containment.
+    outreach_subarea_radius_km: float = 20.0
+    # Cap OSM candidates BEFORE Google verification, so a huge metro can't fan out
+    # into hundreds of paid geocode calls in one enumeration.
+    outreach_subarea_max_candidates: int = 60
+    # Final cap on sub-areas returned to the picker.
+    outreach_subarea_max_results: int = 60
+    # Bounds padding (fraction of the box span) for the inside-the-city test —
+    # slack for a sub-area sitting right on the city edge.
+    outreach_subarea_bounds_pad: float = 0.15
+
+    # Geometry for the rows the any-city "City + Business type" form creates. The
+    # market row's radius is a rough metro extent (used only for that row); the
+    # sub-area's SCAN grid is 5-mile / 1-mile — the pinned 81-point grid the
+    # geometry generator produces. Grid geometry is immutable once scanned, so a
+    # repeat pick of the same sub-area reuses the existing submarket, never a new
+    # one with a drifted centre.
+    outreach_onboard_market_radius_miles: float = 25.0
+    outreach_onboard_grid_radius_miles: float = 5.0
+    outreach_onboard_grid_spacing_miles: float = 1.0
+
+    # --- Call-hook justification (the caller's "why this is a lead" talking points) ------------
+    # The per-prospect phone-call hook (outreach PRD §716; HANDOFF §12 item 1) — deterministic
+    # talking points assembled from scan data a caller reads before dialing. Read-only; spends
+    # nothing. `pack_size` is the Google map-pack depth used to decide "who is beating you here"
+    # (the pack is 3 spots); `max_competitors` caps how many rivals the hook names; the review
+    # comparison is withheld unless at least `field_review_min_sample` businesses in the submarket
+    # have a known review count, so a thin sample never invents a field median to pitch against.
+    outreach_call_hook_pack_size: int = 3
+    outreach_justification_max_competitors: int = 3
+    outreach_field_review_min_sample: int = 5
+    # White-label name in the footer of the client-facing report PDF (increment 4). Mirrors the
+    # suite's client_report_agency_name; a prospect-facing asset should carry the agency's name.
+    outreach_report_agency_name: str = "Amazing Rankings"
+    # The approved client-facing PDF is stored in the private `outreach-reports` bucket and delivered
+    # as a signed URL (reporting-layer-spec §5) so a client gets a link, not an emailed file. Default
+    # 90 days per the spec; the URL is re-signable from the stored path without re-approving.
+    outreach_report_bucket: str = "outreach-reports"
+    outreach_report_url_ttl_days: int = 90
+    # Paid-placement: how much of the area a business must be MISSING from before "paying and
+    # losing" is a fair thing to say about it. Config rather than a literal because it decides
+    # whether a prospect-facing sentence is made at all — a threshold buried in a function body is
+    # one nobody can find when a pitch reads wrong (the same complaint as land_mask_null_scans).
+    outreach_paying_losing_deficit_pct: float = 50.0
+
+    # --- Emit (Phase 3 — the optional outbound-queue webhook; outreach PRD §C) ------------------
+    # Emit posts an AUDIT-READY QUEUE (not generated assets) as plain JSON to whatever URL is set
+    # here — any HTTP receiver (Zapier, Make, a custom endpoint, ...). The PRD named n8n / Encharge
+    # only as EXAMPLES of a downstream sender; nothing depends on them. LEAVE EMPTY if you have no
+    # automated sender: emit still writes the lead + outcome (the non-backfillable substrate) and
+    # reports delivered=false, and logging a call (the `touch` path) captures outcomes with no
+    # webhook at all — that is the primary capture path for a manual phone workflow.
+    outreach_emit_webhook_url: str = ""
+    # Optional bearer token sent as `Authorization: Bearer <token>` when the webhook needs one.
+    outreach_emit_webhook_token: str = ""
+    outreach_emit_webhook_timeout_s: float = 10.0
+    # The outcome's modelling metadata, stamped at emit / first-touch. Config, never hardcoded
+    # (scoring-spec §10 — zero hardcoded params). `sequence_version` is the Phase-6 confounder stamp;
+    # `touches_per_sequence` is the planned sequence length recorded at send (DECISIONS — 5).
+    outreach_sequence_version: str = "phone_v1"
+    outreach_touches_per_sequence: int = 5
+    outreach_emit_channel_default: str = "phone"
+    # Pre-Phase-4 default selection_reason (scoring-spec §7; ISSUES I-102). 'manual' because a
+    # hand-picked pre-model contact is neither a Thompson draw nor the random-control hold-out —
+    # labelling it 'random_control' would poison the baseline that bucket exists to measure.
+    outreach_default_selection_reason: str = "manual"
+
+    # --- Lead enrichment (contact names / phones / emails) --------------------------------------
+    # The PLACEMENT side of the spend gate: platform-api writes a signed `enrichment_request` order
+    # (it never spends — the outreach `tick` drains it) and enforces the per-user daily budget here,
+    # mirroring LeadOff's leadoff_spend guard but using the order rows themselves as the ledger. The
+    # cost rate drives the free preflight estimate + the budget check; keep it in sync with the
+    # outreach job's enrich_cost_per_place_cents (that one drives the drain's cost_ledger write).
+    outreach_enrich_cost_per_place_cents: int = 5
+    # Per-user daily enrichment ceiling (USD). Enforced against the sum of a user's orders placed
+    # today. Set from the real Outscraper plan before a production run (I-022 — the guard is exactly
+    # as honest as the rate above).
+    outreach_enrich_daily_budget_usd: float = 10.0
+    # The enricher set frozen onto each order at placement. `domains_service` is the one that actually
+    # SCRAPES emails + contact names + phones from the business's (GBP) website — the repo's own
+    # convention for a contact pull (pixel_probe / run_market `--enrichment` default). The other two
+    # only post-process what it finds: `emails_validator_service` validates the emails (→
+    # email.emails_validator.status), `phones_enricher_service` adds phone carrier/type. Requesting the
+    # validators WITHOUT the scraper is why the first live run returned name_for_emails but zero emails
+    # (I-109 confirmed against a real response). Kept as a string; overridable by one env var.
+    outreach_enrich_enrichments: str = (
+        "domains_service,emails_validator_service,phones_enricher_service"
+    )
+    # A selection larger than this is refused at placement (the drain enforces the same cap). A bigger
+    # "select all" is split into several orders by the UI.
+    outreach_enrich_max_places_per_order: int = 200
 
     leadoff_income_acs_year: int = 2023
     leadoff_income_refresh_days: int = 365
@@ -1535,10 +1959,10 @@ class Settings(BaseSettings):
     # dark and on its own axis from the builder flag: turning the builder on must
     # not start spending on images, and a 40-page bulk-create is 40 renders.
     website_images_enabled: bool = False
-    # v1 renders through the suite's proven gpt-image-1 path (services/illustration
-    # .py); 'gemini' is reserved for a future renderer that isn't built yet, so the
-    # effective provider today is openai regardless of this value.
-    website_image_provider: str = "openai"
+    # No provider key here on purpose: heroes render through the suite's one
+    # image path (services/illustration.py) and are tuned by its
+    # illustration_image_* settings. A second knob that nothing reads only
+    # invites someone to set it and expect a different renderer.
 
     class Config:
         env_file = ".env"

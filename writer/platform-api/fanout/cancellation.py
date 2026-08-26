@@ -49,19 +49,6 @@ def clear(session_id: str) -> None:
         _events.pop(session_id, None)
 
 
-def owned_sessions() -> list[str]:
-    """Session ids this process currently holds a registration for — used by the
-    shutdown hook to mark its own in-flight runs as interrupted (run_recovery.py).
-
-    `register` is called at the start of each job and `clear` in its `finally`,
-    so this is the process's live set. It can also contain a session whose only
-    registration came from `/cancel` (`set_cancelled` creates the event on
-    demand); that session's status is already `cancelled`, and the recovery write
-    only touches rows still in a live status, so it's a harmless inclusion."""
-    with _lock:
-        return list(_events)
-
-
 def set_cancelled(session_id: str) -> None:
     """Called by the /cancel endpoint."""
     _event_for(session_id).set()

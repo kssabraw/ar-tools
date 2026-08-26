@@ -11,6 +11,7 @@ import logging
 import time
 from typing import Any, Optional
 
+from config import settings
 from models.service_writer import (
     SCHEMA_VERSION,
     Block,
@@ -24,7 +25,7 @@ from modules.service_brief import cost
 from modules.writer.distillation import distill_brand_voice
 from modules.writer.voice_compliance import check_person, check_preferred_terms
 
-from . import generation
+from . import entity_coverage, generation
 from .jsonld import build_jsonld
 from .render import count_words, render_html, render_markdown, render_wordpress
 
@@ -98,6 +99,9 @@ async def run_service_writer(request: ServiceWriterRequest) -> ServiceWriterResp
     )
 
     sections: list[WriterSection] = []
+    # Maps a content WriterSection back to its source brief dict so the
+    # entity-coverage pass can regenerate it with the missing entities named.
+    content_section_dicts: dict[int, dict] = {}
     order = 1
 
     # ---- Architecture sections ----
@@ -124,6 +128,7 @@ async def run_service_writer(request: ServiceWriterRequest) -> ServiceWriterResp
         )
         section.word_count = count_words([section])
         sections.append(section)
+        content_section_dicts[id(section)] = sec
         order += 1
 
     # ---- FAQ section ----
@@ -161,6 +166,52 @@ async def run_service_writer(request: ServiceWriterRequest) -> ServiceWriterResp
     )
     cta_section.word_count = count_words([cta_section])
     sections.append(cta_section)
+
+    # ---- Entity-coverage enforcement (Option B) ----
+    # Benchmark the page's entity coverage against the most aggressive competitor
+    # (research.entity_benchmark_target) and, when the draft falls short,
+    # regenerate the weakest content sections with the missing entities named.
+    # Best-effort: a missing/empty research bundle (cached or degraded briefs)
+    # is a silent no-op.
+    coverage_stats = None
+    research_bundle = brief.get("research_bundle") or {}
+    entity_pool = [
+        str(e.get("term", "")).strip()
+        for e in (research_bundle.get("entity_coverage") or [])
+        if isinstance(e, dict) and str(e.get("term", "")).strip()
+    ]
+    entity_target = int(research_bundle.get("entity_benchmark_target") or 0)
+    if entity_pool and entity_target > 0:
+        async def _regen(section: WriterSection, missing: list[str]) -> list[Block]:
+            sec_dict = content_section_dicts.get(id(section))
+            if not sec_dict:
+                return []
+            directive = brand_directive + generation.entity_coverage_directive(missing)
+            return await generation.write_section_blocks(
+                sec_dict,
+                positioning_angle=positioning_angle,
+                objection=obj_map.get(str(sec_dict.get("heading", "")).strip().lower()),
+                brand_card=brand_card,
+                brand_directive=directive,
+            )
+
+        coverage_stats = await entity_coverage.enforce_entity_coverage(
+            sections,
+            pool=entity_pool,
+            target=entity_target,
+            floor=settings.service_entity_coverage_floor,
+            max_sections=settings.service_entity_rewrite_max_sections,
+            regen_section=_regen,
+            block_text_fn=generation._block_text,
+        )
+        for section in sections:
+            section.word_count = count_words([section])
+        if coverage_stats.sections_rewritten:
+            notes.append(f"entity_coverage_rewrite:{coverage_stats.sections_rewritten}")
+        if coverage_stats.covered < coverage_stats.needed:
+            notes.append(
+                f"entity_coverage_short:{coverage_stats.covered}/{coverage_stats.target}"
+            )
 
     renderings = Renderings(
         markdown=render_markdown(sections),
@@ -203,6 +254,11 @@ async def run_service_writer(request: ServiceWriterRequest) -> ServiceWriterResp
         degraded_notes=notes,
         generation_time_ms=int((time.perf_counter() - started) * 1000),
         decision_fit_rendered=decision_fit_rendered,
+        entity_target=(coverage_stats.target if coverage_stats else 0),
+        entity_covered=(coverage_stats.covered if coverage_stats else 0),
+        entity_rewrite_triggered=(coverage_stats.rewrite_triggered if coverage_stats else False),
+        entity_sections_rewritten=(coverage_stats.sections_rewritten if coverage_stats else 0),
+        entities_missing=(coverage_stats.missing[:25] if coverage_stats else []),
     )
 
     logger.info(

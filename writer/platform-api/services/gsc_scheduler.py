@@ -193,6 +193,122 @@ def enqueue_due_gbp_metrics() -> int:
     return enqueued
 
 
+def enqueue_due_ga4_ingest() -> int:
+    """Daily: enqueue a ga4_ingest job for each verified GA4 property.
+
+    Gated on ``ga4_ingest_enabled`` (dormant until the GA4 Data/Admin APIs are
+    enabled + the service account is added as a Viewer on each property). The
+    ingest re-pulls a trailing window, so a missed run self-heals; dedupes
+    against any in-flight job for the same property. Client Reporting Phase 2."""
+    if not settings.ga4_ingest_enabled:
+        return 0
+    supabase = get_supabase()
+    props = (
+        supabase.table("ga4_properties").select("id").eq("access_status", "ok").execute()
+    )
+    enqueued = 0
+    for prop in props.data or []:
+        property_row_id = prop["id"]
+        existing = (
+            supabase.table("async_jobs")
+            .select("id")
+            .eq("job_type", "ga4_ingest")
+            .eq("entity_id", property_row_id)
+            .in_("status", ["pending", "running"])
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            continue
+        supabase.table("async_jobs").insert(
+            {
+                "job_type": "ga4_ingest",
+                "entity_id": property_row_id,
+                "payload": {"property_id": property_row_id},
+            }
+        ).execute()
+        enqueued += 1
+    if enqueued:
+        logger.info("gsc_scheduler.ga4_enqueued", extra={"jobs": enqueued})
+    return enqueued
+
+
+def enqueue_due_gbp_reviews() -> int:
+    """Daily: enqueue a gbp_reviews job for each verified GBP location to refresh
+    the stored reviews (first-party v4) that feed the dashboard's "reviews this
+    period" panel. Gated on ``gbp_metrics_enabled``; dedupes against any in-flight
+    job for the same location (the daily cadence gives one refresh/location/day)."""
+    if not settings.gbp_metrics_enabled:
+        return 0
+    supabase = get_supabase()
+    locs = (
+        supabase.table("gbp_locations").select("id").eq("access_status", "ok").execute()
+    ).data or []
+    enqueued = 0
+    for loc in locs:
+        location_row_id = loc["id"]
+        existing = (
+            supabase.table("async_jobs").select("id")
+            .eq("job_type", "gbp_reviews").eq("entity_id", location_row_id)
+            .in_("status", ["pending", "running"]).limit(1).execute()
+        ).data
+        if existing:
+            continue
+        supabase.table("async_jobs").insert(
+            {
+                "job_type": "gbp_reviews",
+                "entity_id": location_row_id,
+                "payload": {"location_row_id": location_row_id},
+            }
+        ).execute()
+        enqueued += 1
+    if enqueued:
+        logger.info("gsc_scheduler.gbp_reviews_enqueued", extra={"jobs": enqueued})
+    return enqueued
+
+
+def enqueue_due_gbp_search_keywords() -> int:
+    """Monthly: enqueue a gbp_search_keywords job for each verified GBP location,
+    once per calendar month. GBP search keywords are monthly data, so a daily tick
+    fires this at most once per location per month (gated on whether a
+    gbp_search_keywords job already ran for the location this calendar month —
+    robust even when a month has zero keywords). Gated on ``gbp_metrics_enabled``."""
+    if not settings.gbp_metrics_enabled:
+        return 0
+    from datetime import date  # noqa: PLC0415
+
+    supabase = get_supabase()
+    month_start = date.today().replace(day=1).isoformat()
+    locs = (
+        supabase.table("gbp_locations").select("id").eq("access_status", "ok").execute()
+    ).data or []
+    loc_ids = [loc["id"] for loc in locs]
+    if not loc_ids:
+        return 0
+    # One query (not one per location): which of these already ran this month?
+    ran = (
+        supabase.table("async_jobs").select("entity_id")
+        .eq("job_type", "gbp_search_keywords").in_("entity_id", loc_ids)
+        .gte("created_at", month_start).execute()
+    ).data or []
+    done = {r["entity_id"] for r in ran}
+    enqueued = 0
+    for lid in loc_ids:
+        if lid in done:
+            continue
+        supabase.table("async_jobs").insert(
+            {
+                "job_type": "gbp_search_keywords",
+                "entity_id": lid,
+                "payload": {"location_row_id": lid, "months_back": 2},
+            }
+        ).execute()
+        enqueued += 1
+    if enqueued:
+        logger.info("gsc_scheduler.gbp_search_keywords_enqueued", extra={"jobs": enqueued})
+    return enqueued
+
+
 def enqueue_due_dataforseo() -> int:
     """Daily: enqueue a DataForSEO rank job for each client whose per-client
     fetch schedule is due today.
@@ -515,7 +631,6 @@ async def gsc_scheduler() -> None:
     interval = settings.gsc_scheduler_poll_interval_seconds
     hour = settings.gsc_ingest_hour_utc
     weekday = settings.dataforseo_rank_weekday
-    maps_weekday = settings.maps_scan_weekday
     reopt_weekday = settings.reopt_plan_weekday
     rank_analysis_weekday = settings.rank_analysis_weekly_weekday
     # Durable markers: survive deploys so the daily/weekly blocks don't re-fire
@@ -523,7 +638,6 @@ async def gsc_scheduler() -> None:
     state = load_scheduler_state()
     last_run_date = parse_marker_date(state.get("daily"))
     last_df_date = parse_marker_date(state.get("df_weekly"))
-    last_maps_date = parse_marker_date(state.get("maps_weekly"))
     last_reopt_date = parse_marker_date(state.get("reopt_weekly"))
     last_strategist_date = parse_marker_date(state.get("strategist_daily"))
     last_rank_analysis_date = parse_marker_date(state.get("rank_analysis_weekly"))
@@ -550,6 +664,10 @@ async def gsc_scheduler() -> None:
                 _safe("gsc_ingests", enqueue_due_ingests)
                 # Daily GBP performance-metrics ingest (no-op until enabled).
                 _safe("gbp_metrics", enqueue_due_gbp_metrics)
+                # Daily GA4 metrics ingest (no-op until ga4_ingest_enabled).
+                _safe("ga4_ingest", enqueue_due_ga4_ingest)
+                _safe("gbp_search_keywords", enqueue_due_gbp_search_keywords)
+                _safe("gbp_reviews", enqueue_due_gbp_reviews)
                 # GBP Posts — daily live-state reconciliation (catches async
                 # REJECTED + imports external posts). The recurring-draft tick +
                 # one-off scheduled publishes are evaluated PER-CYCLE below so
@@ -655,11 +773,14 @@ async def gsc_scheduler() -> None:
                 if ok:
                     last_df_date = now.date()
                     save_marker("df_weekly", last_df_date.isoformat())
-            # Weekly Maps geo-grid scans (Module #5) on their own weekday.
-            if now.weekday() == maps_weekday and should_run(now, last_maps_date, hour):
-                if _safe("maps_scans", enqueue_due_maps_scans):
-                    last_maps_date = now.date()
-                    save_marker("maps_weekly", last_maps_date.isoformat())
+            # Maps geo-grid scans (Module #5) — evaluated EVERY cycle (like the
+            # GBP-posts schedules) so each client fires near its OWN local scan
+            # time (maps_scan_configs.weekday + scan_hour, in the client's
+            # timezone), not once a day at a global UTC hour. `enqueue_due_maps_scans`
+            # holds a client back until its local hour arrives and then bounds it to
+            # one scan/client/day (scan_due's same-day guard + the pending-job dedup),
+            # so per-cycle evaluation is safe and needs no daily marker.
+            _safe("maps_scans", enqueue_due_maps_scans)
             # Weekly reoptimization action-plan digest on its own weekday.
             if now.weekday() == reopt_weekday and should_run(now, last_reopt_date, hour):
                 if _safe("reopt_plans", enqueue_due_reopt_plans):

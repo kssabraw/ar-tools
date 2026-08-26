@@ -167,6 +167,12 @@ differentiators and target_cities — a service the ICP names with no page, a se
 with no location page, a differentiator no content mentions, is a gap worth a proposal.
   - Timing (trends + forecast): rising seasonal demand is when content/GBP pushes land \
 hardest; quick-win keywords say where effort converts fastest.
+  - Demand realized (gbp_metrics + ga4): these measure whether visibility is turning into \
+attention and action — GBP profile views + calls/clicks/directions, and GA4 sessions/ \
+conversions by channel. Read them AGAINST rank: rising positions with flat organic \
+sessions/GBP views is a CTR/SERP-feature or listing-prominence problem, not a ranking one; \
+falling views/sessions with steady rank points at seasonality (cross-check trends), not a \
+drop. A strong action metric (e.g. calls up sharply) is proof a lever worked — name it.
 Heed each section's TRAP note; propose only what the evidence in front of you supports; \
 cite the owning SOP as usual, and if no SOP owns the action surface it as a question.
 Do NOT restate the Action Plan back — it's in your input. Add judgment, not inventory. An \
@@ -457,8 +463,6 @@ async def run_strategy_review(
 ) -> dict:
     """Execute one strategist run and persist the strategy_reviews row.
     Returns the completed row. Raises on hard failure (caller marks the job)."""
-    import anthropic
-
     from services import strategist_tools
 
     supabase = get_supabase()
@@ -496,23 +500,25 @@ async def run_strategy_review(
     )
 
     tools = strategist_tools.anthropic_tool_defs() + [_EMIT_TOOL]
-    api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=_LLM_TIMEOUT)
+    from services import anthropic_failover
+
+    clients = anthropic_failover.build_async_clients(timeout=_LLM_TIMEOUT)
     messages: list[dict] = [{"role": "user", "content": user}]
     usage = {"input_tokens": 0, "output_tokens": 0}
     drilldowns: list[dict] = []
     paid_used = 0
     emitted: Optional[dict] = None
 
-    # Transient-retry each round: a single 429 (the shared Anthropic account
-    # saturates under scan/report bursts) previously failed the entire review
-    # job — one of the most expensive artifacts in the suite to lose.
-    from services.report_llm import retry_transient
-
+    # Transient-retry each round AND fail over to the secondary Anthropic account
+    # (same model): a single 429 (the primary account saturates under scan/report
+    # bursts) previously failed the entire review job — one of the most expensive
+    # artifacts in the suite to lose.
     # loop bound: every non-emit round consumes ≥1 drill-down, +2 slack rounds
     for round_no in range(max_dd + 3):
         force_emit = round_no >= max_dd + 1 or len(drilldowns) >= max_dd
-        resp = await retry_transient(
-            lambda: api.messages.create(
+        resp = await anthropic_failover.call_failover(
+            clients,
+            lambda c: c.messages.create(
                 model=settings.strategist_model,
                 max_tokens=settings.strategist_max_tokens,
                 system=_SYSTEM,

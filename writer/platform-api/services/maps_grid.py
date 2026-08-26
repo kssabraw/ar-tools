@@ -10,8 +10,9 @@ into both:
   - the explicit list of pin coordinates (lat/lng per row/col), which we store
     and render as the heatmap regardless of the provider.
 
-Coverage presets (decided with the user): the user picks a 3 / 5 / 7-mile
-radius, with a pin every 1 mile, centred on the business location.
+Coverage (decided with the user): the user picks a radius in whole miles
+(1-10; formerly a 3/5/7 preset), with a pin every 1 mile, centred on the
+business location.
 """
 
 from __future__ import annotations
@@ -23,8 +24,9 @@ METERS_PER_MILE = 1609.344
 # Degrees of latitude per mile (≈ constant); longitude is scaled by cos(lat).
 _MILES_PER_DEGREE_LAT = 69.0
 
-# Radius (miles) → the supported coverage presets. Spacing is fixed at 1 mile.
-SUPPORTED_RADII_MILES = (3, 5, 7)
+# User-choosable radius bounds (whole miles). Spacing is fixed at 1 mile, so
+# cost grows quadratically with radius — the cap keeps a scan ≤ a 21×21 grid.
+MIN_RADIUS_MILES, MAX_RADIUS_MILES = 1, 10
 PIN_SPACING_MILES = 1.0
 
 

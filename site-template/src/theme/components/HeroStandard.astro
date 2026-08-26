@@ -1,5 +1,6 @@
 ---
 import { has } from '../../lib/site';
+import type { HeroImagePosition } from '../../lib/layouts';
 
 interface Props {
   eyebrow?: string;
@@ -11,14 +12,32 @@ interface Props {
   secondaryHref?: string;
   image?: string;
   imageAlt?: string;
+  /** Which side the image sits on, or `none` for a text-only hero. Chosen by
+      the theme's layout manifest (src/theme/layouts.json); defaults to `right`
+      so the house theme renders exactly as before. */
+  imagePosition?: HeroImagePosition;
 }
 
-const { eyebrow, title, lede, ctaLabel, ctaHref, secondaryLabel, secondaryHref, image, imageAlt = '' } =
-  Astro.props;
+const {
+  eyebrow,
+  title,
+  lede,
+  ctaLabel,
+  ctaHref,
+  secondaryLabel,
+  secondaryHref,
+  image,
+  imageAlt = '',
+  imagePosition = 'right',
+} = Astro.props;
+
+// `none` is a text-only hero — the image is dropped even when one was sourced,
+// because the design's layout intent for this screen is a centered lead.
+const showMedia = imagePosition !== 'none' && has(image);
 ---
 
 <section class="hero">
-  <div class="wrap hero__inner">
+  <div class:list={['wrap', 'hero__inner', { 'hero__inner--imageLeft': showMedia && imagePosition === 'left', 'hero__inner--noMedia': !showMedia }]}>
     <div class="hero__copy">
       {has(eyebrow) && <p class="eyebrow">{eyebrow}</p>}
       <h1 class="hero__title">{title}</h1>
@@ -33,8 +52,10 @@ const { eyebrow, title, lede, ctaLabel, ctaHref, secondaryLabel, secondaryHref, 
       )}
     </div>
     {/* The image slot simply disappears when no image has been sourced yet
-        (plan §4.7) rather than leaving a broken frame. */}
-    {has(image) && (
+        (plan §4.7), or when the layout is text-only, rather than leaving a
+        broken frame. H1 stays first in the DOM for SEO; `order` swaps sides
+        visually for the image-left layout. */}
+    {showMedia && (
       <div class="hero__media">
         <img src={image} alt={imageAlt} width="720" height="480" loading="eager" />
       </div>
@@ -52,8 +73,18 @@ const { eyebrow, title, lede, ctaLabel, ctaHref, secondaryLabel, secondaryHref, 
     padding-block: var(--space-8) var(--space-7);
     align-items: center;
   }
+  /* Two columns only when the hero actually shows an image. A text-only hero
+     stays single-column and the copy keeps its natural measure. */
   .hero__inner:has(.hero__media) {
     grid-template-columns: 1.1fr 1fr;
+  }
+  /* Image-left: same fluid grid, copy and media visually swapped. The heavier
+     column follows the copy so the ratio stays copy-weighted either way. */
+  .hero__inner--imageLeft:has(.hero__media) {
+    grid-template-columns: 1fr 1.1fr;
+  }
+  .hero__inner--imageLeft .hero__media {
+    order: -1;
   }
   .hero__title {
     font-size: var(--text-4xl);
@@ -80,6 +111,11 @@ const { eyebrow, title, lede, ctaLabel, ctaHref, secondaryLabel, secondaryHref, 
   @media (max-width: 860px) {
     .hero__inner:has(.hero__media) {
       grid-template-columns: 1fr;
+    }
+    /* On a stacked hero the image always follows the copy, regardless of the
+       desktop side, so the H1 leads on mobile. */
+    .hero__inner--imageLeft .hero__media {
+      order: 0;
     }
   }
 </style>

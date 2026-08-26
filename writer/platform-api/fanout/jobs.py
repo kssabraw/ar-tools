@@ -1,25 +1,30 @@
 """Background execution for the long pipeline operations.
 
-`/expand`, `/plan-articles`, and `/regate` exceed Railway's ~5-min edge cap when
-run inside the request, so the endpoints claim the run (atomic status flip to
-`queued`), submit the work here, and return 202 immediately. The frontend polls
-session status. When a pool worker actually picks the job up it flips the claim
-to `running` (`_claims_start` -> try_mark_started), so a run waiting for a slot
-is visibly *queued*, not indistinguishable from an executing one. Each job owns
-its terminal status: it sets `awaiting_article_planning` / `complete` on
-success, or `error` + `last_error` on failure.
+`/expand`, `/plan-articles`, `/regate`, `/fanout` and `/architecture` exceed
+Railway's ~5-min edge cap when run inside the request, so the endpoints claim the
+run (atomic status flip to `queued`), submit the work here, and return 202
+immediately. The frontend polls session status.
 
-A bounded pool caps concurrent pipeline runs per process; the per-session run
-guard (try_claim_run) prevents the same session running twice. Jobs use the
-service client (no user token — the request already authorized the caller).
+Since issue #686 (Phases 1-3) every pipeline stage runs **durably**, as an
+`async_jobs` row (`fanout_expand` / `fanout_plan` / `fanout_regate` /
+`fanout_fanout` / `fanout_architecture`) claimed by the suite's shared worker via
+`_enqueue_durable` -> `_run_pipeline_durable`. The row IS the durable claim: a
+platform-api restart mid-run no longer strands the session — the graceful
+shutdown drain requeues the in-flight row immediately, and a hard SIGKILL falls
+back to the stale-job reaper, so the run finishes on the next container instead
+of being orphaned at `running`. This replaces the old in-process
+`ThreadPoolExecutor` + `run_recovery.py` shutdown/startup salvage (both retired
+in Phase 3). Each stage owns its terminal status: it sets
+`awaiting_article_planning` / `complete` on success, or `error` + `last_error` on
+failure; the envelope only writes a terminal status for an unexpected crash or a
+`CancelledByUser`.
 
-A process restart mid-job strands the session at status='running' (or 'queued' if
-it never started — that distinction tells you whether any spend happened), since
-a SIGKILL never reaches the job's own `except`. A startup sweep now recovers those
-rows: `fanout/run_recovery.py`, run from the app lifespan, returns a run killed
-after expansion to `awaiting_article_planning` (its keywords are durable, so only
-planning is re-spent) and records the rest as `error` with the reason. The durable
-queue that would remove the failure mode entirely is still the real fix.
+The per-cluster article-generation jobs (SIE / brief / article / prepublish rank
+check) are short and cheap and still run on the in-process `_EXECUTOR` — they do
+not ride session status and were never the deploy-kills-an-expensive-run problem.
+
+Jobs use the service client (no user token — the request already authorized the
+caller).
 """
 
 import logging
@@ -58,6 +63,7 @@ from fanout.pipeline.recursive_fanout import (
     run_recursive_expansion,
 )
 from fanout.storage import silo as store
+from fanout.storage.write_retry import call_with_transport_retry
 from fanout import prepublish_rank
 
 logger = logging.getLogger(__name__)
@@ -67,6 +73,44 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pipeline")
 
 def _short(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"[:500]
+
+
+def _log_write_retry(what: str, session_id: str):
+    def _cb(exc: BaseException, attempt: int) -> None:
+        logger.warning(
+            "db_write_retry",
+            extra={"event": "db_write_retry", "what": what,
+                   "session_id": session_id, "attempt": attempt,
+                   "reason": repr(exc)},
+        )
+    return _cb
+
+
+def _persist_gated_pool(session_id: str, per_topic_gated) -> None:
+    """Replace the session's keyword pool with the freshly-gated one, retried on a
+    transient Supabase transport drop. Delete-then-insert runs as ONE idempotent
+    unit: a retry re-runs the delete first, so a batch that committed server-side
+    before the connection dropped is cleared rather than duplicated. This is the
+    write that stranded session BPC-157 (2026-08-14) — a single
+    `RemoteProtocolError: Server disconnected` mid-insert aborted the whole expand
+    job, leaving a complete pool with no clustering log and status=error."""
+
+    def _do() -> None:
+        store.delete_keywords_for_session(session_id)
+        store.insert_classified_keywords(session_id, per_topic_gated)
+
+    call_with_transport_retry(_do, on_retry=_log_write_retry("persist_pool", session_id))
+
+
+def _finalize_with_retry(session_id: str, fields: dict) -> bool:
+    """Write a job's terminal status + clustering log, retried on a transient
+    transport drop. Idempotent: `try_finalize_running` is guarded on
+    status='running', so a retry after a committed-but-disconnected write simply
+    matches no row and returns False."""
+    return call_with_transport_retry(
+        lambda: store.try_finalize_running(session_id, fields),
+        on_retry=_log_write_retry("finalize", session_id),
+    )
 
 
 @lru_cache(maxsize=4)
@@ -108,15 +152,29 @@ def _maybe_enrich_metrics(session: dict, per_topic_gated) -> None:
     })
     if not active_keywords:
         return
-    result = enrich_keywords(
-        keywords=active_keywords,
-        dfs=get_dataforseo(store.session_location_code(session)),
-        batch_size=s.metrics_batch_size,
-        max_workers=s.metrics_max_workers,
-        time_budget_s=float(s.metrics_time_budget_s),
-    )
-    if result.metrics:
-        store.update_keyword_metrics(session["id"], result.metrics)
+    # Best-effort, and it MUST stay that way: this runs between the pool insert and
+    # the clustering-log finalize, so a raised exception here skips the finalize and
+    # strands the session at status=error with a complete pool and no clustering log
+    # — the exact BPC-157 failure the retry wrappers around persist/finalize exist to
+    # prevent. enrich_keywords degrades internally, but update_keyword_metrics' id
+    # scan is a bare Supabase read that can raise a transient transport error, so
+    # guard the whole enrich here (metrics are optional; the run must still complete).
+    try:
+        result = enrich_keywords(
+            keywords=active_keywords,
+            dfs=get_dataforseo(store.session_location_code(session)),
+            batch_size=s.metrics_batch_size,
+            max_workers=s.metrics_max_workers,
+            time_budget_s=float(s.metrics_time_budget_s),
+        )
+        if result.metrics:
+            store.update_keyword_metrics(session["id"], result.metrics)
+    except Exception as exc:  # noqa: BLE001 — optional enrichment; never strand the run
+        logger.warning(
+            "metrics_enrich_failed",
+            extra={"event": "metrics_enrich_failed",
+                   "session_id": session.get("id"), "reason": repr(exc)},
+        )
 
 
 def _maybe_llm_router(seed: str, topics: list[dict]):
@@ -149,30 +207,6 @@ def _metered(step: str):
         return wrapper
 
     return decorator
-
-
-def _claims_start(fn):
-    """Flip the endpoint's `queued` claim to `running` when a worker actually
-    picks the job up. If the flip doesn't land, the session is no longer queued
-    — the user cancelled while it waited for a slot (or the state was reset) —
-    so skip the run entirely: no metering, no cancellation registration, no
-    external calls. Outermost of the job decorators for exactly that reason.
-    Only the session-status pipeline jobs (expand / plan / regate / fanout /
-    architecture) use this; the per-cluster jobs (SIE / brief / article) don't
-    ride session status."""
-
-    @wraps(fn)
-    def wrapper(session_id: str, *args, **kwargs):
-        if not store.try_mark_started(session_id):
-            logger.info(
-                "job_skipped_not_queued",
-                extra={"event": "job_skipped_not_queued", "step": fn.__name__,
-                       "session_id": session_id},
-            )
-            return None
-        return fn(session_id, *args, **kwargs)
-
-    return wrapper
 
 
 def _cancellable(fn):
@@ -213,13 +247,10 @@ def _cancellable(fn):
 
 
 def _record_active_job(session_id: str, kind: str, **params) -> None:
-    """Best-effort note of which job holds the session's run claim (+ its
-    replayable args), so run_recovery can tell an interrupted planning run
-    (safe to auto-resume — expansion is durable, planning replayable) from an
-    interrupted regate/fanout/architecture run (not: auto-replanning those
-    would wipe a completed plan or run a step the user didn't ask for). A
-    write failure must never block the submit — recovery then just degrades
-    to the manual path."""
+    """Best-effort advisory note of which stage holds the session's run claim
+    (surfaced in the workspace UI). Since Phase 3 recovery is handled by the
+    async_jobs drain/reaper, not this marker, so it is purely informational — a
+    write failure must never block the submit."""
     try:
         store.set_active_job(session_id, {"kind": kind, **params})
     except Exception as exc:  # noqa: BLE001 — advisory metadata only
@@ -230,19 +261,37 @@ def _record_active_job(session_id: str, kind: str, **params) -> None:
         )
 
 
+def _enqueue_durable(
+    session_id: str, job_type: str, kind: str, payload_extra: dict | None = None
+) -> None:
+    """Durable path (issue #686): run a pipeline stage as an async_jobs row so a
+    platform-api restart recovers it via the shared worker's drain/reaper instead
+    of stranding it in a per-process executor. Since Phase 3 this is the ONLY path
+    for every pipeline stage (expand / plan / regate / fanout / architecture) —
+    the in-process executor and run_recovery salvage are gone.
+
+    Mark the session's active_job `durable` FIRST (advisory metadata the UI reads),
+    then enqueue. If the enqueue fails, revert the marker and re-raise so the
+    endpoint surfaces the failure rather than leaving a queued-but-unworked run."""
+    _record_active_job(session_id, kind, durable=True)
+    from db.supabase_client import get_supabase
+
+    payload = {"session_id": session_id, **(payload_extra or {})}
+    try:
+        get_supabase().table("async_jobs").insert(
+            {"job_type": job_type, "entity_id": session_id, "payload": payload}
+        ).execute()
+    except Exception:
+        _record_active_job(session_id, kind)  # revert the durable marker
+        raise
+
+
 def submit_expand(session_id: str) -> None:
-    _record_active_job(session_id, "expand")
-    _EXECUTOR.submit(run_expand_job, session_id)
+    _enqueue_durable(session_id, "fanout_expand", "expand")
 
 
-def submit_plan(session_id: str, direct: bool = False, resumes: int = 0) -> None:
-    """`resumes` is the auto-resume attempt this submit represents — 0 for a
-    human click (a fresh click resets the crash-loop budget, mirroring the
-    orchestrator's resume_count semantics), N when run_recovery re-submits an
-    interrupted planning run. Recorded on active_job so a run that keeps dying
-    stops auto-resuming past plan_auto_resume_max instead of crash-looping."""
-    _record_active_job(session_id, "plan", direct=direct, resumes=resumes)
-    _EXECUTOR.submit(run_plan_job, session_id, direct)
+def submit_plan(session_id: str, direct: bool = False) -> None:
+    _enqueue_durable(session_id, "fanout_plan", "plan", {"direct": bool(direct)})
 
 
 def submit_regate(
@@ -253,10 +302,17 @@ def submit_regate(
     active_per_silo_cap: int,
     seed_terms: list[str],
     peer_terms: list[str],
+    silo_margin: float | None = None,
 ) -> None:
-    _record_active_job(session_id, "regate")
-    _EXECUTOR.submit(run_regate_job, session_id, threshold, edge_threshold,
-                     resolution, active_per_silo_cap, seed_terms, peer_terms)
+    _enqueue_durable(session_id, "fanout_regate", "regate", {
+        "threshold": threshold,
+        "edge_threshold": edge_threshold,
+        "resolution": resolution,
+        "active_per_silo_cap": active_per_silo_cap,
+        "seed_terms": seed_terms,
+        "peer_terms": peer_terms,
+        "silo_margin": silo_margin,
+    })
 
 
 def submit_fanout(
@@ -268,107 +324,299 @@ def submit_fanout(
     seed_terms: list[str],
     peer_terms: list[str],
 ) -> None:
-    _record_active_job(session_id, "fanout")
-    _EXECUTOR.submit(run_fanout_job, session_id, threshold, edge_threshold,
-                     resolution, active_per_silo_cap, seed_terms, peer_terms)
+    _enqueue_durable(session_id, "fanout_fanout", "fanout", {
+        "threshold": threshold,
+        "edge_threshold": edge_threshold,
+        "resolution": resolution,
+        "active_per_silo_cap": active_per_silo_cap,
+        "seed_terms": seed_terms,
+        "peer_terms": peer_terms,
+    })
 
 
 def submit_architecture(session_id: str) -> None:
-    _record_active_job(session_id, "architecture")
-    _EXECUTOR.submit(run_architecture_job, session_id)
+    _enqueue_durable(session_id, "fanout_architecture", "architecture")
 
 
-@_claims_start
-@_metered("expand")
-@_cancellable
-def run_expand_job(session_id: str) -> None:
-    """§7.3–§7.9: expansion + competitor mining + relevance gate + clustering."""
+def _expand_core(session_id: str) -> None:
+    """§7.3–§7.9: expansion + competitor mining + relevance gate + clustering, then
+    persist the gated pool + clustering log and finalize the session to
+    awaiting_article_planning. Raises on failure — the durable envelope
+    (`run_expand_durable` -> `_run_pipeline_durable`) writes the terminal
+    error/cancelled status."""
+    session = store.get_session(session_id)
+    # Run scope, not every finalized silo: a silo the user left out of the run
+    # is never expanded, gated or clustered (the deep-mine gate below is the
+    # narrower, mining-only selection on top of this one).
+    topics = store.list_run_topics(session_id)
+    embeddings = store.get_topic_embeddings(session_id)
+    s = get_settings()
+    coverage_mode = (session.get("settings") or {}).get("coverage_mode", "standard")
+    top_n = (
+        s.competitor_top_n_comprehensive
+        if coverage_mode == "comprehensive"
+        else s.competitor_top_n_standard
+    )
+    seed = session["seed_keyword"]
+    result = run_refinement_pipeline(
+        seed=seed,
+        topics=[
+            PipelineTopic(
+                id=t["id"],
+                name=t["name"],
+                embedding=embeddings.get(t["id"]),
+                gated=bool(t.get("is_gated_for_competitor_mining")),
+            )
+            for t in topics
+        ],
+        dfs=get_dataforseo(store.session_location_code(session)),
+        embed_fn=get_llm().embed,
+        seed_terms=[seed, *(session.get("aliases") or [])],
+        peer_terms=session.get("peer_entities") or [],
+        assign_best_silo=s.relevance_assign_best_silo,
+        silo_margin=s.relevance_silo_margin,
+        keyword_ideas_limit=s.keyword_ideas_limit,
+        keyword_suggestions_limit=s.keyword_suggestions_limit,
+        query_fanouts_limit=s.query_fanouts_limit,
+        paa_tier1_seeds=s.paa_tier1_seeds,
+        paa_tier2_cap=s.paa_tier2_cap,
+        autocomplete_max=s.autocomplete_max,
+        expansion_max_workers=s.expansion_max_workers,
+        expansion_time_budget_s=s.expansion_time_budget_s,
+        competitor_top_n=top_n,
+        ranked_keywords_limit=s.ranked_keywords_limit,
+        competitor_max_position=s.competitor_max_position,
+        competitor_max_workers=s.competitor_max_workers,
+        competitor_time_budget_s=s.competitor_time_budget_s,
+        relevance_threshold=s.relevance_threshold,
+        relevance_embed_batch=s.relevance_embed_batch,
+        clustering_edge_threshold=s.clustering_edge_threshold,
+        clustering_resolution=s.clustering_resolution,
+        clustering_max_nodes=s.clustering_max_nodes,
+        active_per_silo_cap=s.active_per_silo_cap,
+        llm_router=_maybe_llm_router(seed, topics),
+        llm_router_margin=s.llm_routing_margin_threshold,
+        language_filter=_maybe_language_filter(),
+        source_guard_enabled=s.fanout_source_guard_enabled,
+        source_guard_min_score=s.fanout_source_guard_min_score,
+        source_guard_min_seed_tokens=s.fanout_source_guard_min_seed_tokens,
+    )
+    _persist_gated_pool(session_id, result.per_topic_gated)
+    _maybe_enrich_metrics(session, result.per_topic_gated)
+    _finalize_with_retry(
+        session_id,
+        {
+            "statistical_clustering_log": result.clustering_log,
+            "status": "awaiting_article_planning",
+        },
+    )
+    logger.info(
+        "step_complete",
+        extra={"event": "step_complete", "step": "expand_job", **result.counts()},
+    )
+
+
+def _expand_core_resumable(session_id: str) -> None:
+    """Resumable variant of `_expand_core` (issue #686 Phase 2, gated behind
+    fanout_resumable_expand_enabled). Identical gate/cluster/persist/finalize
+    tail, but the expensive expansion + mining is checkpointed per silo (via
+    `run_resumable_expansion` → sessions.expansion_checkpoint), so a requeue after
+    a crash re-pays only the unfinished silos. The checkpoint is cleared once the
+    pool is persisted as keywords; a terminal error/cancel clears it in the caller
+    so only an uncatchable crash leaves it for the requeue to resume."""
+    from fanout.pipeline.resumable import (
+        ExpandParams,
+        ResumableTopic,
+        run_resumable_expansion,
+    )
+
+    session = store.get_session(session_id)
+    topics = store.list_run_topics(session_id)
+    embeddings = store.get_topic_embeddings(session_id)
+    s = get_settings()
+    coverage_mode = (session.get("settings") or {}).get("coverage_mode", "standard")
+    top_n = (
+        s.competitor_top_n_comprehensive
+        if coverage_mode == "comprehensive"
+        else s.competitor_top_n_standard
+    )
+    seed = session["seed_keyword"]
+    pipeline_topics = [
+        PipelineTopic(
+            id=t["id"],
+            name=t["name"],
+            embedding=embeddings.get(t["id"]),
+            gated=bool(t.get("is_gated_for_competitor_mining")),
+        )
+        for t in topics
+    ]
+    params = ExpandParams(
+        keyword_ideas_limit=s.keyword_ideas_limit,
+        keyword_suggestions_limit=s.keyword_suggestions_limit,
+        query_fanouts_limit=s.query_fanouts_limit,
+        paa_tier1_seeds=s.paa_tier1_seeds,
+        paa_tier2_cap=s.paa_tier2_cap,
+        autocomplete_max=s.autocomplete_max,
+        expansion_max_workers=s.expansion_max_workers,
+        expansion_time_budget_s=s.expansion_time_budget_s,
+        competitor_top_n=top_n,
+        ranked_keywords_limit=s.ranked_keywords_limit,
+        competitor_max_position=s.competitor_max_position,
+        competitor_max_workers=s.competitor_max_workers,
+        competitor_time_budget_s=s.competitor_time_budget_s,
+    )
+    checkpoint = store.get_expansion_checkpoint(session_id) or {}
+    per_topic_lists, degraded_notes = run_resumable_expansion(
+        seed=seed,
+        topics=[
+            ResumableTopic(id=t.id, name=t.name, gated=t.gated) for t in pipeline_topics
+        ],
+        dfs=get_dataforseo(store.session_location_code(session)),
+        params=params,
+        checkpoint=checkpoint,
+        save=lambda cp: store.set_expansion_checkpoint(session_id, cp),
+        raise_if_cancelled=cancellation.raise_if_cancelled,
+    )
+    result = gate_and_cluster(
+        per_topic_lists=per_topic_lists,
+        topic_names={t.id: t.name for t in pipeline_topics},
+        topic_embeddings={t.id: t.embedding for t in pipeline_topics},
+        embed_fn=get_llm().embed,
+        relevance_threshold=s.relevance_threshold,
+        relevance_embed_batch=s.relevance_embed_batch,
+        clustering_edge_threshold=s.clustering_edge_threshold,
+        clustering_resolution=s.clustering_resolution,
+        clustering_max_nodes=s.clustering_max_nodes,
+        active_per_silo_cap=s.active_per_silo_cap,
+        seed_terms=[seed, *(session.get("aliases") or [])],
+        peer_terms=session.get("peer_entities") or [],
+        assign_best_silo=s.relevance_assign_best_silo,
+        silo_margin=s.relevance_silo_margin,
+        llm_router=_maybe_llm_router(seed, topics),
+        llm_router_margin=s.llm_routing_margin_threshold,
+        language_filter=_maybe_language_filter(),
+        seed=seed,
+        source_guard_enabled=s.fanout_source_guard_enabled,
+        source_guard_min_score=s.fanout_source_guard_min_score,
+        source_guard_min_seed_tokens=s.fanout_source_guard_min_seed_tokens,
+    )
+    _persist_gated_pool(session_id, result.per_topic_gated)
+    _maybe_enrich_metrics(session, result.per_topic_gated)
+    _finalize_with_retry(
+        session_id,
+        {
+            "statistical_clustering_log": result.clustering_log,
+            "status": "awaiting_article_planning",
+        },
+    )
+    store.clear_expansion_checkpoint(session_id)
+    logger.info(
+        "step_complete",
+        extra={"event": "step_complete", "step": "expand_resumable",
+               "degraded": bool(degraded_notes), **result.counts()},
+    )
+
+
+def _run_expand_core(session_id: str) -> None:
+    """Pick the resumable expansion path (Phase 2) or the plain one, by flag."""
+    if get_settings().fanout_resumable_expand_enabled:
+        _expand_core_resumable(session_id)
+    else:
+        _expand_core(session_id)
+
+
+def _run_pipeline_durable(session_id, meter_label, core, *, on_terminal=None):
+    """Shared async_jobs envelope for every durable Fanout pipeline stage
+    (issue #686). The async_jobs row is the atomic claim, so the session-status
+    flip is idempotent (queued OR running -> running via `try_mark_running_durable`)
+    rather than the queued-only guard of the old executor path: a reaper/drain
+    requeue after a crash finds the session already at 'running' and must proceed,
+    not skip. A session the user cancelled — or an already-finished run whose row
+    got requeued — is no longer in ('queued','running'), so the claim returns
+    False and we skip (no re-run, no double spend).
+
+    Cancellation is DB-first (the claim check) plus the in-flight
+    `raise_if_cancelled` checkpoints, which fire on a same-process /cancel via the
+    event `set_cancelled` creates on demand — so no `_cancellable` registration is
+    needed. Every terminal path is caught here so the async_jobs row settles
+    `complete` (a deterministic pipeline error must not auto-retry and re-spend);
+    a process death leaves the row `running` for the drain/reaper to requeue.
+
+    `core(session_id)` runs the stage and owns its own success terminal status
+    (like the old *_job bodies did). `on_terminal(session_id)` (optional) runs
+    cleanup before the error/cancel status write."""
     bind_session_id(session_id)
-    try:
-        session = store.get_session(session_id)
-        # Run scope, not every finalized silo: a silo the user left out of the run
-        # is never expanded, gated or clustered (the deep-mine gate below is the
-        # narrower, mining-only selection on top of this one).
-        topics = store.list_run_topics(session_id)
-        embeddings = store.get_topic_embeddings(session_id)
-        s = get_settings()
-        coverage_mode = (session.get("settings") or {}).get("coverage_mode", "standard")
-        top_n = (
-            s.competitor_top_n_comprehensive
-            if coverage_mode == "comprehensive"
-            else s.competitor_top_n_standard
-        )
-        seed = session["seed_keyword"]
-        result = run_refinement_pipeline(
-            seed=seed,
-            topics=[
-                PipelineTopic(
-                    id=t["id"],
-                    name=t["name"],
-                    embedding=embeddings.get(t["id"]),
-                    gated=bool(t.get("is_gated_for_competitor_mining")),
-                )
-                for t in topics
-            ],
-            dfs=get_dataforseo(store.session_location_code(session)),
-            embed_fn=get_llm().embed,
-            seed_terms=[seed, *(session.get("aliases") or [])],
-            peer_terms=session.get("peer_entities") or [],
-            assign_best_silo=s.relevance_assign_best_silo,
-            keyword_ideas_limit=s.keyword_ideas_limit,
-            keyword_suggestions_limit=s.keyword_suggestions_limit,
-            query_fanouts_limit=s.query_fanouts_limit,
-            paa_tier1_seeds=s.paa_tier1_seeds,
-            paa_tier2_cap=s.paa_tier2_cap,
-            autocomplete_max=s.autocomplete_max,
-            expansion_max_workers=s.expansion_max_workers,
-            expansion_time_budget_s=s.expansion_time_budget_s,
-            competitor_top_n=top_n,
-            ranked_keywords_limit=s.ranked_keywords_limit,
-            competitor_max_position=s.competitor_max_position,
-            competitor_max_workers=s.competitor_max_workers,
-            competitor_time_budget_s=s.competitor_time_budget_s,
-            relevance_threshold=s.relevance_threshold,
-            relevance_embed_batch=s.relevance_embed_batch,
-            clustering_edge_threshold=s.clustering_edge_threshold,
-            clustering_resolution=s.clustering_resolution,
-            clustering_max_nodes=s.clustering_max_nodes,
-            active_per_silo_cap=s.active_per_silo_cap,
-            llm_router=_maybe_llm_router(seed, topics),
-            llm_router_margin=s.llm_routing_margin_threshold,
-            language_filter=_maybe_language_filter(),
-        )
-        store.delete_keywords_for_session(session_id)
-        store.insert_classified_keywords(session_id, result.per_topic_gated)
-        _maybe_enrich_metrics(session, result.per_topic_gated)
-        store.try_finalize_running(
-            session_id,
-            {
-                "statistical_clustering_log": result.clustering_log,
-                "status": "awaiting_article_planning",
-            },
-        )
+    if not store.try_mark_running_durable(session_id):
         logger.info(
-            "step_complete",
-            extra={"event": "step_complete", "step": "expand_job", **result.counts()},
+            "durable_skipped_not_runnable",
+            extra={"event": "durable_skipped_not_runnable", "step": meter_label,
+                   "session_id": session_id},
         )
-    except Exception as exc:  # noqa: BLE001 — terminal status carries the failure
-        logger.error(
-            "step_failed",
-            extra={"event": "step_failed", "step": "expand_job", "reason": repr(exc)},
-        )
-        store.try_finalize_running(
-            session_id, {"status": "error", "last_error": _short(exc)}
+        return
+    try:
+        with metered_run(session_id, meter_label):
+            try:
+                core(session_id)
+            except CancelledByUser:
+                logger.info(
+                    "step_cancelled",
+                    extra={"event": "step_cancelled", "step": meter_label},
+                )
+                if on_terminal:
+                    on_terminal(session_id)
+                store.try_finalize_running(
+                    session_id,
+                    {"status": "cancelled", "last_error": "Cancelled by user"},
+                )
+            except Exception as exc:  # noqa: BLE001 — terminal status carries the failure
+                logger.error(
+                    "step_failed",
+                    extra={"event": "step_failed", "step": meter_label,
+                           "reason": repr(exc)},
+                )
+                if on_terminal:
+                    on_terminal(session_id)
+                store.try_finalize_running(
+                    session_id, {"status": "error", "last_error": _short(exc)}
+                )
+    finally:
+        # Drop any cancellation event `/cancel` created so a later run starts fresh.
+        cancellation.clear(session_id)
+
+
+def run_expand_durable(session_id: str) -> None:
+    """async_jobs handler for a durable expand run (issue #686). Clears the
+    resumable-expansion checkpoint on a caught error/cancel so only an uncatchable
+    crash leaves it for a requeue to resume."""
+    _run_pipeline_durable(
+        session_id, "expand", _run_expand_core,
+        on_terminal=_clear_checkpoint_best_effort,
+    )
+
+
+def _clear_checkpoint_best_effort(session_id: str) -> None:
+    """Clear the resumable-expansion checkpoint on a code-reachable terminal path
+    (error / cancel), so only an uncatchable crash leaves it for a requeue to
+    resume. Best-effort + flag-gated: a no-op on the non-resumable path, and a
+    failure here must not mask the terminal status write that follows."""
+    if not get_settings().fanout_resumable_expand_enabled:
+        return
+    try:
+        store.clear_expansion_checkpoint(session_id)
+    except Exception as exc:  # noqa: BLE001 — never break the terminal write
+        logger.warning(
+            "expansion_checkpoint_clear_failed",
+            extra={"event": "expansion_checkpoint_clear_failed",
+                   "session_id": session_id, "reason": repr(exc)},
         )
 
 
-@_claims_start
-@_metered("article_planning")
-@_cancellable
-def run_plan_job(session_id: str, direct: bool = False) -> None:
+def _plan_core(session_id: str, direct: bool = False) -> None:
     """§7.10: SERP for candidate primaries + per-silo orchestrator + dedup.
-    With direct=True, skips the orchestrator (groupings -> articles + dedup)."""
-    bind_session_id(session_id)
+    With direct=True, skips the orchestrator (groupings -> articles + dedup).
+    Owns its own terminal status (complete / degraded-error); an unexpected
+    failure propagates to the durable envelope, and CancelledByUser (a
+    BaseException) passes through the `except Exception` below to the envelope."""
     try:
         session = store.get_session(session_id)
         log_topics = (session.get("statistical_clustering_log") or {}).get("topics") or {}
@@ -456,16 +704,15 @@ def run_plan_job(session_id: str, direct: bool = False) -> None:
         )
 
 
-@_claims_start
-@_metered("regate")
-@_cancellable
-def run_regate_job(
+def _regate_core(
     session_id: str, threshold: float, edge_threshold: float, resolution: float,
     active_per_silo_cap: int, seed_terms: list[str], peer_terms: list[str],
+    silo_margin: float | None = None,
 ) -> None:
     """Re-gate + re-cluster a session's stored keyword pool at a new threshold and
-    clustering granularity, skipping DataForSEO. Clears any prior article plan."""
-    bind_session_id(session_id)
+    clustering granularity, skipping DataForSEO. Clears any prior article plan.
+    `silo_margin` None → the configured default; a per-call value lets the owner
+    A/B soft routing on one session without changing global config."""
     try:
         session = store.get_session(session_id)
         pool = store.list_all_keyword_pool(session_id)
@@ -487,15 +734,19 @@ def run_regate_job(
             seed_terms=seed_terms,
             peer_terms=peer_terms,
             assign_best_silo=s.relevance_assign_best_silo,
+            silo_margin=(s.relevance_silo_margin if silo_margin is None else silo_margin),
             llm_router=_maybe_llm_router(session["seed_keyword"], topics),
             llm_router_margin=s.llm_routing_margin_threshold,
             language_filter=_maybe_language_filter(),
+            seed=session["seed_keyword"],
+            source_guard_enabled=s.fanout_source_guard_enabled,
+            source_guard_min_score=s.fanout_source_guard_min_score,
+            source_guard_min_seed_tokens=s.fanout_source_guard_min_seed_tokens,
         )
         store.reset_article_planning(session_id)
-        store.delete_keywords_for_session(session_id)
-        store.insert_classified_keywords(session_id, gc.per_topic_gated)
+        _persist_gated_pool(session_id, gc.per_topic_gated)
         _maybe_enrich_metrics(session, gc.per_topic_gated)
-        store.try_finalize_running(
+        _finalize_with_retry(
             session_id,
             {
                 "statistical_clustering_log": gc.clustering_log,
@@ -518,10 +769,7 @@ def run_regate_job(
         )
 
 
-@_claims_start
-@_metered("recursive_fanout")
-@_cancellable
-def run_fanout_job(
+def _fanout_core(
     session_id: str, threshold: float, edge_threshold: float, resolution: float,
     active_per_silo_cap: int, seed_terms: list[str], peer_terms: list[str],
 ) -> None:
@@ -529,7 +777,6 @@ def run_fanout_job(
     representatives as sub-anchors, merge the new keywords into the stored pool,
     then re-run the gate + clustering on the enlarged pool. Mining stays off at
     this level. Depth is capped at 1 — this never recurses on its own output."""
-    bind_session_id(session_id)
     try:
         session = store.get_session(session_id)
         topics = store.list_run_topics(session_id)
@@ -578,16 +825,20 @@ def run_fanout_job(
             seed_terms=seed_terms,
             peer_terms=peer_terms,
             assign_best_silo=s.relevance_assign_best_silo,
+            silo_margin=s.relevance_silo_margin,
             llm_router=_maybe_llm_router(session["seed_keyword"], topics),
             llm_router_margin=s.llm_routing_margin_threshold,
             language_filter=_maybe_language_filter(),
+            seed=session["seed_keyword"],
+            source_guard_enabled=s.fanout_source_guard_enabled,
+            source_guard_min_score=s.fanout_source_guard_min_score,
+            source_guard_min_seed_tokens=s.fanout_source_guard_min_seed_tokens,
         )
         store.reset_article_planning(session_id)
-        store.delete_keywords_for_session(session_id)
-        store.insert_classified_keywords(session_id, gc.per_topic_gated)
+        _persist_gated_pool(session_id, gc.per_topic_gated)
         _maybe_enrich_metrics(session, gc.per_topic_gated)
         new_settings = {**(session.get("settings") or {}), "recursive_fanout": True}
-        store.try_finalize_running(
+        _finalize_with_retry(
             session_id,
             {
                 "settings": new_settings,
@@ -612,15 +863,11 @@ def run_fanout_job(
         )
 
 
-@_claims_start
-@_metered("architecture")
-@_cancellable
-def run_architecture_job(session_id: str) -> None:
+def _architecture_core(session_id: str) -> None:
     """§7.11 Site Architecture: one pillar per article-bearing silo + the internal
     linking matrix, persisted to site_architecture. Reads the article plan
     produced by /plan-articles; never re-plans. Idempotent — re-running upserts
     the architecture row (PRD §9.3 "Regenerate architecture")."""
-    bind_session_id(session_id)
     try:
         session = store.get_session(session_id)
         clusters = store.list_clusters(session_id)
@@ -703,6 +950,41 @@ def run_architecture_job(session_id: str) -> None:
         store.try_finalize_running(
             session_id, {"status": "error", "last_error": _short(exc)}
         )
+
+
+def run_plan_durable(session_id: str, direct: bool = False) -> None:
+    """async_jobs handler for durable article planning (issue #686 Phase 3)."""
+    _run_pipeline_durable(session_id, "article_planning", lambda sid: _plan_core(sid, direct))
+
+
+def run_regate_durable(
+    session_id: str, threshold: float, edge_threshold: float, resolution: float,
+    active_per_silo_cap: int, seed_terms: list[str], peer_terms: list[str],
+    silo_margin: float | None = None,
+) -> None:
+    """async_jobs handler for a durable re-gate (issue #686 Phase 3)."""
+    _run_pipeline_durable(
+        session_id, "regate",
+        lambda sid: _regate_core(sid, threshold, edge_threshold, resolution,
+                                 active_per_silo_cap, seed_terms, peer_terms, silo_margin),
+    )
+
+
+def run_fanout_durable(
+    session_id: str, threshold: float, edge_threshold: float, resolution: float,
+    active_per_silo_cap: int, seed_terms: list[str], peer_terms: list[str],
+) -> None:
+    """async_jobs handler for a durable recursive fanout (issue #686 Phase 3)."""
+    _run_pipeline_durable(
+        session_id, "recursive_fanout",
+        lambda sid: _fanout_core(sid, threshold, edge_threshold, resolution,
+                                 active_per_silo_cap, seed_terms, peer_terms),
+    )
+
+
+def run_architecture_durable(session_id: str) -> None:
+    """async_jobs handler for durable site architecture (issue #686 Phase 3)."""
+    _run_pipeline_durable(session_id, "architecture", _architecture_core)
 
 
 # ----- M12 SIE Term & Entity analysis ---------------------------------------

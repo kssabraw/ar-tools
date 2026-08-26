@@ -148,9 +148,22 @@ is needed for inspection.
 
 **Goal: a real conversation with a real prospect.** This is the first phase that produces revenue.
 
-- [ ] Heatmap renders from `prospect_coverage.rank_vector` + geometry alone
-- [ ] Dead points visually distinct from "not found"; legend and scale bar present
-- [ ] Renderer deterministic — identical inputs produce identical `content_hash`
+- [x] Heatmap renders from `prospect_coverage.rank_vector` + geometry alone
+      (`api/services/heatmap.py`, 2026-08-07. Regenerates coordinates through the pinned generator
+      using the snapshot's STORED `geometry_version`; no `grid_result` touched. `report_artifact`
+      provenance table, migration `20260807130000`.)
+- [x] Dead points visually distinct from "not found"; legend and scale bar present
+      (dead = hollow grey ring, not-found = solid red disc; business = diamond pin; 1-mile bar.)
+- [x] Renderer deterministic — identical inputs produce identical `content_hash`
+      (no `now()`/ids/random; sorted iteration; fixed-precision coords. Pinned by
+      `tests/test_heatmap.py`; unique index on `report_artifact.content_hash` = the §6 cache.)
+- [x] `heatmap_pair` + `heatmap_delta` renderers (§4.3) — before/after and per-point change
+      (2026-08-07. Shared plot primitives, slice-1 bytes proven unchanged. Inverted-rank delta:
+      absent = worst rank, absent-in-both neutral never red, directional-only legend, distinct
+      frame treatment. `render-delta` CLI. `tests/test_heatmap_compare.py`, +33 tests.)
+- [~] Delta guards (§4.3): refuse across span limit / provider boundary / suppressed drift
+      (span enforced now via `max_delta_span_days`=45; provider + drift are built guard seams
+      awaiting a 2nd provider and `prospect_delta` — I-091.)
 - [ ] Audit PDF assembled; generation gated on explicit approval, never on cycle completion
 - [ ] Send-time LLM verification runs at generation for any engine-specific claim
 - [ ] Call hook rendered from persisted evidence
@@ -162,15 +175,26 @@ before any per-record spend.*
 
 ### Phase 4 — Scoring model
 
-**Goal: replace the placeholder.** Only worth doing once Phase 3 is producing audits.
+**Goal: replace the placeholder. STAGE 1 (priors) BUILT 2026-08-09** (scoring-spec §6 splits the
+refit into three stages; Stage 1 needs no real outcomes, only the elicited coefficients). Stages 2–3
+wait on accumulated `outcome` rows. Data model live (migration `20260809190000`); engine +
+golden-fixture harness + Stage-2 recalibration job + `score`/`recalibrate` CLI all built and tested
+(465 green). `v_prospect_ranked` verified live; the full production ranking is one `score` run away.
 
-- [ ] Scorecard per `docs/scoring-spec.md`; all coefficients config-driven, zero hardcoded
-- [ ] Per-channel offsets (email 705.0, phone 579.3) — never a shared Model A base rate
-- [ ] `score_factors` fully replayable: points + offset reproduces the stored score exactly
-- [ ] Two-pass scoring; pass 1 excludes reachability rather than defaulting it
-- [ ] Golden fixtures pass in CI, including a phone/email pair and an all-unknown case
-- [ ] Slot allocation with MMR selection at λ = 0.5
-- [ ] Deltas computed against the mean of the prior two snapshots
+- [x] Scorecard per `docs/scoring-spec.md`; all coefficients config-driven, zero hardcoded
+      (`scorecard.py` engine + `scorecard_config.py` registry; `OUTREACH_SCORECARD_COEFFICIENTS_JSON`)
+- [x] Per-channel offsets (email 705.0, phone 579.3) — never a shared Model A base rate (pinned config;
+      base rates also config with a consistency test)
+- [x] `score_factors` fully replayable: points + offset reproduces the stored score exactly
+      (`replay_score`, pinned by the golden harness)
+- [x] Two-pass scoring; pass 1 excludes reachability rather than defaulting it (`score_features`;
+      Stage-1 live run is phone/pass 1 — email/pass 2 lights up with enrichment, DECISIONS)
+- [x] Golden fixtures pass (local pytest — no CI in this repo), including the F1/F5 phone/email pair
+      and the F4 all-unknown case (`tests/test_scorecard.py`)
+- [ ] Slot allocation with MMR selection at λ = 0.5 — DEFERRED (a selection-layer concern, like the
+      min-history/evidence-age gates I-101; Stage 1 is the scoring engine, not the selector)
+- [ ] Deltas computed against the mean of the prior two snapshots — extraction wired
+      (`delta_first_scan` unknown on <3 snapshots; the bins exist), fires when a third snapshot lands
 
 *Deltas need three snapshots — roughly six weeks in. They arrive naturally, not on demand.*
 

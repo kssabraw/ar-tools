@@ -57,6 +57,52 @@ _BATCH_WINDOW_HOURS = 12
 _BATCH_GAP_SECONDS = 300
 
 
+# ── single-job activity registry ─────────────────────────────────────────────
+# Non-content, user-initiated long jobs (one job == one user-visible task, no
+# per-item batch fan-out). Registering a type does two things: it surfaces the
+# in-flight job in the global Activity indicator, and — when `notify` — emits one
+# personal "task finished" notification to the initiating user's header bell
+# (`recipient_profile_id`) when the job settles.
+#
+# EVERY entry is gated on the job carrying `payload.user_id`, so the *scheduled /
+# background* runs of the same type (daily sweeps, auto-scans at client creation
+# — no user_id) never appear here or ping anyone. Only a run a user kicked off
+# and might navigate away from surfaces. `path` is a relative in-app link
+# ({cid} = the job's client id). `notify=False` shows the job in the indicator
+# but leaves completion messaging to a bespoke producer (avoids double-pinging).
+SINGLE_JOB_REGISTRY: dict[str, dict[str, Any]] = {
+    "keyword_research":        {"label": "Keyword research",        "path": "clients/{cid}/keyword-research", "notify": True},
+    "keyword_topic_research":  {"label": "Topic research",          "path": "clients/{cid}/keyword-research", "notify": True},
+    "keyword_research_report": {"label": "Keyword research report", "path": "clients/{cid}/keyword-research", "notify": True},
+    "domain_overview":         {"label": "Domain overview",         "path": "clients/{cid}/domain-intel",     "notify": True},
+    "keyword_gap":             {"label": "Keyword gap",             "path": "clients/{cid}/domain-intel",     "notify": True},
+    "link_gap":                {"label": "Backlink gap",            "path": "clients/{cid}/domain-intel",     "notify": True},
+    "local_seo_silo":          {"label": "Silo plan",               "path": "clients/{cid}/local-seo",        "notify": True},
+    "service_page_plan":       {"label": "Service page plan",       "path": "clients/{cid}/service-pages",    "notify": True},
+    "gsc_research":            {"label": "GSC research",            "path": "clients/{cid}/gsc-research",     "notify": True},
+    "client_report":          {"label": "Client report",           "path": "clients/{cid}/reports",          "notify": True},
+    "brand_report":           {"label": "AI visibility report",    "path": "clients/{cid}/ai-visibility",    "notify": True},
+    "brand_scan":             {"label": "AI visibility scan",      "path": "clients/{cid}/ai-visibility",    "notify": True},
+    "brand_voice_scan":       {"label": "Brand voice scan",        "path": "clients/{cid}/brand-voice",      "notify": True},
+    "icp_scan":               {"label": "ICP scan",                "path": "clients/{cid}/icp",              "notify": True},
+    "rank_keyword_report":    {"label": "Rank analysis report",    "path": "clients/{cid}/rankings",         "notify": True},
+    "backlink_lookup":        {"label": "Backlink lookup",         "path": "clients/{cid}/backlinks",        "notify": True},
+    "article_reanalyze":      {"label": "Article reanalysis",      "path": "clients/{cid}/articles",         "notify": True},
+    # The Fanout keyword report is session-scoped; it links to the Fanout app
+    # (not a client page) and only pings when the session is client-linked.
+    "fanout_report":          {"label": "Keyword report",          "path": "fanout",                         "notify": True},
+    # Fanout blog reoptimize is a multi-minute walk-away job (spawns + runs a
+    # full suite pipeline) — ping the initiator's bell when it settles. The
+    # fast score job (fanout_blog_score) is inline and deliberately unregistered.
+    "fanout_blog_reoptimize": {"label": "Article reoptimization",   "path": "fanout",                         "notify": True},
+}
+
+# Every job_type the Activity indicator reads: content page jobs (batch-tracked)
+# + the single-job registry. Membership is safe regardless of scheduled runs —
+# the user_id gate keeps background runs out.
+ACTIVITY_JOB_TYPES: frozenset[str] = frozenset(CONTENT_JOB_TYPES) | frozenset(SINGLE_JOB_REGISTRY)
+
+
 def family_for(job_type: Optional[str]) -> Optional[str]:
     """Return the content family ('ecommerce' | 'local_seo') for a job_type, or
     None if it isn't a content job."""
@@ -64,7 +110,10 @@ def family_for(job_type: Optional[str]) -> Optional[str]:
 
 
 def _client_id_of(job: dict) -> Optional[str]:
-    cid = job.get("entity_id") or (job.get("payload") or {}).get("client_id")
+    # Prefer payload.client_id: for content jobs it equals entity_id, but some
+    # single jobs set entity_id to a non-client id (e.g. rank_keyword_report uses
+    # the report id) while carrying the real client in the payload.
+    cid = (job.get("payload") or {}).get("client_id") or job.get("entity_id")
     return str(cid) if cid else None
 
 
@@ -93,20 +142,32 @@ def _client_name_map(supabase, client_ids: set[str]) -> dict[str, str]:
 
 def _job_item(job: dict, names: dict[str, str]) -> dict[str, Any]:
     job_type = job.get("job_type") or ""
-    fam = _TYPE_FAMILY.get(job_type, "content")
     cid = _client_id_of(job) or ""
     payload = job.get("payload") or {}
-    mode = "reoptimize" if job_type.endswith("reoptimize_url") else "generate"
-    href = f"/clients/{cid}/{'ecommerce' if fam == 'ecommerce' else 'local-seo'}" if cid else None
+    content_fam = _TYPE_FAMILY.get(job_type)
+    if content_fam:  # a content page job (batch-tracked family)
+        fam = content_fam
+        kind_label = _FAMILY_LABEL.get(fam, "Content")
+        mode = "reoptimize" if job_type.endswith("reoptimize_url") else "generate"
+        href = f"/clients/{cid}/{'ecommerce' if fam == 'ecommerce' else 'local-seo'}" if cid else None
+        label = payload.get("keyword") or payload.get("page_url") or "Page"
+    else:  # a single registered task job
+        desc = SINGLE_JOB_REGISTRY.get(job_type, {})
+        fam = "task"
+        kind_label = desc.get("label", "Task")
+        mode = "generate"
+        path = desc.get("path")
+        href = f"/{path.format(cid=cid)}" if (path and cid) else None
+        label = payload.get("keyword") or payload.get("label") or kind_label
     return {
         "id": str(job.get("id")),
         "source": "job",
         "family": fam,
-        "kind_label": _FAMILY_LABEL.get(fam, "Content"),
+        "kind_label": kind_label,
         "mode": mode,
         "client_id": cid,
         "client_name": names.get(cid, "Client"),
-        "label": payload.get("keyword") or payload.get("page_url") or "Page",
+        "label": label,
         "status": job.get("status"),
         "created_at": job.get("created_at"),
         "href": href,
@@ -146,7 +207,7 @@ def list_user_activity(user_id: str) -> dict[str, Any]:
         jobs = (
             supabase.table("async_jobs")
             .select("id, job_type, entity_id, payload, status, created_at")
-            .in_("job_type", list(CONTENT_JOB_TYPES))
+            .in_("job_type", list(ACTIVITY_JOB_TYPES))
             .in_("status", list(_IN_FLIGHT))
             .eq("payload->>user_id", user_id)
             .order("created_at", desc=True)
@@ -315,11 +376,100 @@ def on_content_job_settled(job: dict) -> None:
             title=note["title"],
             summary=note["summary"],
             severity="info",
-            payload={"family": family, "user_id": user_id, **counts},
+            payload={"family": family, "user_id": user_id, "link": _family_link(family, client_id), **counts},
             dedupe_key=f"content_batch:{user_id}:{client_id}:{family}:{stamp}",
+            recipient_profile_id=user_id,
         )
     except Exception as exc:  # pragma: no cover - best effort
         logger.error("activity.settle_failed", extra={"job_id": job.get("id"), "error": str(exc)})
+
+
+def _family_link(family: str, client_id: str) -> str:
+    return f"clients/{client_id}/{'ecommerce' if family == 'ecommerce' else 'local-seo'}"
+
+
+# ── single-job completion notification (driven from the job worker) ──────────
+
+def single_job_notification(
+    job_type: str, client_name: str, status: str, error: Optional[str] = None,
+) -> Optional[dict]:
+    """Build the {title, summary, severity} for a settled single (non-batch) job,
+    or None if it isn't a notifying registered type or the outcome is silent
+    (cancelled). Pure — unit-tested."""
+    desc = SINGLE_JOB_REGISTRY.get(job_type)
+    if not desc or not desc.get("notify"):
+        return None
+    label = desc["label"]
+    if status == "complete":
+        return {
+            "title": f"{label} finished",
+            "summary": f"Your {label.lower()} for {client_name} is ready.",
+            "severity": "info",
+        }
+    if status == "failed":
+        if (error or "") == _CANCELLED_ERROR:
+            return None  # user cancelled — they already know
+        reason = f" — {error}" if error else ""
+        return {
+            "title": f"{label} failed",
+            "summary": f"Your {label.lower()} for {client_name} didn't finish{reason}.",
+            "severity": "warning",
+        }
+    return None
+
+
+def _on_single_job_settled(job: dict) -> None:
+    """Emit one personal completion notification to the user who started a settled
+    single job. Idempotent via a job-id dedupe_key (a reaper re-run is a clean
+    no-op). Best-effort — never raises."""
+    job_type = job.get("job_type") or ""
+    user_id = _user_id_of(job)
+    client_id = _client_id_of(job)
+    if not user_id or not client_id:
+        return  # scheduled/background run, or no client context — nothing to ping
+    supabase = get_supabase()
+    # The in-memory `job` dict still carries the claimed status='running' — the
+    # handler settled its own DB row without mutating it. Re-read the terminal
+    # status/error so we notify on the true outcome (not the stale 'running').
+    try:
+        fresh = (
+            supabase.table("async_jobs").select("status, error")
+            .eq("id", job.get("id")).single().execute()
+        ).data or {}
+    except Exception:  # pragma: no cover — settled state unknowable → skip
+        return
+    note = single_job_notification(
+        job_type, _lookup_client_name(supabase, client_id),
+        fresh.get("status") or "", fresh.get("error"),
+    )
+    if not note:
+        return
+    desc = SINGLE_JOB_REGISTRY.get(job_type, {})
+    path = desc.get("path")
+    link = path.format(cid=client_id) if path else None
+    notifications.emit(
+        client_id=client_id,
+        kind="task_complete",
+        title=note["title"],
+        summary=note["summary"],
+        severity=note["severity"],
+        payload={"job_type": job_type, "user_id": user_id, "link": link},
+        dedupe_key=f"task_complete:{job.get('id')}",
+        recipient_profile_id=user_id,
+    )
+
+
+def on_job_settled(job: dict) -> None:
+    """Worker post-settle hook for every ACTIVITY_JOB_TYPES job: route a content
+    page job to its batch-completion rollup, and a single registered job to its
+    per-job completion ping. Best-effort — never raises into the worker."""
+    try:
+        if family_for(job.get("job_type")):
+            on_content_job_settled(job)
+        else:
+            _on_single_job_settled(job)
+    except Exception as exc:  # pragma: no cover - best effort
+        logger.error("activity.on_job_settled_failed", extra={"job_id": job.get("id"), "error": str(exc)})
 
 
 def _lookup_client_name(supabase, client_id: str) -> str:

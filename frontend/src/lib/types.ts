@@ -83,6 +83,8 @@ export interface Client extends ClientListItem {
   wordpress_site_url: string | null
   wordpress_username: string | null
   wordpress_app_password_set: boolean
+  // Per-client gate for the WheelHouse IT page poster module.
+  wheelhouse_cpt_enabled?: boolean
   gsc_property: string | null
   business_location: string | null
   gbp_place_id: string | null
@@ -154,6 +156,31 @@ export interface SyncRun {
   rows: number
   status: 'ok' | 'failed'
   error: string | null
+}
+
+// GA4 (Google Analytics) connection — Client Reporting Phase 2.
+export interface Ga4Property {
+  id: string
+  client_id: string
+  property_id: string // "properties/123456789"
+  display_name: string | null
+  access_status: 'ok' | 'no_access' | 'pending'
+  last_verified_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface Ga4VerifyResponse {
+  property_id: string
+  access_status: 'ok' | 'no_access' | 'pending'
+  detail: string | null
+  last_verified_at: string | null
+}
+
+export interface Ga4PropertySummary {
+  property_id: string
+  display_name: string
+  account_name: string
 }
 
 export interface IngestResponse {
@@ -331,7 +358,12 @@ export interface RankOverview {
   unread_alert_count: number
 }
 
-export type RankAlertType = 'weekly_drop' | 'page_one_exit' | 'thirty_day_drop' | 'deindexed'
+export type RankAlertType =
+  | 'weekly_drop'
+  | 'page_one_exit'
+  | 'thirty_day_drop'
+  | 'gradual_drop'
+  | 'deindexed'
 
 export interface RankAlert {
   id: string
@@ -611,7 +643,8 @@ export interface SiloPromoteResponse {
 }
 
 // --- Maps / local-pack geo-grid ranker (Module #5) ---
-export type MapsRadius = 3 | 5 | 7
+// Free choice 1-10 whole miles (was a 3|5|7 preset); bounds enforced server-side.
+export type MapsRadius = number
 export interface MapsConfig {
   client_id: string
   google_place_id: string | null
@@ -622,10 +655,14 @@ export interface MapsConfig {
   shape: 'circle' | 'square'
   resource_category: 'googleMaps' | 'googleLocalFinder'
   serp_device: 'desktop' | 'mobile' | 'both'
+  provider: 'local_dominator' | 'dataforseo' | null
+  provider_default: string | null
   cadence: 'off' | 'weekly'
   weekday: number
+  scan_hour: number
   active: boolean
   last_scanned_at: string | null
+  timezone: string | null
   configured: boolean
 }
 
@@ -793,6 +830,8 @@ export interface MapsRunResponse {
   client_id: string
   status: string
   error: string | null
+  /** Keywords the enqueued scan will cover — all active ones unless a subset was picked. */
+  keywords?: string[] | null
 }
 
 export interface MapsTrendPoint {
@@ -807,6 +846,8 @@ export interface MapsTrendPoint {
   found_pct: number | null
   top3_pct: number | null
   top10_pct: number | null
+  /** Grid this point was measured on — coverage % is a share of the area scanned. */
+  radius_miles: number | null
 }
 
 export interface MapsKeywordTrend {
@@ -884,11 +925,14 @@ export interface MapsChangesResponse {
   has_previous: boolean
   current_scan_id: string | null
   previous_scan_id: string | null
+  /** Set when the grid was resized between the two scans: the shared radius the deltas were measured on. */
+  compared_on_radius_miles: number | null
   keywords: MapsKeywordChange[]
 }
 
 export type MapsAlertType =
   | 'grid_rank_drop' | 'coverage_drop' | 'lost_pack' | 'area_decline' | 'competitor_surge'
+  | 'gradual_decline'
 
 export interface MapsAlert {
   id: string
@@ -1877,4 +1921,127 @@ export interface QaReview {
   narrative: string | null
   trigger: string
   created_at: string
+}
+
+// ── GBP performance-metrics reporting dashboard ──────────────────────────────
+export type GbpAccessStatus = 'ok' | 'no_access' | 'pending' | 'error'
+
+export interface GbpLocation {
+  id: string
+  client_id: string
+  location_id: string
+  account_id: string | null
+  place_id: string | null
+  title: string | null
+  access_status: GbpAccessStatus
+  last_verified_at: string | null
+  last_synced_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface GbpResolvedLocation {
+  location_id: string
+  account_id: string | null
+  title: string | null
+  address: string | null
+  place_id: string | null
+}
+
+export interface GbpMetricGrowth {
+  metric: string
+  label: string
+  group: string
+  current: number
+  previous: number
+  delta: number
+  pct: number | null
+}
+
+export interface GbpBreakdownItem {
+  label: string
+  current: number
+  previous: number
+  pct: number | null
+  share: number
+}
+
+export interface GbpBreakdown {
+  surface: GbpBreakdownItem[]
+  device: GbpBreakdownItem[]
+}
+
+export interface GbpActionsSummary {
+  current: number
+  previous: number
+  delta: number
+  pct: number | null
+  engagement_current: number | null
+  engagement_previous: number | null
+}
+
+export interface GbpReviewsSummary {
+  rating: number | null
+  review_count: number
+  items: GbpReview[]
+}
+
+export interface GbpPeriodReviewItem {
+  reviewer: string
+  rating: number | null
+  text: string
+  date: string
+  has_reply: boolean
+}
+
+export interface GbpPeriodReviews {
+  count: number
+  average_rating: number | null
+  items: GbpPeriodReviewItem[]
+  overall_rating: number | null
+  overall_count: number
+  start: string | null
+  end: string | null
+}
+
+export interface GbpSearchKeyword {
+  keyword: string
+  value: number
+  is_threshold: boolean
+  previous?: number | null
+  delta?: number | null
+}
+
+export interface GbpSearchKeywords {
+  month: string | null
+  months: string[]
+  keywords: GbpSearchKeyword[]
+  total: number
+  range_months: number
+  prev_total: number
+  compared: boolean
+}
+
+export interface GbpSeriesPoint {
+  date: string
+  values: Record<string, number>
+}
+
+export interface GbpDashboard {
+  enabled: boolean
+  connected: boolean
+  locations: GbpLocation[]
+  window_days: number
+  date_start: string
+  date_end: string
+  compare_start: string
+  compare_end: string
+  last_synced_at: string | null
+  metrics: GbpMetricGrowth[]
+  breakdown: GbpBreakdown
+  actions: GbpActionsSummary | null
+  insights: string[]
+  reviews: GbpReviewsSummary
+  series: GbpSeriesPoint[]
+  compare_series: GbpSeriesPoint[]
 }

@@ -25,7 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from api.config import get_settings  # noqa: E402
-from api.services import seeding  # noqa: E402
+from api.services import filters, seeding  # noqa: E402
 from api.services.cost import CostLimitExceeded  # noqa: E402
 from api.services.pipeline import run_filter, run_ingest  # noqa: E402
 
@@ -155,9 +155,29 @@ def cmd_ingest(args) -> int:
 def cmd_filter(args) -> int:
     definition = seeding.MarketDefinition.from_file(args.definition)
     client = _client()
+    settings = get_settings()
     market_id = _market_id(client, definition.name)
 
-    report = run_filter(client=client, settings=get_settings(), market_id=market_id)
+    # A market can define more than one ingest category; the relevance allow-list is the union of
+    # each configured category's set. Unconfigured categories contribute nothing (and the whole
+    # gate is a no-op when none of the market's categories are in the map).
+    accepted: set[str] = set()
+    for category in definition.categories:
+        resolved = filters.resolve_accepted_categories(
+            category, settings.filter_category_relevance
+        )
+        if resolved:
+            accepted.update(resolved)
+
+    report = run_filter(
+        client=client,
+        settings=settings,
+        market_id=market_id,
+        accepted_categories=frozenset(accepted) or None,
+        category_relevance_enabled=settings.filter_category_relevance_enabled,
+        distance_gate_enabled=settings.filter_max_distance_enabled,
+        max_distance_miles=settings.filter_max_distance_miles,
+    )
 
     print(
         json.dumps(
@@ -166,6 +186,7 @@ def cmd_filter(args) -> int:
                 "survived": report.survived,
                 "excluded": report.excluded,
                 "franchise_flagged": report.franchise_flagged,
+                "category_review_flagged": report.category_review_flagged,
                 "failures_by_rule": report.failures_by_rule,
             },
             indent=2,
@@ -202,7 +223,7 @@ def cmd_calibrate(args) -> int:
         region=definition.region,
     )[0]
 
-    return _asyncio.run(calibrate(tile.query, args.limit, tile.coordinates))
+    return _asyncio.run(calibrate(tile.query, legacy_limit(args), tile.coordinates))
 
 
 def cmd_verify_reviews(args) -> int:
@@ -233,7 +254,7 @@ def cmd_verify_reviews(args) -> int:
                 client=client,
                 settings=get_settings(),
                 market_id=market_id,
-                limit=args.limit,
+                limit=legacy_limit(args),
                 group=args.group,
                 provider=args.provider,
             )
@@ -413,6 +434,230 @@ def cmd_scan(args) -> int:
     return 0 if report.posted else 1
 
 
+def cmd_scan_organic(args) -> int:
+    """Capture ONE organic SERP for a submarket x keyword's latest rolled-up snapshot. BILLS one request.
+
+    The report's "organic ranking vs competitors" signal (outreach ISSUES I-095, increment 2). It
+    attaches to the maps `scan_snapshot` the report already reads (I-084 — DECISIONS 2026-08-08), so
+    the organic and coverage reads come off the same snapshot. Idempotent per snapshot: a re-run on a
+    snapshot that already has an organic row is free and stores nothing.
+
+    Targets a ROLLED-UP snapshot deliberately — that is the one the per-prospect report reads — via
+    the same resolver the heatmap uses (`--snapshot`, or `--submarket` + optional `--keyword`).
+    """
+    import asyncio as _asyncio
+
+    from api.services import organic_scan
+    from api.services.dataforseo_client import missing_dataforseo_vars
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    settings = get_settings()
+    client = _client()
+
+    absent = missing_dataforseo_vars(settings)
+    if absent:
+        print(f"REFUSED: missing credentials: {', '.join(absent)}", file=sys.stderr)
+        return 2
+
+    market_id = _market_id(client, definition.name)
+    snapshot = _resolve_rollup_snapshot(client, market_id, args)
+    if snapshot is None:
+        return 2
+
+    kw = (
+        client.table("keyword").select("term").eq("id", snapshot["keyword_id"]).limit(1).execute().data
+    )
+    keyword_term = kw[0]["term"] if kw else ""
+    if not keyword_term:
+        print("REFUSED: snapshot's keyword could not be resolved", file=sys.stderr)
+        return 2
+    if snapshot.get("center_lat") is None or snapshot.get("center_lng") is None:
+        print("REFUSED: snapshot has no recorded centre — cannot anchor the organic SERP", file=sys.stderr)
+        return 2
+
+    report = _asyncio.run(
+        organic_scan.capture_organic(
+            client, settings, snapshot, keyword_term, market_id=market_id
+        )
+    )
+    print(
+        json.dumps(
+            {
+                "snapshot_id": report.snapshot_id,
+                "keyword": report.keyword,
+                "stored": report.stored,
+                "already_captured": report.already_captured,
+                "results": report.results,
+                "ai_overview_present": report.ai_overview_present,
+                "ads_present": report.ads_present,
+                "lsa_present": report.lsa_present,
+                "problems": report.problems,
+            },
+            indent=2,
+        )
+    )
+    # already_captured is a successful no-op; only a genuine failure to store is non-zero.
+    return 0 if (report.stored or report.already_captured) else 1
+
+
+def cmd_scan_ai(args) -> int:
+    """Capture AI-visibility for a market's ai_regions x a keyword. BILLS (OpenAI + one AIO request per region).
+
+    The report's LLM signal (outreach ISSUES I-095, increment 3): asks ChatGPT + Google AI Overview
+    "best <keyword> in <region>" for each seeded ai_region and stores what they name, so the report
+    can check whether a given prospect is named. Runs per REGION (not per prospect) — the answer is
+    shared. `--submarket` narrows to the one ai_region of that name; otherwise every region in the
+    market is scanned. `--keyword` picks the term (defaults to the market's primary).
+    """
+    import asyncio as _asyncio
+
+    from api.services import ai_visibility
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    settings = get_settings()
+    client = _client()
+    market_id = _market_id(client, definition.name)
+
+    regions = (
+        client.table("ai_region").select("*").eq("market_id", market_id).order("name").execute().data
+        or []
+    )
+    if args.submarket:
+        regions = [r for r in regions if r["name"].lower() == args.submarket.lower()]
+    if not regions:
+        known = ", ".join(
+            sorted(r["name"] for r in (
+                client.table("ai_region").select("name").eq("market_id", market_id).execute().data or []
+            ))
+        )
+        print(
+            f"REFUSED: no ai_region matched. Known regions: {known or '(none — seed ai_region first)'}",
+            file=sys.stderr,
+        )
+        return 2
+
+    keywords = client.table("keyword").select("*").eq("market_id", market_id).execute().data or []
+    if args.keyword:
+        keywords = [k for k in keywords if k["term"].lower() == args.keyword.lower()]
+    else:
+        keywords = [k for k in keywords if k.get("is_primary")] or keywords[:1]
+    if len(keywords) != 1:
+        terms = ", ".join(sorted(k["term"] for k in keywords))
+        print(f"REFUSED: pass --keyword to pick exactly one of: {terms}", file=sys.stderr)
+        return 2
+
+    out = []
+    for region in regions:
+        report = _asyncio.run(
+            ai_visibility.run_ai_scan(client, settings, region, keywords[0], market_id=market_id)
+        )
+        out.append(
+            {
+                "ai_region": report.ai_region,
+                "keyword": report.keyword,
+                "stored": report.stored,
+                "engines": [
+                    {"engine": e.engine, "present": e.present,
+                     "named": len(e.named_businesses), "error": e.error}
+                    for e in report.engines
+                ],
+                "problems": report.problems,
+            }
+        )
+    print(json.dumps({"regions": out}, indent=2))
+    return 0 if any(r["stored"] for r in out) else 1
+
+
+def cmd_scan_tech(args) -> int:
+    """Fetch each prospect's OWN site and store the ad/marketing tech on it. FREE (own HTTP GET).
+
+    Paid-placement Slice B1 (the money signal, PRD §B3): Meta pixel, Google Ads (AW-) conversion tag,
+    GTM container, and vendor tags (CallRail/Podium/Birdeye) — the scoring-spec.md buying-intent /
+    decision-structure signals a SERP read cannot see. NOT in PAID_COMMANDS: it makes no paid call.
+    A failed fetch stores `unknown` (a status), never `absent`.
+    """
+    import asyncio as _asyncio
+
+    from api.services import scan_tech
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    settings = get_settings()
+    client = _client()
+    market_id = _market_id(client, definition.name)
+
+    report = _asyncio.run(
+        scan_tech.run_tech_scan(client, settings, market_id=market_id, limit=scan_tech_limit(args))
+    )
+    print(
+        json.dumps(
+            {
+                "market_id": report.market_id,
+                "considered": report.considered,
+                "fetched_ok": report.fetched_ok,
+                "failed": report.failed,
+                "with_pixel": report.with_pixel,
+                "with_ads": report.with_ads,
+                "with_vendor": report.with_vendor,
+                "stored": report.stored,
+                "problems": report.problems[:20],
+            },
+            indent=2,
+        )
+    )
+    return 0 if report.stored or report.considered == 0 else 1
+
+
+def cmd_probe_pixel_field(args) -> int:
+    """§16a.1 spike — is a Meta pixel in the Outscraper ENRICHMENT pull? BILLS (enrichment).
+
+    Enriches a SMALL sample of the market's prospects and reports whether a pixel field is present
+    (and how often it is populated). Decides whether Slice B1's Meta half can come near-free from the
+    pull we already run, or whether the site fetch (`scan-tech`) stays the primary source (ISSUES
+    I-003). The `--enrichment` name is a GUESS to confirm against the logged sample record — the
+    parser never asserts the field name (measure-don't-infer).
+    """
+    import asyncio as _asyncio
+
+    from api.config import missing_outscraper_vars
+    from api.services import pixel_probe
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    settings = get_settings()
+
+    # Refuse BEFORE opening a credential, like every other paid command. OutscraperClient does not
+    # validate its key, so without this the spike fires N requests with an empty X-API-KEY.
+    absent = missing_outscraper_vars(settings)
+    if absent:
+        print(f"REFUSED: missing credentials: {', '.join(absent)}", file=sys.stderr)
+        return 2
+
+    client = _client()
+    market_id = _market_id(client, definition.name)
+
+    sample = (
+        client.table("prospect")
+        .select("name, address, website")
+        .eq("market_id", market_id)
+        .not_.is_("website", "null")
+        .limit(pixel_probe_limit(args))
+        .execute()
+        .data
+        or []
+    )
+    if not sample:
+        print("REFUSED: no prospects with a website to sample", file=sys.stderr)
+        return 2
+    queries = [f"{p['name']} {p.get('address') or ''}".strip() for p in sample]
+
+    records, errors = _asyncio.run(
+        pixel_probe.fetch_enriched_sample(settings, queries, enrichment=args.enrichment)
+    )
+    print(json.dumps(pixel_probe.summarize_pixel_probe(records, errors), indent=2))
+    # Every query failing means the spike measured nothing (a wrong enrichment name, a dead key) —
+    # that is a failure. A partial sample still answers the question, so it exits zero.
+    return 1 if errors and not records else 0
+
+
 def cmd_collect(args) -> int:
     """Drain the ready list and store whatever is done. FREE, and safe to run on any tick."""
     import asyncio as _asyncio
@@ -480,48 +725,335 @@ def cmd_collect(args) -> int:
     return 1 if report.problems and not report.collected else 0
 
 
-def cmd_tick(args) -> int:
-    """One heartbeat: collect (always, free) + execute at most ONE signed scan order.
-
-    This is what the §11 cron runs. It replaces nothing — `collect` remains the pure free
-    command — it adds the drain for `scan_request` orders the UI places (DECISIONS.md
-    2026-08-06). `tick` is deliberately NOT in PAID_COMMANDS: its spend is authorized per-run by
-    the order row (signed, single-use, named to one submarket x keyword), which is the evidence
-    an accidental deploy cannot manufacture. Requiring the env token here would make every cron
-    tick refuse, which is the §8a collect-gating mistake wearing a new name.
-
-    Collection runs FIRST: rescue the paid work already in flight before spending more, and a
-    freshly posted batch has nothing on the ready list yet anyway.
+def cmd_enrich(args) -> int:
+    """Drain pending enrichment orders and store the contacts. FREE to INVOKE — the order row is the
+    spend confirmation, like `tick`/`collect`, so this is deliberately NOT in PAID_COMMANDS. It bills
+    only what a signed `enrichment_request` authorized. Enrichment is batchable, so one pass drains
+    several orders (`enrich_orders_per_tick`); a re-order skips already-enriched prospects (no re-bill).
     """
     import asyncio as _asyncio
 
-    from api.services import scan_queue
+    from api.config import missing_outscraper_vars
+    from api.services import enrich_queue
+
+    settings = get_settings()
+    absent = missing_outscraper_vars(settings)
+    if absent:
+        print(f"REFUSED: missing credentials: {', '.join(absent)}", file=sys.stderr)
+        return 2
+
+    client = _client()
+    report = _asyncio.run(enrich_queue.drain(client, settings))
+    print(
+        json.dumps(
+            {
+                "orders_processed": report.orders_processed,
+                "orders": [
+                    {
+                        "order_id": o.order_id,
+                        "outcome": o.outcome,
+                        "requested": o.requested,
+                        "skipped": o.skipped,
+                        "enriched": o.enriched,
+                        "contacts": o.contacts,
+                        "failed": o.failed,
+                        "error": o.error,
+                        "problems": o.problems[:10],
+                    }
+                    for o in report.orders
+                ],
+            },
+            indent=2,
+        )
+    )
+    return 1 if any(o.outcome == "failed" for o in report.orders) else 0
+
+
+def cmd_probe_enrich(args) -> int:
+    """§ measure-don't-infer spike: enrich ONE place and LOG the full record. BILLS one enrichment.
+
+    The exact enrichment param value(s) and response field names are unconfirmed against this
+    account. This confirms them on one billed call before production trusts the parser — mirrors
+    `probe-pixel-field`. Prints the parsed summary; the raw record is logged (INFO `enrich sample
+    record`) so the real envelope is recoverable. `--place-id` picks the place; otherwise the first
+    prospect with a place_id in the market. `--enrichments` overrides the requested set.
+    """
+    import asyncio as _asyncio
+
+    from api.config import missing_outscraper_vars
+    from api.services import enrich_client, enrichment
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    settings = get_settings()
+
+    absent = missing_outscraper_vars(settings)
+    if absent:
+        print(f"REFUSED: missing credentials: {', '.join(absent)}", file=sys.stderr)
+        return 2
+
+    place_id = args.place_id
+    if not place_id:
+        client = _client()
+        market_id = _market_id(client, definition.name)
+        sample = (
+            client.table("prospect")
+            .select("place_id, name")
+            .eq("market_id", market_id)
+            .not_.is_("place_id", "null")
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not sample:
+            print("REFUSED: no prospect with a place_id to sample — pass --place-id", file=sys.stderr)
+            return 2
+        place_id = sample[0]["place_id"]
+
+    enrichments = (
+        [e.strip() for e in args.enrichments.split(",") if e.strip()]
+        if args.enrichments
+        else settings.enrich_enrichments
+    )
+    records, errors = _asyncio.run(
+        enrich_client.enrich_places(settings, [place_id], enrichments=enrichments)
+    )
+    summary = enrichment.summarize(records, errors)
+    summary["place_id"] = place_id
+    summary["enrichments"] = enrichments
+    print(json.dumps(summary, indent=2))
+    # Every query failing means nothing was measured (a wrong enrichment name / dead key) — a
+    # failure. A record that came back answers the question even with no contacts in it.
+    return 1 if errors and not records else 0
+
+
+# Throttle state for the free tech-backlog drain: the monotonic time of its last run in THIS
+# process, so the always-on `tick-loop` runs it at most once per `tech_scan_min_interval_seconds`
+# rather than every ~8s heartbeat. None in a fresh cron process, so the cron always runs it.
+_last_tech_backlog_monotonic: "float | None" = None
+
+
+def cmd_tick(args) -> int:
+    """One heartbeat: collect (always, free) + execute at most ONE scan order + at most ONE
+    onboard order + drain enrichment orders + a throttled free tech-signal backlog.
+
+    This is what the §11 cron runs. It replaces nothing — `collect` remains the pure free
+    command — it drains the `scan_request` orders the UI places (DECISIONS.md 2026-08-06) and the
+    `onboard_request` orders the "City + Business type" form places (DECISIONS.md 2026-08-08:
+    discover → filter → scan for a typed city). `tick` is deliberately NOT in PAID_COMMANDS: its
+    spend is authorized per-run by the order row (signed, single-use), the evidence an accidental
+    deploy cannot manufacture. Requiring the env token here would make every cron tick refuse —
+    the §8a collect-gating mistake wearing a new name.
+
+    Order within the tick: collect FIRST (rescue paid work already in flight), then the quick scan
+    drain, then the onboard drain LAST because it runs a multi-minute Outscraper pull — the newly
+    posted scan it opens is collected on the NEXT tick, exactly like a scan order's. The claim on
+    each queue is conditional, so an onboard tick that runs long cannot be double-processed by the
+    next heartbeat starting before it finishes.
+    """
+    import asyncio as _asyncio
+    import time as _time
+
+    from api.services import (
+        ai_scan_queue,
+        enrich_queue,
+        onboard_queue,
+        organic_scan_queue,
+        scan_queue,
+        scan_tech,
+    )
 
     code = cmd_collect(args)
 
     settings = get_settings()
     client = _client()
     drained = _asyncio.run(scan_queue.drain_one(client, settings))
+    onboarded = _asyncio.run(onboard_queue.drain_one(client, settings))
+    # Enrichment is batchable and cheap, so it drains AFTER the heavy scan/onboard work but WITHOUT
+    # the one-per-tick cadence — several orders per heartbeat. Order-gated (each signed order is its
+    # own confirmation), so no env token, same as the drains above.
+    enriched = _asyncio.run(enrich_queue.drain(client, settings))
+    # Report signal scans (organic / AI-visibility UI triggers). Each is one cheap paid call, drained
+    # ≤ its configured per-tick count (default 1), same signed-order + terminal-outcome model. A drain
+    # that claims nothing ends the loop early, so an empty queue costs one read, not N.
+    organic_drains = []
+    for _ in range(max(0, settings.organic_orders_per_tick)):
+        r = _asyncio.run(organic_scan_queue.drain_one(client, settings))
+        if not r.claimed:
+            break
+        organic_drains.append(r)
+    ai_drains = []
+    for _ in range(max(0, settings.ai_orders_per_tick)):
+        r = _asyncio.run(ai_scan_queue.drain_one(client, settings))
+        if not r.claimed:
+            break
+        ai_drains.append(r)
+    # Site tech signals — FREE (own HTTP GET, same posture as `collect`), idempotent, and bounded
+    # (`tech_scan_per_tick`). Fetches prospects lacking a CURRENT tech signal so every scored
+    # prospect carries the Slice-B1 money signal automatically: each new run's survivors, plus any
+    # market scanned before auto-tech existed. No order/token — it bills nothing. Best-effort: a
+    # site that blocks a bot is normal and does not fail the tick. Throttled off the ~8s tick-loop
+    # to at most once per `tech_scan_min_interval_seconds` so its two reads + any fetch batch don't
+    # block order-draining every heartbeat; a fresh cron process (state None) always runs it.
+    global _last_tech_backlog_monotonic
+    if scan_tech.backlog_due(
+        _last_tech_backlog_monotonic, _time.monotonic(), settings.tech_scan_min_interval_seconds
+    ):
+        tech = _asyncio.run(scan_tech.run_tech_backlog(client, settings))
+        _last_tech_backlog_monotonic = _time.monotonic()
+        tech_out = {
+            "considered": tech.considered,
+            "fetched_ok": tech.fetched_ok,
+            "failed": tech.failed,
+            "with_pixel": tech.with_pixel,
+            "with_vendor": tech.with_vendor,
+            "stored": tech.stored,
+        }
+    else:
+        tech_out = {"skipped": "throttled"}
     print(
         json.dumps(
             {
-                "orders_claimed": drained.claimed,
-                "order_id": drained.order_id,
-                "submarket": drained.submarket,
-                "keyword": drained.keyword,
-                "outcome": drained.outcome,
-                "snapshot_id": drained.snapshot_id,
-                "posted": drained.posted,
-                "error": drained.error,
-                "problems": drained.problems,
+                "scan": {
+                    "orders_claimed": drained.claimed,
+                    "order_id": drained.order_id,
+                    "submarket": drained.submarket,
+                    "keyword": drained.keyword,
+                    "outcome": drained.outcome,
+                    "snapshot_id": drained.snapshot_id,
+                    "posted": drained.posted,
+                    "error": drained.error,
+                    "problems": drained.problems,
+                },
+                "onboard": {
+                    "orders_claimed": onboarded.claimed,
+                    "order_id": onboarded.order_id,
+                    "submarket": onboarded.submarket,
+                    "keyword": onboarded.keyword,
+                    "category": onboarded.category,
+                    "stage": onboarded.stage,
+                    "outcome": onboarded.outcome,
+                    "prospects_ingested": onboarded.prospects_ingested,
+                    "prospects_survived": onboarded.prospects_survived,
+                    "snapshot_id": onboarded.snapshot_id,
+                    "posted": onboarded.posted,
+                    "error": onboarded.error,
+                },
+                "enrich": {
+                    "orders_processed": enriched.orders_processed,
+                    "orders": [
+                        {
+                            "order_id": o.order_id,
+                            "outcome": o.outcome,
+                            "enriched": o.enriched,
+                            "contacts": o.contacts,
+                            "skipped": o.skipped,
+                            "failed": o.failed,
+                            "error": o.error,
+                        }
+                        for o in enriched.orders
+                    ],
+                },
+                "organic": [
+                    {
+                        "order_id": o.order_id,
+                        "snapshot_id": o.snapshot_id,
+                        "keyword": o.keyword,
+                        "outcome": o.outcome,
+                        "already_captured": o.already_captured,
+                        "error": o.error,
+                    }
+                    for o in organic_drains
+                ],
+                "ai": [
+                    {
+                        "order_id": o.order_id,
+                        "ai_region": o.ai_region,
+                        "keyword": o.keyword,
+                        "outcome": o.outcome,
+                        "stored": o.stored,
+                        "error": o.error,
+                    }
+                    for o in ai_drains
+                ],
+                "tech": tech_out,
             },
             indent=2,
         )
     )
-    # A failed ORDER exits non-zero even though the tick itself survived: an unattended queue
-    # whose orders quietly fail is the "green badge over a crashed job" shape (§6.2), and the
-    # exit code is the only summary a cron run leaves behind besides its logs.
-    return 1 if drained.outcome == "failed" else code
+    # A failed ORDER (any queue) exits non-zero even though the tick itself survived: an unattended
+    # queue whose orders quietly fail is the "green badge over a crashed job" shape (§6.2), and the
+    # exit code is the only summary a cron run leaves besides its logs.
+    enrich_failed = any(o.outcome == "failed" for o in enriched.orders)
+    signal_failed = any(
+        o.outcome == "failed" for o in (*organic_drains, *ai_drains)
+    )
+    return (
+        1
+        if enrich_failed or signal_failed or "failed" in (drained.outcome, onboarded.outcome)
+        else code
+    )
+
+
+# The always-on worker's stop flag. Module-level so the SIGTERM/SIGINT handler cmd_tick_loop
+# installs can flip it and the loop can read it. False until a shutdown signal arrives.
+_tick_loop_stop = False
+
+
+def cmd_tick_loop(args) -> int:
+    """Run `tick` continuously — the always-on worker (owner request 2026-08-10).
+
+    A UI click that places a signed order (enrich / organic / AI / scan) should drain within
+    seconds, not wait for a cron. Railway's cron floor is 5 minutes, so near-instant needs a
+    daemon: this loops `cmd_tick` with a short sleep. It is the same tick the cron ran, just
+    on a tight interval, so it inherits every safety property — conditional claims (no double
+    spend even if a second worker existed), terminal order outcomes, `collect` free, and spend
+    authorized ONLY by a signed order row (so `tick-loop` is deliberately NOT in PAID_COMMANDS,
+    exactly like `tick`). An idle iteration spends nothing.
+
+    Two robustness rules:
+      * A single bad iteration (a transient provider/DB error) is logged and swallowed — it must
+        never kill the daemon and stop draining every other client's orders.
+      * SIGTERM/SIGINT (a Railway deploy) sets a stop flag and the loop exits cleanly AFTER the
+        current tick, so a deploy doesn't sever a drain mid-flight. The sleep is sliced so the
+        stop is honored within a fraction of a second, not a whole interval.
+    """
+    import time as _time
+
+    global _tick_loop_stop
+    _tick_loop_stop = False
+
+    def _stop(signum, _frame):  # noqa: ANN001
+        global _tick_loop_stop
+        _tick_loop_stop = True
+        print(f"OUTREACH_TICK_LOOP stopping signal={signum}", flush=True)
+
+    # Override the one-shot marker handler (main installed it) for the daemon's lifetime: for a
+    # loop we want a clean stop-after-current-tick, not an immediate SystemExit mid-drain.
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
+
+    interval = max(1.0, float(get_settings().tick_loop_interval_seconds))
+    print(f"OUTREACH_TICK_LOOP started interval={interval}s", flush=True)
+
+    iterations = 0
+    while not _tick_loop_stop:
+        try:
+            cmd_tick(args)
+        except SystemExit:
+            raise  # a real refusal/exit from within the tick must still propagate
+        except Exception as exc:  # noqa: BLE001 — one bad tick must not stop the daemon
+            logging.getLogger(__name__).error(
+                "tick-loop iteration failed", extra={"error": repr(exc)[:500]}
+            )
+        iterations += 1
+        slept = 0.0
+        while slept < interval and not _tick_loop_stop:
+            _time.sleep(min(0.25, interval - slept))
+            slept += 0.25
+
+    print(f"OUTREACH_TICK_LOOP stopped iterations={iterations}", flush=True)
+    return 0
 
 
 def cmd_rollup(args) -> int:
@@ -557,7 +1089,7 @@ def cmd_rollup(args) -> int:
         client,
         settings,
         snapshot_ids=[args.snapshot] if args.snapshot else None,
-        limit=args.limit if args.snapshot is None else None,
+        limit=legacy_limit(args) if args.snapshot is None else None,
     )
     print(
         json.dumps(
@@ -575,6 +1107,95 @@ def cmd_rollup(args) -> int:
     # Nothing pending is the NORMAL state between scans, so an empty run exits zero. A snapshot
     # that was considered and could not be rolled up is the failure worth reporting: it means a
     # partition will never drop, and fail-closed retention is only safe while somebody knows.
+    return 1 if report.problems else 0
+
+
+def cmd_score(args) -> int:
+    """Score a market's measured prospects into `prospect_score` (Phase 4 Stage 1). FREE.
+
+    Replaces the coverage-deficit placeholder ranking with the sabermetric scorecard
+    (`docs/scoring-spec.md`): ranked by who is worth CALLING (reply x close propensity), all
+    coefficients config-driven, `score_factors` fully replayable. Reads only stored signals and
+    writes only score rows — NO paid provider call, so `score` is not in PAID_COMMANDS (the same
+    posture as `rollup`).
+
+    STAGE 1 SCOPE (DECISIONS): scores the PHONE track at PASS 1 — phone-first, pre-enrichment. Email
+    reachability needs enrichment (Phase 5); the engine + golden fixtures prove that path and the job
+    lights it up when it exists. A re-run inserts a NEW immutable score_run.
+
+    Every coefficient is an ELICITED estimate — rank order is a strong prior, not a prediction, until
+    ~100 prospects have been contacted (CLAUDE.md).
+    """
+    from api.services import scoring
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    settings = get_settings()
+    client = _client()
+    market_id = _market_id(client, args.market_name or definition.name)
+
+    report = scoring.run_score(
+        client, settings, market_id=market_id, cycle_number=args.cycle or 1,
+    )
+    print(
+        json.dumps(
+            {
+                "market_id": report.market_id,
+                "score_run_id": report.score_run_id,
+                "cycle_number": report.cycle_number,
+                "scored": report.scored,
+                "rows_written": report.rows_written,
+                "channels": list(report.channels),
+                "pass": report.pass_number,
+                "review_distribution_p25_p75": report.review_distribution,
+                "problems": report.problems[:20],
+            },
+            indent=2,
+        )
+    )
+    # Scoring an already-measured market with nobody to score is a real problem (the placeholder had
+    # rows); a run that wrote scores is success even with per-prospect problems logged.
+    return 0 if report.rows_written or report.scored == 0 else 1
+
+
+def cmd_recalibrate(args) -> int:
+    """Stage-2 recalibration (scoring-spec §6): fit alpha+gamma on real reply outcomes. FREE.
+
+    Reads `outcome`, fits a two-parameter logistic (alpha + gamma x prior-log-odds) PER CHANNEL, and
+    — only when a channel clears the outcome floor — writes a calibrated score_run that corrects the
+    probability layer WITHOUT touching rank order. Makes no paid call, so it is not in PAID_COMMANDS.
+
+    EMPTY-SAFE: with zero contacted outcomes (today's state) it reports "insufficient" and writes
+    nothing. It becomes useful as outcomes accumulate — Stage 1 rank order stands until then.
+    """
+    from api.services import recalibrate
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    settings = get_settings()
+    client = _client()
+    market_id = _market_id(client, args.market_name or definition.name)
+
+    report = recalibrate.run_recalibration(
+        client, settings, market_id=market_id, cycle_number=args.cycle or 1,
+    )
+    print(
+        json.dumps(
+            {
+                "market_id": report.market_id,
+                "total_outcomes": report.total_outcomes,
+                "channel_fits": [
+                    {"channel": f.channel, "outcomes": f.outcomes, "replies": f.replies,
+                     "fitted": f.fitted, "alpha": f.alpha, "gamma": f.gamma, "reason": f.reason}
+                    for f in report.channel_fits
+                ],
+                "wrote_calibrated_run": report.wrote_calibrated_run,
+                "score_run_id": report.score_run_id,
+                "problems": report.problems,
+            },
+            indent=2,
+        )
+    )
+    # Insufficient data is the NORMAL state until ~30-50 outcomes exist — exit zero. A real problem
+    # (e.g. a multi-channel fit with nowhere to store both) is the reportable failure.
     return 1 if report.problems else 0
 
 
@@ -672,6 +1293,342 @@ def cmd_probe_ai_granularity(args) -> int:
     return 0
 
 
+def _resolve_rollup_snapshot(client, market_id: str, args):
+    """The snapshot to render, or None with a printed reason. It MUST be rolled up.
+
+    A snapshot with no `snapshot_rollup` marker has no `prospect_coverage` rows to read (the rollup
+    writes them), so rendering one would produce nothing — refused rather than drawn blank.
+    """
+    from api.services.paging import fetch_all
+
+    rolled = {
+        r["snapshot_id"]
+        for r in fetch_all(lambda: client.table("snapshot_rollup").select("snapshot_id"))
+    }
+
+    if args.snapshot:
+        rows = (
+            client.table("scan_snapshot").select("*").eq("id", args.snapshot).limit(1).execute().data
+        )
+        if not rows:
+            print(f"REFUSED: snapshot {args.snapshot} not found", file=sys.stderr)
+            return None
+        if rows[0]["id"] not in rolled:
+            print(
+                f"REFUSED: snapshot {args.snapshot} has no rollup marker — nothing to render. "
+                f"Run `rollup` first.",
+                file=sys.stderr,
+            )
+            return None
+        return rows[0]
+
+    if not args.submarket:
+        print(
+            "REFUSED: pass --snapshot <id>, or --submarket (+ optional --keyword) to render that "
+            "submarket's latest rolled-up snapshot.",
+            file=sys.stderr,
+        )
+        return None
+
+    subs = (
+        client.table("submarket").select("id, name").eq("market_id", market_id).execute().data or []
+    )
+    match = [s for s in subs if s["name"].lower() == args.submarket.lower()]
+    if not match:
+        print(f"REFUSED: no submarket named {args.submarket!r}", file=sys.stderr)
+        return None
+
+    snaps = [
+        s
+        for s in (
+            client.table("scan_snapshot").select("*").eq("submarket_id", match[0]["id"]).execute().data
+            or []
+        )
+        if s["id"] in rolled
+    ]
+    if args.keyword:
+        kws = (
+            client.table("keyword").select("id, term").eq("market_id", market_id).execute().data or []
+        )
+        wanted = {k["id"] for k in kws if k["term"].lower() == args.keyword.lower()}
+        snaps = [s for s in snaps if s["keyword_id"] in wanted]
+    if not snaps:
+        print("REFUSED: no rolled-up snapshot for that submarket/keyword yet", file=sys.stderr)
+        return None
+
+    # scanned_at then id, so a tie between two snapshots written in one transaction is broken
+    # deterministically (now() is transaction time — HANDOFF §6.14), the same tie-break the
+    # placeholder-score view uses.
+    snaps.sort(key=lambda s: (str(s.get("scanned_at") or ""), s["id"]), reverse=True)
+    return snaps[0]
+
+
+def cmd_render_heatmap(args) -> int:
+    """Render the coverage heatmap for prospects in one snapshot. FREE — no provider is contacted.
+
+    Reporting-layer-spec §4. Reads `prospect_coverage.rank_vector` + the snapshot's STORED geometry
+    (never the current default — CLAUDE.md) and writes one deterministic SVG per prospect to
+    `artifact_dir`, keyed by content_hash, with a `report_artifact` provenance row. Renders one
+    business with --prospect, or every business holding a coverage row in the snapshot otherwise.
+    """
+    import os
+
+    from api.services import heatmap
+    from api.services.paging import fetch_all
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    settings = get_settings()
+    client = _client()
+    market_id = _market_id(client, definition.name)
+
+    snapshot = _resolve_rollup_snapshot(client, market_id, args)
+    if snapshot is None:
+        return 2
+
+    sub = (
+        client.table("submarket").select("name").eq("id", snapshot["submarket_id"]).limit(1).execute().data
+    )
+    kw = (
+        client.table("keyword").select("term").eq("id", snapshot["keyword_id"]).limit(1).execute().data
+    )
+    sub_name = sub[0]["name"] if sub else "?"
+    kw_term = kw[0]["term"] if kw else "?"
+    subtitle = f"{kw_term} · {sub_name} · scanned {str(snapshot.get('scanned_at') or '')[:10]}"
+
+    coverage_rows = fetch_all(
+        lambda: client.table("prospect_coverage")
+        .select("prospect_id, coverage_pct, rank_vector")
+        .eq("snapshot_id", snapshot["id"])
+    )
+    if args.prospect:
+        coverage_rows = [r for r in coverage_rows if r["prospect_id"] == args.prospect]
+
+    prospects: dict[str, dict] = {}
+    ids = [r["prospect_id"] for r in coverage_rows]
+    if ids:
+        for row in fetch_all(
+            lambda: client.table("prospect").select("id, name, phone, lat, lng").in_("id", ids)
+        ):
+            prospects[row["id"]] = row
+
+    out_dir = settings.artifact_dir
+    os.makedirs(out_dir, exist_ok=True)
+
+    artifacts: list[dict] = []
+    problems: list[str] = []
+    for cov in coverage_rows:
+        pr = prospects.get(cov["prospect_id"], {})
+        try:
+            inputs = heatmap.build_inputs(
+                snapshot=snapshot,
+                coverage=cov,
+                title=f"{pr.get('name') or 'This business'} — Google Maps coverage",
+                subtitle=subtitle,
+                business_lat=pr.get("lat"),
+                business_lng=pr.get("lng"),
+            )
+            svg = heatmap.render_heatmap(inputs)
+            digest = heatmap.content_hash(svg)
+            path = os.path.join(out_dir, f"{digest}.svg")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(svg)
+
+            # Idempotent by content_hash (reporting §6): re-rendering identical inputs is a no-op
+            # rather than a duplicate provenance row.
+            client.table("report_artifact").upsert(
+                {
+                    "kind": "heatmap",
+                    "subject_type": "prospect",
+                    "subject_id": cov["prospect_id"],
+                    "snapshot_id": snapshot["id"],
+                    "generator_version": heatmap.GENERATOR_VERSION,
+                    "geometry_version": snapshot["geometry_version"],
+                    "storage_path": path,
+                    "content_hash": digest,
+                },
+                on_conflict="content_hash",
+                ignore_duplicates=True,
+            ).execute()
+
+            artifacts.append(
+                {
+                    "prospect_id": cov["prospect_id"],
+                    "name": pr.get("name"),
+                    "coverage_pct": cov.get("coverage_pct"),
+                    "content_hash": digest,
+                    "path": path,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 — one bad row must not stop the batch
+            problems.append(f"prospect {cov['prospect_id']}: {exc}")
+
+    print(
+        json.dumps(
+            {
+                "snapshot_id": snapshot["id"],
+                "submarket": sub_name,
+                "keyword": kw_term,
+                "coverage_rows": len(coverage_rows),
+                "rendered": len(artifacts),
+                "artifacts": artifacts,
+                "problems": problems,
+            },
+            indent=2,
+        )
+    )
+    return 1 if problems and not artifacts else 0
+
+
+def _snapshot_by_id(client, snapshot_id: str) -> dict | None:
+    """One snapshot row with the geometry the renderer needs, or None."""
+    rows = (
+        client.table("scan_snapshot")
+        .select(
+            "id, submarket_id, keyword_id, center_lat, center_lng, grid_radius_miles, "
+            "grid_spacing_miles, geometry_version, scanned_at"
+        )
+        .eq("id", snapshot_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    return rows[0] if rows else None
+
+
+def cmd_render_delta(args) -> int:
+    """Render the per-point CHANGE heatmap between two snapshots. FREE — no provider is contacted.
+
+    Reporting-layer-spec §4.3. Takes an explicit AFTER (`--snapshot`) and BEFORE
+    (`--compare-snapshot`) — no auto-resolution, so the operator names exactly which two scans the
+    before/after compares. Renders a `heatmap_delta` per prospect holding a coverage row in BOTH
+    snapshots, enforcing every delta guard first (span / provider / drift / matching geometry). A
+    guard refusal is reported per prospect, never a blank picture.
+    """
+    import os
+
+    from api.services import heatmap
+    from api.services.paging import fetch_all
+
+    settings = get_settings()
+    client = _client()
+
+    if not args.snapshot or not args.compare_snapshot:
+        print(
+            json.dumps(
+                {"error": "render-delta requires --snapshot (after) and --compare-snapshot (before)"}
+            )
+        )
+        return 2
+
+    after = _snapshot_by_id(client, args.snapshot)
+    before = _snapshot_by_id(client, args.compare_snapshot)
+    if after is None or before is None:
+        missing = args.snapshot if after is None else args.compare_snapshot
+        print(json.dumps({"error": f"snapshot not found: {missing}"}))
+        return 2
+
+    sub = (
+        client.table("submarket").select("name").eq("id", after["submarket_id"]).limit(1).execute().data
+    )
+    kw = client.table("keyword").select("term").eq("id", after["keyword_id"]).limit(1).execute().data
+    sub_name = sub[0]["name"] if sub else "?"
+    kw_term = kw[0]["term"] if kw else "?"
+    before_day = str(before.get("scanned_at") or "")[:10]
+    after_day = str(after.get("scanned_at") or "")[:10]
+    subtitle = f"{kw_term} · {sub_name} · {before_day} → {after_day}"
+
+    # A prospect needs coverage in BOTH snapshots to have a change to show.
+    def _coverage(snapshot_id: str) -> dict[str, dict]:
+        return {
+            r["prospect_id"]: r
+            for r in fetch_all(
+                lambda: client.table("prospect_coverage")
+                .select("prospect_id, rank_vector")
+                .eq("snapshot_id", snapshot_id)
+            )
+        }
+
+    cov_before = _coverage(before["id"])
+    cov_after = _coverage(after["id"])
+    shared_ids = sorted(set(cov_before) & set(cov_after))
+    if args.prospect:
+        shared_ids = [pid for pid in shared_ids if pid == args.prospect]
+
+    prospects: dict[str, dict] = {}
+    if shared_ids:
+        for row in fetch_all(
+            lambda: client.table("prospect").select("id, name, lat, lng").in_("id", shared_ids)
+        ):
+            prospects[row["id"]] = row
+
+    out_dir = settings.artifact_dir
+    os.makedirs(out_dir, exist_ok=True)
+
+    artifacts: list[dict] = []
+    problems: list[str] = []
+    for pid in shared_ids:
+        pr = prospects.get(pid, {})
+        try:
+            inputs = heatmap.build_delta_inputs(
+                snapshot_before=before,
+                coverage_before=cov_before[pid],
+                snapshot_after=after,
+                coverage_after=cov_after[pid],
+                title=f"{pr.get('name') or 'This business'} — change in Google Maps coverage",
+                subtitle=subtitle,
+                max_span_days=settings.max_delta_span_days,
+                business_lat=pr.get("lat"),
+                business_lng=pr.get("lng"),
+            )
+            svg = heatmap.render_delta(inputs)
+            digest = heatmap.content_hash(svg)
+            path = os.path.join(out_dir, f"{digest}.svg")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(svg)
+
+            client.table("report_artifact").upsert(
+                {
+                    "kind": "heatmap_delta",
+                    "subject_type": "prospect",
+                    "subject_id": pid,
+                    "snapshot_id": after["id"],
+                    "compare_snapshot_id": before["id"],
+                    "generator_version": heatmap.GENERATOR_VERSION,
+                    "geometry_version": after["geometry_version"],
+                    "storage_path": path,
+                    "content_hash": digest,
+                },
+                on_conflict="content_hash",
+                ignore_duplicates=True,
+            ).execute()
+
+            artifacts.append({"prospect_id": pid, "name": pr.get("name"),
+                              "content_hash": digest, "path": path})
+        except heatmap.DeltaNotRenderable as exc:
+            # A refused delta is a real, expected outcome (guard fired), not a crash — report the
+            # machine-readable reason so the operator sees WHY the picture was withheld.
+            problems.append(f"prospect {pid}: refused ({exc.reason})")
+        except Exception as exc:  # noqa: BLE001 — one bad row must not stop the batch
+            problems.append(f"prospect {pid}: {exc}")
+
+    print(
+        json.dumps(
+            {
+                "after_snapshot_id": after["id"],
+                "before_snapshot_id": before["id"],
+                "submarket": sub_name,
+                "keyword": kw_term,
+                "shared_prospects": len(shared_ids),
+                "rendered": len(artifacts),
+                "artifacts": artifacts,
+                "problems": problems,
+            },
+            indent=2,
+        )
+    )
+    return 1 if problems and not artifacts else 0
+
+
 def cmd_run(args) -> int:
     for step in (cmd_seed, cmd_ingest, cmd_filter):
         code = step(args)
@@ -703,8 +1660,19 @@ _SHA_VARS = ("OUTREACH_BUILD_SHA", "RAILWAY_GIT_COMMIT_SHA", "SOURCE_COMMIT", "G
 # counterpart cannot manufacture. Listing `tick` here would make every cron heartbeat refuse,
 # which is the §8a collect-gating mistake with a different spelling.
 PAID_COMMANDS = frozenset(
-    {"ingest", "run", "calibrate", "verify-reviews", "probe-ai-granularity", "scan"}
+    {"ingest", "run", "calibrate", "verify-reviews", "probe-ai-granularity", "scan", "scan-organic",
+     "scan-ai", "probe-pixel-field", "probe-enrich"}
 )
+# NOTE `scan-tech` is deliberately NOT here — it fetches prospects' own sites over plain HTTP and
+# makes no paid provider call (PRD §B3 "own request, not a paid service"), the same posture as
+# `collect`/`rollup`. `probe-pixel-field` and `probe-enrich` ARE here — each bills an Outscraper
+# enrichment on a sample.
+#
+# `enrich` is deliberately absent, and it is a DESIGN choice like `tick`'s absence (DECISIONS.md):
+# `enrich` drains signed `enrichment_request` orders, and the order IS the affirmative confirmation
+# (single-use, attributed to the admin who placed it). Listing it here would make every drain refuse
+# for want of an env token, the §8a collect-gating mistake again. The env token guards the CLI probe;
+# the order row guards the drain.
 
 SAFE_COMMAND = "filter"
 
@@ -834,41 +1802,59 @@ class _ExtraFormatter(logging.Formatter):
         return f"{base} {extras}" if extras else base
 
 
-def main() -> int:
-    _install_sigterm_marker()
-    handler = logging.StreamHandler()
-    handler.setFormatter(_ExtraFormatter("%(levelname)s %(name)s %(message)s"))
-    logging.basicConfig(level=logging.INFO, handlers=[handler])
+# --- per-command --limit defaults ---------------------------------------------------------
+#
+# `--limit` deliberately has NO shared default. It used to default to 20 for every command, which
+# silently capped `scan-tech` at 20 of ~1,000 sites and still exited 0 — a run that "reports clean
+# because it did almost nothing", the failure mode this codebase keeps meeting. The safe value is
+# per-command, so each one names its own and omission means that command's safe behaviour.
 
-    import os
 
-    print(
-        build_identity(
-            dict(os.environ),
-            [
-                "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-                "probe-dataforseo", "probe-ai-granularity", "scan", "collect", "rollup", "tick",
-            ],
-        ),
-        flush=True,
-    )
+def scan_tech_limit(args) -> "int | None":
+    """scan-tech: None = EVERY site with a website. It is free, so there is no reason to sample."""
+    return args.limit
 
+
+def pixel_probe_limit(args) -> int:
+    """probe-pixel-field: a small sample, because this one SPENDS (§16a.1 wants ~8-20 places)."""
+    return args.limit or 8
+
+
+def legacy_limit(args) -> int:
+    """calibrate / verify-reviews / rollup: the 20 they had before the flag lost its shared default."""
+    return args.limit or 20
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """The real CLI parser, extracted so tests exercise THIS wiring rather than a copy of it.
+
+    The 20-of-1,000 cap shipped because nothing tested the flag-to-command wiring — the pure logic
+    was covered and the seam between argparse and the command was not.
+    """
     parser = argparse.ArgumentParser(description="Outreach pipeline — Phase 1")
     parser.add_argument(
         "command",
         choices=[
             "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-            "probe-dataforseo", "probe-ai-granularity", "scan", "collect", "rollup", "tick",
+            "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech",
+                "probe-pixel-field", "enrich", "probe-enrich", "collect", "rollup", "tick", "tick-loop", "score",
+                "recalibrate",
+            "render-heatmap", "render-delta",
         ],
     )
     parser.add_argument("definition", help="path to a market definition JSON file")
     parser.add_argument("--cycle", type=int, default=None, help="cycle number for cost_ledger")
     parser.add_argument(
-        "--limit", type=int, default=20,
+        "--limit", type=int, default=None,
         help=(
-            "places per query (calibrate); prospects to look up (verify-reviews); snapshots to "
-            "roll up in one invocation (rollup — the command is idempotent, so a larger backlog "
-            "just needs another run)"
+            "places per query (calibrate, default 20); prospects to look up (verify-reviews, "
+            "default 20); snapshots to roll up in one invocation (rollup, default 20 — the command "
+            "is idempotent, so a larger backlog just needs another run); places to enrich "
+            "(probe-pixel-field, default 8 — this one SPENDS); sites to fetch (scan-tech, default "
+            "ALL). "
+            "DEFAULTS ARE PER-COMMAND, not on the flag: a shared default of 20 silently capped "
+            "scan-tech at 20 of ~1,000 sites and still exited 0, which is the 'reports clean "
+            "because it did almost nothing' failure this module keeps meeting."
         ),
     )
     parser.add_argument(
@@ -880,6 +1866,14 @@ def main() -> int:
         help=(
             "probe-dataforseo: after discovery, send ONE real request per surviving path with "
             "this place_id to learn the response shape. This BILLS (a few cents)."
+        ),
+    )
+    parser.add_argument(
+        "--enrichment", default="domains_service",
+        help=(
+            "probe-pixel-field: the Outscraper enrichment to request on the sample. A GUESS to "
+            "confirm against the logged sample record — the parser never asserts the field name "
+            "(measure-don't-infer). §16a.1 spike."
         ),
     )
     parser.add_argument(
@@ -914,13 +1908,48 @@ def main() -> int:
         help="scan: the ONE submarket to scan, by name. Required — see cmd_scan.",
     )
     parser.add_argument(
+        "--place-id", default=None,
+        help="probe-enrich: the place_id to enrich. Defaults to the first prospect with one.",
+    )
+    parser.add_argument(
+        "--enrichments", default=None,
+        help=(
+            "probe-enrich: comma-separated Outscraper enricher set to request "
+            "(e.g. 'emails_validator_service,phones_enricher_service'). Defaults to "
+            "enrich_enrichments. A GUESS to confirm against the logged sample record."
+        ),
+    )
+    parser.add_argument(
+        "--market-name", default=None,
+        help=(
+            "score / recalibrate: resolve the market by THIS name instead of the definition file's "
+            "`name`. Needed for any-city ONBOARD markets (e.g. 'Los Angeles, CA, USA'), which are "
+            "created dynamically and have no definition file — the positional file is still required "
+            "by argparse, but its name is overridden. See ISSUES."
+        ),
+    )
+    parser.add_argument(
         "--allow-geometry-change",
         action="store_true",
         help="permit geometry edits to submarkets that have NOT been scanned",
     )
     parser.add_argument(
         "--snapshot", default=None,
-        help="rollup: one snapshot id, instead of everything awaiting a rollup",
+        help=(
+            "rollup / render-heatmap: one snapshot id, instead of everything awaiting a rollup. "
+            "render-delta: the AFTER snapshot (required)."
+        ),
+    )
+    parser.add_argument(
+        "--compare-snapshot", default=None,
+        help=(
+            "render-delta: the BEFORE snapshot to compare against (required). Must share the "
+            "after snapshot's geometry — a before/after across different grids is refused."
+        ),
+    )
+    parser.add_argument(
+        "--prospect", default=None,
+        help="render-heatmap / render-delta: one prospect id, instead of every prospect in scope",
     )
     parser.add_argument(
         "--verify", action="store_true",
@@ -937,6 +1966,33 @@ def main() -> int:
             "isolating a collection problem, not for routine use."
         ),
     )
+    return parser
+
+
+def main() -> int:
+    _install_sigterm_marker()
+    handler = logging.StreamHandler()
+    handler.setFormatter(_ExtraFormatter("%(levelname)s %(name)s %(message)s"))
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
+
+    import os
+
+    print(
+        build_identity(
+            dict(os.environ),
+            [
+                "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
+                "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech",
+                "probe-pixel-field", "enrich", "probe-enrich", "collect", "rollup", "tick", "tick-loop", "score",
+                "recalibrate",
+                "render-heatmap", "render-delta",
+            ],
+        ),
+        flush=True,
+    )
+
+    parser = build_parser()
+
     handlers = {
         "seed": cmd_seed,
         "ingest": cmd_ingest,
@@ -947,9 +2003,20 @@ def main() -> int:
         "probe-dataforseo": cmd_probe_dataforseo,
         "probe-ai-granularity": cmd_probe_ai_granularity,
         "scan": cmd_scan,
+        "scan-organic": cmd_scan_organic,
+        "scan-ai": cmd_scan_ai,
+        "scan-tech": cmd_scan_tech,
+        "probe-pixel-field": cmd_probe_pixel_field,
+        "enrich": cmd_enrich,
+        "probe-enrich": cmd_probe_enrich,
         "collect": cmd_collect,
         "rollup": cmd_rollup,
         "tick": cmd_tick,
+        "tick-loop": cmd_tick_loop,
+        "score": cmd_score,
+        "recalibrate": cmd_recalibrate,
+        "render-heatmap": cmd_render_heatmap,
+        "render-delta": cmd_render_delta,
     }
 
     # Railway reports a crashed job as deployment status SUCCESS when restartPolicy is NEVER —

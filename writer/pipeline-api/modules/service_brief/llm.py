@@ -17,8 +17,8 @@ from typing import Any, Optional
 from config import settings
 from modules.brief.llm import (
     _STRICT_JSON_SUFFIX,
+    _create_message,
     _extract_json_payload,
-    _get_anthropic_semaphore,
     get_anthropic,
 )
 
@@ -34,6 +34,7 @@ async def claude_json_model(
     model: str,
     max_tokens: int = 2000,
     temperature: float = 0.2,
+    expect_obj: bool = False,
 ) -> Any:
     """Call Claude on a caller-chosen model and parse the response as JSON.
 
@@ -41,21 +42,31 @@ async def claude_json_model(
     retry) but takes an explicit `model` so callers can pick the Haiku
     extraction tier vs the Sonnet synthesis tier. Shares the brief module's
     rate-limit semaphore.
+
+    When `expect_obj=True`, the caller requires a JSON *object* (a dict). A
+    response that parses to a valid-but-wrong-shape value (most often a
+    top-level array, or prose whose first bracketed token is a stray list the
+    tolerant extractor decodes) is treated as a retryable failure — the same
+    strict-JSON retry that recovers a parse error also recovers a shape error,
+    rather than the caller hard-failing the whole run on a single unlucky
+    generation. A single-element `[obj]` wrapper (a common model mistake) is
+    unwrapped instead of retried.
     """
     client = get_anthropic()
-    semaphore = _get_anthropic_semaphore()
 
     last_error: Optional[Exception] = None
     for attempt in range(2):
         sys_prompt = system if attempt == 0 else system + _STRICT_JSON_SUFFIX
-        async with semaphore:
-            message = await client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system=sys_prompt,
-                messages=[{"role": "user", "content": user}],
-            )
+        # Route through the brief module's shared transport: semaphore-guarded,
+        # transient-retried, AND failed over to the secondary Anthropic account
+        # on a saturated primary (same model).
+        message = await _create_message(client, {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "system": sys_prompt,
+            "messages": [{"role": "user", "content": user}],
+        })
         text = "".join(
             block.text for block in message.content if getattr(block, "type", "") == "text"
         )
@@ -72,7 +83,7 @@ async def claude_json_model(
                 extra={"model": model, "max_tokens": max_tokens, "tail": text[-200:]},
             )
         try:
-            return _extract_json_payload(text)
+            payload = _extract_json_payload(text)
         except json.JSONDecodeError as exc:
             last_error = exc
             logger.warning(
@@ -82,6 +93,28 @@ async def claude_json_model(
                 text[:300],
             )
             continue
+
+        if expect_obj and not isinstance(payload, dict):
+            # A single-object array is a benign wrapping mistake — unwrap it
+            # rather than spend a retry.
+            if (
+                isinstance(payload, list)
+                and len(payload) == 1
+                and isinstance(payload[0], dict)
+            ):
+                return payload[0]
+            last_error = ValueError(
+                f"expected a JSON object, got {type(payload).__name__}"
+            )
+            logger.warning(
+                "service_brief.llm.non_object (attempt %s/2): type=%s head=%r",
+                attempt + 1,
+                type(payload).__name__,
+                text[:300],
+            )
+            continue
+
+        return payload
 
     assert last_error is not None
     raise last_error

@@ -3,9 +3,12 @@ import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, FileText, ArrowRight, Loader, Sparkles, Check, RefreshCw } from 'lucide-react'
 import { api } from '../lib/api'
+import { useResumableJob } from '../lib/useResumableJob'
 import { useBulkPublish, type PublishItem } from '../components/publish/useBulkPublish'
 import { BulkPublishBar } from '../components/publish/BulkPublishBar'
 import { usePagedPublish, PublishTabs, Pager, PublishBadges } from '../components/publish/PublishFilter'
+import { ReoptimizePanel } from '../components/reoptimize/ReoptimizePanel'
+import { serviceAdapter } from '../components/reoptimize/adapters'
 import type { Client, RunListResponse, RunStatus } from '../lib/types'
 
 const TERMINAL: RunStatus[] = ['complete', 'failed', 'cancelled']
@@ -27,9 +30,12 @@ export function ServicePages() {
   const { id } = useParams<{ id: string }>()
   const qc = useQueryClient()
   const [text, setText] = useState('')
+  // Create pages vs Reoptimize existing ones (bulk external URL / paste).
+  const [mode, setMode] = useState<'create' | 'reopt'>('create')
 
   // Service-page planner state.
-  const [jobId, setJobId] = useState<string | null>(null)
+  const [plan, setPlan] = useState<PlanResult | null>(null)
+  const [planError, setPlanError] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [createdNote, setCreatedNote] = useState<string | null>(null)
 
@@ -75,23 +81,27 @@ export function ServicePages() {
     },
   })
 
-  // ── Planner: enqueue → poll → render found/missing → bulk-create ──
-  const startPlan = useMutation({
-    mutationFn: () => api.post<{ job_id: string }>(`/clients/${id}/service-page-plan`, {}),
-    onSuccess: (res) => { setJobId(res.job_id); setSelected(new Set()); setCreatedNote(null) },
-  })
-
-  const { data: plan } = useQuery<PlanResult>({
-    queryKey: ['service-page-plan', id, jobId],
-    queryFn: () => api.get<PlanResult>(`/clients/${id}/service-page-plan/${jobId}`),
-    enabled: Boolean(id && jobId),
-    refetchInterval: (query) => {
-      const s = query.state.data?.status
-      return s === 'pending' || s === 'running' ? 3000 : false
+  // ── Planner: enqueue → poll (resumable) → render found/missing → bulk-create ──
+  // Runs as a backgrounded async job: navigating away and back reconnects to the
+  // in-flight plan and re-renders it when it lands.
+  const planJob = useResumableJob<PlanResult, undefined>({
+    storageKey: `service-page-plan:${id}`,
+    poll: async (jobId) => {
+      const res = await api.get<PlanResult>(`/clients/${id}/service-page-plan/${jobId}`)
+      return { status: res.status, result: res, error: res.error }
     },
+    onComplete: (res) => { setPlan(res); setPlanError(res?.error ?? null) },
+    onError: (err) => setPlanError(err || 'plan_failed'),
   })
+  function startPlan() {
+    setPlan(null); setPlanError(null); setSelected(new Set()); setCreatedNote(null)
+    void planJob.start(async () => {
+      const res = await api.post<{ job_id: string }>(`/clients/${id}/service-page-plan`, {})
+      return res.job_id
+    }, undefined)
+  }
 
-  const planRunning = startPlan.isPending || plan?.status === 'pending' || plan?.status === 'running'
+  const planRunning = planJob.running
   const silos = useMemo(() => {
     const groups = new Map<string, PlanItem[]>()
     for (const it of plan?.items ?? []) {
@@ -126,7 +136,7 @@ export function ServicePages() {
       setSelected((prev) => new Set([...prev].filter((k) => !keywords.includes(k))))
       setCreatedNote(`Started ${res.created} page${res.created === 1 ? '' : 's'} — see Generated pages below.`)
       // Mark just-created items found locally so they don't read as missing.
-      qc.setQueryData<PlanResult>(['service-page-plan', id, jobId], (prev) =>
+      setPlan((prev) =>
         prev ? { ...prev, items: prev.items.map((i) => (keywords.includes(i.keyword) ? { ...i, status: 'found' } : i)) } : prev,
       )
     },
@@ -184,6 +194,26 @@ export function ServicePages() {
         service per line to bulk-create several at once.
       </p>
 
+      {/* Create vs Reoptimize */}
+      <div style={{ display: 'inline-flex', gap: 4, background: '#f1f5f9', borderRadius: 8, padding: 4, margin: '4px 0 12px' }}>
+        {(['create', 'reopt'] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => setMode(m)}
+            style={{
+              padding: '6px 14px', fontSize: 13, fontWeight: 600, borderRadius: 6, cursor: 'pointer', border: 'none',
+              background: mode === m ? '#fff' : 'transparent', color: mode === m ? '#0f172a' : '#64748b',
+              boxShadow: mode === m ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+            }}
+          >{m === 'create' ? 'Create pages' : 'Reoptimize'}</button>
+        ))}
+      </div>
+
+      {mode === 'reopt' ? (
+        <ReoptimizePanel adapter={serviceAdapter(id ?? '')} />
+      ) : (
+      <>
       {/* Planner */}
       <div style={plannerCardStyle}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
@@ -199,7 +229,7 @@ export function ServicePages() {
           </div>
           <button
             type="button"
-            onClick={() => startPlan.mutate()}
+            onClick={startPlan}
             disabled={planRunning}
             style={{ ...btnStyle, color: '#fff', background: '#6366f1', borderColor: '#6366f1', opacity: planRunning ? 0.6 : 1, whiteSpace: 'nowrap' }}
           >
@@ -207,16 +237,11 @@ export function ServicePages() {
           </button>
         </div>
 
-        {startPlan.isError && (
-          <div style={{ color: '#dc2626', fontSize: 13, marginTop: 10 }}>
-            Could not start the plan. {(startPlan.error as Error)?.message}
-          </div>
-        )}
-        {plan?.status === 'failed' && (
-          <div style={{ color: '#dc2626', fontSize: 13, marginTop: 10 }}>Plan failed. {plan.error}</div>
+        {planError && (
+          <div style={{ color: '#dc2626', fontSize: 13, marginTop: 10 }}>Plan failed. {planError}</div>
         )}
 
-        {plan?.status === 'complete' && (
+        {plan && (
           <div style={{ marginTop: 14 }}>
             <div style={{ fontSize: 13, color: '#334155', marginBottom: 8 }}>
               {plan.items.length} candidate{plan.items.length === 1 ? '' : 's'} across {silos.length} silo
@@ -408,6 +433,8 @@ export function ServicePages() {
         )}
         <Pager page={pub.page} pageCount={pub.pageCount} total={pub.total} pageSize={pub.pageSize} onPage={pub.setPage} />
         </>
+      )}
+      </>
       )}
     </div>
   )

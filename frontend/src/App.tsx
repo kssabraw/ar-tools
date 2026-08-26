@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider } from './context/AuthContext'
-import { ProtectedRoute, AdminRoute } from './components/ProtectedRoute'
+import { ProtectedRoute, AdminRoute, StaffRoute } from './components/ProtectedRoute'
 import { Layout } from './components/Layout'
 import { Login } from './pages/Login'
 import { Home } from './pages/Home'
@@ -19,7 +19,9 @@ import { Icp } from './pages/Icp'
 import { InternalLinks } from './pages/InternalLinks'
 import { LocalSeoContent } from './pages/LocalSeoContent'
 import { EcommerceProduct } from './pages/EcommerceProduct'
+import { Wheelhouse } from './pages/Wheelhouse'
 import { ContentScheduler } from './pages/ContentScheduler'
+import { ContentCalendar } from './pages/ContentCalendar'
 import { ServicePages } from './pages/ServicePages'
 import { LocationPages } from './pages/LocationPages'
 import { Rankings } from './pages/Rankings'
@@ -45,6 +47,7 @@ import { Outreach } from './pages/Outreach'
 import { OutreachLeads } from './pages/OutreachLeads'
 import { Syndication } from './pages/Syndication'
 import { GbpPosts } from './pages/GbpPosts'
+import { GbpMetrics } from './pages/GbpMetrics'
 import { WebsiteBuilder } from './pages/WebsiteBuilder'
 import { Websites } from './pages/Websites'
 import { Citations } from './pages/Citations'
@@ -93,16 +96,18 @@ export default function App() {
                       <Route path="/leadoff" element={<LeadOff />} />
                       <Route path="/outreach" element={<Outreach />} />
                       <Route path="/outreach/leads" element={<OutreachLeads />} />
+                      <Route path="/content-calendar" element={<ContentCalendar />} />
                       <Route path="/runs" element={<Runs />} />
                       <Route path="/runs/:id" element={<RunDetail />} />
                       <Route path="/clients" element={<Clients />} />
-                      <Route path="/clients/new" element={<AdminRoute><ClientForm /></AdminRoute>} />
+                      <Route path="/clients/new" element={<StaffRoute><ClientForm /></StaffRoute>} />
                       <Route path="/clients/:id" element={<ClientWorkspace />} />
                       <Route path="/clients/:id/brand-voice" element={<BrandVoice />} />
                       <Route path="/clients/:id/icp" element={<Icp />} />
                       <Route path="/clients/:id/content" element={<ClientContent />} />
                       <Route path="/clients/:id/local-seo" element={<LocalSeoContent />} />
                       <Route path="/clients/:id/ecommerce" element={<EcommerceProduct />} />
+                      <Route path="/clients/:id/wheelhouse" element={<Wheelhouse />} />
                       <Route path="/clients/:id/content-scheduler" element={<ContentScheduler />} />
                       <Route path="/clients/:id/service-pages" element={<ServicePages />} />
                       <Route path="/clients/:id/location-pages" element={<LocationPages />} />
@@ -111,6 +116,7 @@ export default function App() {
                       <Route path="/clients/:id/gsc-research" element={<GscResearch />} />
                       <Route path="/clients/:id/syndication" element={<Syndication />} />
                       <Route path="/clients/:id/gbp-posts" element={<GbpPosts />} />
+                      <Route path="/clients/:id/gbp-metrics" element={<GbpMetrics />} />
                       <Route path="/clients/:id/website" element={<WebsiteBuilder />} />
                       <Route path="/websites" element={<Websites />} />
                       <Route path="/clients/:id/citations" element={<Citations />} />
@@ -131,7 +137,7 @@ export default function App() {
                       <Route path="/clients/:id/maps/report" element={<MapsReport />} />
                       <Route path="/clients/:id/rankings/report" element={<RankReport />} />
                       <Route path="/clients/:id/rankings/report/:reportId" element={<RankReport />} />
-                      <Route path="/clients/:id/edit" element={<AdminRoute><ClientForm /></AdminRoute>} />
+                      <Route path="/clients/:id/edit" element={<StaffRoute><ClientForm /></StaffRoute>} />
                       <Route path="/articles" element={<Articles />} />
                       <Route path="/silos" element={<Silos />} />
                       <Route path="/my-tasks" element={<MyTasks />} />

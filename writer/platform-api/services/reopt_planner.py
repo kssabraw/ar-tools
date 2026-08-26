@@ -28,7 +28,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from db.supabase_client import get_supabase
-from services import notifications, rankability, sop_store
+from services import maps_reporting, notifications, rankability, sop_store
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +71,7 @@ _MAPS_WITHIN = {
     "coverage_drop": 6_000,
     "competitor_surge": 5_000,
     "area_decline": 3_000,
+    "gradual_decline": 2_000,  # a slow slide — important but below the sudden declines
 }
 _MAPS_WEAK_AREA_WITHIN = 1_000  # weak coverage areas sit at the bottom of the Maps tier
 _MAPS_GBP_WITHIN = 4_000        # a GBP-gap action sits mid Maps tier (above weak areas)
@@ -471,6 +472,28 @@ def build_maps_actions(
             )
             continue
 
+        if alert_type == "gradual_decline":
+            actions.append(
+                {
+                    "kind": "maps_gradual_decline",
+                    "source": "maps",
+                    "keyword": keyword,
+                    "diagnosis": message,
+                    "recommendation": (
+                        "Local-pack visibility has been eroding steadily for weeks — you're being "
+                        "out-worked over time, not hit by a sudden drop. Sustain the local signals: keep "
+                        "GBP fresh (weekly posts, new photos, accurate categories/services), keep review "
+                        "velocity matching or beating competitors, and keep location-page content current. "
+                        "Check the geo-grid trend to see which areas are softening."
+                    ),
+                    "cta_label": "Open Maps tracker",
+                    "cta_path": maps_path,
+                    "severity": "warning",
+                    "sort": _SORT_MAPS + _within(within),
+                }
+            )
+            continue
+
         lost = alert_type == "lost_pack"
         actions.append(
             {
@@ -802,9 +825,12 @@ def _fetch_maps_signals(supabase, client_id: str) -> "tuple[list[dict], list[dic
     weak_areas: list[dict] = []
     solv_drop: "dict | None" = None
     try:
+        # Weak areas + the SoLV drop become client-facing Action Plan items, so
+        # they read the scheduled series only (services.maps_reporting).
         scans = (
-            supabase.table("maps_scans")
-            .select("id")
+            maps_reporting.only_reporting(
+                supabase.table("maps_scans").select("id")
+            )
             .eq("client_id", client_id)
             .eq("status", "complete")
             .order("completed_at", desc=True)
@@ -814,21 +840,24 @@ def _fetch_maps_signals(supabase, client_id: str) -> "tuple[list[dict], list[dic
         if scans:
             latest_rows = (
                 supabase.table("maps_scan_results")
-                .select("report_weak_locations, total_pins, top3_pins, top10_pins, competitors")
+                .select("report_weak_locations, total_pins, top3_pins, top10_pins, competitors, rank_grid")
                 .eq("scan_id", scans[0]["id"])
                 .execute()
             ).data or []
             weak_areas = _aggregate_weak_areas(latest_rows)
             if len(scans) >= 2:
-                from services import maps_solv
+                from services import maps_compare, maps_solv
 
                 prev_rows = (
                     supabase.table("maps_scan_results")
-                    .select("total_pins, top3_pins, top10_pins, competitors")
+                    .select("total_pins, top3_pins, top10_pins, competitors, rank_grid")
                     .eq("scan_id", scans[1]["id"])
                     .execute()
                 ).data or []
-                solv_drop = maps_solv.detect_solv_drop(latest_rows, prev_rows, SOLV_DROP_MIN_PCT)
+                # A Share-of-Local-Voice "drop" must not just be a widened grid,
+                # so compare the two scans on the ground they share.
+                curr_cmp, prev_cmp, _ = maps_compare.normalize_pair(latest_rows, prev_rows)
+                solv_drop = maps_solv.detect_solv_drop(curr_cmp, prev_cmp, SOLV_DROP_MIN_PCT)
     except Exception as exc:
         logger.warning("reopt_plan_maps_signals_failed", extra={"client_id": client_id, "error": str(exc)})
         weak_areas, solv_drop = weak_areas, None

@@ -11,8 +11,35 @@ from services.leadoff_calibration import (
     maps_share,
     match_keyword,
     months_elapsed,
+    placement_prediction,
     summarize,
 )
+
+
+class TestPlacementPrediction:
+    def _placement(self, **over):
+        base = {"available": True, "thin_field": False, "block_groups": 803,
+                "catchment_miles": 5.0, "radius_miles": 10,
+                "zones": [{"rank": 1, "score": 67.8, "lat": 39.04, "lng": -94.6,
+                           "locality": "Overland Park", "households_reachable": 129162,
+                           "nearest_competitor_miles": 3.5, "pressure_norm": 0.24,
+                           "narrative": "…", "is_top": True}]}
+        base.update(over)
+        return base
+
+    def test_freezes_compact_zone_set(self):
+        out = placement_prediction(self._placement())
+        assert out["block_groups"] == 803 and out["radius_miles"] == 10
+        z = out["zones"][0]
+        assert z["rank"] == 1 and z["score"] == 67.8 and z["locality"] == "Overland Park"
+        # the heavy/derived fields are dropped from the frozen copy
+        assert "narrative" not in z and "is_top" not in z
+
+    def test_none_when_unavailable_thin_or_empty(self):
+        assert placement_prediction(None) is None
+        assert placement_prediction({"available": False, "reason": "no_gbp_pins"}) is None
+        assert placement_prediction(self._placement(thin_field=True, zones=[])) is None
+        assert placement_prediction(self._placement(zones=[])) is None
 
 NOW = datetime(2026, 7, 12, tzinfo=timezone.utc)
 

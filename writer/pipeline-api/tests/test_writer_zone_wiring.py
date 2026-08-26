@@ -19,6 +19,7 @@ from modules.sie.usage import (
     CATEGORY_ENTITIES,
     CATEGORY_KEYWORD_VARIANTS,
     CATEGORY_RELATED_KEYWORDS,
+    ENTITY_AGGRESSIVE_TARGET_MULT,
     ZONE_CATEGORY_TARGET_MULT,
     _classify_term,
     build_zone_category_targets,
@@ -98,9 +99,10 @@ def _page_with_paragraphs(url: str, paragraphs: list[str], word_count: int = 100
     return p
 
 
-def test_zone_category_target_is_half_of_trimmed_max():
+def test_body_entity_target_is_full_trimmed_max():
     """3 competitors mention 4, 4, 4 distinct entities in body. Trimmed
-    max = 4. Target = round(4 × 0.50) = 2."""
+    max = 4. Entities in the paragraphs zone benchmark against the most
+    aggressive competitor → target = round(4 × 1.0) = 4 (not half)."""
     # All four entities present in each page → distinct count = 4 per page.
     pages = [
         _page_with_paragraphs(f"https://t.com/{i}", [
@@ -124,7 +126,8 @@ def test_zone_category_target_is_half_of_trimmed_max():
         outlier_mode="safe",
     )
     assert out["paragraphs"]["entities"]["max"] == 4
-    assert out["paragraphs"]["entities"]["target"] == 2
+    assert out["paragraphs"]["entities"]["target"] == int(round(4 * ENTITY_AGGRESSIVE_TARGET_MULT))
+    assert out["paragraphs"]["entities"]["target"] == 4
 
 
 def test_zone_category_target_excludes_outlier_in_safe_mode():
@@ -192,10 +195,13 @@ def test_zone_category_target_buckets_three_categories():
     assert out["paragraphs"]["entities"]["max"] == 1
     assert out["paragraphs"]["related_keywords"]["max"] == 1
     assert out["paragraphs"]["keyword_variants"]["max"] == 1
-    # 1 × 0.50 → round → 0 or 1 depending on Python rounding; assert
-    # the formula directly so we don't depend on banker's rounding.
-    expected = int(round(1 * ZONE_CATEGORY_TARGET_MULT))
-    assert out["paragraphs"]["entities"]["target"] == expected
+    # Entities in the body zone benchmark against the most aggressive
+    # competitor (mult 1.0) → 1 × 1.0 = 1; the non-entity categories keep
+    # the 0.50 multiplier → 1 × 0.50 rounds to 0. Assert the formulas
+    # directly so we don't depend on banker's rounding.
+    assert out["paragraphs"]["entities"]["target"] == int(round(1 * ENTITY_AGGRESSIVE_TARGET_MULT))
+    assert out["paragraphs"]["related_keywords"]["target"] == int(round(1 * ZONE_CATEGORY_TARGET_MULT))
+    assert out["paragraphs"]["keyword_variants"]["target"] == int(round(1 * ZONE_CATEGORY_TARGET_MULT))
 
 
 def test_zone_category_target_zero_when_no_pages():

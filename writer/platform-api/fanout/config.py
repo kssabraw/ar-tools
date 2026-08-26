@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     # Anthropic — article planning orchestrator (Claude Opus 4.7, tool-use /
     # strict-schema JSON; PRD §7.10, §14.2). Reuses the AR Tools ANTHROPIC_API_KEY.
     anthropic_api_key: str = ""
+    # Second Anthropic account (same models) for SAME-MODEL failover under load.
+    # When the primary account's in-process transport retries can't clear a
+    # transient 429/5xx, the same call is retried on this account's key. Empty ⇒
+    # primary only. Reuses the AR Tools ANTHROPIC_API_KEY_SECONDARY.
+    anthropic_api_key_secondary: str = ""
+    anthropic_key_failover_enabled: bool = True
     orchestrator_model: str = "claude-opus-4-7"
     orchestrator_max_tokens: int = 16000
     orchestrator_timeout_s: int = 120         # PRD §16.2: >120s -> retry once then degrade
@@ -181,6 +187,28 @@ class Settings(BaseSettings):
     # (RELEVANCE_THRESHOLD) or a per-run /regate without redeploying.
     relevance_threshold: float = 0.65        # cosine cutoff vs parent topic embedding
 
+    # Source-aware relevance guard (fan-out relevance-quality fix, 2026-08-07).
+    # The embedding cosine gate alone lets ~half the active pool drift off-topic on
+    # broad multi-token seeds: the two noisiest sources (keyword_ideas category
+    # drift + whole-domain competitor mining) dominate the pool, and
+    # gemini-embedding-2 can't separate their drift from real signal (junk and
+    # on-topic keywords land in the same ~0.06 cosine band, so no single threshold
+    # divides them — measured on the "third party claims administrator" session:
+    # 47% of the active pool contained none of the seed's own terms). This guard
+    # keeps a keyword from a NON-trusted source only when it EITHER shares a topical
+    # token with the seed+aliases vocabulary OR clears an elevated cosine bar (which
+    # rescues legitimate token-disjoint long-tail like "subrogated recoveries" /
+    # "first notice of loss"). A keyword that also surfaced from a trusted
+    # phrase/seed-match source (keyword_suggestions / query_fanouts / PAA) is always
+    # exempt. Deterministic — no new model, no paid call. Only activates for seeds
+    # with >= min_seed_tokens significant tokens; single-token entity seeds
+    # ("retatrutide") are left to the embedding + peer-entity gate, which already
+    # produce tight pools there. The bar is calibrated to gemini-embedding-2's
+    # cosine distribution — recalibrate it if the embedding model changes.
+    fanout_source_guard_enabled: bool = True
+    fanout_source_guard_min_score: float = 0.80
+    fanout_source_guard_min_seed_tokens: int = 2
+
     # Pre-embedding language ID filter (PRD §7.6 follow-up). DataForSEO is
     # locked to en/US but its related/autocomplete endpoints occasionally
     # surface non-English Latin-script phrases when the dominant terms share
@@ -197,6 +225,14 @@ class Settings(BaseSettings):
     # silo anchor) instead of keeping it active in every silo it passes in. Kills
     # the cross-silo duplication that dedup otherwise has to clean up.
     relevance_assign_best_silo: bool = True
+    # Soft routing (0 = off = pure argmax, the default). A positive cosine margin
+    # keeps a keyword active not only in its argmax silo but in every silo within
+    # `silo_margin` of the top cosine — so overlapping-anchor silos aren't starved
+    # (hard argmax emptied 3 of 5 silos on a single-entity seed). The keyword still
+    # has to clear each silo's own relevance threshold, and cross-topic dedup
+    # collapses the duplicate articles the overlap can create. Tune up from 0 (e.g.
+    # 0.03–0.06) when narrow silos come back empty; higher = more overlap.
+    relevance_silo_margin: float = 0.0
     relevance_embed_batch: int = 1000        # keywords per embedding request
     clustering_edge_threshold: float = 0.55  # min cosine for a graph edge
     # Louvain resolution: >1 favors more, smaller communities (finer granularity).
@@ -239,6 +275,17 @@ class Settings(BaseSettings):
     # Cost surfaced to the owner before an RF run (§7.7: 5x-8x the base run).
     fanout_cost_multiplier_low: float = 5.0
     fanout_cost_multiplier_high: float = 8.0
+
+    # Resumable expand checkpoint (issue #686 Phase 2). Gates the per-silo
+    # checkpoint within the (now unconditional) durable expand path. MUST live
+    # here, in the vendored fanout config, because fanout/jobs.py reads it via
+    # `fanout.config.get_settings()` — the sibling platform-api config.py is a
+    # different Settings class that fanout/jobs.py never sees. The env var
+    # (FANOUT_RESUMABLE_EXPAND_ENABLED on PLATFORM) is read by field name.
+    #
+    # (Phase 3 retired fanout_durable_expand_enabled — every pipeline stage runs
+    # durably via async_jobs now, with no flag and no in-process executor path.)
+    fanout_resumable_expand_enabled: bool = False
 
     # M6 site architecture (PRD §7.11). Fully deterministic — no LLM (the writer
     # module owns pillar editorial as of 2026-06-09); only the linking matrix +
@@ -334,17 +381,6 @@ class Settings(BaseSettings):
     scheduler_concurrency_cap: int = 3        # in-flight article writes (LLM rate-limit guard)
     scheduler_stuck_minutes: int = 30         # startup sweep: running rows older than this requeue
     scheduler_shutdown_grace_s: float = 20.0  # max wait for in-flight writes on shutdown
-    # Fallback sweep for pipeline runs orphaned by a kill too hard for the
-    # shutdown hook (OOM / SIGKILL). Delayed rather than run at startup: during a
-    # deploy the outgoing container is still working for ~15s after the new one
-    # boots, and a sweep that early would reap its live run. See run_recovery.py.
-    orphan_sweep_delay_s: float = 120.0
-    # How many times an article-planning run interrupted by a deploy is
-    # auto-resumed (run_recovery re-submits planning on the new container)
-    # before recovery falls back to the manual "Plan articles" click. Mirrors
-    # the Blog Writer orchestrator's run_auto_resume_max: a run that keeps
-    # dying (e.g. planning itself crashes the process) must not crash-loop.
-    plan_auto_resume_max: int = 2
     # Bounded retry for transient generation failures (LLM overload / 529, research
     # timeout, a DataForSEO hiccup, a worker restart mid-write). A failed run is
     # requeued with exponential backoff up to this many total attempts, then

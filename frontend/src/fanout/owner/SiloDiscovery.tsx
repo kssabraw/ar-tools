@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { ErrorDetails } from "../../components/ErrorDetails";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addTopic,
@@ -205,7 +206,7 @@ export function SiloDiscovery({
             Back to sessions
           </button>
         </div>
-        {error && <p className="form-error">{error}</p>}
+        {error && <ErrorDetails variant="fanout" message={error} />}
 
         {busy && (
           <WorkingProgress
@@ -1041,7 +1042,9 @@ function Review(p: {
         />
         <button
           className="btn btn-ghost"
-          disabled={audienceMut.isPending}
+          // Backend requires a non-empty audience (min_length=1); disable rather
+          // than let an empty save round-trip to a 422.
+          disabled={audienceMut.isPending || !audienceValue.trim()}
           onClick={() => audienceMut.mutate(audienceValue.trim())}
         >
           {audienceMut.isPending ? "Saving…" : "Save"}
@@ -1092,6 +1095,13 @@ function SiloCard(p: {
   const [name, setName] = useState(silo.name);
   const [rationale, setRationale] = useState(silo.rationale ?? "");
   const [rel, setRel] = useState<RelationshipType>(silo.relationship_type);
+  // Re-seed the form from the current persisted silo whenever it opens/closes,
+  // so an abandoned edit (or a since-updated prop) never resurfaces stale text.
+  const resetFields = () => {
+    setName(silo.name);
+    setRationale(silo.rationale ?? "");
+    setRel(silo.relationship_type);
+  };
 
   if (editing) {
     return (
@@ -1132,7 +1142,13 @@ function SiloCard(p: {
           >
             Save
           </button>
-          <button className="link-btn" onClick={() => setEditing(false)}>
+          <button
+            className="link-btn"
+            onClick={() => {
+              resetFields();
+              setEditing(false);
+            }}
+          >
             Cancel
           </button>
         </div>
@@ -1145,7 +1161,13 @@ function SiloCard(p: {
       <div className="silo-head">
         <p className="silo-name">{silo.name}</p>
         <div className="silo-actions">
-          <button className="link-btn" onClick={() => setEditing(true)}>
+          <button
+            className="link-btn"
+            onClick={() => {
+              resetFields();
+              setEditing(true);
+            }}
+          >
             Edit
           </button>
           <button className="link-btn" onClick={p.onDelete}>

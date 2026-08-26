@@ -117,6 +117,74 @@ class GbpLocationOption(BaseModel):
     access_status: str
 
 
+class GbpAvailableLocation(BaseModel):
+    """A listing the connected agency account manages (from Google), offered in
+    the picker. `registered_client_*` is set when it's already assigned; `score`
+    is the match confidence to a client (only on the match endpoint)."""
+
+    location_id: str
+    account_id: Optional[str] = None
+    title: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    place_id: Optional[str] = None
+    score: Optional[float] = None
+    registered_client_id: Optional[UUID] = None
+    registered_client_name: Optional[str] = None
+
+
+class GbpAvailableLocationsResponse(BaseModel):
+    locations: list[GbpAvailableLocation]
+    detail: Optional[str] = None  # set (with locations empty) when resolution failed
+
+
+class GbpMatchLocationResponse(BaseModel):
+    """The one listing that is this client's GBP (auto-matched), plus every
+    listing ranked as a fallback when the match isn't confident."""
+
+    client_label: Optional[str] = None
+    matched: Optional[GbpAvailableLocation] = None
+    candidates: list[GbpAvailableLocation] = []
+    detail: Optional[str] = None
+
+
+class GbpRegisterLocationRequest(BaseModel):
+    location_id: str
+    account_id: Optional[str] = None
+    place_id: Optional[str] = None
+    title: Optional[str] = None
+
+
+class GbpGenerateImageRequest(BaseModel):
+    """Text-to-image prompt for a GBP post image (Nano Banana / Gemini)."""
+
+    prompt: str
+
+
+class GbpImageFromUrlRequest(BaseModel):
+    """A public image URL to fetch, validate, and re-host for a post."""
+
+    url: str
+
+
+class GbpGenerateFromUrlRequest(BaseModel):
+    """Create N distinct draft posts from the content of a page URL (0–99)."""
+
+    location_row_id: UUID
+    url: str
+    count: int = Field(1, ge=0, le=99)
+    topic_type: TopicType = "standard"
+    cta_type: Optional[CtaType] = None
+    cta_url: Optional[str] = None
+
+
+class GbpBulkGenerateResponse(BaseModel):
+    count: int
+    job_ids: list[UUID]
+
+
 class GbpPost(BaseModel):
     id: UUID
     client_id: UUID

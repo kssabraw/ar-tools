@@ -441,6 +441,12 @@ async def run_provision_job(payload: dict) -> dict:
             elif step == "configure":
                 subdomain = await cf_workers_subdomain()
                 url = staging_url(worker, subdomain)
+                # Re-read the row before building the config. The step machine
+                # loaded `website` before creating a repo and setting secrets —
+                # network work measured in seconds — and this step writes the
+                # WHOLE config back. Someone saving business facts in that window
+                # would have had the edit silently overwritten by the stale copy.
+                website, client = _load(website_id)
                 website["staging_url"] = url
                 config = build_site_config(website, client)
                 files = {

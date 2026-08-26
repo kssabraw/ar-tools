@@ -88,7 +88,7 @@ function RankTrendBlock({ health }: { health?: ClientRankingHealth }) {
 }
 
 export function Home() {
-  const { isAdmin } = useAuth()
+  const { isStaff } = useAuth()
 
   const { data: clients = [], isLoading } = useQuery<ClientListItem[]>({
     queryKey: ['clients'],
@@ -152,7 +152,7 @@ export function Home() {
             </Link>
           ))}
 
-          {isAdmin && (
+          {isStaff && (
             <Link to="/clients/new" style={{ ...tileStyle, ...addTileStyle }}>
               <Plus size={20} />
               <span style={{ fontWeight: 600, fontSize: 14 }}>Add Client</span>
@@ -161,7 +161,7 @@ export function Home() {
         </div>
       )}
 
-      {!isLoading && clients.length === 0 && !isAdmin && (
+      {!isLoading && clients.length === 0 && !isStaff && (
         <div style={{ color: '#64748b', fontSize: 14, marginTop: 8 }}>
           No clients yet. Ask an admin to add one.
         </div>

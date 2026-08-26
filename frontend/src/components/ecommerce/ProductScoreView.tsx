@@ -6,7 +6,8 @@ import { ecommerceApi } from './api'
 import { useResumableJob } from '../../lib/useResumableJob'
 import type { EcommercePageDetail, EcommercePageType, ReoptimizeUrlResult, ScoreResult } from './types'
 import { Spinner } from '../localseo/Spinner'
-import { backLink, card, errorBox, outlineBtn, primaryBtn, scoreColor } from '../localseo/shared'
+import { backLink, card, outlineBtn, primaryBtn, scoreColor } from '../localseo/shared'
+import { ErrorDetails } from '../ErrorDetails'
 
 // Pages scoring at/above this are skipped server-side (kept in sync with the
 // backend threshold). Surfaced here only as copy.
@@ -187,7 +188,7 @@ export function ProductScoreView({
         {pageUrl && <> · <a href={pageUrl} target="_blank" rel="noreferrer" style={{ color: '#6366f1' }}>{pageUrl}</a></>}
       </p>
 
-      {error && <div style={{ ...errorBox, marginBottom: 16 }}>{error}</div>}
+      {error && <ErrorDetails message={error} style={{ marginBottom: 16 }} />}
 
       {!result && (
         <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 14, alignItems: 'center' }}>

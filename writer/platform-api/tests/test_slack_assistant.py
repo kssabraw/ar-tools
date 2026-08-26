@@ -230,6 +230,70 @@ def test_ctx_strategist_shapes_and_truncates():
     assert out["questions"] == [f"Q{i}" for i in range(5)]
 
 
+def test_ctx_gbp_metrics_growth_cards(monkeypatch):
+    from datetime import date
+
+    monkeypatch.setattr(sa_context.settings, "gbp_metrics_enabled", True)
+    fake = _FakeSupabase(
+        {
+            "gbp_locations": [[{"id": "loc1"}]],
+            "gbp_metric_daily": [
+                [{"date": "2026-07-05"}],  # latest-date anchor
+                [  # window rows (impression sub-types fold into profile_views)
+                    {"date": "2026-07-01", "metric": "CALL_CLICKS", "value": 10},
+                    {"date": "2026-05-15", "metric": "CALL_CLICKS", "value": 5},
+                    {"date": "2026-07-02", "metric": "BUSINESS_IMPRESSIONS_DESKTOP_SEARCH", "value": 100},
+                    {"date": "2026-06-20", "metric": "BUSINESS_IMPRESSIONS_MOBILE_MAPS", "value": 50},
+                ],
+            ],
+        }
+    )
+    out = sa_context._ctx_gbp_metrics(fake, "c1", date(2026, 7, 10))
+    assert out["window_days"] == 30 and out["as_of"] == "2026-07-05"
+    by_metric = {m["metric"]: m for m in out["metrics"]}
+    assert by_metric["Profile views"]["current"] == 150  # 100 + 50 folded
+    assert by_metric["Calls"] == {"metric": "Calls", "current": 10, "previous": 5, "pct_change": 100.0}
+
+
+def test_ctx_gbp_metrics_none_when_disabled(monkeypatch):
+    from datetime import date
+
+    monkeypatch.setattr(sa_context.settings, "gbp_metrics_enabled", False)
+    fake = _FakeSupabase({"gbp_locations": [[{"id": "loc1"}]]})
+    assert sa_context._ctx_gbp_metrics(fake, "c1", date(2026, 7, 10)) is None
+
+
+def test_ctx_ga4_traffic_and_channels():
+    from datetime import date
+
+    fake = _FakeSupabase(
+        {
+            "ga4_properties": [[{"id": "prop1"}]],
+            "ga4_daily": [
+                [
+                    {"date": "2026-07-05", "sessions": 40, "screen_page_views": 120,
+                     "conversions": 4, "channels": {"Organic Search": 25, "Direct": 15}},
+                    {"date": "2026-05-07", "sessions": 20, "screen_page_views": 60,
+                     "conversions": 2, "channels": {}},
+                ]
+            ],
+        }
+    )
+    out = sa_context._ctx_ga4(fake, "c1", date(2026, 7, 10))
+    assert out["window_days"] == 30 and out["as_of"] == "2026-07-05"
+    assert out["sessions"] == {"current": 40, "previous": 20, "pct_change": 100.0}
+    assert out["conversions"] == {"current": 4, "previous": 2, "pct_change": 100.0}
+    assert out["pageviews"]["current"] == 120
+    assert [c["name"] for c in out["top_channels"]] == ["Organic Search", "Direct"]
+
+
+def test_ctx_ga4_none_without_verified_property():
+    from datetime import date
+
+    fake = _FakeSupabase({"ga4_properties": [[]]})
+    assert sa_context._ctx_ga4(fake, "c1", date(2026, 7, 10)) is None
+
+
 def test_stage_live_serp_requires_keyword():
     import asyncio
 
@@ -355,10 +419,19 @@ class _FakeQuery:
     def is_(self, *a, **k):
         return self
 
+    def gte(self, *a, **k):
+        return self
+
+    def lte(self, *a, **k):
+        return self
+
     def order(self, *a, **k):
         return self
 
     def limit(self, *a, **k):
+        return self
+
+    def range(self, *a, **k):
         return self
 
     def execute(self):
@@ -455,7 +528,9 @@ def test_run_maps_history_no_scans(monkeypatch):
     fake = _FakeSupabase({"maps_scans": [[]]})
     monkeypatch.setattr(slack_assistant.llm, "get_supabase", lambda: fake)
     out = asyncio.run(slack_assistant._run_maps_history("c1", {}))
-    assert "No completed geo-grid scans" in out
+    # "scheduled" is load-bearing: the tool reads the reporting series only, so
+    # a client with nothing but one-off runs correctly reports having none.
+    assert "No completed scheduled geo-grid scans" in out
 
 
 def test_ctx_maps_includes_trend_over_completed_scans():

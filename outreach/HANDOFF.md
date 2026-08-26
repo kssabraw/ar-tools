@@ -2,8 +2,203 @@
 
 **Read this first, then `CLAUDE.md` → `START-HERE.md` → `ISSUES.md` → `DECISIONS.md`.**
 
-Status as of 2026-08-05:
+Status as of 2026-08-10 (the first live scan is DONE; heatmap slices 1–2, the any-city scan, **the per-prospect report — call hook + 3 signals + approval-gated client PDF**, **the paid-placement 4th signal**, and **`outcome` + `touch` + the emit webhook** — all MERGED to `main`; **lead enrichment + the report-signal UI triggers built on draft PRs**):
 
+- **CALL HOOK — LOSS-FRAMED + PER-PROSPECT (2026-08-10, draft PR).** The "Why call?" hook read
+  generic/identical for prospects in one submarket (one template led with the shared coverage line).
+  Fixed in two layers: (1) the deterministic assembler (`services/outreach_justification.py`) now
+  LEADS with the most per-prospect-distinctive loss (paying-and-losing → named competitor → review
+  deficit → coverage) and every template is loss-framed; (2) a grounded LLM phrasing pass
+  (`services/outreach_call_hook.py`, `report_llm.run_forced_tool_sync`) rewrites it into compelling
+  loss-framed prose using ONLY the assembled facts, with a deterministic **grounding guard** that
+  rejects invented money/lead-volume numbers (fear-of-loss's failure mode) → falls back to the
+  deterministic hook. Cached per (prospect, snapshot) in `prospect_call_hook` (migration
+  `20260810160000`, **applied live**) keyed by a facts fingerprint, so determinism/replayability lives
+  at the cache (identical re-reads, one paid call per prospect×snapshot). No frontend change (output
+  shape unchanged). Config `outreach_call_hook_*`. Full design in DECISIONS.md 2026-08-10.
+- **REPORT SIGNAL SCANS — RUN ORGANIC + AI PER-PROSPECT FROM THE REPORT (2026-08-10, draft PR).** The
+  report always rendered four signals but only the geogrid could be TRIGGERED in-app; `scan-organic`
+  and `scan-ai` were CLI-only, so their sections read `not_scanned` for every un-hand-run prospect.
+  Owner request: let staff run organic + AI per prospect from the report. Two new signed-order queues
+  on the `scan_request` rails — `organic_scan_request` + `ai_scan_request` (migration
+  `20260810140000`, **applied live** to Outreacher). platform-api WRITES the order admin-only, the
+  outreach `tick` DRAINS + runs it (`api/services/organic_scan_queue.py` / `ai_scan_queue.py`,
+  ≤`organic_orders_per_tick`/`ai_orders_per_tick`=1 each); platform-api never spends. Organic resolves
+  the EXACT snapshot the report reads (idempotent → a re-order/second prospect in the submarket is a
+  free `done`); AI targets a human-seeded `ai_region`, so `create_ai_scan_request` 422s
+  `ai_region_not_seeded` when none matches and the report UI opens a seed modal (`POST
+  /outreach/ai-regions`, admin, name pre-filled to the prospect's area so the resolver matches, human
+  picks name_level — the I-073 invariant intact). platform-api: `services/outreach.py` +
+  `routers/outreach.py` (`/outreach/prospects/{id}/scan-organic|scan-ai`, `/outreach/{organic|ai}-scan-requests`
+  list/detail/cancel, `/outreach/markets/{id}/ai-regions`, `/outreach/ai-regions`). UI:
+  admin-only "Run organic scan" / "Run AI scan" buttons + the region-seed modal in
+  `frontend/src/components/outreach/ProspectReport.tsx` (poll order → refetch report). No per-user
+  budget ledger (each run ~1–3¢; the one-active index + admin gating suffice). Pure drain logic
+  unit-tested (`test_organic_scan_queue.py` / `test_ai_scan_queue.py`, 25 tests) + platform-api
+  gating/constants/validation. Full design in DECISIONS.md 2026-08-10.
+- **LEAD ENRICHMENT IS BUILT (2026-08-10, draft PR) — contact NAMES / PHONES / EMAILS per prospect,
+  one-by-one and select-all.** Enriches a prospect (or a selection) via Outscraper "Emails & Contacts"
+  enrichers. **The mass-ingest enrichment invariant is intact** — `submit_maps_search` is untouched;
+  enrichment builds its own by-place_id request in `api/services/enrich_client.py` (generalizing
+  `pixel_probe.fetch_enriched_sample`). Order-driven like scans: a UI click (ADMIN, budget-guarded) writes
+  an `enrichment_request` (migration `20260810120000`, **applied live** to Outreacher); the `tick` command
+  drains it (`api/services/enrich_queue.py`) and bills — platform-api never spends. Batchable, so the drain
+  does several orders/tick (not the ≤1 scan cadence) and is idempotent (already-enriched prospects skipped,
+  no re-bill → a re-order is a cheap resume). Contact-aware: `prospect_contact` (one business → N contacts)
+  + `prospect_enrichment` (status/provenance/idempotency marker); `prospect` left pristine. Free preflight
+  estimate + per-user daily budget guard (order rows = the ledger). New commands: `enrich` (order-gated,
+  drains) + `probe-enrich` (PAID, the measure-don't-infer spike); both wired into `run_market.py`, `enrich`
+  drained in `tick`. platform-api: `services/outreach.py` + `routers/outreach.py`
+  (`/outreach/enrichment/estimate`, `/outreach/prospects/{id}/enrich`, `/outreach/enrichment`, list/detail/
+  cancel, `/outreach/prospects/{id}/contacts`). UI: `frontend/src/components/outreach/Enrichment.tsx`
+  (per-row Enrich + select-all bulk bar + contact chips, `useResumableBatch`) in the coverage table + CRM
+  lead drawer. Pure logic unit-tested (parser 26 + drain; platform-api estimate/budget/validation).
+  **UNRUN + field names UNCONFIRMED:** run `probe-enrich` once (owner-authorized) to confirm the enrichment
+  param value(s) + response shape before trusting output — ISSUES I-109/110/111. Config rates are
+  placeholders (I-111). Full design in DECISIONS.md 2026-08-10.
+- **`outcome` + `touch` + THE EMIT WEBHOOK ARE BUILT AND MERGED (2026-08-09, PR #625 → `8141629`).**
+  The learning substrate (HANDOFF §12's named next build; the one Phase-3 item with a closing window,
+  because `outcome` cannot be backfilled — scoring-spec §8). Migration `20260809170000_outcome_touch.sql`
+  applied live to Outreacher (`touch` + `outcome` — outbound-only made structural via the composite FK,
+  adopted verbatim from `PHASE3-outcome-constraint.md` — + `lead_activity.touch_id`'s FK), verified live
+  by `tests/outcome_touch_constraints.sql` (12/12). platform-api `emit_prospect`/`record_touch` + pure
+  `outreach_emit.py`; the SPA's Emit button + Log-contact/outcome UI. `selection_reason` on 100% of
+  contacts (ISSUES I-102). **The emit webhook is a GENERIC, OPTIONAL integration** — the owner does NOT
+  use n8n/Encharge (the PRD's example senders); the webhook-free `touch` path is the real capture, so
+  the substrate fills from call one with no external sender. The teed-up hand-picked-backfill question
+  is resolved: create-on-first-contact, no bulk backfill (DECISIONS 2026-08-09). See the dedicated
+  section below and §12.
+- **THE PAID-PLACEMENT SIGNAL IS BUILT AND MERGED (2026-08-08, PR #621 → `b4ca6da`).** The report's
+  FOURTH competitive signal, and per `docs/scoring-spec.md` the highest-value one in the whole model:
+  a business paying to solve its visibility problem while still losing organically has proven budget
+  AND intent (LSA active +57, Ads + no organic/pack +46, spend >$2k +66).
+  - **Slice A — presence, for NO new paid call.** The `scan-organic` capture already stores the full
+    SERP, and that response carries the paid items the parser used to discard. `parse_organic_serp`
+    now also reads `paid` (Google Ads) + `local_services` (LSA) and `summarize_serp` writes a `paid`
+    block into `serp_result.payload_summary`. Surfaced as a "Paid placement" section in both report
+    faces + the client PDF, and an `ELEM_PAID` call-hook talking point.
+  - **Slice B1 — site tech, FREE.** `scan-tech` fetches each prospect's OWN site (PRD §B3, "own
+    request, not a paid service") and stores Meta pixel / `AW-` conversion tag / GTM container /
+    CallRail-Podium-Birdeye into **`prospect_tech_signal`** (migration `20260808200000`, applied
+    live). Deliberately NOT in `PAID_COMMANDS` — a test pins it. A failed fetch stores a
+    `fetch_status` (unknown), NEVER `absent`.
+  - **Slice B2 — ad-spend MAGNITUDE — deliberately NOT built.** Gated behind a DataForSEO Labs yield
+    spike (I-098): Labs paid data is keyword-SERP-derived, so a two-truck operator bidding
+    hyper-locally — and running LSA, which Labs does not index as paid search at all — often returns
+    zero. That is exactly this pipeline's population. Labs endpoints are in the free probe set.
+  - **The strongest pitch it unlocks:** `prospect_is_paying` + poor coverage = "paying and losing"
+    (the vendor-failing shape), an `ELEM_PAYING` element that LEADS the spoken hook when it fires.
+  - **Read I-099 before touching this code.** An adversarial review found three real defects before
+    anything ran: a shared `--limit` default that silently capped `scan-tech` at 20 of ~1,000 sites
+    while exiting 0; a bidirectional LSA name match that asserted an ad the prospect wasn't running
+    AND deleted a real competitor; and an `AW-` site tag that produced the spoken claim "you're
+    paying for Google Ads on ⟨keyword⟩" with no ad in that SERP. All fixed, each pinned by a
+    regression test. Design doc: `docs/paid-placement-slice-b-design-v0_1.md`.
+  - **UNRUN:** `scan-tech` (free) and `probe-pixel-field` (PAID, §16a.1 spike) have never executed.
+
+- **THE PER-PROSPECT REPORT IS BUILT AND MERGED — the "why this is a lead" call hook + a two-face
+  competitive report (2026-08-08, PRs #615–#619).** Phase 3 §12 item 1 (the phone-call hook) plus the
+  internal/client report the owner asked for, in five merged slices. All logic is DETERMINISTIC and
+  fact-grounded — never an LLM guess, never a fabricated fact/competitor/number (DECISIONS 2026-08-08,
+  the design-fork ruling), the same discipline as the heatmap renderer.
+  - **Call-hook justification** (`writer/platform-api/services/outreach_justification.py` pure +
+    `outreach.prospect_justification` I/O + `GET /outreach/prospects/{id}/justification`): the talking
+    points a caller reads before dialing — coverage deficit, the radial pattern of invisibility, who
+    holds the map pack where they're absent, reviews vs the local field, listing gaps — assembled only
+    from stored scan data. A "Why call?" expander in `Outreach.tsx`'s coverage table + the CRM lead
+    drawer. (I-093 compass-direction geography deferred to respect the geometry boundary; I-094
+    competitor detail needs a hot `grid_result` partition.)
+  - **The report** (`services/outreach_report.py` pure + `outreach.prospect_report` I/O +
+    `GET …/report`): two faces over ONE document — an internal competitive brief and a client-facing
+    draft. `components/outreach/ProspectReport.tsx` — two buttons in the coverage table + CRM drawer,
+    a modal with a face toggle + print. A signal with no scan renders as an explicit `not_scanned`
+    block, never an empty table that would read as "no competitors" (the I-076 lesson, per-section).
+  - **Three competitive signals.** MAPS (rankings vs competitors, from the coverage the first scan
+    produced — has LIVE data). ORGANIC (`scan-organic` command, PAID + gated; `api/services/organic_scan.py`,
+    one live Google SERP per snapshot into `serp_result`; I-084 resolved — it attaches to the maps
+    `scan_snapshot`). AI VISIBILITY (`scan-ai` command, PAID + gated; `api/services/ai_visibility.py` —
+    **ChatGPT + Google AI Overview**, per region×keyword; new `ai_region` + `ai_scan_result` tables,
+    `ai_region` seeded with the 11 validated LA place names from I-073; a prospect maps to a region by
+    its submarket name; conservative mention detection that never manufactures invisibility).
+  - **Client-facing PDF + approval gate + signed-URL delivery.** The client face is a DRAFT until an
+    admin approves. `POST …/report/pdf` (ADMIN-gated — the click IS the approval; the no-unapproved-asset
+    invariant) renders the report to PDF (WeasyPrint, reusing the suite's `client_report.render_pdf`),
+    records a `report_approval` row (actor + content_hash + storage_path), stores the PDF in the private
+    `outreach-reports` Supabase Storage bucket, and returns a **signed URL** (90-day expiry — reporting §5
+    on Supabase Storage, NOT R2, DECISIONS 2026-08-08). `GET …/report/pdf` re-signs without re-approving.
+  - **New migrations, all applied live:** `20260808140000_ai_visibility` (ai_region + ai_scan_result),
+    `20260808160000_report_approval`, `20260808180000_report_pdf_storage` (+ the `outreach-reports` bucket).
+    **New PAID commands:** `scan-organic`, `scan-ai` (both in `PAID_COMMANDS`, token/order-gated like `scan`).
+    **I-095 is fully resolved.**
+  - **STILL UNRUN — the organic and AI scans have never been run.** `scan-organic` and `scan-ai` are
+    built, gated, and cost money; the report's organic + LLM sections read `not_scanned` until an admin
+    authorizes them (the MAPS section already has live data from the first scan). `serp_result`,
+    `ai_scan_result`, `report_approval` are all empty. This is the same "built ≠ run" state the scan
+    layer sat in before the first maps scan.
+- **THE FIRST LIVE SCAN IS COMPLETE AND VERIFIED (2026-08-08).** `emergency plumber` × the whole
+  city of Los Angeles, run through the new **any-city onboard** path (not the seeded market): **122
+  businesses discovered, 83 survived the filter, 81/81 grid points collected, snapshot rolled up,
+  119 `prospect_coverage` rows.** onboard_request `91bde3cb-082f-478f-ab3c-d504fc03bca3` · snapshot
+  `30455295-90a7-46ce-aae6-1845f3a856de` · submarket "Los Angeles, CA, USA" (the whole-city centre).
+  This exercised submission → collection → finalization → rollup → placeholder score in one live
+  pass. The scan tables are no longer empty: `scan_snapshot` 1, `scan_task` 81, `grid_result` 1,620,
+  `prospect_coverage` 119, `snapshot_rollup` 1, `grid_point_status` 81. Top invisible businesses
+  (0% coverage) surfaced for outreach: Major League Plumbing, USA Plumbing, Koreatown Handyman, and
+  others. **The core loop is proven end-to-end against a live provider for the first time.**
+  - **What run one still did NOT prove** (unchanged from §11b): the empty-pack path at scale (LA
+    whole-city is dense — a coastal submarket is run two), land masking (needs 3 cycles), the
+    fallback-by-id path (needs a task to age off `tasks_ready`), and tag recovery.
+- **THE ANY-CITY SCAN IS BUILT AND MERGED — "City + what a customer searches" → discover → filter →
+  scan** (2026-08-08). The scan is no longer confined to the pre-seeded LA market. A user types **any
+  city** (Google-resolved) + an optional **Google-recognized sub-area** + a **free-text consumer
+  search** (the phrase a real customer types — NOT a GBP category), and the platform discovers →
+  filters → scans it. The consumer search drives BOTH the Outscraper ingest category AND the geogrid
+  scan keyword. This closes I-092: `prospect_coverage` joins `grid_result` to *pre-ingested*
+  `prospect` rows on place_id, so scanning a city nobody has ingested yields zero coverage — the
+  onboard path therefore ingests-then-scans in one staged order.
+  - **Signed-order model:** a new **`onboard_request`** row (migration `20260808120000_onboard_request.sql`,
+    **applied live**; one-active partial-unique guard; RLS-on/zero-policy) is a single-use, admin-placed
+    order whose existence is its spend confirmation — the same pattern as `scan_request`. The outreach
+    `tick` cron drains **at most one `onboard_request` per heartbeat** (after collect + the scan-order
+    drain), running ingest → filter → scan with staged asymmetric failure (`api/services/onboard_queue.py`,
+    `OnboardDrainReport`, 15 tests). `tick` stays out of `PAID_COMMANDS` — the order row is the confirmation.
+  - **Geo enumeration (platform-api side):** Google has no "list a city's neighborhoods" endpoint, so
+    `services/outreach_geo.py` **OSM-enumerates** sub-areas (Overpass `place=suburb/neighbourhood/…` via
+    the new generic `overpass.places_near`) then **Google-verifies** each with `place_is_within_city`
+    (moved to the FastAPI-free `services/maps_geocode.py` so the sandbox can import it). `create_onboard_from_place`
+    is get-or-create for market/submarket/keyword (geometry is immutable — a repeat pick reuses rows, never
+    mints a drifted centre); `subarea=None` scans the whole-city centre. Routes: geo (`resolve-city`, `subareas`,
+    staff-gated) + onboard (POST/GET/cancel, admin-gated) in `routers/outreach.py`. Tests in
+    `tests/test_outreach_onboard.py`.
+  - **UI (`frontend/src/pages/Outreach.tsx`):** `OnboardCityCard` (city + "What a customer searches" +
+    Find city + sub-area / Whole-city select + Discover & scan), `OnboardOrdersCard` (expandable rows with
+    live `OnboardProgress` X/81 and an inline "View results ▾" → `CoverageTable`), `BusinessesCard`. The
+    two-market friction (the onboard mints its own market, distinct from the seeded LA-Plumbing one) is
+    resolved by viewing a scan's results **inline from its City onboards row** rather than a second market
+    selector (#611).
+  - **platform-api is now CONFIGURED** — the Outreacher project's `OUTREACH_SUPABASE_URL` /
+    `_SERVICE_ROLE_KEY` were set on the PLATFORM Railway service via cross-service **reference variables**
+    (`${{outreach.VAR}}`, no secret exposed), so `/outreach` answers instead of `503 outreach_not_configured`.
+  - **Merged:** #601 (`28f224c`, city+business-type → discover/filter/scan), #603 (`9cfeb12`, consumer
+    search + optional sub-area), #606 (`0229e34`, live collection progress + "Businesses found" view),
+    #611 (`2710729`, inline results). Migration applied live.
+- **Phase 3 slice 2 — the comparison renderers — is BUILT and MERGED (#589, `c3b1b50`).**
+  `heatmap_pair` (before/after side by side,
+  shared colour scale + extent, both panels dated) and `heatmap_delta` (per-point change) —
+  reporting §4.3 — added to `api/services/heatmap.py` on slice 1's deterministic footing. The
+  delta's inverted-rank trap is handled: `delta_band` treats "not found" as worse than any real
+  rank so `absent→ranking` is green and `ranking→absent` is red, but **absent-in-both renders
+  neutral, never red**; the legend is directional words only (no numbers), and the view is made
+  visually distinct from a state heatmap (tinted field + dashed frame). Guards
+  (`assert_delta_renderable`, `DeltaNotRenderable`): **span enforced now** (both `scanned_at` +
+  new `max_delta_span_days`=45 config); provider-boundary + drift-suppression are built seams
+  awaiting a 2nd provider and `prospect_delta` (I-091). Slice-1 `render_heatmap` bytes proven
+  **unchanged** across the shared-primitive extraction (reference hashes captured before the
+  refactor). Free `render-delta` CLI command (explicit `--snapshot` after + `--compare-snapshot`
+  before; writes `heatmap_delta` artifacts with `compare_snapshot_id`; refusals reported
+  per-prospect, never a blank picture). +33 unit tests (suite **351**). Renders nothing until two
+  scans of one submarket both roll up coverage. Interpretation choices in DECISIONS 2026-08-07.
+- **Phase 3 slice 1 — the heatmap renderer — is BUILT and MERGED (#580, `7f7dd3c`).** `api/services/heatmap.py` renders a **deterministic** SVG from `prospect_coverage.rank_vector` + the snapshot's stored geometry alone (no `grid_result`), with the §4.2 colour scale, dead points as hollow grey rings distinct from red "not found", the business's own diamond pin, a legend and a 1-mile scale bar. `report_artifact` provenance table added (migration `20260807130000`, **applied live** — RLS-on/zero-policy, unique on `content_hash` = the §6 cache contract). A free `render-heatmap` CLI command (not in `PAID_COMMANDS`) renders one prospect or a whole snapshot. 25 new unit tests, determinism pinned (identical inputs → identical hash; input reordering can't change it). **Phase 3 is sliced — renderer first, then call hook → outcome/touch + emit webhook → approval gate + PDF → signed URLs/R2 + client views; see DECISIONS 2026-08-07.** Two spec gaps logged not resolved: rank >20 folds to "found, far down" never red (I-089); `score_run_id` FK deferred to Phase 4 (I-090). **No `report_artifact` rows exist yet — the renderer has a live snapshot to draw from now, but nothing has called it.**
 - **Phase 1 (ingest + filter) is COMPLETE, verified against a real market, and MERGED to `main`** (#528, squashed as `67f235b`).
 - **Phase 1b (lead CRM) is COMPLETE, applied live, and MERGED to `main`** (#534, squashed as `452a726`).
 - **The platform-api `outreach` router, Phase 2 storage/partitioning and the pinned grid-geometry generator are MERGED** (#538, squashed as `a7acc05`). Migrations applied live.
@@ -17,7 +212,7 @@ Status as of 2026-08-05:
 - **The placeholder score is BUILT and MERGED (#561, `902be5f`)** — `v_prospect_placeholder_score` (migration `20260805150000`), a view over `prospect_coverage`. Deliberately NOT a `prospect_score` row: that table is the Phase 4 model's and `v_prospect_ranked` already reads it as a fitted score (ISSUES I-082). **I-078 is RESOLVED** — `scan_snapshot` now records its own grid centre, which had to land before the first snapshot rather than after.
 - **THE UI IS BUILT (2026-08-06, owner ruling — see the DECISIONS.md signed-order entry; resolves I-072).** Three slices, all merged to the working branch: the `scan_request` signed-order table + the outreach `tick` command (collect + drain at most one order; NOT env-gated — the order row is its confirmation; closes I-086 with a `cost_ledger` write in `submit_scan`); six platform-api routes (place/cancel/list/detail/keywords/placeholder-scores — place and cancel are ADMIN-gated, the click is the spend authorization); and the suite SPA page `frontend/src/pages/Outreach.tsx` at `/outreach` (queue-a-scan with an explicit confirm step, order list with live progress x/81, coverage results honouring I-076's empty-means-not-measured). **What the Railway service needs now is ONE one-time change:** `OUTREACH_COMMAND=collect` replaced by `OUTREACH_COMMAND=tick` and a frequent `cronSchedule` (`*/15 * * * *`) — after which the §11b variable dance is never needed for a scan again; the env spend gate remains for CLI/emergency use. I-088 (auto-deploy suspected re-enabled) still wants a dashboard answer, though under `tick` an extra deploy is a free heartbeat.
 - **The first scan is PREPARED, not run** (2026-08-06). Live Railway config read and recorded, the target picked (`Van Nuys` × `plumber`, with reasoning), the runbook written and the post-run read built as `queries/first-scan-verify.sql` — 14 checks, every statement executed against the live schema so it parses. **See §11b.** The three things it waits on are still the three in §11, and all three are the owner's. Five findings came out of reading the paths the run is about to execute: **I-083** (the first snapshot is the likeliest to be incomplete, which pins its partition forever), **I-084** (how `serp_result` attaches to a grid-shaped `scan_snapshot` — this blocks 2d's design), **I-085** (I-071 has half-fixed itself), **I-086** (**the geogrid spends money and writes no `cost_ledger` row, and the budget ceiling does not cover scans**) and **I-087** (`recovered_by_tag` exists only in a log line). None are fixed.
-- **NOTHING HAS BEEN SCANNED.** The scan layer now has a producer, a consumer, and no data: `scan_snapshot`, `scan_task`, `grid_result`, `prospect_coverage`, `grid_point_status` are all empty. `OUTREACH_COMMAND` is `filter` and both spend variables are empty. **What is missing is no longer code — it is a deploy, a confirm token, and a second cron schedule** (§11).
+- ~~**NOTHING HAS BEEN SCANNED.**~~ **SUPERSEDED 2026-08-08 — the first scan is done (top of file).** The scan layer now has a producer, a consumer, AND data. The `tick` command is live on a 15-minute cron (since 2026-08-07) and drains scan + onboard orders; the env spend gate remains for CLI/emergency use only. The `filter`-then-set-back procedure this bullet described no longer governs the normal path — the signed-order model does (§11 note below).
 
 **Two things changed on 2026-08-03 that will mislead you if you read the older sections first.** The spend gate above supersedes the "set it back to `filter` afterwards" procedure this file used to rely on (§7.2), and the Railway configuration recorded in §1 was found to be **stale in two ways that each cost money** — read `get-service-config`, not this file, for live values.
 
@@ -33,21 +228,31 @@ Status as of 2026-08-05:
 | Phase 1 PR | [#528](https://github.com/kssabraw/ar-tools/pull/528) | **merged** 2026-07-31 |
 | Phase 1b PR | [#534](https://github.com/kssabraw/ar-tools/pull/534) | **merged** 2026-07-31 as `452a726` |
 | Phase 2 foundations PR | [#538](https://github.com/kssabraw/ar-tools/pull/538) | **merged** as `a7acc05` |
-| Database | Supabase project **Outreacher**, ref `fkwhgvcggvsricuinuqy` | Phase 1 + 1b + Phase 2 storage applied; LA ingested and filtered |
+| Database | Supabase project **Outreacher**, ref `fkwhgvcggvsricuinuqy` | Phase 1 + 1b + Phase 2 storage + the report feature's tables (`ai_region`, `ai_scan_result`, `report_approval`, `report_pdf_storage` + the `outreach-reports` bucket) all applied; LA ingested, filtered, scanned |
 | Job runner | Railway service **outreach**, id `928c84bc-d7ca-416a-bd61-39e91cc64872` in project `ar-tools` (`2c718e53-73c8-4de8-bef8-7136f06b6ead`) | no cron schedule; auto-deploy-on-push DISABLED (2026-08-01); source **actually** on `main` since 2026-08-03 (the 2026-08-01 repoint did not stick — I-065). Runs only on a manual Deploy |
-| platform-api integration | `routers/outreach.py` + `services/outreach{,_db}.py` | **built** — 14 routes, read-only over the pipeline, read/write over the CRM |
-| Suite UI | not built | nothing in `frontend/`. NOT the next build, and **not a prerequisite for scanning** (§11a) — see ISSUES I-072, which asks for a decision rather than a default |
+| platform-api integration | `routers/outreach.py` + `services/outreach{,_db}.py` | **built** — read-only over the pipeline, read/write over the CRM, scan/onboard orders, and the report surface (justification / report / report-pdf). Nothing here spends; paid work stays on the Railway job |
+| Suite UI | `frontend/src/pages/Outreach.tsx` at `/outreach` | **built + merged** (#571 scan trigger, #574 CRM board, #601/#603/#606/#611 any-city onboard). Queue a scan by city + consumer search; live progress; coverage + businesses views; CRM board with one-click promote |
 | Grid geometry | `api/services/geometry.py` | **built**, version `v1`, **81 points** (I-025 resolved) |
-| Geogrid scan client | `api/services/maps_scan.py` (pure) + `scan_runner.py` (I/O) | **built** (#557) — `task_post` batching, `tasks_ready` collection, finalization. Never run |
-| Scan bookkeeping | `scan_task` table, migration `20260804120000` | **applied live**, empty |
-| Coverage rollup | `rollup_snapshot_coverage()` + `grid_point_status`, migration `20260805120000`; `api/services/coverage_rollup.py` | **applied live**, verified by `tests/coverage_rollup.sql` (18 checks). Never run against real data — there is none |
-| Placeholder score | `v_prospect_placeholder_score`, migration `20260805150000` | **applied live**. A view; `prospect_score` stays empty until Phase 4 (I-082) |
+| Geogrid scan client | `api/services/maps_scan.py` (pure) + `scan_runner.py` (I/O) | **built** (#557), **RUN LIVE 2026-08-08** — first scan collected 81/81 points |
+| Scan bookkeeping | `scan_task` table, migration `20260804120000` | **applied live**; 81 rows (all `collected`) from the first scan |
+| Coverage rollup | `rollup_snapshot_coverage()` + `grid_point_status`, migration `20260805120000`; `api/services/coverage_rollup.py` | **applied live**, verified by `tests/coverage_rollup.sql` (18 checks). **Run live 2026-08-08** — 1 snapshot rolled up, 119 coverage rows |
+| Any-city onboard | `onboard_request` table (`20260808120000`) + `api/services/onboard_queue.py` + platform-api `services/outreach_geo.py` | **built + merged + run live** — discover→filter→scan any Google city + consumer search; drained by `tick` |
+| Placeholder score | `v_prospect_placeholder_score`, migration `20260805150000` | **applied live**, **producing real rows** over the first scan's coverage. `prospect_score` stays empty until Phase 4 (I-082) |
+| Report artifacts | `report_artifact` table (`20260807130000`) + `api/services/heatmap.py` | **built + merged** (#580/#589). Renderer has a live snapshot to draw from; **no artifacts rendered yet** |
+| Per-prospect report | `services/outreach_justification.py` + `outreach_report.py` + `components/outreach/ProspectReport.tsx` | **built + merged** (#615–#619). Call hook ("Why call?") + internal/client report, 3 signals (maps/organic/AI), approval-gated client PDF + signed URL. Deterministic + fact-grounded |
+| Organic scan | `api/services/organic_scan.py` + `scan-organic` command | **built + merged** (#616). PAID + gated; one live SERP per snapshot → `serp_result`. **Never run** |
+| AI-visibility scan | `api/services/ai_visibility.py` + `scan-ai` + `ai_region`/`ai_scan_result` (`20260808140000`) | **built + merged** (#617). PAID + gated; ChatGPT + Google AIO per region×keyword; `ai_region` seeded with 11 LA names. **Never run** |
+| Client-report storage | `report_approval` (`20260808160000`) + `report_pdf_storage` (`20260808180000`) + private `outreach-reports` bucket | **applied live**, empty. Approval record (actor + content_hash + storage_path) + signed-URL delivery on Supabase Storage (reporting §5, not R2) |
+| Paid placement (Slice A) | `organic_scan.py` paid/LSA parse + `outreach_report.derive_paid_signal` | **built + merged** (#621). Presence from the SERP already on disk — no new paid call. Reads `not_scanned` until `scan-organic` runs |
+| Site tech signals (Slice B1) | `api/services/tech_signals.py` + `scan_tech.py` + `prospect_tech_signal` (`20260808200000`) | **built + merged** (#621), migration applied live. FREE (`scan-tech` is NOT in PAID_COMMANDS). **Auto-runs each `tick`** (`run_tech_backlog`, throttled to `tech_scan_min_interval_seconds`; DECISIONS 2026-08-14); manual `scan-tech` remains for a single seeded market |
+| §16a.1 pixel spike | `api/services/pixel_probe.py` + `probe-pixel-field` | **built** (#621). PAID + gated; decides whether the Outscraper pull supplies Meta pixel near-free (I-003). **Never run** |
+| Ad-spend magnitude (Slice B2) | — | **NOT built**, deliberately — gated behind the Labs yield spike (I-098) |
 | I-004 spike | `api/services/ai_granularity.py` + `probe-ai-granularity` | **built** (#556), **never run** — needs a Deploy + confirm token |
 | First-scan runbook + read | `HANDOFF.md` §11b · `queries/first-scan-verify.sql` | **prepared 2026-08-06**, never executed. The scan itself still waits on the three owner-side steps in §11 |
 
 **This is a SEPARATE Supabase project from AR-Internal-Tools.** Do not point outreach code at the suite's database, and do not put outreach migrations in `writer/supabase/migrations/`.
 
-Live row counts (2026-08-04, unchanged 2026-08-05): `prospect` 1,388 (**105 carrying `review_count_inferred_zero`**, §9) · `filter_result` 8,328 · `submarket` 14 · `keyword` 5 · `market` 1 · `cost_ledger` 33 · `storage_retention_log` 8 · `lead` 0 · `lead_stage` 7 · `suppression` 0 · `review_inferred_zero_audit` 0 · **`scan_snapshot` 0 · `scan_task` 0 · `grid_result` 0 · `prospect_coverage` 0 · `snapshot_rollup` 0 · `grid_point_status` 0** — the scan layer now has a producer and has still produced nothing. Those two facts are easy to conflate and §11 exists to keep them apart.
+Live row counts (2026-08-08, after the first scan): `prospect` **1,407** (105 carrying `review_count_inferred_zero`, §9) · `submarket` **15** · `keyword` **6** · `market` **2** (the seeded LA-Plumbing market + the any-city onboard's "Los Angeles, CA, USA") · **`scan_snapshot` 1 · `scan_task` 81 · `grid_result` 1,620 · `prospect_coverage` 119 · `snapshot_rollup` 1 · `grid_point_status` 81** · `onboard_request` 1 (done) · `scan_request` 0 · `report_artifact` 0 · **`ai_region` 11 (LA, seeded from I-073) · `ai_scan_result` 0 · `serp_result` 0 · `report_approval` 0 · `prospect_tech_signal` 0** (the report feature's tables — the report reads the LIVE maps coverage, but its organic/AI scans and client-PDF approvals have not been run yet). **The scan layer has a producer, a consumer, and — for the first time — data.**
 
 ### Railway service configuration
 
@@ -458,15 +663,18 @@ One submarket × one keyword exercises submission, collection, finalization, the
 
 **Why it was decided rather than left open.** No source will ever affirmatively report zero — that *is* the convention under test — so waiting for an explicit `0` means waiting forever. An inference held open indefinitely is not caution; it is a decision never made.
 
-> **⚠ CORRECTED 2026-08-25 — I-089.** The paragraph below assumed the geo-grid scan would return
-> `rating.votes_count` and audit the flag automatically. **It does not.** The scan parser
-> (`maps_scan.GridRow` / `parse_grid_result`) keeps only `place_id` and map `rank`, and
-> `grid_result` has no review column — so after four completed scans covering these listings,
-> `review_inferred_zero_audit` is still empty and all 105 flags stand un-audited. The audit
-> mechanism below is real and correct; nothing ever trips it, because no review count is written.
-> Closing the gap needs a deliberate choice (withdraw the expectation, capture votes_count at
-> collect time, or a dedicated review sweep) — see **ISSUES I-089**. The flag is still doing its
-> only load-bearing job (keeping the `review_count_min` filter honest); nothing downstream needs
+> **⚠ CORRECTED 2026-08-25 — this is I-045, already logged and still unbuilt.** The paragraph
+> below assumed the geo-grid scan would return `rating.votes_count` and audit the flag
+> automatically. **It does not yet.** The scan parser (`maps_scan.GridRow` / `parse_grid_result`)
+> keeps only `place_id` and map `rank`, and `grid_result` has no review column — so after four
+> completed live scans covering these listings, `review_inferred_zero_audit` is still empty and
+> all 105 flags stand un-audited. The audit mechanism below is real and correct; nothing ever
+> trips it, because the scan writer does not yet capture the count. **ISSUES I-045** already
+> records this as a binding obligation on the scan writer (capture `votes_count` from the item
+> that already carries `place_id`, update `prospect.review_count` where null, re-evaluate the
+> affected `filter_result` rows) — the four-scan verification just confirms it remains
+> unimplemented. The flag is still doing its only load-bearing job (keeping the `review_count_min`
+> filter honest); nothing downstream needs
 > the 105 audited until Phase 4 scoring reads review counts as a feature.
 
 **How it gets audited — this is the important part.** ~~The geo-grid scan will eventually return `rating.votes_count` for these same listings.~~ (See the correction above — it does not.) That is the first source that *could* contradict the flag, and the moment it does is the moment the contradiction is easiest to lose. So it is caught structurally, not by convention:
@@ -515,13 +723,19 @@ outreach/
 
 ---
 
-## 11. The scan layer has a producer and no data — the gap is not code
+## 11. The scan layer has run — this section is kept for the mechanics, no longer the status
+
+> **UPDATED 2026-08-08.** The three owner-side steps below have all been taken: `tick` is live on a
+> 15-minute cron, the collector schedule is that same tick, and the owner ran the first scan through
+> the any-city UI. This section is now a record of the mechanics (the deploy/confirm/cron model, the
+> collector-cadence trap) rather than a to-do list. The "nothing has been scanned" framing it opens
+> with is historical — see the top of the file for live state.
 
 This section exists because the previous version of this file said "Phase 2 scanning has not started" and that sentence covered two very different situations. It now means only one thing, and conflating them would send the next session to write code that already exists.
 
-**What is built:** the geogrid submission and collection path, end to end, with 42 tests (§8.0a). **What has happened:** nothing. Zero tasks posted, zero rows collected, zero snapshots.
+**What is built:** the geogrid submission and collection path, end to end, with 42 tests (§8.0a). **What has happened (as of 2026-08-08):** the first scan ran — 81/81 points collected, rolled up. The three owner-side steps below are done; they are kept as the mechanics of *how* a scan is triggered, which the any-city onboard path now automates through `tick`.
 
-Three things stand in between, and none of them are code:
+Three things stood in between, and none of them were code:
 
 1. **A Railway deploy with the scan variables set.** `OUTREACH_COMMAND=scan`, `OUTREACH_CONFIRM_SPEND=scan`, `OUTREACH_ARGS=--submarket '<name>'`. It must be a **fresh Deploy, not a redeploy** — a redeploy replays the previous deployment's config snapshot (§6.1, and the ~$0.11 it cost). Line one of the logs prints the resolved command and the confirm token, so what a run is about to do is visible before it does it.
 
@@ -674,31 +888,87 @@ or the email track before there is a single reply is dressing up a guess.
 
 In rough value order:
 
-1. **The audit / heatmap — Phase 3, and the one build worth doing BEFORE call data exists.**
-   Today a prospect's invisibility is a *number*. Phase 3 turns it into a *picture you hand
-   them*: render `prospect_coverage.rank_vector` + geometry into a heatmap, assemble the audit
-   PDF (WeasyPrint is already a dependency), and a phone-call hook generated from the prospect's
-   own data. START-HERE §4 Phase 3 calls this "the first phase that produces revenue" and says
-   ship the **phone track first** (zero enrichment cost). It also lands the `outcome` row per
-   emitted prospect — the learning substrate everything downstream fits against — and the emit
-   webhook that writes `lead` rows with `source='outbound_scan'`. `reporting-layer-spec.md` is
-   the authority; the renderer must be deterministic (identical inputs → identical
-   `content_hash`).
+1. **The audit / heatmap — Phase 3. Renderer, call hook, report, AND `outcome`/`touch`/emit are all
+   BUILT.**
+   The heatmap renderer (slices 1–2, #580/#589), the **call hook + the two-face competitive report +
+   the approval-gated client PDF with signed-URL delivery** (PRs #615–#619), and — new 2026-08-09 —
+   **`outcome` + `touch` + the emit webhook** (migration `20260809170000` applied live; PR #625,
+   merged) are done. A prospect's invisibility is a picture and a script, and emitting one now writes
+   the non-backfillable `outcome` row (and posts a webhook only if one is configured), while logging a
+   call writes a `touch` that rolls up into the outcome — the webhook-free capture path. Two of the
+   report's three signals (organic, AI) are built but never run. Also still open: the org/AI scan
+   cadence, the reporting §5 delivery is on Supabase Storage rather than R2 (DECISIONS 2026-08-08 —
+   reversible behind one seam), and the emit webhook is optional + unset (owner does not use
+   n8n/Encharge — the touch path is the real capture; wire a URL only if a sender is adopted).
+   `reporting-layer-spec.md` is the authority; every renderer is deterministic (identical inputs →
+   identical `content_hash`).
 
-2. **The real scoring model — Phase 4. Do NOT start before Phase 3 is producing audits.** Today
-   the list is ranked "most invisible first," a deliberate placeholder (`v_prospect_placeholder_score`,
-   ISSUES I-082). Phase 4 replaces it with the sabermetric scorecard in `docs/scoring-spec.md`:
-   ranked by *who is worth calling* (reply probability × value), all coefficients config-driven,
-   `score_factors` fully replayable, golden fixtures green in CI, per-channel offsets never pooled
-   (phone 579.3 / email 705.0). The coefficients are elicited estimates until real replies exist —
-   which is why this waits on Phase 3.
+2. **The real scoring model — Phase 4. STAGE 1 (priors) BUILT 2026-08-09.** Today the list is still
+   ranked "most invisible first" (`v_prospect_placeholder_score`, ISSUES I-082) because the reporting
+   reader is not yet repointed (I-108). Phase 4 replaces it with the sabermetric scorecard in
+   `docs/scoring-spec.md`: ranked by *who is worth calling* (reply probability × close probability),
+   all coefficients config-driven, `score_factors` fully replayable, golden fixtures green (local
+   pytest — no CI here), per-channel offsets never pooled (phone 579.3 / email 705.0). **Built:**
+   migration `20260809190000` (`score_run`/`prospect_score`/`conflict_check`/`v_prospect_ranked`,
+   applied live); the pure engine (`api/services/scorecard.py` + `scorecard_config.py` registry); the
+   feature extraction (`score_features.py`, unknown==absent / franchise-flags-not-excludes /
+   reachability-excluded-not-defaulted); the score job + `score` command (phone/pass-1, free); the
+   golden-fixture harness (`tests/test_scorecard.py`, all 7 independent fixtures green); the
+   **empty-safe Stage-2 recalibration** (`recalibrate.py` + `recalibrate` command — fits alpha+gamma
+   on real reply outcomes, per-channel, Thompson-guarded; 0 outcomes today = correct "insufficient").
+   Verified live: `v_prospect_ranked` pivots reply/close/value and ranks the franchise last, the
+   low-coverage non-franchise first. **The coefficients are ELICITED estimates until real replies
+   exist** — rank order is a strong prior, not a prediction, until ~100 prospects are contacted.
+   **Stages 2–3 (the recalibration FIT, then the hierarchical refit + Thompson sampler) wait on
+   accumulated `outcome` rows** — Stage 3 needs a posterior only ~80+ reply outcomes produce.
+   **Next Phase-4 steps:** run the free `scan-tech` + paid `scan-organic`/`scan-ai` (min scope) to
+   fill the buying-intent/organic/AI signal columns the extraction already reads; repoint the
+   platform-api reader to `v_prospect_ranked` (I-108); run `score --market-name "Los Angeles, CA,
+   USA"` for the full production ranking (I-105).
 
-3. **The other scan signals — the rest of Phase 2.** The Maps geo-grid is the built half. The
-   **organic-search** and **AI-answer** visibility layers are not (`serp_result` exists,
-   partitioned; the AI half is blocked on `ai_region` names — §7.4, I-073). These add more
-   "here's another place you're invisible" evidence to the audit. Note I-084: how `serp_result`
-   attaches to a grid-shaped `scan_snapshot` is undefined and must be settled before the organic
-   layer is designed.
+3. **The other scan signals — organic + AI are now BUILT (2026-08-08); paid placement is the gap.**
+   The Maps geo-grid, the **organic-search** layer (`scan-organic`) and the **AI-answer** layer
+   (`scan-ai` — ChatGPT + Google AIO) are all built — they are the report's three signals. What every
+   one of them measures is ORGANIC / earned visibility. The one channel none of them capture is
+   **paid placement** — see 3a, the owner-requested next build.
+
+3a. **PAID PLACEMENT — is the business (and its competitors) BUYING ads? — OWNER-REQUESTED NEXT BUILD
+    (2026-08-08).** The single highest-value lead signal in the model, and currently unmeasured.
+    `docs/scoring-spec.md` rates it above every organic signal: **LSA active +57, LSA present + absent
+    from the pack +50, Google Ads + no organic/pack +46, est. ad spend >$2k/mo +66** — because a
+    business *paying to solve the visibility problem while still losing organically* has proven budget
+    AND intent, which is the ideal cold-outreach target. Two slices, cheapest first:
+    - **Slice A — paid-placement PRESENCE — BUILT 2026-08-08 (draft PR).** The `scan-organic` capture
+      already stores the FULL DataForSEO SERP response in `serp_result.payload`; the parser
+      (`organic_scan.parse_organic_serp`) used to discard everything not `organic`/`ai_overview`. It now
+      also collects `type=="paid"` (**Google Ads**) and `type∈{local_services,…}` (**LSA / Google
+      Guaranteed**) from the SAME response — Google-Ads presence is derived from data already on disk
+      with NO new call. `summarize_serp` writes a `paid` block into `payload_summary` (advertisers by
+      domain, LSA by name, + `seen_item_types` for measure-don't-infer). The per-prospect facts
+      (`outreach_report.derive_paid_signal`, pure) feed a **fourth report signal ("Paid placement")** in
+      both report faces + a `paid` talking point in the call hook ("rivals are paying for this search and
+      you're not" — the §Buying-intent pitch). Persisted in `payload_summary` keyed to the snapshot (no
+      migration — mirrors the organic signal; the per-prospect flag is a read-time domain/name match).
+      **LSA item type is unconfirmed against this account's organic response (I-096)** — parsed
+      tolerantly + logged on first run; if LSA needs its own endpoint, a gated `scan-lsa` is the additive
+      follow-up. Stored + shown, NOT scored until the Phase-4 scorer exists.
+    - **Slice B — the MONEY SIGNAL. Designed + B1 BUILT 2026-08-08; B2 gated behind a yield spike.**
+      Full design: `docs/paid-placement-slice-b-design-v0_1.md`. Splits into two providers with opposite
+      cost profiles: **B1 tech/tag PRESENCE** (Meta pixel, `AW-` conversion tag, GTM container,
+      CallRail/Podium/Birdeye) from a **free** direct site fetch (PRD §B3) — **BUILT** (`scan-tech`, NOT
+      in PAID_COMMANDS; `services/tech_signals.py` pure + `scan_tech.py` producer + migration
+      `20260808200000_prospect_tech_signal` applied live; a failed fetch stores `unknown`, never
+      `absent`; GTM container-follow behind `tech_follow_gtm`, off until §16a.1 decides — I-097; now
+      auto-runs each `tick` via `run_tech_backlog`, DECISIONS 2026-08-14). **B2
+      ad-spend MAGNITUDE** (>$2k/mo bands) from DataForSEO Labs — **PAID and DEFERRED** behind a yield
+      spike (Labs paid data is likely sparse for small local advertisers — I-098; Labs endpoints added to
+      the free probe set). The **§16a.1 pixel spike** (`probe-pixel-field`, gated) is built to decide
+      whether the Outscraper pull supplies the Meta half near-free. Surfaced: a new **"paying and losing"**
+      call-hook element (proven budget + a visible problem — the strongest pitch) + the prospect's own ad
+      tech in the report, both folded ADDITIVELY into the paid signal (Slice A semantics unchanged).
+    Both are Phase-4 scoring inputs; until the scorer exists they are stored + shown, not scored. Same
+    invariants as the three signals it joins: deterministic + fact-grounded (never assert an ad that is
+    not in the response), paid runs gated, tests, DECISIONS/ISSUES entries.
 
 4. **Email outreach + enrichment — Phase 5.** The whole design is phone-first; Phase 5 opens
    email as a second channel (find addresses, ESP integration, suppression sync). Its long pole
@@ -714,10 +984,120 @@ In rough value order:
 **Also outstanding, small and independent of the above:** I-070 (enforce `scan_snapshot`
 append-only — a trigger + a test; cheap, do it after the first scan proves the finalize UPDATE),
 I-086/I-087 (the geogrid cost_ledger row now EXISTS via the tick build, but the budget-ceiling
-check on the scan path and a durable `recovered_by_tag` are still worth revisiting), and the
-`ai_region` naming (§7.4, a manual afternoon that unblocks the AI half of item 3).
+check on the scan path and a durable `recovered_by_tag` are still worth revisiting). (The
+`ai_region` naming is DONE — 11 LA regions seeded from I-073; and the two scan-signal builds it used
+to block, organic + AI, are merged.)
+
+**3a — paid placement — is DONE and MERGED (PR #621, `b4ca6da`).** Slice A (presence) + Slice B1
+(site tech) shipped; Slice B2 (spend magnitude) is deliberately deferred behind the Labs yield spike
+(I-098). See the top-of-file bullet, and read I-099 before touching that code.
+
+---
+
+## `outcome` + `touch` + THE EMIT WEBHOOK — BUILT + MERGED (2026-08-09, PR #625 → `8141629`)
+
+**This section's build is DONE and MERGED to `main`.** Migration `20260809170000_outcome_touch.sql`
+(applied live to Outreacher): `touch` (authoritative for "a contact attempt happened", anchored on
+lead, bigint identity), `outcome` (adopted verbatim from `PHASE3-outcome-constraint.md` —
+outbound-only made structural via the composite FK), and `lead_activity.touch_id`'s foreign key (0
+orphans verified). Verified live by `tests/outcome_touch_constraints.sql` (12 checks, all correct).
+platform-api gained `services/outreach_emit.py` (pure) +
+`emit_prospect`/`record_touch`/`get_outcome`/`list_touches` in `services/outreach.py` + four routes;
+the SPA gained an Emit button (CoverageTable) and a Log-contact section + outcome summary
+(LeadDrawer). Tests: platform-api outreach suite 75 passing; outreach api 411 passing (unchanged).
+`selection_reason` is recorded on 100% of contacts (allowlist `{thompson, random_control, manual}`;
+ISSUES I-102).
+
+**What the emit does:** writes the lead (idempotent) + the `outcome` row (the non-backfillable
+substrate) and — only if a webhook is configured — posts an audit-ready QUEUE to it. It never
+triggers asset generation (the approval gate stays the only path to an asset), and it does not spend
+(a webhook POST is not a paid provider call).
+
+**The emit webhook is a GENERIC, OPTIONAL integration — owner does NOT use n8n/Encharge** (owner
+clarification 2026-08-09; DECISIONS same date). Those two are only the PRD's *examples* of a
+downstream sender; nothing depends on them. `outreach_emit_webhook_url` POSTs plain JSON to any HTTP
+receiver (Zapier / Make / a custom endpoint) — or stays empty, which it is on PLATFORM. **The primary
+capture path is webhook-free:** logging a call (the `touch` path) creates/rolls up the `outcome`, so
+the substrate fills from call one for a manual phone workflow with no external sender at all. Wire a
+URL only if/when the team adopts an automated sender; until then emit records the outcome and reports
+`delivered:false, reason:webhook_not_configured`, which is the intended, harmless state.
+
+**The teed-up 2026-08-06 question is RESOLVED** (DECISIONS 2026-08-09): an outcome is created by
+whichever of emit / first-touch comes first (both idempotent); there is NO bulk backfill of
+pre-existing hand-picked leads — a hand-picked lead becomes modellable when it is CONTACTED (a
+touch), not when it is promoted, because recording an outcome for a prospect nobody called would
+inject a fabricated contact event into the substrate.
+
+**Deferred (ISSUES I-101):** the PRD §183/§198 emit cadence + evidence-age gates belong to the
+Phase-4 selector; v1 emit requires only a rolled-up scan (bootstrap-gated).
+
+---
+
+## (historical) THE NEXT BUILD IS `outcome` + `touch` + THE EMIT WEBHOOK — and it is the only item with a deadline
+
+**Superseded by the section above — this build is done.** Kept for the reasoning that drove it.
+
+Everything else on this list can wait without cost. This one cannot, and the reason is not effort:
+
+**`outcome` cannot be backfilled.** `scoring-spec.md` §8 is explicit — *"`outcome` MUST be written
+from campaign one even though nothing reads it for months. Retrofitting it means the first hundred
+data points are lost permanently."* Every call placed before the table exists is a prospect who was
+contacted, may have replied, and whose result the Phase-4 model will never be able to fit against.
+
+**This contradicts the standing recommendation, deliberately surfaced rather than left to be
+discovered.** §12 has said for several sessions that the highest-value next thing is *making the
+first calls* off the invisible businesses the first scan surfaced. Both statements are in this file
+and they pull against each other: calling now generates revenue and destroys modelling data at the
+same time. Somebody has to decide which, and the cheap resolution is to build `outcome` FIRST — the
+DDL is already worked out in `PHASE3-outcome-constraint.md`, verified live against the real key with
+a throwaway probe table, and it is a small build.
+
+What it is:
+- **`outcome`** — the modelling substrate, OUTBOUND-ONLY, keyed on `lead (prospect_id, source)` so
+  the rule is structural rather than a trigger convention (a promoted INBOUND lead also carries a
+  `prospect_id`, which is why keying on prospect alone cannot express it). Full DDL in
+  `PHASE3-outcome-constraint.md`.
+- **`touch`** — authoritative for "a contact attempt happened". `lead_activity` carries commentary
+  only and must not be used for this (CLAUDE.md invariant).
+- **the emit webhook** — writes `lead` rows with `source='outbound_scan'` and an `outcome` per
+  emitted prospect (PRD §C Emit: an audit-ready QUEUE, never generated assets; asset generation
+  stays behind the approval gate that already exists).
+- **`selection_reason`** on every contact from day one (`thompson` | `random_control`,
+  scoring-spec §7) — same closing-window argument as `outcome` itself.
+
+One decision is already teed up and NOT yet made (DECISIONS 2026-08-06, hand-picked leads): whether
+the emit path also backfills outcomes for the hand-picked `outbound_scan` leads that already exist,
+or the model simply does not see them until they are re-emitted. Decide it when the emit machinery
+gives it a concrete shape.
+
+---
+
+**FOUR producers are built and have NEVER RUN** — `scan-organic` (PAID), `scan-ai` (PAID),
+`probe-pixel-field` (PAID), `scan-tech` (free). §8.1 2c argued once that each additional unrun layer
+raises the chance the first run surfaces several faults at once, interacting, in a batch that has
+been paid for. Two more layers have been added since. **Prefer running a built layer over building a
+fifth**, and note the report's organic / AI / paid sections all read `not_scanned` until those runs
+happen.
 
 **Not on the list, because it is done:** ingest + filter (Phase 1), the lead CRM board and
-one-click promote (Phase 1b, #574), the scan producer/consumer/rollup/placeholder-score, and the
-UI that triggers scans (#571). The scan engine (`tick`) is live on a 15-minute cron as of
-2026-08-07 00:13 UTC and verified idle-healthy.
+one-click promote (Phase 1b, #574), the scan producer/consumer/rollup/placeholder-score, the
+UI that triggers scans (#571), the **any-city onboard** path (#601/#603/#606/#611 — discover→filter→scan
+any Google city by consumer search), the **Phase 3 heatmap renderers** (#580/#589), and — as of
+2026-08-08 — **the first live scan itself** (emergency plumber × whole-city LA: 122 discovered / 83
+survived / 81 collected / rolled up / 119 coverage rows), the **per-prospect report** (call hook + 3
+signals + approval-gated client PDF, #615–#619), and the **paid-placement 4th signal** (#621). The
+scan engine (`tick`) is live on a 15-minute cron since 2026-08-07 00:13 UTC and has now drained a
+real onboard order end-to-end.
+
+**The standing recommendation is now CONDITIONAL, and this supersedes the older phrasing.** It used
+to read "the highest-value next thing is not a build — it is making the first calls, then Phase 3's
+audit/heatmap PDF". Two things changed: the audit/heatmap PDF is **built** (#580/#589/#615–#619), and
+`outcome` still does not exist.
+
+So the sharpened version: **making the first calls is still the highest-value ACT — but every call
+placed before `outcome` exists is a data point the model can never recover.** The two are not in
+conflict for long, because `outcome` is a small build with its DDL already written. The cheap
+sequence is: build `outcome` + `touch` + emit (above) → then call, with results landing in the
+substrate from call one. Calling first is defensible; doing it *without noticing the trade* is not.
+If you choose to call first, write down that the first N outcomes are lost, so the Phase-4 refit is
+not later fitted against a set nobody knows is truncated.

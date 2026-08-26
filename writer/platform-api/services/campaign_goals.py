@@ -26,6 +26,7 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from db.supabase_client import get_supabase
+from services import maps_reporting
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +42,18 @@ GOAL_TYPES = (
     "custom",
 )
 
-# On-pace grace: progress may trail elapsed time by this fraction before the
-# goal reads "behind" (movement is lumpy — links index in waves).
+# On-pace tolerance: a goal reads "on track" when, projecting its current pace to
+# the due date, it would reach within this fraction of the target (i.e. projected
+# progress >= 1 - _PACE_GRACE). Movement is lumpy — links index in waves — so a
+# little slack is allowed. A *projection* (progress ÷ elapsed) is used rather than
+# a flat additive tolerance because the additive form was trivially cleared early
+# in a long campaign: at 19% elapsed, "progress >= elapsed - 0.15" passes at ~4%
+# progress, so a barely-moved, long-dated goal read "on track" (a client saw an
+# almost-empty bar labelled green). A ratio can't be gamed by the calendar.
 _PACE_GRACE = 0.15
+# Below this elapsed fraction the projection is too noisy to judge fairly (a goal
+# a few days into a 6-month window), so give it the benefit of the doubt.
+_PACE_MIN_ELAPSED = 0.1
 _CLICKS_WINDOW_DAYS = 30
 
 
@@ -100,12 +110,18 @@ def evaluate_goal(goal: dict, current_value: Optional[float], today: date) -> di
         if today > due:
             return {"status": "overdue", "progress_pct": progress_pct, "elapsed_pct": 100.0}
         elapsed_pct = None
-        if start and due > start:
-            elapsed = (today - start).days / (due - start).days
-            elapsed_pct = round(min(1.0, max(0.0, elapsed)) * 100.0, 1)
-            if progress is not None:
-                status = "on_track" if progress >= (elapsed - _PACE_GRACE) else "behind"
-                return {"status": status, "progress_pct": progress_pct, "elapsed_pct": elapsed_pct}
+        if start and due > start and progress is not None:
+            elapsed = min(1.0, max(0.0, (today - start).days / (due - start).days))
+            elapsed_pct = round(elapsed * 100.0, 1)
+            # Project the current pace to the due date: on track only if continuing
+            # at this rate would land within _PACE_GRACE of the target. Too early to
+            # judge the projection fairly → benefit of the doubt.
+            if elapsed < _PACE_MIN_ELAPSED:
+                status = "on_track"
+            else:
+                projected = progress / elapsed
+                status = "on_track" if projected >= (1.0 - _PACE_GRACE) else "behind"
+            return {"status": status, "progress_pct": progress_pct, "elapsed_pct": elapsed_pct}
         # No usable pace axis → judge by movement alone.
         return {
             "status": "on_track" if (progress or 0) > 0 else "behind",
@@ -222,14 +238,33 @@ def _measure_gsc_sum(supabase, client_id: str, field: str, today: date) -> Optio
     if not prop:
         return None
     cutoff = date.fromordinal(today.toordinal() - _CLICKS_WINDOW_DAYS).isoformat()
-    rows = (
-        supabase.table("gsc_query_daily")
-        .select(field)
-        .eq("property_id", prop[0]["id"]).gte("date", cutoff).execute()
-    ).data or []
+    # Aggregate per-day in Postgres (one row per day) via the RPC. A plain
+    # gsc_query_daily select is one row per query×day — thousands per 30 days —
+    # and PostgREST caps a response at 1000 rows, so summing client-side silently
+    # undercounts a busy property by orders of magnitude (a real 257-clicks/mo
+    # property measured as ~10, so a met goal read "in progress").
+    try:
+        rows = supabase.rpc(
+            "gsc_property_daily_traffic",
+            {"p_property_id": prop[0]["id"], "p_from": cutoff},
+        ).execute().data or []
+    except Exception as exc:
+        logger.warning(
+            "campaign_goals.gsc_sum_failed",
+            extra={"client_id": client_id, "field": field, "error": str(exc)},
+        )
+        return None
     if not rows:
         return None
-    return float(sum(r.get(field) or 0 for r in rows))
+    # The RPC sums from p_from with no upper bound; bound it to `today` so a
+    # historical measurement (e.g. the value as of the start of a report period,
+    # used for "since last period" movement) reflects only data up to that date —
+    # not everything since. For a current measurement this is a no-op.
+    today_iso = today.isoformat()
+    windowed = [r for r in rows if str(r.get("date")) <= today_iso]
+    if not windowed:
+        return None
+    return float(sum(r.get(field) or 0 for r in windowed))
 
 
 def _measure_ai_visibility(supabase, client_id: str, goal: dict, today: date) -> Optional[float]:
@@ -243,9 +278,11 @@ def _measure_ai_visibility(supabase, client_id: str, goal: dict, today: date) ->
 
 
 def _measure_maps_pack(supabase, client_id: str, goal: dict, today: date) -> Optional[float]:
+    # Goal progress is reporting: measure against the scheduled series, not
+    # whatever one-off happens to be the newest scan.
     scans = (
-        supabase.table("maps_scans")
-        .select("id").eq("client_id", client_id).eq("status", "complete")
+        maps_reporting.only_reporting(supabase.table("maps_scans").select("id"))
+        .eq("client_id", client_id).eq("status", "complete")
         .order("completed_at", desc=True).limit(1).execute()
     ).data
     if not scans:

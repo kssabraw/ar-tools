@@ -71,7 +71,9 @@ export function SettingsTab({ website, perms }: { website: Website; perms: Perms
 
   const save = useMutation({
     mutationFn: () =>
-      api.put<{ committed: boolean; deploy_id: string | null; facts: Facts }>(
+      // `facts` is absent on the no-op response the server sends when nothing
+      // was actually set, hence optional.
+      api.put<{ committed: boolean; deploy_id: string | null; facts?: Facts }>(
         `/websites/${website.id}/facts`,
         {
           business: {
@@ -84,8 +86,12 @@ export function SettingsTab({ website, perms }: { website: Website; perms: Perms
           analytics: { ga4: draft.ga4 ?? '', callrailSnippet: draft.callrailSnippet ?? '' },
         },
       ),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['website-facts', website.id] })
+    onSuccess: (res) => {
+      // The PUT returns the post-save view, so seed the cache with it rather
+      // than invalidating and making the server rebuild the same answer.
+      if (res?.facts) qc.setQueryData(['website-facts', website.id], res.facts)
+      else qc.invalidateQueries({ queryKey: ['website-facts', website.id] })
+      // The deploy list did change, so that one is a real refetch.
       qc.invalidateQueries({ queryKey: ['website', website.id] })
     },
   })

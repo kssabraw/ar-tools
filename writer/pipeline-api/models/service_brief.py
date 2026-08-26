@@ -160,6 +160,10 @@ class ResearchBundle(BaseModel):
     competitor_skeletons: list[CompetitorSkeleton] = Field(default_factory=list)
     gaps: list[Gap] = Field(default_factory=list)
     entity_coverage: list[EntityCoverageItem] = Field(default_factory=list)
+    # Distinct entities the MOST AGGRESSIVE competitor covers (trimmed max of
+    # per-competitor distinct-entity counts). The writer enforces coverage of
+    # `entity_coverage` up to this benchmark (Option B).
+    entity_benchmark_target: int = 0
     questions: list[MinedQuestion] = Field(default_factory=list)
     aio_presence: AioPresence = Field(default_factory=AioPresence)
     degraded_notes: list[str] = Field(default_factory=list)

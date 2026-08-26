@@ -98,3 +98,127 @@ def test_invoke_streams_and_extracts_tool_input():
 
     # 2. The accumulated final message parses the tool input as before.
     assert out == {"clusters": ["a", "b"]}
+
+
+# ── second-Anthropic-account failover ────────────────────────────────────────
+import types  # noqa: E402
+
+import anthropic  # noqa: E402
+
+from fanout.llm.anthropic_client import AnthropicError  # noqa: E402
+
+
+def _fake_final_message(tool_name: str, tool_input: dict):
+    block = types.SimpleNamespace(type="tool_use", name=tool_name, input=tool_input)
+    usage = types.SimpleNamespace(input_tokens=10, output_tokens=5)
+    return types.SimpleNamespace(content=[block], usage=usage)
+
+
+class _FakeStreamCM:
+    def __init__(self, exc=None, message=None):
+        self._exc = exc
+        self._message = message
+
+    def __enter__(self):
+        if self._exc is not None:
+            raise self._exc
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def get_final_message(self):
+        return self._message
+
+
+class _FakeMessages:
+    def __init__(self, *, exc=None, message=None):
+        self._exc = exc
+        self._message = message
+        self.calls = 0
+
+    def stream(self, **kwargs):
+        self.calls += 1
+        return _FakeStreamCM(self._exc, self._message)
+
+
+class _FakeClient:
+    def __init__(self, messages):
+        self.messages = messages
+
+
+def _rate_limit():
+    return anthropic.RateLimitError.__new__(anthropic.RateLimitError)
+
+
+def _status(code):
+    exc = anthropic.APIStatusError.__new__(anthropic.APIStatusError)
+    exc.status_code = code
+    return exc
+
+
+def _make_llm():
+    # max_transport_attempts=1 → one attempt per account, then failover/raise.
+    return AnthropicLLM(api_key="k", model="claude-opus-4-7", max_transport_attempts=1)
+
+
+def test_invoke_fails_over_to_secondary_account():
+    llm = _make_llm()
+    primary = _FakeMessages(exc=_rate_limit())  # primary account saturated
+    secondary = _FakeMessages(message=_fake_final_message("emit_plan", {"x": 1}))
+    llm._client = _FakeClient(primary)
+    llm._secondary_client = _FakeClient(secondary)
+
+    out = llm.call_tool(
+        system="s", user="u", tool_name="emit_plan",
+        tool_description="d", input_schema={"type": "object"}, purpose="test",
+    )
+    assert out == {"x": 1}
+    assert primary.calls == 1     # primary tried once
+    assert secondary.calls == 1   # then the second account served it
+
+
+def test_invoke_terminal_error_does_not_fail_over():
+    llm = _make_llm()
+    primary = _FakeMessages(exc=_status(400))  # bad request — not retryable
+    secondary = _FakeMessages(message=_fake_final_message("emit_plan", {"x": 1}))
+    llm._client = _FakeClient(primary)
+    llm._secondary_client = _FakeClient(secondary)
+
+    with pytest.raises(AnthropicError):
+        llm.call_tool(
+            system="s", user="u", tool_name="emit_plan",
+            tool_description="d", input_schema={"type": "object"}, purpose="test",
+        )
+    assert primary.calls == 1
+    assert secondary.calls == 0  # no failover on a non-transient error
+
+
+def test_invoke_both_accounts_exhausted_raises():
+    llm = _make_llm()
+    primary = _FakeMessages(exc=_rate_limit())
+    secondary = _FakeMessages(exc=_rate_limit())
+    llm._client = _FakeClient(primary)
+    llm._secondary_client = _FakeClient(secondary)
+
+    with pytest.raises(AnthropicError):
+        llm.call_tool(
+            system="s", user="u", tool_name="emit_plan",
+            tool_description="d", input_schema={"type": "object"}, purpose="test",
+        )
+    assert primary.calls == 1
+    assert secondary.calls == 1  # both accounts fully exhausted
+
+
+def test_invoke_no_secondary_still_raises_on_primary():
+    llm = _make_llm()
+    primary = _FakeMessages(exc=_rate_limit())
+    llm._client = _FakeClient(primary)
+    llm._secondary_client = None  # no failover configured
+
+    with pytest.raises(AnthropicError):
+        llm.call_tool(
+            system="s", user="u", tool_name="emit_plan",
+            tool_description="d", input_schema={"type": "object"}, purpose="test",
+        )
+    assert primary.calls == 1

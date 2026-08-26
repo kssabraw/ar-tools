@@ -1,8 +1,9 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Download, Radar, RefreshCw, Search, TrendingUp } from 'lucide-react'
 import { api } from '../lib/api'
+import { useResumableJob } from '../lib/useResumableJob'
 import type { Client } from '../lib/types'
 
 // Domain Intelligence (the "SEMrush clone") — Phase 1: Domain Overview +
@@ -208,12 +209,13 @@ export function DomainIntel() {
   const [input, setInput] = useState('')
   const [role, setRole] = useState('competitor')
   const [selected, setSelected] = useState<string | null>(null)
-  const [job, setJob] = useState<string | null>(null)
   const [tab, setTab] = useState<'overview' | 'keywords' | 'pages'>('overview')
   const [expandedPages, setExpandedPages] = useState<Set<string>>(new Set())
-  const [gapJob, setGapJob] = useState<string | null>(null)
   const [discovered, setDiscovered] = useState<DiscoverResponse | null>(null)
   const [added, setAdded] = useState<Record<string, boolean>>({})
+  const [overviewError, setOverviewError] = useState<string | null>(null)
+  const [gapError, setGapError] = useState<string | null>(null)
+  const [gapNote, setGapNote] = useState<string | null>(null)
 
   // Prefill with the client's own domain, once (adjust-during-render — the
   // client record arrives async, so useState initializers can't see it).
@@ -233,30 +235,25 @@ export function DomainIntel() {
     enabled: Boolean(selected),
   })
 
-  const analyze = useMutation({
-    mutationFn: (domain: string) =>
-      api.post<{ job_id: string; target_domain: string }>(`${base}/overview`, {
-        target_domain: domain, role,
-      }),
-    onSuccess: (r) => { setJob(r.job_id); setSelected(r.target_domain) },
-  })
-
-  const { data: jobStatus } = useQuery<{ status: string; error?: string }>({
-    queryKey: ['domain-intel-job', scope, job],
-    queryFn: () => api.get(`${base}/jobs/${job}`),
-    enabled: Boolean(job),
-    refetchInterval: (q) => (['complete', 'failed'].includes(q.state.data?.status ?? '') ? false : 2500),
-  })
-  // On completion, refetch the views. The job id is deliberately NOT cleared on
-  // a terminal status: clearing it changes the status-query key, which blanks
-  // `jobStatus` and made failure banners vanish within one render. Polling
-  // already stops via refetchInterval; a new run replaces the id.
-  useEffect(() => {
-    if (jobStatus?.status === 'complete') {
+  // Domain Overview runs as a background async_jobs job. The in-flight job id is
+  // persisted (keyed by scope), so navigating away and back reconnects to it and
+  // refreshes the snapshot when it lands — instead of losing the run in useState.
+  const overviewJob = useResumableJob<unknown, string>({
+    storageKey: `domain-intel:overview:${scope}`,
+    poll: async (jobId) => {
+      const st = await api.get<{ status: string; error?: string }>(`${base}/jobs/${jobId}`)
+      return { status: st.status, error: st.error }
+    },
+    onComplete: (_result, domain, resumed) => {
+      // On a reconnect the local `selected` is fresh — restore it from meta so the
+      // overview view re-opens the domain the job was analyzing.
+      if (resumed && domain) setSelected(domain)
       queryClient.invalidateQueries({ queryKey: ['domain-intel', scope] })
-      queryClient.invalidateQueries({ queryKey: ['domain-intel-overview', scope, selected] })
-    }
-  }, [jobStatus?.status]) // eslint-disable-line react-hooks/exhaustive-deps
+      queryClient.invalidateQueries({ queryKey: ['domain-intel-overview', scope, resumed ? domain : selected] })
+    },
+    onError: (err) => setOverviewError(err === 'job_failed' ? '' : err),
+    intervalMs: 2500,
+  })
 
   // --- Keyword Gap (client vs registered competitors) ---
   const { data: gapData } = useQuery<KeywordGapResponse>({
@@ -264,22 +261,29 @@ export function DomainIntel() {
     queryFn: () => api.get<KeywordGapResponse>(`/clients/${id}/domain-intel/keyword-gap`),
     enabled: Boolean(id && mode === 'gap'),
   })
-  const runGap = useMutation({
-    mutationFn: () => api.post<{ job_id: string }>(`/clients/${id}/domain-intel/keyword-gap`, {}),
-    onSuccess: (r) => setGapJob(r.job_id),
-  })
-  const { data: gapJobStatus } = useQuery<{ status: string; error?: string; result?: { note?: string } }>({
-    queryKey: ['domain-intel-gap-job', id, gapJob],
-    queryFn: () => api.get(`/clients/${id}/domain-intel/jobs/${gapJob}`),
-    enabled: Boolean(gapJob),
-    refetchInterval: (q) => (['complete', 'failed'].includes(q.state.data?.status ?? '') ? false : 2500),
-  })
-  useEffect(() => {
-    if (gapJobStatus?.status === 'complete') {
+  const gapJob = useResumableJob<{ note?: string } | null, undefined>({
+    storageKey: `domain-intel:gap:${id ?? 'global'}`,
+    poll: async (jobId) => {
+      const st = await api.get<{ status: string; error?: string; result?: { note?: string } }>(
+        `/clients/${id}/domain-intel/jobs/${jobId}`)
+      return { status: st.status, result: st.result ?? null, error: st.error }
+    },
+    onComplete: (result) => {
+      setGapNote(result?.note ?? null)
       queryClient.invalidateQueries({ queryKey: ['domain-intel-gap', id] })
-    }
-  }, [gapJobStatus?.status]) // eslint-disable-line react-hooks/exhaustive-deps
-  const gapRunning = Boolean(gapJob) && !['complete', 'failed'].includes(gapJobStatus?.status ?? '')
+    },
+    onError: (err) => setGapError(err === 'job_failed' ? '' : err),
+    intervalMs: 2500,
+  })
+  const runGap = () => {
+    setGapError(null)
+    setGapNote(null)
+    void gapJob.start(async () => {
+      const r = await api.post<{ job_id: string }>(`/clients/${id}/domain-intel/keyword-gap`, {})
+      return r.job_id
+    }, undefined)
+  }
+  const gapRunning = gapJob.running
   const gaps = gapData?.gaps ?? []
 
   const exportGapCsv = () => {
@@ -307,7 +311,7 @@ export function DomainIntel() {
     onSuccess: (_r, domain) => setAdded((m) => ({ ...m, [domain]: true })),
   })
 
-  const running = Boolean(job) && !['complete', 'failed'].includes(jobStatus?.status ?? '')
+  const running = overviewJob.running
   const snap = overview?.snapshot
   const keywords = useMemo(() => overview?.ranked_keywords ?? [], [overview])
   const budget = history?.budget_remaining ?? 0
@@ -318,7 +322,15 @@ export function DomainIntel() {
 
   const submit = () => {
     const v = input.trim()
-    if (v) analyze.mutate(v)
+    if (!v) return
+    setOverviewError(null)
+    void overviewJob.start(async () => {
+      const r = await api.post<{ job_id: string; target_domain: string }>(`${base}/overview`, {
+        target_domain: v, role,
+      })
+      setSelected(r.target_domain)
+      return r.job_id
+    }, v)
   }
 
   const exportCsv = () => {
@@ -400,14 +412,14 @@ export function DomainIntel() {
             </p>
             <div style={{ display: 'flex', gap: 8 }}>
               <button style={ghostBtn} onClick={exportGapCsv} disabled={!gaps.length}><Download size={14} /> Export CSV</button>
-              <button style={primaryBtn} disabled={gapRunning || runGap.isPending || budget <= 0} onClick={() => runGap.mutate()}>
+              <button style={primaryBtn} disabled={gapRunning || budget <= 0} onClick={runGap}>
                 <RefreshCw size={14} style={gapRunning ? { animation: 'spin 1s linear infinite' } : undefined} />
                 {gapRunning ? 'Analyzing…' : 'Run gap analysis'}
               </button>
             </div>
           </div>
-          {gapJobStatus?.status === 'failed' && <div style={errBox}>Gap analysis failed{gapJobStatus.error ? `: ${gapJobStatus.error}` : ''}.</div>}
-          {gapJobStatus?.result?.note === 'no_competitors' && <div style={errBox}>No competitors registered — add some in Competitive Intel, then re-run.</div>}
+          {gapError !== null && <div style={errBox}>Gap analysis failed{gapError ? `: ${gapError}` : ''}.</div>}
+          {gapNote === 'no_competitors' && <div style={errBox}>No competitors registered — add some in Competitive Intel, then re-run.</div>}
           {!gaps.length && !gapRunning ? (
             <div style={emptyBox}>No keyword gaps yet — click Run gap analysis.</div>
           ) : (
@@ -505,16 +517,13 @@ export function DomainIntel() {
           <option value="prospect">Prospect</option>
           <option value="client">Own site</option>
         </select>
-        <button style={primaryBtn} disabled={running || analyze.isPending || budget <= 0} onClick={submit}>
+        <button style={primaryBtn} disabled={running || budget <= 0} onClick={submit}>
           <RefreshCw size={14} style={running ? { animation: 'spin 1s linear infinite' } : undefined} />
           {running ? 'Analyzing…' : 'Analyze'}
         </button>
       </div>
-      {analyze.isError && (
-        <div style={errBox}>{(analyze.error as Error)?.message ?? 'Failed to start analysis.'}</div>
-      )}
-      {jobStatus?.status === 'failed' && (
-        <div style={errBox}>Analysis failed{jobStatus.error ? `: ${jobStatus.error}` : ''}.</div>
+      {overviewError !== null && (
+        <div style={errBox}>Analysis failed{overviewError ? `: ${overviewError}` : ''}.</div>
       )}
 
       {/* History chips — snapshots are newest-first and retained per domain,

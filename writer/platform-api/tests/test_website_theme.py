@@ -129,6 +129,15 @@ class TestValidation:
         with pytest.raises(wt.ThemeError, match="token_not_measured:font_body"):
             wt.validate_roles(bad, pre)
 
+    def test_a_design_with_no_measurable_font_fails_rather_than_letting_one_through(self):
+        # Fonts used to be checked only `if families` — so the single case where
+        # the model has nothing to copy from was the one case it could invent
+        # freely. Colours never had that escape; now neither do fonts.
+        bare = pc.Precompiled(tokens=pc.TokenCensus(colors=[("#000", 1)]))
+        assigned = {**GOOD, "colors": {r: "#000" for r in wt.COLOR_ROLES}}
+        with pytest.raises(wt.ThemeError, match="no_fonts_measured"):
+            wt.validate_roles(assigned, bare)
+
     def test_an_empty_response_fails_rather_than_producing_a_blank_theme(self, pre):
         with pytest.raises(wt.ThemeError, match="token_role_missing"):
             wt.validate_roles({}, pre)
@@ -253,7 +262,8 @@ class TestCompileWiring:
         monkeypatch.setattr(wt.fonts, "fetch_font_bundle", fake_fonts)
 
         files, record, _pre = await wt.compile_design(design.encode("utf-8"))
-        assert set(files) == {"tokens.css", "fonts/space-grotesk-400-latin.woff2"}
+        # layouts.json is always emitted alongside tokens.css (the layout manifest).
+        assert set(files) == {"tokens.css", "layouts.json", "fonts/space-grotesk-400-latin.woff2"}
         # The @font-face block must precede :root, or the family it declares is
         # named by a variable nothing has loaded yet.
         css = files["tokens.css"].decode()
@@ -274,7 +284,7 @@ class TestCompileWiring:
         files, record, _pre = await wt.compile_design(design.encode("utf-8"))
         # Degrades to naming the families — the behaviour before self-hosting
         # existed — rather than refusing to produce a theme.
-        assert set(files) == {"tokens.css"}
+        assert set(files) == {"tokens.css", "layouts.json"}
         assert record["selfHostedFonts"] == 0
         assert record["webFonts"] == ["Space Grotesk", "Libre Franklin"]
 

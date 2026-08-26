@@ -313,7 +313,12 @@ async def synthesize(
         model=synthesis_model(),
         max_tokens=4000,
         temperature=0.4,
+        expect_obj=True,
     )
+    # `expect_obj=True` makes a non-object response a retryable failure inside
+    # claude_json_model (and unwraps a single-element `[obj]` wrapper), so a
+    # normal return is already a dict. This guard is a final belt-and-suspenders
+    # in case the shared helper's contract changes.
     if not isinstance(result, dict):
         raise ValueError("synthesis returned a non-object payload")
     return result

@@ -62,6 +62,26 @@ class TestApplyEdit:
         assert "evilKey" not in out["forms"]
         assert out["analytics"]["ga4"] == "G-123"
 
+    def test_a_numeric_value_is_coerced_not_treated_as_a_clear(self):
+        # `business` is an untyped dict, so pydantic never sees these — a client
+        # posting {"postalCode": 92801} as a JSON number used to DELETE the field
+        # and drop its `user` stamp, silently handing it back to GBP.
+        before = {"business": {"postalCode": "92801", "provenance": {"postalCode": "user"}}}
+        out = ws.apply_facts_edit(before, business={"postalCode": 92801})
+        assert out["business"]["postalCode"] == "92801"
+        assert out["business"]["provenance"]["postalCode"] == "user"
+
+    def test_a_genuinely_empty_value_still_clears(self):
+        # The clear path must survive the coercion fix.
+        before = {"business": {"city": "Anaheim", "provenance": {"city": "user"}}}
+        out = ws.apply_facts_edit(before, business={"city": "   "})
+        assert "city" not in out["business"]
+        assert "city" not in out["business"]["provenance"]
+
+    def test_a_tagline_only_edit_adds_no_business_skeleton(self):
+        # It used to stamp business: {provenance: {}} onto a config with none.
+        assert "business" not in ws.apply_facts_edit({}, tagline="Roofs done right")
+
     def test_an_unknown_business_field_is_ignored(self):
         out = ws.apply_facts_edit({}, business={"mapPlaceId": "spoofed", "name": "Acme"})
         # mapPlaceId is GBP-only; a settings edit can't set it.
@@ -132,22 +152,48 @@ class TestSave:
         supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
             data=[website]
         )
-        supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
-            data=[{"id": "deploy-1"}]
-        )
         monkeypatch.setattr(ws, "_load", lambda wid: (website, {"id": "c1"}))
         monkeypatch.setattr("db.supabase_client.get_supabase", lambda: supabase)
 
         commit = AsyncMock(return_value={"commit_sha": "abc123"})
-        with patch("services.github_publish.commit_files_to_github", new=commit):
+        record = MagicMock(return_value="deploy-1")
+        with patch("services.github_publish.commit_files_to_github", new=commit), patch(
+            "services.website_deploy.record_deploy", new=record
+        ):
             out = await ws.save_facts("w1", {"tagline": "Roofs"})
         assert out["committed"] is True
         assert out["deploy_id"] == "deploy-1"
         commit.assert_called_once()
-        # The deploy row is a 'config' trigger (allowed by the live CHECK).
-        insert_arg = supabase.table.return_value.insert.call_args[0][0]
-        assert insert_arg["trigger"] == "config"
-        assert insert_arg["commit_sha"] == "abc123"
+        # Through record_deploy, NOT a raw insert: it is what enqueues the poll
+        # that resolves the row, so the chip settles instead of sitting at
+        # 'queued' until the scheduler's next sweep.
+        assert record.call_args.kwargs == {
+            "website_id": "w1", "commit_sha": "abc123", "trigger": "config",
+        }
+
+    @pytest.mark.asyncio
+    async def test_the_saved_view_is_returned_without_a_second_read(self, monkeypatch):
+        # The router used to re-fetch website+client just to render the response.
+        website = {"id": "w1", "client_id": "c1", "name": "Acme",
+                   "site_type": "local_business", "github_repo": None, "config": {}}
+        supabase = MagicMock()
+        supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[{**website, "config": {"business": {"city": "Anaheim",
+                                                     "provenance": {"city": "user"}}}}]
+        )
+        loads = []
+
+        def _load(wid):
+            loads.append(wid)
+            return website, {"id": "c1"}
+
+        monkeypatch.setattr(ws, "_load", _load)
+        monkeypatch.setattr("db.supabase_client.get_supabase", lambda: supabase)
+        out = await ws.save_facts("w1", {"business": {"city": "Anaheim"}})
+
+        assert loads == ["w1"]  # loaded exactly once for the whole save
+        assert out["facts"]["business"]["city"] == "Anaheim"
+        assert out["facts"]["provenance"]["city"] == "user"
 
     @pytest.mark.asyncio
     async def test_a_commit_failure_keeps_the_saved_facts(self, monkeypatch):

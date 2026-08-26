@@ -126,6 +126,33 @@ def _group_blocks(instances: list[dict[str, Any]], faq: bool = False) -> list[di
 
 # ── page → outline extraction ───────────────────────────────────────────────
 
+def _pick_content_root(soup: BeautifulSoup) -> Any:
+    """Choose the subtree to segment into an outline.
+
+    Prefer a semantic <article>/<main> container — the flat article HTML the
+    generators emit is wrapped in <article>, and a real page's main content is
+    usually under <main>. BUT a container only wins if it actually holds the
+    BULK of the page's headings: on Elementor/WordPress pages the visible
+    content sits in a <div data-elementor-type="single-post"> (no <article>)
+    while stray <article> cards from a "Related Posts" widget — often with one
+    heading or none — appear elsewhere. Blindly taking the first <article>
+    scoped the outline to that card and dropped every real heading (a reference
+    scrape came back with 0 sections despite 65 headings in the HTML). When no
+    semantic container carries the headings, fall back to the whole body."""
+    body = soup.body or soup
+    if body is None:
+        return None
+    total = len(body.find_all(_HEADING_TAGS))
+    if total:
+        # find_all is document order, so an enclosing <main> is considered
+        # before the <article> it wraps; the first container holding most of
+        # the headings is the tightest correct root.
+        for node in soup.find_all(("article", "main")):
+            if len(node.find_all(_HEADING_TAGS)) >= total * 0.8:
+                return node
+    return body
+
+
 def extract_outline_from_html(html: str) -> dict[str, Any]:
     """Extract a structure analysis ({outline, elements}) from page HTML.
 
@@ -134,8 +161,7 @@ def extract_outline_from_html(html: str) -> dict[str, Any]:
     depth) to that section, so it works on the deeply-wrapped markup of real
     reference pages as well as the flat article HTML the generators emit."""
     soup = BeautifulSoup(html or "", "html.parser")
-    # Prefer the article/main subtree; fall back to body then the whole doc.
-    root = soup.find("article") or soup.find("main") or soup.body or soup
+    root = _pick_content_root(soup)
     if root is None:
         return {"outline": [], "elements": _derive_elements([], "")}
 

@@ -24,6 +24,9 @@ class EcommerceGenerateRequest(BaseModel):
     # Per-job writing notes the writer follows as high-priority guidance
     # (e.g. "remove the Research Use Only designation").
     notes: Optional[str] = None
+    # Entity-extraction engine for the nlp SERP analysis ("textrazor"|"google");
+    # None → nlp's default.
+    entity_provider: Optional[str] = None
 
 
 class EcommercePageTemplateRequest(BaseModel):
@@ -50,6 +53,8 @@ class EcommerceBulkGenerateRequest(BaseModel):
     page_type: PageType = "product"
     # Batch-level writing notes applied to every page in the batch.
     notes: Optional[str] = None
+    # Entity-extraction engine for the nlp SERP analysis ("textrazor"|"google").
+    entity_provider: Optional[str] = None
 
 
 class EcommerceBulkGenerateJob(BaseModel):
@@ -69,6 +74,8 @@ class EcommerceReoptimizeBulkRequest(BaseModel):
     # Batch-level writing notes applied to every rewrite (also forces a rewrite
     # even on an already-high-scoring page).
     notes: Optional[str] = None
+    # Entity-extraction engine for the nlp SERP analysis ("textrazor"|"google").
+    entity_provider: Optional[str] = None
 
 
 class EcommerceReoptimizeJobHandle(BaseModel):
@@ -105,6 +112,8 @@ class EcommerceScoreRequest(BaseModel):
     page_type: PageType = "product"
     page_url: Optional[str] = None
     page_content: Optional[str] = None
+    # Entity-extraction engine for the nlp SERP analysis ("textrazor"|"google").
+    entity_provider: Optional[str] = None
 
 
 class EcommerceDiscoverItem(BaseModel):

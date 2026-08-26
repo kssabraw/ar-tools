@@ -118,10 +118,37 @@ def _as_str_list(value: Any) -> list[str]:
     return []
 
 
+# How each site type wants its core pages framed. A content property and a
+# service business want genuinely different copy from the same three templates —
+# one is a publication, the other sells a job — so the type is stated rather than
+# left for the model to infer from whether a services list happens to be present.
+_SITE_TYPE_FRAMING = {
+    "local_business": (
+        "This is a local service business's site. Write for someone deciding who "
+        "to hire in their area: concrete, reassuring, and oriented to getting in "
+        "touch."
+    ),
+    "lead_gen": (
+        "This is a lead-generation site for a service category in a specific "
+        "area. Write for someone comparing providers and about to enquire; keep "
+        "it useful and direct rather than corporate."
+    ),
+    "informational": (
+        "This is an independent content property, NOT a business selling a "
+        "service. Write for a reader who came to learn something: describe what "
+        "the publication covers and who it is for. Do not write sales copy, and "
+        "do not imply services are for hire."
+    ),
+}
+
+
 def _facts_block(facts: dict) -> str:
     """The facts, rendered for the prompt. Only non-empty lines, so an
     unconfigured site does not hand the model a page full of blanks to fill."""
     lines: list[str] = []
+    framing = _SITE_TYPE_FRAMING.get(facts.get("site_type") or "")
+    if framing:
+        lines.append(framing)
     if facts.get("business_name"):
         lines.append(f"Business name: {facts['business_name']}")
     if facts.get("category"):

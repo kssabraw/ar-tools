@@ -12,6 +12,9 @@ from db.supabase_client import get_supabase
 from middleware.auth import is_staff_or_above, require_auth
 from models.runs import (
     BULK_RUNS_MAX,
+    BlogReoptimizeBulkRequest,
+    BlogReoptimizeExistingRequest,
+    BlogReoptimizeRequest,
     ClientContextSnapshot,
     ModuleOutputSummary,
     RunBulkCreateRequest,
@@ -19,11 +22,13 @@ from models.runs import (
     RunCreateRequest,
     RunCreateResponse,
     RunDetail,
+    ReoptimizeExistingBulkResponse,
     RunListItem,
     RunListResponse,
     RunPollResponse,
     ServicePagePlanJob,
     ServicePagePlanResult,
+    ServicePageReoptimizeBulkRequest,
     ServicePageReoptimizeExistingRequest,
     ServicePageReoptimizeRequest,
     SIETermsByCategory,
@@ -34,6 +39,7 @@ from services.orchestrator import NON_TERMINAL_STATUSES, orchestrate_run
 from services.run_dispatch import create_run_and_snapshot
 from services.file_parser import detect_format
 from services import (
+    blog_page_score,
     brand_voice_service,
     icp_service,
     service_page_plan,
@@ -420,7 +426,9 @@ async def score_service_page(
     auth: dict = Depends(require_auth),
 ):
     """Score a service_page run's current page (nlp-api national mode). SSE
-    heartbeat stream → the ScoreResult (composite + per-engine + deficiencies)."""
+    heartbeat stream → the ScoreResult (composite + per-engine + deficiencies).
+    Legacy in-request path — kept for frontends predating the async twin below
+    (a deploy kills this stream; the async path survives it)."""
     return sse_response(service_page_score.score_run(str(run_id), user_id=auth["user_id"]))
 
 
@@ -431,10 +439,48 @@ async def reoptimize_service_page(
     auth: dict = Depends(require_auth),
 ):
     """Reoptimize a service_page run via the Service Page Writer (fed the given
-    deficiencies), persist a new attempt, then re-score. SSE → {page, score}."""
+    deficiencies), persist a new attempt, then re-score. SSE → {page, score}.
+    Legacy in-request path — see score above."""
     return sse_response(
         service_page_score.reoptimize_run(str(run_id), body.deficiencies, user_id=auth["user_id"])
     )
+
+
+@router.post("/runs/{run_id}/score-async", status_code=202)
+async def score_service_page_async(
+    run_id: UUID,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Deploy-proof score: enqueue a `service_page_score` job and poll
+    `GET /runs/{run_id}/score-jobs/{job_id}` — the work runs server-side, so a
+    deploy (or a closed tab) can't lose it."""
+    job_id = await service_page_score.enqueue_score(str(run_id), user_id=auth["user_id"])
+    return {"job_id": job_id, "status": "pending"}
+
+
+@router.post("/runs/{run_id}/reoptimize-async", status_code=202)
+async def reoptimize_service_page_async(
+    run_id: UUID,
+    body: ServicePageReoptimizeRequest,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Deploy-proof reoptimize: enqueue a `service_page_reoptimize` job; poll
+    the same score-jobs endpoint (its completion carries the new page too)."""
+    job_id = await service_page_score.enqueue_reoptimize(
+        str(run_id), body.deficiencies, user_id=auth["user_id"]
+    )
+    return {"job_id": job_id, "status": "pending"}
+
+
+@router.get("/runs/{run_id}/score-jobs/{job_id}")
+async def get_score_job(
+    run_id: UUID,
+    job_id: UUID,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Poll a score/reoptimize job. Complete → {status, score, page?} read from
+    module_outputs (the authoritative store); failed → {status, error}."""
+    return service_page_score.get_score_job(str(job_id), str(run_id))
 
 
 @router.post(
@@ -478,6 +524,232 @@ async def reoptimize_existing_service_page(
         extra={"run_id": run_id, "keyword": keyword, "user_id": auth["user_id"]},
     )
     return RunCreateResponse(run_id=run_id, status="queued")
+
+
+@router.post(
+    "/service-pages/reoptimize-bulk",
+    response_model=ReoptimizeExistingBulkResponse,
+    status_code=202,
+)
+async def reoptimize_service_pages_bulk(
+    body: ServicePageReoptimizeBulkRequest,
+    background_tasks: BackgroundTasks,
+    auth: dict = Depends(require_auth),
+) -> ReoptimizeExistingBulkResponse:
+    """Bulk reoptimize service/location pages from external sources (a pasted list
+    of live URLs and/or WYSIWYG content). Spawns one reoptimize-of-existing run per
+    item (sequential background dispatch, like /runs/bulk — skips the single-run
+    in-flight cap); poll each returned run like any other."""
+    assert_not_frozen(str(body.client_id))
+    return _spawn_reoptimize_existing_runs(
+        client_id=str(body.client_id),
+        items=body.items,
+        content_type=("location_page" if body.page_type == "location_page" else "service_page"),
+        writer_notes=None,
+        user_id=auth["user_id"],
+        background_tasks=background_tasks,
+    )
+
+
+# ── Blog article scoring + reoptimization ─────────────────────────────────────
+# Mirrors the service-page block above, but scores against the blog/AEO rubric
+# and reoptimizes by regenerating the blog writer (reopt mode) + re-running
+# sources_cited. Score is read-only; the reoptimize paths are freeze-gated.
+
+@router.post("/runs/{run_id}/blog-score")
+async def score_blog_page(
+    run_id: UUID,
+    auth: dict = Depends(require_auth),
+):
+    """Score a blog run's current article against the blog/AEO rubric. SSE
+    heartbeat stream → the ScoreResult. Legacy in-request path (a deploy kills
+    this stream; the async twin below survives it)."""
+    return sse_response(blog_page_score.score_run(str(run_id), user_id=auth["user_id"]))
+
+
+@router.post("/runs/{run_id}/blog-reoptimize")
+async def reoptimize_blog_page(
+    run_id: UUID,
+    body: BlogReoptimizeRequest,
+    auth: dict = Depends(require_auth),
+):
+    """Reoptimize a blog run: regenerate the writer (reopt mode, fed the given
+    deficiencies) + re-run sources_cited, then re-score. SSE → {page, score}."""
+    supabase = get_supabase()
+    run = (supabase.table("runs").select("client_id").eq("id", str(run_id)).single().execute()).data
+    if run:
+        assert_not_frozen(str(run["client_id"]))
+    return sse_response(
+        blog_page_score.reoptimize_run(str(run_id), body.deficiencies, user_id=auth["user_id"])
+    )
+
+
+@router.post("/runs/{run_id}/blog-score-async", status_code=202)
+async def score_blog_page_async(
+    run_id: UUID,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Deploy-proof score: enqueue a `blog_score` job; poll
+    `GET /runs/{run_id}/blog-score-jobs/{job_id}`."""
+    job_id = await blog_page_score.enqueue_score(str(run_id), user_id=auth["user_id"])
+    return {"job_id": job_id, "status": "pending"}
+
+
+@router.post("/runs/{run_id}/blog-reoptimize-async", status_code=202)
+async def reoptimize_blog_page_async(
+    run_id: UUID,
+    body: BlogReoptimizeRequest,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Deploy-proof reoptimize: enqueue a `blog_reoptimize` job; poll the same
+    blog-score-jobs endpoint (its completion carries the new article too)."""
+    supabase = get_supabase()
+    run = (supabase.table("runs").select("client_id").eq("id", str(run_id)).single().execute()).data
+    if run:
+        assert_not_frozen(str(run["client_id"]))
+    job_id = await blog_page_score.enqueue_reoptimize(
+        str(run_id), body.deficiencies, user_id=auth["user_id"]
+    )
+    return {"job_id": job_id, "status": "pending"}
+
+
+@router.get("/runs/{run_id}/blog-score-jobs/{job_id}")
+async def get_blog_score_job(
+    run_id: UUID,
+    job_id: UUID,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Poll a blog score/reoptimize job. Complete → {status, score, page?} read
+    from module_outputs; failed → {status, error}."""
+    return blog_page_score.get_score_job(str(job_id), str(run_id))
+
+
+@router.post(
+    "/blog/reoptimize-existing",
+    response_model=RunCreateResponse,
+    status_code=202,
+)
+async def reoptimize_existing_blog_page(
+    body: BlogReoptimizeExistingRequest,
+    background_tasks: BackgroundTasks,
+    auth: dict = Depends(require_auth),
+) -> RunCreateResponse:
+    """Reoptimize a blog article that has no cheap suite run to reuse — a live URL
+    or content pasted into the WYSIWYG editor. Spawns a blog run tagged with the
+    source; the orchestrator scores the source with the blog/AEO rubric and feeds
+    its deficiencies into the writer's first pass. Poll the returned run."""
+    assert_not_frozen(str(body.client_id))
+    supabase = get_supabase()
+    client_result = (
+        supabase.table("clients").select("*").eq("id", str(body.client_id)).single().execute()
+    )
+    if not client_result.data:
+        raise HTTPException(status_code=404, detail="client_not_found")
+
+    keyword = (body.keyword or "").strip()
+    source_url = (body.source_url or "").strip()
+    source_html = (body.source_html or "").strip()
+    if not keyword:
+        raise HTTPException(status_code=400, detail="keyword_required")
+    if not source_url and not source_html:
+        raise HTTPException(status_code=400, detail="source_url_or_html_required")
+
+    run_id = create_run_and_snapshot(
+        client=client_result.data,
+        keyword=keyword,
+        content_type="blog_post",
+        reoptimize_source_url=source_url or None,
+        reoptimize_source_html=source_html or None,
+        writer_notes=(body.writer_notes or "").strip() or None,
+        created_by=auth["user_id"],
+    )
+    background_tasks.add_task(orchestrate_run, run_id)
+    logger.info(
+        "blog_reoptimize_existing_dispatched",
+        extra={"run_id": run_id, "keyword": keyword, "user_id": auth["user_id"]},
+    )
+    return RunCreateResponse(run_id=run_id, status="queued")
+
+
+@router.post(
+    "/blog/reoptimize-bulk",
+    response_model=ReoptimizeExistingBulkResponse,
+    status_code=202,
+)
+async def reoptimize_blog_pages_bulk(
+    body: BlogReoptimizeBulkRequest,
+    background_tasks: BackgroundTasks,
+    auth: dict = Depends(require_auth),
+) -> ReoptimizeExistingBulkResponse:
+    """Bulk reoptimize blog articles from external sources (a pasted list of live
+    URLs and/or WYSIWYG content). Spawns one reoptimize-of-existing blog run per
+    item; poll each returned run like any other."""
+    assert_not_frozen(str(body.client_id))
+    return _spawn_reoptimize_existing_runs(
+        client_id=str(body.client_id),
+        items=body.items,
+        content_type="blog_post",
+        writer_notes=(body.writer_notes or "").strip() or None,
+        user_id=auth["user_id"],
+        background_tasks=background_tasks,
+    )
+
+
+def _spawn_reoptimize_existing_runs(
+    *,
+    client_id: str,
+    items: list,
+    content_type: str,
+    writer_notes: str | None,
+    user_id: str,
+    background_tasks: BackgroundTasks,
+) -> ReoptimizeExistingBulkResponse:
+    """Shared bulk reoptimize-of-existing dispatch for service + blog runs: create
+    one run per valid item (needs a keyword and a url or pasted html), dispatch it,
+    and report the spawned runs. Skips the single-run in-flight cap (like
+    /runs/bulk)."""
+    supabase = get_supabase()
+    client_result = (
+        supabase.table("clients").select("*").eq("id", client_id).single().execute()
+    )
+    if not client_result.data:
+        raise HTTPException(status_code=404, detail="client_not_found")
+    client = client_result.data
+
+    runs: list[dict] = []
+    skipped: list[dict] = []
+    for item in items:
+        keyword = (item.keyword or "").strip()
+        source_url = (item.source_url or "").strip()
+        source_html = (item.source_html or "").strip()
+        if not keyword or not (source_url or source_html):
+            skipped.append({
+                "keyword": keyword or None,
+                "source_url": source_url or None,
+                "reason": "Missing a keyword or a URL / pasted content.",
+            })
+            continue
+        run_id = create_run_and_snapshot(
+            client=client,
+            keyword=keyword,
+            content_type=content_type,
+            location=item.location,
+            location_code=item.location_code,
+            reoptimize_source_url=source_url or None,
+            reoptimize_source_html=source_html or None,
+            writer_notes=writer_notes,
+            created_by=user_id,
+        )
+        background_tasks.add_task(orchestrate_run, run_id)
+        runs.append({"run_id": run_id, "keyword": keyword, "source": source_url or "pasted"})
+
+    if not runs:
+        raise HTTPException(status_code=400, detail="no_valid_items")
+    logger.info(
+        "reoptimize_existing_bulk_dispatched",
+        extra={"count": len(runs), "content_type": content_type, "user_id": user_id},
+    )
+    return ReoptimizeExistingBulkResponse(runs=runs, skipped=skipped)
 
 
 @router.post("/runs/{run_id}/cancel", response_model=dict)

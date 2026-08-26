@@ -14,14 +14,26 @@ class MapsConfig(BaseModel):
     business_name: Optional[str] = None
     center_lat: Optional[float] = None
     center_lng: Optional[float] = None
-    radius_miles: Literal[3, 5, 7] = 5
+    # Free choice 1-10 miles (1-mile pin spacing, so pins/scan = (2r+1)²) —
+    # was a 3/5/7 preset. Cost scales quadratically; 10 mi = a 21×21 grid.
+    radius_miles: int = Field(5, ge=1, le=10)
     shape: Literal["circle", "square"] = "circle"
     resource_category: Literal["googleMaps", "googleLocalFinder"] = "googleMaps"
     serp_device: Literal["desktop", "mobile", "both"] = "desktop"
+    # Data source for NEW scans. None = inherit the global MAPS_SCAN_PROVIDER.
+    provider: Optional[Literal["local_dominator", "dataforseo"]] = None
+    # Read-only: what `provider` resolves to when unset (the global default), so
+    # the UI can show the effective source for a never-configured client.
+    provider_default: Optional[str] = None
     cadence: Literal["off", "weekly"] = "weekly"
     weekday: int = 1
+    # Hour-of-day (0-23) the scheduled scan fires at, in the client's LOCAL time.
+    scan_hour: int = 8
     active: bool = True
     last_scanned_at: Optional[str] = None
+    # The IANA timezone `scan_hour`/`weekday` are interpreted in (read-only, derived
+    # from the client's location). None → the scheduler falls back to UTC.
+    timezone: Optional[str] = None
     # True when the row is persisted; False = a default prefilled from the client.
     configured: bool = False
 
@@ -31,12 +43,17 @@ class MapsConfigUpdate(BaseModel):
     business_name: Optional[str] = None
     center_lat: Optional[float] = None
     center_lng: Optional[float] = None
-    radius_miles: Optional[Literal[3, 5, 7]] = None
+    radius_miles: Optional[int] = Field(default=None, ge=1, le=10)
     shape: Optional[Literal["circle", "square"]] = None
     resource_category: Optional[Literal["googleMaps", "googleLocalFinder"]] = None
     serp_device: Optional[Literal["desktop", "mobile", "both"]] = None
+    provider: Optional[Literal["local_dominator", "dataforseo"]] = None
     cadence: Optional[Literal["off", "weekly"]] = None
-    weekday: Optional[int] = None
+    # 0=Mon..6=Sun. Bounded here so an out-of-range day can't be stored and then
+    # silently ignored by the scheduler (which falls back to the global default).
+    weekday: Optional[int] = Field(default=None, ge=0, le=6)
+    # 0-23, in the client's local time. Bounded like weekday.
+    scan_hour: Optional[int] = Field(default=None, ge=0, le=23)
     active: Optional[bool] = None
 
 
@@ -100,10 +117,21 @@ class MapsScanDetail(MapsScanSummary):
     results: list[MapsScanResultRow] = Field(default_factory=list)
 
 
+class MapsRunRequest(BaseModel):
+    """Body for an on-demand scan. ``keywords`` omitted/empty scans every active
+    keyword (the default); pass a subset to scan only those — useful when you
+    only want to re-check the one keyword you just worked on, and cheaper,
+    since a geo-grid is billed per keyword × pin."""
+    keywords: Optional[list[str]] = None
+
+
 class MapsRunResponse(BaseModel):
     client_id: UUID
     status: str  # 'enqueued' | 'failed'
     error: Optional[str] = None
+    # Which keywords the enqueued scan will cover (all active ones unless a
+    # subset was requested), so the UI can confirm the scope it just started.
+    keywords: Optional[list[str]] = None
 
 
 class MapsTrendPoint(BaseModel):
@@ -119,6 +147,10 @@ class MapsTrendPoint(BaseModel):
     found_pct: Optional[float] = None   # % of pins where the business appears
     top3_pct: Optional[float] = None    # % of pins ranking in the local pack (<= 3)
     top10_pct: Optional[float] = None   # % of pins ranking <= 10
+    # The grid this point was measured on. Coverage % is a share of the area
+    # scanned, so a radius change steps the line without any ranking change —
+    # the chart marks the scan where it changed rather than hiding it.
+    radius_miles: Optional[int] = None
 
 
 class MapsKeywordTrend(BaseModel):
@@ -367,6 +399,9 @@ class MapsChangesResponse(BaseModel):
     has_previous: bool = False
     current_scan_id: Optional[UUID] = None
     previous_scan_id: Optional[UUID] = None
+    # Set only when the grid was resized between the two scans: the shared
+    # radius both were re-measured on so the deltas compare the same ground.
+    compared_on_radius_miles: Optional[int] = None
     keywords: list[MapsKeywordChange] = Field(default_factory=list)
 
 
@@ -375,7 +410,8 @@ class MapsAlert(BaseModel):
     id: UUID
     keyword: str
     alert_type: Literal[
-        "grid_rank_drop", "coverage_drop", "lost_pack", "area_decline", "competitor_surge"
+        "grid_rank_drop", "coverage_drop", "lost_pack", "area_decline",
+        "competitor_surge", "gradual_decline"
     ]
     sector: Optional[str] = None
     from_value: Optional[float] = None

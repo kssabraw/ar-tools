@@ -1,18 +1,35 @@
-# Railway config for the outreach pipeline cron service.
+# Railway config for the outreach worker service.
 #
-# restartPolicyType = "never" is load-bearing. The default ("always") is correct for a server and
-# catastrophic for a job: the CLI exits when the market is done, Railway would read that as a
-# crash, restart it, and the pipeline would re-run — including the paid Outscraper pull — in a
-# loop until something noticed.
+# STEADY STATE = the always-on `tick-loop` daemon (owner request 2026-08-10). The service runs
+# `python -m api.scripts.run_market tick-loop <market>` (OUTREACH_COMMAND=tick-loop), which loops
+# `tick` every few seconds so a UI-placed order (enrich / scan) drains within SECONDS instead of
+# waiting for a cron (Railway's cron floor is 5 minutes). The daemon swallows per-iteration errors
+# and stops cleanly on SIGTERM, so a deploy never severs a drain.
 #
-# No cronSchedule here yet. A cron service also runs its start command on every deploy, so the
-# schedule is set once the first real ingest has been validated. Semi-monthly per the config
-# reference (scan_interval_days = 15) is roughly "0 6 1,16 * *" — 06:00 UTC on the 1st and 16th.
-# Note Railway crons are UTC and skip an execution if the previous one is still running.
+# CRON KEPT AS A SAFETY NET (cronSchedule = "*/5 * * * *", set on the service). The daemon runs
+# forever, so after it starts, later cron fires are SKIPPED (Railway skips overlapping runs) — it
+# is effectively always-on. If the daemon process is ever killed (OOM / SIGKILL, or if Railway
+# reaps a long-running job), the next cron fire relaunches it within ≤5 minutes. So the worst case
+# is NEVER worse than a plain 5-minute cron: there is no full-outage state. This is why the cron is
+# deliberately NOT removed (`cronSchedule=null` would make it a bare continuous service with no
+# relaunch net — riskier for no benefit while the daemon persists on its own).
+#
+# restartPolicyType = "on_failure": relaunch immediately on a crash (faster than waiting for the
+# next cron fire); a clean SIGTERM exit during a deploy returns 0 and is NOT restarted (the new
+# deployment takes over). CAVEAT — do NOT repurpose this service for a manual PAID one-shot
+# (ingest / run): under "on_failure" a failed paid pull would restart and re-pull. Run those via
+# the local CLI or an ephemeral job. The steady state here is tick-loop, whose relaunch is harmless
+# (it just resumes draining — spend stays authorized per signed order row).
+#
+# NOTE ON DEPLOYS: this service must be deployed by GIT PUSH (it builds from the Dockerfile below).
+# An API-triggered redeploy rebuilds with Railpack (the service's builder field has drifted) and
+# FAILS — so config changes here take effect on the next merge to main, not on a dashboard redeploy.
+# The start command + cron schedule live on the Railway service (dashboard), matching how this
+# service has always been configured.
 
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-restartPolicyType = "never"
+restartPolicyType = "on_failure"

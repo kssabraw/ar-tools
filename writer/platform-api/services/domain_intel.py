@@ -440,10 +440,12 @@ def enqueue_domain_overview(
     location_code: Optional[int] = None,
     language_code: Optional[str] = None,
     force: bool = False,
+    user_id: Optional[str] = None,
 ) -> str:
     """Enqueue a domain_overview async job. Returns the job id. ``client_id`` is
     None for a standalone (client-less) lookup — ``standalone`` marks the job so
-    the handler doesn't mistake the null entity_id for a client."""
+    the handler doesn't mistake the null entity_id for a client. ``user_id`` (the
+    initiator) drives the Activity indicator + completion notification."""
     row = (
         get_supabase().table("async_jobs").insert({
             "job_type": "domain_overview",
@@ -451,7 +453,7 @@ def enqueue_domain_overview(
             "payload": {
                 "client_id": client_id, "target_domain": target_domain, "role": role,
                 "location_code": location_code, "language_code": language_code, "force": force,
-                "standalone": client_id is None,
+                "standalone": client_id is None, "user_id": user_id,
             },
         }).execute()
     ).data[0]
@@ -682,8 +684,10 @@ def enqueue_keyword_gap(
     location_code: Optional[int] = None,
     language_code: Optional[str] = None,
     notify: bool = False,
+    user_id: Optional[str] = None,
 ) -> str:
-    """Enqueue a keyword_gap async job. Returns the job id."""
+    """Enqueue a keyword_gap async job. Returns the job id. ``user_id`` (the
+    initiator) drives the Activity indicator + completion notification."""
     row = (
         get_supabase().table("async_jobs").insert({
             "job_type": "keyword_gap",
@@ -691,7 +695,7 @@ def enqueue_keyword_gap(
             "payload": {
                 "client_id": client_id, "competitor_domains": competitor_domains,
                 "location_code": location_code, "language_code": language_code,
-                "notify": notify,
+                "notify": notify, "user_id": user_id,
             },
         }).execute()
     ).data[0]
@@ -808,13 +812,21 @@ async def run_link_gap(
     return {"gap_count": len(rows), "competitors": used, "client_domain": client_domain}
 
 
-def enqueue_link_gap(client_id: str, competitor_domains: Optional[list[str]] = None) -> str:
-    """Enqueue a link_gap async job. Returns the job id."""
+def enqueue_link_gap(
+    client_id: str,
+    competitor_domains: Optional[list[str]] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Enqueue a link_gap async job. Returns the job id. ``user_id`` (the
+    initiator) drives the Activity indicator + completion notification."""
     row = (
         get_supabase().table("async_jobs").insert({
             "job_type": "link_gap",
             "entity_id": client_id,
-            "payload": {"client_id": client_id, "competitor_domains": competitor_domains},
+            "payload": {
+                "client_id": client_id, "competitor_domains": competitor_domains,
+                "user_id": user_id,
+            },
         }).execute()
     ).data[0]
     return row["id"]

@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Megaphone, Trash2, RotateCcw, ExternalLink, RefreshCw, Sparkles,
   CalendarClock, Send, Save, X, Upload, ImageIcon, CheckCircle2, XCircle, Clock, Link2,
+  MapPin, Plus, Pencil, Smile,
 } from 'lucide-react'
 import { api } from '../lib/api'
+import { useResumableJob, type JobPoll } from '../lib/useResumableJob'
 import type { Client } from '../lib/types'
 
 // Google Business Profile Posts — compose (manual + AI-drafted) and publish
@@ -20,12 +22,24 @@ type CtaType = 'book' | 'order' | 'shop' | 'learn_more' | 'sign_up' | 'call'
 type PostStatus = 'draft' | 'scheduled' | 'publishing' | 'live' | 'rejected' | 'failed' | 'deleted'
 
 interface GbpLocation { id: string; location_id: string; title: string | null; access_status: string }
+interface AvailableLocation {
+  location_id: string; account_id: string | null; title: string | null
+  address: string | null; phone: string | null; place_id: string | null
+  lat?: number | null; lng?: number | null; score?: number | null
+  registered_client_id?: string | null; registered_client_name?: string | null
+}
+interface MatchResult {
+  client_label: string | null
+  matched: AvailableLocation | null
+  candidates: AvailableLocation[]
+  detail: string | null
+}
 interface ReusableImage { url: string; source: string; label: string | null }
 interface GbpPost {
   id: string; location_row_id: string; source: string; topic_type: TopicType
   summary: string; cta_type: CtaType | null; cta_url: string | null
   event: Record<string, unknown> | null; offer: Record<string, unknown> | null
-  media: { sourceUrl?: string }[] | null; status: PostStatus
+  media: { sourceUrl?: string; prompt?: string }[] | null; status: PostStatus
   scheduled_at: string | null; published_at: string | null
   search_url: string | null; error: string | null; created_at: string | null
 }
@@ -96,14 +110,22 @@ function timeToGoogle(v: string) {
   return { hours: h, minutes: min }
 }
 
-async function pollJob(clientId: string, jobId: string): Promise<JobStatus> {
-  const started = Date.now()
-  for (;;) {
-    const rows = await api.post<JobStatus[]>(`/clients/${clientId}/gbp/posts/jobs/status`, { job_ids: [jobId] })
-    const row = rows[0]
-    if (row && ['complete', 'failed', 'cancelled'].includes(row.status)) return row
-    if (Date.now() - started > 150000) return { job_id: jobId, status: 'timeout', post_id: null, error: 'timed_out' }
-    await new Promise((r) => setTimeout(r, 2500))
+// One poll tick for a GBP-posts async job. Shared by the resumable-job hooks
+// (generate / publish / sync) so a backgrounded job reconnects on return.
+async function pollGbpJob(clientId: string, jobId: string): Promise<JobPoll<JobStatus>> {
+  const rows = await api.post<JobStatus[]>(`/clients/${clientId}/gbp/posts/jobs/status`, { job_ids: [jobId] })
+  const row = rows[0]
+  return row ? { status: row.status, result: row, error: row.error } : { status: 'running' }
+}
+
+// Read a resumable job's persisted meta (to re-derive which row is busy after a
+// remount). Mirrors the hook's internal storage shape.
+function readPersistedMeta<M>(storageKey: string): M | null {
+  try {
+    const raw = localStorage.getItem(storageKey)
+    return raw ? ((JSON.parse(raw).meta as M) ?? null) : null
+  } catch {
+    return null
   }
 }
 
@@ -118,22 +140,60 @@ const input: React.CSSProperties = {
 }
 const label: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: '#475569', marginBottom: 4, display: 'block' }
 
+// ── Emoji picker (dependency-free) ───────────────────────────────────────────
+const EMOJI_GROUPS: { label: string; emojis: string[] }[] = [
+  { label: 'Smileys & people', emojis: ['😀', '😃', '😄', '😁', '😊', '🙂', '😉', '😍', '🤩', '😎', '🥳', '🤗', '🙌', '👏', '💪', '👍', '👌', '🙏', '🤝', '✌️'] },
+  { label: 'Nature & weather', emojis: ['🌟', '⭐', '✨', '🔥', '💥', '☀️', '🌤️', '🌧️', '⛈️', '🌈', '🌳', '🌲', '🍃', '🌸', '🌺', '🌱', '🍂', '❄️', '🌊', '⚡'] },
+  { label: 'Home & work', emojis: ['🏡', '🏠', '🔨', '🛠️', '🧰', '🪜', '🚜', '🚚', '📞', '📱', '💻', '📅', '📍', '🎉', '🎁', '🏆', '💰', '💯', '✅', '⏰'] },
+  { label: 'Symbols', emojis: ['❤️', '🧡', '💛', '💚', '💙', '💜', '✔️', '➡️', '⬇️', '❗', '❓', '💬', '📢', '🔔', '♻️', '🆕', '🆓', '🔝', '💎', '⚠️'] },
+]
+
+// Insert text at the textarea's caret (or append if unfocused), respecting a max.
+function insertAtCursor(el: HTMLTextAreaElement | null, current: string, text: string, max: number): { value: string; caret: number } {
+  const start = el?.selectionStart ?? current.length
+  const end = el?.selectionEnd ?? current.length
+  const value = (current.slice(0, start) + text + current.slice(end)).slice(0, max)
+  return { value, caret: Math.min(start + text.length, value.length) }
+}
+
+function EmojiPicker({ onSelect }: { onSelect: (emoji: string) => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <button type="button" onClick={() => setOpen((o) => !o)} title="Insert emoji" style={btn('#fff', '#334155')}>
+        <Smile size={14} /> Emoji
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 20 }} />
+          <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 6, zIndex: 21, width: 290, maxHeight: 260, overflowY: 'auto', background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, boxShadow: '0 8px 24px rgba(15,23,42,0.14)', padding: 10 }}>
+            {EMOJI_GROUPS.map((g) => (
+              <div key={g.label} style={{ marginBottom: 4 }}>
+                <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.3, margin: '4px 2px' }}>{g.label}</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                  {g.emojis.map((e) => (
+                    <button key={e} type="button" onClick={() => { onSelect(e); setOpen(false) }}
+                      style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: 4, borderRadius: 6 }}
+                      onMouseEnter={(ev) => { ev.currentTarget.style.background = '#f1f5f9' }}
+                      onMouseLeave={(ev) => { ev.currentTarget.style.background = 'none' }}>
+                      {e}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 export function GbpPosts() {
   const { id } = useParams<{ id: string }>()
-  const qc = useQueryClient()
-  const [tab, setTab] = useState<'compose' | 'posts' | 'schedule' | 'trash'>('compose')
-
   const { data: client } = useQuery<Client>({
     queryKey: ['client', id], queryFn: () => api.get<Client>(`/clients/${id}`), enabled: Boolean(id),
   })
-  const locationsQ = useQuery<GbpLocation[]>({
-    queryKey: ['gbp-post-locations', id],
-    queryFn: () => api.get<GbpLocation[]>(`/clients/${id}/gbp/post-locations`),
-    enabled: Boolean(id), retry: false,
-  })
-
-  const disabled = (locationsQ.error as Error | null)?.message === 'gbp_posts_not_enabled'
-
   return (
     <div style={{ padding: 32, maxWidth: 980 }}>
       <Link to={`/clients/${id}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: ACCENT, textDecoration: 'none', marginBottom: 16 }}>
@@ -146,38 +206,69 @@ export function GbpPosts() {
       <p style={{ fontSize: 13, color: '#64748b', marginTop: 0, marginBottom: 20 }}>
         Compose and publish Google Business Profile posts — Updates, Offers, Events & Products — to this client's listing.
       </p>
+      {id && <GbpWorkspace clientId={id} />}
+    </div>
+  )
+}
 
+// The full GBP posts toolkit for one client (Connect + Compose/Posts/Schedule/
+// Trash + listing management). Reused by the standalone page AND embedded in the
+// Local SEO module. `seed` (with a changing nonce) drops text into the composer.
+export function GbpWorkspace({ clientId, seed }: { clientId: string; seed?: { text: string; nonce: number } }) {
+  const qc = useQueryClient()
+  const [tab, setTab] = useState<'compose' | 'posts' | 'schedule' | 'trash'>('compose')
+  const [manageOpen, setManageOpen] = useState(false)
+
+  const locationsQ = useQuery<GbpLocation[]>({
+    queryKey: ['gbp-post-locations', clientId],
+    queryFn: () => api.get<GbpLocation[]>(`/clients/${clientId}/gbp/post-locations`),
+    enabled: Boolean(clientId), retry: false,
+  })
+  const disabled = (locationsQ.error as Error | null)?.message === 'gbp_posts_not_enabled'
+
+  // Seeding the composer from outside (Local SEO suggestions) → jump to Compose.
+  useEffect(() => { if (seed) setTab('compose') }, [seed?.nonce])
+
+  return (
+    <>
       <ConnectionBar />
-
       {disabled ? (
         <EnablementNotice />
       ) : (
         <>
-          <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '1px solid #e2e8f0' }}>
+          <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '1px solid #e2e8f0', alignItems: 'center' }}>
             {(['compose', 'posts', 'schedule', 'trash'] as const).map((t) => (
               <button key={t} onClick={() => setTab(t)}
                 style={{ padding: '9px 16px', border: 'none', borderBottom: tab === t ? `2px solid ${ACCENT}` : '2px solid transparent', background: 'none', color: tab === t ? ACCENT : '#64748b', fontSize: 13, fontWeight: 600, cursor: 'pointer', textTransform: 'capitalize' }}>
                 {t === 'posts' ? 'Posts' : t}
               </button>
             ))}
+            {(locationsQ.data ?? []).length > 0 && (
+              <button onClick={() => setManageOpen((o) => !o)}
+                style={{ marginLeft: 'auto', marginBottom: 6, ...btn('#fff', '#334155') }}>
+                <MapPin size={13} /> {manageOpen ? 'Done' : 'Manage listings'}
+              </button>
+            )}
           </div>
 
           {locationsQ.isLoading ? (
             <div style={{ color: '#64748b', fontSize: 13 }}>Loading…</div>
           ) : (locationsQ.data ?? []).length === 0 ? (
-            <NoLocations />
+            <RegisterLocations clientId={clientId} registered={[]} />
+          ) : manageOpen ? (
+            <RegisterLocations clientId={clientId} registered={locationsQ.data!} onClose={() => setManageOpen(false)} />
           ) : tab === 'compose' ? (
-            <ComposeTab clientId={id!} locations={locationsQ.data!} onDone={() => { setTab('posts'); qc.invalidateQueries({ queryKey: ['gbp-posts', id] }) }} />
+            <ComposeTab clientId={clientId} locations={locationsQ.data!} seed={seed} onDone={() => { setTab('posts'); qc.invalidateQueries({ queryKey: ['gbp-posts', clientId] }) }} />
           ) : tab === 'posts' ? (
-            <PostsTab clientId={id!} />
+            <PostsTab clientId={clientId} />
           ) : tab === 'schedule' ? (
-            <ScheduleTab clientId={id!} locations={locationsQ.data!} />
+            <ScheduleTab clientId={clientId} locations={locationsQ.data!} />
           ) : (
-            <TrashTab clientId={id!} />
+            <TrashTab clientId={clientId} />
           )}
         </>
       )}
-    </div>
+    </>
   )
 }
 
@@ -213,11 +304,33 @@ function ConnectionBar() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['gbp-oauth-status'] }),
     onError: (e: Error) => setNotice({ ok: false, msg: e.message === 'forbidden' ? 'Only an admin/staff user can disconnect.' : e.message }),
   })
+  // Pending manager invitations the connected account has received. Drives
+  // whether we even show an "Accept" button — an always-on button reads as a
+  // standing demand when there's nothing to accept (which is the normal state
+  // once the account already manages the listings).
+  const invitationsQ = useQuery<{ invitations: { business: string | null }[] }>({
+    queryKey: ['gbp-invitations'],
+    queryFn: () => api.get<{ invitations: { business: string | null }[] }>('/gbp/oauth/invitations'),
+    // Auto-refreshes on tab focus so a newly-granted invite surfaces without a
+    // manual button — nothing to click once access is settled.
+    enabled: Boolean(data?.connected), staleTime: 60_000, retry: false, refetchOnWindowFocus: true,
+  })
+  const pendingCount = invitationsQ.data?.invitations.length ?? 0
   const acceptMut = useMutation({
     mutationFn: () => api.post<{ accepted: number; pending: number }>('/gbp/oauth/accept-invitations', {}),
-    onSuccess: (r) => setNotice({ ok: true, msg: r.accepted > 0 ? `Accepted ${r.accepted} access invitation${r.accepted === 1 ? '' : 's'}.` : 'No pending access invitations.' }),
+    onSuccess: (r) => {
+      setNotice({ ok: true, msg: r.accepted > 0 ? `Accepted ${r.accepted} access invitation${r.accepted === 1 ? '' : 's'}.` : 'No pending access invitations.' })
+      qc.invalidateQueries({ queryKey: ['gbp-invitations'] })
+    },
     onError: (e: Error) => setNotice({ ok: false, msg: e.message === 'forbidden' ? 'Only an admin/staff user can do this.' : e.message }),
   })
+
+  // Success notices are transient — clear them so the bar goes quiet once done.
+  useEffect(() => {
+    if (!notice?.ok) return
+    const t = setTimeout(() => setNotice(null), 6000)
+    return () => clearTimeout(t)
+  }, [notice])
 
   if (!data) return null
   const bar: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 10, fontSize: 13, marginBottom: 16 }
@@ -232,10 +345,13 @@ function ConnectionBar() {
         <div style={{ ...bar, background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#15803d' }}>
           <CheckCircle2 size={15} />
           <span>Connected to Google Business Profile{data.account_email ? ` as ${data.account_email}` : ''}.</span>
-          <button onClick={() => acceptMut.mutate()} disabled={acceptMut.isPending} title="Accept manager invitations clients have sent to the connected account" style={{ ...btn('#fff', '#334155'), marginLeft: 'auto' }}>
-            {acceptMut.isPending ? 'Checking…' : 'Accept access invitations'}
-          </button>
-          <button onClick={() => disconnectMut.mutate()} disabled={disconnectMut.isPending} style={btn('#fff', '#334155')}>
+          {pendingCount > 0 && (
+            <button onClick={() => acceptMut.mutate()} disabled={acceptMut.isPending} title="Clients have added this account as a Manager — accept to manage their listings" style={{ ...btn(ACCENT), marginLeft: 'auto' }}>
+              {acceptMut.isPending ? 'Accepting…' : `Accept ${pendingCount} access invitation${pendingCount === 1 ? '' : 's'}`}
+            </button>
+          )}
+          <button onClick={() => disconnectMut.mutate()} disabled={disconnectMut.isPending}
+            style={{ marginLeft: pendingCount > 0 ? 8 : 'auto', border: 'none', background: 'none', color: '#15803d', fontSize: 12, cursor: 'pointer', textDecoration: 'underline', opacity: 0.75 }}>
             {disconnectMut.isPending ? 'Disconnecting…' : 'Disconnect'}
           </button>
         </div>
@@ -266,18 +382,145 @@ function EnablementNotice() {
     </div>
   )
 }
-function NoLocations() {
+// ── This client's Business Profile (auto-matched to one GBP) ─────────────────
+// No "browse all" by default: the suite already knows each client's GBP, so we
+// match it to the connected account's one listing and confirm a single card.
+// A ranked fallback appears only when the match isn't confident (or on request).
+function RegisterLocations({ clientId, registered, onClose }: { clientId: string; registered: GbpLocation[]; onClose?: () => void }) {
+  const qc = useQueryClient()
+  const [showAll, setShowAll] = useState(false)
+  const [changing, setChanging] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const hasRegistered = registered.length > 0
+
+  // Fetch the match only when we need to pick/change (empty state, or "Change").
+  const matchQ = useQuery<MatchResult>({
+    queryKey: ['gbp-match-location', clientId],
+    queryFn: () => api.get<MatchResult>(`/clients/${clientId}/gbp/match-location`),
+    enabled: !hasRegistered || changing, retry: false,
+  })
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['gbp-post-locations', clientId] })
+    qc.invalidateQueries({ queryKey: ['gbp-match-location', clientId] })
+  }
+  const registerMut = useMutation({
+    mutationFn: (l: AvailableLocation) => api.post(`/clients/${clientId}/gbp/register-location`, {
+      location_id: l.location_id, account_id: l.account_id, place_id: l.place_id, title: l.title,
+    }),
+    onSuccess: () => { setChanging(false); setShowAll(false); invalidate() },
+    onError: (e: Error) => setErr(e.message === 'forbidden' ? 'Only an admin/staff user can set the listing.' : e.message),
+  })
+  const unregisterMut = useMutation({
+    mutationFn: (rowId: string) => api.delete(`/clients/${clientId}/gbp/locations/${rowId}`),
+    onSuccess: invalidate,
+    onError: (e: Error) => setErr(e.message),
+  })
+
+  const detailMsg = (d: string | null): string => {
+    if (d === 'gbp_not_connected') return 'Connect the agency Google account first (the Connect button above).'
+    if (d === 'no_locations_visible') return "The connected account doesn't manage any listings yet — accept access invitations above, or add it as a Manager on the client's Business Profile."
+    if (d === 'service_account_not_a_manager_or_insufficient_permission') return 'The connected account has no access to any listings yet. Accept access invitations above, or have the client add it as a Manager.'
+    if (d === 'quota_exceeded_or_not_granted') return 'Google returned a quota error — try again shortly.'
+    return d ? `Could not load listings: ${d}` : 'No matching Business Profile found for this client.'
+  }
+  const m = matchQ.data
+  const registeredLocIds = new Set(registered.map((r) => r.location_id))
+
+  const LocationCard = ({ l, suggested }: { l: AvailableLocation; suggested?: boolean }) => {
+    const here = registeredLocIds.has(l.location_id)
+    const elsewhere = !here && l.registered_client_id
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, border: `1px solid ${suggested ? '#c7d2fe' : '#e2e8f0'}`, background: suggested ? '#f5f3ff' : '#fff', borderRadius: 10, padding: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>{l.title || l.location_id}</div>
+          <div style={{ fontSize: 12, color: '#64748b' }}>{[l.address, l.phone].filter(Boolean).join(' · ') || l.location_id}</div>
+          {elsewhere && <div style={{ fontSize: 11, color: '#b45309', marginTop: 2 }}>Currently assigned to {l.registered_client_name || 'another client'}</div>}
+        </div>
+        {here ? (
+          <span style={{ fontSize: 12, color: '#15803d', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}><CheckCircle2 size={14} /> In use</span>
+        ) : (
+          <button onClick={() => { setErr(null); registerMut.mutate(l) }} disabled={registerMut.isPending}
+            style={btn(elsewhere ? '#fff' : ACCENT, elsewhere ? '#334155' : '#fff')}>
+            <Plus size={13} /> {elsewhere ? 'Use here instead' : 'Use this profile'}
+          </button>
+        )}
+      </div>
+    )
+  }
+
   return (
-    <div style={{ padding: 20, borderRadius: 12, background: '#f8fafc', border: '1px solid #e2e8f0', fontSize: 13, color: '#475569', lineHeight: 1.6 }}>
-      No Business Profile location is registered for this client yet. Add the service account as a Manager on the
-      client's Google Business Profile and register the location (GBP connection) before posting.
+    <div style={{ display: 'grid', gap: 16, maxWidth: 640 }}>
+      <div style={{ padding: 16, borderRadius: 12, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <MapPin size={16} color={ACCENT} />
+          <strong style={{ fontSize: 14, color: '#0f172a' }}>This client's Business Profile</strong>
+          {onClose && <button onClick={onClose} style={{ marginLeft: 'auto', ...btn('#fff', '#334155') }}>Done</button>}
+        </div>
+        <p style={{ fontSize: 13, color: '#64748b', margin: 0, lineHeight: 1.6 }}>
+          Posts publish to this client's Google Business Profile. We match it automatically from the client's known listing.
+        </p>
+      </div>
+
+      {err && <div style={{ color: '#b91c1c', fontSize: 13, background: '#fef2f2', border: '1px solid #fecaca', padding: 10, borderRadius: 8 }}>{err}</div>}
+
+      {/* Assigned listing (with change/remove) */}
+      {hasRegistered && registered.map((r) => (
+        <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid #bbf7d0', background: '#f0fdf4', borderRadius: 10, padding: 12 }}>
+          <CheckCircle2 size={15} color="#15803d" />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>{r.title || r.location_id}</div>
+            <div style={{ fontSize: 11, color: '#94a3b8' }}>{r.location_id}{r.access_status !== 'ok' ? ` · ${r.access_status}` : ''}</div>
+          </div>
+          <button onClick={() => { setErr(null); setChanging((c) => !c) }} style={btn('#fff', '#334155')}>
+            <RefreshCw size={12} /> Change
+          </button>
+          <button onClick={() => { if (confirm('Remove this Business Profile from the client? Its posts will be deleted.')) unregisterMut.mutate(r.id) }}
+            disabled={unregisterMut.isPending} style={btn('#fff', '#b91c1c')}>
+            <X size={12} /> Remove
+          </button>
+        </div>
+      ))}
+
+      {/* Match / pick — shown for the empty state, or when changing an assignment */}
+      {(!hasRegistered || changing) && (
+        matchQ.isLoading ? (
+          <div style={{ color: '#64748b', fontSize: 13 }}>Finding this client's Business Profile…</div>
+        ) : matchQ.isError ? (
+          <div style={{ color: '#b91c1c', fontSize: 13 }}>Couldn't reach Google. {(matchQ.error as Error)?.message}</div>
+        ) : (m?.candidates.length ?? 0) === 0 ? (
+          <div style={{ fontSize: 13, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', padding: 12, borderRadius: 8, lineHeight: 1.6 }}>
+            {detailMsg(m?.detail ?? null)}
+          </div>
+        ) : m?.matched && !showAll ? (
+          <div style={{ display: 'grid', gap: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#475569' }}>
+              Matched{m.client_label ? ` for ${m.client_label}` : ''}
+            </span>
+            <LocationCard l={m.matched} suggested />
+            <button onClick={() => setShowAll(true)} style={{ justifySelf: 'start', border: 'none', background: 'none', color: ACCENT, fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: 0 }}>
+              Not the right listing? Show all
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: 8 }}>
+            <span style={{ fontSize: 12, color: '#94a3b8' }}>
+              {m?.matched ? 'All listings managed by the connected account — best match first.' : "We couldn't confidently match this client — pick its listing:"}
+            </span>
+            {(m?.candidates ?? []).map((l) => <LocationCard key={l.location_id} l={l} suggested={l.location_id === m?.matched?.location_id} />)}
+          </div>
+        )
+      )}
     </div>
   )
 }
 
 // ── Image field (upload + reuse existing) ────────────────────────────────────
-function ImageField({ clientId, value, onChange }: { clientId: string; value: string | null; onChange: (url: string | null) => void }) {
+function ImageField({ clientId, value, onChange }: { clientId: string; value: string | null; onChange: (url: string | null, prompt?: string) => void }) {
   const [showReuse, setShowReuse] = useState(false)
+  const [showGen, setShowGen] = useState(false)
+  const [genPrompt, setGenPrompt] = useState('')
+  const [showUrl, setShowUrl] = useState(false)
+  const [imgUrl, setImgUrl] = useState('')
   const [err, setErr] = useState<string | null>(null)
   const reuseQ = useQuery<ReusableImage[]>({
     queryKey: ['gbp-reusable-images', clientId],
@@ -292,6 +535,27 @@ function ImageField({ clientId, value, onChange }: { clientId: string; value: st
     onSuccess: (r) => { setErr(null); onChange(r.url) },
     onError: (e: Error) => setErr(e.message),
   })
+  const genMut = useMutation({
+    mutationFn: (prompt: string) => api.post<{ url: string }>(`/clients/${clientId}/gbp/posts/generate-image`, { prompt }),
+    // Pass the prompt back so the caller can store it — enables one-click "Regenerate image".
+    onSuccess: (r, prompt) => { setErr(null); setShowGen(false); onChange(r.url, prompt) },
+    onError: (e: Error) => setErr(e.message),
+  })
+  const urlMut = useMutation({
+    mutationFn: (u: string) => api.post<{ url: string }>(`/clients/${clientId}/gbp/posts/image-from-url`, { url: u }),
+    onSuccess: (r) => { setErr(null); setShowUrl(false); setImgUrl(''); onChange(r.url) },
+    onError: (e: Error) => setErr(e.message),
+  })
+  const errMsg = (e: string): string =>
+    e === 'image_dimensions_too_small' ? 'Image must be at least 250×250px.'
+      : e === 'unsupported_image_type' ? 'Use a JPG or PNG image.'
+      : e === 'image_gen_failed' ? 'Image generation failed — try a different prompt.'
+      : e === 'image_gen_not_configured' ? 'AI image generation isn’t configured on the server.'
+      : e === 'prompt_required' ? 'Describe the image you want.'
+      : e === 'image_fetch_failed' ? "Couldn't fetch that image URL — make sure it's public and direct to a JPG/PNG."
+      : e === 'invalid_image_url' ? 'Enter a valid http(s) image URL.'
+      : e === 'invalid_image' ? "That URL didn't return a readable image."
+      : e
 
   return (
     <div>
@@ -308,10 +572,36 @@ function ImageField({ clientId, value, onChange }: { clientId: string; value: st
             <input type="file" accept="image/jpeg,image/png" hidden
               onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadMut.mutate(f) }} />
           </label>
-          <button onClick={() => setShowReuse((s) => !s)} style={btn('#fff', '#334155')}><ImageIcon size={13} /> Reuse existing</button>
+          <button onClick={() => { setShowGen((s) => !s); setShowReuse(false); setShowUrl(false) }} style={btn(showGen ? '#eef2ff' : '#fff', showGen ? ACCENT : '#334155')}><Sparkles size={13} /> Generate with AI</button>
+          <button onClick={() => { setShowUrl((s) => !s); setShowGen(false); setShowReuse(false) }} style={btn(showUrl ? '#eef2ff' : '#fff', showUrl ? ACCENT : '#334155')}><Link2 size={13} /> From URL</button>
+          <button onClick={() => { setShowReuse((s) => !s); setShowGen(false); setShowUrl(false) }} style={btn('#fff', '#334155')}><ImageIcon size={13} /> Reuse existing</button>
         </div>
       )}
-      {err && <div style={{ color: '#b91c1c', fontSize: 12, marginTop: 6 }}>{err === 'image_dimensions_too_small' ? 'Image must be at least 250×250px.' : err === 'unsupported_image_type' ? 'Use a JPG or PNG image.' : err}</div>}
+      {err && <div style={{ color: '#b91c1c', fontSize: 12, marginTop: 6 }}>{errMsg(err)}</div>}
+      {showUrl && !value && (
+        <div style={{ marginTop: 10, padding: 12, border: '1px solid #e2e8f0', borderRadius: 10 }}>
+          <label style={label}>Image URL <span style={{ color: '#94a3b8', fontWeight: 400 }}>(direct link to a JPG/PNG)</span></label>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input value={imgUrl} onChange={(e) => setImgUrl(e.target.value)} placeholder="https://example.com/image.jpg" style={{ ...input, flex: 1 }} />
+            <button onClick={() => urlMut.mutate(imgUrl.trim())} disabled={!imgUrl.trim() || urlMut.isPending} style={{ ...btn(ACCENT), opacity: imgUrl.trim() ? 1 : 0.5 }}>
+              {urlMut.isPending ? 'Fetching…' : 'Use image'}
+            </button>
+          </div>
+          <p style={{ fontSize: 11, color: '#94a3b8', margin: '6px 0 0' }}>We fetch and re-host it so Google can load it reliably at publish time.</p>
+        </div>
+      )}
+      {showGen && !value && (
+        <div style={{ marginTop: 10, padding: 12, border: '1px dashed #c7d2fe', borderRadius: 10, background: '#f5f3ff' }}>
+          <label style={{ ...label, color: ACCENT }}><Sparkles size={12} style={{ verticalAlign: -1 }} /> Describe the image (Nano Banana · Gemini)</label>
+          <textarea value={genPrompt} onChange={(e) => setGenPrompt(e.target.value)} rows={2}
+            placeholder="e.g. a friendly roofer inspecting a tiled roof on a sunny day" style={{ ...input, resize: 'vertical' }} />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+            <button onClick={() => genMut.mutate(genPrompt.trim())} disabled={!genPrompt.trim() || genMut.isPending} style={{ ...btn(ACCENT), opacity: genPrompt.trim() ? 1 : 0.5 }}>
+              <Sparkles size={13} /> {genMut.isPending ? 'Generating…' : 'Generate image'}
+            </button>
+          </div>
+        </div>
+      )}
       {showReuse && !value && (
         <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(84px,1fr))', gap: 8, maxHeight: 200, overflowY: 'auto', padding: 8, border: '1px solid #e2e8f0', borderRadius: 8 }}>
           {reuseQ.isLoading ? <span style={{ fontSize: 12, color: '#94a3b8' }}>Loading…</span>
@@ -328,14 +618,86 @@ function ImageField({ clientId, value, onChange }: { clientId: string; value: st
 }
 
 // ── Compose ──────────────────────────────────────────────────────────────────
-function ComposeTab({ clientId, locations, onDone }: { clientId: string; locations: GbpLocation[]; onDone: () => void }) {
+// ── Create N posts from a page URL ───────────────────────────────────────────
+function CreateFromUrl({ clientId, locationId, disabled, onDone }: { clientId: string; locationId: string; disabled: boolean; onDone: () => void }) {
+  const [url, setUrl] = useState('')
+  const [count, setCount] = useState(3)
+  const [status, setStatus] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const errMsg = (e: string): string =>
+    e === 'source_fetch_failed' ? "Couldn't read that page — check the URL is public and try again."
+      : e === 'url_required' ? 'Enter a page URL.'
+      : e === 'client_frozen' ? 'This client is frozen — content creation is paused.'
+      : e
+
+  const run = async () => {
+    setErr(null)
+    const clean = url.trim()
+    if (!clean) { setErr('Enter a page URL.'); return }
+    const n = Math.max(0, Math.min(99, Math.floor(count || 0)))
+    if (n === 0) { setErr('Set how many posts to create (1–99).'); return }
+    setBusy(true); setStatus(`Reading the page and drafting ${n} post${n === 1 ? '' : 's'}…`)
+    try {
+      const r = await api.post<{ count: number; job_ids: string[] }>(`/clients/${clientId}/gbp/posts/generate-from-url`, {
+        location_row_id: locationId, url: clean, count: n, topic_type: 'standard',
+      })
+      const ids = r.job_ids
+      // Poll the batch until every job settles (bounded so a hung job can't spin forever).
+      for (let i = 0; i < 60 && ids.length; i++) {
+        await new Promise((res) => setTimeout(res, 3000))
+        const rows = await api.post<JobStatus[]>(`/clients/${clientId}/gbp/posts/jobs/status`, { job_ids: ids })
+        const done = rows.filter((x) => x.status === 'complete' || x.status === 'failed').length
+        const ok = rows.filter((x) => x.status === 'complete').length
+        setStatus(`Drafted ${ok} of ${ids.length}…`)
+        if (done >= ids.length) break
+      }
+      setStatus(null); setBusy(false); setUrl(''); onDone()
+    } catch (e) {
+      setErr(errMsg((e as Error).message)); setBusy(false); setStatus(null)
+    }
+  }
+
+  return (
+    <div style={{ padding: 14, border: '1px dashed #c7d2fe', borderRadius: 10, background: '#f5f3ff' }}>
+      <label style={{ ...label, color: ACCENT, marginBottom: 8 }}><Sparkles size={12} style={{ verticalAlign: -1 }} /> Create posts from a page URL</label>
+      <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 10px' }}>
+        Paste a page (a blog post, service page, offer…) and we'll draft distinct posts from its content. They land as drafts for review.
+      </p>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <div style={{ flex: 3, minWidth: 220 }}>
+          <label style={label}>Page URL</label>
+          <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/blog/post" style={input} />
+        </div>
+        <div style={{ width: 90 }}>
+          <label style={label}>How many</label>
+          <input type="number" min={0} max={99} value={count}
+            onChange={(e) => setCount(Math.max(0, Math.min(99, Math.floor(Number(e.target.value) || 0))))} style={input} />
+        </div>
+        <button onClick={run} disabled={busy || disabled || !locationId} style={{ ...btn(ACCENT), height: 38 }}>
+          <Sparkles size={13} /> {busy ? 'Creating…' : 'Create posts'}
+        </button>
+      </div>
+      {status && <div style={{ fontSize: 12, color: ACCENT, marginTop: 8 }}>{status}</div>}
+      {err && <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 8 }}>{err}</div>}
+      {disabled && <div style={{ fontSize: 12, color: '#b45309', marginTop: 8 }}>Posts can't publish until a verified location is assigned — drafts will still be created.</div>}
+    </div>
+  )
+}
+
+function ComposeTab({ clientId, locations, onDone, seed }: { clientId: string; locations: GbpLocation[]; onDone: () => void; seed?: { text: string; nonce: number } }) {
   const okLocations = locations.filter((l) => l.access_status === 'ok')
   const [locationId, setLocationId] = useState(okLocations[0]?.id ?? locations[0]?.id ?? '')
   const [type, setType] = useState<TopicType>('standard')
-  const [summary, setSummary] = useState('')
+  const [summary, setSummary] = useState(seed?.text ?? '')
+  const summaryRef = useRef<HTMLTextAreaElement>(null)
+  // Re-seed the composer when an external suggestion is picked (Local SEO).
+  useEffect(() => { if (seed) setSummary(seed.text.slice(0, MAX_CHARS)) }, [seed?.nonce])
   const [ctaType, setCtaType] = useState<CtaType | ''>('')
   const [ctaUrl, setCtaUrl] = useState('')
   const [image, setImage] = useState<string | null>(null)
+  const [imagePrompt, setImagePrompt] = useState<string | null>(null)
   // offer/event fields
   const [eventTitle, setEventTitle] = useState('')
   const [startDate, setStartDate] = useState(''); const [startTime, setStartTime] = useState('')
@@ -354,7 +716,7 @@ function ComposeTab({ clientId, locations, onDone }: { clientId: string; locatio
     const body: Record<string, unknown> = {
       location_row_id: locationId, topic_type: type, summary: summary.trim(),
       cta_type: ctaType || null, cta_url: ctaType && ctaType !== 'call' ? ctaUrl.trim() || null : null,
-      media: image ? [{ sourceUrl: image }] : null,
+      media: image ? [{ sourceUrl: image, ...(imagePrompt ? { prompt: imagePrompt } : {}) }] : null,
     }
     if (needsEvent) {
       const schedule: Record<string, unknown> = {}
@@ -376,14 +738,46 @@ function ComposeTab({ clientId, locations, onDone }: { clientId: string; locatio
 
   const valid = locationId && summary.trim() && (!needsEvent || (eventTitle.trim() && startDate)) && (!ctaType || ctaType === 'call' || ctaUrl.trim())
 
+  // Publish runs as a backgrounded async job — survive navigating away and
+  // reconnect on return (the post publishes server-side regardless).
+  const publishJob = useResumableJob<JobStatus, undefined>({
+    storageKey: `gbp-posts:compose-publish:${clientId}`,
+    poll: (jobId) => pollGbpJob(clientId, jobId),
+    onComplete: () => onDone(),
+    onError: (err) => setError(err === 'job_failed' ? 'Publish failed.' : err),
+  })
+  // AI draft also runs as a backgrounded job; on completion we fetch the drafted
+  // post and drop its text into the composer.
+  const generateJob = useResumableJob<JobStatus, undefined>({
+    storageKey: `gbp-posts:generate:${clientId}`,
+    poll: (jobId) => pollGbpJob(clientId, jobId),
+    onComplete: async (row) => {
+      if (!row?.post_id) { setError(row?.error || 'draft_failed'); return }
+      try {
+        const p = await api.get<GbpPost>(`/gbp/posts/${row.post_id}`)
+        setSummary(p.summary); setError(null)
+      } catch (e) { setError((e as Error).message) }
+    },
+    onError: (err) => setError(err === 'job_failed' ? 'draft_failed' : err),
+  })
+  const publishing = publishJob.running
+  const anyBusy = busy !== null || publishing
+
   async function submit(action: 'draft' | 'publish' | 'schedule') {
-    setError(null); setBusy(action)
+    setError(null)
+    if (action === 'publish') {
+      // Create the post, then enqueue + poll the publish job (resumable).
+      await publishJob.start(async () => {
+        const post = await api.post<GbpPost>(`/clients/${clientId}/gbp/posts`, buildBody())
+        const { job_id } = await api.post<{ job_id: string }>(`/clients/${clientId}/gbp/posts/${post.id}/publish`, {})
+        return job_id
+      }, undefined)
+      return
+    }
+    setBusy(action)
     try {
       const post = await api.post<GbpPost>(`/clients/${clientId}/gbp/posts`, buildBody())
-      if (action === 'publish') {
-        const { job_id } = await api.post<{ job_id: string }>(`/clients/${clientId}/gbp/posts/${post.id}/publish`, {})
-        await pollJob(clientId, job_id)
-      } else if (action === 'schedule') {
+      if (action === 'schedule') {
         // tz known → send the raw wall-clock; the backend interprets it in the
         // client's timezone. tz unknown → resolve in the browser tz to a UTC ISO
         // (graceful fallback, matches the backend's naive-as-UTC path).
@@ -398,22 +792,20 @@ function ComposeTab({ clientId, locations, onDone }: { clientId: string; locatio
     }
   }
 
-  const aiDraft = useMutation({
-    mutationFn: async () => {
+  const runAiDraft = () => {
+    setError(null)
+    void generateJob.start(async () => {
       const { job_id } = await api.post<{ job_id: string }>(`/clients/${clientId}/gbp/posts/generate`, {
         location_row_id: locationId, topic_type: type, theme: theme.trim() || null,
         source_url: sourceUrl.trim() || null, cta_type: ctaType || null, cta_url: ctaUrl.trim() || null,
       })
-      const done = await pollJob(clientId, job_id)
-      if (done.status !== 'complete' || !done.post_id) throw new Error(done.error || 'draft_failed')
-      return api.get<GbpPost>(`/gbp/posts/${done.post_id}`)
-    },
-    onSuccess: (p) => { setSummary(p.summary); setError(null) },
-    onError: (e: Error) => setError(e.message),
-  })
+      return job_id
+    }, undefined)
+  }
 
   return (
     <div style={{ display: 'grid', gap: 16, maxWidth: 640 }}>
+      <CreateFromUrl clientId={clientId} locationId={locationId} disabled={okLocations.length === 0} onDone={onDone} />
       {okLocations.length === 0 && (
         <div style={{ fontSize: 12, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', padding: 10, borderRadius: 8 }}>
           No verified location — posts can't publish until the service account is a Manager and the location shows “ok”.
@@ -475,20 +867,27 @@ function ComposeTab({ clientId, locations, onDone }: { clientId: string; locatio
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <input value={theme} onChange={(e) => setTheme(e.target.value)} placeholder="Topic / angle (optional)" style={{ ...input, flex: 2, minWidth: 160 }} />
           <input value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} placeholder="Announce a page URL (optional)" style={{ ...input, flex: 2, minWidth: 160 }} />
-          <button onClick={() => aiDraft.mutate()} disabled={!locationId || aiDraft.isPending} style={btn(ACCENT)}>
-            {aiDraft.isPending ? 'Drafting…' : 'Draft with AI'}
+          <button onClick={runAiDraft} disabled={!locationId || generateJob.running} style={btn(ACCENT)}>
+            {generateJob.running ? 'Drafting…' : 'Draft with AI'}
           </button>
         </div>
       </div>
 
       <div>
-        <label style={label}>Post text</label>
-        <textarea value={summary} onChange={(e) => setSummary(e.target.value.slice(0, MAX_CHARS))} rows={5}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+          <label style={{ ...label, marginBottom: 0 }}>Post text</label>
+          <EmojiPicker onSelect={(e) => {
+            const { value, caret } = insertAtCursor(summaryRef.current, summary, e, MAX_CHARS)
+            setSummary(value)
+            requestAnimationFrame(() => { const el = summaryRef.current; if (el) { el.focus(); el.setSelectionRange(caret, caret) } })
+          }} />
+        </div>
+        <textarea ref={summaryRef} value={summary} onChange={(e) => setSummary(e.target.value.slice(0, MAX_CHARS))} rows={5}
           placeholder="Write your post…" style={{ ...input, resize: 'vertical' }} />
         <div style={{ fontSize: 11, color: summary.length > MAX_CHARS - 100 ? '#b45309' : '#94a3b8', textAlign: 'right', marginTop: 2 }}>{summary.length}/{MAX_CHARS}</div>
       </div>
 
-      <ImageField clientId={clientId} value={image} onChange={setImage} />
+      <ImageField clientId={clientId} value={image} onChange={(u, p) => { setImage(u); setImagePrompt(p ?? null) }} />
 
       <div>
         <label style={label}>Call to action <span style={{ color: '#94a3b8', fontWeight: 400 }}>(optional)</span></label>
@@ -507,18 +906,18 @@ function ComposeTab({ clientId, locations, onDone }: { clientId: string; locatio
 
       {/* Actions */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', borderTop: '1px solid #f1f5f9', paddingTop: 14 }}>
-        <button onClick={() => submit('draft')} disabled={!valid || busy !== null} style={{ ...btn('#fff', '#334155'), opacity: valid ? 1 : 0.5 }}>
+        <button onClick={() => submit('draft')} disabled={!valid || anyBusy} style={{ ...btn('#fff', '#334155'), opacity: valid ? 1 : 0.5 }}>
           <Save size={13} /> {busy === 'draft' ? 'Saving…' : 'Save draft'}
         </button>
-        <button onClick={() => submit('publish')} disabled={!valid || busy !== null || okLocations.length === 0} style={{ ...btn('#16a34a'), opacity: valid && okLocations.length ? 1 : 0.5 }}>
-          <Send size={13} /> {busy === 'publish' ? 'Publishing…' : 'Publish now'}
+        <button onClick={() => submit('publish')} disabled={!valid || anyBusy || okLocations.length === 0} style={{ ...btn('#16a34a'), opacity: valid && okLocations.length ? 1 : 0.5 }}>
+          <Send size={13} /> {publishing ? 'Publishing…' : 'Publish now'}
         </button>
         <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginLeft: 'auto' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             <input type="datetime-local" value={scheduleAt} onChange={(e) => setScheduleAt(e.target.value)} style={{ ...input, width: 200 }} title={`Publish time — ${tzLabel(tz)}`} />
             <span style={{ fontSize: 10, color: '#94a3b8' }}>{tzLabel(tz)}</span>
           </div>
-          <button onClick={() => submit('schedule')} disabled={!valid || !scheduleAt || busy !== null} style={{ ...btn(ACCENT), opacity: valid && scheduleAt ? 1 : 0.5 }}>
+          <button onClick={() => submit('schedule')} disabled={!valid || !scheduleAt || anyBusy} style={{ ...btn(ACCENT), opacity: valid && scheduleAt ? 1 : 0.5 }}>
             <CalendarClock size={13} /> {busy === 'schedule' ? 'Scheduling…' : 'Schedule'}
           </button>
         </div>
@@ -528,81 +927,255 @@ function ComposeTab({ clientId, locations, onDone }: { clientId: string; locatio
 }
 
 // ── Posts list ───────────────────────────────────────────────────────────────
+// One post row — with per-post image editing + scheduling for drafts.
+function PostCard({ clientId, post: p, tz, onPublish, isPublishing, onChanged }: {
+  clientId: string; post: GbpPost; tz: string | null
+  onPublish: (id: string) => void; isPublishing: boolean; onChanged: () => void
+}) {
+  const [pending, setPending] = useState<string | null>(null)
+  const [showImage, setShowImage] = useState(false)
+  const [schedAt, setSchedAt] = useState('')
+  const [editText, setEditText] = useState<string | null>(null)
+  const editRef = useRef<HTMLTextAreaElement>(null)
+  const meta = STATUS_META[p.status]
+  const busy = pending !== null || isPublishing
+  const isDraft = p.status === 'draft' || p.status === 'failed'
+  const hasImage = Boolean(p.media?.[0]?.sourceUrl)
+  const imagePrompt = p.media?.[0]?.prompt
+  const isAi = p.source === 'ai' || p.source === 'schedule'
+
+  const run = async (fn: () => Promise<unknown>, key: string) => {
+    setPending(key)
+    try { await fn() } finally { setPending(null); onChanged() }
+  }
+  const setImage = (url: string | null, prompt?: string) => {
+    const media = url ? [{ sourceUrl: url, ...(prompt ? { prompt } : {}) }] : null
+    void run(() => api.patch(`/gbp/posts/${p.id}`, { media }), `${p.id}:img`)
+    if (url) setShowImage(false)
+  }
+  const saveText = () => {
+    const summary = (editText ?? '').trim()
+    if (!summary) return
+    void run(() => api.patch(`/gbp/posts/${p.id}`, { summary }), `${p.id}:edit`).then(() => setEditText(null))
+  }
+  const schedule = () => {
+    // tz known → send the raw wall-clock (backend interprets it in the client's
+    // tz); tz unknown → resolve in the browser tz to a UTC ISO (matches Compose).
+    const scheduled_at = tz ? schedAt : new Date(schedAt).toISOString()
+    void run(() => api.post(`/clients/${clientId}/gbp/posts/${p.id}/schedule`, { scheduled_at }), `${p.id}:sch`)
+  }
+  // Re-draft the post text in place (async job) — poll until it settles.
+  const regenerateText = () => run(async () => {
+    const { job_id } = await api.post<{ job_id: string }>(`/clients/${clientId}/gbp/posts/${p.id}/regenerate`, {})
+    for (let i = 0; i < 40; i++) {
+      await new Promise((res) => setTimeout(res, 2500))
+      const rows = await api.post<JobStatus[]>(`/clients/${clientId}/gbp/posts/jobs/status`, { job_ids: [job_id] })
+      if (rows[0]?.status === 'complete' || rows[0]?.status === 'failed') break
+    }
+  }, `${p.id}:regen`)
+  // Re-roll the AI image using its stored prompt (Nano Banana is non-deterministic).
+  const regenerateImage = () => {
+    if (!imagePrompt) return
+    void run(async () => {
+      const r = await api.post<{ url: string }>(`/clients/${clientId}/gbp/posts/generate-image`, { prompt: imagePrompt })
+      await api.patch(`/gbp/posts/${p.id}`, { media: [{ sourceUrl: r.url, prompt: imagePrompt }] })
+    }, `${p.id}:imgregen`)
+  }
+
+  return (
+    <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <span style={{ padding: '3px 9px', borderRadius: 999, background: meta.bg, color: meta.color, fontSize: 11, fontWeight: 700 }}>{meta.label}</span>
+        <span style={{ fontSize: 11, color: '#94a3b8', textTransform: 'capitalize' }}>{p.topic_type === 'standard' ? 'update' : p.topic_type}</span>
+        {p.scheduled_at && p.status === 'scheduled' && (
+          <span style={{ fontSize: 11, color: '#7c3aed', display: 'inline-flex', alignItems: 'center', gap: 3 }} title={tzLabel(tz)}><Clock size={11} /> {fmtInTz(p.scheduled_at, tz)}</span>
+        )}
+        {p.search_url && (
+          <a href={p.search_url} target="_blank" rel="noreferrer" style={{ marginLeft: 'auto', fontSize: 12, color: ACCENT, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+            View on Google <ExternalLink size={11} />
+          </a>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 12 }}>
+        {hasImage && <img src={p.media![0].sourceUrl} alt="" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 6, flexShrink: 0 }} />}
+        {editText !== null ? (
+          <div style={{ flex: 1 }}>
+            <textarea ref={editRef} value={editText} onChange={(e) => setEditText(e.target.value.slice(0, MAX_CHARS))} rows={4}
+              style={{ ...input, resize: 'vertical' }} />
+            <div style={{ display: 'flex', gap: 6, marginTop: 6, alignItems: 'center' }}>
+              <button disabled={busy || !editText.trim()} onClick={saveText} style={btn(ACCENT)}>
+                <Save size={12} /> {pending === `${p.id}:edit` ? 'Saving…' : 'Save'}
+              </button>
+              <button onClick={() => setEditText(null)} style={btn('#fff', '#334155')}>Cancel</button>
+              <EmojiPicker onSelect={(e) => {
+                const { value, caret } = insertAtCursor(editRef.current, editText, e, MAX_CHARS)
+                setEditText(value)
+                requestAnimationFrame(() => { const el = editRef.current; if (el) { el.focus(); el.setSelectionRange(caret, caret) } })
+              }} />
+            </div>
+          </div>
+        ) : (
+          <p style={{ margin: 0, fontSize: 13, color: '#334155', whiteSpace: 'pre-wrap', flex: 1 }}>{p.summary || <span style={{ color: '#94a3b8' }}>(no text)</span>}</p>
+        )}
+      </div>
+      {p.error && <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 6 }}>Error: {p.error}</div>}
+
+      {/* Per-post image editor (drafts) */}
+      {isDraft && (
+        <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          {showImage ? (
+            <div style={{ padding: 10, border: '1px solid #e2e8f0', borderRadius: 8, width: '100%' }}>
+              <ImageField clientId={clientId} value={p.media?.[0]?.sourceUrl ?? null} onChange={setImage} />
+              <button onClick={() => setShowImage(false)} style={{ ...btn('#fff', '#334155'), marginTop: 8 }}>Done</button>
+            </div>
+          ) : (
+            <>
+              <button disabled={busy} onClick={() => setShowImage(true)} style={btn('#fff', '#334155')}>
+                <ImageIcon size={12} /> {hasImage ? 'Change image' : 'Add image'}
+              </button>
+              {hasImage && imagePrompt && (
+                <button disabled={busy} onClick={regenerateImage} title="Generate a new image from the same prompt" style={btn('#fff', '#334155')}>
+                  <RefreshCw size={12} /> {pending === `${p.id}:imgregen` ? 'Regenerating…' : 'Regenerate image'}
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Actions */}
+      <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        {isDraft && (
+          <button disabled={busy} onClick={() => onPublish(p.id)} style={btn('#16a34a')}>
+            <Send size={12} /> {isPublishing ? 'Publishing…' : 'Publish now'}
+          </button>
+        )}
+        {isDraft && editText === null && (
+          <button disabled={busy} onClick={() => setEditText(p.summary)} style={btn('#fff', '#334155')}>
+            <Pencil size={12} /> Edit
+          </button>
+        )}
+        {isDraft && isAi && (
+          <button disabled={busy} onClick={regenerateText} title="Re-draft this post with AI" style={btn('#fff', '#334155')}>
+            <Sparkles size={12} /> {pending === `${p.id}:regen` ? 'Regenerating…' : 'Regenerate'}
+          </button>
+        )}
+        {p.status === 'scheduled' && (
+          <button disabled={busy} onClick={() => run(() => api.post(`/clients/${clientId}/gbp/posts/${p.id}/unschedule`, {}), `${p.id}:unsch`)} style={btn('#fff', '#334155')}>
+            <X size={12} /> Unschedule
+          </button>
+        )}
+        {p.status === 'live' && p.search_url && (
+          <button disabled={busy} onClick={() => run(() => api.post(`/gbp/posts/${p.id}/remove-from-google`, {}), `${p.id}:rmg`)} style={btn('#fff', '#b91c1c')}>
+            <XCircle size={12} /> {pending === `${p.id}:rmg` ? 'Removing…' : 'Remove from Google'}
+          </button>
+        )}
+        <button disabled={busy} onClick={() => run(() => api.delete(`/gbp/posts/${p.id}`), `${p.id}:del`)} style={btn('#fff', '#64748b')}>
+          <Trash2 size={12} /> Trash
+        </button>
+        {isDraft && (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto' }}>
+            <input type="datetime-local" value={schedAt} onChange={(e) => setSchedAt(e.target.value)}
+              style={{ ...input, width: 190 }} title={`Publish time — ${tzLabel(tz)}`} />
+            <button disabled={!schedAt || busy} onClick={schedule} style={{ ...btn(ACCENT), opacity: schedAt ? 1 : 0.5 }}>
+              <CalendarClock size={12} /> {pending === `${p.id}:sch` ? 'Scheduling…' : 'Schedule'}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function PostsTab({ clientId }: { clientId: string }) {
   const qc = useQueryClient()
   const { data, isLoading } = useQuery<GbpPost[]>({
     queryKey: ['gbp-posts', clientId], queryFn: () => api.get<GbpPost[]>(`/clients/${clientId}/gbp/posts`),
   })
   const invalidate = () => qc.invalidateQueries({ queryKey: ['gbp-posts', clientId] })
-  const [pending, setPending] = useState<string | null>(null)
   const tz = useClientTz(clientId)
+  const [filter, setFilter] = useState<'all' | 'drafts' | 'scheduled' | 'live'>('all')
 
-  async function run(fn: () => Promise<unknown>, key: string) {
-    setPending(key)
-    try { await fn() } finally { setPending(null); invalidate() }
-  }
-  const syncMut = useMutation({
-    mutationFn: () => api.post<{ job_id: string }>(`/clients/${clientId}/gbp/posts/sync`, {}),
-    onSuccess: async (r) => { await pollJob(clientId, r.job_id); invalidate() },
+  // Sync-from-Google runs as a backgrounded async job — reconnects on return.
+  const syncJob = useResumableJob<JobStatus, undefined>({
+    storageKey: `gbp-posts:sync:${clientId}`,
+    poll: (jobId) => pollGbpJob(clientId, jobId),
+    onComplete: () => invalidate(),
+    onError: () => invalidate(),
   })
 
+  // Per-post publish runs as a backgrounded async job; the meta carries which
+  // post is publishing so the right row shows the busy state (and re-derives it
+  // after a remount from the persisted meta).
+  const [publishingPostId, setPublishingPostId] = useState<string | null>(
+    () => readPersistedMeta<{ postId: string }>(`gbp-posts:post-publish:${clientId}`)?.postId ?? null,
+  )
+  const publishJob = useResumableJob<JobStatus, { postId: string }>({
+    storageKey: `gbp-posts:post-publish:${clientId}`,
+    poll: (jobId) => pollGbpJob(clientId, jobId),
+    onComplete: () => { setPublishingPostId(null); invalidate() },
+    onError: () => { setPublishingPostId(null); invalidate() },
+  })
+  const publishPost = (postId: string) => {
+    setPublishingPostId(postId)
+    void publishJob.start(async () => {
+      const r = await api.post<{ job_id: string }>(`/clients/${clientId}/gbp/posts/${postId}/publish`, {})
+      return r.job_id
+    }, { postId })
+  }
+
   const posts = data ?? []
+  // Actionable (draft/failed → then scheduled → publishing) sort ahead of live/
+  // imported posts, so your own drafts are never buried under posts synced from
+  // Google. Data arrives created_at-desc, so a stable sort keeps recency within
+  // each status band.
+  const STATUS_RANK: Record<string, number> = { draft: 0, failed: 1, scheduled: 2, publishing: 3, live: 4, rejected: 5, deleted: 6 }
+  const isDraftish = (s: string) => s === 'draft' || s === 'failed'
+  const counts = {
+    all: posts.length,
+    drafts: posts.filter((p) => isDraftish(p.status)).length,
+    scheduled: posts.filter((p) => p.status === 'scheduled').length,
+    live: posts.filter((p) => p.status === 'live').length,
+  }
+  const shown = posts
+    .filter((p) => filter === 'all' ? true : filter === 'drafts' ? isDraftish(p.status) : p.status === filter)
+    .slice()
+    .sort((a, b) => (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9))
+
+  const TABS: { key: typeof filter; label: string; n: number }[] = [
+    { key: 'all', label: 'All', n: counts.all },
+    { key: 'drafts', label: 'Drafts', n: counts.drafts },
+    { key: 'scheduled', label: 'Scheduled', n: counts.scheduled },
+    { key: 'live', label: 'Live', n: counts.live },
+  ]
+
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-        <button onClick={() => syncMut.mutate()} disabled={syncMut.isPending} style={btn('#fff', '#334155')}>
-          <RefreshCw size={13} /> {syncMut.isPending ? 'Syncing…' : 'Sync from Google'}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {TABS.map((t) => (
+            <button key={t.key} onClick={() => setFilter(t.key)}
+              style={{ padding: '5px 11px', borderRadius: 999, border: `1px solid ${filter === t.key ? ACCENT : '#e2e8f0'}`, background: filter === t.key ? '#eef2ff' : '#fff', color: filter === t.key ? ACCENT : '#475569', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+              {t.label} {t.n}
+            </button>
+          ))}
+        </div>
+        <button onClick={() => { void syncJob.start(async () => {
+          const r = await api.post<{ job_id: string }>(`/clients/${clientId}/gbp/posts/sync`, {})
+          return r.job_id
+        }, undefined) }} disabled={syncJob.running} style={{ ...btn('#fff', '#334155'), marginLeft: 'auto' }}>
+          <RefreshCw size={13} /> {syncJob.running ? 'Syncing…' : 'Sync from Google'}
         </button>
       </div>
       {isLoading ? <div style={{ color: '#64748b', fontSize: 13 }}>Loading…</div>
-        : posts.length === 0 ? <div style={{ color: '#94a3b8', fontSize: 13, padding: '24px 0' }}>No posts yet — compose one to get started.</div>
+        : shown.length === 0 ? <div style={{ color: '#94a3b8', fontSize: 13, padding: '24px 0' }}>{posts.length === 0 ? 'No posts yet — compose one to get started.' : 'No posts in this view.'}</div>
         : (
           <div style={{ display: 'grid', gap: 10 }}>
-            {posts.map((p) => {
-              const meta = STATUS_META[p.status]
-              const busy = pending?.startsWith(p.id)
-              return (
-                <div key={p.id} style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 14 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                    <span style={{ padding: '3px 9px', borderRadius: 999, background: meta.bg, color: meta.color, fontSize: 11, fontWeight: 700 }}>{meta.label}</span>
-                    <span style={{ fontSize: 11, color: '#94a3b8', textTransform: 'capitalize' }}>{p.topic_type === 'standard' ? 'update' : p.topic_type}</span>
-                    {p.scheduled_at && p.status === 'scheduled' && (
-                      <span style={{ fontSize: 11, color: '#7c3aed', display: 'inline-flex', alignItems: 'center', gap: 3 }} title={tzLabel(tz)}><Clock size={11} /> {fmtInTz(p.scheduled_at, tz)}</span>
-                    )}
-                    {p.search_url && (
-                      <a href={p.search_url} target="_blank" rel="noreferrer" style={{ marginLeft: 'auto', fontSize: 12, color: ACCENT, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                        View on Google <ExternalLink size={11} />
-                      </a>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', gap: 12 }}>
-                    {p.media?.[0]?.sourceUrl && <img src={p.media[0].sourceUrl} alt="" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 6, flexShrink: 0 }} />}
-                    <p style={{ margin: 0, fontSize: 13, color: '#334155', whiteSpace: 'pre-wrap', flex: 1 }}>{p.summary}</p>
-                  </div>
-                  {p.error && <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 6 }}>Error: {p.error}</div>}
-                  <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
-                    {(p.status === 'draft' || p.status === 'failed') && (
-                      <button disabled={busy} onClick={() => run(async () => { const r = await api.post<{ job_id: string }>(`/clients/${clientId}/gbp/posts/${p.id}/publish`, {}); await pollJob(clientId, r.job_id) }, `${p.id}:pub`)} style={btn('#16a34a')}>
-                        <Send size={12} /> {pending === `${p.id}:pub` ? 'Publishing…' : 'Publish'}
-                      </button>
-                    )}
-                    {p.status === 'scheduled' && (
-                      <button disabled={busy} onClick={() => run(() => api.post(`/clients/${clientId}/gbp/posts/${p.id}/unschedule`, {}), `${p.id}:unsch`)} style={btn('#fff', '#334155')}>
-                        <X size={12} /> Unschedule
-                      </button>
-                    )}
-                    {p.status === 'live' && p.search_url && (
-                      <button disabled={busy} onClick={() => run(() => api.post(`/gbp/posts/${p.id}/remove-from-google`, {}), `${p.id}:rmg`)} style={btn('#fff', '#b91c1c')}>
-                        <XCircle size={12} /> {pending === `${p.id}:rmg` ? 'Removing…' : 'Remove from Google'}
-                      </button>
-                    )}
-                    <button disabled={busy} onClick={() => run(() => api.delete(`/gbp/posts/${p.id}`), `${p.id}:del`)} style={btn('#fff', '#64748b')}>
-                      <Trash2 size={12} /> Trash
-                    </button>
-                  </div>
-                </div>
-              )
-            })}
+            {shown.map((p) => (
+              <PostCard key={p.id} clientId={clientId} post={p} tz={tz}
+                onPublish={publishPost} isPublishing={publishJob.running && publishingPostId === p.id}
+                onChanged={invalidate} />
+            ))}
           </div>
         )}
     </div>

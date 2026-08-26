@@ -5,7 +5,7 @@ import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, CalendarClock, CalendarPlus,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
-  ClipboardList, BookOpen, Share2, Target, Swords, Link2, KanbanSquare, Radar, ShoppingBag, Megaphone, Globe2,
+  ClipboardList, BookOpen, Share2, Target, Swords, Link2, KanbanSquare, Radar, ShoppingBag, Megaphone, Globe2, Server, BarChart3,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 import { FreezeBanner } from '../components/FreezeBanner'
@@ -190,6 +190,15 @@ export function ClientWorkspace() {
             ) : undefined
           }
         />
+        {client?.wheelhouse_cpt_enabled && (
+          <ActionCard
+            icon={<Server size={22} />}
+            label="WHIT Posting"
+            description="Generate & publish WheelHouse IT city, service & local SEO pages to WordPress as ACF-driven Pages under the Florida or New York silo — mass runs or a single one-off."
+            to={id ? `/clients/${id}/wheelhouse` : undefined}
+            cta="Open"
+          />
+        )}
         <ActionCard
           icon={<FileText size={22} />}
           label="Create Service Pages"
@@ -421,6 +430,13 @@ export function ClientWorkspace() {
         title="Reporting"
         subtitle="Generate client-facing performance reports."
       >
+        <ActionCard
+          icon={<BarChart3 size={22} />}
+          label="GBP Insights"
+          description="Google Business Profile performance over time — profile views, calls, website clicks, direction requests & messages, with period-over-period growth pulled from the Business Profile Performance API."
+          to={id ? `/clients/${id}/gbp-metrics` : undefined}
+          cta="Open"
+        />
         <ActionCard
           icon={<FileBarChart size={22} />}
           label="Client Reports"

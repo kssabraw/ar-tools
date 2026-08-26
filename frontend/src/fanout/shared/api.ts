@@ -582,6 +582,10 @@ export interface RegateBody {
   relevance_threshold?: number;
   clustering_edge_threshold?: number;
   clustering_resolution?: number;
+  active_per_silo_cap?: number;
+  // Soft-routing cosine margin (0 = pure argmax). Keeps a keyword active in every
+  // silo within this margin of its best — repopulates silos starved by argmax.
+  silo_margin?: number;
 }
 
 export const regate = (id: string, body: RegateBody = {}) =>
@@ -852,10 +856,34 @@ export interface KeywordReportListItem {
   has_download: boolean;
 }
 
-// Generate a client-facing PDF report (silos, demand, top opportunities, content
-// plan + keyword appendix), saved to the client's Drive folder + downloadable.
+// The pending descriptor returned when a report render is enqueued.
+export interface KeywordReportPending {
+  report_id: string;
+  session_id: string;
+  status: string;
+  generated_at: string;
+}
+
+// A report row's live status + a fresh download URL once the render completes.
+export interface KeywordReportStatus {
+  report_id: string;
+  title: string | null;
+  status: string;               // pending | complete | failed
+  error: string | null;
+  download_url: string | null;
+  drive_url: string | null;
+  generated_at: string | null;
+}
+
+// Enqueue a client-facing PDF report (silos, demand, top opportunities, content
+// plan + keyword appendix) as a background job — the user can navigate away while
+// it renders. Poll getKeywordReportStatus, then download.
 export const createKeywordReport = (sessionId: string) =>
-  request<KeywordReportResult>(`/sessions/${sessionId}/report`, { method: "POST" });
+  request<KeywordReportPending>(`/sessions/${sessionId}/report`, { method: "POST" });
+
+// Poll a background report render.
+export const getKeywordReportStatus = (sessionId: string, reportId: string) =>
+  request<KeywordReportStatus>(`/sessions/${sessionId}/report/${reportId}`);
 
 // Past reports for a session, newest first.
 export const listKeywordReports = (sessionId: string) =>
@@ -1068,9 +1096,32 @@ export interface ArticleListItem {
   cost_usd: number | null;
   generated_at: string | null;
   scheduled: boolean;
+  // Reoptimization is available only for client-linked articles (mirrored into a
+  // suite blog run); the latest blog composite score is shown as a badge.
+  reoptimizable?: boolean;
+  composite_score?: number | null;
+  composite_status?: string | null;
 }
 export const listArticles = (sessionId: string) =>
   request<{ articles: ArticleListItem[]; count: number }>(`/sessions/${sessionId}/articles`);
+
+// ── Reoptimize a Fan-out article (via its mirrored suite blog run) ──
+export interface ReoptJobStatus {
+  job_id: string;
+  status: string; // queued | running | complete | failed
+  result?: { composite_score?: number | null; prev_score?: number | null; new_score?: number | null } | null;
+  error?: string | null;
+}
+export const scoreArticle = (sessionId: string, clusterId: string) =>
+  request<{ job_id: string; cluster_id: string }>(
+    `/sessions/${sessionId}/clusters/${clusterId}/reopt-score`, { method: "POST" });
+export const reoptimizeArticle = (sessionId: string, clusterId: string) =>
+  request<{ job_id: string; cluster_id: string }>(
+    `/sessions/${sessionId}/clusters/${clusterId}/reopt`, { method: "POST" });
+export const reoptJobsStatus = (sessionId: string, jobIds: string[]) =>
+  request<{ jobs: ReoptJobStatus[] }>(
+    `/sessions/${sessionId}/reopt-jobs/status`,
+    { method: "POST", body: JSON.stringify({ job_ids: jobIds }) });
 export const downloadAllArticles = (sessionId: string) =>
   request<{ download_url: string; count: number }>(
     `/sessions/${sessionId}/articles/download-all`, { method: "POST" });

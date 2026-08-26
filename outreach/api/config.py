@@ -101,6 +101,11 @@ class Settings(BaseSettings):
     # for a smoke test and unwise for a real market run. Moves to R2 in Phase 2 (ISSUES I-024).
     raw_landing_dir: str | None = None
 
+    # Where the `render-heatmap` command writes rendered SVGs, keyed by content_hash. Local-disk
+    # for now; R2 + signed prospect URLs are a later Phase 3 slice (reporting §5). Defaults to a
+    # working dir so a render never fails for want of a configured path.
+    artifact_dir: str = "artifacts"
+
     # --- DataForSEO ----------------------------------------------------------------------
     # The independent second opinion for I-041, and the sole provider for Phase 2 scanning.
     # Set on Railway as REFERENCE variables (${{PLATFORM.DATAFORSEO_LOGIN}}) rather than copies,
@@ -133,6 +138,16 @@ class Settings(BaseSettings):
     # cheapest way to find out.
     ai_granularity_model: str = "gpt-5.4"
 
+    # --- AI-visibility scan (report increment 3) -----------------------------------------
+    # The report's LLM signal: does an AI assistant name this business for its keyword in its
+    # region. Two engines (owner ruling 2026-08-08): ChatGPT (OpenAI, reuses OUTREACH_OPENAI_API_KEY)
+    # and Google AI Overview (DataForSEO). The ChatGPT model is a consumer-reachable one, like the
+    # granularity spike. OpenAI does not return a per-call cost, so the ledger stores this configured
+    # estimate (the DataForSEO/AIO side rides dataforseo_cost_per_request_cents) — reconciled against
+    # the dashboard like every other rate here.
+    ai_visibility_chatgpt_model: str = "gpt-5.4"
+    ai_visibility_openai_cost_cents: int = 2
+
     # --- Cost guardrails -----------------------------------------------------------------
     # Abort the paid stage if the pre-flight projection exceeds this (brief §4).
     max_market_run_cost_cents: int = 5000
@@ -164,6 +179,40 @@ class Settings(BaseSettings):
     franchise_patterns: list[str] = Field(
         default_factory=lambda: list(DEFAULT_FRANCHISE_PATTERNS)
     )
+
+    # --- Category relevance (three-bucket gate) ------------------------------------------
+    # A Google Maps category search returns adjacent trades too — a "plumbing contractor" pull for
+    # Inglewood surfaced apartment buildings, tool stores, HVAC firms and supply houses, ~half the
+    # contactable set. This gate drops a listing whose PRIMARY Google category is off the vertical's
+    # allow-list, keeps it when the primary matches, and flags it for REVIEW (never auto-drops) when
+    # only a SECONDARY category matches. Fail-open: a listing with no category, or a vertical absent
+    # from the map below, is NOT_EVALUATED and kept.
+    #
+    # Enabled by default, but a no-op for any vertical not in `filter_category_relevance` — so it
+    # touches only the verticals whose allow-list has been curated here. Keyed on the INGEST
+    # category (the typed business type). Add a vertical by adding a key.
+    filter_category_relevance_enabled: bool = True
+    filter_category_relevance: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "plumber": ["Plumber", "Fontanero", "Drainage service"],
+            "plumbing contractor": ["Plumber", "Fontanero", "Drainage service"],
+            "plumbing": ["Plumber", "Fontanero", "Drainage service"],
+        }
+    )
+
+    # --- Distance gate -------------------------------------------------------------------
+    # `coordinates` biases the Outscraper search centre but does not bound it (there is no radius
+    # parameter), so a category search can return a business outside the target city. This drops a
+    # listing further than `filter_max_distance_miles` from its assigned submarket centroid — which,
+    # for the typed-city onboard flow, IS the city centre (platform-api geocodes the city to that
+    # submarket). Fail-open: a listing with no coordinates is kept.
+    #
+    # 7 miles (owner ruling 2026-08-10). Tight enough to keep results in the city while still
+    # covering a business on the far side of it — the live Inglewood pull sat entirely within 6.7
+    # miles of centre. A market whose submarkets are spaced further apart than this may need a
+    # looser cap; it is per-config for that reason.
+    filter_max_distance_enabled: bool = True
+    filter_max_distance_miles: float = 7.0
 
     # --- Cadence -------------------------------------------------------------------------
     scan_interval_days: int = 15
@@ -213,6 +262,217 @@ class Settings(BaseSettings):
     # ambition: the rollup rides the collector's frequent tick, so a backlog drains over ticks
     # instead of turning one tick into an unbounded job that the platform may kill halfway.
     rollup_batch_limit: int = 50
+
+    # --- Delta heatmaps (reporting spec §4.3, PRD §9a.2) -----------------------------------
+    # A before/after delta MUST NOT be rendered across a gap wider than this — a gap means missed
+    # cycles, and a two-snapshot comparison spanning them attributes to one interval what really
+    # happened over several (PRD §9a.2). Default 45 per PRD §9a.2. The guard is enforced from the
+    # two snapshots' `scanned_at`, which exist today; the provider-boundary and drift-suppression
+    # halves of the same guard are wired in `heatmap.assert_delta_renderable` and land fully when a
+    # second provider and `prospect_delta` exist (ISSUES I-091).
+    max_delta_span_days: int = 45
+
+    # --- Site tech-signal scan (paid-placement Slice B1, PRD §B3) --------------------------
+    # `scan-tech` fetches each prospect's OWN site and detects ad/marketing tech (Meta pixel, AW-
+    # conversion tag, GTM container, CallRail/Podium/Birdeye). FREE (own HTTP GET, "not a paid
+    # service" — §B3), so `scan-tech` is deliberately NOT in PAID_COMMANDS.
+    tech_fetch_timeout_seconds: float = 12.0
+    tech_scan_concurrency: int = 8
+    # Only this many bytes of a page are kept and regex-scanned. Ad tags live in the head and in
+    # script tags near it, so 2 MB is generous; without a cap one CMS page dumping a 50 MB inlined
+    # payload would be held in memory and scanned by every pattern, times the concurrency.
+    tech_max_page_bytes: int = 2_000_000
+    # Follow the GTM container to recover pixels injected client-side (ISSUES I-003 / §16a.1). OFF
+    # until the §16a.1 spike measures whether inline scanning misses GTM-injected pixels — the seam
+    # is built either way, this only decides whether it runs by default.
+    tech_follow_gtm: bool = False
+
+    # `tick` auto-runs the tech scan so every scored prospect carries the Slice-B1 money signal
+    # without a manual `scan-tech` per market (which needs a definition file the any-city onboard
+    # path has none of). FREE — an own HTTP GET, same posture as `collect` — idempotent (a prospect
+    # already carrying a CURRENT signal is skipped, never re-fetched), and bounded per heartbeat so
+    # one large market cannot monopolize a tick. 0 disables the drain entirely. Kept modest because
+    # the drain runs synchronously inside the tick: worst-case iteration time is roughly
+    # per_tick / tech_scan_concurrency × tech_fetch_timeout_seconds (≈75s at 50/8/12), and while it
+    # runs the tick-loop's next iteration — which drains newly-placed enrich/scan orders — cannot
+    # start, so this caps how long an order can wait behind a tech batch.
+    tech_scan_per_tick: int = 50
+    # The tech backlog does two portfolio-sized reads (candidate prospects + their signals), so on
+    # the always-on `tick-loop` (every `tick_loop_interval_seconds`, ~8s) running it every heartbeat
+    # would be constant read load for a drain that is empty most of the time. Throttle it to at most
+    # once per this many seconds: a fresh cron process (long-lived state absent) always runs it, and
+    # the daemon runs it occasionally so order-draining stays near-instant between tech batches. 0
+    # disables the throttle (run every tick).
+    tech_scan_min_interval_seconds: int = 300
+    # Re-fetch a prospect's site once its latest tech signal is older than this many days. Tech
+    # stacks change on a scale of months (a business installs CallRail once), and re-fetching hits
+    # third-party sites, so a light cadence keeps the vendor-failing pairing honest (tech present +
+    # a fresh coverage delta) without re-hammering every site each 15-day cycle. 0 = fetch a
+    # prospect's tech once and never auto-refresh.
+    tech_refresh_days: int = 45
+
+    # --- Lead enrichment (contact names / phones / emails via Outscraper) ------------------
+    # A SEPARATE, spend-gated, per-selection action — NOT the mass ingest, which hardcodes
+    # `enrichment=""` with a hard invariant so a market pull can never silently bill per-place
+    # enrichment (outscraper_client.submit_maps_search). This path builds its own request (like
+    # pixel_probe.fetch_enriched_sample) and never touches that method. The order row
+    # (`enrichment_request`) is its own spend confirmation; the `tick` command drains it.
+
+    # The enricher set requested by default (the fallback; an order freezes its own set at placement).
+    # Outscraper takes a LIST, called BY place_id. `domains_service` is the SCRAPER that pulls emails +
+    # contact names + phones from the business's website (the repo's contact-pull convention); the
+    # other two post-process it (email validation → email.emails_validator.status; phone carrier). The
+    # first live run requested the validators WITHOUT the scraper and got name_for_emails but no emails
+    # (I-109). The parser still never asserts a field it hasn't seen — `probe-enrich` confirms the shape.
+    enrich_enrichments: list[str] = Field(
+        default_factory=lambda: [
+            "domains_service", "emails_validator_service", "phones_enricher_service"
+        ]
+    )
+
+    # Outscraper enrichment is billed per record. The API returns no per-request cost, so like every
+    # other rate here this is a CONFIGURED number reconciled against the dashboard (I-022) — set it
+    # from the real plan before a production run. Keep in sync with platform-api's
+    # outreach_enrich_cost_per_place_cents (that one drives the placement-time budget guard; this
+    # one drives the drain's cost_ledger write).
+    enrich_cost_per_place_cents: int = 5
+
+    # place_ids per Outscraper enrichment request. Enrichment is BATCHABLE — one request covers many
+    # place_ids — so chunks stay modest: a synchronous enriched pull for a chunk stays under the
+    # timeout, and a failed chunk loses one chunk's worth, not the whole order (the pixel_probe
+    # per-query-isolation lesson).
+    enrich_chunk_size: int = 10
+
+    # Enrichment is lightweight + batchable, so the tick is deliberately NOT held to the ≤1-order
+    # cadence the heavy geogrid scan uses (that cadence exists so each scan's collection starts
+    # before the next scan's spend — irrelevant when one cheap request covers a whole selection). It
+    # drains up to this many orders per heartbeat.
+    enrich_orders_per_tick: int = 5
+    # A defensive ceiling on one order's selection, so a single order can never run unboundedly (the
+    # placement layer caps it too — this is the drain's backstop). A bigger "select all" is split
+    # into several orders.
+    enrich_max_places_per_order: int = 200
+
+    # A synchronous enriched pull for a chunk of place_ids can take longer than the base search; its
+    # own timeout, clear of the 60s base request timeout.
+    enrich_request_timeout_seconds: float = 180.0
+
+    # --- Report signal scans (organic / AI-visibility UI triggers, 2026-08-10) -----------
+    # The per-prospect report's ORGANIC and AI sections are filled by two signed-order queues
+    # (`organic_scan_request` / `ai_scan_request`), drained by `tick`. Each is a single cheap paid
+    # call, so ≤1 per tick — matching the geogrid scan's cadence, NOT enrichment's batch drain —
+    # keeps every capture a discrete, terminal, first-run-fault-bounded order. Raise if a queue ever
+    # backs up faster than the 15-minute cron clears it.
+    organic_orders_per_tick: int = 1
+    ai_orders_per_tick: int = 1
+
+    # --- Always-on worker (tick-loop daemon) ---------------------------------------------
+    # The `tick-loop` command runs `tick` continuously so a UI-placed order (enrich / scan)
+    # drains within seconds instead of waiting for the cron. This is the sleep between ticks.
+    # Every iteration is one tick, whose spend is authorized per signed order (tick is not in
+    # PAID_COMMANDS); an idle iteration spends nothing and `collect` is free, so a short interval
+    # is cheap. Kept off the floor so the DB / free-endpoint polling stays modest.
+    tick_loop_interval_seconds: float = 8.0
+
+    # --- Scoring model — Phase 4 Stage 1 (scoring-spec.md) --------------------------------
+    # EVERYTHING here is a CONFIG value. Zero hardcoded betas, ever (CLAUDE.md invariant). The
+    # scalar knobs live here; the full coefficient REGISTRY (the elicited priors, ~40 bins) lives
+    # in `services/scorecard_config.py`, loaded through this settings layer and overridable via
+    # `scorecard_coefficients_json`. Every coefficient in this model is an ELICITED estimate — no
+    # part has been tested against a single reply — so treat rank order as a strong prior, not a
+    # prediction, until ~100 prospects have been contacted (CLAUDE.md → What is unvalidated).
+
+    # scoring-spec §1. Score = TargetScore + Factor x ln(odds); Factor = PDO / ln(2). Every +PDO
+    # points doubles the odds. TargetScore 500 = a market-average prospect. Factor is DERIVED from
+    # pdo (scorecard_config.factor_of) — not a stored constant — so the two can never drift.
+    score_pdo: float = 50.0
+    score_target: float = 500.0
+
+    # scoring-spec §5. The uniform shrinkage on every elicited beta at v1. A UNIFORM multiplier: it
+    # cannot change rank order (CLAUDE.md trap — do not tune it to improve ranking). Store both the
+    # prior and the effective contribution; this is the only knob between them.
+    score_lambda_shrink: float = 0.5
+
+    # scoring-spec §1 offsets, PINNED to the values the golden fixtures were hand-computed against
+    # (tests/fixtures/golden-fixtures.json). They are DERIVED from the base rates below
+    # (offset = target - factor x ln(base_odds)); a unit test asserts the derivation rounds to
+    # these, so replacing a base rate per §9 without updating its offset fails loudly rather than
+    # silently miscalibrating. Phone and email are 126 points apart and MUST NEVER be ranked in one
+    # list (enforced at the read surface by carrying `channel` on every score row).
+    score_offset_email: float = 705.0
+    score_offset_phone: float = 579.3
+    score_offset_close: float = 625.1
+
+    # scoring-spec §1 base rates — sequence-level (a full 5-touch sequence), per-channel, and
+    # ASSUMPTIONS (MUST be config, not constants — §1). The phone figure is the weaker guess and is
+    # observable first. Overwrite with observed data after ~3 weeks of sends rather than tuning
+    # coefficients around them (§9 open decision 1).
+    score_base_rate_reply_email: float = 0.055
+    score_base_rate_reply_phone: float = 0.25
+    score_base_rate_close: float = 0.15
+
+    # scoring-spec §5. v1 scores are ORDINAL ONLY — displayed probabilities clamped to this until a
+    # score_run has a non-null calibration_alpha (Stage 2). Applied at the read surface
+    # (v_prospect_ranked.display_prob) and by the engine's display_prob.
+    score_display_prob_clamp_pct: float = 60.0
+
+    # scoring-spec §4 — Model C value layer. INERT under flat pricing: R and T are constants and drop
+    # out of ranking, so the operative ranking is p_reply x p_close. Do NOT spend effort tuning these
+    # (CLAUDE.md trap) — they exist so E[revenue] is a meaningful dollar figure and reactivating the
+    # value dimension is a config change (§4, revisit ~month 9).
+    score_r_base: float = 2000.0
+    score_t_base: float = 15.0
+
+    # Stamped on every score_run so a stored score names the coefficient generation that produced it.
+    # Bump when the registry or scaling changes (a re-score is always a NEW run — immutable history).
+    score_model_version: str = "stage1-priors-v1"
+
+    # Optional JSON object overriding any coefficient in the registry, keyed by bin name:
+    # '{"geogrid_lt20_steep": 60, "aw_tag": 22}'. Empty = the elicited-prior defaults in
+    # scorecard_config.py. This is the "coefficients load from config" seam — the registry is the
+    # documented default, this is the override, and nothing in the scoring LOGIC hardcodes a beta.
+    scorecard_coefficients_json: str = ""
+
+    # scoring-spec §7a — the AI-inversion trigger's threshold. Below this variance of AI presence
+    # across a market's qualified set, AI features stay low-weight pitch flags; crossing it is the
+    # signal to re-elicit them as discriminators. Stage 1 only records the metric; it does not act.
+    score_ai_variance_threshold: float = 0.10
+
+    # Bin BOUNDARIES for the feature-extraction layer (scoring-spec §2 geogrid pain / trajectory).
+    # These define which bin a measurement falls in — structural like the point values, and config
+    # for the same reason (§7a: geogrid weight/boundaries may shift if local-pack results compress).
+    # Coverage is a percentage 0-100. <low = severe pain; low-mid; mid-high = reference; >high = strong.
+    score_geogrid_low_pct: float = 20.0
+    score_geogrid_mid_pct: float = 50.0
+    score_geogrid_high_pct: float = 80.0
+    # Bottom-review-quartile bin requires >= this many reviews (scoring-spec §Trajectory, "bottom
+    # quartile (>=10)") — a business with near-zero reviews is a different case than a lagging one.
+    score_review_bottom_min: int = 10
+    # GBP "strong" needs rating >= this AND photos/categories evidence. Stage 1 does not capture
+    # photos/categories, so strong/weak stay dormant and GBP scores at the `adequate` reference
+    # (ISSUES: a future GBP-detail enrichment lights them up). Threshold kept for when it does.
+    score_gbp_strong_rating: float = 4.0
+
+    # scoring-spec §6 Stage 2 — the standalone recalibration job. It fits a two-parameter logistic
+    # (alpha + gamma x prior-log-odds) on real reply outcomes, correcting calibration WITHOUT
+    # touching rank order. Below this many reply outcomes IN A CHANNEL it refuses and writes nothing
+    # (§6 "~30-50 outcomes"). Zero outcomes exist today, which is the correct empty-safe state.
+    score_recalibration_min_outcomes: int = 30
+
+
+def missing_outscraper_vars(settings: "Settings") -> list[str]:
+    """Which Outscraper credentials are absent, by env-var name.
+
+    Mirrors `missing_supabase_vars` / `dataforseo_client.missing_dataforseo_vars` so a paid command
+    can REFUSE before opening a credential rather than firing N requests with an empty API key and
+    failing per-request. `OutscraperClient.__aenter__` does not validate the key (unlike the
+    DataForSEO client), so the check has to live at the command boundary.
+    """
+    return [
+        name
+        for name, value in (("OUTREACH_OUTSCRAPER_API_KEY", settings.outscraper_api_key),)
+        if not value
+    ]
 
 
 def missing_supabase_vars(settings: "Settings") -> list[str]:

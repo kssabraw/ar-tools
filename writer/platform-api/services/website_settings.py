@@ -47,7 +47,21 @@ _ANALYTICS_KEYS = ("ga4", "callrailSnippet")
 
 
 def _clean(value: Any) -> str:
-    return value.strip() if isinstance(value, str) else ""
+    """One submitted value as text.
+
+    Numbers are coerced rather than discarded: `postalCode` and phone fields
+    arrive as JSON numbers from perfectly reasonable clients, and `business` is
+    an untyped dict so pydantic never sees them. Treating those as empty used to
+    DELETE the stored field and its `user` stamp, handing it silently back to
+    GBP — a clear-on-typo. Only None and genuinely non-scalar values are empty.
+    """
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, bool) or value is None:
+        return ""
+    if isinstance(value, (int, float)):
+        return str(value)
+    return ""
 
 
 def apply_facts_edit(
@@ -97,8 +111,12 @@ def apply_facts_edit(
                 biz.pop("areaServed", None)
                 provenance.pop("areaServed", None)
 
-    biz["provenance"] = provenance
-    out["business"] = biz
+    # Only write the group back when there is something in it, so a
+    # tagline-only edit does not stamp an empty `business: {provenance: {}}`
+    # skeleton onto a config that had none.
+    if biz or provenance:
+        biz["provenance"] = provenance
+        out["business"] = biz
 
     if tagline is not None:
         out["tagline"] = tagline.strip()
@@ -164,11 +182,18 @@ def _load(website_id: str) -> tuple[dict, dict]:
     return website, (client[0] if client else {})
 
 
-def get_facts(website_id: str) -> dict:
-    """Current editable facts (GBP-filled) + whether a save would redeploy."""
+def get_facts(
+    website_id: str, *, loaded: Optional[tuple[dict, dict]] = None
+) -> dict:
+    """Current editable facts (GBP-filled) + whether a save would redeploy.
+
+    `loaded` lets a caller that already holds the (website, client) pair skip the
+    re-read — the save path ends by returning this view, and re-fetching both
+    rows to build it made one save four queries deeper than it needed to be.
+    """
     from services.website_provision import build_site_config
 
-    website, client = _load(website_id)
+    website, client = loaded if loaded is not None else _load(website_id)
     view = facts_view(build_site_config(website, client))
     view["provisioned"] = bool(website.get("github_repo"))
     return view
@@ -196,7 +221,13 @@ async def save_facts(website_id: str, edits: dict) -> dict:
     ).data
     website = updated[0] if updated else {**website, "config": new_config}
 
-    result = {"website": website, "committed": False, "deploy_id": None}
+    result = {
+        "website": website,
+        "committed": False,
+        "deploy_id": None,
+        # Built from the rows already in hand rather than re-read.
+        "facts": get_facts(website_id, loaded=(website, client)),
+    }
     if not website.get("github_repo"):
         # Not provisioned yet — the facts are stored and provisioning will carry
         # them in with its configure commit. Nothing to redeploy.
@@ -217,8 +248,8 @@ async def recommit_config(website: dict, client: dict) -> dict:
     import json
 
     from config import settings
-    from db.supabase_client import get_supabase
     from services.github_publish import commit_files_to_github
+    from services.website_deploy import record_deploy
     from services.website_provision import build_site_config
 
     config = build_site_config(website, client)
@@ -230,11 +261,8 @@ async def recommit_config(website: dict, client: dict) -> dict:
         message="Update site settings",
     )
     sha = commit.get("commit_sha")
-    deploy = (
-        get_supabase()
-        .table("website_deploys")
-        .insert({"website_id": website["id"], "trigger": "config", "status": "queued",
-                 "commit_sha": sha})
-        .execute()
-    ).data
-    return {"committed": True, "deploy_id": deploy[0]["id"] if deploy else None}
+    # record_deploy rather than a raw insert: it also enqueues the poll that
+    # resolves the row, so the deploy chip settles instead of sitting at 'queued'
+    # until the scheduler's next sweep.
+    deploy_id = record_deploy(website_id=website["id"], commit_sha=sha, trigger="config")
+    return {"committed": True, "deploy_id": deploy_id}

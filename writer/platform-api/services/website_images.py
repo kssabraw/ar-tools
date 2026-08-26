@@ -68,12 +68,28 @@ def brand_style_suffix(client: dict) -> str:
         "professional editorial photograph, natural light, realistic, high detail, "
         "no text, no words, no logos, no watermarks"
     )
+    tone = brand_tone(client)
+    return f"{base}, {tone[:80]}" if tone else base
+
+
+def brand_tone(client: dict) -> str:
+    """The client's tone, from where the brand-voice blob actually keeps it.
+
+    `brand_voice` nests the structured voice under `current_voice` (or
+    `recommended_voice`) — the same precedence `brand_voice_service` uses. Reading
+    `brand_voice["tone"]` off the top level, as this did, finds nothing for every
+    real client, so the tone never reached the prompt and the whole set rendered
+    in the generic house style.
+    """
     voice = client.get("brand_voice")
-    if isinstance(voice, dict):
-        tone = voice.get("tone") or voice.get("summary")
-        if isinstance(tone, str) and tone.strip():
-            return f"{base}, {tone.strip()[:80]}"
-    return base
+    if not isinstance(voice, dict):
+        return ""
+    for blob in (voice.get("current_voice"), voice.get("recommended_voice"), voice):
+        if isinstance(blob, dict):
+            tone = blob.get("tone") or blob.get("summary")
+            if isinstance(tone, str) and tone.strip():
+                return tone.strip()
+    return ""
 
 
 def build_prompt(page: dict, *, business: str, city: str, style: str) -> str:

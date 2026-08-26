@@ -65,6 +65,16 @@ def promote_orphans(
         topic_input = topic_inputs_by_id.get(plan.topic_id)
         if topic_input is None:
             continue
+        # A degraded silo fell back to statistical passthrough (an orchestrator
+        # failure). Its multi-keyword groupings are already covered by passthrough
+        # articles; anything left over is singleton-grouping keywords, and minting
+        # those into one-keyword articles is exactly the explosion the passthrough
+        # fallback exists to prevent. Leave them active+unassigned instead — the
+        # silo has already failed editorial planning (and, if every silo did,
+        # all_degraded surfaces it as an error rather than shipping singletons).
+        if plan.degraded:
+            plan.log["orphans_skipped_degraded"] = True
+            continue
         # The topic's full active pool = union of all its Louvain groupings'
         # keywords (groupings are what the orchestrator received).
         all_active: set[str] = set()

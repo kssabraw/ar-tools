@@ -121,6 +121,10 @@ import ecommerce_mcs as mcs  # Max-Cosine Synthesis (AIO capture + entity + head
 import ecommerce_facts as ecom_facts  # invariant public-spec auto-research (cited)
 import ecommerce_loop as ecom_loop  # auto-retry loop stop decisions (pure)
 import voice_card as vcard  # brand voice + ICP: distilled card, prompt block, hard checks
+from blog_structure import (  # deterministic blog/AEO structure checks (R4/R6/R7)
+    compute_blog_structural_aeo as _compute_blog_structural_aeo,
+    detect_blog_structure as _detect_blog_structure,
+)
 
 STOP_WORDS = set(stopwords.words('english'))
 
@@ -136,6 +140,18 @@ ANTHROPIC_API_KEY    = os.environ.get("ANTHROPIC_API_KEY", "")
 # the shared account is saturated by the rest of the suite — a 429 on the main
 # generation call then failed the whole local_seo_generate job.
 ANTHROPIC_MAX_RETRIES = int(os.environ.get("ANTHROPIC_MAX_RETRIES", "5"))
+# Second Anthropic account (same models) for SAME-MODEL failover, when the
+# primary account's SDK retries can't clear a transient concurrency/rate limit.
+# Logic lives in the sibling `anthropic_failover` module (unit-testable without
+# importing this file); `_anthropic_client(...)` is the drop-in used at every
+# call site (constructor name only changed — `.messages.create` is unchanged).
+import anthropic_failover as _anthropic_failover  # noqa: E402
+
+
+def _anthropic_client(**client_kwargs):
+    """Failover-capable async Anthropic client. `client_kwargs` (max_retries,
+    timeout, …) apply to every account's underlying SDK client."""
+    return _anthropic_failover.client(**client_kwargs)
 # ScrapeOwl 429 handling: retry in place with backoff (honoring Retry-After) at
 # the same price tier instead of letting a rate-limited scrape escalate to the
 # ~2× JS-render tier.
@@ -430,12 +446,13 @@ Return valid HTML only. No markdown. No explanations outside the HTML. Structure
 Then on a NEW LINE after </article>, output the JSON-LD schema block starting with <script type="application/ld+json"> (3 schema blocks in one script tag).
 
 TITLE TAG FORMULA (follow exactly — do not deviate):
-<title>[Power Word]! [Exact Match Keyword] | [Brand Name] | [Justification using entities] | [Additional persuasion + entities]</title>
-- Power Word: a single urgent/emotional word (e.g. Trusted, Fast, Expert, Certified, Local, Licensed)
-- Exact Match Keyword: the primary keyword verbatim
+<title>[Exact Match Keyword] | [Brand Name] | [Phrase Match Keyword] | [Justification using entities] | [Additional persuasion + entities]</title>
+- Exact Match Keyword (EMQ): the primary keyword verbatim
 - Brand Name: the business name
-- Justification: a short phrase using 1–2 Google entities that validates the claim (e.g. "Serving Anaheim Hills & Orange County")
-- Additional persuasion: a benefit or proof point that includes 1–2 more entities (e.g. "Same-Day Response, No Overtime Fees")
+- Phrase Match Keyword (PMQ): a secondary keyword that contains the primary keyword phrase plus a modifier (e.g. "[keyword] near me", "24 hour [keyword]", "affordable [keyword]") — broadens keyword coverage without repeating the EMQ verbatim
+- Justification: a short phrase using 1–2 SERVICE-SCOPE or CREDENTIAL entities that validates the claim — NOT additional locations (e.g. "Licensed Burst Pipe & Blocked Drain Repair")
+- Additional persuasion: a benefit or proof point that includes 1–2 more service-scope or credential entities, not places (e.g. "Same-Day Response, No Overtime Fees")
+- GEOGRAPHIC ENTITY RULE: the primary city is ALREADY in the Exact Match Keyword and is the ONLY geographic entity the title should contain. Do NOT append neighbouring suburbs, adjacent cities, or the county — extra locations dilute the primary geo signal and confuse Google + LLM entity extraction. Prefer the SERVICE entities surfaced by the analysis (the services, products, and problems the business solves) for the justification/persuasion slots.
 - Total title length: no character limit — prioritise keyword density and entity coverage over brevity
 
 AEO / LLM WRITING RULES — apply throughout every section
@@ -531,16 +548,22 @@ optimised for Answer Engine Optimisation. Follow all of them in every section.
 
 9. ENTITY TRIPLETS in ≥3 sections: [Brand] + [service] + [city] must co-occur in the
    intro, the main services body, the local section, and the FAQ. This establishes the
-   entity relationship in LLM retrieval.
-   MAIN ENTITY IN SUBHEADINGS: repeat the page's main entity — the [service] (and [city]
-   where it reads naturally) — across the H2/H3 subheadings, EACH paired with a real
-   subtopic. Every section heading should name what the page is about, never a bare
-   generic label.
+   entity relationship in LLM retrieval. This is a BODY-PROSE rule — the triplet lives in
+   sentences, NOT in the headings.
+   SERVICE-LED SUBHEADINGS — ONE GEOGRAPHIC HEADING ONLY: front every H2/H3 with the page's
+   main entity — the [service] or a specific service sub-entity (e.g. drain cleaning, water
+   heater repair, burst pipe) drawn from the analysis's service entities — EACH paired with a
+   real subtopic. Do NOT repeat the [city] across the subheadings: extra location entities in
+   headings dilute the primary geo signal and confuse Google + LLM entity extraction about
+   which place the page targets. The city belongs in the H1, the intro, and exactly ONE
+   dedicated geographic heading (the local-area section) — nowhere else in the heading set.
+   Every heading should name what the page is about, never a bare generic label.
    ✗ Bad:  "Our Process" / "Why Choose Us" / "Get Started"
-   ✓ Good: "[Service] Process in [City]" / "Why [City] Homeowners Choose [Brand] for [Service]"
+   ✗ Too much geo: "[Service] in [City]" / "[Service] Process in [City]" / "Why [City] Homeowners Choose Us" (city repeated across headings)
+   ✓ Good: "How [Service] Prevents [Problem]" / "[Sub-service] Explained" / "What to Expect During [Service]", plus ONE geo heading like "[Service] Across [City] & Nearby Areas"
    Do NOT spam the exact-match keyword VERBATIM across headings — vary the wording and front
    the entity + the subtopic. Question-format H3s (rule 3) still count as long as they name
-   the entity, e.g. "How much does [service] cost in [city]?".
+   the entity, e.g. "How much does [service] cost?".
 
 10. SECTION LENGTH ≤300 words: LLMs extract from dense sections poorly. If a topic needs
     more depth, split it into multiple H2 subsections rather than lengthening one section.
@@ -633,8 +656,8 @@ The rule: lead with the answer, then let the rest of the sentence and paragraph 
 
 Section 1 — Intro / Direct Answer Block (100–150 words)
 <section id="intro">
-  <h1>[Exact Match Keyword] + [1–2 entities that reinforce location or service scope]</h1>
-  H1 FORMULA: Write the primary keyword verbatim, then append relevant entities naturally (e.g. "Emergency Plumber Anaheim — Serving Anaheim Hills, Yorba Linda & Orange County")
+  <h1>[Exact Match Keyword] + [1–2 SERVICE-SCOPE or CREDENTIAL entities]</h1>
+  H1 FORMULA: Write the primary keyword verbatim (it already contains the primary city — the ONLY geographic entity the H1 should carry), then append 1–2 entities that describe the SERVICE scope or a credential — NOT additional locations. Prefer the service entities surfaced by the analysis (e.g. "Emergency Plumber Anaheim — Burst Pipe, Blocked Drain & Water Heater Repair"). Secondary service areas belong in a body "areas we serve" section, not the H1.
   <p>[Brand] provides [service] to [city] — [primary differentiator stated in the first sentence]. [One short supporting sentence with a proof point.]</p>
   <p>[Availability / scope signal — use a specific timeframe ONLY if it is in the business data, otherwise a coverage or credential proof point.] [Phone number as a CTA, e.g. "Call [phone] now".]</p>
   <p>[Direct service claim + city + 1 neighborhood.]</p>
@@ -643,18 +666,18 @@ Section 1 — Intro / Direct Answer Block (100–150 words)
 
 Section 2 — USP / Value Proposition (150–200 words)
 <section id="usp">
-  <h2>[Single sentence combining: the main entity (service, + city where it fits) worded naturally + persuasion/outcome + 1–2 entities]</h2>
-  FIRST H2 FORMULA: Must be a complete sentence (not a fragment) that names the main entity — the service (and city where it reads naturally) — paired with a persuasive outcome or differentiator and 1–2 entities. Word the entity NATURALLY; do NOT drop the exact-match keyword in verbatim. Exact-match keywords stuffed into H2s are a demoting signal — the H1 already carries the primary keyword verbatim (rule 9), so front the service + the buyer's situation here instead. (e.g. "When Anaheim Homeowners Face a Burst Pipe After Hours, [Brand] Delivers Same-Day Emergency Plumbing Across Orange County" — names the service + city + situation without repeating the exact query string)
+  <h2>[Single sentence combining: the main entity (the service) worded naturally + persuasion/outcome + 1–2 service entities]</h2>
+  FIRST H2 FORMULA: Must be a complete sentence (not a fragment) that names the main entity — the service — paired with a persuasive outcome or differentiator and 1–2 service entities. Word the entity NATURALLY; do NOT drop the exact-match keyword in verbatim, and do NOT put the city in this heading (rule 9 — the city stays in the H1, the intro, and the dedicated geographic heading only). Exact-match keywords stuffed into H2s are a demoting signal — the H1 already carries the primary keyword verbatim, so front the service + the buyer's situation here instead. (e.g. "When Homeowners Face a Burst Pipe After Hours, [Brand] Delivers Same-Day Emergency Plumbing & Fast Leak Repair" — names the service + situation + service entities without a city or the exact query string)
   [Min 3 differentiators with mechanisms. One contrast statement. One proof signal.]
 </section>
 
 Section 3 — Special Offers (omit this section if no offer data provided)
 <section id="offers">...</section>
 
-Section 4 — CTA Block Primary (50–75 words)
+Section 4 — CTA Block Primary (50–75 words) — VALUE / OFFER-LED
 <section id="cta-primary">
-  <h2>[Action-oriented H2]</h2>
-  [Differentiated CTA — not "Contact us today". Include phone.]
+  <h2>[Service-anchored action heading — name the SERVICE (no city, and do NOT repeat the exact-match keyword verbatim), e.g. "Book Your Roof Restoration Today" / "Start Your Emergency Plumbing Repair"]</h2>
+  [Lead with the core VALUE or OFFER: the primary differentiator or a free quote/estimate, then the ask. NOT "Contact us today". Include the phone number.]
 </section>
 
 Section 5 — Features and Benefits (150–200 words)
@@ -674,12 +697,12 @@ Section 6 — Main Service Body (800–1400 words)
   - You MUST use MULTIPLE H2s within this section — each H2 block must be ≤300 words; split further into additional H2s if needed
   - Each H2 should represent a distinct major topic or service category
   - Use H3s under each H2 for sub-services, use cases, or scenarios
-  - Every heading: include service/city naturally where it fits (not forced)
+  - Every heading: front the SERVICE or a service sub-entity; do NOT put the city in these body-section headings (rule 9 — the city is anchored in the H1, the intro, and the dedicated geographic section only)
   - Open with a primary service description paragraph (answer-first)
   - Each H3: 2–4 sentences covering description, real-world scenario, differentiator, geo reference
   - List ALL sub-services or service types in individual H3 sections (e.g. if keyword is "plumber", include H3s for drain cleaning, water heater repair, pipe repair, etc. — each 2–4 sentences)
-  - At least one H3 must include city or neighborhood name naturally in the heading text
-  - Include a coverage or geo reference in at least one H3 body paragraph
+  - Keep the city OUT of the §6 headings (rule 9); the geographic heading is the dedicated local section only
+  - Include a coverage or geo reference in at least one H3 body paragraph (body prose, not the heading)
   - Weave in the EXACT competitor 4-word phrases from the SEO checklist verbatim (do not paraphrase)
   - Do NOT copy competitor headings verbatim — use them to understand topic coverage, then write
     headings that are more specific, benefit-oriented, or locally relevant
@@ -691,8 +714,11 @@ Section 7 — Testimonials (include only if reviews provided above; omit if none
   [Verbatim reviews only — first name + last initial, stars, date, full text]
 </section>
 
-Section 8 — CTA Block Secondary (50–75 words — different angle from Section 4)
-<section id="cta-secondary">...</section>
+Section 8 — CTA Block Secondary (50–75 words) — PROOF / RISK-REVERSAL
+<section id="cta-secondary">
+  <h2>[Service-anchored action heading — name the SERVICE (no city, no verbatim exact-match keyword), DISTINCT wording from §4, e.g. "Trust Your Roof Restoration to a Proven Crew"]</h2>
+  [A DISTINCT angle from §4: lead with proof or risk-reversal — a guarantee/warranty, licensing/insurance, or a reviews callback (each ONLY if present in the business data; never invent one), then the ask. Include the phone. Do NOT reuse §4's wording or angle.]
+</section>
 
 Section 9 — Getting Started (150–200 words)
 <section id="getting-started">
@@ -706,8 +732,11 @@ Section 10 — Geographic / Local SEO Section (200–300 words)
   [City + min 3 neighborhoods in sentence context (not just a list) + min 1 landmark + min 2 streets + zip codes (min 3). Use only real, verifiable geographic details. If neighborhood/landmark/street/zip data is not provided in the business data, include only what you are certain is accurate for the target city. Do not invent or guess street names, zip codes, or landmarks. Coverage area required. Response time: ONLY include if explicitly stated in business hours, GBP description, or reviews — otherwise write "Call us for availability" or omit entirely.]
 </section>
 
-Section 11 — CTA Block Tertiary (50–75 words — urgency-forward)
-<section id="cta-tertiary">...</section>
+Section 11 — CTA Block Tertiary (50–75 words) — URGENCY / AVAILABILITY
+<section id="cta-tertiary">
+  <h2>[Service-anchored action heading — name the SERVICE (no city, no verbatim exact-match keyword), DISTINCT wording from §4 and §8, e.g. "Get Your Roof Restoration Scheduled"]</h2>
+  [A DISTINCT angle from §4 and §8: lead with urgency or availability — same-day/emergency response ONLY if it is in the business data; otherwise use non-fabricated urgency ("don't wait until the damage spreads", seasonal timing, "book before your preferred slot fills"). NEVER invent a timeframe. Include the phone. Do NOT reuse the earlier CTAs' wording.]
+</section>
 
 Section 12 — FAQ (min 4, max 7 entries — 40–80 words each)
 <section id="faq">
@@ -947,6 +976,21 @@ TEXTRAZOR_MAX_RETRIES     = int(os.environ.get("TEXTRAZOR_MAX_RETRIES", "4"))
 TEXTRAZOR_RETRY_BASE      = float(os.environ.get("TEXTRAZOR_RETRY_BASE", "0.5"))
 _textrazor_semaphore = asyncio.Semaphore(TEXTRAZOR_MAX_CONCURRENCY)
 
+# ── Entity provider selection (per-request: TextRazor | Google NLP) ───────────
+# TextRazor stays the default (cheaper + Wikidata/Wikipedia linking). Google
+# Cloud Natural Language is available PER-REQUEST when GOOGLE_NLP_API_KEY is set
+# on the nlp service — callers pass entity_provider="google" to opt in. Both
+# emit the same entity shape (name/entity_type/mid/mean_salience/page_spread/
+# recommended_mentions), so everything downstream is provider-agnostic.
+ENTITY_PROVIDERS = ("textrazor", "google")
+ENTITY_PROVIDER_DEFAULT = (os.environ.get("ENTITY_PROVIDER", "textrazor") or "textrazor").lower()
+GOOGLE_NLP_API_KEY   = os.environ.get("GOOGLE_NLP_API_KEY", "")
+GOOGLE_NLP_ENDPOINT  = "https://language.googleapis.com/v1/documents:analyzeEntities"
+GOOGLE_NLP_MAX_BYTES = 100_000   # Google NLP per-document size limit
+# Google NLP salience (0–1) is its own scale — keep the historical 0.40 floor,
+# distinct from TextRazor's relevance floor above. Env-tunable.
+GOOGLE_NLP_MIN_SALIENCE = float(os.environ.get("GOOGLE_NLP_MIN_SALIENCE", "0.40"))
+
 
 # DataForSEO: how many organic results to request
 SERP_RESULT_COUNT = 20
@@ -1000,6 +1044,8 @@ def _block_ssrf(url: str) -> None:
 
 class AnalysisRequest(BaseModel):
     keyword: str
+    # Entity extractor for this request: 'textrazor' (default) | 'google'.
+    entity_provider: Optional[str] = None
     location: str                        # e.g. "Anaheim, California, United States"
     location_code: Optional[int] = None  # DataForSEO numeric location code (preferred)
     urls: Optional[List[str]] = None     # override SERP lookup — pass URLs directly
@@ -1728,6 +1774,139 @@ async def get_textrazor_entities(
     return results
 
 
+async def fetch_google_entities(text: str, client: httpx.AsyncClient) -> List[dict]:
+    """Call Google Cloud Natural Language `analyzeEntities` for one document via
+    the REST API (API-key auth — no service account). Returns the raw `entities`
+    list. Ported from the reference nlp service."""
+    if not GOOGLE_NLP_API_KEY or not text.strip():
+        return []
+    encoded = text.encode("utf-8")[:GOOGLE_NLP_MAX_BYTES]
+    safe_text = encoded.decode("utf-8", errors="ignore")
+    try:
+        response = await client.post(
+            GOOGLE_NLP_ENDPOINT,
+            params={"key": GOOGLE_NLP_API_KEY},
+            json={"document": {"type": "PLAIN_TEXT", "content": safe_text}, "encodingType": "UTF8"},
+            timeout=15.0,
+        )
+        response.raise_for_status()
+        return response.json().get("entities", [])
+    except Exception as e:  # noqa: BLE001 — degrade to no entities on any failure
+        logger.warning(f"Google NLP API error: {e}")
+        return []
+
+
+async def get_google_entities(
+    paragraph_docs: List[str],
+    min_page_spread: float = ENTITY_MIN_PAGE_SPREAD,
+    min_salience: float = GOOGLE_NLP_MIN_SALIENCE,
+) -> List[dict]:
+    """Aggregate Google NLP entities across competitor pages (per-page de-dup →
+    page-spread + salience filter). Emits the SAME shape as get_textrazor_entities
+    so the downstream `google_entities` consumers are untouched — `mid` carries
+    Google's Knowledge-Graph MID, `wiki_link` the entity's Wikipedia URL."""
+    if not GOOGLE_NLP_API_KEY:
+        return []
+
+    total_pages = len(paragraph_docs)
+    min_pages_required = max(2, int(np.ceil(total_pages * min_page_spread)))
+
+    async with httpx.AsyncClient() as client:
+        per_page_entities = await asyncio.gather(
+            *[fetch_google_entities(doc, client) for doc in paragraph_docs]
+        )
+
+    entity_data: Dict[tuple, Dict] = defaultdict(lambda: {
+        "saliences": [], "mention_counts": [], "pages": set(),
+    })
+
+    for page_idx, entities in enumerate(per_page_entities):
+        seen_this_page = set()
+        for entity in entities:
+            name = (entity.get("name") or "").strip()
+            etype = entity.get("type", "UNKNOWN")
+            salience = float(entity.get("salience", 0.0) or 0.0)
+            mention_count = len(entity.get("mentions", []))
+            meta = entity.get("metadata", {}) or {}
+            mid = meta.get("mid", "")
+            wiki_link = meta.get("wikipedia_url", "")
+            if not name:
+                continue
+            key = (name.lower(), etype)
+            if key not in seen_this_page:
+                d = entity_data[key]
+                d["saliences"].append(salience)
+                d["mention_counts"].append(mention_count)
+                d["pages"].add(page_idx)
+                d["name"] = name
+                d["entity_type"] = etype
+                if mid and not d.get("mid"):
+                    d["mid"] = mid
+                if wiki_link and not d.get("wiki_link"):
+                    d["wiki_link"] = wiki_link
+                seen_this_page.add(key)
+
+    results = []
+    for key, data in entity_data.items():
+        page_count = len(data["pages"])
+        if page_count < min_pages_required:
+            continue
+        mean_salience = float(np.mean(data["saliences"]))
+        if mean_salience < min_salience:
+            continue
+        recommended_mentions = int(round(float(np.mean(data["mention_counts"]))))
+        results.append({
+            "name": data["name"],
+            "entity_type": data["entity_type"],
+            "mid": data.get("mid", ""),
+            "wiki_link": data.get("wiki_link", ""),
+            "mean_salience": round(mean_salience, 4),
+            "page_spread": page_count,
+            "page_spread_pct": round(page_count / total_pages, 2),
+            "recommended_mentions": max(1, recommended_mentions),
+            "type": "google_entity",
+        })
+
+    results.sort(key=lambda x: x["mean_salience"], reverse=True)
+    logger.info(
+        f"Google NLP entities: {len(results)} kept "
+        f"(salience>={min_salience}, page_spread>={min_pages_required}/{total_pages})"
+    )
+    return results
+
+
+def resolve_entity_provider(requested: Optional[str]) -> str:
+    """Pick the entity provider for a request. Honours the request's choice when
+    it names a known provider whose key is configured; otherwise falls back to
+    whichever provider IS configured (so a request never silently yields zero
+    entities because its chosen provider is unkeyed). TextRazor wins ties."""
+    choice = (requested or ENTITY_PROVIDER_DEFAULT or "textrazor").lower()
+    if choice not in ENTITY_PROVIDERS:
+        choice = "textrazor"
+    keyed = {"textrazor": bool(TEXTRAZOR_API_KEY), "google": bool(GOOGLE_NLP_API_KEY)}
+    if keyed.get(choice):
+        return choice
+    # Chosen provider isn't configured — fall back to the other if it is.
+    for alt in ("textrazor", "google"):
+        if keyed.get(alt):
+            if alt != choice:
+                logger.warning(
+                    f"entity_provider '{choice}' has no API key configured; "
+                    f"falling back to '{alt}'"
+                )
+            return alt
+    return choice  # neither keyed — extractor returns [] (best-effort, unchanged)
+
+
+async def get_serp_entities(paragraph_docs: List[str], provider: Optional[str] = None) -> List[dict]:
+    """Dispatch competitor-page entity extraction to the selected provider
+    (per-request). Both return the same shape; downstream is provider-agnostic."""
+    chosen = resolve_entity_provider(provider)
+    if chosen == "google":
+        return await get_google_entities(paragraph_docs)
+    return await get_textrazor_entities(paragraph_docs)
+
+
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 
 async def _run_serp_analysis(
@@ -1735,10 +1914,13 @@ async def _run_serp_analysis(
     location: str,
     location_code: Optional[int] = None,
     urls: Optional[List[str]] = None,
+    entity_provider: Optional[str] = None,
 ) -> AnalysisResponse:
     """
-    Shared SERP analysis pipeline used by both /analyze and /score-page.
-    Runs DataForSEO → ScrapeOwl (hybrid JS retry) → TF-IDF → quadgrams → Google NLP.
+    Shared SERP analysis pipeline used by /analyze, /score-page, generation, etc.
+    Runs DataForSEO → ScrapeOwl (hybrid JS retry) → TF-IDF → quadgrams → entity
+    extraction. `entity_provider` ('textrazor' | 'google') selects the entity
+    engine per-request (default `ENTITY_PROVIDER`); both emit the same shape.
     """
     # Step 1: get URLs + bold terms from SERP snippets
     bold_terms_from_serp: List[str] = []
@@ -1788,20 +1970,22 @@ async def _run_serp_analysis(
     )
     quadgrams = get_top_quadgrams(zone_buckets["paragraphs"], keyword)
 
-    # Step 5: TextRazor entity analysis — use paragraph text already in memory.
-    # `google_entities` keeps its name for serp_analysis / frontend compatibility,
-    # but is now TextRazor-sourced (Wikidata/Wikipedia-linked).
+    # Step 5: entity analysis (per-request provider — TextRazor or Google NLP) on
+    # the paragraph text already in memory. The `google_entities` field keeps its
+    # name for serp_analysis / frontend compatibility regardless of provider.
+    provider = resolve_entity_provider(entity_provider)
     google_entities: List[dict] = []
     nlp_requests = 0
-    if TEXTRAZOR_API_KEY:
+    provider_keyed = TEXTRAZOR_API_KEY if provider == "textrazor" else GOOGLE_NLP_API_KEY
+    if provider_keyed:
         para_texts = [t for t in zone_buckets["paragraphs"] if len(t) > 100]
         if para_texts:
             try:
-                google_entities = await get_textrazor_entities(para_texts)
+                google_entities = await get_serp_entities(para_texts, provider)
                 nlp_requests = len(para_texts)
-                logger.info(f"TextRazor: {len(google_entities)} entities from {len(para_texts)} pages")
+                logger.info(f"Entities ({provider}): {len(google_entities)} from {len(para_texts)} pages")
             except Exception as _nlp_err:
-                logger.warning(f"TextRazor failed (non-fatal): {_nlp_err}")
+                logger.warning(f"Entity extraction ({provider}) failed (non-fatal): {_nlp_err}")
 
     # Step 6: SERP bold keyword analysis — count usage across competitor pages
     serp_bold_keywords: List[dict] = []
@@ -1909,7 +2093,10 @@ async def analyze(request: Request, body: AnalysisRequest):
 
     Pass optional `urls` to skip the DataForSEO SERP step (testing / override).
     """
-    return await _run_serp_analysis(body.keyword, body.location, body.location_code, body.urls)
+    return await _run_serp_analysis(
+        body.keyword, body.location, body.location_code, body.urls,
+        entity_provider=body.entity_provider,
+    )
 
 
 @app.get('/health')
@@ -2414,7 +2601,7 @@ async def _classify_urls_with_ai(urls: List[str]) -> Dict[str, str]:
         import anthropic
         import json as json_lib
 
-        client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+        client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
 
         url_list = "\n".join(urls)
         prompt = f"""Classify each URL from a business website. Return ONLY a JSON object mapping URL→type.
@@ -2563,7 +2750,7 @@ async def analyze_business_with_anthropic(
         import anthropic
         import json as json_lib
 
-        client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+        client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
 
         has_pages = bool(pages)
 
@@ -2748,7 +2935,7 @@ async def analyze_brand_voice_with_anthropic(page_contents: List[str], business_
     has_content = bool(page_contents)
     content_text = "\n\n---\n\n".join(page_contents) if page_contents else ""
 
-    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+    client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
 
     # Tool definitions force structured JSON output — Anthropic validates against
     # the schema server-side, so we can't hit a JSON parse error from unescaped
@@ -3217,7 +3404,7 @@ async def distill_voice_card(request: Request, body: DistillVoiceCardRequest):
     if not ANTHROPIC_API_KEY:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
     import anthropic as _anthropic
-    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    client = _anthropic_client()
     card = await _distill_voice_card(client, body.brand_voice, body.detected_icp)
     return DistillVoiceCardResponse(
         voice_card=card,
@@ -4054,7 +4241,11 @@ def compute_zone_targets(
     target. Using the 75th percentile (rather than max) avoids outlier competitor
     pages setting unrealistically high targets that inflate serp_signal_coverage
     scoring difficulty.
-    Also computes per-zone entity targets using the same 75th-percentile approach.
+    Also computes per-zone entity targets using the same 75th-percentile
+    approach — EXCEPT the H2/H3 and paragraph zones' entity targets, which are
+    benchmarked against the most aggressive competitor (trimmed max, spam
+    outliers excluded) to drive denser entity coverage in the subheadings and
+    body prose.
     """
     targets: Dict[str, dict] = {}
     entity_names = {e["name"].lower() for e in google_entities} if google_entities else set()
@@ -4065,6 +4256,24 @@ def compute_zone_targets(
         sorted_vals = sorted(values)
         idx = int(np.ceil(0.75 * len(sorted_vals))) - 1
         return sorted_vals[max(idx, 0)]
+
+    def _aggressive_max(values: list) -> int:
+        """Benchmark against the MOST AGGRESSIVE competitor, not the 75th
+        percentile — the highest per-page count after dropping spam outliers
+        (pages whose count exceeds 3× the median). So one keyword-stuffed
+        competitor cannot set an impossible bar, but a genuinely thorough
+        competitor does raise the target. Used for the H2/H3 entity target."""
+        if not values:
+            return 0
+        if len(values) < 3:
+            return max(values)
+        median = float(np.median(values))
+        if median > 0:
+            threshold = median * 3.0
+            filtered = [v for v in values if v <= threshold]
+            if filtered:
+                return max(filtered)
+        return max(values)
 
     for zone_name in ZONES:
         terms = getattr(related, zone_name, [])
@@ -4081,9 +4290,18 @@ def compute_zone_targets(
             if entity_names:
                 entity_counts.append(sum(1 for e in entity_names if e in cleaned))
 
+        # H2/H3 and paragraph entity targets are benchmarked against the most
+        # aggressive competitor to drive denser entity coverage in subheadings
+        # + body prose; the title/H1 entity targets and all keyword targets
+        # stay at the 75th percentile.
+        entity_target = (
+            _aggressive_max(entity_counts)
+            if zone_name in ("h2_h3", "paragraphs")
+            else _p75(entity_counts)
+        )
         targets[zone_name] = {
             "target":        _p75(term_counts),
-            "entity_target": _p75(entity_counts),
+            "entity_target": entity_target,
         }
 
     return targets
@@ -5068,7 +5286,7 @@ async def find_page_for_keyword(request: Request, body: FindPageRequest):
             if ANTHROPIC_API_KEY and candidate_pool:
                 try:
                     import anthropic  # local import — matches every other LLM call site here
-                    _ac = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+                    _ac = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
                     url_list_text = "\n".join(f"{i+1}. {u}" for i, u in enumerate(candidate_pool))
 
                     # Build location context line
@@ -5151,6 +5369,7 @@ async def find_page_for_keyword(request: Request, body: FindPageRequest):
 
 class ScorePageRequest(BaseModel):
     keyword: str
+    entity_provider: Optional[str] = None  # 'textrazor' (default) | 'google'
     location: str = ""  # optional in national mode
     location_code: Optional[int] = None  # DataForSEO numeric location code
     page_url: Optional[str] = None
@@ -5191,7 +5410,7 @@ async def score_page(request: Request, body: ScorePageRequest):
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
     import anthropic as _anthropic
-    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+    client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
 
     # geo_mode: "national" service-page scoring drops the geo engines + de-geos
     # gbp_maps/entity_establishment (location-agnostic). Default "local" is the
@@ -5218,7 +5437,7 @@ async def score_page(request: Request, body: ScorePageRequest):
             # so SERP Signal Coverage still has competitor data to score against.
             _serp_loc = body.location or ("United States" if national else body.location)
             _serp_code = body.location_code or (2840 if national else body.location_code)
-            inline_serp = await _run_serp_analysis(body.keyword, _serp_loc, _serp_code)
+            inline_serp = await _run_serp_analysis(body.keyword, _serp_loc, _serp_code, entity_provider=body.entity_provider)
             serp_analysis_dict = inline_serp.model_dump()
         except Exception as _serp_err:
             logger.warning(f"score-page: inline SERP analysis failed ({_serp_err})")
@@ -5595,6 +5814,7 @@ _AUGMENT_TOOL = {
 
 class AugmentPageRequest(BaseModel):
     keyword: str
+    entity_provider: Optional[str] = None  # 'textrazor' (default) | 'google'
     location: str
     location_code: Optional[int] = None
     page_url: str
@@ -5638,7 +5858,7 @@ async def augment_page(request: Request, body: AugmentPageRequest):
     if not serp_analysis_dict:
         logger.info(f"augment-page: no serp_analysis provided — running inline for '{body.keyword}'")
         try:
-            inline_serp = await _run_serp_analysis(body.keyword, body.location, body.location_code)
+            inline_serp = await _run_serp_analysis(body.keyword, body.location, body.location_code, entity_provider=body.entity_provider)
             serp_analysis_dict = inline_serp.model_dump()
         except Exception as e:
             logger.warning(f"augment-page: inline SERP analysis failed ({e})")
@@ -5714,7 +5934,7 @@ async def augment_page(request: Request, body: AugmentPageRequest):
     user_prompt = "\n".join(parts)
 
     import anthropic as _anthropic
-    aclient = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+    aclient = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
 
     msg = None
     for attempt in range(2):
@@ -5873,6 +6093,7 @@ async def _extract_template_outline(url: Optional[str], html: Optional[str]) -> 
 
 class GeneratePageRequest(BaseModel):
     keyword: str
+    entity_provider: Optional[str] = None  # 'textrazor' (default) | 'google'
     location: str
     location_code: Optional[int] = None  # DataForSEO numeric location code (preferred)
     business_name: str
@@ -5990,7 +6211,7 @@ async def generate_page(request: Request, body: GeneratePageRequest):
     import anthropic as _anthropic
 
     async def _worker(q: asyncio.Queue):
-        client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+        client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
         city = body.location.split(",")[0].strip()
         _worker_start = time.monotonic()
 
@@ -6005,7 +6226,7 @@ async def generate_page(request: Request, body: GeneratePageRequest):
         if not serp_analysis_dict and body.run_analysis:
             await q.put({"step": "progress", "progress": 10, "message": "Fetching top search results…"})
             try:
-                inline_serp = await _run_serp_analysis(body.keyword, body.location, body.location_code)
+                inline_serp = await _run_serp_analysis(body.keyword, body.location, body.location_code, entity_provider=body.entity_provider)
                 serp_analysis_dict = inline_serp.model_dump() if hasattr(inline_serp, "model_dump") else dict(inline_serp)
                 await q.put({"step": "progress", "progress": 50, "message": "Analyzing competitor pages…"})
             except Exception as _serp_err:
@@ -6526,7 +6747,7 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
     import anthropic as _anthropic
 
     async def _worker(q: asyncio.Queue):
-        client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+        client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
         city = body.location.split(",")[0].strip()
         _worker_start = time.monotonic()
 
@@ -6912,7 +7133,7 @@ async def reoptimize_section(request: Request, body: ReoptimizeSectionRequest):
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
     import anthropic as _anthropic
-    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+    client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
 
     engine_label = _SECTION_ENGINE_LABELS.get(body.engine, body.engine)
     city = body.location.split(",")[0].strip()
@@ -7000,7 +7221,7 @@ async def related_pages(request: Request, body: RelatedPagesRequest):
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
     import anthropic as _anthropic
-    haiku_client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+    haiku_client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
 
     total_input_tokens = 0
     total_output_tokens = 0
@@ -7125,7 +7346,7 @@ async def generate_social_posts(request: Request, body: SocialPostsRequest):
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
     import anthropic as _anthropic
-    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+    client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
 
     city = body.location.split(",")[0].strip()
     page_text = body.page_content[:4000]  # cap context to keep cost low
@@ -7767,7 +7988,7 @@ async def generate_press_release(request: Request, body: PressReleaseGenerationR
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
     import anthropic as _anthropic
-    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+    client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
 
     city = body.location.split(",")[0].strip()
     page_url = (body.page_url or body.website or "").strip()
@@ -8064,7 +8285,16 @@ OUTPUT CONTRACT — return EXACTLY these parts in order, and NOTHING else (no ma
 
 HARD RULE — NEVER invent facts. Do not fabricate prices, specs, measurements, materials, certifications, review counts, or ratings. Use ONLY the product facts + store data provided — PLUS any values given in a "VERIFIED PUBLIC SPECIFICATIONS" block (those are invariant, publicly-documented properties of the product/compound that were researched from cited public sources: you MAY state them exactly as given, and you must NOT list them in CONTENT_GAPS_REPORT). When a needed fact is missing AND not supplied in any provided block, write around it (do not state a made-up value) and record it in CONTENT_GAPS_REPORT. Vendor/store facts specifically — the exact price, YOUR review counts/ratings, YOUR testing lab's identity/accreditation, YOUR shipping/returns terms — are never researched for you, so always record those in CONTENT_GAPS_REPORT when missing.
 
-STORE-PAGE FRAMING (critical — read before writing) — This is a live STORE product/collection page, NOT an informational article, blog post, or encyclopedia entry. The MAIN ENTITY is THIS specific product (or category) as sold by this store (e.g. "Nova Life B12 12mg vial"), NOT the generic ingredient / material / topic ("vitamin B12"). Write to help a ready-to-buy shopper choose and purchase THIS product. What's BANNED is generic-topic ENCYCLOPEDIA that doesn't help the buyer decide or use the product: "what X is in the human body", physiology, mechanism-of-action, history, or health benefits of the underlying ingredient. What's WELCOME — and SHOULD be developed with substantive, specific detail — is informational depth that serves THIS buyer's use and purchase decision: the product's real-world applications and use cases, how it's used / handled / stored, compatibility, quality & testing context, and compliance — always anchored to THIS product and this buyer (e.g. the specific research contexts a lab would use it in, not a textbook explainer of the molecule). Write a THOROUGH, in-depth page — develop each section with concrete, useful detail; do not produce a thin stub. Anchor EVERY heading and section on the product and the purchase decision.
+STORE-PAGE FRAMING (critical — read before writing) — This is a live STORE product/collection page, NOT an informational article, blog post, or encyclopedia entry. The MAIN ENTITY is THIS specific product (or category) as sold by this store (e.g. "Nova Life B12 12mg vial"), NOT the generic ingredient / material / topic ("vitamin B12"). Write to help a ready-to-buy shopper choose and purchase THIS product. What's BANNED is generic-topic ENCYCLOPEDIA that doesn't help the buyer decide or use the product: "what X is in the human body", physiology, mechanism-of-action, history, or health benefits of the underlying ingredient. What's WELCOME — and SHOULD be developed with substantive, specific detail — is informational depth that serves THIS buyer's use and purchase decision: the product's real-world applications and use cases, how it's used / handled / stored, compatibility, quality & testing context, and compliance — always anchored to THIS product and this buyer (e.g. the specific research contexts a lab would use it in, not a textbook explainer of the molecule). Write a THOROUGH page — but thoroughness means DEPTH ON THE PURCHASE DECISION, not length for its own sake and never the same point restated across several sections. Develop each section with concrete, useful detail; do not produce a thin stub. Anchor EVERY heading and section on the product and the purchase decision.
+
+WHO YOU ARE WRITING FOR (buyer focus) — Write for ONE reader: the person who will click "Add to Cart" on THIS page. Every section must help THAT person decide to buy and use THIS product. Do NOT spend sections serving — or repeatedly redirecting — an audience this store cannot sell to on this page (e.g. someone who would get the product through a different channel entirely): a single sentence pointing such a reader elsewhere is fine; a whole section, or the same redirect repeated, is not. Market/category/landscape context (how this product relates to alternatives — brands, prescription vs. compounded vs. this compound, price tiers, access routes) IS allowed and can genuinely help the buyer — but it must be (a) written TO this buyer and framed as "what this means for your purchase", (b) consolidated into as FEW sections as possible, and (c) stated ONCE — name a competing option, price band, or access route a single time, then move on; never create multiple sections that re-explain the same external landscape. The buyer-decision sections (what it is, why this one, specs, options/value, handling, trust/COA, FAQ, CTA) must OUTNUMBER and OUTWEIGH the context sections.
+
+SKIMMABILITY PROTOCOL (a store page is scanned, not read) — a buyer must be able to extract the decision in a ~10-second scan:
+- Front-load the buy decision — what it is, key specs/value, and why this one — all reachable near the top.
+- Never place more than TWO consecutive <p> paragraphs without an intervening scannable element (a bulleted/numbered list, a table, a bold lead-in, or a decision block). Long unbroken prose is THE failure mode — break it up or cut it.
+- Whenever the content is a set of options, specs, steps, comparisons, or facts, use a list or table instead of paragraphs.
+- HARD LIMIT: no paragraph may exceed THREE sentences — ever, in any section including the market/positioning context. This is a strict cap, not a guideline. If a point needs more than three sentences, split it into multiple short paragraphs or convert it to a list or table. One idea per paragraph.
+- No two sections may cover the same ground; if two sections would repeat facts, MERGE them.
 
 WRITING METHODOLOGY — Max-Cosine Score (MCS). This is HOW every section must be written. The "main entity" is THIS specific product/SKU (PDP) or category (PLP) as sold by this store — never the generic ingredient/material/topic. Follow ALL of these:
 
@@ -8081,7 +8311,7 @@ WRITING METHODOLOGY — Max-Cosine Score (MCS). This is HOW every section must b
 11. Active voice; consistent terminology (pick one name for a thing and keep it); power words only when they truthfully reflect the product.
 12. FAQ: an H2 "Frequently Asked Questions" with 4–7 <h3> questions in real buyer language (sizing, compatibility, shipping, returns, care, differences between options), each answered answer-first in 1–3 sentences.
 13. CTA: a clear, value-forward primary call-to-action (e.g. "Add to Cart", "Shop the collection") — prefer value framing over a bare "Buy now" where natural. Where truthful and provided, include trust signals (returns window, warranty, ratings, guarantees).
-14. Formatting hygiene: short paragraphs (1–2 sentences). Use <strong> SPARINGLY — a median of ~7 bold tags per page and NEVER more than 15 (over-bolding is associated with deindexing).
+14. Formatting hygiene: short paragraphs — 3 sentences MAXIMUM, no exceptions (see the SKIMMABILITY PROTOCOL's hard limit). Use <strong> SPARINGLY — a median of ~7 bold tags per page and NEVER more than 15 (over-bolding is associated with deindexing).
 15. Voice & audience: match the provided BRAND VOICE and speak directly to the provided IDEAL CUSTOMER.
 16. Decision-fit mapping (only when a real choice exists): if THIS product has genuine variants/options (size, strength, quantity, form, tier) OR there are relevant related products to route between, include a concise, answer-first condition→option treatment — "if your work needs X, choose A; if Y, choose B" — woven into the copy or as a small "which is right for you" list/table, using ONLY options actually offered. COMPARATIVE DEPTH (Goldilocks): when you do compare, compare the options on the SAME decision axes that matter for THIS product (e.g. size/strength, use-case fit, per-unit value) — deep enough to let the buyer choose, but NO deeper; cover the real tradeoffs, never pad with trivial differences. If the product is genuinely single-option with no meaningful choice, OMIT this — never manufacture a fake choice.
 
@@ -8092,11 +8322,13 @@ PAGE-TYPE DIRECTIVE (stated in the user message):
   3) Why choose this one — the product's differentiators/benefits (quality, testing, guarantees), benefit-led.
   4) Specifications — a fact-model <table> of the product's real specs/variants.
   5) What's included / options — variants, quantity, what ships.
-  6) Who it's for & how it's used — the buyer + their use case (the ONE allowed short product-anchored educational sentence may go here).
+  6) Who it's for & how it's used — the buyer + their use case.
+  6b) What it's used / studied for (applications) — INCLUDE this section. For a general consumer product: the product's real-world use cases and who it's for. For a research compound / Research-Use-Only product: the specific research contexts it is studied in AND the biological target/receptor it is studied against (e.g. "studied in GLP-1 receptor agonism research", "used as a research tool for examining X pathways"). Develop it with substantive, specific detail — this is the WELCOME applications depth, and it is what a buyer means by "what does it do". COMPLIANCE BOUNDARY (research/RUO products): frame everything as what the product is USED or STUDIED FOR — never what it treats, cures, causes, or does in the human body. NO therapeutic/medical claims, NO efficacy/outcome claims, NO mechanism-as-benefit, NO dosing/administration guidance. "Studied for", not "works by" or "helps you". This applications/research-context section is DISTINCT from — and allowed despite — the BANNED textbook mechanism-of-action / physiology / health-benefits encyclopedia.
   7) Shipping, returns & guarantees — state what's known; flag unknowns as gaps.
-  8) FAQ — 4–7 real buyer questions (fit, compatibility, shipping, returns, care).
-  9) A clear closing CTA.
-  Keep it commercial throughout — it is a page that sells THIS product, NOT an article about the ingredient/material.
+  8) (OPTIONAL — at most ONE section) Market/positioning context — how THIS product compares to the alternatives a buyer is weighing, framed as "what this means for your purchase". Include ONLY if it genuinely aids the decision; keep it to a SINGLE consolidated section placed here (after the core buyer sections); never split it across multiple sections or repeat its facts elsewhere.
+  9) FAQ — 4–7 real buyer questions (fit, compatibility, shipping, returns, care).
+  10) A clear closing CTA.
+  Keep it commercial and buyer-first throughout — it is a page that sells THIS product to the person buying it, NOT an article about the ingredient/material and NOT a guide for someone who will buy elsewhere.
 - COLLECTION — write a category/collection landing page (PLP): intro that frames the category and who it's for, buying guidance ("how to choose", key considerations), an overview of the notable sub-types/products (named only if provided), internal-link-worthy structure, FAQ, CTA. Do NOT write a single-product description.
 
 SCHEMA RULES (the final JSON-LD block):
@@ -8220,6 +8452,7 @@ _ECOMMERCE_SERP_LOCATION_CODE = 2840
 
 class EcommerceScoreRequest(BaseModel):
     keyword: str
+    entity_provider: Optional[str] = None  # 'textrazor' (default) | 'google'
     page_type: str = "product"          # "product" | "collection"
     page_url: Optional[str] = None
     page_content: Optional[str] = None  # if omitted, fetched from page_url
@@ -8251,7 +8484,7 @@ async def score_ecommerce_page(request: Request, body: EcommerceScoreRequest):
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
     import anthropic as _anthropic
-    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+    client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
     page_type = "collection" if (body.page_type or "").lower() == "collection" else "product"
 
     # SERP analysis inline if not supplied (national scope — ecommerce is not geo-local).
@@ -8261,7 +8494,7 @@ async def score_ecommerce_page(request: Request, body: EcommerceScoreRequest):
         try:
             _loc = body.location or _ECOMMERCE_SERP_LOCATION
             _code = body.location_code or _ECOMMERCE_SERP_LOCATION_CODE
-            inline_serp = await _run_serp_analysis(body.keyword, _loc, _code)
+            inline_serp = await _run_serp_analysis(body.keyword, _loc, _code, entity_provider=body.entity_provider)
             serp_analysis_dict = inline_serp.model_dump()
         except Exception as _serp_err:
             logger.warning(f"score-ecommerce: inline SERP analysis failed ({_serp_err})")
@@ -8333,8 +8566,247 @@ async def score_ecommerce_page(request: Request, body: EcommerceScoreRequest):
     )
 
 
+# ---------------------------------------------------------------------------
+# Blog / article scoring rubric (AEO-oriented, national scope)
+# ---------------------------------------------------------------------------
+# Blog posts are written in pipeline-api (the 5-module blog pipeline), NOT here —
+# nlp-api only SCORES them. The rubric mirrors the ecommerce scorer seam: a
+# (weights, labels, system prompt, prompt builder, deficiency builder) tuple that
+# reuses the shared _composite_from_scores / _serp_context / _run_serp_analysis /
+# _scrape_one / _compute_serp_signal_coverage / _voice_scorecard_from helpers.
+#
+# Two engines are DETERMINISTIC (scored in Python, never sent to Claude):
+#   • serp_signal_coverage (.15) — reused as-is (exact keyword/entity presence).
+#   • structural_aeo (.10)       — the content-quality PRD's R4/R6/R7 checks
+#                                   (Key Takeaways / paragraph cap / citations /
+#                                   scannability / heading structure).
+# The other 6 are LLM-scored. Weights sum to 1.0 and, like the other rubrics,
+# NEVER include brand voice (voice is a separate scorecard).
+_BLOG_ENGINE_WEIGHTS = {
+    "organic_ranking":       0.12,
+    "aeo_llm_retrieval":     0.20,
+    "content_depth":         0.15,
+    "entity_topic_coverage": 0.13,
+    "eeat_citations":        0.10,
+    "icp_alignment":         0.05,
+    "structural_aeo":        0.10,   # deterministic — scored in Python, not Claude
+    "serp_signal_coverage":  0.15,   # deterministic — scored in Python, not Claude
+}
+
+_BLOG_ENGINE_LABELS = {
+    "organic_ranking":       "Organic Ranking Engine",
+    "aeo_llm_retrieval":     "AEO / LLM Retrieval Engine",
+    "content_depth":         "Content Depth & Helpfulness Engine",
+    "entity_topic_coverage": "Entity & Topic Coverage Engine",
+    "eeat_citations":        "E-E-A-T & Citations Engine",
+    "icp_alignment":         "ICP Alignment Engine",
+    "structural_aeo":        "Structural / AEO Readiness",
+    "serp_signal_coverage":  "SERP Signal Coverage",
+}
+
+
+def _blog_score_system_prompt_for(voice_card: Optional[dict] = None) -> str:
+    if vcard.is_card_empty(voice_card):
+        return _BLOG_SCORE_SYSTEM_PROMPT
+    return _BLOG_SCORE_SYSTEM_PROMPT + _VOICE_SCORE_PROMPT_SUFFIX
+
+
+def _blog_build_deficiencies(scores: dict) -> List[dict]:
+    """Per-engine deficiencies (<80) using the blog labels. Mirrors
+    _build_deficiencies but keyed to _BLOG_ENGINE_LABELS (so the deterministic
+    structural_aeo/serp_signal_coverage engines surface as deficiencies too)."""
+    out = []
+    for key, label in _BLOG_ENGINE_LABELS.items():
+        eng = scores.get(key, {})
+        if eng.get("score", 100) < 80:
+            out.append({
+                "engine": label,
+                "engine_key": key,
+                "score": eng.get("score", 0),
+                "issues": eng.get("issues", []),
+                "recommendations": eng.get("recommendations", []),
+            })
+    return out
+
+
+_BLOG_SCORE_SYSTEM_PROMPT = """You are an expert content-SEO + AEO (Answer Engine Optimization) analyst. Score the provided BLOG ARTICLE against all 6 engines below.
+
+IMPORTANT: These 6 engines account for 75% of the composite score. The remaining 25% is scored separately by two deterministic Python engines you do NOT score — Structural / AEO Readiness (10%, checks Key Takeaways / paragraph length / citations / scannability / heading structure) and SERP Signal Coverage (15%, checks exact keyword/entity/quadgram presence per HTML zone). Focus only on the 6 below. Use the deterministic HTML STRUCTURE FACTS in the CONTEXT (heading/list/paragraph/link counts) — do NOT re-count them from the stripped text.
+
+This is an informational/editorial ARTICLE, not a landing page or product page. Judge it as content a reader (and an AI answer engine) would find genuinely helpful, trustworthy, and extractable. Do NOT reward hard sales copy, keyword stuffing, or thin restatement.
+
+SCORING CRITERIA — score each engine 0–100:
+
+1. organic_ranking (weight 12%): the target keyword / topic in <title>, H1, and the opening answer sentence; search-intent match (does the article answer what someone searching this query actually wants?); unique angle and substance vs. generic boilerplate; a compelling, non-clickbait title.
+
+2. aeo_llm_retrieval (weight 20% — treat as high value): extractability for AI answers and featured snippets. A single DIRECT, liftable answer sentence to the seed query in the opening (~15–30 words, self-contained). A "Key Takeaways" block of standalone, quotable claims near the top (the first bullet a clean definitional/direct answer). Section headings that read as real questions or specific sub-topics (penalise vague "Overview"/"More info"/the exact search phrase verbatim as a heading). Each key claim quotable WITHOUT surrounding context (penalise vague "it depends" hedging). An FAQ with answer-first responses is a plus. Scannable structure (short paragraphs, lists) that an LLM can cleanly cite.
+
+3. content_depth (weight 15%): genuine helpfulness and comprehensiveness for the intent; concrete specifics, examples, data, and first-hand/expert insight over filler; covers the sub-questions a reader would have; no fluff, no repetition, no obvious AI-boilerplate ("In today's fast-paced world…"). Penalise padding and off-topic drift from the title's promise.
+
+4. entity_topic_coverage (weight 13%): topical authority — the main entity plus the related entities, concepts, and terms a thorough piece on this topic would cover, co-occurring across multiple sections; semantic completeness vs. what the SERP competitors cover; no critical sub-topic gaps.
+
+5. eeat_citations (weight 10%): Experience, Expertise, Authoritativeness, Trust. External citations/links on time-bound, statistical, or named-source claims (a piece making factual claims with zero sourcing scores LOW); first-party/authoritative sources preferred over aggregators; author/brand credibility signals; accurate, non-misleading claims. Judge the citation presence the COPY shows — do not penalise for lacking a platform byline widget.
+
+6. icp_alignment (weight 5%): does the article speak to the client's actual audience (the ICP) and their level, problems, and language? Framing and examples relevant to that reader; appropriate depth for who it's for. Score neutrally (~70) when no ICP context is provided rather than penalising.
+
+Return ONLY valid JSON — no markdown, no explanation:
+{
+  "organic_ranking":       {"score": 0, "issues": [], "recommendations": []},
+  "aeo_llm_retrieval":     {"score": 0, "issues": [], "recommendations": []},
+  "content_depth":         {"score": 0, "issues": [], "recommendations": []},
+  "entity_topic_coverage": {"score": 0, "issues": [], "recommendations": []},
+  "eeat_citations":        {"score": 0, "issues": [], "recommendations": []},
+  "icp_alignment":         {"score": 0, "issues": [], "recommendations": [], "icp_detected": ""}
+}
+
+Be specific — reference actual content found (or missing) in the article."""
+
+
+def _build_blog_score_prompt(
+    business_name: str,
+    brand_context: str,
+    keyword: str,
+    serp_ctx: str,
+    page_text: str,
+    html_structure: str = "",
+    voice_card: Optional[dict] = None,
+) -> str:
+    """Dynamic user-message portion of the blog scoring prompt. The static rubric
+    lives in _BLOG_SCORE_SYSTEM_PROMPT (cached separately)."""
+    structure_block = f"\n{html_structure}\n" if html_structure else ""
+    ctx_line = f"Brand/business context: {brand_context}\n" if brand_context else ""
+    voice_rendered = vcard.render_voice_card_block(voice_card)
+    voice_block = (
+        f"\nCLIENT BRAND VOICE & AUDIENCE (score the brand voice scorecard against this):\n{voice_rendered}\n"
+        if voice_rendered else ""
+    )
+    return f"""CONTEXT
+Business / brand: {business_name}
+Content type: Blog article (informational)
+Target keyword / topic: {keyword}
+{ctx_line}{serp_ctx}{structure_block}{voice_block}
+ARTICLE CONTENT (first 8,000 chars):
+{page_text[:8000]}"""
+
+
+class BlogScoreRequest(BaseModel):
+    keyword: str
+    entity_provider: Optional[str] = None  # 'textrazor' (default) | 'google'
+    page_url: Optional[str] = None
+    page_content: Optional[str] = None  # if omitted, fetched from page_url
+    business_name: str = ""
+    brand_context: Optional[str] = None
+    serp_analysis: Optional[dict] = None
+    location: str = _ECOMMERCE_SERP_LOCATION
+    location_code: Optional[int] = None
+    brand_voice: Optional[dict] = None
+    detected_icp: Optional[dict] = None
+    voice_card: Optional[dict] = None
+
+
+class BlogScoreResponse(BaseModel):
+    composite_score: float
+    composite_status: str
+    engine_scores: dict
+    deficiencies: List[dict]
+    token_usage: dict
+    serp_analysis: Optional[dict] = None
+    analysis_cost: Optional[dict] = None
+    voice_compliance: Optional[dict] = None
+
+
+@app.post('/score-blog-page', response_model=BlogScoreResponse)
+@limiter.limit("10/minute")
+async def score_blog_page(request: Request, body: BlogScoreRequest):
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
+
+    import anthropic as _anthropic
+    client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
+
+    # SERP analysis inline if not supplied (national scope — blog topics rank nationally).
+    inline_serp = None
+    serp_analysis_dict: Optional[dict] = body.serp_analysis
+    if not serp_analysis_dict:
+        try:
+            _loc = body.location or _ECOMMERCE_SERP_LOCATION
+            _code = body.location_code or _ECOMMERCE_SERP_LOCATION_CODE
+            inline_serp = await _run_serp_analysis(body.keyword, _loc, _code, entity_provider=body.entity_provider)
+            serp_analysis_dict = inline_serp.model_dump()
+        except Exception as _serp_err:
+            logger.warning(f"score-blog: inline SERP analysis failed ({_serp_err})")
+            raise HTTPException(status_code=503, detail="Could not fetch competitor data. Please try again in a moment.")
+
+    from bs4 import BeautifulSoup as _BS
+    page_html = body.page_content
+    if not page_html and body.page_url:
+        async with httpx.AsyncClient() as _fc:
+            page_html = await _scrape_one(body.page_url, _fc, render_js=False)
+            if not page_html:
+                page_html = await _scrape_one(body.page_url, _fc, render_js=True)
+        if not page_html:
+            raise HTTPException(status_code=422, detail="Could not fetch the provided page URL. Check that it is correct and publicly accessible.")
+    if not page_html:
+        raise HTTPException(status_code=422, detail="Either page_content or page_url is required")
+
+    html_structure = _detect_blog_structure(page_html)
+    page_text = _BS(page_html, "html.parser").get_text(separator="\n", strip=True)
+    serp_ctx = _serp_context(serp_analysis_dict)
+    brand_context = body.brand_context or body.business_name
+    voice_card = await _resolve_voice_card(client, body)
+    user_prompt = _build_blog_score_prompt(
+        body.business_name, brand_context, body.keyword, serp_ctx, page_text,
+        html_structure, voice_card=voice_card,
+    )
+
+    scores = None
+    token_rec = None
+    for attempt in range(2):
+        try:
+            msg = await client.messages.create(
+                model=SCORE_MODEL,
+                max_tokens=8192,
+                system=[{
+                    "type": "text",
+                    "text": _blog_score_system_prompt_for(voice_card),
+                    "cache_control": {"type": "ephemeral"},
+                }],
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            token_rec = _token_record("score-blog-page", SCORE_MODEL, msg.usage.input_tokens, msg.usage.output_tokens)
+            parsed = _parse_claude_json(msg.content[0].text)
+            if parsed:
+                scores = parsed
+                break
+            logger.warning(f"score-blog: invalid JSON on attempt {attempt + 1}")
+        except Exception:
+            logger.exception(f"Blog scoring error on attempt {attempt + 1}")
+            if attempt == 1:
+                raise HTTPException(status_code=502, detail="Scoring service temporarily unavailable. Please try again.")
+
+    if not scores:
+        raise HTTPException(status_code=502, detail="Scoring service returned an invalid response. Please try again.")
+
+    scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_html, serp_analysis_dict)
+    scores["structural_aeo"] = _compute_blog_structural_aeo(page_html)
+    voice_compliance = _voice_scorecard_from(scores, page_html, "", voice_card)
+    composite, status = _composite_from_scores(scores, _BLOG_ENGINE_WEIGHTS)
+
+    return BlogScoreResponse(
+        composite_score=composite,
+        composite_status=status,
+        engine_scores=scores,
+        deficiencies=_blog_build_deficiencies(scores),
+        voice_compliance=voice_compliance,
+        token_usage=token_rec,
+        serp_analysis=serp_analysis_dict if inline_serp else None,
+        analysis_cost=inline_serp.analysis_cost if inline_serp else None,
+    )
+
+
 class GenerateEcommerceRequest(BaseModel):
     keyword: str
+    entity_provider: Optional[str] = None  # 'textrazor' (default) | 'google'
     page_type: str = "product"           # "product" | "collection"
     business_name: str
     website: Optional[str] = None
@@ -8539,7 +9011,7 @@ async def generate_ecommerce_page(request: Request, body: GenerateEcommerceReque
     page_type = "collection" if (body.page_type or "").lower() == "collection" else "product"
 
     async def _worker(q: asyncio.Queue):
-        client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+        client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
         await q.put({"step": "progress", "progress": 5, "message": "Starting…"})
 
         # SERP analysis (national scope) unless supplied or explicitly skipped.
@@ -8549,7 +9021,7 @@ async def generate_ecommerce_page(request: Request, body: GenerateEcommerceReque
             try:
                 _loc = body.location or _ECOMMERCE_SERP_LOCATION
                 _code = body.location_code or _ECOMMERCE_SERP_LOCATION_CODE
-                inline_serp = await _run_serp_analysis(body.keyword, _loc, _code)
+                inline_serp = await _run_serp_analysis(body.keyword, _loc, _code, entity_provider=body.entity_provider)
                 serp_analysis_dict = inline_serp.model_dump() if hasattr(inline_serp, "model_dump") else dict(inline_serp)
                 await q.put({"step": "progress", "progress": 45, "message": "Analyzing competitor pages…"})
             except Exception as _serp_err:
@@ -8843,7 +9315,7 @@ async def reoptimize_ecommerce_page(request: Request, body: ReoptimizeEcommerceR
     page_type = "collection" if (body.page_type or "").lower() == "collection" else "product"
 
     async def _worker(q: asyncio.Queue):
-        client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+        client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
         await q.put({"step": "progress", "progress": 10, "message": "Fetching existing page…"})
 
         existing_html = body.existing_page_html or ""

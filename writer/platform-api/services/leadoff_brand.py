@@ -242,6 +242,76 @@ def top5_from_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _item_latlng(it: dict[str, Any]) -> tuple[Any, Any]:
+    """A maps item's coordinates. DataForSEO documents top-level `latitude`/
+    `longitude`; some payloads nest them under `gps_coordinates`. (None, None)
+    when absent (a directory entry with no pin)."""
+    if it.get("latitude") is not None or it.get("longitude") is not None:
+        return it.get("latitude"), it.get("longitude")
+    gps = it.get("gps_coordinates")
+    if isinstance(gps, dict):
+        return gps.get("latitude"), gps.get("longitude")
+    return None, None
+
+
+def map_pins_from_items(items: list[dict[str, Any]],
+                        cap: int = 20) -> list[dict[str, Any]]:
+    """The live-GBP competitor pins for the LeadOff market map — the same Maps
+    SERP scout/tryout already fire, but keeping the coordinates/place_id/rating/
+    reviews the phone parser discards. Only items with real coordinates are
+    kept (the map plots pins; a coord-less directory entry has nothing to plot).
+    Ordered by SERP rank, capped. Pure."""
+    out = []
+    for it in items or []:
+        lat, lng = _item_latlng(it)
+        if lat is None or lng is None:
+            continue
+        name = (it.get("title") or "").strip()
+        if not name:
+            continue
+        rating = it.get("rating") or {}
+        out.append({
+            "rank_position": it.get("rank_group") or it.get("rank_absolute"),
+            "place_id": it.get("place_id"),
+            "business_name": name,
+            "domain": (it.get("domain") or "").strip() or None,
+            "rating": rating.get("value") if isinstance(rating, dict) else None,
+            "review_count": rating.get("votes_count") if isinstance(rating, dict) else None,
+            "lat": lat, "lng": lng,
+            # phone is not persisted (no column) but lets scout reuse this one
+            # SERP to fill NAP phones instead of firing a second Maps call.
+            "phone": (it.get("phone") or "").strip() or None,
+        })
+        if len(out) >= cap:
+            break
+    return out
+
+
+async def fetch_market_pins(client, category_name: str, city: dict[str, Any],
+                            depth: int = 20) -> list[dict[str, Any]]:
+    """One live Maps SERP (13z) → the market's competitor GBP pins (coords +
+    place_id + rating + reviews). Scout's map-pin source; best-effort (returns
+    [] on any error so the map is never the reason an enrichment job fails)."""
+    from services.leadoff_actions import _check_money_limit, _dfs_post, _task0
+
+    try:
+        d = await _dfs_post(
+            client, "/serp/google/maps/live/advanced",
+            [{"keyword": category_name,
+              "location_coordinate": f"{city['latitude']},{city['longitude']},13z",
+              "language_code": "en", "device": "desktop", "os": "windows",
+              "depth": depth}])
+        t0 = _task0(d)
+        _check_money_limit(t0)
+        items = ((t0.get("result") or [{}])[0] or {}).get("items") or []
+        return map_pins_from_items(items)
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        logger.warning("leadoff_brand.market_pins_failed", extra={"error": str(exc)})
+        return []
+
+
 # ── Cache state + fetch (impure; plumbing borrowed lazily from leadoff_actions
 #    to avoid a top-level import cycle — actions imports this module) ──────────
 

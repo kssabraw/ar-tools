@@ -14,6 +14,12 @@ Rules (thresholds are conservative tunables, like rank_status.py):
   - weekly_drop      : baseline (a week ago) in 1–15 and dropped ≥6 spots
   - page_one_exit    : was on page 1 (≤10) a week ago, now off it (>10)
   - thirty_day_drop  : baseline (30 days ago) in ~top 20 and dropped ≥6 spots
+  - gradual_drop     : a slow, steady slide the window-over-window rules miss —
+                       a keyword bleeding ~1 spot/week never accumulates ≥6 in a
+                       single 7- or 30-day window, so it would otherwise notify
+                       no one. Measures CUMULATIVE displacement over ~8 weeks and
+                       fires only when the decline is genuinely gradual (not a
+                       cliff the sudden rules already own, not mid-window noise).
   - deindexed        : status == 'deindex_risk' (GSC-only sustained NULL signal)
 """
 
@@ -21,7 +27,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from statistics import mean
 from typing import Optional, Sequence
 
@@ -41,7 +47,22 @@ GSC_SMOOTH_DAYS = 7                # rolling-average window for the GSC paths
 DF_RECENT_TOLERANCE = 4           # DataForSEO "now" vs a point on/before today−4
 DF_MONTH_TOLERANCE = 25           # DataForSEO "a month ago" vs on/before today−25
 
-ALERT_TYPES = ("weekly_drop", "page_one_exit", "thirty_day_drop", "deindexed")
+# --- gradual_drop tunables --------------------------------------------------
+# A slow slide the fast rules miss. Endpoints (tight 7-day windows / sparse-DFS
+# points) set the MAGNITUDE; three segment means set the SHAPE, so a sudden
+# cliff (one segment carries almost the whole move) is rejected and left to the
+# weekly/thirty-day rules that fired when it happened. Kept as module constants
+# alongside the sibling thresholds above (start conservative; the on/off switch
+# is settings.rank_gradual_drop_enabled).
+GRADUAL_WINDOW_DAYS = 56           # ~8 weeks — long enough that ~1 spot/week clears the bar
+GRADUAL_DROP_SPOTS = 5             # cumulative positions lost, start-to-end, to fire
+GRADUAL_BASELINE_MAX = 20          # only alert if it was ~top 20 eight weeks ago
+GRADUAL_SEGMENTS = 3               # split the window into thirds for the shape test
+GRADUAL_MAX_STEP_SHARE = 0.75      # no single segment step may exceed this share of the move
+GRADUAL_STEP_NOISE = 1.5           # a segment may improve by up to this and still count as a steady slide
+GRADUAL_DF_TOLERANCE = 10          # DFS baseline: nearest point on/before today-(window-tol)
+
+ALERT_TYPES = ("weekly_drop", "page_one_exit", "thirty_day_drop", "gradual_drop", "deindexed")
 
 
 @dataclass
@@ -122,10 +143,109 @@ def _fmt(pos: Optional[float]) -> str:
     return f"{round(pos)}" if pos is not None else "—"
 
 
+def _segment_means(
+    series: Sequence[DatePoint], today: date, window_days: int, segments: int
+) -> list[Optional[float]]:
+    """Split the trailing `window_days` into `segments` equal date-buckets
+    (oldest first) and return the mean non-null position in each (None if empty).
+
+    Source-agnostic — works for dense GSC series and sparse weekly DataForSEO
+    points alike. Used only for the SHAPE test (is the slide steady, or a cliff),
+    never the magnitude, which the tighter endpoints in `detect_gradual_drop`
+    carry.
+    """
+    hi = today.toordinal()
+    lo = hi - window_days + 1
+    seg_len = window_days / segments
+    buckets: list[list[float]] = [[] for _ in range(segments)]
+    for d, p in _sorted_points(series):
+        if p is None:
+            continue
+        o = _to_date(d).toordinal()
+        if not (lo <= o <= hi):
+            continue
+        idx = int((o - lo) / seg_len)
+        if idx >= segments:  # the final day lands exactly on the boundary
+            idx = segments - 1
+        buckets[idx].append(p)
+    return [round(mean(b), 1) if b else None for b in buckets]
+
+
+def detect_gradual_drop(
+    merged: Sequence[dict], primary: str, today: date
+) -> Optional[tuple[float, float, float]]:
+    """A slow, sustained multi-week slide the sudden-drop rules miss.
+
+    Returns (baseline, current, delta) when a gradual decline is present, else
+    None. 'Gradual' means ALL of:
+      * magnitude — position worsened by ≥ GRADUAL_DROP_SPOTS across the window,
+        measured from tight endpoints (7-day averages / sparse-DFS points), so a
+        ~1 spot/week bleed that never trips a 7- or 30-day window still clears it;
+      * baseline was ranking — ≤ GRADUAL_BASELINE_MAX eight weeks ago (deep
+        keywords aren't worth a gradual alert);
+      * steady — no segment materially better than the one before it (a real
+        mid-window recovery means it isn't a monotonic slide);
+      * not a cliff — no single segment step is most of the move. An old sudden
+        drop (baseline pre-cliff, current post-cliff) would otherwise look
+        gradual now, but the weekly/thirty-day rules already fired when it fell;
+        this keeps gradual_drop distinct instead of re-alerting a stale cliff.
+    """
+    if primary == "gsc":
+        series: list[DatePoint] = [(r["date"], r.get("gsc_position")) for r in merged]
+        current = _window_average(series, 0, GSC_SMOOTH_DAYS, today)
+        baseline = _window_average(
+            series, GRADUAL_WINDOW_DAYS - GSC_SMOOTH_DAYS, GSC_SMOOTH_DAYS, today
+        )
+    elif primary == "dataforseo":
+        series = [(r["date"], r.get("tracked_rank")) for r in merged]
+        current = _latest_value(series)
+        baseline = _value_on_or_before(
+            series, today - timedelta(days=GRADUAL_WINDOW_DAYS - GRADUAL_DF_TOLERANCE)
+        )
+    else:
+        return None
+
+    if current is None or baseline is None or baseline > GRADUAL_BASELINE_MAX:
+        return None
+    delta = round(current - baseline, 1)
+    if delta < GRADUAL_DROP_SPOTS:
+        return None
+
+    means = _segment_means(series, today, GRADUAL_WINDOW_DAYS, GRADUAL_SEGMENTS)
+    if any(m is None for m in means):
+        return None  # need coverage across the whole window to judge the shape
+
+    steps: list[float] = []
+    prev: Optional[float] = None
+    for m in means:
+        if prev is not None:
+            step = m - prev
+            if step < -GRADUAL_STEP_NOISE:
+                return None  # recovered mid-window → not a steady slide
+            steps.append(step)
+        prev = m
+    span = means[-1] - means[0]
+    if span > 0 and steps and max(steps) > GRADUAL_MAX_STEP_SHARE * span:
+        return None  # one segment carries the move → a cliff, not a slide
+
+    return baseline, current, delta
+
+
 def detect_alerts(
-    keyword: str, merged: Sequence[dict], primary: str, status: str, today: date
+    keyword: str,
+    merged: Sequence[dict],
+    primary: str,
+    status: str,
+    today: date,
+    include_gradual: bool = True,
 ) -> list[AlertSignal]:
-    """Active alert conditions for one keyword right now (no history/dedup)."""
+    """Active alert conditions for one keyword right now (no history/dedup).
+
+    `include_gradual` gates the slow-slide detector (settings.rank_gradual_drop_
+    enabled at the call site). A gradual_drop is suppressed whenever a sudden
+    drop (weekly_drop / thirty_day_drop) or deindexed already fired this run, so
+    the same fall never opens two overlapping episodes.
+    """
     signals: list[AlertSignal] = []
 
     # deindexed — reuse the established deindex_risk signal (GSC-only by nature).
@@ -182,6 +302,30 @@ def detect_alerts(
                     delta=delta_m,
                     message=f'"{keyword}" dropped {round(delta_m)} spots over 30 days '
                     f"(from {_fmt(month_ago)} to {_fmt(current)}).",
+                )
+            )
+
+    # Gradual slide — only when no sudden drop already fired for this keyword
+    # (else the same fall opens two overlapping episodes). page_one_exit is a
+    # milestone, not a magnitude, so it doesn't suppress the gradual signal.
+    if include_gradual and not (
+        {"weekly_drop", "thirty_day_drop", "deindexed"} & {s.alert_type for s in signals}
+    ):
+        gradual = detect_gradual_drop(merged, primary, today)
+        if gradual is not None:
+            baseline, current_pos, delta_g = gradual
+            weeks = round(GRADUAL_WINDOW_DAYS / 7)
+            signals.append(
+                AlertSignal(
+                    alert_type="gradual_drop",
+                    source=primary,
+                    from_position=baseline,
+                    to_position=current_pos,
+                    delta=delta_g,
+                    message=f'"{keyword}" has slid {round(delta_g)} spots over the past '
+                    f"{weeks} weeks (from {_fmt(baseline)} to {_fmt(current_pos)}) — a slow, "
+                    "steady decline that no single-week drop alert would catch.",
+                    details={"window_days": GRADUAL_WINDOW_DAYS},
                 )
             )
 

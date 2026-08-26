@@ -1,10 +1,195 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-07 · **Website Builder — theme compiler + core-pages writer + imagery (PR #575, open/draft)** (latest)
+## ⏩ Update — 2026-08-25 · **LeadOff market-map interactions + two-maps sync (PR #721, MERGED + DEPLOYED)** (latest)
+
+Owner-driven UX polish on the live-GBP market map, shipped in the **same PR #721**
+as the Refresh-map affordance below (squash-merged to `main` as `f2da79d`,
+auto-deploys PLATFORM + rebuilds the Netlify frontend). All in
+`frontend/src/components/leadoff/MarketMap.tsx` (+ a `place_id` field threaded
+through `ProximityRead.pins` / `MarketMapPin` in `pages/LeadOff.tsx`).
+
+**What changed, in order of how it landed:**
+- **Per-pin interactivity.** Each competitor pin is a link to its **exact GBP**
+  (`place_id` → `maps/place/?q=place_id:…`, else a name/coord search), and
+  hovering shows a card with the business **name / ★ rating / reviews / distance**
+  plus a "View on Google" link. The hover card flips below the pin for top-row
+  pins and spills past the map edge (outer container `overflow: visible`; the
+  image keeps its clipped rounded border). `place_id` was already captured for
+  live pins by `_map_pins`; it just wasn't typed on the frontend.
+- **Two-maps sync (owner: "users are going to get confused").** The map + pins
+  show only the **ranked competitors we captured** (bounded: SERP depth ~20,
+  coords-required, within the analysis radius, exact keyword). A Google Maps link
+  can't be limited to that exact set — it always renders Google's **full live
+  directory** — so a whole-map "Open in Maps" jump read as the two maps
+  disagreeing. **Resolution (owner chose "exact links only"):** the base map is a
+  **static snapshot, not a link**; the only place-level jump to Google is
+  **per-pin** (place_id-exact, always in sync with what's plotted).
+- **Separate "Browse all …" escape hatch (owner request).** A **clearly-distinct,
+  labelled** link *below* the map — `Browse all "<category>" businesses on Google
+  Maps` with a sub-note that it opens Google's full live directory (more listings
+  than the ranked field above). Framed as its own action, never as "the same
+  map". Driven by a new optional `browseQuery` prop (the market's humanized
+  category slug).
+
+**Why the counts differ (for future reference):** the tool map is the *ranked
+competitive field for one keyword* (a curated, bounded snapshot from a single
+DataForSEO Maps SERP), not the exhaustive local directory Google shows live. This
+is by design; the per-pin `place_id` links are the only guaranteed-exact bridge
+between the two.
+
+Frontend-only; `tsc` + `vite build` clean; platform-api tests green on the merge.
+
+---
+
+## ⏩ Update — 2026-08-25 · **LeadOff market-map "Refresh map" affordance (follow-up #3)**
+
+Follow-up to the live-GBP market map below. Closes the gap where a **fully-cached
+scout can't (re)generate its map**: `fetch_market_pins` (the ~$0.004 Maps SERP
+that captures GBP pins) only fired inside a full scout, and a fully-cached scout
+returns `{job_id: null}` and runs nothing — so every market scouted before the
+pins feature shipped (2026-08-21) showed octant bars but **no map**, with no way
+to get one short of 90-day cache expiry.
+
+**What it adds:** a lightweight **`leadoff_map_refresh`** async job that re-pulls
+ONLY the market's live competitor GBP pins (one Maps SERP, `COST_MAP_REFRESH` =
+$0.004), decoupled from the RD/velocity/trend/footprint enrichment. Surfaced as a
+**"Refresh map (~$0.004)"** link on a market whose map is already showing, and as
+**"Plot the live GBPs (~$0.004)"** on a not-yet-scouted market (the cheap
+alternative to a full ~$0.70 scout just to get the map) — including the
+`no_geocoded_competitors` empty state.
+
+**Files:** `services/leadoff_actions.py` (`COST_MAP_REFRESH`, `market_display`,
+`enqueue_map_refresh`, `run_map_refresh_job`), `services/job_worker.py` (dispatch),
+`routers/leadoff.py` (`POST /leadoff/map-refresh`, staff-gated + budget-checked +
+spend-recorded as `"map_refresh"`; job added to the `/leadoff/jobs/{id}`
+allowlist), `frontend/src/pages/LeadOff.tsx` (`MapRefreshButton`, wired into
+`ProximityCard`/`ProximityDetail`).
+
+**Safety:** an empty/failed SERP (`fetch_market_pins` returns `[]` on any error)
+**skips persist entirely** — `persist_gbp_pins_batch`'s delete-stale step would
+otherwise wipe the market's prior pins on an empty batch, so a bad pull leaves the
+existing map intact (unit-tested). Reuses the separate `leadoff_gbp_pins` table,
+so a refresh still never shifts the board grade (Census pins unchanged).
+
+**Migration `20260825140000_leadoff_map_refresh_job.sql`** (adds the job type to
+the `async_jobs` CHECK) — **applied live** to `AR-Internal-Tools`. Tests:
+`tests/test_leadoff_map_refresh.py` (persist-only-non-empty, empty-preserves,
+unknown-market-fails); 115 leadoff tests green + frontend build clean.
+
+**Still open (deliberately deferred, owner "v1 is a start"):** click-to-drop a
+candidate pin (#1) + re-anchoring the octant math on a chosen point (#2), and the
+sparse-category (<5 pin) read polish (#4).
+
+---
+
+## ⏩ Update — 2026-08-25 · **LeadOff live-GBP market map from Scout/Tryout + placement plan (PR #719, MERGED + DEPLOYED)**
+
+The LeadOff market brief now shows a **map of the actual competitor Google
+Business Profiles** for a market, plus a plain-English **placement plan**
+("where should we plant a GBP"). Shipped in **PR #719**, squash-merged to `main`
+as `d075d8d`, auto-deployed to `PLATFORM` (deploy SUCCESS on `d075d8d`), frontend
+live via Netlify. **No feature flag — it's on.**
+
+### What it does
+- **Scout a market** (or run a **Tryout**) → the live competitor GBPs are plotted
+  over a Google static map (teal dots sized by review count, ranked ones
+  labelled), with the market centre, suggested placement zones, and an optional
+  pasted-GBP reference pin. A deterministic **placement plan** names the weakest
+  bearings + the best place to plant a GBP (near the nearest real town) + the
+  nearest-competitor distance.
+- **Where to see it:** LeadOff (sidebar Radar icon / `/leadoff`) → filter to a
+  market → click its row → the **"Proximity (where the field sits)"** card. The
+  map renders only **after** a scout/tryout (source `gbp_serp`); before that the
+  card shows the octant bars + a "Scout this market" nudge. Also on the **Tryouts**
+  tab: a per-result-row **Map** button.
+
+### The cheap-win insight
+Scout and Tryout **already fire a live Google Maps SERP** whose items carry each
+competitor's GBP **coordinates / place_id / rating / review count** — the parsers
+just kept name/domain/phone. So plotting the real GBPs needs **no new paid call**;
+scout still fires a single Maps SERP (its phones also feed the existing NAP
+footprint step).
+
+### Architecture / decisions worth knowing
+- **Grade safety.** Live pins live in a **new, separate** `public.leadoff_gbp_pins`
+  table — deliberately NOT in `competitor_locations`, whose Census pins feed
+  `proximity_opportunity` (a board grade input). So scouting improves a market's
+  **map** without shifting its **grade**. The grade path
+  (`leadoff_proximity.market_proximity_score`) still reads Census pins, unchanged.
+- **`market_proximity(prefer_live=True)`** prefers live GBP pins → attaches the map
+  layer only for the `gbp_serp` source. The **create-client handoff** calls it with
+  `prefer_live=False` so the campaign-goal placement text + the calibration-frozen
+  proximity stay aligned with the grade's Census read even on a scouted market.
+- **Persistence is insert-then-delete-stale** (`services/leadoff_gbp_pins.py`,
+  keyed on a per-batch `captured_at` stamp) so a failed insert never wipes a
+  market's prior pins; tryout writes all categories in one batched insert + delete.
+- **Rural fallback:** if every competitor sits beyond the 10-mi analysis radius
+  (octant read empty), the map still shows all captured GBPs, framed by a
+  `map_radius_miles`, instead of reading "unavailable".
+- Migration **`20260821140000_leadoff_gbp_pins.sql`** (table + index + RLS-on,
+  service-role-only like every sibling LeadOff table) — **applied live** to
+  `AR-Internal-Tools`.
+
+### Verified in production (2026-08-25)
+Ran one real scout on the deployed worker for **Little Rock, AR / chimney_sweep**
+(city_id `4119403`) — everything else cached, so ≈ one $0.004 Maps SERP. Result
+`gbp_pins: 2`, no error; the two real GBPs (JMI Masonry Chimney Inspection ★3.8;
+Clean Sweep Management ★5) persisted with coords/place_ids and the batch stamp,
+both inside the 10-mi radius → the read flips to `source=gbp_serp` and serves the
+map. (Those 2 rows are real scout output — left in place.)
+
+### Known limits / follow-ups (owner: "not perfect, a start")
+- Sparse categories (like the chimney_sweep test, 2 pins) correctly show a "thin
+  data" note and **no** placement plan — you need ≥5 in-radius pins for the plan.
+- **Re-generating the map on an already-fully-cached scout** isn't offerable yet
+  (the first scout always captures pins; a later refresh needs cache expiry). A
+  "refresh map" affordance is an easy follow-up.
+- Deliberately not built (owner chose reference-pin-only for v1): **click-to-drop**
+  a candidate pin anywhere, and **re-anchoring** the proximity math on a chosen
+  location.
+- The map image needs `VITE_GOOGLE_MAPS_API_KEY` in the Netlify build (same key
+  the geo-grid map uses). Absent it, the card shows a "needs a Maps key" note +
+  the octant bars (pins/logic still present).
+
+---
+
+## ⏩ Update — 2026-08-19 · **Second-Anthropic-account failover (concurrency headroom)**
+
+Concurrency limits (429s) on the shared Anthropic account can now fail over to a
+**second Anthropic account** — same Claude models, so output quality is
+unchanged. This is distinct from the existing cross-*provider* fallback
+(Anthropic→OpenAI→Gemini in `report_llm.py`), which swaps models; the second
+account is tried **first**, before any provider swap. Reactive failover only
+(the primary stays primary; the secondary is used only when the primary hits a
+transient 429/5xx that outlasts its retry budget). Covers all four Anthropic
+call surfaces: the report fan-out + brand/AI scans + agentic loops
+(Slack/SerMastr, strategist, PACE, QA) in **platform-api**, blog/service
+generation in **pipeline-api**, Local SEO/Ecommerce generation in **nlp-api**,
+and the Topic Fanout backend.
+
+**To activate — set ONE env var per service** (empty ⇒ no failover, so the code
+ships dark until you set it). The var is a **second Anthropic account's API key**
+(a genuinely separate account/org, not a second key on the same account — same
+account shares the same concurrency limit):
+
+| Railway service | Var to set |
+|---|---|
+| `PLATFORM` (platform-api + the vendored fanout) | `ANTHROPIC_API_KEY_SECONDARY` |
+| `pipeline` (pipeline-api) | `ANTHROPIC_API_KEY_SECONDARY` |
+| `nlp` (nlp-api) | `ANTHROPIC_API_KEY_SECONDARY` |
+
+Each service also honours `ANTHROPIC_KEY_FAILOVER_ENABLED` (default `true`; set
+`false` to disable without unsetting the key). Read the live Railway config
+before/after setting these (see the CLAUDE.md "read the live config" rule). No
+migration, no schema change, no new dependency.
+
+---
+
+## ⏩ Update — 2026-08-07 · **Website Builder — theme compiler + core-pages writer + imagery (PR #575, MERGED)**
 
 Closes the owner's four-step arc — *upload a Claude design → write the pages →
 generate images → push to a repo*. Three slices on **`claude/website-builder-slice-3-9an50d`**,
-three commits, CI green, **not yet merged**. Still dark behind
+three commits, CI green, **merged to `main` 2026-08-07**. Still dark behind
 `website_builder_enabled`; imagery additionally behind `website_images_enabled`
 (both default False — unchanged, nothing has run).
 
@@ -88,7 +273,10 @@ today a per-site NAP override goes through the config, not a form.
 ### To run it end-to-end
 
 Flip `website_builder_enabled=true` (and `website_images_enabled=true` for art)
-on PLATFORM — **both currently unset**. Then the normal lifecycle: create a
+on PLATFORM — **both set to `true` on 2026-08-08** (deployment `ea2b98b4`,
+commit `b4ca6da`, SUCCESS; verified behaviourally in the running app's logs —
+the scheduler is executing `enqueue_due_deploy_polls`, which returns early
+unless the flag is on). Then the normal lifecycle: create a
 `websites` row → upload+approve a theme → provision → build+approve a plan →
 generate (now covers home/about/contact + hero images, not just nlp pages) →
 publish. Testing: ~160 new unit tests across the three modules; full backend
@@ -125,7 +313,8 @@ repo to point at. Nothing is deployed from it and it has no Cloudflare project.
 
 **For a real website to exist, all of these must happen deliberately:**
 
-1. `website_builder_enabled=true` set on PLATFORM (it is not set, so it is False)
+1. `website_builder_enabled=true` set on PLATFORM (**done 2026-08-08**; was
+   False before that, which is why nothing below had run)
 2. a `websites` row created for a client
 3. `POST /websites/{id}/provision` called by a staff+ user
 4. a site plan built, reviewed and approved
@@ -178,8 +367,9 @@ The impure half is now built: `services/website_plan_store.py` (build / rebuild
 across the seven modules** (was 99).
 
 **UI (built 2026-08-06).** Two entry points, per PRD §6.1, and **both are
-hidden until `website_builder_enabled=true` on PLATFORM** — the flag is unset,
-so the module is currently invisible in the dashboard by design:
+hidden until `website_builder_enabled=true` on PLATFORM** — **set 2026-08-08**,
+so the module is now visible in the dashboard (it was invisible by design until
+then):
 
 1. **Sidebar → Websites** (`pages/Websites.tsx`, route `/websites`) — the fleet
    across every client, with status/domain/last-deploy columns, a filter, the

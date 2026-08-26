@@ -1,16 +1,30 @@
 ---
+import { cardColumns } from '../../lib/layouts';
+
 interface Props {
   title?: string;
   /** Minimum column width; the grid decides its own column count from this. */
   min?: string;
+  /** Explicit target column count. Defaults to the theme's card-grid density
+      (layouts.json); when the design declared none, `undefined` keeps this
+      grid's own `min`, i.e. the house behaviour. A caller may still override. */
+  columns?: number;
 }
-const { title, min = '260px' } = Astro.props;
+const { title, min = '260px', columns = cardColumns() } = Astro.props;
+
+// Target column count is expressed as a min column width so the grid stays the
+// same robust auto-fill mechanism — it never forces exactly N columns into a
+// narrow viewport, it just aims for the design's density at desktop width and
+// collapses gracefully. A design's explicit choice overrides the per-content
+// `min`; an unmeasured theme keeps it.
+const MIN_BY_COLUMNS: Record<number, string> = { 2: '380px', 3: '280px', 4: '210px' };
+const resolvedMin = (columns && MIN_BY_COLUMNS[columns]) || min;
 ---
 
 <section class="card-grid-section">
   <div class="wrap">
     {title && <h2 class="card-grid-section__title">{title}</h2>}
-    <div class="card-grid" style={`--min:${min}`}>
+    <div class="card-grid" style={`--min:${resolvedMin}`}>
       <slot />
     </div>
   </div>

@@ -13,11 +13,13 @@ import { ProductScoreView } from '../components/ecommerce/ProductScoreView'
 import { ReoptimizeView } from '../components/ecommerce/ReoptimizeView'
 import { useBulkGenerate } from '../components/ecommerce/useBulkGenerate'
 import { Spinner } from '../components/localseo/Spinner'
+import { EntityProviderSelect, type EntityProvider } from '../components/EntityProviderSelect'
 import { useBulkPublish, type PublishItem } from '../components/publish/useBulkPublish'
 import { BulkPublishBar } from '../components/publish/BulkPublishBar'
 import { usePagedPublish, PublishTabs, Pager, PublishBadges } from '../components/publish/PublishFilter'
+import { ErrorDetails } from '../components/ErrorDetails'
 import {
-  backLink, card, errorBox, input, label, outlineBtn, primaryBtn, relativeTime, scoreColor,
+  backLink, card, input, label, outlineBtn, primaryBtn, relativeTime, scoreColor,
 } from '../components/localseo/shared'
 
 type View =
@@ -71,6 +73,8 @@ export function EcommerceProduct() {
   const [sourceUrl, setSourceUrl] = useState('')
   const [productInput, setProductInput] = useState('')
   const [notes, setNotes] = useState('')
+  // Which entity-extraction engine the nlp SERP analysis uses (default TextRazor).
+  const [entityProvider, setEntityProvider] = useState<EntityProvider>('textrazor')
   const [bulkKeywords, setBulkKeywords] = useState('')
   const [bulkNotes, setBulkNotes] = useState('')
   const [error, setError] = useState('')
@@ -125,6 +129,7 @@ export function EcommerceProduct() {
         source_url: sourceUrl.trim() || null,
         product_input: productInput.trim() || null,
         notes: notes.trim() || null,
+        entity_provider: entityProvider,
       })
       const poll = async () => {
         if (genCancelledRef.current) return
@@ -399,7 +404,10 @@ export function EcommerceProduct() {
             />
           </div>
 
-          {error && <div style={errorBox}>{error}</div>}
+          {/* Entity-extraction engine for the competitor SERP analysis */}
+          <EntityProviderSelect value={entityProvider} onChange={setEntityProvider} />
+
+          {error && <ErrorDetails message={error} />}
 
           <button
             style={{ ...primaryBtn, width: '100%', opacity: canGenerate ? 1 : 0.5, cursor: canGenerate ? 'pointer' : 'not-allowed' }}
@@ -480,7 +488,7 @@ function BulkGenerateForm({ keywords, setKeywords, notes, setNotes, pageType, bu
         />
       </div>
 
-      {error && <div style={errorBox}>{error}</div>}
+      {error && <ErrorDetails message={error} />}
 
       {creating ? (
         <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 12, background: '#f8fafc' }}>

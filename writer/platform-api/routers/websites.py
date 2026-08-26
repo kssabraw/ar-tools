@@ -345,8 +345,9 @@ async def get_website_facts(website_id: str, auth: dict = Depends(require_auth))
     """The site's business facts as it would actually use them (GBP-filled),
     each labelled `user`/`gbp`/unset so the editor shows what came from where."""
     _enabled()
-    _load_site(website_id)  # 404s if the site is gone
     try:
+        # get_facts loads the site itself and raises SettingsError when it is
+        # gone, so a separate existence check would only duplicate the read.
         return website_settings.get_facts(website_id)
     except website_settings.SettingsError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -363,26 +364,28 @@ async def update_website_facts(
     Not freeze-gated: correcting a phone number is not content output, and a
     frozen client may well need its NAP fixed. Staff-gated like every write."""
     _enabled()
-    site = _load_site(website_id)
     # Only send fields the caller actually set, so an omitted group is left
     # untouched rather than cleared.
     edits = body.model_dump(exclude_unset=True)
     if not edits:
         return {"updated": False}
     try:
+        # save_facts loads the site itself (and 404s via SettingsError), so there
+        # is no pre-load here — and it returns the post-save view, so there is no
+        # re-read after either.
         result = await website_settings.save_facts(website_id, edits)
     except website_settings.SettingsError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     logger.info(
         "websites.facts_updated",
         extra={"website_id": website_id, "committed": result.get("committed"),
-               "client_id": site.get("client_id")},
+               "client_id": (result.get("website") or {}).get("client_id")},
     )
     return {
         "updated": True,
         "committed": result.get("committed", False),
         "deploy_id": result.get("deploy_id"),
-        "facts": website_settings.get_facts(website_id),
+        "facts": result.get("facts"),
     }
 
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import { useResumableJob } from '../lib/useResumableJob'
 import type { RunDetail as RunDetailType, RunStatus } from '../lib/types'
 import { ArrowLeft, Ban, CheckCircle, XCircle, Clock, Loader, Download, Copy, Check, RotateCcw, Repeat, Play, ExternalLink, AlertTriangle, GitBranch } from 'lucide-react'
 import {
@@ -13,6 +14,8 @@ import { sectionsToHtml, escapeHtml } from '../lib/sectionsToHtml'
 import { FeedbackButton } from '../components/FeedbackButton'
 import { ServicePageRunView } from '../components/ServicePageRunView'
 import { FeaturedImagePicker } from '../components/FeaturedImagePicker'
+import { ErrorDetails } from '../components/ErrorDetails'
+import { BlogScorePanel } from '../components/reoptimize/BlogScorePanel'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -298,21 +301,20 @@ export function RunDetail() {
   const [wpUrl, setWpUrl] = useState<string | null>(null)
   const [wpStatus, setWpStatus] = useState<'draft' | 'publish'>('draft')
   const [ghUrl, setGhUrl] = useState<string | null>(null)
-  const [ghPhase, setGhPhase] = useState<'idle' | 'generating' | 'error'>('idle')
-  const [ghJobId, setGhJobId] = useState<string | null>(null)
   const [ghError, setGhError] = useState<string | null>(null)
   const [ghQueueAhead, setGhQueueAhead] = useState<number | null>(null)
   const [fmt, setFmt] = useState<'markdown' | 'html'>('markdown')
   const publishMutation = useMutation({
-    mutationFn: () => api.post<{ doc_url: string }>(`/runs/${id}/publish`, {}),
+    mutationFn: (opts?: { force_voice?: boolean }) =>
+      api.post<{ doc_url: string }>(`/runs/${id}/publish`, opts ?? {}),
     onSuccess: (data) => {
       setPublishedUrl(data.doc_url)
       window.open(data.doc_url, '_blank')
     },
   })
   const wpPublishMutation = useMutation({
-    mutationFn: () => api.post<{ url: string; edit_url: string }>(
-      `/runs/${id}/publish`, { destination: 'wordpress', status: wpStatus },
+    mutationFn: (opts?: { force_voice?: boolean }) => api.post<{ url: string; edit_url: string }>(
+      `/runs/${id}/publish`, { destination: 'wordpress', status: wpStatus, ...(opts ?? {}) },
     ),
     onSuccess: (data) => {
       const link = data.edit_url || data.url
@@ -320,56 +322,52 @@ export function RunDetail() {
       if (link) window.open(link, '_blank')
     },
   })
+  // The async GitHub-publish job (image generation + atomic commit) runs as a
+  // resumable job: navigating away and back reconnects to it and re-opens the
+  // result when it lands. Only blog posts return a job; other content commits
+  // synchronously (handled in the mutation's onSuccess).
+  const ghJob = useResumableJob<{ html_url?: string }, undefined>({
+    storageKey: `run-github-publish:${id}`,
+    intervalMs: 4000,
+    poll: async (jobId) => {
+      const s = await api.get<{ status: string; result?: { html_url?: string }; error?: string; queue_ahead?: number }>(
+        `/runs/${id}/github-publish/status?job_id=${jobId}`,
+      )
+      setGhQueueAhead(s.status === 'pending' ? (s.queue_ahead ?? null) : null)
+      return { status: s.status, result: s.result ?? null, error: s.error }
+    },
+    onComplete: (result) => {
+      setGhError(null)
+      setGhQueueAhead(null)
+      setGhUrl(result?.html_url ?? null)
+      queryClient.invalidateQueries({ queryKey: ['run', id] })
+      queryClient.invalidateQueries({ queryKey: ['run-images', id] })
+      if (result?.html_url) window.open(result.html_url, '_blank')
+    },
+    onError: (err) => {
+      setGhQueueAhead(null)
+      setGhError(err || 'github_publish_failed')
+    },
+  })
+
   const ghPublishMutation = useMutation({
-    mutationFn: () => api.post<{ url?: string; path?: string; status?: string; job_id?: string }>(
-      `/runs/${id}/publish`, { destination: 'github' },
+    mutationFn: (opts?: { force_voice?: boolean }) => api.post<{ url?: string; path?: string; status?: string; job_id?: string }>(
+      `/runs/${id}/publish`, { destination: 'github', ...(opts ?? {}) },
     ),
     onSuccess: (data) => {
       setGhError(null)
       // Blog posts return { status: 'generating', job_id } — the images are
-      // generated + committed by an async job we poll below. Other content
-      // returns the committed URL directly (synchronous single-file commit).
+      // generated + committed by the async job the resumable hook polls. Other
+      // content returns the committed URL directly (synchronous single-file commit).
       if (data.status === 'generating' && data.job_id) {
-        setGhJobId(data.job_id)
-        setGhPhase('generating')
+        const jobId = data.job_id
+        void ghJob.start(async () => jobId, undefined)
       } else if (data.url) {
         setGhUrl(data.url)
         window.open(data.url, '_blank')
       }
     },
   })
-
-  // Poll the async GitHub-publish job (image generation + atomic commit).
-  useEffect(() => {
-    if (ghPhase !== 'generating' || !ghJobId) return
-    let active = true
-    const tick = async () => {
-      try {
-        const s = await api.get<{ status: string; result?: { html_url?: string }; error?: string; queue_ahead?: number }>(
-          `/runs/${id}/github-publish/status?job_id=${ghJobId}`,
-        )
-        if (!active) return
-        setGhQueueAhead(s.status === 'pending' ? (s.queue_ahead ?? null) : null)
-        if (s.status === 'complete') {
-          setGhPhase('idle')
-          setGhJobId(null)
-          setGhUrl(s.result?.html_url ?? null)
-          queryClient.invalidateQueries({ queryKey: ['run', id] })
-          queryClient.invalidateQueries({ queryKey: ['run-images', id] })
-          if (s.result?.html_url) window.open(s.result.html_url, '_blank')
-        } else if (s.status === 'failed') {
-          setGhPhase('error')
-          setGhJobId(null)
-          setGhError(s.error || 'github_publish_failed')
-        }
-      } catch {
-        /* transient — keep polling */
-      }
-    }
-    const h = setInterval(tick, 4000)
-    tick()
-    return () => { active = false; clearInterval(h) }
-  }, [ghPhase, ghJobId, id, queryClient])
 
   const runImagesQuery = useQuery({
     queryKey: ['run-images', id],
@@ -595,8 +593,16 @@ export function RunDetail() {
               <strong>Auto-retry{run.error_stage ? ` (${run.error_stage})` : ''}:</strong> {run.error_message}
             </div>
           ) : (
-            <div style={{ marginTop: 14, padding: '12px 14px', background: '#fef2f2', borderRadius: 8, color: '#dc2626', fontSize: 13 }}>
-              <strong>Error{run.error_stage ? ` (${run.error_stage})` : ''}:</strong> {run.error_message}
+            // A pipeline generation failure. Keep the failing stage visible
+            // (it's the fastest triage signal) and hand the message to the
+            // shared accordion for a plain-English explanation + plan of action.
+            <div style={{ marginTop: 14 }}>
+              {run.error_stage && (
+                <div style={{ fontSize: 12, fontWeight: 600, color: '#991b1b', marginBottom: 4 }}>
+                  Failed at the {run.error_stage} stage
+                </div>
+              )}
+              <ErrorDetails message={run.error_message} />
             </div>
           )
         )}
@@ -687,7 +693,7 @@ export function RunDetail() {
                 </a>
               ) : (
                 <button
-                  onClick={() => publishMutation.mutate()}
+                  onClick={() => publishMutation.mutate({})}
                   disabled={publishMutation.isPending}
                   style={{ ...ghostBtn, color: '#6366f1', borderColor: '#c7d2fe' }}
                   title="Publish to the client's Google Drive folder"
@@ -712,7 +718,7 @@ export function RunDetail() {
                     <option value="publish">Publish</option>
                   </select>
                   <button
-                    onClick={() => wpPublishMutation.mutate()}
+                    onClick={() => wpPublishMutation.mutate({})}
                     disabled={wpPublishMutation.isPending}
                     style={{ ...ghostBtn, border: 'none', borderLeft: '1px solid #c7d2fe', borderRadius: 0, color: '#6366f1' }}
                     title="Publish directly to the client's WordPress site"
@@ -728,13 +734,13 @@ export function RunDetail() {
                 </a>
               ) : (
                 <button
-                  onClick={() => ghPublishMutation.mutate()}
-                  disabled={ghPublishMutation.isPending || ghPhase === 'generating'}
+                  onClick={() => ghPublishMutation.mutate({})}
+                  disabled={ghPublishMutation.isPending || ghJob.running}
                   style={{ ...ghostBtn, color: '#334155', borderColor: '#cbd5e1' }}
                   title="Generate images and commit this post to the client's configured GitHub repo"
                 >
                   <GitBranch size={13} /> {
-                    ghPhase === 'generating'
+                    ghJob.running
                       ? 'Generating images…'
                       : ghPublishMutation.isPending ? 'Publishing…' : 'Publish to GitHub'
                   }
@@ -749,7 +755,7 @@ export function RunDetail() {
               onChange={(url) => featuredImageMutation.mutateAsync(url).then(() => undefined)}
             />
           </div>
-          {ghPhase === 'generating' && (
+          {ghJob.running && (
             <div style={{ marginBottom: 12, padding: '10px 12px', background: '#f0fdf4', borderRadius: 6, color: '#15803d', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
               <Loader size={14} className="spin" />
               {ghQueueAhead != null && ghQueueAhead > 0
@@ -757,11 +763,31 @@ export function RunDetail() {
                 : 'Generating hero + body images and committing to GitHub… you can leave this page; it finishes in the background. You\'ll get a notification when it\'s live.'}
             </div>
           )}
-          {(publishMutation.isError || wpPublishMutation.isError || ghPublishMutation.isError || ghError) && (
-            <div style={{ marginBottom: 12, padding: '10px 12px', background: '#fef2f2', borderRadius: 6, color: '#dc2626', fontSize: 12 }}>
-              Failed to publish: {ghError || ((publishMutation.error || wpPublishMutation.error || ghPublishMutation.error) instanceof Error ? ((publishMutation.error || wpPublishMutation.error || ghPublishMutation.error) as Error).message : 'unknown error')}
-            </div>
-          )}
+          {(publishMutation.isError || wpPublishMutation.isError || ghPublishMutation.isError || ghError) && (() => {
+            // Surface whichever publish destination failed, with a plan of
+            // action and — for a brand-voice block — a one-click override that
+            // re-runs that same destination with force_voice.
+            const failed = publishMutation.isError
+              ? publishMutation
+              : wpPublishMutation.isError
+                ? wpPublishMutation
+                : ghPublishMutation.isError
+                  ? ghPublishMutation
+                  : null
+            // Message tracks whichever source the override would re-run: the
+            // errored mutation when there is one, else the async GitHub job's
+            // error. This keeps the shown error and the override in sync.
+            const message = failed
+              ? (failed.error instanceof Error ? failed.error.message : 'unknown error')
+              : (ghError || 'unknown error')
+            return (
+              <ErrorDetails
+                message={message}
+                overriding={failed?.isPending}
+                onOverride={failed ? () => failed.mutate({ force_voice: true }) : undefined}
+              />
+            )
+          })()}
           {(runImagesQuery.data?.images?.length ?? 0) > 0 && (
             <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid #f1f5f9' }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: '#475569', marginBottom: 8 }}>
@@ -803,6 +829,14 @@ export function RunDetail() {
             {fmt === 'html' ? fullHtml : fullMarkdown}
           </pre>
         </div>
+      )}
+
+      {/* Score + reoptimize this completed article in place (8-engine rubric). */}
+      {run.status === 'complete' && articleMarkdown && (
+        <BlogScorePanel
+          runId={run.id}
+          onReoptimized={() => queryClient.invalidateQueries({ queryKey: ['run', id] })}
+        />
       )}
 
       {/* Per-zone term usage breakdown — what related keywords, entities,

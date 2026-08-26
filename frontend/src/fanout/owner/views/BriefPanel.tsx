@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ErrorDetails } from "../../../components/ErrorDetails";
 import { getBrief, startBrief, type BriefReport } from "../../shared/api";
 
 // M13 Brief Generator report (answer-engine-first; owner-only validation surface).
@@ -107,7 +108,7 @@ export default function BriefPanel(props: {
             </p>
           </div>
         )}
-        {status === "error" && <p className="banner banner-error">{error}</p>}
+        {status === "error" && <ErrorDetails variant="fanout" message={error} />}
 
         {brief && (
           <div style={{ display: "grid", gap: 18 }}>

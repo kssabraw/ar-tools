@@ -67,6 +67,29 @@ def test_pace_on_track_vs_behind():
     assert cg.evaluate_goal(g, 12.0, TODAY)["status"] == "behind"
 
 
+def test_pace_projection_not_fooled_by_calendar():
+    # The WheelHouse local-pack case: baseline 10.8 → 11.5 toward target 25, only
+    # ~5% of the way with ~19% of a long window elapsed. Projected pace is well
+    # short of the target, so it must read "behind" — NOT "on track" just because
+    # little time has elapsed (the old additive-grace bug).
+    g = _goal(goal_type="maps_pack_presence", baseline_value=10.8, target_value=25.0,
+              baseline_date="2026-07-07", due_date="2026-12-31")
+    ev = cg.evaluate_goal(g, 11.5, date(2026, 8, 10))
+    assert ev["status"] == "behind"
+    # A goal keeping projected pace (half-way at a fifth of the time) stays on track.
+    g2 = _goal(goal_type="keywords_in_top", baseline_value=0, target_value=2.0,
+               baseline_date="2026-07-07", due_date="2026-12-31")
+    assert cg.evaluate_goal(g2, 1.0, date(2026, 8, 10))["status"] == "on_track"
+
+
+def test_pace_benefit_of_doubt_very_early():
+    # A few days into a 6-month window (elapsed < the min-pace floor): too early to
+    # judge the projection, so a barely-moved goal is not alarmed as "behind".
+    g = _goal(goal_type="maps_pack_presence", baseline_value=10.0, target_value=25.0,
+              baseline_date="2026-07-07", due_date="2026-12-31")
+    assert cg.evaluate_goal(g, 10.5, date(2026, 7, 12))["status"] == "on_track"
+
+
 def test_overdue_past_due_date():
     g = _goal(due_date="2026-07-01")
     ev = cg.evaluate_goal(g, 6.0, TODAY)
@@ -92,3 +115,47 @@ def test_goal_note_carries_numbers_and_status():
 
 def test_measure_goal_dispatch_custom_is_none():
     assert cg.measure_goal(None, "c1", {"goal_type": "custom"}, TODAY) is None
+
+
+def test_measure_gsc_sum_aggregates_via_rpc():
+    """Clicks/impressions goals must sum the per-day RPC totals (server-side
+    aggregate), not a raw gsc_query_daily select that PostgREST caps at 1000 rows
+    and silently undercounts a busy property."""
+    class _Res:
+        def __init__(self, data):
+            self.data = data
+
+    class _Table:
+        def select(self, *a, **k):
+            return self
+
+        def eq(self, *a, **k):
+            return self
+
+        def limit(self, *a, **k):
+            return self
+
+        def execute(self):
+            return _Res([{"id": "prop1"}])  # gsc_properties row
+
+    class _Rpc:
+        def execute(self):
+            # one row per day (already aggregated); the row dated AFTER `today` must
+            # be excluded by the upper-bound filter so a historical measurement is
+            # correct — clicks sum to 17 (9 + 8), not 25.
+            return _Res([{"date": "2026-07-01", "impressions": 100, "clicks": 9},
+                         {"date": "2026-07-05", "impressions": 50, "clicks": 8},
+                         {"date": "2026-07-20", "impressions": 999, "clicks": 8}])
+
+    class _SB:
+        def table(self, name):
+            return _Table()
+
+        def rpc(self, name, params):
+            assert name == "gsc_property_daily_traffic"
+            assert params["p_property_id"] == "prop1"
+            return _Rpc()
+
+    # TODAY = 2026-07-07 → the 2026-07-20 row is in the future and excluded.
+    assert cg._measure_gsc_sum(_SB(), "c1", "clicks", TODAY) == 17.0
+    assert cg._measure_gsc_sum(_SB(), "c1", "impressions", TODAY) == 150.0

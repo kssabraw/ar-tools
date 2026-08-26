@@ -260,9 +260,14 @@ def gate_and_cluster(
     seed_terms: list[str] | None = None,
     peer_terms: list[str] | None = None,
     assign_best_silo: bool = False,
+    silo_margin: float = 0.0,
     llm_router=None,
     llm_router_margin: float = 0.04,
     language_filter: Callable[[str], bool] | None = None,
+    seed: str | None = None,
+    source_guard_enabled: bool = False,
+    source_guard_min_score: float = 0.80,
+    source_guard_min_seed_tokens: int = 2,
 ) -> PipelineResult:
     """Relevance gate (§7.6) + statistical clustering (§7.9) over an already-built
     per-topic candidate pool. Shared by the full pipeline and the re-gate path
@@ -284,9 +289,14 @@ def gate_and_cluster(
         seed_terms=seed_terms,
         peer_terms=peer_terms,
         assign_best_silo=assign_best_silo,
+        silo_margin=silo_margin,
         llm_router=llm_router,
         llm_router_margin=llm_router_margin,
         language_filter=language_filter,
+        seed=seed,
+        source_guard_enabled=source_guard_enabled,
+        source_guard_min_score=source_guard_min_score,
+        source_guard_min_seed_tokens=source_guard_min_seed_tokens,
     )
     result.degraded_notes.extend(gate.degraded_notes)
     cap_log = _cap_active_per_silo(gate.per_topic, active_per_silo_cap)
@@ -375,12 +385,19 @@ def cluster_preview(
     seed_terms: list[str] | None = None,
     peer_terms: list[str] | None = None,
     assign_best_silo: bool = False,
+    silo_margin: float = 0.0,
     language_filter: Callable[[str], bool] | None = None,
+    seed: str | None = None,
+    source_guard_enabled: bool = False,
+    source_guard_min_score: float = 0.80,
+    source_guard_min_seed_tokens: int = 2,
 ) -> dict:
     """Embed + gate once, then cluster under each (edge_threshold, resolution)
     config and report granularity stats — without persisting anything. The
     granularity sweep tool: one embed pass, many configs, so we can find the
-    settings that yield ~150-200 substantial groupings before committing a run."""
+    settings that yield ~150-200 substantial groupings before committing a run.
+    Applies the same source guard as the /regate it previews, so the active-pool
+    count it reports matches what a subsequent regate will commit."""
     gate = run_relevance_gate(
         per_topic=per_topic_lists,
         topic_embeddings=topic_embeddings,
@@ -391,7 +408,12 @@ def cluster_preview(
         seed_terms=seed_terms,
         peer_terms=peer_terms,
         assign_best_silo=assign_best_silo,
+        silo_margin=silo_margin,
         language_filter=language_filter,
+        seed=seed,
+        source_guard_enabled=source_guard_enabled,
+        source_guard_min_score=source_guard_min_score,
+        source_guard_min_seed_tokens=source_guard_min_seed_tokens,
     )
     active_keywords, active_embeddings = _active_for_clustering(
         gate.per_topic, clustering_max_nodes
@@ -462,9 +484,13 @@ def run_refinement_pipeline(
     seed_terms: list[str] | None = None,
     peer_terms: list[str] | None = None,
     assign_best_silo: bool = False,
+    silo_margin: float = 0.0,
     llm_router=None,
     llm_router_margin: float = 0.04,
     language_filter: Callable[[str], bool] | None = None,
+    source_guard_enabled: bool = False,
+    source_guard_min_score: float = 0.80,
+    source_guard_min_seed_tokens: int = 2,
 ) -> PipelineResult:
     result = PipelineResult()
     topic_names = {t.id: t.name for t in topics}
@@ -546,9 +572,14 @@ def run_refinement_pipeline(
         seed_terms=seed_terms,
         peer_terms=peer_terms,
         assign_best_silo=assign_best_silo,
+        silo_margin=silo_margin,
         llm_router=llm_router,
         llm_router_margin=llm_router_margin,
         language_filter=language_filter,
+        seed=seed,
+        source_guard_enabled=source_guard_enabled,
+        source_guard_min_score=source_guard_min_score,
+        source_guard_min_seed_tokens=source_guard_min_seed_tokens,
     )
     result.degraded_notes.extend(gc.degraded_notes)
     result.per_topic_gated = gc.per_topic_gated

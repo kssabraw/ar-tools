@@ -9,7 +9,8 @@ per location×date×metric), recording each run in ``gbp_sync_runs``. A 403
 Triggered by ``job_type='gbp_metrics_ingest'`` jobs (enqueued by gsc_scheduler)
 or the manual ingest endpoint. Mirrors services/gsc_ingest.py.
 
-Dormant until ``settings.gbp_metrics_enabled`` and Google access land.
+Live in production since 2026-08-15 (``gbp_metrics_enabled`` on; the ingest
+authenticates via the OAuth agency account — see gbp_performance_service).
 """
 
 from __future__ import annotations
@@ -181,8 +182,18 @@ def ingest_location(
             supabase.table("gbp_metric_daily").upsert(
                 rows, on_conflict="location_row_id,date,metric"
             ).execute()
+        # A successful fetch is live proof of access — stronger than the verify
+        # probe — so self-heal the access state: clear a stale ``no_access``/
+        # ``error`` (e.g. from a transient blip that the scheduled sync skips
+        # thereafter, since it only ingests ``ok`` locations) back to ``ok`` and
+        # refresh ``last_verified_at``. Idempotent for an already-ok location.
         supabase.table("gbp_locations").update(
-            {"last_synced_at": "now()", "updated_at": "now()"}
+            {
+                "access_status": "ok",
+                "last_synced_at": "now()",
+                "last_verified_at": "now()",
+                "updated_at": "now()",
+            }
         ).eq("id", location_row_id).execute()
     except Exception as exc:
         logger.error("gbp_ingest_upsert_failed", extra={"location_row_id": location_row_id, "error": str(exc)})

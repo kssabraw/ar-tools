@@ -261,9 +261,12 @@ async def _execute_chatgpt(keyword: str, brand: str) -> tuple[str, list[str]]:
 async def _execute_claude(keyword: str, brand: str) -> tuple[str, list[str]]:
     if not settings.anthropic_api_key:
         raise ScanFailed("Anthropic API not configured")
-    import anthropic
+    import anthropic  # for the APIStatusError type below
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    from services import anthropic_failover
+
+    # Same-model failover to the secondary Anthropic account on a transient limit.
+    client = anthropic_failover.FailoverAsyncAnthropic()
     try:
         resp = await client.messages.create(
             model=settings.brand_engine_claude_model,

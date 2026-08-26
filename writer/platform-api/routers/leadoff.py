@@ -133,6 +133,55 @@ async def get_proximity(
         return {"available": False, "reason": "proximity_error"}
 
 
+@router.get("/leadoff/placement")
+async def get_placement(
+    city_id: int,
+    category_id: str,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """The demand-aware GBP Placement Advisor for one market (placement plan
+    §3/§5): ranked neighborhood-sized zones where reachable Census demand is high
+    and competitive pressure is low, scored on the geo-grid's 1-mile lattice.
+    Advice/display only — never a grade input (grade safety, plan §7). Degrades
+    to {available:false, reason} instead of 404 (no pins → nudge to the ~$0.004
+    map refresh; census_not_cached → a job_id to poll)."""
+    if not settings.leadoff_placement_enabled:
+        return {"available": False, "reason": "placement_disabled"}
+    from services.census_demand import market_placement
+    try:
+        return await market_placement(city_id, category_id)
+    except Exception:
+        logger.warning("leadoff.placement_failed", exc_info=True)
+        return {"available": False, "reason": "placement_error"}
+
+
+class PlacementPointRequest(BaseModel):
+    city_id: int
+    category_id: str
+    lat: float = Field(..., ge=-90, le=90)
+    lng: float = Field(..., ge=-180, le=180)
+
+
+@router.post("/leadoff/placement/score-point")
+async def score_placement_point(
+    body: PlacementPointRequest,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Score an arbitrary point (dropped pin / pasted address) against the
+    market's zones on the same market-relative scale (placement plan §5.2):
+    its 0-100 score, percentile vs the market, nearest competitor, and distance
+    to the best zone. $0 — pure recomputation over the already-cached surface."""
+    if not settings.leadoff_placement_enabled:
+        return {"available": False, "reason": "placement_disabled"}
+    from services.census_demand import score_market_point
+    try:
+        return await score_market_point(body.city_id, body.category_id,
+                                        body.lat, body.lng)
+    except Exception:
+        logger.warning("leadoff.placement_point_failed", exc_info=True)
+        return {"available": False, "reason": "placement_error"}
+
+
 @router.post("/leadoff/signals/refresh", status_code=202)
 async def refresh_signals(auth: dict = Depends(require_staff)) -> dict:
     """Seed / refresh the board's market-signal cache (proximity + footprint
@@ -329,14 +378,30 @@ async def create_client_from_market(
                 "error": str(exc)})
 
     # Distance-pillar read for the handoff (placement recommendation) +
-    # calibration (proximity_opportunity the geo-grid later verifies).
+    # calibration (proximity_opportunity the geo-grid later verifies). Force the
+    # Census read (prefer_live=False) so the frozen prediction + placement text
+    # stay aligned with the grade's Census-based proximity signal, even if this
+    # market was scouted first (whose live-GBP read would otherwise diverge).
     from services.leadoff_proximity import market_proximity
     try:
-        proximity = await market_proximity(body.city_id, body.category_id)
+        proximity = await market_proximity(body.city_id, body.category_id,
+                                           prefer_live=False)
     except Exception as exc:
         logger.warning("leadoff_proximity_lookup_failed", extra={
             "client_id": client_id, "error": str(exc)})
         proximity = None
+
+    # Demand-aware placement read for the calibration freeze (plan §8): the
+    # ranked zone set the post-client geo-grid later grades. Opportunistic —
+    # available only when the market has live competitor pins + a cached Census
+    # demand surface; None otherwise, never blocks the handoff.
+    from services.census_demand import market_placement
+    try:
+        placement = await market_placement(body.city_id, body.category_id)
+    except Exception as exc:
+        logger.warning("leadoff_placement_lookup_failed", extra={
+            "client_id": client_id, "error": str(exc)})
+        placement = None
 
     goal_created = False
     try:
@@ -355,7 +420,7 @@ async def create_client_from_market(
     from services import leadoff_calibration
     prediction_id = leadoff_calibration.capture_prediction(
         client_id, brief, DEFAULT_CAPTURE, DEFAULT_TIER, auth.get("user_id"),
-        proximity=proximity)
+        proximity=proximity, placement=placement)
 
     logger.info("leadoff_client_created", extra={
         "client_id": client_id, "city_id": body.city_id,
@@ -492,11 +557,38 @@ async def start_scout(
             "fully_cached": False}
 
 
+@router.post("/leadoff/map-refresh", status_code=202)
+async def start_map_refresh(
+    body: ScoutRequest,
+    auth: dict = Depends(require_staff),
+) -> dict:
+    """Re-pull just the live competitor GBP pins for a market's map (~$0.004,
+    one Maps SERP) — decoupled from a full scout. Lets a fully-cached scout (or
+    a never-scouted market) (re)generate its market map without the ~$0.70
+    enrichment pull or a 90-day cache wait. Poll GET /leadoff/jobs/{job_id}."""
+    market = leadoff_actions.market_display(body.city_id, body.category_id)
+    if market is None:
+        raise HTTPException(status_code=404, detail="not_found")
+    try:
+        leadoff_actions.check_budget(auth["user_id"], leadoff_actions.COST_MAP_REFRESH)
+    except leadoff_actions.BudgetExceeded as exc:
+        raise HTTPException(status_code=422, detail="budget_exceeded") from exc
+    out = leadoff_actions.enqueue_map_refresh(
+        auth["user_id"], body.city_id, body.category_id)
+    leadoff_actions.record_spend(
+        auth["user_id"], "map_refresh", leadoff_actions.COST_MAP_REFRESH,
+        city_id=body.city_id, category_id=body.category_id,
+        city_name=market.get("city_name"), state_code=market.get("state_code"))
+    return {"job_id": out["job_id"], "est_cost": leadoff_actions.COST_MAP_REFRESH}
+
+
 @router.get("/leadoff/jobs/{job_id}")
 async def get_leadoff_job(job_id: str, auth: dict = Depends(require_auth)) -> dict:
     rows = (get_supabase().table("async_jobs")
             .select("id,job_type,status,error,result,created_at,completed_at")
-            .eq("id", job_id).in_("job_type", ["leadoff_tryout", "leadoff_scout"])
+            .eq("id", job_id)
+            .in_("job_type", ["leadoff_tryout", "leadoff_scout",
+                              "leadoff_map_refresh", "leadoff_placement"])
             .limit(1).execute().data or [])
     if not rows:
         raise HTTPException(status_code=404, detail="not_found")

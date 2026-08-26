@@ -5,6 +5,7 @@ import {
   ArrowLeft, Eye, Zap, AlertTriangle, Plus, Trash2, Check, CalendarClock, Sparkles, FileText, FileDown, Download,
 } from 'lucide-react'
 import { api } from '../lib/api'
+import { useResumableJob } from '../lib/useResumableJob'
 import { toCsv, downloadCsv } from '../lib/csv'
 import type { Client } from '../lib/types'
 // Shared AI Visibility building blocks (LABS-style dashboard rebuild).
@@ -251,21 +252,28 @@ function Overview(props: {
     downloadCsv(`ai-visibility-history-${new Date().toISOString().slice(0, 10)}.csv`, toCsv(headers, rows))
   }
 
-  const [reportJob, setReportJob] = useState<string | null>(null)
-  const reportMut = useMutation({
-    mutationFn: () => api.post<{ job_id: string }>(`/clients/${clientId}/brand/report`, {}),
-    onSuccess: (r) => setReportJob(r.job_id),
-  })
-  const { data: report } = useQuery<{ status: string; doc_url: string | null; error: string | null }>({
-    queryKey: ['brand-report-job', clientId, reportJob],
-    queryFn: () => api.get(`/clients/${clientId}/brand/report/${reportJob}`),
-    enabled: Boolean(reportJob),
-    refetchInterval: (q) => {
-      const s = q.state.data?.status
-      return s === 'complete' || s === 'failed' ? false : 3000
+  // Report generation runs as a background async_job (publishes a Google Doc to
+  // the client's Drive folder). Persist the id so navigating away and back
+  // reconnects and re-displays the doc link when it lands.
+  type ReportResult = { doc_url: string | null; error: string | null }
+  const [report, setReport] = useState<{ status: string; doc_url: string | null; error: string | null } | null>(null)
+  const reportJob = useResumableJob<ReportResult, undefined>({
+    storageKey: `aivisibility:report:${clientId}`,
+    poll: async (jobId) => {
+      const st = await api.get<{ status: string; doc_url: string | null; error: string | null }>(
+        `/clients/${clientId}/brand/report/${jobId}`,
+      )
+      return { status: st.status, result: { doc_url: st.doc_url, error: st.error }, error: st.error }
     },
+    onComplete: (result) => setReport({ status: 'complete', doc_url: result?.doc_url ?? null, error: result?.error ?? null }),
+    onError: (error) => setReport({ status: 'failed', doc_url: null, error }),
   })
-  const reportRunning = Boolean(reportJob) && report?.status !== 'complete' && report?.status !== 'failed'
+  const runReport = () =>
+    reportJob.start(async () => {
+      const r = await api.post<{ job_id: string }>(`/clients/${clientId}/brand/report`, {})
+      return r.job_id
+    }, undefined)
+  const reportRunning = reportJob.running
 
   return (
     <div>
@@ -294,7 +302,7 @@ function Overview(props: {
               </button>
             )}
             {latestBatch !== null && (
-              <button style={miniBtn} disabled={reportRunning} onClick={() => reportMut.mutate()} title="Publish a visibility report to the client's Drive folder">
+              <button style={miniBtn} disabled={reportRunning} onClick={() => void runReport()} title="Publish a visibility report to the client's Drive folder">
                 <FileText size={13} /> {reportRunning ? 'Generating…' : 'Google Doc'}
               </button>
             )}

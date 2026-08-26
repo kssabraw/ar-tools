@@ -131,3 +131,82 @@ def test_summarize_drop_alerts_single_warning():
     out = rank_alerts.summarize_drop_alerts([{"keyword": "a", "alert_type": "weekly_drop", "message": "m"}])
     assert out["title"] == "1 ranking drop detected"
     assert out["severity"] == "warning"
+
+
+# ---------------------------------------------------------------------------
+# gradual_drop — the slow, sustained slide the window-over-window rules miss
+# ---------------------------------------------------------------------------
+def _gsc_days(days, fn):
+    """Dense daily GSC rows; position for each offset comes from fn(offset)."""
+    return [
+        {"date": (TODAY - timedelta(days=o)).isoformat(), "gsc_position": fn(o), "tracked_rank": None}
+        for o in range(days)
+    ]
+
+
+def test_gradual_drop_fires_on_slow_slide():
+    # A steady ~1 spot/week slide from ~3 to ~10 over 8 weeks. Each 7- and 30-day
+    # window moves too little for weekly_drop / thirty_day_drop, so ONLY the
+    # cumulative gradual_drop should fire.
+    rows = _gsc_days(56, lambda o: round(10 - 7 * o / 55, 2))
+    signals = rank_alerts.detect_alerts("roof repair", rows, "gsc", "stable", TODAY)
+    assert _types(signals) == {"gradual_drop"}
+    g = next(s for s in signals if s.alert_type == "gradual_drop")
+    assert g.from_position < g.to_position          # position got worse (higher number)
+    assert g.delta >= rank_alerts.GRADUAL_DROP_SPOTS
+    assert g.source == "gsc"
+
+
+def test_gradual_drop_suppressed_when_sudden_drop_fires():
+    # Flat at 4, then a one-week cliff to 12. weekly_drop + thirty_day_drop own
+    # this; gradual must NOT also open (no double episode for one fall).
+    rows = _gsc_days(56, lambda o: 12 if o <= 6 else 4)
+    signals = rank_alerts.detect_alerts("kw", rows, "gsc", "stable", TODAY)
+    types = _types(signals)
+    assert "weekly_drop" in types
+    assert "gradual_drop" not in types
+
+
+def test_no_gradual_drop_on_old_cliff():
+    # A sudden 7-spot cliff 45 days ago, flat since. month/week windows are all
+    # post-cliff so no sudden alert fires — but this is NOT a gradual slide (one
+    # segment carries the whole move), so gradual_drop must stay silent too.
+    rows = _gsc_days(56, lambda o: 4 if o >= 45 else 11)
+    signals = rank_alerts.detect_alerts("kw", rows, "gsc", "stable", TODAY)
+    assert "gradual_drop" not in _types(signals)
+
+
+def test_no_gradual_drop_when_recovered_mid_window():
+    # Dropped hard mid-window then recovered several spots — not a steady slide.
+    rows = _gsc_days(56, lambda o: 4 if o >= 38 else (12 if o >= 19 else 9))
+    signals = rank_alerts.detect_alerts("kw", rows, "gsc", "stable", TODAY)
+    assert "gradual_drop" not in _types(signals)
+
+
+def test_no_gradual_drop_when_stable():
+    rows = _gsc_days(56, lambda o: 5)
+    signals = rank_alerts.detect_alerts("kw", rows, "gsc", "stable", TODAY)
+    assert signals == []
+
+
+def test_no_gradual_drop_when_baseline_too_deep():
+    # Same steady slide shape but starting outside the top 20 — not worth a
+    # gradual alert (mirrors the thirty-day floor).
+    rows = _gsc_days(56, lambda o: round(30 - 7 * o / 55, 2))
+    signals = rank_alerts.detect_alerts("kw", rows, "gsc", "stable", TODAY)
+    assert "gradual_drop" not in _types(signals)
+
+
+def test_gradual_drop_dataforseo_weekly():
+    # Sparse weekly DataForSEO points sloping 3 → 10 over 8 weeks.
+    rows = _df([(0, 10), (7, 9), (14, 8), (21, 7), (28, 6), (35, 5), (42, 4), (49, 3), (56, 3)])
+    signals = rank_alerts.detect_alerts("kw", rows, "dataforseo", "stable", TODAY)
+    assert _types(signals) == {"gradual_drop"}
+    g = signals[0]
+    assert g.source == "dataforseo" and g.delta >= rank_alerts.GRADUAL_DROP_SPOTS
+
+
+def test_gradual_drop_respects_disable_flag():
+    rows = _gsc_days(56, lambda o: round(10 - 7 * o / 55, 2))
+    signals = rank_alerts.detect_alerts("kw", rows, "gsc", "stable", TODAY, include_gradual=False)
+    assert "gradual_drop" not in _types(signals)

@@ -31,6 +31,14 @@ ZONES = ("title", "h1", "h2", "h3", "paragraphs")
 # their articles are longer.
 ZONE_CATEGORY_TARGET_MULT = 0.50
 
+# Entities in the subheading + body zones are benchmarked against the MOST
+# AGGRESSIVE competitor (full trimmed-max) rather than half, to drive denser
+# entity coverage there — the blog analog of the nlp-api Local SEO
+# h2_h3/paragraphs aggressive entity target. Other zones (title/h1) and the
+# non-entity categories keep the 0.50 multiplier.
+ENTITY_AGGRESSIVE_TARGET_MULT = 1.0
+ENTITY_AGGRESSIVE_ZONES = ("h2", "h3", "paragraphs")
+
 CATEGORY_ENTITIES = "entities"
 CATEGORY_RELATED_KEYWORDS = "related_keywords"
 CATEGORY_KEYWORD_VARIANTS = "keyword_variants"
@@ -248,7 +256,9 @@ def build_zone_category_targets(
 
     For each (zone, category) pair, count distinct items present in
     each competitor page's zone, find the trimmed-max across competitor
-    pages, and target = round(trimmed_max × 0.50). Outlier exclusion
+    pages, and target = round(trimmed_max × 0.50) — EXCEPT entities in the
+    h2/h3/paragraphs zones, which use the full trimmed-max (mult 1.0) to
+    benchmark against the most aggressive competitor. Outlier exclusion
     follows the same SAFE_OUTLIER_MULT logic as `_compute_zone_range`
     but operates on per-page distinct counts instead of per-1000-words
     frequencies.
@@ -299,7 +309,11 @@ def build_zone_category_targets(
                 if count > 0 and url in distinct_counts:
                     distinct_counts[url][zone_name][category] += 1
 
-    # Across-page aggregation with outlier exclusion + 0.50 multiplier.
+    # Across-page aggregation with outlier exclusion + multiplier. Entities in
+    # the subheading + body zones benchmark against the MOST AGGRESSIVE
+    # competitor (full trimmed-max, mult 1.0) rather than half, to drive denser
+    # entity coverage there — mirrors the nlp-api Local SEO h2_h3/paragraphs
+    # entity target. Every other (zone, category) pair keeps the 0.50 multiplier.
     for zone in ZONES:
         for category in CATEGORIES:
             counts = [
@@ -317,8 +331,13 @@ def build_zone_category_targets(
             if not freqs:
                 freqs = counts
             trimmed_max = max(freqs) if freqs else 0
+            mult = (
+                ENTITY_AGGRESSIVE_TARGET_MULT
+                if category == CATEGORY_ENTITIES and zone in ENTITY_AGGRESSIVE_ZONES
+                else ZONE_CATEGORY_TARGET_MULT
+            )
             out[zone][category] = {
-                "target": int(round(trimmed_max * ZONE_CATEGORY_TARGET_MULT)),
+                "target": int(round(trimmed_max * mult)),
                 "max": int(trimmed_max),
             }
 

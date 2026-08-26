@@ -23,6 +23,9 @@ class LocalSeoGenerateRequest(BaseModel):
     # Phase 3 — mirror this reference page's structure. Falls back to the
     # client's saved default when omitted.
     page_template_url: Optional[str] = None
+    # Entity-extraction engine for the nlp SERP analysis ("textrazor"|"google");
+    # None → nlp's default.
+    entity_provider: Optional[str] = None
 
 
 class PageTemplateDefaultRequest(BaseModel):
@@ -54,6 +57,8 @@ class LocalSeoBulkGenerateRequest(BaseModel):
     location_code: Optional[int] = None
     page_template_url: Optional[str] = None
     force_refresh: bool = False
+    # Entity-extraction engine for the nlp SERP analysis ("textrazor"|"google").
+    entity_provider: Optional[str] = None
 
 
 class LocalSeoBulkGenerateJob(BaseModel):
@@ -77,6 +82,8 @@ class LocalSeoReoptimizeBulkRequest(BaseModel):
     targets: list[LocalSeoReoptimizeTarget] = Field(..., min_length=1)
     score_threshold: Optional[float] = None
     publish_to_doc: bool = False
+    # Entity-extraction engine for the nlp SERP analysis ("textrazor"|"google").
+    entity_provider: Optional[str] = None
 
 
 class LocalSeoReoptimizeJobHandle(BaseModel):
@@ -178,6 +185,8 @@ class LocalSeoScoreRequest(BaseModel):
     serp_analysis: Optional[dict[str, Any]] = None
     # Bypass the shared SERP-analysis cache and re-scrape competitors.
     force_refresh: bool = False
+    # Entity-extraction engine for the nlp SERP analysis ("textrazor"|"google").
+    entity_provider: Optional[str] = None
 
 
 class LocalSeoRelatedPagesRequest(BaseModel):
@@ -242,6 +251,8 @@ class LocalSeoReoptimizeRequest(BaseModel):
     existing_page_url: Optional[str] = None
     deficiencies: list[dict[str, Any]] = Field(default_factory=list)
     serp_analysis: Optional[dict[str, Any]] = None
+    # Entity-extraction engine for the nlp SERP analysis ("textrazor"|"google").
+    entity_provider: Optional[str] = None
 
 
 class LocalSeoSocialPostsRequest(BaseModel):
@@ -251,6 +262,9 @@ class LocalSeoSocialPostsRequest(BaseModel):
     location: str = Field(..., min_length=1)
     page_content: str = Field(..., min_length=1)
     serp_analysis: Optional[dict[str, Any]] = None
+    # When set, the generated suggestions are saved on the page so re-opening the
+    # tab re-reads them instead of regenerating (an explicit Regenerate overwrites).
+    page_id: Optional[UUID] = None
 
 
 class LocalSeoRankabilityRequest(BaseModel):
@@ -327,6 +341,8 @@ class LocalSeoPageDetail(BaseModel):
     # SEO/AEO only. Both null when the client has no brand guide on file.
     voice_violations: Optional[dict[str, Any]] = None
     voice_score: Optional[float] = None
+    # Saved GBP post suggestions for this page (generated once, re-read on return).
+    social_posts: Optional[dict[str, Any]] = None
     mode: str
     token_usage: Optional[dict[str, Any]] = None
     cost_breakdown: Optional[dict[str, Any]] = None

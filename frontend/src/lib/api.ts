@@ -91,7 +91,7 @@ async function streamJson<T>(path: string, body: unknown, signal?: AbortSignal):
     // A deliberate cancel keeps its AbortError; anything else mid-stream is the
     // connection dying under us (deploy, network) — say so in plain words.
     if (signal?.aborted) throw err
-    throw new Error(STREAM_INTERRUPTED_MSG)
+    throw new Error(STREAM_INTERRUPTED_MSG, { cause: err })
   }
 
   if (failure !== undefined) throw new Error(failure)
@@ -173,6 +173,25 @@ export const api = {
   patch: <T>(path: string, body: unknown) => request<T>('PATCH', path, body),
   delete: <T>(path: string) => request<T>('DELETE', path),
   upload: <T>(path: string, form: FormData) => upload<T>(path, form),
+  // Authed file download → triggers a browser save. For CSV/file endpoints that
+  // return raw bytes (not JSON) behind the JWT.
+  download: async (path: string, filename: string): Promise<void> => {
+    const headers = await authHeaders()
+    const res = await fetch(`${BASE_URL}${path}`, { headers })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }))
+      throw new Error(err.detail ?? res.statusText)
+    }
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  },
   stream: <T>(path: string, body: unknown, signal?: AbortSignal) => streamJson<T>(path, body, signal),
   streamEvents: (path: string, body: unknown, onEvent: (evt: StreamEvent) => void, signal?: AbortSignal) =>
     streamEvents(path, body, onEvent, signal),

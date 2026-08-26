@@ -1,6 +1,6 @@
 # Rank Drop Mitigation SOP — Organic Branch
 
-**Current as of:** 03 July 2026 _(supersedes "How To Diagnose And Fix Organic Rankings Drops")_
+**Current as of:** 13 August 2026 _(supersedes "How To Diagnose And Fix Organic Rankings Drops"; §A.6 content-decay procedure filled in)_
 **Goal:** Diagnose and mitigate organic ranking drops.
 **Who this is for:** All clients.
 **When:** Triggered by the **rank tracking agent** (the agent owns the drop definition and fires the signal — no manual weekly checking).
@@ -38,7 +38,15 @@ Many keywords/pages down together. Work in order:
 3. **Sitewide technical accident** — robots.txt / noindex regressions, canonical breakage, migration/redesign side-effects, hosting/CDN issues, sitewide CWV regression.
 4. **Entity-vector confusion** — heavy off-topic content pulling the site off-vector (Maps SOP Part 1 §Content volume & the entity vector). Remediate per the vector-confusion protocol: delete off-vector pages with no traffic-to-conversion and no conversions; noindex + nofollow internal links where they do have such traffic; whole off-vector services move to a new site/subdomain.
 5. **Aggregate link loss / unnatural spike** — from the **offpage agent**. Loss → replacement plan via the **Recipe Engine**. Sudden unnatural spike → check for negative SEO or an unintended blast; MC4 judgment call, Senior SEO if unclear.
-6. **Content decay / freshness** — *(procedure pending — not yet built out; placeholder so the slot exists).*
+6. **Content decay / freshness** — the slow-erosion cause: rankings bleed because content aged while the SERP freshened and competitors updated, not because anything broke. It is the dominant driver of gradual, steady declines; at scale (many pages decaying together) it reads as a soft sitewide slide with no technical, link, manual-action or algo cause. **This is the cause when:** the decline is gradual over weeks/months rather than a step — the rank tracking agent's **`gradual_drop`** signal, or a `dropping` trend with no `weekly_drop` / `thirty_day_drop` — §A.1–§A.5 are all cleared, and intent is unchanged (§B2); whoever passed you simply has fresher / deeper content (Organic Rank Analysis report; §B5 step 6). **Response** (per page, worst-first; batch across the site for a sitewide slide):
+   1. **Find the decayed pages** — rank the losers by traffic lost over time (GSC) and by business value (money / pillar pages first). The `gradual_drop` alerts and the Organic Rank Analysis report name them.
+   2. **Diagnose the gap** vs. who now outranks you — depth, freshness signals (a real visible update date, current stats / data), new subtopics and People-Also-Ask the SERP now rewards, and format (tables, lists, media). Use the competitive SERP snapshot / rank analysis.
+   3. **Refresh & expand — don't rewrite from scratch** (preserve the URL, its ranking equity and internal links): update stale facts / stats / dates / screenshots; answer the current PAA and new subtopics; deepen thin sections; strengthen E-E-A-T (author, citations, a genuine "updated" date). Then **re-run the page-type on-page agent** (On-Page Criteria & Coverage — composite ≥90 continues, <90 → re-optimization task).
+   4. **Reinforce authority** if a refresh alone won't close the gap — silo interlinking (Architecture SOP), and a link round via the **Recipe Engine** where RD is deficient against the Link Building gates (§B5 step 5).
+   5. **Re-index** — VA uploads (§6) → request indexing via GSC URL Inspection (see Indexing & Follow-Through).
+   6. **Make it preventive, not just reactive** — schedule periodic refreshes of money / pillar pages through the Recipe Engine's monthly plan so pages don't decay silently; set a per-client review interval.
+
+   *Per-page vs. sitewide:* the rank tracking agent applies this exact procedure to a single page via its **`gradual_drop`** signal (classification **GRADUAL**) — the slow-slide analogue of §B's classified responses; this §A.6 entry is the sitewide version, the same playbook run in batch when many pages decay together. Verify per Indexing & Follow-Through: expect movement ~2 weeks after re-indexing; no lift after 6 weeks → Senior SEO strategy review.
 
 ## §B — Page/Keyword-Specific Drop
 

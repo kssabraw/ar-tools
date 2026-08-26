@@ -40,7 +40,7 @@ async def run_research(client_id: UUID, auth: dict = Depends(require_auth)) -> G
     client = supabase.table("clients").select("id").eq("id", str(client_id)).limit(1).execute().data
     if not client:
         raise HTTPException(status_code=404, detail="client_not_found")
-    run_id = gsc_research.enqueue_gsc_research(str(client_id))
+    run_id = gsc_research.enqueue_gsc_research(str(client_id), user_id=auth["user_id"])
     return GscResearchRunResponse(run_id=run_id, status="enqueued")
 
 

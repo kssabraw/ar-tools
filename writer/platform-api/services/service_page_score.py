@@ -149,22 +149,29 @@ async def score_run(run_id: str, user_id: Optional[str] = None) -> dict:
 
 
 async def score_external_page(
-    run_id: str, source_url: str, user_id: Optional[str] = None
+    run_id: str,
+    source_url: Optional[str] = None,
+    user_id: Optional[str] = None,
+    *,
+    source_html: Optional[str] = None,
 ) -> dict:
-    """Scrape a page already published on the client's live site and score it via
-    the nlp-api 8-engine scorer, persisting a `source_page_score` module_output.
-    Returns the ScoreResult (its `deficiencies` drive the reoptimize generation).
+    """Score an EXTERNAL service/location page — either scraped from a live URL or
+    pasted by the user (WYSIWYG) — via the nlp-api 8-engine scorer, persisting a
+    `source_page_score` module_output. Returns the ScoreResult (its `deficiencies`
+    drive the reoptimize generation).
 
     Mirrors `score_run`'s geo handling (national for service pages, local for
-    location pages) but scores the *scraped live HTML* rather than a generated page.
+    location pages) but scores the *external HTML* rather than a generated page.
     Raises on scrape/score failure; the orchestrator calls it best-effort."""
-    from services.website_scraper import scrapeowl_fetch
-
     run = _get_run(run_id)
     client = _get_client(run["client_id"])
     business_name, gbp_category, address = _business_fields(client)
-    html = await scrapeowl_fetch(source_url)
-    if not (html or "").strip():
+    html = (source_html or "").strip()
+    if not html and source_url:
+        from services.website_scraper import scrapeowl_fetch
+
+        html = (await scrapeowl_fetch(source_url) or "").strip()
+    if not html:
         raise HTTPException(status_code=422, detail="source_page_empty")
     payload = {
         "keyword": run.get("keyword") or "",
@@ -287,3 +294,115 @@ async def reoptimize_run(
         extra={"run_id": run_id, "new_composite": score.get("composite_score")},
     )
     return {"page": page, "score": score}
+
+
+# ── background jobs (deploy-proof score / reoptimize) ─────────────────────────
+# The SSE endpoints above run the work inside the HTTP request, so a deploy
+# killed it with no server-side record of the intent — the user was told to run
+# it again. As async_jobs the work is durable: a deploy's shutdown requeues the
+# row, the new container finishes it, and the UI reconnects (useResumableJob)
+# instead of prompting. Results still land in module_outputs exactly as before;
+# the job row's `result` stays thin and the poll endpoint reads the
+# authoritative module_outputs rows, so a multi-hundred-KB page payload isn't
+# duplicated into async_jobs.
+
+def _enqueue_job(job_type: str, run: dict, payload: dict) -> str:
+    res = (
+        _sb().table("async_jobs")
+        .insert({"job_type": job_type, "entity_id": run["id"], "payload": payload})
+        .execute()
+    )
+    return res.data[0]["id"]
+
+
+async def enqueue_score(run_id: str, user_id: Optional[str]) -> str:
+    """Validate (the run exists and has a page — fail fast with the same 422 the
+    SSE path gave), then enqueue a `service_page_score` job."""
+    run = _get_run(run_id)
+    if not _latest_output(run_id, "service_writer"):
+        raise HTTPException(status_code=422, detail="page_not_available")
+    return _enqueue_job(
+        "service_page_score", run, {"run_id": run_id, "user_id": user_id}
+    )
+
+
+async def enqueue_reoptimize(
+    run_id: str, deficiencies: list[dict], user_id: Optional[str]
+) -> str:
+    """Validate, then enqueue a `service_page_reoptimize` job carrying the
+    deficiency selection the user made on screen."""
+    run = _get_run(run_id)
+    if not _latest_output(run_id, "service_brief") or not _latest_output(run_id, "service_writer"):
+        raise HTTPException(status_code=422, detail="page_not_available")
+    return _enqueue_job(
+        "service_page_reoptimize", run,
+        {"run_id": run_id, "deficiencies": deficiencies or [], "user_id": user_id},
+    )
+
+
+async def _finish_job(job_id: str, work) -> None:
+    """Run one job's work coroutine and record the terminal state for the
+    poller. A requeued duplicate (deploy mid-run) simply re-runs the work and
+    persists a fresh module_outputs attempt — reads use the latest, so state
+    converges (same idempotency class as the local_seo generate jobs)."""
+    sb = _sb()
+    try:
+        summary = await work()
+        sb.table("async_jobs").update(
+            {"status": "complete", "result": summary, "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+    except Exception as exc:  # noqa: BLE001 — record the failure for the poller
+        detail = getattr(exc, "detail", None) or str(exc)
+        logger.warning(
+            "service_page.job_failed", extra={"job_id": job_id, "error": str(detail)}
+        )
+        sb.table("async_jobs").update(
+            {"status": "failed", "error": str(detail)[:500], "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+
+
+async def run_score_job(job: dict) -> None:
+    """async_jobs handler for job_type='service_page_score'."""
+    payload = job.get("payload") or {}
+
+    async def work() -> dict:
+        result = await score_run(payload["run_id"], user_id=payload.get("user_id"))
+        return {"composite_score": result.get("composite_score")}
+
+    await _finish_job(job["id"], work)
+
+
+async def run_reoptimize_job(job: dict) -> None:
+    """async_jobs handler for job_type='service_page_reoptimize'."""
+    payload = job.get("payload") or {}
+
+    async def work() -> dict:
+        result = await reoptimize_run(
+            payload["run_id"], payload.get("deficiencies") or [],
+            user_id=payload.get("user_id"),
+        )
+        return {"composite_score": (result.get("score") or {}).get("composite_score")}
+
+    await _finish_job(job["id"], work)
+
+
+def get_score_job(job_id: str, run_id: str) -> dict:
+    """Poll a score/reoptimize job (scoped to the run). On completion the score
+    (and, for a reoptimize, the new page) come from module_outputs — the
+    authoritative store the job wrote — not from the job row."""
+    rows = (
+        _sb().table("async_jobs")
+        .select("job_type, status, error, entity_id")
+        .eq("id", job_id).limit(1).execute()
+    ).data or []
+    if not rows or rows[0].get("entity_id") != run_id:
+        raise HTTPException(status_code=404, detail="score_job_not_found")
+    row = rows[0]
+    out: dict = {"status": row["status"], "error": row.get("error")}
+    if row["status"] == "complete":
+        score = _latest_output(run_id, "service_score")
+        out["score"] = (score or {}).get("output_payload")
+        if row["job_type"] == "service_page_reoptimize":
+            page = _latest_output(run_id, "service_writer")
+            out["page"] = (page or {}).get("output_payload")
+    return out

@@ -68,14 +68,17 @@ def parse_overpass_elements(body: dict) -> list[dict]:
 
 # ── network (best-effort) ────────────────────────────────────────────────────
 
-async def nearby_cities(lat: float, lng: float, radius_km: float) -> list[dict]:
-    """Cities/towns within `radius_km` of (lat, lng), via Overpass. Returns
-    ``[{name, lat, lng, place}]`` (possibly empty). Never raises — tries the
-    configured endpoint then a mirror, and returns [] if both fail."""
-    if lat is None or lng is None:
+async def places_near(
+    lat: float, lng: float, radius_km: float, place_types: tuple[str, ...],
+) -> list[dict]:
+    """OSM ``place=<type>`` nodes within `radius_km` of (lat, lng), for ARBITRARY
+    place types. Returns ``[{name, lat, lng, place}]`` (possibly empty). Never
+    raises — tries the configured endpoint then a mirror, and returns [] if both
+    fail. The generic fetch `nearby_cities` (city/town) and the outreach sub-area
+    enumeration (suburb/neighbourhood/quarter) both ride this."""
+    if lat is None or lng is None or not place_types:
         return []
-    place_types = tuple(t.strip() for t in settings.local_seo_overpass_place_types.split(",") if t.strip())
-    query = build_nearby_cities_query(lat, lng, int(radius_km * 1000), place_types or ("city", "town"))
+    query = build_nearby_cities_query(lat, lng, int(radius_km * 1000), place_types)
     endpoints = [settings.local_seo_overpass_url, settings.local_seo_overpass_mirror_url]
 
     async with httpx.AsyncClient(timeout=_TIMEOUT, headers={"User-Agent": "ar-tools-overpass/1.0"}) as client:
@@ -92,3 +95,10 @@ async def nearby_cities(lat: float, lng: float, radius_km: float) -> list[dict]:
                 )
                 continue
     return []
+
+
+async def nearby_cities(lat: float, lng: float, radius_km: float) -> list[dict]:
+    """Cities/towns within `radius_km` of (lat, lng), via Overpass. Returns
+    ``[{name, lat, lng, place}]`` (possibly empty). Never raises."""
+    place_types = tuple(t.strip() for t in settings.local_seo_overpass_place_types.split(",") if t.strip())
+    return await places_near(lat, lng, radius_km, place_types or ("city", "town"))

@@ -105,3 +105,127 @@ class GbpPerformanceDiagnostic(BaseModel):
     performance_status: Optional[int] = None
     detail: Optional[str] = None
     steps: list[GbpDiagnosticStep] = []
+
+
+# ── Reporting dashboard ──────────────────────────────────────────────────────
+class GbpMetricGrowth(BaseModel):
+    """One headline metric's period-over-period growth (a dashboard KPI tile)."""
+
+    metric: str  # folded key ("profile_views") or raw Performance metric name
+    label: str
+    group: str = ""  # "visibility" | "actions" (which dashboard section it belongs to)
+    current: int
+    previous: int
+    delta: int
+    pct: Optional[float] = None  # None when the prior window was zero
+
+
+class GbpBreakdownItem(BaseModel):
+    """One slice of the profile-views breakout (e.g. Search, or Mobile)."""
+
+    label: str
+    current: int
+    previous: int
+    pct: Optional[float] = None
+    share: float = 0.0  # % of the current-period total
+
+
+class GbpBreakdown(BaseModel):
+    surface: list[GbpBreakdownItem] = []  # Search vs Maps
+    device: list[GbpBreakdownItem] = []  # Desktop vs Mobile
+
+
+class GbpActionsSummary(BaseModel):
+    """Total customer actions (calls + website + directions + messages) and the
+    engagement rate (actions ÷ profile views), current vs prior."""
+
+    current: int
+    previous: int
+    delta: int
+    pct: Optional[float] = None
+    engagement_current: Optional[float] = None
+    engagement_previous: Optional[float] = None
+
+
+class GbpReviewItem(BaseModel):
+    reviewer: str = ""
+    rating: Optional[float] = None
+    text: str = ""
+    date: str = ""
+    has_reply: bool = False  # whether the business has replied (v4 reviews only)
+
+
+class GbpPeriodReviews(BaseModel):
+    """Reviews posted within the dashboard's reporting window (first-party v4),
+    plus the all-time rating/count for context."""
+
+    count: int = 0
+    average_rating: Optional[float] = None
+    items: list[GbpReviewItem] = []
+    overall_rating: Optional[float] = None
+    overall_count: int = 0
+    start: Optional[str] = None
+    end: Optional[str] = None
+
+
+class GbpReviews(BaseModel):
+    """Profile-health review summary from the client's captured GBP."""
+
+    rating: Optional[float] = None
+    review_count: int = 0
+    items: list[GbpReviewItem] = []
+
+
+class GbpSearchKeyword(BaseModel):
+    keyword: str
+    value: int
+    is_threshold: bool = False  # true = Google privacy floor ("fewer than N")
+    previous: Optional[int] = None  # prior-period impressions (None = no comparison)
+    delta: Optional[int] = None  # value - previous
+
+
+class GbpSearchKeywordsResponse(BaseModel):
+    """Top search terms that drove impressions for a client's locations in a
+    calendar month (``month`` = YYYY-MM-01); ``months`` lists the available ones."""
+
+    month: Optional[str] = None
+    months: list[str] = []
+    keywords: list[GbpSearchKeyword] = []
+    total: int = 0
+    range_months: int = 1  # months aggregated (1 = single month; N = a range view)
+    prev_total: int = 0  # prior-period total impressions (for the header comparison)
+    compared: bool = False  # whether a full prior period existed to compare against
+
+
+class GbpSeriesPoint(BaseModel):
+    """A single day of the dashboard time series; ``values`` carries every
+    dashboard metric's value for that day (zero-filled)."""
+
+    date: str
+    values: dict[str, int]
+
+
+class GbpDashboardResponse(BaseModel):
+    """Everything the GBP Insights page needs in one read: connection state,
+    the client's registered locations, growth KPI tiles, and a daily series.
+
+    ``enabled`` is the server ``gbp_metrics_enabled`` flag; ``connected`` is true
+    once at least one location has verified (``ok``) access. When not connected
+    the metric/series lists are empty and the UI shows the connect flow."""
+
+    enabled: bool
+    connected: bool
+    locations: list[GbpLocation] = []
+    window_days: int
+    date_start: str
+    date_end: str
+    compare_start: str  # start of the prior equal-length comparison window
+    compare_end: str  # end of the prior equal-length comparison window
+    last_synced_at: Optional[str] = None
+    metrics: list[GbpMetricGrowth] = []
+    breakdown: GbpBreakdown = GbpBreakdown()
+    actions: Optional[GbpActionsSummary] = None
+    insights: list[str] = []
+    reviews: GbpReviews = GbpReviews()
+    series: list[GbpSeriesPoint] = []
+    compare_series: list[GbpSeriesPoint] = []  # prior-window daily, for the overlay

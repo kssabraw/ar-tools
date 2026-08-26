@@ -102,6 +102,9 @@ class RegateBody(BaseModel):
     # Hard cap on active keywords per silo (post-gate, top-N by relevance). 0 =
     # no cap. Owner-only override; the env default is `active_per_silo_cap`.
     active_per_silo_cap: int | None = Field(default=None, ge=0, le=50000)
+    # Soft-routing cosine margin (0 = pure argmax). Per-call so soft routing can be
+    # A/B'd on one session without touching the global `relevance_silo_margin` env.
+    silo_margin: float | None = Field(default=None, ge=0.0, le=1.0)
     # Peer-entity filter overrides (for testing on sessions whose grounding ran
     # before this existed). Omitted -> use the session's stored lists.
     aliases: list[str] | None = None
@@ -938,7 +941,13 @@ def regate_session(
         if body.active_per_silo_cap is not None
         else s.active_per_silo_cap
     )
-    jobs.submit_regate(session_id, threshold, edge, resolution, cap, seed_terms, peer_terms)
+    margin = (
+        body.silo_margin
+        if body.silo_margin is not None
+        else s.relevance_silo_margin
+    )
+    jobs.submit_regate(session_id, threshold, edge, resolution, cap, seed_terms,
+                       peer_terms, silo_margin=margin)
     return {
         "status": "queued",
         "session_id": session_id,
@@ -946,6 +955,7 @@ def regate_session(
         "clustering_edge_threshold": edge,
         "clustering_resolution": resolution,
         "active_per_silo_cap": cap,
+        "silo_margin": margin,
         "peer_entities": peer_terms,
     }
 
@@ -969,8 +979,8 @@ def fanout_session(
     _assert_embedding_current(session)
     bind_session_id(session_id)
     clustering_log = session.get("statistical_clustering_log") or {}
-    # Run scope, so the previewed sub-anchor plan matches what run_fanout_job
-    # will actually re-expand.
+    # Run scope, so the previewed sub-anchor plan matches what the durable
+    # recursive-fanout stage will actually re-expand.
     topics = store.list_run_topics(session_id)
     topic_ids = [t["id"] for t in topics]
     sub_anchors = derive_sub_anchors(
@@ -1131,6 +1141,10 @@ def cluster_preview_endpoint(
         seed_terms=seed_terms,
         peer_terms=peer_terms,
         language_filter=jobs._maybe_language_filter(),
+        seed=session["seed_keyword"],
+        source_guard_enabled=s.fanout_source_guard_enabled,
+        source_guard_min_score=s.fanout_source_guard_min_score,
+        source_guard_min_seed_tokens=s.fanout_source_guard_min_seed_tokens,
     )
 
 
@@ -1920,6 +1934,12 @@ def list_articles(
         "cost_usd": r.get("cost_usd"),
         "generated_at": r.get("generated_at"),
         "scheduled": r.get("scheduled_article_run_id") is not None,
+        # Reoptimization is available only for client-linked articles (those
+        # mirrored into a suite blog run); the latest composite score is shown
+        # as a badge when a score/reopt has run.
+        "reoptimizable": r.get("suite_run_id") is not None,
+        "composite_score": r.get("composite_score"),
+        "composite_status": r.get("composite_status"),
     } for r in rows]
     items.sort(key=lambda x: x["generated_at"] or "", reverse=True)
     return {"articles": items, "count": len(items)}

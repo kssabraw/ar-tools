@@ -408,7 +408,9 @@ async def interpret_pace(question: str, client: Optional[dict], context: dict,
         blocks.append(f"Scope: the client *{client.get('name') if client else 'this client'}*.")
     blocks.append("Board data (JSON):\n" + json.dumps(context, default=str, ensure_ascii=False))
     blocks.append(f"Latest message: {question}")
-    api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=60.0, max_retries=2)
+    from services import anthropic_failover
+
+    clients = anthropic_failover.build_async_clients(timeout=60.0, max_retries=2)
     drill_client_id = client.get("id") if client else None
     tools = build_pace_tools() + [pace_batch.DRILL_TOOL, pace_batch.BATCH_TOOL]
     messages = [{"role": "user", "content": "\n\n".join(blocks)}]
@@ -426,9 +428,13 @@ async def interpret_pace(question: str, client: Optional[dict], context: dict,
     try:
         for round_no in range(_PACE_TOOL_ROUNDS):
             final = round_no == _PACE_TOOL_ROUNDS - 1
-            resp = await _one_llm_call(
-                api, _PACE_SYSTEM, messages, [] if final else tools,
-                _kw(final), on_text if on_event else None,
+            resp = await anthropic_failover.call_failover(
+                clients,
+                lambda c: _one_llm_call(
+                    c, _PACE_SYSTEM, messages, [] if final else tools,
+                    _kw(final), on_text if on_event else None,
+                ),
+                log_tag="pace_agent",
             )
             for b in resp.content:
                 if getattr(b, "type", None) != "tool_use":

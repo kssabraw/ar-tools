@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import {
   ArrowLeft, ArrowRight, Check, Copy, Download, ExternalLink, TrendingUp, Wand2,
 } from 'lucide-react'
@@ -6,8 +6,9 @@ import { ecommerceApi } from './api'
 import type { ContentGap, EcommercePageDetail } from './types'
 import { FeaturedImagePicker } from '../FeaturedImagePicker'
 import { VoiceCompliancePanel } from '../localseo/VoiceCompliancePanel'
+import { ErrorDetails } from '../ErrorDetails'
 import {
-  backLink, card, downloadFile, errorBox, formatHtml, outlineBtn,
+  backLink, card, downloadFile, formatHtml, outlineBtn,
   primaryBtn, relativeTime, scoreBg, scoreBorder, scoreColor, statusLabel, wordCount,
 } from '../localseo/shared'
 
@@ -61,43 +62,40 @@ export function GeneratedProductView({ page, isNew, prevScore, onBack, onScoreAn
     setFeaturedImageUrl(url)
   }
 
-  const handlePublish = async () => {
+  // Re-runs whichever publish destination was blocked, with force_voice — wired
+  // to the error accordion's "Publish anyway" override. Raw error codes are
+  // stored as-is; ErrorDetails renders the explanation + plan of action.
+  const forceRetry = useRef<(() => void) | null>(null)
+
+  const handlePublish = async (forceVoice = false) => {
     setPublishing(true)
     setPublishError('')
     try {
-      const res = await ecommerceApi.publishPage(page.id)
+      const res = await ecommerceApi.publishPage(page.id, forceVoice ? { force_voice: true } : {})
       setPublishedUrl(res.doc_url ?? null)
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Publish failed'
-      setPublishError(
-        msg.includes('missing_google_drive_folder_id')
-          ? 'Set this client’s Google Drive folder first (Client → Edit), then publish.'
-          : msg.includes('publish_not_configured')
-            ? 'Publishing isn’t configured on the server (no Apps Script URL).'
-            : msg,
-      )
+      forceRetry.current = () => handlePublish(true)
+      setPublishError(msg)
     } finally {
       setPublishing(false)
     }
   }
 
-  const handleWpPublish = async () => {
+  const handleWpPublish = async (forceVoice = false) => {
     setWpPublishing(true)
     setPublishError('')
     try {
-      const res = await ecommerceApi.publishPage(page.id, { destination: 'wordpress', status: wpStatus })
+      const res = await ecommerceApi.publishPage(page.id, {
+        destination: 'wordpress', status: wpStatus, ...(forceVoice ? { force_voice: true } : {}),
+      })
       const link = res.url ?? null
       setWpUrl(link)
       if (link) window.open(link, '_blank')
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Publish failed'
-      setPublishError(
-        msg.includes('wordpress_not_configured')
-          ? 'Add this client’s WordPress site + Application Password first (Client → Edit), then publish.'
-          : msg.includes('wordpress_auth_failed')
-            ? 'WordPress rejected the credentials — check the username and Application Password.'
-            : msg,
-      )
+      forceRetry.current = () => handleWpPublish(true)
+      setPublishError(msg)
     } finally {
       setWpPublishing(false)
     }
@@ -337,7 +335,7 @@ export function GeneratedProductView({ page, isNew, prevScore, onBack, onScoreAn
           <FeaturedImagePicker value={featuredImageUrl} onChange={handleFeaturedImage} />
         </div>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button style={outlineBtn} onClick={handlePublish} disabled={publishing}>
+          <button style={outlineBtn} onClick={() => handlePublish()} disabled={publishing}>
             <ExternalLink size={14} /> {publishing ? 'Publishing…' : publishedUrl ? 'Re-publish to Google Doc' : 'Publish to Google Doc'}
           </button>
           {publishedUrl && (
@@ -360,7 +358,7 @@ export function GeneratedProductView({ page, isNew, prevScore, onBack, onScoreAn
             </select>
             <button
               style={{ ...outlineBtn, border: 'none', borderLeft: '1px solid #cbd5e1', borderRadius: 0 }}
-              onClick={handleWpPublish}
+              onClick={() => handleWpPublish()}
               disabled={wpPublishing}
             >
               <ExternalLink size={14} /> {wpPublishing ? 'Publishing…' : wpUrl ? 'Re-publish to WordPress' : 'Publish to WordPress'}
@@ -373,7 +371,13 @@ export function GeneratedProductView({ page, isNew, prevScore, onBack, onScoreAn
             </a>
           )}
         </div>
-        {publishError && <div style={errorBox}>{publishError}</div>}
+        {publishError && (
+          <ErrorDetails
+            message={publishError}
+            overriding={publishing || wpPublishing}
+            onOverride={() => forceRetry.current?.()}
+          />
+        )}
         <button onClick={onNewPage} style={{ ...backLink, alignSelf: 'center', marginBottom: 0 }}>← Start a new page</button>
       </div>
     </div>

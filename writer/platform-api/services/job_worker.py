@@ -16,6 +16,7 @@ from services.icp_service import run_icp_scan_job
 from services.dataforseo_rank import run_dataforseo_rank_job
 from services.gbp_metrics_ingest import run_gbp_metrics_ingest_job
 from services import gbp_posts_service
+from services.ga4_ingest import run_ga4_ingest_job
 from services.gsc_ingest import run_gsc_ingest_job, run_gsc_page_ingest_job
 from services.gsc_research import run_gsc_research_job
 from services.keyword_market import run_keyword_market_job
@@ -27,8 +28,11 @@ from services.local_seo_service import (
 )
 from services.local_seo_silo import run_silo_plan_job
 from services import ecommerce_service
+from services import wheelhouse_service
 from services.rank_location import run_rank_location_derive_job
 from services.service_page_plan import run_service_plan_job
+from services import service_page_score
+from services import blog_page_score
 from services.rank_analysis_report import run_rank_keyword_report_job
 from services.rank_report import run_rank_report_job
 from services.rank_materialize import run_gsc_materialize_job
@@ -44,6 +48,7 @@ from services.domain_intel import run_domain_overview_job, run_keyword_gap_job, 
 from services.github_infer import run_github_infer_job
 from services.blog_media.pipeline import run_blog_media_publish_job
 from services.keyword_research import run_keyword_research_job
+from services.keyword_research_report import run_report_job as run_keyword_research_report_job
 from services.freeze import FREEZE_GATED_JOB_TYPES, is_frozen, job_client_id, run_freeze_check_job
 from services.page_backlink_intel import run_page_backlink_job
 from services.notifications import run_notification_dispatch_job
@@ -63,8 +68,10 @@ from services.competitor_gbp import run_competitor_gbp_job
 from services.review_analytics import run_review_intel_job
 from services.backlink_intel import run_backlink_intel_job
 from services.backlink_explorer import run_backlink_snapshot_job
+from services.backlink_explorer import run_lookup_job as run_backlink_lookup_job
 from services.content_intel import run_content_intel_job
 from services.leadoff_actions import (
+    run_map_refresh_job as run_leadoff_map_refresh_job,
     run_scout_job as run_leadoff_scout_job,
     run_tryout_job as run_leadoff_tryout_job,
 )
@@ -74,6 +81,8 @@ from services.leadoff_geocode import run_geocode_job as run_leadoff_geocode_job
 from services.leadoff_signals import run_signal_refresh_job as run_leadoff_signal_refresh_job
 from services.leadoff_income import run_income_backfill_job as run_leadoff_income_backfill_job
 from services.leadoff_counties import run_county_backfill_job as run_leadoff_county_backfill_job
+from services.census_demand import run_placement_job as run_leadoff_placement_job
+from services.leadoff_zip_demand import run_zip_demand_probe_job as run_leadoff_zip_demand_job
 from services.leadoff_finder import run_city_finder_job as run_leadoff_city_finder_job
 from services.local_relevance import run_local_relevance_job
 from services.page_structure_scraper import analyze_page_structure
@@ -106,9 +115,13 @@ _inflight_jobs: set[str] = set()
 _CLAIM_SCAN_LIMIT = 10
 
 
-async def _claim_next_job(job_types: list[str] | None = None) -> dict | None:
+async def _claim_next_job(
+    job_types: list[str] | None = None, exclude_types: list[str] | None = None
+) -> dict | None:
     """Claim the oldest claimable pending job (optionally restricted to
-    `job_types` — the interactive lane's filter) and atomically mark it running.
+    `job_types` — the interactive/fanout lane's filter — or with `exclude_types`
+    held back for the MAIN lane, so long dedicated-lane jobs never block it) and
+    atomically mark it running.
 
     Scans a small window of the oldest rows rather than just the single oldest:
     an exhausted (`attempts >= max_attempts`) pending row would otherwise sit at
@@ -122,6 +135,8 @@ async def _claim_next_job(job_types: list[str] | None = None) -> dict | None:
         query = supabase.table("async_jobs").select("*").eq("status", "pending")
         if job_types:
             query = query.in_("job_type", job_types)
+        if exclude_types:
+            query = query.not_.in_("job_type", exclude_types)
         result = query.order("scheduled_at").limit(_CLAIM_SCAN_LIMIT).execute()
         jobs = result.data or []
 
@@ -600,6 +615,7 @@ async def _run_page_structure_scrape(job: dict) -> None:
     page_type = payload.get("page_type")
     url = payload.get("url")
     job_id = job["id"]
+    supabase = get_supabase()
 
     logger.info(
         "page_structure_scrape_started",
@@ -745,8 +761,19 @@ async def _process_job(job: dict) -> None:
         await run_gsc_ingest_job(job)
     elif job_type == "gsc_page_ingest":
         await run_gsc_page_ingest_job(job)
+    elif job_type == "ga4_ingest":
+        await run_ga4_ingest_job(job)
     elif job_type == "gbp_metrics_ingest":
         await run_gbp_metrics_ingest_job(job)
+    elif job_type == "gbp_onboard":
+        from services import gbp_locations_service
+        await gbp_locations_service.run_gbp_onboard_job(job)
+    elif job_type == "gbp_search_keywords":
+        from services import gbp_search_keywords
+        await gbp_search_keywords.run_gbp_search_keywords_job(job)
+    elif job_type == "gbp_reviews":
+        from services import gbp_reviews_ingest
+        await gbp_reviews_ingest.run_gbp_reviews_job(job)
     elif job_type == "gbp_post_publish":
         await gbp_posts_service.run_publish_job(job)
     elif job_type == "gbp_post_generate":
@@ -783,6 +810,8 @@ async def _process_job(job: dict) -> None:
         await run_backlink_intel_job(job)
     elif job_type == "backlink_snapshot":
         await run_backlink_snapshot_job(job)
+    elif job_type == "backlink_lookup":
+        await run_backlink_lookup_job(job)
     elif job_type == "content_intel":
         await run_content_intel_job(job)
     elif job_type == "local_relevance":
@@ -803,8 +832,26 @@ async def _process_job(job: dict) -> None:
         await ecommerce_service.run_reoptimize_url_job(job)
     elif job_type == "ecommerce_action":
         await ecommerce_service.run_ecommerce_action_job(job)
+    elif job_type == "wheelhouse_generate":
+        await wheelhouse_service.run_generate_job(job)
     elif job_type == "service_page_plan":
         await run_service_plan_job(job)
+    elif job_type == "service_page_score":
+        await service_page_score.run_score_job(job)
+    elif job_type == "service_page_reoptimize":
+        await service_page_score.run_reoptimize_job(job)
+    elif job_type == "blog_score":
+        await blog_page_score.run_score_job(job)
+    elif job_type == "blog_reoptimize":
+        await blog_page_score.run_reoptimize_job(job)
+    elif job_type == "fanout_blog_score":
+        from fanout import reoptimize as fanout_reoptimize
+
+        await fanout_reoptimize.run_score_job(job)
+    elif job_type == "fanout_blog_reoptimize":
+        from fanout import reoptimize as fanout_reoptimize
+
+        await fanout_reoptimize.run_reoptimize_job(job)
     elif job_type == "rank_location_derive":
         await run_rank_location_derive_job(job)
     elif job_type == "brand_scan":
@@ -847,6 +894,8 @@ async def _process_job(job: dict) -> None:
         await run_leadoff_tryout_job(job)
     elif job_type == "leadoff_scout":
         await run_leadoff_scout_job(job)
+    elif job_type == "leadoff_map_refresh":
+        await run_leadoff_map_refresh_job(job)
     elif job_type == "leadoff_ai_probe":
         await run_leadoff_ai_probe_job(job)
     elif job_type == "leadoff_permits":
@@ -859,6 +908,10 @@ async def _process_job(job: dict) -> None:
         await run_leadoff_income_backfill_job(job)
     elif job_type == "leadoff_county_backfill":
         await run_leadoff_county_backfill_job(job)
+    elif job_type == "leadoff_placement":
+        await run_leadoff_placement_job(job)
+    elif job_type == "leadoff_zip_demand":
+        await run_leadoff_zip_demand_job(job)
     elif job_type == "leadoff_city_finder":
         await run_leadoff_city_finder_job(job)
     elif job_type == "domain_overview":
@@ -869,6 +922,49 @@ async def _process_job(job: dict) -> None:
         await run_link_gap_job(job)
     elif job_type == "keyword_research":
         await run_keyword_research_job(job)
+    elif job_type == "keyword_research_report":
+        await run_keyword_research_report_job(job)
+    elif job_type == "keyword_topic_research":
+        from services.keyword_topic_research import run_topic_research_job
+        await run_topic_research_job(job)
+    elif job_type == "fanout_report":
+        from fanout.report_runner import run_report_job as run_fanout_report_job
+        await run_fanout_report_job(job)
+    elif job_type in (
+        "fanout_expand", "fanout_plan", "fanout_regate", "fanout_fanout",
+        "fanout_architecture",
+    ):
+        # Durable Fanout pipeline stages (issue #686). Each runs the blocking
+        # pipeline in a thread so it doesn't stall this (dedicated) lane's event
+        # loop; the row settles complete after it returns, or stays running for
+        # the drain/reaper to requeue on a crash. The payload carries the stage's
+        # params (mirrors the old submit_* signatures).
+        import fanout.jobs as _fjobs
+        payload = job.get("payload") or {}
+        session_id = payload.get("session_id") or job.get("entity_id")
+        if job_type == "fanout_expand":
+            await asyncio.to_thread(_fjobs.run_expand_durable, session_id)
+        elif job_type == "fanout_plan":
+            await asyncio.to_thread(
+                _fjobs.run_plan_durable, session_id, bool(payload.get("direct"))
+            )
+        elif job_type == "fanout_regate":
+            await asyncio.to_thread(
+                _fjobs.run_regate_durable, session_id,
+                payload.get("threshold"), payload.get("edge_threshold"),
+                payload.get("resolution"), payload.get("active_per_silo_cap"),
+                payload.get("seed_terms") or [], payload.get("peer_terms") or [],
+                payload.get("silo_margin"),
+            )
+        elif job_type == "fanout_fanout":
+            await asyncio.to_thread(
+                _fjobs.run_fanout_durable, session_id,
+                payload.get("threshold"), payload.get("edge_threshold"),
+                payload.get("resolution"), payload.get("active_per_silo_cap"),
+                payload.get("seed_terms") or [], payload.get("peer_terms") or [],
+            )
+        else:  # fanout_architecture
+            await asyncio.to_thread(_fjobs.run_architecture_durable, session_id)
     elif job_type == "deliverables_log":
         await run_deliverables_log_job(job)
     elif job_type == "deliverable_notes_scan":
@@ -904,13 +1000,14 @@ async def _process_job(job: dict) -> None:
         logger.info("job_worker.settled_by_worker",
                     extra={"job_id": job["id"], "job_type": job_type})
 
-    # Cross-module batch awareness: after a content-generation job settles (the
-    # handler has already written its terminal status), check whether it was the
-    # last in-flight one for its (user, client, family) group and, if so, notify
-    # the user their batch finished. Best-effort — never breaks the worker.
-    if job_type in activity.CONTENT_JOB_TYPES:
+    # Cross-module activity awareness: after a settled job that a user started and
+    # may have navigated away from, tell them it's done. Content page jobs roll up
+    # into one per-batch notification; single registered jobs get one per-job
+    # completion ping (both to the initiator's header bell). Every path is gated
+    # on payload.user_id, so scheduled/background runs never ping. Best-effort.
+    if job_type in activity.ACTIVITY_JOB_TYPES:
         try:
-            activity.on_content_job_settled(job)
+            activity.on_job_settled(job)
         except Exception as exc:  # pragma: no cover - defensive
             logger.error(
                 "job_worker.activity_settle_failed",
@@ -918,13 +1015,19 @@ async def _process_job(job: dict) -> None:
             )
 
 
-async def job_worker(job_types: list[str] | None = None, lane: str = "main") -> None:
+async def job_worker(
+    job_types: list[str] | None = None,
+    lane: str = "main",
+    exclude_types: list[str] | None = None,
+) -> None:
     """Background loop: poll async_jobs every N seconds and process one job per tick.
 
-    Two lanes run in-process (ops fix 2026-07-12): the MAIN lane claims
-    everything (and owns the stale-job reaper), while the INTERACTIVE lane is
-    restricted to short, user-awaited job types (`interactive_job_types`) so a
-    just-clicked action never waits 10–20 min behind a long background job.
+    Lanes run in-process (ops fix 2026-07-12): the MAIN lane claims everything
+    (and owns the stale-job reaper) EXCEPT `exclude_types` — the long, blocking
+    Fanout pipeline jobs, which get their own dedicated lane so a ~10-min run
+    can't stall the reaper or other background work (issue #686). The INTERACTIVE
+    lane is restricted to short, user-awaited job types (`interactive_job_types`)
+    so a just-clicked action never waits behind a long background job.
     The claim's status='pending' guard makes the lanes race-safe.
     """
     interval = settings.job_worker_poll_interval_seconds
@@ -934,7 +1037,7 @@ async def job_worker(job_types: list[str] | None = None, lane: str = "main") -> 
         try:
             if lane == "main":
                 await _reap_stale_jobs()
-            job = await _claim_next_job(job_types)
+            job = await _claim_next_job(job_types, exclude_types)
             if job:
                 logger.info(
                     "async_job_claimed",

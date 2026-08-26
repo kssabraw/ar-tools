@@ -11,11 +11,12 @@ shared scheduler when each item comes due.
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from config import settings
 from db.supabase_client import get_supabase
@@ -26,7 +27,12 @@ from models.content_batch import (
     ContentBatchEstimateRequest,
     ContentBatchEstimateResponse,
 )
-from services import content_batch, content_schedule_feed, content_schedule_store as store
+from services import (
+    content_batch,
+    content_calendar,
+    content_schedule_feed,
+    content_schedule_store as store,
+)
 from services.freeze import assert_not_frozen
 
 router = APIRouter(tags=["content-scheduler"])
@@ -172,12 +178,82 @@ async def create_batch(
     )
 
 
+class SchedulerDraftRequest(BaseModel):
+    keywords: list[str] = []
+    content_type: Optional[str] = None
+
+
+@router.get("/clients/{client_id}/content-scheduler-draft")
+async def get_scheduler_draft(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """The client's pending Content Scheduler draft — the handed-off keyword list
+    (e.g. from Keyword Research) the batch form seeds from. {terms, content_type}."""
+    return store.get_draft(str(client_id))
+
+
+@router.post("/clients/{client_id}/content-scheduler-draft")
+async def save_scheduler_draft(
+    client_id: UUID, body: SchedulerDraftRequest, auth: dict = Depends(require_auth)
+) -> dict:
+    """Merge keywords into the client's Content Scheduler draft so they persist
+    across a refresh / navigation until a batch is created from them."""
+    _require_client(str(client_id))
+    return store.merge_draft(str(client_id), body.keywords, body.content_type)
+
+
+@router.delete("/clients/{client_id}/content-scheduler-draft")
+async def clear_scheduler_draft(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Clear the client's pending Content Scheduler draft."""
+    store.clear_draft(str(client_id))
+    return {"cleared": True}
+
+
 @router.get("/clients/{client_id}/scheduled-content")
 async def scheduled_content(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
     """The unified per-client feed for the workspace 'Scheduled Content' card:
     suite Content Scheduler batches + client-linked Fanout schedules, normalized
     and newest-first. Read-only; the Fanout half degrades to empty on any error."""
     return {"items": content_schedule_feed.unified_feed(str(client_id))}
+
+
+@router.get("/clients/{client_id}/content-calendar")
+async def client_content_calendar(
+    client_id: UUID,
+    start: Optional[str] = Query(None, description="Window start (YYYY-MM-DD)"),
+    end: Optional[str] = Query(None, description="Window end (YYYY-MM-DD)"),
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """One flattened row per scheduled content item for this client in the
+    [start, end] window — suite Content Scheduler items + the client's Fanout runs,
+    each with a concrete `scheduled_at` — for the workspace's day-by-day calendar.
+    Read-only; the Fanout half degrades to empty on any error."""
+    start_iso, end_iso = content_calendar.resolve_range(
+        start, end, now=datetime.now(timezone.utc)
+    )
+    return {
+        "items": content_calendar.client_calendar(str(client_id), start_iso, end_iso),
+        "start": start_iso,
+        "end": end_iso,
+    }
+
+
+@router.get("/content-calendar")
+async def agency_content_calendar(
+    start: Optional[str] = Query(None, description="Window start (YYYY-MM-DD)"),
+    end: Optional[str] = Query(None, description="Window end (YYYY-MM-DD)"),
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """The agency-wide content calendar: one flattened row per scheduled item
+    across ALL clients in the [start, end] window (suite batches + every
+    client-linked Fanout run), each row carrying its client's id + name. Feeds the
+    sidebar Content Calendar page. Read-only."""
+    start_iso, end_iso = content_calendar.resolve_range(
+        start, end, now=datetime.now(timezone.utc)
+    )
+    return {
+        "items": content_calendar.agency_calendar(start_iso, end_iso),
+        "start": start_iso,
+        "end": end_iso,
+    }
 
 
 @router.get("/clients/{client_id}/content-batches")

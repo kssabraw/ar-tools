@@ -423,6 +423,19 @@ CANDIDATE_REVIEW_PATHS: tuple[str, ...] = (
     # The live twin of the Maps path that IS genuinely proven — maps_dataforseo.py has used
     # /v3/serp/google/maps/task_post + task_get/advanced in production.
     "/v3/serp/google/maps/live/advanced",
+    # Organic SERP — the report's "organic ranking vs competitors" signal (organic_scan.py). Added
+    # here so `probe-dataforseo` confirms the endpoint FREE before the first paid capture, the
+    # measure-don't-infer discipline this module exists to enforce.
+    "/v3/serp/google/organic/live/advanced",
+    "/v3/serp/google/organic/task_post",
+    # DataForSEO Labs — the ad-spend MAGNITUDE source for paid-placement Slice B2 (the money signal).
+    # Probed FREE here, but note what this probe can and cannot establish: `exists` is HTTP 200, which
+    # proves the PATH is real. It does NOT prove this account is entitled to Labs — an unentitled
+    # account can still answer 200 with a task-level access error, so read `task_status`/`task_message`,
+    # not the `exists` list, before concluding Labs is usable (ISSUES I-098). Entitlement and yield are
+    # both settled by the paid spike, not here. Not yet consumed by any producer.
+    "/v3/dataforseo_labs/google/domain_rank_overview/live",
+    "/v3/dataforseo_labs/google/bulk_traffic_estimation/live",
 )
 
 # A task with no fields. A path that exists answers 200 and rejects the task at the task level

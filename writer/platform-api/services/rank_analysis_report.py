@@ -27,6 +27,7 @@ from config import settings
 from db.supabase_client import get_supabase
 from services import rank_analysis
 from services.google_docs import GoogleDocError, create_google_doc
+from services.markdown_html import markdown_to_html
 
 logger = logging.getLogger(__name__)
 
@@ -282,9 +283,11 @@ async def generate_report_for_keyword(client_id: str, keyword_id: str) -> dict:
 # ----------------------------------------------------------------------------
 def enqueue_rank_keyword_report(
     client_id: str, keyword_id: str, keyword: str, trigger: str = "on_demand",
+    user_id: Optional[str] = None,
 ) -> Optional[str]:
     """Create a pending report row + enqueue the job (deduped on the pending
-    row). Returns the report row id, or None if one is already in flight."""
+    row). Returns the report row id, or None if one is already in flight.
+    ``user_id`` (the initiator) drives the Activity indicator + completion ping."""
     supabase = get_supabase()
     existing = (
         supabase.table("rank_keyword_reports").select("id")
@@ -303,7 +306,7 @@ def enqueue_rank_keyword_report(
         supabase.table("async_jobs").insert({
             "job_type": "rank_keyword_report", "entity_id": report_id,
             "payload": {"report_id": report_id, "client_id": client_id,
-                        "keyword_id": keyword_id, "trigger": trigger},
+                        "keyword_id": keyword_id, "trigger": trigger, "user_id": user_id},
         }).execute()
     return report_id
 
@@ -355,8 +358,12 @@ async def _maybe_publish_doc(
     wo = render_work_order_md(work_order or [])
     if wo:
         body += "\n\n---\n\n" + wo
+    # Render to HTML and publish format="html": the live Apps Script deployment
+    # only creates Docs on the html path (every markdown publish silently failed).
     try:
-        result = await create_google_doc(folder_id, title, body)
+        result = await create_google_doc(
+            folder_id, title, markdown_to_html(body), content_format="html"
+        )
         return result.get("doc_url")
     except GoogleDocError as exc:
         logger.warning("rank_analysis_doc_publish_failed", extra={"keyword": keyword, "error": str(exc)})

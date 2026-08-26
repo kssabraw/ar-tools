@@ -20,14 +20,19 @@ from api.services import cost  # noqa: E402
 from api.services.filters import (  # noqa: E402
     NOT_EVALUATED,
     RULE_BUSINESS_STATUS,
+    RULE_CATEGORY_RELEVANT,
     RULE_HAS_PHONE,
     RULE_NOT_FRANCHISE,
     RULE_NOT_SUPPRESSED,
     RULE_REVIEW_COUNT,
     RULE_REVIEW_RECENCY,
+    RULE_WITHIN_AREA,
     SuppressionIndex,
+    _haversine_miles,
+    category_signals,
     evaluate,
     matches_franchise_pattern,
+    resolve_accepted_categories,
 )
 from api.services.outscraper_client import TileRequest, extract_places  # noqa: E402
 from api.services.parser import (  # noqa: E402
@@ -142,6 +147,8 @@ def test_every_rule_is_recorded_for_every_prospect():
         RULE_NOT_FRANCHISE,
         RULE_REVIEW_COUNT,
         RULE_REVIEW_RECENCY,
+        RULE_CATEGORY_RELEVANT,
+        RULE_WITHIN_AREA,
     }
 
 
@@ -1046,3 +1053,226 @@ def test_fetch_all_builds_a_fresh_query_per_page():
 
     assert len(fetch_all(build)) == 2500
     assert built["n"] == 3
+
+
+# --- category relevance: keep / review / drop -------------------------------------------
+
+ACCEPT = frozenset({"plumber", "fontanero", "drainage service"})
+
+
+def run_cat(p, **kwargs):
+    """Run the filter with the category gate ENABLED. Everything else is the default matrix."""
+    return run(p, accepted_categories=ACCEPT, category_relevance_enabled=True, **kwargs)
+
+
+def _cat_outcome(verdict):
+    return next(o for o in verdict.outcomes if o.rule == RULE_CATEGORY_RELEVANT)
+
+
+def test_category_gate_defaults_off_and_is_not_evaluated():
+    """Unchanged behaviour when the caller does not opt in — the rule writes an honest not_evaluated
+    row and never excludes, exactly like the other deferred rules."""
+    verdict = run(place(type="Apartment building"))
+    outcome = _cat_outcome(verdict)
+    assert outcome.passed
+    assert not outcome.evaluated
+    assert not verdict.excluded
+    assert verdict.category_status == "unknown"
+
+
+def test_category_enabled_but_vertical_unconfigured_is_a_no_op():
+    """`accepted_categories=None` means the vertical was never curated; the gate must not fire."""
+    verdict = run(
+        place(type="Apartment building"),
+        accepted_categories=None,
+        category_relevance_enabled=True,
+    )
+    assert _cat_outcome(verdict).observed_value == NOT_EVALUATED
+    assert not verdict.excluded
+
+
+def test_primary_category_on_the_list_is_kept():
+    verdict = run_cat(place(type="Plumber"))
+    assert not verdict.excluded
+    assert verdict.category_status == "relevant"
+    assert not verdict.category_review_flagged
+
+
+def test_off_category_primary_is_excluded():
+    verdict = run_cat(place(type="Apartment building"))
+    assert verdict.excluded
+    assert RULE_CATEGORY_RELEVANT in verdict.failed_rules
+    assert verdict.category_status == "off_category"
+
+
+def test_secondary_match_flags_for_review_and_does_not_exclude():
+    """A general contractor that lists Plumber among its subtypes is a review candidate, not a keep
+    and not a drop — the 'maybe' pile."""
+    verdict = run_cat(
+        place(type="General contractor", subtypes="General contractor, Plumber, HVAC contractor")
+    )
+    assert not verdict.excluded
+    assert verdict.category_review_flagged
+    assert verdict.category_status == "review"
+    assert _cat_outcome(verdict).observed_value.startswith("review:")
+
+
+def test_secondary_match_never_auto_keeps_a_home_depot_style_generalist():
+    """The precision point: any-subtype matching would auto-KEEP a service desk that lists ten
+    trades. It must land in review, not relevant."""
+    verdict = run_cat(
+        place(
+            type="General contractor",
+            subtypes="General contractor, Bathroom remodeler, Electrician, HVAC contractor, Plumber, Remodeler",
+        )
+    )
+    assert verdict.category_status == "review"
+    assert verdict.category_status != "relevant"
+
+
+def test_supply_store_with_no_bare_plumber_badge_is_dropped():
+    """Ferguson & co carry 'Plumbing supply store', never bare 'Plumber' — they are warehouses, not
+    the trade, and fall out as off-category rather than into review."""
+    verdict = run_cat(
+        place(type="Plumbing supply store", subtypes="Plumbing supply store, Bathroom supply store, Hardware store")
+    )
+    assert verdict.excluded
+    assert verdict.category_status == "off_category"
+
+
+def test_missing_category_fails_open_and_is_kept():
+    verdict = run_cat(place(type=None))
+    assert _cat_outcome(verdict).observed_value == NOT_EVALUATED
+    assert not verdict.excluded
+    assert verdict.category_status == "unknown"
+
+
+def test_human_confirmed_relevant_keeps_an_off_list_primary():
+    verdict = run_cat(place(type="Apartment building"), category_decision="confirmed_relevant")
+    assert not verdict.excluded
+    assert _cat_outcome(verdict).passed
+
+
+def test_human_confirmed_off_drops_an_on_list_primary():
+    verdict = run_cat(place(type="Plumber"), category_decision="confirmed_off")
+    assert verdict.excluded
+    assert RULE_CATEGORY_RELEVANT in verdict.failed_rules
+
+
+def test_category_match_is_case_insensitive():
+    verdict = run_cat(place(type="PLUMBER"))
+    assert not verdict.excluded
+    assert verdict.category_status == "relevant"
+
+
+def test_category_relevance_does_not_rescue_a_prospect_failing_a_hard_gate():
+    """A relevant plumber with no phone is still excluded — relevance is one gate among several."""
+    verdict = run_cat(place(type="Plumber", phone=None))
+    assert verdict.excluded
+    assert RULE_HAS_PHONE in verdict.failed_rules
+    assert RULE_CATEGORY_RELEVANT not in verdict.failed_rules
+
+
+# --- category helpers -------------------------------------------------------------------
+
+
+def test_resolve_accepted_categories_is_case_insensitive():
+    mapping = {"Plumbing Contractor": ["Plumber", "Drainage service"]}
+    resolved = resolve_accepted_categories("plumbing contractor", mapping)
+    assert resolved == frozenset({"plumber", "drainage service"})
+
+
+def test_resolve_accepted_categories_returns_none_for_an_unconfigured_vertical():
+    assert resolve_accepted_categories("locksmith", {"plumber": ["Plumber"]}) is None
+    assert resolve_accepted_categories("", {"plumber": ["Plumber"]}) is None
+
+
+def test_category_signals_reads_primary_and_all_secondaries():
+    p = place(type="General contractor", subtypes="General contractor, Plumber, Remodeler")
+    primary, all_cats = category_signals(p)
+    assert primary == "General contractor"
+    assert "plumber" in all_cats
+    assert "remodeler" in all_cats
+
+
+# --- distance gate: gross geographic drift ----------------------------------------------
+
+# Overland Park submarket centroid (from SUBMARKETS above) — the anchor for these cases.
+ANCHOR_LAT, ANCHOR_LNG = 38.9822, -94.6708
+LOMPOC_LAT, LOMPOC_LNG = 34.6391, -120.4579  # ~1,270 miles from Overland Park, KS
+
+
+def run_dist(p, **kwargs):
+    return run(
+        p,
+        distance_gate_enabled=True,
+        max_distance_miles=30.0,
+        anchor_lat=ANCHOR_LAT,
+        anchor_lng=ANCHOR_LNG,
+        **kwargs,
+    )
+
+
+def _area_outcome(verdict):
+    return next(o for o in verdict.outcomes if o.rule == RULE_WITHIN_AREA)
+
+
+def test_distance_gate_defaults_off_and_is_not_evaluated():
+    verdict = run(place(latitude=LOMPOC_LAT, longitude=LOMPOC_LNG))
+    outcome = _area_outcome(verdict)
+    assert outcome.passed
+    assert not outcome.evaluated
+    assert not verdict.excluded
+
+
+def test_a_prospect_inside_the_radius_is_kept():
+    # place() sits at 38.98,-94.67 — a few hundred metres from the anchor.
+    verdict = run_dist(place())
+    assert not verdict.excluded
+    assert _area_outcome(verdict).passed
+
+
+def test_a_far_away_prospect_is_excluded():
+    verdict = run_dist(place(latitude=LOMPOC_LAT, longitude=LOMPOC_LNG))
+    assert verdict.excluded
+    assert RULE_WITHIN_AREA in verdict.failed_rules
+    assert _area_outcome(verdict).observed_value.endswith(" mi")
+
+
+def test_distance_gate_fails_open_when_the_listing_has_no_coordinates():
+    """An unknown location is not a distant one — keep it, like every other rule's missing data."""
+    verdict = run_dist(place(latitude=None, longitude=None))
+    assert _area_outcome(verdict).observed_value == NOT_EVALUATED
+    assert not verdict.excluded
+
+
+def test_distance_gate_fails_open_when_there_is_no_anchor():
+    verdict = run(
+        place(latitude=LOMPOC_LAT, longitude=LOMPOC_LNG),
+        distance_gate_enabled=True,
+        max_distance_miles=30.0,
+        anchor_lat=None,
+        anchor_lng=None,
+    )
+    assert _area_outcome(verdict).observed_value == NOT_EVALUATED
+    assert not verdict.excluded
+
+
+def test_distance_gate_does_not_rescue_a_prospect_failing_another_gate():
+    verdict = run_dist(place(phone=None))
+    assert verdict.excluded
+    assert RULE_HAS_PHONE in verdict.failed_rules
+    assert RULE_WITHIN_AREA not in verdict.failed_rules
+
+
+def test_local_haversine_matches_the_tiling_implementation():
+    """The distance rule keeps its own copy to stay dependency-free; it must not drift from the
+    tiler's, which the ingest uses for submarket assignment."""
+    from api.services.tiling import haversine_miles
+
+    for a, b, c, d in [
+        (38.9822, -94.6708, 34.6391, -120.4579),
+        (33.9617, -118.3531, 34.7420, -120.4570),
+        (40.0, -70.0, 40.0, -70.0),
+    ]:
+        assert _haversine_miles(a, b, c, d) == pytest.approx(haversine_miles(a, b, c, d))

@@ -554,6 +554,51 @@ def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     return 2 * r * math.asin(min(1.0, math.sqrt(a)))
 
 
+# A candidate whose top geocode type is one of these is a region bigger than a town — a
+# county/state/country, never a city sub-area. Everything smaller (locality for an AU/UK suburb,
+# sublocality/neighborhood/postal_town, …) is allowed and gated geographically instead.
+_TOO_BIG_TYPES = frozenset({
+    "administrative_area_level_1", "administrative_area_level_2",
+    "administrative_area_level_3", "country", "continent",
+})
+
+
+def place_is_within_city(candidate: dict, city_geo: dict) -> bool:
+    """True when a forward-geocoded candidate is a real sub-area geographically INSIDE the target
+    city — country-agnostic. Works for a US neighborhood (nested in the city's locality) and an
+    AU/UK suburb (its own locality) alike, because it checks geography, not name nesting:
+
+      1. it resolved to a place that isn't the city itself / a centroid fallback (distinct
+         place_id), and
+      2. it isn't a region bigger than a town (no county/state/country type), and
+      3. its centre falls inside the city's geocoded footprint (bounds, padded), or — when the city
+         has no footprint — within a radius of the city centre.
+
+    Pure; unit-tested. Lives here (not in `local_seo_silo`) because it is pure geography over this
+    module's own primitives, so both the Local SEO neighbourhood silo and the outreach any-city
+    sub-area enumeration can reuse it without importing a web-framework-bound module."""
+    if not candidate or not candidate.get("matched"):
+        return False
+    if not city_geo or not city_geo.get("matched"):
+        return False
+    cpid, citypid = candidate.get("place_id"), city_geo.get("place_id")
+    if cpid and citypid and cpid == citypid:
+        return False  # snapped to the city itself — a bogus / centroid-fallback name
+    types = {str(t).lower() for t in (candidate.get("result_types") or [])}
+    if types & _TOO_BIG_TYPES:
+        return False  # a county / state / country, not a sub-area
+    lat, lng = candidate.get("lat"), candidate.get("lng")
+    if lat is None or lng is None:
+        return False
+    bounds = city_geo.get("bounds")
+    if bounds:
+        return point_in_bounds(lat, lng, bounds, pad=settings.local_seo_city_bounds_pad)
+    clat, clng = city_geo.get("lat"), city_geo.get("lng")
+    if clat is None or clng is None:
+        return False
+    return haversine_km(lat, lng, clat, clng) <= settings.local_seo_neighborhood_radius_km
+
+
 def _norm_query(query: str) -> str:
     """Cache key: lower-cased, whitespace-collapsed query string."""
     return " ".join((query or "").lower().split())

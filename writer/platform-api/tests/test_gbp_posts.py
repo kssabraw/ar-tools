@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timezone
 
 import pytest
 
+from services import gbp_locations_service as loc_svc
 from services import gbp_posts_api as api
 from services import gbp_posts_service as svc
+from services import nano_banana
 
 
 # ── v4_parent ────────────────────────────────────────────────────────────────
@@ -194,6 +197,205 @@ def test_classify_not_manager():
 def test_classify_invalid_and_notfound():
     assert api.classify_post_error(400, "bad content") == "invalid_post_content"
     assert api.classify_post_error(404, "not found") == "post_or_location_not_found"
+
+
+# ── location resolution (parse_location) ─────────────────────────────────────
+def test_parse_location_full():
+    parsed = loc_svc.parse_location(
+        {
+            "name": "locations/456",
+            "title": "Acme Roofing",
+            "storefrontAddress": {"addressLines": ["12 Main St"], "locality": "Austin", "administrativeArea": "TX"},
+            "phoneNumbers": {"primaryPhone": "+1 512-555-0100"},
+            "latlng": {"latitude": 30.27, "longitude": -97.74},
+            "metadata": {"placeId": "ChIJ123", "mapsUri": "https://maps.google.com/?cid=999"},
+        },
+        "accounts/123",
+    )
+    assert parsed == {
+        "location_id": "locations/456",
+        "account_id": "accounts/123",
+        "title": "Acme Roofing",
+        "address": "12 Main St, Austin, TX",
+        "phone": "+1 512-555-0100",
+        "lat": 30.27,
+        "lng": -97.74,
+        "place_id": "ChIJ123",
+        "maps_uri": "https://maps.google.com/?cid=999",
+    }
+
+
+def test_parse_location_minimal_and_missing_name():
+    thin = loc_svc.parse_location({"name": "locations/9", "title": "X"}, None)
+    assert thin["location_id"] == "locations/9" and thin["account_id"] is None
+    assert thin["address"] is None and thin["phone"] is None and thin["place_id"] is None
+    assert loc_svc.parse_location({"title": "no name"}, "accounts/1") is None
+
+
+# ── client → listing matching ────────────────────────────────────────────────
+def test_parse_latlng_from_maps_uri_prefers_pin():
+    uri = "https://www.google.com/maps/place/X/@34.169,-116.541,14z/data=!3d34.1693721!4d-116.541466"
+    assert loc_svc.parse_latlng_from_maps_uri(uri) == (34.1693721, -116.541466)
+
+
+def test_parse_latlng_falls_back_to_viewport_and_none():
+    assert loc_svc.parse_latlng_from_maps_uri("https://maps.google.com/@26.09,-80.36,14z") == (26.09, -80.36)
+    assert loc_svc.parse_latlng_from_maps_uri("no coords here") is None
+    assert loc_svc.parse_latlng_from_maps_uri(None) is None
+
+
+def test_name_similarity_ignores_suffix_noise():
+    # "Service"/"and" are stopwords → exact-token match.
+    assert loc_svc.name_similarity("ABC Tree And Landscape Service", "ABC Tree Landscape") == 1.0
+    assert loc_svc.name_similarity("WheelHouse IT", "WheelHouse IT") == 1.0
+    assert loc_svc.name_similarity("WheelHouse IT", "Joe's Plumbing") == 0.0
+
+
+def test_score_match_uses_geo_to_disambiguate_same_name():
+    """Two same-name WheelHouse IT listings — geo picks the right city."""
+    ll_ftl = (26.0841946, -80.1793231)  # Fort Lauderdale client pin
+    ftl = {"title": "WheelHouse IT", "lat": 26.0842, "lng": -80.1793}
+    orl = {"title": "WheelHouse IT", "lat": 28.5717, "lng": -81.2085}
+    s_ftl = loc_svc.score_match("WheelHouse IT", ll_ftl, ftl)
+    s_orl = loc_svc.score_match("WheelHouse IT", ll_ftl, orl)
+    assert s_ftl > s_orl
+    ranked = loc_svc.rank_matches("WheelHouse IT", ll_ftl, [orl, ftl])
+    assert ranked[0]["lat"] == 26.0842  # closest wins
+
+
+def test_score_match_without_geo_is_name_only():
+    loc = {"title": "ABC Tree And Landscape Service"}  # no lat/lng
+    assert loc_svc.score_match("ABC Tree And Landscape Service", None, loc) == 1.0
+
+
+# ── exact identity match (the dashboard's GBP, by CID / place_id) ─────────────
+def test_parse_cid_from_client_hex_uri():
+    # The stored clients.gbp.google_maps_uri hex form → decimal CID.
+    uri = "https://www.google.com/maps/place/X/@34.16,-116.54,14z/data=!4m8!1m2!2m1!1sABC!3m4!1s0x8f25d7aec605aa33:0xc1cd0ec6746318ae!8m2!3d34.16!4d-116.54"
+    assert loc_svc.parse_cid(uri) == str(int("c1cd0ec6746318ae", 16))
+
+
+def test_parse_cid_from_api_cid_uri_and_none():
+    assert loc_svc.parse_cid("https://maps.google.com/?cid=13964098231375669678") == "13964098231375669678"
+    assert loc_svc.parse_cid("https://example.com/no-cid") is None
+    assert loc_svc.parse_cid(None) is None
+
+
+def test_find_exact_match_by_cid_beats_a_same_name_lookalike():
+    client_cid = str(int("c1cd0ec6746318ae", 16))
+    right = {"location_id": "locations/1", "title": "ABC Tree", "maps_uri": f"https://maps.google.com/?cid={client_cid}"}
+    lookalike = {"location_id": "locations/2", "title": "ABC Tree", "maps_uri": "https://maps.google.com/?cid=42"}
+    assert loc_svc.find_exact_match(client_cid, None, [lookalike, right]) is right
+
+
+def test_find_exact_match_by_place_id_then_none():
+    a = {"location_id": "locations/1", "place_id": "ChIJ_A"}
+    b = {"location_id": "locations/2", "place_id": "ChIJ_B"}
+    assert loc_svc.find_exact_match(None, "ChIJ_B", [a, b]) is b
+    assert loc_svc.find_exact_match(None, "ChIJ_Z", [a, b]) is None
+    assert loc_svc.find_exact_match(None, None, [a, b]) is None
+
+
+# ── Nano Banana image generation (pure helpers) ──────────────────────────────
+def test_extract_image_bytes_camelcase():
+    b64 = base64.b64encode(b"\x89PNG-fake").decode()
+    resp = {"candidates": [{"content": {"parts": [
+        {"text": "here you go"},
+        {"inlineData": {"mimeType": "image/png", "data": b64}},
+    ]}}]}
+    assert nano_banana.extract_image_bytes(resp) == b"\x89PNG-fake"
+
+
+def test_extract_image_bytes_snake_case():
+    b64 = base64.b64encode(b"jpegbytes").decode()
+    resp = {"candidates": [{"content": {"parts": [
+        {"inline_data": {"mime_type": "image/jpeg", "data": b64}},
+    ]}}]}
+    assert nano_banana.extract_image_bytes(resp) == b"jpegbytes"
+
+
+def test_extract_image_bytes_none_when_absent_or_text_only():
+    assert nano_banana.extract_image_bytes({"candidates": [{"content": {"parts": [{"text": "sorry, no image"}]}}]}) is None
+    assert nano_banana.extract_image_bytes({}) is None
+    assert nano_banana.extract_image_bytes({"candidates": []}) is None
+
+
+def test_build_image_prompt_adds_brand_safe_style():
+    p = svc.build_image_prompt("a roofer on a roof")
+    assert p.startswith("a roofer on a roof.")
+    assert "no text" in p and "no logos" in p and "photograph" in p
+
+
+# ── Voice & Audience Card in the draft (pure helpers) ────────────────────────
+def test_render_voice_card_block_empty():
+    assert svc.render_voice_card_block(None) == ""
+    assert svc.render_voice_card_block({}) == ""
+    assert svc.render_voice_card_block({"tone_adjectives": [], "never_use_terms": []}) == ""
+
+
+def test_render_voice_card_block_includes_key_fields():
+    card = {
+        "tone_adjectives": ["warm", "confident"],
+        "person": "first",
+        "must_use_terms": ["storm restoration"],
+        "never_use_terms": ["cheap", "guarantee"],
+        "audience_label": "Melbourne homeowner with an old tile roof",
+        "audience_motivations": ["a roof that lasts"],
+        "cta_language": ["Book your free inspection"],
+    }
+    block = svc.render_voice_card_block(card)
+    assert "HIGHEST PRIORITY" in block
+    assert "warm, confident" in block
+    assert "FIRST PERSON" in block
+    assert '"storm restoration"' in block
+    assert '"cheap"' in block and '"guarantee"' in block
+    assert "Melbourne homeowner" in block
+    assert "Book your free inspection" in block
+
+
+def test_voice_forbidden_hits_word_boundary_case_insensitive():
+    card = {"never_use_terms": ["cheap", "guarantee"]}
+    assert svc.voice_forbidden_hits("We offer CHEAP rates", card) == ["cheap"]
+    assert set(svc.voice_forbidden_hits("cheap guarantee!", card)) == {"cheap", "guarantee"}
+    # word-boundary: "cheaper" does not contain the whole-word "cheap"
+    assert svc.voice_forbidden_hits("cheaper options", card) == []
+    assert svc.voice_forbidden_hits("all good here", card) == []
+    assert svc.voice_forbidden_hits("anything", {}) == []
+
+
+def test_content_type_for_image_format():
+    assert svc.content_type_for_image_format("JPEG") == "image/jpeg"
+    assert svc.content_type_for_image_format("png") == "image/png"  # case-insensitive
+    assert svc.content_type_for_image_format("WEBP") is None  # Google rejects
+    assert svc.content_type_for_image_format("GIF") is None
+    assert svc.content_type_for_image_format(None) is None
+
+
+# ── bulk create-from-URL (pure helpers) ──────────────────────────────────────
+def test_clamp_bulk_count():
+    assert svc.clamp_bulk_count(3) == 3
+    assert svc.clamp_bulk_count(0) == 0
+    assert svc.clamp_bulk_count(-5) == 0
+    assert svc.clamp_bulk_count(999) == svc.settings.gbp_post_max_bulk  # capped at 99
+    assert svc.clamp_bulk_count("7") == 7
+    assert svc.clamp_bulk_count(None) == 0
+    assert svc.clamp_bulk_count("abc") == 0
+
+
+def test_variation_instruction_single_is_none():
+    assert svc.variation_instruction(1, 1) is None
+    assert svc.variation_instruction(1, 0) is None
+
+
+def test_variation_instruction_distinct_angles_cycle():
+    a = svc.variation_instruction(1, 3)
+    b = svc.variation_instruction(2, 3)
+    assert a and b and a != b
+    assert "post 1 of 3" in a and "post 2 of 3" in b
+    # angles cycle: index 1 and index len+1 share an angle phrase
+    n = len(svc._VARIATION_ANGLES)
+    assert svc._VARIATION_ANGLES[0] in svc.variation_instruction(1, 20)
+    assert svc._VARIATION_ANGLES[0] in svc.variation_instruction(n + 1, 20)
 
 
 # ── schedule cadence math ────────────────────────────────────────────────────

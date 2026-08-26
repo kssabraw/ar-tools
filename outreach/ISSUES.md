@@ -811,6 +811,19 @@ comparing the count of `review_count is null` before and after. Listings with ge
 reviews will mostly *not* appear in a pack, so a low resolution rate is itself evidence for
 reading 2 above rather than a failure of the backfill.
 
+**CONFIRMED STILL UNBUILT — 2026-08-25, after four completed live scans** (LA, Whittier,
+Inglewood, Van Nuys — all 81/81, rolled up). The scan writer does NOT yet do any of the above:
+`maps_scan.GridRow`/`parse_grid_result` keep only `place_id` + `rank`, `grid_result` has no review
+column, and the `votes_count` the response carries is dropped. Direct evidence:
+`review_inferred_zero_audit` = 0 rows, `contradicted` = 0, `review_count_inferred_zero` still set
+on **105** prospects — unchanged across four scans covering real plumbers. So HANDOFF §9's
+promise that "the geo-grid scan will audit the flag" cannot fire until this obligation is
+implemented; §9 now carries a correction marker pointing here. This is the canonical home for the
+gap (found independently while verifying the scans and reconciled to I-045 on merge — do NOT open
+a duplicate). Cheapest close if the review signal is never actually needed by scoring: withdraw
+§9's expectation rather than build the capture — decide when Phase 4 scoring first reads review
+counts as a feature.
+
 ### I-046 · Phase 5 precondition — unresolved filter evaluations gate SPEND, not the filter
 **Recorded now so it is not rediscovered at the moment money is committed.**
 
@@ -2003,44 +2016,431 @@ must show what it spent.
 **What this does NOT remove:** the one-time Railway setup (the cron running `tick`) and the I-088
 auto-deploy question. A webpage cannot wake a server on a schedule; the engine still has to exist.
 
-### I-089 · The geo-grid scan drops `rating.votes_count`, so it cannot audit the inferred-zero flag
-Found 2026-08-25 while verifying the first live scans (four completed: LA, Whittier, Inglewood,
-Van Nuys — all 81/81, clean). HANDOFF §9 states the inferred-zero decision on the **105
-prospects** (`review_count_inferred_zero=true`, `review_count` NULL) would be **audited by the
-geo-grid scan**: *"The geo-grid scan will eventually return `rating.votes_count` for these same
-listings. That is the first source that can contradict the flag."* The audit mechanism is built
-and waiting — `review_inferred_zero_audit` + the `prospect_audit_inferred_zero` BEFORE UPDATE
-trigger fire when a real count lands on a flagged prospect (I-067).
+---
 
-**It cannot fire, because the scan never writes a review count.** `maps_scan.GridRow` keeps only
-`point_seq`, `place_id`, `rank` (`parse_grid_result`), and `grid_result` has only
-`(snapshot_id, scan_month, point_seq, place_id, rank)` — no review column anywhere. The scan
-reads map RANK, not review counts. So after four completed scans covering real plumbers:
-`review_inferred_zero_audit` = **0 rows**, `contradicted` = **0**, `still_flagged` = **105**. The
-105 flags stand un-audited, and will stay that way no matter how many geo-grids run.
+### I-089 (open, low) — the heatmap colour scale has no band for a rank past 20
+Reporting spec §4.2 defines four rank bands — `1–3` green, `4–10` yellow, `11–20` orange, `0` red
+(not found) — and `255` grey (dead). It says nothing about a byte in **21–254**. That byte is a
+genuine encoding: `coverage_rollup` stores each point's `rank_absolute` as the byte, and while
+`scan_depth = 20` today (so the provider returns at most 20 results and ranks never exceed 20), the
+depth is config-tunable and a deeper scan would produce ranks past 20.
 
-Note the DataForSEO Maps response DOES carry `rating.votes_count` — `maps_scan.py`'s own module
-docstring names it as an available field (lines 11–12) — the parser simply does not read it, and
-there is nowhere to store it if it did.
+**Interpretation chosen (cheapest to reverse, per CLAUDE.md session protocol #6):** the renderer
+(`api/services/heatmap.band_for_byte`) folds 11–254 into the single `far_down` band. The load-
+bearing property is that a found ranking, however deep, is **never** coloured red — conflating
+"ranked #40" with "not ranking at all" is exactly the overstatement §4.2 warns a prospect can
+catch. The legend reads "Found, far down (11+)" rather than "11–20" so it stays honest if the depth
+is ever raised.
 
-**Not a scan bug** — the scan does exactly its job (measure map coverage) and `grid_result` is
-deliberately thin for storage reasons (storage spec §5: no per-row columns beyond the join key +
-rank; 58M rows/year). The gap is between §9's *expectation* and what the scanner *keeps*.
+**If 11–20 vs 21+ ever needs to be visually split**, it is a new band plus a `GENERATOR_VERSION`
+bump — never a silent recolour of history, since a cached March artifact must keep rendering the
+way it was cited. Unreachable at the current depth, so no action needed now; recorded so the
+decision is visible if `scan_depth` changes.
 
-**Three ways to close it, cheapest first (all deferred — decide before relying on the audit):**
-1. **Withdraw the §9 expectation.** Accept that the geo-grid is not the inferred-zero instrument
-   and that the 105 flags are a standing inference, audited (if ever) by a different source — e.g.
-   a targeted `my_business_info` re-pull of just the 105 (the same call `verify-reviews` already
-   uses, I-066). Cheapest; changes a doc, not the scan.
-2. **Capture votes_count at collect time onto `scan_task`** (NOT `grid_result` — one number per
-   PROSPECT-bearing point, not per row), then a small reconciliation job UPDATEs
-   `prospect.review_count` for matched flagged prospects, which trips the existing audit trigger.
-   This is the shape I-074 already anticipated for the "nearest-result distance" capture — same
-   place, same reasoning. Medium.
-3. **A dedicated per-prospect review-count sweep** decoupled from the geo-grid. Most work, but the
-   cleanest separation (map coverage and review counts are different measurements).
+---
 
-Recommendation: **option 1 unless/until the review-count signal is actually needed by scoring** —
-the flag exists to keep the filter honest (`review_count_min`), and it is already doing that job;
-nothing downstream currently needs the 105 audited. Whoever builds Phase 4 scoring decides, since
-that is the first consumer that reads review counts as a feature.
+### I-090 (open, low) — `report_artifact.score_run_id` has no foreign key yet
+Reporting spec §2 defines `score_run_id uuid references score_run(id)`. `score_run` is the Phase 4
+model's table (START-HERE §3a) and does not exist, so migration `20260807130000_report_artifact.sql`
+creates `score_run_id` as a nullable, **unconstrained** uuid. A heatmap needs no score run, so
+nothing is lost today.
+
+**Adopt when Phase 4 lands `score_run`:** add the FK in the same migration that creates the table —
+`alter table report_artifact add constraint report_artifact_score_run_fk foreign key
+(score_run_id) references score_run(id)`. Check for orphans first (there will be none until a
+renderer starts writing the column). Same shape as the `lead_activity.touch_id` FK deferral in
+PHASE3-outcome-constraint.md §2 — a column waiting for the table it points at.
+
+---
+
+### I-091 (open, low) — the delta guard's provider-boundary and drift-suppression halves are seams awaiting their data
+Reporting spec §4.3 requires a delta heatmap to refuse to render across three conditions: a
+**provider boundary**, a **span** wider than `max_delta_span_days`, and where **drift suppression**
+fired (PRD §9a.2). `heatmap.assert_delta_renderable` implements all three, but only the span guard
+is sourced from live data today:
+
+- **Span** — fully enforced. Both snapshots carry `scanned_at`; `max_delta_span_days` (default 45)
+  is now in config. This guard is real now.
+- **Provider boundary** — the mechanism exists (`provider_before != provider_after`), but
+  `scan_snapshot` carries no provider column and DataForSEO is the only provider, so it is
+  vacuously satisfied. `build_delta_inputs` defaults both providers to `"dataforseo"`. When a
+  second provider is ever added, store it per snapshot and pass it through — the guard then bites
+  with no renderer change.
+- **Drift suppression** — `build_delta_inputs` takes an explicit `drift_suppressed: bool`,
+  defaulting False, because `prospect_delta` (the table that would source it, PRD §9a.2) does not
+  exist yet — the `coverage_rollup` migration notes this at its own tail. Building the drift
+  subsystem now would be pulling Phase-later work forward (session protocol §3); the renderer is
+  built as its correct *consumer* instead, with the seam documented here.
+
+**Adopt when:** a second SERP provider lands (wire the provider column) and/or `prospect_delta` +
+drift suppression are built (pass the real flag). Neither is a renderer change — both are one-line
+call-site edits in `build_delta_inputs`. Until then the delta is honest: it refuses on span, and
+the other two conditions cannot occur.
+
+---
+
+### I-092 (open, by design) — a scan of a non-ingested city yields empty coverage; discovery must precede the scan
+`prospect_coverage` is produced by `finalize_snapshot_rollup()` joining `grid_result` to
+`prospect` on `place_id` (migration `20260805120000`). `prospect` rows are written ONLY by the
+paid Outscraper `ingest` pass (`cmd_ingest` → `pipeline.run_ingest`, driven by a market's
+`categories` + submarket tiles). So scanning a submarket whose city was never ingested captures a
+grid but rolls up ZERO prospect coverage — a successful-but-empty result, and exactly the
+"manufactured total invisibility" the I-076 invariant warns against if misread.
+
+**Consequence for the any-city scan form (DECISIONS 2026-08-08):** "type a city and scan it" is not
+a scan-only action — it is discover (ingest, paid) → filter → scan. The business type the operator
+types IS the ingest category, which is why the form is "City + Business type". The geo read layer
+(built) resolves the city + its sub-areas; the discovery-execution layer (next slice) must run
+ingest+filter for the city BEFORE the scan, or reuse an already-ingested city's prospects. Not a
+bug — the pipeline order — recorded so the execution slice is built with it front of mind and no
+one wires a "scan a fresh city" button that silently returns nothing.
+
+---
+
+### I-093 (open, by design) — the call hook's geography is RADIAL, not compass-directional
+
+The call-hook justification (DECISIONS 2026-08-08) describes the geographic pattern of a prospect's
+invisibility from the coverage scalars the rollup already stores — coverage %, absent-point count,
+`centroid_dist_at_loss` ("holds close to home, falls off beyond ~N miles"), rank depth. That is a
+RADIAL read: near vs far, which "parts" of the service area in the concentric sense.
+
+The richer read the task named — "which parts they don't rank in, derived from `rank_vector` + the
+snapshot's stored geometry" in the COMPASS sense (weakest to the north/east) — is **deferred**,
+because it needs each point's (dx, dy) offset, which comes only from the pinned geometry generator
+(`api/services/geometry.generate_points`). That generator lives in the outreach api, which
+platform-api (where the hook is assembled) cannot import across the deploy boundary. Re-deriving the
+lattice in platform-api is exactly the "second definition of geometry" the version registry exists
+to prevent (CLAUDE.md) — a byte decode of the vector is geometry-free and safe; a point→coordinate
+mapping is not.
+
+**Cheapest-to-reverse reading chosen:** ship the radial pattern now (no geometry, honors the
+boundary), defer the compass decomposition. Two clean ways to add it later, neither a rewrite of the
+hook: (a) vendor `geometry.py` byte-identical into platform-api with a sync-guard test — the
+established suite pattern for cross-boundary duplication (`agent_docs/`, the voice_card vendoring) —
+so there is no drifting second *definition*, only a test-enforced copy; or (b) have the rollup store
+a small per-prospect directional summary (octant weakest-quadrant) alongside coverage, which the hook
+then reads as a scalar. (b) is cleaner but touches the rollup, so it waits for a rollup-touching
+build. Neither is worth pulling forward before the hook has been used on a real call.
+
+### I-094 (open, by design) — the hook's competitor detail needs a HOT `grid_result` partition
+
+"Who outranks you and where" reads the map pack from `grid_result` (bounded to `rank <= pack_size`).
+`grid_result` is partitioned by month and cold-dropped after the hot window (~90 days,
+`drop_cold_partitions`), while `prospect_coverage` persists indefinitely — which is exactly why the
+heatmap renderer reads ONLY coverage, so it renders forever (reporting §4).
+
+The hook deliberately diverges: it reads `grid_result` because competitor IDENTITY (place_id → name)
+lives nowhere else, and the hook is a call-prep artifact generated soon after a scan, when the
+partition is hot. When the partition has been dropped, `_fetch_pack_rows` degrades: the competitor
+talking point is omitted and a caveat says "the raw ranking data has aged out", while coverage,
+geography, reviews and gaps — all from the persistent coverage row + the prospect — still stand. So
+a hook built from a cold scan is thinner, never wrong, and never fabricated.
+
+**Adopt a durable form when:** competitor identity needs to survive the partition drop. The clean
+option is for the rollup (or a later phase) to persist the top-N pack holders' `place_id`s per
+prospect alongside coverage — a handful of ids, negligible storage — so the hook reads them from a
+permanent row. Not built now: it touches the rollup, and the hot-window read covers the actual
+use (dialing a fresh shortlist).
+
+---
+
+### I-095 (open, staged) — the report's organic + LLM sections, and the client-facing PDF, are staged builds
+
+The per-prospect report (DECISIONS 2026-08-08) ships its spine now — identity + the Maps
+rankings-vs-competitors table + the call hook, in an internal brief and a client-facing draft. Three
+pieces are deliberately staged, because each is a real build (two of them paid, one blocked), and the
+report renders them as explicit `not_scanned` blocks until they land — never an empty table:
+
+- **Organic-SERP scan (increment 2) — BUILT 2026-08-08.** A new producer in the outreach Railway job:
+  a DataForSEO organic SERP for the prospect's keyword+location, the prospect's rank + top
+  competitors, written to `serp_result` against the maps `scan_snapshot` (I-084 resolved — single
+  location per keyword×submarket). Authorized through the `scan_request`/`tick` order mechanism, not a
+  platform-api call. Then `outreach_report.build_report`'s `organic` section fills from it.
+
+- **LLM-visibility scan (increment 3) — BUILT 2026-08-08.** Blocked on `ai_region` names (§7.4 — a human
+  "which place names does an LLM recognise" task; a candidate LA list is drafted in I-073) and an
+  engine choice (the suite AI-visibility uses six; a prospect scan likely wants a cheap subset —
+  DataForSEO's Google AI Overview/AI Mode needs no per-engine key, plus optionally ChatGPT). Same
+  order-gated spend path. Fills the report's `llm` section.
+
+- **Client-facing PDF + approval gate (increment 4) — BUILT 2026-08-08.** Signed-URL delivery built on Supabase Storage (DECISIONS 2026-08-08 — R2's substance, no new creds). **I-095 fully resolved.** Today the client face is a print-preview DRAFT
+  marked `approved:false`. Turning it into a sendable asset needs the Phase 3 audit path: WeasyPrint
+  render + signed R2 URL + the explicit-approval gate (reporting §4a; the no-unapproved-asset
+  invariant). Build order: after the data layers, so the PDF has all three signals to show.
+
+None is a restructure of the report — each fills a section shape that exists now. Build order
+2 → 3 → 4; increment 3 needs the two human inputs above before it starts.
+
+---
+
+### I-096 (open, cheapest-to-reverse reading taken) — the LSA / Google-Guaranteed item type is unconfirmed against this account's organic response
+
+Paid-placement PRESENCE (HANDOFF §12 item 3a, Slice A) is parsed from the organic SERP response
+`scan-organic` already captures — no new paid call. Two item types feed it:
+
+- **Google Ads** — DataForSEO's `type == "paid"`. High confidence (it is the standard label), and
+  the parse is tolerant (domain recovered from the ad URL when `domain` is absent).
+- **Local Services Ads ("Google Guaranteed")** — parsed from `type ∈ {local_services,
+  google_local_services, local_service_ads}` in the SAME response.
+
+**The ambiguity:** whether LSA actually rides the organic `/serp/google/organic/live/advanced`
+response for THIS account, and under which exact item type, is UNMEASURED — the organic scan has
+never run (I-095), so there is no stored sample to read. The spec is explicit that this is a
+measure-don't-infer point ("confirm its item type against a live response before parsing").
+
+**The reading taken (cheapest to reverse, per the session protocol):** parse LSA from the
+already-captured organic response with a tolerant type set, and DO NOT add a speculative new paid
+LSA call in Slice A. Two guards make the reading recoverable:
+
+- `parse_organic_serp` records every distinct top-level item `type` it saw (`seen_item_types`), and
+  `capture_organic` logs it plus the paid/LSA counts on the first run, so the exact envelope is
+  confirmable from the log (and from `serp_result.payload_summary.paid.seen_item_types`) rather than
+  a second paid run.
+- Presence-absent is a finding, not a gap — `ads_present:false`/`lsa_present:false` never
+  manufacture a claim, so a wrong LSA type reads as "no LSA detected" (understates, the safe
+  direction), never a fabricated advertiser.
+
+**Resolve after the first `scan-organic` run:** read `seen_item_types` from the log / stored summary.
+If LSA does NOT appear in the organic response for local-service queries, the follow-up is a
+dedicated `/v3/serp/google/local_services/live/advanced` capture — its own PAID, token/order-gated
+command (`scan-lsa`), a `cost_ledger` row, and the path added to the free probe set first. Parsing an
+existing field costs nothing and adds no paid call; a speculative new paid call on a wrong envelope
+is what this reading avoids.
+
+---
+
+### I-099 (RESOLVED, same session) — three defects found by adversarial review of the Slice A/B code
+
+Reviewed the paid-placement code adversarially before it ran and found three real defects, each
+reproduced with a concrete input before fixing. Recorded because two of them are the SAME class of
+mistake this module keeps meeting, in a new place.
+
+1. **`scan-tech` scanned 20 of ~1,000 sites and exited 0.** `--limit` had a SHARED argparse default
+   of 20, inherited by a command that wants "all". A full-market run reported `considered: 20` and
+   looked clean — the "reports clean because it did almost nothing" failure, again. Fixed by giving
+   the flag NO shared default and naming a per-command default (`scan_tech_limit` → all,
+   `pixel_probe_limit` → 8 because it spends, `legacy_limit` → the previous 20). The parser was
+   extracted as `build_parser()` so tests exercise the real wiring; the gap was that pure logic was
+   covered and the argparse-to-command seam was not.
+2. **A bidirectional LSA name match fabricated a claim.** `name in prospect_norm` let a SHORTER
+   competitor name inside a LONGER prospect name read as the prospect — "AAA Plumbing" (a distinct
+   business) inside "AAA Plumbing Services". It asserted an LSA the prospect does not run AND
+   deleted a real competitor. Fixed to one-directional (prospect-name-in-advertiser), which is the
+   rule `detect_ai_mention` already used and which fails toward understating.
+3. **An `AW-` tag on the SITE produced the spoken line "you're paying for Google Ads on ⟨keyword⟩".**
+   The tag proves conversion tracking is installed, not that they bid on that term — and tags
+   routinely outlive the campaigns that placed them, so the claim is falsifiable on the call. Fixed
+   by splitting `prospect_paying_this_keyword` (measured on this SERP) from the broad
+   `prospect_is_paying`, and carrying `paying_evidence` (`serp_ad`/`lsa`/`conversion_tag`) so the
+   hook, the report and the client PDF each say only what was observed. The tag-only wording now
+   ASKS about spend instead of asserting it.
+
+Also fixed in the same pass: `likely_represented` counted GTM (near-universal, and the only derived
+flag that scores NEGATIVE) — now 2+ vendor tags; the pixel spike discarded already-billed results on
+any mid-loop failure (`httpx.ReadTimeout` is not in `FAILOVER_ERRORS`, so it propagated) — now
+per-query isolation with the errors reported beside the results; no credential pre-flight on the
+spike (`missing_outscraper_vars` added); a page-size cap + bounded problem list on the site fetch;
+the report's duplicate cross-region reads (a per-request memo); and the `deficit >= 50` literal moved
+to config. Every fix carries a regression test.
+
+---
+
+### I-097 (open, cheap follow-ups) — Slice B1 tech-scan: survivor filtering + GTM-follow default
+
+Slice B1 (`scan-tech`, `services/scan_tech.py`) fetches every prospect-with-a-website in a market and
+stores `prospect_tech_signal`. Two deliberate simplifications, each a cheap follow-up, neither wrong:
+
+- **Scans all prospects with a website, not only filter survivors.** PRD §B3 says "survivors only".
+  Narrowing to filter survivors needs the filter verdict joined in; a wasted FREE fetch on an excluded
+  prospect is slightly wasteful, never wrong (the row is per-prospect and read only for a prospect the
+  report is about). Follow-up: join `filter_result`/exclusion into the query.
+- **GTM container follow is OFF by default** (`tech_follow_gtm=False`). A GTM container can inject a
+  pixel the inline scan misses (I-003 / §16a.1). The seam is built (`looks_gtm_only` + `merge_signals`,
+  unit-tested), gated behind the flag until the §16a.1 spike measures the miss rate. Flip the flag if
+  the spike shows inline scanning misses GTM-injected pixels.
+
+Also: `scan-tech` is a manual per-market command today — it is NOT yet on the `tick` cron or a
+`scan_request`/order path (Slice A's producers aren't either). Wiring it into the cadence is a
+follow-up once the first run proves the fetch behaves against real sites.
+
+---
+
+### I-098 (open, gates Slice B2) — DataForSEO Labs ad-spend yield is unproven for small local advertisers
+
+Slice B2 (ad-spend MAGNITUDE, the >$2k / $500–2k bands) is designed against DataForSEO Labs domain
+paid metrics (`domain_rank_overview` — `estimated_paid_traffic_cost` / `count`), added to the free
+`probe-dataforseo` set so endpoint EXISTENCE is confirmable free. **That probe does NOT establish
+entitlement**: an account without Labs can answer HTTP 200 with a task-level access error, and the
+probe's `exists` flag is HTTP-200-only — read `task_message` rather than the `exists` list. **B2 is deferred
+behind a yield spike** (owner ruling 2026-08-08: build B1 now, gate B2) for one reason: Labs paid data
+is keyword-SERP-derived, so a two-truck local operator bidding on hyper-local terms — and running LSA,
+which Labs does not index as paid search at all — very often returns `paid.count = 0`. That is exactly
+the population this pipeline targets, so the band is likely SPARSE for our prospects.
+
+**Resolve before building `scan-adspend`:** a `probe-labs-paid` sample over ~20 small local prospects,
+measuring how many return a non-zero paid estimate. If near-zero, defer B2 and rely on the PRESENCE
+signals (Slice A + B1); a documented fallback (the scanned keyword's CPC as a spend FLOOR — "some spend
+vs none", insufficient for the >$2k band) is the cheaper alternative. Design: `docs/paid-placement-slice-b-design-v0_1.md`.
+
+---
+
+## Phase 3 — outcome + touch + emit (2026-08-09)
+
+### I-100 · `PHASE3-outcome-constraint.md` §3 points at a `_phase3_probe` that never existed
+**Doc-vs-code drift, resolved cheapest-to-reverse.** §3 of `PHASE3-outcome-constraint.md` says
+"`outreach/tests/lead_crm_rls.sql` cases 1–3 currently run against a throwaway `_phase3_probe`
+table standing in for `outcome`. Delete the probe and point them at the real table." No such probe
+exists anywhere in the repo — `grep -rn _phase3_probe` matches only that one doc line — and
+`lead_crm_rls.sql` cases 1–3 test the lead SOURCE vocabulary, not `outcome`. The probe was
+presumably a scratch table used live during the 2026-07-31 verification (the doc records that run)
+and never committed.
+**What was done instead of "deleting the probe":** `lead_crm_rls.sql` is left untouched (its cases
+1–3 are about `source`, still correct), and the real `outcome`/`touch` constraints get their OWN
+new script `tests/outcome_touch_constraints.sql` (12 checks, self-cleaning, run live 2026-08-09 —
+all `(correct)`), following the `lead_crm_rls.sql` pattern the task pointed at. Adding a script is
+more reversible than editing a working one to chase a table that isn't there.
+
+### I-101 · Emit-time cadence + evidence-age gates (PRD §183/§198) are NOT enforced in v1 emit
+**Deferred to the Phase-4 selection layer, deliberately.** PRD §C-adjacent rules say a prospect
+MUST NOT be emitted unless its submarket has ≥ `min_history_cycles` (2) snapshots (§198) and its
+backing evidence is younger than `max_evidence_age_days` (§183). v1 emit does NOT check these; it
+requires only that the prospect has a rolled-up snapshot (`prospect_justification.measured`), which
+under `bootstrap_share = 1.0` (DECISIONS — cycle one runs on a single snapshot) is the correct
+bootstrap bar. The min-history and evidence-age gates are selection-policy concerns that belong with
+the Phase-4 scorer/selector (where `selection_reason` becomes `thompson`), not with a manual v1
+emit. Recorded so it is not mistaken for an omission. **Action:** enforce both gates in the Phase-4
+selection job; until then emit is manual and bootstrap-gated.
+
+### I-102 · `selection_reason` carries a third value, `manual`, in the pre-Phase-4 era
+scoring-spec §7 names the enum `{thompson, random_control}`, but both presuppose a model to select
+from or to hold out against — neither exists before Phase 4. Labelling a hand-picked pre-model
+contact `random_control` would poison the one unbiased baseline that bucket exists to measure. So
+the application allowlist is `{thompson, random_control, manual}`, default `manual`. The `outcome`
+DDL leaves `selection_reason` unconstrained text (as adopted from PHASE3-outcome-constraint.md), so
+this needs no migration and the vocabulary can tighten later. **Action at Phase 4:** the selector
+writes `thompson` / `random_control`; `manual` remains only for hand-picked contacts, and refits
+must treat the three buckets distinctly (they already must exclude `thompson`-only — §7).
+
+---
+
+## Phase 4 Stage 1 findings (2026-08-09)
+
+### I-103 · Geogrid "steep decay from pin" qualifier is not evaluated — coverage<20 always maps to the `_steep` bin
+scoring-spec §Geogrid-pain names the strongest pain bin "Coverage <20% + steep decay from pin" (+57),
+but there is NO non-steep <20 bin to fall to. Requiring a reliable per-pin decay computation (from
+`centroid_dist_at_loss`) to gate the pipeline's PRIMARY discriminator would zero out the strongest
+signal in the market whenever the decay read was ambiguous. So `score_features._geogrid_bin` maps any
+coverage below the low threshold to `geogrid_lt20_steep` unconditionally. **Cheapest-to-reverse
+reading** (CLAUDE.md §protocol): the decay refinement lands with a trustworthy per-pin measurement;
+until then the +57 bin fires on coverage alone. `centroid_dist_at_loss` is carried on FeatureInputs so
+the refinement needs no new capture.
+
+### I-104 · GBP strong/weak bins are dormant — Stage 1 captures rating only, not photos/categories
+scoring-spec §GBP-gate's `gbp_strong` (+34) requires "rating >= 4.0, photos, categories set" and
+`gbp_weak` (-26) is a rebuild-level deficiency — neither reducible to rating alone. Stage 1 does not
+capture photos/categories, so GBP scores at the `adequate` reference (0) for every prospect with a
+rating, and strong/weak never fire. This is honest (a feature with no variance cannot discriminate —
+the §7a logic), not a bug. A future GBP-detail enrichment (photos/categories from the Outscraper/DfS
+pull) lights them up with no coefficient change. `score_gbp_strong_rating` config is kept for then.
+
+### I-105 · The scanned market has no definition file, so the `score`/`recalibrate` CLI needs `--market-name`
+The measured LA market is "Los Angeles, CA, USA" (`9238e737…`, created by the any-city ONBOARD path),
+NOT the seeded "Los Angeles, CA — Plumbing" (`markets/los-angeles-plumbing.json`, which has zero
+coverage). The `score`/`recalibrate` commands resolve the market by the definition file's `name`, so
+they would target the empty seeded market. **Fixed:** a `--market-name` override on both commands
+(the positional definition file is still required by argparse, but its name is overridden). The
+production run is `score <any-file> --market-name "Los Angeles, CA, USA"`. A cleaner fix (resolve
+onboard markets without a file) is deferred — onboard markets are created dynamically and a broader
+market-resolution rework is out of Stage-1 scope.
+
+### I-106 · `score_run` stores ONE calibration alpha/gamma, but calibration is per-channel
+scoring-spec §1 forbids pooling phone and email, and §6 Stage 2 fits calibration per channel — but the
+PRD `score_run` DDL carries a single `calibration_alpha`/`calibration_gamma` pair. So `recalibrate`
+writes a calibrated run only when EXACTLY ONE channel clears the outcome floor (the phone-first reality:
+phone is observable first, §1). A run where BOTH channels fit has nowhere to store both and is reported
+as a problem, writing no calibrated run. **Action when the email track goes live:** a migration adding
+per-channel calibration storage (e.g. a `score_run_calibration(score_run_id, channel, alpha, gamma)`
+child table), then `run_score` reads the pair per channel. Not needed until email + ~30 email outcomes
+exist, which is many months out.
+
+### I-107 · `phone_type` is 'unknown' for every ingested prospect — phone reachability is dormant
+Every LA prospect carries `phone_type='unknown'` (the base pull does not classify the line), so the
+phone-track reachability bins (direct-owner +50 / listed 0 / gatekept -37) never fire and reachability
+is correctly EXCLUDED from the phone reply score (START-HERE Phase 4: "pass 1 excludes reachability
+rather than defaulting it"). This is honest but means the phone reply score currently has no
+reachability contribution for anyone. When the ingest/enrichment classifies `phone_type` (or an owner-
+name signal appears), the bins fire with no code change. Not a defect — a dormant signal awaiting data.
+
+### I-108 · Reporting/platform-api still reads the placeholder, not `v_prospect_ranked` — reader NOT repointed
+`writer/platform-api/services/outreach.py::placeholder_scores` reads `v_prospect_placeholder_score`,
+and the frontend prospect list ranks by it. Phase 4 built the fitted `v_prospect_ranked` and
+subordinated the placeholder (view comment), but did NOT repoint the platform-api reader/frontend to
+prefer real scores when a score_run exists — that is a separate change with frontend regression surface,
+deliberately deprioritized this session (owner away, high bar on user-facing change). **Action:** repoint
+`placeholder_scores` (or add a ranked-scores endpoint) to read `v_prospect_ranked` where a score_run
+exists, falling back to the placeholder otherwise; then the UI reflects the fitted ranking. Until then
+the placeholder still drives the list even after a `score` run populates the fitted tables.
+
+---
+
+## Lead enrichment (2026-08-10)
+
+### I-109 UPDATE (2026-08-10) · The enricher SET was wrong — corrected against a real response; domains_service field shape still to confirm
+The first live enrichment ran (order drained in 5s, 1 contact) and produced the evidence the probe was
+meant to: the response carried `name_for_emails` + the base listing `phone` + `website`, but **ZERO
+email fields** (`emails` key absent). Root cause: the default set requested the POST-PROCESSORS
+(`emails_validator_service`, `phones_enricher_service`) WITHOUT the scraper that actually finds emails.
+That scraper is **`domains_service`** (the repo's own contact-pull convention — `pixel_probe` /
+`run_market --enrichment` default), which reads the business's website and returns emails + contact names
++ phones for the validators to enrich. Fixed: the default enricher set is now
+`domains_service,emails_validator_service,phones_enricher_service` (both configs).
+**Still open:** the exact FIELD SHAPE `domains_service` returns is not yet seen against this account, so
+the parser stays defensive and the stored `raw` is the recovery path — inspect the next real enrichment
+and adjust `enrichment.py` aliases if the emails/contacts land under unexpected keys. Not fully closed
+until a `domains_service` run is confirmed to yield real emails/people.
+
+### I-109 · Outscraper enrichment param value(s) + response field names UNCONFIRMED — run `probe-enrich` first
+**Severity: blocks trusting production enrichment OUTPUT; does not block the code.**
+No enriched pull has ever run against this account, so — exactly like I-018 for the base pull and I-003
+for the pixel field — the exact `enrichment` param VALUE(S) (the guess is
+`emails_validator_service,phones_enricher_service`, config `enrich_enrichments` /
+`outreach_enrich_enrichments`) and the RESPONSE field names are unverified. `services/enrichment.py`
+reads the documented "Emails & Contacts" column shape (both nested and flat forms) DEFENSIVELY and asserts
+nothing; every record's untouched fragment is stored in `prospect_contact.raw` / `prospect_enrichment.raw`,
+so a corrected alias re-parses stored data for free (no re-pull).
+**Action (owner-authorized, one billed call):** deploy + run `probe-enrich` with
+`OUTREACH_CONFIRM_SPEND=probe-enrich` on one place (`--place-id` or the market's first prospect). It prints
+the parsed summary and LOGS the full record (`enrich sample record`). Read the log, confirm the enricher
+set + field paths, adjust `enrichment.py`'s aliases if they differ, and (if needed) re-parse via a small
+backfill over stored `raw`. Until then, treat parsed contact fields as provisional.
+
+### I-110 · A stuck-`running` enrichment order is not auto-resumed
+Like `scan_request`/`onboard_request`, a container death mid-drain leaves an `enrichment_request` at
+`running` with no reaper (the outreach service is a cron, not an async_jobs worker). Correctness is
+protected by idempotency — a NEW order over the same prospects skips the ones already enriched (no re-bill)
+— but the stuck row itself is not retried by the machine, matching the module's "terminal failure, human
+re-places" philosophy. A re-order is the cheap resume. If enrichment volume grows enough that this bites,
+add an owner-id + heartbeat claim (the same upgrade the scan drains would need for >1 replica).
+
+### I-111 · Enrichment billing rate is a placeholder, in TWO places that must stay in sync
+`enrich_cost_per_place_cents` (outreach job — drives the `cost_ledger` write) and
+`outreach_enrich_cost_per_place_cents` (platform-api — drives the free preflight estimate + the per-user
+daily budget guard) are both `5`, a GUESS. Outscraper returns no per-request cost, so like every rate here
+the ledger is `units × rate` reconciled manually against the dashboard (I-022). **Action:** set BOTH from
+the real plan before a production run, and keep them equal — the budget guard is exactly as honest as the
+platform-api value, and the ledger as honest as the outreach one.
+
+### I-112 · Enrichment daily-budget guard has a benign check-then-insert race
+`create_enrichment_request` reads a user's spend-today and inserts without a lock, so two concurrent
+orders by the same admin (a double-click, or a per-row Enrich fired alongside a bulk order) can both
+pass the guard and land slightly over `outreach_enrich_daily_budget_usd`. Bounded by one extra order's
+estimate; identical shape to LeadOff's `check_budget`. **Left as-is** — soft guard, single admin,
+cheap enrichment; a DB-side atomic check isn't worth the complexity at this volume. Revisit if
+enrichment ever runs unattended or multi-user.
+
+### I-113 · An order's progress counters undercount when a selected prospect is deleted before the drain
+If a `prospect` in an `enrichment_request`'s selection is deleted between placement and drain, it is
+excluded from `to_enrich`, so the order's `enriched_count + skipped_count + failed_count` (the
+`progress.done`) is less than `requested_count`. **Cosmetic only** — the order still resolves to
+`done` and the UI batch completes (useResumableBatch keys on the order STATUS, not the counts), so
+nothing hangs. Left as-is; if a precise reconciliation is ever wanted, add a `vanished_count`.

@@ -92,3 +92,4 @@ def test_marker_roundtrip_prevents_rerun():
     # Next day it runs again.
     tomorrow = datetime(2026, 7, 13, 9, 0, tzinfo=timezone.utc)
     assert S.should_run(tomorrow, restored, hour_utc=6) is True
+

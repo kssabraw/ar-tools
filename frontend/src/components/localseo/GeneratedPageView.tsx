@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, ArrowRight, Check, Copy, Download, ExternalLink, TrendingUp, Wand2,
+  ArrowLeft, ArrowRight, Check, Copy, Download, ExternalLink, TrendingUp, Wand2, Megaphone, RefreshCw,
 } from 'lucide-react'
+import { GbpWorkspace } from '../../pages/GbpPosts'
 import { localSeoApi } from './api'
 import { useResumableJob } from '../../lib/useResumableJob'
 import type { LocalSeoPageDetail, SocialPostsResult } from './types'
@@ -13,6 +14,7 @@ import { useSiloPlan } from './useSiloPlan'
 import { useBulkCreate } from './useBulkCreate'
 import { Spinner } from './Spinner'
 import { FeaturedImagePicker } from '../FeaturedImagePicker'
+import { ErrorDetails } from '../ErrorDetails'
 import {
   backLink, card, downloadFile, errorBox, formatHtml, htmlToText, outlineBtn,
   primaryBtn, relativeTime, scoreBg, scoreBorder, scoreColor, statusLabel, wordCount,
@@ -74,11 +76,11 @@ export function GeneratedPageView({
     setFeaturedImageUrl(url)
   }
 
-  // Set when the server refused the publish because the page uses wording the
-  // brand guide forbids. Surfacing an override rather than a dead end: the
-  // forbidden list is distilled from the guide by an LLM, so a wrong extraction
-  // must not lock the page permanently — but it takes a second, deliberate click.
-  const [voiceBlocked, setVoiceBlocked] = useState(false)
+  // Re-runs whichever publish destination was blocked, with force_voice — wired
+  // to the error accordion's "Publish anyway" override so a brand-guide block
+  // (an LLM-distilled never-use list can misfire) isn't a dead end. The raw
+  // error code is stored as-is; ErrorDetails turns it into guidance.
+  const forceRetry = useRef<(() => void) | null>(null)
 
   const handlePublish = async (forceVoice = false) => {
     setPublishing(true)
@@ -88,57 +90,42 @@ export function GeneratedPageView({
         page.id, forceVoice ? { force_voice: true } : {},
       )
       setPublishedUrl(res.doc_url ?? null)
-      setVoiceBlocked(false)
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Publish failed'
-      if (msg.includes('voice_violation')) {
-        setVoiceBlocked(true)
-        setPublishError(
-          'Not published — this page uses wording the client’s brand guide forbids. '
-          + 'See the Brand voice panel below for the exact words.',
-        )
-      } else {
-        setPublishError(
-          msg.includes('missing_google_drive_folder_id')
-            ? 'Set this client’s Google Drive folder first (Client → Edit), then publish.'
-            : msg.includes('publish_not_configured')
-              ? 'Publishing isn’t configured on the server (no Apps Script URL).'
-              : msg,
-        )
-      }
+      forceRetry.current = () => handlePublish(true)
+      setPublishError(msg)
     } finally {
       setPublishing(false)
     }
   }
 
-  const handleWpPublish = async () => {
+  const handleWpPublish = async (forceVoice = false) => {
     setWpPublishing(true)
     setPublishError('')
     try {
-      const res = await localSeoApi.publishPage(page.id, { destination: 'wordpress', status: wpStatus })
+      const res = await localSeoApi.publishPage(page.id, {
+        destination: 'wordpress', status: wpStatus, ...(forceVoice ? { force_voice: true } : {}),
+      })
       const link = res.edit_url || res.url || null
       setWpUrl(link)
       if (link) window.open(link, '_blank')
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Publish failed'
-      setPublishError(
-        msg.includes('wordpress_not_configured')
-          ? 'Add this client’s WordPress site + Application Password first (Client → Edit), then publish.'
-          : msg.includes('wordpress_auth_failed')
-            ? 'WordPress rejected the credentials — check the username and Application Password.'
-            : msg,
-      )
+      forceRetry.current = () => handleWpPublish(true)
+      setPublishError(msg)
     } finally {
       setWpPublishing(false)
     }
   }
 
-  // Social posts — lazily generated when the tab is first opened (each call
-  // costs an LLM round-trip; suite doesn't persist them). Runs as a background
-  // job, persisted per page, so navigating away and back reconnects to it.
-  const [social, setSocial] = useState<SocialPostsResult | null>(null)
+  const queryClient = useQueryClient()
+  // Social posts — generated ONCE and saved on the page (page.social_posts), so
+  // re-opening the tab re-reads them instead of paying for a fresh generation.
+  // Seeded from the saved set; an explicit Regenerate overwrites it.
+  const [social, setSocial] = useState<SocialPostsResult | null>(page.social_posts ?? null)
   const [socialError, setSocialError] = useState('')
   const [copiedPost, setCopiedPost] = useState<string | null>(null)
+  const [gbpSeed, setGbpSeed] = useState<{ text: string; nonce: number } | undefined>(undefined)
   const socialRequested = useRef(false)
   const socialJob = useResumableJob<SocialPostsResult, null>({
     storageKey: `localseo:social:${clientId}:${page.id}`,
@@ -148,7 +135,10 @@ export function GeneratedPageView({
         ? { status: st.status, result: (st.result as SocialPostsResult | null) ?? null, error: st.error }
         : { status: 'running' }
     },
-    onComplete: (data) => { if (data) setSocial(data); else setSocialError('No posts returned.') },
+    onComplete: (data) => {
+      if (data) { setSocial(data); queryClient.invalidateQueries({ queryKey: ['local-seo-pages', clientId] }) }
+      else setSocialError('No posts returned.')
+    },
     onError: (err) => setSocialError(err || 'Could not generate posts'),
   })
   const socialLoading = socialJob.running
@@ -160,7 +150,6 @@ export function GeneratedPageView({
   const relatedRequested = useRef(false)
   // Multi-select bulk creation of the missing related pages (same flow as the
   // Plan Silo tab). Refresh the saved-pages list as pages land.
-  const queryClient = useQueryClient()
   const bulk = useBulkCreate(clientId, () =>
     queryClient.invalidateQueries({ queryKey: ['local-seo-pages', clientId] }),
   )
@@ -169,7 +158,7 @@ export function GeneratedPageView({
     setSocialError('')
     await socialJob.start(async () => {
       const { job_id } = await localSeoApi.socialPosts(clientId, {
-        keyword, location, page_content: htmlToText(content_html),
+        keyword, location, page_content: htmlToText(content_html), page_id: page.id,
       })
       return job_id
     }, null)
@@ -372,17 +361,25 @@ export function GeneratedPageView({
           )}
           {!socialLoading && social && (
             <>
-              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <button style={outlineBtn} onClick={downloadSocial}><Download size={14} /> Download all</button>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>Suggested posts for this page — send one to the composer below to add an image, schedule, or publish it.</p>
+                <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                  <button style={outlineBtn} onClick={fetchSocial} title="Generate a fresh set of suggestions"><RefreshCw size={14} /> Regenerate</button>
+                  <button style={outlineBtn} onClick={downloadSocial}><Download size={14} /> Download all</button>
+                </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {social.gbp.map((post, i) => {
                   const id = `gbp-${i}`
                   return (
-                    <div key={id} style={{ ...card, padding: 16, display: 'flex', gap: 12 }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', width: 16, flexShrink: 0 }}>{i + 1}</span>
+                    <div key={id} style={{ ...card, padding: 16, display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', width: 16, flexShrink: 0, marginTop: 2 }}>{i + 1}</span>
                       <p style={{ fontSize: 14, color: '#0f172a', flex: 1, whiteSpace: 'pre-wrap', margin: 0 }}>{post}</p>
-                      <button onClick={() => copyPost(post, id)} title="Copy" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', flexShrink: 0 }}>
+                      <button onClick={() => setGbpSeed({ text: post, nonce: Date.now() })} title="Send to the composer below"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: '#eef2ff', border: '1px solid #c7d2fe', color: '#4f46e5', fontSize: 12, fontWeight: 600, cursor: 'pointer', borderRadius: 8, padding: '5px 10px', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                        <Megaphone size={13} /> Use in composer
+                      </button>
+                      <button onClick={() => copyPost(post, id)} title="Copy" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', flexShrink: 0, marginTop: 2 }}>
                         {copiedPost === id ? <Check size={16} color="#16a34a" /> : <Copy size={16} />}
                       </button>
                     </div>
@@ -391,6 +388,16 @@ export function GeneratedPageView({
               </div>
             </>
           )}
+
+          {/* Full GBP Posts toolkit — compose (seedable from a suggestion above),
+              add images, schedule, and publish to the client's Business Profile. */}
+          <div style={{ marginTop: 8, paddingTop: 16, borderTop: '1px solid #e2e8f0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <Megaphone size={18} color="#6366f1" />
+              <h3 style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', margin: 0 }}>Post to Google Business Profile</h3>
+            </div>
+            <GbpWorkspace clientId={clientId} seed={gbpSeed} />
+          </div>
         </div>
       )}
 
@@ -477,7 +484,7 @@ export function GeneratedPageView({
             </select>
             <button
               style={{ ...outlineBtn, border: 'none', borderLeft: '1px solid #cbd5e1', borderRadius: 0 }}
-              onClick={handleWpPublish}
+              onClick={() => handleWpPublish()}
               disabled={wpPublishing}
             >
               <ExternalLink size={14} /> {wpPublishing ? 'Publishing…' : wpUrl ? 'Re-publish to WordPress' : 'Publish to WordPress'}
@@ -491,20 +498,11 @@ export function GeneratedPageView({
           )}
         </div>
         {publishError && (
-          <div style={errorBox}>
-            {publishError}
-            {voiceBlocked && (
-              <div style={{ marginTop: 8 }}>
-                <button
-                  style={outlineBtn}
-                  disabled={publishing}
-                  onClick={() => handlePublish(true)}
-                >
-                  Publish anyway
-                </button>
-              </div>
-            )}
-          </div>
+          <ErrorDetails
+            message={publishError}
+            overriding={publishing || wpPublishing}
+            onOverride={() => forceRetry.current?.()}
+          />
         )}
         <button onClick={onNewPage} style={{ ...backLink, alignSelf: 'center', marginBottom: 0 }}>← Start a new page</button>
       </div>

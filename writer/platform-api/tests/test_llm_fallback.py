@@ -248,3 +248,78 @@ def test_run_forced_tool_sync_falls_back(monkeypatch):
     monkeypatch.setattr(rl, "_run_anthropic_sync", anthro)
     monkeypatch.setattr(rl, "_run_openai_sync", openai)
     assert rl.run_forced_tool_sync(provider="anthropic", **_FT_KW) == {"ok": 1}
+
+
+# ── second Anthropic account axis (same model, tried before other providers) ──
+def test_anthropic_keys_resolution(monkeypatch):
+    monkeypatch.setattr(rl.settings, "anthropic_api_key", "a", raising=False)
+    monkeypatch.setattr(rl.settings, "anthropic_api_key_secondary", "", raising=False)
+    monkeypatch.setattr(rl.settings, "anthropic_key_failover_enabled", True, raising=False)
+    assert rl._anthropic_keys() == ["a"]  # no secondary configured
+    monkeypatch.setattr(rl.settings, "anthropic_api_key_secondary", "b", raising=False)
+    assert rl._anthropic_keys() == ["a", "b"]  # secondary added
+    monkeypatch.setattr(rl.settings, "anthropic_key_failover_enabled", False, raising=False)
+    assert rl._anthropic_keys() == ["a"]  # disabled → primary only
+    monkeypatch.setattr(rl.settings, "anthropic_key_failover_enabled", True, raising=False)
+    monkeypatch.setattr(rl.settings, "anthropic_api_key_secondary", "a", raising=False)
+    assert rl._anthropic_keys() == ["a"]  # duplicate secondary de-duped
+
+
+async def test_second_anthropic_account_tried_before_openai(monkeypatch):
+    monkeypatch.setattr(rl.settings, "anthropic_api_key_secondary", "b", raising=False)
+    monkeypatch.setattr(rl.settings, "anthropic_key_failover_enabled", True, raising=False)
+    seen = []
+
+    async def anthro(**kw):
+        seen.append(kw.get("api_key"))
+        if kw.get("api_key") == "a":  # primary account limited
+            raise _transient()
+        return {"ok": True}, "tool_use"
+
+    async def openai(**kw):  # pragma: no cover - must not run
+        seen.append("openai")
+        return {"no": True}, "tool_use"
+
+    monkeypatch.setattr(rl, "_run_anthropic", anthro)
+    monkeypatch.setattr(rl, "_run_openai", openai)
+    out = await rl.run_forced_tool(provider="anthropic", **_FT_KW)
+    assert out == {"ok": True}
+    assert seen == ["a", "b"]  # second account cleared it; openai never reached
+
+
+async def test_both_anthropic_accounts_then_openai(monkeypatch):
+    monkeypatch.setattr(rl.settings, "anthropic_api_key_secondary", "b", raising=False)
+    monkeypatch.setattr(rl.settings, "anthropic_key_failover_enabled", True, raising=False)
+    calls = []
+
+    async def anthro(**kw):
+        calls.append(("anthropic", kw.get("api_key")))
+        raise _transient()
+
+    async def openai(**kw):
+        calls.append(("openai", None))
+        return {"ok": 1}, "tool_use"
+
+    monkeypatch.setattr(rl, "_run_anthropic", anthro)
+    monkeypatch.setattr(rl, "_run_openai", openai)
+    out = await rl.run_forced_tool(provider="anthropic", **_FT_KW)
+    assert out == {"ok": 1}
+    # both accounts exhausted (transient) before advancing off anthropic
+    assert calls == [("anthropic", "a"), ("anthropic", "b"), ("openai", None)]
+
+
+async def test_text_generation_second_account(monkeypatch):
+    monkeypatch.setattr(rl.settings, "anthropic_api_key_secondary", "b", raising=False)
+    monkeypatch.setattr(rl.settings, "anthropic_key_failover_enabled", True, raising=False)
+    seen = []
+
+    async def anthro(**kw):
+        seen.append(kw.get("api_key"))
+        if kw.get("api_key") == "a":
+            raise _transient()
+        return "second-account text"
+
+    monkeypatch.setattr(rl, "_run_anthropic_text", anthro)
+    out = await rl.generate_text(user="hi", max_tokens=50, model="claude-x")
+    assert out == "second-account text"
+    assert seen == ["a", "b"]

@@ -1,7 +1,7 @@
 """Local Dominator client + geo-grid scan orchestration (Module #5).
 
 Maps / local-pack geo-grid ranker. The team configures a per-client grid (a
-3/5/7-mile radius at 1-mile spacing around the business) and tracked keywords;
+1-10-mile radius at 1-mile spacing around the business) and tracked keywords;
 this runs scans via the Local Dominator API and stores the business's Maps rank
 per pin for a heatmap + a trend over time.
 
@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from statistics import mean
 from typing import Optional
 
@@ -30,6 +30,7 @@ import httpx
 from config import settings
 from db.supabase_client import get_supabase
 from services import maps_grid
+from services import maps_reporting
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +215,35 @@ def build_competitors_above(result_element: dict, our_place_id: Optional[str]) -
     return {"directory": directory, "grid": out_grid}
 
 
+def resolve_scan_keywords(
+    active: list[str], requested: Optional[list[str]]
+) -> tuple[list[str], list[str]]:
+    """Which keywords a scan should cover. Pure.
+
+    Returns ``(to_scan, unknown)``. ``requested`` of None/empty means the whole
+    active set (the scheduled behaviour, unchanged). A subset is matched
+    case-insensitively and returned in the client's own keyword order rather
+    than the order it was requested in, so two runs of the same subset produce
+    identically-ordered scans. Anything requested that isn't an active keyword
+    comes back in ``unknown`` for the caller to reject — silently dropping it
+    would start a narrower scan than the user asked for.
+    """
+    if not requested:
+        return list(active), []
+    by_lower = {k.strip().lower(): k for k in active}
+    wanted: set[str] = set()
+    unknown: list[str] = []
+    for raw in requested:
+        key = (raw or "").strip().lower()
+        if not key:
+            continue
+        if key in by_lower:
+            wanted.add(key)
+        elif raw not in unknown:
+            unknown.append(raw)
+    return [k for k in active if k.strip().lower() in wanted], unknown
+
+
 def build_scan_request(config: dict, keywords: list[str]) -> dict:
     """The POST /v1/scans body for a client's grid config + active keywords."""
     radius = config["radius_miles"]
@@ -288,16 +318,30 @@ async def get_scan_results(scan_uuid: str) -> Optional[list[dict]]:
 # ----------------------------------------------------------------------------
 # Orchestration
 # ----------------------------------------------------------------------------
-async def start_client_scan(client_id: str, trigger: str = "scheduled") -> dict:
+def resolve_scan_provider(config: Optional[dict]) -> str:
+    """The data source a NEW scan should use for this client: the per-client
+    maps_scan_configs.provider when set, else the global MAPS_SCAN_PROVIDER
+    flag. Pure — the single place that decides Local Dominator vs DataForSEO."""
+    provider = (config or {}).get("provider")
+    return provider or settings.maps_scan_provider
+
+
+async def start_client_scan(
+    client_id: str, trigger: str = "scheduled", keywords: Optional[list[str]] = None
+) -> dict:
     """Validate a client's grid config, POST a scan, and record it as 'polling'.
 
-    The single provider branch point: when maps_scan_provider is 'dataforseo',
-    new scans go through the DataForSEO grid builder instead of Local Dominator.
-    (In-flight/historic scans keep finishing on their own provider — the poller
-    routes by the stored maps_scans.provider column, not this flag.)"""
-    if settings.maps_scan_provider == "dataforseo":
-        from services import maps_dataforseo
-        return await maps_dataforseo.start_client_scan_dfs(client_id, trigger)
+    ``keywords`` (on-demand runs only) narrows the scan to a subset of the
+    client's active keywords; None scans them all. It is re-resolved here rather
+    than trusted from the job payload, so a keyword deactivated between enqueue
+    and run is dropped instead of scanned.
+
+    The single provider branch point: each client picks its data source
+    (maps_scan_configs.provider, falling back to the global MAPS_SCAN_PROVIDER
+    flag). When it resolves to 'dataforseo', new scans go through the DataForSEO
+    grid builder instead of Local Dominator. (In-flight/historic scans keep
+    finishing on their own provider — the poller routes by the stored
+    maps_scans.provider column, not this setting.)"""
     supabase = get_supabase()
     config = (
         supabase.table("maps_scan_configs").select("*").eq("client_id", client_id).limit(1).execute()
@@ -305,10 +349,15 @@ async def start_client_scan(client_id: str, trigger: str = "scheduled") -> dict:
     if not config:
         return {"status": "failed", "error": "no_config"}
     config = config[0]
+
+    if resolve_scan_provider(config) == "dataforseo":
+        from services import maps_dataforseo
+        return await maps_dataforseo.start_client_scan_dfs(client_id, trigger, keywords)
+
     if not config.get("google_place_id") or config.get("center_lat") is None or config.get("center_lng") is None:
         return {"status": "failed", "error": "config_incomplete"}
 
-    keywords = [
+    active = [
         k["keyword"]
         for k in (
             supabase.table("maps_keywords")
@@ -319,6 +368,7 @@ async def start_client_scan(client_id: str, trigger: str = "scheduled") -> dict:
         ).data
         or []
     ]
+    keywords, _unknown = resolve_scan_keywords(active, keywords)
     if not keywords:
         return {"status": "failed", "error": "no_keywords"}
 
@@ -495,10 +545,15 @@ async def poll_scan(scan_row: dict) -> str:
 def enqueue_completion_hooks(scan_id: str, trigger: Optional[str] = None) -> None:
     """Enqueue the per-scan completion jobs (Local Rank Analysis report +
     scan-over-scan analyzer). Provider-agnostic; both best-effort so a failure
-    never fails the scan. Test scans (trigger='parallel_test', §7 quarantine)
-    skip both hooks — no LLM report spend, no alerts / Action Plan rebuilds from
-    throwaway comparison data."""
-    if trigger == "parallel_test":
+    never fails the scan.
+
+    Only reporting scans get the hooks. Test scans (trigger='parallel_test', §7
+    quarantine) and one-off manual runs skip both — no LLM report spend and no
+    Drive doc for a scan that isn't part of the client's record, and no alerts /
+    Action Plan rebuilds off a scan that may be a partial keyword set or a
+    just-changed grid config. The "Generate report" button still works on any
+    scan, so a one-off can be written up deliberately."""
+    if not maps_reporting.is_reporting_scan(trigger):
         return
     try:
         from services.maps_report import enqueue_maps_report
@@ -556,8 +611,13 @@ async def poll_client_scans(client_id: str) -> int:
 # ----------------------------------------------------------------------------
 # Jobs + scheduler enqueue
 # ----------------------------------------------------------------------------
-def enqueue_maps_scan(client_id: str, trigger: str = "scheduled") -> bool:
-    """Enqueue a maps_scan create job (deduped against pending/running ones)."""
+def enqueue_maps_scan(
+    client_id: str, trigger: str = "scheduled", keywords: Optional[list[str]] = None
+) -> bool:
+    """Enqueue a maps_scan create job (deduped against pending/running ones).
+
+    ``keywords`` narrows an on-demand scan to a subset of the client's active
+    keywords; None (the scheduled path) scans them all."""
     supabase = get_supabase()
     existing = (
         supabase.table("async_jobs").select("id")
@@ -566,8 +626,11 @@ def enqueue_maps_scan(client_id: str, trigger: str = "scheduled") -> bool:
     )
     if existing.data:
         return False
+    payload: dict = {"client_id": client_id, "trigger": trigger}
+    if keywords:
+        payload["keywords"] = keywords
     supabase.table("async_jobs").insert(
-        {"job_type": "maps_scan", "entity_id": client_id, "payload": {"client_id": client_id, "trigger": trigger}}
+        {"job_type": "maps_scan", "entity_id": client_id, "payload": payload}
     ).execute()
     return True
 
@@ -583,7 +646,11 @@ async def run_maps_scan_job(job: dict) -> None:
             {"status": "failed", "error": "missing client_id", "completed_at": "now()"}
         ).eq("id", job_id).execute()
         return
-    result = await start_client_scan(client_id, trigger=payload.get("trigger", "scheduled"))
+    result = await start_client_scan(
+        client_id,
+        trigger=payload.get("trigger", "scheduled"),
+        keywords=payload.get("keywords"),
+    )
     supabase.table("async_jobs").update(
         {
             "status": "complete" if result.get("status") in ("polling", "complete") else "failed",
@@ -631,21 +698,258 @@ def cancel_scan(scan_id: str) -> dict:
     return {"status": "cancelled", "cancelled": True}
 
 
+def resolve_weekday(value) -> int:
+    """A config's scan weekday (0=Mon..6=Sun), falling back to the global default.
+
+    Anything out of range or non-integer (including a bool, which is an int in
+    Python) is treated as unset rather than silently scheduling a client onto a
+    nonsense day. Pure."""
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 6:
+        return value
+    return settings.maps_scan_weekday
+
+
+def resolve_scan_hour(value) -> int:
+    """A config's scan hour (0-23, client-local), falling back to the global
+    default. Out-of-range / non-int (incl. bool) → unset. Pure."""
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 23:
+        return value
+    return settings.maps_scan_hour
+
+
+def _zone(tz: Optional[str]):
+    """tzinfo for an IANA name; UTC when unset or unknown (never raises)."""
+    if not tz:
+        return timezone.utc
+    try:
+        from zoneinfo import ZoneInfo  # noqa: PLC0415
+
+        return ZoneInfo(tz)
+    except Exception:  # noqa: BLE001 — a bad name degrades to UTC, never breaks
+        return timezone.utc
+
+
+def hour_reached(now_local: datetime, scan_hour: int) -> bool:
+    """True once the client's local wall-clock has reached its scan hour today.
+
+    The gate that lets a per-client local scan time be honored: the daily sweep
+    runs every scheduler cycle, so a client is held back until its own local hour
+    arrives, then released (once — `scan_due` blocks the rest of the day). Pure."""
+    return now_local.hour >= scan_hour
+
+
+def _parse_ts(value) -> Optional[datetime]:
+    """A Supabase timestamptz string → a UTC-aware datetime; None on garbage.
+
+    Naive/offset-less values are read as UTC (that is how the column is stored).
+    Pure."""
+    if not value:
+        return None
+    s = str(value).strip().replace(" ", "T")
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        try:
+            dt = datetime.fromisoformat(s[:19])  # date+time, drop any offset we can't parse
+        except ValueError:
+            return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def scan_due(
+    today: date, weekday: int,
+    last_attempt: Optional[date], last_good: Optional[date],
+) -> bool:
+    """Is a scheduled geo-grid scan due for this client today? Pure.
+
+    `last_attempt` is the client's most recent scheduled scan of ANY status;
+    `last_good` is its most recent that didn't FAIL (complete / in-flight /
+    cancelled — a user-cancelled scan must not auto-retry). Three rules:
+
+      - attempted today        -> not due. `enqueue_maps_scan` only dedupes
+        against PENDING/RUNNING jobs, so once a scan finishes (or fails) there
+        is nothing stopping the next tick re-enqueueing it. This is the guard
+        that bounds a daily sweep — and a failing provider — to ONE paid
+        attempt per client per day instead of one per 5-minute tick.
+      - good scan overdue      -> due, whatever weekday it is. Per-client
+        catch-up: a missed weekday window (scheduler down) or a FAILED attempt
+        (provider down) self-heals the next day instead of waiting a week.
+        Strictly MORE than 7 days: at exactly 7 the client is on cadence.
+      - otherwise              -> due on the client's own weekday, UNLESS a
+        good scan already landed within the last 2 days. Without that, the
+        week after a weekday change double-scans: moving Tue->Thu leaves the
+        Wednesday catch-up firing at day 8 and the new Thursday weekday firing
+        again the very next day. With it, the transition is a single scan and
+        the cadence settles on the new day.
+
+    Both dates None (never scanned, or older than the lookback window) waits
+    for the client's weekday — the catch-up is for a gap we can measure."""
+    if last_attempt is not None and last_attempt >= today:
+        return False
+    if last_good is not None and (today - last_good).days > 7:
+        return True
+    return today.weekday() == weekday and (
+        last_good is None or (today - last_good).days >= 3
+    )
+
+
+def _scan_history(
+    supabase, now: datetime
+) -> tuple[dict[str, datetime], dict[str, datetime]]:
+    """(last_attempt, last_good): per-client UTC timestamps of the most recent
+    SCHEDULED scan of any status / of non-failed status, over a 60-day window.
+
+    Returns timestamps (not dates) so the caller can convert each to the CLIENT'S
+    local date — the "already scanned today" de-dup has to be in the same frame as
+    the client-local scheduling day, or a far-from-UTC client could double-scan
+    across the UTC-midnight boundary.
+
+    Deliberately ignores manual scans: a one-off "Run scan now" must not suppress
+    or shift the client's weekly cadence. Clients with nothing in the window are
+    absent, which `scan_due` reads as "wait for your weekday"."""
+    since = (now - timedelta(days=60)).isoformat()
+    rows = (
+        supabase.table("maps_scans").select("client_id, created_at, status")
+        .eq("trigger", "scheduled").gte("created_at", since)
+        .order("created_at", desc=True).limit(2000).execute()
+    ).data or []
+    attempts: dict[str, datetime] = {}
+    good: dict[str, datetime] = {}
+    for row in rows:
+        client_id, created = row.get("client_id"), row.get("created_at")
+        ts = _parse_ts(created)
+        if not client_id or ts is None:
+            continue
+        if client_id not in attempts or ts > attempts[client_id]:
+            attempts[client_id] = ts
+        if row.get("status") != "failed" and (client_id not in good or ts > good[client_id]):
+            good[client_id] = ts
+    return attempts, good
+
+
 def enqueue_due_maps_scans() -> int:
-    """Weekly: enqueue a scan for each client with an active weekly config + keywords."""
+    """Enqueue a scan for each client due right now, in its OWN local time.
+
+    Evaluated every scheduler cycle (not once a day): each client has its own scan
+    weekday AND hour-of-day (`maps_scan_configs.weekday`/`scan_hour`), interpreted
+    in the client's timezone, so a client fires near its chosen local time instead
+    of at one global UTC hour. `hour_reached` holds a client back until its local
+    hour arrives; `scan_due` (fed the client's LOCAL dates) then bounds it to one
+    scan/day and carries the overdue catch-up. Per-cycle evaluation is safe: that
+    same-day guard plus the pending-job dedup in `enqueue_maps_scan` keep it to one
+    paid scan per client per day.
+
+    (History: this used to run on ONE global weekday and select only `client_id`,
+    so every client scanned on `settings.maps_scan_weekday` at 08:00 UTC regardless
+    of its own row.)
+
+    A client whose weekly config is still `active` but has lost every active
+    keyword produces no scan. That used to be a silent `continue`: the Setup tab
+    kept reading "weekly scanning on", the geo-grid simply stopped updating, and
+    nothing anywhere said why (First Class Roofing sat like that from 2026-06-23).
+    Such a client is now warned about + notified once per ISO week, so a stalled
+    tracker announces itself instead of having to be noticed."""
+    from services import gbp_timezone  # noqa: PLC0415 — avoid a module-load cycle
+
     supabase = get_supabase()
     configs = (
-        supabase.table("maps_scan_configs").select("client_id")
+        supabase.table("maps_scan_configs")
+        .select("client_id, weekday, scan_hour, google_place_id, center_lat, center_lng")
         .eq("active", True).eq("cadence", "weekly").execute()
     ).data or []
+    if not configs:
+        return 0
+    now = datetime.now(timezone.utc)
+    attempts, good = _scan_history(supabase, now)
     enqueued = 0
+    starved: list[str] = []
+    incomplete: list[str] = []
     for cfg in configs:
+        client_id = cfg["client_id"]
+        weekday = resolve_weekday(cfg.get("weekday"))
+        scan_hour = resolve_scan_hour(cfg.get("scan_hour"))
+        # The weekday + hour are the client's LOCAL time. Resolve its timezone
+        # (cached on clients.timezone; falls back to the grid center's coordinates
+        # so a Maps-only client without GBP lat/lng still schedules locally), then
+        # everything below is decided in that local frame. None → UTC (best-effort).
+        tz = gbp_timezone.resolve_client_timezone(
+            client_id, cfg.get("center_lat"), cfg.get("center_lng")
+        )
+        zone = _zone(tz)
+        now_local = now.astimezone(zone)
+        today = now_local.date()
+        # Hold the client back until its own local hour arrives (then scan_due
+        # bounds it to one scan that day).
+        if not hour_reached(now_local, scan_hour):
+            continue
+        la = attempts.get(client_id)
+        lg = good.get(client_id)
+        last_attempt = la.astimezone(zone).date() if la else None
+        last_good = lg.astimezone(zone).date() if lg else None
+        if not scan_due(today, weekday, last_attempt, last_good):
+            continue
+        # An incomplete config (Setup saved before Place ID / center were filled
+        # in — the upsert allows it) makes `start_client_scan` fail BEFORE any
+        # maps_scans row is inserted, so nothing would record the attempt and the
+        # daily sweep would re-enqueue a failing job every tick. Skip it here —
+        # never enqueued, no storm — and log on the client's own weekday only,
+        # same weekly rhythm as the starved report below.
+        if (
+            not cfg.get("google_place_id")
+            or cfg.get("center_lat") is None
+            or cfg.get("center_lng") is None
+        ):
+            if today.weekday() == weekday:
+                incomplete.append(client_id)
+            continue
         kw = (
             supabase.table("maps_keywords").select("id")
-            .eq("client_id", cfg["client_id"]).eq("active", True).limit(1).execute()
+            .eq("client_id", client_id).eq("active", True).limit(1).execute()
         ).data
-        if kw and enqueue_maps_scan(cfg["client_id"], trigger="scheduled"):
+        if not kw:
+            # Report on the client's OWN weekday only. A starved client never
+            # scans, so it is permanently "overdue" — reporting on every catch-up
+            # day would log it daily instead of once a week.
+            if today.weekday() == weekday:
+                starved.append(client_id)
+            continue
+        if enqueue_maps_scan(client_id, trigger="scheduled"):
             enqueued += 1
     if enqueued:
         logger.info("maps_scans_enqueued", extra={"clients": enqueued})
+    if incomplete:
+        logger.warning("maps_scans_skipped_config_incomplete", extra={"clients": incomplete})
+    if starved:
+        logger.warning("maps_scans_skipped_no_keywords", extra={"clients": starved})
+        _notify_starved_configs(starved)
     return enqueued
+
+
+def _notify_starved_configs(client_ids: list[str]) -> None:
+    """Tell the team about active weekly configs that have no active keywords.
+
+    Best-effort and deduped per client per ISO week (the sweep runs weekly, so a
+    re-run inside the same week is a clean no-op rather than a repeat ping)."""
+    try:
+        from services import notifications
+
+        year, week, _ = datetime.now(timezone.utc).isocalendar()
+        for client_id in client_ids:
+            notifications.emit(
+                client_id=client_id,
+                kind="maps_scan_no_keywords",
+                title="Geo-grid scanning is on but has no keywords",
+                summary=(
+                    "Weekly Maps geo-grid scanning is active for this client, but every "
+                    "tracked keyword is inactive or removed — so no scan ran and the "
+                    "heatmap and Local Rank Analysis reports will not update. Add a "
+                    "keyword in the Maps Geo-Grid Setup tab to resume."
+                ),
+                severity="warning",
+                payload={"link": f"clients/{client_id}/maps"},
+                dedupe_key=f"maps_scan_no_keywords:{client_id}:{year}-W{week:02d}",
+            )
+    except Exception as exc:  # noqa: BLE001 — notifications never sink the sweep
+        logger.warning("maps_scan_starved_notify_failed", extra={"error": str(exc)})

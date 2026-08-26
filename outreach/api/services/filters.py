@@ -37,6 +37,8 @@ RULE_NOT_SUPPRESSED = "not_suppressed"
 RULE_NOT_FRANCHISE = "not_franchise"
 RULE_REVIEW_COUNT = "review_count_min"
 RULE_REVIEW_RECENCY = "review_recency"
+RULE_CATEGORY_RELEVANT = "category_relevant"
+RULE_WITHIN_AREA = "within_area"
 
 # Order is presentation only — all of them run regardless.
 ALL_RULES: tuple[str, ...] = (
@@ -46,10 +48,22 @@ ALL_RULES: tuple[str, ...] = (
     RULE_NOT_FRANCHISE,
     RULE_REVIEW_COUNT,
     RULE_REVIEW_RECENCY,
+    RULE_CATEGORY_RELEVANT,
+    RULE_WITHIN_AREA,
 )
 
 # The one non-exclusionary rule. Failing it sets franchise_status = 'flagged' and the prospect
 # proceeds. Do not add to this set without re-reading DECISIONS.md.
+#
+# RULE_CATEGORY_RELEVANT is deliberately NOT here. It has THREE outcomes, not two: a place whose
+# primary category is off-list is EXCLUDED (a hard drop, so it must stay out of this set), but a
+# place whose primary is off-list while a SECONDARY category matches is neither kept nor dropped —
+# it is flagged for review. The review case is encoded as passed=True with a REVIEW-prefixed
+# observed value (see `evaluate`), so it never reaches `.excluded`; only the genuine off-category
+# drop fails the rule. Putting the rule name in this set would turn every off-category listing
+# into a flag and defeat the whole point.
+CATEGORY_REVIEW_PREFIX = "review:"
+
 NON_EXCLUSIONARY_RULES: frozenset[str] = frozenset({RULE_NOT_FRANCHISE})
 
 
@@ -88,6 +102,45 @@ class FilterVerdict:
         """Never returns a 'confirmed_*' value — confirmation is a human act, not a pattern match."""
         return "flagged" if self.franchise_flagged else "unknown"
 
+    @property
+    def _category_outcome(self) -> "RuleOutcome | None":
+        for outcome in self.outcomes:
+            if outcome.rule == RULE_CATEGORY_RELEVANT:
+                return outcome
+        return None
+
+    @property
+    def category_review_flagged(self) -> bool:
+        """The 'maybe' pile: primary category is off-list but a secondary category matches, so a
+        human should glance before this is contacted or dropped."""
+        outcome = self._category_outcome
+        return bool(
+            outcome
+            and outcome.passed
+            and outcome.observed_value
+            and outcome.observed_value.startswith(CATEGORY_REVIEW_PREFIX)
+        )
+
+    @property
+    def category_status(self) -> str:
+        """The bucket this prospect landed in, for the `category_status` column.
+
+        Never returns a 'confirmed_*' value — confirmation is a human act, like franchise. The DB
+        guard (migration 20260810180000) additionally protects a human ruling from being reverted
+        by the next routine filter run.
+        """
+        outcome = self._category_outcome
+        if outcome is None:
+            return "unknown"
+        if not outcome.passed:
+            return "off_category"
+        if outcome.observed_value and outcome.observed_value.startswith(CATEGORY_REVIEW_PREFIX):
+            return "review"
+        if outcome.observed_value in (None, NOT_EVALUATED):
+            # Rule disabled, vertical unconfigured, or the place carried no category at all.
+            return "unknown"
+        return "relevant"
+
 
 class SuppressionIndex:
     """Case-insensitive membership test across all suppression scopes.
@@ -122,6 +175,84 @@ def matches_franchise_pattern(name: str, patterns: Sequence[str]) -> str | None:
     return None
 
 
+def resolve_accepted_categories(
+    ingest_category: str | None, mapping: dict[str, Sequence[str]]
+) -> frozenset[str] | None:
+    """The allow-list of Google categories that count as this vertical, or None.
+
+    None means "this vertical is not configured for relevance filtering" — and the rule then
+    records NOT_EVALUATED rather than dropping anything, so switching the feature on for a market
+    we have not curated a category list for is a no-op, not a mass exclusion. Keyed case- and
+    whitespace-insensitively on the ingest category (== the typed business type).
+    """
+    if not ingest_category:
+        return None
+    wanted = ingest_category.strip().lower()
+    for key, categories in mapping.items():
+        if key.strip().lower() == wanted and categories:
+            return frozenset(c.strip().lower() for c in categories if c and c.strip())
+    return None
+
+
+def category_signals(place: ParsedPlace) -> tuple[str | None, frozenset[str]]:
+    """A place's PRIMARY category and the full set of ALL its categories, lowercased.
+
+    The primary is the single best label — Outscraper's `category`/`type` — and is what the keep
+    decision keys on. `subtypes` is the comma-joined list of every category Google assigns, used
+    only for the 'maybe' pile: a business labelled primarily 'General contractor' that lists
+    'Plumber' as one of ten subtypes is a review candidate, never an automatic keep, because an
+    any-subtype match would re-admit the exact noise this rule removes (a Home Depot service desk
+    lists 'Plumber' among its trades).
+    """
+    raw = place.raw or {}
+
+    primary: str | None = None
+    for key in ("category", "type", "main_category"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            # A single label. subtypes-as-category (a comma blob) is split on the first comma.
+            primary = value.split(",")[0].strip()
+            break
+    if primary is None and place.category:
+        primary = place.category.split(",")[0].strip()
+
+    all_categories: set[str] = set()
+    if primary:
+        all_categories.add(primary)
+
+    subtypes = raw.get("subtypes")
+    if isinstance(subtypes, str):
+        all_categories.update(part.strip() for part in subtypes.split(",") if part.strip())
+    elif isinstance(subtypes, (list, tuple)):
+        all_categories.update(str(part).strip() for part in subtypes if str(part).strip())
+
+    for key in ("category", "type", "main_category"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            all_categories.add(value.strip())
+
+    return (
+        (primary or None),
+        frozenset(c.lower() for c in all_categories if c),
+    )
+
+
+def _haversine_miles(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Great-circle distance in miles. A local copy of `tiling.haversine_miles` on purpose — this
+    module is deliberately dependency-free (its docstring: no database, no clock, no config), and
+    importing `tiling` would drag in the Outscraper client + httpx at import time. Six lines of
+    pure trig is the cheaper price. A test pins the two implementations to agree.
+    """
+    import math
+
+    earth_radius_miles = 3958.7613
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    d_phi = phi2 - phi1
+    d_lambda = math.radians(lng2 - lng1)
+    a = math.sin(d_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
+    return 2 * earth_radius_miles * math.asin(math.sqrt(a))
+
+
 def _months_between(earlier: date, later: date) -> int:
     return (later.year - earlier.year) * 12 + (later.month - earlier.month)
 
@@ -142,6 +273,13 @@ def evaluate(
     inferred_zero: bool = False,
     review_count_override: int | None = None,
     franchise_decision: str | None = None,
+    accepted_categories: frozenset[str] | None = None,
+    category_relevance_enabled: bool = False,
+    category_decision: str | None = None,
+    anchor_lat: float | None = None,
+    anchor_lng: float | None = None,
+    max_distance_miles: float | None = None,
+    distance_gate_enabled: bool = False,
 ) -> FilterVerdict:
     """Run every rule against one place and return all outcomes.
 
@@ -244,6 +382,81 @@ def evaluate(
                 RULE_REVIEW_RECENCY,
                 age_months < review_recency_months,
                 latest_review_at.isoformat(),
+            )
+        )
+
+    # -- 7. category relevance — three outcomes: keep / review / drop ----------------------
+    #
+    # Google Maps text search for a category returns adjacent businesses too (hardware stores,
+    # HVAC firms, apartment buildings), and none of the six rules above ask whether a listing is
+    # actually the searched trade. This rule does, keyed on Google's own PRIMARY category:
+    #
+    #   * primary category ON the allow-list  -> keep (rule passes)
+    #   * primary OFF, but a SECONDARY matches -> review (passes, but flagged; a human glances)
+    #   * primary OFF, no secondary match      -> drop  (rule fails, hard exclude)
+    #
+    # Fail-open is preserved throughout, per this module's dominant fear of a false exclusion: the
+    # rule is NOT_EVALUATED (keeps the prospect) when disabled, when the vertical has no configured
+    # allow-list, or when the place carried no category at all. A human ruling on `category_status`
+    # outranks the match in both directions, exactly like franchise (I-054) — and the DB guard
+    # protects that ruling from the next routine re-filter.
+    if not category_relevance_enabled or accepted_categories is None:
+        outcomes.append(RuleOutcome(RULE_CATEGORY_RELEVANT, True, NOT_EVALUATED))
+    elif category_decision == "confirmed_relevant":
+        outcomes.append(RuleOutcome(RULE_CATEGORY_RELEVANT, True, "confirmed_relevant (human)"))
+    elif category_decision == "confirmed_off":
+        outcomes.append(RuleOutcome(RULE_CATEGORY_RELEVANT, False, "confirmed_off (human)"))
+    else:
+        primary, all_categories = category_signals(place)
+        accept = {c.strip().lower() for c in accepted_categories}
+
+        if primary is None:
+            # No category signal at all is not evidence of being off-topic. Keep it.
+            outcomes.append(RuleOutcome(RULE_CATEGORY_RELEVANT, True, NOT_EVALUATED))
+        elif primary.strip().lower() in accept:
+            outcomes.append(RuleOutcome(RULE_CATEGORY_RELEVANT, True, primary))
+        elif all_categories & accept:
+            matched = ", ".join(sorted(all_categories & accept))
+            outcomes.append(
+                RuleOutcome(
+                    RULE_CATEGORY_RELEVANT,
+                    True,
+                    f"{CATEGORY_REVIEW_PREFIX} {primary} (secondary: {matched})",
+                )
+            )
+        else:
+            outcomes.append(RuleOutcome(RULE_CATEGORY_RELEVANT, False, primary))
+
+    # -- 8. geographic distance — the unbounded-coordinates escape ------------------------
+    #
+    # Outscraper's `coordinates` biases the search CENTRE but does not bound the area (there is no
+    # radius parameter — tiling.py / outscraper_client.py), so a category search can return a
+    # business far outside the market: an Inglewood plumbing pull surfaced a kitchen remodeler in
+    # Lompoc, ~150 miles away. This rule drops a listing whose location is further than
+    # `max_distance_miles` from its assigned submarket centroid.
+    #
+    # Fail-open, like every other rule: NOT_EVALUATED (kept) when disabled, when no centroid/cap is
+    # supplied, or when the listing itself carries no coordinates — an unknown location is not
+    # evidence of a distant one. The default cap is deliberately generous (it is anchored on the
+    # centroid a prospect was already assigned to as its NEAREST submarket, so an in-metro business
+    # sits a few miles from it at most); the point is to catch gross drift, not to fence a service
+    # area.
+    if (
+        not distance_gate_enabled
+        or max_distance_miles is None
+        or anchor_lat is None
+        or anchor_lng is None
+    ):
+        outcomes.append(RuleOutcome(RULE_WITHIN_AREA, True, NOT_EVALUATED))
+    elif place.lat is None or place.lng is None:
+        outcomes.append(RuleOutcome(RULE_WITHIN_AREA, True, NOT_EVALUATED))
+    else:
+        distance = _haversine_miles(place.lat, place.lng, anchor_lat, anchor_lng)
+        outcomes.append(
+            RuleOutcome(
+                RULE_WITHIN_AREA,
+                distance <= max_distance_miles,
+                f"{distance:.1f} mi",
             )
         )
 

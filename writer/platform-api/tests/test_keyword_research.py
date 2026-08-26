@@ -31,6 +31,48 @@ def test_tokenize_alphanumeric_only():
     assert kr.tokenize("24/7 emergency plumber!") == ["24", "emergency", "plumber"]
 
 
+def test_tokenize_drops_interrogatives():
+    # Pure interrogatives are dropped so a question seed anchors on its real topic
+    # (no "what"/"how" seed token inflating the relevance gate or hijacking clusters).
+    assert kr.tokenize("what is a third party claims administrator") == [
+        "third", "party", "claims", "administrator"]
+    assert kr.tokenize("how does a claims adjuster get paid") == [
+        "claims", "adjuster", "paid"]
+    # ...but ambiguous words that can be real topics are kept.
+    assert "will" in kr.tokenize("last will and testament")
+
+
+def test_question_seed_tokens_exclude_interrogatives():
+    # is_question still fires on the raw string even though the token is gone.
+    assert kr.is_question("what is a third party claims administrator")
+    assert kr.token_set("what is a third party claims administrator") == {
+        "third", "party", "claim", "administrator"}
+
+
+def test_filter_question_seeds_reject_interrogative_only_overlap():
+    # The reported BSA Claims failure: question seeds made "what" a seed token, so
+    # keyword_ideas "what is X" drift cleared the >=2 coherence gate via what + one
+    # generic token. With interrogatives gone, those match on <2 topical tokens.
+    seeds = ["what is a third party claims administrator?",
+             "how does a third party claims administrator get paid?",
+             "catastrophe claims management"]
+    rows = [
+        {"keyword": "what is supply chain management"},   # {supply, chain, management} -> 1 (management)
+        {"keyword": "what is a hen party"},               # {hen, party} -> 1 (party)
+        {"keyword": "what is an independent variable"},   # {independent, variable} -> 0
+        {"keyword": "third party administrator health insurance"},  # -> 3, kept
+        {"keyword": "catastrophe claims management software"},      # -> 3, kept
+    ]
+    kept, report = kr.filter_relevant_ideas(rows, seeds, "BSA Claims")
+    kept_kw = {r["keyword"] for r in kept}
+    assert "what is supply chain management" not in kept_kw
+    assert "what is a hen party" not in kept_kw
+    assert "what is an independent variable" not in kept_kw
+    assert "third party administrator health insurance" in kept_kw
+    assert "catastrophe claims management software" in kept_kw
+    assert report["gate"] == "coherence"
+
+
 # --- opportunity_score --------------------------------------------------------
 def test_opportunity_score_rewards_value_ease_intent():
     # High volume, high CPC, low difficulty, transactional → high score.
@@ -264,6 +306,108 @@ def test_filter_disabled_keeps_everything():
     kept, report = kr.filter_relevant_ideas(rows, ["henson architect"], "Henson Design", enabled=False)
     assert len(kept) == 2
     assert report["gate"] == "off"
+
+
+def test_filter_per_seed_overlap_kills_multiseed_pooling_flood():
+    # The reported FreightOptics failure (run bedc615e): 4 three-token seeds. The
+    # pooled union {3pl, audit, software, company, platform, parcel, spend,
+    # management} let "password management software" pass on management(one seed) +
+    # software(another) — two tokens NO single seed contains together. Per-seed
+    # overlap drops the whole "X management software" flood while keeping genuinely
+    # on-topic ideas that share ≥2 tokens with ONE real seed.
+    seeds = ["3pl audit software", "3pl audit company",
+             "3pl audit platform", "parcel spend management"]
+    rows = _ideas(
+        "3pl invoice audit",              # {3pl, audit} vs "3pl audit software" = 2 → keep
+        "3pl audit companies",            # {3pl, audit} → keep
+        "password management software",   # management + software (diff seeds) → drop
+        "project management software",    # management + software → drop
+        "property management software",   # management + software → drop
+        "parcel spend analysis",          # {parcel, spend} vs "parcel spend management" = 2 → keep
+    )
+    kept, report = kr.filter_relevant_ideas(rows, seeds, "FreightOptics")
+    kws = {r["keyword"] for r in kept}
+    assert report["gate"] == "coherence"
+    assert "3pl invoice audit" in kws
+    assert "3pl audit companies" in kws
+    assert "parcel spend analysis" in kws
+    assert "password management software" not in kws
+    assert "project management software" not in kws
+    assert "property management software" not in kws
+
+
+def test_filter_multiseed_short_service_seeds_still_broaden():
+    # Two short clean service seeds (no single seed ≥3 tokens, no drift anchor) →
+    # gate stays OFF so cross-topic broadening survives, even though the pooled
+    # union is 4 tokens. The old union rule (len(union) >= 3) would have engaged.
+    rows = _ideas("blocked drain", "hot water repair", "burst pipe")
+    kept, report = kr.filter_relevant_ideas(
+        rows, ["emergency plumber", "drain cleaning"], "Acme Plumbing")
+    assert len(kept) == 3
+    assert report["gate"] == "none"
+
+
+# --- detect_cluster_dominance -------------------------------------------------
+def test_cluster_dominance_flags_offseed_majority():
+    clusters = [
+        {"label": "management", "keyword_count": 60, "total_volume": 100},
+        {"label": "audit", "keyword_count": 40, "total_volume": 50},
+    ]
+    d = kr.detect_cluster_dominance(clusters, 100, ["3pl audit", "parcel spend"])
+    assert d is not None and d["label"] == "management" and d["fraction"] == 0.6
+
+
+def test_cluster_dominance_silent_when_head_is_a_seed_term():
+    # "<service> <city>" runs legitimately cluster under the service (a seed token).
+    clusters = [{"label": "plumber", "keyword_count": 70, "total_volume": 100}]
+    assert kr.detect_cluster_dominance(clusters, 100, ["emergency plumber"]) is None
+
+
+def test_cluster_dominance_silent_on_small_run_and_other():
+    big = [{"label": "widget", "keyword_count": 9, "total_volume": 10}]
+    assert kr.detect_cluster_dominance(big, 10, ["gadget"]) is None   # below min_count
+    other = [{"label": "other", "keyword_count": 60, "total_volume": 0}]
+    assert kr.detect_cluster_dominance(other, 100, ["gadget"]) is None
+
+
+def test_cluster_dominance_silent_below_fraction():
+    clusters = [{"label": "management", "keyword_count": 30, "total_volume": 10},
+                {"label": "audit", "keyword_count": 70, "total_volume": 10}]
+    # Top cluster "audit" is 70% but IS a seed term; "management" is only 30%.
+    assert kr.detect_cluster_dominance(clusters, 100, ["3pl audit"]) is None
+
+
+# --- build_filter_summary -----------------------------------------------------
+def test_build_filter_summary_reconciles_and_tallies():
+    dropped = [
+        {"keyword": "project management software", "reason": "Off your seed topic (category drift)"},
+        {"keyword": "password manager", "reason": "Off your seed topic (category drift)"},
+        {"keyword": "3pl invoice audit", "reason": "Not topically relevant"},  # survived elsewhere
+        {"keyword": "PROJECT management software", "reason": "dup"},           # dupe (normalized)
+    ]
+    fs = kr.build_filter_summary(
+        raw_pool=50, kept=8, dropped_detail=dropped,
+        final_keywords=["3pl invoice audit", "freight audit"],
+        filter_warnings=["Filtered 2 keywords."],
+    )
+    assert fs["raw_pool"] == 50 and fs["kept"] == 8
+    kws = {d["keyword"] for d in fs["dropped"]}
+    # a keyword present in final results is never reported as dropped
+    assert "3pl invoice audit" not in kws
+    # deduped by normalized keyword (kept first reason)
+    assert fs["dropped_total"] == 2
+    assert fs["by_reason"][0]["reason"] == "Off your seed topic (category drift)"
+    assert fs["by_reason"][0]["count"] == 2
+    assert fs["warnings"] == ["Filtered 2 keywords."]
+
+
+def test_build_filter_summary_caps_sample():
+    dropped = [{"keyword": f"kw {i}", "reason": "drift"} for i in range(200)]
+    fs = kr.build_filter_summary(
+        raw_pool=200, kept=0, dropped_detail=dropped,
+        final_keywords=[], filter_warnings=[], cap=10)
+    assert len(fs["dropped"]) == 10
+    assert fs["dropped_total"] == 200
 
 
 def test_looks_like_brand_seed():
@@ -501,3 +645,188 @@ def test_render_report_html_is_escaped_and_self_contained():
     assert "<b>inject" not in html                   # no raw injection
     assert "Bob &amp; Co" in html
     assert "Acme SEO" in html
+
+
+# --- detect_brand_flood_tokens (related-layer brand/homonym flood gate) --------
+def _mitchell_related():
+    """The real "third party claims adjuster" flood shape: a competitor-brand
+    namespace ("mitchell ...") dominating the seedless neighbours, mixed with a
+    few legit seed-anchored terms and diverse legit adjacency."""
+    brand = [
+        "mitchell connect", "mitchell community", "mitchell prodemand",
+        "mitchell connect login", "mitchell international", "mitchell 1 login",
+        "mitchell collision", "mitchell cloud", "mitchell usa serum",
+        "mitchell cream",  # homonym skincare brand — pure off-niche
+    ]
+    seed_anchored = ["third-party payer examples", "claims adjuster salary"]
+    legit_adjacent = ["first notice of loss", "subrogation basics"]
+    return brand + seed_anchored + legit_adjacent
+
+
+def test_brand_flood_detects_dominant_namespace():
+    flood, report = kr.detect_brand_flood_tokens(
+        _mitchell_related(), ["third party claims adjuster"], min_count=8, min_fraction=0.4,
+    )
+    assert "mitchell" in flood
+    assert report["gate"] == "flood"
+    assert report["dropped"] >= 10
+
+
+def test_brand_flood_keeps_seed_anchored_and_diverse_adjacency():
+    flood, _ = kr.detect_brand_flood_tokens(
+        _mitchell_related(), ["third party claims adjuster"], min_count=8, min_fraction=0.4,
+    )
+    seed_toks = kr.token_set("third party claims adjuster")
+    # brand namespace dropped...
+    assert kr.is_brand_flooded("mitchell connect", seed_toks, flood)
+    assert kr.is_brand_flooded("mitchell usa serum", seed_toks, flood)
+    # ...seed-anchored kept even though unrelated otherwise...
+    assert not kr.is_brand_flooded("third-party payer examples", seed_toks, flood)
+    # ...and diverse legit adjacency (no dominant token) kept.
+    assert not kr.is_brand_flooded("first notice of loss", seed_toks, flood)
+
+
+def test_brand_flood_inert_on_clean_diverse_related_set():
+    # The "historic preservation" shape: a tiny, diverse seedless subset — no flood.
+    related = [
+        "historic preservation office", "national historic preservation act",
+        "adaptive reuse", "national trust", "state historic tax credit",
+        "preservation grants", "architecture salary",
+    ]
+    flood, report = kr.detect_brand_flood_tokens(related, ["historic preservation"])
+    assert flood == set()
+    assert report["gate"] in ("none", "off")
+
+
+def test_brand_flood_below_min_count_never_fires():
+    # A handful of same-brand seedless terms below the absolute floor is left alone.
+    related = ["acme one", "acme two", "acme three", "roof repair guide"]
+    flood, report = kr.detect_brand_flood_tokens(related, ["roof repair"], min_count=8)
+    assert flood == set()
+    assert report["seedless"] < 8
+
+
+def test_brand_flood_disabled_returns_empty():
+    flood, report = kr.detect_brand_flood_tokens(
+        _mitchell_related(), ["third party claims adjuster"], enabled=False,
+    )
+    assert flood == set() and report["gate"] == "off"
+
+
+# --- is_seed_acronym + flood exoneration -------------------------------------
+def test_is_seed_acronym_matches_subsequence_from_first_word():
+    assert kr.is_seed_acronym("tpa", ["third party claims administrator"])   # t-p-a of t-p-c-a
+    assert kr.is_seed_acronym("tpca", ["third party claims administrator"])  # full acronym
+
+
+def test_is_seed_acronym_rejects_non_acronyms():
+    assert not kr.is_seed_acronym("mitchell", ["third party claims administrator"])
+    assert not kr.is_seed_acronym("t", ["third party claims administrator"])   # too short
+    assert not kr.is_seed_acronym("pca", ["third party claims administrator"])  # must start at first word
+    assert not kr.is_seed_acronym("tpa", ["roof repair contractor"])           # not this seed
+
+
+def test_brand_flood_exonerates_seed_acronym():
+    # "tpa" is the seed's own acronym — the "tpa ..." namespace must NOT be flooded,
+    # while a real competitor brand ("mitchell") still is.
+    related = ["tpa companies", "tpa insurance", "tpa software", "tpa services",
+               "tpa login", "tpa portal", "tpa list", "tpa near me",
+               "mitchell connect", "mitchell prodemand", "mitchell login",
+               "mitchell serum", "mitchell 1", "mitchell cloud", "mitchell community",
+               "mitchell international"]
+    flood, _ = kr.detect_brand_flood_tokens(
+        related, ["third party claims administrator"], min_count=5, min_fraction=0.3)
+    assert "tpa" not in flood
+    assert "mitchell" in flood
+
+
+# --- detect_generic_drift_tokens (bleached filler-token drift gate) -------------
+def _tpa_related():
+    """The real "third party claims administrator" shape: the related graph
+    wandered from the legal compound "third party" into the event sense of the
+    bleached filler "party", mixed with the on-topic compound, legit
+    distinctive-token adjacency, and true adjacency."""
+    party_drift = [  # solo overlap = {"party"} — false-friend drift
+        "party rentals", "party supplies", "birthday party ideas",
+        "party planning checklist", "party bus", "party city near me",
+    ]
+    third_drift = ["third grade math", "third eye chakra"]  # solo {"third"} — below min
+    compound = ["third party administrator", "third party claims process"]  # overlap >= 2
+    distinctive_solo = ["claims adjuster salary", "insurance claims process"]  # solo {"claim"}
+    adjacency = ["first notice of loss", "subrogation basics"]  # overlap 0
+    return party_drift + third_drift + compound + distinctive_solo + adjacency
+
+
+def test_generic_drift_flags_bleached_filler_token():
+    drift, report = kr.detect_generic_drift_tokens(
+        _tpa_related(), ["third party claims administrator"], min_count=5,
+    )
+    assert "party" in drift            # 6 solo-"party" keywords clears the floor
+    assert "third" not in drift        # only 2 solo-"third" — below min_count
+    assert report["gate"] == "drift"
+    assert report["dropped"] == 6
+
+
+def test_generic_drift_keeps_compound_distinctive_solo_and_adjacency():
+    drift, _ = kr.detect_generic_drift_tokens(
+        _tpa_related(), ["third party claims administrator"], min_count=5,
+    )
+    seed_toks = kr.token_set("third party claims administrator")
+    # bleached-filler drift dropped...
+    assert kr.is_generic_drift("party rentals", seed_toks, drift)
+    assert kr.is_generic_drift("birthday party ideas", seed_toks, drift)
+    # ...on-topic compound kept (shares >= 2 seed tokens)...
+    assert not kr.is_generic_drift("third party administrator", seed_toks, drift)
+    # ...single-token adjacency on a DISTINCTIVE token kept...
+    assert not kr.is_generic_drift("claims adjuster salary", seed_toks, drift)
+    # ...and true adjacency (no seed overlap) kept.
+    assert not kr.is_generic_drift("first notice of loss", seed_toks, drift)
+
+
+def test_generic_drift_inert_when_seed_is_about_the_filler():
+    # "party rental company": only ONE distinctive token ("rental" — "party" and
+    # "company" are fillers), so the topic could BE the filler. Never gate it,
+    # even though solo-"party" keywords dominate.
+    related = [
+        "party favors", "party venue", "party decorations", "party themes",
+        "party games", "party hire", "party ideas",
+    ]
+    drift, report = kr.detect_generic_drift_tokens(related, ["party rental company"])
+    assert drift == set()
+    assert report["gate"] == "off"
+    assert report["distinctive"] == 1
+
+
+def test_generic_drift_inert_for_short_topic_seed():
+    # "party planning": distinctive tokens < 2 → gate never engages.
+    drift, report = kr.detect_generic_drift_tokens(
+        ["party favors", "party venue", "party games", "party ideas", "party bus"],
+        ["party planning"],
+    )
+    assert drift == set() and report["gate"] == "off"
+
+
+def test_generic_drift_below_min_count_never_fires():
+    related = ["party rentals", "party supplies", "third party administrator",
+               "claims adjuster salary"]
+    drift, report = kr.detect_generic_drift_tokens(
+        related, ["third party claims administrator"], min_count=5,
+    )
+    assert drift == set()
+    assert report["gate"] == "none"
+
+
+def test_generic_drift_disabled_returns_empty():
+    drift, report = kr.detect_generic_drift_tokens(
+        _tpa_related(), ["third party claims administrator"], enabled=False,
+    )
+    assert drift == set() and report["gate"] == "off"
+
+
+def test_generic_drift_no_filler_in_seed_is_inert():
+    # A clean distinctive seed with no bleached filler token → gate never engages.
+    drift, report = kr.detect_generic_drift_tokens(
+        ["roof cleaning", "metal roof cost", "gutter guards"],
+        ["roof repair contractor"],
+    )
+    assert drift == set() and report["gate"] == "off"
