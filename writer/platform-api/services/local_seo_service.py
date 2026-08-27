@@ -37,7 +37,9 @@ _GENERATE_TIMEOUT = 600
 # rewrite/rescore passes earlier) — the soft cap ships the best page, this is the
 # backstop. Kept separate from _GENERATE_TIMEOUT so it does NOT shorten the
 # reoptimize-page flow (which has its own multi-pass loop and no time budget).
-_GENERATE_PAGE_TIMEOUT = 360
+# 8 min: wide enough that a pass started just under the 4-min soft budget always
+# finishes and ships, rather than being severed mid-rewrite at the hard stop.
+_GENERATE_PAGE_TIMEOUT = 480
 # Plain JSON endpoints (analyze / find-page / score / related / social) are
 # faster but still scrape/score — give them generous headroom.
 _JSON_TIMEOUT = 300
