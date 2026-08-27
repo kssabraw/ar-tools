@@ -593,9 +593,10 @@ class Settings(BaseSettings):
     # ── Maps geo-grid provider switch (Local Dominator → DataForSEO) ──────────
     # Which provider a NEW scan uses. In-flight/historic scans are routed by
     # their stored maps_scans.provider column, so both coexist across the flip;
-    # rollback is flipping this env var back. 'local_dominator' (default —
-    # DataForSEO dormant) | 'dataforseo'.
-    maps_scan_provider: str = "local_dominator"
+    # rollback is flipping this env var back. 'dataforseo' (default) |
+    # 'local_dominator' (retired 2026-08-27 — the vendor account lapsed and every
+    # scheduled scan on it 500'd for weeks; DataForSEO is now the geo-grid source).
+    maps_scan_provider: str = "dataforseo"
     # DataForSEO Maps SERP per-pin params. The zoom in location_coordinate
     # ("lat,lng,<zoom>") sets the simulated viewport WIDTH at each pin, and the
     # viewport must cover the pin→business distance (the grid RADIUS, not the
