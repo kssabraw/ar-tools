@@ -572,12 +572,16 @@ optimised for Answer Engine Optimisation. Follow all of them in every section.
    ✓ Good: "Yes, [Brand] offers 24/7 emergency tree removal in Anaheim and surrounding cities."
 
 5. BULLETED LISTS — use <ul> for features, services, inclusions, and what-to-expect items:
-   - Each bullet is a complete, self-contained statement (no sentence fragments)
+   - Each bullet is a COMPLETE SENTENCE — a subject and a verb, ending in a full stop (period).
+     NEVER a noun-phrase fragment or a "Topic — description" catalogue entry. A complete sentence
+     reads better AND is more liftable for AI answers, so this helps voice and AEO together.
    - Lead with the outcome or benefit, not the feature name
    - 1–2 lines per bullet maximum
    - Minimum 3 bullets, maximum 8 per list
-   - ✗ Bad bullet:  "Fast service"
-   - ✓ Good bullet: "Same-day response — crews dispatched within 2 hours for Anaheim emergencies"
+   - ✗ Bad (vague):    "Fast service"
+   - ✗ Bad (fragment): "Terracotta tile restoration — specialist cleaning and sealing" (no verb, no period — a catalogue entry, not a sentence)
+   - ✓ Good: "We restore heritage terracotta roofs with specialist cleaning and sealing that lasts."
+   - ✓ Good: "Our crews dispatch within 2 hours for Anaheim emergencies, so same-day response is standard."
 
 6. NUMBERED LISTS — use <ol> for processes, steps, and how-it-works sequences:
    - Each step begins with an action verb
@@ -956,7 +960,7 @@ AEO / LLM WRITING RULES — apply to all text and any new content added:
    split long paragraphs into multiple short <p> blocks rather than lengthening one.
 3. QUESTION-FORMAT H3s: Where natural, write H3s as questions a real searcher would type.
 4. DIRECT FAQ ANSWERS: Every FAQ answer opens with a direct yes/no or factual statement.
-5. BULLETED LISTS — use <ul> for features, services, inclusions, what-to-expect items.
+5. BULLETED LISTS — use <ul> for features, services, inclusions, what-to-expect items. Each bullet is a COMPLETE SENTENCE (subject + verb, ends in a period) — never a noun-phrase fragment or "Topic — description" catalogue entry.
 6. NUMBERED LISTS — use <ol> for processes, steps, how-it-works sequences.
 7. TABLES — preserve any existing <table> in the page. If the page has NONE and its content
    is genuinely comparative (service tiers, repair vs. replace, response time / coverage by
