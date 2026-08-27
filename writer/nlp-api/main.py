@@ -122,6 +122,7 @@ import ecommerce_facts as ecom_facts  # invariant public-spec auto-research (cit
 import ecommerce_loop as ecom_loop  # auto-retry loop stop decisions (pure)
 import voice_card as vcard  # brand voice + ICP: distilled card, prompt block, hard checks
 import length_fit  # deterministic length-fit engine (SERP avg +20% target)
+import section_edit  # split/splice generated pages by <section> for scoped corrective passes
 from blog_structure import (  # deterministic blog/AEO structure checks (R4/R6/R7)
     compute_blog_structural_aeo as _compute_blog_structural_aeo,
     detect_blog_structure as _detect_blog_structure,
@@ -303,6 +304,15 @@ VOICE_ENFORCEMENT_ENABLED = os.environ.get(
 # forbidden word is a fact, not a score, and gets its own targeted pass.
 MAX_VOICE_CORRECTION_PASSES = int(os.environ.get("MAX_VOICE_CORRECTION_PASSES", "3"))
 
+# The generate-page second pass now corrects BOTH axes: it fires when the voice
+# scorecard needs a rewrite OR the SEO composite fell short (voice is anchored in
+# pass 1 now, so a shortfall is most likely SEO). This is the SEO bar below which
+# the composite is treated as "fell short" and, with at least one deficient
+# engine, earns a corrective pass. Pages had been landing ~83-87, so 85 targets
+# the low end without adding a pass to already-strong pages; the time budget
+# still caps the loop and keep-best guarantees no regression ships.
+SEO_SECOND_PASS_THRESHOLD = float(os.environ.get("SEO_SECOND_PASS_THRESHOLD", "85"))
+
 
 def _voice_rank_key(scorecard: Optional[dict]) -> tuple:
     """Ranking key for keep-best voice correction: fewest critical violations
@@ -317,6 +327,29 @@ def _voice_rank_key(scorecard: Optional[dict]) -> tuple:
     score = sc.get("score")
     score = score if isinstance(score, (int, float)) and not isinstance(score, bool) else float("-inf")
     return (-crit, score)
+
+
+def _combined_rank_key(seo_score, voice: Optional[dict], seo_threshold: float) -> tuple:
+    """Keep-best key for the two-axis second pass: rank a (SEO, voice) state so
+    the page that best clears BOTH bars ships, never one axis won at the other's
+    expense. Priority: fewest voice criticals, then BOTH bars cleared, then how
+    many bars are cleared, then the summed score. A pass that lifts SEO but
+    regresses voice (voice.needs_rewrite flips true) therefore ranks below the
+    pre-pass state and is not shipped — which is how "re-verify voice didn't
+    regress" is enforced. Mirrors `_voice_rank_key` for the voice-only fields."""
+    v = voice or {}
+    crit = v.get("critical_count") or 0
+    vscore = v.get("score")
+    vscore = vscore if isinstance(vscore, (int, float)) and not isinstance(vscore, bool) else None
+    sscore = seo_score if isinstance(seo_score, (int, float)) and not isinstance(seo_score, bool) else None
+    seo_ok = sscore is not None and sscore >= seo_threshold
+    # No voice card → voice is not a bar (treat as satisfied); with a card, the
+    # bar is "not needing a rewrite".
+    voice_ok = (not v) or (not v.get("needs_rewrite"))
+    both = 1 if (seo_ok and voice_ok) else 0
+    cleared = (1 if seo_ok else 0) + (1 if voice_ok else 0)
+    total = (sscore or 0.0) + (vscore or 0.0)
+    return (-crit, both, cleared, total)
 
 
 async def _distill_voice_card(client, brand_voice: Optional[dict], detected_icp: Optional[dict]) -> dict:
@@ -4332,6 +4365,117 @@ EXISTING PAGE (use as reference — preserve accurate facts, fix everything else
     return content_html, schema_json, page_title, token_rec
 
 
+_SECTION_CORRECT_SYSTEM = """You are refining specific sections of an already-written local service page — not rewriting the page.
+
+You will be given: the client's BRAND VOICE & AUDIENCE guide (HIGHEST priority for expression), the SEO deficiencies to fix, any voice corrections, and the page's sections. Each section is shown as `[key] heading: <current inner HTML>`.
+
+Return ONLY a JSON object mapping a section's `[key]` to that section's NEW inner HTML (the content that goes INSIDE its <section> tag, not the <section> tag itself). Include ONLY the sections you actually change.
+
+Rules:
+- Fix the SEO deficiencies and the voice corrections in the sections where they belong. Leave every already-good section out of your response entirely.
+- PRESERVE THE CLIENT'S BRAND VOICE in every edit: grammatical person, required phrasing, tone, and CTA wording. An SEO fix must NOT flatten the prose into generic copy that could run on a competitor's site by swapping the business name — that is a failure, not a fix.
+- Keep each edited section's heading and its structural role (a services list stays a list, the comparison table stays a table, the FAQ stays Q&A). Do not add, remove, reorder, or rename sections.
+- Keep all facts accurate — never invent phone numbers, addresses, prices, hours, or services the business does not offer.
+- Write clean semantic HTML. Do NOT add RDFa markup (`<span property=...>`, `<link rel="sameAs">`) or re-link phone numbers — that is applied automatically after your edit.
+- Output valid JSON and valid HTML fragments only. No markdown fences, no commentary.
+"""
+
+
+async def _seo_voice_correct_inline(
+    content_html: str,
+    keyword: str,
+    location: str,
+    city: str,
+    business_name: str,
+    gbp_category: str,
+    address: Optional[str],
+    phone: Optional[str],
+    seo_deficiencies: List[dict],
+    voice_block: str,
+    voice_corrections: str,
+    serp_analysis_dict: Optional[dict],
+    client,
+) -> Optional[tuple]:
+    """Section-scoped SEO + voice corrective pass.
+
+    Rewrites ONLY the sections that need fixing and splices them back, so the LLM
+    output is a few sections rather than a whole ~16k-token page — which is what
+    keeps the second pass affordable under the wall-clock budget. The voice card
+    rides along as a hard constraint on every edit so an SEO fix can't flatten the
+    voice (the caller then re-scores and keep-bests on both axes to catch any
+    regression the prompt didn't prevent).
+
+    Returns ``(new_html, token_rec, applied_keys)`` — or ``None`` when the page
+    has no addressable ``<section>`` structure, the model returned no usable
+    edits, or the call failed, so the caller can fall back to a whole-page
+    rewrite. Never raises."""
+    try:
+        sections = section_edit.split_sections(content_html)
+        if not sections:
+            return None  # no <section> structure to target — caller falls back
+
+        deficiency_text = "\n".join(
+            f"  Engine: {d['engine']} (score: {d.get('score')}/100)\n"
+            f"  Issues: {'; '.join(d.get('issues', []))}\n"
+            f"  Fixes: {'; '.join(d.get('recommendations', []))}"
+            for d in (seo_deficiencies or [])
+        ) or "  (none — apply the voice corrections only)"
+        voice_section = f"\n{voice_block}\n" if voice_block else ""
+        corrections_section = (
+            f"\nVOICE CORRECTIONS (apply verbatim where they belong):\n{voice_corrections}\n"
+            if voice_corrections else ""
+        )
+        digest = section_edit.section_digest(sections)
+
+        user_prompt = f"""BUSINESS: {business_name} | CATEGORY: {gbp_category}
+KEYWORD: {keyword} | CITY: {city}
+PHONE: {phone or "[PHONE]"}
+ADDRESS: {address or "Not provided"}
+{voice_section}
+SEO DEFICIENCIES TO FIX:
+{deficiency_text}
+{corrections_section}
+PAGE SECTIONS — edit only the ones that need it and return their new inner HTML keyed by [key]:
+
+{digest}
+"""
+        msg = await client.messages.create(
+            model=GENERATION_MODEL,
+            max_tokens=8000,
+            system=[{"type": "text", "text": _SECTION_CORRECT_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        token_rec = _token_record(
+            "section-correct-inline", GENERATION_MODEL,
+            msg.usage.input_tokens, msg.usage.output_tokens,
+        )
+        edits = _parse_claude_json(msg.content[0].text)
+        if not isinstance(edits, dict):
+            return None
+        edits = {k: v for k, v in edits.items() if isinstance(v, str) and v.strip()}
+        if not edits:
+            return None
+
+        # Restore the deterministic markup a fresh section rewrite drops — per
+        # CHANGED section only, so unchanged sections keep their single
+        # first-occurrence RDFa spans (re-marking the whole page would double-wrap
+        # them, since _apply_rdfa_markup marks first occurrence in each text run).
+        entities = (serp_analysis_dict or {}).get("google_entities", [])
+        edits = {
+            k: _apply_rdfa_markup(_linkify_phones(v, phone), entities)
+            for k, v in edits.items()
+        }
+        new_html, applied, skipped = section_edit.apply_section_edits(content_html, edits)
+        if not applied:
+            return None
+        if skipped:
+            logger.info("section-correct: applied %s; skipped unresolved %s", applied, skipped)
+        return new_html, token_rec, applied
+    except Exception as _sce:
+        logger.warning("section-correct: failed (falling back to whole-page): %s", _sce)
+        return None
+
+
 def _sse(data: dict) -> str:
     """Format a dict as a Server-Sent Event line."""
     return f"data: {json.dumps(data)}\n\n"
@@ -6869,68 +7013,95 @@ Full location: {body.location}
                     f"deterministic checks only for '{body.keyword}'"
                 )
 
-        # ── Brand-voice enforcement: rewrite until it sounds like the client ──
-        # Two independent triggers, either of which earns a corrective pass:
-        # a deterministic `critical` finding (a forbidden word is a fact, not an
-        # opinion) or a scorecard below the pass bar. Each pass is fed BOTH the
-        # named words to remove and the failing dimensions with their evidence
-        # quotes, which is far better rewrite input than a bare score.
-        if voice_scorecard and voice_scorecard.get("needs_rewrite"):
-            # Keep-best: track the strongest state seen (initial + every pass) so
-            # a corrective rewrite that scores lower than its predecessor doesn't
-            # get shipped just because it ran last.
+        # ── Second pass: two-axis (voice + SEO) corrective, section-scoped ────
+        # Voice is anchored in pass 1 now, so a shortfall is most likely SEO.
+        # Fire when EITHER the voice scorecard needs a rewrite (a forbidden word
+        # or a sub-bar score) OR the SEO composite fell short with at least one
+        # deficient engine. Each pass rewrites ONLY the weak sections (cheap
+        # output → fits the wall-clock budget), carries the voice card as a hard
+        # constraint so an SEO fix can't flatten the voice, re-scores BOTH axes,
+        # and keep-bests on both — a pass that lifts one axis while regressing the
+        # other is never shipped.
+        def _seo_short(score, defs):
+            # length_fit has its own trim pass above; brand_voice is never in the
+            # SEO composite. A shortfall needs both a sub-bar composite AND an
+            # actionable deficient engine, so an already-strong page skips the pass.
+            _sd = [d for d in (defs or []) if d.get("engine_key") != "length_fit"]
+            short = score is not None and score < SEO_SECOND_PASS_THRESHOLD and bool(_sd)
+            return short, _sd
+
+        _voice_needs = bool(voice_scorecard and voice_scorecard.get("needs_rewrite"))
+        _seo_needs, _seo_defs = _seo_short(inline_score, inline_defs)
+        if _voice_needs or _seo_needs:
+            # Keep-best across BOTH axes (see _combined_rank_key): the strongest
+            # state seen wins, so a corrective pass that scores lower on either
+            # axis than its predecessor is never the one that ships.
             _best = {"html": content_html, "schema": schema_json, "title": page_title,
                      "score": inline_score, "scores": inline_scores, "voice": voice_scorecard}
+            _best_key = _combined_rank_key(inline_score, voice_scorecard, SEO_SECOND_PASS_THRESHOLD)
             for _fix_pass in range(1, MAX_VOICE_CORRECTION_PASSES + 1):
-                # Time budget: don't START another voice pass once the wall-clock
-                # budget is spent — ship the best page so far (a pass already in
-                # flight has finished by now). Keeps the sequential rewrite loop
-                # from stacking to 10+ minutes.
+                # Time budget: don't START another pass once the wall-clock budget
+                # is spent — ship the best page so far (a pass already in flight
+                # has finished). Keeps the sequential loop from stacking.
                 if not _within_time_budget():
                     logger.info(
-                        "generate-page: %ss time budget spent after voice pass %d — "
-                        "shipping best page without further rewrites",
+                        "generate-page: %ss time budget spent after pass %d — "
+                        "shipping best page without further correction",
                         GENERATION_TIME_BUDGET_SECONDS, _fix_pass - 1,
                     )
                     break
                 await q.put({
                     "step": "progress", "progress": 92,
-                    "message": (f"Aligning to the brand guide "
+                    "message": (f"Refining voice + SEO "
                                 f"(pass {_fix_pass} of {MAX_VOICE_CORRECTION_PASSES})…"),
                 })
                 corrections = "\n\n".join(part for part in (
-                    vcard.violations_to_corrections(voice_scorecard.get("violations")),
-                    vcard.voice_deficiency_text(voice_scorecard.get("deficiencies")),
+                    vcard.violations_to_corrections((voice_scorecard or {}).get("violations")),
+                    vcard.voice_deficiency_text((voice_scorecard or {}).get("deficiencies")),
                 ) if part)
-                try:
-                    fixed_html, fixed_schema, fixed_title, fix_tok = await _reoptimize_html_inline(
-                        existing_html=content_html,
-                        keyword=body.keyword, location=body.location, city=city,
-                        business_name=body.business_name, gbp_category=body.gbp_category,
-                        address=body.address, phone=body.phone,
-                        deficiencies=[], serp_analysis_dict=serp_analysis_dict,
-                        seo_checklist=seo_checklist, client=client,
-                        voice_block=voice_block, voice_corrections=corrections,
-                    )
-                except Exception as _ve:
-                    logger.warning(f"generate-page: voice pass {_fix_pass} failed: {_ve}")
-                    break
+
+                # Prefer the section-scoped corrective (only the weak sections,
+                # small output). Fall back to a whole-page rewrite when the page
+                # has no addressable <section> structure or the scoped pass yields
+                # nothing usable.
+                fixed_html = None
+                _sc = await _seo_voice_correct_inline(
+                    content_html, body.keyword, body.location, city,
+                    body.business_name, body.gbp_category, body.address, body.phone,
+                    _seo_defs, voice_block, corrections, serp_analysis_dict, client,
+                )
+                if _sc is not None:
+                    fixed_html, fix_tok, _applied = _sc
+                    # Section edits don't touch <title>/schema — keep them as-is.
+                else:
+                    try:
+                        fixed_html, _fs, _ft, fix_tok = await _reoptimize_html_inline(
+                            existing_html=content_html,
+                            keyword=body.keyword, location=body.location, city=city,
+                            business_name=body.business_name, gbp_category=body.gbp_category,
+                            address=body.address, phone=body.phone,
+                            deficiencies=_seo_defs, serp_analysis_dict=serp_analysis_dict,
+                            seo_checklist=seo_checklist, client=client,
+                            voice_block=voice_block, voice_corrections=corrections,
+                        )
+                        if (fixed_html or "").strip():
+                            schema_json = _fs or schema_json
+                            page_title = _ft or page_title
+                    except Exception as _ve:
+                        logger.warning(f"generate-page: correction pass {_fix_pass} failed: {_ve}")
+                        break
                 if not (fixed_html or "").strip():
-                    logger.warning(f"generate-page: voice pass {_fix_pass} returned empty HTML; keeping previous")
+                    logger.warning(f"generate-page: correction pass {_fix_pass} produced no HTML; keeping previous")
                     break
                 token_rec["input_tokens"]  += fix_tok["input_tokens"]
                 token_rec["output_tokens"] += fix_tok["output_tokens"]
                 token_rec["cost_usd"]       = round(token_rec["cost_usd"] + fix_tok["cost_usd"], 6)
                 content_html = fixed_html
-                schema_json = fixed_schema or schema_json
-                page_title = fixed_title or page_title
 
-                # Re-score the rewrite. The SEO composite is refreshed too: a
-                # voice rewrite touches the prose, so the old composite no longer
-                # describes this page.
+                # Re-score both axes on the corrected page.
                 try:
                     (
-                        inline_score, _, inline_scores, rescore_tok, voice_scorecard
+                        inline_score, inline_defs, inline_scores, rescore_tok, voice_scorecard
                     ) = await _score_html_inline(
                         content_html, body.keyword, body.location, body.business_name,
                         body.gbp_category, body.address, serp_analysis_dict, client,
@@ -6940,23 +7111,33 @@ Full location: {body.location}
                     token_rec["output_tokens"] += rescore_tok["output_tokens"]
                     token_rec["cost_usd"]       = round(token_rec["cost_usd"] + rescore_tok["cost_usd"], 6)
                 except Exception as _re:
-                    logger.warning(f"generate-page: voice re-score {_fix_pass} failed: {_re}")
+                    logger.warning(f"generate-page: re-score after pass {_fix_pass} failed: {_re}")
                     break
-                if _voice_rank_key(voice_scorecard) > _voice_rank_key(_best["voice"]):
+
+                _key = _combined_rank_key(inline_score, voice_scorecard, SEO_SECOND_PASS_THRESHOLD)
+                if _key > _best_key:
+                    _best_key = _key
                     _best = {"html": content_html, "schema": schema_json, "title": page_title,
                              "score": inline_score, "scores": inline_scores, "voice": voice_scorecard}
-                if not (voice_scorecard or {}).get("needs_rewrite"):
+
+                # Both bars cleared → done.
+                _seo_needs, _seo_defs = _seo_short(inline_score, inline_defs)
+                _voice_needs = bool(voice_scorecard and voice_scorecard.get("needs_rewrite"))
+                if not _voice_needs and not _seo_needs:
                     break
-            # Ship the best pass, not merely the last (also keeps html + scorecard
-            # consistent if a re-score failed mid-loop).
+            # Ship the best pass across both axes (keeps html + scorecard
+            # consistent even if a re-score failed mid-loop).
             content_html, schema_json, page_title = _best["html"], _best["schema"], _best["title"]
             inline_score, inline_scores, voice_scorecard = _best["score"], _best["scores"], _best["voice"]
-            if (voice_scorecard or {}).get("needs_rewrite"):
+            _still_voice = bool((voice_scorecard or {}).get("needs_rewrite"))
+            _still_seo, _ = _seo_short(inline_score, _build_deficiencies(inline_scores or {}))
+            if _still_voice or _still_seo:
                 # Flagged, not silently shipped.
                 logger.warning(
-                    "generate-page: page still off brand voice after "
-                    f"{MAX_VOICE_CORRECTION_PASSES} passes for '{body.keyword}' "
-                    f"(best score={voice_scorecard.get('score')})"
+                    "generate-page: page still short after %d passes for '%s' "
+                    "(voice_score=%s seo_composite=%s)",
+                    MAX_VOICE_CORRECTION_PASSES, body.keyword,
+                    (voice_scorecard or {}).get("score"), inline_score,
                 )
 
         # Build combined cost breakdown
