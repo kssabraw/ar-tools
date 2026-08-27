@@ -88,6 +88,16 @@ export interface PlanResponse {
   conflicts: PlanIssue[]
 }
 
+export type VariationKind = 'brand' | 'type'
+
+// A modifier that auto-generates a child page under a service. `brand` →
+// /{service}/{brand}/ brand × service ("Carrier AC Repair"); `type` →
+// /{service}/{modifier}/ sub-service ("Oak Tree Removal").
+export interface ServiceVariation {
+  label: string
+  kind: VariationKind
+}
+
 export interface ServiceRow {
   name: string
   slug?: string
@@ -95,8 +105,10 @@ export interface ServiceRow {
   order?: number
   include_in_matrix?: boolean
   parent_slug?: string | null
-  // Equipment brands this service is offered for. Their presence opts a
-  // top-level service into brand × service pages (/{service}/{brand}/).
+  // Variations a top-level service auto-generates child pages for.
+  variations?: ServiceVariation[]
+  // Pre-generalization field — read when loading an older stored catalog, then
+  // migrated into `variations` (kind:'brand') on the next save.
   brands?: string[]
 }
 

@@ -12,10 +12,18 @@ from __future__ import annotations
 import pytest
 
 from services import website_plan as wp
-from services.website_plan import CityEntry, ServiceEntry
+from services.website_plan import CityEntry, ServiceEntry, ServiceVariation
 
 
-def svc(name: str, **kw) -> ServiceEntry:
+def svc(name: str, *, brands=(), types=(), **kw) -> ServiceEntry:
+    """Build a ServiceEntry; `brands`/`types` are sugar for equipment-brand and
+    narrower-type variations, so tests read as intent rather than dataclass."""
+    variations = tuple(
+        [ServiceVariation(label=b, kind="brand") for b in brands]
+        + [ServiceVariation(label=t, kind="type") for t in types]
+    )
+    if variations:
+        kw["variations"] = variations
     return ServiceEntry(name=name, slug=wp.slugify(name), **kw)
 
 
@@ -564,15 +572,65 @@ class TestBrandServiceEngine:
         plan = wp.build_plan(site_type="informational", catalog=catalog, cities=[])
         assert not any(p.page_type == "brand_service" for p in plan.pages)
 
-    def test_over_200_brand_pages_blocks_pending_signoff(self):
+    def test_over_200_variation_pages_blocks_pending_signoff(self):
         brands = tuple(f"Brand{i}" for i in range(201))
         catalog = [svc("AC Repair", brands=brands)]
         plan = wp.build_plan(site_type="local_business", catalog=catalog, cities=CITIES)
-        gate = next((i for i in plan.issues if i.kind == "brand_service_scale"), None)
+        gate = next((i for i in plan.issues if i.kind == "variation_scale"), None)
         assert gate is not None and gate.blocking and gate.acknowledgeable
 
     def test_brand_service_is_a_generable_page_type(self):
         assert "brand_service" in wp.NLP_PAGE_TYPES
+
+
+class TestServiceVariations:
+    """The generalized variation matrix: a 'type' modifier becomes a sub-service
+    (Oak Tree Removal), a 'brand' modifier a brand × service page."""
+
+    def test_type_variation_becomes_a_sub_service_with_a_clean_title(self):
+        catalog = [svc("Tree Removal", types=("Oak Trees",))]
+        pages = wp.service_variation_pages(catalog)
+        assert len(pages) == 1
+        page = pages[0]
+        assert page.path == "/tree-removal/oak-trees/"
+        assert page.page_type == "sub_service"
+        # The label stands alone — no "Oak Trees Tree Removal" doubling.
+        assert page.title == "Oak Trees"
+        assert page.tier == 2
+
+    def test_brand_and_type_variations_coexist_on_one_service(self):
+        catalog = [svc("AC Repair", brands=("Carrier",), types=("Ductless Mini Split",))]
+        pages = wp.service_variation_pages(catalog)
+        kinds = {p.path: p.page_type for p in pages}
+        assert kinds["/ac-repair/carrier/"] == "brand_service"
+        assert kinds["/ac-repair/ductless-mini-split/"] == "sub_service"
+
+    def test_type_variation_generates_with_the_label_as_keyword(self):
+        catalog = [svc("Tree Removal", types=("Oak Tree Removal",))]
+        page = wp.service_variation_pages(catalog)[0]
+        # No catalog ServiceEntry exists for the synthetic sub-service, so the
+        # nlp keyword falls back to the page title (the label) — clean, not doubled.
+        inputs = wp.generation_inputs(page, services={"tree-removal": catalog[0]}, cities={}, primary_city="Dallas")
+        assert inputs["engine"] == "nlp"
+        assert inputs["keyword"] == "Oak Tree Removal"
+        assert inputs["location"] == "Dallas"
+
+    def test_type_variation_frontmatter_nests_under_the_service(self):
+        catalog = [svc("Tree Removal", types=("Oak Trees",))]
+        page = wp.service_variation_pages(catalog)[0]
+        fm = wp.frontmatter_extra(page, services={"tree-removal": catalog[0]}, cities={})
+        assert fm["parentService"] == "tree-removal"
+
+    def test_brands_property_reads_only_brand_variations(self):
+        s = svc("AC Repair", brands=("Carrier",), types=("Mini Split",))
+        assert s.brands == ("Carrier",)
+
+    def test_geo_plan_includes_type_variation_pages(self):
+        catalog = [svc("Tree Removal", order=10, types=("Oak Trees", "Palm Trees"))]
+        plan = wp.build_plan(site_type="local_business", catalog=catalog, cities=CITIES)
+        paths = {p.path for p in plan.pages}
+        assert "/tree-removal/oak-trees/" in paths
+        assert "/tree-removal/palm-trees/" in paths
 
 
 class TestHyperLocalEngine:
