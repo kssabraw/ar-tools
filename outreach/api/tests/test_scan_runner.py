@@ -167,6 +167,10 @@ class _Settings:
     scan_collect_fallback_limit = 500
     scan_collect_alert_days = 5
     dataforseo_cost_per_request_cents = 1  # the I-086 ledger write reads this
+    # Auto-organic hook fires on finalize (collect_ready); off by default here so the collection
+    # tests stay focused — the wiring is pinned by its own test below.
+    organic_auto_enabled = False
+    organic_auto_actor_id = "00000000-0000-0000-0000-000000000000"
 
 
 def _submarket(radius=5.0, spacing=5.0):
@@ -602,3 +606,66 @@ def test_a_failing_month_assertion_raises_rather_than_reporting_success():
 
     with pytest.raises(RuntimeError):
         scan_runner.finalize_snapshot(db, _Settings(), "snap-1")
+
+
+def test_a_finalized_snapshot_auto_enqueues_an_organic_order():
+    """Owner ruling 2026-08-27: the organic / paid-placement signal runs on EVERY scan, not only on
+    a UI click. When collect_ready finalizes a snapshot, it auto-places one organic order for it
+    (the tick's organic drain then captures it). Same collecting setup as the tag-recovery test,
+    plus a keyword_id and organic_auto_enabled."""
+    db = _FakeDB()
+    db.tables["scan_snapshot"] = [
+        {"id": SNAP, "scanned_at": "2026-03-15T12:00:00+00:00", "expected_points": 1,
+         "keyword_id": "kw-1"}
+    ]
+    db.tables["scan_task"] = [
+        {"id": "t0", "snapshot_id": SNAP, "point_seq": 0, "provider_task_id": None,
+         "status": "pending", "submitted_at": None}
+    ]
+    http = _FakeHTTP(
+        gets=[
+            _ready([{"id": "orphan-task", "tag": f"{SNAP}:0"}]),
+            _grid([{"place_id": "A", "rank_absolute": 1}]),
+            _ready([]),
+        ]
+    )
+    settings = _Settings()
+    settings.organic_auto_enabled = True
+
+    report = asyncio.run(scan_runner.collect_ready(db, settings, client=http, max_rounds=2))
+
+    assert SNAP in report.snapshots_finalized
+    orders = db.tables.get("organic_scan_request", [])
+    assert len(orders) == 1
+    assert orders[0]["snapshot_id"] == SNAP and orders[0]["keyword_id"] == "kw-1"
+    assert orders[0]["requested_by"] == "00000000-0000-0000-0000-000000000000"
+
+
+def test_the_auto_organic_enqueue_is_idempotent_across_ticks():
+    """A stale-recovery re-touch can reach finalize_snapshot again; the enqueue must not place a
+    second (paid) order — a prior order for the snapshot short-circuits it."""
+    db = _FakeDB()
+    db.tables["scan_snapshot"] = [
+        {"id": SNAP, "scanned_at": "2026-03-15T12:00:00+00:00", "expected_points": 1,
+         "keyword_id": "kw-1"}
+    ]
+    db.tables["scan_task"] = [
+        {"id": "t0", "snapshot_id": SNAP, "point_seq": 0, "provider_task_id": None,
+         "status": "pending", "submitted_at": None}
+    ]
+    db.tables["organic_scan_request"] = [
+        {"id": "prior", "snapshot_id": SNAP, "keyword_id": "kw-1", "status": "done"}
+    ]
+    http = _FakeHTTP(
+        gets=[
+            _ready([{"id": "orphan-task", "tag": f"{SNAP}:0"}]),
+            _grid([{"place_id": "A", "rank_absolute": 1}]),
+            _ready([]),
+        ]
+    )
+    settings = _Settings()
+    settings.organic_auto_enabled = True
+
+    asyncio.run(scan_runner.collect_ready(db, settings, client=http, max_rounds=2))
+
+    assert len(db.tables["organic_scan_request"]) == 1  # no second order

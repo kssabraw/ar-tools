@@ -297,6 +297,12 @@ async def collect_ready(
     for snapshot_id in sorted(s for s in touched if s):
         if finalize_snapshot(db, settings, snapshot_id):
             report.snapshots_finalized.append(snapshot_id)
+            # Owner ruling 2026-08-27: the ORGANIC / paid-placement signal runs on EVERY scan, not
+            # only on a UI click. A just-finalized snapshot auto-enqueues one cheap organic order
+            # (idempotent, budget-gated, ≤1/tick drain). Local import breaks the scan_runner ⇄
+            # organic_scan import cycle; best-effort so it never blocks finalization.
+            from . import organic_scan_queue
+            organic_scan_queue.enqueue_for_snapshot(db, settings, snapshot_id)
 
     return report
 
