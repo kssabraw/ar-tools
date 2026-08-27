@@ -805,9 +805,16 @@ VOICE_PASS_THRESHOLD = 87.0
 # Deterministic findings outrank the judge on the things a regex can settle.
 # Without this a scorer can call vocabulary "strong" on a page that provably
 # contains a forbidden word.
+#
+# A MISSING preferred phrase is deliberately NOT capped (owner ruling
+# 2026-08-27): a `must_use_terms` finding is a soft "warning", and a single
+# absent preferred phrase among many present should not crater an otherwise
+# on-voice vocabulary score to a hard 70. The miss is still surfaced as a
+# deficiency and still drives the phrase-insert + corrective passes — it just no
+# longer pins the score. A forbidden word (never_use) is a different, provable,
+# critical signal and stays capped.
 _DETERMINISTIC_CAPS = {
     "never_use_terms": ("vocabulary", 40.0),
-    "must_use_terms":  ("vocabulary", 70.0),
     "person":          ("person", 40.0),
     "cta_language":    ("cta_fit", 50.0),
 }
