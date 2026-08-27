@@ -31,6 +31,15 @@ logger = logging.getLogger(__name__)
 
 # Generation/reoptimization can take minutes (SERP scrape + Claude + scoring).
 _GENERATE_TIMEOUT = 600
+# Hard stop for a single /generate-page attempt: if nlp hasn't returned within
+# this window the SSE connection is severed and the attempt fails. Paired with
+# the nlp GENERATION_TIME_BUDGET_SECONDS soft cap (which stops starting new
+# rewrite/rescore passes earlier) — the soft cap ships the best page, this is the
+# backstop. Kept separate from _GENERATE_TIMEOUT so it does NOT shorten the
+# reoptimize-page flow (which has its own multi-pass loop and no time budget).
+# 8 min: wide enough that a pass started just under the 4-min soft budget always
+# finishes and ships, rather than being severed mid-rewrite at the hard stop.
+_GENERATE_PAGE_TIMEOUT = 480
 # Plain JSON endpoints (analyze / find-page / score / related / social) are
 # faster but still scrape/score — give them generous headroom.
 _JSON_TIMEOUT = 300
@@ -177,13 +186,15 @@ async def _post_nlp(
         raise HTTPException(status_code=502, detail="local_seo_provider_error") from exc
 
 
-async def _stream_nlp(path: str, payload: dict) -> dict:
+async def _stream_nlp(path: str, payload: dict, timeout: float = _GENERATE_TIMEOUT) -> dict:
     """POST to an SSE nlp endpoint (`/generate-page`, `/reoptimize-page`) and
-    return the final `result` dict. Raises HTTPException on provider error."""
+    return the final `result` dict. Raises HTTPException on provider error.
+    `timeout` is the hard stop for the whole attempt (generate uses the tighter
+    _GENERATE_PAGE_TIMEOUT; reoptimize keeps the longer default)."""
     url = f"{settings.nlp_api_url}{path}"
     result: Optional[dict] = None
     try:
-        async with httpx.AsyncClient(timeout=_GENERATE_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             async with client.stream("POST", url, json=payload) as response:
                 if response.status_code != 200:
                     body = await response.aread()
@@ -448,7 +459,7 @@ async def _apply_structure_gate(
     from services import structure_gate
 
     async def _regenerate(corrections: str) -> Optional[dict]:
-        return await _stream_nlp("/generate-page", {**payload, "structure_corrections": corrections})
+        return await _stream_nlp("/generate-page", {**payload, "structure_corrections": corrections}, timeout=_GENERATE_PAGE_TIMEOUT)
 
     return await structure_gate.apply_structure_gate(
         result,
@@ -523,7 +534,7 @@ async def generate_page(
         payload["serp_analysis"] = serp
     else:
         payload["run_analysis"] = False  # analysis unavailable → degrade, no nlp re-scrape
-    result = await _stream_nlp("/generate-page", payload)
+    result = await _stream_nlp("/generate-page", payload, timeout=_GENERATE_PAGE_TIMEOUT)
     result = await _apply_structure_gate(result, payload, reference_analysis)
     return _persist_page(client_id, keyword, location, True, "generate", result, user_id, notes=notes)
 

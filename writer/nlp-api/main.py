@@ -270,7 +270,7 @@ LENGTH_TRIM_MIN_RATIO = float(os.environ.get("LENGTH_TRIM_MIN_RATIO", "1.4"))
 # correction pass is STARTED — a pass already in flight finishes, then the best
 # page so far ships. Caps the sequential rewrite→rescore loop that can otherwise
 # stack to 10+ minutes for a brand-guide client. 0 disables the cap.
-GENERATION_TIME_BUDGET_SECONDS = int(os.environ.get("GENERATION_TIME_BUDGET_SECONDS", "300"))
+GENERATION_TIME_BUDGET_SECONDS = int(os.environ.get("GENERATION_TIME_BUDGET_SECONDS", "240"))
 
 # Plateau guard: the minimum composite gain a pass must produce to justify
 # running another one. A run that has flat-lined and one that is still climbing
@@ -688,11 +688,12 @@ A direct answer must always come first, but it must be written in the brand's re
 The rule: lead with the answer, then let the rest of the sentence and paragraph carry the brand tone.
 
 LENGTH BUDGET — READ BEFORE WRITING (HIGHEST-PRIORITY LENGTH RULE):
-The BUSINESS DATA may include a "TOTAL WORD BUDGET" (the competitor SERP average + 20%). When it is present it is AUTHORITATIVE and OVERRIDES the per-section word counts below. The per-section counts are proportions for a full-length page — SCALE THEM DOWN so the entire visible <article> body lands within ±10% of the budget. Rules:
+The BUSINESS DATA may include a "TOTAL WORD BUDGET" (the competitor SERP average + 20%). When it is present it is AUTHORITATIVE and OVERRIDES the per-section word counts below. The per-section counts are proportions for a full-length page — SCALE THEM DOWN so the entire visible <article> body lands at the LOWER end of the budget: aim for roughly the budget minus 10% (never below the budget minus 20%), and treat the budget as a HARD CEILING you never exceed. Rules:
+- BIAS SHORT EVERYWHERE. Whenever a section, the budget, or a "structure to mirror" reference layout gives a word-count range or target, aim for the LOWER end / the minimum of it — never the middle or the top. Fewer words that fully make the point always beat more. When in doubt, cut.
 - Take the reduction primarily from the Main Service Body (§6), then by consolidating overlapping H2/H3 sections and trimming repetition — never by dropping a required structural element (intro answer block, CTAs, geographic section, FAQ, schema).
 - A shorter page that matches the SERP beats a longer one: do NOT chase "information gain" past the budget. Cover what competitors cover concisely; add a net-new topic only when it is essential to answer the query AND you are within budget.
-- NEVER pad to reach a number and NEVER fabricate facts to fill space. If real, on-topic substance runs short of the budget, a slightly shorter page is correct.
-- If no TOTAL WORD BUDGET is provided, use the per-section counts below as written.
+- NEVER pad to reach a number and NEVER fabricate facts to fill space. If real, on-topic substance runs short of the budget, a shorter page is correct — coming in UNDER the budget is good, going over is not.
+- If no TOTAL WORD BUDGET is provided, target the LOWER end of the per-section counts below (their minimums), not the middle.
 
 Section 1 — Intro / Direct Answer Block (100–150 words)
 <section id="intro">
