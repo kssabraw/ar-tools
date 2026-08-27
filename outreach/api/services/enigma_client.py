@@ -54,8 +54,17 @@ class EnigmaCall:
 
 
 def _headers(settings: Settings) -> dict[str, str]:
+    """Headers for the POST match (carries a JSON body)."""
     return {"x-api-key": settings.enigma_api_key, "Content-Type": "application/json",
             "Accept": "application/json"}
+
+
+def _get_headers(settings: Settings) -> dict[str, str]:
+    """Headers for the bodyless GET attributes call. Deliberately NO `Content-Type: application/json`
+    — a GET sends no body, and declaring a JSON content type made Enigma's gateway try to parse an
+    empty body and return `400 {"Code":"BadRequestError","Message":"Error Parsing JSON"}` on the first
+    probe. Only `x-api-key` + `Accept` here."""
+    return {"x-api-key": settings.enigma_api_key, "Accept": "application/json"}
 
 
 def _biz_body(biz: dict[str, Any]) -> dict[str, Any]:
@@ -103,10 +112,15 @@ async def get_attributes(client: httpx.AsyncClient, settings: Settings, enigma_i
     """GET the attributes for a matched id (`?attrs=` selects datasets when configured). Never raises."""
     base = f"{settings.enigma_base_url.rstrip('/')}{settings.enigma_business_path.rstrip('/')}"
     url = f"{base}/{enigma_id}"
-    params = {"attrs": settings.enigma_attrs} if settings.enigma_attrs.strip() else None
+    params: dict[str, str] = {}
+    if settings.enigma_attrs.strip():
+        params["attrs"] = settings.enigma_attrs.strip()
+    # lookback_months only means anything for the time-series (card) attributes; harmless otherwise.
+    if str(settings.enigma_lookback_months).strip():
+        params["lookback_months"] = str(settings.enigma_lookback_months).strip()
     call = EnigmaCall(method="GET", url=url)
     try:
-        resp = await client.get(url, headers=_headers(settings), params=params)
+        resp = await client.get(url, headers=_get_headers(settings), params=params or None)
         call.status = resp.status_code
         call.body_text = resp.text[:6000]
         try:
