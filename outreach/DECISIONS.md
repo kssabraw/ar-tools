@@ -2107,3 +2107,44 @@ deliberate owner decision recorded here), and the auto order carries a **sentine
 (`00000000-…`, no FK) + a machine note, so an auto capture stays auditable in the ledger apart from a
 click. This does NOT change the other paid producers (`scan-ai`, `probe-pixel-field` stay
 click/flag-gated). Reversible by config (`organic_auto_enabled=False` → click-only).
+
+---
+
+## 2026-08-27 · Enigma — probe-first, native 1m/3m/12m windows (owner: build both uses)
+
+Owner provided an Enigma eval API key and asked for two user-facing options: (1) get an owner/
+principal NAME for businesses our ladder can't name (AFTER Outscraper → site-scrape → web-search),
+and (2) get 3m/6m/12m credit-card-transaction data per business. Both come from one Enigma lookup
+(scoping doc `docs/enigma-integration-scoping-v0_1.md`).
+
+**Two decisions (owner-confirmed 2026-08-27):**
+
+1. **Probe first, then build.** The dev sandbox's egress proxy blocks `api.enigma.com` (and the
+   docs), so Enigma cannot be called or the schema verified from the dev environment — only the
+   Railway service can reach it (like the private nlp service / census.gov). Per this module's
+   "measure, don't infer" discipline AND the scoping doc's own §3, the contract + yield are measured
+   on a live Railway run before parsers are trusted. Built `probe-enigma` (PAID, confirm-gated): it
+   matches a §3 sample (~half un-named + named controls) from a market, fetches attributes, LOGS the
+   full raw envelope of every call (so the real schema — and which datasets carry principals + card
+   transactions — is captured), and prints the decision metrics (match rate, owner-name hit on the
+   un-named, card-signal fill). The client (`enigma_client.py`) is written to the DOCUMENTED shape
+   with EVERYTHING url-shaped in config (`enigma_base_url`/`enigma_match_path`/`enigma_business_path`/
+   `enigma_attrs`) so a wrong path is an env fix, not a code redeploy; the pure extractors
+   (`enigma_probe.py`) are tolerant (recursive key search, never raise) and unit-tested against the
+   documented shapes + tolerance cases.
+
+2. **Native 1m / 3m / 12m windows — drop the 6m.** Enigma's card-transaction product reports average
+   monthly transactions/revenue over its native **1-month, 3-month, and 12-month** windows; there is
+   **no 6-month period**. Owner chose to surface Enigma's real windows rather than approximate a 6m,
+   so the transactions feature will show 1m/3m/12m as measured (no invented number).
+
+**Key handling:** the eval key is stored as `OUTREACH_ENIGMA_API_KEY` on the Railway outreach service
+(set with skipDeploys — the outreach service must be deployed by git push, an API redeploy rebuilds
+with Railpack and fails per `railway.toml`). It is NEVER committed to the repo; config reads it via
+the `OUTREACH_` env prefix (`settings.enigma_api_key`).
+
+**Next (Phase 2, after the probe run confirms yield ≥ the §5 bars):** the two features against the
+measured contract — an `enigma_request` signed-order contacts rung positioned LAST (only for still-
+un-named prospects; mirrors `name_search`) and the card-transaction data stored + surfaced per
+business. Cost per lookup (`enigma_cost_per_lookup_cents`, placeholder 50¢) is confirmed by the
+probe's bill (the I-111 pattern).

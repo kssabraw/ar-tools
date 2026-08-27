@@ -1,9 +1,14 @@
 # Enigma integration — scoping & procurement ask (v0.1)
 
-**Status:** SCOPING ONLY — no code, no contract. This doc frames (1) what to ask Enigma for and
-(2) a concrete sample test to run *before* committing, so the decision is made on measured coverage
-against our own prospects, not on a sales deck. Same "measure, don't infer" discipline that just
-resolved the Outscraper enrichment work (I-109).
+**Status:** PROBE BUILT (2026-08-27) — an eval API key is provisioned (`OUTREACH_ENIGMA_API_KEY` on
+the Railway outreach service) and the §3 sample test is now runnable as the `probe-enigma` command
+(PAID, confirm-gated). This doc frames (1) what to ask Enigma for and (2) the sample test to run
+*before* committing the production features, so the decision is made on measured coverage against our
+own prospects, not on a sales deck. Same "measure, don't infer" discipline that resolved the
+Outscraper enrichment work (I-109). **Owner ruling 2026-08-27:** build both uses; the transactions
+feature surfaces Enigma's native **1m / 3m / 12m** windows (there is no 6m period). Run the probe on
+Railway (flip `OUTREACH_COMMAND=probe-enigma` + `OUTREACH_CONFIRM_SPEND=probe-enigma`, or run the CLI
+there) to capture the real schema + yield, then build Phase 2 per §4. See DECISIONS.md 2026-08-27.
 
 **Why Enigma is on the table.** After the enrichment fixes (async submit+poll + the correct
 `leads_n_contacts` slug + per-person dedup), Outscraper reliably returns **emails** for small local
