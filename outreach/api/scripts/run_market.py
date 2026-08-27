@@ -999,7 +999,8 @@ def cmd_probe_enigma_graphql(args) -> int:
         print("REFUSED: no prospect with a place_id to sample in this market", file=sys.stderr)
         return 2
 
-    results = _asyncio.run(enigma_graphql.lookup_many(settings, prospects))
+    entity = getattr(args, "entity", "brand")
+    results = _asyncio.run(enigma_graphql.lookup_many(settings, prospects, entity_type=entity))
     metrics = enigma_graphql.probe_metrics(results, unnamed_ids)
     per = [
         {
@@ -1007,6 +1008,7 @@ def cmd_probe_enigma_graphql(args) -> int:
             "name": (r.biz or {}).get("name"),
             "un_named": r.prospect_id in unnamed_ids,
             "status": getattr(r.call, "status", None),
+            "matched": enigma_graphql.is_match(r),
             "enigma_id": r.enigma_id or None,
             "owner": enigma_graphql.extract_owner(r.brand),
             "card_windows": enigma_graphql.extract_card_windows(r.brand),
@@ -1014,7 +1016,8 @@ def cmd_probe_enigma_graphql(args) -> int:
         for r in results
     ]
     print(json.dumps({"market_id": market_id, "sampled": len(prospects),
-                      "path": "graphql", "metrics": metrics, "prospects": per}, indent=2))
+                      "path": "graphql", "entity": entity, "metrics": metrics,
+                      "prospects": per}, indent=2))
     # Any 200 answers the schema question; nothing OK ⇒ wrong URL / dead key ⇒ failure.
     any_ok = any(getattr(r.call, "ok", False) for r in results if r.call)
     return 0 if any_ok else 1
@@ -2156,6 +2159,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--market-id", default=None,
         help="probe-enigma: the market UUID to sample. Defaults to the market resolved from the "
              "definition's name.",
+    )
+    parser.add_argument(
+        "--entity", choices=["brand", "operating_location"], default="brand",
+        help="probe-enigma-graphql: which Enigma entity to match. 'brand' reads roles under "
+             "operatingLocations; 'operating_location' reads roles directly on the location (where "
+             "owner records live). Card data comes from either.",
     )
     parser.add_argument(
         "--enrichments", default=None,

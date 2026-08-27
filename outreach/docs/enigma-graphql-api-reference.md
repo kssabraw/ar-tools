@@ -75,6 +75,18 @@ rejected with `Cannot query field '…'`:
   (`rawQuantity` exists on `OperatingLocationCardTransaction`, not Brand).
 - `Person.fullName` / `firstName` / `lastName` — use `LegalEntity.names` instead (above).
 
+### Measured on the corrected query (2026-08-27, LA plumbers)
+
+- **`enigmaId` comes back `null`** on a real match — a match is signalled by a returned entity dict
+  (names/cardTransactions/roles present), NOT by a non-null id. `is_match` / `first_entity` key on
+  the entity, not the id.
+- **Card revenue windows (1m/3m/12m) flow** — `projectedQuantity` per period, as a rolling series
+  (multiple overlapping 12m windows at different `periodEndDate`s). ~40% fill on LA plumbers.
+- **Roles came back empty** under `Brand → operatingLocations → roles`. The console batch's columns
+  are `operatingLocations__0__roles__0…`, so roles live at the operating-location level — hence the
+  probe also supports `entityType: OPERATING_LOCATION`, reading `roles` **directly** on the matched
+  location (`--entity operating_location`). Card data comes from either entity type.
+
 ## The probe query (BRAND match → owner + card windows)
 
 ```graphql
