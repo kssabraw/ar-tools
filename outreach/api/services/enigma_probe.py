@@ -17,9 +17,14 @@ from typing import Any, Iterator
 
 # Enigma business ids look like `B00233ee1f5e` (a letter + hex). Loose: a letter then ≥6 hex chars.
 _ENIGMA_ID_RE = re.compile(r"^[A-Za-z][0-9a-fA-F]{6,}$")
-_ID_KEYS = ("enigma_id", "business_id", "id")
+# The ID endpoint's path param is the BUSINESS id (`B…`), confirmed by the docs
+# (`GET /businesses/B00233ee1f5e?attrs=…`). A match record also carries a record-level `enigma_id`
+# (`E…`) — passing THAT is what 400'd the first probe. Prefer `business_enigma_id` when both exist.
+_ID_KEYS = ("business_enigma_id", "enigma_id", "business_id", "id")
 _MATCH_LIST_KEYS = ("matches", "businesses", "data", "results", "hits")
-_PRINCIPAL_KEYS = ("principal", "person", "officer", "owner", "contact", "registered_agent")
+# "people" catches Enigma's match-response `associated_people`; "registered_agent" catches
+# `registered_agents`. Principals ride the MATCH response for these businesses, not the id call.
+_PRINCIPAL_KEYS = ("principal", "people", "person", "officer", "owner", "contact", "registered_agent")
 _CARD_KEYS = ("card_transaction", "card_transactions", "transactions", "card_revenue", "card_revenues")
 # Period aliases → canonical window. Enigma's native windows are 1m / 3m / 12m (NO 6m).
 # Period detection, in precedence order so a compound key ("three_month", "twelve_month") is not
@@ -170,6 +175,26 @@ def extract_card_transactions(id_raw: Any) -> dict[str, Any] | None:
     return out or None
 
 
+def _call_raw(call: Any) -> Any:
+    return getattr(call, "raw", None) if call is not None else None
+
+
+def principal_name_from_result(result: Any) -> str | None:
+    """A principal / owner NAME for one lookup, checking BOTH the match response and the id-endpoint
+    attributes. Enigma returns `associated_people` / `registered_agents` in the MATCH payload for these
+    businesses, so reading only the id call (as the first cut did) misses every name."""
+    return (
+        extract_principal_name(_call_raw(getattr(result, "id_call", None)))
+        or extract_principal_name(_call_raw(getattr(result, "match_call", None)))
+    )
+
+
+def card_transactions_from_result(result: Any) -> dict[str, Any] | None:
+    """Card-transaction windows for one lookup, from the id-endpoint attributes (the match response
+    lists only which data_sources EXIST, not the amounts)."""
+    return extract_card_transactions(_call_raw(getattr(result, "id_call", None)))
+
+
 def probe_metrics(results: list[Any], unnamed_prospect_ids: set[str]) -> dict[str, Any]:
     """The scoping §3 decision metrics over a list of `enigma_client.LookupResult`.
 
@@ -182,12 +207,8 @@ def probe_metrics(results: list[Any], unnamed_prospect_ids: set[str]) -> dict[st
     matched = [r for r in results if getattr(r, "enigma_id", "")]
     unnamed = [r for r in results if getattr(r, "prospect_id", "") in unnamed_prospect_ids]
 
-    def _id_raw(r: Any) -> Any:
-        call = getattr(r, "id_call", None)
-        return getattr(call, "raw", None) if call is not None else None
-
-    unnamed_named = [r for r in unnamed if extract_principal_name(_id_raw(r))]
-    card_filled = [r for r in matched if extract_card_transactions(_id_raw(r))]
+    unnamed_named = [r for r in unnamed if principal_name_from_result(r)]
+    card_filled = [r for r in matched if card_transactions_from_result(r)]
 
     def _rate(n: int, d: int) -> float:
         return round(n / d, 3) if d else 0.0

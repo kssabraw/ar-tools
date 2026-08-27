@@ -468,14 +468,23 @@ class Settings(BaseSettings):
     # POST match: identifiers (name + address {street/city/state/postal}, website, person) → matched
     # profiles carrying an Enigma business id. Path is a best guess pending the probe.
     enigma_match_path: str = "/businesses/match"
-    # GET attributes for a matched id: `{base}{business_path}/{id}?attrs=<datasets>`. Confirmed shape
-    # from the docs (`GET /businesses/B00233…?attrs=industries`); the dataset NAMES that carry card
-    # data + principals are what the probe confirms.
+    # GET attributes for a matched id: `{base}{business_path}/{B-id}?attrs=<datasets>`. Confirmed from
+    # the docs (`GET /businesses/B00233…?attrs=industries`) — the path param is the **business_enigma_id**
+    # (the `B…` id in a match record), NOT the record-level `enigma_id` (`E…`); passing the `E…` id is
+    # what the first probe hit with a 400 "Error Parsing JSON". `match_id_from_response` now prefers the
+    # `B…` id (enigma_probe._ID_KEYS).
     enigma_business_path: str = "/businesses"
-    # Attribute datasets to request on the id call (comma-joined into ?attrs=). Empty = whatever the
-    # endpoint returns by default; the probe logs the raw so the real dataset names are captured, then
-    # this is set to the card-transaction + principals datasets for production.
-    enigma_attrs: str = ""
+    # Attribute datasets to request on the id call (comma-joined into ?attrs=). The card-transaction
+    # VALUES are add-on Merchant-Transaction-Signals attributes that must be asked for by name (the base
+    # id response carries only names/addresses/data_sources/industries). Confirmed slugs (developers.
+    # enigma.com/docs/attribute-dictionary): `card_transactions` + `card_revenues` return per-window
+    # (1m/3m/12m) `average_monthly_amount`. Principals ride the MATCH response (`associated_people` /
+    # `registered_agents`), so they are NOT requested here. Override via OUTREACH_ENIGMA_ATTRS.
+    enigma_attrs: str = "card_transactions,card_revenues"
+    # Time-series depth for the Merchant-Transaction-Signals attributes. Enigma returns history back to
+    # Jan 2017 when `lookback_months` > 0 (`*` = max); the 1m/3m/12m rolling windows come regardless, so
+    # 12 is enough for the probe. Sent only when non-empty. Override via OUTREACH_ENIGMA_LOOKBACK_MONTHS.
+    enigma_lookback_months: str = "12"
     enigma_request_timeout_seconds: float = 60.0
     # How many prospects `probe-enigma` samples (scoping §3 wants ~20). It BILLS one Enigma lookup per
     # prospect, so it is in PAID_COMMANDS + confirm-gated.

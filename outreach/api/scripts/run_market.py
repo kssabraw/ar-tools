@@ -952,13 +952,10 @@ def cmd_probe_enigma(args) -> int:
             "name": (r.biz or {}).get("name"),
             "un_named": r.prospect_id in unnamed_ids,
             "match_status": getattr(r.match_call, "status", None),
+            "id_status": getattr(r.id_call, "status", None) if r.id_call else None,
             "enigma_id": r.enigma_id or None,
-            "principal_name": enigma_probe.extract_principal_name(
-                getattr(r.id_call, "raw", None) if r.id_call else None
-            ),
-            "card_transactions": enigma_probe.extract_card_transactions(
-                getattr(r.id_call, "raw", None) if r.id_call else None
-            ),
+            "principal_name": enigma_probe.principal_name_from_result(r),
+            "card_transactions": enigma_probe.card_transactions_from_result(r),
         }
         for r in results
     ]
