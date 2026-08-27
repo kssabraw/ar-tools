@@ -95,6 +95,9 @@ export interface ServiceRow {
   order?: number
   include_in_matrix?: boolean
   parent_slug?: string | null
+  // Equipment brands this service is offered for. Their presence opts a
+  // top-level service into brand × service pages (/{service}/{brand}/).
+  brands?: string[]
 }
 
 export interface CityRow {

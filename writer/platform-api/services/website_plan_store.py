@@ -70,6 +70,11 @@ def parse_catalog(raw: Iterable[dict]) -> list[ServiceEntry]:
                     if item.get("parent_slug")
                     else None
                 ),
+                brands=tuple(
+                    b.strip()
+                    for b in (item.get("brands") or [])
+                    if isinstance(b, str) and b.strip()
+                ),
             )
         )
     return out

@@ -73,7 +73,7 @@ const ld = [
 ].filter(Boolean) as Record<string, unknown>[];
 
 const eyebrow =
-  page.pageType === 'local_landing'
+  page.pageType === 'local_landing' || page.pageType === 'hyper_local'
     ? d.locationName
     : page.pageType === 'location' || page.pageType === 'neighborhood'
       ? 'Areas we serve'
