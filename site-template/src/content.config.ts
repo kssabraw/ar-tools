@@ -120,6 +120,25 @@ const posts = defineCollection({
 });
 
 /**
+ * Pillar / hub pages (reference §5.3). A pillar is the comprehensive parent of a
+ * topic cluster, routed at TOP LEVEL (/{topic-slug}/) — not under /blog/ — so it
+ * gets its own collection rather than sharing the flat `posts` shape. Its own
+ * `path`/`pageType` are declared for the same reason routed pages carry them:
+ * the top-level namespace is shared with services and cities on a geo site, so
+ * the template is told the type rather than inferring it. `silo` is the pillar's
+ * slug, which its child posts carry too, so the hub can list its cluster.
+ */
+const pillars = defineCollection({
+  loader: glob({ pattern: '**/*.md', base: './src/content/pillars' }),
+  schema: z.object({
+    ...common,
+    path: z.string().regex(/^\/[a-z0-9-]+\/$/, 'pillar path must be a single top-level slug ending in /'),
+    pageType: z.literal('pillar'),
+    silo: z.string().optional(),
+  }),
+});
+
+/**
  * Core pages (home/about/contact/privacy). Optional: the template renders
  * defaults from site.config.json when an entry is absent, so a site is never
  * broken because the core-pages generator has not run. Entry ids are the
@@ -133,4 +152,4 @@ const pages = defineCollection({
   }),
 });
 
-export const collections = { services, locations, localLanding, posts, pages };
+export const collections = { services, locations, localLanding, posts, pages, pillars };

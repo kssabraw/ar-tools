@@ -4,6 +4,7 @@ description: Not all studies are equal. A short guide to reading health claims w
 category: Basics
 readingTime: 7 min read
 author: Editorial team
+silo: basics
 publishDate: 2026-07-02
 featured: true
 ---

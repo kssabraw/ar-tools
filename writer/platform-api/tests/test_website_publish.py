@@ -350,3 +350,61 @@ class TestPublishPage:
 
         files = commit.call_args.kwargs["files"]
         assert files["public/_redirects"] == b"/old-roof/ /roof-repair/ 301\n"
+
+
+class TestFirstParagraphSummary:
+    def test_takes_the_first_prose_paragraph_skipping_headings(self):
+        md = "# A Big Heading\n\nThe first real paragraph of prose here.\n\nSecond one."
+        assert wp.first_paragraph_summary(md) == "The first real paragraph of prose here."
+
+    def test_skips_lists_and_blockquotes_to_find_prose(self):
+        md = "## Intro\n\n- a bullet\n- another\n\nProse arrives at last."
+        assert wp.first_paragraph_summary(md) == "Prose arrives at last."
+
+    def test_strips_inline_markdown(self):
+        md = "This has **bold** and _italic_ and `code`."
+        assert wp.first_paragraph_summary(md) == "This has bold and italic and code."
+
+    def test_truncates_at_a_word_boundary(self):
+        md = "word " * 100
+        out = wp.first_paragraph_summary(md, limit=40)
+        assert len(out) <= 41
+        assert out.endswith("…")
+        # No partial word: every token before the ellipsis is a whole "word".
+        assert set(out[:-1].split()) == {"word"}
+
+    def test_empty_input_is_safe(self):
+        assert wp.first_paragraph_summary("") == ""
+        assert wp.first_paragraph_summary(None) == ""
+
+
+class TestGateFrontmatter:
+    def _source(self, **kw):
+        base = dict(body="b", title="Generated Title", description="Generated desc")
+        base.update(kw)
+        return wp.SourceContent(**base)
+
+    def test_generated_title_and_description_fill_the_gate(self):
+        # A post's title/description come from the run, its format from the plan —
+        # the gate must see the union of both, or a post always fails as
+        # frontmatter_incomplete.
+        page = {"plan": {"frontmatter": {"format": "listicle"}}}
+        fm = wp.gate_frontmatter(page, self._source())
+        assert fm["title"] == "Generated Title"
+        assert fm["description"] == "Generated desc"
+        assert fm["format"] == "listicle"
+
+    def test_a_post_passes_its_gate_with_generated_meta_and_planned_format(self):
+        from services import website_content as wc
+
+        page = {"page_type": "post", "plan": {"frontmatter": {"format": "informational_cluster"}}}
+        verdict = wc.publish_verdict(
+            page_type="post", frontmatter=wp.gate_frontmatter(page, self._source())
+        )
+        assert verdict.allowed
+
+    def test_explicit_frontmatter_title_overrides_the_source(self):
+        # frontmatter_for lets `extra` win, so the gate must mirror that precedence.
+        page = {"content": {"frontmatter": {"title": "Pinned"}}, "plan": {"frontmatter": {}}}
+        fm = wp.gate_frontmatter(page, self._source())
+        assert fm["title"] == "Pinned"

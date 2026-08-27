@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -99,6 +100,40 @@ def parse_jsonld(raw: Any) -> Optional[dict]:
     return None
 
 
+_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s")
+_MD_INLINE_RE = re.compile(r"[*_`>#\[\]]")
+
+
+def first_paragraph_summary(markdown: str, limit: int = 200) -> str:
+    """A meta description from a run's markdown body: its first real paragraph.
+
+    A generated blog post carries no dedicated meta-description field, but its
+    frontmatter `description` is a required field the publish gate checks (an
+    empty meta description is a real SEO defect on an auto-published page). The
+    first prose paragraph is the honest summary — headings, list markers and
+    blank lines are skipped, inline markdown is stripped, and the result is
+    trimmed to a word boundary. Pure.
+    """
+    para: list[str] = []
+    for raw in (markdown or "").splitlines():
+        line = raw.strip()
+        if not line:
+            if para:
+                break
+            continue
+        if _HEADING_RE.match(raw) or line.startswith(("-", "*", "|", "```", ">")):
+            if para:
+                break
+            continue
+        para.append(line)
+    text = _MD_INLINE_RE.sub("", " ".join(para)).strip()
+    text = re.sub(r"\s+", " ", text)
+    if len(text) <= limit:
+        return text
+    clipped = text[:limit].rsplit(" ", 1)[0].rstrip(",.;:")
+    return f"{clipped}…"
+
+
 def content_hash(files: dict[str, bytes]) -> str:
     """A stable digest of exactly what would be committed.
 
@@ -160,6 +195,29 @@ def source_from_content(content: dict) -> SourceContent:
         voice=content.get("voice") if isinstance(content.get("voice"), dict) else None,
         facts_consistent=bool(content.get("facts_consistent", True)),
     )
+
+
+def gate_frontmatter(page: dict, source: SourceContent) -> dict:
+    """The frontmatter the committed file will actually carry, for the gate.
+
+    The publish gate must judge what SHIPS, not the plan alone: a post's
+    `format`/`silo` are declared at plan time, but its `title`/`description` come
+    from the generated run (`source`), which the gate for posts/pillars checks
+    for completeness. Mirrors `build_files`' merge order — plan frontmatter, then
+    any stored frontmatter, then the generated title/description that
+    `frontmatter_for` emits — so the gate can never pass a file that would ship
+    missing a required field.
+    """
+    plan = page.get("plan") or {}
+    extra = dict(plan.get("frontmatter") or {})
+    stored = (page.get("content") or {}).get("frontmatter")
+    if isinstance(stored, dict):
+        extra.update(stored)
+    # `frontmatter_for` seeds title/description from the source, then lets `extra`
+    # override — so a value in `extra` wins, and otherwise the generated one does.
+    title = extra.get("title") or source.title or page.get("title") or ""
+    description = extra.get("description") or source.description or ""
+    return {**extra, "title": title, "description": description}
 
 
 def build_files(page: dict, source: SourceContent) -> dict[str, bytes]:
@@ -308,10 +366,13 @@ def resolve_source(page: dict) -> SourceContent:
         if not body.strip():
             raise PublishError("run_markdown_unavailable")
         content = page.get("content") or {}
+        # A blog run has no dedicated meta-description field; the first paragraph
+        # is the honest summary, and it is required frontmatter for a post/pillar.
+        description = (content.get("description") or "").strip() or first_paragraph_summary(body)
         return SourceContent(
             body=body,
             title=(content.get("title") or page.get("title") or "").strip(),
-            description=(content.get("description") or "").strip(),
+            description=description,
             voice=voice,
             writer_schema_version=version,
         )
@@ -376,7 +437,7 @@ async def publish_page(
         voice=source.voice,
         facts_consistent=source.facts_consistent,
         writer_schema_version=source.writer_schema_version,
-        frontmatter=(page.get("plan") or {}).get("frontmatter"),
+        frontmatter=gate_frontmatter(page, source),
     )
     forced = False
     if not verdict.allowed:

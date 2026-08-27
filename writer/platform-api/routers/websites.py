@@ -21,11 +21,13 @@ from config import settings
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth, require_staff
 from services import (
+    website_content_plan,
     website_deploy,
     website_generate,
     website_plan_store,
     website_provision,
     website_publish,
+    website_release,
     website_settings,
     website_theme,
 )
@@ -477,6 +479,110 @@ async def get_plan(website_id: str, auth: dict = Depends(require_auth)) -> dict:
     }
 
 
+class ContentPlanRequest(BaseModel):
+    """An informational site's cluster inventory (pillars -> posts).
+
+    Site-owned: stored on `config.content_plan`, editable, and durable across a
+    re-research. The shape is what `website_plan.content_plan_pillars` parses.
+    """
+
+    content_plan: dict = Field(default_factory=dict)
+
+
+class ContentPlanSeedRequest(BaseModel):
+    # A seed refuses to clobber an edited plan unless `replace` is set — the
+    # strategist plan is the seed, not a live dependency, so re-seeding is a
+    # deliberate act.
+    replace: bool = False
+
+
+class ContentPlanSeedFanoutRequest(BaseModel):
+    # The finished Fanout session whose silos/clusters seed the plan. Option 1
+    # (always regenerate fresh): only the topics/keywords are copied — the site
+    # writes its own posts and never links the session's generated articles.
+    session_id: str = Field(min_length=1)
+    replace: bool = False
+
+
+def _rebuild_after_content_plan(website_id: str) -> dict:
+    """Rebuild the plan rows after the content plan changed, and return them."""
+    website = _load_site(website_id)
+    config = website.get("config") or {}
+    result = website_plan_store.build(
+        website, catalog=config.get("catalog") or [], cities=config.get("cities") or []
+    )
+    return {"plan": result, "pages": website_plan_store.stored(website_id)}
+
+
+@router.put("/websites/{website_id}/content-plan")
+async def set_content_plan(
+    website_id: str, body: ContentPlanRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Set a site's blog content plan, then rebuild the plan rows.
+
+    Valid for every site type: blog posts are cross-family (reference §5.3), so a
+    local site's content plan seeds its blog alongside its service/location pages,
+    and an informational site's IS its whole inventory.
+    """
+    _enabled()
+    website = _load_site(website_id)
+    assert_not_frozen(website["client_id"])
+
+    config = dict(website.get("config") or {})
+    config["content_plan"] = body.content_plan or {}
+    get_supabase().table("websites").update(
+        {"config": config, "updated_at": "now()"}
+    ).eq("id", website_id).execute()
+
+    return {
+        "summary": website_content_plan.plan_summary(config["content_plan"]),
+        **_rebuild_after_content_plan(website_id),
+    }
+
+
+@router.post("/websites/{website_id}/content-plan/seed")
+async def seed_content_plan(
+    website_id: str, body: ContentPlanSeedRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Seed the content plan from the client's latest topic-strategist plan.
+
+    A one-shot import: after it, the plan is the site's own data. Rebuilds the
+    plan rows so the seeded pages are immediately reviewable.
+    """
+    _enabled()
+    website = _load_site(website_id)
+    assert_not_frozen(website["client_id"])
+    try:
+        seeded = website_content_plan.import_from_strategist(website, replace=body.replace)
+    except website_content_plan.SeedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"seeded": seeded, **_rebuild_after_content_plan(website_id)}
+
+
+@router.post("/websites/{website_id}/content-plan/seed-fanout")
+async def seed_content_plan_from_fanout(
+    website_id: str,
+    body: ContentPlanSeedFanoutRequest,
+    auth: dict = Depends(require_staff),
+) -> dict:
+    """Seed the content plan from a finished Fanout session's silos/clusters.
+
+    A one-shot import (like the strategist seed): after it, the plan is the
+    site's own data. Always regenerates fresh — the session's own generated
+    articles are not linked.
+    """
+    _enabled()
+    website = _load_site(website_id)
+    assert_not_frozen(website["client_id"])
+    try:
+        seeded = website_content_plan.import_from_fanout(
+            website, session_id=body.session_id, replace=body.replace
+        )
+    except website_content_plan.SeedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"seeded": seeded, **_rebuild_after_content_plan(website_id)}
+
+
 @router.post("/websites/{website_id}/plan")
 async def build_plan(
     website_id: str, body: PlanBuildRequest, auth: dict = Depends(require_staff)
@@ -607,6 +713,77 @@ async def publish_pages(
         force=body.force,
     )
     return {"queued": len(job_ids), "job_ids": job_ids}
+
+
+class ReleaseScheduleRequest(BaseModel):
+    """A site's drip-publish schedule (PRD §5 — the content-scheduler analog).
+
+    `immediate_count` pages go out now; `per_release_count` more each cadence
+    tick. Each release generates then publishes the next planned posts, so the
+    site needs nothing generated up front.
+    """
+
+    mode: str = "daily"
+    # weekly: 0=Mon..6=Sun; monthly: 1..28. Filled from the setup day when unset.
+    weekday: Optional[int] = None
+    day_of_month: Optional[int] = None
+    immediate_count: int = Field(default=0, ge=0)
+    per_release_count: int = Field(default=1, ge=1)
+    enabled: bool = True
+
+
+@router.get("/websites/{website_id}/release-schedule")
+async def get_release_schedule(
+    website_id: str, auth: dict = Depends(require_auth)
+) -> dict:
+    """The site's release schedule plus how many pages are left to release."""
+    _enabled()
+    _load_site(website_id)
+    pages = website_plan_store.stored(website_id)
+    return {
+        "schedule": website_release.get_schedule(website_id),
+        "releasable": website_release.releasable_count(pages),
+    }
+
+
+@router.put("/websites/{website_id}/release-schedule")
+async def set_release_schedule(
+    website_id: str, body: ReleaseScheduleRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Set (or replace) the release schedule; publish the immediate batch now.
+
+    staff+ only, because a release publishes to the public internet — the same
+    bar as the manual publish route. Refused until the plan is approved and the
+    site provisioned, since a release cannot commit to a repo that doesn't exist.
+    """
+    _enabled()
+    website = _load_site(website_id)
+    assert_not_frozen(website["client_id"])
+    if not website.get("github_repo"):
+        raise HTTPException(status_code=409, detail="website_not_provisioned")
+    if not website_plan_store.is_approved(website):
+        raise HTTPException(status_code=409, detail="plan_not_approved")
+
+    try:
+        result = website_release.set_schedule(
+            website, body=body.model_dump(), user_id=auth.get("user_id") or ""
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return result
+
+
+@router.delete("/websites/{website_id}/release-schedule")
+async def delete_release_schedule(
+    website_id: str, auth: dict = Depends(require_staff)
+) -> dict:
+    """Stop the drip. Pages already released keep going; nothing new is enqueued."""
+    _enabled()
+    _load_site(website_id)
+    get_supabase().table("website_releases").delete().eq(
+        "website_id", website_id
+    ).execute()
+    return {"deleted": True}
 
 
 @router.post("/websites/{website_id}/pages/{page_id}/retry")

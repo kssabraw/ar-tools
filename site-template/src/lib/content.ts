@@ -33,6 +33,26 @@ export async function allPosts(): Promise<CollectionEntry<'posts'>[]> {
   return live(await getCollection('posts')).sort(byDate);
 }
 
+/**
+ * Pillar / hub pages (reference §5.3). NOT gated on `isLocal`: pillars are the
+ * informational site's top-level hubs, and on a local site the collection is
+ * simply empty. Sorted by path so their routes and links are deterministic.
+ */
+export async function allPillars(): Promise<CollectionEntry<'pillars'>[]> {
+  return live(await getCollection('pillars')).sort((a, b) =>
+    a.data.path.localeCompare(b.data.path),
+  );
+}
+
+/** The published posts in a pillar's silo, for its "in this guide" list. */
+export function postsInSilo(
+  posts: CollectionEntry<'posts'>[],
+  silo: string | undefined,
+): CollectionEntry<'posts'>[] {
+  if (!silo) return [];
+  return posts.filter((p) => p.data.silo === silo);
+}
+
 /** Services, sub-services and brand × service pages. Local-only concept. */
 export async function allServices(): Promise<CollectionEntry<'services'>[]> {
   if (!isLocal) return [];
@@ -61,7 +81,27 @@ export interface RoutedPage {
   entry:
     | CollectionEntry<'services'>
     | CollectionEntry<'locations'>
-    | CollectionEntry<'localLanding'>;
+    | CollectionEntry<'localLanding'>
+    | CollectionEntry<'pillars'>;
+}
+
+/**
+ * Pillar pages as RoutedPages, so the top-level catch-all and the breadcrumb /
+ * conflict helpers can treat them uniformly with local routed pages. Kept
+ * separate from `routedPages()` (which is local-only and drives geo structural
+ * linking) because a pillar's children are its silo's posts, not path-nested
+ * pages — its link block is built in the route, not by `structuralLinks`.
+ */
+export async function pillarRoutedPages(): Promise<RoutedPage[]> {
+  const pillars = await allPillars();
+  return pillars.map((entry) => ({
+    path: normalizePath(entry.data.path),
+    pageType: entry.data.pageType,
+    title: entry.data.title,
+    description: entry.data.description,
+    teaser: '',
+    entry,
+  }));
 }
 
 /**

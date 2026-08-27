@@ -31,7 +31,13 @@ from typing import Iterable, Optional
 
 from db.supabase_client import get_supabase
 from services import website_plan
-from services.website_plan import CityEntry, PlanIssue, ServiceEntry, SitePlan
+from services.website_plan import (
+    CityEntry,
+    PillarEntry,
+    PlanIssue,
+    ServiceEntry,
+    SitePlan,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,24 +122,44 @@ def head_terms(
     return primary_service or None, primary_city or None
 
 
+def posts_by_path(pillars: list[PillarEntry]) -> dict:
+    """Every planned post keyed by its /blog/{slug}/ route."""
+    return {
+        website_plan._path("blog", p.slug): p
+        for pillar in pillars
+        for p in pillar.posts
+    }
+
+
+def pillars_by_path(pillars: list[PillarEntry]) -> dict:
+    """Every pillar keyed by its /{topic-slug}/ route."""
+    return {website_plan._path(pillar.slug): pillar for pillar in pillars}
+
+
 def plan_rows(
     website_id: str,
     plan: SitePlan,
     *,
     catalog: list[ServiceEntry],
     cities: list[CityEntry],
+    pillars: Optional[list[PillarEntry]] = None,
     primary_service: Optional[str],
     primary_city: Optional[str],
 ) -> list[dict]:
     """One row per planned page, ready to insert or merge."""
     services_by_slug = {s.slug: s for s in catalog}
     cities_by_slug = {c.slug: c for c in cities}
+    pillar_list = pillars or []
+    posts_map = posts_by_path(pillar_list)
+    pillars_map = pillars_by_path(pillar_list)
     rows = []
     for page in plan.pages:
         payload = website_plan.plan_payload(
             page,
             services=services_by_slug,
             cities=cities_by_slug,
+            posts=posts_map,
+            pillars=pillars_map,
             primary_service=primary_service,
             primary_city=primary_city,
         )
@@ -174,18 +200,23 @@ def build(website: dict, *, catalog: list[dict], cities: list[dict]) -> dict:
 
     services = parse_catalog(catalog)
     city_entries = parse_cities(cities)
+    # The content plan is site-owned (config.content_plan). An informational site
+    # is planned from it; a geo site has none, so this is empty and inert there.
+    pillars = website_plan.content_plan_pillars(config.get("content_plan"))
     primary_service, primary_city = head_terms(config, services, city_entries)
 
     plan = website_plan.build_plan(
         site_type=website.get("site_type") or "local_business",
         catalog=services,
         cities=city_entries,
+        content_plan=config.get("content_plan"),
     )
     rows = plan_rows(
         website_id,
         plan,
         catalog=services,
         cities=city_entries,
+        pillars=pillars,
         primary_service=primary_service,
         primary_city=primary_city,
     )
@@ -300,6 +331,7 @@ def recompute(website: dict) -> dict:
         site_type=website.get("site_type") or "local_business",
         catalog=services,
         cities=city_entries,
+        content_plan=config.get("content_plan"),
     )
     return serialize(plan)
 

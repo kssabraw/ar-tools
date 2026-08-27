@@ -9,8 +9,17 @@ import LocationCardGrid from '../theme/components/LocationCardGrid.astro';
 import TrustBadgeRow from '../theme/components/TrustBadgeRow.astro';
 import CTABand from '../theme/components/CTABand.astro';
 import ReviewStrip from '../theme/components/ReviewStrip.astro';
-import { routedPages, breadcrumbsFor, structuralLinks, type RoutedPage } from '../lib/content';
-import { service } from '../lib/schema';
+import RelatedPagesBlock from '../theme/components/RelatedPagesBlock.astro';
+import {
+  routedPages,
+  pillarRoutedPages,
+  breadcrumbsFor,
+  structuralLinks,
+  allPosts,
+  postsInSilo,
+  type RoutedPage,
+} from '../lib/content';
+import { service, article } from '../lib/schema';
 import { breadcrumbList } from '../lib/schema';
 import { site } from '../lib/site';
 
@@ -24,9 +33,16 @@ import { site } from '../lib/site';
  *
  * Astro gives static routes priority, so /about-us/, /blog/ and the rest of the
  * reserved slugs are matched before this catch-all ever sees them.
+ *
+ * Pillar / hub pages (reference §5.3) route here too: they live at top level
+ * (/{topic-slug}/), the same namespace as services and cities, so they share
+ * this catch-all and are told apart by their declared `pageType`, never by
+ * shape. A local site has no pillars and an informational site has no local
+ * routed pages, so the two never collide in practice.
  */
 export const getStaticPaths: GetStaticPaths = async () => {
-  const pages = await routedPages();
+  const [routed, pillars] = await Promise.all([routedPages(), pillarRoutedPages()]);
+  const pages = [...routed, ...pillars];
   return pages.map((page) => ({
     params: { path: page.path.replace(/^\/|\/$/g, '') },
     props: { page, pages },
@@ -38,11 +54,21 @@ const { Content } = await render(page.entry as never);
 const d = page.entry.data as Record<string, any>;
 
 const crumbs = breadcrumbsFor(page.path, pages, page.title);
-const links = structuralLinks(page, pages);
+const isPillar = page.pageType === 'pillar';
+
+// A pillar links DOWN to every post in its silo (reference §5.3) rather than to
+// path-nested children, so its link block is built here, not by structuralLinks.
+const clusterPosts = isPillar ? postsInSilo(await allPosts(), d.silo) : [];
+const links = isPillar
+  ? { siblingServices: [], sameServiceNearby: [], children: [] }
+  : structuralLinks(page, pages);
 
 const base = Astro.site ?? site.url;
 const ld = [
-  d.jsonld ?? service({ title: page.title, description: page.description, url: Astro.url.href }),
+  d.jsonld ??
+    (isPillar
+      ? article({ title: page.title, description: page.description, url: Astro.url.href })
+      : service({ title: page.title, description: page.description, url: Astro.url.href })),
   breadcrumbList(crumbs, base.toString()),
 ].filter(Boolean) as Record<string, unknown>[];
 
@@ -51,9 +77,41 @@ const eyebrow =
     ? d.locationName
     : page.pageType === 'location' || page.pageType === 'neighborhood'
       ? 'Areas we serve'
-      : 'Service';
+      : isPillar
+        ? 'Guide'
+        : 'Service';
 ---
 
+{isPillar ? (
+<Layout title={page.title} description={page.description} image={d.heroImage} jsonld={ld}>
+  <BreadcrumbBar crumbs={crumbs} />
+  <PageHeader eyebrow={eyebrow} title={page.title} lede={page.description} />
+
+  {d.heroImage && (
+    <div class="wrap media">
+      <img src={d.heroImage} alt={d.heroImageAlt} width="960" height="480" loading="eager" />
+    </div>
+  )}
+
+  <div class="prose-wrap richtext body">
+    <Content />
+  </div>
+
+  {/* Links down to every child post in the cluster (reference §5.3). */}
+  <RelatedPagesBlock
+    title="In this guide"
+    limit={999}
+    items={clusterPosts.map((p) => ({
+      href: `/blog/${p.id}/`,
+      title: p.data.title,
+      kicker: p.data.category,
+      meta: p.data.readingTime,
+    }))}
+  />
+
+  <CTABand title={`More on ${page.title.toLowerCase()}`} />
+</Layout>
+) : (
 <Layout title={page.title} description={page.description} image={d.heroImage} jsonld={ld}>
   <BreadcrumbBar crumbs={crumbs} />
   <PageHeader eyebrow={eyebrow} title={page.title} lede={page.teaser || page.description} />
@@ -91,6 +149,7 @@ const eyebrow =
 
   <CTABand title={`Talk to us about ${page.title.toLowerCase()}`} />
 </Layout>
+)}
 
 <style>
   .media {

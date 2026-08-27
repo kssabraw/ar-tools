@@ -39,6 +39,10 @@ _COLLECTION_BY_PAGE_TYPE: dict[str, str] = {
     "local_landing": "local-landing",
     "hyper_local": "local-landing",
     "post": "posts",
+    # Pillar/hub pages get their own collection: they route at top level
+    # (/{topic-slug}/) and render differently from a flat blog post, so the
+    # template needs to tell them apart by collection, not just page type.
+    "pillar": "pillars",
     "home": "pages",
     "about": "pages",
     "contact": "pages",
@@ -287,6 +291,21 @@ def publish_verdict(
             # Non-evergreen + auto-publish + no expiry is how a site ends up
             # ranking on outdated information indefinitely.
             return PublishVerdict(False, "news_post_missing_review_date", overridable=False)
+        return PublishVerdict(True)
+
+    if page_type == "pillar":
+        # A pillar is the same class of thing as a post — informational content
+        # that auto-publishes with no human in the loop — so it carries the same
+        # non-overridable machine gate. It has no `format`/`reviewBy` (a pillar
+        # is never a news reaction); it must carry title + description.
+        if critical:
+            return PublishVerdict(False, "voice_violation", overridable=False)
+        if writer_schema_version and "-degraded" in writer_schema_version:
+            return PublishVerdict(False, "writer_run_degraded", overridable=False)
+        fm = frontmatter or {}
+        missing = [k for k in ("title", "description") if not fm.get(k)]
+        if missing:
+            return PublishVerdict(False, f"frontmatter_incomplete:{','.join(missing)}", overridable=False)
         return PublishVerdict(True)
 
     # Core pages: facts already checked above; slots and length are advisory.
