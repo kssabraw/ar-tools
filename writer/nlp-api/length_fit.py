@@ -8,17 +8,20 @@ measured or budgeted against the actual SERP length.
 
 This module closes that gap deterministically (no LLM, no extra tokens):
 
-  1. It measures the competitor SERP's average body length.
+  1. It measures the competitor SERP's average body-content length.
   2. It sets a target of SERP average + 20% (owner-chosen — a local page may
      reasonably out-cover a thin SERP, but not by 2–3×).
   3. It scores how well a generated page fits that target, so the target both
      steers generation (as a budget in the prompt) and is enforced by the
      scoring / auto-reoptimization loop.
 
-Body length is measured from ``<p>`` prose on BOTH sides — the competitor
-"paragraphs" zone and the generated page — so the comparison is symmetric and
-chrome-free (nav/footer text lives outside ``<p>``). A pure regex/bs4 module,
-unit-testable in isolation, mirroring ``blog_structure.py``.
+Body length is measured with `content_word_count` on BOTH sides — the competitor
+pages and the generated page — so the comparison is symmetric. It counts the
+readable body content (paragraphs, list items, table cells, and other prose)
+after stripping site chrome (nav/header/footer/aside/forms) and headings, so a
+page whose content lives in lists or tables is measured at its true length, not
+just its ``<p>`` prose. A pure regex/bs4 module, unit-testable in isolation,
+mirroring ``blog_structure.py``.
 """
 from __future__ import annotations
 
@@ -41,26 +44,38 @@ _UPPER_OK = 1.10                       # ratio at which the page ≈ target + 10
 _UNDER_SLOPE = 250.0                   # points lost per unit of ratio below the band
 _OVER_SLOPE = 150.0                    # points lost per unit of ratio above the band
 
-# Score used when no SERP length target is available (external-URL scoring, or an
-# older analysis with no target). Kept ≥ the 80 deficiency threshold so an
-# unmeasurable page never flags as a length deficiency, and near typical composite
-# levels so it barely moves a score it genuinely cannot measure.
-_NEUTRAL_SCORE = 85
+# Site chrome + headings are removed before counting body content, so nav menus,
+# footers, sidebars, and forms don't inflate the measure and headings (short,
+# structural) don't pad the prose count. Everything else a reader sees —
+# paragraphs, list items, table cells, blockquotes, div/span prose — is counted.
+_CHROME_TAGS = (
+    "script", "style", "noscript", "template", "iframe", "svg",
+    "nav", "header", "footer", "aside", "form",
+)
+_HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6")
 
 
-def paragraph_word_count(html: str) -> int:
-    """Words of visible ``<p>`` prose in an HTML fragment — chrome-free and
-    symmetric with how competitor length is measured from the paragraphs zone."""
+def content_word_count(html: str) -> int:
+    """Readable body-content word count: everything a reader sees minus site
+    chrome (nav/header/footer/aside/forms), headings, and scripts/styles.
+    Counts prose, list items, and table cells — not just ``<p>`` — so a page
+    whose content lives in lists or tables is measured at its true length. Used
+    symmetrically for competitor pages and the generated page, so the comparison
+    is fair."""
     soup = BeautifulSoup(html or "", "html.parser")
-    text = " ".join(p.get_text(" ", strip=True) for p in soup.find_all("p"))
+    for tag in soup(list(_CHROME_TAGS) + list(_HEADING_TAGS)):
+        tag.decompose()
+    text = soup.get_text(" ", strip=True)
     return len(text.split())
 
 
-def competitor_avg_words(paragraph_zone_texts: List[str]) -> Optional[float]:
-    """Average per-competitor-page ``<p>`` word count across the SERP, dropping
-    thin/failed scrapes. Returns ``None`` when fewer than 2 valid pages remain
-    (no reliable target — callers then skip length budgeting/scoring)."""
-    counts = [len((t or "").split()) for t in (paragraph_zone_texts or [])]
+def competitor_avg_words(page_htmls: List[str]) -> Optional[float]:
+    """Average per-competitor-page body-content word count across the SERP,
+    dropping thin/failed scrapes. Returns ``None`` when fewer than 2 valid pages
+    remain (no reliable target — callers then skip length budgeting/scoring).
+    Measures each page with `content_word_count`, identical to the generated
+    page, so the two sides are directly comparable."""
+    counts = [content_word_count(h) for h in (page_htmls or [])]
     valid = [c for c in counts if c >= _MIN_VALID_WORDS]
     if len(valid) < 2:
         return None
@@ -74,28 +89,33 @@ def word_target(avg_words: Optional[float]) -> Optional[int]:
     return int(round(avg_words * OVERAGE_MULTIPLIER))
 
 
-def _neutral(reason: str) -> dict:
-    return {
-        "score": _NEUTRAL_SCORE,
-        "issues": [],
-        "recommendations": [],
-        "measured": False,
-        "reason": reason,
-    }
+def is_over_length(engine: Optional[dict]) -> bool:
+    """True when a length_fit engine result shows the page meaningfully OVER the
+    SERP target (measured, and words above target). Used to decide whether a
+    generated/live page earns a length-trim pass. Under-length never triggers a
+    trim (that would ask the writer to pad)."""
+    e = engine or {}
+    if not e.get("measured"):
+        return False
+    target = e.get("target_words") or 0
+    return bool(target) and e.get("page_words", 0) > target
 
 
-def compute_length_fit(page_html: str, target_words: Optional[int]) -> dict:
+def compute_length_fit(page_html: str, target_words: Optional[int]) -> Optional[dict]:
     """Deterministically score a page's body length against the SERP target
     (SERP average + 20%). Returns the engine-dict shape used by the composite:
-    ``{score, issues, recommendations, ...}``. Over-length and under-length both
-    produce a concrete "cut ~N words" / "add ~N words" recommendation so the
+    ``{score, issues, recommendations, ...}`` — or ``None`` when length can't be
+    measured (no SERP target, or no body prose on the page). Callers OMIT the
+    engine on ``None`` so the composite renormalizes over the engines it can
+    measure, never distorting a score it can't. Over-length and under-length
+    both produce a concrete "cut ~N words" / "add ~N words" recommendation so the
     auto-reoptimization loop is steered, not just penalized."""
     if not target_words or target_words <= 0:
-        return _neutral("No SERP length target available — length fit not measured.")
+        return None
 
-    words = paragraph_word_count(page_html)
+    words = content_word_count(page_html)
     if words <= 0:
-        return _neutral("No body prose detected — length fit not measured.")
+        return None
 
     ratio = words / target_words
     if ratio < _LOWER_OK:

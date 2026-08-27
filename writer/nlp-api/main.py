@@ -2045,11 +2045,12 @@ async def _run_serp_analysis(
 
     zone_targets = compute_zone_targets(zone_buckets, related, google_entities)
 
-    # Competitor body-length target: average <p> prose words across the SERP,
+    # Competitor body-length target: average body-content words across the SERP,
     # +20%. Drives the writer's length budget AND the deterministic length_fit
-    # engine. Measured from the same paragraphs zone the generated page is scored
-    # against, so the two sides are symmetric. None when too few pages scraped.
-    serp_avg_words = length_fit.competitor_avg_words(zone_buckets["paragraphs"])
+    # engine. Measured from the raw competitor HTML with the SAME content counter
+    # the generated page is scored against (chrome-stripped, counts prose + lists
+    # + tables), so the two sides are symmetric. None when too few pages scraped.
+    serp_avg_words = length_fit.competitor_avg_words(pages)
     serp_word_target = length_fit.word_target(serp_avg_words)
     if serp_word_target:
         logger.info(f"SERP length: avg={round(serp_avg_words)} words, target={serp_word_target} (avg +20%)")
@@ -3984,12 +3985,12 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
     }
 
 
-def _compute_length_fit(page_html: str, serp_analysis: Optional[dict]) -> dict:
+def _compute_length_fit(page_html: str, serp_analysis: Optional[dict]) -> Optional[dict]:
     """Deterministic length-fit engine (Python, not Claude). Scores the page's
     body length against the SERP target (avg + 20%) carried on the serp_analysis
-    dict. Degrades to a neutral, non-flagging score when no target is available
-    (external-URL scoring or an older analysis) so it never distorts a composite
-    it cannot measure."""
+    dict. Returns None when there is no target (external-URL scoring or an older
+    analysis) or no body prose; callers omit the engine on None so the composite
+    renormalizes and length_fit never distorts a score it cannot measure."""
     target = (serp_analysis or {}).get("serp_word_target")
     return length_fit.compute_length_fit(page_html, target)
 
@@ -4014,7 +4015,18 @@ def _length_budget_line(serp_analysis: Optional[dict]) -> str:
 
 def _composite_from_scores(scores: dict, weights: Optional[dict] = None) -> tuple[float, str]:
     weights = weights or _ENGINE_WEIGHTS
-    composite = sum(scores[k]["score"] * w for k, w in weights.items() if k in scores)
+    # Renormalize over the engines actually present, so an engine that is
+    # legitimately absent (e.g. length_fit when there is no SERP length target)
+    # neither depresses the composite nor distorts it with a neutral placeholder.
+    # When every weighted engine is present the denominator is 1.0, so this is a
+    # no-op for the normal path (and for ecommerce/blog, which always score all
+    # of their engines).
+    present = {k: w for k, w in weights.items() if k in scores}
+    total_w = sum(present.values())
+    composite = (
+        sum(scores[k]["score"] * w for k, w in present.items()) / total_w
+        if total_w else 0.0
+    )
     if composite >= 90:   status = "excellent"
     elif composite >= 80: status = "good"
     elif composite >= 70: status = "needs_improvement"
@@ -4171,7 +4183,9 @@ async def _score_html_inline(
     if not scores:
         raise Exception("Inline scoring returned invalid JSON")
     scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_html, serp_analysis_dict)
-    scores["length_fit"] = _compute_length_fit(page_html, serp_analysis_dict)
+    _lf = _compute_length_fit(page_html, serp_analysis_dict)
+    if _lf is not None:
+        scores["length_fit"] = _lf
     composite, _ = _composite_from_scores(scores, _ENGINE_WEIGHTS)
     deficiencies = _build_deficiencies(scores)
     # The voice scorecard rides the same LLM call but is kept out of `scores`
@@ -4631,10 +4645,12 @@ async def _score_page_for_related(
         msg.usage.input_tokens, msg.usage.output_tokens,
     )
     scores = _parse_claude_json(msg.content[0].text)
-    # No serp_analysis available in the related-pages path — coverage + length_fit
-    # engines score neutral (no target to measure against).
+    # No serp_analysis available in the related-pages path — serp coverage scores
+    # neutral and length_fit is omitted (no target); the composite renormalizes.
     scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_text, None)
-    scores["length_fit"] = _compute_length_fit(page_html, None)
+    _lf = _compute_length_fit(page_html, None)
+    if _lf is not None:
+        scores["length_fit"] = _lf
     composite, status = _composite_from_scores(scores)
     return {
         "composite_score": composite,
@@ -5612,7 +5628,9 @@ async def score_page(request: Request, body: ScorePageRequest):
 
     # Inject deterministic SERP signal coverage + length fit (Python, not Claude)
     scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_html, serp_analysis_dict)
-    scores["length_fit"] = _compute_length_fit(page_html, serp_analysis_dict)
+    _lf = _compute_length_fit(page_html, serp_analysis_dict)
+    if _lf is not None:
+        scores["length_fit"] = _lf
 
     # Pull the voice scorecard out FIRST: it must never reach the composite.
     voice_compliance = _voice_scorecard_from(scores, page_html, "", voice_card)
@@ -6695,10 +6713,11 @@ Full location: {body.location}
         await q.put({"step": "progress", "progress": 90, "message": "Scoring your page…"})
         inline_score = None
         inline_scores = None  # full per-engine verdict (surfaced below for persistence)
+        inline_defs = None    # per-engine deficiencies (drives the length-trim pass)
         voice_scorecard = None  # separate brand-voice verdict (never in the composite)
         for _score_attempt in range(3):
             try:
-                inline_score, _, inline_scores, score_tok, voice_scorecard = await _score_html_inline(
+                inline_score, inline_defs, inline_scores, score_tok, voice_scorecard = await _score_html_inline(
                     content_html, body.keyword, body.location, body.business_name,
                     body.gbp_category, body.address, serp_analysis_dict, client,
                     voice_card=voice_card,
@@ -6712,6 +6731,47 @@ Full location: {body.location}
                     await asyncio.sleep(2 ** _score_attempt)  # 1s then 2s
                 else:
                     logger.warning(f"generate-page: scoring failed after 3 attempts: {_ae}")
+
+        # ── Length enforcement: trim once if the writer overshot the SERP target ──
+        # The generation prompt carries an authoritative word budget, so most pages
+        # land in range; this is the safety net for the ones that don't. length_fit
+        # is deterministic and carries a concrete "cut ~N words" deficiency — one
+        # reopt pass (the same mechanism the voice loop uses) trims it. Runs before
+        # the voice loop so voice is judged on the page that ships. Best-effort: any
+        # failure keeps the generated page. Under-length never triggers a trim.
+        length_engine = (inline_scores or {}).get("length_fit")
+        length_def = next(
+            (d for d in (inline_defs or []) if d.get("engine_key") == "length_fit"), None
+        )
+        if length_def and length_fit.is_over_length(length_engine):
+            await q.put({"step": "progress", "progress": 91, "message": "Trimming to match the top pages…"})
+            try:
+                trimmed_html, trimmed_schema, trimmed_title, trim_tok = await _reoptimize_html_inline(
+                    content_html, body.keyword, body.location, city, body.business_name,
+                    body.gbp_category, body.address, body.phone, [length_def],
+                    serp_analysis_dict, seo_checklist, client, voice_block=voice_block,
+                )
+                token_rec["input_tokens"]  += trim_tok["input_tokens"]
+                token_rec["output_tokens"] += trim_tok["output_tokens"]
+                token_rec["cost_usd"]       = round(token_rec["cost_usd"] + trim_tok["cost_usd"], 6)
+                if (trimmed_html or "").strip():
+                    content_html = trimmed_html
+                    schema_json  = trimmed_schema or schema_json
+                    page_title   = trimmed_title or page_title
+                    # Re-score so the result + the voice loop describe the trimmed page.
+                    try:
+                        inline_score, inline_defs, inline_scores, rescore_tok, voice_scorecard = await _score_html_inline(
+                            content_html, body.keyword, body.location, body.business_name,
+                            body.gbp_category, body.address, serp_analysis_dict, client,
+                            voice_card=voice_card,
+                        )
+                        token_rec["input_tokens"]  += rescore_tok["input_tokens"]
+                        token_rec["output_tokens"] += rescore_tok["output_tokens"]
+                        token_rec["cost_usd"]       = round(token_rec["cost_usd"] + rescore_tok["cost_usd"], 6)
+                    except Exception as _lse:
+                        logger.warning(f"generate-page: re-score after length trim failed: {_lse}")
+            except Exception as _lte:
+                logger.warning(f"generate-page: length trim pass failed (keeping page): {_lte}")
 
         # A scoring outage must not silently produce an unchecked page. The
         # deterministic half needs no network, so run it on its own — a

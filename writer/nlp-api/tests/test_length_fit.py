@@ -1,9 +1,10 @@
 """Unit tests for the deterministic length-fit engine.
 
-Pure + offline — bs4 only, no network, no Anthropic. Covers the competitor
-average, the SERP-avg-+20% target, and the length_fit scoring curve
-(over-length penalized, under-length penalized, on-target = 100, and the
-neutral degrade when no target is available).
+Pure + offline — bs4 only, no network, no Anthropic. Covers the content-aware
+word count (prose + lists + tables, chrome-stripped), the competitor average,
+the SERP-avg-+20% target, the length_fit scoring curve, the over-length helper,
+and the None-when-unmeasurable contract (so callers omit the engine and the
+composite renormalizes instead of taking a neutral placeholder).
 Run with `pytest writer/nlp-api/tests/` or `python -m pytest`.
 """
 
@@ -16,22 +17,46 @@ import length_fit as lf  # noqa: E402
 
 
 def _page(n_words: int) -> str:
-    """An HTML fragment whose <p> prose is exactly n_words words."""
+    """An HTML fragment whose body content is exactly n_words words."""
     return "<article><h2>Heading not counted</h2><p>" + " ".join(["word"] * n_words) + "</p></article>"
 
 
-# ── competitor_avg_words ─────────────────────────────────────────────────────
+# ── content_word_count ───────────────────────────────────────────────────────
+
+def test_content_count_includes_lists_and_tables_excludes_chrome_and_headings():
+    html = (
+        "<nav>Home About Contact Services Areas Reviews</nav>"
+        "<header>logo tagline phone</header>"
+        "<article><h1>Big Heading Words Here Ignored</h1>"
+        "<p>one two three</p>"
+        "<ul><li>four five</li><li>six seven</li></ul>"
+        "<table><tr><td>eight nine</td><td>ten</td></tr></table></article>"
+        "<footer>footer nav words here too plenty</footer>"
+        "<aside>related links sidebar chrome</aside>"
+    )
+    # counted: p(3) + li(2+2) + td(2+1) = 10; headings/nav/header/footer/aside excluded.
+    assert lf.content_word_count(html) == 10
+
+
+def test_content_count_handles_none_and_empty():
+    assert lf.content_word_count(None) == 0
+    assert lf.content_word_count("") == 0
+    assert lf.content_word_count("<nav>only chrome here</nav>") == 0
+
+
+# ── competitor_avg_words (now takes raw page HTML) ───────────────────────────
 
 def test_competitor_avg_drops_thin_scrapes():
-    # Two real pages (800, 1200) + one failed/thin scrape (10 words) → avg of the
-    # two valid pages only.
-    texts = [" ".join(["w"] * 800), " ".join(["w"] * 1200), "too thin"]
-    assert lf.competitor_avg_words(texts) == 1000.0
+    good_a = "<article><p>" + " ".join(["w"] * 800) + "</p></article>"
+    good_b = "<article><p>" + " ".join(["w"] * 1200) + "</p></article>"
+    thin = "<article><p>too thin</p></article>"
+    assert lf.competitor_avg_words([good_a, good_b, thin]) == 1000.0
 
 
 def test_competitor_avg_needs_two_valid_pages():
-    assert lf.competitor_avg_words([" ".join(["w"] * 900)]) is None
-    assert lf.competitor_avg_words(["thin", "also thin"]) is None
+    one_good = "<article><p>" + " ".join(["w"] * 900) + "</p></article>"
+    assert lf.competitor_avg_words([one_good]) is None
+    assert lf.competitor_avg_words(["<p>thin</p>", "<p>also thin</p>"]) is None
     assert lf.competitor_avg_words([]) is None
 
 
@@ -41,18 +66,14 @@ def test_word_target_is_avg_plus_20_percent():
     assert lf.word_target(0) is None
 
 
-# ── paragraph_word_count ─────────────────────────────────────────────────────
+# ── is_over_length ───────────────────────────────────────────────────────────
 
-def test_paragraph_word_count_ignores_headings_and_chrome():
-    html = (
-        "<nav>Home About Contact Services Areas</nav>"
-        "<article><h1>Big Heading Words Here</h1>"
-        "<p>one two three four five</p>"
-        "<ul><li>list item not counted</li></ul>"
-        "<footer>footer nav words here too</footer></article>"
-    )
-    # Only the <p> prose counts.
-    assert lf.paragraph_word_count(html) == 5
+def test_is_over_length():
+    assert lf.is_over_length({"measured": True, "page_words": 2000, "target_words": 1200}) is True
+    assert lf.is_over_length({"measured": True, "page_words": 900, "target_words": 1200}) is False  # under
+    assert lf.is_over_length({"measured": True, "page_words": 1200, "target_words": 1200}) is False  # equal
+    assert lf.is_over_length({"measured": False, "page_words": 9999, "target_words": 1200}) is False
+    assert lf.is_over_length(None) is False
 
 
 # ── compute_length_fit scoring curve ─────────────────────────────────────────
@@ -60,9 +81,8 @@ def test_paragraph_word_count_ignores_headings_and_chrome():
 def test_on_target_scores_100():
     target = 1200  # SERP avg 1000 + 20%
     assert lf.compute_length_fit(_page(1200), target)["score"] == 100.0
-    # Anywhere from ~the SERP average (1000) up to target+10% (1320) is full credit.
-    assert lf.compute_length_fit(_page(1050), target)["score"] == 100.0
-    assert lf.compute_length_fit(_page(1300), target)["score"] == 100.0
+    assert lf.compute_length_fit(_page(1050), target)["score"] == 100.0  # ~SERP average
+    assert lf.compute_length_fit(_page(1300), target)["score"] == 100.0  # target +10%
 
 
 def test_over_length_is_penalized_and_recommends_cutting():
@@ -91,19 +111,13 @@ def test_under_length_is_penalized_and_recommends_adding():
     assert res["recommendations"] and "add" in res["recommendations"][0].lower()
 
 
-# ── neutral degrade ──────────────────────────────────────────────────────────
+# ── None-when-unmeasurable (so callers omit it and the composite renormalizes) ─
 
-def test_no_target_scores_neutral_and_never_flags_deficiency():
+def test_no_target_returns_none():
     for target in (None, 0):
-        res = lf.compute_length_fit(_page(4000), target)
-        assert res["measured"] is False
-        # Neutral must sit at/above the 80 deficiency threshold so an unmeasurable
-        # page never surfaces as a length deficiency.
-        assert res["score"] >= 80
-        assert res["issues"] == []
+        assert lf.compute_length_fit(_page(4000), target) is None
 
 
-def test_no_body_prose_scores_neutral():
-    res = lf.compute_length_fit("<article><h2>Only a heading</h2></article>", 1200)
-    assert res["measured"] is False
-    assert res["score"] >= 80
+def test_no_body_prose_returns_none():
+    assert lf.compute_length_fit("<article><h2>Only a heading</h2></article>", 1200) is None
+    assert lf.compute_length_fit("<nav>only chrome</nav>", 1200) is None
