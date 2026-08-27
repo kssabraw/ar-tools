@@ -2049,3 +2049,30 @@ mailbox (info@/office@). Those are legitimately distinct contact points, not dup
 data-poor path (LA plumbers, one business-name-fallback contact per email) unchanged. Unit-tested in
 `tests/test_enrichment.py` (permutation collapse, distinct people kept, role mailboxes kept, mixed
 person+role, contact_rows re-indexing).
+
+---
+
+## 2026-08-27 · CI gate for the outreach test suite + onboard-queue harness fix
+
+The outreach worker (`api/`) had **no automated test gate**. The three Python CI workflows
+(`python-tests.yml`, `pipeline-api-tests.yml`, `nlp-api-tests.yml`) are all path-filtered to
+`writer/**`, and the only PR check reaching outreach changes was the Netlify *frontend* build —
+which never runs the Python suite. So a change to a drain's budget logic or a pure parser could
+break its 661 tests with nothing red, on the one module whose drains spend real money against
+signed orders.
+
+**Decision:** add `.github/workflows/outreach-tests.yml` — `python -m pytest -q` from `outreach/`
+on any PR touching `outreach/**` (and on push to `main`). Modeled on `pipeline-api-tests.yml`: no
+system libs / no spaCy model (the worker has no WeasyPrint or spaCy dependency — report rendering
+lives in platform-api), Python 3.11 to match the Dockerfile, deps from `api/requirements.txt`
+(which bundles pytest + pytest-asyncio).
+
+**Prerequisite fix:** the suite had 4 long-standing red tests in `test_onboard_queue.py` — a CI
+gate can't be added over a red suite. Root cause was harness drift, NOT production code: `drain_one`
+STAGE 2 gained the category-relevance + distance filter (reading `settings.filter_category_relevance`
+/ `_enabled` / `filter_max_distance_enabled` / `_miles`), but the test's `_Settings` stub was never
+given those fields, so argument evaluation raised `AttributeError` and the filter stage failed before
+the (stubbed) `run_filter` was reached — leaving the order row without the final status/snapshot_id
+the assertions expected. Fixed by completing the `_Settings` stub to mirror `config.py` (fields only;
+no production change, no assertion relaxed). Full suite now **661 passed**, green from day one — the
+pipeline-api precedent (#746 fixed its pre-existing failures rather than skipping them).
