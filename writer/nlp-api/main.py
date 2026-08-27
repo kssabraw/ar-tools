@@ -270,7 +270,7 @@ LENGTH_TRIM_MIN_RATIO = float(os.environ.get("LENGTH_TRIM_MIN_RATIO", "1.4"))
 # correction pass is STARTED — a pass already in flight finishes, then the best
 # page so far ships. Caps the sequential rewrite→rescore loop that can otherwise
 # stack to 10+ minutes for a brand-guide client. 0 disables the cap.
-GENERATION_TIME_BUDGET_SECONDS = int(os.environ.get("GENERATION_TIME_BUDGET_SECONDS", "300"))
+GENERATION_TIME_BUDGET_SECONDS = int(os.environ.get("GENERATION_TIME_BUDGET_SECONDS", "240"))
 
 # Plateau guard: the minimum composite gain a pass must produce to justify
 # running another one. A run that has flat-lined and one that is still climbing
