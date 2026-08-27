@@ -2428,6 +2428,27 @@ one `enrichment_request` that drained in **71 s within a single tick** (started 
 01:26:16, 0 failed), well inside the `*/5` cron window, with no stuck `running` order. **Fully
 resolved.**
 
+### I-119 FIXED (2026-08-27) · The I-118 cron-window fix, ported to the PAID name_search drain
+`name_search_queue` (the paid `web_search` owner/manager-name fallback, OpenAI gpt-5.4) had the SAME
+latent I-118 vulnerability the enrich drain did: **no per-tick place budget and no stuck-order reaper**.
+A web search is ~4 s/place, so a large `name_search_request` (dozens of places) drained as one order
+could exceed the `*/5` cron window and get its container killed mid-run — stranding the order `running`
+with no recovery. Surfaced while closing the LA generic-name gap (an ~83-place sweep would have tripped
+it). **Fixed by porting the I-118 pattern verbatim** (mirrors `enrich_queue`): (1) per-tick PLACE budget
+`name_search_per_tick` (24) — the drain searches at most that many places per tick across all orders; an
+order with more is searched up to it and left PENDING to resume next tick (the idempotent marker skip
+re-bills only the un-done places), so no tick overruns the window; `process_order` now returns
+`(report, billed, finished)` and the order's counters are the CUMULATIVE marker tally
+(`_order_marker_tally`, scoped by `name_search_request_id`) so a multi-tick order reports its whole self;
+`cost_ledger` writes one row per billing tick. (2) `recover_stuck_orders` resets a `running` order older
+than `name_search_stuck_order_minutes` (20) back to `pending` (conditional-on-still-running), called
+first in `drain`. Unit-tested (`test_name_search_queue`: resume across ticks, whole-tick budget bound,
+stuck recovery, recent-order-not-recovered — 14 pass; full suite 665). **Remaining sibling gap
+(not fixed here, lower priority):** `name_scrape_queue` (the FREE site-scrape fallback) already HAS the
+per-tick budget (`name_scrape_per_tick`) but still lacks the `recover_stuck_orders` reaper — a hard kill
+(SIGKILL before its budget's work finishes) would strand a `running` order with no auto-recovery. It
+wastes no money (free), only blocks that one order, so it's a cheap follow-up: port the same reaper.
+
 ### I-109 RESOLVED (2026-08-26) · TWO stacked bugs — sync mode AND the wrong enricher slug; fixed to async + `leads_n_contacts`
 Enrichment was broken two ways at once, which is why every prior single-cause theory (wrong validator
 set, parser aliases) only half-explained it:

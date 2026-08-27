@@ -18,7 +18,7 @@ class _R:
 class _Q:
     def __init__(self, db, name, op="select", payload=None):
         self.db, self.name, self.op, self.payload = db, name, op, payload
-        self.eqs, self.ins = [], []
+        self.eqs, self.ins, self.lts = [], [], []
         self._order = self._limit = self._conflict = None
 
     def select(self, *_a, **_k):
@@ -46,6 +46,10 @@ class _Q:
         self.ins.append((c, list(v)))
         return self
 
+    def lt(self, c, v):
+        self.lts.append((c, v))
+        return self
+
     def order(self, c, desc=False):
         self._order = (c, desc)
         return self
@@ -56,7 +60,8 @@ class _Q:
 
     def _match(self, r):
         return (all(str(r.get(c)) == str(v) for c, v in self.eqs)
-                and all(r.get(c) in vs for c, vs in self.ins))
+                and all(r.get(c) in vs for c, vs in self.ins)
+                and all(r.get(c) is not None and str(r.get(c)) < str(v) for c, v in self.lts))
 
     def execute(self):
         rows = self.db.tables.setdefault(self.name, [])
@@ -107,6 +112,8 @@ class _Settings:
     name_search_chunk_size = 4
     name_search_orders_per_tick = 5
     name_search_max_places_per_order = 100
+    name_search_per_tick = 24
+    name_search_stuck_order_minutes = 20
     max_market_run_cost_cents = 5000
 
 
@@ -298,3 +305,78 @@ def test_drain_several_orders_per_tick(monkeypatch):
     report = asyncio.run(name_search_queue.drain(db, _Settings()))
     assert report.orders_processed == 2
     assert {r["status"] for r in db.tables["name_search_request"]} == {"done"}
+
+
+# --- I-118 sibling: per-tick place budget + resume, and stuck-order recovery ------------------
+
+
+def test_a_large_order_resumes_across_ticks(monkeypatch):
+    """An order larger than the per-tick place budget is searched up to it and left PENDING; the next
+    tick's idempotent skip re-bills only the un-done places, until it finishes — bounding a big paid
+    order to the cron window instead of overrunning it (I-118 sibling)."""
+    pids = [f"p{i}" for i in range(5)]
+    db = _FakeDB()
+    _seed(db, prospects=[{"id": pid, "place_id": f"pl{i}", "market_id": "m1", "name": "A"}
+                         for i, pid in enumerate(pids)],
+          orders=[_order(prospect_ids=pids)])
+    _stub(monkeypatch, {pid: _result(pid, status="found", name=f"Name{i}")
+                        for i, pid in enumerate(pids)})
+
+    def found_markers():
+        return sum(1 for m in db.tables["prospect_name_search"] if m["status"] == "found")
+
+    asyncio.run(name_search_queue.drain(db, _Settings(), max_places=2))
+    assert db.tables["name_search_request"][0]["status"] == "pending"   # partial → resumes
+    assert found_markers() == 2
+
+    asyncio.run(name_search_queue.drain(db, _Settings(), max_places=2))
+    assert db.tables["name_search_request"][0]["status"] == "pending"
+    assert found_markers() == 4
+
+    asyncio.run(name_search_queue.drain(db, _Settings(), max_places=2))
+    order = db.tables["name_search_request"][0]
+    assert order["status"] == "done"                                   # all 5 done
+    assert order["found_count"] == 5 and order["name_count"] == 5      # CUMULATIVE, not last batch
+    assert found_markers() == 5
+    # one cost_ledger row per tick that billed (3 ticks), never a re-bill of a done place
+    assert sum(r["units"] for r in db.tables["cost_ledger"]) == 5
+
+
+def test_the_per_tick_place_budget_bounds_the_tick(monkeypatch):
+    """The budget caps places across the WHOLE tick (not per order), so several small paid orders
+    can't together overrun the window either."""
+    db = _FakeDB()
+    _seed(db, prospects=[{"id": f"p{i}", "place_id": f"pl{i}", "market_id": "m1", "name": "A"}
+                         for i in range(4)],
+          orders=[_order(id="o1", prospect_ids=["p0", "p1"], created_at="2026-08-26T01:00:00+00:00"),
+                  _order(id="o2", prospect_ids=["p2", "p3"], created_at="2026-08-26T02:00:00+00:00")])
+    _stub(monkeypatch, {f"p{i}": _result(f"p{i}", status="found", name=f"Name{i}") for i in range(4)})
+
+    asyncio.run(name_search_queue.drain(db, _Settings(), max_places=3))
+    # 3 places is the budget: o1 (2) fully, then o2 partial (1) → o2 left pending, loop stops.
+    assert sum(1 for m in db.tables["prospect_name_search"] if m["status"] == "found") == 3
+    assert {o["id"]: o["status"] for o in db.tables["name_search_request"]} == {"o1": "done", "o2": "pending"}
+
+
+def test_a_stuck_running_order_is_recovered_and_finished(monkeypatch):
+    """A `running` order older than the threshold (its container died mid-tick) is reset to `pending`
+    and resumed — the recovery half (I-118 sibling; this producer had no reaper before)."""
+    db = _FakeDB()
+    _seed(db, prospects=[{"id": "p1", "place_id": "pl1", "market_id": "m1", "name": "A"}],
+          orders=[_order(prospect_ids=["p1"], status="running",
+                         started_at="2020-01-01T00:00:00+00:00")])
+    _stub(monkeypatch, {"p1": _result("p1", status="found", name="Bob Lee")})
+
+    asyncio.run(name_search_queue.drain(db, _Settings()))
+    assert db.tables["name_search_request"][0]["status"] == "done"   # recovered → claimed → searched
+
+
+def test_a_recently_running_order_is_not_recovered():
+    """A `running` order younger than the threshold is a live tick's work — never reset (that would
+    double-process it, re-billing a paid search)."""
+    db = _FakeDB()
+    _seed(db, prospects=[{"id": "p1", "place_id": "pl1", "market_id": "m1", "name": "A"}],
+          orders=[_order(prospect_ids=["p1"], status="running", started_at=name_search_queue._now())])
+    recovered = name_search_queue.recover_stuck_orders(db, _Settings())
+    assert recovered == 0
+    assert db.tables["name_search_request"][0]["status"] == "running"

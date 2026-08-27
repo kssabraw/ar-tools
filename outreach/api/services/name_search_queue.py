@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..config import Settings
@@ -119,6 +119,87 @@ def _already_searched(db: Any, prospect_ids: list[str]) -> set[str]:
     return done
 
 
+def _order_marker_tally(db: Any, order_id: str, prospect_ids: list[str]) -> dict[str, int]:
+    """This order's CUMULATIVE progress across ticks, read from the markers IT wrote (so a multi-tick
+    resume reports the whole order, not just the last batch). Only markers carrying THIS
+    `name_search_request_id` are counted — a durable marker left by a PRIOR order is a skip, not this
+    order's work. Chunked under the 1000-row cap; pure over the DB read."""
+    found = no_names = failed = names = 0
+    for start in range(0, len(prospect_ids), 500):
+        chunk = prospect_ids[start : start + 500]
+        if not chunk:
+            continue
+        for row in (
+            db.table(_MARKER)
+            .select("prospect_id, status, name_count, name_search_request_id")
+            .in_("prospect_id", chunk)
+            .execute()
+            .data
+            or []
+        ):
+            if str(row.get("name_search_request_id")) != str(order_id):
+                continue
+            status = row.get("status")
+            if status == "found":
+                found += 1
+                names += int(row.get("name_count") or 0)
+            elif status == "no_names":
+                no_names += 1
+            elif status == "failed":
+                failed += 1
+    # `searched` = prospects the search actually returned a result for (found + no_names), matching the
+    # per-run report; `attempted` includes failures.
+    return {"found": found, "no_names": no_names, "failed": failed, "names": names,
+            "searched": found + no_names, "attempted": found + no_names + failed}
+
+
+def _write_order_progress(
+    db: Any, order_id: str, *, status: str, requested: int, missing: int, tally: dict[str, int],
+) -> None:
+    """Persist an order's CUMULATIVE counters (from the marker tally) + its status. `done` stamps
+    finished_at; `pending` (a partial left to resume) does not. `skipped` = requested prospects this
+    order neither attempted nor found unsearchable — i.e. durable from a PRIOR order."""
+    fields: dict[str, Any] = {
+        "status": status,
+        "requested_count": requested,
+        "skipped_count": max(0, requested - tally["attempted"] - missing),
+        "searched_count": tally["searched"],
+        "found_count": tally["found"],
+        "name_count": tally["names"],
+        "failed_count": tally["failed"],
+        "error": None,
+    }
+    if status == "done":
+        fields["finished_at"] = _now()
+    db.table(_TABLE).update(fields).eq("id", order_id).execute()
+
+
+def recover_stuck_orders(db: Any, settings: Settings) -> int:
+    """Reset `running` orders older than `name_search_stuck_order_minutes` back to `pending` so a later
+    tick resumes them (I-118 sibling — this producer had no reaper). A normal tick holds an order
+    `running` only for the tens of seconds it searches one budget's worth, so a much-older `running`
+    is a container that died mid-tick. The idempotent skip means the resume re-bills only the un-done
+    places. Returns the number recovered."""
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(minutes=settings.name_search_stuck_order_minutes)
+    ).isoformat()
+    stuck = (
+        db.table(_TABLE).select("id").eq("status", "running").lt("started_at", cutoff)
+        .execute().data or []
+    )
+    recovered = 0
+    for row in stuck:
+        # Conditional on still-running so we never stomp an order a live tick just re-claimed.
+        updated = (
+            db.table(_TABLE).update({"status": "pending", "started_at": None})
+            .eq("id", row["id"]).eq("status", "running").execute().data or []
+        )
+        if updated:
+            recovered += 1
+            logger.warning("recovered stuck name-search order", extra={"order_id": row["id"]})
+    return recovered
+
+
 def _contact_rows(
     result: name_search.NameSearchResult, place_id: str, business_website: str | None = None
 ) -> list[dict[str, Any]]:
@@ -199,8 +280,17 @@ def _mark_failed(db: Any, *, prospect_id: str, order_id: str, error: str) -> Non
     ).execute()
 
 
-async def process_order(db: Any, settings: Settings, order: dict[str, Any]) -> NameSearchOrderReport:
-    """Search one claimed order end to end. Never raises past recording the failure on the order."""
+async def process_order(
+    db: Any, settings: Settings, order: dict[str, Any], *, max_places: int
+) -> tuple[NameSearchOrderReport, int, bool]:
+    """Search up to `max_places` of one claimed order's due prospects. Never raises past recording the
+    failure on the order.
+
+    Returns `(report, billed_this_call, finished)`. When the order's due set exceeds `max_places`,
+    only that many are searched this call and the order is left PENDING (finished False) — the
+    marker-based idempotent skip means the next tick's resume re-bills only the rest. The order's
+    persisted counters are the CUMULATIVE marker tally, so a resumed order still reports its whole
+    self (I-118 sibling)."""
     report = NameSearchOrderReport(order_id=str(order["id"]))
     prospect_ids = list(order.get("prospect_ids") or [])
     report.requested = len(prospect_ids)
@@ -209,7 +299,7 @@ async def process_order(db: Any, settings: Settings, order: dict[str, Any]) -> N
         report.outcome = "failed"
         report.error = "order has no prospects"
         _finish(db, report.order_id, {"status": "failed", "error": report.error, "requested_count": 0})
-        return report
+        return report, 0, True
 
     if len(prospect_ids) > settings.name_search_max_places_per_order:
         report.outcome = "failed"
@@ -219,11 +309,17 @@ async def process_order(db: Any, settings: Settings, order: dict[str, Any]) -> N
         )
         _finish(db, report.order_id, {"status": "failed", "error": report.error,
                                       "requested_count": report.requested})
-        return report
+        return report, 0, True
 
     prospects = _load_prospects(db, prospect_ids)
     skip = _already_searched(db, prospect_ids)
     report.skipped = sum(1 for pid in prospect_ids if pid in skip)
+    # Prospects that are neither skipped nor searchable (vanished, or no place_id) — not an error, not
+    # skipped, just not billable. Counted so the order's skipped math reconciles.
+    missing = sum(
+        1 for pid in prospect_ids
+        if pid not in skip and (pid not in prospects or not prospects[pid].get("place_id"))
+    )
 
     # A prospect needs a place_id (the contact row's NOT-NULL join key); a website is preferred for
     # grounding but not required (the search can anchor on name + address).
@@ -231,17 +327,22 @@ async def process_order(db: Any, settings: Settings, order: dict[str, Any]) -> N
         prospects[pid] for pid in prospect_ids
         if pid not in skip and pid in prospects and prospects[pid].get("place_id")
     ]
-    report.billable = len(to_search)
 
     if not to_search:
         report.outcome = "done"
-        _finish(db, report.order_id,
-                {"status": "done", "requested_count": report.requested,
-                 "skipped_count": report.skipped, "searched_count": 0, "found_count": 0,
-                 "name_count": 0, "failed_count": 0, "error": None})
-        return report
+        tally = _order_marker_tally(db, report.order_id, prospect_ids)
+        _write_order_progress(db, report.order_id, status="done", requested=report.requested,
+                              missing=missing, tally=tally)
+        return report, 0, True
 
-    # Budget backstop before the money (the placement guard already ran; this catches a runaway).
+    # Budget: search at most `max_places` this call; leave the rest to resume next tick (I-118 sibling).
+    cap = max(1, max_places)
+    batch = to_search[:cap]
+    finished = len(to_search) <= cap
+    report.billable = len(batch)
+
+    # Budget backstop before the money (the placement guard already ran; this catches a runaway) —
+    # over THIS call's batch, since that is all that bills now.
     estimate = report.billable * settings.name_search_cost_cents
     denial = budget_denial(estimate, settings.max_market_run_cost_cents)
     if denial:
@@ -250,9 +351,9 @@ async def process_order(db: Any, settings: Settings, order: dict[str, Any]) -> N
         _finish(db, report.order_id, {"status": "failed", "error": denial,
                                       "requested_count": report.requested,
                                       "skipped_count": report.skipped})
-        return report
+        return report, 0, True
 
-    by_id = {p["id"]: p for p in to_search}
+    by_id = {p["id"]: p for p in batch}
     ids = list(by_id.keys())
     chunk_size = max(1, settings.name_search_chunk_size)
     for start in range(0, len(ids), chunk_size):
@@ -285,9 +386,10 @@ async def process_order(db: Any, settings: Settings, order: dict[str, Any]) -> N
                 report.found += 1
         report.problems.extend(errors)
 
-    # cost_ledger: units = prospects we sent to the provider (billable). market_id from any billed
-    # prospect; rate reconciled manually against the OpenAI dashboard (I-022).
-    market_id = next((p.get("market_id") for p in to_search if p.get("market_id")), None)
+    # cost_ledger: units = prospects we sent to the provider THIS call (only the batch bills now; a
+    # multi-tick order writes one ledger row per tick). market_id from any billed prospect; rate
+    # reconciled manually against the OpenAI dashboard (I-022).
+    market_id = next((p.get("market_id") for p in batch if p.get("market_id")), None)
     try:
         db.table("cost_ledger").insert(
             cost.build_ledger_row(
@@ -299,16 +401,17 @@ async def process_order(db: Any, settings: Settings, order: dict[str, Any]) -> N
     except Exception as exc:  # noqa: BLE001 — a ledger hiccup must not lose the search
         logger.warning("name search cost_ledger write failed", extra={"error": str(exc)[:200]})
 
-    report.outcome = "done"
-    _finish(db, report.order_id,
-            {"status": "done", "requested_count": report.requested,
-             "skipped_count": report.skipped, "searched_count": report.searched,
-             "found_count": report.found, "name_count": report.names,
-             "failed_count": report.failed, "error": None})
-    logger.info("name search order executed",
-                extra={"order_id": report.order_id, "billable": report.billable,
-                       "searched": report.searched, "found": report.found, "failed": report.failed})
-    return report
+    tally = _order_marker_tally(db, report.order_id, prospect_ids)
+    _write_order_progress(
+        db, report.order_id, status="done" if finished else "pending",
+        requested=report.requested, missing=missing, tally=tally,
+    )
+    report.outcome = "done" if finished else "partial"
+    logger.info("name search order %s", "executed" if finished else "partial (resuming next tick)",
+                extra={"order_id": report.order_id, "billed_this_call": report.billable,
+                       "searched_total": tally["searched"], "found_total": tally["found"],
+                       "failed_total": tally["failed"], "finished": finished})
+    return report, len(batch), finished
 
 
 def _first_error(errors: list[str], prospect_id: str) -> str:
@@ -318,15 +421,32 @@ def _first_error(errors: list[str], prospect_id: str) -> str:
     return "name search failed"
 
 
-async def drain(db: Any, settings: Settings, *, max_orders: int | None = None) -> NameSearchDrainReport:
-    """Claim and process up to `max_orders` pending orders (default `name_search_orders_per_tick`).
-    PAID — but order-gated (the signed order is the confirmation), so no env token, like enrich."""
+async def drain(
+    db: Any, settings: Settings, *, max_orders: int | None = None, max_places: int | None = None,
+) -> NameSearchDrainReport:
+    """Claim and process pending orders, up to `max_orders` (default `name_search_orders_per_tick`)
+    and a per-tick PLACE budget `max_places` (default `name_search_per_tick`; <=0 = no cap). The place
+    budget bounds the tick's wall-time so a large order can't overrun Railway's cron window: an order
+    larger than the remaining budget is searched up to it and left PENDING to resume next tick (a
+    partial ⟹ the budget is spent, so the loop stops). Stranded `running` orders are recovered first
+    (I-118 sibling). PAID — but order-gated (the signed order is the confirmation), so no env token."""
     report = NameSearchDrainReport()
-    limit = max_orders if max_orders is not None else settings.name_search_orders_per_tick
-    while report.orders_processed < max(0, limit):
+    try:
+        recover_stuck_orders(db, settings)
+    except Exception as exc:  # noqa: BLE001 — recovery is best-effort; never block the drain
+        logger.warning("name-search stuck-order recovery failed", extra={"error": str(exc)[:200]})
+
+    order_limit = max_orders if max_orders is not None else settings.name_search_orders_per_tick
+    per_tick = max_places if max_places is not None else settings.name_search_per_tick
+    budget = per_tick if per_tick > 0 else 10**9  # <=0 → effectively no cap
+    while report.orders_processed < max(0, order_limit) and budget > 0:
         order = claim_next_order(db)
         if order is None:
             break
-        report.orders.append(await process_order(db, settings, order))
+        rep, billed, finished = await process_order(db, settings, order, max_places=budget)
+        report.orders.append(rep)
         report.orders_processed += 1
+        budget -= billed
+        if not finished:
+            break  # a partial means the budget is exhausted; the order resumes next tick
     return report
