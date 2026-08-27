@@ -32,6 +32,7 @@ class _Query:
         self.db, self.name, self.op, self.payload = db, name, op, payload
         self.eqs = []
         self.in_filters = []
+        self.lts = []
         self._order = None
         self._limit = None
         self._range = None
@@ -63,6 +64,10 @@ class _Query:
         self.in_filters.append((column, list(values)))
         return self
 
+    def lt(self, column, value):
+        self.lts.append((column, value))
+        return self
+
     def order(self, column, desc=False):
         self._order = (column, desc)
         return self
@@ -77,6 +82,8 @@ class _Query:
 
     def _matches(self, row):
         if not all(str(row.get(c)) == str(v) for c, v in self.eqs):
+            return False
+        if not all(row.get(c) is not None and str(row.get(c)) < str(v) for c, v in self.lts):
             return False
         return all(row.get(c) in vs for c, vs in self.in_filters)
 
@@ -134,6 +141,7 @@ class _Settings:
     name_scrape_max_places_per_order = 200
     name_scrape_concurrency = 4
     name_scrape_per_tick = 1000  # effectively no per-tick cap for most tests
+    name_scrape_stuck_order_minutes = 20
 
 
 def _seed(db, *, prospects, orders):
@@ -481,3 +489,37 @@ def test_scan_names_is_free_and_the_drain_is_order_gated():
     from api.scripts.run_market import PAID_COMMANDS
 
     assert "scan-names" not in PAID_COMMANDS
+
+
+# --- I-119 sibling: stuck-order recovery (the FREE drain already had the per-tick budget) ------
+
+
+def test_a_stuck_running_name_scrape_order_is_recovered_and_finished(monkeypatch):
+    """A `running` order older than the threshold (its container died mid-tick) is reset to
+    `pending` and resumed — the reaper this free drain was missing (I-119 sibling)."""
+    db = _FakeDB()
+    _seed(
+        db,
+        prospects=[{"id": "p1", "place_id": "pl-1", "name": "A", "website": "https://a.com"}],
+        orders=[_order(prospect_ids=["p1"], status="running",
+                       started_at="2020-01-01T00:00:00+00:00")],
+    )
+    _stub(monkeypatch, {"p1": _result("p1", status="found", names=["Amy Cole"])})
+
+    asyncio.run(name_scrape_queue.drain(db, _Settings()))
+    assert db.tables["name_scrape_request"][0]["status"] == "done"  # recovered → claimed → scraped
+
+
+def test_a_recently_running_name_scrape_order_is_not_recovered():
+    """A `running` order younger than the threshold is a live tick's work — never reset (that would
+    double-process it)."""
+    db = _FakeDB()
+    _seed(
+        db,
+        prospects=[{"id": "p1", "place_id": "pl-1", "name": "A", "website": "https://a.com"}],
+        orders=[_order(prospect_ids=["p1"], status="running",
+                       started_at=name_scrape_queue._now())],
+    )
+    recovered = name_scrape_queue.recover_stuck_orders(db, _Settings())
+    assert recovered == 0
+    assert db.tables["name_scrape_request"][0]["status"] == "running"

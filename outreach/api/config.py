@@ -340,6 +340,13 @@ class Settings(BaseSettings):
     # — the marker-based idempotent skip means a resume re-scrapes only the un-done prospects, so no
     # work is lost or repeated. <=0 means no cap (process whole orders up to name_scrape_orders_per_tick).
     name_scrape_per_tick: int = 60
+    # A `running` name-scrape order older than this is treated as stranded (its container died
+    # mid-tick — a hard SIGKILL before the budget's work finished) and reset to `pending` so a later
+    # tick resumes it (I-119 sibling — this FREE drain had the budget but no reaper). A normal tick
+    # holds an order `running` only for the tens of seconds it scrapes a budget's worth, so a
+    # much-older `running` is a dead container; the idempotent marker skip re-scrapes only the un-done
+    # prospects on resume. Free, so a strand wastes no money — but a stuck order still blocks itself.
+    name_scrape_stuck_order_minutes: int = 20
 
     # --- Web-search owner/manager name (PAID third-rung fallback) --------------------------
     # When enrichment AND the free site-scrape both found no name, a paid web search looks the owner
