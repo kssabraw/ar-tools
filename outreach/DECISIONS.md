@@ -2076,3 +2076,34 @@ the (stubbed) `run_filter` was reached — leaving the order row without the fin
 the assertions expected. Fixed by completing the `_Settings` stub to mirror `config.py` (fields only;
 no production change, no assertion relaxed). Full suite now **661 passed**, green from day one — the
 pipeline-api precedent (#746 fixed its pre-existing failures rather than skipping them).
+
+---
+
+## 2026-08-27 · Organic / paid-placement signal runs on EVERY scan (owner ruling)
+
+**Decision (owner):** the report's ORGANIC + paid-placement signal (is the business, and are its
+competitors, showing a Google Ad / Local Services Ad — and ranking — for the keyword) should be
+captured automatically on every scan, not only when someone clicks the button. It's the strongest
+"evidence of other marketing" read the tool has, and a signal that answers "are they already paying
+to be visible" is worth having on 100% of prospects.
+
+**Why it's cheap + safe to make always-on:** organic capture is ONE live DataForSEO SERP call per
+snapshot (submarket×keyword), and the paid-placement parse (Google Ads / LSA presence) rides that
+same call for free (`organic_scan.parse_organic_serp`). So "always on" adds ~one organic request per
+scanned submarket×keyword — a fraction of a cent — not a per-prospect cost. The infrastructure was
+already there: a signed `organic_scan_request` order, drained ≤1/tick by `organic_scan_queue`,
+budget-gated, and idempotent per snapshot (a snapshot already carrying a `google_organic`
+`serp_result` drains as a free no-op).
+
+**Implementation:** `scan_runner.collect_ready` auto-enqueues an `organic_scan_request` when a
+snapshot finalizes, via `organic_scan_queue.enqueue_for_snapshot` (gated on `organic_auto_enabled`,
+default True; idempotent — skips if the snapshot already has ANY organic order or a captured SERP;
+best-effort so it never blocks finalization). The tick's existing organic drain then captures it.
+
+**The signed-order stance, deliberately shifted for this producer only:** an `organic_scan_request`
+normally means "a human clicked" — the order row is evidence of deliberate intent the accidental
+deploy path can't supply. For the auto path the STANDING confirmation is the config flag (the
+deliberate owner decision recorded here), and the auto order carries a **sentinel `requested_by`**
+(`00000000-…`, no FK) + a machine note, so an auto capture stays auditable in the ledger apart from a
+click. This does NOT change the other paid producers (`scan-ai`, `probe-pixel-field` stay
+click/flag-gated). Reversible by config (`organic_auto_enabled=False` → click-only).

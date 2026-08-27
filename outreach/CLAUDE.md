@@ -148,11 +148,21 @@ a manual phone workflow: emit records the outcome and reports `delivered:false`,
 webhook-free `touch` path is the real capture. Wire a URL (Zapier / Make / a custom endpoint) only
 if the team ever adopts an automated sender.
 
-**THREE paid producers are built and have NEVER RUN** — `scan-organic`, `scan-ai`,
-`probe-pixel-field`. HANDOFF §8.1 2c already made the argument that each additional unrun layer
+**Paid producers `scan-ai` + `probe-pixel-field` are built and have NEVER RUN** (`scan-organic` NOW
+RUNS — see below). HANDOFF §8.1 2c already made the argument that each additional unrun layer
 raises the chance the first run surfaces several faults at once, interacting, in a batch that has
 been paid for. That argument is stronger now than when it was written, so prefer RUNNING a built
-layer over building a fourth. **The free `scan-tech` now RUNS AUTOMATICALLY each `tick`**
+layer over building a fourth.
+
+**`scan-organic` (the ORGANIC + paid-placement signal) now RUNS AUTOMATICALLY on every scan** (owner
+ruling 2026-08-27; DECISIONS 2026-08-27). When a geogrid snapshot finalizes,
+`scan_runner.collect_ready` auto-enqueues an `organic_scan_request` (`organic_scan_queue.enqueue_for_snapshot`,
+gated on `organic_auto_enabled` default True; idempotent per snapshot; drained ≤1/tick by the existing
+organic queue, budget-gated). Organic capture is ONE cheap DataForSEO SERP call per snapshot and the
+paid-placement parse (Google Ads / LSA presence on the keyword) rides that same call for free — so it
+answers "is this prospect already paying to be visible" on 100% of scanned prospects. Auto orders carry
+a sentinel `requested_by` (`00000000-…`) so they're auditable apart from a UI click. The other two paid
+producers stay click/flag-gated. **The free `scan-tech` now RUNS AUTOMATICALLY each `tick`**
 (`scan_tech.run_tech_backlog`, DECISIONS 2026-08-14): a free, idempotent, bounded backlog drain that
 fetches tech signals for any prospect with a website and no current signal — covering each new run's
 survivors and backfilling pre-existing markets (incl. the any-city onboard markets the manual

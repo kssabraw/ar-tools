@@ -86,6 +86,8 @@ class _FakeDB:
 class _Settings:
     dataforseo_cost_per_request_cents = 1
     max_market_run_cost_cents = 5000
+    organic_auto_enabled = True
+    organic_auto_actor_id = "00000000-0000-0000-0000-000000000000"
 
 
 def _seed(db, *, orders=()):
@@ -275,3 +277,52 @@ def test_a_failed_order_is_terminal_not_retried(monkeypatch):
     report = asyncio.run(organic_scan_queue.drain_one(db, _Settings()))
 
     assert report.claimed == 0 and calls == []
+
+
+# --- auto-enqueue on scan completion (owner ruling 2026-08-27) ---------------------------------
+
+
+def test_auto_enqueue_places_one_order_when_enabled():
+    """A finalized snapshot with no prior organic order + no captured SERP gets exactly one auto
+    order, stamped with the sentinel requester + auto note (auditable apart from a UI click)."""
+    db = _FakeDB()
+    _seed(db)  # snap-1 / kw-1, no orders
+    placed = organic_scan_queue.enqueue_for_snapshot(db, _Settings(), "snap-1")
+    assert placed is True
+    orders = db.tables["organic_scan_request"]
+    assert len(orders) == 1
+    o = orders[0]
+    assert o["snapshot_id"] == "snap-1" and o["keyword_id"] == "kw-1"
+    assert o["requested_by"] == "00000000-0000-0000-0000-000000000000"
+    assert o["note"] == organic_scan_queue._AUTO_NOTE
+
+
+def test_auto_enqueue_is_idempotent_on_an_existing_order():
+    """A re-touch of the same snapshot (finalize_snapshot can be reached again on a later tick) must
+    NOT re-bill: any prior order for the snapshot short-circuits the enqueue."""
+    db = _FakeDB()
+    _seed(db, orders=[_order(id="prior", status="done")])
+    placed = organic_scan_queue.enqueue_for_snapshot(db, _Settings(), "snap-1")
+    assert placed is False
+    assert len(db.tables["organic_scan_request"]) == 1  # unchanged
+
+
+def test_auto_enqueue_skips_when_the_snapshot_already_has_a_captured_serp():
+    """If the organic SERP is already on disk for this snapshot, there is nothing to capture."""
+    db = _FakeDB()
+    _seed(db)
+    db.tables["serp_result"] = [{"id": "sr-1", "snapshot_id": "snap-1",
+                                 "engine": organic_scan_queue.organic_scan.ENGINE}]
+    placed = organic_scan_queue.enqueue_for_snapshot(db, _Settings(), "snap-1")
+    assert placed is False
+    assert db.tables["organic_scan_request"] == []
+
+
+def test_auto_enqueue_disabled_is_a_noop():
+    settings = _Settings()
+    settings.organic_auto_enabled = False
+    db = _FakeDB()
+    _seed(db)
+    placed = organic_scan_queue.enqueue_for_snapshot(db, settings, "snap-1")
+    assert placed is False
+    assert db.tables["organic_scan_request"] == []

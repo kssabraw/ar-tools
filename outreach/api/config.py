@@ -452,6 +452,19 @@ class Settings(BaseSettings):
     # backs up faster than the 15-minute cron clears it.
     organic_orders_per_tick: int = 1
     ai_orders_per_tick: int = 1
+    # Auto-capture the ORGANIC / paid-placement signal on EVERY scan (owner ruling 2026-08-27), not
+    # only on a UI click: when a geogrid snapshot finalizes, `scan_runner` auto-enqueues an
+    # `organic_scan_request` for it (idempotent per snapshot; drained ≤1/tick by the existing queue,
+    # budget-gated, per-snapshot idempotent capture). The organic SERP is ONE cheap DataForSEO call
+    # per snapshot and the paid-placement parse (Google Ads / LSA presence on the keyword) rides that
+    # same call for free — so "always on" adds ~one organic request per scanned submarket×keyword.
+    # The STANDING spend confirmation is this flag (the deliberate owner decision); auto orders carry
+    # a sentinel `requested_by` so they stay auditable apart from a human click. Set False to revert
+    # to click-only.
+    organic_auto_enabled: bool = True
+    # The sentinel actor stamped on auto-enqueued organic orders (requested_by has no FK). A nil uuid,
+    # distinct from any human, so an auto capture is distinguishable in the ledger from a UI click.
+    organic_auto_actor_id: str = "00000000-0000-0000-0000-000000000000"
 
     # --- Always-on worker (tick-loop daemon) ---------------------------------------------
     # The `tick-loop` command runs `tick` continuously so a UI-placed order (enrich / scan)
