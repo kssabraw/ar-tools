@@ -255,6 +255,15 @@ _ECOM_RESEARCH_MAX_TURNS = ECOMMERCE_FACT_RESEARCH_MAX_SEARCHES + 3  # search ro
 # same page reoptimizes to the same result run-to-run.
 MAX_ECOMMERCE_AUTO_PASSES = int(os.environ.get("MAX_ECOMMERCE_AUTO_PASSES", "3"))
 
+# Local SEO generate-page length safety net: run the extra length-trim rewrite
+# pass ONLY when the freshly generated page is over the SERP target by at least
+# this ratio (1.4 = 40% over). The authoritative word budget in the generation
+# prompt keeps most pages near target, so the trim — a full ~90s rewrite + a
+# ~90s re-score — should fire rarely, not on every mildly-long page. Set to 1.0
+# to trim on any overage, or very high to disable the generation-time trim
+# (length is still scored, and the bulk reoptimizer still trims live pages).
+LENGTH_TRIM_MIN_RATIO = float(os.environ.get("LENGTH_TRIM_MIN_RATIO", "1.4"))
+
 # Plateau guard: the minimum composite gain a pass must produce to justify
 # running another one. A run that has flat-lined and one that is still climbing
 # are otherwise treated identically — both burn every pass at ~3m40s and ~$0.22
@@ -6732,18 +6741,22 @@ Full location: {body.location}
                 else:
                     logger.warning(f"generate-page: scoring failed after 3 attempts: {_ae}")
 
-        # ── Length enforcement: trim once if the writer overshot the SERP target ──
+        # ── Length enforcement: trim once if the writer BADLY overshot the target ──
         # The generation prompt carries an authoritative word budget, so most pages
-        # land in range; this is the safety net for the ones that don't. length_fit
-        # is deterministic and carries a concrete "cut ~N words" deficiency — one
-        # reopt pass (the same mechanism the voice loop uses) trims it. Runs before
-        # the voice loop so voice is judged on the page that ships. Best-effort: any
-        # failure keeps the generated page. Under-length never triggers a trim.
+        # land in range; this is the safety net for the ones that don't. To keep it
+        # from adding a ~90s rewrite + ~90s re-score to every mildly-long page, it
+        # only fires when the page is over target by at least LENGTH_TRIM_MIN_RATIO
+        # (40% by default). Milder overages are still scored by length_fit and still
+        # trimmed by the bulk reoptimizer's gate — just not at generation time.
+        # length_fit carries a concrete "cut ~N words" deficiency; one reopt pass
+        # (the same mechanism the voice loop uses) trims it. Runs before the voice
+        # loop so voice is judged on the page that ships. Best-effort: any failure
+        # keeps the generated page. Under-length never triggers a trim.
         length_engine = (inline_scores or {}).get("length_fit")
         length_def = next(
             (d for d in (inline_defs or []) if d.get("engine_key") == "length_fit"), None
         )
-        if length_def and length_fit.is_over_length(length_engine):
+        if length_def and length_fit.is_over_length(length_engine, LENGTH_TRIM_MIN_RATIO):
             await q.put({"step": "progress", "progress": 91, "message": "Trimming to match the top pages…"})
             try:
                 trimmed_html, trimmed_schema, trimmed_title, trim_tok = await _reoptimize_html_inline(
