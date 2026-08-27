@@ -205,7 +205,30 @@ email-null / business-name-only under `domains_service` returned real emails + d
 under `leads_n_contacts`; person names populate for businesses with an Apollo/ZoomInfo record (small
 owner-operated ones fall back to scraped site emails). Cost per `leads_n_contacts` record is unconfirmed
 (export `est:10`, likely pricier) — config rates remain placeholders
-(I-111).
+(I-111). **`leads_n_contacts` names a person only ~40% of small local operators** — measured on the LA
+market: it returns a business-name fallback for the rest. The name-specific fallbacks (`name_scrape`
+free site-scrape, `name_search` paid gpt-5.4 web search) fill that gap where they can; the residual
+(businesses no source can name) is the true public-web floor and the **Enigma** sample-test baseline
+(`docs/enigma-integration-scoping-v0_1.md`). "Evidence of other marketing" per prospect lives in
+`prospect_tech_signal` (site tags) + the auto-captured paid-placement block, NOT in the contact data.
+
+**Enrichment reliability — I-117 / I-118 / I-119 all FIXED (2026-08-27; see ISSUES + HANDOFF).** Three
+drain bugs, all merged + verified: **I-117** — the enrich replace-on-place delete had no `source`
+scope and wiped the free/paid NAME fallbacks on a re-enrich (scoped to `source='outscraper'`; #767).
+**I-118** — a large enrichment order overran Railway's `*/5` cron window and stranded a `running`
+order; fixed with a **per-tick place budget** (`enrich_per_tick`) + PENDING-resume + a **stuck-order
+reaper** (`recover_stuck_orders`), prod-verified (#769). **I-119** — the same budget+reaper ported to
+the other two drains (#775 `name_search`, #778 `name_scrape`), so **all three name/enrich drains carry
+BOTH the per-tick budget and the reaper** — none can strand a `running` order on a mid-tick kill. When
+you write or change ANY of these drains, keep the two invariants: (1) the per-tick budget bounds the
+tick's wall-time (an over-budget order resumes next tick via the idempotent marker skip); (2) the
+reaper runs first in `drain`, conditional-on-still-running.
+
+**CI: the outreach worker is now gated (#770).** `.github/workflows/outreach-tests.yml` runs the full
+`pytest` suite on any PR touching `outreach/**` (and push to main) — previously nothing ran the Python
+suite (the three `writer/**` workflows are path-filtered away, leaving only the Netlify frontend build).
+This module spends real money against signed orders, so a red drain must fail a check. Keep the suite
+green; it is the gate that validated every I-117/I-118/I-119 change.
 
 **The pipeline is an AR Tools SUITE MODULE, not a standalone tool** (owner ruling, HANDOFF §2).
 The database stays in the Outreacher project; the API and UI belong in `platform-api` and the
