@@ -247,6 +247,7 @@ def run_scan_health_sweep() -> dict:
     names = _client_names(supabase, sorted({cid for (cid, _), _ in alerting}))
 
     emitted = 0
+    producer_items: list[dict] = []
     for (client_id, pipeline_key), info in alerting:
         try:
             digest = build_digest(
@@ -271,11 +272,30 @@ def run_scan_health_sweep() -> dict:
             )
             if nid:
                 emitted += 1
+            producer_items.append(
+                {
+                    "client_id": client_id,
+                    "pipeline_key": pipeline_key,
+                    "label": _PIPELINE_LABELS.get(pipeline_key, pipeline_key),
+                    "streak": info.streak,
+                    "summary": digest["summary"],
+                }
+            )
         except Exception as exc:  # never break the sweep on one client
             logger.warning(
                 "scan_health.emit_failed",
                 extra={"client_id": client_id, "pipeline": pipeline_key, "error": str(exc)},
             )
+
+    # Hand the alerting set to the native-task producer so a sustained outage
+    # becomes owned board work (PACE picks it up). Called even when nothing is
+    # alerting, so a recovered streak closes its task. Best-effort + self-gated.
+    try:
+        from services import task_producers
+
+        task_producers.on_scan_health(producer_items)
+    except Exception as exc:
+        logger.warning("scan_health.producer_failed", extra={"error": str(exc)})
 
     if alerting:
         logger.info(

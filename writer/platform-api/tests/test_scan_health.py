@@ -140,3 +140,101 @@ def test_digest_without_last_success_reports_staleness():
     d = sh.build_digest("Acme", "organic", info, None, NOW)
     assert "no success in the last 8 days" in d["summary"]
     assert "Organic rank" in d["title"]
+
+
+# ---------------------------------------------------------------------------
+# task_producers.on_scan_health — the PACE wiring (opens/closes board tasks)
+# ---------------------------------------------------------------------------
+class _FakeQuery:
+    """Minimal chainable Supabase table stub returning a fixed row set."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def is_(self, *a, **k):
+        return self
+
+    def execute(self):
+        return type("R", (), {"data": self._rows})()
+
+
+class _FakeSupabase:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def table(self, name):
+        return _FakeQuery(self._rows)
+
+
+def _wire(monkeypatch, live_rows):
+    """Patch task_producers so on_scan_health runs without a real DB, capturing
+    created/closed calls. Returns (created, closed) lists."""
+    from services import task_producers as tp
+
+    created: list[dict] = []
+    closed: list[str] = []
+    monkeypatch.setattr(tp.settings, "native_tasks_enabled", True, raising=False)
+    monkeypatch.setattr(tp.settings, "task_producer_scan_health_enabled", True, raising=False)
+    monkeypatch.setattr(
+        tp, "_create",
+        lambda cid, name, *, source, source_ref, description: created.append(
+            {"client_id": cid, "name": name, "source": source, "source_ref": source_ref}
+        ),
+    )
+    monkeypatch.setattr(tp, "get_supabase", lambda: _FakeSupabase(live_rows))
+    monkeypatch.setattr(tp.task_service, "close_task_by_source",
+                        lambda source, ref: closed.append(ref) or True)
+    return tp, created, closed
+
+
+def test_producer_opens_task_per_failing_group(monkeypatch):
+    tp, created, closed = _wire(monkeypatch, live_rows=[])
+    tp.on_scan_health([
+        {"client_id": "c1", "pipeline_key": "geogrid", "label": "Maps geo-grid",
+         "streak": 17, "summary": "17 consecutive ... failed"},
+    ])
+    assert len(created) == 1
+    assert created[0]["source"] == "scan_health"
+    assert created[0]["source_ref"] == "c1:geogrid"
+    assert "Maps geo-grid" in created[0]["name"]
+    assert closed == []
+
+
+def test_producer_closes_recovered_group(monkeypatch):
+    # c1:geogrid is still failing; c2:organic recovered (open task, not alerting).
+    live = [
+        {"id": "t1", "source_ref": "c1:geogrid", "completed": False},
+        {"id": "t2", "source_ref": "c2:organic", "completed": False},
+    ]
+    tp, created, closed = _wire(monkeypatch, live_rows=live)
+    tp.on_scan_health([
+        {"client_id": "c1", "pipeline_key": "geogrid", "label": "Maps geo-grid",
+         "streak": 5, "summary": "still failing"},
+    ])
+    # c1 already live → not recreated is not asserted here (_create is idempotent
+    # in prod); the recovery close is the contract under test.
+    assert closed == ["c2:organic"]
+
+
+def test_producer_empty_list_closes_all_open(monkeypatch):
+    live = [{"id": "t1", "source_ref": "c1:geogrid", "completed": False}]
+    tp, created, closed = _wire(monkeypatch, live_rows=live)
+    tp.on_scan_health([])  # nothing failing now → recovery
+    assert created == []
+    assert closed == ["c1:geogrid"]
+
+
+def test_producer_noop_when_disabled(monkeypatch):
+    tp, created, closed = _wire(monkeypatch, live_rows=[])
+    monkeypatch.setattr(tp.settings, "task_producer_scan_health_enabled", False, raising=False)
+    tp.on_scan_health([
+        {"client_id": "c1", "pipeline_key": "geogrid", "label": "Maps geo-grid",
+         "streak": 9, "summary": "x"},
+    ])
+    assert created == [] and closed == []

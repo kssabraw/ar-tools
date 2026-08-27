@@ -1541,6 +1541,11 @@ class Settings(BaseSettings):
     # Only the top-N plan actions become tasks (the plan is priority-sorted).
     task_producer_action_plan_max: int = 10
     task_producer_content_run_enabled: bool = False
+    # scan_health: open a board task when a client's scheduled data pulls (maps
+    # geo-grid / organic rank) keep failing, so a silent upstream outage becomes
+    # owned work PACE tracks (its untriaged/producer/overdue signals pick it up),
+    # not just a Slack ping. Auto-closes when the streak recovers.
+    task_producer_scan_health_enabled: bool = True
 
     # Deliverables Sheet Sync (docs/modules/deliverables-sheet-sync-prd-v1_0.md)
     # — auto-maintain each client's Google deliverables sheet: append a row on
