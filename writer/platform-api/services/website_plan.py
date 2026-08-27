@@ -84,6 +84,9 @@ UTILITY_PAGE_TYPES = frozenset(
 
 # Scale gates (PRD §4.3).
 MATRIX_SIGNOFF_THRESHOLD = 200
+# Brand × service is its own matrix (brands × services); the reference flags a
+# large one for link-equity review at the same threshold as the geo matrix.
+BRAND_SERVICE_SIGNOFF_THRESHOLD = 200
 # **Ratified at 25** — by the owner 2026-08-05, and upstream in the reference
 # itself at v3.6 §1.2 / planner rule 7, which supersedes the unratified >40
 # heuristic. The number and what it counts ratify together: **body links only**,
@@ -175,6 +178,9 @@ class ServiceEntry:
     # service crossed with every city is how a matrix doubles for no return.
     include_in_matrix: bool = True
     parent_slug: Optional[str] = None
+    # Equipment brands this service is offered for (Carrier, Trane, …). Their
+    # presence is the opt-in for brand × service pages; empty for most services.
+    brands: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -309,6 +315,14 @@ def _path(*segments: str) -> str:
     return f"/{'/'.join(parts)}/" if parts else "/"
 
 
+def _deslug(slug: str) -> str:
+    """A slug back to a human label, for the rare fallback where the canonical
+    name isn't on the page title. `carrier-ac` -> `Carrier Ac`. Lossy — the real
+    name always wins where it exists; this only keeps a keyword from being empty.
+    """
+    return (slug or "").replace("-", " ").replace("_", " ").strip().title()
+
+
 def core_pages(site_type: str) -> list[PlannedPage]:
     """The fixed pages every site gets, whatever its shape.
 
@@ -352,6 +366,59 @@ def service_pages(catalog: Iterable[ServiceEntry]) -> list[PlannedPage]:
         else:
             out.append(PlannedPage(_path(svc.slug), "service", svc.name, "CORE"))
     return out
+
+
+def brand_service_pages(catalog: Iterable[ServiceEntry]) -> list[PlannedPage]:
+    """Brand × service pages at /{service-slug}/{brand-slug}/ (reference: Brand ×
+    Service, ⭐ SOP extension — "Carrier AC Repair").
+
+    One page per (top-level service, brand) for every service that carries a
+    brand list. A brand modifier is a distinct keyword vector, so the type is
+    declared here rather than inferred from the path (it shares the sub-service
+    namespace). Restricted to top-level services: a sub-service already lives two
+    segments deep, and /{parent}/{sub}/{brand}/ is not the ratified pattern — that
+    depth is the hyper-local escalation, not a brand cell.
+    """
+    out: list[PlannedPage] = []
+    for svc in sorted(catalog, key=lambda s: (s.order, s.slug)):
+        if svc.parent_slug:
+            continue
+        seen: set[str] = set()
+        for raw in svc.brands:
+            brand = (raw or "").strip()
+            brand_slug = slugify(brand)
+            if not brand or not brand_slug or brand_slug in seen:
+                continue
+            seen.add(brand_slug)
+            out.append(
+                PlannedPage(
+                    _path(svc.slug, brand_slug),
+                    "brand_service",
+                    f"{brand} {svc.name}",
+                    f"brand × service (auto): {brand}",
+                    tier=4,
+                )
+            )
+    return out
+
+
+def brand_service_gate(count: int) -> list[PlanIssue]:
+    """Link-equity sign-off for a large brand × service matrix (reference: "flag
+    > 200 for link-equity review"). Blocking but acknowledgeable, like the other
+    scale gates — a legitimately large brand catalog needs a recorded decision,
+    not a wall.
+    """
+    if count > BRAND_SERVICE_SIGNOFF_THRESHOLD:
+        return [
+            PlanIssue(
+                "brand_service_scale",
+                True,
+                f"{count} brand × service pages (> {BRAND_SERVICE_SIGNOFF_THRESHOLD}) — "
+                "link-equity review before approval",
+                acknowledgeable=True,
+            )
+        ]
+    return []
 
 
 def location_pages(cities: Iterable[CityEntry], *, multi_city: bool) -> list[PlannedPage]:
@@ -869,12 +936,17 @@ def build_plan(
     multi_city = len(cities) > 1
 
     pages = core_pages(site_type)
+    brand_pages: list[PlannedPage] = []
     if site_type in GEO_SITE_TYPES:
         pages += service_pages(catalog)
         pages += location_pages(cities, multi_city=multi_city)
         matrix = matrix_pages(catalog, cities, multi_city=multi_city)
         pages += matrix
         pages += conditional_pages(catalog, cities, multi_city=multi_city)
+        # Brand × service: its own matrix (brands × top-level services), opted in
+        # per service by a brand list. Leaf pages, so they add no index links.
+        brand_pages = brand_service_pages(catalog)
+        pages += brand_pages
     else:
         matrix = []
 
@@ -895,6 +967,7 @@ def build_plan(
     issues = (
         check_paths(pages)
         + scale_gates(len(matrix), links)
+        + brand_service_gate(len(brand_pages))
         + single_service_gate(catalog, multi_city=multi_city)
         + template_coverage_gate(pages)
     )
@@ -909,7 +982,11 @@ def build_plan(
 
 # Page types the nlp-api local generator can write today (PRD §4.7). Everything
 # else is planned but not generable, and says so rather than being promised.
-NLP_PAGE_TYPES = frozenset({"service", "sub_service", "location", "neighborhood", "local_landing"})
+# `brand_service` (brand × service) and `hyper_local` (subservice × geo) are
+# service/local-landing variants — the same nlp writer, a different keyword vector.
+NLP_PAGE_TYPES = frozenset(
+    {"service", "sub_service", "brand_service", "location", "neighborhood", "local_landing", "hyper_local"}
+)
 
 # Written by the core-pages generator (plan §4.6), which is Phase 3 and unbuilt.
 CORE_PAGE_TYPES = frozenset({"home", "about", "contact", "privacy"})
@@ -947,12 +1024,23 @@ def frontmatter_extra(
     segs = _segments(page.path)
     out: dict = {}
 
-    if page.page_type in {"service", "sub_service", "brand_service"}:
+    if page.page_type in {"service", "sub_service"}:
         svc = services.get(segs[-1]) if segs else None
         if svc:
             out["teaser"] = svc.teaser
             out["order"] = svc.order
         if page.page_type == "sub_service" and len(segs) >= 2:
+            out["parentService"] = segs[0]
+
+    elif page.page_type == "brand_service":
+        # /{service-slug}/{brand-slug}/ — the SERVICE is the first segment (the
+        # brand is segs[-1]), so teaser/order and the breadcrumb parent come from
+        # segs[0], not segs[-1] as the sibling service branch assumes.
+        svc = services.get(segs[0]) if segs else None
+        if svc:
+            out["teaser"] = svc.teaser
+            out["order"] = svc.order
+        if len(segs) >= 2:
             out["parentService"] = segs[0]
 
     elif page.page_type == "location":
@@ -1084,7 +1172,30 @@ def generation_inputs(
             "location": parent.name if parent else page.title,
         }
 
-    # local_landing / hyper_local
+    if page.page_type == "brand_service":
+        # /{service-slug}/{brand-slug}/ — the brand modifier is the keyword vector
+        # ("Carrier AC Repair"). Geo-agnostic like a service page, so the city
+        # only scopes the SERP analysis. The brand name lives on the title the
+        # emitter set ("<Brand> <Service>"), since no catalog entry carries it.
+        svc = services.get(segs[0]) if segs else None
+        svc_name = svc.name if svc else (segs[0] if segs else "")
+        keyword = (page.title or "").strip() or (
+            f"{_deslug(segs[1])} {svc_name}".strip() if len(segs) >= 2 else svc_name
+        )
+        return {"engine": "nlp", "keyword": keyword, "location": primary_city}
+
+    if page.page_type == "hyper_local":
+        # /{city}/{service}/{subservice}/ (or /{city}/{neighborhood}/{subservice}/):
+        # the most granular geo need. The city anchors the DataForSEO location; the
+        # specific subservice+geo is the keyword, carried on the page's own title.
+        city = cities.get(segs[0]) if segs else None
+        city_name = city.name if city else (segs[0] if segs else "")
+        keyword = (page.title or "").strip() or (
+            f"{_deslug(segs[-1])} {city_name}".strip() if segs else ""
+        )
+        return {"engine": "nlp", "keyword": keyword, "location": city_name}
+
+    # local_landing
     city = cities.get(segs[0]) if len(segs) >= 1 else None
     svc = services.get(segs[1]) if len(segs) >= 2 else None
     city_name = city.name if city else (segs[0] if segs else "")

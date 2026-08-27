@@ -243,27 +243,41 @@ function ServiceEditor({ rows, onChange, disabled }: {
   return (
     <div style={{ display: 'grid', gap: 6 }}>
       {rows.map((row, i) => (
-        <div key={i} style={{ display: 'grid', gridTemplateColumns: '1.4fr 2fr auto auto auto', gap: 6, alignItems: 'center' }}>
-          <input style={input} placeholder="Service name" value={row.name} disabled={disabled}
-                 onChange={(e) => update(i, { name: e.target.value })} />
-          <input style={input} placeholder="Short description (nav, cards, index)" value={row.teaser ?? ''} disabled={disabled}
-                 onChange={(e) => update(i, { teaser: e.target.value })} />
-          <select style={{ ...input, width: 150 }} value={row.parent_slug ?? ''} disabled={disabled}
-                  onChange={(e) => update(i, { parent_slug: e.target.value || null })}>
-            <option value="">Top-level</option>
-            {rows.filter((r, j) => j !== i && !r.parent_slug && r.name).map((r, j) => (
-              <option key={j} value={slugify(r.slug || r.name)}>under {r.name}</option>
-            ))}
-          </select>
-          <label style={{ fontSize: 11, color: '#475569', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
-            <input type="checkbox" checked={row.include_in_matrix !== false} disabled={disabled}
-                   onChange={(e) => update(i, { include_in_matrix: e.target.checked })} />
-            In matrix
-          </label>
-          <button onClick={() => onChange(rows.filter((_, j) => j !== i))} disabled={disabled}
-                  style={{ ...btn('#fff', '#b91c1c'), padding: '6px 8px' }} title="Remove">
-            <Trash2 size={13} />
-          </button>
+        <div key={i} style={{ display: 'grid', gap: 5 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 2fr auto auto auto', gap: 6, alignItems: 'center' }}>
+            <input style={input} placeholder="Service name" value={row.name} disabled={disabled}
+                   onChange={(e) => update(i, { name: e.target.value })} />
+            <input style={input} placeholder="Short description (nav, cards, index)" value={row.teaser ?? ''} disabled={disabled}
+                   onChange={(e) => update(i, { teaser: e.target.value })} />
+            <select style={{ ...input, width: 150 }} value={row.parent_slug ?? ''} disabled={disabled}
+                    onChange={(e) => update(i, { parent_slug: e.target.value || null })}>
+              <option value="">Top-level</option>
+              {rows.filter((r, j) => j !== i && !r.parent_slug && r.name).map((r, j) => (
+                <option key={j} value={slugify(r.slug || r.name)}>under {r.name}</option>
+              ))}
+            </select>
+            <label style={{ fontSize: 11, color: '#475569', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+              <input type="checkbox" checked={row.include_in_matrix !== false} disabled={disabled}
+                     onChange={(e) => update(i, { include_in_matrix: e.target.checked })} />
+              In matrix
+            </label>
+            <button onClick={() => onChange(rows.filter((_, j) => j !== i))} disabled={disabled}
+                    style={{ ...btn('#fff', '#b91c1c'), padding: '6px 8px' }} title="Remove">
+              <Trash2 size={13} />
+            </button>
+          </div>
+          {/* Brand × service opt-in: a brand list turns a top-level service into
+              /{service}/{brand}/ pages ("Carrier AC Repair"). Sub-services don't
+              take brands (that depth is the hyper-local escalation, not a cell). */}
+          {!row.parent_slug && (
+            <input
+              style={{ ...input, fontSize: 12 }}
+              placeholder="Equipment brands for brand × service pages (comma-separated, optional) — e.g. Carrier, Trane, Lennox"
+              value={(row.brands ?? []).join(', ')}
+              disabled={disabled}
+              onChange={(e) => update(i, { brands: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })}
+            />
+          )}
         </div>
       ))}
       <button onClick={() => onChange([...rows, { name: '', order: (rows.length + 1) * 10, include_in_matrix: true }])}

@@ -51,6 +51,17 @@ class TestParsing:
             "roof-replacement",
         ]
 
+    def test_brands_are_parsed_and_trimmed(self):
+        [svc] = store.parse_catalog(
+            [{"name": "AC Repair", "brands": ["Carrier", "  Trane  ", "", 5]}]
+        )
+        # Whitespace trimmed, blanks and non-strings dropped.
+        assert svc.brands == ("Carrier", "Trane")
+
+    def test_brands_default_to_empty(self):
+        [svc] = store.parse_catalog([{"name": "AC Repair"}])
+        assert svc.brands == ()
+
 
 class TestHeadTerms:
     def test_defaults_to_the_first_service_in_nav_order(self):
