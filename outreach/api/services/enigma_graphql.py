@@ -27,17 +27,18 @@ from .enigma_client import EnigmaCall  # reuse the captured-round-trip record
 
 logger = logging.getLogger(__name__)
 
-# The probe query: match a BRAND by name+address, then pull the two payloads we care about. Mirrors
-# the entity path behind the owner's console-batch output columns (operatingLocations→roles→persons)
-# and requests all three card-revenue windows (the batch export only carried 12m).
-# The query carries inline fragments for BOTH Brand and OperatingLocation, so the same document works
-# whichever `entityType` the variables request. On a BRAND match, roles hang off
-# `operatingLocations → roles`; on an OPERATING_LOCATION match, `roles` are directly on the entity
-# (the console batch's `operatingLocations__0__roles__0…` implies the operating-location level is
-# where role/owner records actually live). `RoleFields` (Role is the same type in both places) DRYs the
-# owner selection; the card selection is duplicated inline because BrandCardTransaction and
-# OperatingLocationCardTransaction are distinct types (both expose period/projectedQuantity/dates).
-SEARCH_QUERY = """
+# The probe query pulls the two payloads we care about — card-revenue windows (1m/3m/12m) and the
+# owner (roles → legalEntities → Person-typed name + title/mgmt/phone/email). Roles live either under
+# a Brand (`operatingLocations → roles`) or directly on an OperatingLocation (the console batch's
+# `operatingLocations__0__roles__0…` implies the operating-location level is where they actually sit).
+#
+# The document is built PER entity type (only the fragment for the queried type), NOT with both inline
+# fragments in one document: `BrandName.name` is `String` while `OperatingLocationName.name` is
+# `String!`, so selecting `names.edges.node.name` in a `... on Brand` AND a `... on OperatingLocation`
+# fragment at the same response position is a GraphQL field-conflict validation error (measured live
+# 2026-08-27). One fragment per document sidesteps it entirely. `RoleFields` (Role is the same type in
+# both places) DRYs the owner selection.
+_ROLE_FRAGMENT = """
 fragment RoleFields on Role {
   jobTitle
   jobFunction
@@ -48,38 +49,50 @@ fragment RoleFields on Role {
   phoneNumbers(first: 1) { edges { node { phoneNumber } } }
   emailAddresses(first: 1) { edges { node { emailAddress } } }
 }
+""".strip()
 
-query Probe($si: SearchInput!) {
-  search(searchInput: $si) {
-    ... on Brand {
-      enigmaId
-      names(first: 1) { edges { node { name } } }
-      cardTransactions(conditions: { filter: { AND: [
-        { EQ: ["quantityType", "card_revenue_amount"] },
-        { IN: ["period", ["1m", "3m", "12m"]] }
-      ] } }) {
-        edges { node { period projectedQuantity periodStartDate periodEndDate } }
-      }
-      operatingLocations(first: 1) {
-        edges { node { roles(first: 3) { edges { node { ...RoleFields } } } } }
-      }
-    }
-    ... on OperatingLocation {
-      enigmaId
-      names(first: 1) { edges { node { name } } }
-      cardTransactions(conditions: { filter: { AND: [
-        { EQ: ["quantityType", "card_revenue_amount"] },
-        { IN: ["period", ["1m", "3m", "12m"]] }
-      ] } }) {
-        edges { node { period projectedQuantity periodStartDate periodEndDate } }
-      }
-      roles(first: 3) { edges { node { ...RoleFields } } }
-    }
-  }
+_CARD_SELECTION = """
+cardTransactions(conditions: { filter: { AND: [
+  { EQ: ["quantityType", "card_revenue_amount"] },
+  { IN: ["period", ["1m", "3m", "12m"]] }
+] } }) {
+  edges { node { period projectedQuantity periodStartDate periodEndDate } }
 }
 """.strip()
 
+_BRAND_BODY = f"""
+... on Brand {{
+  enigmaId
+  names(first: 1) {{ edges {{ node {{ name }} }} }}
+  {_CARD_SELECTION}
+  operatingLocations(first: 1) {{
+    edges {{ node {{ roles(first: 3) {{ edges {{ node {{ ...RoleFields }} }} }} }} }}
+  }}
+}}
+""".strip()
+
+_OPERATING_LOCATION_BODY = f"""
+... on OperatingLocation {{
+  enigmaId
+  names(first: 1) {{ edges {{ node {{ name }} }} }}
+  {_CARD_SELECTION}
+  roles(first: 3) {{ edges {{ node {{ ...RoleFields }} }} }}
+}}
+""".strip()
+
 _ENTITY_TYPES = {"brand": "BRAND", "operating_location": "OPERATING_LOCATION"}
+
+
+def build_query(entity_type: str = "BRAND") -> str:
+    """The GraphQL document for one entity type. Only the matching inline fragment is included, to
+    avoid the Brand/OperatingLocation `names.name` (String vs String!) field-conflict."""
+    et = _ENTITY_TYPES.get(str(entity_type).strip().lower(), str(entity_type).strip().upper())
+    body = _OPERATING_LOCATION_BODY if et == "OPERATING_LOCATION" else _BRAND_BODY
+    return f"{_ROLE_FRAGMENT}\n\nquery Probe($si: SearchInput!) {{\n  search(searchInput: $si) {{\n    {body}\n  }}\n}}"
+
+
+# Back-compat: the default (BRAND) document.
+SEARCH_QUERY = build_query("BRAND")
 
 
 def build_variables(biz: dict[str, Any], match_threshold: float,
@@ -115,7 +128,7 @@ async def search_business(client: httpx.AsyncClient, settings: Settings,
     EnigmaCall so one bad lookup can't abort the sample."""
     url = settings.enigma_graphql_url
     call = EnigmaCall(method="POST", url=url)
-    body = {"query": SEARCH_QUERY,
+    body = {"query": build_query(entity_type),
             "variables": build_variables(biz, settings.enigma_graphql_match_threshold, entity_type)}
     try:
         resp = await client.post(url, headers=_headers(settings), json=body)

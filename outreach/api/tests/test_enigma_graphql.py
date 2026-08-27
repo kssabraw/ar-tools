@@ -37,6 +37,18 @@ def test_build_variables_entity_type():
     assert v["si"]["entityType"] == "OPERATING_LOCATION"
 
 
+def test_build_query_is_single_fragment_per_entity():
+    # Both fragments in one document collide (BrandName.name String vs OperatingLocationName.name
+    # String!), so each query carries ONLY the fragment for its entity type.
+    brand_q = eg.build_query("brand")
+    assert "... on Brand" in brand_q and "... on OperatingLocation" not in brand_q
+    ol_q = eg.build_query("operating_location")
+    assert "... on OperatingLocation" in ol_q and "... on Brand" not in ol_q
+    # roles are read directly on the OperatingLocation, nested under operatingLocations for a Brand.
+    assert "operatingLocations" in brand_q
+    assert "fragment RoleFields on Role" in brand_q and "fragment RoleFields on Role" in ol_q
+
+
 # --- a realistic matched-brand response --------------------------------------------------------
 
 _BRAND = {
