@@ -1099,7 +1099,8 @@ async def reoptimize_url(
     # alone silently skipped the pages most worth rewriting — a page at 78 SEO
     # and 40 voice never had its voice score looked at.
     should_reopt, reason = voice_card_service.reoptimize_verdict(
-        composite, voice_compliance, score_threshold
+        composite, voice_compliance, score_threshold,
+        length_fit=(score_result.get("engine_scores") or {}).get("length_fit"),
     )
     voice_score = (voice_compliance or {}).get("score")
     if not should_reopt:

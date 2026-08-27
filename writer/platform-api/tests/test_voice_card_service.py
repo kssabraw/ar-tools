@@ -221,6 +221,56 @@ def test_skip_reason_omits_voice_when_there_is_none():
     assert "85/100 on SEO" in reason
 
 
+# ── length-aware gate ────────────────────────────────────────────────────────
+def _lf(score, page_words, target_words, measured=True):
+    return {"score": score, "page_words": page_words, "target_words": target_words, "measured": measured}
+
+
+def test_over_length_page_reoptimizes_even_when_seo_and_voice_clear():
+    """The case a 10%-weighted length engine can't force on its own: strong SEO,
+    strong voice, but ~2x the SERP target — trim it."""
+    reopt, reason = vcs.reoptimize_verdict(
+        85, _voice(score=92), 75, length_fit=_lf(30, 2400, 1200)
+    )
+    assert reopt is True
+    assert "2400 words" in reason and "1200 target" in reason
+
+
+def test_under_length_does_not_trigger_a_trim():
+    """Under-length is left to the content engines and the SEO bar."""
+    reopt, _ = vcs.reoptimize_verdict(
+        85, _voice(score=92), 75, length_fit=_lf(40, 600, 1200)
+    )
+    assert reopt is False
+
+
+def test_on_target_length_skips_as_before():
+    reopt, _ = vcs.reoptimize_verdict(
+        85, _voice(score=92), 75, length_fit=_lf(100, 1200, 1200)
+    )
+    assert reopt is False
+
+
+def test_mildly_over_but_not_deficient_does_not_trigger():
+    """Over target but length_fit >= 80 (within tolerance) is not a deficiency."""
+    reopt, _ = vcs.reoptimize_verdict(
+        85, _voice(score=92), 75, length_fit=_lf(85, 1260, 1200)
+    )
+    assert reopt is False
+
+
+def test_unmeasured_length_engine_is_ignored():
+    reopt, _ = vcs.reoptimize_verdict(
+        85, _voice(score=92), 75, length_fit=_lf(0, 9999, 1200, measured=False)
+    )
+    assert reopt is False
+
+
+def test_no_length_engine_behaves_exactly_as_before():
+    assert vcs.reoptimize_verdict(85, _voice(score=92), 75, length_fit=None)[0] is False
+    assert vcs.reoptimize_verdict(85, _voice(score=92), 75)[0] is False
+
+
 # ---------------------------------------------------------------------------
 # assert_voice_publishable — the publish gate
 # ---------------------------------------------------------------------------

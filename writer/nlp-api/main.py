@@ -121,6 +121,7 @@ import ecommerce_mcs as mcs  # Max-Cosine Synthesis (AIO capture + entity + head
 import ecommerce_facts as ecom_facts  # invariant public-spec auto-research (cited)
 import ecommerce_loop as ecom_loop  # auto-retry loop stop decisions (pure)
 import voice_card as vcard  # brand voice + ICP: distilled card, prompt block, hard checks
+import length_fit  # deterministic length-fit engine (SERP avg +20% target)
 from blog_structure import (  # deterministic blog/AEO structure checks (R4/R6/R7)
     compute_blog_structural_aeo as _compute_blog_structural_aeo,
     detect_blog_structure as _detect_blog_structure,
@@ -669,6 +670,13 @@ A direct answer must always come first, but it must be written in the brand's re
 
 The rule: lead with the answer, then let the rest of the sentence and paragraph carry the brand tone.
 
+LENGTH BUDGET — READ BEFORE WRITING (HIGHEST-PRIORITY LENGTH RULE):
+The BUSINESS DATA may include a "TOTAL WORD BUDGET" (the competitor SERP average + 20%). When it is present it is AUTHORITATIVE and OVERRIDES the per-section word counts below. The per-section counts are proportions for a full-length page — SCALE THEM DOWN so the entire visible <article> body lands within ±10% of the budget. Rules:
+- Take the reduction primarily from the Main Service Body (§6), then by consolidating overlapping H2/H3 sections and trimming repetition — never by dropping a required structural element (intro answer block, CTAs, geographic section, FAQ, schema).
+- A shorter page that matches the SERP beats a longer one: do NOT chase "information gain" past the budget. Cover what competitors cover concisely; add a net-new topic only when it is essential to answer the query AND you are within budget.
+- NEVER pad to reach a number and NEVER fabricate facts to fill space. If real, on-topic substance runs short of the budget, a slightly shorter page is correct.
+- If no TOTAL WORD BUDGET is provided, use the per-section counts below as written.
+
 Section 1 — Intro / Direct Answer Block (100–150 words)
 <section id="intro">
   <h1>[Exact Match Keyword] + [1–2 SERVICE-SCOPE or CREDENTIAL entities]</h1>
@@ -704,9 +712,11 @@ Section 5 — Features and Benefits (150–200 words)
 Section 6 — Main Service Body (800–1400 words)
 <section id="services">
   Use the COMPETITOR H2/H3 HEADINGS from the SERP data above as your structural baseline.
-  Cover every topic competitors cover, then add H2/H3 sections for topics competitors DON'T cover
-  that would more fully answer the user's implied query — this is called INFORMATION GAIN and
-  is critical for outranking competitors.
+  Cover every topic competitors cover. INFORMATION GAIN — adding H2/H3 sections for topics
+  competitors DON'T cover — helps outrank them, but is SUBORDINATE to the LENGTH BUDGET: when a
+  budget is set, cover competitor topics concisely first and add a net-new section only if it is
+  essential to the query AND you are still within budget. When no budget is set, this is 800–1400
+  words; when a budget IS set, this section absorbs most of the scaling (up or down) to hit it.
 
   Structure rules:
   - You MUST use MULTIPLE H2s within this section — each H2 block must be ≤300 words; split further into additional H2s if needed
@@ -747,11 +757,7 @@ Section 10 — Geographic / Local SEO Section (200–300 words)
   [City + min 3 neighborhoods in sentence context (not just a list) + min 1 landmark + min 2 streets + zip codes (min 3). Use only real, verifiable geographic details. If neighborhood/landmark/street/zip data is not provided in the business data, include only what you are certain is accurate for the target city. Do not invent or guess street names, zip codes, or landmarks. Coverage area required. Response time: ONLY include if explicitly stated in business hours, GBP description, or reviews — otherwise write "Call us for availability" or omit entirely.]
 </section>
 
-Section 11 — CTA Block Tertiary (50–75 words) — URGENCY / AVAILABILITY
-<section id="cta-tertiary">
-  <h2>[Service-anchored action heading — name the SERVICE (no city, no verbatim exact-match keyword), DISTINCT wording from §4 and §8, e.g. "Get Your Roof Restoration Scheduled"]</h2>
-  [A DISTINCT angle from §4 and §8: lead with urgency or availability — same-day/emergency response ONLY if it is in the business data; otherwise use non-fabricated urgency ("don't wait until the damage spreads", seasonal timing, "book before your preferred slot fills"). NEVER invent a timeframe. Include the phone. Do NOT reuse the earlier CTAs' wording.]
-</section>
+Section 11 — (removed) There are exactly TWO CTA blocks on the page — §4 (value/offer-led) and §8 (proof/risk-reversal). Do NOT add a third CTA block; repeated calls-to-action pad the page without adding value. (Section numbers below are unchanged.)
 
 Section 12 — FAQ (min 4, max 7 entries — 40–80 words each)
 <section id="faq">
@@ -1087,6 +1093,8 @@ class AnalysisResponse(BaseModel):
     aio_text: str = ""                        # the AIO answer text (MCS target)
     aio_sources: List[str] = []               # domains the AIO cites
     aio_fanout: List[str] = []                # AIO fan-out sub-questions
+    serp_avg_word_count: Optional[int] = None # avg competitor body (<p>) word count across the SERP
+    serp_word_target: Optional[int] = None    # length target = SERP avg + 20% (drives length_fit + the writer budget)
     analysis_cost: dict = {}                  # estimated API costs for this analysis run
 
 
@@ -2037,6 +2045,16 @@ async def _run_serp_analysis(
 
     zone_targets = compute_zone_targets(zone_buckets, related, google_entities)
 
+    # Competitor body-length target: average body-content words across the SERP,
+    # +20%. Drives the writer's length budget AND the deterministic length_fit
+    # engine. Measured from the raw competitor HTML with the SAME content counter
+    # the generated page is scored against (chrome-stripped, counts prose + lists
+    # + tables), so the two sides are symmetric. None when too few pages scraped.
+    serp_avg_words = length_fit.competitor_avg_words(pages)
+    serp_word_target = length_fit.word_target(serp_avg_words)
+    if serp_word_target:
+        logger.info(f"SERP length: avg={round(serp_avg_words)} words, target={serp_word_target} (avg +20%)")
+
     # Aggregate competitor headings by page spread
     competitor_headings: List[dict] = []
     for tag_type, per_page in (("h2", h2_per_page), ("h3", h3_per_page)):
@@ -2093,6 +2111,8 @@ async def _run_serp_analysis(
         aio_text=aio_insights.get("text", ""),
         aio_sources=aio_insights.get("sources", []),
         aio_fanout=aio_insights.get("fanout", []),
+        serp_avg_word_count=int(round(serp_avg_words)) if serp_avg_words else None,
+        serp_word_target=serp_word_target,
         analysis_cost=analysis_cost,
     )
 
@@ -3662,26 +3682,36 @@ Return ONLY valid JSON — no markdown, no explanation:
 Be specific — reference actual content found (or missing) in the page."""
 
 
+# length_fit (0.10) was added as a deterministic engine so the SERP-average
+# length target (SERP avg + 20%) is enforced by scoring, not just suggested to
+# the writer — pages were running 2–3× the competitor SERP. The pre-existing
+# engines keep their exact relative proportions (each scaled ×0.90 to make
+# uniform room), so no engine's importance was editorialized. NOTE: adding an
+# engine re-weights the composite, so NEW scorings of a page differ slightly from
+# scores stored before this change (historical rows are not rewritten).
 _ENGINE_WEIGHTS = {
-    "organic_ranking":      0.10,
-    "gbp_maps":             0.20,
-    "entity_establishment": 0.10,
-    "icp_alignment":        0.05,
-    "aeo_llm_retrieval":    0.20,
-    "geographic_legitimacy":0.10,
-    "nearme_intent":        0.10,
-    "serp_signal_coverage": 0.15,   # deterministic — scored in Python, not Claude
+    "organic_ranking":      0.09,
+    "gbp_maps":             0.18,
+    "entity_establishment": 0.09,
+    "icp_alignment":        0.045,
+    "aeo_llm_retrieval":    0.18,
+    "geographic_legitimacy":0.09,
+    "nearme_intent":        0.09,
+    "serp_signal_coverage": 0.135,  # deterministic — scored in Python, not Claude
+    "length_fit":           0.10,   # deterministic — scored in Python, not Claude
 }
 
 # National / location-agnostic weights (geo_mode="national"): the local weights
-# minus geographic_legitimacy + nearme_intent, renormalized to sum to 1.0.
+# minus geographic_legitimacy + nearme_intent, renormalized to sum to 1.0
+# (then the same ×0.90 room made for length_fit at 0.10).
 _ENGINE_WEIGHTS_NATIONAL = {
-    "organic_ranking":      0.125,
-    "gbp_maps":             0.25,
-    "entity_establishment": 0.125,
-    "icp_alignment":        0.0625,
-    "aeo_llm_retrieval":    0.25,
-    "serp_signal_coverage": 0.1875,
+    "organic_ranking":      0.1125,
+    "gbp_maps":             0.225,
+    "entity_establishment": 0.1125,
+    "icp_alignment":        0.05625,
+    "aeo_llm_retrieval":    0.225,
+    "serp_signal_coverage": 0.16875,
+    "length_fit":           0.10,
 }
 
 _ENGINE_LABELS = {
@@ -3693,6 +3723,7 @@ _ENGINE_LABELS = {
     "geographic_legitimacy": "Geographic Legitimacy Engine",
     "nearme_intent":         "Hyperlocal / Near-Me Engine",
     "serp_signal_coverage":  "SERP Signal Coverage",
+    "length_fit":            "Length Fit (SERP avg +20%)",
 }
 
 # ── Brand voice scoring ────────────────────────────────────────────────────
@@ -3954,9 +3985,48 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
     }
 
 
+def _compute_length_fit(page_html: str, serp_analysis: Optional[dict]) -> Optional[dict]:
+    """Deterministic length-fit engine (Python, not Claude). Scores the page's
+    body length against the SERP target (avg + 20%) carried on the serp_analysis
+    dict. Returns None when there is no target (external-URL scoring or an older
+    analysis) or no body prose; callers omit the engine on None so the composite
+    renormalizes and length_fit never distorts a score it cannot measure."""
+    target = (serp_analysis or {}).get("serp_word_target")
+    return length_fit.compute_length_fit(page_html, target)
+
+
+def _length_budget_line(serp_analysis: Optional[dict]) -> str:
+    """The 'TOTAL WORD BUDGET' line injected into a writer/reoptimizer prompt so
+    the page targets the SERP average + 20%. Empty string when no target was
+    measured (too few competitor pages) — the prompt then falls back to the
+    template's per-section counts."""
+    sa = serp_analysis or {}
+    target = sa.get("serp_word_target")
+    if not target:
+        return ""
+    avg = sa.get("serp_avg_word_count") or int(round(target / length_fit.OVERAGE_MULTIPLIER))
+    return (
+        f"TOTAL WORD BUDGET: ~{target} words for the whole <article> body "
+        f"(competitor SERP average ~{avg} + 20%). This is AUTHORITATIVE — scale the section "
+        f"guidance so the page lands within ±10% of it (see the LENGTH BUDGET rule). Do not "
+        f"exceed it to chase extra coverage, and never pad or fabricate to reach it."
+    )
+
+
 def _composite_from_scores(scores: dict, weights: Optional[dict] = None) -> tuple[float, str]:
     weights = weights or _ENGINE_WEIGHTS
-    composite = sum(scores[k]["score"] * w for k, w in weights.items() if k in scores)
+    # Renormalize over the engines actually present, so an engine that is
+    # legitimately absent (e.g. length_fit when there is no SERP length target)
+    # neither depresses the composite nor distorts it with a neutral placeholder.
+    # When every weighted engine is present the denominator is 1.0, so this is a
+    # no-op for the normal path (and for ecommerce/blog, which always score all
+    # of their engines).
+    present = {k: w for k, w in weights.items() if k in scores}
+    total_w = sum(present.values())
+    composite = (
+        sum(scores[k]["score"] * w for k, w in present.items()) / total_w
+        if total_w else 0.0
+    )
     if composite >= 90:   status = "excellent"
     elif composite >= 80: status = "good"
     elif composite >= 70: status = "needs_improvement"
@@ -4113,6 +4183,9 @@ async def _score_html_inline(
     if not scores:
         raise Exception("Inline scoring returned invalid JSON")
     scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_html, serp_analysis_dict)
+    _lf = _compute_length_fit(page_html, serp_analysis_dict)
+    if _lf is not None:
+        scores["length_fit"] = _lf
     composite, _ = _composite_from_scores(scores, _ENGINE_WEIGHTS)
     deficiencies = _build_deficiencies(scores)
     # The voice scorecard rides the same LLM call but is kept out of `scores`
@@ -4572,8 +4645,12 @@ async def _score_page_for_related(
         msg.usage.input_tokens, msg.usage.output_tokens,
     )
     scores = _parse_claude_json(msg.content[0].text)
-    # No serp_analysis available in the related-pages path — coverage engine scores neutral
+    # No serp_analysis available in the related-pages path — serp coverage scores
+    # neutral and length_fit is omitted (no target); the composite renormalizes.
     scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_text, None)
+    _lf = _compute_length_fit(page_html, None)
+    if _lf is not None:
+        scores["length_fit"] = _lf
     composite, status = _composite_from_scores(scores)
     return {
         "composite_score": composite,
@@ -5549,8 +5626,11 @@ async def score_page(request: Request, body: ScorePageRequest):
     if not scores:
         raise HTTPException(status_code=502, detail="Scoring service returned an invalid response. Please try again.")
 
-    # Inject deterministic SERP signal coverage (Python, not Claude)
+    # Inject deterministic SERP signal coverage + length fit (Python, not Claude)
     scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_html, serp_analysis_dict)
+    _lf = _compute_length_fit(page_html, serp_analysis_dict)
+    if _lf is not None:
+        scores["length_fit"] = _lf
 
     # Pull the voice scorecard out FIRST: it must never reach the composite.
     voice_compliance = _voice_scorecard_from(scores, page_html, "", voice_card)
@@ -6539,6 +6619,8 @@ async def generate_page(request: Request, body: GeneratePageRequest):
                 f"User notes: {body.notes.strip()}\n"
             )
 
+        length_budget_text = _length_budget_line(serp_analysis_dict)
+
         user_prompt = f"""BUSINESS DATA
 Name: {body.business_name}
 Category: {body.gbp_category}
@@ -6550,6 +6632,7 @@ Hours: {body.hours or "Not provided"}
 Primary keyword: {body.keyword}
 Target city: {city}
 Full location: {body.location}
+{length_budget_text}
 
 {brand_voice_text}
 {icp_text}
@@ -6630,10 +6713,11 @@ Full location: {body.location}
         await q.put({"step": "progress", "progress": 90, "message": "Scoring your page…"})
         inline_score = None
         inline_scores = None  # full per-engine verdict (surfaced below for persistence)
+        inline_defs = None    # per-engine deficiencies (drives the length-trim pass)
         voice_scorecard = None  # separate brand-voice verdict (never in the composite)
         for _score_attempt in range(3):
             try:
-                inline_score, _, inline_scores, score_tok, voice_scorecard = await _score_html_inline(
+                inline_score, inline_defs, inline_scores, score_tok, voice_scorecard = await _score_html_inline(
                     content_html, body.keyword, body.location, body.business_name,
                     body.gbp_category, body.address, serp_analysis_dict, client,
                     voice_card=voice_card,
@@ -6647,6 +6731,47 @@ Full location: {body.location}
                     await asyncio.sleep(2 ** _score_attempt)  # 1s then 2s
                 else:
                     logger.warning(f"generate-page: scoring failed after 3 attempts: {_ae}")
+
+        # ── Length enforcement: trim once if the writer overshot the SERP target ──
+        # The generation prompt carries an authoritative word budget, so most pages
+        # land in range; this is the safety net for the ones that don't. length_fit
+        # is deterministic and carries a concrete "cut ~N words" deficiency — one
+        # reopt pass (the same mechanism the voice loop uses) trims it. Runs before
+        # the voice loop so voice is judged on the page that ships. Best-effort: any
+        # failure keeps the generated page. Under-length never triggers a trim.
+        length_engine = (inline_scores or {}).get("length_fit")
+        length_def = next(
+            (d for d in (inline_defs or []) if d.get("engine_key") == "length_fit"), None
+        )
+        if length_def and length_fit.is_over_length(length_engine):
+            await q.put({"step": "progress", "progress": 91, "message": "Trimming to match the top pages…"})
+            try:
+                trimmed_html, trimmed_schema, trimmed_title, trim_tok = await _reoptimize_html_inline(
+                    content_html, body.keyword, body.location, city, body.business_name,
+                    body.gbp_category, body.address, body.phone, [length_def],
+                    serp_analysis_dict, seo_checklist, client, voice_block=voice_block,
+                )
+                token_rec["input_tokens"]  += trim_tok["input_tokens"]
+                token_rec["output_tokens"] += trim_tok["output_tokens"]
+                token_rec["cost_usd"]       = round(token_rec["cost_usd"] + trim_tok["cost_usd"], 6)
+                if (trimmed_html or "").strip():
+                    content_html = trimmed_html
+                    schema_json  = trimmed_schema or schema_json
+                    page_title   = trimmed_title or page_title
+                    # Re-score so the result + the voice loop describe the trimmed page.
+                    try:
+                        inline_score, inline_defs, inline_scores, rescore_tok, voice_scorecard = await _score_html_inline(
+                            content_html, body.keyword, body.location, body.business_name,
+                            body.gbp_category, body.address, serp_analysis_dict, client,
+                            voice_card=voice_card,
+                        )
+                        token_rec["input_tokens"]  += rescore_tok["input_tokens"]
+                        token_rec["output_tokens"] += rescore_tok["output_tokens"]
+                        token_rec["cost_usd"]       = round(token_rec["cost_usd"] + rescore_tok["cost_usd"], 6)
+                    except Exception as _lse:
+                        logger.warning(f"generate-page: re-score after length trim failed: {_lse}")
+            except Exception as _lte:
+                logger.warning(f"generate-page: length trim pass failed (keeping page): {_lte}")
 
         # A scoring outage must not silently produce an unchecked page. The
         # deterministic half needs no network, so run it on its own — a
@@ -6908,6 +7033,8 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
             "Still keep every paragraph short per rule 2 (1–2 sentences)."
         )
 
+        length_budget_text = _length_budget_line(body.serp_analysis)
+
         user_prompt = f"""BUSINESS DATA
 Name: {body.business_name}
 Category: {body.gbp_category}
@@ -6916,6 +7043,7 @@ Phone: {body.phone or "Not provided — use [PHONE] as placeholder"}
 Primary keyword: {body.keyword}
 Target city: {city}
 Full location: {body.location}
+{length_budget_text}
 
 {mcs_block}
 {serp_ctx}
