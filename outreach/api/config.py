@@ -486,8 +486,18 @@ class Settings(BaseSettings):
     # 12 is enough for the probe. Sent only when non-empty. Override via OUTREACH_ENIGMA_LOOKBACK_MONTHS.
     enigma_lookback_months: str = "12"
     enigma_request_timeout_seconds: float = 60.0
-    # How many prospects `probe-enigma` samples (scoping §3 wants ~20). It BILLS one Enigma lookup per
-    # prospect, so it is in PAID_COMMANDS + confirm-gated.
+    # --- GraphQL API (the path that actually returns card windows + owner contact) ----------------
+    # `POST {graphql_url}` with `{query, variables}` + the x-api-key header. The synchronous `search`
+    # query matches a business (BRAND) and returns cardTransactions (1m/3m/12m card_revenue_amount) +
+    # operatingLocations→roles→persons in ONE call — see docs/enigma-graphql-api-reference.md. This is
+    # what `probe-enigma-graphql` and the future contacts rung use; the REST match/ID path above is
+    # kept only as the first (superseded) probe.
+    enigma_graphql_url: str = "https://api.enigma.com/graphql"
+    # Match-confidence floor for a business lookup (0.0–1.0). The console batch matched at ~1.0 on
+    # these prospects; 0.7 keeps a real match without admitting a weak one.
+    enigma_graphql_match_threshold: float = 0.7
+    # How many prospects `probe-enigma` / `probe-enigma-graphql` sample (scoping §3 wants ~20). Each
+    # BILLS one Enigma lookup per prospect, so both are in PAID_COMMANDS + confirm-gated.
     enigma_probe_limit: int = 20
     # CONFIGURED cost estimate per Enigma lookup (unknown until the probe / a bill — the I-111 pattern);
     # drives the cost_ledger write + budget guard once the contacts rung is built. Placeholder.
