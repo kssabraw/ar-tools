@@ -92,6 +92,9 @@ export interface LocalSeoPageDetail extends LocalSeoPageListItem {
   schema_json: string
   content_gaps: ContentGap[]
   voice_violations?: VoiceCompliance | null
+  // Full per-engine scoring verdict; carries serp_signal_coverage (entities /
+  // zones) surfaced in the Search-coverage panel. Absent on older saved pages.
+  engine_scores?: Record<string, EngineScore> | null
   token_usage: Record<string, unknown> | null
   cost_breakdown: Record<string, unknown> | null
   published_doc_url: string | null
@@ -103,11 +106,26 @@ export interface LocalSeoPageDetail extends LocalSeoPageListItem {
   updated_at: string
 }
 
+export interface CoverageZone {
+  zone: string
+  keyword_found?: number
+  keyword_target?: number
+  entity_found?: number
+  entity_target?: number
+}
+
 export interface EngineScore {
   score: number
   issues?: string[]
   recommendations?: string[]
   icp_detected?: string
+  // serp_signal_coverage only — the deterministic SERP-signal engine.
+  keyword_coverage?: number
+  entity_coverage?: number
+  quadgram_coverage?: number
+  entities_used?: string[]
+  entities_missing?: string[]
+  zones?: CoverageZone[]
 }
 
 // Mirrors the nlp `_build_deficiencies` output (engine/engine_key/score/
