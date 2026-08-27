@@ -7475,6 +7475,16 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
         city = body.location.split(",")[0].strip()
         _worker_start = time.monotonic()
 
+        def _within_time_budget() -> bool:
+            """False once the reoptimize wall-clock budget is spent. Gates the
+            START of each optional improvement pass (auto-retry rewrite, voice
+            rewrite) so the page can't stack passes into a 15–20 minute run; a
+            pass already in flight still finishes. The initial rewrite + first
+            score are never gated — they produce the page and its verdict.
+            Shares GENERATION_TIME_BUDGET_SECONDS with generate-page (one dial)."""
+            return (GENERATION_TIME_BUDGET_SECONDS <= 0
+                    or (time.monotonic() - _worker_start) < GENERATION_TIME_BUDGET_SECONDS)
+
         await q.put({"step": "progress", "progress": 10, "message": "Fetching existing page…"})
 
         # Fetch existing page if URL given but no HTML
@@ -7672,6 +7682,13 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
             for pass_num in range(2, MAX_AUTO_PASSES + 1):
                 if inline_score >= 90:
                     break
+                if not _within_time_budget():
+                    logger.info(
+                        "reoptimize-page: %ss time budget spent before auto-retry "
+                        "pass %d — shipping current page (score=%s)",
+                        GENERATION_TIME_BUDGET_SECONDS, pass_num, inline_score,
+                    )
+                    break
                 pct = min(92, 78 + pass_num * 3)
                 await q.put({
                     "step": "progress",
@@ -7749,6 +7766,18 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                      "score": inline_score, "defs": inline_defs, "scores": inline_scores,
                      "voice": voice_scorecard}
             for _fix_pass in range(1, MAX_VOICE_CORRECTION_PASSES + 1):
+                # Always allow the first pass (a critical voice finding is
+                # publish-blocking, so it earns one repair attempt whatever the
+                # clock says); gate later passes on the shared time budget so the
+                # loop can't stack a page into a 15–20 minute run.
+                if _fix_pass > 1 and not _within_time_budget():
+                    logger.info(
+                        "reoptimize-page: %ss time budget spent before voice "
+                        "pass %d — shipping best page so far (voice score=%s)",
+                        GENERATION_TIME_BUDGET_SECONDS, _fix_pass,
+                        (_best.get("voice") or {}).get("score"),
+                    )
+                    break
                 await q.put({
                     "step": "progress", "progress": 93,
                     "message": (f"Aligning to the brand guide "
