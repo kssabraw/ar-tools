@@ -354,6 +354,19 @@ class Settings(BaseSettings):
     name_search_chunk_size: int = 4
     name_search_orders_per_tick: int = 3
     name_search_max_places_per_order: int = 100
+    # Per-TICK place budget across all name-search orders (I-118 sibling). A web search is ~4 s/place,
+    # so a large order (dozens of places) can exceed Railway's `*/5` cron window and get its container
+    # killed mid-run, stranding the order `running` with no recovery — this producer has no per-tick
+    # budget of its own. The drain searches at most this many places per tick; an order with more is
+    # searched up to it and left PENDING to resume next tick (the idempotent marker skip re-bills only
+    # the un-done places), exactly like `enrich_per_tick`. Keep it comfortably inside the window: 24
+    # places / 4 concurrency × ~15 s ≈ 90 s. <=0 = no cap (the old, unsafe behaviour).
+    name_search_per_tick: int = 24
+    # A `running` name-search order older than this is treated as stranded (its container died
+    # mid-tick) and reset to `pending` so a later tick resumes it — the recovery half. Generous so it
+    # can never race a legitimately-executing tick (a normal tick holds an order `running` only for
+    # the tens of seconds it searches a budget's worth).
+    name_search_stuck_order_minutes: int = 20
     # At most this many names kept per prospect (an owner is usually one person).
     name_search_max_names: int = 2
     # OpenAI returns no per-call cost, so — like every rate here — this is a CONFIGURED estimate
