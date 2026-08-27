@@ -114,6 +114,17 @@ export interface CoverageZone {
   entity_target?: number
 }
 
+// Cora-style per-entity coverage row: the page's current mention count vs the
+// competitor-derived recommended count, and the resulting shortfall.
+export interface EntityCoverage {
+  name: string
+  current: number
+  recommended: number
+  shortfall: number
+  page_spread?: number
+  type?: string | null
+}
+
 export interface EngineScore {
   score: number
   issues?: string[]
@@ -125,6 +136,12 @@ export interface EngineScore {
   quadgram_coverage?: number
   entities_used?: string[]
   entities_missing?: string[]
+  // Cora-style per-entity target table (name / current / recommended / shortfall),
+  // its under-target names, and the total mention shortfall. Absent on pages
+  // scored before this was added.
+  entity_detail?: EntityCoverage[]
+  entities_under_target?: string[]
+  total_entity_shortfall?: number
   zones?: CoverageZone[]
 }
 

@@ -3945,6 +3945,51 @@ def _score_system_prompt_for(geo_mode: str = "local", voice_card: Optional[dict]
         return base
     return base + _VOICE_SCORE_PROMPT_SUFFIX
 
+def _count_entity_mentions(name: str, text_lower: str) -> int:
+    """Count whole-word occurrences of an entity name in already-lowercased page
+    text. Word-boundary matched so 'tile' does not count inside 'tiles' and a
+    multi-word entity ('metal roof') is counted as a phrase. Cora-style: the
+    page-level mention frequency compared against the competitor benchmark."""
+    if not name:
+        return 0
+    return len(re.findall(r"\b" + re.escape(name.lower()) + r"\b", text_lower))
+
+
+def _build_entity_coverage_detail(entities: list, page_text_lower: str) -> tuple[list, list, int]:
+    """Cora-style per-entity coverage table: for each competitor-derived entity,
+    the page's CURRENT mention count vs the RECOMMENDED count (mean competitor
+    usage) and the resulting shortfall. Additive detail — it does not change the
+    engine score — persisted via engine_scores so the UI can render a term-target
+    table. Widened to the top 30 entities by page_spread (the score still uses
+    the top 15) so the table is richer without shifting any score.
+
+    Returns (entity_detail, entities_under_target, total_shortfall)."""
+    detail_entities = sorted(
+        entities, key=lambda e: e.get("page_spread", 0), reverse=True
+    )[:30]
+    entity_detail: list[dict] = []
+    for e in detail_entities:
+        name = (e.get("name") or "").strip()
+        if not name:
+            continue
+        recommended = int(e.get("recommended_mentions") or 1)
+        current = _count_entity_mentions(name, page_text_lower)
+        entity_detail.append({
+            "name": name,
+            "current": current,
+            "recommended": recommended,
+            "shortfall": max(0, recommended - current),
+            "page_spread": e.get("page_spread", 0),
+            "type": e.get("entity_type") or e.get("type"),
+        })
+    # Biggest gaps first (then by how many competitors use it) so the most
+    # important under-covered entities lead the table.
+    entity_detail.sort(key=lambda d: (d["shortfall"], d["page_spread"]), reverse=True)
+    entities_under_target = [d["name"] for d in entity_detail if d["shortfall"] > 0]
+    total_shortfall = sum(d["shortfall"] for d in entity_detail)
+    return entity_detail, entities_under_target, total_shortfall
+
+
 def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict]) -> dict:
     """
     Deterministically score how well the page covers the SERP signals identified
@@ -4022,6 +4067,12 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
     # of the per-zone target loop so it reflects the whole page.
     entities_used    = [e["name"] for e in top_entities if e["name"].lower() in page_text_lower]
     entities_missing = [e["name"] for e in top_entities if e["name"].lower() not in page_text_lower]
+    # Cora-style per-entity coverage: current vs recommended mention counts +
+    # shortfall, persisted so the UI can render a term-target table and the gap
+    # survives the run (additive — does not affect the score).
+    entity_detail, entities_under_target, total_entity_shortfall = (
+        _build_entity_coverage_detail(entities, page_text_lower)
+    )
     ent_zone_scores: list[float] = []
     if top_entities:
         for zone_key in ("title", "h1", "h2_h3", "paragraphs"):
@@ -4079,6 +4130,9 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
         "quadgram_coverage": round(qg_score, 1),
         "entities_used":     entities_used,
         "entities_missing":  entities_missing,
+        "entity_detail":         entity_detail,
+        "entities_under_target": entities_under_target,
+        "total_entity_shortfall": total_entity_shortfall,
         "zones":             [zone_detail[k] for k in ("title", "h1", "h2_h3", "paragraphs") if k in zone_detail],
     }
 

@@ -26,9 +26,9 @@ def _serp_analysis():
             "paragraphs": {"target": 2, "entity_target": 2},
         },
         "google_entities": [
-            {"name": "Melbourne", "page_spread": 5},
-            {"name": "Colorbond", "page_spread": 4},
-            {"name": "Slate", "page_spread": 3},
+            {"name": "Melbourne", "page_spread": 5, "recommended_mentions": 4},
+            {"name": "Colorbond", "page_spread": 4, "recommended_mentions": 3},
+            {"name": "Slate", "page_spread": 3, "recommended_mentions": 2},
         ],
         "top_quadgrams": [{"phrase": "licensed roofing contractor"}],
     }
@@ -64,3 +64,44 @@ def test_no_serp_analysis_has_no_coverage_fields():
     res = main._compute_serp_signal_coverage("<p>hi</p>", None)
     assert res["score"] == 50
     assert "entities_used" not in res  # degraded payload stays minimal
+
+
+def test_entity_detail_reports_current_recommended_and_shortfall():
+    # Melbourne x2, Colorbond x1, Slate x0 on the page.
+    html = (
+        "<article><h2>Roof Restoration in Melbourne</h2>"
+        "<p>Colorbond roofing across Melbourne. We install it well.</p></article>"
+    )
+    res = main._compute_serp_signal_coverage(html, _serp_analysis())
+    detail = {d["name"]: d for d in res["entity_detail"]}
+    # current mention counts (word-boundary, page-level)
+    assert detail["Melbourne"]["current"] == 2
+    assert detail["Colorbond"]["current"] == 1
+    assert detail["Slate"]["current"] == 0
+    # recommended carried from the SERP analysis
+    assert detail["Melbourne"]["recommended"] == 4
+    assert detail["Slate"]["recommended"] == 2
+    # shortfall = max(0, recommended - current)
+    assert detail["Melbourne"]["shortfall"] == 2   # 4 - 2
+    assert detail["Colorbond"]["shortfall"] == 2   # 3 - 1
+    assert detail["Slate"]["shortfall"] == 2       # 2 - 0
+    # biggest gaps first, ties broken by page_spread (Melbourne before others)
+    assert res["entity_detail"][0]["name"] == "Melbourne"
+    # rollups
+    assert set(res["entities_under_target"]) == {"Melbourne", "Colorbond", "Slate"}
+    assert res["total_entity_shortfall"] == 6
+
+
+def test_word_boundary_counting_does_not_match_substrings():
+    # "Slate" must not be counted inside "Slater"; "tile" not inside "tiles".
+    html = "<article><p>Mr Slater fitted the tiles. Slate is different.</p></article>"
+    serp = {
+        "google_entities": [
+            {"name": "Slate", "page_spread": 3, "recommended_mentions": 2},
+            {"name": "tile", "page_spread": 2, "recommended_mentions": 2},
+        ],
+    }
+    res = main._compute_serp_signal_coverage(html, serp)
+    detail = {d["name"]: d for d in res["entity_detail"]}
+    assert detail["Slate"]["current"] == 1   # only the standalone "Slate"
+    assert detail["tile"]["current"] == 0    # "tiles" does not count

@@ -50,6 +50,8 @@ function SearchCoveragePanel({ coverage }: { coverage?: EngineScore }) {
   const missing = coverage.entities_missing ?? []
   const zones = coverage.zones ?? []
   const recs = coverage.recommendations ?? []
+  const entityDetail = coverage.entity_detail ?? []
+  const totalShortfall = coverage.total_entity_shortfall ?? 0
   const chip = (text: string, bg: string, color: string) => (
     <span key={text} style={{ fontSize: 12, fontWeight: 600, padding: '3px 9px', borderRadius: 999, background: bg, color }}>{text}</span>
   )
@@ -94,6 +96,43 @@ function SearchCoveragePanel({ coverage }: { coverage?: EngineScore }) {
             {missing.length > 0 && (
               <p style={{ fontSize: 11, color: '#94a3b8', margin: '6px 0 0' }}>Red = target entities not yet on the page.</p>
             )}
+          </div>
+        )}
+
+        {/* Entity targets — Cora-style: current vs recommended mentions per entity */}
+        {entityDetail.length > 0 && (
+          <div style={{ overflowX: 'auto' }}>
+            <p style={{ fontSize: 12, fontWeight: 600, color: '#475569', margin: '0 0 6px' }}>
+              Entity targets{totalShortfall > 0 && ` — ${totalShortfall} mention${totalShortfall > 1 ? 's' : ''} to add`}
+            </p>
+            <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 360 }}>
+              <thead>
+                <tr>
+                  <th style={th}>Entity</th>
+                  <th style={{ ...th, textAlign: 'right' }}>On page</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Target</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Needed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entityDetail.map((e) => {
+                  const short = e.shortfall > 0
+                  return (
+                    <tr key={e.name} style={short ? { background: '#fef2f2' } : undefined}>
+                      <td style={{ ...td, fontWeight: short ? 600 : 400 }}>{e.name}</td>
+                      <td style={{ ...td, textAlign: 'right' }}>{e.current}</td>
+                      <td style={{ ...td, textAlign: 'right' }}>{e.recommended}</td>
+                      <td style={{ ...td, textAlign: 'right', color: short ? '#b91c1c' : '#94a3b8', fontWeight: short ? 700 : 400 }}>
+                        {short ? `+${e.shortfall}` : '✓'}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+            <p style={{ fontSize: 11, color: '#94a3b8', margin: '6px 0 0' }}>
+              Target = average mentions across the top-ranking competitor pages. "Needed" is how many more times to use the entity on this page.
+            </p>
           </div>
         )}
 
