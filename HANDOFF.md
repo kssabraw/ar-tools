@@ -1,6 +1,58 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-27 · **Website Builder content creator — ALL MERGED + LIVE, frontend UI shipped, user guide added** (latest)
+## ⏩ Update — 2026-08-27 · **Website Builder — future page-type engines (ROADMAP, not built)** (latest)
+
+**Why this entry exists.** The generation layer routes every planned page to
+whichever suite writer owns its type (`website_generate.generation_inputs` →
+`nlp` / `run` / `core_pages` / `template`). A handful of **reference page types
+have no writer engine yet**: the planner is wired to *detect* them and record
+`engine: None` (surfaced as `engine_unavailable:<type>` / the
+`template_coverage_gate`) rather than fake them. **In practice today the planner
+emits none of these**, so every currently-plannable page has a writer or renders
+from data — this is a forward roadmap, not a live gap.
+
+**The types, in two tiers (source of truth: `services/website_plan.py`
+`NLP_PAGE_TYPES`, `services/website_content.py`
+`_COLLECTION_BY_PAGE_TYPE`/`UNRENDERABLE_PAGE_TYPES`, `site-template`
+`content.config.ts`):**
+
+- **Tier A — template exists, only a writer engine is missing.** These already
+  have a collection + route in the template and frontmatter handling in the
+  planner; they fall through to `engine: None` purely because they aren't in
+  `NLP_PAGE_TYPES`. Cheapest to finish — likely a prompt profile on the existing
+  nlp generator, no new template screen:
+  - **`brand_service`** (brand × service, e.g. `/ac-repair/carrier/`) — collection `services`.
+  - **`hyper_local`** (a hyper-specific service×place page) — collection `local-landing`.
+- **Tier B — ⭐ extension types with ratified URLs but NO template AND no engine.**
+  `UNRENDERABLE_PAGE_TYPES` is an intentionally-empty frozenset today; the first
+  plan that proposes one trips `template_coverage_gate` (blocking-but-
+  acknowledgeable). Each needs **both** a new template screen (added in Claude
+  Design + compiled, or mapped onto an existing collection) **and** a writer
+  engine:
+  - **cost / pricing**
+  - **problem / symptom**
+  - **standalone FAQ**
+  - **projects** (portfolio / case-study)
+  - **comparison** (X vs Y)
+
+**What "add an engine" concretely means** (per type): (1) add the type to
+`NLP_PAGE_TYPES` or give it a branch in `generation_inputs` returning a real
+`engine` + keyword/location; (2) for Tier B, add its template screen +
+`_COLLECTION_BY_PAGE_TYPE` mapping and remove it from `UNRENDERABLE_PAGE_TYPES`;
+(3) point it at a writer — most reuse `local_seo_service.generate_page` with a
+tuned prompt, `comparison`/`cost` may be better as a `run`-engine blog variant;
+(4) teach the planner to actually EMIT it (an emitter in `website_plan.py`), since
+today none are proposed.
+
+**Also thin-but-not-broken (no roadmap action needed):** `blog_archive`,
+`sitemap`, `services_index`, `areas_we_serve` are `template`-engine — they render
+from the published-pages query with **no body writer**. Reference "Writer #6"
+would add narrative depth to the two index hubs; until then they ship as accurate
+hubs, not broken pages.
+
+---
+
+## ⏩ Update — 2026-08-27 · **Website Builder content creator — ALL MERGED + LIVE, frontend UI shipped, user guide added**
 
 Everything the two sections below describe is now **merged to `main` and live in
 production**. The "nothing is merged yet" / "frontend UI not built" caveats in
