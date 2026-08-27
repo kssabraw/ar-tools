@@ -867,6 +867,109 @@ def cmd_probe_enrich(args) -> int:
     return 1 if errors and not records else 0
 
 
+def _has_person_name(contact: dict) -> bool:
+    """A prospect_contact row that names a real PERSON (not a business-name fallback / role mailbox)."""
+    if str(contact.get("source") or "") in ("site_scrape", "web_search"):
+        return True
+    return bool(str(contact.get("first_name") or "").strip()
+                and str(contact.get("last_name") or "").strip())
+
+
+def _select_enigma_sample(client, market_id: str, limit: int) -> tuple[list[dict], set[str]]:
+    """The scoping §3 sample: ~half UN-NAMED (Enigma's target — the ladder couldn't name them),
+    up to 5 NAMED controls, the rest filled from the remaining un-named. Returns (prospects,
+    unnamed_sampled_ids). Each prospect dict carries the identifiers the match sends."""
+    rows = (
+        client.table("prospect").select("id, name, address, website, place_id")
+        .eq("market_id", market_id).not_.is_("place_id", "null").limit(2000).execute().data or []
+    )
+    ids = [r["id"] for r in rows]
+    named: set[str] = set()
+    for start in range(0, len(ids), 500):
+        chunk = ids[start : start + 500]
+        if not chunk:
+            continue
+        for c in (
+            client.table("prospect_contact").select("prospect_id, source, first_name, last_name")
+            .in_("prospect_id", chunk).execute().data or []
+        ):
+            if _has_person_name(c):
+                named.add(c["prospect_id"])
+
+    def _biz(r: dict) -> dict:
+        return {"id": r["id"], "name": r.get("name"), "street": r.get("address"),
+                "website": r.get("website"), "place_id": r.get("place_id")}
+
+    unnamed_rows = [r for r in rows if r["id"] not in named]
+    named_rows = [r for r in rows if r["id"] in named]
+    n_named = min(5, len(named_rows), max(0, limit - 1))
+    n_unnamed = max(0, limit - n_named)
+    sample_unnamed = unnamed_rows[:n_unnamed]
+    sample = [_biz(r) for r in sample_unnamed] + [_biz(r) for r in named_rows[:n_named]]
+    return sample[:limit], {r["id"] for r in sample_unnamed}
+
+
+def cmd_probe_enigma(args) -> int:
+    """§ measure-don't-infer spike for ENIGMA: match a sample of prospects, fetch attributes, LOG the
+    full raw envelope of every call, and print the scoping §3 decision metrics. BILLS one Enigma
+    lookup per sampled prospect (in PAID_COMMANDS).
+
+    The exact Enigma request/response contract is unconfirmed from the sandbox (api.enigma.com is
+    egress-blocked there), so this is how it is MEASURED on a live Railway run: the raw match + id
+    envelopes are logged (INFO `enigma lookup`) so the real schema — and which datasets carry
+    principals + card transactions — is captured, and the printed metrics answer the build-vs-buy
+    decision (match rate, owner-name hit on the un-named, card-signal fill). `--market-id` picks the
+    market (defaults to the definition's); `--limit` overrides the sample size.
+    """
+    import asyncio as _asyncio
+
+    from api.config import missing_enigma_vars
+    from api.services import enigma_client, enigma_probe
+
+    settings = get_settings()
+    absent = missing_enigma_vars(settings)
+    if absent:
+        print(f"REFUSED: missing credentials: {', '.join(absent)}", file=sys.stderr)
+        return 2
+
+    client = _client()
+    market_id = args.market_id or _market_id(
+        client, seeding.MarketDefinition.from_file(args.definition).name
+    )
+    limit = args.limit or settings.enigma_probe_limit
+    prospects, unnamed_ids = _select_enigma_sample(client, market_id, limit)
+    if not prospects:
+        print("REFUSED: no prospect with a place_id to sample in this market", file=sys.stderr)
+        return 2
+
+    results = _asyncio.run(
+        enigma_client.lookup_many(settings, prospects, enigma_probe.match_id_from_response)
+    )
+    metrics = enigma_probe.probe_metrics(results, unnamed_ids)
+    per = [
+        {
+            "prospect_id": r.prospect_id,
+            "name": (r.biz or {}).get("name"),
+            "un_named": r.prospect_id in unnamed_ids,
+            "match_status": getattr(r.match_call, "status", None),
+            "enigma_id": r.enigma_id or None,
+            "principal_name": enigma_probe.extract_principal_name(
+                getattr(r.id_call, "raw", None) if r.id_call else None
+            ),
+            "card_transactions": enigma_probe.extract_card_transactions(
+                getattr(r.id_call, "raw", None) if r.id_call else None
+            ),
+        }
+        for r in results
+    ]
+    print(json.dumps({"market_id": market_id, "sampled": len(prospects),
+                      "metrics": metrics, "prospects": per}, indent=2))
+    # Nothing matched at all ⇒ nothing measured (wrong path / dead key): a failure. Any 2xx match
+    # answers the schema question even if it carried no id.
+    any_ok = any(getattr(r.match_call, "ok", False) for r in results if r.match_call)
+    return 0 if any_ok else 1
+
+
 # Throttle state for the free tech-backlog drain: the monotonic time of its last run in THIS
 # process, so the always-on `tick-loop` runs it at most once per `tech_scan_min_interval_seconds`
 # rather than every ~8s heartbeat. None in a fresh cron process, so the cron always runs it.
@@ -1743,7 +1846,7 @@ _SHA_VARS = ("OUTREACH_BUILD_SHA", "RAILWAY_GIT_COMMIT_SHA", "SOURCE_COMMIT", "G
 # which is the §8a collect-gating mistake with a different spelling.
 PAID_COMMANDS = frozenset(
     {"ingest", "run", "calibrate", "verify-reviews", "probe-ai-granularity", "scan", "scan-organic",
-     "scan-ai", "probe-pixel-field", "probe-enrich"}
+     "scan-ai", "probe-pixel-field", "probe-enrich", "probe-enigma"}
 )
 # NOTE `scan-tech` is deliberately NOT here — it fetches prospects' own sites over plain HTTP and
 # makes no paid provider call (PRD §B3 "own request, not a paid service"), the same posture as
@@ -1925,7 +2028,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[
             "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
             "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech", "scan-names",
-                "probe-pixel-field", "enrich", "probe-enrich", "collect", "rollup", "tick", "tick-loop", "score",
+                "probe-pixel-field", "enrich", "probe-enrich", "probe-enigma", "collect", "rollup", "tick", "tick-loop", "score",
                 "recalibrate",
             "render-heatmap", "render-delta",
         ],
@@ -2000,6 +2103,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="probe-enrich: the place_id to enrich. Defaults to the first prospect with one.",
     )
     parser.add_argument(
+        "--market-id", default=None,
+        help="probe-enigma: the market UUID to sample. Defaults to the market resolved from the "
+             "definition's name.",
+    )
+    parser.add_argument(
         "--enrichments", default=None,
         help=(
             "probe-enrich: comma-separated Outscraper enricher set to request "
@@ -2071,7 +2179,7 @@ def main() -> int:
             [
                 "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
                 "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech", "scan-names",
-                "probe-pixel-field", "enrich", "probe-enrich", "collect", "rollup", "tick", "tick-loop", "score",
+                "probe-pixel-field", "enrich", "probe-enrich", "probe-enigma", "collect", "rollup", "tick", "tick-loop", "score",
                 "recalibrate",
                 "render-heatmap", "render-delta",
             ],
@@ -2098,6 +2206,7 @@ def main() -> int:
         "probe-pixel-field": cmd_probe_pixel_field,
         "enrich": cmd_enrich,
         "probe-enrich": cmd_probe_enrich,
+        "probe-enigma": cmd_probe_enigma,
         "collect": cmd_collect,
         "rollup": cmd_rollup,
         "tick": cmd_tick,

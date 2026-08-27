@@ -451,6 +451,39 @@ class Settings(BaseSettings):
     # THAT place after this long rather than hanging the whole tick for the mass-ingest 1h timeout.
     enrich_poll_timeout_seconds: float = 300.0
 
+    # --- Enigma (SMB intelligence — the last-rung contacts source + card-transaction data) ------
+    # Enigma is the enterprise SMB-data API evaluated in `docs/enigma-integration-scoping-v0_1.md`.
+    # Two uses: (1) an owner/principal NAME for prospects the existing ladder (Outscraper →
+    # site-scrape → web-search) still can't name — the last, most-expensive contacts rung; (2)
+    # CARD-TRANSACTION activity/health (avg monthly transactions + revenue over Enigma's native 1m /
+    # 3m / 12m windows — there is NO 6m period). A single lookup carries both.
+    #
+    # **The exact request/response contract is UNCONFIRMED from the sandbox** (egress blocks
+    # api.enigma.com), so the probe (`probe-enigma`) MEASURES it on a live Railway run and logs the
+    # full raw envelope, the same "measured on first run, not asserted" discipline as
+    # `dataforseo_client` / `probe-enrich`. Everything URL-shaped is config so a correction is an env
+    # change (OUTREACH_ENIGMA_*), not a code redeploy. Auth is the `x-api-key` header.
+    enigma_api_key: str = ""
+    enigma_base_url: str = "https://api.enigma.com"
+    # POST match: identifiers (name + address {street/city/state/postal}, website, person) → matched
+    # profiles carrying an Enigma business id. Path is a best guess pending the probe.
+    enigma_match_path: str = "/businesses/match"
+    # GET attributes for a matched id: `{base}{business_path}/{id}?attrs=<datasets>`. Confirmed shape
+    # from the docs (`GET /businesses/B00233…?attrs=industries`); the dataset NAMES that carry card
+    # data + principals are what the probe confirms.
+    enigma_business_path: str = "/businesses"
+    # Attribute datasets to request on the id call (comma-joined into ?attrs=). Empty = whatever the
+    # endpoint returns by default; the probe logs the raw so the real dataset names are captured, then
+    # this is set to the card-transaction + principals datasets for production.
+    enigma_attrs: str = ""
+    enigma_request_timeout_seconds: float = 60.0
+    # How many prospects `probe-enigma` samples (scoping §3 wants ~20). It BILLS one Enigma lookup per
+    # prospect, so it is in PAID_COMMANDS + confirm-gated.
+    enigma_probe_limit: int = 20
+    # CONFIGURED cost estimate per Enigma lookup (unknown until the probe / a bill — the I-111 pattern);
+    # drives the cost_ledger write + budget guard once the contacts rung is built. Placeholder.
+    enigma_cost_per_lookup_cents: int = 50
+
     # --- Report signal scans (organic / AI-visibility UI triggers, 2026-08-10) -----------
     # The per-prospect report's ORGANIC and AI sections are filled by two signed-order queues
     # (`organic_scan_request` / `ai_scan_request`), drained by `tick`. Each is a single cheap paid
@@ -578,6 +611,16 @@ def missing_outscraper_vars(settings: "Settings") -> list[str]:
     return [
         name
         for name, value in (("OUTREACH_OUTSCRAPER_API_KEY", settings.outscraper_api_key),)
+        if not value
+    ]
+
+
+def missing_enigma_vars(settings: "Settings") -> list[str]:
+    """Which Enigma credentials are absent, by env-var name — so `probe-enigma` REFUSES before a
+    keyless call. Mirrors `missing_outscraper_vars`."""
+    return [
+        name
+        for name, value in (("OUTREACH_ENIGMA_API_KEY", settings.enigma_api_key),)
         if not value
     ]
 
