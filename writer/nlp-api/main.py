@@ -264,6 +264,14 @@ MAX_ECOMMERCE_AUTO_PASSES = int(os.environ.get("MAX_ECOMMERCE_AUTO_PASSES", "3")
 # (length is still scored, and the bulk reoptimizer still trims live pages).
 LENGTH_TRIM_MIN_RATIO = float(os.environ.get("LENGTH_TRIM_MIN_RATIO", "1.4"))
 
+# Wall-clock budget for generate-page's post-generation improvement passes. The
+# initial page generation + its first score always run (that's the page + its
+# verdict); once this many seconds have elapsed, no NEW length-trim or voice-
+# correction pass is STARTED — a pass already in flight finishes, then the best
+# page so far ships. Caps the sequential rewrite→rescore loop that can otherwise
+# stack to 10+ minutes for a brand-guide client. 0 disables the cap.
+GENERATION_TIME_BUDGET_SECONDS = int(os.environ.get("GENERATION_TIME_BUDGET_SECONDS", "300"))
+
 # Plateau guard: the minimum composite gain a pass must produce to justify
 # running another one. A run that has flat-lined and one that is still climbing
 # are otherwise treated identically — both burn every pass at ~3m40s and ~$0.22
@@ -6366,6 +6374,15 @@ async def generate_page(request: Request, body: GeneratePageRequest):
         city = body.location.split(",")[0].strip()
         _worker_start = time.monotonic()
 
+        def _within_time_budget() -> bool:
+            """False once the generate-page wall-clock budget is spent. Gates the
+            START of each optional improvement pass (length-trim, voice rewrite)
+            so the sequential rewrite→rescore loop can't run away; a pass already
+            in flight still finishes. The initial generation + first score are
+            never gated — they produce the page and its verdict."""
+            return (GENERATION_TIME_BUDGET_SECONDS <= 0
+                    or (time.monotonic() - _worker_start) < GENERATION_TIME_BUDGET_SECONDS)
+
         await q.put({"step": "progress", "progress": 5, "message": "Starting…"})
 
         # Use supplied analysis if present; otherwise run an inline SERP
@@ -6756,7 +6773,13 @@ Full location: {body.location}
         length_def = next(
             (d for d in (inline_defs or []) if d.get("engine_key") == "length_fit"), None
         )
-        if length_def and length_fit.is_over_length(length_engine, LENGTH_TRIM_MIN_RATIO):
+        _needs_trim = bool(length_def) and length_fit.is_over_length(length_engine, LENGTH_TRIM_MIN_RATIO)
+        if _needs_trim and not _within_time_budget():
+            logger.info(
+                "generate-page: over target but the %ss time budget is spent — "
+                "shipping without the length-trim pass", GENERATION_TIME_BUDGET_SECONDS
+            )
+        elif _needs_trim:
             await q.put({"step": "progress", "progress": 91, "message": "Trimming to match the top pages…"})
             try:
                 trimmed_html, trimmed_schema, trimmed_title, trim_tok = await _reoptimize_html_inline(
@@ -6810,6 +6833,17 @@ Full location: {body.location}
             _best = {"html": content_html, "schema": schema_json, "title": page_title,
                      "score": inline_score, "scores": inline_scores, "voice": voice_scorecard}
             for _fix_pass in range(1, MAX_VOICE_CORRECTION_PASSES + 1):
+                # Time budget: don't START another voice pass once the wall-clock
+                # budget is spent — ship the best page so far (a pass already in
+                # flight has finished by now). Keeps the sequential rewrite loop
+                # from stacking to 10+ minutes.
+                if not _within_time_budget():
+                    logger.info(
+                        "generate-page: %ss time budget spent after voice pass %d — "
+                        "shipping best page without further rewrites",
+                        GENERATION_TIME_BUDGET_SECONDS, _fix_pass - 1,
+                    )
+                    break
                 await q.put({
                     "step": "progress", "progress": 92,
                     "message": (f"Aligning to the brand guide "
