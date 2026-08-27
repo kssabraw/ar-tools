@@ -437,6 +437,17 @@ def test_deterministic_caps_map_each_check():
         assert capped[dimension]["score"] == cap
 
 
+def test_missing_required_phrase_no_longer_caps_vocabulary():
+    """Owner ruling 2026-08-27: a single missing preferred phrase is a warning,
+    not a hard cap — the judge's vocabulary score stands (the miss is still
+    surfaced as a deficiency + drives the phrase-insert pass elsewhere)."""
+    assert "must_use_terms" not in vc._DETERMINISTIC_CAPS
+    violations = [{"check": "must_use_terms", "severity": "warning", "terms": ["Colorbond"]}]
+    capped = vc.apply_deterministic_caps(_dims(vocabulary=90), violations)
+    assert capped["vocabulary"]["score"] == 90
+    assert "capped_by_check" not in capped["vocabulary"]
+
+
 def test_build_voice_deficiencies_only_failing_worst_first():
     dims = _dims(tone=55, cta_fit=70, vocabulary=95)
     deficiencies = vc.build_voice_deficiencies(dims)
