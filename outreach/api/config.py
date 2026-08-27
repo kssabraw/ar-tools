@@ -406,6 +406,20 @@ class Settings(BaseSettings):
     # into several orders.
     enrich_max_places_per_order: int = 200
 
+    # Per-TICK place budget across all orders (I-118). Each place is an async submit+poll, so a large
+    # order (100+ places) can exceed Railway's cron interval and get its container killed mid-run,
+    # stranding the order. The drain enriches at most this many places per tick; an order with more is
+    # enriched up to it and left PENDING to resume next tick (the idempotent marker skip re-bills only
+    # the un-done places), exactly like `name_scrape_per_tick`. Keep it comfortably inside the cron
+    # window: 40 places / 10 concurrency × ~5-10s ≈ 20-40s. <=0 = no cap (the old, unsafe behaviour).
+    enrich_per_tick: int = 40
+
+    # A `running` order older than this is treated as stranded (its container died mid-tick) and reset
+    # to `pending` so a later tick resumes it — the recovery half of I-118. Safe because a normal tick
+    # only holds an order `running` for the ~tens of seconds it enriches a budget's worth; a much older
+    # `running` is a dead container. Generous so it can never race a legitimately-executing tick.
+    enrich_stuck_order_minutes: int = 20
+
     # A single enrichment HTTP request (the async submit, or one poll of the archive) can take
     # longer than the base search; its own per-request timeout, clear of the 60s base.
     enrich_request_timeout_seconds: float = 180.0
