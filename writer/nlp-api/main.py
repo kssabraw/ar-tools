@@ -572,6 +572,19 @@ optimised for Answer Engine Optimisation. Follow all of them in every section.
      Each project is completed to a high standard." (three same-length sentences in a row)
    ✓ Varied:   "We restore tile roofs across Melbourne. Cracked, leaking, storm-hit — we handle
      it. Every repair is finished to a standard that lasts."
+   DON'T DESCRIBE A SERVICE WITH THE "[service] involves A, B and C" FORMULA. Opening a service
+   description by listing its steps in one comma sentence ("A full restoration involves pressure
+   cleaning, re-bedding and repointing, and a coating") reads like a brochure and is the single
+   most common writing-style miss. Instead open with the customer's situation or the outcome, THEN
+   explain what's done — vary how each service section opens so they don't all follow one template.
+   ✗ Formula: "Repointing involves removing old mortar, re-bedding the ridge caps and applying flexible pointing."
+   ✓ Outcome-first: "Cracked ridge capping is the usual reason a tiled roof starts leaking. We strip the
+     failed mortar, re-bed the caps and seal them with flexible pointing that flexes instead of cracking."
+   EXPLAIN THE JARGON: this page is read by a homeowner or business owner, not a tradesperson. The FIRST
+   time you use a trade/technical term they may not know — e.g. "bedding compound", "flexible pointing",
+   "sarking", "flashing", "bullnose", "valley" — add a short plain-English gloss right there (a few
+   words), then carry on. ✓ "flexible pointing (a rubber-based sealant that flexes instead of cracking)".
+   Never leave a trade term unexplained on its first use.
 
 3. QUESTION-FORMAT H3s: Where natural, write H3s as questions a real searcher would type.
    e.g. "Do you offer emergency tree removal in Anaheim?"
@@ -593,6 +606,10 @@ optimised for Answer Engine Optimisation. Follow all of them in every section.
    - ✗ Bad (fragment): "Terracotta tile restoration — specialist cleaning and sealing" (no verb, no period — a catalogue entry, not a sentence)
    - ✓ Good: "We restore heritage terracotta roofs with specialist cleaning and sealing that lasts."
    - ✓ Good: "Our crews dispatch within 2 hours for Anaheim emergencies, so same-day response is standard."
+   - A SECONDARY-SERVICES LIST IS NOT EXEMPT. An "Additional / Other services we offer" block is the
+     usual place this rule gets broken — do NOT dump a bare index of service names ("Repointing.
+     Pressure cleaning. Gutter replacement."). Either write each item as a one-line benefit sentence,
+     or fold the secondary services into a short prose paragraph. Never a catalogue of noun phrases.
 
 6. NUMBERED LISTS — use <ol> for processes, steps, and how-it-works sequences:
    - Each step begins with an action verb
@@ -969,9 +986,15 @@ AEO / LLM WRITING RULES — apply to all text and any new content added:
 2. ONE IDEA PER PARAGRAPH — KEEP PARAGRAPHS SHORT: Each <p> covers exactly one point in
    1–2 sentences (never exceed 3, never past ~45 words). When you rewrite or add text,
    split long paragraphs into multiple short <p> blocks rather than lengthening one.
+   VARY SENTENCE CADENCE (only the lead sentence must stand alone) — do not leave a run of same-length
+   sentences; a page with uniform mid-section rhythm reads robotically. Do NOT open a service description
+   with the "[service] involves A, B and C" formula — lead with the customer's situation or the outcome,
+   then explain, and vary how sections open. EXPLAIN THE JARGON: the first time a trade term appears
+   ("bedding compound", "flexible pointing", "sarking", "flashing", "bullnose") add a short plain-English
+   gloss — the reader is a homeowner, not a tradesperson.
 3. QUESTION-FORMAT H3s: Where natural, write H3s as questions a real searcher would type.
 4. DIRECT FAQ ANSWERS: Every FAQ answer opens with a direct yes/no or factual statement.
-5. BULLETED LISTS — use <ul> for features, services, inclusions, what-to-expect items. Each bullet is a COMPLETE SENTENCE (subject + verb, ends in a period) — never a noun-phrase fragment or "Topic — description" catalogue entry.
+5. BULLETED LISTS — use <ul> for features, services, inclusions, what-to-expect items. Each bullet is a COMPLETE SENTENCE (subject + verb, ends in a period) — never a noun-phrase fragment or "Topic — description" catalogue entry. A secondary/"additional services" list is NOT exempt: make each item a one-line benefit sentence or fold it into prose, never a bare index of service names.
 6. NUMBERED LISTS — use <ol> for processes, steps, how-it-works sequences.
 7. TABLES — preserve any existing <table> in the page. If the page has NONE and its content
    is genuinely comparative (service tiers, repair vs. replace, response time / coverage by
