@@ -33,13 +33,19 @@ after `/macros/s/`:
 
 | Prefix | Was | Now |
 |---|---|---|
-| `AKfycbxTjwbZYB…` | Version 8 (Jul 6) — the one prod most likely calls | Version 10 |
+| `AKfycbxTjwbZYB…` | Version 8 (Jul 6) — **PRIMARY: the one `GOOGLE_APPS_SCRIPT_URL` points at** | Version 10 |
 | `AKfycbyfvDYYs…` | Version 1 (Jun 27) | Version 9 |
 
-Which one `GOOGLE_APPS_SCRIPT_URL` holds is still unconfirmed (the value is
-redacted to tooling; read it in the Railway dashboard). **This did not need to
-be resolved:** webhook changes here are additive and opt-in, so bumping BOTH is
-safe and removes the guess. Do that by default.
+**Resolved 2026-08-26:** `GOOGLE_APPS_SCRIPT_URL` holds the
+`AKfycbxTjwbZYB…` / Version 10 deployment — verified by revealing the value in
+the Railway **dashboard** and full-string-matching it against the deployment id
+(not just the prefix). Both deployments' descriptions now say which is which.
+Note the value is readable ONLY in the dashboard: every API client (the Railway
+MCP, an OAuth app) gets variable names with values redacted, which is what made
+this take two attempts to settle.
+
+Even so, **bumping BOTH on a redeploy stays the default** — webhook changes here
+are additive and opt-in, so it is free insurance against this drifting again.
 
 **Redeploy procedure.** Edit the code → save → **Deploy → Manage deployments →
 pencil icon → Version: "New version" → Deploy**. ⚠️ **Never "New deployment"** —
@@ -47,7 +53,11 @@ that mints a *different* exec URL while `GOOGLE_APPS_SCRIPT_URL` keeps pointing
 at the old one, so prod silently keeps running the old code with no error
 anywhere. Authorization is only re-prompted when a change introduces a NEW
 Google service (Sheets, UrlFetchApp did; `dedupe_by_name` did not — it reuses
-`DriveApp`).
+`DriveApp`). If you drive this UI with a browser agent: the pencil icon
+silently swallows clicks while the Manage-deployments dialog is still animating
+open, and the dialog settles at two different sizes depending on timing — wait
+for each control's position to stop moving before clicking, or the early clicks
+land on nothing.
 
 **Deployment labels vanish on every redeploy — this is expected.** The name shown
 in the Manage-deployments list is just a mirror of the deployment's Description,
