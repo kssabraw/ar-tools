@@ -89,16 +89,19 @@ def word_target(avg_words: Optional[float]) -> Optional[int]:
     return int(round(avg_words * OVERAGE_MULTIPLIER))
 
 
-def is_over_length(engine: Optional[dict]) -> bool:
-    """True when a length_fit engine result shows the page meaningfully OVER the
-    SERP target (measured, and words above target). Used to decide whether a
-    generated/live page earns a length-trim pass. Under-length never triggers a
-    trim (that would ask the writer to pad)."""
+def is_over_length(engine: Optional[dict], min_ratio: float = 1.0) -> bool:
+    """True when a length_fit engine result shows the page OVER the SERP target
+    by at least ``min_ratio`` (page_words >= target_words * min_ratio). Used to
+    decide whether a generated/live page earns a length-trim pass; under-length
+    never triggers a trim (that would ask the writer to pad). ``min_ratio`` lets
+    a caller require a LARGE overage before spending an extra rewrite pass — the
+    generation budget prompt keeps most pages near target, so the trim should be
+    a rare safety net, not a routine step. Default 1.0 = any overage."""
     e = engine or {}
     if not e.get("measured"):
         return False
     target = e.get("target_words") or 0
-    return bool(target) and e.get("page_words", 0) > target
+    return bool(target) and e.get("page_words", 0) > target * min_ratio
 
 
 def compute_length_fit(page_html: str, target_words: Optional[int]) -> Optional[dict]:

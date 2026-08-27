@@ -76,6 +76,19 @@ def test_is_over_length():
     assert lf.is_over_length(None) is False
 
 
+def test_is_over_length_min_ratio_gates_small_overages():
+    # min_ratio=1.4 (the generate-page safety-net threshold): only a >40% overage
+    # spends the extra trim pass. A 25% over page is left to the score + bulk gate.
+    eng_25 = {"measured": True, "page_words": 1500, "target_words": 1200}   # 25% over
+    eng_60 = {"measured": True, "page_words": 1920, "target_words": 1200}   # 60% over
+    assert lf.is_over_length(eng_25, 1.4) is False
+    assert lf.is_over_length(eng_60, 1.4) is True
+    # exactly at the ratio boundary is not "over" it (strict >)
+    assert lf.is_over_length({"measured": True, "page_words": 1680, "target_words": 1200}, 1.4) is False
+    # default (1.0) still flags any real overage
+    assert lf.is_over_length(eng_25) is True
+
+
 # ── compute_length_fit scoring curve ─────────────────────────────────────────
 
 def test_on_target_scores_100():
