@@ -615,6 +615,7 @@ async def gsc_scheduler() -> None:
     from services.domain_intel import enqueue_due_domain_intel
     from services.trend_watch import run_trend_sweep
     from services.offpage_agent import run_offpage_sweep
+    from services.scan_health import run_scan_health_sweep
     from services.leadoff_calibration import (
         run_calibration_sweep as run_leadoff_calibration_sweep,
     )
@@ -689,6 +690,10 @@ async def gsc_scheduler() -> None:
                 _safe("episode_sync", run_episode_sync)
                 # Daily offpage sweep (RD loss / unnatural spike — SOP §A.5).
                 _safe("offpage_sweep", run_offpage_sweep)
+                # Daily scan-health watch: alert when a client's scheduled
+                # geo-grid / organic-rank data pulls keep failing, so a silent
+                # upstream outage can't starve the drop alerts unnoticed.
+                _safe("scan_health_sweep", run_scan_health_sweep)
                 # LeadOff calibration outcome checks (Phase 0 — read-only,
                 # $0; at most one check per prediction per ~28 days).
                 _safe("leadoff_calibration", run_leadoff_calibration_sweep)

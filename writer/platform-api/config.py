@@ -260,6 +260,15 @@ class Settings(BaseSettings):
     algo_min_clients: int = 3
     algo_min_share: float = 0.4
     algo_window_days: int = 3
+    # Scan-health watch: alert (in-app + Slack) when a client's scheduled data-
+    # collection jobs (maps geo-grid / organic rank) fail in a streak, so a
+    # silent upstream outage can't starve the drop alerts unnoticed. Daily
+    # DB-reads-only sweep over async_jobs; deduped per streak-episode (re-nudges
+    # at most weekly while unresolved).
+    scan_health_enabled: bool = True
+    scan_health_min_streak: int = 3      # consecutive failed scheduled runs to fire
+    scan_health_min_days: int = 3        # ...the failing run must also span this many days
+    scan_health_lookback_days: int = 21  # async_jobs history read per sweep
     # Auto-generate a new client's brand voice + ICP at creation (async, best-
     # effort) so the assets exist without a manual scan. Skips clients with no
     # website and no GBP (nothing to analyze). Never overrides user-authored
@@ -584,9 +593,10 @@ class Settings(BaseSettings):
     # ── Maps geo-grid provider switch (Local Dominator → DataForSEO) ──────────
     # Which provider a NEW scan uses. In-flight/historic scans are routed by
     # their stored maps_scans.provider column, so both coexist across the flip;
-    # rollback is flipping this env var back. 'local_dominator' (default —
-    # DataForSEO dormant) | 'dataforseo'.
-    maps_scan_provider: str = "local_dominator"
+    # rollback is flipping this env var back. 'dataforseo' (default) |
+    # 'local_dominator' (retired 2026-08-27 — the vendor account lapsed and every
+    # scheduled scan on it 500'd for weeks; DataForSEO is now the geo-grid source).
+    maps_scan_provider: str = "dataforseo"
     # DataForSEO Maps SERP per-pin params. The zoom in location_coordinate
     # ("lat,lng,<zoom>") sets the simulated viewport WIDTH at each pin, and the
     # viewport must cover the pin→business distance (the grid RADIUS, not the
@@ -1531,6 +1541,11 @@ class Settings(BaseSettings):
     # Only the top-N plan actions become tasks (the plan is priority-sorted).
     task_producer_action_plan_max: int = 10
     task_producer_content_run_enabled: bool = False
+    # scan_health: open a board task when a client's scheduled data pulls (maps
+    # geo-grid / organic rank) keep failing, so a silent upstream outage becomes
+    # owned work PACE tracks (its untriaged/producer/overdue signals pick it up),
+    # not just a Slack ping. Auto-closes when the streak recovers.
+    task_producer_scan_health_enabled: bool = True
 
     # Deliverables Sheet Sync (docs/modules/deliverables-sheet-sync-prd-v1_0.md)
     # — auto-maintain each client's Google deliverables sheet: append a row on
