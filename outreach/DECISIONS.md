@@ -1832,3 +1832,278 @@ the always-on worker:
   `enrich_queue._already_enriched` precedent — so the read is bounded by the candidate set, not the
   whole signal history. This also closes the fetch-once (`tech_refresh_days=0`) path's unfiltered
   full-history read.
+
+## 2026-08-26 — Site name-scrape: a FREE owner/manager fallback when Outscraper returns no name
+
+**Decision.** Add an optional, user-triggered producer that scans a prospect's OWN website for the
+owner/manager NAME when Outscraper enrichment couldn't get one (status `no_contacts`, or contacts
+carrying an email/phone but no person). FREE — an own HTTP GET, the exact posture as `scan-tech`
+(PRD §B3 "own request, not a paid service") — so it is NOT in `PAID_COMMANDS`, places no billed
+order, and is STAFF-gated (not admin + budget-guarded, the enrichment bar): there is no spend to
+authorize, matching `promote`/`touch` (commitments, not spend).
+
+**Shape (mirrors the two proven siblings, no new architecture).**
+- `api/services/name_extract.py` — PURE, role-anchored + schema.org extractor (the crux). A name is
+  taken ONLY when tied to an explicit ownership/management role (`owner`/`founder`/`president`/…) or
+  carried by JSON-LD (`founder`/`employee` with a matching `jobTitle`). Conservative by design: a
+  bare Title-Case phrase with no role is nothing; the business name / nav chrome / trade words are
+  rejected; the business-name check is ONE-DIRECTIONAL (I-099). Evidence is kept for replay.
+- `api/services/name_scrape.py` — the producer: reuses `scan_tech.fetch_page` / `normalize_site_url`
+  (one definition of "how we fetch a prospect's site") and does a BOUNDED same-host crawl —
+  homepage + a few likely pages (about/team/contact/meet), capped by `name_scrape_max_pages` —
+  because owners are rarely on the homepage. Measured-vs-found: a failed homepage fetch is
+  `unreachable`, never "no owner named".
+- `api/services/name_scrape_queue.py` — the drain (sibling to `enrich_queue`, minus the money): a
+  `name_scrape_request` order, conditional claim, idempotent skip of `found`/`no_names` (retry
+  `unreachable`/`failed`), chunked for crash isolation, batchable (several orders/tick). Store
+  replaces ONLY the prospect's `source='site_scrape'` contacts — never the Outscraper ones (the two
+  producers are independent). Wired into `cmd_tick` after the enrich drain; also a free `scan-names`
+  CLI (`run_name_scrape_market`) for ops/backfill.
+- Migration `20260826120000_name_scrape.sql` — `name_scrape_request` (no cost/budget columns, unlike
+  enrichment) + `prospect_name_scrape` (per-prospect marker, `found|no_names|unreachable|failed`,
+  keeping the measured-vs-found distinction). Found names land in the EXISTING `prospect_contact`
+  with `source='site_scrape'` (no schema change there). Applied live to Outreacher.
+- platform-api: `create/list/detail/cancel_name_scrape_request` (staff-gated routes
+  `/outreach/prospects/{id}/scrape-names`, `/outreach/name-scrape`), the contacts reads now carry
+  `name_scrape` status + each contact's `source`. Frontend: `useNameScrape` + a per-row "Scan site
+  for names" fallback button (shown when the prospect has a website and no name is known yet), a free
+  bulk `NameScrapeBar`, and a "from website" provenance badge on site-scraped names.
+
+**Why a separate marker table, not reuse `prospect_enrichment`.** The two producers must be
+independent — an enriched prospect can still be name-scraped and vice versa — and merging their
+status would corrupt each drain's idempotent skip. Same reasoning as `prospect_tech_signal` sitting
+apart from `prospect_enrichment`.
+
+**Why user-triggered, not an auto-backlog.** The ask was to give the team the OPTION (owner request).
+Unlike `scan-tech`'s auto-backlog, this does not run on every prospect each tick — it only drains
+placed orders. An auto-backlog "scrape everyone who enrichment left nameless" is a clean follow-up on
+the same machinery if wanted, but was deliberately not built.
+
+**Config.** `api/config.py`: `name_scrape_max_pages` (5), `_max_names` (8),
+`_fetch_timeout_seconds` (12), `_max_page_bytes`, `_concurrency`/`_chunk_size` (6),
+`_orders_per_tick` (5), `_max_places_per_order` (200). platform-api:
+`outreach_name_scrape_max_places_per_order` (200; no cost/budget keys — it is free).
+
+**Unvalidated.** The extractor's PRECISION is unmeasured against real sites (I-114) — it is tuned to
+fail toward a miss, but a caller must still verify a scraped name (hence the "from website" badge and
+that these names carry no verified email/phone, unlike Outscraper contacts).
+
+## 2026-08-26 — Name-scrape adversarial-review fixes (loose-form precision, wall-time budget, SSRF)
+
+An adversarial re-read of the site name-scrape produced five fixes:
+
+- **Loose-byline precision.** The punctuation-free `<role> <Name>` form fabricated a person from any
+  page merely mentioning a president/CEO of another entity ("President Joe Biden" → "Joe Biden",
+  "CEO Tim Cook"). `President`/`President & CEO`/`CEO`/`Principal` were removed from `_STRONG_ROLES`
+  — they still extract on every PUNCTUATED byline ("Jane Doe, President", "President: …", "our
+  President Jane"), only the bare loose form is withheld. Owner/Founder/Proprietor keep it.
+- **`extract_names` truly never-raises.** A pathologically deep JSON-LD block could raise
+  `RecursionError` from `json.loads`/the node walk, escaping the narrow `except (ValueError,
+  TypeError)`. Added `_JSONLD_MAX_DEPTH` to `_iter_json_nodes` + caught `RecursionError` at parse.
+- **Per-tick wall-time budget (`name_scrape_per_tick`, default 60).** Unlike enrichment (one provider
+  call per place), a scrape does up to `name_scrape_max_pages` sequential fetches per prospect, so a
+  200-prospect order could block the tick loop for many minutes. The drain now bounds prospects
+  FETCHED per tick across and WITHIN orders: an order larger than the remaining budget is scraped up
+  to it and left PENDING to resume next tick — the marker-based idempotent skip means a resume
+  re-scrapes only the un-done prospects (no loss, no repeat). Order counters are the CUMULATIVE
+  marker tally (`_order_marker_tally`), so a resumed order still reports its whole self.
+- **SSRF guard (`name_scrape.is_public_host`).** The scrape reuses `scan_tech.fetch_page`
+  (`follow_redirects=True`), so a malicious prospect site could redirect the fetch to an internal
+  host (e.g. 169.254.169.254). The guard blocks localhost + IP-literal private/loopback/link-local/
+  reserved hosts BEFORE fetching AND on the post-fetch `final_url` (a same-host page 301-ing to an
+  internal address has its body discarded). Self-contained in `name_scrape` — `scan_tech` is
+  untouched. DNS-rebinding (a hostname resolving to a private IP) is explicitly out of scope (I-116).
+- **Frontend: staff-gate + error surfacing + dead-code removal.** The per-row "Scan site for names"
+  button is gated on `isStaff` (the route is `require_staff`) and now surfaces a placement error
+  instead of a silent 403. Removed dead backfill code in `merge_names`.
+
+## 2026-08-26 — Web-search owner name: the PAID third-rung fallback (a guarded LLM exception)
+
+**Decision.** Add a third owner/manager-name fallback below Outscraper enrichment and the free site
+scrape: when both come up empty, the team can PAY for a web search that looks the owner up (news,
+directories, licensing records, LinkedIn). OpenAI Responses API + `web_search` tool over httpx
+(reuses `OUTREACH_OPENAI_API_KEY`; no `openai` SDK dependency), grounded on the business's own
+name + address + category + website so the model resolves THIS business, not a namesake elsewhere.
+
+**This is a deliberate, GUARDED exception to the "deterministic, never an LLM guess, never fabricate"
+report ruling (2026-08-08).** A web search for "who owns X" is the single most fabrication-prone
+thing the module does, so the guard is the strictest of any producer:
+- **Require-citation (owner ruling).** A name is kept ONLY when the search returns a real SOURCE URL
+  that names the person; an uncited name is DROPPED (`name_search.parse_search_answer`). The model is
+  prompted for strict JSON `{found, name, title, source_url}` and told never to guess.
+- **Same plausibility guard as the site scrape.** The kept name must pass
+  `name_extract.is_plausible_name` (business-name/stopword rejection) — one definition of "is this a
+  real person, not the business".
+- **Surfaced as lowest-trust.** Stored `source='web_search'` with the citation in `raw`; the UI
+  badges it "from web search — verify" as a link to the source, and it carries no verified
+  email/phone. The report/scoring layers must continue to treat only the deterministic signals as
+  fact — a web-searched name is a caller aid, never a measured fact.
+
+**PAID, so it mirrors enrichment, not the free site scrape.** Signed `name_search_request` order
+(admin-gated + per-user daily budget guard + `cost_ledger` write + free preflight estimate); the
+`tick` drains it (`name_search_queue.py`, one OpenAI call per prospect, per-prospect isolation,
+idempotent skip). Config on the outreach service: `name_search_model` (gpt-5.4),
+`name_search_web_search_tool`, `_cost_cents`, `_chunk_size`, `_orders_per_tick`,
+`_max_places_per_order`, `_max_names`, `_request_timeout_seconds`; on PLATFORM:
+`outreach_name_search_cost_cents`/`_daily_budget_usd`/`_max_places_per_order`.
+
+**Placement gate.** The paid order refuses (`nothing_to_search`) any prospect that already has a name
+from ANY source or was already searched, so a bulk "search all" only bills the genuinely nameless.
+The UI offers the web-search rung only after the site scrape came up empty (or there is no site to
+scan), and only to admins.
+
+Migration `20260826140000_name_search.sql` (`name_search_request` + `prospect_name_search`) applied
+live to Outreacher. Names land in the existing `prospect_contact` (`source='web_search'`).
+Unvalidated like every other name source (I-114 applies): calibrate the model/prompt from real
+`prospect_name_search.raw` after the first live runs; the require-citation guard is the floor.
+
+## 2026-08-26 — Confidence scores for the additional-research name sources
+
+**Decision.** The site-scrape and web-search fallback names (both lower-trust than an Outscraper
+pull) now each carry a 0-100 `confidence` + a High/Medium/Low `confidence_band` on ONE shared scale
+(`prospect_contact.confidence`/`confidence_band`, migration `20260826160000`, applied live; Outscraper
+contacts leave them NULL — their trust is a validated email, a different thing). Owner ruling: score
+BOTH fallbacks, BLENDED method. Pure `services/name_confidence.py` (unit-tested), called from the two
+queues so "confidence" has one definition.
+
+- **Site scrape — DETERMINISTIC.** `score_site_scrape(source_kind, title, page_count)`: structured
+  JSON-LD (65) beats role-anchored text (45); an explicit senior-ownership title adds +12; a name
+  found on ≥2 fetched pages of the site adds +18 (corroboration — `merge_names` now stamps
+  `ExtractedName.page_count`). No model involved.
+- **Web search — BLENDED.** `score_web_search(model_confidence, citations, business_website)`: a
+  DETERMINISTIC corroboration backbone (distinct citing domains: +0/+12/+20; a citation on the
+  business's OWN domain: +10) is the primary signal, and the model's OWN self-rating — a new
+  `confidence` (0-100) + `confidence_reason` field in the strict-JSON answer — is blended in at 35%
+  (`0.65·deterministic + 0.35·model`). The model MOVES the score, it never SETS it: a 90-confident
+  model on a single uncorroborated citation lands 58 (Medium), not 90. This keeps the fact-grounded
+  posture while using the model's opinion as one input, per the owner ruling.
+
+Bands (High ≥75, Medium ≥50) + weights are module constants for calibration. Factors are stored in
+each contact's `raw.confidence` for replay. Frontend: a `ConfidenceChip` (colour by band, score in
+the tooltip) beside the "from website" / "from web search — verify" provenance badge. Contacts read
+(`_CONTACT_COLUMNS` + single read) now returns the two columns. Unvalidated like every name signal
+(I-114) — calibrate the weights from real `raw.confidence` factors after the first live runs.
+
+---
+
+## 2026-08-26 · Enrichment must be ASYNC — sync returns the base listing with no enrichers run (I-109)
+
+A coworker reported the Enrich button "just restates the business name." Root cause was not the
+enricher set or a parser alias (the two prior I-109 theories) but the **call mode**: `enrich_client`
+called Outscraper synchronously (`async=false`), and Outscraper runs enrichments asynchronously, so a
+sync call returns the base Maps record BEFORE the enrichers finish — no emails, no contacts, no
+people, only `name_for_emails` (the business name), which the parser then falls back to.
+
+**Confirmed, not inferred** (the module's measure-don't-infer law): two owner-authorized `probe-enrich`
+runs. `company_insights_service` returned firmographics only. Our production set
+`domains_service,emails_validator_service,phones_enricher_service` against a business KNOWN to have
+LinkedIn/Apollo people (Enhanced Hearing Center / "Rex McGee") STILL returned a bare Maps record
+(`with_email:0`, `full_name`=business name). Sync yields nothing regardless of enricher set or business.
+
+**Decision:** submit `async=true` and poll the archive (`fetch_result`) to completion — the same pair
+the mass ingest already uses — with a dedicated `enrich_poll_timeout_seconds` (300s) per-place ceiling
+so a stuck place fails on its own rather than hanging the tick. This is a smaller, correct fix than
+building a separate "Contacts Finder" producer (the initially-requested approach): the CSV's rich
+people data is what async `domains_service` returns; there was never a missing *product*, only a
+missing *async*. `submit_maps_search`'s `enrichment=""` base-tier invariant is untouched.
+
+**Deliberately deferred:** whether async `domains_service` alone surfaces the Apollo/ZoomInfo *people*
+(vs. site-scraped emails only) is confirmed on the next LIVE async re-enrich, and the exact
+people-enricher slug (if a distinct one is needed) is added then — not guessed now.
+
+---
+
+## 2026-08-26 · The enrichment slug is `leads_n_contacts`, not `domains_service` (I-109 fully resolved)
+
+The async fix (prior entry) was necessary but not sufficient — even async, `domains_service` returned
+no contacts. The owner's Outscraper dashboard export for the CSV that DID contain decision-maker people
+named the real enricher: **`enrichments: ["leads_n_contacts"]`** (Outscraper's "Leads & Contacts").
+`domains_service` is a bare website scraper and was simply the wrong enricher all along.
+
+**Decision:** default the enricher set to `["leads_n_contacts"]` in both configs (outreach api
+`enrich_enrichments`, platform-api `outreach_enrich_enrichments`). Validated live: five LA plumbers that
+returned email-null / business-name-only under `domains_service` returned real emails + domain + company
+socials under `leads_n_contacts` (async), with the full contact column set in the raw. Person names
+populate for businesses with an Apollo/ZoomInfo/LinkedIn record; small owner-operated businesses fall
+back to scraped site emails (genuinely empty person fields, not a parser miss).
+
+The public `/maps/search-v3` endpoint accepts `leads_n_contacts` on our async single-place_id call — no
+need for the dashboard's `/tasks` endpoint or its category+location search shape. Cost per record is
+unconfirmed (export carried `est:10`, likely pricier than a base pull) — tracked under I-111.
+
+---
+
+## 2026-08-26 · Dedup enrichment contacts by person (leads_n_contacts email permutations)
+
+`leads_n_contacts` returns a person's email as several guessed permutations (rex@ / gee@ / mcgee@ for
+Rex Mcgee), each as its own email-anchored contact — so one owner surfaced as 3 near-identical
+contacts. `enrichment.parse_contacts` now ends with a `_dedupe_by_person` pass that collapses contacts
+sharing a normalized person identity (`first`+`last`, or a `full_name` distinct from the business
+name; "Rex Mcgee"/"Rex Mc Gee" normalize equal) into one — keeping the richest identity (a title
+wins), filling missing fields from the others, and picking one primary email (name-matching local-part
+> non-generic > first). The dropped permutations remain in `raw`.
+
+**Deliberately NOT merged:** contacts with no person identity — a business-name fallback or a role
+mailbox (info@/office@). Those are legitimately distinct contact points, not duplicates, so
+`_person_key` returns None for them and they pass through untouched (order preserved). This keeps the
+data-poor path (LA plumbers, one business-name-fallback contact per email) unchanged. Unit-tested in
+`tests/test_enrichment.py` (permutation collapse, distinct people kept, role mailboxes kept, mixed
+person+role, contact_rows re-indexing).
+
+---
+
+## 2026-08-27 · CI gate for the outreach test suite + onboard-queue harness fix
+
+The outreach worker (`api/`) had **no automated test gate**. The three Python CI workflows
+(`python-tests.yml`, `pipeline-api-tests.yml`, `nlp-api-tests.yml`) are all path-filtered to
+`writer/**`, and the only PR check reaching outreach changes was the Netlify *frontend* build —
+which never runs the Python suite. So a change to a drain's budget logic or a pure parser could
+break its 661 tests with nothing red, on the one module whose drains spend real money against
+signed orders.
+
+**Decision:** add `.github/workflows/outreach-tests.yml` — `python -m pytest -q` from `outreach/`
+on any PR touching `outreach/**` (and on push to `main`). Modeled on `pipeline-api-tests.yml`: no
+system libs / no spaCy model (the worker has no WeasyPrint or spaCy dependency — report rendering
+lives in platform-api), Python 3.11 to match the Dockerfile, deps from `api/requirements.txt`
+(which bundles pytest + pytest-asyncio).
+
+**Prerequisite fix:** the suite had 4 long-standing red tests in `test_onboard_queue.py` — a CI
+gate can't be added over a red suite. Root cause was harness drift, NOT production code: `drain_one`
+STAGE 2 gained the category-relevance + distance filter (reading `settings.filter_category_relevance`
+/ `_enabled` / `filter_max_distance_enabled` / `_miles`), but the test's `_Settings` stub was never
+given those fields, so argument evaluation raised `AttributeError` and the filter stage failed before
+the (stubbed) `run_filter` was reached — leaving the order row without the final status/snapshot_id
+the assertions expected. Fixed by completing the `_Settings` stub to mirror `config.py` (fields only;
+no production change, no assertion relaxed). Full suite now **661 passed**, green from day one — the
+pipeline-api precedent (#746 fixed its pre-existing failures rather than skipping them).
+
+---
+
+## 2026-08-27 · Organic / paid-placement signal runs on EVERY scan (owner ruling)
+
+**Decision (owner):** the report's ORGANIC + paid-placement signal (is the business, and are its
+competitors, showing a Google Ad / Local Services Ad — and ranking — for the keyword) should be
+captured automatically on every scan, not only when someone clicks the button. It's the strongest
+"evidence of other marketing" read the tool has, and a signal that answers "are they already paying
+to be visible" is worth having on 100% of prospects.
+
+**Why it's cheap + safe to make always-on:** organic capture is ONE live DataForSEO SERP call per
+snapshot (submarket×keyword), and the paid-placement parse (Google Ads / LSA presence) rides that
+same call for free (`organic_scan.parse_organic_serp`). So "always on" adds ~one organic request per
+scanned submarket×keyword — a fraction of a cent — not a per-prospect cost. The infrastructure was
+already there: a signed `organic_scan_request` order, drained ≤1/tick by `organic_scan_queue`,
+budget-gated, and idempotent per snapshot (a snapshot already carrying a `google_organic`
+`serp_result` drains as a free no-op).
+
+**Implementation:** `scan_runner.collect_ready` auto-enqueues an `organic_scan_request` when a
+snapshot finalizes, via `organic_scan_queue.enqueue_for_snapshot` (gated on `organic_auto_enabled`,
+default True; idempotent — skips if the snapshot already has ANY organic order or a captured SERP;
+best-effort so it never blocks finalization). The tick's existing organic drain then captures it.
+
+**The signed-order stance, deliberately shifted for this producer only:** an `organic_scan_request`
+normally means "a human clicked" — the order row is evidence of deliberate intent the accidental
+deploy path can't supply. For the auto path the STANDING confirmation is the config flag (the
+deliberate owner decision recorded here), and the auto order carries a **sentinel `requested_by`**
+(`00000000-…`, no FK) + a machine note, so an auto capture stays auditable in the ledger apart from a
+click. This does NOT change the other paid producers (`scan-ai`, `probe-pixel-field` stay
+click/flag-gated). Reversible by config (`organic_auto_enabled=False` → click-only).

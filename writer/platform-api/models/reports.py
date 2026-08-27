@@ -44,6 +44,8 @@ class ReportSettings(BaseModel):
     period: str = "auto"                  # auto | 30d | 60d | 90d | 120d | 1y | all
     email_enabled: bool = True
     drive_enabled: bool = True
+    ai_visibility_enabled: bool = False   # also emit the AI Visibility report on the schedule
+    maps_enabled: bool = False            # also emit the Local Rank (Maps) report on the schedule
     last_run_at: Optional[str] = None
     next_run_at: Optional[str] = None
 
@@ -57,3 +59,5 @@ class ReportSettingsUpdateRequest(BaseModel):
     period: str = "auto"                  # auto = 7d (weekly) / 30d (monthly)
     email_enabled: bool = True
     drive_enabled: bool = True
+    ai_visibility_enabled: bool = False
+    maps_enabled: bool = False

@@ -14,11 +14,15 @@ failing loses one place, not the batch) over the marginal request-overhead savin
 call. That per-place isolation is the pixel_probe lesson: every query is billed, so a failure on one
 must never discard the records the others were charged for.
 
-**Measure-don't-infer:** the exact enrichment param VALUE(S) and response field names are
-unconfirmed against this account (no enriched pull has run). `enrichments` is passed through
-verbatim from config and this module asserts nothing about the response — `enrichment.parse_contacts`
-reads it defensively, and `probe-enrich` logs one full record so the shape is confirmed before
-production is trusted.
+**Async is mandatory (confirmed live 2026-08-26, I-109).** Enrichments run asynchronously on
+Outscraper; a synchronous (`async=false`) call returns the base Maps record BEFORE the enrichers
+finish, so it carries no emails/contacts/people — only the business name in `name_for_emails`. Two
+`probe-enrich` runs proved it: our production enricher set (`domains_service` + validators) against
+a business with known LinkedIn/Apollo contacts still returned a bare Maps record. So `_enrich_one`
+now submits `async=true` and polls the archive (`fetch_result`) to completion, the same pair the
+mass ingest uses — the only path that actually yields the enrichers' output. `enrichments` is still
+passed through verbatim from config; the response is read defensively by `enrichment.parse_contacts`
+and `probe-enrich` still logs one full record so a new enricher's shape can be confirmed.
 """
 
 from __future__ import annotations
@@ -30,7 +34,12 @@ from typing import Any
 import httpx
 
 from ..config import Settings
-from .outscraper_client import ENDPOINT_MAPS_SEARCH, OutscraperClient, extract_places
+from .outscraper_client import (
+    ENDPOINT_MAPS_SEARCH,
+    OutscraperClient,
+    OutscraperError,
+    extract_places,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,12 +65,17 @@ def _enrichment_param(enrichments: list[str], endpoint: str) -> Any:
 async def _enrich_one(
     oc: OutscraperClient, settings: Settings, place_id: str, enrichments: list[str]
 ) -> list[dict[str, Any]]:
-    """Enrich one place_id synchronously and return its record(s), each tagged with the place_id.
+    """Enrich one place_id ASYNC (submit → poll the archive) and return its record(s), tagged.
 
-    Synchronous (async=false) like the pixel_probe spike: one place returns fast, and the sync path
-    avoids the submit/poll dance for what is a single lookup. A slow enriched pull is exactly the
-    shape that hits the timeout, which is why enrichment gets its own generous
-    `enrich_request_timeout_seconds`, clear of the 60s base.
+    Enrichments run asynchronously on Outscraper: a synchronous (async=false) call returns the base
+    Maps record BEFORE the enrichers finish — i.e. with no emails, no scraped contacts, no person
+    fields at all, only `name_for_emails` (the business name). That was the real cause of "enrich
+    just restates the business name" — confirmed live 2026-08-26 by two `probe-enrich` runs, one
+    with `domains_service` against a business KNOWN to have contact data, which still came back with
+    zero enrichment fields (ISSUES I-109). So we submit async and poll to completion, exactly like
+    the mass-ingest `submit_maps_search`/`fetch_result` pair — the only path that actually returns
+    the enrichers' output. Per-place poll ceiling is `enrich_poll_timeout_seconds` so a single
+    stuck place fails on its own rather than hanging the tick.
     """
     endpoint = settings.outscraper_search_endpoint
     enrichment = _enrichment_param(enrichments, endpoint)
@@ -71,23 +85,39 @@ async def _enrich_one(
             "organizationsPerQueryLimit": 1,
             "language": settings.outscraper_language,
             "region": settings.outscraper_region,
-            "async": False,
+            "async": True,
             "enrichment": enrichment,
         }
-        body = await oc._request("POST", endpoint, json=payload)  # noqa: SLF001 — enrichment path
+        submit = await oc._request("POST", endpoint, json=payload)  # noqa: SLF001 — enrichment path
     else:
         params = {
             "query": place_id,
             "organizationsPerQueryLimit": 1,
             "language": settings.outscraper_language,
             "region": settings.outscraper_region,
-            "async": "false",
+            # Booleans go over the wire as lowercase strings on GET, as the base search does.
+            "async": "true",
             # `enrichment` is a single comma-joined value on GET (see `_enrichment_param`).
             "enrichment": enrichment,
         }
-        body = await oc._request("GET", endpoint, params=params)  # noqa: SLF001 — enrichment path
+        submit = await oc._request("GET", endpoint, params=params)  # noqa: SLF001 — enrichment path
 
-    records = extract_places(body)
+    request_id = submit.get("id")
+    if not request_id:
+        # No request id: either a body-level error the client would have raised, or a response that
+        # already carried its data inline. Use inline data if present; otherwise it is a real fault.
+        inline = extract_places(submit)
+        if not inline:
+            raise OutscraperError(
+                f"enrichment submission for {place_id} returned no request id and no data: {submit!r}"
+            )
+        records = inline
+    else:
+        archive = await oc.fetch_result(
+            str(request_id), poll_timeout=settings.enrich_poll_timeout_seconds
+        )
+        records = extract_places(archive)
+
     for record in records:
         if isinstance(record, dict):
             record[PLACE_TAG] = place_id

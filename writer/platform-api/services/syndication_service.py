@@ -305,21 +305,36 @@ async def run_syndication_item_job(job: dict) -> None:
                 "rewritten_markdown": new_md,
             })
 
+        # `dedupe_by_name`: the id below is recorded only AFTER the create call
+        # returns, so an interruption in that window (a deploy drain requeues this
+        # job) leaves a real public Doc/Sheet on Drive that the retry's
+        # `not item.get("doc_id")` check cannot see — and it would publish a
+        # second one. The webhook resolves an existing file of the same title in
+        # the folder instead of creating a twin, which makes the retry adopt the
+        # orphan. Requires the 2026-08 webhook deployment; an older one ignores
+        # the flag and behaves exactly as before (create, and risk the duplicate).
         doc_url = item.get("doc_url")
         if want_doc and not item.get("doc_id"):
             doc = await create_google_doc(
                 folder_id, new_title, build_doc_html(new_title, new_md, source_url),
-                content_format="html", share=share,
+                content_format="html", share=share, dedupe_by_name=True,
             )
             doc_url = doc.get("doc_url")
+            if doc.get("reused"):
+                logger.info("syndication_item_adopted_doc",
+                            extra={"item_id": item_id, "doc_id": doc.get("doc_id")})
             _patch({"doc_id": doc.get("doc_id"), "doc_url": doc_url})
 
         sheet_url = item.get("sheet_url")
         if want_sheet and not item.get("sheet_id"):
             sheet = await create_google_sheet(
-                folder_id, new_title, build_sheet_rows(new_title, new_md, source_url), share=share,
+                folder_id, new_title, build_sheet_rows(new_title, new_md, source_url),
+                share=share, dedupe_by_name=True,
             )
             sheet_url = sheet.get("sheet_url")
+            if sheet.get("reused"):
+                logger.info("syndication_item_adopted_sheet",
+                            extra={"item_id": item_id, "sheet_id": sheet.get("sheet_id")})
             _patch({"sheet_id": sheet.get("sheet_id"), "sheet_url": sheet_url})
 
         _patch({"status": "published", "error": None, "published_at": "now()"})

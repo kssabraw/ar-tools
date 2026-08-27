@@ -68,6 +68,246 @@ pillar, 14 pages, no namespace conflict) is what confirmed the cross-family fix.
 
 ---
 
+## ⏩ Update — 2026-08-26 · **The Apps Script publish webhook: which project, which deployment, and how to redeploy it**
+
+**Why this entry exists.** Closing out the deploy-safety work needed one webhook
+change, and finding *which script to edit* took longer than writing the change.
+Nothing recorded the project name or the deployment id — only "the 2026-07-07
+deployment". Two traps cost the time; both are written down here so they cost it
+once.
+
+**The live webhook.** Apps Script project **"AR Tools Google Docs Webhook"**,
+script id `1EoBPm2VqU-GlloClByKq6BVqIs9-6AsZVbraw9DahEG_1NBBmHSiduep`
+(https://script.google.com/d/1EoBPm2VqU-GlloClByKq6BVqIs9-6AsZVbraw9DahEG_1NBBmHSiduep/edit).
+Source of truth in-repo: `writer/apps-script/publish_webhook.gs`. It serves the
+doc / `type:"sheet"` / `type:"pdf"` branches, `share`, `format:"html"`, image
+embedding, and (2026-08-26) `dedupe_by_name`.
+
+**Trap 1 — the decoy project.** A second project, **"AR Tools Publisher"**
+(created 2026-05-01, untouched since), is the *original markdown-only* script:
+no `sheet`, no `pdf`, no `share`, no `format`. It is NOT the webhook. Editing it
+changes nothing, and because it looks plausible it is the one you find first.
+Consider renaming it `AR Tools Publisher (OLD — unused)`.
+
+*How it was ruled out, if you ever need to redo this:* `upload_pdf` hard-fails
+with `pdf_not_supported` unless the webhook returns a `file_id`, and the decoy
+has no `pdf` branch — yet 20 of 26 `client_reports` rows carry successful Drive
+delivery. So the live script could not be that one. The definitive check is
+comparing a deployment's exec URL against `GOOGLE_APPS_SCRIPT_URL` on the
+PLATFORM Railway service.
+
+**Trap 2 — two active deployments.** The real project has two, differing only
+after `/macros/s/`:
+
+| Prefix | Was | Now |
+|---|---|---|
+| `AKfycbxTjwbZYB…` | Version 8 (Jul 6) — **PRIMARY: the one `GOOGLE_APPS_SCRIPT_URL` points at** | Version 10 |
+| `AKfycbyfvDYYs…` | Version 1 (Jun 27) | Version 9 |
+
+**Resolved 2026-08-26:** `GOOGLE_APPS_SCRIPT_URL` holds the
+`AKfycbxTjwbZYB…` / Version 10 deployment — verified by revealing the value in
+the Railway **dashboard** and full-string-matching it against the deployment id
+(not just the prefix). Both deployments' descriptions now say which is which.
+Note the value is readable ONLY in the dashboard: every API client (the Railway
+MCP, an OAuth app) gets variable names with values redacted, which is what made
+this take two attempts to settle.
+
+Even so, **bumping BOTH on a redeploy stays the default** — webhook changes here
+are additive and opt-in, so it is free insurance against this drifting again.
+
+**Redeploy procedure.** Edit the code → save → **Deploy → Manage deployments →
+pencil icon → Version: "New version" → Deploy**. ⚠️ **Never "New deployment"** —
+that mints a *different* exec URL while `GOOGLE_APPS_SCRIPT_URL` keeps pointing
+at the old one, so prod silently keeps running the old code with no error
+anywhere. Authorization is only re-prompted when a change introduces a NEW
+Google service (Sheets, UrlFetchApp did; `dedupe_by_name` did not — it reuses
+`DriveApp`). If you drive this UI with a browser agent: the pencil icon
+silently swallows clicks while the Manage-deployments dialog is still animating
+open, and the dialog settles at two different sizes depending on timing — wait
+for each control's position to stop moving before clicking, or the early clicks
+land on nothing.
+
+**Deployment labels vanish on every redeploy — this is expected.** The name shown
+in the Manage-deployments list is just a mirror of the deployment's Description,
+and **cutting a new version resets it to "Untitled"**. That is why the 2026-08-26
+redeploy appeared to wipe the "AR Tools Google Docs Webhook" label, and it cost
+confusion twice in one session. Two consequences: (1) after any redeploy, expect
+to re-enter the descriptions; (2) **always identify a deployment by its version
+number or its `AKfyc…` deployment ID, never by the list label** — the label may
+be blank, stale, or duplicated across both. Editing a description alone does NOT
+cut a version (verified: the list still topped out at Version 10 afterwards).
+
+**Verifying a deploy landed.** Two options, in order of convenience:
+1. Read the project source back through Drive (`download_file_content` with
+   `exportMimeType: application/vnd.google-apps.script+json`) and confirm the
+   code is present — this is how the 2026-08-26 change was verified, and it
+   works from an agent session.
+2. Exercise it: POST the same `{folder_id, title, …, dedupe_by_name: true}`
+   twice against a scratch folder; the second reply should carry the SAME id
+   plus `"reused": true`. **Note the sandbox cannot do this** — the agent proxy
+   denies `script.google.com` (403 on CONNECT), so run it from a real terminal.
+
+**Current state.** Both deployments serve the 2026-08-26 code; the syndication
+duplicate-Doc guard (PR #758) is live. The un-run item is option 2 above — a
+live round-trip test, which only matters on a retry path and is not blocking.
+
+## ⏩ Update — 2026-08-26 · **Brand-voice QA: the judge was too generous — hardened the scoring rubric across both writers + turned on nlp/pipeline CI**
+
+**Problem.** The separate brand-voice scorecard (the 8-dimension LLM judge, not
+the deterministic checks) was scoring off-brand pages "fine." Pulled the real
+distribution from `<page>.voice_violations` to confirm — across **all 17 pages
+scored since the voice system shipped 2026-07-31** (the other 200 are pre-guide
+and correctly unscored): composites clustered **81–87** (Local SEO avg 84.2,
+Ecommerce 81.3), nothing ≥90, almost nothing <80. Textbook LLM-judge
+central-tendency.
+
+**The insight that wrote the fix.** Per-dimension, the **only** dimension
+producing honest, well-spread scores was `distinctiveness` (avg **71.5**, range
+55–82) — and it is the **only** dimension whose prompt line was already framed
+adversarially ("could a competitor use this by swapping the name? score LOW").
+The other seven ("score how faithfully it follows the guide") inflated: tone
+86.8, writing_style 84.3, vocabulary 80.4. So it was a controlled experiment —
+adversarial framing works; extend it to the other seven.
+
+**What changed (PR #743, open).** Hardened **both** judge prompts — they are
+separate and have **no sync-guard** (unlike `voice_card.py`):
+- `nlp-api/main.py::_VOICE_SCORE_PROMPT_SUFFIX` — the page judge, consumed by all
+  four page scorers (`_score_system_prompt_for` local/national,
+  `_ecommerce_score_system_prompt_for`, `_blog_score_system_prompt_for`).
+- `pipeline-api/modules/writer/voice_review.py::_SCORE_SYSTEM` — the blog/service
+  **article** judge (its own rubric; would have stayed generous otherwise).
+
+Each got: anchored 0–100 bands with **60–74 "competent but anonymous" as the
+DEFAULT** for a page that reads fine but isn't distinctly the client; "never
+award 75+ for the mere absence of errors"; **worst-section evidence** (quote
+where it drifts, score to that); an 85+ justification guardrail; per-dimension
+"what LOW looks like" cues. **Output contracts unchanged** (page: `brand_voice`
+key; article: bare 8-dim object) → parsers, `voice_scorecard` math, weights,
+`VOICE_PASS_THRESHOLD` (80), deterministic caps all untouched. Verified locally
+as far as the sandbox allows (py_compile; `test_voice_card` 54 pass; isolated
+article-path integration).
+
+**Validation — the next real step, must run on PLATFORM.**
+`platform-api/scripts/revalidate_voice_scores.py` re-scores the baseline pages
+through the deployed nlp path and prints before→after distributions +
+per-dimension means. Read-only w.r.t. the stored baseline (records a score-run
+history row like a UI "Score", never overwrites `voice_score`/`voice_violations`;
+`--write` persists once trusted; `--limit` smoke-tests). The **sandbox can't
+reach the private nlp service**, so run it in a Railway shell on PLATFORM.
+Expected: the 81–87 mass spreads to **~62–80**, on-brand pages still reaching
+high 80s. Caveats it prints: re-score uses the client's *current* voice card
+(clean rubric comparison only where the guide is unchanged); local pages with an
+empty/unrecognized `location` error out (excluded, not scored 0).
+
+**Deferred until that re-score is measured (do NOT guess now):** raise the
+`distinctiveness` weight (.10→.15) and revisit `VOICE_PASS_THRESHOLD`. Scores are
+stored, so recalibration needs no re-billing beyond the one re-score.
+
+**CI coverage (PR #746, open).** Only platform-api ran in CI, so both prompt
+changes above had **no automated gate**. Added `.github/workflows/
+nlp-api-tests.yml` + `pipeline-api-tests.yml` (mirror `python-tests.yml`; nlp got
+a CI-only `requirements-dev.txt`). nlp-api went green; **pipeline-api immediately
+caught two pre-existing failures** (1327 passed, 2 failed) invisible because the
+suite never ran — both fixed in the same PR:
+1. `test_pipeline_metadata_threshold_echo` — stale assertion (0.55) vs
+   `config.brief_relevance_floor` raised to 0.65 in #688.
+2. **Real bug** in `brief/assembly.py::_apply_title_case` — it title-cased each
+   content H2 but left child H3s' `parent_h2_text` on the old casing, so an H3
+   referenced a "nonexistent" parent. Fixed by realigning H3 parent pointers to
+   the re-cased H2 in the same pass (idempotent).
+
+**Open items for the next session:** (1) run the re-score on PLATFORM and record
+the spread; (2) recalibrate weight+threshold from it; (3) land #746 green (CI
+re-running after the two fixes) then #743; (4) longer-term, fold the two judge
+prompts into one seam so they can't drift again (the scorecard math is already
+shared; the prompts are not); (5) 146 live pre-guide pages still carry no voice
+verdict — a backfill via voice-aware reoptimization.
+
+## ⏩ Update — 2026-08-26 · **Client Reporting — report-content upgrades (all merged + live)**
+
+A run of improvements to the client-facing PDF report shipped this session — each
+its own PR, squash-merged to `main`, auto-deployed to PLATFORM (each verified
+`SUCCESS`), and gated by the platform-api `pytest` GitHub Actions workflow (five
+code PRs #741/#742/#744/#745/#748 + a docs PR #747). All
+are additive rendering changes in `services/client_report.py` +
+`services/brand_report_html.py`; two carry additive migrations (applied live).
+Toggles default off, so nothing changes for a client until an account manager
+opts in on the ClientReports **Delivery & schedule** card.
+
+- **#741 (`ad26fb1`) — scheduled standalone report types.** The recurring
+  schedule (`client_report_schedule.enqueue_due_report_schedules`) now also
+  emits, per opt-in, the **AI Visibility** report (`report_type="ai_visibility"`
+  — the 2026-07-06 fold-in decision finally executed) and a **new Local Rank
+  (Maps) report** (`report_type="maps"`, `_build_maps_report` — a self-contained
+  geo-grid PDF reusing the combined report's own `_gather_geogrid` +
+  `_section_geogrid`; deterministic, no LLM, on purpose). Opt-in via
+  `client_report_settings.ai_visibility_enabled` / `maps_enabled` (migrations
+  `20260826140000` + `20260826150000`; the latter also widened the
+  `client_reports.report_type` CHECK to include `maps`). Gated on the client
+  actually tracking the matching keywords (empty-report guard); the pending-report
+  guard is now `report_type`-scoped so the three deliverables don't block each
+  other; delivery reads the report row generically so both new PDFs email +
+  Drive-copy unchanged. The per-keyword Maps **Local Rank Analysis Docs** stay a
+  separate on-scan-completion deliverable — not folded in.
+- **#742 (`779f670`) — clearer Rank trend + month-over-month + GBP Insights.**
+  The organic "Trend" column is relabeled **"Rank trend (last 90 days)"** with a
+  legend (the sparkline already plots better ranks higher — it just had no
+  label). Maps + AI-visibility gained month-over-month callouts with
+  **per-keyword deltas** (`_gather_geogrid` pulls the previous reporting scan's
+  per-keyword rows; `_gather_ai_visibility` the previous batch's found-counts;
+  standalone `brand_report_html` gained a prev-period overall + per-keyword
+  column). The **GBP Insights** section (`_section_gbp` — rating + new reviews +
+  highlights + the `_gather_gbp_metric_growth` performance table) was
+  **re-enabled** in the combined report (it was built-but-disabled) and added to
+  the standalone Maps report. Note: `gbp_metric_daily` is keyed by
+  `location_row_id`, **not** `client_id` — a naive `client_id` count reads 0 even
+  for clients that have data (it joins through `gbp_locations`).
+- **#744 (`3f70b96`) — 30d / 90d / since-start comparison horizons.** A
+  single-window comparison tied to the report period is volatile (a 30-day
+  report only ever showed a 30-day delta), which the owner flagged as hiding
+  wins. **Performance highlights** now shows **Now / vs prev 30d / vs prev 90d /
+  since-we-started** columns — pure `build_multi_comparisons` anchored at
+  `period_end`, each horizon **omitted ("—") when the data doesn't span both its
+  windows** (no fabricated partial deltas). Maps (`presence_horizons`) and
+  AI-visibility (`visibility_horizons`) get the same section-level three-horizon
+  callout (vs the scan/batch nearest each horizon + the first scan/batch). The
+  single-window `build_comparisons` is kept for the KPI strip.
+- **#745 (`d3b3a55`) — executive summary longer time frame.** The `emit_summary`
+  tool gained a required **`long_term_progress`** field rendered as a green
+  **"The bigger picture"** callout under the headline; the exec context now
+  carries the three horizon sets so the model cites the durable 90d/since-start
+  trend positively, leading with the longer view when a single month dipped and
+  saying "early and building momentum" (never an invented number) when long-term
+  data isn't there yet.
+- **#748 (`a79c0cc`) — every tracked keyword in Organic rankings.** The combined
+  report's `_section_organic` trimmed to the top ~5 movers with a "remaining N —
+  full list on request" note; owner wants the full table. It now renders **every**
+  tracked keyword, sorted strongest current position first (unranked last), with
+  per-row Movement + rank-trend intact — so a slip shows honestly now (the old
+  design deliberately hid decliners). Dropped the top-movers selection + the
+  now-unused `_TOP_MOVERS` constant; raised `_gather_organic`'s `_MAX_KEYWORDS`
+  cap **40 → 250** (runaway ceiling, not a display trim) because several clients
+  track 50–96 keywords (UMH 96, Southwestern Hearing 60, EML 58, WheelHouse FL 50)
+  — those clients now get a **multi-page** organic table, which is the accepted
+  cost of "all keywords" (flag if a cap/hybrid is wanted for the very large ones).
+- **#747 (docs)** — recorded #741/#742/#744/#745 in CLAUDE.md + HANDOFF.md.
+
+**Live-data caveat (tell whoever tests this):** the horizons + month-over-month
+only render where the history supports them. **Organic rank** runs long, so
+Performance shows all three horizons today (verified on First Class Roofing:
+Feb→Aug). **Maps + AI-visibility** scan history is younger than 90 days for
+every current client, so their 90d/since-start rows correctly read "—" and fill
+in over the coming months. A good end-to-end test client is **First Class
+Roofing** (real previous Maps scan for MoM + real GBP metric growth; its AI
+scans are a single day so AI MoM won't show).
+
+**Infra note — the pytest gate is intermittent.** The platform-api `pytest`
+workflow (added 2026-08-15, path filter `writer/platform-api/**`) **triggered for
+#744/#745/#748 but did NOT fire for #741/#742** despite matching the same filter
+and firing normally on other `claude/*` PRs. All were validated locally (74–80
+report tests green) and merged clean. Unresolved; worth a glance if a
+platform-api PR merges without its Python tests having gated it.
+
 ## ⏩ Update — 2026-08-26 (am) · **Website Builder — where it stood before PR #740, and the informational gap that is now built above**
 
 Nothing was built in this pass. This section records **what is finished**, the

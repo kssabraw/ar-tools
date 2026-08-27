@@ -1033,3 +1033,78 @@ def test_render_full_omits_total_words_directive_for_partial_counts():
     assert "total words across the page" not in out
     # The per-section targets that WERE stated still come through.
     assert "~100 words" in out
+
+
+# ── scale_analysis_words (SERP-budget rescaling of the reference layout) ──────
+
+from services.page_structure_render import (  # noqa: E402
+    scale_analysis_words,
+    outline_total_words,
+)
+
+
+def _scale_ref():
+    """A reference analysis summing to 3177 words (FCR-shaped) — 3 sections."""
+    return {
+        "outline": [
+            {"level": "H1", "heading": "Hero", "intent": "hero", "word_count": 600,
+             "blocks": [{"type": "paragraph", "count": 2, "words": 600}]},
+            {"level": "H2", "heading": "Services", "intent": "service_detail", "word_count": 1977,
+             "blocks": [{"type": "paragraph", "count": 3, "words": 1500},
+                        {"type": "list", "count": 1, "items": 6, "words": 477}]},
+            {"level": "H2", "heading": "FAQ", "intent": "faq", "word_count": 600,
+             "blocks": [{"type": "paragraph", "count": 4, "words": 600}]},
+        ],
+        "elements": {"section_count": 3, "approx_total_words": 3177,
+                     "has_faq": True, "has_cta": True},
+        "structure_summary": "hero, services, faq",
+    }
+
+
+def test_scale_down_to_serp_budget_preserves_proportions():
+    a = _scale_ref()
+    assert outline_total_words(a) == 3177
+    scaled = scale_analysis_words(a, 1571)
+    # total lands within rounding of the target
+    assert abs(outline_total_words(scaled) - 1571) <= 3
+    # proportions preserved: services stays the biggest section
+    counts = [s["word_count"] for s in scaled["outline"]]
+    assert counts[1] > counts[0] and counts[1] > counts[2]
+    # block-level word counts scaled too; total set to the target
+    assert scaled["outline"][1]["blocks"][0]["words"] < 1500
+    assert scaled["elements"]["approx_total_words"] == 1571
+
+
+def test_scale_never_mutates_input():
+    a = _scale_ref()
+    scale_analysis_words(a, 900)
+    assert outline_total_words(a) == 3177  # original untouched
+    assert a["elements"]["approx_total_words"] == 3177
+
+
+def test_scale_can_scale_up_when_reference_is_short():
+    # SERP budget, not the reference's own length, sets the target.
+    short = {"outline": [{"level": "H2", "heading": "X", "word_count": 200}]}
+    scaled = scale_analysis_words(short, 1000)
+    assert scaled["outline"][0]["word_count"] == 1000
+
+
+def test_scale_noop_without_target_or_outline_or_words():
+    a = _scale_ref()
+    assert scale_analysis_words(a, None) is a          # no target → unchanged object
+    assert scale_analysis_words(a, 0) is a
+    empty = {"outline": []}
+    assert scale_analysis_words(empty, 1571) is empty   # nothing to scale
+    no_words = {"outline": [{"level": "H2", "heading": "X"}]}
+    assert scale_analysis_words(no_words, 1571) is no_words  # no measurable length
+
+
+def test_render_uses_scaled_targets_not_reference_length():
+    entry = {"status": "complete", "analysis": _scale_ref()}
+    block = render_reference_structure(entry, "local_landing", target_words=1571)
+    assert block is not None
+    assert "3177" not in block          # the reference's own length never reaches the writer
+    assert "1571" in block              # the SERP budget does
+    # without a target it still renders the raw reference (back-compat)
+    raw = render_reference_structure(entry, "local_landing")
+    assert raw is not None and "3177" in raw

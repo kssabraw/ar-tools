@@ -1,0 +1,50 @@
+name: outreach tests
+
+# Mirrors pipeline-api-tests.yml / python-tests.yml for the outreach pipeline — the pre-client
+# prospecting worker (api/). Its pytest suite (661 tests: the scan/enrich/name-scrape drains, the
+# scorecard golden fixtures, the geometry + rollup logic, all the pure signal helpers) had NO CI
+# gate: the three existing Python workflows are path-filtered to writer/**, and nothing runs on
+# outreach/**. So a change to a drain's budget logic or a pure parser could break its tests with
+# nothing red — which is exactly the class of regression this module can least afford, since its
+# drains spend money against signed orders. This closes that gap.
+#
+# The worker has no WeasyPrint / spaCy dependency (report rendering lives in platform-api), so —
+# unlike python-tests.yml — no system libraries or model download are needed; a plain pip install
+# of api/requirements.txt (which bundles pytest + pytest-asyncio) is enough. The tests drive async
+# code via asyncio.run() directly rather than the asyncio marker, so no asyncio_mode config is
+# required. Run from outreach/ (the rootdir with no __init__.py), which puts the api package on
+# sys.path.
+
+on:
+  pull_request:
+    paths:
+      - "outreach/**"
+      - ".github/workflows/outreach-tests.yml"
+  push:
+    branches: [main]
+    paths:
+      - "outreach/**"
+      - ".github/workflows/outreach-tests.yml"
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: outreach
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: outreach/api/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r api/requirements.txt
+
+      - name: Run tests
+        run: python -m pytest -q

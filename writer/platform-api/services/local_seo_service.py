@@ -31,6 +31,15 @@ logger = logging.getLogger(__name__)
 
 # Generation/reoptimization can take minutes (SERP scrape + Claude + scoring).
 _GENERATE_TIMEOUT = 600
+# Hard stop for a single /generate-page attempt: if nlp hasn't returned within
+# this window the SSE connection is severed and the attempt fails. Paired with
+# the nlp GENERATION_TIME_BUDGET_SECONDS soft cap (which stops starting new
+# rewrite/rescore passes earlier) — the soft cap ships the best page, this is the
+# backstop. Kept separate from _GENERATE_TIMEOUT so it does NOT shorten the
+# reoptimize-page flow (which has its own multi-pass loop and no time budget).
+# 8 min: wide enough that a pass started just under the 4-min soft budget always
+# finishes and ships, rather than being severed mid-rewrite at the hard stop.
+_GENERATE_PAGE_TIMEOUT = 480
 # Plain JSON endpoints (analyze / find-page / score / related / social) are
 # faster but still scrape/score — give them generous headroom.
 _JSON_TIMEOUT = 300
@@ -177,13 +186,15 @@ async def _post_nlp(
         raise HTTPException(status_code=502, detail="local_seo_provider_error") from exc
 
 
-async def _stream_nlp(path: str, payload: dict) -> dict:
+async def _stream_nlp(path: str, payload: dict, timeout: float = _GENERATE_TIMEOUT) -> dict:
     """POST to an SSE nlp endpoint (`/generate-page`, `/reoptimize-page`) and
-    return the final `result` dict. Raises HTTPException on provider error."""
+    return the final `result` dict. Raises HTTPException on provider error.
+    `timeout` is the hard stop for the whole attempt (generate uses the tighter
+    _GENERATE_PAGE_TIMEOUT; reoptimize keeps the longer default)."""
     url = f"{settings.nlp_api_url}{path}"
     result: Optional[dict] = None
     try:
-        async with httpx.AsyncClient(timeout=_GENERATE_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             async with client.stream("POST", url, json=payload) as response:
                 if response.status_code != 200:
                     body = await response.aread()
@@ -448,7 +459,7 @@ async def _apply_structure_gate(
     from services import structure_gate
 
     async def _regenerate(corrections: str) -> Optional[dict]:
-        return await _stream_nlp("/generate-page", {**payload, "structure_corrections": corrections})
+        return await _stream_nlp("/generate-page", {**payload, "structure_corrections": corrections}, timeout=_GENERATE_PAGE_TIMEOUT)
 
     return await structure_gate.apply_structure_gate(
         result,
@@ -493,28 +504,11 @@ async def generate_page(
     from services import voice_card_service
 
     payload["voice_card"] = await voice_card_service.get_voice_card(client, user_id=user_id)
-    # Page template: per-page value wins; otherwise the client's saved default.
-    template_url = (page_template_url or "").strip() or client.get("local_seo_page_template_url")
-    reference_analysis: Optional[dict] = None
-    if template_url:
-        payload["page_template_url"] = template_url
-    else:
-        # No explicit template — mirror the client's own local page layout from
-        # the pre-analyzed reference structures (local landing preferred, else
-        # location). Avoids re-scraping a template URL at generate time. Hold onto
-        # the winning entry's analysis so the structural gate can score the output
-        # against the same outline the prompt was told to mirror.
-        from services.page_structure_render import render_reference_structure, usable_analysis
-
-        structures = client.get("page_structures") or {}
-        for page_type in ("local_landing", "location"):
-            rendered = render_reference_structure(structures.get(page_type), page_type)
-            if rendered:
-                payload["reference_page_structure"] = rendered
-                reference_analysis = usable_analysis(structures.get(page_type))
-                break
-    if (notes or "").strip():
-        payload["notes"] = notes.strip()  # per-page writing guidance the writer follows
+    # SERP analysis FIRST: its length target (SERP avg + 20%, floored) both drives
+    # the writer's word budget AND rescales the reference layout below, so a long
+    # client reference page can't drag generation to ~2x the SERP-appropriate
+    # length. Best-effort — a thin SERP / provider outage degrades to a
+    # no-competitor page (run_analysis off so nlp doesn't re-scrape the failure).
     serp = await _get_or_compute_analysis(
         keyword, location, location_code, force_refresh, user_id, required=False,
         entity_provider=entity_provider,
@@ -523,7 +517,40 @@ async def generate_page(
         payload["serp_analysis"] = serp
     else:
         payload["run_analysis"] = False  # analysis unavailable → degrade, no nlp re-scrape
-    result = await _stream_nlp("/generate-page", payload)
+    serp_target = (serp or {}).get("serp_word_target")
+
+    # Page template: per-page value wins; otherwise the client's saved default.
+    template_url = (page_template_url or "").strip() or client.get("local_seo_page_template_url")
+    reference_analysis: Optional[dict] = None
+    if template_url:
+        payload["page_template_url"] = template_url
+    else:
+        # No explicit template — mirror the client's own local page layout from
+        # the pre-analyzed reference structures (local landing preferred, else
+        # location). Avoids re-scraping a template URL at generate time. The
+        # layout is rescaled to the SERP length target so the writer reproduces
+        # the client's STRUCTURE at SERP-appropriate length, not the reference's
+        # own (often much longer) word counts. Hold onto the winning entry's
+        # analysis — scaled to the SAME target — so the structural gate scores the
+        # output against the sizes the prompt asked for and never re-inflates it.
+        from services.page_structure_render import (
+            render_reference_structure, usable_analysis, scale_analysis_words,
+        )
+
+        structures = client.get("page_structures") or {}
+        for page_type in ("local_landing", "location"):
+            rendered = render_reference_structure(
+                structures.get(page_type), page_type, target_words=serp_target,
+            )
+            if rendered:
+                payload["reference_page_structure"] = rendered
+                reference_analysis = scale_analysis_words(
+                    usable_analysis(structures.get(page_type)), serp_target,
+                )
+                break
+    if (notes or "").strip():
+        payload["notes"] = notes.strip()  # per-page writing guidance the writer follows
+    result = await _stream_nlp("/generate-page", payload, timeout=_GENERATE_PAGE_TIMEOUT)
     result = await _apply_structure_gate(result, payload, reference_analysis)
     return _persist_page(client_id, keyword, location, True, "generate", result, user_id, notes=notes)
 
@@ -1099,7 +1126,8 @@ async def reoptimize_url(
     # alone silently skipped the pages most worth rewriting — a page at 78 SEO
     # and 40 voice never had its voice score looked at.
     should_reopt, reason = voice_card_service.reoptimize_verdict(
-        composite, voice_compliance, score_threshold
+        composite, voice_compliance, score_threshold,
+        length_fit=(score_result.get("engine_scores") or {}).get("length_fit"),
     )
     voice_score = (voice_compliance or {}).get("score")
     if not should_reopt:

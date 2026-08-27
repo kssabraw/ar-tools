@@ -217,13 +217,23 @@ class OutscraperClient:
         )
         return str(request_id)
 
-    async def fetch_result(self, request_id: str) -> dict[str, Any]:
+    async def fetch_result(
+        self, request_id: str, *, poll_timeout: float | None = None
+    ) -> dict[str, Any]:
         """Poll GET /requests/{id} until the request leaves Pending.
 
         Returns the full archive body. The caller persists it before parsing anything —
         re-parsing stored raw is free, re-pulling is not, and the archive expires in 2 hours.
+
+        `poll_timeout` overrides the mass-ingest `outscraper_poll_timeout_seconds` ceiling — the
+        enrichment path passes a shorter one so a single stuck place cannot hang the tick for an
+        hour.
         """
-        deadline = time.monotonic() + self._settings.outscraper_poll_timeout_seconds
+        timeout = (
+            poll_timeout if poll_timeout is not None
+            else self._settings.outscraper_poll_timeout_seconds
+        )
+        deadline = time.monotonic() + timeout
         path = REQUEST_ARCHIVE_PATH.format(request_id=request_id)
 
         while True:
@@ -234,8 +244,7 @@ class OutscraperClient:
 
             if time.monotonic() >= deadline:
                 raise OutscraperTimeout(
-                    f"request {request_id} still Pending after "
-                    f"{self._settings.outscraper_poll_timeout_seconds}s"
+                    f"request {request_id} still Pending after {timeout}s"
                 )
 
             await asyncio.sleep(self._settings.outscraper_poll_interval_seconds)

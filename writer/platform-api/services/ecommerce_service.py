@@ -115,6 +115,40 @@ def _generate_payload(
     }
 
 
+# ── competitor SERP analysis (shared cache) ──────────────────────────────────
+# Ecommerce pages are national, so the analysis varies only by keyword — the same
+# `keyword_analyses` cache Local SEO uses, keyed on the US national location.
+# Without this the analysis ran INSIDE the nlp endpoint on every call, so a job
+# requeued by a deploy (or reaped) re-paid the whole DataForSEO + ScrapeOwl +
+# TextRazor scrape, which is the bulk of a generate's cost. Mirrors nlp's own
+# defaults (_ECOMMERCE_SERP_LOCATION / _CODE) so a precomputed analysis is
+# identical to the one it would have run inline.
+_SERP_LOCATION = "United States"
+_SERP_LOCATION_CODE = 2840
+
+
+async def _cached_serp_analysis(keyword: str, user_id: Optional[str],
+                                entity_provider: Optional[str] = None) -> Optional[dict]:
+    """The competitor SERP analysis for `keyword`, from the shared cache when
+    fresh, else computed once and cached. Best-effort: None means "couldn't get
+    one", and the caller degrades to letting nlp run it inline (today's
+    behaviour) rather than failing the generate."""
+    try:
+        from services.local_seo_service import _get_or_compute_analysis
+
+        return await _get_or_compute_analysis(
+            keyword, _SERP_LOCATION, _SERP_LOCATION_CODE,
+            force_refresh=False, user_id=user_id, required=False,
+            entity_provider=entity_provider,
+        )
+    except Exception as exc:  # noqa: BLE001 — analysis enhances, never gates
+        logger.warning(
+            "ecommerce.serp_analysis_degraded",
+            extra={"keyword": keyword, "error": str(exc)},
+        )
+        return None
+
+
 # ── nlp transport ────────────────────────────────────────────────────────────
 
 async def _post_nlp(path: str, payload: dict, user_id: Optional[str] = None) -> dict:
@@ -353,6 +387,14 @@ async def generate_page(
     # compound. A hit skips nlp's web_search pass entirely — those values never
     # change, and the pass costs ~$0.37 and ~1m24s each time it runs.
     payload["researched_facts"] = ecommerce_facts_cache.get_cached_facts(keyword.strip(), page_type)
+    # Competitor SERP analysis from the shared cache. Passing it in (and turning
+    # nlp's inline run off) is what makes a requeued job cheap: the scrape is the
+    # bulk of the cost and it is keyword-scoped, not per-page. A miss leaves
+    # run_analysis=True so nlp does exactly what it did before.
+    serp = await _cached_serp_analysis(keyword.strip(), user_id, entity_provider)
+    if serp is not None:
+        payload["serp_analysis"] = serp
+        payload["run_analysis"] = False
     result = await _stream_nlp("/generate-ecommerce-page", payload)
     result = await _apply_structure_gate(result, payload, reference_analysis)
     page = _persist_page(client_id, keyword.strip(), page_type, source_url, product_input, "generate", result, user_id, notes=notes)

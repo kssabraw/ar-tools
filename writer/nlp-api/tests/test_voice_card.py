@@ -47,6 +47,27 @@ def test_parse_full_card_round_trips():
     assert card["audience_triggers"] == ["a storm just went through"]
 
 
+def test_parse_distinctiveness_fields_round_trip_and_cap():
+    card = vc.parse_voice_card({
+        "differentiators": ["50-year workmanship warranty", "only Malarkey-certified crew"]
+        + [f"extra{i}" for i in range(10)],
+        "signature_phrases": ["Roofs done right, rain or shine"]
+        + [f"phrase{i}" for i in range(20)],
+    })
+    assert card["differentiators"][0] == "50-year workmanship warranty"
+    assert len(card["differentiators"]) == 6   # capped
+    assert card["signature_phrases"][0] == "Roofs done right, rain or shine"
+    assert len(card["signature_phrases"]) == 8  # capped
+
+
+def test_parse_missing_distinctiveness_fields_default_empty():
+    """A legacy card (or a distillation that stated nothing distinctive) yields
+    empty lists, never a KeyError downstream."""
+    card = vc.parse_voice_card({"brand_name": "X"})
+    assert card["differentiators"] == []
+    assert card["signature_phrases"] == []
+
+
 def test_parse_never_raises_on_garbage():
     for raw in [None, "not a dict", 42, [], {"person": {"nested": True}}]:
         card = vc.parse_voice_card(raw)
@@ -85,6 +106,9 @@ def test_is_card_empty():
     # A guide that says only "write as we/our" is still worth enforcing —
     # it is exactly the rule the third-person default was overriding.
     assert not vc.is_card_empty(_card(person="first"))
+    # Distinctiveness raw material alone is enough to render + enforce.
+    assert not vc.is_card_empty(_card(differentiators=["50-year warranty"]))
+    assert not vc.is_card_empty(_card(signature_phrases=["rain or shine"]))
 
 
 def test_fingerprint_is_stable_and_change_sensitive():
@@ -169,6 +193,33 @@ def test_render_block_third_person_directive():
     block = vc.render_voice_card_block(_card(person="third", tone_adjectives=["formal"]))
     assert "THIRD PERSON" in block
     assert "FIRST PERSON" not in block
+
+
+def test_render_block_carries_the_distinctiveness_directive():
+    """The write-time mirror of the hardened judge: the writer is told it will
+    be scored on the name-swap test and handed the client's distinctive
+    material to lead with."""
+    card = _card(
+        tone_adjectives=["straight-talking"],
+        differentiators=["50-year workmanship warranty", "only Malarkey-certified crew"],
+        signature_phrases=["Roofs done right, rain or shine"],
+    )
+    block = vc.render_voice_card_block(card)
+    assert "BE UNMISTAKABLY THIS CLIENT" in block
+    assert "swapping the brand name" in block
+    assert "50-year workmanship warranty" in block
+    assert '"Roofs done right, rain or shine"' in block
+
+
+def test_render_block_directive_fires_without_distinctiveness_material():
+    """A thin/legacy card (no differentiators, missing keys entirely) still gets
+    the directive — it leans on the audience block — and never KeyErrors."""
+    block = vc.render_voice_card_block({"brand_name": "X", "tone_adjectives": ["bold"]})
+    assert "BE UNMISTAKABLY THIS CLIENT" in block
+    assert "Brand: X" in block
+    # No spurious differentiator/signature lines when the fields are absent.
+    assert "What sets this client apart" not in block
+    assert "This brand's own words" not in block
 
 
 # --- check_voice_compliance ------------------------------------------------
@@ -354,9 +405,11 @@ def test_compute_voice_score_clamps_and_ignores_junk():
 
 
 def test_voice_band_thresholds():
+    # Bands reference VOICE_PASS_THRESHOLD (the "mostly on voice" floor) rather
+    # than a hardcoded literal, so raising the bar doesn't silently break this.
     assert vc.voice_band(95) == "on_voice"
-    assert vc.voice_band(80) == "mostly_on_voice"
-    assert vc.voice_band(79.9) == "drifting"
+    assert vc.voice_band(vc.VOICE_PASS_THRESHOLD) == "mostly_on_voice"
+    assert vc.voice_band(vc.VOICE_PASS_THRESHOLD - 0.1) == "drifting"
     assert vc.voice_band(59) == "off_voice"
     assert vc.voice_band(None) == "not_scored"
 
@@ -382,6 +435,17 @@ def test_deterministic_caps_map_each_check():
     for check, (dimension, cap) in vc._DETERMINISTIC_CAPS.items():
         capped = vc.apply_deterministic_caps(_dims(), [{"check": check, "severity": "warning"}])
         assert capped[dimension]["score"] == cap
+
+
+def test_missing_required_phrase_no_longer_caps_vocabulary():
+    """Owner ruling 2026-08-27: a single missing preferred phrase is a warning,
+    not a hard cap — the judge's vocabulary score stands (the miss is still
+    surfaced as a deficiency + drives the phrase-insert pass elsewhere)."""
+    assert "must_use_terms" not in vc._DETERMINISTIC_CAPS
+    violations = [{"check": "must_use_terms", "severity": "warning", "terms": ["Colorbond"]}]
+    capped = vc.apply_deterministic_caps(_dims(vocabulary=90), violations)
+    assert capped["vocabulary"]["score"] == 90
+    assert "capped_by_check" not in capped["vocabulary"]
 
 
 def test_build_voice_deficiencies_only_failing_worst_first():
@@ -489,3 +553,146 @@ def test_dimension_score_rejects_booleans():
     dims = _dims(tone={"score": True, "applicable": True})
     # tone excluded → renormalized over the rest, still 100.
     assert vc.compute_voice_score(dims) == 100.0
+
+
+# --- missing_required_terms + insert_required_terms (deterministic net) -----
+
+def _voice_card(**overrides):
+    """A non-empty card (so is_card_empty is False) with must_use terms."""
+    return _card(tone_adjectives=["reassuring"], **overrides)
+
+
+def test_missing_required_terms_uses_page_presence():
+    card = _voice_card(must_use_terms=["trusted", "expert", "premium materials"])
+    # Only 'trusted' present → the other two are missing.
+    missing = vc.missing_required_terms("We are trusted local specialists.", card)
+    assert missing == ["expert", "premium materials"]
+    # All present → none missing.
+    assert vc.missing_required_terms(
+        "Trusted expert roofing with premium materials.", card
+    ) == []
+
+
+def test_insert_swaps_filler_for_missing_required_adjective():
+    card = _voice_card(must_use_terms=["trusted"])
+    html = "<article><p>We built a great reputation on honest work.</p></article>"
+    out, swapped = vc.insert_required_terms(html, card)
+    assert swapped == ["trusted"]
+    assert "trusted reputation" in out
+    assert "great reputation" not in out
+
+
+def test_insert_never_touches_headings_or_chrome():
+    card = _voice_card(must_use_terms=["trusted"])
+    # 'great' only appears in a heading and a nav — neither is body prose.
+    html = (
+        "<nav>Great deals here</nav>"
+        "<article><h2>Great service</h2><p>Reliable roofing, done well.</p></article>"
+    )
+    out, swapped = vc.insert_required_terms(html, card)
+    assert swapped == []
+    assert out == html  # untouched — no body-prose filler to swap
+
+
+def test_insert_idiom_guard_leaves_measure_phrases_alone():
+    card = _voice_card(must_use_terms=["trusted"])
+    html = "<article><p>We do a great deal of our work in the area.</p></article>"
+    out, swapped = vc.insert_required_terms(html, card)
+    assert swapped == []
+    assert "great deal" in out  # 'a great deal' is an idiom, not an adjective+noun
+
+
+def test_insert_fixes_indefinite_article_agreement():
+    card = _voice_card(must_use_terms=["trusted", "expert"])
+    html = "<article><p>An amazing standard and a great appearance.</p></article>"
+    out, swapped = vc.insert_required_terms(html, card)
+    assert swapped == ["trusted", "expert"]
+    # 'an amazing' -> 'a trusted' (consonant); 'a great' -> 'an expert' (vowel).
+    assert "a trusted standard" in out.lower()
+    assert "an expert appearance" in out.lower()
+    assert "an trusted" not in out.lower()
+    assert "a expert" not in out.lower()
+
+
+def test_insert_skips_multiword_required_phrases():
+    # A phrase can't be swapped for a single filler safely — left to the LLM loop.
+    card = _voice_card(must_use_terms=["premium materials"])
+    html = "<article><p>We use the best materials on every job.</p></article>"
+    out, swapped = vc.insert_required_terms(html, card)
+    assert swapped == []
+
+
+def test_insert_no_op_when_terms_present_or_no_filler():
+    card = _voice_card(must_use_terms=["trusted"])
+    # already present → nothing to do
+    present = "<article><p>We are a trusted roofer.</p></article>"
+    assert vc.insert_required_terms(present, card) == (present, [])
+    # missing but no filler to swap → unchanged
+    no_filler = "<article><p>We fix roofs across the city.</p></article>"
+    assert vc.insert_required_terms(no_filler, card) == (no_filler, [])
+
+
+def test_insert_one_swap_per_missing_term():
+    card = _voice_card(must_use_terms=["trusted"])
+    # two fillers, one missing term → exactly one swap
+    html = "<article><p>A great reputation and a great appearance.</p></article>"
+    out, swapped = vc.insert_required_terms(html, card)
+    assert swapped == ["trusted"]
+    assert out.lower().count("trusted") == 1
+    assert "great appearance" in out  # the second filler is left alone
+
+
+def test_insert_respects_client_required_filler_and_discouraged():
+    # 'best' is REQUIRED by this client → it must not be treated as a filler.
+    card = _voice_card(must_use_terms=["trusted", "best"])
+    html = "<article><p>We offer the best value in town.</p></article>"
+    out, swapped = vc.insert_required_terms(html, card)
+    # 'best' is present (required) so not missing; 'trusted' is missing but 'best'
+    # is not an eligible filler → no swap.
+    assert swapped == []
+
+
+def test_insert_empty_card_and_empty_html_are_safe():
+    assert vc.insert_required_terms("<p>hi</p>", {}) == ("<p>hi</p>", [])
+    assert vc.insert_required_terms("", _voice_card(must_use_terms=["trusted"])) == ("", [])
+    assert vc.missing_required_terms("", _voice_card(must_use_terms=["trusted"])) == []
+
+
+# --- multi-word required-phrase net (hyphen swap + phrase detection) --------
+
+def test_is_swappable_token():
+    assert vc._is_swappable_token("trusted") is True
+    assert vc._is_swappable_token("long-lasting") is True   # hyphenated adjective
+    assert vc._is_swappable_token("peace of mind") is False  # multi-word phrase
+    assert vc._is_swappable_token("Melbourne roofing experts") is False
+    assert vc._is_swappable_token("") is False
+    assert vc._is_swappable_token("100%") is False           # not adjective-like
+
+
+def test_multiword_required_terms_splits_phrases_from_swappables():
+    card = _voice_card(must_use_terms=["trusted", "long-lasting", "peace of mind",
+                                       "Melbourne roofing experts"])
+    text = "We are trusted local specialists offering great confidence."
+    # 'trusted' present; the rest missing. multiword = only the phrases.
+    assert vc.missing_required_terms(text, card) == [
+        "long-lasting", "peace of mind", "Melbourne roofing experts"]
+    assert vc.multiword_required_terms(text, card) == [
+        "peace of mind", "Melbourne roofing experts"]
+
+
+def test_insert_swaps_hyphenated_adjective():
+    card = _voice_card(must_use_terms=["long-lasting"])
+    html = "<article><p>We deliver great results on every roof.</p></article>"
+    out, swapped = vc.insert_required_terms(html, card)
+    assert swapped == ["long-lasting"]
+    assert "long-lasting results" in out
+    assert "great results" not in out
+
+
+def test_insert_leaves_multiword_phrases_to_the_phrase_pass():
+    # The deterministic swap never touches a multi-word phrase (no filler maps to it).
+    card = _voice_card(must_use_terms=["peace of mind"])
+    html = "<article><p>We give you great confidence on every job.</p></article>"
+    out, swapped = vc.insert_required_terms(html, card)
+    assert swapped == []
+    assert out == html

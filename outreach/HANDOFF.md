@@ -2,6 +2,61 @@
 
 **Read this first, then `CLAUDE.md` → `START-HERE.md` → `ISSUES.md` → `DECISIONS.md`.**
 
+Status as of 2026-08-27 (**enrichment hardened + made reliable; the ORGANIC/paid-placement signal now runs automatically; the outreach worker finally has CI** — all MERGED to `main`; the four live geogrid scans below still stand).
+
+### 2026-08-27 session — enrichment reliability, auto-organic, CI, LA data repair (all MERGED)
+
+- **OUTREACH NOW HAS A CI TEST GATE (#770).** The worker (`outreach/api/`) had **no** automated test
+  run — the three Python CI workflows are path-filtered to `writer/**`, so the only PR check was the
+  Netlify *frontend* build. A change to a money-spending drain could go red with nothing failing.
+  Added `.github/workflows/outreach-tests.yml` (`python -m pytest -q` from `outreach/` on any PR
+  touching `outreach/**` + push to main; Python 3.11, deps from `api/requirements.txt`, no system
+  libs). Fixed 4 long-standing red `test_onboard_queue` cases first (harness drift — the test
+  `_Settings` stub was missing the `filter_*` fields `drain_one` STAGE 2 now reads; no production
+  change). Full suite now **673 pass**; it gated (and validated) every drain change below.
+
+- **ENRICHMENT I-109 RESOLVED + hardened (see the enrichment bullet in CLAUDE.md).** The Enrich button
+  returned business names, not people, for two stacked reasons — sync mode + the wrong enricher slug —
+  now fixed to **async `leads_n_contacts`** (#756/#763) with per-person dedup (#765). Then three
+  reliability fixes:
+  - **I-117 (data loss) FIXED + verified (#767).** `enrich_queue`'s replace-on-place delete had NO
+    source scope, so re-enriching a prospect wiped its FREE site-scrape + PAID web-search **name**
+    fallbacks too. Scoped the delete to `source='outscraper'`. Verified on LA: the wiped fallbacks
+    were restored (site_scrape 1→20 free, web_search 0→3 paid ~9¢) — the surviving marker rows held
+    the names through the wipe, so the restore was cheap.
+  - **I-118 (cron-window kill) FIXED + PROD-VERIFIED (#769).** A market-wide enrichment order (118
+    async lookups) overran Railway's `*/5` cron window (`restartPolicy: NEVER`) and the container was
+    killed mid-tick, stranding the order `running` at 101/118 with no recovery. Fix mirrors
+    `name_scrape`: a **per-tick place budget** (`enrich_per_tick`=40) with PENDING-resume + a
+    **stuck-order reaper** (`recover_stuck_orders`). Re-ran the exact failure cleanly — 17 stranded
+    places drained in **71 s, one tick, 0 failed**.
+  - **I-119 — the same budget+reaper ported to the other two drains (#775 `name_search` PAID, #778
+    `name_scrape` FREE).** **All three name/enrich drains (enrich / name_search / name_scrape) now
+    carry BOTH the per-tick budget AND the reaper** — none can strand a `running` order on a mid-tick
+    kill.
+
+- **ORGANIC / PAID-PLACEMENT SIGNAL NOW RUNS ON EVERY SCAN (#777, owner ruling; DECISIONS 2026-08-27).**
+  The report's strongest "is this prospect already paying to be visible / doing other marketing" read
+  (Google Ad / LSA presence + organic rank for the keyword) was click-only, so most markets read
+  `not_scanned`. Now `scan_runner.collect_ready` auto-enqueues an `organic_scan_request` when a snapshot
+  finalizes (`organic_scan_queue.enqueue_for_snapshot`, gated `organic_auto_enabled`=True, idempotent
+  per snapshot, drained ≤1/tick, budget-gated). Organic is ONE cheap DataForSEO SERP call per snapshot
+  and the paid-placement parse rides it for free — ~one request per scanned submarket×keyword, not per
+  prospect. Auto orders carry a sentinel `requested_by` (`00000000-…`) so they stay auditable apart
+  from a click. `scan-ai` / `probe-pixel-field` stay click/flag-gated.
+
+- **LA MARKET (Los Angeles, CA, USA) DATA REPAIRED + the generic-name gap measured.** Enrichment gap
+  closed (17 stranded → 0). The "Enrich returns generic business names" complaint was traced to
+  `leads_n_contacts` returning a **business-name fallback** for most small operators (only ~42/161 of
+  its contacts were real people); the name-specific fallbacks (site-scrape, web-search) return real
+  people but had barely run. A free site-scrape sweep (exhausted — 0 new) + a paid `web_search` sweep
+  across the 83 generic-only prospects (~$2.49, 39% hit) lifted **person-name coverage 33 → 65 of
+  118**. The residual **53 = the true public-web floor** (no source can name the owner) — the clean
+  **Enigma sample-test baseline** (`docs/enigma-integration-scoping-v0_1.md`). **"Evidence of other
+  marketing"** for a market lives in `prospect_tech_signal` (site tags: Meta pixel / Google-Ads `AW-`
+  tag / GTM / CallRail-Podium-Birdeye / Google-Guaranteed, from the free auto `scan-tech`) + the
+  paid-placement block now auto-captured per scan.
+
 Status as of 2026-08-26 (**FOUR live geogrid scans are DONE and independently verified** — the pipeline is proven in production, not just built; heatmap slices 1–2, the any-city scan, **the per-prospect report — call hook + 3 signals + approval-gated client PDF**, **the paid-placement 4th signal**, **`outcome` + `touch` + the emit webhook**, and **lead enrichment + the report-signal UI triggers** — all MERGED to `main`):
 
 - **FOUR LIVE SCANS COMPLETE + VERIFIED (through 2026-08-25).** The full scan → collect → rollup →

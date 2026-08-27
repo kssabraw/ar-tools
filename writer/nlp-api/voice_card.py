@@ -57,6 +57,8 @@ _EMPTY_CARD: dict[str, Any] = {
     "must_use_terms": [],
     "never_use_terms": [],
     "discouraged_terms": [],
+    "differentiators": [],
+    "signature_phrases": [],
     "cta_language": [],
     "audience_label": "",
     "audience_summary": "",
@@ -84,6 +86,8 @@ Output a single JSON object matching this exact schema:
   "must_use_terms": [string, max 15 - phrasings the guide REQUIRES or names as preferred],
   "never_use_terms": [string, max 30 - see the HIGH BAR rule below],
   "discouraged_terms": [string, max 20 - softer "avoid/prefer X over Y" preferences],
+  "differentiators": [string, max 6 - the concrete, specific things that make THIS brand distinct from a generic competitor: proof points, credentials, guarantees, signature methods, years/scale, service-area or process specifics. Extract only what the documents actually claim.],
+  "signature_phrases": [string, max 8 - verbatim taglines, slogans, or characteristic turns of phrase the brand uses for ITSELF that a competitor would not; empty list if none are stated],
   "cta_language": [string, max 8 - the call-to-action phrasings the guide or ICP calls for, verbatim],
   "audience_label": string (max 120 - a short name for the primary customer, e.g. "Melbourne homeowner with a 20+ year old tile roof"),
   "audience_summary": string (max 300),
@@ -100,6 +104,7 @@ CRITICAL RULES:
 - person: answer "first" only if the guide actually asks the writer to use we/our/us, and "third" only if it asks for the brand to be named instead. If the guide is silent, return "".
 - tone_adjectives, voice_directives, sentence_rhythm, must_use_terms, never_use_terms, discouraged_terms come from the BRAND GUIDE.
 - audience_* and cta_language come from the ICP (cta_language may also come from the brand guide when it specifies CTA wording).
+- differentiators and signature_phrases may come from EITHER the brand guide or the ICP. differentiators are what the brand claims sets it apart (only real, stated claims - a generic "quality service" is NOT a differentiator); signature_phrases are the brand's own verbatim wording. Do NOT invent either: an empty list is the correct answer when the documents state nothing distinctive.
 - If a field has no basis in the source documents, return an empty array, empty string, or "". Never fill a field to look complete."""
 
 
@@ -157,6 +162,8 @@ def parse_voice_card(raw: Any) -> dict[str, Any]:
     card["must_use_terms"] = _list("must_use_terms", 15, 80)
     card["never_use_terms"] = _sanitize_never_use(_list("never_use_terms", 30, 80))
     card["discouraged_terms"] = _list("discouraged_terms", 20, 80)
+    card["differentiators"] = _list("differentiators", 6, 200)
+    card["signature_phrases"] = _list("signature_phrases", 8, 120)
     card["cta_language"] = _list("cta_language", 8, 120)
     card["audience_pain_points"] = _list("audience_pain_points", 6)
     card["audience_triggers"] = _list("audience_triggers", 6)
@@ -237,7 +244,24 @@ def render_voice_card_block(card: Optional[dict]) -> str:
         "length, required lists/table, headings, schema) still apply: express them in this voice",
         "rather than abandoning them.",
         "",
+        "BE UNMISTAKABLY THIS CLIENT. This page is scored on one test above all: could it be",
+        "published on a competitor's site by swapping the brand name? If yes, it FAILS. Clean,",
+        "correct, generic copy is a failure here, not a pass. Lead with what only this client",
+        "can say — their specific proof, differentiators, and the exact concerns of the customer",
+        "described below — never generic benefit-claims any competitor in this trade could make.",
     ]
+
+    if card.get("differentiators"):
+        lines.append(
+            "What sets this client apart (foreground these — don't just list them): "
+            + "; ".join(card["differentiators"])
+        )
+    if card.get("signature_phrases"):
+        lines.append(
+            "This brand's own words (use where they fit naturally, never forced): "
+            + " / ".join(f'"{p}"' for p in card["signature_phrases"])
+        )
+    lines.append("")
 
     if card.get("brand_name"):
         lines.append(f"Brand: {card['brand_name']}")
@@ -269,7 +293,9 @@ def render_voice_card_block(card: Optional[dict]) -> str:
     if card.get("must_use_terms"):
         lines.append("")
         lines.append(
-            "REQUIRED phrasing — use these terms, in these words: "
+            "REQUIRED phrasing — you MUST include EACH of these exact phrases VERBATIM, "
+            "word-for-word, at least once somewhere on the page. Do NOT paraphrase them or "
+            "swap in a synonym (e.g. if \"experts\" is required, do not write \"specialists\"): "
             + ", ".join(f'"{t}"' for t in card["must_use_terms"])
         )
     if card.get("never_use_terms"):
@@ -507,6 +533,184 @@ def check_voice_compliance(page_text: str, card: Optional[dict]) -> list[dict]:
     return violations
 
 
+# ── Deterministic required-phrasing net ──────────────────────────────────────
+# Weak-superlative fillers a generator reaches for in place of the client's own
+# vocabulary ("great reputation" where the guide requires "trusted reputation").
+# Deterministically swapping one of these for a MISSING required adjective is the
+# one required-phrasing fix that is safe to make WITHOUT an LLM — see
+# `insert_required_terms`. (Everything else — inserting a truly-absent term with
+# no filler anchor, or a multi-word phrase — is left to the LLM voice loop.)
+_FILLER_SUPERLATIVES = frozenset({
+    "great", "amazing", "awesome", "excellent", "fantastic", "wonderful",
+    "superb", "outstanding", "exceptional", "best", "top", "premier",
+    "leading", "unbeatable", "superior",
+})
+
+# Nouns / quantifiers that form an idiom or measure phrase with a filler
+# ("a great deal", "a great many", "the best part") — never swap the filler
+# before one of these, or the swap produces nonsense ("a trusted deal").
+_FILLER_IDIOM_FOLLOWERS = frozenset({
+    "deal", "deals", "many", "number", "amount", "lot", "lots", "extent",
+    "majority", "variety", "range", "part", "parts", "portion", "while",
+    "time", "times", "way", "ways", "bit", "chunk", "share", "quantity", "few",
+})
+
+_HEADING_TAGS_VC = ("h1", "h2", "h3", "h4", "h5", "h6")
+
+# A regex that never matches — lets a term with no compilable pattern read as
+# "absent" without a None-check at the call site.
+_NEVER = re.compile(r"(?!x)x")
+
+
+def _is_swappable_token(term: str) -> bool:
+    """True for a required term the deterministic filler-swap can place in-line:
+    a single token (no spaces) made of letters and internal hyphens — a bare
+    adjective ("trusted") or a hyphenated compound ("long-lasting"). Multi-word
+    phrases are handled by the targeted phrase pass, not here."""
+    t = (term or "").strip()
+    if not t or " " in t:
+        return False
+    return bool(re.fullmatch(r"[A-Za-z]+(?:-[A-Za-z]+)*", t))
+
+
+def missing_required_terms(page_text: str, card: Optional[dict]) -> list[str]:
+    """The guide's must-use terms that do NOT appear in `page_text`.
+
+    Uses the same word-boundary, case-insensitive presence test as
+    `check_voice_compliance`, so "present here" means exactly what the scorecard
+    means by it. `page_text` must be rendered text, not raw HTML."""
+    if is_card_empty(card) or not (page_text or "").strip():
+        return []
+    out: list[str] = []
+    for term in (card or {}).get("must_use_terms") or []:
+        rx = build_term_regex([term])
+        if rx is None or not rx.search(page_text):
+            out.append(term)
+    return out
+
+
+def multiword_required_terms(page_text: str, card: Optional[dict]) -> list[str]:
+    """The MISSING required phrasings the deterministic swap can't place — multi-word
+    phrases (and any non-adjective token). These are what the targeted phrase pass /
+    voice loop must weave in, typically by replacing a synonym the writer used
+    ("specialists" where the guide requires "experts")."""
+    return [
+        t for t in missing_required_terms(page_text, card)
+        if not _is_swappable_token((t or "").strip())
+    ]
+
+
+def insert_required_terms(html: str, card: Optional[dict]) -> tuple[str, list[str]]:
+    """Deterministically weave MISSING single-word required adjectives into a
+    generated page by swapping a weak-superlative filler for the required term
+    ("great reputation" -> "trusted reputation"). No LLM, no added latency — the
+    one required-phrasing fix that is safe to make mechanically, run before
+    scoring so it lifts the deterministic `must_use_terms` vocabulary cap on its
+    own instead of spending a full-page LLM voice pass on it.
+
+    Conservative by construction, because a wrong swap ships to a client:
+      - only SINGLE-WORD, alphabetic required terms are inserted (a multi-word
+        phrase like "premium materials" cannot be swapped for one filler safely
+        — those fall through to the LLM voice loop unchanged);
+      - a filler that the client has themselves REQUIRED or that is the target
+        term is never treated as filler;
+      - a filler that forms an idiom / measure phrase ("a great deal of work")
+        is never swapped;
+      - body text only — never headings, site chrome, or tag attributes;
+      - at most one swap per missing term.
+
+    Returns ``(html, inserted_terms)``. Best-effort: if bs4 is unavailable or
+    anything fails it returns the html unchanged with an empty list, so a page
+    never fails to generate because this net could not run."""
+    if not (html or "").strip() or is_card_empty(card):
+        return html or "", []
+    try:
+        from bs4 import BeautifulSoup, NavigableString
+    except Exception:
+        return html, []
+
+    card = card or {}
+    must = card.get("must_use_terms") or []
+    # Single-token adjective-like requireds the filler-swap can place in-line:
+    # a bare word ("trusted") or a hyphenated compound ("long-lasting"). A
+    # multi-word phrase ("peace of mind", "Melbourne roofing experts") can't be
+    # swapped for one filler and is left to the targeted phrase pass / LLM loop.
+    singles = [t.strip() for t in must if t and _is_swappable_token(t.strip())]
+    if not singles:
+        return html, []
+
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+    except Exception:
+        return html, []
+
+    page_text = soup.get_text(" ", strip=True)
+    missing = [t for t in singles if not (build_term_regex([t]) or _NEVER).search(page_text)]
+    if not missing:
+        return html, []
+
+    required_lower = {t.lower() for t in must if t}
+    discouraged = {d.lower() for d in (card.get("discouraged_terms") or []) if d}
+    fillers = (_FILLER_SUPERLATIVES | discouraged) - required_lower
+    if not fillers:
+        return html, []
+    filler_alt = "|".join(sorted((re.escape(f) for f in fillers), key=len, reverse=True))
+    # Optionally capture a leading indefinite article so it can be corrected to
+    # agree with the new term ("an amazing" -> "a trusted", "a expert" -> "an
+    # expert") — otherwise the swap leaves a mismatched a/an behind.
+    filler_re = re.compile(
+        rf"(\b[Aa]n?\b)(\s+)({filler_alt})\b(\s+)([A-Za-z][A-Za-z\-]*)"
+        rf"|\b({filler_alt})\b(\s+)([A-Za-z][A-Za-z\-]*)",
+        re.IGNORECASE,
+    )
+
+    skip_tags = set(_HEADING_TAGS_VC) | {
+        "script", "style", "nav", "header", "footer", "aside", "form",
+        "title", "template",
+    }
+    remaining = list(missing)
+    swapped: list[str] = []
+
+    def _repl(m: "re.Match") -> str:
+        if not remaining:
+            return m.group(0)
+        # Two alternatives: with a leading article (groups 1-5) or without (6-8).
+        if m.group(3) is not None:
+            article, art_sp, filler, sp, follower = m.group(1, 2, 3, 4, 5)
+        else:
+            article, art_sp, filler, sp, follower = None, None, m.group(6), m.group(7), m.group(8)
+        if follower.lower() in _FILLER_IDIOM_FOLLOWERS:
+            return m.group(0)  # idiom / measure phrase — leave it alone
+        term = remaining[0]
+        replacement = term.capitalize() if filler[:1].isupper() else term
+        swapped.append(term)
+        remaining.pop(0)
+        prefix = ""
+        if article is not None:
+            correct = "an" if term[:1].lower() in "aeiou" else "a"
+            correct = correct.capitalize() if article[:1].isupper() else correct
+            prefix = correct + art_sp
+        return prefix + replacement + sp + follower
+
+    for node in list(soup.find_all(string=True)):
+        if not remaining:
+            break
+        if not isinstance(node, NavigableString):
+            continue
+        text = str(node)
+        if not text.strip():
+            continue
+        if any(getattr(anc, "name", None) in skip_tags for anc in node.parents):
+            continue
+        new_text = filler_re.sub(_repl, text)
+        if new_text != text:
+            node.replace_with(new_text)
+
+    if not swapped:
+        return html, []
+    return str(soup), swapped
+
+
 def has_critical(violations: Optional[list[dict]]) -> bool:
     """True when the page must not ship as-is."""
     return any(v.get("severity") == "critical" for v in (violations or []))
@@ -589,14 +793,28 @@ VOICE_DIMENSIONS: dict[str, dict] = {
 # A dimension the guide says nothing about must not drag the score down — a
 # guide that never mentions sentence rhythm is not a page failing at it. The
 # scorer marks those `applicable: false` and the remaining weights renormalize.
-VOICE_PASS_THRESHOLD = 80.0
+#
+# Raised 80 -> 87 (owner ruling 2026-08-26): an aspirational "distinctly this
+# client" bar the corrective-rewrite loop strives toward, not a "most pages
+# pass" line. The hardened-rubric re-score of existing pages topped out at 82,
+# so nearly every page reads below this and runs its full correction budget —
+# deliberate. Revisit if new generations consistently cap below it (the pass
+# state would never show).
+VOICE_PASS_THRESHOLD = 87.0
 
 # Deterministic findings outrank the judge on the things a regex can settle.
 # Without this a scorer can call vocabulary "strong" on a page that provably
 # contains a forbidden word.
+#
+# A MISSING preferred phrase is deliberately NOT capped (owner ruling
+# 2026-08-27): a `must_use_terms` finding is a soft "warning", and a single
+# absent preferred phrase among many present should not crater an otherwise
+# on-voice vocabulary score to a hard 70. The miss is still surfaced as a
+# deficiency and still drives the phrase-insert + corrective passes — it just no
+# longer pins the score. A forbidden word (never_use) is a different, provable,
+# critical signal and stays capped.
 _DETERMINISTIC_CAPS = {
     "never_use_terms": ("vocabulary", 40.0),
-    "must_use_terms":  ("vocabulary", 70.0),
     "person":          ("person", 40.0),
     "cta_language":    ("cta_fit", 50.0),
 }

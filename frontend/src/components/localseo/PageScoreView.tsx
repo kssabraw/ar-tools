@@ -35,6 +35,8 @@ const ENGINE_LABELS: Record<string, string> = {
   aeo_llm_retrieval: 'AEO / LLM Retrieval',
   geographic_legitimacy: 'Geographic Legitimacy',
   nearme_intent: 'Hyperlocal / Near-Me',
+  serp_signal_coverage: 'SERP Signal Coverage',
+  length_fit: 'Length Fit (SERP avg +20%)',
 }
 
 function EngineIcon({ score }: { score: number }) {

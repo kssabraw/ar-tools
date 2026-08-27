@@ -158,13 +158,22 @@ def reoptimize_verdict(
     voice_compliance: Optional[dict],
     seo_threshold: float,
     voice_threshold: float = VOICE_PASS_THRESHOLD,
+    length_fit: Optional[dict] = None,
 ) -> tuple[bool, str]:
     """Should this live page be rewritten? Returns `(reoptimize, reason)`.
 
     The bulk reoptimizer used to decide purely on the SEO score, which meant a
     page at 78 SEO / 40 voice was skipped without the voice score ever being
     looked at — exactly the pages most worth re-running. A page now earns a
-    rewrite when EITHER score falls short, or when a forbidden term is on it.
+    rewrite when the SEO score falls short, a forbidden term is on it, the voice
+    score is low, OR it runs significantly over the SERP length target.
+
+    `length_fit` is the deterministic length engine from the score's
+    `engine_scores` (or None for clients/tools without it). Length gets its own
+    trigger for the same reason voice does: its small composite weight can't drag
+    an otherwise-strong page below the SEO bar, so a 2× page at 78 SEO would be
+    skipped. Only OVER-length trips this (an over-length deficiency, score < 80);
+    under-length is left to the content-depth engines and the SEO bar.
 
     Pure so the decision is unit-testable without a live score call; the
     `reason` is user-facing copy shown on skipped rows.
@@ -179,12 +188,30 @@ def reoptimize_verdict(
         and (voice_score is None or voice_score >= voice_threshold)
     )
 
-    if seo_ok and voice_ok:
+    lf = length_fit or {}
+    lf_target = lf.get("target_words") or 0
+    over_length = bool(
+        lf.get("measured")
+        and lf_target
+        and lf.get("page_words", 0) > lf_target
+        and lf.get("score", 100) < 80
+    )
+    length_ok = not over_length
+
+    if seo_ok and voice_ok and length_ok:
         detail = f"Already scores {round(composite)}/100 on SEO"
         if voice_score is not None:
             detail += f" and {round(voice_score)}/100 on brand voice"
         return False, (
             f"{detail} — at or above threshold, so reoptimization was skipped."
+        )
+
+    # SEO + voice fine, but the page runs long vs the SERP — trim it.
+    if seo_ok and voice_ok and not length_ok:
+        return True, (
+            f"SEO is fine at {round(composite)}/100, but the page runs "
+            f"~{lf.get('page_words')} words vs a ~{lf_target} target "
+            f"(competitor SERP average + 20%) — trimming to match the SERP."
         )
 
     # Unscoreable SEO (None) still reoptimizes, as it always did.

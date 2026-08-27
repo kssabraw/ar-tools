@@ -607,6 +607,46 @@ def cmd_scan_tech(args) -> int:
     return 0 if report.stored or report.considered == 0 else 1
 
 
+def cmd_scan_names(args) -> int:
+    """Fetch each website-carrying prospect's OWN site and store any owner/manager NAME found. FREE.
+
+    The ops/backfill twin of the UI `name_scrape_request` order — the free owner-name fallback for
+    when Outscraper enrichment returned no name (own HTTP GET, the `scan-tech` posture; NOT in
+    PAID_COMMANDS). Bounded same-host crawl (homepage + a few likely pages). Idempotent: a prospect
+    already found/no_names is skipped. `--limit` caps the run (default ALL — it is free)."""
+    import asyncio as _asyncio
+
+    from api.services import name_scrape_queue
+
+    definition = seeding.MarketDefinition.from_file(args.definition)
+    settings = get_settings()
+    client = _client()
+    market_id = _market_id(client, args.market_name or definition.name)
+
+    report = _asyncio.run(
+        name_scrape_queue.run_name_scrape_market(
+            client, settings, market_id=market_id, limit=name_scrape_limit(args)
+        )
+    )
+    print(
+        json.dumps(
+            {
+                "market_id": market_id,
+                "requested": report.requested,
+                "skipped": report.skipped,
+                "scraped": report.scraped,
+                "found": report.found,
+                "names": report.names,
+                "unreachable": report.unreachable,
+                "failed": report.failed,
+                "problems": report.problems[:20],
+            },
+            indent=2,
+        )
+    )
+    return 0 if report.scraped or report.requested == 0 else 1
+
+
 def cmd_probe_pixel_field(args) -> int:
     """§16a.1 spike — is a Meta pixel in the Outscraper ENRICHMENT pull? BILLS (enrichment).
 
@@ -857,6 +897,8 @@ def cmd_tick(args) -> int:
     from api.services import (
         ai_scan_queue,
         enrich_queue,
+        name_scrape_queue,
+        name_search_queue,
         onboard_queue,
         organic_scan_queue,
         scan_queue,
@@ -873,6 +915,14 @@ def cmd_tick(args) -> int:
     # the one-per-tick cadence — several orders per heartbeat. Order-gated (each signed order is its
     # own confirmation), so no env token, same as the drains above.
     enriched = _asyncio.run(enrich_queue.drain(client, settings))
+    # Site name-scrape orders — FREE (own HTTP GET, the scan-tech posture), batchable like enrichment
+    # so several drain per heartbeat. The owner/manager fallback the UI places when Outscraper found
+    # no name. Order-gated (the order row is its confirmation), no env token — it bills nothing.
+    named = _asyncio.run(name_scrape_queue.drain(client, settings))
+    # Web-search owner-name orders — PAID (one OpenAI web-search call per prospect) but order-gated
+    # (the signed order is its confirmation, like enrichment), so no env token. The third-rung
+    # fallback the UI places when enrichment AND the free site-scrape both found no name.
+    searched_names = _asyncio.run(name_search_queue.drain(client, settings))
     # Report signal scans (organic / AI-visibility UI triggers). Each is one cheap paid call, drained
     # ≤ its configured per-tick count (default 1), same signed-order + terminal-outcome model. A drain
     # that claims nothing ends the loop early, so an empty queue costs one read, not N.
@@ -952,6 +1002,38 @@ def cmd_tick(args) -> int:
                             "error": o.error,
                         }
                         for o in enriched.orders
+                    ],
+                },
+                "name_scrape": {
+                    "orders_processed": named.orders_processed,
+                    "orders": [
+                        {
+                            "order_id": o.order_id,
+                            "outcome": o.outcome,
+                            "scraped": o.scraped,
+                            "found": o.found,
+                            "names": o.names,
+                            "skipped": o.skipped,
+                            "failed": o.failed,
+                            "error": o.error,
+                        }
+                        for o in named.orders
+                    ],
+                },
+                "name_search": {
+                    "orders_processed": searched_names.orders_processed,
+                    "orders": [
+                        {
+                            "order_id": o.order_id,
+                            "outcome": o.outcome,
+                            "searched": o.searched,
+                            "found": o.found,
+                            "names": o.names,
+                            "skipped": o.skipped,
+                            "failed": o.failed,
+                            "error": o.error,
+                        }
+                        for o in searched_names.orders
                     ],
                 },
                 "organic": [
@@ -1815,6 +1897,12 @@ def scan_tech_limit(args) -> "int | None":
     return args.limit
 
 
+def name_scrape_limit(args) -> "int | None":
+    """scan-names: None = EVERY due site. Free, so there is no reason to sample; a cap is only for
+    isolating a run."""
+    return args.limit
+
+
 def pixel_probe_limit(args) -> int:
     """probe-pixel-field: a small sample, because this one SPENDS (§16a.1 wants ~8-20 places)."""
     return args.limit or 8
@@ -1836,7 +1924,7 @@ def build_parser() -> argparse.ArgumentParser:
         "command",
         choices=[
             "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-            "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech",
+            "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech", "scan-names",
                 "probe-pixel-field", "enrich", "probe-enrich", "collect", "rollup", "tick", "tick-loop", "score",
                 "recalibrate",
             "render-heatmap", "render-delta",
@@ -1982,7 +2070,7 @@ def main() -> int:
             dict(os.environ),
             [
                 "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
-                "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech",
+                "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech", "scan-names",
                 "probe-pixel-field", "enrich", "probe-enrich", "collect", "rollup", "tick", "tick-loop", "score",
                 "recalibrate",
                 "render-heatmap", "render-delta",
@@ -2006,6 +2094,7 @@ def main() -> int:
         "scan-organic": cmd_scan_organic,
         "scan-ai": cmd_scan_ai,
         "scan-tech": cmd_scan_tech,
+        "scan-names": cmd_scan_names,
         "probe-pixel-field": cmd_probe_pixel_field,
         "enrich": cmd_enrich,
         "probe-enrich": cmd_probe_enrich,

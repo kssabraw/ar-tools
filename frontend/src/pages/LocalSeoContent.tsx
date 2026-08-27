@@ -1054,7 +1054,7 @@ function ExistingPageChoiceView({
 }
 
 function CreatingView({ elapsed, onLeave }: { elapsed: number; onLeave?: () => void }) {
-  const pct = Math.min(95, Math.round((elapsed / 180) * 100))
+  const pct = Math.min(95, Math.round((elapsed / 660) * 100))
   // Analysis always runs first, so the progress steps always include it.
   const steps = [
     { label: 'Fetching top search results', done: pct >= 35, active: pct < 35 },
@@ -1068,11 +1068,11 @@ function CreatingView({ elapsed, onLeave }: { elapsed: number; onLeave?: () => v
   return (
     <div style={{ padding: 32, maxWidth: 640, margin: '0 auto' }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: '0 0 2px' }}>Creating your page</h1>
-      <p style={{ fontSize: 13, color: '#94a3b8', margin: '0 0 20px' }}>Hang tight — this usually takes 2–4 minutes.</p>
+      <p style={{ fontSize: 13, color: '#94a3b8', margin: '0 0 20px' }}>Hang tight — this usually takes 10–12 minutes.</p>
       <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#64748b' }}>
           <span style={{ fontWeight: 600 }}>Building your page… {elapsedLabel}</span>
-          <span style={{ opacity: 0.7 }}>Usually 2–4 minutes</span>
+          <span style={{ opacity: 0.7 }}>Usually 10–12 minutes</span>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {steps.map((s, i) => (

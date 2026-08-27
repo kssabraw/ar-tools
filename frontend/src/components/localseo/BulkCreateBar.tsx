@@ -105,7 +105,7 @@ export function BulkCreateBar({ items, bulk, location, locationCode, onViewSaved
                 <Sparkles size={16} /> Create {selectedCount} selected page{selectedCount === 1 ? '' : 's'}
               </button>
               <p style={{ fontSize: 11, color: '#94a3b8', margin: 0, textAlign: 'center' }}>
-                Each page takes ~2–4 minutes and runs in the background — you can leave once they start.
+                Each page takes ~10–12 minutes and runs in the background — you can leave once they start.
               </p>
             </div>
           )}

@@ -96,10 +96,36 @@ def _new_request_id() -> str:
     return "req_" + "".join(secrets.choice(_REQUEST_ID_CHARS) for _ in range(12))
 
 
+async def _recover_stuck_runs_later() -> None:
+    """Recover runs orphaned by a previous process, once the deploy handover
+    window has closed.
+
+    Deliberately DELAYED, not run at startup: Railway keeps the outgoing
+    container working for ~15s after this one boots, so a sweep at second 0
+    re-dispatches runs that are still genuinely executing over there. Two
+    orchestrators would then drive one run — double module spend, and racing
+    `module_outputs` writes where the loser's payload can overwrite the winner's.
+    Interactive runs carry no `source_ref`, so nothing else stops that.
+
+    Cancelled at shutdown, so a container that dies inside the window simply
+    never sweeps and the next boot picks the runs up instead. Best-effort: this
+    must never take the app down.
+    """
+    try:
+        delay = float(settings.run_recovery_delay_seconds or 0)
+        if delay > 0:
+            await asyncio.sleep(delay)
+        await recover_stuck_runs()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # pragma: no cover - best-effort
+        logger.warning("run_recovery_sweep_failed", extra={"error": str(exc)})
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("platform-api starting up")
-    await recover_stuck_runs()
+    run_recovery_task = asyncio.create_task(_recover_stuck_runs_later())
     # Seed the in-app Guides portal with default content (idempotent on slug;
     # never overwrites edits). Best-effort — must not block startup.
     try:
@@ -163,6 +189,15 @@ async def lifespan(app: FastAPI):
     # / stale-job reaper — the old fanout run_recovery sweep + shutdown salvage
     # were retired.
     yield
+    # Cancel the pending run-recovery sweep before anything else: if it hasn't
+    # fired yet, this container is going away and the next boot owns the sweep.
+    run_recovery_task.cancel()
+    try:
+        await run_recovery_task
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:  # pragma: no cover - shutdown best-effort
+        logger.warning("run_recovery_cancel_failed", extra={"error": str(exc)})
     try:
         await fanout_scheduler.stop()
     except Exception as exc:  # pragma: no cover - shutdown best-effort
