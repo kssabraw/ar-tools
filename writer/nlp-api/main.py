@@ -561,6 +561,17 @@ optimised for Answer Engine Optimisation. Follow all of them in every section.
    it into two or more separate <p> blocks so each renders as its own visually distinct
    paragraph. This applies to EVERY section without exception — the intro, USP, service
    descriptions, and the local/geo section included.
+   SENTENCE RHYTHM — VARY YOUR SENTENCE LENGTHS: Only the OPENING sentence of each paragraph
+   must stand alone and be liftable (rule 1). The one or two sentences that follow it should
+   VARY in length and cadence — a short, punchy sentence beside a longer, fuller one — so the
+   prose reads like a person wrote it, not a template. Do NOT make every sentence the same
+   medium length: that flat, uniform cadence is exactly what makes AEO-optimized pages read
+   robotically and hurts the writing-style read. Vary the rhythm WITHIN the ≤3-sentence /
+   ≤45-word paragraph cap above — this is about cadence, never a licence to write longer.
+   ✗ Monotone: "We restore tile roofs across Melbourne. Our crews handle every repair with care.
+     Each project is completed to a high standard." (three same-length sentences in a row)
+   ✓ Varied:   "We restore tile roofs across Melbourne. Cracked, leaking, storm-hit — we handle
+     it. Every repair is finished to a standard that lasts."
 
 3. QUESTION-FORMAT H3s: Where natural, write H3s as questions a real searcher would type.
    e.g. "Do you offer emergency tree removal in Anaheim?"
