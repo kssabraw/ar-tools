@@ -296,6 +296,17 @@ ECOMMERCE_MIN_PASS_GAIN = float(os.environ.get("ECOMMERCE_MIN_PASS_GAIN", "0"))
 # stay self-contained. Distillation is categorization-only and cheap, so Haiku
 # is sufficient — it extracts stated rules, it never judges prose.
 VOICE_CARD_MODEL = os.environ.get("VOICE_CARD_MODEL", "claude-haiku-4-5-20251001")
+# Per-section voice-drift localizer. Before the (single, expensive Sonnet)
+# corrective pass, one cheap Haiku call audits each body section against the
+# brand-voice guide and names the sections that drift, so the corrective pass
+# targets exactly those instead of sweeping the whole page blind — mid-page
+# service descriptions are where voice drifts, and a single ~5k-token pass can't
+# re-voice 5-6 sections AND fix SEO if it doesn't know where to look. Best-effort:
+# a failure or empty audit falls back to the page-wide sweep rules alone.
+VOICE_LOCALIZE_MODEL = os.environ.get("VOICE_LOCALIZE_MODEL", "claude-haiku-4-5-20251001")
+VOICE_LOCALIZE_ENABLED = os.environ.get(
+    "VOICE_LOCALIZE_ENABLED", "true"
+).lower() in ("1", "true", "yes", "on")
 VOICE_ENFORCEMENT_ENABLED = os.environ.get(
     "VOICE_ENFORCEMENT_ENABLED", "true"
 ).lower() in ("1", "true", "yes", "on")
@@ -4492,6 +4503,90 @@ Rules:
 """
 
 
+_VOICE_LOCALIZE_SYSTEM = """You are a brand-voice auditor. You are given a client's BRAND VOICE & AUDIENCE guide and the body sections of a local service page, each shown as `[key] heading: <inner HTML>`.
+
+Judge EACH section against the guide and report ONLY the sections that DRIFT from it — where the register, sentence rhythm, word choice, tone, or distinctiveness no longer matches the guide. Typical drifts, and where they hide:
+- REGISTER: a flat, clipped, catalogue register (often a bare heading-then-bullet-list) instead of the guide's flowing paragraph prose. Mid-page service-description sections are the usual offenders.
+- RHYTHM: uniform sentence length/cadence that doesn't match the guide's pattern.
+- DISTINCTIVENESS: generic, swappable copy that could sit on a competitor's site by changing the business name — no proof, credential, or specific only this client can say.
+- TONE / VOCABULARY / PERSON: wording, formality, or grammatical person that departs from the guide.
+The intro and FAQ usually hold the voice; the MIDDLE service sections are where it slips — scrutinise those hardest. A section that already reads distinctly like this client in the guide's voice is NOT a drift — omit it.
+
+Return ONLY a JSON object: {"drift": [{"key": "<section key>", "dimensions": ["register"|"rhythm"|"distinctiveness"|"tone"|"vocabulary"|"person", ...], "note": "<one concrete phrase naming what drifts>"}, ...]}. Report at most the 6 worst-drifting sections, worst first. Do NOT report sections that are fine. No markdown fences, no commentary."""
+
+
+def _build_drift_block(drift_map, section_keys) -> str:
+    """Render a per-section voice-drift audit into a targeted corrective prompt
+    block. Pure: filters to keys that actually exist on the page, dedupes, and
+    caps at 6. Returns "" when nothing is usable — the caller then relies on the
+    page-wide sweep rules in the corrective system prompt alone (never worse than
+    prior behaviour). Accepts either the parsed ``{"drift": [...]}`` object or a
+    bare list, so a model that drops the wrapper still works."""
+    items = drift_map.get("drift") if isinstance(drift_map, dict) else drift_map
+    if not isinstance(items, list):
+        return ""
+    keys = set(section_keys or [])
+    lines: List[str] = []
+    seen: set = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()
+        if not key or key not in keys or key in seen:
+            continue
+        seen.add(key)
+        dims = item.get("dimensions")
+        dims_txt = (
+            ", ".join(d for d in dims if isinstance(d, str) and d.strip())
+            if isinstance(dims, list) else ""
+        )
+        note = str(item.get("note") or "").strip()
+        detail = " — ".join(p for p in (dims_txt, note) if p)
+        lines.append(f"  [{key}]{(' — ' + detail) if detail else ''}")
+        if len(lines) >= 6:
+            break
+    if not lines:
+        return ""
+    return (
+        "SECTIONS THAT DRIFT FROM THE BRAND VOICE (a per-section audit — these are "
+        "the sections to re-voice HARDEST, in addition to fixing any SEO deficiency: "
+        "rewrite each so it reads distinctly like this client in the guide's register "
+        "and rhythm, per the rules above):\n" + "\n".join(lines) + "\n"
+    )
+
+
+async def _localize_voice_drift(sections, voice_block, client) -> tuple:
+    """Best-effort per-section voice-drift audit (one cheap Haiku call).
+
+    Returns ``(drift_block, token_rec)`` — ``drift_block`` names the sections that
+    drift from the guide (so the single Sonnet corrective pass targets exactly
+    those instead of sweeping blind), ``""`` when the audit is disabled,
+    unavailable, or finds nothing. ``token_rec`` is ``None`` when no call was
+    made. Never raises."""
+    if not (VOICE_LOCALIZE_ENABLED and voice_block and sections):
+        return "", None
+    try:
+        digest = section_edit.section_digest(sections, max_inner_chars=1400)
+        user_prompt = f"{voice_block}\n\nPAGE SECTIONS:\n\n{digest}"
+        msg = await client.messages.create(
+            model=VOICE_LOCALIZE_MODEL,
+            max_tokens=1400,
+            system=[{"type": "text", "text": _VOICE_LOCALIZE_SYSTEM,
+                     "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        token_rec = _token_record(
+            "voice-localize", VOICE_LOCALIZE_MODEL,
+            msg.usage.input_tokens, msg.usage.output_tokens,
+        )
+        drift_map = _parse_claude_json(msg.content[0].text)
+        block = _build_drift_block(drift_map, {s["key"] for s in sections})
+        return block, token_rec
+    except Exception as _vl:
+        logger.warning("voice-localize: failed (page-wide sweep only): %s", _vl)
+        return "", None
+
+
 async def _seo_voice_correct_inline(
     content_html: str,
     keyword: str,
@@ -4525,6 +4620,13 @@ async def _seo_voice_correct_inline(
         if not sections:
             return None  # no <section> structure to target — caller falls back
 
+        # Lever 2: one cheap Haiku audit names the sections that actually drift
+        # from the voice guide, so this single (expensive Sonnet) pass focuses its
+        # capacity on those instead of sweeping all 5-6 mid-page sections blind.
+        # Best-effort — an empty/failed audit leaves the page-wide sweep rules to
+        # carry the pass as before.
+        drift_block, localize_tok = await _localize_voice_drift(sections, voice_block, client)
+
         deficiency_text = "\n".join(
             f"  Engine: {d['engine']} (score: {d.get('score')}/100)\n"
             f"  Issues: {'; '.join(d.get('issues', []))}\n"
@@ -4540,6 +4642,7 @@ async def _seo_voice_correct_inline(
         )
         digest = section_edit.section_digest(sections)
 
+        drift_section = f"\n{drift_block}" if drift_block else ""
         user_prompt = f"""BUSINESS: {business_name} | CATEGORY: {gbp_category}
 KEYWORD: {keyword} | CITY: {city}
 PHONE: {phone or "[PHONE]"}
@@ -4547,7 +4650,7 @@ ADDRESS: {address or "Not provided"}
 {voice_section}
 SEO DEFICIENCIES TO FIX:
 {deficiency_text}
-{corrections_section}
+{corrections_section}{drift_section}
 PAGE SECTIONS — edit only the ones that need it and return their new inner HTML keyed by [key]:
 
 {digest}
@@ -4562,6 +4665,12 @@ PAGE SECTIONS — edit only the ones that need it and return their new inner HTM
             "section-correct-inline", GENERATION_MODEL,
             msg.usage.input_tokens, msg.usage.output_tokens,
         )
+        if localize_tok:
+            # Fold the localizer's cheap Haiku call into this pass's cost so the
+            # page's token_usage/cost_breakdown stays accurate.
+            token_rec["input_tokens"] += localize_tok["input_tokens"]
+            token_rec["output_tokens"] += localize_tok["output_tokens"]
+            token_rec["cost_usd"] = round(token_rec["cost_usd"] + localize_tok["cost_usd"], 6)
         edits = _parse_claude_json(msg.content[0].text)
         if not isinstance(edits, dict):
             return None
