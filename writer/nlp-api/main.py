@@ -3969,6 +3969,8 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
 
     issues: list[str] = []
     recommendations: list[str] = []
+    # Per-zone detail surfaced to the UI (keyword + entity found/target by zone).
+    zone_detail: dict[str, dict] = {}
 
     # ── 1. Related keyword coverage per zone  (50% of engine score) ─────────────
     zone_label_map = {
@@ -3986,6 +3988,9 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
         missing = [t["term"] for t in terms if t["term"].lower() not in zone_text]
         coverage = min(len(found) / max(target, 1), 1.0)
         zone_scores.append(coverage)
+        zone_detail.setdefault(zone_key, {"zone": zone_label_map[zone_key]}).update(
+            {"keyword_found": len(found), "keyword_target": target}
+        )
         gap = max(0, target - len(found))
         if gap > 0 and missing:
             zlabel = zone_label_map[zone_key]
@@ -4002,6 +4007,10 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
 
     # ── 2. Google NLP entity coverage per zone  (50% of engine score) ──────────
     top_entities = sorted(entities, key=lambda e: e.get("page_spread", 0), reverse=True)[:15]
+    # Page-level entities actually used vs. not (surfaced to the UI), independent
+    # of the per-zone target loop so it reflects the whole page.
+    entities_used    = [e["name"] for e in top_entities if e["name"].lower() in page_text_lower]
+    entities_missing = [e["name"] for e in top_entities if e["name"].lower() not in page_text_lower]
     ent_zone_scores: list[float] = []
     if top_entities:
         for zone_key in ("title", "h1", "h2_h3", "paragraphs"):
@@ -4013,6 +4022,9 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
             missing_ents = [e["name"] for e in top_entities if e["name"].lower() not in zone_text]
             coverage = min(len(found_ents) / max(entity_target, 1), 1.0)
             ent_zone_scores.append(coverage)
+            zone_detail.setdefault(zone_key, {"zone": zone_label_map[zone_key]}).update(
+                {"entity_found": len(found_ents), "entity_target": entity_target}
+            )
             gap = max(0, entity_target - len(found_ents))
             if gap > 0 and missing_ents:
                 zlabel = zone_label_map[zone_key]
@@ -4054,6 +4066,9 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
         "keyword_coverage":  round(kw_score, 1),
         "entity_coverage":   round(ent_score, 1),
         "quadgram_coverage": round(qg_score, 1),
+        "entities_used":     entities_used,
+        "entities_missing":  entities_missing,
+        "zones":             [zone_detail[k] for k in ("title", "h1", "h2_h3", "paragraphs") if k in zone_detail],
     }
 
 

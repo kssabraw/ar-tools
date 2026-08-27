@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, ArrowRight, Check, Copy, Download, ExternalLink, TrendingUp, Wand2, Megaphone, RefreshCw,
@@ -6,7 +6,7 @@ import {
 import { GbpWorkspace } from '../../pages/GbpPosts'
 import { localSeoApi } from './api'
 import { useResumableJob } from '../../lib/useResumableJob'
-import type { LocalSeoPageDetail, SocialPostsResult } from './types'
+import type { LocalSeoPageDetail, SocialPostsResult, EngineScore } from './types'
 import { RelatedPagesList } from './RelatedPagesList'
 import { VoiceCompliancePanel } from './VoiceCompliancePanel'
 import { BulkCreateBar } from './BulkCreateBar'
@@ -38,6 +38,106 @@ const PREVIEW_CSS = `
   .seo-preview a { color: #6366f1; }
 `
 
+// SERP-signal coverage: how well the page covers the entities, keywords and
+// competitor phrases mined from the SERP. Rendered between the Brand Voice panel
+// and the "How to reach 100" gaps. Degrades gracefully — older saved pages carry
+// only the coverage percentages (no entities_used / zones), and a page scored
+// without a SERP analysis carries none of it, so the panel simply hides.
+function SearchCoveragePanel({ coverage }: { coverage?: EngineScore }) {
+  if (!coverage || coverage.entity_coverage == null) return null
+  const pct = (n?: number) => (n == null ? '—' : `${Math.round(n)}%`)
+  const used = coverage.entities_used ?? []
+  const missing = coverage.entities_missing ?? []
+  const zones = coverage.zones ?? []
+  const recs = coverage.recommendations ?? []
+  const chip = (text: string, bg: string, color: string) => (
+    <span key={text} style={{ fontSize: 12, fontWeight: 600, padding: '3px 9px', borderRadius: 999, background: bg, color }}>{text}</span>
+  )
+  const th: CSSProperties = { textAlign: 'left', fontSize: 11, fontWeight: 600, color: '#64748b', padding: '6px 12px', textTransform: 'uppercase', letterSpacing: 0.3 }
+  const td: CSSProperties = { fontSize: 13, color: '#0f172a', padding: '6px 12px', borderTop: '1px solid #f1f5f9' }
+  const cell = (found?: number, target?: number) =>
+    found == null || target == null ? '—' : `${found}/${target}${found >= target ? ' ✓' : ''}`
+  return (
+    <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
+      <div style={{ background: '#f8fafc', padding: '16px 20px', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div>
+          <p style={{ fontSize: 14, fontWeight: 600, color: '#0f172a', margin: 0 }}>Search coverage</p>
+          <p style={{ fontSize: 12, color: '#64748b', margin: '4px 0 0' }}>How well this page covers the entities, keywords and competitor phrases from the SERP.</p>
+        </div>
+        <span style={{ fontSize: 20, fontWeight: 700, color: '#0f172a', whiteSpace: 'nowrap' }}>{pct(coverage.score)}</span>
+      </div>
+      <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {/* Total coverage */}
+        <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+          {[
+            ['Entities', coverage.entity_coverage],
+            ['Keywords', coverage.keyword_coverage],
+            ['Competitor phrases', coverage.quadgram_coverage],
+          ].map(([label, val]) => (
+            <div key={label as string}>
+              <div style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', lineHeight: 1.1 }}>{pct(val as number | undefined)}</div>
+              <div style={{ fontSize: 12, color: '#64748b' }}>{label}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Entities used / missing */}
+        {(used.length > 0 || missing.length > 0) && (
+          <div>
+            <p style={{ fontSize: 12, fontWeight: 600, color: '#475569', margin: '0 0 6px' }}>
+              Entities used {used.length > 0 && `(${used.length})`}
+            </p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {used.map((e) => chip(e, '#ecfdf5', '#047857'))}
+              {missing.map((e) => chip(e, '#fef2f2', '#b91c1c'))}
+            </div>
+            {missing.length > 0 && (
+              <p style={{ fontSize: 11, color: '#94a3b8', margin: '6px 0 0' }}>Red = target entities not yet on the page.</p>
+            )}
+          </div>
+        )}
+
+        {/* Coverage by zone */}
+        {zones.length > 0 && (
+          <div style={{ overflowX: 'auto' }}>
+            <p style={{ fontSize: 12, fontWeight: 600, color: '#475569', margin: '0 0 6px' }}>Coverage by zone</p>
+            <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 360 }}>
+              <thead>
+                <tr>
+                  <th style={th}>Zone</th>
+                  <th style={th}>Keywords</th>
+                  <th style={th}>Entities</th>
+                </tr>
+              </thead>
+              <tbody>
+                {zones.map((z) => (
+                  <tr key={z.zone}>
+                    <td style={td}>{z.zone}</td>
+                    <td style={td}>{cell(z.keyword_found, z.keyword_target)}</td>
+                    <td style={td}>{cell(z.entity_found, z.entity_target)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Recommendations */}
+        {recs.length > 0 && (
+          <div>
+            <p style={{ fontSize: 12, fontWeight: 600, color: '#475569', margin: '0 0 6px' }}>Recommendations</p>
+            <ul style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {recs.map((r, i) => (
+                <li key={i} style={{ fontSize: 12, color: '#475569' }}>{r}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 interface Props {
   clientId: string
   page: LocalSeoPageDetail
@@ -54,7 +154,7 @@ type Tab = 'preview' | 'html' | 'social' | 'related'
 export function GeneratedPageView({
   clientId, page, isNew, prevScore, onBack, onScoreAndImprove, onRelatedAction, onNewPage,
 }: Props) {
-  const { keyword, location, content_html, schema_json, page_title, content_gaps, voice_violations, mode } = page
+  const { keyword, location, content_html, schema_json, page_title, content_gaps, voice_violations, engine_scores, mode } = page
   const score = page.composite_score
   const status = page.composite_status
 
@@ -294,6 +394,7 @@ export function GeneratedPageView({
             <div className="seo-preview" dangerouslySetInnerHTML={{ __html: content_html }} />
           </div>
           <VoiceCompliancePanel compliance={voice_violations} />
+          <SearchCoveragePanel coverage={engine_scores?.serp_signal_coverage} />
           {content_gaps && content_gaps.length > 0 && (
             <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
               <div style={{ background: '#f8fafc', padding: '16px 20px', borderBottom: '1px solid #e2e8f0' }}>
