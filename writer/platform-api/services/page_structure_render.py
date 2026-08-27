@@ -212,6 +212,7 @@ def render_reference_structure(
     page_type: str,
     mode: RenderMode = "full",
     target_words: Optional[int] = None,
+    include_word_targets: bool = True,
 ) -> Optional[str]:
     """Return a compact text block describing the client's own page layout, or
     None when there's no usable analysis.
@@ -224,6 +225,15 @@ def render_reference_structure(
     so the writer mirrors the client's LAYOUT at SERP-appropriate length instead of
     reproducing the reference's own (often much longer) word counts. Layout modes
     other than "full" don't emit hard word targets, so scaling only affects "full".
+
+    When `include_word_targets` is False (the service brief, whose SERP length target
+    isn't known until its own research runs, so the reference can't be pre-scaled at
+    render time), the "full" block emits the LAYOUT only — section count, order,
+    heading hierarchy, intents, and block composition — but NO absolute per-section or
+    total word counts. The SERP-derived target then drives length downstream, so the
+    reference can't drag the page toward its own (often much longer) length. This is
+    the service analogue of Local SEO's `scale_analysis_words`: SERP drives length,
+    reference drives layout.
     """
     analysis = _usable(entry)
     if analysis is None:
@@ -234,16 +244,20 @@ def render_reference_structure(
         return _render_opening(analysis, page_type)
     if mode == "structure":
         return _render_structure(analysis, page_type)
-    return _render_full(analysis, page_type)
+    return _render_full(analysis, page_type, include_word_targets=include_word_targets)
 
 
-def _outline_lines(outline: Any, with_targets: bool = False) -> list[str]:
+def _outline_lines(
+    outline: Any, with_targets: bool = False, include_words: bool = True
+) -> list[str]:
     """Render an outline into indented bullet lines. Shared by the full +
     structure renderers.
 
     When `with_targets` is set (whole-page mirror), each line carries the
     section's intent, exact word count, and block composition as concrete
-    targets. Otherwise it stays a lighter style reference."""
+    targets. Otherwise it stays a lighter style reference. When `include_words`
+    is False the per-section word count is omitted (layout-only rendering) while
+    the intent + block composition are kept."""
     lines: list[str] = []
     if not isinstance(outline, list):
         return lines
@@ -256,7 +270,7 @@ def _outline_lines(outline: Any, with_targets: bool = False) -> list[str]:
         intent = _intent_label(item)
         intent_txt = f" · {intent}" if intent else ""
         words = _section_words(item)
-        words_txt = f" (~{words} words)" if words else ""
+        words_txt = f" (~{words} words)" if (words and include_words) else ""
         blocks_txt = _format_blocks(item.get("blocks"))
         blocks_part = f" [{blocks_txt}]" if blocks_txt else ""
         if with_targets:
@@ -271,16 +285,25 @@ def _outline_lines(outline: Any, with_targets: bool = False) -> list[str]:
     return lines
 
 
-def _render_full(analysis: dict[str, Any], page_type: str) -> str:
-    """Whole-page mirror block: outline + an explicit replication checklist."""
+def _render_full(
+    analysis: dict[str, Any], page_type: str, include_word_targets: bool = True
+) -> str:
+    """Whole-page mirror block: outline + an explicit replication checklist.
+
+    When `include_word_targets` is False the block carries LAYOUT only — section
+    count, order, heading hierarchy, intents, and block composition — but no
+    absolute per-section or total word counts, and no "hit the word count"
+    directives. The caller's own (SERP-derived) length target then governs length,
+    so the reference can't drag the page toward its own word count."""
     outline = analysis.get("outline") or []
     summary = (analysis.get("structure_summary") or "").strip()
     elements = analysis.get("elements") or {}
     label = PAGE_TYPE_LABELS.get(page_type, page_type)
 
+    size_clause = ", and per-section SIZE" if include_word_targets else ""
     lines: list[str] = [
         f"REFERENCE STRUCTURE — mirror how the client's own {label} pages are organized. "
-        "Match the section layout, ordering, heading hierarchy, and per-section SIZE below; "
+        f"Match the section layout, ordering, heading hierarchy{size_clause} below; "
         "adapt ALL wording to this topic. Do not copy the reference's wording or topic. Still "
         "follow every other writing rule for this module."
     ]
@@ -291,18 +314,31 @@ def _render_full(analysis: dict[str, Any], page_type: str) -> str:
     # always does (they're measured off the DOM); a written guidelines spec only
     # does where the client stated them. Directives about targets are emitted
     # only when there are targets — otherwise the prompt demands the model hit
-    # numbers that were never specified.
-    has_word_targets = any(_section_words(it) for it in outline if isinstance(it, dict))
+    # numbers that were never specified. `include_word_targets=False` suppresses
+    # word (but NOT block) targets entirely, regardless of what the reference carries.
+    has_word_targets = include_word_targets and any(
+        _section_words(it) for it in outline if isinstance(it, dict)
+    )
     has_block_targets = any(
         _block_type_list(it.get("blocks")) for it in outline if isinstance(it, dict)
     )
 
-    outline_lines = _outline_lines(outline, with_targets=True)
+    outline_lines = _outline_lines(outline, with_targets=True, include_words=include_word_targets)
     if outline_lines:
-        if has_word_targets or has_block_targets:
+        if has_word_targets and has_block_targets:
             lines.append(
                 "Outline: each section lists its purpose, target word count, and the content "
                 "blocks to include — treat these as targets to hit."
+            )
+        elif has_word_targets:
+            lines.append(
+                "Outline: each section lists its purpose and target word count — treat these "
+                "as targets to hit."
+            )
+        elif has_block_targets:
+            lines.append(
+                "Outline: each section lists its purpose and the content blocks to include — "
+                "cover them in this order and reproduce the block composition."
             )
         else:
             lines.append("Outline: each section lists its purpose — cover them in this order.")
@@ -315,7 +351,7 @@ def _render_full(analysis: dict[str, Any], page_type: str) -> str:
             meta_bits.append("includes: " + ", ".join(flags))
         if elements.get("section_count"):
             meta_bits.append(f"{elements['section_count']} main sections")
-        if elements.get("approx_total_words"):
+        if include_word_targets and elements.get("approx_total_words"):
             meta_bits.append(f"~{elements['approx_total_words']} words")
         if elements.get("intro_pattern"):
             meta_bits.append(f"opens with: {elements['intro_pattern']}")
@@ -344,7 +380,7 @@ def _render_full(analysis: dict[str, Any], page_type: str) -> str:
             "(with a similar item count), tables, and CTAs shown in that section's target."
         )
     total_words = elements.get("approx_total_words") if isinstance(elements, dict) else None
-    if isinstance(total_words, int) and total_words:
+    if include_word_targets and isinstance(total_words, int) and total_words:
         checklist.append(f"Aim for roughly {total_words} total words across the page.")
     flags = _present_flags(elements) if isinstance(elements, dict) else []
     if flags:

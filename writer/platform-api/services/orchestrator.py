@@ -686,10 +686,19 @@ def _build_service_brief_payload(run: dict, snapshot: dict) -> dict:
             "brand_voice_text": snapshot.get("brand_guide_text") or "",
             "icp_text": snapshot.get("icp_text") or "",
             "website_analysis": snapshot.get("website_analysis"),
-            # Mirror the client's own layout for this page type.
+            # Mirror the client's own layout for this page type — LAYOUT ONLY.
+            # The SERP length target the reference would be scaled against isn't
+            # known until the brief runs its own research (unlike Local SEO, where
+            # platform-api holds the SERP analysis before calling the generator), so
+            # the reference is rendered without absolute word counts and the brief's
+            # SERP-anchored target (competitor avg + 20%) drives length instead. The
+            # structural gate scales the reference to that same target (see
+            # service_page_score.structural_deficiency) so requirement + measurement
+            # agree. SERP drives length; the reference drives layout.
             "reference_page_structure": render_reference_structure(
                 structures.get("location" if is_location else "service"),
                 "location" if is_location else "service",
+                include_word_targets=False,
             ),
         },
     }

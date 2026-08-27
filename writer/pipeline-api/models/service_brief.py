@@ -142,6 +142,10 @@ class SerpProfile(BaseModel):
     mode: ServiceMode
     length_band: LengthBand
     target_word_count: int
+    # Competitor SERP average body word count (the target is this × 1.20, floored).
+    # 0 when too few competitor pages scraped to yield a reliable average — the
+    # target then falls back to the band. Additive/observability; readers ignore it.
+    serp_avg_word_count: int = 0
     local_pack: bool = False
     featured_snippet: bool = False
     organic_service_pages: int = 0

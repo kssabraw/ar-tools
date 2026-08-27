@@ -176,6 +176,70 @@ def test_render_full_includes_replication_checklist():
     assert "FAQ" in out
 
 
+def test_render_full_layout_only_suppresses_word_targets():
+    """The service brief renders the reference LAYOUT-ONLY (SERP drives length):
+    section layout, order, hierarchy, intents, and block composition are kept, but
+    no absolute per-section / total word counts and no "hit the word count"
+    directive — so the reference can't drag the page toward its own length."""
+    entry = {
+        "url": "https://x.com/p",
+        "status": "complete",
+        "analysis": {
+            "outline": [
+                {"level": "H2", "heading": "Hero", "intent": "hero",
+                 "word_count": 300, "blocks": [{"type": "paragraph", "count": 2, "words": 300}]},
+                {"level": "H2", "heading": "Services", "intent": "service_detail",
+                 "word_count": 900, "blocks": [{"type": "list", "count": 1, "items": 6}]},
+            ],
+            "structure_summary": "A landing page.",
+            "elements": {"section_count": 2, "approx_total_words": 1200,
+                         "has_cta": True, "intro_pattern": "problem-first"},
+        },
+    }
+    full = render_reference_structure(entry, "service")
+    layout = render_reference_structure(entry, "service", include_word_targets=False)
+    assert full is not None and layout is not None
+
+    # Full mode carries absolute word counts + the word-count directive.
+    assert "~300 words" in full
+    assert "1200 words" in full
+    assert "word count within" in full
+
+    # Layout-only mode suppresses ALL word counts + the word-count directive...
+    assert "300 words" not in layout
+    assert "900 words" not in layout
+    assert "1200 words" not in layout
+    assert "word count within" not in layout
+    assert "total words across the page" not in layout
+
+    # ...but keeps layout: section count, order, hierarchy, intents, and blocks.
+    assert "Hero" in layout and "Services" in layout
+    assert "2 main sections" in layout
+    assert "hero" in layout  # intent label
+    assert "list" in layout  # block composition preserved
+    assert "Reproduce each section's block composition" in layout
+
+
+def test_render_full_scale_path_unaffected_by_layout_flag():
+    """Local SEO's target_words scaling (include_word_targets defaults True) is
+    untouched: passing a target still rescales the reference's word counts."""
+    entry = {
+        "status": "complete",
+        "analysis": {
+            "outline": [
+                {"level": "H2", "heading": "A", "word_count": 400},
+                {"level": "H2", "heading": "B", "word_count": 600},
+            ],
+            "structure_summary": "s",
+            "elements": {"section_count": 2, "approx_total_words": 1000},
+        },
+    }
+    scaled = render_reference_structure(entry, "local_landing", target_words=500)
+    assert scaled is not None
+    # 1000 -> 500 total: A 400->200, B 600->300.
+    assert "~200 words" in scaled and "~300 words" in scaled
+
+
 def test_render_opening_mode_omits_outline():
     out = render_reference_structure(_complete_entry(), "blog_post", mode="opening")
     assert out is not None
