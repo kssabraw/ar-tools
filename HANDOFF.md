@@ -1,6 +1,61 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-26 (pm) · **Website Builder — informational content creator + drip-publish release schedule BUILT (PR #740)** (latest)
+## ⏩ Update — 2026-08-27 · **Website Builder content creator — ALL MERGED + LIVE, frontend UI shipped, user guide added** (latest)
+
+Everything the two sections below describe is now **merged to `main` and live in
+production**. The "nothing is merged yet" / "frontend UI not built" caveats in
+the 2026-08-26 (pm) entry are **superseded by this one** — read this first.
+
+**What merged (all squash-merged to `main`):**
+- **[#740](https://github.com/kssabraw/ar-tools/pull/740)** — the backend +
+  template: content_plan model, post/pillar planner, `run` engine, effective-
+  frontmatter publish gate, seed bridges (strategist + Fanout), the drip-release
+  schedule (`website_releases`, migration `20260826140000`, applied live), and
+  the cross-family fix (a local site's `/blog/` is planned + dripped alongside
+  its geo pages).
+- **[#796](https://github.com/kssabraw/ar-tools/pull/796)** — the **frontend UI**
+  the #740 entry lists as "NOT built": `ContentPlanEditor.tsx` (Plan tab, **every
+  site type**) with the two one-click **seed buttons** (strategist / Fanout
+  session id) + `ScheduleTab.tsx` (the drip-release schedule) + PlanTab gating
+  the service/city "Build plan" cards to **geo sites only** while the blog
+  content-plan editor shows for all. So the whole feature is now editable in-app.
+- **[#800](https://github.com/kssabraw/ar-tools/pull/800)** — a **team-facing
+  user guide**, `docs/website-builder-user-guide.md`: a no-code, dashboard-only
+  tutorial of the full lifecycle (create → provision → theme → plan (services/
+  cities + the blog content plan) → approve → generate/publish → drip-release →
+  deploys → settings), with a quick-reference table and an FAQ whose first entry
+  answers the recurring "my local site's plan shows no blog posts" question (the
+  blog is driven by the Blog content plan editor, which starts empty).
+- **[#801](https://github.com/kssabraw/ar-tools/pull/801)** — CLAUDE.md now
+  references the user guide and records the frontend UI as built.
+
+**Production flag flipped ON (owner asked 2026-08-27):** `WEBSITE_BUILDER_ENABLED=true`
+on the PLATFORM Railway service. **Railway gotcha that cost time:** `set-variables`
+**staged** the value but did **not** roll a fresh container (the running deployment
+kept serving the old value — confirmed by the container timestamp in logs
+being unchanged after the variable write). A **`redeploy`** was what actually
+applied it. `WEBSITE_IMAGES_ENABLED` was **deliberately left off** — it bills a
+per-page image render, flip it separately when hero images are wanted. Both
+Netlify (frontend) and PLATFORM (backend) are deployed; the **Website Builder
+card** now appears on the client workspace (gated on `GET /websites/status`,
+which the restarted container returns `{enabled:true}` for; TanStack caches it
+~5 min, so a hard refresh surfaces it).
+
+**Where to use it:** client workspace → **Website Builder** card (route
+`clients/:id/website`), or the sidebar **Websites** fleet view (`/websites`).
+The blog on a local site lives behind the **Blog content plan** editor on the
+**Plan** tab (below Service catalog / Cities) — empty by default, which is why a
+fresh local site's plan shows only service/city/matrix pages until you add silos
++ posts (or seed them) and Save.
+
+---
+
+## ⏩ Update — 2026-08-26 (pm) · **Website Builder — informational content creator + drip-publish release schedule BUILT (PR #740)**
+
+> **Superseded by the 2026-08-27 entry above** — #740 (and the frontend, user
+> guide, and flag-on that followed) are all merged and live now. Kept for the
+> build detail; ignore its "nothing is merged yet" / "frontend UI not built"
+> caveats.
 
 The gap mapped in the section below is **built**. PR
 [#740](https://github.com/kssabraw/ar-tools/pull/740) (draft, green CI,
