@@ -4465,7 +4465,8 @@ You will be given: the client's BRAND VOICE & AUDIENCE guide (HIGHEST priority f
 Return ONLY a JSON object mapping a section's `[key]` to that section's NEW inner HTML (the content that goes INSIDE its <section> tag, not the <section> tag itself). Include ONLY the sections you actually change.
 
 Rules:
-- Fix the SEO deficiencies and the voice corrections in the sections where they belong. Leave every already-good section out of your response entirely.
+- Fix the SEO deficiencies in the sections where they belong. A section with no SEO deficiency AND no voice drift stays out of your response entirely.
+- VOICE IS A PAGE-WIDE SWEEP, NOT A ONE-SPOT FIX. Each voice correction's quoted text is a SAMPLE of a pattern that recurs across the page — never the only place it occurs. Re-read EVERY section against the BRAND VOICE guide and rewrite EVERY section that drifts the same way, not just the quoted one. Brand voice usually holds in the intro and the FAQ but slips into a flat, functional, catalogue register in the MID-PAGE service-description sections (the middle of the document) — those middle sections are the ones to scrutinise HARDEST. A mid-page section that reads like it could sit on any competitor's site, or whose cadence/word-choice/register no longer matches the guide, is a drift to fix even if nothing in it was quoted.
 - PRESERVE THE CLIENT'S BRAND VOICE in every edit: grammatical person, required phrasing, tone, and CTA wording. An SEO fix must NOT flatten the prose into generic copy that could run on a competitor's site by swapping the business name — that is a failure, not a fix.
 - Keep each edited section's heading and its structural role (a services list stays a list, the comparison table stays a table, the FAQ stays Q&A). Do not add, remove, reorder, or rename sections.
 - Keep all facts accurate — never invent phone numbers, addresses, prices, hours, or services the business does not offer.
@@ -4515,7 +4516,9 @@ async def _seo_voice_correct_inline(
         ) or "  (none — apply the voice corrections only)"
         voice_section = f"\n{voice_block}\n" if voice_block else ""
         corrections_section = (
-            f"\nVOICE CORRECTIONS (apply verbatim where they belong):\n{voice_corrections}\n"
+            f"\nVOICE CORRECTIONS — each quoted example is a SAMPLE of a page-wide pattern; "
+            f"apply the correction to EVERY section that drifts the same way (especially the "
+            f"mid-page service descriptions), not only the quoted section:\n{voice_corrections}\n"
             if voice_corrections else ""
         )
         digest = section_edit.section_digest(sections)
