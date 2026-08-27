@@ -2399,16 +2399,23 @@ single source of truth (used by `contact_rows` too). Regression test
 wiped site_scrape/web_search names must be RE-RUN (site scrape is free; web search ~cents) once the fix
 is deployed — do it AFTER deploy, or the still-buggy live code wipes them again.
 
-### I-118 OPEN · A large enrichment order exceeds the 5-min cron window and gets stuck `running`
+### I-118 FIXED (2026-08-27) · A large enrichment order exceeds the 5-min cron window and gets stuck `running`
 The market-wide `leads_n_contacts` order (118 places) ran ~4 min writing 101 markers, then the cron
 container was terminated at the `*/5` boundary (~00:29→00:30), leaving 17 places unprocessed and the
 order stuck `status='running'` with no recovery (the enrich drain claims only `pending` orders, and
 there is no stale-order reaper for `enrichment_request`). Unlike `name_scrape`, the **enrich drain has
 no per-tick place budget**, so one big order can't bound itself to the cron window or resume across
-ticks. **Interim:** the stuck order was cancelled by hand; enrich in **smaller batches** (≤~40 places)
-until fixed. **Fix (follow-up):** give the enrich drain a per-tick place budget + resume (mirror
-`name_scrape_per_tick` / the PENDING-resume pattern), and/or a stuck-`running` reaper that returns an
-overrun order to `pending`. Note this is separate from I-117 (data loss) — this is throughput/recovery.
+ticks. **Fixed** (mirrors `name_scrape`): (1) a per-tick PLACE budget `enrich_per_tick` (40) — the
+drain enriches at most that many places per tick across all orders; an order with more is enriched up
+to it and left PENDING to resume next tick (the idempotent marker skip re-bills only the un-done
+places), so no tick can overrun the cron window; `process_order` now returns
+`(report, billed, finished)` and the order's counters are the CUMULATIVE marker tally
+(`_order_marker_tally`) so a multi-tick order still reports its whole self; cost_ledger writes one row
+per billing tick. (2) `recover_stuck_orders` resets a `running` order older than
+`enrich_stuck_order_minutes` (20) back to `pending` (conditional-on-still-running so it can't stomp a
+live tick), called first in `drain` — the recovery half. Unit-tested (`test_enrich_queue`: resume
+across ticks, whole-tick budget bound, stuck recovery, recent-order-not-recovered). Separate from
+I-117 (data loss). The stuck 2026-08-27 order was cancelled by hand before the fix.
 
 ### I-109 RESOLVED (2026-08-26) · TWO stacked bugs — sync mode AND the wrong enricher slug; fixed to async + `leads_n_contacts`
 Enrichment was broken two ways at once, which is why every prior single-cause theory (wrong validator

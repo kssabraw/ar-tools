@@ -36,6 +36,7 @@ class _Query:
         self.db, self.name, self.op, self.payload = db, name, op, payload
         self.eqs = []
         self.in_filters = []
+        self.lt_filters = []
         self._order = None
         self._limit = None
         self._conflict = None
@@ -66,6 +67,10 @@ class _Query:
         self.in_filters.append((column, list(values)))
         return self
 
+    def lt(self, column, value):
+        self.lt_filters.append((column, value))
+        return self
+
     def order(self, column, desc=False):
         self._order = (column, desc)
         return self
@@ -77,7 +82,9 @@ class _Query:
     def _matches(self, row):
         if not all(str(row.get(c)) == str(v) for c, v in self.eqs):
             return False
-        return all(row.get(c) in vs for c, vs in self.in_filters)
+        if not all(row.get(c) in vs for c, vs in self.in_filters):
+            return False
+        return all(row.get(c) is not None and str(row.get(c)) < str(v) for c, v in self.lt_filters)
 
     def execute(self):
         rows = self.db.tables.setdefault(self.name, [])
@@ -131,6 +138,8 @@ class _Settings:
     enrich_chunk_size = 10
     enrich_orders_per_tick = 5
     enrich_max_places_per_order = 200
+    enrich_per_tick = 40
+    enrich_stuck_order_minutes = 20
     max_market_run_cost_cents = 5000
 
 
@@ -530,3 +539,92 @@ def test_enrich_is_order_gated_not_env_gated():
 
     assert "enrich" not in PAID_COMMANDS
     assert "probe-enrich" in PAID_COMMANDS
+
+
+# --- I-118: per-tick place budget + resume, and stuck-order recovery --------------------------
+
+
+def test_a_large_order_resumes_across_ticks(monkeypatch):
+    """An order larger than the per-tick place budget is enriched up to it and left PENDING; the
+    next tick's idempotent skip re-bills only the un-done places, until it finishes. Bounds a big
+    order to the cron window instead of overrunning it (I-118)."""
+    pids = [f"p{i}" for i in range(5)]
+    db = _FakeDB()
+    _seed(
+        db,
+        prospects=[{"id": pid, "place_id": f"place-{i}", "market_id": "m1", "name": "A"}
+                   for i, pid in enumerate(pids)],
+        orders=[_order(prospect_ids=pids)],
+    )
+    _stub_enrich(monkeypatch, by_place={f"place-{i}": [{"emails": [{"value": f"e{i}@x.com"}]}]
+                                        for i in range(5)})
+
+    def enriched_markers():
+        return sum(1 for m in db.tables["prospect_enrichment"] if m["status"] == "enriched")
+
+    asyncio.run(enrich_queue.drain(db, _Settings(), max_places=2))
+    assert db.tables["enrichment_request"][0]["status"] == "pending"   # partial → resumes
+    assert enriched_markers() == 2
+
+    asyncio.run(enrich_queue.drain(db, _Settings(), max_places=2))
+    assert db.tables["enrichment_request"][0]["status"] == "pending"
+    assert enriched_markers() == 4
+
+    asyncio.run(enrich_queue.drain(db, _Settings(), max_places=2))
+    order = db.tables["enrichment_request"][0]
+    assert order["status"] == "done"                                   # all 5 done
+    assert order["enriched_count"] == 5                                # CUMULATIVE, not last batch
+    assert enriched_markers() == 5
+    # one cost_ledger row per tick that billed (3 ticks), never a re-bill of a done place
+    assert sum(r["units"] for r in db.tables["cost_ledger"]) == 5
+
+
+def test_the_per_tick_place_budget_bounds_the_tick(monkeypatch):
+    """The budget caps places across the WHOLE tick (not per order), so several small orders can't
+    together overrun the window either."""
+    db = _FakeDB()
+    _seed(
+        db,
+        prospects=[{"id": f"p{i}", "place_id": f"place-{i}", "market_id": "m1", "name": "A"}
+                   for i in range(4)],
+        orders=[_order(id="o1", prospect_ids=["p0", "p1"]),
+                _order(id="o2", prospect_ids=["p2", "p3"])],
+    )
+    _stub_enrich(monkeypatch, by_place={f"place-{i}": [{"emails": [{"value": f"e{i}@x.com"}]}]
+                                        for i in range(4)})
+
+    asyncio.run(enrich_queue.drain(db, _Settings(), max_places=3))
+    # 3 places is the budget: o1 (2) fully, then o2 partial (1) → o2 left pending, loop stops.
+    assert sum(1 for m in db.tables["prospect_enrichment"] if m["status"] == "enriched") == 3
+    statuses = {o["id"]: o["status"] for o in db.tables["enrichment_request"]}
+    assert statuses == {"o1": "done", "o2": "pending"}
+
+
+def test_a_stuck_running_order_is_recovered_and_finished(monkeypatch):
+    """A `running` order older than the threshold (its container died mid-tick) is reset to
+    `pending` and resumed — the recovery half of I-118."""
+    db = _FakeDB()
+    _seed(
+        db,
+        prospects=[{"id": "p1", "place_id": "place-1", "market_id": "m1", "name": "A"}],
+        orders=[_order(prospect_ids=["p1"], status="running",
+                       started_at="2020-01-01T00:00:00+00:00")],
+    )
+    _stub_enrich(monkeypatch, by_place={"place-1": [{"emails": [{"value": "a@x.com"}]}]})
+
+    asyncio.run(enrich_queue.drain(db, _Settings()))
+    assert db.tables["enrichment_request"][0]["status"] == "done"   # recovered → claimed → enriched
+
+
+def test_a_recently_running_order_is_not_recovered():
+    """A `running` order younger than the threshold is a live tick's work — never reset (that would
+    double-process it)."""
+    db = _FakeDB()
+    _seed(
+        db,
+        prospects=[{"id": "p1", "place_id": "place-1", "market_id": "m1", "name": "A"}],
+        orders=[_order(prospect_ids=["p1"], status="running", started_at=enrich_queue._now())],
+    )
+    recovered = enrich_queue.recover_stuck_orders(db, _Settings())
+    assert recovered == 0
+    assert db.tables["enrichment_request"][0]["status"] == "running"
