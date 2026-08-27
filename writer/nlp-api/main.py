@@ -4365,6 +4365,84 @@ EXISTING PAGE (use as reference — preserve accurate facts, fix everything else
     return content_html, schema_json, page_title, token_rec
 
 
+_PHRASE_INSERT_SYSTEM = """You are making a MINIMAL edit to an already-written local service page: making a few exact phrases the client's brand guide REQUIRES appear on the page. The draft is currently missing them — usually because the writer expressed the same idea with a synonym.
+
+You are given the page HTML (the <article> body) and a list of REQUIRED PHRASES. Make EACH required phrase appear on the page VERBATIM — word-for-word — by the most natural means, in priority order:
+  1. If the writer used a close synonym, replace that synonym in place (e.g. the page says "roofing specialists" and the required phrase is "Melbourne roofing experts" → rework that mention; the page says "confidence" or "reassurance" and the required phrase is "peace of mind" → use the required phrase there).
+  2. Otherwise weave the phrase into an existing sentence where it genuinely fits.
+
+Hard rules:
+- Change as LITTLE else as possible. Do NOT rewrite sections, reorder content, add or remove sections, or alter any fact (phone, address, prices, services, hours).
+- The phrase must read naturally in the client's voice — never bolted on or keyword-stuffed.
+- Keep ALL existing HTML structure and any markup exactly as-is except the minimal words you change.
+- Do NOT add RDFa <span>/<link> markup and do NOT re-link phone numbers — that is applied automatically after your edit.
+- Return the FULL edited <article> HTML only. No <title>, no schema, no markdown fences, no commentary.
+"""
+
+
+async def _insert_required_phrases_inline(
+    content_html: str,
+    phrases: List[str],
+    voice_block: str,
+    keyword: str,
+    business_name: str,
+    phone: Optional[str],
+    client,
+) -> Optional[tuple]:
+    """Targeted, minimal-edit LLM pass that weaves MISSING multi-word required
+    phrases into the page — typically by replacing the synonym the writer used —
+    so the deterministic ``must_use_terms`` vocabulary cap clears before scoring.
+
+    Multi-word required phrasing can't be placed by the deterministic swap (you
+    can't substitute one filler for "peace of mind"), and the general voice loop
+    proved unreliable at it (it's a recall problem, not a rewrite problem). This
+    pass does the one job. Runs only when such phrases remain missing after the
+    deterministic net and the time budget allows; one bounded call, small edit.
+
+    Returns ``(html, token_rec)`` or ``None`` when there's nothing to do or the
+    call fails (best-effort — never blocks generation). The caller applies RDFa
+    markup afterward, so this returns clean HTML."""
+    if not phrases:
+        return None
+    try:
+        phrase_list = "\n".join(f'- "{p}"' for p in phrases)
+        voice_section = f"\n{voice_block}\n" if voice_block else ""
+        user_prompt = f"""BUSINESS: {business_name} | KEYWORD: {keyword}
+{voice_section}
+REQUIRED PHRASES — each MUST appear verbatim on the page:
+{phrase_list}
+
+PAGE HTML:
+{content_html}
+"""
+        msg = await client.messages.create(
+            model=GENERATION_MODEL,
+            max_tokens=16000,
+            system=[{"type": "text", "text": _PHRASE_INSERT_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        token_rec = _token_record(
+            "phrase-insert-inline", GENERATION_MODEL,
+            msg.usage.input_tokens, msg.usage.output_tokens,
+        )
+        raw = (msg.content[0].text or "").strip()
+        if raw.startswith("```"):
+            raw = re.sub(r'^```[a-zA-Z]*\n?', '', raw)
+            raw = re.sub(r'\n?```$', '', raw).strip()
+        # Defensive: if the model echoed a <title> or schema block, drop them —
+        # this pass owns only the article body; the caller keeps title + schema.
+        raw = re.sub(r'<title>.*?</title>', '', raw, flags=re.IGNORECASE | re.DOTALL)
+        _schema_at = raw.find('<script type="application/ld+json">')
+        if _schema_at != -1:
+            raw = raw[:_schema_at].strip()
+        if not raw:
+            return None
+        return raw, token_rec
+    except Exception as _pe:
+        logger.warning("phrase-insert-inline failed (non-fatal): %s", _pe)
+        return None
+
+
 _SECTION_CORRECT_SYSTEM = """You are refining specific sections of an already-written local service page — not rewriting the page.
 
 You will be given: the client's BRAND VOICE & AUDIENCE guide (HIGHEST priority for expression), the SEO deficiencies to fix, any voice corrections, and the page's sections. Each section is shown as `[key] heading: <current inner HTML>`.
@@ -6899,22 +6977,23 @@ Full location: {body.location}
             content_html = raw
             schema_json  = ""
 
-        # Linkify phone numbers + RDFa entity markup
         content_html = _linkify_phones(content_html, body.phone)
-        google_entities = (serp_analysis_dict or {}).get("google_entities", [])
-        content_html = _apply_rdfa_markup(content_html, google_entities)
 
-        # ── Deterministic required-phrasing net (no LLM, no added latency) ────────
-        # The generation prompt now leads with the brand voice, but "use these
-        # exact phrases" is a recall problem an LLM misses regardless of ordering,
-        # and a missing required term deterministically CAPS the Vocabulary voice
-        # dimension. Where the writer reached for a weak superlative ("great
-        # reputation") in place of a required adjective the client asked for
-        # ("trusted reputation"), swap it in deterministically — idiom-guarded,
-        # body-text only — BEFORE scoring, so the cap lifts on its own instead of
-        # spending a full-page (time-budgeted) LLM voice pass on it. Truly-absent
-        # terms with no filler anchor, and multi-word phrases, are left to the
-        # LLM voice loop below. Best-effort: never blocks generation.
+        # ── Required-phrasing net (runs before scoring, before RDFa markup) ───────
+        # A missing required term deterministically CAPS the Vocabulary voice
+        # dimension, so guarantee the guide's required phrasing is present before
+        # the page is scored — in two tiers:
+        #   1. Deterministic (no LLM): single-token adjective requireds the writer
+        #      replaced with a weak superlative ("great reputation" -> the required
+        #      "trusted reputation"; hyphenated compounds like "long-lasting" too).
+        #      Idiom-guarded, body-text only.
+        #   2. Targeted LLM pass: MULTI-WORD phrases the writer expressed with a
+        #      SYNONYM ("specialists" where the guide requires "Melbourne roofing
+        #      experts", "confidence" for "peace of mind") can't be swapped
+        #      deterministically — a bounded, minimal-edit LLM pass weaves them in.
+        #      Runs only when such phrases remain missing AND the time budget allows.
+        # RDFa markup is applied AFTER both, so the LLM pass edits clean HTML and
+        # markup is applied once (no double-wrapping). Best-effort throughout.
         try:
             content_html, _req_swapped = vcard.insert_required_terms(content_html, voice_card)
             if _req_swapped:
@@ -6924,6 +7003,31 @@ Full location: {body.location}
                 )
         except Exception as _rte:
             logger.warning("generate-page: required-phrasing net failed (non-fatal): %s", _rte)
+
+        try:
+            _missing_phrases = vcard.multiword_required_terms(
+                _page_text_for_voice_check(content_html, page_title), voice_card
+            )
+            if _missing_phrases and _within_time_budget():
+                _pp = await _insert_required_phrases_inline(
+                    content_html, _missing_phrases, voice_block,
+                    body.keyword, body.business_name, body.phone, client,
+                )
+                if _pp is not None:
+                    content_html, _pp_tok = _pp
+                    token_rec["input_tokens"]  += _pp_tok["input_tokens"]
+                    token_rec["output_tokens"] += _pp_tok["output_tokens"]
+                    token_rec["cost_usd"]       = round(token_rec["cost_usd"] + _pp_tok["cost_usd"], 6)
+                    logger.info(
+                        "generate-page: targeted phrase pass inserted %s for '%s'",
+                        _missing_phrases, body.keyword,
+                    )
+        except Exception as _ppe:
+            logger.warning("generate-page: phrase-insert pass failed (non-fatal): %s", _ppe)
+
+        # RDFa entity markup — applied once, after all text edits above.
+        google_entities = (serp_analysis_dict or {}).get("google_entities", [])
+        content_html = _apply_rdfa_markup(content_html, google_entities)
 
         # ── Score the generated page (single pass) ───────────────────────────────
         # Structural requirements (keywords, entities, FAQ, geo, AEO) are covered

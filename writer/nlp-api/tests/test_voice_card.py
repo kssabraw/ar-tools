@@ -645,3 +645,43 @@ def test_insert_empty_card_and_empty_html_are_safe():
     assert vc.insert_required_terms("<p>hi</p>", {}) == ("<p>hi</p>", [])
     assert vc.insert_required_terms("", _voice_card(must_use_terms=["trusted"])) == ("", [])
     assert vc.missing_required_terms("", _voice_card(must_use_terms=["trusted"])) == []
+
+
+# --- multi-word required-phrase net (hyphen swap + phrase detection) --------
+
+def test_is_swappable_token():
+    assert vc._is_swappable_token("trusted") is True
+    assert vc._is_swappable_token("long-lasting") is True   # hyphenated adjective
+    assert vc._is_swappable_token("peace of mind") is False  # multi-word phrase
+    assert vc._is_swappable_token("Melbourne roofing experts") is False
+    assert vc._is_swappable_token("") is False
+    assert vc._is_swappable_token("100%") is False           # not adjective-like
+
+
+def test_multiword_required_terms_splits_phrases_from_swappables():
+    card = _voice_card(must_use_terms=["trusted", "long-lasting", "peace of mind",
+                                       "Melbourne roofing experts"])
+    text = "We are trusted local specialists offering great confidence."
+    # 'trusted' present; the rest missing. multiword = only the phrases.
+    assert vc.missing_required_terms(text, card) == [
+        "long-lasting", "peace of mind", "Melbourne roofing experts"]
+    assert vc.multiword_required_terms(text, card) == [
+        "peace of mind", "Melbourne roofing experts"]
+
+
+def test_insert_swaps_hyphenated_adjective():
+    card = _voice_card(must_use_terms=["long-lasting"])
+    html = "<article><p>We deliver great results on every roof.</p></article>"
+    out, swapped = vc.insert_required_terms(html, card)
+    assert swapped == ["long-lasting"]
+    assert "long-lasting results" in out
+    assert "great results" not in out
+
+
+def test_insert_leaves_multiword_phrases_to_the_phrase_pass():
+    # The deterministic swap never touches a multi-word phrase (no filler maps to it).
+    card = _voice_card(must_use_terms=["peace of mind"])
+    html = "<article><p>We give you great confidence on every job.</p></article>"
+    out, swapped = vc.insert_required_terms(html, card)
+    assert swapped == []
+    assert out == html

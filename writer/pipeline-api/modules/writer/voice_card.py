@@ -293,7 +293,9 @@ def render_voice_card_block(card: Optional[dict]) -> str:
     if card.get("must_use_terms"):
         lines.append("")
         lines.append(
-            "REQUIRED phrasing — use these terms, in these words: "
+            "REQUIRED phrasing — you MUST include EACH of these exact phrases VERBATIM, "
+            "word-for-word, at least once somewhere on the page. Do NOT paraphrase them or "
+            "swap in a synonym (e.g. if \"experts\" is required, do not write \"specialists\"): "
             + ", ".join(f'"{t}"' for t in card["must_use_terms"])
         )
     if card.get("never_use_terms"):
@@ -560,6 +562,17 @@ _HEADING_TAGS_VC = ("h1", "h2", "h3", "h4", "h5", "h6")
 _NEVER = re.compile(r"(?!x)x")
 
 
+def _is_swappable_token(term: str) -> bool:
+    """True for a required term the deterministic filler-swap can place in-line:
+    a single token (no spaces) made of letters and internal hyphens — a bare
+    adjective ("trusted") or a hyphenated compound ("long-lasting"). Multi-word
+    phrases are handled by the targeted phrase pass, not here."""
+    t = (term or "").strip()
+    if not t or " " in t:
+        return False
+    return bool(re.fullmatch(r"[A-Za-z]+(?:-[A-Za-z]+)*", t))
+
+
 def missing_required_terms(page_text: str, card: Optional[dict]) -> list[str]:
     """The guide's must-use terms that do NOT appear in `page_text`.
 
@@ -574,6 +587,17 @@ def missing_required_terms(page_text: str, card: Optional[dict]) -> list[str]:
         if rx is None or not rx.search(page_text):
             out.append(term)
     return out
+
+
+def multiword_required_terms(page_text: str, card: Optional[dict]) -> list[str]:
+    """The MISSING required phrasings the deterministic swap can't place — multi-word
+    phrases (and any non-adjective token). These are what the targeted phrase pass /
+    voice loop must weave in, typically by replacing a synonym the writer used
+    ("specialists" where the guide requires "experts")."""
+    return [
+        t for t in missing_required_terms(page_text, card)
+        if not _is_swappable_token((t or "").strip())
+    ]
 
 
 def insert_required_terms(html: str, card: Optional[dict]) -> tuple[str, list[str]]:
@@ -607,10 +631,11 @@ def insert_required_terms(html: str, card: Optional[dict]) -> tuple[str, list[st
 
     card = card or {}
     must = card.get("must_use_terms") or []
-    singles = [
-        t.strip() for t in must
-        if t and t.strip() and " " not in t.strip() and t.strip().isalpha()
-    ]
+    # Single-token adjective-like requireds the filler-swap can place in-line:
+    # a bare word ("trusted") or a hyphenated compound ("long-lasting"). A
+    # multi-word phrase ("peace of mind", "Melbourne roofing experts") can't be
+    # swapped for one filler and is left to the targeted phrase pass / LLM loop.
+    singles = [t.strip() for t in must if t and _is_swappable_token(t.strip())]
     if not singles:
         return html, []
 
