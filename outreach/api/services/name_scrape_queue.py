@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..config import Settings
@@ -65,6 +65,33 @@ class NameScrapeDrainReport:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def recover_stuck_orders(db: Any, settings: Settings) -> int:
+    """Reset `running` orders older than `name_scrape_stuck_order_minutes` back to `pending` so a
+    later tick resumes them (I-119 sibling — this FREE drain has a per-tick budget but had no reaper).
+    A normal tick holds an order `running` only for the tens of seconds it scrapes one budget's worth,
+    so a much-older `running` is a container that died mid-tick (a hard SIGKILL before the budget's
+    work finished). The idempotent marker skip means the resume re-scrapes only the un-done prospects.
+    Returns the number recovered."""
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(minutes=settings.name_scrape_stuck_order_minutes)
+    ).isoformat()
+    stuck = (
+        db.table(_TABLE).select("id").eq("status", "running").lt("started_at", cutoff)
+        .execute().data or []
+    )
+    recovered = 0
+    for row in stuck:
+        # Conditional on still-running so we never stomp an order a live tick just re-claimed.
+        updated = (
+            db.table(_TABLE).update({"status": "pending", "started_at": None})
+            .eq("id", row["id"]).eq("status", "running").execute().data or []
+        )
+        if updated:
+            recovered += 1
+            logger.warning("recovered stuck name-scrape order", extra={"order_id": row["id"]})
+    return recovered
 
 
 def claim_next_order(db: Any) -> dict[str, Any] | None:
@@ -452,8 +479,14 @@ async def drain(
 
     The budget bounds the tick's wall-time: an order larger than the remaining budget is scraped up
     to it and left PENDING to resume next tick (a partial ⟹ the budget is spent, so the loop stops).
+    Stranded `running` orders are recovered first (I-119 sibling).
     """
     report = NameScrapeDrainReport()
+    try:
+        recover_stuck_orders(db, settings)
+    except Exception as exc:  # noqa: BLE001 — recovery is best-effort; never block the drain
+        logger.warning("name-scrape stuck-order recovery failed", extra={"error": str(exc)[:200]})
+
     order_limit = max_orders if max_orders is not None else settings.name_scrape_orders_per_tick
     per_tick = max_prospects if max_prospects is not None else settings.name_scrape_per_tick
     budget = per_tick if per_tick > 0 else 10**9  # <=0 → effectively no cap

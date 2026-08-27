@@ -2443,11 +2443,13 @@ re-bills only the un-done places), so no tick overruns the window; `process_orde
 `cost_ledger` writes one row per billing tick. (2) `recover_stuck_orders` resets a `running` order older
 than `name_search_stuck_order_minutes` (20) back to `pending` (conditional-on-still-running), called
 first in `drain`. Unit-tested (`test_name_search_queue`: resume across ticks, whole-tick budget bound,
-stuck recovery, recent-order-not-recovered — 14 pass; full suite 665). **Remaining sibling gap
-(not fixed here, lower priority):** `name_scrape_queue` (the FREE site-scrape fallback) already HAS the
-per-tick budget (`name_scrape_per_tick`) but still lacks the `recover_stuck_orders` reaper — a hard kill
-(SIGKILL before its budget's work finishes) would strand a `running` order with no auto-recovery. It
-wastes no money (free), only blocks that one order, so it's a cheap follow-up: port the same reaper.
+stuck recovery, recent-order-not-recovered — 14 pass; full suite 665). **Sibling gap CLOSED
+(2026-08-27):** `name_scrape_queue` (the FREE site-scrape fallback) already HAD the per-tick budget
+(`name_scrape_per_tick`) but lacked the reaper; `recover_stuck_orders` (+ `name_scrape_stuck_order_minutes`,
+20) was ported to it too — same shape (conditional-on-still-running reset, called first in `drain`), so a
+hard kill that strands a `running` site-scrape order now self-recovers on the next tick. Unit-tested
+(`test_name_scrape_queue`: stuck recovered, recent-not-recovered — 16 pass; full suite 673). All three
+name/enrich drains (enrich / name_search / name_scrape) now carry BOTH the per-tick budget and the reaper.
 
 ### I-109 RESOLVED (2026-08-26) · TWO stacked bugs — sync mode AND the wrong enricher slug; fixed to async + `leads_n_contacts`
 Enrichment was broken two ways at once, which is why every prior single-cause theory (wrong validator
