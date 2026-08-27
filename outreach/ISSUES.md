@@ -2385,6 +2385,31 @@ the placeholder still drives the list even after a `score` run populates the fit
 
 ## Lead enrichment (2026-08-10)
 
+### I-117 FIXED (2026-08-27) · Re-enrich WIPED a prospect's site_scrape / web_search name contacts (unscoped delete)
+`enrich_queue._store_prospect`'s replace-on-place did
+`prospect_contact.delete().eq("prospect_id", …)` with **no source scope**, so re-enriching a prospect
+deleted ALL its contacts — including the free **site_scrape** and paid **web_search** NAME fallbacks,
+which are independent producers. Caught live: a market-wide `leads_n_contacts` re-run on the LA
+emergency-plumber market dropped site_scrape from 14 named prospects → 1 and web_search 3 → 0. The
+`name_scrape_queue` correctly scopes its own delete to `source='site_scrape'`; the enrich drain didn't.
+**Fixed:** scoped the delete to `enrichment.CONTACT_SOURCE` ('outscraper') — a re-enrich now replaces
+only Outscraper contacts and leaves the name fallbacks intact. New `CONTACT_SOURCE` constant is the
+single source of truth (used by `contact_rows` too). Regression test
+`test_enrich_queue.test_re_enrich_preserves_site_scrape_and_web_search_contacts`. **Cleanup owed:** the
+wiped site_scrape/web_search names must be RE-RUN (site scrape is free; web search ~cents) once the fix
+is deployed — do it AFTER deploy, or the still-buggy live code wipes them again.
+
+### I-118 OPEN · A large enrichment order exceeds the 5-min cron window and gets stuck `running`
+The market-wide `leads_n_contacts` order (118 places) ran ~4 min writing 101 markers, then the cron
+container was terminated at the `*/5` boundary (~00:29→00:30), leaving 17 places unprocessed and the
+order stuck `status='running'` with no recovery (the enrich drain claims only `pending` orders, and
+there is no stale-order reaper for `enrichment_request`). Unlike `name_scrape`, the **enrich drain has
+no per-tick place budget**, so one big order can't bound itself to the cron window or resume across
+ticks. **Interim:** the stuck order was cancelled by hand; enrich in **smaller batches** (≤~40 places)
+until fixed. **Fix (follow-up):** give the enrich drain a per-tick place budget + resume (mirror
+`name_scrape_per_tick` / the PENDING-resume pattern), and/or a stuck-`running` reaper that returns an
+overrun order to `pending`. Note this is separate from I-117 (data loss) — this is throughput/recovery.
+
 ### I-109 RESOLVED (2026-08-26) · TWO stacked bugs — sync mode AND the wrong enricher slug; fixed to async + `leads_n_contacts`
 Enrichment was broken two ways at once, which is why every prior single-cause theory (wrong validator
 set, parser aliases) only half-explained it:

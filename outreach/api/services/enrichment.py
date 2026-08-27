@@ -27,6 +27,11 @@ from __future__ import annotations
 import re
 from typing import Any
 
+# The `prospect_contact.source` these rows carry. The drain's replace-on-place delete is scoped to
+# this value so a re-enrich only ever replaces Outscraper contacts — never the site_scrape /
+# web_search NAME fallbacks, which are independent producers.
+CONTACT_SOURCE = "outscraper"
+
 # Generic mailbox local-parts — kept as a FLAG (`email_is_generic`), never a reason to drop the
 # contact. A generic address is still a real, usable contact; the caller decides how to weight it.
 _GENERIC_LOCALS = frozenset(
@@ -389,7 +394,7 @@ def contact_rows(
                 "prospect_id": prospect_id,
                 "place_id": place_id,
                 "contact_index": idx,
-                "source": "outscraper",
+                "source": CONTACT_SOURCE,
                 "raw": record if idx == 0 else None,
                 **contact,
             }
