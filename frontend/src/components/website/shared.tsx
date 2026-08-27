@@ -103,6 +103,61 @@ export interface CityRow {
   neighborhoods?: { name: string }[]
 }
 
+// --- content plan (the blog) --------------------------------------------
+// Blog posts are cross-family: an informational site's whole inventory and a
+// local site's /blog/ both come from this. Planned per cluster (pillar), each
+// post with a target format before generation.
+
+export interface ContentPlanPost {
+  title: string
+  slug?: string
+  format?: string
+  keyword?: string
+  buyer_problem?: string
+  target_keywords?: string[]
+}
+
+export interface ContentPlanPillar {
+  title: string
+  slug?: string
+  posts: ContentPlanPost[]
+}
+
+export interface ContentPlan {
+  pillars: ContentPlanPillar[]
+}
+
+// The five formats the template renders. `format` is a plan-time decision: it
+// changes the geo rule, the schema, and whether the post counts toward the
+// >=5-evergreen pillar trigger (news is non-evergreen, excluded).
+export const POST_FORMATS: { value: string; label: string }[] = [
+  { value: 'informational_cluster', label: 'Cluster post (evergreen)' },
+  { value: 'listicle', label: 'Listicle / roundup' },
+  { value: 'comparison', label: 'Comparison / “vs”' },
+  { value: 'local_geo', label: 'Local geo (local sites)' },
+  { value: 'news', label: 'News (non-evergreen)' },
+]
+
+// --- release (drip-publish) schedule ------------------------------------
+
+export type ReleaseMode = 'daily' | 'weekly' | 'monthly'
+
+export interface ReleaseSchedule {
+  id: string
+  website_id: string
+  enabled: boolean
+  mode: ReleaseMode
+  weekday: number | null
+  day_of_month: number | null
+  immediate_count: number
+  per_release_count: number
+  status: 'active' | 'complete' | 'paused'
+  next_run_at: string | null
+  last_run_at: string | null
+}
+
+export const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
 // --- shared styles -------------------------------------------------------
 
 export const btn = (bg: string, fg = '#fff'): React.CSSProperties => ({
