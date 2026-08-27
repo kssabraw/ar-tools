@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, CheckCircle2, Info, Loader2, Plus, ShieldCheck, Trash2 } from 'lucide-react'
 import { ACCENT, btn, card, denyReason, input } from './shared'
 import type { CityRow, PlanIssue, PlanResponse, ServiceRow, Website } from './shared'
+import { ContentPlanEditor } from './ContentPlanEditor'
 import { api } from '../../lib/api'
 
 // Plan review (PRD §6.2). Two rules shape this screen:
@@ -64,46 +65,59 @@ export function PlanTab({ website, plan, perms }: Props) {
     return next
   })
 
+  // A geo site is planned from its catalog × cities; an informational site has
+  // no such half — its inventory is entirely its blog content plan. Both site
+  // families can carry a blog, so the content plan shows for all.
+  const isGeo = website.site_type === 'local_business' || website.site_type === 'lead_gen'
+
   return (
     <div style={{ display: 'grid', gap: 16 }}>
-      <div style={card}>
-        <strong style={{ fontSize: 14, color: '#0f172a' }}>Service catalog</strong>
-        <p style={{ fontSize: 12, color: '#64748b', margin: '4px 0 12px' }}>
-          The billable jobs, in the client's own words. Never imported from GBP categories —
-          a category is a taxonomy label and a service is a billable job, and wiring one into
-          the other produces the wrong page inventory. Unticking <em>In matrix</em> gives a
-          service its own page but no service × city pages.
-        </p>
-        <ServiceEditor rows={services} onChange={setServices} disabled={Boolean(deny)} />
-      </div>
+      {isGeo && (
+        <>
+          <div style={card}>
+            <strong style={{ fontSize: 14, color: '#0f172a' }}>Service catalog</strong>
+            <p style={{ fontSize: 12, color: '#64748b', margin: '4px 0 12px' }}>
+              The billable jobs, in the client's own words. Never imported from GBP categories —
+              a category is a taxonomy label and a service is a billable job, and wiring one into
+              the other produces the wrong page inventory. Unticking <em>In matrix</em> gives a
+              service its own page but no service × city pages.
+            </p>
+            <ServiceEditor rows={services} onChange={setServices} disabled={Boolean(deny)} />
+          </div>
 
-      <div style={card}>
-        <strong style={{ fontSize: 14, color: '#0f172a' }}>Cities</strong>
-        <p style={{ fontSize: 12, color: '#64748b', margin: '4px 0 12px' }}>
-          One location page each, plus a service × city page per matrix service. A single-city
-          business gets neither — its service pages geo-target the one city instead. Only
-          neighborhoods that pass the Maps entity test belong here.
-        </p>
-        <CityEditor rows={cities} onChange={setCities} disabled={Boolean(deny)} />
-      </div>
+          <div style={card}>
+            <strong style={{ fontSize: 14, color: '#0f172a' }}>Cities</strong>
+            <p style={{ fontSize: 12, color: '#64748b', margin: '4px 0 12px' }}>
+              One location page each, plus a service × city page per matrix service. A single-city
+              business gets neither — its service pages geo-target the one city instead. Only
+              neighborhoods that pass the Maps entity test belong here.
+            </p>
+            <CityEditor rows={cities} onChange={setCities} disabled={Boolean(deny)} />
+          </div>
 
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <button
-          onClick={() => build.mutate()}
-          disabled={Boolean(deny) || build.isPending || services.length === 0}
-          title={deny ?? (services.length === 0 ? 'Add at least one service — Plan Silo consumes a service list, it does not invent one.' : undefined)}
-          style={{ ...btn(deny || services.length === 0 ? '#e2e8f0' : ACCENT, deny || services.length === 0 ? '#94a3b8' : '#fff') }}
-        >
-          {build.isPending ? <Loader2 size={14} className="spin" /> : null}
-          {plan?.plan.pages.length ? 'Rebuild plan' : 'Build plan'}
-        </button>
-        {plan?.plan.pages.length ? (
-          <span style={{ fontSize: 12, color: '#64748b' }}>
-            {plan.plan.pages.length} pages · {plan.plan.matrix_count} matrix
-          </span>
-        ) : null}
-      </div>
-      {build.error && <ErrorNote message={(build.error as Error).message} />}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button
+              onClick={() => build.mutate()}
+              disabled={Boolean(deny) || build.isPending || services.length === 0}
+              title={deny ?? (services.length === 0 ? 'Add at least one service — Plan Silo consumes a service list, it does not invent one.' : undefined)}
+              style={{ ...btn(deny || services.length === 0 ? '#e2e8f0' : ACCENT, deny || services.length === 0 ? '#94a3b8' : '#fff') }}
+            >
+              {build.isPending ? <Loader2 size={14} className="spin" /> : null}
+              {plan?.plan.pages.length ? 'Rebuild plan' : 'Build plan'}
+            </button>
+            {plan?.plan.pages.length ? (
+              <span style={{ fontSize: 12, color: '#64748b' }}>
+                {plan.plan.pages.length} pages · {plan.plan.matrix_count} matrix
+              </span>
+            ) : null}
+          </div>
+          {build.error && <ErrorNote message={(build.error as Error).message} />}
+        </>
+      )}
+
+      {/* The blog content plan — its Save/seed rebuild the plan, which is the
+          whole build for an informational site and the blog half for a geo one. */}
+      <ContentPlanEditor website={website} perms={perms} />
 
       {plan && plan.plan.pages.length > 0 && (
         <>
