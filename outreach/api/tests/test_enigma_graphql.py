@@ -37,19 +37,24 @@ _BRAND = {
     "enigmaId": "5f53e079-c66a-487e-8a9d-08efc39652ee",
     "names": {"edges": [{"node": {"name": "MR SPEEDY PLUMBING ROOTER INC"}}]},
     "cardTransactions": {"edges": [
-        {"node": {"period": "1m", "projectedQuantity": 83971, "rawQuantity": 20000,
+        {"node": {"period": "1m", "projectedQuantity": 83971,
                   "periodStartDate": "2025-06-01", "periodEndDate": "2025-06-30"}},
-        {"node": {"period": "3m", "projectedQuantity": 250000, "rawQuantity": 60000,
+        {"node": {"period": "3m", "projectedQuantity": 250000,
                   "periodStartDate": "2025-04-01", "periodEndDate": "2025-06-30"}},
-        {"node": {"period": "12m", "projectedQuantity": 900000, "rawQuantity": 300000,
+        {"node": {"period": "12m", "projectedQuantity": 900000,
                   "periodStartDate": "2024-07-01", "periodEndDate": "2025-06-30"}},
     ]},
     "operatingLocations": {"edges": [{"node": {"roles": {"edges": [
         {"node": {
             "jobTitle": "OWNER", "jobFunction": "Management", "managementLevel": "owner",
-            "legalEntities": {"edges": [{"node": {"persons": {"edges": [
-                {"node": {"fullName": "ALFRED MARZOUK", "firstName": "ALFRED", "lastName": "MARZOUK"}}
-            ]}}}]},
+            # Person name comes via legalEntities→names (legalEntityType "Person"), NOT persons.fullName
+            # (the deployed search schema rejects Person.fullName). A company LE here must be ignored.
+            "legalEntities": {"edges": [
+                {"node": {"names": {"edges": [
+                    {"node": {"name": "MR SPEEDY PLUMBING ROOTER INC", "legalEntityType": "Corporation"}}]}}},
+                {"node": {"names": {"edges": [
+                    {"node": {"name": "ALFRED MARZOUK", "legalEntityType": "Person"}}]}}},
+            ]},
             "phoneNumbers": {"edges": [{"node": {"phoneNumber": "+13235551234"}}]},
             "emailAddresses": {"edges": [{"node": {"emailAddress": "owner@example.com"}}]},
         }}
@@ -102,11 +107,23 @@ def test_extract_owner_prefers_role_with_a_person():
     brand = {"operatingLocations": {"edges": [{"node": {"roles": {"edges": [
         {"node": {"jobTitle": "STAFF", "legalEntities": {"edges": []}}},  # no person
         {"node": {"jobTitle": "OWNER",
-                  "legalEntities": {"edges": [{"node": {"persons": {"edges": [
-                      {"node": {"fullName": "Dana Lee"}}]}}}]}}},
+                  "legalEntities": {"edges": [{"node": {"names": {"edges": [
+                      {"node": {"name": "Dana Lee", "legalEntityType": "Person"}}]}}}]}}},
     ]}}}]}}
     owner = eg.extract_owner(brand)
     assert owner["full_name"] == "Dana Lee" and owner["job_title"] == "OWNER"
+
+
+def test_extract_owner_ignores_company_legal_entity_name():
+    # A role whose only legal entity is a Corporation is NOT an owner name.
+    brand = {"operatingLocations": {"edges": [{"node": {"roles": {"edges": [
+        {"node": {"jobTitle": "OWNER",
+                  "legalEntities": {"edges": [{"node": {"names": {"edges": [
+                      {"node": {"name": "ACME LLC", "legalEntityType": "Corporation"}}]}}}]},
+                  "phoneNumbers": {"edges": [{"node": {"phoneNumber": "+13230000000"}}]}}},
+    ]}}}]}}
+    owner = eg.extract_owner(brand)
+    assert owner["full_name"] is None and owner["phone"] == "+13230000000"
 
 
 def test_extract_owner_falls_back_to_titled_role_without_person():
