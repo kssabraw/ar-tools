@@ -197,7 +197,13 @@ def _store_prospect(
     # Delete-then-insert: the child rows are fully derived from the latest pull, so replacing them is
     # both correct and idempotent. Contacts first, then the status marker, so a crash between the two
     # leaves the marker absent (status unknown → retried) rather than present-with-stale-children.
-    db.table("prospect_contact").delete().eq("prospect_id", prospect_id).execute()
+    # SCOPED to source='outscraper' — this producer owns ONLY the Outscraper contacts. A prospect's
+    # site_scrape / web_search contacts (the free/paid NAME fallbacks) are a different producer's and
+    # must survive a re-enrich; an unscoped delete here wiped them (the name_scrape drain scopes its
+    # own delete the same way — the two producers are independent).
+    db.table("prospect_contact").delete().eq("prospect_id", prospect_id).eq(
+        "source", enrichment.CONTACT_SOURCE
+    ).execute()
     if rows:
         db.table("prospect_contact").insert(rows).execute()
 

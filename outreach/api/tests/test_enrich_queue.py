@@ -430,7 +430,8 @@ def test_re_enrich_replaces_contacts_rather_than_duplicating(monkeypatch):
         {"prospect_id": "p1", "place_id": "place-1", "status": "failed", "contact_count": 0}
     ]
     db.tables["prospect_contact"] = [
-        {"id": "old", "prospect_id": "p1", "place_id": "place-1", "email": "stale@x.com"}
+        {"id": "old", "prospect_id": "p1", "place_id": "place-1", "email": "stale@x.com",
+         "source": "outscraper"}
     ]
     _stub_enrich(monkeypatch, by_place={"place-1": [{"emails": [{"value": "fresh@x.com"}]}]})
 
@@ -438,6 +439,37 @@ def test_re_enrich_replaces_contacts_rather_than_duplicating(monkeypatch):
 
     emails = [c.get("email") for c in db.tables["prospect_contact"]]
     assert emails == ["fresh@x.com"], "the stale contact must be replaced, not accumulated"
+
+
+def test_re_enrich_preserves_site_scrape_and_web_search_contacts(monkeypatch):
+    """The replace-on-place delete is SCOPED to source='outscraper': a re-enrich must never wipe a
+    prospect's site_scrape / web_search NAME contacts (independent producers). Regression for the
+    data-loss bug where an unscoped delete removed the free/paid name fallbacks."""
+    db = _FakeDB()
+    _seed(
+        db,
+        prospects=[{"id": "p1", "place_id": "place-1", "market_id": "m1", "name": "A"}],
+        orders=[_order(prospect_ids=["p1"])],
+    )
+    db.tables["prospect_enrichment"] = [
+        {"prospect_id": "p1", "place_id": "place-1", "status": "failed", "contact_count": 0}
+    ]
+    db.tables["prospect_contact"] = [
+        {"id": "os", "prospect_id": "p1", "place_id": "place-1", "email": "stale@x.com",
+         "source": "outscraper"},
+        {"id": "site", "prospect_id": "p1", "place_id": "place-1", "full_name": "Rex Mcgee",
+         "source": "site_scrape"},
+        {"id": "web", "prospect_id": "p1", "place_id": "place-1", "full_name": "Jane Roe",
+         "source": "web_search"},
+    ]
+    _stub_enrich(monkeypatch, by_place={"place-1": [{"emails": [{"value": "fresh@x.com"}]}]})
+
+    asyncio.run(enrich_queue.drain(db, _Settings()))
+
+    by_source = {c["source"]: c for c in db.tables["prospect_contact"]}
+    assert by_source["outscraper"]["email"] == "fresh@x.com"     # its own contact replaced
+    assert by_source["site_scrape"]["full_name"] == "Rex Mcgee"  # fallback names SURVIVE
+    assert by_source["web_search"]["full_name"] == "Jane Roe"
 
 
 def test_drain_processes_several_orders_per_tick(monkeypatch):
