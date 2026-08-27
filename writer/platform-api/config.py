@@ -260,6 +260,15 @@ class Settings(BaseSettings):
     algo_min_clients: int = 3
     algo_min_share: float = 0.4
     algo_window_days: int = 3
+    # Scan-health watch: alert (in-app + Slack) when a client's scheduled data-
+    # collection jobs (maps geo-grid / organic rank) fail in a streak, so a
+    # silent upstream outage can't starve the drop alerts unnoticed. Daily
+    # DB-reads-only sweep over async_jobs; deduped per streak-episode (re-nudges
+    # at most weekly while unresolved).
+    scan_health_enabled: bool = True
+    scan_health_min_streak: int = 3      # consecutive failed scheduled runs to fire
+    scan_health_min_days: int = 3        # ...the failing run must also span this many days
+    scan_health_lookback_days: int = 21  # async_jobs history read per sweep
     # Auto-generate a new client's brand voice + ICP at creation (async, best-
     # effort) so the assets exist without a manual scan. Skips clients with no
     # website and no GBP (nothing to analyze). Never overrides user-authored
