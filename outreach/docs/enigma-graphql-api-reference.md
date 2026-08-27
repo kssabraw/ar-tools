@@ -60,8 +60,20 @@ cardTransactions(conditions: { filter: { AND: [
 
 `Role` fields: `jobTitle`, `jobFunction`, `managementLevel`, plus connections `phoneNumbers` →
 `PhoneNumber.phoneNumber`, `emailAddresses` → `EmailAddress.emailAddress`, and `legalEntities` →
-`LegalEntity.persons` → `Person { fullName firstName lastName }`. This is the exact path behind the
-CSV's `operatingLocations__0__roles__0__legalEntities__0__persons__0__fullName__0` etc.
+`LegalEntity`. The console batch's flattened path was
+`operatingLocations__0__roles__0__legalEntities__0__persons__0__fullName__0`, **but the deployed
+`search` schema rejects `Person.fullName`/`firstName`/`lastName`** (measured live 2026-08-27 — a
+schema-validation 400). The name comes instead from `legalEntities → names → { name legalEntityType }`,
+keeping only a `legalEntityType == "Person"` entity so a company legal-entity name is never mistaken
+for an owner.
+
+### Live-schema deviations from this doc's SDL (measured 2026-08-27)
+
+The deployed `search` schema is slightly behind the published SDL. Two fields the SDL lists are
+rejected with `Cannot query field '…'`:
+- `BrandCardTransaction.rawQuantity` — Brand-level card transactions expose only `projectedQuantity`
+  (`rawQuantity` exists on `OperatingLocationCardTransaction`, not Brand).
+- `Person.fullName` / `firstName` / `lastName` — use `LegalEntity.names` instead (above).
 
 ## The probe query (BRAND match → owner + card windows)
 
@@ -75,14 +87,14 @@ query Probe($si: SearchInput!) {
         { EQ: ["quantityType", "card_revenue_amount"] },
         { IN: ["period", ["1m", "3m", "12m"]] }
       ] } }) {
-        edges { node { period projectedQuantity rawQuantity periodStartDate periodEndDate } }
+        edges { node { period projectedQuantity periodStartDate periodEndDate } }
       }
       operatingLocations(first: 1) {
         edges { node { roles(first: 3) { edges { node {
           jobTitle jobFunction managementLevel
-          legalEntities(first: 1) { edges { node { persons(first: 1) { edges { node {
-            fullName firstName lastName
-          } } } } } }
+          legalEntities(first: 2) { edges { node {
+            names(first: 1) { edges { node { name legalEntityType } } }
+          } } }
           phoneNumbers(first: 1) { edges { node { phoneNumber } } }
           emailAddresses(first: 1) { edges { node { emailAddress } } }
         } } } } }

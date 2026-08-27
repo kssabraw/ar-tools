@@ -40,14 +40,14 @@ query Probe($si: SearchInput!) {
         { EQ: ["quantityType", "card_revenue_amount"] },
         { IN: ["period", ["1m", "3m", "12m"]] }
       ] } }) {
-        edges { node { period projectedQuantity rawQuantity periodStartDate periodEndDate } }
+        edges { node { period projectedQuantity periodStartDate periodEndDate } }
       }
       operatingLocations(first: 1) {
         edges { node { roles(first: 3) { edges { node {
           jobTitle jobFunction managementLevel
-          legalEntities(first: 1) { edges { node { persons(first: 1) { edges { node {
-            fullName firstName lastName
-          } } } } } }
+          legalEntities(first: 2) { edges { node {
+            names(first: 1) { edges { node { name legalEntityType } } }
+          } } }
           phoneNumbers(first: 1) { edges { node { phoneNumber } } }
           emailAddresses(first: 1) { edges { node { emailAddress } } }
         } } } } }
@@ -162,16 +162,16 @@ def extract_card_windows(brand: Any) -> dict[str, Any] | None:
 
 
 def _person_name(role: dict[str, Any]) -> str | None:
+    """The owner's name from a role's legal entities. The deployed `search` schema does NOT expose
+    `Person.fullName/firstName/lastName` (a live 400), so the name comes from
+    `legalEntities → names → { name legalEntityType }` — and only a `legalEntityType == "Person"`
+    entity is treated as a person, so a company legal entity name is never mistaken for an owner."""
     for le in _nodes(role.get("legalEntities")):
-        for person in _nodes(le.get("persons")):
-            full = person.get("fullName")
-            if isinstance(full, str) and full.strip():
-                return full.strip()
-            first = str(person.get("firstName") or "").strip()
-            last = str(person.get("lastName") or "").strip()
-            name = f"{first} {last}".strip()
-            if name:
-                return name
+        for name_node in _nodes(le.get("names")):
+            if str(name_node.get("legalEntityType") or "").strip().lower() == "person":
+                nm = name_node.get("name")
+                if isinstance(nm, str) and nm.strip():
+                    return nm.strip()
     return None
 
 
