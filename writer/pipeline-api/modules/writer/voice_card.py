@@ -54,7 +54,6 @@ _EMPTY_CARD: dict[str, Any] = {
     "person": "",
     "voice_directives": [],
     "sentence_rhythm": "",
-    "readability": "",
     "must_use_terms": [],
     "never_use_terms": [],
     "discouraged_terms": [],
@@ -84,7 +83,6 @@ Output a single JSON object matching this exact schema:
   "person": "first" | "third" | "" (does the guide tell the writer to speak as "we/our" (first) or to name the brand in third person (third)? "" if the guide does not say),
   "voice_directives": [string, max 8, each <=200 chars - the guide's concrete HOW-TO-WRITE rules],
   "sentence_rhythm": string (max 200 chars - what the guide says about sentence length/rhythm/cadence; "" if unstated),
-  "readability": string (max 200 chars - what the guide says about READING LEVEL and PLAIN LANGUAGE for the reader: e.g. "explain jargon/technical terms for homeowners", "write for a layperson", "no unexplained industry terms", a target reading level, or a formality instruction. "" if the guide says nothing about reading level or explaining terminology),
   "must_use_terms": [string, max 15 - phrasings the guide REQUIRES or names as preferred],
   "never_use_terms": [string, max 30 - see the HIGH BAR rule below],
   "discouraged_terms": [string, max 20 - softer "avoid/prefer X over Y" preferences],
@@ -104,8 +102,7 @@ CRITICAL RULES:
 - never_use_terms has a HIGH BAR: include a term ONLY when the document uses literal prohibitive language about it - "never use", "do not use", "banned", "prohibited", "must not appear", "absolutely not", or equivalent. A page will be BLOCKED when one of these appears, so a false positive is expensive.
 - discouraged_terms is for every softer preference - "avoid", "we prefer X over Y", "try not to", "use sparingly", "lean away from". When torn between never_use and discouraged, choose discouraged.
 - person: answer "first" only if the guide actually asks the writer to use we/our/us, and "third" only if it asks for the brand to be named instead. If the guide is silent, return "".
-- tone_adjectives, voice_directives, sentence_rhythm, readability, must_use_terms, never_use_terms, discouraged_terms come from the BRAND GUIDE.
-- readability: capture an EXPLICIT instruction about reading level or explaining terminology only (e.g. "explain jargon for homeowners", "write in plain English a layperson understands"). Do NOT infer it from tone; "" when the guide is silent.
+- tone_adjectives, voice_directives, sentence_rhythm, must_use_terms, never_use_terms, discouraged_terms come from the BRAND GUIDE.
 - audience_* and cta_language come from the ICP (cta_language may also come from the brand guide when it specifies CTA wording).
 - differentiators and signature_phrases may come from EITHER the brand guide or the ICP. differentiators are what the brand claims sets it apart (only real, stated claims - a generic "quality service" is NOT a differentiator); signature_phrases are the brand's own verbatim wording. Do NOT invent either: an empty list is the correct answer when the documents state nothing distinctive.
 - If a field has no basis in the source documents, return an empty array, empty string, or "". Never fill a field to look complete."""
@@ -157,7 +154,6 @@ def parse_voice_card(raw: Any) -> dict[str, Any]:
 
     card["brand_name"] = _str("brand_name", 120)
     card["sentence_rhythm"] = _str("sentence_rhythm", 200)
-    card["readability"] = _str("readability", 200)
     card["audience_label"] = _str("audience_label", 120)
     card["audience_summary"] = _str("audience_summary", 300)
 
@@ -287,13 +283,6 @@ def render_voice_card_block(card: Optional[dict]) -> str:
 
     if card.get("sentence_rhythm"):
         lines.append(f"Sentence rhythm: {card['sentence_rhythm']}")
-
-    if card.get("readability"):
-        lines.append(
-            f"Reading level: {card['readability']} — the first time you use a "
-            "trade/technical term the reader may not know, add a short plain-English "
-            "gloss right there (a few words), then continue."
-        )
 
     if card.get("voice_directives"):
         lines.append("")
