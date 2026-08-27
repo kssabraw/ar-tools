@@ -25,6 +25,7 @@ Two render modes shape the directive to the consumer:
 
 from __future__ import annotations
 
+import copy
 from typing import Any, Literal, Optional
 
 # Human labels for each reference page type.
@@ -135,6 +136,61 @@ def usable_analysis(entry: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]
     return _usable(entry)
 
 
+def outline_total_words(analysis: Optional[dict[str, Any]]) -> int:
+    """Sum of the reference outline's per-section word counts (0 when absent)."""
+    if not isinstance(analysis, dict):
+        return 0
+    outline = analysis.get("outline")
+    if not isinstance(outline, list):
+        return 0
+    return sum(_section_words(it) for it in outline if isinstance(it, dict))
+
+
+def scale_analysis_words(
+    analysis: Optional[dict[str, Any]], target_words: Optional[int]
+) -> Optional[dict[str, Any]]:
+    """Rescale a reference analysis's per-section (and per-block) word counts so the
+    outline sums to ``target_words``, preserving the layout — section count, order,
+    heading hierarchy, intents, and relative section proportions — while retargeting
+    the SIZE to the topic's SERP budget.
+
+    This is what stops a long reference page (e.g. a 3,177-word client landing page)
+    from dragging generation to ~2× the SERP-appropriate length: the writer still
+    mirrors the client's structure, but at SERP-sized sections. Applied identically
+    to the copy fed to the prompt renderer AND the copy fed to the structural gate,
+    so the requirement and the measurement stay in agreement (otherwise the gate
+    would re-inflate the page it was meant to keep on-budget).
+
+    Returns the analysis unchanged when there is no target, no outline, or no
+    measurable reference length; scales UP or DOWN otherwise (the SERP budget, not
+    the reference's own length, sets the target). Never mutates the input."""
+    if not isinstance(analysis, dict) or not target_words or target_words <= 0:
+        return analysis
+    total = outline_total_words(analysis)
+    if total <= 0:
+        return analysis
+    factor = target_words / total
+    scaled = copy.deepcopy(analysis)
+    for item in scaled.get("outline", []):
+        if not isinstance(item, dict):
+            continue
+        words = _section_words(item)
+        if words:
+            new_words = max(1, round(words * factor))
+            item["word_count"] = new_words
+            if "approx_words" in item:
+                item["approx_words"] = new_words
+        blocks = item.get("blocks")
+        if isinstance(blocks, list):
+            for b in blocks:
+                if isinstance(b, dict) and isinstance(b.get("words"), int) and b["words"]:
+                    b["words"] = max(1, round(b["words"] * factor))
+    elements = scaled.get("elements")
+    if isinstance(elements, dict) and elements.get("approx_total_words"):
+        elements["approx_total_words"] = int(round(target_words))
+    return scaled
+
+
 def _present_flags(elements: dict[str, Any]) -> list[str]:
     return [label for key, label in _ELEMENT_FLAGS if elements.get(key)]
 
@@ -155,16 +211,25 @@ def render_reference_structure(
     entry: Optional[dict[str, Any]],
     page_type: str,
     mode: RenderMode = "full",
+    target_words: Optional[int] = None,
 ) -> Optional[str]:
     """Return a compact text block describing the client's own page layout, or
     None when there's no usable analysis.
 
     `entry` is one value from clients.page_structures (e.g. the "service" key):
         {"url", "status", "error", "analysis": {outline, structure_summary, elements}}
+
+    When `target_words` is given (the topic's SERP length budget), the reference's
+    per-section sizes are rescaled to that budget first (see `scale_analysis_words`)
+    so the writer mirrors the client's LAYOUT at SERP-appropriate length instead of
+    reproducing the reference's own (often much longer) word counts. Layout modes
+    other than "full" don't emit hard word targets, so scaling only affects "full".
     """
     analysis = _usable(entry)
     if analysis is None:
         return None
+    if target_words:
+        analysis = scale_analysis_words(analysis, target_words)
     if mode == "opening":
         return _render_opening(analysis, page_type)
     if mode == "structure":

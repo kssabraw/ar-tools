@@ -66,6 +66,18 @@ def test_word_target_is_avg_plus_20_percent():
     assert lf.word_target(0) is None
 
 
+def test_word_target_floors_thin_serps_but_never_invents_one():
+    # A real but low average is raised to the floor so a multi-section reference
+    # layout isn't squeezed to nonsense; a healthy average is unaffected.
+    assert lf.MIN_TARGET_WORDS == 900
+    assert lf.word_target(500.0) == 900       # 500*1.2 = 600 -> floored to 900
+    assert lf.word_target(750.0) == 900       # 750*1.2 = 900 -> exactly the floor
+    assert lf.word_target(800.0) == 960       # 800*1.2 = 960 -> above the floor, unchanged
+    # the floor never manufactures a target where there is no SERP average
+    assert lf.word_target(None) is None
+    assert lf.word_target(0) is None
+
+
 # ── is_over_length ───────────────────────────────────────────────────────────
 
 def test_is_over_length():
