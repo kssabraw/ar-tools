@@ -31,6 +31,12 @@ def test_build_variables_omits_empty_address():
     assert "address" not in v["si"] and v["si"]["name"] == "Joe's Plumbing"
 
 
+def test_build_variables_entity_type():
+    assert eg.build_variables({"name": "X"}, 0.7)["si"]["entityType"] == "BRAND"
+    v = eg.build_variables({"name": "X"}, 0.7, "operating_location")
+    assert v["si"]["entityType"] == "OPERATING_LOCATION"
+
+
 # --- a realistic matched-brand response --------------------------------------------------------
 
 _BRAND = {
@@ -73,6 +79,19 @@ def test_first_brand_none_on_empty_or_bad():
     assert eg.first_brand({"data": {"search": []}}) is None
     assert eg.first_brand({"errors": [{"message": "x"}]}) is None
     assert eg.first_brand(None) is None
+
+
+def test_first_entity_matches_on_null_enigma_id():
+    # The live API returns enigmaId: null on a real match; a named result must still count as a match.
+    raw = {"data": {"search": [{"enigmaId": None, "names": {"edges": [{"node": {"name": "ACME"}}]}}]}}
+    ent = eg.first_entity(raw)
+    assert ent is not None and eg.extract_enigma_id(ent) is None
+
+
+def test_first_entity_matches_operating_location_with_roles():
+    raw = {"data": {"search": [{"enigmaId": None, "roles": {"edges": []},
+                                "names": {"edges": [{"node": {"name": "ACME"}}]}}]}}
+    assert eg.first_entity(raw) is not None
 
 
 def test_extract_card_windows_all_three():
@@ -136,8 +155,20 @@ def test_extract_owner_falls_back_to_titled_role_without_person():
     assert owner["phone"] == "+13230000000"
 
 
+def test_extract_owner_from_direct_roles_operating_location_shape():
+    # OPERATING_LOCATION match: roles hang directly on the entity, not under operatingLocations.
+    ol = {"roles": {"edges": [
+        {"node": {"jobTitle": "OWNER", "managementLevel": "owner",
+                  "legalEntities": {"edges": [{"node": {"names": {"edges": [
+                      {"node": {"name": "Sam Rivera", "legalEntityType": "Person"}}]}}}]}}}
+    ]}}
+    owner = eg.extract_owner(ol)
+    assert owner["full_name"] == "Sam Rivera" and owner["job_title"] == "OWNER"
+
+
 def test_extract_owner_none_when_no_roles():
     assert eg.extract_owner({"operatingLocations": {"edges": []}}) is None
+    assert eg.extract_owner({"roles": {"edges": []}}) is None
     assert eg.extract_owner(None) is None
 
 
@@ -169,6 +200,24 @@ def test_probe_metrics():
     assert m["owner_name_hit_on_unnamed"] == round(1 / 3, 3)
     assert m["card_windows_present"] == 2  # u1 + u2
     assert m["card_fill_of_matched"] == round(2 / 3, 3)
+
+
+def test_is_match_keys_on_entity_not_id():
+    # A brand present with an empty enigma_id (the live null-id case) is still a match.
+    assert eg.is_match(_lookup("x", enigma_id="", brand={"names": {"edges": []}})) is True
+    assert eg.is_match(_lookup("y")) is False
+
+
+def test_probe_metrics_counts_matches_with_null_enigma_id():
+    # All matched but enigma_id empty (the real API behaviour) — match_rate must NOT be 0.
+    results = [
+        _lookup("a", brand={"names": {"edges": [{"node": {"name": "A"}}]}}),
+        _lookup("b", brand={"cardTransactions": {"edges": [
+            {"node": {"period": "12m", "projectedQuantity": 100}}]}}),
+        _lookup("c"),  # no match
+    ]
+    m = eg.probe_metrics(results, set())
+    assert m["matched"] == 2 and m["match_rate"] == round(2 / 3, 3)
 
 
 def test_probe_metrics_empty_is_safe():

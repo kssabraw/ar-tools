@@ -30,7 +30,25 @@ logger = logging.getLogger(__name__)
 # The probe query: match a BRAND by name+address, then pull the two payloads we care about. Mirrors
 # the entity path behind the owner's console-batch output columns (operatingLocations→roles→persons)
 # and requests all three card-revenue windows (the batch export only carried 12m).
+# The query carries inline fragments for BOTH Brand and OperatingLocation, so the same document works
+# whichever `entityType` the variables request. On a BRAND match, roles hang off
+# `operatingLocations → roles`; on an OPERATING_LOCATION match, `roles` are directly on the entity
+# (the console batch's `operatingLocations__0__roles__0…` implies the operating-location level is
+# where role/owner records actually live). `RoleFields` (Role is the same type in both places) DRYs the
+# owner selection; the card selection is duplicated inline because BrandCardTransaction and
+# OperatingLocationCardTransaction are distinct types (both expose period/projectedQuantity/dates).
 SEARCH_QUERY = """
+fragment RoleFields on Role {
+  jobTitle
+  jobFunction
+  managementLevel
+  legalEntities(first: 2) { edges { node {
+    names(first: 1) { edges { node { name legalEntityType } } }
+  } } }
+  phoneNumbers(first: 1) { edges { node { phoneNumber } } }
+  emailAddresses(first: 1) { edges { node { emailAddress } } }
+}
+
 query Probe($si: SearchInput!) {
   search(searchInput: $si) {
     ... on Brand {
@@ -43,25 +61,34 @@ query Probe($si: SearchInput!) {
         edges { node { period projectedQuantity periodStartDate periodEndDate } }
       }
       operatingLocations(first: 1) {
-        edges { node { roles(first: 3) { edges { node {
-          jobTitle jobFunction managementLevel
-          legalEntities(first: 2) { edges { node {
-            names(first: 1) { edges { node { name legalEntityType } } }
-          } } }
-          phoneNumbers(first: 1) { edges { node { phoneNumber } } }
-          emailAddresses(first: 1) { edges { node { emailAddress } } }
-        } } } } }
+        edges { node { roles(first: 3) { edges { node { ...RoleFields } } } } }
       }
+    }
+    ... on OperatingLocation {
+      enigmaId
+      names(first: 1) { edges { node { name } } }
+      cardTransactions(conditions: { filter: { AND: [
+        { EQ: ["quantityType", "card_revenue_amount"] },
+        { IN: ["period", ["1m", "3m", "12m"]] }
+      ] } }) {
+        edges { node { period projectedQuantity periodStartDate periodEndDate } }
+      }
+      roles(first: 3) { edges { node { ...RoleFields } } }
     }
   }
 }
 """.strip()
 
+_ENTITY_TYPES = {"brand": "BRAND", "operating_location": "OPERATING_LOCATION"}
 
-def build_variables(biz: dict[str, Any], match_threshold: float) -> dict[str, Any]:
+
+def build_variables(biz: dict[str, Any], match_threshold: float,
+                    entity_type: str = "BRAND") -> dict[str, Any]:
     """The `searchInput` for one prospect, from its identifiers. Only non-empty address parts are
-    sent. Matches at BRAND level (the console batch's entity path)."""
-    si: dict[str, Any] = {"entityType": "BRAND", "matchThreshold": match_threshold}
+    sent. `entity_type` selects BRAND (the console batch's entity path) or OPERATING_LOCATION (where
+    roles/owner records live directly)."""
+    et = _ENTITY_TYPES.get(str(entity_type).strip().lower(), str(entity_type).strip().upper())
+    si: dict[str, Any] = {"entityType": et, "matchThreshold": match_threshold}
     if biz.get("name"):
         si["name"] = str(biz["name"]).strip()
     addr = {
@@ -83,12 +110,13 @@ def _headers(settings: Settings) -> dict[str, str]:
 
 
 async def search_business(client: httpx.AsyncClient, settings: Settings,
-                          biz: dict[str, Any]) -> EnigmaCall:
+                          biz: dict[str, Any], entity_type: str = "BRAND") -> EnigmaCall:
     """POST one GraphQL search. Never raises — a transport/HTTP failure is recorded on the returned
     EnigmaCall so one bad lookup can't abort the sample."""
     url = settings.enigma_graphql_url
     call = EnigmaCall(method="POST", url=url)
-    body = {"query": SEARCH_QUERY, "variables": build_variables(biz, settings.enigma_graphql_match_threshold)}
+    body = {"query": SEARCH_QUERY,
+            "variables": build_variables(biz, settings.enigma_graphql_match_threshold, entity_type)}
     try:
         resp = await client.post(url, headers=_headers(settings), json=body)
         call.status = resp.status_code
@@ -121,18 +149,28 @@ def _first_node(conn: Any) -> dict[str, Any] | None:
     return ns[0] if ns else None
 
 
-def first_brand(raw: Any) -> dict[str, Any] | None:
-    """The top matched Brand object from a GraphQL response, or None. `search` returns a list ranked
-    best-first; we take the first dict that carries our fields."""
+def first_entity(raw: Any) -> dict[str, Any] | None:
+    """The top matched entity (Brand or OperatingLocation) from a GraphQL response, or None. `search`
+    returns a list ranked best-first; we take the first dict that carries any of our selected fields.
+    Note the live API returns `enigmaId: null` on a real match, so a match is signalled by the
+    presence of a result dict with fields (names/cardTransactions/roles/operatingLocations), NOT by a
+    non-null id — that is what the earlier match_rate=0 bug keyed on."""
     if not isinstance(raw, dict):
         return None
     results = ((raw.get("data") or {}).get("search")) if isinstance(raw.get("data"), dict) else None
     if not isinstance(results, list):
         return None
     for item in results:
-        if isinstance(item, dict) and (item.get("enigmaId") or item.get("names") or item.get("cardTransactions")):
+        if isinstance(item, dict) and any(
+            item.get(k) is not None
+            for k in ("enigmaId", "names", "cardTransactions", "roles", "operatingLocations")
+        ):
             return item
     return None
+
+
+# Back-compat alias — this returns whichever entity type matched, not only a Brand.
+first_brand = first_entity
 
 
 def extract_enigma_id(brand: Any) -> str | None:
@@ -175,16 +213,18 @@ def _person_name(role: dict[str, Any]) -> str | None:
     return None
 
 
-def extract_owner(brand: Any) -> dict[str, Any] | None:
-    """The best decision-maker record from `operatingLocations → roles`, or None. Prefers a role that
-    resolves to a named person; falls back to the first role carrying a title. Returns
-    `{full_name, job_title, management_level, job_function, phone, email}` (any may be None)."""
-    if not isinstance(brand, dict):
+def extract_owner(entity: Any) -> dict[str, Any] | None:
+    """The best decision-maker record from a matched entity's roles, or None. Roles live either
+    directly on an OperatingLocation (`roles`) or under a Brand (`operatingLocations → roles`) — this
+    checks the direct path first, then the nested one. Prefers a role that resolves to a named person;
+    falls back to the first role carrying a title/contact. Returns `{full_name, job_title,
+    management_level, job_function, phone, email}` (any may be None)."""
+    if not isinstance(entity, dict):
         return None
-    ol = _first_node(brand.get("operatingLocations"))
-    if not ol:
-        return None
-    roles = _nodes(ol.get("roles"))
+    roles = _nodes(entity.get("roles"))
+    if not roles:
+        ol = _first_node(entity.get("operatingLocations"))
+        roles = _nodes(ol.get("roles")) if ol else []
     if not roles:
         return None
 
@@ -223,11 +263,11 @@ class GraphqlLookup:
 
 
 async def lookup_one(client: httpx.AsyncClient, settings: Settings,
-                     prospect: dict[str, Any]) -> GraphqlLookup:
+                     prospect: dict[str, Any], entity_type: str = "BRAND") -> GraphqlLookup:
     result = GraphqlLookup(prospect_id=str(prospect.get("id") or ""), biz=prospect)
-    result.call = await search_business(client, settings, prospect)
+    result.call = await search_business(client, settings, prospect, entity_type)
     if result.call.ok:
-        result.brand = first_brand(result.call.raw)
+        result.brand = first_entity(result.call.raw)
         result.enigma_id = extract_enigma_id(result.brand) or ""
     logger.info(
         "enigma graphql lookup",
@@ -244,13 +284,13 @@ async def lookup_one(client: httpx.AsyncClient, settings: Settings,
 
 
 async def lookup_many(settings: Settings, prospects: list[dict[str, Any]],
-                      *, concurrency: int = 5) -> list[GraphqlLookup]:
+                      *, entity_type: str = "BRAND", concurrency: int = 5) -> list[GraphqlLookup]:
     sem = asyncio.Semaphore(max(1, concurrency))
     async with httpx.AsyncClient(timeout=settings.enigma_request_timeout_seconds) as client:
         async def _run(p: dict[str, Any]) -> GraphqlLookup:
             async with sem:
                 try:
-                    return await lookup_one(client, settings, p)
+                    return await lookup_one(client, settings, p, entity_type)
                 except Exception as exc:  # noqa: BLE001 — never let one prospect break the gather
                     logger.warning("enigma graphql lookup crashed", extra={"error": repr(exc)[:200]})
                     return GraphqlLookup(prospect_id=str(p.get("id") or ""), biz=p)
@@ -258,16 +298,23 @@ async def lookup_many(settings: Settings, prospects: list[dict[str, Any]],
         return await asyncio.gather(*[_run(p) for p in prospects])
 
 
+def is_match(result: Any) -> bool:
+    """Whether a lookup matched an Enigma entity. Keys on a returned entity object, NOT on
+    `enigma_id` — the live API returns `enigmaId: null` on a real match, so the id is not a match
+    signal (the earlier match_rate=0 bug)."""
+    return bool(getattr(result, "brand", None))
+
+
 def probe_metrics(results: list[Any], unnamed_prospect_ids: set[str]) -> dict[str, Any]:
     """The scoping §3 decision metrics over GraphqlLookup results.
 
-    - match_rate: share that matched a Brand with an enigma id.
+    - match_rate: share that matched an Enigma entity (by a returned entity, not the always-null id).
     - owner_name_hit_on_unnamed: of the prospects the existing ladder could NOT name, share Enigma
       gave a principal NAME (the headline contacts number).
     - card_fill_of_matched: of the matched, share with any 1m/3m/12m card-revenue window.
     """
     total = len(results)
-    matched = [r for r in results if getattr(r, "enigma_id", "")]
+    matched = [r for r in results if is_match(r)]
     unnamed = [r for r in results if getattr(r, "prospect_id", "") in unnamed_prospect_ids]
 
     def _owner_name(r: Any) -> str | None:
