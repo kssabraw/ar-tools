@@ -542,3 +542,106 @@ def test_dimension_score_rejects_booleans():
     dims = _dims(tone={"score": True, "applicable": True})
     # tone excluded → renormalized over the rest, still 100.
     assert vc.compute_voice_score(dims) == 100.0
+
+
+# --- missing_required_terms + insert_required_terms (deterministic net) -----
+
+def _voice_card(**overrides):
+    """A non-empty card (so is_card_empty is False) with must_use terms."""
+    return _card(tone_adjectives=["reassuring"], **overrides)
+
+
+def test_missing_required_terms_uses_page_presence():
+    card = _voice_card(must_use_terms=["trusted", "expert", "premium materials"])
+    # Only 'trusted' present → the other two are missing.
+    missing = vc.missing_required_terms("We are trusted local specialists.", card)
+    assert missing == ["expert", "premium materials"]
+    # All present → none missing.
+    assert vc.missing_required_terms(
+        "Trusted expert roofing with premium materials.", card
+    ) == []
+
+
+def test_insert_swaps_filler_for_missing_required_adjective():
+    card = _voice_card(must_use_terms=["trusted"])
+    html = "<article><p>We built a great reputation on honest work.</p></article>"
+    out, swapped = vc.insert_required_terms(html, card)
+    assert swapped == ["trusted"]
+    assert "trusted reputation" in out
+    assert "great reputation" not in out
+
+
+def test_insert_never_touches_headings_or_chrome():
+    card = _voice_card(must_use_terms=["trusted"])
+    # 'great' only appears in a heading and a nav — neither is body prose.
+    html = (
+        "<nav>Great deals here</nav>"
+        "<article><h2>Great service</h2><p>Reliable roofing, done well.</p></article>"
+    )
+    out, swapped = vc.insert_required_terms(html, card)
+    assert swapped == []
+    assert out == html  # untouched — no body-prose filler to swap
+
+
+def test_insert_idiom_guard_leaves_measure_phrases_alone():
+    card = _voice_card(must_use_terms=["trusted"])
+    html = "<article><p>We do a great deal of our work in the area.</p></article>"
+    out, swapped = vc.insert_required_terms(html, card)
+    assert swapped == []
+    assert "great deal" in out  # 'a great deal' is an idiom, not an adjective+noun
+
+
+def test_insert_fixes_indefinite_article_agreement():
+    card = _voice_card(must_use_terms=["trusted", "expert"])
+    html = "<article><p>An amazing standard and a great appearance.</p></article>"
+    out, swapped = vc.insert_required_terms(html, card)
+    assert swapped == ["trusted", "expert"]
+    # 'an amazing' -> 'a trusted' (consonant); 'a great' -> 'an expert' (vowel).
+    assert "a trusted standard" in out.lower()
+    assert "an expert appearance" in out.lower()
+    assert "an trusted" not in out.lower()
+    assert "a expert" not in out.lower()
+
+
+def test_insert_skips_multiword_required_phrases():
+    # A phrase can't be swapped for a single filler safely — left to the LLM loop.
+    card = _voice_card(must_use_terms=["premium materials"])
+    html = "<article><p>We use the best materials on every job.</p></article>"
+    out, swapped = vc.insert_required_terms(html, card)
+    assert swapped == []
+
+
+def test_insert_no_op_when_terms_present_or_no_filler():
+    card = _voice_card(must_use_terms=["trusted"])
+    # already present → nothing to do
+    present = "<article><p>We are a trusted roofer.</p></article>"
+    assert vc.insert_required_terms(present, card) == (present, [])
+    # missing but no filler to swap → unchanged
+    no_filler = "<article><p>We fix roofs across the city.</p></article>"
+    assert vc.insert_required_terms(no_filler, card) == (no_filler, [])
+
+
+def test_insert_one_swap_per_missing_term():
+    card = _voice_card(must_use_terms=["trusted"])
+    # two fillers, one missing term → exactly one swap
+    html = "<article><p>A great reputation and a great appearance.</p></article>"
+    out, swapped = vc.insert_required_terms(html, card)
+    assert swapped == ["trusted"]
+    assert out.lower().count("trusted") == 1
+    assert "great appearance" in out  # the second filler is left alone
+
+
+def test_insert_respects_client_required_filler_and_discouraged():
+    # 'best' is REQUIRED by this client → it must not be treated as a filler.
+    card = _voice_card(must_use_terms=["trusted", "best"])
+    html = "<article><p>We offer the best value in town.</p></article>"
+    out, swapped = vc.insert_required_terms(html, card)
+    # 'best' is present (required) so not missing; 'trusted' is missing but 'best'
+    # is not an eligible filler → no swap.
+    assert swapped == []
+
+
+def test_insert_empty_card_and_empty_html_are_safe():
+    assert vc.insert_required_terms("<p>hi</p>", {}) == ("<p>hi</p>", [])
+    assert vc.insert_required_terms("", _voice_card(must_use_terms=["trusted"])) == ("", [])
+    assert vc.missing_required_terms("", _voice_card(must_use_terms=["trusted"])) == []

@@ -468,7 +468,13 @@ async def _research_public_facts(client, entity: str, page_type: str, focus: Opt
         logger.warning(f"ecommerce fact research failed (non-fatal): {_fe}")
         return "", zero, []
 
-_GEN_SYSTEM_PROMPT = """You are an expert local SEO content writer. Generate a complete, publish-ready local service page following the exact structure below.
+_GEN_SYSTEM_PROMPT = """You are writing ONE specific local business's service page — in that business's own brand voice, for that business's specific customer. This is the FIRST requirement, ahead of every SEO rule below.
+
+The page must read as unmistakably THIS client and speak to the customer described in the "BRAND VOICE & AUDIENCE" block in the user message. A page that is technically well-optimized but could be published on a competitor's site by swapping the business name is a FAILURE, not a pass — brand voice and audience fit are graded as their own headline result, separate from the SEO score. Lead every section with what only this client can say (their specific proof, differentiators, and the exact concerns of the customer described), in their word choice, tone, grammatical person, and CTA wording.
+
+You are ALSO an expert local SEO content writer. Everything below tells you WHAT to cover and HOW to structure the page so it ranks and is retrievable by AI assistants — execute all of it, but always IN THIS CLIENT'S VOICE and for THIS customer. Where an SEO or structure rule below conflicts with the client's brand-voice block on word choice, tone, grammatical person, or CTA wording, the brand-voice block WINS; the structural requirements (answer-first openings, headings, lists, the table, schema, length budget) still apply — express them in the client's voice rather than abandoning either.
+
+Generate a complete, publish-ready local service page following the exact structure below.
 
 OUTPUT FORMAT
 Return valid HTML only. No markdown. No explanations outside the HTML. Structure:
@@ -5016,6 +5022,8 @@ async def _build_seo_checklist(
         "━" * 60,
         "SEO SCORING CHECKLIST — satisfy ALL items below to score 90+.",
         "These are derived from the exact rubric used to grade your page.",
+        "Execute every item IN THIS CLIENT'S BRAND VOICE and for the customer in the",
+        "BRAND VOICE & AUDIENCE block above — never drop the voice to hit an SEO item; do both.",
         "━" * 60,
         "",
         "【KEYWORD PLACEMENT — organic_ranking 10%】",
@@ -6599,6 +6607,24 @@ async def generate_page(request: Request, body: GeneratePageRequest):
         if voice_block:
             voice_block = "\n" + voice_block + "\n"
 
+        # End-of-prompt voice recency reminder. The brand-voice block now leads
+        # the prompt for primacy; this short reminder at the very end holds the
+        # recency too, aimed squarely at the observed failure where voice is
+        # strong in the opening sections and thins into generic copy toward the
+        # end (services list, process steps, FAQ). Only present when there's a
+        # guide to hold to.
+        voice_recency_text = ""
+        if voice_block:
+            voice_recency_text = (
+                "\nVOICE REMINDER (applies to the WHOLE page): keep every section — "
+                "especially the later ones (any additional-services list, the process/"
+                "steps section, and the FAQ) — in "
+                f"{body.business_name}'s brand voice and speaking to the customer described "
+                "above. These sections are where generic, swap-the-name copy creeps in; do "
+                "not let them drift. Use the client's required phrasing and differentiators "
+                "here too, not only in the opening.\n"
+            )
+
         gbp_description_text = (
             f"GBP Description: {body.gbp_description}"
             if body.gbp_description else
@@ -6664,6 +6690,7 @@ Full location: {body.location}
 {brand_voice_text}
 {icp_text}
 {diff_text}
+{voice_block}
 {reviews_text}
 {website_text}
 {mcs_block}
@@ -6674,8 +6701,8 @@ Full location: {body.location}
 {seo_checklist}
 
 {template_text}
-{voice_block}
-{corrections_text}"""
+{corrections_text}
+{voice_recency_text}"""
 
         await q.put({"step": "progress", "progress": 65, "message": "Generating your page…"})
 
@@ -6732,6 +6759,27 @@ Full location: {body.location}
         content_html = _linkify_phones(content_html, body.phone)
         google_entities = (serp_analysis_dict or {}).get("google_entities", [])
         content_html = _apply_rdfa_markup(content_html, google_entities)
+
+        # ── Deterministic required-phrasing net (no LLM, no added latency) ────────
+        # The generation prompt now leads with the brand voice, but "use these
+        # exact phrases" is a recall problem an LLM misses regardless of ordering,
+        # and a missing required term deterministically CAPS the Vocabulary voice
+        # dimension. Where the writer reached for a weak superlative ("great
+        # reputation") in place of a required adjective the client asked for
+        # ("trusted reputation"), swap it in deterministically — idiom-guarded,
+        # body-text only — BEFORE scoring, so the cap lifts on its own instead of
+        # spending a full-page (time-budgeted) LLM voice pass on it. Truly-absent
+        # terms with no filler anchor, and multi-word phrases, are left to the
+        # LLM voice loop below. Best-effort: never blocks generation.
+        try:
+            content_html, _req_swapped = vcard.insert_required_terms(content_html, voice_card)
+            if _req_swapped:
+                logger.info(
+                    "generate-page: inserted required phrasing deterministically for '%s': %s",
+                    body.keyword, _req_swapped,
+                )
+        except Exception as _rte:
+            logger.warning("generate-page: required-phrasing net failed (non-fatal): %s", _rte)
 
         # ── Score the generated page (single pass) ───────────────────────────────
         # Structural requirements (keywords, entities, FAQ, geo, AEO) are covered
