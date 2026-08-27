@@ -25,6 +25,7 @@ mirroring ``blog_structure.py``.
 """
 from __future__ import annotations
 
+import os
 from typing import List, Optional
 
 from bs4 import BeautifulSoup
@@ -35,6 +36,14 @@ _MIN_VALID_WORDS = 100
 
 # SERP average + 20%: the owner-chosen target band.
 OVERAGE_MULTIPLIER = 1.20
+
+# Absolute floor on the length target (owner-chosen). The target drives length_fit
+# scoring AND the writer's word budget AND the scaling of the reference-page
+# layout; on a thin / low-signal SERP, SERP-avg + 20% can be so small that a
+# multi-section reference layout gets squeezed to nonsense. The floor only ever
+# RAISES a real (avg-derived) target — it never manufactures one from a SERP that
+# produced no usable average (that stays None, i.e. length is not graded).
+MIN_TARGET_WORDS = int(os.environ.get("LENGTH_MIN_TARGET_WORDS", "900"))
 
 # Full credit while the page sits between the SERP average and slightly above
 # target; penalties ramp up outside the band. Over-length (the disease we are
@@ -83,10 +92,13 @@ def competitor_avg_words(page_htmls: List[str]) -> Optional[float]:
 
 
 def word_target(avg_words: Optional[float]) -> Optional[int]:
-    """SERP average + 20%, rounded. ``None`` when there is no average."""
+    """SERP average + 20%, floored at ``MIN_TARGET_WORDS``. ``None`` when there is
+    no average (a SERP that yielded no usable competitor length → length is not
+    graded and the reference layout is not scaled). The floor only raises a real,
+    low target; it never invents one from a missing average."""
     if not avg_words or avg_words <= 0:
         return None
-    return int(round(avg_words * OVERAGE_MULTIPLIER))
+    return max(int(round(avg_words * OVERAGE_MULTIPLIER)), MIN_TARGET_WORDS)
 
 
 def is_over_length(engine: Optional[dict], min_ratio: float = 1.0) -> bool:
