@@ -17,9 +17,29 @@ from . import cache, cost
 from .assembly import assemble
 from .errors import ServiceBriefError
 from .research import _anchor_query, run_research
+from .serp import competitor_avg_words, serp_word_target
 from .synthesis import synthesize
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_serp_length_target(bundle: ResearchBundle) -> None:
+    """Set the SERP-anchored length target (competitor avg + 20%) on the bundle's
+    SERP profile from its competitor word counts.
+
+    Called for both fresh and cached bundles so a research bundle cached BEFORE the
+    length change (which carries the old fixed-band target) is still sized to the
+    SERP average — the cache lookup keys on keyword + TTL only, not schema_version,
+    so an old bundle would otherwise be reused verbatim for up to the TTL window.
+    Idempotent for fresh bundles (research computed the same value). No-op — leaving
+    the band fallback in place — when too few competitors scraped to yield a
+    reliable average. Deterministic, no LLM."""
+    counts = [sk.word_count for sk in bundle.competitor_skeletons if sk.word_count > 0]
+    avg = competitor_avg_words(counts)
+    target = serp_word_target(avg)
+    if target:
+        bundle.serp_profile.target_word_count = target
+        bundle.serp_profile.serp_avg_word_count = int(round(avg))
 
 
 async def run_service_brief(request: ServiceBriefRequest) -> ServiceBriefResponse:
@@ -72,6 +92,11 @@ async def run_service_brief(request: ServiceBriefRequest) -> ServiceBriefRespons
             output_payload=bundle.model_dump(),
             page_type=request.page_type,
         )
+
+    # SERP-anchored length target — applied after the bundle is ready (cache or
+    # fresh) so a bundle cached under the old fixed-band target is upgraded to the
+    # SERP average + 20% before synthesis reads it. Idempotent for fresh bundles.
+    _apply_serp_length_target(bundle)
 
     # ---- Synthesis (per-client) ----
     try:

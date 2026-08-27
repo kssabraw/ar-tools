@@ -202,6 +202,79 @@ def test_mode_and_band_derived_from_serp():
     assert local.length_band != national.length_band
 
 
+# ----------------------------------------------------------------------
+# SERP-anchored length target (competitor avg + 20%, floored) — SERP drives length
+# ----------------------------------------------------------------------
+
+def test_competitor_avg_words_drops_thin_and_needs_two():
+    # A single valid page is not a reliable average.
+    assert serp_mod.competitor_avg_words([1200]) is None
+    # Thin/failed scrapes (< 100 words) are dropped before averaging.
+    assert serp_mod.competitor_avg_words([40, 60]) is None
+    assert serp_mod.competitor_avg_words([1000, 2000, 40]) == 1500.0
+    assert serp_mod.competitor_avg_words([]) is None
+
+
+def test_serp_word_target_is_avg_plus_20pct_floored():
+    assert serp_mod.serp_word_target(None) is None
+    assert serp_mod.serp_word_target(0) is None
+    # avg × 1.20, rounded.
+    assert serp_mod.serp_word_target(1500) == 1800
+    assert serp_mod.serp_word_target(1000) == 1200
+    # A thin SERP average is floored at MIN_LENGTH_TARGET_WORDS (never nonsense).
+    assert serp_mod.serp_word_target(500) == serp_mod.MIN_LENGTH_TARGET_WORDS
+    assert serp_mod.MIN_LENGTH_TARGET_WORDS == 900
+
+
+def test_apply_serp_length_target_upgrades_cached_bundle():
+    """A bundle cached under the old fixed band is re-anchored to competitor
+    avg + 20% before synthesis reads it (the cache keys on keyword + TTL, not
+    schema_version, so old bundles would otherwise be reused verbatim)."""
+    from modules.service_brief.pipeline import _apply_serp_length_target
+    from models.service_brief import (
+        CompetitorSkeleton, ResearchBundle, SerpProfile,
+    )
+
+    profile = SerpProfile(
+        mode="national_b2b", length_band="long", target_word_count=1800,  # stale band value
+    )
+    bundle = ResearchBundle(
+        serp_profile=profile,
+        mode="national_b2b",
+        length_band="long",
+        competitor_skeletons=[
+            CompetitorSkeleton(url="https://a.com", sections=[], word_count=1000),
+            CompetitorSkeleton(url="https://b.com", sections=[], word_count=1400),
+            CompetitorSkeleton(url="https://c.com", sections=[], word_count=30),  # thin, dropped
+        ],
+    )
+    _apply_serp_length_target(bundle)
+    # avg of the two valid pages = 1200 -> target 1440, serp_avg 1200.
+    assert bundle.serp_profile.target_word_count == 1440
+    assert bundle.serp_profile.serp_avg_word_count == 1200
+
+
+def test_apply_serp_length_target_keeps_band_when_too_few_competitors():
+    from modules.service_brief.pipeline import _apply_serp_length_target
+    from models.service_brief import (
+        CompetitorSkeleton, ResearchBundle, SerpProfile,
+    )
+
+    profile = SerpProfile(
+        mode="local_service", length_band="medium", target_word_count=1200,
+    )
+    bundle = ResearchBundle(
+        serp_profile=profile, mode="local_service", length_band="medium",
+        competitor_skeletons=[
+            CompetitorSkeleton(url="https://a.com", sections=[], word_count=1500),
+        ],
+    )
+    _apply_serp_length_target(bundle)
+    # Only one valid competitor -> no reliable average -> band target untouched.
+    assert bundle.serp_profile.target_word_count == 1200
+    assert bundle.serp_profile.serp_avg_word_count == 0
+
+
 def test_filter_drops_directories_and_listicles():
     urls = serp_mod.filter_service_page_urls(_serp_items())
     assert "https://acmeplumbing.com/drain-cleaning" in urls

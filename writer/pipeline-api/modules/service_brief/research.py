@@ -38,7 +38,9 @@ from .errors import ServiceBriefError
 from .serp import (
     band_for_word_count,
     classify_serp,
+    competitor_avg_words,
     filter_service_page_urls,
+    serp_word_target,
     target_words_for_band,
 )
 
@@ -135,14 +137,20 @@ async def run_research(
     notes.extend(teardown_notes)
     gaps = derive_gaps(skeletons)
 
-    # Refine length band from the competitor median word count (still
-    # SERP-derived — PRD §8.2). Falls back to the mode default when no page
-    # yielded a usable word count.
+    # SERP-anchored length target: the competitor SERP average + 20%, floored
+    # (mirrors nlp-api length_fit — SERP drives length). The band is kept only as a
+    # coarse label + a fallback when too few competitor pages scraped to yield a
+    # reliable average. Still fully SERP-derived (PRD §8.2), just anchored to the
+    # real competitor length instead of a fixed 700/1200/1800 bucket.
     word_counts = [sk.word_count for sk in skeletons if sk.word_count > 0]
     if word_counts:
         median_words = int(statistics.median(word_counts))
-        profile.length_band = band_for_word_count(median_words)
-        profile.target_word_count = target_words_for_band(profile.length_band)
+        profile.length_band = band_for_word_count(median_words)  # coarse label only
+        avg = competitor_avg_words(word_counts)
+        profile.serp_avg_word_count = int(round(avg)) if avg else 0
+        profile.target_word_count = serp_word_target(avg) or target_words_for_band(
+            profile.length_band
+        )
 
     # ---- Stage 3: Entity & term coverage (reuse already-scraped pages) ----
     entity_coverage: list[EntityCoverageItem] = []

@@ -162,3 +162,49 @@ async def test_reoptimize_run_regenerates_then_rescores():
     inserted_modules = [r["module"] for t, r in store["inserts"] if t == "module_outputs"]
     assert "service_writer" in inserted_modules
     assert "service_score" in inserted_modules
+
+
+# ---- SERP-anchored length: structural gate scales the reference to the target ----
+
+def test_serp_length_target_reads_brief():
+    with patch(f"{_PFX}._latest_output", return_value={
+        "output_payload": {"research_bundle": {"serp_profile": {"target_word_count": 1440}}}
+    }):
+        assert sps._serp_length_target("r1") == 1440
+    # No brief output / no target -> None (best-effort).
+    with patch(f"{_PFX}._latest_output", return_value=None):
+        assert sps._serp_length_target("r1") is None
+    with patch(f"{_PFX}._latest_output", return_value={"output_payload": {}}):
+        assert sps._serp_length_target("r1") is None
+
+
+def test_structural_deficiency_scales_reference_to_serp_target():
+    """A (correctly) SERP-sized page must be measured against a reference scaled to
+    the SAME SERP target — otherwise word_fit reads it as "too short" vs the
+    client's much longer reference and the gate triggers a re-inflating reopt."""
+    run = {"id": "r1", "content_type": "service_page"}
+    snapshot = {"page_structures": {"service": {"status": "complete", "analysis": {
+        "outline": [
+            {"level": "H2", "heading": "A", "word_count": 400},
+            {"level": "H2", "heading": "B", "word_count": 600},
+        ],
+        "structure_summary": "s",
+        "elements": {"section_count": 2, "approx_total_words": 1000},
+    }}}}
+    captured = {}
+
+    def _fake_struct_def(reference, generated, *, label, min_composite):
+        captured["reference"] = reference
+        return None
+
+    with patch(f"{_PFX}._serp_length_target", return_value=500), \
+         patch(f"{_PFX}._latest_output", return_value={
+             "output_payload": {"title": "T", "renderings": {"html": "<h2>A</h2>"}}}), \
+         patch("services.page_structure_eval.extract_outline_from_html", return_value={"outline": []}), \
+         patch("services.page_structure_eval.structure_deficiency", side_effect=_fake_struct_def):
+        result = sps.structural_deficiency(run, snapshot)
+
+    assert result is None
+    # Reference outline rescaled 1000 -> 500 (A 400->200, B 600->300).
+    total = sum(it["word_count"] for it in captured["reference"]["outline"])
+    assert total == 500

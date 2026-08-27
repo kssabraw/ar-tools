@@ -201,6 +201,19 @@ async def score_external_page(
     return result
 
 
+def _serp_length_target(run_id: str) -> Optional[int]:
+    """The SERP-anchored length target (competitor avg + 20%) the service brief
+    computed for this run, or None. Read from the latest service_brief output's
+    research bundle. Best-effort: any shape drift returns None."""
+    sb = _latest_output(run_id, "service_brief")
+    if not sb:
+        return None
+    out = sb.get("output_payload") or {}
+    profile = ((out.get("research_bundle") or {}).get("serp_profile")) or {}
+    target = profile.get("target_word_count")
+    return int(target) if isinstance(target, int) and target > 0 else None
+
+
 def structural_deficiency(run: dict, snapshot: dict) -> Optional[dict]:
     """A synthetic scorer-deficiency describing structural drift of the run's latest
     service_writer page vs the client's reference structure, or None when the gate
@@ -217,13 +230,25 @@ def structural_deficiency(run: dict, snapshot: dict) -> Optional[dict]:
         extract_outline_from_html,
         structure_deficiency as _deficiency,
     )
-    from services.page_structure_render import usable_analysis
+    from services.page_structure_render import scale_analysis_words, usable_analysis
 
     structures = snapshot.get("page_structures") or {}
     key = "location" if run.get("content_type") == "location_page" else "service"
     reference = usable_analysis(structures.get(key))
     if not reference:
         return None
+    # Scale the reference to the SERP length target the writer aimed at, so the
+    # word_fit dimension compares generated section sizes to SERP-SIZED reference
+    # sizes. Without this a (correctly) SERP-sized page reads as "far too short"
+    # against the client's own, often much longer, reference and the gate would
+    # trigger a re-inflating reopt — the exact conflict the Local SEO structural
+    # gate avoids by scaling the reference to the same target. No target (thin SERP)
+    # → the reference is used as-is, i.e. prior behaviour.
+    serp_target = _serp_length_target(run["id"])
+    if serp_target:
+        scaled = scale_analysis_words(reference, serp_target)
+        if isinstance(scaled, dict):
+            reference = scaled
     sw = _latest_output(run["id"], "service_writer")
     if not sw:
         return None
