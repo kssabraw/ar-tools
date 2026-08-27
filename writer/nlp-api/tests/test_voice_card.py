@@ -68,6 +68,39 @@ def test_parse_missing_distinctiveness_fields_default_empty():
     assert card["signature_phrases"] == []
 
 
+def test_parse_readability_round_trips_and_caps():
+    card = vc.parse_voice_card({
+        "readability": "Explain jargon for homeowners; write in plain English.",
+    })
+    assert card["readability"] == "Explain jargon for homeowners; write in plain English."
+    long = "x" * 500
+    assert len(vc.parse_voice_card({"readability": long})["readability"]) == 200
+
+
+def test_parse_missing_readability_defaults_empty():
+    """A legacy card (distilled before the readability slot existed) yields ""
+    rather than a KeyError in render_voice_card_block."""
+    assert vc.parse_voice_card({"brand_name": "X"})["readability"] == ""
+    assert vc.empty_card()["readability"] == ""
+
+
+def test_render_block_carries_the_readability_gloss_directive():
+    card = vc.parse_voice_card({
+        "brand_name": "First Class Roofing",
+        "readability": "Explain jargon for homeowners.",
+    })
+    block = vc.render_voice_card_block(card)
+    assert "Explain jargon for homeowners." in block
+    assert "plain-English gloss" in block
+
+
+def test_render_block_omits_readability_when_unstated():
+    block = vc.render_voice_card_block(
+        {"brand_name": "X", "tone_adjectives": ["bold"]}
+    )
+    assert "Reading level:" not in block
+
+
 def test_parse_never_raises_on_garbage():
     for raw in [None, "not a dict", 42, [], {"person": {"nested": True}}]:
         card = vc.parse_voice_card(raw)
