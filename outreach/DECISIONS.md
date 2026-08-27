@@ -2030,3 +2030,22 @@ back to scraped site emails (genuinely empty person fields, not a parser miss).
 The public `/maps/search-v3` endpoint accepts `leads_n_contacts` on our async single-place_id call — no
 need for the dashboard's `/tasks` endpoint or its category+location search shape. Cost per record is
 unconfirmed (export carried `est:10`, likely pricier than a base pull) — tracked under I-111.
+
+---
+
+## 2026-08-26 · Dedup enrichment contacts by person (leads_n_contacts email permutations)
+
+`leads_n_contacts` returns a person's email as several guessed permutations (rex@ / gee@ / mcgee@ for
+Rex Mcgee), each as its own email-anchored contact — so one owner surfaced as 3 near-identical
+contacts. `enrichment.parse_contacts` now ends with a `_dedupe_by_person` pass that collapses contacts
+sharing a normalized person identity (`first`+`last`, or a `full_name` distinct from the business
+name; "Rex Mcgee"/"Rex Mc Gee" normalize equal) into one — keeping the richest identity (a title
+wins), filling missing fields from the others, and picking one primary email (name-matching local-part
+> non-generic > first). The dropped permutations remain in `raw`.
+
+**Deliberately NOT merged:** contacts with no person identity — a business-name fallback or a role
+mailbox (info@/office@). Those are legitimately distinct contact points, not duplicates, so
+`_person_key` returns None for them and they pass through untouched (order preserved). This keeps the
+data-poor path (LA plumbers, one business-name-fallback contact per email) unchanged. Unit-tested in
+`tests/test_enrichment.py` (permutation collapse, distinct people kept, role mailboxes kept, mixed
+person+role, contact_rows re-indexing).

@@ -206,14 +206,102 @@ def _phone_entries(record: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def _person_key(contact: dict[str, Any]) -> str | None:
+    """A normalized identity key for a REAL person, or None for a contact that must NEVER be merged
+    by name — a business-name fallback or a role mailbox (info@/office@), which are legitimately
+    distinct contact points, not duplicates of a person.
+
+    A person is identified by structured `first`/`last` names, or a `full_name` that is not just the
+    business name. Normalization strips case + non-alphanumerics so "Rex Mcgee" and "Rex Mc Gee"
+    (the permutations `leads_n_contacts` returns for one person) collapse to the same key.
+    """
+    first = _clean_str(contact.get("first_name")) or ""
+    last = _clean_str(contact.get("last_name")) or ""
+    full = _clean_str(contact.get("full_name")) or ""
+    biz = _clean_str(contact.get("name_for_emails")) or ""
+    if first or last:
+        key_src = f"{first} {last}"
+    elif full and full.lower() != biz.lower():
+        key_src = full
+    else:
+        return None  # no person identity — never merge by name
+    key = re.sub(r"[^a-z0-9]", "", key_src.lower())
+    return key or None
+
+
+def _pick_primary_email(contact: dict[str, Any], emails: list[str]) -> str | None:
+    """The best single email for a merged person: one whose local-part carries the person's first or
+    last name (rex@… for Rex), else a non-generic address, else the first. All were guesses at the
+    same mailbox; the name-matching one is the best bet and the rest live on in `raw`."""
+    if not emails:
+        return None
+    first = (_clean_str(contact.get("first_name")) or "").lower()
+    last = (_clean_str(contact.get("last_name")) or "").lower()
+    for email in emails:
+        local = email.split("@", 1)[0]
+        if (len(first) >= 2 and first in local) or (len(last) >= 2 and last in local):
+            return email
+    for email in emails:
+        if not is_generic_email(email):
+            return email
+    return emails[0]
+
+
+def _merge_person(group: list[dict[str, Any]]) -> dict[str, Any]:
+    """Collapse several contacts for the SAME person into one — keep the richest identity (a title
+    wins), fill any missing field from the others, and pick one primary email."""
+    if len(group) == 1:
+        return group[0]
+    base = max(
+        group,
+        key=lambda c: (
+            1 if _clean_str(c.get("title")) else 0,
+            1 if (c.get("first_name") and c.get("last_name")) else 0,
+            len(_clean_str(c.get("full_name")) or ""),
+        ),
+    )
+    merged = dict(base)
+    for contact in group:
+        for field in ("title", "first_name", "last_name", "full_name", "phone",
+                      "phone_type", "phone_carrier", "email_status"):
+            if not merged.get(field) and contact.get(field):
+                merged[field] = contact[field]
+    emails = [c["email"] for c in group if c.get("email")]
+    merged["email"] = _pick_primary_email(merged, emails) or merged.get("email")
+    merged["email_is_generic"] = is_generic_email(merged["email"])
+    return merged
+
+
+def _dedupe_by_person(contacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge contacts that are the same person (by `_person_key`), preserving order (a person's slot
+    is its first occurrence). Non-person contacts — business-name fallbacks, role mailboxes — pass
+    through untouched, so distinct contact points are never collapsed."""
+    slots: list[tuple[str, Any]] = []  # ("passthrough", contact) | ("person", group_list)
+    group_by_key: dict[str, list[dict[str, Any]]] = {}
+    for contact in contacts:
+        key = _person_key(contact)
+        if key is None:
+            slots.append(("passthrough", contact))
+        elif key in group_by_key:
+            group_by_key[key].append(contact)
+        else:
+            group = [contact]
+            group_by_key[key] = group
+            slots.append(("person", group))
+    return [val if kind == "passthrough" else _merge_person(val) for kind, val in slots]
+
+
 def parse_contacts(record: dict[str, Any]) -> list[dict[str, Any]]:
     """Turn one enriched place record into a list of contact shapes (no prospect_id/place_id yet).
 
     Contacts are built email-first (an email carries the resolved person), then aligned to phones by
     position; phones with no matching email become phone-only contacts; and a record with neither an
     email nor a phone but a `name_for_emails`/`contact_name` still yields one name-only contact.
-    Returns [] only when the record carries no email, no phone and no usable name — a genuine
-    "enriched, found nobody" (recorded upstream as `no_contacts`, distinct from a failed call).
+    Finally, contacts that are the SAME person are deduped (`leads_n_contacts` returns a person's
+    email as several guessed permutations, one contact each) — business-name/role-mailbox contacts
+    are never merged. Returns [] only when the record carries no email, no phone and no usable name —
+    a genuine "enriched, found nobody" (recorded upstream as `no_contacts`, distinct from a failed
+    call).
     """
     if not isinstance(record, dict):
         return []
@@ -282,7 +370,7 @@ def parse_contacts(record: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
 
-    return contacts
+    return _dedupe_by_person(contacts)
 
 
 def contact_rows(

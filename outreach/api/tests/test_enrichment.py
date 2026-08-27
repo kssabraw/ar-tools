@@ -175,3 +175,74 @@ def test_summarize_counts_fill_rates_and_surfaces_unmapped_fields():
     assert out["generic_email"] == 1
     assert "mystery_field" in out["unmapped_fields"]
     assert out["errors"] == errors
+
+
+# --- dedup-by-person (leads_n_contacts returns a person's email as several permutations) -------
+
+
+def test_same_person_email_permutations_collapse_to_one_contact():
+    # leads_n_contacts returned Rex Mcgee three times (rex@ / gee@ / mcgee@), one carrying the title.
+    record = {
+        "name_for_emails": "Enhanced Hearing Center",
+        "emails": [
+            {"value": "gee@enhancedhearingcenter.com", "full_name": "Rex Mc Gee",
+             "first_name": "Rex", "last_name": "Mc Gee"},
+            {"value": "rex@enhancedhearingcenter.com", "full_name": "Rex Mcgee",
+             "first_name": "Rex", "last_name": "Mcgee", "title": "owner"},
+            {"value": "mcgee@enhancedhearingcenter.com", "full_name": "Rex Mcgee",
+             "first_name": "Rex", "last_name": "Mcgee"},
+        ],
+    }
+    contacts = enrichment.parse_contacts(record)
+    assert len(contacts) == 1
+    c = contacts[0]
+    assert c["full_name"] == "Rex Mcgee"
+    assert c["title"] == "owner"                       # the titled variant wins the identity
+    assert c["email"] == "rex@enhancedhearingcenter.com"  # name-matching local-part is primary
+
+
+def test_two_distinct_people_are_not_merged():
+    record = {"emails": [
+        {"value": "a@x.com", "first_name": "Amy", "last_name": "Cole", "full_name": "Amy Cole"},
+        {"value": "b@x.com", "first_name": "Ben", "last_name": "Diaz", "full_name": "Ben Diaz"},
+    ]}
+    got = {c["full_name"] for c in enrichment.parse_contacts(record)}
+    assert got == {"Amy Cole", "Ben Diaz"}
+
+
+def test_role_mailboxes_are_never_merged_by_name():
+    # info@ and office@ carry no person -> the business-name fallback must NOT collapse them.
+    record = {"name_for_emails": "Acme Plumbing", "emails": [
+        {"value": "info@acme.com"}, {"value": "office@acme.com"},
+    ]}
+    contacts = enrichment.parse_contacts(record)
+    assert len(contacts) == 2
+    assert {c["email"] for c in contacts} == {"info@acme.com", "office@acme.com"}
+    assert all(c["full_name"] == "Acme Plumbing" for c in contacts)  # business-name fallback kept
+
+
+def test_a_person_and_a_role_mailbox_coexist_person_deduped():
+    record = {"name_for_emails": "Acme Plumbing", "emails": [
+        {"value": "info@acme.com"},
+        {"value": "jane@acme.com", "first_name": "Jane", "last_name": "Roe", "full_name": "Jane Roe"},
+        {"value": "j.roe@acme.com", "first_name": "Jane", "last_name": "Roe", "full_name": "Jane Roe"},
+    ]}
+    contacts = enrichment.parse_contacts(record)
+    assert len(contacts) == 2                            # info@ passthrough + one merged Jane
+    assert contacts[0]["email"] == "info@acme.com"       # order preserved (role first)
+    jane = contacts[1]
+    assert jane["full_name"] == "Jane Roe"
+    assert jane["email"] in ("jane@acme.com", "j.roe@acme.com")  # a name-matching address
+
+
+def test_dedup_reindexes_contact_rows():
+    record = {
+        "emails": [
+            {"value": "rex@x.com", "first_name": "Rex", "last_name": "Mcgee", "full_name": "Rex Mcgee"},
+            {"value": "mcgee@x.com", "first_name": "Rex", "last_name": "Mcgee", "full_name": "Rex Mcgee"},
+        ],
+    }
+    rows = enrichment.contact_rows(record, prospect_id="p1", place_id="place-1")
+    assert len(rows) == 1
+    assert rows[0]["contact_index"] == 0
+    assert rows[0]["raw"] == record                      # raw kept on the surviving contact
