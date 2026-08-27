@@ -2395,9 +2395,15 @@ emergency-plumber market dropped site_scrape from 14 named prospects → 1 and w
 **Fixed:** scoped the delete to `enrichment.CONTACT_SOURCE` ('outscraper') — a re-enrich now replaces
 only Outscraper contacts and leaves the name fallbacks intact. New `CONTACT_SOURCE` constant is the
 single source of truth (used by `contact_rows` too). Regression test
-`test_enrich_queue.test_re_enrich_preserves_site_scrape_and_web_search_contacts`. **Cleanup owed:** the
-wiped site_scrape/web_search names must be RE-RUN (site scrape is free; web search ~cents) once the fix
-is deployed — do it AFTER deploy, or the still-buggy live code wipes them again.
+`test_enrich_queue.test_re_enrich_preserves_site_scrape_and_web_search_contacts`. **Merged + deployed**
+(#767 → `main`, live on the outreach service). **VERIFIED (2026-08-27):** after deploy the wiped names
+were restored on the LA (`Los Angeles, CA, USA`) market — site_scrape re-scraped **1 → 20** contacts
+(free `name_scrape_request`) and web_search re-searched **0 → 3** (paid `name_search_request`, ~9¢:
+Cesar Fashen Jr. / Edgar A. Samayoa / Alex Preciado — the third drifted from the pre-wipe "Jason
+Hanleybrown, CEO" to the SoCal regional manager, an accepted more-local result; web search is
+non-deterministic). The surviving `prospect_name_scrape` / `prospect_name_search` markers held the
+names through the wipe, which is what made a free/cheap restore possible. **Cleanup DONE — issue fully
+resolved.**
 
 ### I-118 FIXED (2026-08-27) · A large enrichment order exceeds the 5-min cron window and gets stuck `running`
 The market-wide `leads_n_contacts` order (118 places) ran ~4 min writing 101 markers, then the cron
@@ -2415,7 +2421,12 @@ per billing tick. (2) `recover_stuck_orders` resets a `running` order older than
 `enrich_stuck_order_minutes` (20) back to `pending` (conditional-on-still-running so it can't stomp a
 live tick), called first in `drain` — the recovery half. Unit-tested (`test_enrich_queue`: resume
 across ticks, whole-tick budget bound, stuck recovery, recent-order-not-recovered). Separate from
-I-117 (data loss). The stuck 2026-08-27 order was cancelled by hand before the fix.
+I-117 (data loss). The stuck 2026-08-27 order was cancelled by hand before the fix. **Merged +
+deployed** (#769 → `main`, live on the outreach service). **VERIFIED IN PRODUCTION (2026-08-27):** the
+same failure mode was re-run cleanly — the 17 places the killed order had stranded were re-enriched as
+one `enrichment_request` that drained in **71 s within a single tick** (started 01:25:05, finished
+01:26:16, 0 failed), well inside the `*/5` cron window, with no stuck `running` order. **Fully
+resolved.**
 
 ### I-109 RESOLVED (2026-08-26) · TWO stacked bugs — sync mode AND the wrong enricher slug; fixed to async + `leads_n_contacts`
 Enrichment was broken two ways at once, which is why every prior single-cause theory (wrong validator
