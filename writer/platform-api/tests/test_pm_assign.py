@@ -240,3 +240,86 @@ def test_replace_skills_happy_path_deletes_then_inserts(monkeypatch):
     assert saved == [{"category_key": "content", "is_primary": True}]
     ops = [c for c in sb.calls if c[1] == "task_member_skills"]
     assert ops == [("delete", "task_member_skills"), ("insert", "task_member_skills")]
+
+
+# ---------------------------------------------------------------------------
+# Bulk auto-place (admin endpoint engine)
+# ---------------------------------------------------------------------------
+def test_classify_placement_labels():
+    assert pm_assign.classify_placement({"gid": "g1", "reason": "placed"}) == "placed"
+    assert pm_assign.classify_placement({"gid": "g1", "reason": "placed_widened"}) == "placed"
+    assert pm_assign.classify_placement(
+        {"gid": None, "held": True, "reason": "team_at_capacity"}) == "held"
+    assert pm_assign.classify_placement({"reason": "already_assigned", "gid": "x"}) == "already_assigned"
+    assert pm_assign.classify_placement({"gid": None, "held": True, "reason": "task_not_found"}) == "not_found"
+    # A held row that happens to carry a stale gid is still a hold, not a placement.
+    assert pm_assign.classify_placement({"gid": "g1", "held": True, "reason": "error"}) == "held"
+
+
+def test_summarize_autoplace_tallies():
+    rows = [
+        {"outcome": "placed"}, {"outcome": "placed"},
+        {"outcome": "held"}, {"outcome": "already_assigned"},
+    ]
+    s = pm_assign.summarize_autoplace(rows)
+    assert s["total"] == 4 and s["placed"] == 2 and s["held"] == 1 and s["already_assigned"] == 1
+    assert s["results"] is rows
+
+
+class _AutoplaceQuery:
+    def __init__(self, rows, calls):
+        self._rows, self._calls = rows, calls
+
+    def select(self, *a, **k): return self
+    def eq(self, *a, **k): self._calls.append(("eq", a)); return self
+    def is_(self, *a, **k): self._calls.append(("is_", a)); return self
+    def order(self, *a, **k): return self
+
+    def in_(self, *a, **k):
+        self._calls.append(("in_", a))
+        return self
+
+    def execute(self):
+        return type("R", (), {"data": self._rows})()
+
+
+class _AutoplaceSB:
+    def __init__(self, rows):
+        self.rows, self.calls = rows, []
+
+    def table(self, name):
+        return _AutoplaceQuery(self.rows, self.calls)
+
+
+def test_autoplace_unassigned_maps_and_summarizes(monkeypatch):
+    rows = [{"id": "t1", "name": "A"}, {"id": "t2", "name": "B"}, {"id": "t3", "name": "C"}]
+    sb = _AutoplaceSB(rows)
+    monkeypatch.setattr(pm_assign, "get_supabase", lambda: sb)
+    outcomes = {
+        "t1": {"gid": "g1", "name": "Ivy", "reason": "placed"},
+        "t2": {"gid": None, "held": True, "reason": "team_at_capacity"},
+        "t3": {"gid": "g2", "name": "Bo", "reason": "placed_widened"},
+    }
+    seen_actor = {}
+    def _fake_place(tid, *, actor_id=None):
+        seen_actor[tid] = actor_id
+        return outcomes[tid]
+    monkeypatch.setattr(pm_assign, "place_task", _fake_place)
+
+    res = pm_assign.autoplace_unassigned_for_client("c1", sources=["monthly"], actor_id="u1")
+    assert res["total"] == 3 and res["placed"] == 2 and res["held"] == 1
+    assert res["already_assigned"] == 0
+    names = {r["task_id"]: r["assignee_name"] for r in res["results"]}
+    assert names == {"t1": "Ivy", "t2": None, "t3": "Bo"}
+    # source filter applied, and the actor is threaded to every place_task call.
+    assert ("in_", ("source", ["monthly"])) in sb.calls
+    assert set(seen_actor.values()) == {"u1"}
+
+
+def test_autoplace_all_sources_skips_source_filter(monkeypatch):
+    sb = _AutoplaceSB([])
+    monkeypatch.setattr(pm_assign, "get_supabase", lambda: sb)
+    monkeypatch.setattr(pm_assign, "place_task", lambda tid, **k: {})
+    res = pm_assign.autoplace_unassigned_for_client("c1", sources=None)
+    assert res == {"total": 0, "placed": 0, "held": 0, "already_assigned": 0, "results": []}
+    assert not any(c[0] == "in_" for c in sb.calls)

@@ -309,3 +309,74 @@ def place_task(task_id: str, *, actor_id: Optional[str] = None) -> dict:
     except Exception as exc:
         logger.warning("pm_assign.place_failed", extra={"task_id": task_id, "error": str(exc)})
         return {"gid": None, "held": True, "reason": "error"}
+
+
+# ---------------------------------------------------------------------------
+# Bulk auto-place (admin): staff a client's unassigned tasks in one pass, using
+# the same place_task engine PACE uses per task. The recurring need is monthly
+# template tasks on clients with no auto_assignee_gids configured — monthly
+# generation leaves those unstaffed, and there is otherwise no non-chat way to
+# place them in bulk.
+# ---------------------------------------------------------------------------
+def classify_placement(res: dict) -> str:
+    """Pure. Map a ``place_task`` return dict to an outcome label."""
+    reason = res.get("reason")
+    if reason == "already_assigned":
+        return "already_assigned"
+    if reason == "task_not_found":
+        return "not_found"
+    if res.get("gid") and not res.get("held"):
+        return "placed"
+    return "held"
+
+
+def summarize_autoplace(rows: list[dict]) -> dict:
+    """Pure. Tally AutoplacedTask-shaped rows (each carrying ``outcome``)."""
+    def _n(label: str) -> int:
+        return sum(1 for r in rows if r.get("outcome") == label)
+
+    return {
+        "total": len(rows),
+        "placed": _n("placed"),
+        "held": _n("held"),
+        "already_assigned": _n("already_assigned"),
+        "results": rows,
+    }
+
+
+def autoplace_unassigned_for_client(
+    client_id: str,
+    *,
+    sources: Optional[list[str]] = ("monthly",),
+    actor_id: Optional[str] = None,
+) -> dict:
+    """Place every unassigned, incomplete, top-level task for ``client_id`` via
+    :func:`place_task` (skill + capacity, holds the ones the eligible pool can't
+    take). ``sources`` filters by task source (None → every source). Best-effort
+    per task — one task's failure never aborts the batch. Native-board only."""
+    query = (
+        get_supabase()
+        .table("tasks")
+        .select("id, name")
+        .eq("client_id", client_id)
+        .is_("assignee_gid", "null")
+        .is_("deleted_at", "null")
+        .is_("parent_task_id", "null")
+        .eq("completed", False)
+        .order("sort_order")
+    )
+    if sources:
+        query = query.in_("source", list(sources))
+    tasks = query.execute().data or []
+
+    rows: list[dict] = []
+    for task in tasks:
+        res = place_task(task["id"], actor_id=actor_id)
+        rows.append({
+            "task_id": task["id"],
+            "name": task.get("name"),
+            "outcome": classify_placement(res),
+            "assignee_name": res.get("name"),
+            "reason": res.get("reason"),
+        })
+    return summarize_autoplace(rows)
