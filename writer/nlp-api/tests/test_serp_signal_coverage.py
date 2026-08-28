@@ -83,6 +83,25 @@ def test_entity_chips_capped_at_thirty_ranked_by_page_spread():
     assert "Entity30" not in res["entities_used"]
 
 
+def test_score_counts_entities_ranked_16_to_30():
+    # The per-zone entity SCORE (not just the chips) uses the top 30. A page that
+    # mentions ONLY entities ranked 16–19 (outside the old top-15) still gets
+    # credit toward the zone's entity_target — so raising the cap can only lift
+    # entity_coverage, never lower it (found_ents is a superset; target is fixed).
+    entities = [{"name": f"Ent{i:02d}", "page_spread": 20 - i} for i in range(20)]
+    serp = {
+        "related_keywords": {},
+        "zone_targets": {"paragraphs": {"target": 0, "entity_target": 3}},
+        "google_entities": entities,
+        "top_quadgrams": [],
+    }
+    body = " ".join(f"Ent{i:02d}" for i in range(16, 20))  # ranks 16–19 only
+    res = main._compute_serp_signal_coverage(f"<article><p>{body}</p></article>", serp)
+    # 4 found / target 3 -> min(4/3, 1) = 1.0 -> entity_coverage 100. Under the old
+    # top-15 slice these entities were invisible and this zone scored 0.
+    assert res["entity_coverage"] == 100.0
+
+
 def test_reports_per_zone_found_and_target():
     html = (
         "<article><h2>Roof Restoration and Roof Repairs</h2>"
