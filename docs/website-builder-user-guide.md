@@ -102,8 +102,32 @@ informational site has only the blog half.
   every city.
 - **Cities** — one location page each, plus a service × city page per matrix service. Add
   neighborhoods if they pass the Maps entity test.
+- **Service variations** (optional, under each top-level service) — auto-generate extra pages
+  at `/{service}/{modifier}/`. See below.
 - Click **Build plan** (or **Rebuild plan** after edits). The proposed service/city/matrix pages
   appear in the **Proposed pages** table below.
+
+#### Service variations — one service, many pages
+
+Under each **top-level** service there's a small **"Service variations"** editor. It bulk-creates a
+page per modifier of that service, so you don't add each as its own catalog row. Each variation is
+a **label** plus a **kind**:
+
+- **Type** — a narrower version of the service. The label *is* the page. Great for things a trade
+  splits by: tree species, materials, property types. Example: on "Tree Removal", add Type
+  variations **Oak Trees**, **Maple Trees**, **Palm Trees** → `/tree-removal/oak-trees/`,
+  `/tree-removal/maple-trees/`, … Each is written as a **sub-service** page, titled by the label
+  ("Oak Trees" — not "Oak Trees Tree Removal").
+- **Brand** — an equipment manufacturer you service. Example: on "AC Repair", add Brand variations
+  **Carrier**, **Trane**, **Lennox** → `/ac-repair/carrier/` ("Carrier AC Repair"), etc. Written as
+  **brand × service** pages, with the brand in front of the service.
+
+Notes:
+- Only **top-level** services take variations (sub-services don't — that depth is reserved).
+- A service can mix Type and Brand variations.
+- A very large variation set (over ~200 pages) pauses on a **link-equity sign-off** at approval —
+  tick to acknowledge, same as a big service × city matrix.
+- Variation pages are written by the same nlp writer as your service pages (brand voice + scoring).
 
 ### 4b — The blog (all site types) — "Blog content plan"
 
@@ -222,6 +246,7 @@ etc. (the NAP). These auto-fill from the client's Google Business Profile where 
 | Mint the real repo | **Overview** → Provision |
 | Match the client's design | **Theme** → Upload a design → Approve |
 | Add service / city pages | **Plan** → Service catalog + Cities → Build plan |
+| Bulk-create service variations (species, materials, brands) | **Plan** → a top-level service → **Service variations** (Type or Brand) |
 | Add blog posts (any site type) | **Plan** → **Blog content plan** → add silos/posts → Save |
 | Pull blog topics from research | **Plan** → Blog content plan → **Seed from strategist / Fanout** |
 | Let the plan go live | **Plan** → Approve plan |
