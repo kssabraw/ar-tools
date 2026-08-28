@@ -1704,6 +1704,14 @@ class Settings(BaseSettings):
     qa_visual_model: str = "claude-haiku-4-5-20251001"
     qa_visual_max_tokens: int = 400
     qa_asset_check_cap: int = 12                 # HEAD checks per page review
+    # Cost gate: skip the (paid) screenshot + vision call when the FREE
+    # deterministic layers already say the render is fine — every checked asset
+    # (CSS + images) loads AND structural fidelity is comfortably above the
+    # floor (>= qa_structural_threshold + qa_visual_skip_structural_margin). A
+    # dead asset, a weak/missing structure score, or the margin not cleared all
+    # keep the screenshot. Default-safe: only skips on two strong clean signals.
+    qa_visual_skip_when_clean: bool = True
+    qa_visual_skip_structural_margin: float = 10.0
     # QA chat persona (the dedicated /qa sidebar surface — the reviewer sibling
     # of SerMaStr's /assistant and PACE's /pace). Its own master gate so the
     # chat can ship dark independently of the automatic in_qa trigger

@@ -263,6 +263,11 @@ class _FakeTable:
     def select(self, *_a, **_k):
         return self
 
+    # Chainable query builders (eq / is_ / in_ / order / limit / …) are no-ops
+    # here — these fakes return their canned rows regardless of filter.
+    def __getattr__(self, _name):
+        return lambda *_a, **_k: self
+
     def execute(self):
         class _R:
             pass
@@ -412,3 +417,153 @@ def test_unknown_client_reply_lists_clients_instead_of_relooping():
     assert "umh" in low and "don't have" in low
     assert "IHBS" in out["reply"]  # the real client list is shown
     assert "on another website" not in low  # not the identical re-ask
+
+
+# ---------------------------------------------------------------------------
+# _suite_deliverable — routing over the (patched) suite candidate readers
+# ---------------------------------------------------------------------------
+def test_suite_deliverable_page_resolves_from_stored_page():
+    task = {"client_id": "c1", "source": "monthly"}
+    with patch.object(qa_service, "_suite_local_seo_candidates",
+                      lambda _c: [{"keyword": "roof repair tampa", "location": "Tampa",
+                                   "url": "https://c.com/roof/", "published_at": "1"}]), \
+         patch.object(qa_service, "_suite_ecommerce_candidates", lambda _c: []):
+        out = qa_service._suite_deliverable(task, sig.RUBRIC_PAGE, "roof repair tampa")
+    assert out["url"] == "https://c.com/roof/"
+    assert out["keyword"] == "roof repair tampa"
+    assert out["location"] == "Tampa"
+
+
+def test_suite_deliverable_page_falls_back_to_website_builder():
+    task = {"client_id": "c1", "source": "monthly"}
+    with patch.object(qa_service, "_suite_local_seo_candidates", lambda _c: []), \
+         patch.object(qa_service, "_suite_ecommerce_candidates", lambda _c: []), \
+         patch.object(qa_service, "_suite_website_page", lambda _c, _kw: "https://site.com/x/"):
+        out = qa_service._suite_deliverable(task, sig.RUBRIC_PAGE, "emergency plumber")
+    assert out["url"] == "https://site.com/x/"
+
+
+def test_suite_deliverable_page_no_match_returns_empty():
+    task = {"client_id": "c1", "source": "monthly"}
+    with patch.object(qa_service, "_suite_local_seo_candidates", lambda _c: []), \
+         patch.object(qa_service, "_suite_ecommerce_candidates", lambda _c: []), \
+         patch.object(qa_service, "_suite_website_page", lambda _c, _kw: None):
+        assert qa_service._suite_deliverable(task, sig.RUBRIC_PAGE, "plumbing") == {}
+
+
+def test_suite_deliverable_gbp_pulls_published_copy():
+    task = {"client_id": "c1", "source": "monthly"}
+    with patch.object(qa_service, "_suite_gbp_copy", lambda _c: "Call us today! 🚰 emergency plumber"):
+        out = qa_service._suite_deliverable(task, sig.RUBRIC_GBP_POSTS, None)
+    assert "emergency plumber" in out["copy"]
+
+
+def test_suite_deliverable_content_run_pulls_keyword_and_url():
+    task = {"source": "content_run", "source_ref": "run-1"}
+    rows = [{"keyword": "solar panels", "published_url": "https://c.com/solar/", "published_at": "1"}]
+    with patch.object(qa_service, "get_supabase", lambda: _FakeSupabase(rows)):
+        out = qa_service._suite_deliverable(task, sig.RUBRIC_BLOG, None)
+    assert out["keyword"] == "solar panels" and out["url"] == "https://c.com/solar/"
+
+
+def test_suite_deliverable_external_rubric_resolves_nothing():
+    # A third-party placement (guest post) is never suite-produced → no lookup.
+    task = {"client_id": "c1", "source": "monthly"}
+    assert qa_service._suite_deliverable(task, sig.RUBRIC_GUEST_POST, "anchor") == {}
+    # No client → nothing to resolve.
+    assert qa_service._suite_deliverable({"source": "monthly"}, sig.RUBRIC_PAGE, "x") == {}
+
+
+# ---------------------------------------------------------------------------
+# _website_page_checks — visual-gate + nlp composite fold (PR 2)
+# ---------------------------------------------------------------------------
+# Carries a stylesheet + image so the asset-integrity layer actually runs
+# (assets_checked=True) — the precondition for the visual cost gate to skip.
+_MIN_HTML = (
+    "<html><head><title>Roofing | Tampa</title>"
+    "<link rel='stylesheet' href='/site.css'></head>"
+    "<body><h1>Roofing Tampa</h1><img src='/hero.jpg' alt='roof'></body></html>"
+)
+
+
+def test_website_page_checks_skips_visual_when_clean_and_folds_nlp_score():
+    fields = {"domain": "c.com", "business_name": "Acme Roofing", "service": ""}
+    called = {"visual": False}
+
+    async def fake_broken(_urls):
+        return []  # every asset loads
+
+    async def fake_visual(_url):
+        called["visual"] = True
+        return {"key": "visual_render", "ok": None, "blocking": True, "label": "x", "note": ""}
+
+    with patch.object(qa_service, "_structural_fit", lambda *_a, **_k: (92.0, "strong")), \
+         patch.object(qa_service, "_broken_assets", fake_broken), \
+         patch("services.qa_visual.visual_check", fake_visual):
+        checks, composite = _run(qa_service._website_page_checks(
+            _MIN_HTML, "https://c.com/roofing-tampa/", fields, {},
+            keyword="roofing tampa", nlp_composite=88.0, nlp_status="good",
+        ))
+    assert called["visual"] is False  # gate skipped the paid capture
+    assert composite == 88.0          # nlp score is the headline composite
+    nlp = [c for c in checks if c["key"] == "nlp_quality"]
+    assert nlp and nlp[0]["blocking"] is False and "88" in nlp[0]["note"]
+    vis = [c for c in checks if c["key"] == "visual_render"]
+    assert vis and vis[0]["blocking"] is False and vis[0]["ok"] is True  # skip is advisory, never blocks
+
+
+def test_website_page_checks_runs_visual_when_structure_weak():
+    fields = {"domain": "c.com", "business_name": "Acme Roofing", "service": ""}
+    called = {"visual": False}
+
+    async def fake_broken(_urls):
+        return []
+
+    async def fake_visual(_url):
+        called["visual"] = True
+        return {"key": "visual_render", "ok": True, "blocking": True, "label": "x", "note": "ok"}
+
+    with patch.object(qa_service, "_structural_fit", lambda *_a, **_k: (72.0, "borderline")), \
+         patch.object(qa_service, "_broken_assets", fake_broken), \
+         patch("services.qa_visual.visual_check", fake_visual):
+        _checks, _c = _run(qa_service._website_page_checks(
+            _MIN_HTML, "https://c.com/x/", fields, {}, keyword="roofing tampa",
+        ))
+    assert called["visual"] is True  # structure only borderline → paid capture runs
+
+
+# ---------------------------------------------------------------------------
+# _run_rubric — suite lookups are lazy (only when the task lacks link/copy)
+# ---------------------------------------------------------------------------
+def test_run_rubric_gbp_skips_suite_copy_when_task_has_copy():
+    # Task carries copy → the suite GBP-copy DB lookup is NOT performed.
+    task = {"id": "t1", "client_id": "c1", "name": "GBP Posts — roof repair",
+            "description": "Call us today! 🚿 roof repair now"}
+    with patch.object(qa_service, "get_supabase", lambda: _FakeSupabase([])), \
+         patch.object(qa_service, "_suite_gbp_copy") as m:
+        checks, urls, comp = _run(qa_service._run_rubric(sig.RUBRIC_GBP_POSTS, task, {}, None))
+    m.assert_not_called()
+    assert all(c["ok"] for c in checks)  # keyword + CTA + emoji all present in the task copy
+
+
+def test_run_rubric_gbp_pulls_suite_copy_when_task_has_none():
+    # No copy on the task → the suite's published copy is queried + used.
+    task = {"id": "t1", "client_id": "c1", "name": "GBP Posts — roof repair", "description": ""}
+    with patch.object(qa_service, "get_supabase", lambda: _FakeSupabase([])), \
+         patch.object(qa_service, "_suite_gbp_copy", lambda _c: "Book now! 🚀 roof repair"):
+        checks, urls, comp = _run(qa_service._run_rubric(sig.RUBRIC_GBP_POSTS, task, {}, None))
+    assert all(c["ok"] for c in checks)  # resolved copy satisfies keyword + CTA + emoji
+
+
+def test_run_rubric_blog_does_not_call_suite_deliverable():
+    # A content_run blog review resolves its keyword via _run_keyword, not the
+    # (now-removed) unconditional _suite_deliverable call.
+    task = {"id": "t1", "client_id": "c1", "source": "content_run", "source_ref": "run-1",
+            "name": "Review & publish: article"}
+    with patch.object(qa_service, "get_supabase", lambda: _FakeSupabase([])), \
+         patch.object(qa_service, "_blog_markdown", lambda _r: "## Key Takeaways\nCall us. [x](https://a.com)"), \
+         patch.object(qa_service, "_run_keyword", lambda _r: "roofing"), \
+         patch.object(qa_service, "_suite_deliverable") as m:
+        checks, urls, comp = _run(qa_service._run_rubric(sig.RUBRIC_BLOG, task, {}, None))
+    m.assert_not_called()
+    assert checks  # blog structural checks ran

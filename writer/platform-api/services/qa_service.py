@@ -454,6 +454,174 @@ def _run_keyword(run_id: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Suite-produced deliverable resolution — pull the live URL / keyword the suite
+# already recorded, so machine work needs no pasted 'Deliverable links' subtask.
+# Every reader is best-effort (returns [] / {} on any miss or error) and the
+# SELECTION is the pure ``sig.pick_*`` logic — an ambiguous match resolves to
+# nothing, so QA never guesses a wrong page into a false FAIL.
+# ---------------------------------------------------------------------------
+def _suite_local_seo_candidates(client_id: str) -> list[dict]:
+    """Published Local SEO pages for a client, normalized for ``pick_published_page``
+    (live site ``published_url`` only — a Doc-only page isn't a posted page)."""
+    try:
+        rows = (
+            get_supabase().table("local_seo_pages")
+            .select("keyword, location, published_url, published_at, composite_score, composite_status")
+            .eq("client_id", client_id).is_("deleted_at", "null").execute()
+        ).data or []
+    except Exception:
+        return []
+    return [
+        {"keyword": r.get("keyword"), "location": r.get("location"),
+         "url": r.get("published_url"), "published_at": r.get("published_at"),
+         "composite": r.get("composite_score"), "composite_status": r.get("composite_status")}
+        for r in rows if (r.get("published_url") or "").strip()
+    ]
+
+
+def _suite_ecommerce_candidates(client_id: str) -> list[dict]:
+    """Published ecommerce pages for a client (no geo — location omitted)."""
+    try:
+        rows = (
+            get_supabase().table("ecommerce_pages")
+            .select("keyword, published_url, published_at, composite_score, composite_status")
+            .eq("client_id", client_id).is_("deleted_at", "null").execute()
+        ).data or []
+    except Exception:
+        return []
+    return [
+        {"keyword": r.get("keyword"), "location": None,
+         "url": r.get("published_url"), "published_at": r.get("published_at"),
+         "composite": r.get("composite_score"), "composite_status": r.get("composite_status")}
+        for r in rows if (r.get("published_url") or "").strip()
+    ]
+
+
+def _suite_website_page(client_id: str, keyword: Optional[str]) -> Optional[str]:
+    """The live URL of a published Website-Builder page for this client whose
+    route matches the task keyword (unambiguous single match), assembled from the
+    site's own domain (active custom domain, else the *.workers.dev staging URL)
+    + the page route. None on any miss. Best-effort."""
+    try:
+        sites = (
+            get_supabase().table("websites")
+            .select("id, staging_url, custom_domain, domain_status")
+            .eq("client_id", client_id).execute()
+        ).data or []
+        if not sites:
+            return None
+        base_by_id: dict[str, str] = {}
+        for s in sites:
+            base = (s.get("custom_domain") if s.get("domain_status") == "active" else None) \
+                or s.get("staging_url")
+            if base:
+                b = base.strip()
+                if not b.startswith("http"):
+                    b = "https://" + b
+                base_by_id[s["id"]] = b.rstrip("/")
+        if not base_by_id:
+            return None
+        pages = (
+            get_supabase().table("website_pages")
+            .select("website_id, route, title, published_at")
+            .in_("website_id", list(base_by_id.keys()))
+            .eq("status", "published").execute()
+        ).data or []
+        candidates = []
+        for p in pages:
+            base = base_by_id.get(p.get("website_id"))
+            if not base:
+                continue
+            route = "/" + (p.get("route") or "").lstrip("/")
+            candidates.append({"url": base + route, "route": p.get("route"),
+                               "title": p.get("title"), "published_at": p.get("published_at")})
+        picked = sig.pick_website_page(candidates, keyword)
+        return picked["url"] if picked else None
+    except Exception:
+        return None
+
+
+def _suite_gbp_copy(client_id: str) -> Optional[str]:
+    """The copy of the most-recent LIVE GBP post the suite published for this
+    client — the real text that went out, better than task copy for a machine
+    post. None on any miss. Best-effort."""
+    try:
+        rows = (
+            get_supabase().table("gbp_posts")
+            .select("summary, published_at, status")
+            .eq("client_id", client_id).eq("status", "live")
+            .order("published_at", desc=True).limit(1).execute()
+        ).data or []
+        return (rows[0].get("summary") or "").strip() or None if rows else None
+    except Exception:
+        return None
+
+
+def _suite_deliverable(task: dict, rubric: str, keyword: Optional[str]) -> dict:
+    """Resolve a suite-produced deliverable from the task's linkage — returns a
+    best-effort ``{"url", "keyword", "location", "copy"}`` (all optional), used
+    to fill a missing deliverable URL / keyword / GBP copy BEFORE the pasted
+    'Deliverable links' convention. Only the machine-produced rubrics resolve
+    anything (the client's own pages + GBP posts); external placements
+    (guest post / niche edit / press release / citation / map embed) live on
+    third-party sites the suite never produced, so they return {}. Best-effort:
+    any miss/ambiguity leaves the field empty and QA falls through to today's
+    behaviour."""
+    out: dict[str, Any] = {}
+    client_id = task.get("client_id")
+
+    # content_run: the run already carries the keyword; pull its live URL too so
+    # a page-shaped QA of the same run has the placement without a paste.
+    if (task.get("source") or "") == "content_run" and task.get("source_ref"):
+        try:
+            rows = (
+                get_supabase().table("runs")
+                .select("keyword, published_url, published_at")
+                .eq("id", task["source_ref"]).limit(1).execute()
+            ).data or []
+            if rows:
+                if rows[0].get("keyword"):
+                    out["keyword"] = rows[0]["keyword"]
+                if (rows[0].get("published_url") or "").strip():
+                    out["url"] = rows[0]["published_url"]
+        except Exception:
+            pass
+        return out
+
+    if not client_id:
+        return out
+
+    if rubric == sig.RUBRIC_PAGE:
+        candidates = _suite_local_seo_candidates(client_id) + _suite_ecommerce_candidates(client_id)
+        page = sig.pick_published_page(candidates, keyword)
+        if page:
+            out["url"] = page.get("url")
+            out["keyword"] = keyword or page.get("keyword")
+            if page.get("location"):
+                out["location"] = page.get("location")
+            # The suite already 8-engine-scored this page; fold that in so QA
+            # surfaces the real quality number instead of re-deriving it.
+            if page.get("composite") is not None:
+                out["composite"] = page.get("composite")
+                out["composite_status"] = page.get("composite_status")
+        elif keyword:
+            # No stored-page keyword match; the Website Builder keys off the route
+            # slug, so try that path (its own unambiguous-match guard).
+            wurl = _suite_website_page(client_id, keyword)
+            if wurl:
+                out["url"] = wurl
+        return out
+
+    if rubric == sig.RUBRIC_GBP_POSTS:
+        copy = _suite_gbp_copy(client_id)
+        if copy:
+            out["copy"] = copy
+        return out
+
+    return out
+
+
+# ---------------------------------------------------------------------------
 # The review itself
 # ---------------------------------------------------------------------------
 async def run_qa_review_job(job: dict) -> None:
@@ -583,13 +751,27 @@ async def _run_rubric(
 
     if rubric == sig.RUBRIC_GBP_POSTS:
         # Post copy lives on the task: deliverable subtask description first,
-        # else the task description.
+        # else the task description; failing both, the copy the suite actually
+        # published for this client — queried ONLY when the task carries no copy.
         text = "\n".join(
             s.get("description") or "" for s in subtasks if sig.is_deliverable_subtask(s.get("name"))
-        ).strip() or (task.get("description") or "").strip() or None
-        return (sig.check_gbp_post(text, keyword), [], None)
+        ).strip() or (task.get("description") or "").strip()
+        if not text and task.get("client_id"):
+            text = _suite_gbp_copy(task["client_id"]) or ""
+        return (sig.check_gbp_post(text or None, keyword), [], None)
 
-    # Everything below examines external placements.
+    # Everything below examines external placements. When the task carries no
+    # link, auto-resolve the suite-produced deliverable (the client's own posted
+    # page) — a DB lookup done ONLY in that no-link case, so a pasted URL never
+    # pays for it. The resolved page's stored 8-engine score can then fold in
+    # below (the fold is scoped to a page WE resolved, never a pasted URL).
+    suite: dict[str, Any] = {}
+    if not raw_urls:
+        suite = _suite_deliverable(task, rubric, keyword)
+        if not keyword and suite.get("keyword"):
+            keyword = suite["keyword"]
+        if suite.get("url"):
+            raw_urls = [suite["url"]]
     pages, blocked = await _resolve_sheet_urls(raw_urls)
     if not pages:
         note = ("no deliverable URLs on the task — add a 'Deliverable links' subtask "
@@ -668,8 +850,13 @@ async def _run_rubric(
         if html is None:
             return ([sig._check("page", "Posted page reachable", None,
                                 note="page unreachable/blocked")], examined, None)
+        # Only fold the stored 8-engine score in when the URL under review IS the
+        # suite page we resolved it from (not an unrelated field-supplied URL).
+        nlp_composite = suite.get("composite") if suite.get("url") == url else None
+        nlp_status = suite.get("composite_status") if suite.get("url") == url else None
         checks, composite = await _website_page_checks(
             html, url, fields, client, keyword=keyword, page_type=task.get("qa_page_type"),
+            nlp_composite=nlp_composite, nlp_status=nlp_status,
         )
         return (checks, examined, composite)
 
@@ -679,11 +866,17 @@ async def _run_rubric(
 async def _website_page_checks(
     html: str, url: str, fields: dict, client: Optional[dict],
     keyword: Optional[str] = None, page_type: Optional[str] = None,
+    nlp_composite: Optional[float] = None, nlp_status: Optional[str] = None,
 ) -> tuple[list[dict], Optional[float]]:
     """The website-page QA checks (QA_Checklists §Website Pages Posted) for a
     fetched page — shared by the ``website_page`` rubric (task deliverable, which
     supplies ``keyword`` + an optional ``page_type``) and the bare-URL
-    ``review_url`` path. Returns (checks, composite_or_none)."""
+    ``review_url`` path. Returns (checks, composite_or_none).
+
+    ``nlp_composite``/``nlp_status`` (present when the deliverable resolved to a
+    suite-generated page) are the page's already-computed 8-engine quality
+    score — folded in as an advisory + used as the headline composite so QA
+    surfaces the real quality number instead of re-deriving it."""
     checks = sig.check_website_page(
         html, fields["domain"], fields["business_name"], keyword=keyword, url=url,
     )
@@ -692,9 +885,11 @@ async def _website_page_checks(
     # 'Page type' dropdown) picks the matching reference; unset falls back to
     # the service → local_landing → location priority. Attribution is heuristic,
     # so a low score reads needs_human, never an auto-bounce.
+    structural_composite: Optional[float] = None
     structural = _structural_fit(html, client, page_type)
     if structural is not None:
         composite, note = structural
+        structural_composite = composite
         ok: Optional[bool] = True if composite >= settings.qa_structural_threshold else None
         checks.append(sig._check(
             "structural_fit", "Design fit (structural) vs reference page", ok,
@@ -712,11 +907,23 @@ async def _website_page_checks(
             note="no reference page structure on file for this page type — add a "
                  "reference page URL on the client form to enable this check",
         ))
+    # The suite's own 8-engine quality score for a suite-generated page — folded
+    # in as an advisory, and preferred as the headline composite (QA grades
+    # presence/correctness; the nlp scorer already graded quality).
+    if nlp_composite is not None:
+        checks.append(sig._check(
+            "nlp_quality", "Page quality (nlp 8-engine score)", True, blocking=False,
+            note=f"composite {float(nlp_composite):.0f}/100"
+                 + (f" — {nlp_status}" if nlp_status else "") + " (scored at generation)",
+        ))
+        composite = float(nlp_composite)
     # Design fit — VISUAL. Two layers:
     # 1. Asset integrity (free, deterministic): a 404'd stylesheet or image
     #    breaks the render without needing a screenshot to prove it.
     assets = sig.asset_urls_of(html, url, cap=settings.qa_asset_check_cap)
     asset_list = assets["stylesheets"] + assets["images"]
+    assets_checked = bool(asset_list)
+    assets_clean = True
     if asset_list:
         dead = set(await _broken_assets(asset_list))
         # A dead STYLESHEET breaks the render → blocking. A dead IMAGE is a
@@ -724,6 +931,7 @@ async def _website_page_checks(
         # 2026-07-22: don't bounce a page over one 404'd image).
         dead_css = [u for u in assets["stylesheets"] if u in dead]
         dead_img = [u for u in assets["images"] if u in dead]
+        assets_clean = not dead_css and not dead_img
         if assets["stylesheets"]:
             checks.append(sig._check(
                 "asset_integrity", "Stylesheets load", not dead_css,
@@ -738,11 +946,24 @@ async def _website_page_checks(
             ))
     # 2. Rendered screenshot judged by vision (DataForSEO capture — no Chromium
     #    in the image; only HIGH-confidence breakage bounces, everything
-    #    uncertain is fail-open needs_human).
+    #    uncertain is fail-open needs_human). Gated behind the free layers: a
+    #    page whose assets all load AND whose structure comfortably clears the
+    #    floor doesn't need the paid capture — record that it was skipped as an
+    #    advisory (so the panel shows the layer ran) rather than a missing check.
     if settings.qa_visual_enabled:
-        from services import qa_visual
+        if sig.should_run_visual(
+            assets_checked, assets_clean, structural_composite,
+            settings.qa_structural_threshold, settings.qa_visual_skip_structural_margin,
+            skip_enabled=settings.qa_visual_skip_when_clean,
+        ):
+            from services import qa_visual
 
-        checks.append(await qa_visual.visual_check(url))
+            checks.append(await qa_visual.visual_check(url))
+        else:
+            checks.append(sig._check(
+                "visual_render", "Page renders without visual breakage", True, blocking=False,
+                note="skipped the screenshot — assets all load and structure is strong",
+            ))
     return checks, composite
 
 
@@ -915,7 +1136,7 @@ def assess_readiness(task_id: str) -> dict:
         return out
 
     if rubric in _URL_RUBRICS:
-        url, src = _readiness_deliverable(task)
+        url, src = _readiness_deliverable(task, rubric)
         if url:
             out["have"].append("page URL")
             if src == "auto":
@@ -950,8 +1171,11 @@ def assess_readiness(task_id: str) -> dict:
         copy = "\n".join(
             s.get("description") or "" for s in subtasks if sig.is_deliverable_subtask(s.get("name"))
         ).strip() or (task.get("description") or "").strip()
-        if copy:
+        auto_copy = "" if copy else (_suite_deliverable(task, rubric, None).get("copy") or "")
+        if copy or auto_copy:
             out["have"].append("post copy")
+            if auto_copy:
+                out["autodetected"]["copy"] = auto_copy[:200]
         else:
             out["missing"].append("the post copy (in the task description or a 'Deliverable' subtask)")
 
@@ -966,9 +1190,10 @@ def _readiness_subtasks(task_id: str) -> list[dict]:
     ).data or []
 
 
-def _readiness_deliverable(task: dict) -> tuple[Optional[str], str]:
+def _readiness_deliverable(task: dict, rubric: str = "") -> tuple[Optional[str], str]:
     """Resolve the deliverable URL + where it came from ('field' | 'scan' |
-    'auto'). Explicit field → conventions (subtask/desc/attachments)."""
+    'auto'). Explicit field → conventions (subtask/desc/attachments) → the
+    suite's own record of the published page (auto)."""
     if (task.get("deliverable_url") or "").strip():
         urls = sig.extract_urls(task["deliverable_url"])
         if urls:
@@ -977,6 +1202,11 @@ def _readiness_deliverable(task: dict) -> tuple[Optional[str], str]:
     urls = _deliverable_urls(task, subtasks, _txt_attachments_text(task["id"]))
     if urls:
         return urls[0], "scan"
+    # Suite-produced deliverable (the client's own posted page) — no paste needed.
+    keyword = sig.keyword_from_task(task, allow_full_name=rubric != sig.RUBRIC_PAGE)
+    suite = _suite_deliverable(task, rubric, keyword)
+    if suite.get("url"):
+        return suite["url"], "auto"
     return None, ""
 
 
