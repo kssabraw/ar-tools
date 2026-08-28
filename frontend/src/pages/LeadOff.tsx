@@ -68,7 +68,7 @@ interface MarketRow {
   cost_breakdown?: {
     reviews: number; reviews_n: number; content: number
     content_pages: number; links: number; links_rd: number
-    ramp: number; deliverables: number
+    setup: number; ramp: number; deliverables: number
   } | null
 }
 interface BoardResponse {
@@ -697,6 +697,7 @@ export function LeadOff() {
                   {brief.roi_links_estimated
                     ? ' · links not yet costed'
                     : ` · ${brief.cost_breakdown.links_rd} RD ${usd(brief.cost_breakdown.links)}`}
+                  {brief.cost_breakdown.setup ? ` · 1st-mo setup ${usd(brief.cost_breakdown.setup)}` : ''}
                   {brief.ramp_months ? ` · ${brief.ramp_months}-mo ramp ${usd(brief.cost_breakdown.ramp)}` : ''}
                   {' — '}{brief.roi_confidence === 'measured'
                     ? 'measured (scouted RD gap)'

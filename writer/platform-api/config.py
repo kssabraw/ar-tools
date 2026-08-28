@@ -1811,6 +1811,11 @@ class Settings(BaseSettings):
     # (Beatability / win-likelihood) between these bounds.
     leadoff_roi_maint_min_month: float = 135.0  # softest field (≈ Recipe Engine Baseline Stack)
     leadoff_roi_maint_max_month: float = 600.0  # brutal field (heavier defensive spend)
+    # The FIRST month costs this multiple of the normal monthly spend — the
+    # client needs the site set up, initial citations submitted, GBP configured,
+    # etc., which later months don't. The surcharge = (mult − 1) × that market's
+    # (sliding) monthly maintenance, added to the one-time cost to win.
+    leadoff_roi_first_month_multiplier: float = 2.0
     leadoff_roi_rd_target_mult: float = 1.0     # RD-to-win = competitor field median true RD × this
     # Ramp-to-rank: SEO doesn't rank instantly — you pay the monthly spend for
     # months of ramp BEFORE the ranking (and its value) arrive, and that sunk
