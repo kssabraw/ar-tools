@@ -24,6 +24,44 @@ strategist+autonomy+producer triple-collision has never occurred.
 §11 open questions (seam thresholds; digest cadence; duplicate auto-merge vs. flag-only;
 autonomy pre-flight veto in Phase 1 or hold).
 
+## ⏩ Update — 2026-08-28 · **PACE Slack replies — mrkdwn formatting fix**
+
+**PR #875 (merged to `main`, squash `21cc855`).** PACE's conversational Slack replies
+(`services/pace_agent.py::interpret_pace`) were shipping as raw, unrendered Markdown in
+`#pace` — `**bold**`, `##`/`###` headers, Markdown pipe tables, and `---` dividers all
+showed up as literal punctuation, because Slack's own "mrkdwn" dialect doesn't understand
+any of them. Root cause: PACE's system prompt (`_PACE_SYSTEM`) gave the LLM **no
+formatting instructions at all**, so it defaulted to standard Markdown. SerMaStr already
+solved this exact problem months earlier (`slack_assistant/prompts.py` — Slack mrkdwn by
+default, standard Markdown only via `_WEB_STYLE` on the dashboard surface) — PACE even had
+the identical `style="slack"|"web"` parameter plumbed end-to-end through
+`interpret_pace`/`_answer`, it just never used it to change the prompt.
+
+**Fix, in `services/pace_agent.py`:** an explicit FORMATTING block added to `_PACE_SYSTEM`
+(Slack `*bold*` not `**bold**`, no `#` headers, no Markdown pipe tables — one bullet per
+row instead since Slack renders neither tables nor `---`), plus a `_PACE_WEB_STYLE`
+override (standard Markdown) appended only when `style == "web"`, mirroring SerMaStr's
+pattern exactly. `style` is now actually wired into the prompt sent to the LLM.
+
+**No migration, no config flag, no deploy gate** — this is a pure prompt-text change that
+takes effect as soon as `PLATFORM` redeploys with the merged commit. The deterministic PACE
+senders (`pace_digest.py`, `pace_proposals.py` / Chase Plan, `pace_briefs.py` morning
+briefs, `pace_report.py` delivery reports) were already hand-built with correct `*bold*`
+Slack syntax and needed no change — only PACE's LLM-generated conversational replies were
+affected.
+
+**Verified against three real PACE replies** before merging — two pulled from
+`assistant_messages`, and one (the worst case: a full agency-wide status digest with 8
+client overdue-task tables, ~58 tasks total) pasted straight from a live `#pace` thread.
+All three confirmed the `FORMATTING` rule (bold/headers/tables/dividers, all generic) covers
+the largest real message shape with no further changes needed.
+
+**One thing the fix does *not* solve, by design:** Slack's `*bold*` has only one weight —
+even after the fix, a top-level section title and a client-name subheading both render as
+plain bold with no size hierarchy (`##` vs `###` had implied one, falsely). A true heading
+look in Slack needs Block Kit rich-text blocks instead of a plain `text` message — a bigger
+change, not attempted here.
+
 ## ⏩ Update — 2026-08-28 · **Intervention-outcome loop — v1, report-only, ships dark**
 
 **PR #871 (merged to `main`).** The measurement half of SerMaStr's decide+assign flow: PR #862
