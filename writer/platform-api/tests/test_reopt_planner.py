@@ -95,15 +95,28 @@ def test_drop_supersedes_quick_win_for_same_keyword():
 def test_gsc_cannibalization_and_hidden_wins_mapped():
     gsc = {
         "cannibalization": [{"query": "drain cleaning", "page_count": 3, "total_impressions": 4200}],
-        "hidden_wins": [{"keyword": "leak detection", "position": 14.0, "impressions": 300}],
+        "hidden_wins": [{"keyword": "leak detection", "position": 14.0, "impressions": 300,
+                         "page": "https://acme.com/leak-detection/"}],
     }
     actions = reopt_planner.build_actions(CLIENT, [], [], gsc)
     by_kind = {a["kind"]: a for a in actions}
     assert by_kind["cannibalization"]["keyword"] == "drain cleaning"
     assert "3 pages" in by_kind["cannibalization"]["diagnosis"]
     assert by_kind["cannibalization"]["cta_path"] == f"clients/{CLIENT}/gsc-research"
-    assert by_kind["opportunity"]["keyword"] == "leak detection"
-    assert "page 2" in by_kind["opportunity"]["diagnosis"]
+    opp = by_kind["opportunity"]
+    assert opp["keyword"] == "leak detection"
+    assert "page 2" in opp["diagnosis"]
+    # the specific ranking page is named (so the user knows WHICH page to refresh)
+    assert opp["url"] == "https://acme.com/leak-detection/"
+    assert "https://acme.com/leak-detection/" in opp["diagnosis"]
+    assert "https://acme.com/leak-detection/" in opp["recommendation"]
+
+
+def test_hidden_win_without_page_degrades_gracefully():
+    gsc = {"hidden_wins": [{"keyword": "leak detection", "position": 14.0, "impressions": 300}]}
+    opp = reopt_planner.build_actions(CLIENT, [], [], gsc)[0]
+    assert opp["url"] is None
+    assert "page 2" in opp["diagnosis"] and "ranking page" in opp["recommendation"]
 
 
 def test_hidden_win_skipped_when_already_a_drop():
