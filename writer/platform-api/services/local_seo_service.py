@@ -15,7 +15,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 import httpx
 from fastapi import HTTPException
@@ -186,11 +186,18 @@ async def _post_nlp(
         raise HTTPException(status_code=502, detail="local_seo_provider_error") from exc
 
 
-async def _stream_nlp(path: str, payload: dict, timeout: float = _GENERATE_TIMEOUT) -> dict:
+async def _stream_nlp(
+    path: str, payload: dict, timeout: float = _GENERATE_TIMEOUT,
+    on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
+) -> dict:
     """POST to an SSE nlp endpoint (`/generate-page`, `/reoptimize-page`) and
     return the final `result` dict. Raises HTTPException on provider error.
     `timeout` is the hard stop for the whole attempt (generate uses the tighter
-    _GENERATE_PAGE_TIMEOUT; reoptimize keeps the longer default)."""
+    _GENERATE_PAGE_TIMEOUT; reoptimize keeps the longer default).
+
+    `on_progress(percent, message)` — when supplied, called for each per-stage
+    `progress` SSE event so a background job can surface live progress. Awaited
+    but best-effort: a failing progress write never interrupts the stream."""
     url = f"{settings.nlp_api_url}{path}"
     result: Optional[dict] = None
     try:
@@ -221,6 +228,12 @@ async def _stream_nlp(path: str, payload: dict, timeout: float = _GENERATE_TIMEO
                     if not isinstance(event, dict):
                         continue
                     step = event.get("step")
+                    if step == "progress" and on_progress is not None:
+                        try:
+                            await on_progress(event.get("progress"), event.get("message"))
+                        except Exception:  # noqa: BLE001 — progress is best-effort
+                            pass
+                        continue
                     if step == "error":
                         # The nlp worker's own message says WHY generation failed.
                         # Logging it alone is not enough: for a background job the
@@ -247,6 +260,33 @@ async def _stream_nlp(path: str, payload: dict, timeout: float = _GENERATE_TIMEO
     if not result:
         raise HTTPException(status_code=502, detail="local_seo_no_result")
     return result
+
+
+def _job_progress_writer(job_id: Optional[str]):
+    """Return an async callback that writes live progress (percent + stage
+    message) onto the async_jobs row for `job_id`, so the frontend jobs/status
+    poll can render a moving bar instead of a frozen one. Best-effort and guarded
+    on status='running' (never touches a finished job); returns None when there's
+    no job_id, so streaming stays a no-op off the background-job path."""
+    if not job_id:
+        return None
+
+    async def _write(percent: Optional[int], message: Optional[str]) -> None:
+        try:
+            update: dict = {}
+            if percent is not None:
+                update["progress"] = max(0, min(100, int(percent)))
+            if message:
+                update["progress_message"] = str(message)[:200]
+            if not update:
+                return
+            get_supabase().table("async_jobs").update(update).eq(
+                "id", job_id
+            ).eq("status", "running").execute()
+        except Exception:  # noqa: BLE001 — best-effort, never break the job
+            pass
+
+    return _write
 
 
 # ── persistence ─────────────────────────────────────────────────────────────
@@ -479,6 +519,7 @@ async def generate_page(
     include_decision_map: bool = True,
     notes: Optional[str] = None,
     entity_provider: Optional[str] = None,
+    on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
 ) -> dict:
     """Generate a local SEO page for a client and persist it.
 
@@ -550,7 +591,7 @@ async def generate_page(
                 break
     if (notes or "").strip():
         payload["notes"] = notes.strip()  # per-page writing guidance the writer follows
-    result = await _stream_nlp("/generate-page", payload, timeout=_GENERATE_PAGE_TIMEOUT)
+    result = await _stream_nlp("/generate-page", payload, timeout=_GENERATE_PAGE_TIMEOUT, on_progress=on_progress)
     result = await _apply_structure_gate(result, payload, reference_analysis)
     return _persist_page(client_id, keyword, location, True, "generate", result, user_id, notes=notes)
 
@@ -611,6 +652,7 @@ async def run_generate_job(job: dict) -> None:
             force_refresh=bool(payload.get("force_refresh")),
             page_template_url=payload.get("page_template_url"),
             entity_provider=payload.get("entity_provider"),
+            on_progress=_job_progress_writer(job_id),
         )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": {"page_id": page["id"]}, "completed_at": "now()"}
@@ -763,6 +805,7 @@ async def run_reoptimize_url_job(job: dict) -> None:
             score_threshold=payload.get("score_threshold", REOPT_SCORE_THRESHOLD),
             publish_to_doc=bool(payload.get("publish_to_doc")),
             entity_provider=payload.get("entity_provider"),
+            on_progress=_job_progress_writer(job_id),
         )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": result, "completed_at": "now()"}
@@ -784,7 +827,7 @@ def get_jobs_status(client_id: str, job_ids: list[str]) -> list[dict]:
     supabase = get_supabase()
     res = (
         supabase.table("async_jobs")
-        .select("id, status, result, error, entity_id")
+        .select("id, status, result, error, entity_id, progress, progress_message")
         .in_("id", job_ids)
         .execute()
     )
@@ -793,7 +836,9 @@ def get_jobs_status(client_id: str, job_ids: list[str]) -> list[dict]:
         if row.get("entity_id") != client_id:
             continue
         out.append(
-            {"job_id": row["id"], "status": row["status"], "result": row.get("result"), "error": row.get("error")}
+            {"job_id": row["id"], "status": row["status"], "result": row.get("result"),
+             "error": row.get("error"),
+             "progress": row.get("progress"), "progress_message": row.get("progress_message")}
         )
     return out
 
@@ -852,6 +897,7 @@ async def run_reoptimize_page_job(job: dict) -> None:
             serp_analysis=payload.get("serp_analysis"),
             user_id=payload["user_id"],
             entity_provider=payload.get("entity_provider"),
+            on_progress=_job_progress_writer(job_id),
         )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": {"page_id": page["id"]}, "completed_at": "now()"}
@@ -993,6 +1039,7 @@ async def reoptimize_page(
     serp_analysis: Optional[dict],
     user_id: str,
     entity_provider: Optional[str] = None,
+    on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
 ) -> dict:
     """Reoptimize an existing page to lift its score, re-score the result, and
     persist it as a `mode='reoptimize'` row."""
@@ -1023,7 +1070,7 @@ async def reoptimize_page(
         "voice_card": voice_card,
         # Keep the decision-fit treatment on reoptimization (parity with generate).
         "include_decision_map": True,
-    })
+    }, on_progress=on_progress)
 
     # Newer nlp builds surface the score the reoptimize loop already computed.
     # Only re-score when it's absent (older nlp) so the persisted page still
@@ -1071,6 +1118,7 @@ async def reoptimize_url(
     score_threshold: float = REOPT_SCORE_THRESHOLD,
     publish_to_doc: bool = False,
     entity_provider: Optional[str] = None,
+    on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
 ) -> dict:
     """Score a live page (by URL) and reoptimize it only if it scores below
     `score_threshold`. Strong pages (>= threshold) are skipped with a note rather
@@ -1088,6 +1136,12 @@ async def reoptimize_url(
     client = _get_client(client_id)
     fields = _business_fields(client)
     location, location_code = await locations_service.resolve_location(client, location, location_code)
+
+    # Coarse progress for the pre-rewrite phase (analysis + score are plain JSON
+    # calls with no SSE of their own). The rewrite itself streams fine-grained
+    # progress once reoptimize_page takes over.
+    if on_progress is not None:
+        await on_progress(8, "Analyzing the SERP & scoring the live page…")
 
     # Shared SERP analysis (served from cache when fresh) — passed to both the
     # score and the rewrite so neither re-scrapes. Optional: both degrade
@@ -1167,6 +1221,7 @@ async def reoptimize_url(
         serp_analysis=serp,
         user_id=user_id,
         entity_provider=entity_provider,
+        on_progress=on_progress,
     )
 
     out: dict = {

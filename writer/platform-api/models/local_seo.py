@@ -112,6 +112,10 @@ class LocalSeoJobStatus(BaseModel):
     status: str  # pending | running | complete | failed
     result: Optional[dict[str, Any]] = None
     error: Optional[str] = None
+    # Live progress for a running generate/reoptimize job (percent 0–100 + the
+    # current stage message); null for job types that don't stream progress.
+    progress: Optional[int] = None
+    progress_message: Optional[str] = None
 
 
 class LocalSeoPrecheckRequest(BaseModel):
