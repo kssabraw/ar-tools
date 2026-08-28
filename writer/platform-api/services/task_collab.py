@@ -311,7 +311,6 @@ def duplicate_task(task_id: str, *, with_subtasks: bool, actor_id: Optional[str]
         section_id=original.get("section_id"),
         description=original.get("description"),
         assignee_id=original.get("assignee_id"),
-        assignee_gid=original.get("assignee_gid"),
         assignee_name=original.get("assignee_name"),
         category=original.get("category"),
         due_date=original.get("due_date"),

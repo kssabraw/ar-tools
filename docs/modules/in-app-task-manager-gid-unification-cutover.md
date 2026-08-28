@@ -93,53 +93,52 @@ the old prod Team-page save returns a 500 (RESTRICT) — a rare, safe degradatio
 `tasks.assignee_id` points at their roster `id` and `assignee_gid` is NULL, and
 that they appear in workload/My-Tasks/placement.
 
-### Phase 2b — legacy cleanup (after confidence)
+### Phase 2b — legacy cleanup (BUILT; migration `20260828220000` STAGED)
 
-Deploy code that no longer references any of the legacy columns (search for
-`assignee_gid`, `member_gid`, `auto_assignee_gids` across
-`writer/platform-api` — the only remaining ones after 2a are the reads listed
-below), then apply:
+Scoped to the two legacy columns with **no legacy-UI coupling**. The Phase 2b
+CODE (in this PR) stops writing them; the migration drops them and is applied
+**only after this PR deploys and is verified** (irreversible, no backstop —
+dropping a column the deployed code still writes breaks it hard). Grep the
+deployed code for any remaining reference first.
 
 ```sql
 -- tasks: drop the legacy assignee column + its index.
 drop index if exists idx_tasks_assignee_open;                 -- was on assignee_gid
-alter table tasks drop column assignee_gid;
-
--- templates: drop the legacy default-assignee column.
-alter table asana_client_task_templates drop column assignee_gid;
+alter table tasks drop column if exists assignee_gid;
 
 -- skills: finalize on member_id, drop the legacy gid column + its unique/index.
 drop index if exists idx_task_member_skills_gid;
-alter table task_member_skills drop constraint task_member_skills_member_gid_category_key_key;
-alter table task_member_skills drop column member_gid;
+alter table task_member_skills drop constraint if exists task_member_skills_member_gid_category_key_key;
+alter table task_member_skills drop column if exists member_gid;
 alter table task_member_skills alter column member_id set not null;
 alter table task_member_skills add constraint uq_task_member_skills_member_cat unique (member_id, category_key);
-
--- eligibility: drop the legacy gid array.
-alter table asana_client_projects drop column auto_assignee_gids;
 ```
 
-**Code touched by 2b** (remove the now-dead legacy references):
-
-- `models/tasks.py`, `models/asana.py` — drop the `assignee_gid` /
-  `auto_assignee_gids` fields.
-- `services/task_service.py` — `_resolve_member` / `create_task` /
-  `update_task` no longer mention `assignee_gid`.
-- `routers/tasks.py` — `/tasks/mine`: drop the legacy `?gid=` param and the
-  `gid`/`my_gid` response keys (once the Phase-1 frontend that read them is no
-  longer deployed).
-- `routers/asana.py` — project-mapping get/put: drop `auto_assignee_gids`
-  read/write + the gid↔id cross-fill (keep `auto_assignee_ids`); template
-  insert drops `assignee_gid`.
-- `services/pm_assign.py` — `_skills_by_member` / `replace_member_skills`
-  already use `member_id`; no SQL change, just confirm no `member_gid` remains.
-- **Frontend** — drop the `assignee_gid` / legacy `?gid=` fallbacks
-  (`t.assignee_id ?? t.assignee_gid` → `t.assignee_id`; `m.id ?? m.gid` →
-  `m.id`), and the `gid`/`my_gid` type fields.
+**Code done by 2b:** `task_service` (`_resolve_member`/`create_task`/`update_task`
++ notify no longer write `assignee_gid`), `task_import` (subtask assignee
+resolved to `member_id`), `task_monthly`/`task_collab` (drop the vestigial
+`assignee_gid` pass), `routers/asana` (the Phase-2a explicit-unassign no longer
+writes `assignee_gid`), frontend (`TaskItem.assignee_gid` gone; `Tasks.tsx`
+filters on `assignee_id`). `pm_assign` already uses `member_id`.
 
 **Verify 2b:** full platform-api pytest suite green; Team/Tasks/My-Tasks/
-Workload/Action-Plan pages load; a monthly generation + an auto-placement both
-assign correctly.
+Workload pages load; a monthly generation + an auto-placement both assign
+correctly.
+
+#### Phase 2b follow-up — the two RETAINED columns (needs an AsanaTasks rewire)
+
+`asana_client_task_templates.assignee_gid` and
+`asana_client_projects.auto_assignee_gids` are **kept** (still dual-written)
+because the legacy **AsanaTasks** UI edits per-client templates + auto-assignee
+eligibility by Asana gid, and the native monthly generation still depends on
+`asana_client_task_templates`. Dropping these needs that editor rewired to
+member ids first (its assignee picker → roster members; its auto-assign chips →
+`auto_assignee_ids`). Once rewired:
+
+```sql
+alter table asana_client_task_templates drop column assignee_gid;   -- + model field
+alter table asana_client_projects       drop column auto_assignee_gids;  -- + model/cross-fill
+```
 
 ### The rename (Phase 2c — optional, recommended to DEFER)
 

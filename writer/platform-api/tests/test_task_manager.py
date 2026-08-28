@@ -217,7 +217,7 @@ def test_duplicate_task_copies_fields_not_source(monkeypatch):
         "client_id": "c1",
         "section_id": "sec1",
         "description": "desc",
-        "assignee_gid": "g1",
+        "assignee_id": "m1",
         "assignee_name": "Ivy",
         "category": "gbp_authority",
         "due_date": "2026-07-20",
@@ -245,7 +245,7 @@ def test_duplicate_task_copies_fields_not_source(monkeypatch):
     copy = task_collab.duplicate_task("t1", with_subtasks=True, actor_id="u1")
     assert copy["id"] == "t2"
     assert created["name"] == "GBP Blast (copy)"
-    assert created["assignee_gid"] == "g1" and created["est_hours"] == 1.5
+    assert created["assignee_id"] == "m1" and created["est_hours"] == 1.5
     # A duplicate is a manual task — the producer key must NOT carry over.
     assert "source" not in created and "source_ref" not in created
     assert sub_calls == [["Step 1", "Step 2"]]
@@ -522,10 +522,11 @@ def test_auto_tick_never_raises(monkeypatch):
     assert task_service.auto_tick_subtasks("t1", 5) == 0  # swallowed, logged
 
 
-def test_resolve_member_dual_writes_both_keys(monkeypatch):
-    """The single dual-write point (profiles↔gid unification): any of id/gid/name
-    normalizes to all three from the roster; an unknown id/gid passes through so
-    an assignment is never silently dropped."""
+def test_resolve_member_normalizes_to_assignee_id(monkeypatch):
+    """The single assignee-normalization point (profiles↔gid unification): id or
+    a legacy gid input resolves to the canonical assignee_id + cached name (the
+    assignee_gid column is gone); an unknown id passes through so an assignment
+    is never silently dropped."""
     roster = [{"id": "m1", "gid": "g1", "name": "Ivy"}]
 
     class _Q:
@@ -543,16 +544,15 @@ def test_resolve_member_dual_writes_both_keys(monkeypatch):
     monkeypatch.setattr(task_service, "get_supabase",
                         lambda: type("SB", (), {"table": lambda self, name: _Q(roster)})())
 
-    ivy = {"assignee_id": "m1", "assignee_gid": "g1", "assignee_name": "Ivy"}
-    # By canonical id, and by legacy gid → the same filled trio.
+    ivy = {"assignee_id": "m1", "assignee_name": "Ivy"}
+    # By canonical id, and by a legacy gid input → the same canonical result.
     assert task_service._resolve_member(assignee_id="m1") == ivy
     assert task_service._resolve_member(assignee_gid="g1") == ivy
-    # Neither → an explicit unassign (all cleared).
-    assert task_service._resolve_member() == {
-        "assignee_id": None, "assignee_gid": None, "assignee_name": None}
-    # An unknown member is passed through unchanged (never dropped on a miss).
+    # Neither → an explicit unassign.
+    assert task_service._resolve_member() == {"assignee_id": None, "assignee_name": None}
+    # An unknown id is passed through unchanged (never dropped on a miss).
     assert task_service._resolve_member(assignee_id="ghost") == {
-        "assignee_id": "ghost", "assignee_gid": None, "assignee_name": None}
+        "assignee_id": "ghost", "assignee_name": None}
 
 
 def test_partition_roster_write_login_less_and_non_destructive():

@@ -189,7 +189,7 @@ def assign_auto_tasks(client_id: str, templates: list[dict]) -> int:
         return 0
     auto_rows = [
         r for r in templates
-        if r.get("auto_assign") and not r.get("assignee_id") and not r.get("assignee_gid")
+        if r.get("auto_assign") and not r.get("assignee_id")
     ]
     if not auto_rows:
         return 0
@@ -259,7 +259,6 @@ def generate_month_for_client(client_id: str, target: date, *, actor_id: Optiona
                 client_id=client_id,
                 section_id=section["id"],
                 assignee_id=row.get("assignee_id"),
-                assignee_gid=row.get("assignee_gid"),
                 assignee_name=row.get("assignee_name"),
                 status_key=initial,
                 category=task_service.resolve_category_key(row.get("category_name"), categories),

@@ -14,9 +14,9 @@ from pydantic import BaseModel
 class AsanaProjectMapping(BaseModel):
     client_id: UUID
     project_gid: str
+    # Legacy gid eligibility (retained until the AsanaTasks editor is rewired to
+    # member ids — a Phase 2b follow-up) + the canonical member-id eligibility.
     auto_assignee_gids: list[str] = []
-    # Native identity: the same eligibility list as roster member ids (canonical
-    # key; auto_assignee_gids is the dual-written legacy copy).
     auto_assignee_ids: list[str] = []
     # Resolved from Asana at save time (validation) — None on reads / when
     # Asana is unconfigured.
@@ -35,8 +35,10 @@ class AsanaProjectMappingRequest(BaseModel):
 class AsanaTaskTemplateItem(BaseModel):
     """One row of a client's monthly task template (editor in + out)."""
     name: str
-    assignee_id: Optional[str] = None  # roster member id (canonical)
-    assignee_gid: Optional[str] = None  # legacy Asana gid (dual-written)
+    assignee_id: Optional[str] = None  # roster member id
+    # Legacy Asana gid — retained until the AsanaTasks template editor is rewired
+    # to member ids (a Phase 2b follow-up).
+    assignee_gid: Optional[str] = None
     assignee_name: Optional[str] = None
     category_option_gid: Optional[str] = None
     category_name: Optional[str] = None

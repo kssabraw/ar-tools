@@ -1831,8 +1831,6 @@ export interface TaskItem {
   description: string | null
   // Roster member id — the canonical assignee key (profiles↔gid unification).
   assignee_id: string | null
-  // Legacy Asana gid — dual-written during the transition; prefer assignee_id.
-  assignee_gid: string | null
   assignee_name: string | null
   status_key: string | null
   category: string | null

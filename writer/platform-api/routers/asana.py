@@ -119,7 +119,7 @@ async def replace_team_members(
             # the old blanket-delete roster editor), so a member with tasks can't
             # be cascade-nulled — we clear their tasks first, then delete.
             supabase.table("tasks").update(
-                {"assignee_id": None, "assignee_gid": None, "assignee_name": None}
+                {"assignee_id": None, "assignee_name": None}
             ).in_("assignee_id", plan["drop_ids"]).execute()
             supabase.table("asana_team_members").delete().in_("id", plan["drop_ids"]).execute()
         for upd in plan["updates"]:
@@ -219,9 +219,9 @@ async def set_project_mapping(
     project_gid = body.project_gid.strip()
     gids = [g.strip() for g in body.auto_assignee_gids if g and g.strip()]
     ids = [i.strip() for i in body.auto_assignee_ids if i and i.strip()]
-    # Cross-fill so both eligibility columns agree (dual-write). The frontend
-    # sends member ids; the legacy gid copy is derived (and vice-versa) via the
-    # roster map, so a save from either the old or new frontend stays consistent.
+    # Cross-fill so both eligibility columns agree (the auto_assignee_gids column
+    # is retained until the legacy AsanaTasks template/eligibility editor is
+    # rewired to member ids — a follow-up to Phase 2b).
     roster = (
         supabase.table("asana_team_members").select("id, gid").execute()
     ).data or []

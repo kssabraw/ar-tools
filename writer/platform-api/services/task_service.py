@@ -412,9 +412,9 @@ def create_task(
     if status_key is None:
         status_key = initial_status_key(get_statuses())
 
-    # Dual-write: normalize whichever of id/gid/name the caller gave into all
-    # three, so assignee_id (the canonical key) and assignee_gid (rollback /
-    # Asana-push resolution) always agree.
+    # Normalize whichever of id/gid/name the caller gave into the canonical
+    # assignee_id + cached name (Phase 2b — the legacy assignee_gid column is
+    # dropped; a gid input is still accepted and resolved to the member id).
     who = _resolve_member(assignee_id, assignee_gid, assignee_name)
 
     row = {
@@ -424,7 +424,6 @@ def create_task(
         "parent_task_id": parent_task_id,
         "description": description,
         "assignee_id": who["assignee_id"],
-        "assignee_gid": who["assignee_gid"],
         "assignee_name": who["assignee_name"],
         "status_key": status_key,
         "category": category,
@@ -479,40 +478,37 @@ def _resolve_member(
     assignee_gid: Optional[str] = None,
     assignee_name: Optional[str] = None,
 ) -> dict:
-    """Normalize any of id / gid / name into ``{assignee_id, assignee_gid,
-    assignee_name}`` filled from the roster — the single dual-write point for the
-    two assignee keys (profiles↔gid unification, 2026-08-28).
+    """Normalize any of id / gid / name into the canonical ``{assignee_id,
+    assignee_name}`` from the roster (profiles↔gid unification). A legacy gid
+    input (e.g. from SerMaStr's Asana path) is still accepted and resolved to the
+    member id; the assignee_gid column itself is gone (Phase 2b).
 
-    * No id and no gid → an unassign (all cleared, caller-supplied name kept).
-    * A known member → both keys + cached name (a login-less VA has gid=None).
-    * An unknown id/gid → passed through unchanged, so an assignment is never
+    * No id and no gid → an unassign (cleared, caller-supplied name kept).
+    * A known member → its id + cached name.
+    * An unknown id → passed through unchanged, so an assignment is never
       silently dropped when the roster read misses.
     """
     if not assignee_id and not assignee_gid:
-        return {"assignee_id": None, "assignee_gid": None, "assignee_name": assignee_name}
+        return {"assignee_id": None, "assignee_name": assignee_name}
     supabase = get_supabase()
     row = None
     if assignee_id:
         rows = (
             supabase.table("asana_team_members")
-            .select("id, gid, name").eq("id", assignee_id).limit(1).execute()
+            .select("id, name").eq("id", assignee_id).limit(1).execute()
         ).data
         row = rows[0] if rows else None
     if row is None and assignee_gid:
         rows = (
             supabase.table("asana_team_members")
-            .select("id, gid, name").eq("gid", assignee_gid).limit(1).execute()
+            .select("id, name").eq("gid", assignee_gid).limit(1).execute()
         ).data
         row = rows[0] if rows else None
     if row is None:
-        return {
-            "assignee_id": assignee_id,
-            "assignee_gid": assignee_gid,
-            "assignee_name": assignee_name,
-        }
+        # gid didn't resolve → keep an explicit id if given, else an unassign.
+        return {"assignee_id": assignee_id, "assignee_name": assignee_name}
     return {
         "assignee_id": row["id"],
-        "assignee_gid": row.get("gid"),
         "assignee_name": assignee_name or row.get("name"),
     }
 
@@ -594,11 +590,8 @@ def _notify_assignment(task: dict) -> None:
                 "link": link,
                 "task_id": task["id"],
                 "assignee_id": task.get("assignee_id"),
-                "assignee_gid": task.get("assignee_gid"),
             },
-            recipient_profile_id=_profile_for_member(
-                task.get("assignee_id"), task.get("assignee_gid")
-            ),
+            recipient_profile_id=_profile_for_member(task.get("assignee_id")),
         )
     except Exception as exc:
         logger.warning("task_assign_notify_failed", extra={"task_id": task.get("id"), "error": str(exc)})
@@ -613,15 +606,15 @@ def update_task(task_id: str, changes: dict, *, actor_id: Optional[str] = None) 
         raise ValueError("task_not_found")
     before = before_rows[0]
 
-    # An assignee change (via either key) is normalized so both columns move
-    # together and the activity/notify logic keys on the canonical assignee_id.
+    # An assignee change (via id, or a legacy gid input) is normalized to the
+    # canonical assignee_id + cached name; the activity/notify logic keys on it.
     changes = dict(changes)
     if "assignee_id" in changes or "assignee_gid" in changes:
         who = _resolve_member(
             changes.get("assignee_id"), changes.get("assignee_gid"), changes.get("assignee_name")
         )
+        changes.pop("assignee_gid", None)  # legacy input only — no such column now
         changes["assignee_id"] = who["assignee_id"]
-        changes["assignee_gid"] = who["assignee_gid"]
         changes["assignee_name"] = who["assignee_name"]
 
     payload = dict(changes)

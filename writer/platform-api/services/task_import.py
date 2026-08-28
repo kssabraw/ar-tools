@@ -151,6 +151,14 @@ async def import_client(client_id: str, project_gid: str, *, statuses: list[dict
 
     tasks = await asana_service.list_project_tasks_full(project_gid)
     supabase = get_supabase()
+    # Roster gid → member id, to resolve subtask assignees to the canonical
+    # assignee_id (the legacy assignee_gid column is gone — Phase 2b). Parent
+    # tasks go through create_task, which resolves the gid itself.
+    member_id_by_gid = {
+        r["gid"]: r["id"]
+        for r in (supabase.table("asana_team_members").select("id, gid").execute().data or [])
+        if r.get("gid")
+    }
     for t in tasks:
         try:
             name = (t.get("name") or "").strip()
@@ -190,7 +198,7 @@ async def import_client(client_id: str, project_gid: str, *, statuses: list[dict
                         "client_id": client_id,
                         "section_id": created.get("section_id"),
                         "parent_task_id": created["id"],
-                        "assignee_gid": ((s.get("assignee") or {}).get("gid")),
+                        "assignee_id": member_id_by_gid.get((s.get("assignee") or {}).get("gid")),
                         "assignee_name": ((s.get("assignee") or {}).get("name")),
                         "status_key": initial,
                         "due_date": s.get("due_on"),
