@@ -894,6 +894,84 @@ def is_deliverable_subtask(name: Optional[str]) -> bool:
     return "deliverable" in " ".join((name or "").casefold().split())
 
 
+# ---------------------------------------------------------------------------
+# Suite-produced deliverable resolution (auto-resolve machine work)
+# ---------------------------------------------------------------------------
+# For a deliverable the suite itself generated (a Local SEO / ecommerce /
+# website page, an API-published GBP post), the live URL + keyword are already
+# in our DB — so QA can find them without a VA pasting a 'Deliverable links'
+# subtask. The impure DB reads live in qa_service; the SELECTION is pure here so
+# it's unit-testable and — critically — can be held to a strict "unambiguous
+# single match or nothing" rule, so a wrong page is never guessed into a false
+# FAIL (fail-open: no match → fall through to the paste convention → needs_human).
+
+
+def match_key(text: Optional[str]) -> str:
+    """Normalized comparison key for keyword/location matching: casefold, then
+    collapse every run of non-alphanumerics to a single space and strip. So
+    'Emergency Plumber, Miami' and 'emergency-plumber miami' compare equal. Pure."""
+    return normalize_ws(re.sub(r"[^0-9a-z]+", " ", (text or "").casefold()))
+
+
+def pick_published_page(
+    candidates: list[dict],
+    keyword: Optional[str],
+    location: Optional[str] = None,
+) -> Optional[dict]:
+    """Choose the ONE suite page that unambiguously is this task's deliverable.
+
+    ``candidates`` are normalized ``{keyword, location, url, published_at}`` rows
+    (each must carry a live ``url``). A match needs the task ``keyword`` to equal
+    the page keyword (``match_key`` normalized); when BOTH the task and the page
+    carry a location, that must match too (an absent location on either side is
+    not a mismatch). Returns the single match (most-recent ``published_at`` on a
+    tie) — or None when there is no match OR the match is AMBIGUOUS (≥2 distinct
+    live URLs qualify). QA never guesses a wrong page into a false FAIL. Pure."""
+    kw = match_key(keyword)
+    if not kw:
+        return None
+    loc = match_key(location)
+    hits: list[dict] = []
+    for c in candidates:
+        if not (c.get("url") or "").strip():
+            continue
+        if match_key(c.get("keyword")) != kw:
+            continue
+        cloc = match_key(c.get("location"))
+        if loc and cloc and loc != cloc:
+            continue
+        hits.append(c)
+    if not hits:
+        return None
+    if len({(h.get("url") or "").strip() for h in hits}) > 1:
+        return None  # ambiguous — don't guess a page into a false FAIL
+    return max(hits, key=lambda h: h.get("published_at") or "")
+
+
+def pick_website_page(pages: list[dict], keyword: Optional[str]) -> Optional[dict]:
+    """Choose the ONE published Website-Builder page whose route slug carries
+    EVERY significant token of the task ``keyword`` (routes have no keyword
+    column, so match on the slug). ``pages`` are ``{url, route, title,
+    published_at}`` with a live ``url``. Unambiguous single match only (≥2
+    distinct URLs qualifying → None). Pure."""
+    tokens = [t for t in match_key(keyword).split() if t not in _KW_STOPWORDS]
+    if not tokens:
+        return None
+    hits: list[dict] = []
+    for p in pages:
+        if not (p.get("url") or "").strip():
+            continue
+        hay = match_key(p.get("route")) + " " + match_key(p.get("title"))
+        haywords = set(hay.split())
+        if all(t in haywords for t in tokens):
+            hits.append(p)
+    if not hits:
+        return None
+    if len({(h.get("url") or "").strip() for h in hits}) > 1:
+        return None
+    return max(hits, key=lambda h: h.get("published_at") or "")
+
+
 _GATHERING_KEYS = {"deliverable", "article", "page"}
 
 

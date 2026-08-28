@@ -714,3 +714,86 @@ def test_is_google_doc_url():
     assert not sig.is_google_doc_url("https://docs.google.com/spreadsheets/d/abc/edit")
     assert not sig.is_google_doc_url("https://example.com/press-release")
     assert not sig.is_google_doc_url(None)
+
+
+# ---------------------------------------------------------------------------
+# Suite-produced deliverable resolution (auto-resolve machine work)
+# ---------------------------------------------------------------------------
+def test_match_key_normalizes_separators_and_case():
+    assert sig.match_key("Emergency Plumber, Miami") == "emergency plumber miami"
+    assert sig.match_key("emergency-plumber   miami") == "emergency plumber miami"
+    assert sig.match_key(None) == ""
+
+
+def test_pick_published_page_exact_keyword_match():
+    cands = [
+        {"keyword": "Roof Repair Tampa", "location": "Tampa",
+         "url": "https://c.com/roof-repair-tampa/", "published_at": "2026-01-01"},
+        {"keyword": "gutter cleaning", "location": None,
+         "url": "https://c.com/gutter/", "published_at": "2026-01-02"},
+    ]
+    got = sig.pick_published_page(cands, "roof repair tampa")
+    assert got and got["url"] == "https://c.com/roof-repair-tampa/"
+
+
+def test_pick_published_page_no_keyword_or_no_match_returns_none():
+    cands = [{"keyword": "roof repair", "url": "https://c.com/x/", "published_at": ""}]
+    assert sig.pick_published_page(cands, None) is None
+    assert sig.pick_published_page(cands, "solar panels") is None
+    # A candidate with no live URL never matches.
+    assert sig.pick_published_page([{"keyword": "roof repair", "url": ""}], "roof repair") is None
+
+
+def test_pick_published_page_ambiguous_returns_none():
+    # Two DISTINCT live URLs for the same keyword → don't guess (no false FAIL).
+    cands = [
+        {"keyword": "roof repair", "url": "https://c.com/a/", "published_at": "2026-01-01"},
+        {"keyword": "roof repair", "url": "https://c.com/b/", "published_at": "2026-01-02"},
+    ]
+    assert sig.pick_published_page(cands, "roof repair") is None
+    # Same URL twice is NOT ambiguous → resolves.
+    same = [
+        {"keyword": "roof repair", "url": "https://c.com/a/", "published_at": "2026-01-01"},
+        {"keyword": "roof repair", "url": "https://c.com/a/", "published_at": "2026-01-02"},
+    ]
+    got = sig.pick_published_page(same, "roof repair")
+    assert got and got["url"] == "https://c.com/a/"
+
+
+def test_pick_published_page_location_disambiguates_but_absent_is_not_a_mismatch():
+    cands = [
+        {"keyword": "roofing", "location": "Tampa",
+         "url": "https://c.com/tampa/", "published_at": "2026-01-01"},
+        {"keyword": "roofing", "location": "Miami",
+         "url": "https://c.com/miami/", "published_at": "2026-01-02"},
+    ]
+    # With a location, only the matching city qualifies (unambiguous).
+    got = sig.pick_published_page(cands, "roofing", location="Miami")
+    assert got and got["url"] == "https://c.com/miami/"
+    # Without a task location both qualify → ambiguous → None.
+    assert sig.pick_published_page(cands, "roofing") is None
+    # A page with no stored location still matches a task that has one.
+    cands2 = [{"keyword": "roofing", "location": None,
+               "url": "https://c.com/x/", "published_at": ""}]
+    assert sig.pick_published_page(cands2, "roofing", location="Tampa")["url"] == "https://c.com/x/"
+
+
+def test_pick_website_page_route_token_subset():
+    pages = [
+        {"url": "https://s.com/services/emergency-plumber/", "route": "services/emergency-plumber",
+         "title": "Emergency Plumber", "published_at": "2026-01-01"},
+        {"url": "https://s.com/about/", "route": "about", "title": "About", "published_at": ""},
+    ]
+    got = sig.pick_website_page(pages, "emergency plumber")
+    assert got and got["url"].endswith("/services/emergency-plumber/")
+    # Stop-words in the keyword are ignored; a missing significant token → no match.
+    assert sig.pick_website_page(pages, "emergency electrician") is None
+    assert sig.pick_website_page(pages, None) is None
+
+
+def test_pick_website_page_ambiguous_returns_none():
+    pages = [
+        {"url": "https://s.com/a/roofing/", "route": "a/roofing", "title": "", "published_at": "1"},
+        {"url": "https://s.com/b/roofing/", "route": "b/roofing", "title": "", "published_at": "2"},
+    ]
+    assert sig.pick_website_page(pages, "roofing") is None

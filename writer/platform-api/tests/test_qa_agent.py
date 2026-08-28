@@ -263,6 +263,11 @@ class _FakeTable:
     def select(self, *_a, **_k):
         return self
 
+    # Chainable query builders (eq / is_ / in_ / order / limit / …) are no-ops
+    # here — these fakes return their canned rows regardless of filter.
+    def __getattr__(self, _name):
+        return lambda *_a, **_k: self
+
     def execute(self):
         class _R:
             pass
@@ -412,3 +417,58 @@ def test_unknown_client_reply_lists_clients_instead_of_relooping():
     assert "umh" in low and "don't have" in low
     assert "IHBS" in out["reply"]  # the real client list is shown
     assert "on another website" not in low  # not the identical re-ask
+
+
+# ---------------------------------------------------------------------------
+# _suite_deliverable — routing over the (patched) suite candidate readers
+# ---------------------------------------------------------------------------
+def test_suite_deliverable_page_resolves_from_stored_page():
+    task = {"client_id": "c1", "source": "monthly"}
+    with patch.object(qa_service, "_suite_local_seo_candidates",
+                      lambda _c: [{"keyword": "roof repair tampa", "location": "Tampa",
+                                   "url": "https://c.com/roof/", "published_at": "1"}]), \
+         patch.object(qa_service, "_suite_ecommerce_candidates", lambda _c: []):
+        out = qa_service._suite_deliverable(task, sig.RUBRIC_PAGE, "roof repair tampa")
+    assert out["url"] == "https://c.com/roof/"
+    assert out["keyword"] == "roof repair tampa"
+    assert out["location"] == "Tampa"
+
+
+def test_suite_deliverable_page_falls_back_to_website_builder():
+    task = {"client_id": "c1", "source": "monthly"}
+    with patch.object(qa_service, "_suite_local_seo_candidates", lambda _c: []), \
+         patch.object(qa_service, "_suite_ecommerce_candidates", lambda _c: []), \
+         patch.object(qa_service, "_suite_website_page", lambda _c, _kw: "https://site.com/x/"):
+        out = qa_service._suite_deliverable(task, sig.RUBRIC_PAGE, "emergency plumber")
+    assert out["url"] == "https://site.com/x/"
+
+
+def test_suite_deliverable_page_no_match_returns_empty():
+    task = {"client_id": "c1", "source": "monthly"}
+    with patch.object(qa_service, "_suite_local_seo_candidates", lambda _c: []), \
+         patch.object(qa_service, "_suite_ecommerce_candidates", lambda _c: []), \
+         patch.object(qa_service, "_suite_website_page", lambda _c, _kw: None):
+        assert qa_service._suite_deliverable(task, sig.RUBRIC_PAGE, "plumbing") == {}
+
+
+def test_suite_deliverable_gbp_pulls_published_copy():
+    task = {"client_id": "c1", "source": "monthly"}
+    with patch.object(qa_service, "_suite_gbp_copy", lambda _c: "Call us today! 🚰 emergency plumber"):
+        out = qa_service._suite_deliverable(task, sig.RUBRIC_GBP_POSTS, None)
+    assert "emergency plumber" in out["copy"]
+
+
+def test_suite_deliverable_content_run_pulls_keyword_and_url():
+    task = {"source": "content_run", "source_ref": "run-1"}
+    rows = [{"keyword": "solar panels", "published_url": "https://c.com/solar/", "published_at": "1"}]
+    with patch.object(qa_service, "get_supabase", lambda: _FakeSupabase(rows)):
+        out = qa_service._suite_deliverable(task, sig.RUBRIC_BLOG, None)
+    assert out["keyword"] == "solar panels" and out["url"] == "https://c.com/solar/"
+
+
+def test_suite_deliverable_external_rubric_resolves_nothing():
+    # A third-party placement (guest post) is never suite-produced → no lookup.
+    task = {"client_id": "c1", "source": "monthly"}
+    assert qa_service._suite_deliverable(task, sig.RUBRIC_GUEST_POST, "anchor") == {}
+    # No client → nothing to resolve.
+    assert qa_service._suite_deliverable({"source": "monthly"}, sig.RUBRIC_PAGE, "x") == {}
