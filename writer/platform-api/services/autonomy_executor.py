@@ -345,6 +345,18 @@ def run_autonomy_for_client(
     for rec in decided:
         if rec["outcome"] != "auto" or rec["action"] not in AUTO_EXECUTE:
             continue
+        # Director of Operations pre-flight veto (plan §5 decision 4; build
+        # spec §8). Ships dark behind director_autonomy_veto_enabled — guards
+        # a collision that hasn't been observed yet. Fail-open by construction
+        # (director_veto.preflight_conflict never raises); placed BEFORE the
+        # budget reserve so a vetoed candidate never touches spend.
+        if settings.director_autonomy_veto_enabled:
+            from services.director import veto as director_veto
+
+            if director_veto.preflight_conflict(rec, client_id):
+                rec["outcome"] = "propose"
+                rec["policy_reason"] = "director veto: in-flight conflicting action on same target"
+                continue
         cost_c = float(rec.get("cost_usd") or 0.0)
         if cost_c > 0 and not autonomy_budget.reserve(client_id, cost_c, cap=budget, today=today):
             rec["outcome"] = "propose"

@@ -90,7 +90,7 @@ def build_portfolio_context() -> dict:
     open_goals = _counts("campaign_goals", lambda q: q.is_("achieved_at", "null"))
     frozen = set(_counts("client_freezes", lambda q: q.eq("status", "active")))
 
-    return {
+    out = {
         "clients": [
             {
                 "name": c.get("name"),
@@ -105,6 +105,27 @@ def build_portfolio_context() -> dict:
         ],
         "client_count": len(clients),
     }
+
+    # Director of Operations (build spec §7) — agency-wide seam flags, so
+    # "who's the bottleneck this week" / "show me every place two agents are
+    # acting on the same target" answer without a client named. Isolated: a
+    # failure here must never break the rest of the portfolio snapshot.
+    try:
+        from services.director.read_model import build_read_model
+
+        model = build_read_model(None, date.today())
+        flags = (model.get("flow") or {}).get("flags") or []
+        if flags:
+            out["director"] = {
+                "seam_flags": [
+                    {"seam": f["seam"], "client_id": f.get("client_id"), "evidence": f.get("evidence")}
+                    for f in flags
+                ],
+            }
+    except Exception as exc:
+        logger.warning("portfolio_ctx_director_failed", extra={"error": str(exc)})
+
+    return out
 
 
 # --- Module context providers (each: (supabase, client_id, today) -> dict|None) ---
@@ -1827,6 +1848,31 @@ def _ctx_memories(supabase, client_id: str, today: date) -> Optional[dict]:
     }
 
 
+def _ctx_director(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Director of Operations — the cross-agent seam flags for THIS client
+    (build spec §7): where a SerMaStr proposal sits unplaced, an autonomy
+    candidate nobody actioned, content that shipped degraded, or two agents
+    acting on the same target. Read-only insight, never an action of its own —
+    SerMaStr may *offer* to open a task or raise a proposal to PACE from what
+    it sees here, but never silently acts on delivery."""
+    from services.director.read_model import build_read_model
+
+    model = build_read_model(client_id, today)
+    flags = (model.get("flow") or {}).get("flags") or []
+    if not flags:
+        return None
+    return {
+        "seam_flags": [
+            {
+                "seam": f["seam"],
+                "evidence": f.get("evidence"),
+                "since": f.get("since"),
+            }
+            for f in flags
+        ],
+    }
+
+
 # Registry — append a provider here to give SerMastr a new module (see build_context).
 _CONTEXT_PROVIDERS = [
     ("campaign_goals", _ctx_campaign_goals),
@@ -1862,4 +1908,5 @@ _CONTEXT_PROVIDERS = [
     ("leadoff", _ctx_leadoff),
     ("response_episodes", _ctx_response_episodes),
     ("setup", _ctx_setup),
+    ("director", _ctx_director),
 ]
