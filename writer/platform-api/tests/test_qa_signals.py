@@ -797,3 +797,26 @@ def test_pick_website_page_ambiguous_returns_none():
         {"url": "https://s.com/b/roofing/", "route": "b/roofing", "title": "", "published_at": "2"},
     ]
     assert sig.pick_website_page(pages, "roofing") is None
+
+
+# ---------------------------------------------------------------------------
+# should_run_visual — the paid-screenshot cost gate
+# ---------------------------------------------------------------------------
+def test_should_run_visual_skips_only_when_both_signals_clean():
+    thr, margin = 70.0, 10.0
+    # Assets clean + structure comfortably above floor → skip (return False).
+    assert sig.should_run_visual(True, True, 85.0, thr, margin) is False
+    # Exactly at threshold (not above margin) → run.
+    assert sig.should_run_visual(True, True, 70.0, thr, margin) is True
+    assert sig.should_run_visual(True, True, 79.9, thr, margin) is True
+    # Just clears the margin → skip.
+    assert sig.should_run_visual(True, True, 80.0, thr, margin) is False
+
+
+def test_should_run_visual_runs_when_any_signal_weak():
+    thr, margin = 70.0, 10.0
+    assert sig.should_run_visual(True, False, 95.0, thr, margin) is True   # dead asset
+    assert sig.should_run_visual(False, True, 95.0, thr, margin) is True   # no assets checked
+    assert sig.should_run_visual(True, True, None, thr, margin) is True    # no structure score
+    # skip_enabled=False always runs, even on two clean signals.
+    assert sig.should_run_visual(True, True, 99.0, thr, margin, skip_enabled=False) is True

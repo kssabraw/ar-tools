@@ -472,3 +472,61 @@ def test_suite_deliverable_external_rubric_resolves_nothing():
     assert qa_service._suite_deliverable(task, sig.RUBRIC_GUEST_POST, "anchor") == {}
     # No client → nothing to resolve.
     assert qa_service._suite_deliverable({"source": "monthly"}, sig.RUBRIC_PAGE, "x") == {}
+
+
+# ---------------------------------------------------------------------------
+# _website_page_checks — visual-gate + nlp composite fold (PR 2)
+# ---------------------------------------------------------------------------
+# Carries a stylesheet + image so the asset-integrity layer actually runs
+# (assets_checked=True) — the precondition for the visual cost gate to skip.
+_MIN_HTML = (
+    "<html><head><title>Roofing | Tampa</title>"
+    "<link rel='stylesheet' href='/site.css'></head>"
+    "<body><h1>Roofing Tampa</h1><img src='/hero.jpg' alt='roof'></body></html>"
+)
+
+
+def test_website_page_checks_skips_visual_when_clean_and_folds_nlp_score():
+    fields = {"domain": "c.com", "business_name": "Acme Roofing", "service": ""}
+    called = {"visual": False}
+
+    async def fake_broken(_urls):
+        return []  # every asset loads
+
+    async def fake_visual(_url):
+        called["visual"] = True
+        return {"key": "visual_render", "ok": None, "blocking": True, "label": "x", "note": ""}
+
+    with patch.object(qa_service, "_structural_fit", lambda *_a, **_k: (92.0, "strong")), \
+         patch.object(qa_service, "_broken_assets", fake_broken), \
+         patch("services.qa_visual.visual_check", fake_visual):
+        checks, composite = _run(qa_service._website_page_checks(
+            _MIN_HTML, "https://c.com/roofing-tampa/", fields, {},
+            keyword="roofing tampa", nlp_composite=88.0, nlp_status="good",
+        ))
+    assert called["visual"] is False  # gate skipped the paid capture
+    assert composite == 88.0          # nlp score is the headline composite
+    nlp = [c for c in checks if c["key"] == "nlp_quality"]
+    assert nlp and nlp[0]["blocking"] is False and "88" in nlp[0]["note"]
+    vis = [c for c in checks if c["key"] == "visual_render"]
+    assert vis and vis[0]["blocking"] is False and vis[0]["ok"] is True  # skip is advisory, never blocks
+
+
+def test_website_page_checks_runs_visual_when_structure_weak():
+    fields = {"domain": "c.com", "business_name": "Acme Roofing", "service": ""}
+    called = {"visual": False}
+
+    async def fake_broken(_urls):
+        return []
+
+    async def fake_visual(_url):
+        called["visual"] = True
+        return {"key": "visual_render", "ok": True, "blocking": True, "label": "x", "note": "ok"}
+
+    with patch.object(qa_service, "_structural_fit", lambda *_a, **_k: (72.0, "borderline")), \
+         patch.object(qa_service, "_broken_assets", fake_broken), \
+         patch("services.qa_visual.visual_check", fake_visual):
+        checks, _c = _run(qa_service._website_page_checks(
+            _MIN_HTML, "https://c.com/x/", fields, {}, keyword="roofing tampa",
+        ))
+    assert called["visual"] is True  # structure only borderline → paid capture runs

@@ -466,14 +466,15 @@ def _suite_local_seo_candidates(client_id: str) -> list[dict]:
     try:
         rows = (
             get_supabase().table("local_seo_pages")
-            .select("keyword, location, published_url, published_at")
+            .select("keyword, location, published_url, published_at, composite_score, composite_status")
             .eq("client_id", client_id).is_("deleted_at", "null").execute()
         ).data or []
     except Exception:
         return []
     return [
         {"keyword": r.get("keyword"), "location": r.get("location"),
-         "url": r.get("published_url"), "published_at": r.get("published_at")}
+         "url": r.get("published_url"), "published_at": r.get("published_at"),
+         "composite": r.get("composite_score"), "composite_status": r.get("composite_status")}
         for r in rows if (r.get("published_url") or "").strip()
     ]
 
@@ -483,14 +484,15 @@ def _suite_ecommerce_candidates(client_id: str) -> list[dict]:
     try:
         rows = (
             get_supabase().table("ecommerce_pages")
-            .select("keyword, published_url, published_at")
+            .select("keyword, published_url, published_at, composite_score, composite_status")
             .eq("client_id", client_id).is_("deleted_at", "null").execute()
         ).data or []
     except Exception:
         return []
     return [
         {"keyword": r.get("keyword"), "location": None,
-         "url": r.get("published_url"), "published_at": r.get("published_at")}
+         "url": r.get("published_url"), "published_at": r.get("published_at"),
+         "composite": r.get("composite_score"), "composite_status": r.get("composite_status")}
         for r in rows if (r.get("published_url") or "").strip()
     ]
 
@@ -597,6 +599,11 @@ def _suite_deliverable(task: dict, rubric: str, keyword: Optional[str]) -> dict:
             out["keyword"] = keyword or page.get("keyword")
             if page.get("location"):
                 out["location"] = page.get("location")
+            # The suite already 8-engine-scored this page; fold that in so QA
+            # surfaces the real quality number instead of re-deriving it.
+            if page.get("composite") is not None:
+                out["composite"] = page.get("composite")
+                out["composite_status"] = page.get("composite_status")
         elif keyword:
             # No stored-page keyword match; the Website Builder keys off the route
             # slug, so try that path (its own unambiguous-match guard).
@@ -838,8 +845,13 @@ async def _run_rubric(
         if html is None:
             return ([sig._check("page", "Posted page reachable", None,
                                 note="page unreachable/blocked")], examined, None)
+        # Only fold the stored 8-engine score in when the URL under review IS the
+        # suite page we resolved it from (not an unrelated field-supplied URL).
+        nlp_composite = suite.get("composite") if suite.get("url") == url else None
+        nlp_status = suite.get("composite_status") if suite.get("url") == url else None
         checks, composite = await _website_page_checks(
             html, url, fields, client, keyword=keyword, page_type=task.get("qa_page_type"),
+            nlp_composite=nlp_composite, nlp_status=nlp_status,
         )
         return (checks, examined, composite)
 
@@ -849,11 +861,17 @@ async def _run_rubric(
 async def _website_page_checks(
     html: str, url: str, fields: dict, client: Optional[dict],
     keyword: Optional[str] = None, page_type: Optional[str] = None,
+    nlp_composite: Optional[float] = None, nlp_status: Optional[str] = None,
 ) -> tuple[list[dict], Optional[float]]:
     """The website-page QA checks (QA_Checklists §Website Pages Posted) for a
     fetched page — shared by the ``website_page`` rubric (task deliverable, which
     supplies ``keyword`` + an optional ``page_type``) and the bare-URL
-    ``review_url`` path. Returns (checks, composite_or_none)."""
+    ``review_url`` path. Returns (checks, composite_or_none).
+
+    ``nlp_composite``/``nlp_status`` (present when the deliverable resolved to a
+    suite-generated page) are the page's already-computed 8-engine quality
+    score — folded in as an advisory + used as the headline composite so QA
+    surfaces the real quality number instead of re-deriving it."""
     checks = sig.check_website_page(
         html, fields["domain"], fields["business_name"], keyword=keyword, url=url,
     )
@@ -862,9 +880,11 @@ async def _website_page_checks(
     # 'Page type' dropdown) picks the matching reference; unset falls back to
     # the service → local_landing → location priority. Attribution is heuristic,
     # so a low score reads needs_human, never an auto-bounce.
+    structural_composite: Optional[float] = None
     structural = _structural_fit(html, client, page_type)
     if structural is not None:
         composite, note = structural
+        structural_composite = composite
         ok: Optional[bool] = True if composite >= settings.qa_structural_threshold else None
         checks.append(sig._check(
             "structural_fit", "Design fit (structural) vs reference page", ok,
@@ -882,11 +902,23 @@ async def _website_page_checks(
             note="no reference page structure on file for this page type — add a "
                  "reference page URL on the client form to enable this check",
         ))
+    # The suite's own 8-engine quality score for a suite-generated page — folded
+    # in as an advisory, and preferred as the headline composite (QA grades
+    # presence/correctness; the nlp scorer already graded quality).
+    if nlp_composite is not None:
+        checks.append(sig._check(
+            "nlp_quality", "Page quality (nlp 8-engine score)", True, blocking=False,
+            note=f"composite {float(nlp_composite):.0f}/100"
+                 + (f" — {nlp_status}" if nlp_status else "") + " (scored at generation)",
+        ))
+        composite = float(nlp_composite)
     # Design fit — VISUAL. Two layers:
     # 1. Asset integrity (free, deterministic): a 404'd stylesheet or image
     #    breaks the render without needing a screenshot to prove it.
     assets = sig.asset_urls_of(html, url, cap=settings.qa_asset_check_cap)
     asset_list = assets["stylesheets"] + assets["images"]
+    assets_checked = bool(asset_list)
+    assets_clean = True
     if asset_list:
         dead = set(await _broken_assets(asset_list))
         # A dead STYLESHEET breaks the render → blocking. A dead IMAGE is a
@@ -894,6 +926,7 @@ async def _website_page_checks(
         # 2026-07-22: don't bounce a page over one 404'd image).
         dead_css = [u for u in assets["stylesheets"] if u in dead]
         dead_img = [u for u in assets["images"] if u in dead]
+        assets_clean = not dead_css and not dead_img
         if assets["stylesheets"]:
             checks.append(sig._check(
                 "asset_integrity", "Stylesheets load", not dead_css,
@@ -908,11 +941,24 @@ async def _website_page_checks(
             ))
     # 2. Rendered screenshot judged by vision (DataForSEO capture — no Chromium
     #    in the image; only HIGH-confidence breakage bounces, everything
-    #    uncertain is fail-open needs_human).
+    #    uncertain is fail-open needs_human). Gated behind the free layers: a
+    #    page whose assets all load AND whose structure comfortably clears the
+    #    floor doesn't need the paid capture — record that it was skipped as an
+    #    advisory (so the panel shows the layer ran) rather than a missing check.
     if settings.qa_visual_enabled:
-        from services import qa_visual
+        if sig.should_run_visual(
+            assets_checked, assets_clean, structural_composite,
+            settings.qa_structural_threshold, settings.qa_visual_skip_structural_margin,
+            skip_enabled=settings.qa_visual_skip_when_clean,
+        ):
+            from services import qa_visual
 
-        checks.append(await qa_visual.visual_check(url))
+            checks.append(await qa_visual.visual_check(url))
+        else:
+            checks.append(sig._check(
+                "visual_render", "Page renders without visual breakage", True, blocking=False,
+                note="skipped the screenshot — assets all load and structure is strong",
+            ))
     return checks, composite
 
 

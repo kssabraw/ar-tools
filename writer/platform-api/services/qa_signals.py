@@ -948,6 +948,32 @@ def pick_published_page(
     return max(hits, key=lambda h: h.get("published_at") or "")
 
 
+def should_run_visual(
+    assets_checked: bool,
+    assets_clean: bool,
+    structural_composite: Optional[float],
+    threshold: float,
+    margin: float,
+    *,
+    skip_enabled: bool = True,
+) -> bool:
+    """Whether the (paid) screenshot + vision render check should run for a page.
+
+    Skip it ONLY when the free deterministic layers already vouch for the
+    render: we actually checked the page's assets AND every one loaded, AND a
+    structural-fidelity score exists that comfortably clears the floor
+    (``>= threshold + margin``). A dead asset, no assets checked, a missing or
+    below-margin structure score, or ``skip_enabled=False`` all keep the
+    screenshot — default-safe, two strong clean signals required to skip. Pure."""
+    if not skip_enabled:
+        return True
+    if not (assets_checked and assets_clean):
+        return True
+    if structural_composite is None or structural_composite < threshold + margin:
+        return True
+    return False
+
+
 def pick_website_page(pages: list[dict], keyword: Optional[str]) -> Optional[dict]:
     """Choose the ONE published Website-Builder page whose route slug carries
     EVERY significant token of the task ``keyword`` (routes have no keyword
