@@ -70,12 +70,24 @@ all config, tune without a rebuild: `leadoff_roi_cost_per_review` (10),
 `_ramp_min/max_months` (3/9), `_ramp_accel/cooling_mult` (1.35/1.05),
 `_first_month_multiplier` (2.0), `_rd_target_mult` (1.0), `_enabled` (True).
 
-**Deferred (owner-flagged, not built):** the **"gap grows during the ramp"**
-refinement — while you close the review/RD gap, the incumbents keep adding
-reviews/RD, so the *effective* gap (and the deliverable cost) is larger than the
-static snapshot. Today the moving target only extends the *ramp* (via momentum);
-inflating the *deliverable count* by the field's growth-rate × ramp is the next
-step. Also: swap in the real agency unit costs.
+**Gap-grows-during-the-ramp (BUILT — owner ruling 2026-08-28, Option B):** while
+you close the review/RD gap, the incumbents keep building, so the **effective**
+gap (and its cost) is larger than the static snapshot. `compute_roi` now inflates
+the deliverable counts over the ramp horizon: **reviews** = `rev_win` +
+review_rate × ramp, where the rate is the field's **measured** velocity on
+scouted markets (`field_review_growth` = `field_vel30 / vel_matched` ≈ the #3's
+monthly review gain) or a flat board default (`leadoff_roi_field_review_growth`,
+2/mo); **RD** = the scouted RD gap × (1 + `leadoff_roi_rd_growth_pct_month` (0.03)
+× ramp) — RD has no growth-rate data pre-client, so it's a flat %/month
+assumption applied to the measured RD gap only (board/tryout have no RD gap → no
+RD growth). Gated `leadoff_roi_gap_growth_enabled` (True). The cost breakdown
+carries `reviews_growth`/`links_growth` and the brief annotates "+N during ramp".
+**Note the deliberate compounding:** the momentum ramp-extension already
+lengthens the *time* for an active field, and this adds *quantity* on top — an
+accelerating field is penalised on both axes (owner accepted this). Little Rock:
++~9 reviews over the ramp ≈ +$94, a modest effect that grows in fast-moving
+fields. **Still deferred:** swap in the real agency unit costs (the one change
+that moves every number more than this refinement does).
 
 ---
 
