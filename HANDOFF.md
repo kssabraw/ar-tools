@@ -1,6 +1,60 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-28 · **QA Agent — "For QA" drawer button (activation gap closed)** (latest)
+## ⏩ Update — 2026-08-28 · **PACE — enabled in production + its own Slack bot** (latest)
+
+**PACE is LIVE** (`PACE_ENABLED` + `PACE_INITIATIVE_ENABLED` = true on PLATFORM;
+`PACE_SLACK_CHANNEL=C0BTJ9U5H5F` = the private `#pace` channel). PRs this session:
+**#858** (route PM / native `task_*` notifications to the PACE channel), **#860**
+(separate PACE Slack bot), **#861** (inbound diagnostic log), **#868** (Team-page
+self-link). First automated digest + Chase Plan fires the workday after enablement,
+after `gsc_ingest_hour_utc` (**08:00 UTC**), delivered by the PACE bot in `#pace`.
+Full module detail is in the CLAUDE.md PACE entry.
+
+### PACE has its own Slack app now (not SerMaStr) — App ID `A0BTJKE3BDX`
+Config on PLATFORM: **`PACE_SLACK_BOT_TOKEN`** (`xoxb-…`) + **`PACE_SLACK_SIGNING_SECRET`**
+(both set live). With both set: PACE posts under its own token (`notifications.pace_bot_token()`
++ `resolve_slack_token`), inbound events hit **`POST /slack/pace/events`** (verified with
+the PACE signing secret), and the SerMaStr `/slack/events` handler **ignores `#pace`**
+(no double-reply). Both empty ⇒ PACE falls back to the shared SerMaStr bot — the code is
+inert until the vars are set.
+
+### ⚠️⚠️ The setup gotcha that cost real debugging time: **DISABLE SOCKET MODE**
+The #1 failure when wiring a Slack app to an HTTP Request URL. With **Socket Mode ON**,
+Slack delivers every event over a WebSocket and **ignores your Request URL entirely** —
+but the one-time `url_verification` challenge is a plain HTTP POST, so the URL still
+shows **"Verified ✓"**. Symptom we hit: URL verified, events subscribed, `groups:history`
+present, bot in the private channel, app reinstalled… and **zero events ever reached the
+endpoint** (no logs, no reply). Fix: Slack app → **Settings → Socket Mode → OFF**, then
+reinstall. The per-message **`slack_pace_events.hit`** log (#861) makes this diagnosable
+next time — if it never appears in the PLATFORM logs when someone posts, Slack isn't
+delivering (Socket Mode / subscription / reinstall), not our endpoint.
+
+### Full setup runbook for the PACE Slack app (if re-doing it)
+1. Create a Slack app named **PACE** (its own icon = the separate identity).
+2. **Socket Mode → OFF** (do this first — see above).
+3. **OAuth & Permissions → Bot Token Scopes:** `chat:write`, `channels:history`,
+   **`groups:history`** (REQUIRED for private channels — public `channels:history` does
+   NOT cover them), `im:history` + `im:write` (nudge/brief DMs). **Install to Workspace**
+   → copy the `xoxb-…` Bot User OAuth Token.
+4. **Basic Information → App Credentials → Signing Secret** → copy it.
+5. **Event Subscriptions → Enable Events ON** → Request URL
+   `https://platform-production-a5c5.up.railway.app/slack/pace/events` → verify →
+   **Subscribe to bot events:** `message.channels`, `message.groups`, `message.im` →
+   **Reinstall** if prompted (events don't deliver until you do).
+6. In Slack, **`/invite` the PACE bot** to `#pace` (`C0BTJ9U5H5F`). Removing SerMaStr from
+   that channel is optional (code already steps it out). *Redirect URLs / Interactivity
+   are NOT needed — PACE confirms via plain-text "reply yes", no buttons/modals/shortcuts.*
+7. Set `PACE_SLACK_BOT_TOKEN` + `PACE_SLACK_SIGNING_SECRET` on the PLATFORM Railway service.
+
+### Team Slack linking (for nudges / morning DMs)
+PACE routes personal DMs `member → profile → profiles.slack_user_id`. All three logins are
+linked: Kyle `U0A6M999M1T`, Ryan `U02APLQCK6Z`, Minda `U05GC69MR4N`. Link on the **Team
+page** (admin-only) → per-row **Link Slack**; get a member's id in Slack via avatar →
+**Profile → ⋮ → Copy member ID** (`U…`). **#868** made that button appear on your **own**
+row too (it was hidden for `isSelf`, so an admin previously couldn't self-link without a
+DB edit; the backend `PATCH /users/{id}/slack-link` already allowed it).
+
+## ⏩ Update — 2026-08-28 · **QA Agent — "For QA" drawer button (activation gap closed)**
 
 **PR #865 (merged to `main`, commit `5315266`).** Added a **For QA** button to the
 task detail drawer (`frontend/src/components/tasks/TaskDetail.tsx`) — one click moves
