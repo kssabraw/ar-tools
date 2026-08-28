@@ -84,9 +84,10 @@ UTILITY_PAGE_TYPES = frozenset(
 
 # Scale gates (PRD §4.3).
 MATRIX_SIGNOFF_THRESHOLD = 200
-# Brand × service is its own matrix (brands × services); the reference flags a
-# large one for link-equity review at the same threshold as the geo matrix.
-BRAND_SERVICE_SIGNOFF_THRESHOLD = 200
+# Auto-generated service variations (brands + narrower types) are their own
+# matrix; the reference flags a large one for link-equity review at the same
+# threshold as the geo matrix.
+VARIATION_SIGNOFF_THRESHOLD = 200
 # **Ratified at 25** — by the owner 2026-08-05, and upstream in the reference
 # itself at v3.6 §1.2 / planner rule 7, which supersedes the unratified >40
 # heuristic. The number and what it counts ratify together: **body links only**,
@@ -160,6 +161,23 @@ PageType = Literal[
 
 GEO_SITE_TYPES = frozenset({"local_business", "lead_gen"})
 
+# The kinds of service variation a catalog service can auto-generate child pages
+# for. A "brand" modifier is an equipment manufacturer (Carrier AC Repair) — its
+# own keyword vector, rendered as a brand × service page. A "type" modifier is a
+# narrower kind of the service (Oak Tree Removal) — a sub-service. Both live at
+# /{service}/{modifier}/; the kind decides the page type, the title, and the
+# eventual content angle. Default "type": a bare modifier is a narrower service
+# far more often than a brand.
+VARIATION_KINDS = frozenset({"brand", "type"})
+
+
+@dataclass(frozen=True)
+class ServiceVariation:
+    """A modifier that auto-generates a child page under a service."""
+
+    label: str
+    kind: str = "type"
+
 
 @dataclass(frozen=True)
 class ServiceEntry:
@@ -178,9 +196,17 @@ class ServiceEntry:
     # service crossed with every city is how a matrix doubles for no return.
     include_in_matrix: bool = True
     parent_slug: Optional[str] = None
-    # Equipment brands this service is offered for (Carrier, Trane, …). Their
-    # presence is the opt-in for brand × service pages; empty for most services.
-    brands: tuple[str, ...] = ()
+    # Modifiers this service auto-generates child pages for — equipment brands
+    # (Carrier) and/or narrower service types (Oak Tree Removal). Empty for most
+    # services; their presence is the opt-in.
+    variations: tuple[ServiceVariation, ...] = ()
+
+    @property
+    def brands(self) -> tuple[str, ...]:
+        """The equipment-brand labels among the variations. Kept so callers that
+        only care about brands (and the pre-generalization tests) still read a
+        flat brand list."""
+        return tuple(v.label for v in self.variations if v.kind == "brand")
 
 
 @dataclass(frozen=True)
@@ -368,52 +394,79 @@ def service_pages(catalog: Iterable[ServiceEntry]) -> list[PlannedPage]:
     return out
 
 
-def brand_service_pages(catalog: Iterable[ServiceEntry]) -> list[PlannedPage]:
-    """Brand × service pages at /{service-slug}/{brand-slug}/ (reference: Brand ×
-    Service, ⭐ SOP extension — "Carrier AC Repair").
+def service_variation_pages(catalog: Iterable[ServiceEntry]) -> list[PlannedPage]:
+    """Auto-generated variation pages at /{service-slug}/{modifier-slug}/.
 
-    One page per (top-level service, brand) for every service that carries a
-    brand list. A brand modifier is a distinct keyword vector, so the type is
-    declared here rather than inferred from the path (it shares the sub-service
-    namespace). Restricted to top-level services: a sub-service already lives two
-    segments deep, and /{parent}/{sub}/{brand}/ is not the ratified pattern — that
-    depth is the hyper-local escalation, not a brand cell.
+    One page per (top-level service, variation). The variation's KIND decides
+    what it becomes — both live in the same URL namespace, so the type is
+    declared here, never inferred from the path:
+
+    * **brand** → a **brand × service** page ("Carrier AC Repair"): the modifier
+      is a distinct keyword vector, so the title puts the brand in front of the
+      service and the page is a brand_service.
+    * **type** → a **sub-service** page ("Oak Tree Removal"): the modifier IS the
+      narrower service, so the label stands alone as the title — no "<modifier>
+      <service>" composition, which is what produced "Oak Trees Tree Removal".
+
+    Restricted to top-level services: a sub-service already lives two segments
+    deep, and /{parent}/{sub}/{modifier}/ is not the ratified pattern — that depth
+    is the hyper-local escalation, not a variation cell. Slugs are deduped within
+    a service; a collision with a hand-added sub-service surfaces as a
+    duplicate_path the reviewer resolves.
     """
     out: list[PlannedPage] = []
     for svc in sorted(catalog, key=lambda s: (s.order, s.slug)):
         if svc.parent_slug:
             continue
         seen: set[str] = set()
-        for raw in svc.brands:
-            brand = (raw or "").strip()
-            brand_slug = slugify(brand)
-            if not brand or not brand_slug or brand_slug in seen:
+        for variation in svc.variations:
+            label = (variation.label or "").strip()
+            slug = slugify(label)
+            if not label or not slug or slug in seen:
                 continue
-            seen.add(brand_slug)
-            out.append(
-                PlannedPage(
-                    _path(svc.slug, brand_slug),
-                    "brand_service",
-                    f"{brand} {svc.name}",
-                    f"brand × service (auto): {brand}",
-                    tier=4,
+            seen.add(slug)
+            if variation.kind == "brand":
+                out.append(
+                    PlannedPage(
+                        _path(svc.slug, slug),
+                        "brand_service",
+                        f"{label} {svc.name}",
+                        f"brand × service (auto): {label}",
+                        tier=4,
+                    )
                 )
-            )
+            else:
+                out.append(
+                    PlannedPage(
+                        _path(svc.slug, slug),
+                        "sub_service",
+                        label,
+                        f"service variation (auto): {label}",
+                        tier=2,
+                    )
+                )
     return out
 
 
-def brand_service_gate(count: int) -> list[PlanIssue]:
-    """Link-equity sign-off for a large brand × service matrix (reference: "flag
-    > 200 for link-equity review"). Blocking but acknowledgeable, like the other
-    scale gates — a legitimately large brand catalog needs a recorded decision,
-    not a wall.
+def brand_service_pages(catalog: Iterable[ServiceEntry]) -> list[PlannedPage]:
+    """The brand-kind subset of the variation pages. Kept as a named seam for
+    callers and tests that care specifically about brand × service."""
+    return [p for p in service_variation_pages(catalog) if p.page_type == "brand_service"]
+
+
+def variation_scale_gate(count: int) -> list[PlanIssue]:
+    """Link-equity sign-off for a large auto-generated variation matrix
+    (reference: brand × service "flag > 200 for link-equity review"; the same
+    concern applies to any large service × modifier set). Blocking but
+    acknowledgeable, like the other scale gates — a legitimately large catalog
+    needs a recorded decision, not a wall.
     """
-    if count > BRAND_SERVICE_SIGNOFF_THRESHOLD:
+    if count > VARIATION_SIGNOFF_THRESHOLD:
         return [
             PlanIssue(
-                "brand_service_scale",
+                "variation_scale",
                 True,
-                f"{count} brand × service pages (> {BRAND_SERVICE_SIGNOFF_THRESHOLD}) — "
+                f"{count} auto-generated service variation pages (> {VARIATION_SIGNOFF_THRESHOLD}) — "
                 "link-equity review before approval",
                 acknowledgeable=True,
             )
@@ -936,17 +989,19 @@ def build_plan(
     multi_city = len(cities) > 1
 
     pages = core_pages(site_type)
-    brand_pages: list[PlannedPage] = []
+    variation_pages: list[PlannedPage] = []
     if site_type in GEO_SITE_TYPES:
         pages += service_pages(catalog)
         pages += location_pages(cities, multi_city=multi_city)
         matrix = matrix_pages(catalog, cities, multi_city=multi_city)
         pages += matrix
         pages += conditional_pages(catalog, cities, multi_city=multi_city)
-        # Brand × service: its own matrix (brands × top-level services), opted in
-        # per service by a brand list. Leaf pages, so they add no index links.
-        brand_pages = brand_service_pages(catalog)
-        pages += brand_pages
+        # Service variations: brands (brand × service) + narrower types
+        # (sub-services), opted in per top-level service. brand_service leaves
+        # add no index links; sub-service variations ride the normal service
+        # linking like any other sub-service.
+        variation_pages = service_variation_pages(catalog)
+        pages += variation_pages
     else:
         matrix = []
 
@@ -967,7 +1022,7 @@ def build_plan(
     issues = (
         check_paths(pages)
         + scale_gates(len(matrix), links)
-        + brand_service_gate(len(brand_pages))
+        + variation_scale_gate(len(variation_pages))
         + single_service_gate(catalog, multi_city=multi_city)
         + template_coverage_gate(pages)
     )

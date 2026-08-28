@@ -70,14 +70,46 @@ def parse_catalog(raw: Iterable[dict]) -> list[ServiceEntry]:
                     if item.get("parent_slug")
                     else None
                 ),
-                brands=tuple(
-                    b.strip()
-                    for b in (item.get("brands") or [])
-                    if isinstance(b, str) and b.strip()
-                ),
+                variations=_parse_variations(item),
             )
         )
     return out
+
+
+def _parse_variations(item: dict) -> tuple:
+    """Service variations from config, accepting both the current shape and the
+    pre-generalization one.
+
+    * `variations: [{label, kind}]` — the current shape; `kind` defaults to
+      "type" and an unknown kind is coerced to "type".
+    * `variations: ["Oak Tree Removal", …]` — bare strings read as type modifiers.
+    * `brands: ["Carrier", …]` — the pre-generalization field, read as brand
+      modifiers so an existing site's stored catalog keeps working until its next
+      save migrates it forward.
+    """
+    out: list = []
+    seen: set = set()
+
+    def add(label: str, kind: str) -> None:
+        label = (label or "").strip()
+        if not label:
+            return
+        key = (label.lower(), kind)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(website_plan.ServiceVariation(label=label, kind=kind))
+
+    for legacy in item.get("brands") or []:
+        if isinstance(legacy, str):
+            add(legacy, "brand")
+    for v in item.get("variations") or []:
+        if isinstance(v, str):
+            add(v, "type")
+        elif isinstance(v, dict):
+            kind = v.get("kind")
+            add(v.get("label") or "", kind if kind in website_plan.VARIATION_KINDS else "type")
+    return tuple(out)
 
 
 def parse_cities(raw: Iterable[dict]) -> list[CityEntry]:
