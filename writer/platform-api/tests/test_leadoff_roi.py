@@ -41,6 +41,20 @@ class TestComputeRoi:
         assert r["payback_months"] == round(180 / (1449 - 135), 1)
         assert r["cost_to_win"] == 180  # ramp 0 ⇒ cost_to_win == deliverables
 
+    def test_first_month_multiplier_adds_a_setup_surcharge(self):
+        # 2× first month = one extra month of maintenance on top of the ramp.
+        base = compute_roi(1449, 16, ramp_months=4, **COSTS)
+        setup = compute_roi(1449, 16, ramp_months=4, first_month_multiplier=2,
+                            **COSTS)
+        # surcharge = (2−1) × 135 = 135
+        assert setup["cost_breakdown"]["setup"] == 135
+        assert setup["cost_to_win"] == base["cost_to_win"] + 135
+        assert setup["payback_months"] > base["payback_months"]
+
+    def test_first_month_multiplier_default_is_no_surcharge(self):
+        r = compute_roi(1449, 16, ramp_months=4, **COSTS)  # default mult 1.0
+        assert r["cost_breakdown"]["setup"] == 0
+
     def test_ramp_makes_payback_realistic(self):
         # 4 months of ramp labour before the ranking arrives.
         r = compute_roi(1449, 16, ramp_months=4, **COSTS)
