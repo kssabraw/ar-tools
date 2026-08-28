@@ -4268,16 +4268,16 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
         (e for e in entities if (e.get("name") or "").strip()),
         key=lambda e: e.get("page_spread", 0), reverse=True,
     )
-    # The per-zone entity SCORE stays on the top 15 so entity_coverage is stable:
-    # widening it only inflates the score (found_ents is a superset while the
-    # per-zone entity_target is fixed). The UI chips show the top 30, matching the
-    # entity-target table's depth — display only, no effect on the score.
-    top_entities = named_entities[:15]
-    chip_entities = named_entities[:30]
+    # Top 30 entities by page_spread — used for BOTH the per-zone entity score AND
+    # the UI chips (matching the entity-target table's depth). Owner decision: score
+    # the page against the wider entity set. Note this can only lift entity_coverage
+    # vs. a top-15 score (found_ents is a superset while the per-zone entity_target
+    # is fixed), never lower it.
+    top_entities = named_entities[:30]
     # Page-level entities actually used vs. not (the UI chips), independent of the
     # per-zone target loop so it reflects the whole page.
-    entities_used    = [e["name"] for e in chip_entities if e["name"].lower() in page_text_lower]
-    entities_missing = [e["name"] for e in chip_entities if e["name"].lower() not in page_text_lower]
+    entities_used    = [e["name"] for e in top_entities if e["name"].lower() in page_text_lower]
+    entities_missing = [e["name"] for e in top_entities if e["name"].lower() not in page_text_lower]
     # Cora-style per-entity coverage: current vs recommended mention counts +
     # shortfall, persisted so the UI can render a term-target table and the gap
     # survives the run (additive — does not affect the score).
