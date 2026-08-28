@@ -436,9 +436,15 @@ def _apply_check(supabase, iv: dict, result: dict, current_value: Optional[float
     })
     updates: dict = {"checks": checks, "updated_at": now.isoformat()}
     if result["is_final"]:
-        # Commit the verdict and close the intervention.
+        # Commit the verdict and close the intervention (next_check_at=null → the
+        # daily sweep's `.lte("next_check_at", now)` filter never re-picks it). A
+        # None verdict here means we never got a measurable reading (untracked
+        # keyword / page-only target / transient miss at the final check) — close
+        # it WITHOUT a verdict rather than fabricate 'no_effect', which would
+        # falsely count the work as a failure in the effectiveness rollup (it
+        # stays `pending` there, which is honest).
         updates.update({
-            "verdict": result["verdict"] or "no_effect",
+            "verdict": result["verdict"],
             "evaluated_at": now.isoformat(),
             "next_check_at": None,
         })
@@ -487,7 +493,7 @@ def run_intervention_sync() -> dict:
             stats["checked"] += 1
             if result["is_final"]:
                 stats["final"] += 1
-                verdict = result["verdict"] or "no_effect"
+                verdict = result["verdict"]  # None (unmeasurable) → not counted
                 if verdict in stats:
                     stats[verdict] += 1
         except Exception as exc:

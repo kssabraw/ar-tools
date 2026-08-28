@@ -94,6 +94,16 @@ def test_evaluate_final_verdict_at_six_weeks():
     assert r["verdict"] == "no_effect"
 
 
+def test_evaluate_unmeasurable_final_is_none_not_no_effect():
+    # A target we could never measure (no baseline value) must NOT be fabricated
+    # into 'no_effect' at the 6-week mark — evaluate returns verdict None, and
+    # _apply_check closes the row without a verdict (stays 'pending' in the rollup).
+    row = _intervention(43, baseline_value=None)
+    r = iv.evaluate_intervention(row, current_value=None, now=NOW)
+    assert r["is_final"] is True and r["due"] is True
+    assert r["verdict"] is None
+
+
 def test_evaluate_uses_baseline_direction_and_target():
     row = _intervention(
         43, baseline_value=100.0, direction="higher_is_better",
