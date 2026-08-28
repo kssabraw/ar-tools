@@ -1810,7 +1810,7 @@ class Settings(BaseSettings):
     # a soft one. Slides on the same field-difficulty signal as the ramp
     # (Beatability / win-likelihood) between these bounds.
     leadoff_roi_maint_min_month: float = 135.0  # softest field (≈ Recipe Engine Baseline Stack)
-    leadoff_roi_maint_max_month: float = 400.0  # brutal field (heavier defensive spend)
+    leadoff_roi_maint_max_month: float = 600.0  # brutal field (heavier defensive spend)
     leadoff_roi_rd_target_mult: float = 1.0     # RD-to-win = competitor field median true RD × this
     # Ramp-to-rank: SEO doesn't rank instantly — you pay the monthly spend for
     # months of ramp BEFORE the ranking (and its value) arrive, and that sunk
