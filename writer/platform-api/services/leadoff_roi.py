@@ -41,6 +41,8 @@ def compute_roi(exp_val: Optional[float], rev_win: Optional[float], *,
                 content_pages: float, content_page_cost: float,
                 monthly_maintenance: float, ramp_months: float = 0.0,
                 first_month_multiplier: float = 1.0,
+                review_growth_per_month: float = 0.0,
+                rd_growth_pct_month: float = 0.0,
                 rd_gap_true: Optional[float] = None) -> dict[str, Any]:
     """Agency cost-to-win economics from a market's expected monthly value and
     its winnability gaps. Pure — no config, no I/O.
@@ -67,17 +69,29 @@ def compute_roi(exp_val: Optional[float], rev_win: Optional[float], *,
     it only for scouted markets; omit board-wide and links are 0 + flagged.
     """
     ev = float(exp_val or 0.0)
-    reviews_n = max(0.0, float(rev_win or 0.0))
+    ramp = max(0.0, float(ramp_months))
+
+    # Gap-grows-during-the-ramp: the incumbents keep building over the ramp, so
+    # the effective gap to close is the static snapshot PLUS the field's growth
+    # over that horizon (owner ruling 2026-08-28, Option B — reviews from
+    # measured velocity, RD from a flat %/month assumption).
+    reviews_base = max(0.0, float(rev_win or 0.0))
+    reviews_growth = max(0.0, float(review_growth_per_month)) * ramp
+    reviews_n = reviews_base + reviews_growth
     reviews_cost = reviews_n * cost_per_review
+
     content_cost = max(0.0, float(content_pages)) * content_page_cost
+
     links_estimated = rd_gap_true is None
-    links_rd = 0.0 if links_estimated else max(0.0, float(rd_gap_true))
+    links_base = 0.0 if links_estimated else max(0.0, float(rd_gap_true))
+    links_growth = links_base * max(0.0, float(rd_growth_pct_month)) * ramp
+    links_rd = links_base + links_growth
     links_cost = links_rd * cost_per_link
+
     deliverables = reviews_cost + content_cost + links_cost
 
     monthly_cost = max(0.0, float(monthly_maintenance))
     setup_cost = max(0.0, float(first_month_multiplier) - 1.0) * monthly_cost
-    ramp = max(0.0, float(ramp_months))
     ramp_cost = ramp * monthly_cost
     sunk = deliverables + setup_cost + ramp_cost   # total invested before payoff
 
@@ -95,11 +109,13 @@ def compute_roi(exp_val: Optional[float], rev_win: Optional[float], *,
         "roi_confidence": "modelled" if links_estimated else "measured",
         "cost_breakdown": {
             "reviews": round(reviews_cost),
-            "reviews_n": round(reviews_n),
+            "reviews_n": round(reviews_n),          # effective (base + ramp growth)
+            "reviews_growth": round(reviews_growth),
             "content": round(content_cost),
             "content_pages": round(float(content_pages)),
             "links": round(links_cost),
-            "links_rd": round(links_rd),
+            "links_rd": round(links_rd),            # effective (base + ramp growth)
+            "links_growth": round(links_growth),
             "setup": round(setup_cost),
             "ramp": round(ramp_cost),
             "deliverables": round(deliverables),
@@ -152,6 +168,22 @@ def estimate_maintenance(*, beatability: Optional[float], rankab: Optional[float
     return round(maint_min + (1.0 - ease) * (maint_max - maint_min))
 
 
+def field_review_growth(enrichment: Optional[dict[str, Any]], *,
+                        default: float) -> float:
+    """The field's monthly review-growth rate for the gap-grows model. Pure.
+
+    Scouted markets carry the measured review velocity — `field_vel30` (reviews
+    the matched field added in 30 days) over `vel_matched` (competitors matched)
+    ≈ the #3 competitor's monthly review gain. Board-wide (no velocity) falls
+    back to the flat `default`. Never negative.
+    """
+    enr = enrichment or {}
+    vel30, matched = enr.get("field_vel30"), enr.get("vel_matched")
+    if vel30 is not None and matched:
+        return max(0.0, float(vel30) / float(matched))
+    return max(0.0, float(default))
+
+
 def roi_params() -> dict[str, float]:
     """The config-sourced cost assumptions (impure). Content page price comes
     straight from the Recipe Engine so it can't drift from the SOP catalog."""
@@ -191,8 +223,19 @@ def attach_roi(row: dict[str, Any], *,
             beatability=bt, rankab=ra,
             maint_min=settings.leadoff_roi_maint_min_month,
             maint_max=settings.leadoff_roi_maint_max_month)
+        # Gap-grows-during-the-ramp (Option B): reviews from measured velocity
+        # (scouted) / a flat board default; RD from a flat %/month assumption.
+        if settings.leadoff_roi_gap_growth_enabled:
+            review_growth = field_review_growth(
+                row.get("enrichment"),
+                default=settings.leadoff_roi_field_review_growth)
+            rd_growth_pct = settings.leadoff_roi_rd_growth_pct_month
+        else:
+            review_growth = rd_growth_pct = 0.0
         roi = compute_roi(row.get("exp_val"), row.get("rev_win"),
                           ramp_months=ramp, monthly_maintenance=maintenance,
+                          review_growth_per_month=review_growth,
+                          rd_growth_pct_month=rd_growth_pct,
                           rd_gap_true=rd_gap_true, **roi_params())
         return {**row, **roi}
     except Exception:

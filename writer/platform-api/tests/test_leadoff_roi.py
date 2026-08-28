@@ -3,6 +3,7 @@ from services.leadoff_roi import (
     compute_roi,
     estimate_maintenance,
     estimate_ramp_months,
+    field_review_growth,
     rd_gap_from_enrichment,
 )
 
@@ -152,6 +153,50 @@ class TestEstimateMaintenance:
         soft = estimate_maintenance(beatability=80, rankab=None, **MAINT)
         hard = estimate_maintenance(beatability=20, rankab=None, **MAINT)
         assert hard > soft
+
+
+class TestGapGrowth:
+    def test_review_growth_inflates_the_review_count(self):
+        base = compute_roi(1449, 16, ramp_months=4, **COSTS)
+        grown = compute_roi(1449, 16, ramp_months=4,
+                            review_growth_per_month=2.0, **COSTS)
+        # 16 + 2×4 = 24 effective reviews; growth = 8 reviews = $80
+        assert grown["cost_breakdown"]["reviews_n"] == 24
+        assert grown["cost_breakdown"]["reviews_growth"] == 8
+        assert grown["cost_breakdown"]["reviews"] == base["cost_breakdown"]["reviews"] + 80
+
+    def test_rd_growth_only_applies_when_rd_gap_present(self):
+        # modelled (no rd_gap) → no RD, no RD growth
+        modelled = compute_roi(1449, 16, ramp_months=4,
+                              rd_growth_pct_month=0.03, **COSTS)
+        assert modelled["cost_breakdown"]["links_rd"] == 0
+        assert modelled["cost_breakdown"]["links_growth"] == 0
+        # measured (rd_gap 50) → 50 × (1 + .03×4) = 56 effective RD
+        measured = compute_roi(1449, 16, ramp_months=4, rd_gap_true=50.0,
+                              rd_growth_pct_month=0.03, **COSTS)
+        assert measured["cost_breakdown"]["links_rd"] == 56
+        assert measured["cost_breakdown"]["links_growth"] == 6
+
+    def test_no_growth_defaults_are_back_compat(self):
+        r = compute_roi(1449, 16, ramp_months=4, rd_gap_true=50.0, **COSTS)
+        assert r["cost_breakdown"]["reviews_growth"] == 0
+        assert r["cost_breakdown"]["links_growth"] == 0
+        assert r["cost_breakdown"]["links_rd"] == 50  # static
+
+
+class TestFieldReviewGrowth:
+    def test_measured_velocity_is_per_competitor_monthly_gain(self):
+        # 12 reviews across 4 matched competitors in 30 days → 3/competitor/mo
+        assert field_review_growth({"field_vel30": 12, "vel_matched": 4},
+                                   default=2.0) == 3.0
+
+    def test_board_wide_falls_back_to_default(self):
+        assert field_review_growth(None, default=2.0) == 2.0
+        assert field_review_growth({"field_vel30": None, "vel_matched": None},
+                                   default=2.5) == 2.5
+        # matched 0 → avoid div-by-zero, use default
+        assert field_review_growth({"field_vel30": 5, "vel_matched": 0},
+                                   default=2.0) == 2.0
 
 
 class TestRdGapFromEnrichment:

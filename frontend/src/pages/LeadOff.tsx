@@ -66,8 +66,8 @@ interface MarketRow {
   roi_confidence?: 'measured' | 'modelled' | null
   roi_links_estimated?: boolean | null
   cost_breakdown?: {
-    reviews: number; reviews_n: number; content: number
-    content_pages: number; links: number; links_rd: number
+    reviews: number; reviews_n: number; reviews_growth: number; content: number
+    content_pages: number; links: number; links_rd: number; links_growth: number
     setup: number; ramp: number; deliverables: number
   } | null
 }
@@ -697,8 +697,12 @@ export function LeadOff() {
                     + `${brief.enrichment?.momentum === 'accel' ? ', extended because the field is actively growing' : ''}) `
                     + `— you pay monthly labour before the ranking arrives, then recoup the ${usd(brief.cost_to_win)} sunk cost from profit. SEO doesn’t rank in weeks.`} />
               {brief.cost_breakdown && (
-                <div style={{ fontSize: 11, color: '#64748b', margin: '2px 0 6px', lineHeight: 1.5 }}>
+                <div style={{ fontSize: 11, color: '#64748b', margin: '2px 0 6px', lineHeight: 1.5 }}
+                  title={(brief.cost_breakdown.reviews_growth || brief.cost_breakdown.links_growth)
+                    ? 'Review/RD counts are the EFFECTIVE gap — the snapshot plus what the incumbents add while you close it over the ramp.'
+                    : undefined}>
                   Cost to win {usd(brief.cost_to_win)}: {brief.cost_breakdown.reviews_n} reviews {usd(brief.cost_breakdown.reviews)}
+                  {brief.cost_breakdown.reviews_growth ? ` (+${brief.cost_breakdown.reviews_growth} during ramp)` : ''}
                   {' · '}{brief.cost_breakdown.content_pages} pages {usd(brief.cost_breakdown.content)}
                   {brief.roi_links_estimated
                     ? ' · links not yet costed'

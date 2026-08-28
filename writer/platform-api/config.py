@@ -1829,6 +1829,18 @@ class Settings(BaseSettings):
     leadoff_roi_ramp_max_months: float = 9.0     # brutal field
     leadoff_roi_ramp_accel_mult: float = 1.35    # field accelerating → longer (chasing a moving target)
     leadoff_roi_ramp_cooling_mult: float = 1.05  # field cooling/dead → still growing a little
+    # Gap-grows-during-the-ramp: while you spend the ramp closing the review/RD
+    # gap, the incumbents keep building, so the EFFECTIVE gap (and its cost) is
+    # larger than the static snapshot. Reviews use the field's MEASURED velocity
+    # on scouted markets (field_vel30 / vel_matched ≈ the #3's monthly review
+    # gain), falling back to this flat default board-wide. RD has no growth-rate
+    # data pre-client, so it uses a flat %-per-month assumption applied to the
+    # scouted RD gap only. Both grow over the ramp horizon. Note: this compounds
+    # with the momentum ramp-extension (an active field is worse on both time and
+    # quantity) — deliberate (owner ruling 2026-08-28, Option B).
+    leadoff_roi_gap_growth_enabled: bool = True
+    leadoff_roi_field_review_growth: float = 2.0     # board-wide default reviews/mo the field adds
+    leadoff_roi_rd_growth_pct_month: float = 0.055   # RD gap grows this fraction per ramp month
     # GBP Placement Advisor (leadoff-gbp-placement-plan-v1_0.md §10): the
     # demand-aware "where should the GBP live" read. Free core = the Census
     # ACS block-group demand surface (census_demand.py, $0) ÷ the live
