@@ -565,6 +565,21 @@ class ContactsBatchRequest(BaseModel):
     prospect_ids: list[str]
 
 
+class EnigmaEstimateRequest(BaseModel):
+    prospect_ids: list[str]
+
+
+class EnigmaRequestCreate(BaseModel):
+    prospect_ids: list[str]
+    note: Optional[str] = None
+    # Which Enigma entity path to match ('brand' | 'operating_location'); server-defaults when omitted.
+    entity_type: Optional[str] = None
+
+
+class EnigmaBatchRequest(BaseModel):
+    prospect_ids: list[str]
+
+
 class SignalScanCreate(BaseModel):
     """The per-prospect "Run organic" / "Run AI" order body — a note is the only thing to carry, the
     target is resolved server-side from the prospect's report."""
@@ -684,6 +699,109 @@ async def list_prospect_contacts(
 ) -> dict:
     """A prospect's enriched contacts (names/phones/emails) + its enrichment status. Read-only."""
     return _handle(outreach_service.list_prospect_contacts, prospect_id)
+
+
+# --- Enigma card revenue (per-prospect 1m/3m/12m card_revenue_amount — outreach DECISIONS.md) --
+#
+# Look up a selected prospect's (or a set's) card-transaction revenue over Enigma's 1m/3m/12m windows.
+# The estimate is FREE (staff, read-only). Placing an order BILLS on the next tick (one Enigma `search`
+# per prospect), so it is ADMIN-gated — the click is the spend authorization, exactly like a scan or
+# enrichment order — and additionally budget-guarded per user. platform-api never spends: it writes a
+# signed `enigma_request` the outreach job drains. Reads (list/detail/card data) are open to any authed
+# staff.
+
+
+@router.post("/outreach/enigma/estimate")
+async def estimate_enigma(
+    payload: EnigmaEstimateRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Free preflight cost estimate for a selection: billable count, est cost, today's spend and
+    whether the daily budget allows it. Spends nothing; shown before the admin confirms."""
+    _require_outreach_ready()
+    return _handle(outreach_service.estimate_enigma, payload.prospect_ids, auth["user_id"])
+
+
+@router.post("/outreach/prospects/{prospect_id}/enigma")
+async def enigma_prospect(
+    prospect_id: str, note: Optional[str] = None, auth: dict = Depends(require_admin)
+) -> dict:
+    """Look up ONE prospect's card revenue — the per-row button. Places a signed one-prospect order;
+    the tick bills it. Admin-gated + budget-guarded. 422 `nothing_to_look_up` if already looked up."""
+    _require_outreach_ready()
+    return {
+        "enigma_request": _handle(
+            outreach_service.create_enigma_request,
+            prospect_ids=[prospect_id],
+            note=note,
+            entity_type=None,
+            actor_id=auth["user_id"],
+        )
+    }
+
+
+@router.post("/outreach/enigma")
+async def create_enigma_request(
+    payload: EnigmaRequestCreate, auth: dict = Depends(require_admin)
+) -> dict:
+    """Look up a SELECTION (select-all / bulk) — one signed order carrying the whole prospect-id list,
+    drained per-prospect by the tick. Admin-gated + budget-guarded; the estimate rides the response."""
+    _require_outreach_ready()
+    return {
+        "enigma_request": _handle(
+            outreach_service.create_enigma_request,
+            prospect_ids=payload.prospect_ids,
+            note=payload.note,
+            entity_type=payload.entity_type,
+            actor_id=auth["user_id"],
+        )
+    }
+
+
+@router.get("/outreach/enigma")
+async def list_enigma_requests(
+    status: Optional[str] = None,
+    limit: int = Query(default=outreach_service.DEFAULT_PAGE_SIZE, ge=1),
+    offset: int = Query(default=0, ge=0),
+    auth: dict = Depends(require_outreach),
+) -> dict:
+    return _handle(
+        outreach_service.list_enigma_requests, status=status, limit=limit, offset=offset
+    )
+
+
+@router.get("/outreach/enigma/{request_id}")
+async def enigma_request_detail(
+    request_id: str, auth: dict = Depends(require_outreach)
+) -> dict:
+    """One order + its progress counters — the poll the bulk bar's useResumableBatch reads."""
+    return _handle(outreach_service.enigma_request_detail, request_id)
+
+
+@router.post("/outreach/enigma/{request_id}/cancel")
+async def cancel_enigma_request(
+    request_id: str, auth: dict = Depends(require_admin)
+) -> dict:
+    """Withdraw a PENDING order. One the tick has claimed is looking up (real money) and resolves on
+    its own."""
+    _require_outreach_ready()
+    return _handle(outreach_service.cancel_enigma_request, request_id, auth["user_id"])
+
+
+@router.post("/outreach/enigma/batch")
+async def get_prospect_enigma_batch(
+    payload: EnigmaBatchRequest, auth: dict = Depends(require_outreach)
+) -> dict:
+    """Card results for a SET of prospects in one read — the coverage table's batch, so rendering N
+    rows costs a few queries, not 2N. Read-only."""
+    return _handle(outreach_service.get_prospect_enigma_batch, payload.prospect_ids)
+
+
+@router.get("/outreach/prospects/{prospect_id}/enigma")
+async def get_prospect_enigma(
+    prospect_id: str, auth: dict = Depends(require_outreach)
+) -> dict:
+    """A prospect's Enigma card-revenue result (1m/3m/12m windows + match audit). Read-only."""
+    return _handle(outreach_service.get_prospect_enigma, prospect_id)
 
 
 # --- Site name-scrape (FREE owner/manager fallback — outreach DECISIONS.md) --------------------

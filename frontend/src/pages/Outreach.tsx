@@ -11,6 +11,8 @@ import { Justification } from '../components/outreach/Justification'
 import { ProspectReportButtons } from '../components/outreach/ProspectReport'
 import { ContactCell, EnrichmentBar, NameScrapeBar, NameSearchBar, useEnrichment, useNameScrape, useNameSearch } from '../components/outreach/Enrichment'
 import type { ProspectContacts } from '../components/outreach/Enrichment'
+import { CardRevenueCell, EnigmaBar, useEnigma } from '../components/outreach/EnigmaCards'
+import type { ProspectEnigma } from '../components/outreach/EnigmaCards'
 
 // ── Types (mirror routers/outreach.py's scan-order section) ──────────────────
 interface Market { id: string; name: string }
@@ -835,9 +837,11 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
   const enrich = useEnrichment(submarketId)
   const nameScrape = useNameScrape(submarketId)
   const nameSearch = useNameSearch(submarketId)
+  const enigma = useEnigma(submarketId)
   const batchRunning = enrich.batch.running
   const nameBatchRunning = nameScrape.batch.running
   const nameSearchBatchRunning = nameSearch.batch.running
+  const enigmaBatchRunning = enigma.batch.running
   const toggle = (id: string) =>
     setSelected(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next })
   const promote = useMutation({
@@ -871,6 +875,14 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
     enabled: visibleIds.length > 0,
     refetchInterval: batchRunning || nameBatchRunning || nameSearchBatchRunning ? 6000 : false,
   })
+  // Enigma card revenue for the whole table in ONE read (no per-row N+1). Refetched while an enigma
+  // batch drains so freshly-written card figures appear without a reload — same pattern as contacts.
+  const { data: enigmaBatch } = useQuery<{ by_prospect: Record<string, ProspectEnigma> }>({
+    queryKey: ['outreach-enigma-batch', submarketId, visibleIds],
+    queryFn: () => api.post('/outreach/enigma/batch', { prospect_ids: visibleIds }),
+    enabled: visibleIds.length > 0,
+    refetchInterval: enigmaBatchRunning ? 6000 : false,
+  })
 
   if (!submarketId) return null
   if (isLoading) return <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>Loading…</p>
@@ -884,29 +896,39 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
   }
   const visible = data.scores.filter(s => !s.excluded)
   const allSelected = visible.length > 0 && visible.every(s => selected.has(s.prospect_id))
-  const colSpan = 7 + (isAdmin ? 1 : 0) + 1  // + checkbox (admin) + contacts column
+  const colSpan = 8 + (isAdmin ? 1 : 0) + 1  // + checkbox (admin) + contacts + card-revenue columns
 
   const exportCsv = () => {
     const by = contactsBatch?.by_prospect
     const join = (id: string, pick: (c: ProspectContacts['contacts'][number]) => string | null | undefined) =>
       (by?.[id]?.contacts ?? []).map(pick).filter(Boolean).join('; ')
+    const en = enigmaBatch?.by_prospect
     const headers = [
       'Prospect', 'Phone', 'Coverage %', 'Deficit %', 'Best rank', 'Drops out at (mi)',
-      'Website', 'Contact names', 'Emails', 'Contact phones', 'Measured at',
+      'Website', 'Contact names', 'Emails', 'Contact phones',
+      'Card revenue 12m', 'Card revenue 3m', 'Card revenue 1m', 'Card as-of', 'Measured at',
     ]
-    const rows = visible.map(s => [
-      s.name,
-      s.phone ?? '',
-      s.coverage_pct != null ? s.coverage_pct.toFixed(1) : '',
-      s.coverage_deficit != null ? s.coverage_deficit.toFixed(1) : '',
-      s.best_rank ?? '',
-      s.centroid_dist_at_loss != null ? s.centroid_dist_at_loss.toFixed(1) : '',
-      by?.[s.prospect_id]?.website ?? '',
-      join(s.prospect_id, c => c.full_name || c.name_for_emails),
-      join(s.prospect_id, c => c.email),
-      join(s.prospect_id, c => c.phone),
-      s.measured_at ?? '',
-    ])
+    const rows = visible.map(s => {
+      const e = en?.[s.prospect_id]
+      const card = (v: number | null | undefined) => (v != null ? String(Math.round(v)) : '')
+      return [
+        s.name,
+        s.phone ?? '',
+        s.coverage_pct != null ? s.coverage_pct.toFixed(1) : '',
+        s.coverage_deficit != null ? s.coverage_deficit.toFixed(1) : '',
+        s.best_rank ?? '',
+        s.centroid_dist_at_loss != null ? s.centroid_dist_at_loss.toFixed(1) : '',
+        by?.[s.prospect_id]?.website ?? '',
+        join(s.prospect_id, c => c.full_name || c.name_for_emails),
+        join(s.prospect_id, c => c.email),
+        join(s.prospect_id, c => c.phone),
+        card(e?.card_revenue_12m),
+        card(e?.card_revenue_3m),
+        card(e?.card_revenue_1m),
+        e?.card_as_of ?? '',
+        s.measured_at ?? '',
+      ]
+    })
     const slug = (submarketName ?? submarketId)
       .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
     downloadCsv(`outreach-coverage-${slug}-${new Date().toISOString().slice(0, 10)}.csv`,
@@ -947,6 +969,13 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
           onCleared={() => setSelected(new Set())}
         />
       )}
+      {isAdmin && (
+        <EnigmaBar
+          selectedIds={[...selected]}
+          controller={enigma}
+          onCleared={() => setSelected(new Set())}
+        />
+      )}
       {/* Horizontal scroll: the coverage table has many columns (contacts + a wide actions
           group), so it can exceed the card width — scroll it rather than crush the columns.
           width:max-content sizes the table to its content (no crushing); we deliberately do NOT
@@ -966,6 +995,7 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
             <th style={{ padding: '4px 8px' }}>Prospect</th>
             <th style={{ padding: '4px 8px' }}>Phone</th>
             <th style={{ padding: '4px 8px' }}>Contacts</th>
+            <th style={{ padding: '4px 8px' }}>Card revenue</th>
             <th style={{ padding: '4px 8px', textAlign: 'right' }}>Coverage</th>
             <th style={{ padding: '4px 8px', textAlign: 'right' }}>Deficit</th>
             <th style={{ padding: '4px 8px', textAlign: 'right' }}>Best rank</th>
@@ -991,6 +1021,11 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
                     nameController={nameScrape} nameBatchRunning={nameBatchRunning}
                     nameSearchController={nameSearch} nameSearchBatchRunning={nameSearchBatchRunning}
                     provided={contactsBatch?.by_prospect?.[s.prospect_id] ?? null} />
+                </td>
+                <td style={{ padding: '6px 8px' }}>
+                  <CardRevenueCell prospectId={s.prospect_id} isAdmin={isAdmin}
+                    controller={enigma} batchRunning={enigmaBatchRunning}
+                    provided={enigmaBatch?.by_prospect?.[s.prospect_id] ?? null} />
                 </td>
                 <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.coverage_pct?.toFixed(1)}%</td>
                 <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>
