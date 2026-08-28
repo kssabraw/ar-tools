@@ -46,7 +46,10 @@ platform Module 6 — see `LEADOFF_PRD.md`):
 | `v3` | within-category percentile | "best city for category X" — do NOT use across categories |
 | `rankab` (0–1) | win-likelihood: field review-strength + exact-category openness | difficulty at a glance |
 | `rev_win` | reviews needed to pass the #3 incumbent | **review target for the Maps SOP** |
-| `roi` | exp_val ÷ rev_win — $/mo per review of effort | prioritization when capacity-constrained |
+| `monthly_profit` | `exp_val` − the market's sliding monthly maintenance — real recurring profit once ranked | the "is this market worth building" number |
+| `payback_months` | months to recoup `cost_to_win` from monthly profit; **blank = never recoups** (maintenance ≥ the market's value) | prioritization / "win cheapest first" |
+| `cost_to_win` | one-time investment to win = deliverables (reviews + pages + scouted links) + first-month setup + ramp-period labour | effort/$ estimate |
+| `roi` (deprecated) | old `exp_val ÷ rev_win` $/mo-per-review ratio — subtracted no cost, so it flattered expensive markets. Superseded by monthly_profit + payback; kept only for back-compat, not shown in the UI | do not quote — use monthly_profit/payback |
 | `rating` | field's avg star rating | <4.3 ⇒ compete-on-quality angle |
 | `namekw` | top-5 with keyword business names (0–5) | 0–1 ⇒ name-relevance lever open |
 | `exact_open` | competitors holding the exact primary category | low ⇒ category lever open (verify per §6) |
@@ -60,11 +63,31 @@ Economics knobs: `--capture` (default 0.10 of searches → leads; rank-dependent
 in reality) and `--lead-tier` (per-category CPL low/mid/high from
 `inputs/lead_values.csv`). Estimates are **planning numbers, not promises**.
 
+**Cost-to-win ROI model (2026-08-28).** The board/brief/tryout now report the
+**agency cost-to-win ROI** (monthly profit + payback) instead of the old
+$/review ratio — expected value measured against what the agency pays to win and
+hold the ranking. `cost_to_win` = **deliverables** (reviews-to-win × per-review +
+pages × per-page + the scouted RD gap × per-link) + a **first-month setup**
+surcharge (the first month costs 2× — site build, initial citations, GBP config)
++ **ramp-period labour** (monthly maintenance × the months it takes to rank). The
+**ramp** and **monthly maintenance** both slide per market on field difficulty
+(Beatability / win-likelihood — a soft field ranks fast and cheap, a brutal one
+slow and dear), and because the incumbents keep doing SEO, an **active field
+(momentum=accel)** both **extends the ramp** and **grows the effective review/RD
+gap** over that ramp (reviews from measured velocity, RD from a %/month
+assumption). Payback of "a few months" is realistic; a `payback_months` in the
+low single digits is normal, blank means the market never recoups at these
+assumptions. Every input is config-tunable and the shipped defaults are
+**placeholder agency-cost assumptions** — confirm the real per-review / per-link
+/ pages / maintenance / ramp numbers before quoting cost-to-win to a client.
+
 ## 4. Standard procedures
 
 **P1 — New-market selection (build a new asset):**
-1. Board screen: `--sort expected` within the target geography, or `--sort roi`
-   when review-capacity is the constraint. Keep grade ≥ B, `conf` ≠ low.
+1. Board screen: `--sort expected` within the target geography, or `--sort payback`
+   ("win cheapest" — fastest to recoup the cost-to-win; replaces the old $/review
+   `roi` sort) / `--sort profit` when economics are the constraint. Keep grade ≥ B,
+   `conf` ≠ low.
 2. Off-list city of interest → run a **tryout**.
 3. Shortlist 10–50 → run the **scouting report**.
 4. Kill or verify every `HOT?` (trend), every `momentum=accel` (closing window),
@@ -78,7 +101,10 @@ neighboring cities; rank by `exp_val`; deliver as an expansion roadmap with
 
 **P3 — Quantify an engagement plan (feeds other SOPs):**
 - Review target → `rev_win` (+ margin; check `momentum` — an accel field needs a
-  moving target: rev_win + field_vel30 × expected months to rank).
+  moving target: rev_win + field_vel30 × expected months to rank). The ROI
+  cost-to-win now bakes this in automatically (effective reviews = rev_win +
+  measured velocity × ramp), but quote the raw `rev_win` as the *initial* target
+  to the Maps SOP and add the moving-target margin explicitly.
 - Link budget → §5 conversion of `rd_min`/`rd_med` into true-RD targets for the
   Link Building SOP.
 - GBP primary category → highest-demand family member with the fewest verified
