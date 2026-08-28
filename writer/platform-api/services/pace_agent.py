@@ -484,7 +484,12 @@ async def interpret_pace(question: str, client: Optional[dict], context: dict,
         raise
 
     parts = [b.text for b in (resp.content if resp else []) if getattr(b, "type", None) == "text"]
-    return ("text", "\n".join(parts).strip() or "I couldn't work that out — try rephrasing.")
+    reply = "\n".join(parts).strip() or "I couldn't work that out — try rephrasing."
+    if resp is not None and getattr(resp, "stop_reason", None) == "max_tokens":
+        # Ran out of room — close cleanly instead of stopping mid-sentence, same
+        # pattern as slack_assistant.llm.interpret/interpret_portfolio.
+        reply += "\n\n_…I hit my reply-length limit — say “continue” and I'll pick up where I left off._"
+    return ("text", reply)
 
 
 def _drill_read(task_name: str, client_id_hint: Optional[str] = None) -> str:
