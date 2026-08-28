@@ -25,6 +25,13 @@ def test_senior_and_passthrough_escalate():
     assert ap.classify(_p("disavow"), client_tier=2).outcome == "escalate"
 
 
+def test_requires_approval_proposes_not_autos():
+    # A strategist proposal flagged requires=approval must surface, never auto,
+    # even for an in-tier in-budget action.
+    d = ap.classify(_p("rebuild_action_plan", requires="approval"), client_tier=2, budget_left=100.0)
+    assert d.outcome == "propose" and "approval" in d.reason.lower()
+
+
 def test_unknown_action_escalates():
     d = ap.classify(_p("do_something_weird"), client_tier=2)
     assert d.outcome == "escalate" and "unknown" in d.reason.lower()
