@@ -130,3 +130,27 @@ class TaskGenerateMonthResponse(BaseModel):
     existing: int = 0
     reason: Optional[str] = None
     errors: list[str] = Field(default_factory=list)
+
+
+class AutoplaceUnassignedRequest(BaseModel):
+    # Which task sources to auto-place. Defaults to monthly template tasks —
+    # the recurring gap (clients with no auto_assignee_gids leave those
+    # unstaffed at generation). Pass an explicit list to widen, or null for
+    # every source. Empty list is rejected as a no-op.
+    sources: Optional[list[str]] = ["monthly"]
+
+
+class AutoplacedTask(BaseModel):
+    task_id: str
+    name: Optional[str] = None
+    outcome: str  # "placed" | "held" | "already_assigned" | "not_found"
+    assignee_name: Optional[str] = None
+    reason: Optional[str] = None  # placed / placed_widened / team_at_capacity / …
+
+
+class AutoplaceUnassignedResponse(BaseModel):
+    total: int = 0
+    placed: int = 0
+    held: int = 0
+    already_assigned: int = 0
+    results: list[AutoplacedTask] = Field(default_factory=list)
