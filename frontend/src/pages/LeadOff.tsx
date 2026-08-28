@@ -683,7 +683,7 @@ export function LeadOff() {
               <KV k="Profit $/mo (after costs)" strong
                 v={usd(brief.monthly_profit)}
                 hint={`Agency cost-to-win ROI. Expected ${usd(brief.exp_val)} − ${usd(brief.monthly_cost)}/mo maintenance `
-                  + `(Recipe Engine baseline stack). Not a per-review ratio — real profit after what we pay to hold the ranking.`} />
+                  + `(slides with field difficulty — harder fields cost more to hold). Not a per-review ratio — real profit after what we pay to hold the ranking.`} />
               <KV k="Payback period" v={paybackLabel(brief.payback_months)}
                 hint={brief.payback_months == null
                   ? 'Maintenance ≥ this market’s value — it never recoups the build at these assumptions.'

@@ -1805,7 +1805,12 @@ class Settings(BaseSettings):
     leadoff_roi_cost_per_review: float = 10.0   # loaded labour to earn one review
     leadoff_roi_cost_per_link: float = 30.0     # blended per-RD cost (DAS $10 … niche edit $75)
     leadoff_roi_content_pages: float = 4.0      # pages assumed to rank a market
-    leadoff_roi_monthly_maintenance: float = 135.0  # Recipe Engine Baseline Stack/mo (reporting excluded)
+    # Monthly maintenance is a SLIDING SCALE, not a flat number: holding rank in
+    # a brutal field costs more per month (more links/content to defend) than in
+    # a soft one. Slides on the same field-difficulty signal as the ramp
+    # (Beatability / win-likelihood) between these bounds.
+    leadoff_roi_maint_min_month: float = 135.0  # softest field (≈ Recipe Engine Baseline Stack)
+    leadoff_roi_maint_max_month: float = 400.0  # brutal field (heavier defensive spend)
     leadoff_roi_rd_target_mult: float = 1.0     # RD-to-win = competitor field median true RD × this
     # Ramp-to-rank: SEO doesn't rank instantly — you pay the monthly spend for
     # months of ramp BEFORE the ranking (and its value) arrive, and that sunk
@@ -1817,8 +1822,8 @@ class Settings(BaseSettings):
     # the ramp — you're chasing a moving target.
     leadoff_roi_ramp_min_months: float = 3.0     # softest field
     leadoff_roi_ramp_max_months: float = 9.0     # brutal field
-    leadoff_roi_ramp_accel_mult: float = 1.3     # field accelerating → longer
-    leadoff_roi_ramp_cooling_mult: float = 0.9   # field cooling/dead → shorter
+    leadoff_roi_ramp_accel_mult: float = 1.35    # field accelerating → longer (chasing a moving target)
+    leadoff_roi_ramp_cooling_mult: float = 1.05  # field cooling/dead → still growing a little
     # GBP Placement Advisor (leadoff-gbp-placement-plan-v1_0.md §10): the
     # demand-aware "where should the GBP live" read. Free core = the Census
     # ACS block-group demand surface (census_demand.py, $0) ÷ the live

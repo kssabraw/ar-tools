@@ -1,11 +1,12 @@
 """Unit tests for the LeadOff agency cost-to-win ROI (pure core)."""
 from services.leadoff_roi import (
     compute_roi,
+    estimate_maintenance,
     estimate_ramp_months,
     rd_gap_from_enrichment,
 )
 
-RAMP = dict(ramp_min=3.0, ramp_max=9.0, accel_mult=1.3, cooling_mult=0.9)
+RAMP = dict(ramp_min=3.0, ramp_max=9.0, accel_mult=1.35, cooling_mult=1.05)
 
 # Fixed unit costs so the arithmetic is checkable by hand.
 COSTS = dict(cost_per_review=10.0, cost_per_link=30.0, content_pages=4.0,
@@ -101,17 +102,42 @@ class TestEstimateRampMonths:
         assert estimate_ramp_months(beatability=None, rankab=None, momentum=None,
                                     **RAMP) == 6.0
 
-    def test_accelerating_field_extends_ramp(self):
+    def test_accelerating_field_extends_ramp_most(self):
         base = estimate_ramp_months(beatability=50, rankab=None, momentum=None, **RAMP)
         accel = estimate_ramp_months(beatability=50, rankab=None, momentum="accel", **RAMP)
-        assert accel == round(base * 1.3, 1)
+        assert accel == round(base * 1.35, 1)
         assert accel > base  # chasing a moving target takes longer
 
-    def test_cooling_field_shortens_ramp(self):
+    def test_cooling_field_still_extends_ramp_slightly(self):
         base = estimate_ramp_months(beatability=50, rankab=None, momentum=None, **RAMP)
         for m in ("cooling", "dead"):
-            assert estimate_ramp_months(beatability=50, rankab=None, momentum=m,
-                                        **RAMP) == round(base * 0.9, 1)
+            r = estimate_ramp_months(beatability=50, rankab=None, momentum=m, **RAMP)
+            assert r == round(base * 1.05, 1)
+            assert r > base  # even a cooling field is still doing some SEO
+
+
+MAINT = dict(maint_min=135.0, maint_max=400.0)
+
+
+class TestEstimateMaintenance:
+    def test_soft_field_costs_near_the_floor(self):
+        # Beatability 90 → ease .9 → 135 + .1×265 = 161.5 → 162
+        assert estimate_maintenance(beatability=90, rankab=None, **MAINT) == 162
+
+    def test_brutal_field_costs_near_the_ceiling(self):
+        # Beatability 10 → ease .1 → 135 + .9×265 = 373.5 → 374
+        assert estimate_maintenance(beatability=10, rankab=None, **MAINT) == 374
+
+    def test_rankab_fallback_and_midpoint(self):
+        # no beatability, rankab .5 → ease .5 → 135 + .5×265 = 267.5 → 268
+        assert estimate_maintenance(beatability=None, rankab=0.5, **MAINT) == 268
+        # neither → midpoint ease .5 → same
+        assert estimate_maintenance(beatability=None, rankab=None, **MAINT) == 268
+
+    def test_harder_field_costs_more(self):
+        soft = estimate_maintenance(beatability=80, rankab=None, **MAINT)
+        hard = estimate_maintenance(beatability=20, rankab=None, **MAINT)
+        assert hard > soft
 
 
 class TestRdGapFromEnrichment:

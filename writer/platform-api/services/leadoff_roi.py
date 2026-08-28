@@ -128,6 +128,24 @@ def estimate_ramp_months(*, beatability: Optional[float], rankab: Optional[float
     return round(max(0.0, base), 1)
 
 
+def estimate_maintenance(*, beatability: Optional[float], rankab: Optional[float],
+                         maint_min: float, maint_max: float) -> float:
+    """Sliding monthly maintenance (what it costs to HOLD the ranking). Pure.
+
+    Harder fields cost more to defend, so this slides on the same difficulty
+    signal as the ramp: a soft field (high Beatability / win-likelihood) sits
+    near `maint_min`, a brutal one near `maint_max`. Beatability preferred;
+    win-likelihood fallback; midpoint when neither is known.
+    """
+    if beatability is not None:
+        ease = max(0.0, min(1.0, float(beatability) / 100.0))
+    elif rankab is not None:
+        ease = max(0.0, min(1.0, float(rankab)))
+    else:
+        ease = 0.5
+    return round(maint_min + (1.0 - ease) * (maint_max - maint_min))
+
+
 def roi_params() -> dict[str, float]:
     """The config-sourced cost assumptions (impure). Content page price comes
     straight from the Recipe Engine so it can't drift from the SOP catalog."""
@@ -138,7 +156,6 @@ def roi_params() -> dict[str, float]:
         "cost_per_link": settings.leadoff_roi_cost_per_link,
         "content_pages": settings.leadoff_roi_content_pages,
         "content_page_cost": CONTENT_PAGE_COST,
-        "monthly_maintenance": settings.leadoff_roi_monthly_maintenance,
     }
 
 
@@ -156,16 +173,20 @@ def attach_roi(row: dict[str, Any], *,
         # likelihood) + the incumbents' review-velocity momentum (scouted only,
         # carried on the brief's enrichment block; None board-wide).
         momentum = (row.get("enrichment") or {}).get("momentum")
+        bt, ra = row.get("beatability"), row.get("rankab")
         ramp = estimate_ramp_months(
-            beatability=row.get("beatability"), rankab=row.get("rankab"),
-            momentum=momentum,
+            beatability=bt, rankab=ra, momentum=momentum,
             ramp_min=settings.leadoff_roi_ramp_min_months,
             ramp_max=settings.leadoff_roi_ramp_max_months,
             accel_mult=settings.leadoff_roi_ramp_accel_mult,
             cooling_mult=settings.leadoff_roi_ramp_cooling_mult)
+        maintenance = estimate_maintenance(
+            beatability=bt, rankab=ra,
+            maint_min=settings.leadoff_roi_maint_min_month,
+            maint_max=settings.leadoff_roi_maint_max_month)
         roi = compute_roi(row.get("exp_val"), row.get("rev_win"),
-                          ramp_months=ramp, rd_gap_true=rd_gap_true,
-                          **roi_params())
+                          ramp_months=ramp, monthly_maintenance=maintenance,
+                          rd_gap_true=rd_gap_true, **roi_params())
         return {**row, **roi}
     except Exception:
         logger.warning("leadoff_roi.attach_failed", exc_info=True)
