@@ -227,7 +227,7 @@ export function AsanaTasks() {
             </div>
           ) : (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {(team ?? []).map((m) => {
+              {(team ?? []).filter((m): m is typeof m & { gid: string } => !!m.gid).map((m) => {
                 const on = autoAssignees.includes(m.gid)
                 return (
                   <button

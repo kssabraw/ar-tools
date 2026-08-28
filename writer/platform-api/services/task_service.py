@@ -517,6 +517,46 @@ def _resolve_member(
     }
 
 
+def partition_roster_write(existing: list[dict], members: list[dict]) -> dict:
+    """Plan a NON-DESTRUCTIVE roster replace, keyed on member id (preferred) or
+    gid (Phase 2a — supports login-less VAs). Pure — unit-tested.
+
+    Each payload member is one of:
+      * an existing member (carries ``id``)  → update in place (id preserved);
+      * a newly Asana-linked member (``gid`` but no ``id``) → upsert by gid;
+      * a brand-new login-less VA (neither)  → insert with gid = NULL.
+    A stored member is dropped only when neither its id nor its gid is kept — so
+    a member is never deleted-and-recreated (which would orphan its tasks via the
+    assignee_id FK). Returns ``{drop_ids, updates, gid_upserts, inserts}``.
+    """
+    keep_ids = {m["id"] for m in members if m.get("id")}
+    keep_gids = {(m.get("gid") or "").strip() for m in members if (m.get("gid") or "").strip()}
+    drop_ids = [
+        r["id"] for r in existing
+        if r.get("id") and r["id"] not in keep_ids
+        and (not r.get("gid") or r["gid"] not in keep_gids)
+    ]
+    updates: list[dict] = []
+    gid_upserts: list[dict] = []
+    inserts: list[dict] = []
+    for m in members:
+        gid = (m.get("gid") or "").strip() or None
+        fields = {
+            "name": m.get("name"),
+            "weekly_hours": m.get("weekly_hours"),
+            "active": m.get("active", True),
+            "profile_id": m.get("profile_id") or None,
+        }
+        if m.get("id"):
+            updates.append({"id": m["id"], "fields": {**fields, "gid": gid}})
+        elif gid:
+            gid_upserts.append({**fields, "gid": gid})
+        else:
+            inserts.append(fields)  # login-less VA → gid defaults NULL
+    return {"drop_ids": drop_ids, "updates": updates,
+            "gid_upserts": gid_upserts, "inserts": inserts}
+
+
 def _profile_for_member(
     assignee_id: Optional[str] = None, assignee_gid: Optional[str] = None
 ) -> Optional[str]:

@@ -75,10 +75,11 @@ class AsanaTaskTemplateRef(BaseModel):
 # Team & capacity (Team Workload)
 # ---------------------------------------------------------------------------
 class AsanaTeamMemberItem(BaseModel):
-    # Roster member id (canonical assignee identity). Output-only — assigned by
-    # the DB; a create/edit is matched by gid in Phase 1.
+    # Roster member id (canonical assignee identity). Echoed on reads; on a write
+    # it identifies an existing member to update in place (id preserved).
     id: Optional[str] = None
-    gid: str
+    # Asana user gid — OPTIONAL (Phase 2a): a login-less VA has no gid.
+    gid: Optional[str] = None
     name: Optional[str] = None
     weekly_hours: Optional[float] = None
     active: bool = True

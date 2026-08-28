@@ -1620,7 +1620,8 @@ export interface AsanaTaskTemplateItem {
 export interface AsanaTeamMember {
   // Roster member id (canonical assignee identity); output-only from the API.
   id?: string | null
-  gid: string
+  // Asana user gid — optional (Phase 2a): a login-less VA has no gid.
+  gid?: string | null
   name: string | null
   weekly_hours: number | null
   active: boolean

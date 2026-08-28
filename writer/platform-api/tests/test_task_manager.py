@@ -555,6 +555,38 @@ def test_resolve_member_dual_writes_both_keys(monkeypatch):
         "assignee_id": "ghost", "assignee_gid": None, "assignee_name": None}
 
 
+def test_partition_roster_write_login_less_and_non_destructive():
+    """Phase 2a roster replace: existing members update in place by id (never
+    delete+recreate), a gid-only member upserts by gid, a member with neither is
+    a new login-less VA, and a stored member is dropped only when absent by both
+    id and gid."""
+    existing = [
+        {"id": "m1", "gid": "g1"},   # kept (payload carries id m1)
+        {"id": "m2", "gid": "g2"},   # kept (payload carries gid g2, no id)
+        {"id": "m3", "gid": "g3"},   # dropped (absent by id and gid)
+        {"id": "m4", "gid": None},   # kept login-less (payload carries id m4)
+    ]
+    members = [
+        {"id": "m1", "gid": "g1", "name": "Ivy", "weekly_hours": 30, "profile_id": "p1"},
+        {"gid": "g2", "name": "Minda"},   # gid, no id → upsert by gid
+        {"id": "m4", "name": "Bo"},       # existing login-less → update in place
+        {"name": "New VA"},               # brand-new login-less VA → insert, gid NULL
+    ]
+    plan = task_service.partition_roster_write(existing, members)
+
+    assert plan["drop_ids"] == ["m3"]
+    assert {u["id"] for u in plan["updates"]} == {"m1", "m4"}
+    m1 = next(u for u in plan["updates"] if u["id"] == "m1")
+    assert m1["fields"]["gid"] == "g1" and m1["fields"]["name"] == "Ivy"
+    m4 = next(u for u in plan["updates"] if u["id"] == "m4")
+    assert m4["fields"]["gid"] is None            # stays login-less
+    assert plan["gid_upserts"] == [
+        {"name": "Minda", "weekly_hours": None, "active": True, "profile_id": None, "gid": "g2"}]
+    # A login-less insert carries no gid → the DB default (NULL) applies.
+    assert plan["inserts"] == [
+        {"name": "New VA", "weekly_hours": None, "active": True, "profile_id": None}]
+
+
 # ---------------------------------------------------------------------------
 # Stage auto-advance (owner ruling 2026-07-12): the status column drives
 # itself — start-on-touch (Rule A) + last-work-item → In QA (Rule B).

@@ -36,7 +36,7 @@ from models.asana import (
     GenerateMonthRequest,
     GenerateMonthResponse,
 )
-from services import asana_monthly, asana_service, asana_workload
+from services import asana_monthly, asana_service, asana_workload, task_service
 
 router = APIRouter(tags=["asana"])
 logger = logging.getLogger(__name__)
@@ -90,14 +90,16 @@ async def replace_team_members(
     body: AsanaTeamMembersReplaceRequest,
     auth: dict = Depends(require_auth),
 ) -> list[AsanaTeamMemberItem]:
-    """Replace the tracked team list (gid + name + weekly capacity + the
-    optional suite-user link).
+    """Replace the tracked team list (name + weekly capacity + the optional
+    suite-user link; an Asana gid when the member has one).
 
-    Non-destructive on member id: existing members are upserted by gid so their
-    roster id is PRESERVED — the id is now the assignee FK target on tasks, so a
-    delete-then-reinsert (the old approach) would orphan every assigned task
-    (assignee_id → SET NULL). Members dropped from the payload are removed
-    explicitly; their tasks' assignee_id clears (assignee_gid is retained)."""
+    Non-destructive on member id: an existing member is updated in place by id
+    (Phase 2a) so its roster id is PRESERVED — the id is the assignee FK target
+    on tasks, and a delete-then-reinsert would orphan every assigned task
+    (assignee_id → SET NULL). A member with a gid but no id upserts by gid; a
+    member with neither is a NEW LOGIN-LESS VA (inserted with gid = NULL, which
+    requires the Phase 2a migration). A stored member is removed only when
+    neither its id nor its gid is in the payload."""
     supabase = get_supabase()
     # A suite user maps to at most one member (matches the partial-unique index);
     # reject a payload that links the same profile twice rather than 500 on it.
@@ -105,29 +107,25 @@ async def replace_team_members(
     if len(linked) != len(set(linked)):
         raise HTTPException(status_code=400, detail="duplicate_profile_link")
     try:
-        keep_gids = [m.gid.strip() for m in body.members if m.gid and m.gid.strip()]
-        # Remove members no longer in the payload (never a blanket wipe).
         existing = (
-            supabase.table("asana_team_members").select("gid").execute()
+            supabase.table("asana_team_members").select("id, gid").execute()
         ).data or []
-        drop = [r["gid"] for r in existing if r.get("gid") and r["gid"] not in keep_gids]
-        if drop:
-            supabase.table("asana_team_members").delete().in_("gid", drop).execute()
-        rows = [
-            {
-                "gid": m.gid.strip(),
-                "name": m.name,
-                "weekly_hours": m.weekly_hours,
-                "active": m.active,
-                "profile_id": m.profile_id or None,
-                "updated_at": "now()",
-            }
-            for m in body.members
-            if m.gid and m.gid.strip()
-        ]
-        if rows:
-            # on_conflict=gid → update in place, preserving each member's id.
-            supabase.table("asana_team_members").upsert(rows, on_conflict="gid").execute()
+        plan = task_service.partition_roster_write(
+            existing, [m.model_dump() for m in body.members]
+        )
+        if plan["drop_ids"]:
+            supabase.table("asana_team_members").delete().in_("id", plan["drop_ids"]).execute()
+        for upd in plan["updates"]:
+            supabase.table("asana_team_members").update(
+                {**upd["fields"], "updated_at": "now()"}
+            ).eq("id", upd["id"]).execute()
+        if plan["gid_upserts"]:
+            supabase.table("asana_team_members").upsert(
+                [{**r, "updated_at": "now()"} for r in plan["gid_upserts"]],
+                on_conflict="gid",
+            ).execute()
+        if plan["inserts"]:
+            supabase.table("asana_team_members").insert(plan["inserts"]).execute()
     except Exception as exc:
         logger.error("asana_replace_team_failed", extra={"error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc

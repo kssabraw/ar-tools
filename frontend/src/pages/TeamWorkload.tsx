@@ -234,7 +234,7 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
     },
   })
 
-  const tracked = new Set(rows.map((r) => r.gid))
+  const tracked = new Set(rows.map((r) => r.gid).filter(Boolean) as string[])
   const available = (users ?? []).filter((u) => !tracked.has(u.gid))
   const dirty = JSON.stringify(rows) !== JSON.stringify((members ?? []).map((m) => ({ ...m })))
   // gid → email (from the live workspace-users read) — disambiguates same-name
@@ -279,13 +279,25 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
                 rows.filter((_, j) => j !== i).map((x) => x.profile_id).filter(Boolean) as string[],
               )
               return (
-              <div key={r.gid} style={{ display: 'grid', gridTemplateColumns: '1fr 130px 190px 36px', gap: 8, alignItems: 'center' }}>
-                <span style={{ fontSize: 13, color: '#0f172a' }}>
-                  {r.name ?? r.gid}
-                  {emailByGid.get(r.gid) && (
-                    <span style={{ fontSize: 11.5, color: '#94a3b8', marginLeft: 8 }}>{emailByGid.get(r.gid)}</span>
-                  )}
-                </span>
+              <div key={r.id ?? r.gid ?? `new-${i}`} style={{ display: 'grid', gridTemplateColumns: '1fr 130px 190px 36px', gap: 8, alignItems: 'center' }}>
+                {r.gid ? (
+                  <span style={{ fontSize: 13, color: '#0f172a' }}>
+                    {r.name ?? r.gid}
+                    {emailByGid.get(r.gid) && (
+                      <span style={{ fontSize: 11.5, color: '#94a3b8', marginLeft: 8 }}>{emailByGid.get(r.gid)}</span>
+                    )}
+                  </span>
+                ) : (
+                  // Login-less VA (no Asana account): their name is editable here.
+                  <input
+                    style={input}
+                    placeholder="VA name"
+                    value={r.name ?? ''}
+                    onChange={(e) =>
+                      setRows((rs) => rs.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))
+                    }
+                  />
+                )}
                 <input
                   style={input}
                   type="number"
@@ -342,6 +354,15 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
         </button>
         <button style={ghostBtn} onClick={() => addMemberManual(setRows, tracked)} title="Add a member by Asana user GID">
           <Plus size={14} /> GID
+        </button>
+        <button
+          style={ghostBtn}
+          onClick={() =>
+            setRows((rs) => [...rs, { name: '', gid: null, weekly_hours: null, active: true, profile_id: null }])
+          }
+          title="Add a VA who never logs into AR Tools (assignable, no Asana account)"
+        >
+          <Plus size={14} /> VA (no login)
         </button>
       </div>
       {save.isError && <p style={errText}>{(save.error as Error).message}</p>}
@@ -451,13 +472,13 @@ function SkillsEditor() {
   const norm = (list?: { category_key: string; is_primary: boolean }[]) =>
     JSON.stringify([...(list ?? [])].sort((a, b) => a.category_key.localeCompare(b.category_key)))
   const changed = tracked.filter(
-    (mem) => norm(map[mem.id ?? mem.gid]) !== norm((loaded ?? {})[mem.id ?? mem.gid]),
+    (mem) => norm(map[mem.id ?? mem.gid ?? '']) !== norm((loaded ?? {})[mem.id ?? mem.gid ?? '']),
   )
 
   const save = useMutation({
     mutationFn: async () => {
       for (const mem of changed) {
-        const mid = mem.id ?? mem.gid
+        const mid = mem.id ?? mem.gid ?? ''
         await api.put(`/tasks/member-skills/${mid}`, { skills: map[mid] ?? [] })
       }
     },
@@ -477,7 +498,7 @@ function SkillsEditor() {
       </p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {tracked.map((mem) => {
-          const mid = mem.id ?? mem.gid
+          const mid = mem.id ?? mem.gid ?? ''
           return (
           <div key={mid} style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 10, alignItems: 'center' }}>
             <span style={{ fontSize: 13, color: '#0f172a', fontWeight: 600 }}>{mem.name ?? mem.gid}</span>
