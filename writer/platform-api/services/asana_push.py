@@ -385,6 +385,12 @@ async def push_proposal(client_id: str, review_id: str, proposal: dict) -> Optio
             from services import task_monthly, task_service
 
             section = task_monthly.ensure_month_section(client_id, date.today())
+            # Intervention-outcome loop: carry the proposal's target (+ the shared
+            # source_ref stamped at approval) onto the task so its completion can
+            # register/confirm the intervention. None for untargeted proposals.
+            intervention_target = (
+                proposal.get("target") if isinstance(proposal.get("target"), dict) else None
+            )
             row = task_service.create_task(
                 proposal_task_name(proposal),
                 client_id=client_id,
@@ -394,6 +400,7 @@ async def push_proposal(client_id: str, review_id: str, proposal: dict) -> Optio
                 ),
                 source="strategy_proposal",
                 source_ref=f"{review_id}:{proposal_task_name(proposal)[:100].casefold()}",
+                target=intervention_target,
             )
             # PACE v1.3 (§4.6/§5): auto-place the approved task on the correct
             # skilled, eligible, least-loaded party (or hold + flag if the pool is

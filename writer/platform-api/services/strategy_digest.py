@@ -762,6 +762,41 @@ def _prov_campaign_goals(supabase, client_id: str, today: date, now: datetime) -
     }
 
 
+def _prov_intervention_outcomes(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:
+    """Intervention-outcome loop rollup — did past goal-linked link-building /
+    reoptimization work actually move the metric it targeted (worked/partial/
+    no_effect at the 6-week mark), by tactic. Report-only evidence of what has a
+    track record for this client. Dormant until `intervention_tracking_enabled`."""
+    if not settings.intervention_tracking_enabled:
+        return None
+    from services import interventions
+
+    rows = interventions.list_interventions(client_id, limit=200)
+    if not rows:
+        return None
+    rollup = interventions.summarize_effectiveness(rows)
+    # A few most-recent evaluated verdicts, keyword-anchored, for the passport-
+    # style read (which specific work moved which keyword).
+    evaluated = [r for r in rows if r.get("verdict")]
+    recent = [
+        {
+            "tactic_type": r.get("tactic_type"),
+            "keyword": (r.get("target") or {}).get("keyword"),
+            "verdict": r.get("verdict"),
+            "baseline": (r.get("baseline") or {}).get("value"),
+            "metric": (r.get("baseline") or {}).get("metric"),
+            "evaluated_at": r.get("evaluated_at"),
+        }
+        for r in evaluated[:10]
+    ]
+    return {
+        "by_tactic": rollup.get("by_tactic"),
+        "overall": rollup.get("overall"),
+        "recent_verdicts": recent,
+        "note": rollup.get("note"),
+    }
+
+
 def _prov_competitors(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:
     """Assembled competitor profiles (registry × every module) — gaps the
     strategist can aim proposals at, plus fresh competitor content."""
@@ -1240,6 +1275,7 @@ _PROVIDERS: list[tuple[str, object]] = [
     ("gbp_audit", _prov_gbp_audit),
     ("content", _prov_content),
     ("campaign_goals", _prov_campaign_goals),
+    ("intervention_outcomes", _prov_intervention_outcomes),
     ("competitors", _prov_competitors),
     ("domain_intel", _prov_domain_intel),
     ("forecast", _prov_forecast),
