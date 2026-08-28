@@ -18,6 +18,10 @@ export interface BatchJobRow {
   status: string // pending | running | complete | failed | cancelled
   error?: string | null
   result?: Record<string, unknown> | null
+  // Live progress for a running generate/reoptimize job (0–100 + stage message);
+  // absent for job types / modules that don't report it.
+  progress?: number | null
+  progress_message?: string | null
 }
 
 const TERMINAL = new Set(['complete', 'failed', 'cancelled'])

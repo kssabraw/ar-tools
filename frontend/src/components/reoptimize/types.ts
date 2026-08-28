@@ -69,6 +69,10 @@ export interface ReoptResult {
   publishError?: string | null
   // Run-based results link back to the spawned run.
   runId?: string | null
+  // Live progress for a running job (0–100 + current stage message); absent for
+  // run-based tools and modules that don't report it.
+  progress?: number | null
+  progressMessage?: string | null
 }
 
 // Options gathered from the panel's shared controls, passed to `start`.

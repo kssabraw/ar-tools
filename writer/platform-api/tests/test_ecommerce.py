@@ -95,7 +95,7 @@ def _capture_generate_payload(client_row, page_type, page_template_url=None):
     to nlp so we can assert house-template resolution."""
     sent = {}
 
-    async def _fake_stream(path, payload):
+    async def _fake_stream(path, payload, on_progress=None):
         sent.update(payload)
         return {"content_html": "<article></article>", "composite_score": 90}
 

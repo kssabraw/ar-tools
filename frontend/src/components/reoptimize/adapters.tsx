@@ -12,7 +12,10 @@ import type { ReoptAdapter, ReoptHandle, ReoptResult } from './types'
 // suite run" score/reopt (job endpoints) live in their run-detail views, not here.
 
 // ── Job-based result mapping (Local SEO / Ecommerce) ──
-type JobStatus = { job_id: string; status: string; result?: Record<string, unknown> | null; error?: string | null }
+type JobStatus = {
+  job_id: string; status: string; result?: Record<string, unknown> | null; error?: string | null
+  progress?: number | null; progress_message?: string | null
+}
 
 function jobResult(id: string, label: string, st: JobStatus | undefined): ReoptResult {
   if (!st) return { id, label, status: 'queued' }
@@ -29,7 +32,9 @@ function jobResult(id: string, label: string, st: JobStatus | undefined): ReoptR
     }
   }
   if (st.status === 'failed') return { id, label, status: 'failed', reason: st.error ?? 'Reoptimization failed' }
-  if (st.status === 'running') return { id, label, status: 'working' }
+  if (st.status === 'running') {
+    return { id, label, status: 'working', progress: st.progress ?? null, progressMessage: st.progress_message ?? null }
+  }
   return { id, label, status: 'queued' }
 }
 

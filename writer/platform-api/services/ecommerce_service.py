@@ -21,7 +21,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 import httpx
 from fastapi import HTTPException
@@ -185,8 +185,15 @@ async def _post_nlp(path: str, payload: dict, user_id: Optional[str] = None) -> 
         raise HTTPException(status_code=502, detail="ecommerce_provider_error") from exc
 
 
-async def _stream_nlp(path: str, payload: dict) -> dict:
-    """POST to an SSE nlp endpoint and return the final `result` dict."""
+async def _stream_nlp(
+    path: str, payload: dict,
+    on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
+) -> dict:
+    """POST to an SSE nlp endpoint and return the final `result` dict.
+
+    `on_progress(percent, message)` — when supplied, called for each per-stage
+    `progress` SSE event so a background job can surface live progress (awaited,
+    best-effort: a failing progress write never interrupts the stream)."""
     url = f"{settings.nlp_api_url}{path}"
     result: Optional[dict] = None
     try:
@@ -214,6 +221,12 @@ async def _stream_nlp(path: str, payload: dict) -> dict:
                     if not isinstance(event, dict):
                         continue
                     step = event.get("step")
+                    if step == "progress" and on_progress is not None:
+                        try:
+                            await on_progress(event.get("progress"), event.get("message"))
+                        except Exception:  # noqa: BLE001 — progress is best-effort
+                            pass
+                        continue
                     if step == "error":
                         # Carry the nlp worker's reason into the detail — it's what
                         # lands in `async_jobs.error`, and logs roll off. Code kept
@@ -234,6 +247,32 @@ async def _stream_nlp(path: str, payload: dict) -> dict:
     if not result:
         raise HTTPException(status_code=502, detail="ecommerce_no_result")
     return result
+
+
+def _job_progress_writer(job_id: Optional[str]):
+    """Return an async callback that writes live progress (percent + stage
+    message) onto the async_jobs row for `job_id`, so the frontend jobs/status
+    poll can render a moving bar. Best-effort, guarded on status='running';
+    returns None when there's no job_id (off the background-job path)."""
+    if not job_id:
+        return None
+
+    async def _write(percent: Optional[int], message: Optional[str]) -> None:
+        try:
+            update: dict = {}
+            if percent is not None:
+                update["progress"] = max(0, min(100, int(percent)))
+            if message:
+                update["progress_message"] = str(message)[:200]
+            if not update:
+                return
+            get_supabase().table("async_jobs").update(update).eq(
+                "id", job_id
+            ).eq("status", "running").execute()
+        except Exception:  # noqa: BLE001 — best-effort, never break the job
+            pass
+
+    return _write
 
 
 # ── persistence ──────────────────────────────────────────────────────────────
@@ -345,6 +384,7 @@ async def generate_page(
     source_url: Optional[str], product_input: Optional[str], user_id: str,
     page_template_url: Optional[str] = None, notes: Optional[str] = None,
     entity_provider: Optional[str] = None,
+    on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
 ) -> dict:
     """Generate an ecommerce page for a client and persist it. Competitor SERP
     analysis runs inside the nlp endpoint (run_analysis defaults True).
@@ -395,7 +435,7 @@ async def generate_page(
     if serp is not None:
         payload["serp_analysis"] = serp
         payload["run_analysis"] = False
-    result = await _stream_nlp("/generate-ecommerce-page", payload)
+    result = await _stream_nlp("/generate-ecommerce-page", payload, on_progress=on_progress)
     result = await _apply_structure_gate(result, payload, reference_analysis)
     page = _persist_page(client_id, keyword.strip(), page_type, source_url, product_input, "generate", result, user_id, notes=notes)
     # Fill the cache on a miss, off the facts already persisted on the page.
@@ -442,6 +482,7 @@ async def reoptimize_from(
     product_input: Optional[str], user_id: str, notes: Optional[str] = None,
     score_threshold: float = REOPT_SCORE_THRESHOLD,
     entity_provider: Optional[str] = None,
+    on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
 ) -> dict:
     """Rewrite an existing ecommerce page to lift its score, then persist it as a
     `mode='reoptimize'` row. The nlp endpoint re-scores the rewrite and runs an
@@ -474,7 +515,7 @@ async def reoptimize_from(
         "product_input": (product_input or "").strip() or None,
         "notes": (notes or "").strip() or None,
         "score_threshold": score_threshold,
-    })
+    }, on_progress=on_progress)
     page = _persist_page(client_id, keyword, page_type, existing_page_url, product_input, "reoptimize", result, user_id, notes=notes)
     if not cached_facts:
         ecommerce_facts_cache.store_facts(
@@ -487,6 +528,7 @@ async def reoptimize_url(
     client_id: str, page_url: str, keyword: str, page_type: str, user_id: str,
     score_threshold: float = REOPT_SCORE_THRESHOLD, publish_to_doc: bool = False,
     notes: Optional[str] = None, entity_provider: Optional[str] = None,
+    on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
 ) -> dict:
     """Score a live page (by URL) and reoptimize it only if it scores below
     `score_threshold`. The SERP analysis the score produced is threaded into the
@@ -497,6 +539,10 @@ async def reoptimize_url(
     an explicit rewrite instruction (e.g. "remove the Research Use Only
     designation") that must apply even to an already-high-scoring page."""
     page_type = _norm_page_type(page_type)
+    # Coarse progress for the pre-rewrite score phase (plain JSON, no SSE); the
+    # rewrite streams fine-grained progress once reoptimize_from takes over.
+    if on_progress is not None:
+        await on_progress(8, "Scoring the live page…")
     score_result = await score_page(
         client_id, keyword, page_type, page_url=page_url, page_content=None, user_id=user_id,
         entity_provider=entity_provider,
@@ -540,6 +586,7 @@ async def reoptimize_url(
         product_input=None, user_id=user_id, notes=notes,
         score_threshold=score_threshold,
         entity_provider=entity_provider,
+        on_progress=on_progress,
     )
 
     out: dict = {
@@ -819,6 +866,7 @@ async def run_generate_job(job: dict) -> None:
             source_url=payload.get("source_url"), product_input=payload.get("product_input"),
             user_id=payload["user_id"], page_template_url=payload.get("page_template_url"),
             notes=payload.get("notes"), entity_provider=payload.get("entity_provider"),
+            on_progress=_job_progress_writer(job_id),
         )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": {"page_id": page["id"]}, "completed_at": "now()"}
@@ -922,6 +970,7 @@ async def run_reoptimize_url_job(job: dict) -> None:
             user_id=payload["user_id"], score_threshold=payload.get("score_threshold", REOPT_SCORE_THRESHOLD),
             publish_to_doc=bool(payload.get("publish_to_doc")), notes=payload.get("notes"),
             entity_provider=payload.get("entity_provider"),
+            on_progress=_job_progress_writer(job_id),
         )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": result, "completed_at": "now()"}
@@ -940,14 +989,16 @@ def get_jobs_status(client_id: str, job_ids: list[str]) -> list[dict]:
     if not job_ids:
         return []
     res = (
-        get_supabase().table("async_jobs").select("id, status, result, error, entity_id")
+        get_supabase().table("async_jobs").select("id, status, result, error, entity_id, progress, progress_message")
         .in_("id", job_ids).execute()
     )
     out = []
     for row in res.data or []:
         if row.get("entity_id") != client_id:
             continue
-        out.append({"job_id": row["id"], "status": row["status"], "result": row.get("result"), "error": row.get("error")})
+        out.append({"job_id": row["id"], "status": row["status"], "result": row.get("result"),
+                    "error": row.get("error"),
+                    "progress": row.get("progress"), "progress_message": row.get("progress_message")})
     return out
 
 

@@ -138,6 +138,8 @@ export function ReoptimizePanel({ adapter, pageType: pageTypeProp }: Props) {
           status,
           error: r.status === 'failed' ? (r.reason ?? null) : null,
           result: r as unknown as Record<string, unknown>,
+          progress: r.progress ?? null,
+          progress_message: r.progressMessage ?? null,
         }
       })
     },
@@ -340,6 +342,19 @@ export function ReoptimizePanel({ adapter, pageType: pageTypeProp }: Props) {
   const doneCount = displayRows.filter(r => r.status === 'done' || r.status === 'skipped' || r.status === 'failed').length
   const reoptimizedCount = displayRows.filter(r => r.status === 'done').length
   const isRunKind = activeHandles.some(h => h.kind === 'run')
+  // Live progress (Local SEO / Ecommerce jobs report a per-stage percent + message).
+  // Overall = finished items count as 100, the running item contributes its live
+  // percent, pending count as 0 — so the bar moves within a single long item AND
+  // across a batch. Absent for run-based tools → fall back to the segment bar.
+  const hasLiveProgress = displayRows.some(r => r.status === 'working' && typeof r.progress === 'number')
+  const stageMessage = displayRows.find(r => r.status === 'working' && r.progressMessage)?.progressMessage ?? null
+  const overallPct = total > 0
+    ? Math.round(displayRows.reduce((sum, r) => {
+        if (r.status === 'done' || r.status === 'skipped' || r.status === 'failed') return sum + 100
+        if (r.status === 'working' && typeof r.progress === 'number') return sum + r.progress
+        return sum
+      }, 0) / total)
+    : 0
 
   const allDiscoverSelected = Boolean(
     discoverItems && discoverItems.length > 0 && discoverItems.every(it => selectedUrls.has(it.url)),
@@ -659,13 +674,23 @@ export function ReoptimizePanel({ adapter, pageType: pageTypeProp }: Props) {
               </button>
             )}
           </div>
-          {total > 0 && (
+          {hasLiveProgress ? (
+            <div>
+              <div style={{ height: 8, background: '#e2e8f0', borderRadius: 999, overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${overallPct}%`, background: '#6366f1', borderRadius: 999, transition: 'width 0.4s ease' }} />
+              </div>
+              <p style={{ fontSize: 11, color: '#64748b', margin: '6px 0 0' }}>
+                {stageMessage ? `${stageMessage} · ${overallPct}%` : `${overallPct}%`}
+                {total > 1 ? ` · ${doneCount} / ${total} done` : ''}
+              </p>
+            </div>
+          ) : total > 0 ? (
             <div style={{ display: 'flex', gap: 4 }}>
               {Array.from({ length: total }).map((_, idx) => (
                 <div key={idx} style={{ height: 6, flex: 1, borderRadius: 999, transition: 'background 0.3s', background: idx < doneCount ? '#16a34a' : '#e2e8f0' }} />
               ))}
             </div>
-          )}
+          ) : null}
           <p style={{ fontSize: 11, color: '#94a3b8', margin: 0 }}>
             This runs in the background — you can leave; the results {isRunKind ? 'appear in the run list' : 'land in Saved Pages'} when done.
           </p>

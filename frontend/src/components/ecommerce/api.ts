@@ -99,7 +99,7 @@ export const ecommerceApi = {
   // job's result dict — {page_id} for generate, a ReoptimizeUrlResult for
   // reoptimize, a ScoreResult for score.
   jobsStatus: (clientId: string, jobIds: string[]) =>
-    api.post<Array<{ job_id: string; status: string; result?: Record<string, unknown> | null; error?: string | null }>>(
+    api.post<Array<{ job_id: string; status: string; result?: Record<string, unknown> | null; error?: string | null; progress?: number | null; progress_message?: string | null }>>(
       `/clients/${clientId}/ecommerce/jobs/status`, { job_ids: jobIds },
     ),
 

@@ -70,7 +70,7 @@ export const localSeoApi = {
   // Batch-poll background jobs (generate / reoptimize). `result` is the job's
   // result dict — {page_id} for generate, a ReoptimizeUrlResult for reoptimize.
   jobsStatus: (clientId: string, jobIds: string[]) =>
-    api.post<Array<{ job_id: string; status: string; result?: Record<string, unknown> | null; error?: string | null }>>(
+    api.post<Array<{ job_id: string; status: string; result?: Record<string, unknown> | null; error?: string | null; progress?: number | null; progress_message?: string | null }>>(
       `/clients/${clientId}/local-seo/jobs/status`, { job_ids: jobIds },
     ),
 

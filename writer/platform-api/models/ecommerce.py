@@ -103,6 +103,9 @@ class EcommerceJobStatus(BaseModel):
     status: str  # pending | running | complete | failed
     result: Optional[dict[str, Any]] = None
     error: Optional[str] = None
+    # Live progress for a running generate/reoptimize job (0–100 + stage message).
+    progress: Optional[int] = None
+    progress_message: Optional[str] = None
 
 
 class EcommerceScoreRequest(BaseModel):
