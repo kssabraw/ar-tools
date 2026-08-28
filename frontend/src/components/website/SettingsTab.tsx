@@ -183,6 +183,7 @@ interface Brand {
   brand_voice: string
   icp: string
   has_context: boolean
+  strategist_enabled: boolean
 }
 
 // Brand voice & audience — only for a standalone site (an owned property). A
@@ -208,6 +209,11 @@ function BrandVoiceSection({ website, deny }: { website: Website; deny: string |
 
   const save = useMutation({
     mutationFn: () => api.put<Brand>(`/websites/${website.id}/brand`, { brand_voice: voice, icp }),
+    onSuccess: (res) => qc.setQueryData(['website-brand', website.id], res),
+  })
+
+  const toggleStrategist = useMutation({
+    mutationFn: (enabled: boolean) => api.put<Brand>(`/websites/${website.id}/strategist`, { enabled }),
     onSuccess: (res) => qc.setQueryData(['website-brand', website.id], res),
   })
 
@@ -258,6 +264,26 @@ function BrandVoiceSection({ website, deny }: { website: Website; deny: string |
           {(save.error as Error).message}
         </div>
       )}
+
+      <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid #f1f5f9' }}>
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: deny ? 'default' : 'pointer' }}
+               title={deny ?? undefined}>
+          <input type="checkbox" checked={data.strategist_enabled} disabled={Boolean(deny) || toggleStrategist.isPending}
+                 onChange={(e) => toggleStrategist.mutate(e.target.checked)} style={{ marginTop: 3 }} />
+          <span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>Include in SerMastr strategist reviews</span>
+            <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+              Off by default for a standalone property. When on, SerMastr’s scheduled weekly review and
+              monthly opportunity mining run on this site like a client’s.
+            </div>
+          </span>
+        </label>
+        {toggleStrategist.error && (
+          <div style={{ marginTop: 8, padding: 10, borderRadius: 8, background: '#fef2f2', color: '#b91c1c', fontSize: 12 }}>
+            {(toggleStrategist.error as Error).message}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

@@ -789,6 +789,29 @@ def enqueue_due_strategy_reviews(today_weekday: Optional[int] = None) -> int:
 # ─────────────────────────────────────────────────────────────────────────────
 # Enqueue + job handler (async_jobs job_type='strategy_review')
 # ─────────────────────────────────────────────────────────────────────────────
+def _strategist_excluded(client_id: str) -> bool:
+    """Whether SerMastr's scheduled strategist skips this client.
+
+    Agency-owned website properties (`clients.kind='owned_property'`) opt out by
+    default via `clients.strategist_enabled=false`; a real client is included
+    unless someone turned it off. Fail open on a read blip — never silence a real
+    client's review over a transient error (`strategist_enabled` is only false
+    when explicitly set)."""
+    try:
+        rows = (
+            get_supabase()
+            .table("clients")
+            .select("strategist_enabled")
+            .eq("id", client_id)
+            .limit(1)
+            .execute()
+        ).data or []
+    except Exception as exc:  # noqa: BLE001 — fail open
+        logger.warning("strategist.excluded_read_failed", extra={"client_id": client_id, "error": str(exc)})
+        return False
+    return bool(rows) and rows[0].get("strategist_enabled") is False
+
+
 def enqueue_strategy_review(
     client_id: str,
     trigger: str = "on_demand",
@@ -802,6 +825,11 @@ def enqueue_strategy_review(
         return None
     if trigger not in VALID_TRIGGERS:
         trigger = "on_demand"
+    # Excluded clients (a website property opted out) skip the AUTOMATED triggers.
+    # An explicit on_demand run is a deliberate human act and still allowed.
+    if trigger != "on_demand" and _strategist_excluded(client_id):
+        logger.info("strategist.client_excluded", extra={"client_id": client_id, "trigger": trigger})
+        return None
     supabase = get_supabase()
     # Dedup per trigger, not globally: an escalation brief must not be silently
     # swallowed because the weekly scheduled run happens to be in flight (the

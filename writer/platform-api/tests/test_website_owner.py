@@ -91,6 +91,9 @@ class TestBuildPropertyRow:
         assert "brand_voice" not in row
         assert "detected_icp" not in row
 
+    def test_a_property_opts_out_of_the_strategist_by_default(self):
+        assert wo.build_property_row(name="X")["strategist_enabled"] is False
+
 
 class TestNameCandidates:
     def test_disambiguates_in_order(self):
@@ -133,7 +136,7 @@ class TestCreatePropertyClient:
 
 class TestBrandEditing:
     PROPERTY = ({"id": "w1", "client_id": "c1"},
-                {"id": "c1", "kind": "owned_property",
+                {"id": "c1", "kind": "owned_property", "strategist_enabled": False,
                  "brand_voice": {"raw_text": "friendly", "source": "user"}})
     CLIENT = ({"id": "w1", "client_id": "c1"}, {"id": "c1", "kind": "client"})
 
@@ -167,3 +170,23 @@ class TestBrandEditing:
             wo.set_brand("w1", brand_voice="be bold")
         assert sb.clients_updated
         assert sb.clients_updated[0]["brand_voice"]["raw_text"] == "be bold"
+
+    def test_get_brand_reports_the_strategist_flag(self):
+        with patch.object(wo, "_load", return_value=self.PROPERTY), patch(
+            "services.website_generate.has_brand_context", return_value=True
+        ):
+            assert wo.get_brand("w1")["strategist_enabled"] is False
+
+    def test_set_strategist_toggles_a_property(self):
+        sb = _FakeSupabase()
+        with patch.object(wo, "_load", return_value=self.PROPERTY), patch.object(
+            wo, "get_supabase", return_value=sb
+        ), patch.object(wo, "get_brand", return_value={"ok": True}):
+            wo.set_strategist("w1", enabled=True)
+        assert sb.clients_updated[0]["strategist_enabled"] is True
+
+    def test_set_strategist_refuses_a_real_client(self):
+        with patch.object(wo, "_load", return_value=self.CLIENT):
+            with pytest.raises(wo.OwnerError) as ei:
+                wo.set_strategist("w1", enabled=False)
+        assert ei.value.code == "not_a_property"

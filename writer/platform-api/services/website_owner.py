@@ -68,6 +68,9 @@ def build_property_row(
         "name": (name or "").strip(),
         "kind": OWNED_PROPERTY,
         "created_by": user_id or None,
+        # A property is not a client, so SerMastr's scheduled strategist reviews
+        # skip it by default. The site's Settings tab can opt one back in.
+        "strategist_enabled": False,
     }
     url = (website_url or "").strip()
     row["website_url"] = url or None
@@ -229,7 +232,29 @@ def get_brand(website_id: str) -> dict:
         "brand_voice": _raw_text(client.get("brand_voice")),
         "icp": _raw_text(client.get("detected_icp")),
         "has_context": has_brand_context(client),
+        # Whether SerMastr's scheduled strategist runs on this property (off by
+        # default for a property; the Settings tab toggles it).
+        "strategist_enabled": client.get("strategist_enabled") is not False,
     }
+
+
+def set_strategist(website_id: str, *, enabled: bool) -> dict:
+    """Include/exclude a property site from SerMastr's scheduled strategist runs.
+
+    Refused for a real client — a client's strategist cadence is a client-level
+    decision, not a per-site one, and belongs on the client screen.
+    """
+    website, client = _load(website_id)
+    if (client.get("kind") or "client") != OWNED_PROPERTY:
+        raise OwnerError("not_a_property", 409)
+    get_supabase().table("clients").update(
+        {"strategist_enabled": bool(enabled), "updated_at": "now()"}
+    ).eq("id", client["id"]).execute()
+    logger.info(
+        "website_owner.strategist_toggled",
+        extra={"client_id": client["id"], "strategist_enabled": bool(enabled)},
+    )
+    return get_brand(website_id)
 
 
 def set_brand(

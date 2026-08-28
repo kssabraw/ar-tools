@@ -422,3 +422,40 @@ def test_opportunity_sweep_disabled_and_no_quiet(monkeypatch):
     monkeypatch.setattr(strategist, "get_supabase", lambda: supabase)
     assert strategist.clients_due_opportunity_sweep({"a"}, 28) == set()
     supabase.table.assert_called_once_with("clients")
+
+
+class TestStrategistExcluded:
+    """A website property (clients.strategist_enabled=false) opts out of the
+    automated strategist; the check fails open so a read blip never silences a
+    real client."""
+
+    @staticmethod
+    def _sb(data=None, boom=False):
+        from unittest.mock import MagicMock
+
+        supabase = MagicMock()
+        if boom:
+            supabase.table.side_effect = RuntimeError("db down")
+            return supabase
+        chain = supabase.table.return_value
+        chain.select.return_value = chain
+        chain.eq.return_value = chain
+        chain.limit.return_value = chain
+        chain.execute.return_value = MagicMock(data=data or [])
+        return supabase
+
+    def test_excluded_when_flag_is_false(self, monkeypatch):
+        monkeypatch.setattr(strategist, "get_supabase", lambda: self._sb([{"strategist_enabled": False}]))
+        assert strategist._strategist_excluded("c1") is True
+
+    def test_included_when_flag_is_true(self, monkeypatch):
+        monkeypatch.setattr(strategist, "get_supabase", lambda: self._sb([{"strategist_enabled": True}]))
+        assert strategist._strategist_excluded("c1") is False
+
+    def test_included_when_row_missing(self, monkeypatch):
+        monkeypatch.setattr(strategist, "get_supabase", lambda: self._sb([]))
+        assert strategist._strategist_excluded("c1") is False
+
+    def test_fails_open_on_read_error(self, monkeypatch):
+        monkeypatch.setattr(strategist, "get_supabase", lambda: self._sb(boom=True))
+        assert strategist._strategist_excluded("c1") is False

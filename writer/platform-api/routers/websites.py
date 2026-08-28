@@ -86,6 +86,12 @@ class BrandUpdateRequest(BaseModel):
     icp: Optional[str] = None
 
 
+class StrategistToggleRequest(BaseModel):
+    """Whether SerMastr's scheduled strategist runs on this property site."""
+
+    enabled: bool
+
+
 class WebsiteUpdateRequest(BaseModel):
     name: Optional[str] = None
     custom_domain: Optional[str] = None
@@ -539,6 +545,21 @@ async def update_website_brand(
         return website_owner.set_brand(
             website_id, brand_voice=body.brand_voice, icp=body.icp
         )
+    except website_owner.OwnerError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.code) from exc
+
+
+@router.put("/websites/{website_id}/strategist")
+async def update_website_strategist(
+    website_id: str, body: StrategistToggleRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Include/exclude a property site from SerMastr's scheduled strategist runs.
+
+    Refused for a real client (a client's strategist cadence is a client-level
+    decision). Returns the same shape as GET /brand."""
+    _enabled()
+    try:
+        return website_owner.set_strategist(website_id, enabled=body.enabled)
     except website_owner.OwnerError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.code) from exc
 
