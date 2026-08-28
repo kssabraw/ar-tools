@@ -1227,6 +1227,9 @@ export interface ReoptAction {
     | 'assistant_action'
   source?: 'organic' | 'maps' | 'assistant'
   keyword: string
+  // The specific live page an action targets, when the signal names one (e.g. a
+  // GSC-Research hidden win's ranking URL). Absent for keyword-only actions.
+  url?: string | null
   diagnosis: string
   recommendation: string
   cta_label: string

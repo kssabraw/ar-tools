@@ -230,21 +230,34 @@ def build_actions(
             }
         )
 
-    # 4) GSC-Research hidden wins — page-2 terms with demand.
+    # 4) GSC-Research hidden wins — page-2 terms with demand. Each row carries the
+    # exact query×page URL from Search Console, so name the page to refresh.
     for h in (gsc.get("hidden_wins") or [])[:HIDDEN_MAX]:
         kw = h.get("keyword") or ""
         if kw.lower() in dropped_keywords:
             continue
         pos = h.get("position")
+        page = (h.get("page") or "").strip()
+        diagnosis = (
+            f"Position {round(pos) if pos else '—'} with {h.get('impressions', 0):,} "
+            "impressions — sitting on page 2."
+        )
+        if page:
+            diagnosis += f" The ranking page is {page}."
         actions.append(
             {
                 "kind": "opportunity",
                 "source": "organic",
                 "keyword": kw,
-                "diagnosis": f"Position {round(pos) if pos else '—'} with {h.get('impressions', 0):,} "
-                "impressions — sitting on page 2.",
-                "recommendation": "Refresh & expand the page (more depth, internal links, freshness) "
-                "to push it onto page 1.",
+                "url": page or None,
+                "diagnosis": diagnosis,
+                "recommendation": (
+                    f"Refresh & expand this page — {page} — (more depth, internal links, freshness) "
+                    "to push it onto page 1."
+                    if page
+                    else "Refresh & expand the ranking page (more depth, internal links, freshness) "
+                    "to push it onto page 1."
+                ),
                 "cta_label": "GSC Research",
                 "cta_path": f"clients/{client_id}/gsc-research",
                 "severity": "info",

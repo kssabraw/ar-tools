@@ -134,6 +134,17 @@ function ActionRow({ action, clientId, onGo }: { action: ReoptAction; clientId: 
           </div>
           <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>{action.diagnosis}</div>
           <div style={{ fontSize: 13, color: '#334155', marginTop: 4, lineHeight: 1.5 }}>{action.recommendation}</div>
+          {/* The specific page this action targets (e.g. a hidden win's ranking URL). */}
+          {action.url && (
+            <a
+              href={action.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ display: 'inline-block', marginTop: 4, fontSize: 12, color: '#2563eb', wordBreak: 'break-all' }}
+            >
+              {action.url.replace(/^https?:\/\/(www\.)?/, '')}
+            </a>
+          )}
         </div>
         <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
           {action.kind === 'assistant_action' && action.assistant_action_id && (
