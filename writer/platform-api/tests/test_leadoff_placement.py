@@ -8,12 +8,14 @@ from services.leadoff_placement import (
     build_demand_surface,
     build_zones,
     demand_access,
+    haversine_miles,
     households_within,
     nearest_competitor_miles,
     pressure,
     score_grid,
     score_point,
     select_zones,
+    select_zones_coverage,
     zone_narrative,
 )
 
@@ -207,3 +209,63 @@ class TestNarrative:
                                 "nearest_competitor_miles": 0.5})
         assert "light" in light and "heavy" in heavy
         assert "12,000 households" in light
+
+
+# Two demand blobs far apart — the NYC "clustered in Manhattan" reproduction:
+# a big cluster at LR and a smaller one ~10 mi east. No competitors, so pressure
+# is 0 everywhere and selection is pure demand coverage.
+_BLOB_A = LR
+_BLOB_B = (LR[0], LR[1] + 0.175)   # ~10 mi east
+_BLOB_CENTER = (LR[0], LR[1] + 0.0875)
+
+
+def _two_blob_surface():
+    rows = [bg(_BLOB_A[0], _BLOB_A[1], 10000, geoid="a1"),
+            bg(_BLOB_A[0] + 0.008, _BLOB_A[1], 9000, geoid="a2"),
+            bg(_BLOB_B[0], _BLOB_B[1], 3000, geoid="b1"),
+            bg(_BLOB_B[0] + 0.008, _BLOB_B[1], 2500, geoid="b2")]
+    return build_demand_surface(rows)
+
+
+def _nearest(zones, point):
+    return min(haversine_miles(z["lat"], z["lng"], point[0], point[1]) for z in zones)
+
+
+class TestCoverageGreedy:
+    def test_spreads_to_the_second_blob(self):
+        surface = _two_blob_surface()
+        built = build_zones(_BLOB_CENTER[0], _BLOB_CENTER[1], surface, [],
+                            radius_miles=16, zone_count=2,
+                            coverage_greedy=True, coverage_radius_miles=3.0)
+        zones = built["zones"]
+        assert len(zones) == 2
+        # one zone lands near each blob — the small one is covered, not starved
+        assert _nearest(zones, _BLOB_A) < 2.0
+        assert _nearest(zones, _BLOB_B) < 2.0
+
+    def test_legacy_top_n_starves_the_small_blob(self):
+        surface = _two_blob_surface()
+        built = build_zones(_BLOB_CENTER[0], _BLOB_CENTER[1], surface, [],
+                            radius_miles=16, zone_count=2,
+                            coverage_greedy=False, min_separation_miles=2.0)
+        # both legacy zones sit in/near the big blob; the small blob is uncovered
+        assert _nearest(built["zones"], _BLOB_B) > 2.0
+
+    def test_reports_covers_households(self):
+        surface = _two_blob_surface()
+        zones = select_zones_coverage(
+            score_grid(_BLOB_CENTER[0], _BLOB_CENTER[1], surface, [],
+                       radius_miles=16)["cells"],
+            surface, zone_count=2, coverage_radius_miles=3.0)
+        assert all(z.get("covers_households", 0) > 0 for z in zones)
+        # the big-blob pin owns more rankable demand than the small-blob pin
+        assert zones[0]["covers_households"] > zones[1]["covers_households"]
+
+    def test_early_stops_when_demand_exhausted(self):
+        # one tiny blob, 4 zones requested → only demand-bearing zones returned
+        surface = build_demand_surface([bg(LR[0], LR[1], 5000)])
+        zones = select_zones_coverage(
+            score_grid(LR[0], LR[1], surface, [], radius_miles=6)["cells"],
+            surface, zone_count=4, coverage_radius_miles=3.0)
+        assert 1 <= len(zones) <= 4
+        assert zones[0]["covers_households"] > 0

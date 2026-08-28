@@ -1161,6 +1161,7 @@ interface PlacementZone {
   lng: number
   locality?: string | null
   households_reachable?: number
+  covers_households?: number
   nearest_competitor_miles?: number | null
   pressure_norm?: number
   narrative?: string
@@ -1611,7 +1612,7 @@ function PlacementZones({ data, loading, cityId, categoryId }: {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>
-                  {z.locality ? `Near ${z.locality}` : `Zone ${z.rank}`}
+                  {z.locality ? `Best spot to serve ${z.locality}` : `Zone ${z.rank}`}
                 </span>
                 <span style={{ fontSize: 12, fontWeight: 700, color: '#5b21b6' }}>{z.score}/100</span>
                 {z.maps_url && (

@@ -1853,6 +1853,14 @@ class Settings(BaseSettings):
     placement_pressure_decay_miles: float = 2.0     # D_DECAY — locked to proximity's
     placement_zone_count: int = 4                   # top zones surfaced
     placement_min_separation_miles: float = 2.0     # neighborhood-sized, not clumped
+    # Coverage-greedy zone selection: each chosen pin CLAIMS the demand within its
+    # catchment, so later pins are scored on the REMAINING (uncovered) demand and
+    # spread to distinct demand pockets instead of clustering in the metro's peak
+    # (a Manhattan pin can't rank in Queens). `_coverage_radius_miles` = how far a
+    # GBP realistically ranks/serves (the demand it owns); smaller → more distinct
+    # pins per metro. Off ⇒ the legacy top-N + min-separation selection.
+    placement_coverage_greedy: bool = True
+    placement_coverage_radius_miles: float = 3.0
     placement_min_pins: int = 5                     # thin-data floor (== proximity)
     placement_min_blockgroups: int = 8              # below this the advisor declines
     # w_cat demand weights on the same free Census pull — ships ON but weight-0
