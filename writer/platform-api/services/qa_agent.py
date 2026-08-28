@@ -77,7 +77,9 @@ def format_review(review: dict, subject: str) -> str:
     lines = [f"*{_VERDICT_LABEL.get(verdict, verdict)}* — {subject}"]
     composite = review.get("composite")
     if composite is not None:
-        lines[0] += f"  ·  fidelity {float(composite):.0f}/100"
+        # Neutral label: composite is structural fidelity for most pages, but the
+        # nlp 8-engine quality score when the deliverable resolved to a suite page.
+        lines[0] += f"  ·  score {float(composite):.0f}/100"
     checks = review.get("checks") or []
     failed = [c for c in checks if c.get("blocking") and c.get("ok") is False]
     unknown = [c for c in checks if c.get("blocking") and c.get("ok") is None]

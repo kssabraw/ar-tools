@@ -526,7 +526,7 @@ def test_website_page_checks_runs_visual_when_structure_weak():
     with patch.object(qa_service, "_structural_fit", lambda *_a, **_k: (72.0, "borderline")), \
          patch.object(qa_service, "_broken_assets", fake_broken), \
          patch("services.qa_visual.visual_check", fake_visual):
-        checks, _c = _run(qa_service._website_page_checks(
+        _checks, _c = _run(qa_service._website_page_checks(
             _MIN_HTML, "https://c.com/x/", fields, {}, keyword="roofing tampa",
         ))
     assert called["visual"] is True  # structure only borderline → paid capture runs
