@@ -225,7 +225,7 @@ def _latest_snapshot_per_keyword(supabase, client_id: str) -> dict[str, dict]:
     rows = (
         supabase.table("serp_snapshots")
         .select("id, keyword_id, captured_at, targeted_count, aio_present, intent_signals, "
-                "generalist_count, client_topical_focus, client_rank")
+                "generalist_count, client_topical_focus, client_rank, client_url")
         .eq("client_id", client_id)
         .in_("status", ["complete", "partial"])
         .order("captured_at", desc=True)
@@ -331,7 +331,9 @@ def get_client_rankability(client_id: str, today: Optional[date] = None) -> dict
         )
         items.append({**base, "has_snapshot": True, "snapshot_id": snap["id"],
                       "client_rank": snap.get("client_rank"),
-                      "client_url": (client_best or {}).get("url"),
+                      # The snapshot stores the client's ranking URL directly; the
+                      # per-result rows fetched above don't select `url`.
+                      "client_url": snap.get("client_url"),
                       "priority": priority, **scored})
 
     return {"items": items}

@@ -2,10 +2,33 @@
 
 from __future__ import annotations
 
+from models.reopt import ReoptAction
 from services import reopt_planner
 
 
 CLIENT = "11111111-1111-1111-1111-111111111111"
+
+
+def test_reopt_action_model_preserves_the_detail_fields():
+    # The GET /action-plan endpoint serializes stored items through ReoptAction
+    # (response_model). Pydantic DROPS undeclared keys, so every structured detail
+    # field the frontend renders must be declared or it never reaches the UI.
+    action = {
+        "kind": "cannibalization", "keyword": "x", "diagnosis": "d", "recommendation": "r",
+        "cta_label": "c", "cta_path": "p", "severity": "info",
+        "url": "https://a.com/p/",
+        "pages": [{"url": "https://a.com/p/", "impressions": 10, "position": 8, "clicks": 1}],
+        "topics": ["faq", "pricing"],
+        "target_domains": [{"domain": "bobvila.com", "rank": 82, "linking_to": ["c.com"]}],
+        "target_link_count": 12,
+        "search_volume": 880,
+        "est_value": 430.0,
+        "location": "Miami, FL",
+    }
+    dumped = ReoptAction(**action).model_dump()
+    for key in ("url", "pages", "topics", "target_domains", "target_link_count",
+                "search_volume", "est_value", "location"):
+        assert dumped[key] == action[key], f"{key} was stripped by ReoptAction"
 
 
 def _rankability_item(**over):
@@ -132,6 +155,21 @@ def test_hidden_win_without_page_degrades_gracefully():
     opp = reopt_planner.build_actions(CLIENT, [], [], gsc)[0]
     assert opp["url"] is None
     assert "page 2" in opp["diagnosis"] and "ranking page" in opp["recommendation"]
+
+
+def test_cannibalization_null_impressions_does_not_crash():
+    # A stored row with explicit null counts must not hit the `:,` format with None.
+    gsc = {"cannibalization": [{"query": "drain cleaning", "page_count": None,
+                               "total_impressions": None, "pages": None}]}
+    a = reopt_planner.build_actions(CLIENT, [], [], gsc)[0]
+    assert a["kind"] == "cannibalization" and "0 pages" in a["diagnosis"]
+
+
+def test_quick_win_coerces_float_search_volume_to_int():
+    a = reopt_planner.build_actions(
+        CLIENT, [], [_rankability_item(keyword="x", client_rank=None, search_volume=880.0)], {}
+    )[0]
+    assert a["search_volume"] == 880 and isinstance(a["search_volume"], int)
 
 
 def test_hidden_win_skipped_when_already_a_drop():
