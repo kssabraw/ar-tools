@@ -24,6 +24,7 @@ from services import (
     website_content_plan,
     website_deploy,
     website_generate,
+    website_owner,
     website_plan_store,
     website_provision,
     website_publish,
@@ -50,6 +51,45 @@ class WebsiteCreateRequest(BaseModel):
     site_type: str
     slug: Optional[str] = None
     config: dict = Field(default_factory=dict)
+
+
+class StandaloneSiteCreateRequest(BaseModel):
+    """A site with no external client — an agency-owned property (rank-and-rent,
+    PBN, a niche informational site).
+
+    It still has a business identity; that identity is captured here and stored on
+    a lightweight `owned_property` client row so every generator can read it. The
+    public business name and city seed the site's own business facts (which
+    generation prefers over GBP); a typed brand guide / ICP, or a website URL to
+    auto-scan, gives generation the brand context it requires.
+    """
+
+    name: str = Field(min_length=1, max_length=120)  # the site's internal label
+    site_type: str
+    slug: Optional[str] = None
+    # The property's own business identity.
+    business_name: Optional[str] = None  # public name; defaults to `name`
+    business_city: Optional[str] = None
+    website_url: Optional[str] = None
+    brand_voice: Optional[str] = None  # typed brand guide
+    icp: Optional[str] = None
+    config: dict = Field(default_factory=dict)
+
+
+class BrandUpdateRequest(BaseModel):
+    """A property site's brand voice / ICP guide, edited from the workspace.
+
+    Only sent fields are written; a real client's voice is not editable here.
+    """
+
+    brand_voice: Optional[str] = None
+    icp: Optional[str] = None
+
+
+class StrategistToggleRequest(BaseModel):
+    """Whether SerMastr's scheduled strategist runs on this property site."""
+
+    enabled: bool
 
 
 class WebsiteUpdateRequest(BaseModel):
@@ -93,6 +133,28 @@ class PageSelectionRequest(BaseModel):
     """
 
     page_ids: list[str] = Field(default_factory=list)
+
+
+class AddPageRequest(BaseModel):
+    """One hand-added page, on top of the deterministic services × cities plan.
+
+    `page_type` is one of the writable types (the NLP geo/service pages plus
+    one-off blog posts and pillars); which axes are required depends on it — the
+    service validates that. `keyword`/`location` override the derived targeting
+    for the odd escalation page that wants hand-tuning; `angle` (posts/pillars)
+    and `format` (posts) shape the writer brief.
+    """
+
+    page_type: str
+    service: Optional[str] = None
+    city: Optional[str] = None
+    subservice: Optional[str] = None
+    title: Optional[str] = None
+    keyword: Optional[str] = None
+    location: Optional[str] = None
+    format: Optional[str] = None
+    angle: Optional[str] = None
+    target_keywords: list[str] = Field(default_factory=list)
 
 
 class FactsUpdateRequest(BaseModel):
@@ -300,6 +362,70 @@ async def create_website(
     return {"website": row[0] if row else None}
 
 
+@router.post("/websites")
+async def create_standalone_website(
+    body: StandaloneSiteCreateRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Create a site with no external client — an agency-owned property.
+
+    Mints a lightweight `owned_property` client to hold the site's own business
+    identity (so every generator, and freeze/publish/notifications, work
+    unchanged), seeds the site's business facts from the identity, then creates
+    the website under it. The user never picks or sees a client; the property is
+    filtered out of client lists by `kind`.
+    """
+    _enabled()
+    if body.site_type not in _SITE_TYPES:
+        raise HTTPException(status_code=400, detail="invalid_site_type")
+
+    slug = website_provision.slugify(body.slug or body.name)
+    business_name = (body.business_name or body.name).strip()
+
+    try:
+        client = website_owner.create_property_client(
+            name=business_name,
+            website_url=body.website_url,
+            brand_voice_text=body.brand_voice,
+            icp_text=body.icp,
+            business_location=body.business_city,
+            disambiguator=slug,
+            user_id=auth["user_id"],
+        )
+    except website_owner.OwnerError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.code) from exc
+
+    # Seed the site's own business facts from the identity (name/city), stamped
+    # `user` so a later GBP scan can only fill gaps — reusing the Settings tab's
+    # own merge so provenance is written the one correct way.
+    config = website_settings.apply_facts_edit(
+        body.config or {},
+        business={"name": business_name, "city": (body.business_city or "").strip()},
+    )
+
+    try:
+        row = (
+            get_supabase()
+            .table("websites")
+            .insert(
+                {
+                    "client_id": client["id"],
+                    "name": body.name,
+                    "slug": slug,
+                    "site_type": body.site_type,
+                    "config": config,
+                }
+            )
+            .execute()
+        ).data
+    except Exception as exc:
+        if "duplicate" in str(exc).lower() or "unique" in str(exc).lower():
+            raise HTTPException(status_code=409, detail="website_slug_exists") from exc
+        logger.error("websites.standalone_create_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+    return {"website": row[0] if row else None, "client_id": client["id"]}
+
+
 @router.get("/websites/{website_id}")
 async def get_website(website_id: str, auth: dict = Depends(require_auth)) -> dict:
     _enabled()
@@ -389,6 +515,53 @@ async def update_website_facts(
         "deploy_id": result.get("deploy_id"),
         "facts": result.get("facts"),
     }
+
+
+@router.get("/websites/{website_id}/brand")
+async def get_website_brand(website_id: str, auth: dict = Depends(require_auth)) -> dict:
+    """A property site's brand voice / ICP guide, and whether it is editable here.
+
+    Editable only for an `owned_property` backing row; a real client's voice is
+    edited on the client screen. `has_context` tells the UI whether generation is
+    currently unblocked."""
+    _enabled()
+    try:
+        return website_owner.get_brand(website_id)
+    except website_owner.OwnerError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.code) from exc
+
+
+@router.put("/websites/{website_id}/brand")
+async def update_website_brand(
+    website_id: str, body: BrandUpdateRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Set a property site's brand voice / ICP. Refused for a real client.
+
+    Not freeze-gated (editing a guide is not content output) and does not
+    redeploy — generation reads the voice at run time, so the next Generate picks
+    it up. Staff-gated like every write."""
+    _enabled()
+    try:
+        return website_owner.set_brand(
+            website_id, brand_voice=body.brand_voice, icp=body.icp
+        )
+    except website_owner.OwnerError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.code) from exc
+
+
+@router.put("/websites/{website_id}/strategist")
+async def update_website_strategist(
+    website_id: str, body: StrategistToggleRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Include/exclude a property site from SerMastr's scheduled strategist runs.
+
+    Refused for a real client (a client's strategist cadence is a client-level
+    decision). Returns the same shape as GET /brand."""
+    _enabled()
+    try:
+        return website_owner.set_strategist(website_id, enabled=body.enabled)
+    except website_owner.OwnerError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.code) from exc
 
 
 @router.post("/websites/{website_id}/provision")
@@ -595,6 +768,41 @@ async def build_plan(
         website, catalog=body.catalog, cities=body.cities
     )
     return {"plan": result, "pages": website_plan_store.stored(website_id)}
+
+
+@router.post("/websites/{website_id}/pages")
+async def add_page(
+    website_id: str, body: AddPageRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Add one page by hand, on top of the deterministic plan.
+
+    staff+ because adding a page is a plan edit, like building the plan or the
+    content plan — not a VA action. The new row lands as a `manual` draft that
+    the existing generate/publish flow drives exactly like any planned page, and
+    a later rebuild preserves it rather than pruning it. Approval still gates
+    generation and publishing, so an unreviewed manual page cannot reach the
+    internet without the normal staff sign-off.
+    """
+    _enabled()
+    website = _load_site(website_id)
+    assert_not_frozen(website["client_id"])
+    try:
+        page = website_plan_store.add_manual_page(
+            website,
+            page_type=body.page_type,
+            service=body.service,
+            city=body.city,
+            subservice=body.subservice,
+            title=body.title,
+            keyword=body.keyword,
+            location=body.location,
+            post_format=body.format,
+            angle=body.angle,
+            target_keywords=body.target_keywords,
+        )
+    except website_plan_store.ManualPageError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.code)
+    return {"page": page, "pages": website_plan_store.stored(website_id)}
 
 
 @router.post("/websites/{website_id}/plan/approve")

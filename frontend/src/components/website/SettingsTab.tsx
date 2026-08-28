@@ -135,6 +135,8 @@ export function SettingsTab({ website, perms }: { website: Website; perms: Perms
         />
       </Section>
 
+      <BrandVoiceSection website={website} deny={deny} />
+
       <Section title="Positioning">
         <Field label="Tagline" placeholder="Roofs done right, the first time"
                value={draft.tagline ?? ''} onChange={(v) => set('tagline', v)} disabled={Boolean(deny)} />
@@ -171,6 +173,117 @@ export function SettingsTab({ website, perms }: { website: Website; perms: Perms
           {(save.error as Error).message}
         </div>
       )}
+    </div>
+  )
+}
+
+interface Brand {
+  editable: boolean
+  kind: string
+  brand_voice: string
+  icp: string
+  has_context: boolean
+  strategist_enabled: boolean
+}
+
+// Brand voice & audience — only for a standalone site (an owned property). A
+// property has no client screen, so its voice is set here; generation is blocked
+// until it has one. For a real client-backed site this section does not render
+// (voice is edited on the client), so the tab looks the same as it always did.
+function BrandVoiceSection({ website, deny }: { website: Website; deny: string | null }) {
+  const qc = useQueryClient()
+  const { data } = useQuery<Brand>({
+    queryKey: ['website-brand', website.id],
+    queryFn: () => api.get<Brand>(`/websites/${website.id}/brand`),
+  })
+
+  const [voice, setVoice] = useState('')
+  const [icp, setIcp] = useState('')
+  const [seeded, setSeeded] = useState(false)
+  useEffect(() => {
+    if (!data || seeded) return
+    setVoice(data.brand_voice)
+    setIcp(data.icp)
+    setSeeded(true)
+  }, [data, seeded])
+
+  const save = useMutation({
+    mutationFn: () => api.put<Brand>(`/websites/${website.id}/brand`, { brand_voice: voice, icp }),
+    onSuccess: (res) => qc.setQueryData(['website-brand', website.id], res),
+  })
+
+  const toggleStrategist = useMutation({
+    mutationFn: (enabled: boolean) => api.put<Brand>(`/websites/${website.id}/strategist`, { enabled }),
+    onSuccess: (res) => qc.setQueryData(['website-brand', website.id], res),
+  })
+
+  if (!data?.editable) return null
+
+  return (
+    <div style={card}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: '#0f172a' }}>Brand voice & audience</h3>
+        {data.has_context
+          ? <span style={{ padding: '1px 8px', borderRadius: 999, fontSize: 10, fontWeight: 700, color: '#15803d', background: '#f0fdf4' }}>Ready</span>
+          : <span style={{ padding: '1px 8px', borderRadius: 999, fontSize: 10, fontWeight: 700, color: '#b45309', background: '#fffbeb' }}>Needed to generate</span>}
+      </div>
+      <p style={{ margin: '0 0 12px', fontSize: 12, color: '#64748b' }}>
+        This site is a standalone property, so it carries its own voice. Content generation is
+        blocked until a brand voice is set — describe how the business should sound and who it’s
+        for. (If you entered a website URL when creating the site, a scan may fill these in.)
+      </p>
+      <div style={{ display: 'grid', gap: 12 }}>
+        <div>
+          <label style={label}>Brand voice / guide</label>
+          <textarea value={voice} onChange={(e) => setVoice(e.target.value)} rows={5} disabled={Boolean(deny)}
+                    placeholder="Tone, personality, words to use and avoid. Paste a brand guide, or write a few lines."
+                    style={{ ...input, resize: 'vertical' }} />
+        </div>
+        <div>
+          <label style={label}>Ideal customer (ICP)</label>
+          <textarea value={icp} onChange={(e) => setIcp(e.target.value)} rows={3} disabled={Boolean(deny)}
+                    placeholder="Who this business serves — their situation, needs, and what makes them buy."
+                    style={{ ...input, resize: 'vertical' }} />
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 }}>
+        <button onClick={() => save.mutate()} disabled={Boolean(deny) || save.isPending}
+                title={deny ?? undefined}
+                style={btn(deny ? '#e2e8f0' : ACCENT, deny ? '#94a3b8' : '#fff')}>
+          {save.isPending ? <Loader2 size={14} className="spin" /> : <Save size={14} />} Save voice
+        </button>
+        {save.isSuccess && !save.isPending && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#15803d' }}>
+            <Check size={13} /> Saved
+          </span>
+        )}
+        {deny && <span style={{ fontSize: 12, color: '#94a3b8' }}>{deny}</span>}
+      </div>
+      {save.error && (
+        <div style={{ marginTop: 10, padding: 10, borderRadius: 8, background: '#fef2f2', color: '#b91c1c', fontSize: 12 }}>
+          {(save.error as Error).message}
+        </div>
+      )}
+
+      <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid #f1f5f9' }}>
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: deny ? 'default' : 'pointer' }}
+               title={deny ?? undefined}>
+          <input type="checkbox" checked={data.strategist_enabled} disabled={Boolean(deny) || toggleStrategist.isPending}
+                 onChange={(e) => toggleStrategist.mutate(e.target.checked)} style={{ marginTop: 3 }} />
+          <span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>Include in SerMastr strategist reviews</span>
+            <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+              Off by default for a standalone property. When on, SerMastr’s scheduled weekly review and
+              monthly opportunity mining run on this site like a client’s.
+            </div>
+          </span>
+        </label>
+        {toggleStrategist.error && (
+          <div style={{ marginTop: 8, padding: 10, borderRadius: 8, background: '#fef2f2', color: '#b91c1c', fontSize: 12 }}>
+            {(toggleStrategist.error as Error).message}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

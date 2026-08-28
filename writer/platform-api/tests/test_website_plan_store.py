@@ -269,6 +269,126 @@ class TestSelection:
         assert store.coerce_ids([{"id": "a"}], None) == []
 
 
+class TestAddManualPage:
+    def _site(self, catalog=None, cities=None):
+        return {"id": "w1", "config": {
+            "catalog": catalog if catalog is not None else [{"name": "Tree Removal"}],
+            "cities": cities if cities is not None else [{"name": "Seattle"}],
+        }}
+
+    def test_it_inserts_a_manual_draft_row(self):
+        supabase = MagicMock()
+        chain = supabase.table.return_value
+        chain.insert.return_value = chain
+        chain.execute.return_value = MagicMock(data=[{"id": "new"}])
+        with patch.object(store, "get_supabase", return_value=supabase), patch.object(
+            store, "stored", return_value=[]
+        ):
+            store.add_manual_page(
+                self._site(), page_type="hyper_local", city="Seattle",
+                service="Tree Removal", subservice="Oak Trees",
+            )
+        row = chain.insert.call_args[0][0]
+        assert row["trigger"] == "manual"
+        assert row["status"] == "draft"
+        assert row["route"] == "/seattle/tree-removal/oak-trees/"
+        assert row["plan"]["engine"] == "nlp"
+
+    def test_a_reserved_slug_is_refused(self):
+        with patch.object(store, "get_supabase"), patch.object(store, "stored", return_value=[]):
+            with pytest.raises(store.ManualPageError) as ei:
+                store.add_manual_page({"id": "w1", "config": {}}, page_type="pillar", title="Reviews")
+        assert ei.value.code == "reserved_slug"
+        assert ei.value.status == 400
+
+    def test_a_route_that_already_exists_is_refused(self):
+        with patch.object(store, "get_supabase"), patch.object(
+            store, "stored", return_value=[{"route": "/tree-removal/"}]
+        ):
+            with pytest.raises(store.ManualPageError) as ei:
+                store.add_manual_page(self._site(), page_type="service", service="Tree Removal")
+        assert ei.value.code == "page_route_exists"
+        assert ei.value.status == 409
+
+    def test_a_missing_axis_surfaces_as_a_400(self):
+        with patch.object(store, "get_supabase"), patch.object(store, "stored", return_value=[]):
+            with pytest.raises(store.ManualPageError) as ei:
+                store.add_manual_page(self._site(), page_type="location")
+        assert ei.value.code == "missing_city"
+        assert ei.value.status == 400
+
+
+class _BuildFakeSupabase:
+    """Enough of the supabase client for `build()` to run, recording what it
+    would delete so the orphan-guard rule can be asserted."""
+
+    def __init__(self, existing):
+        self.store = {"existing": existing, "deleted": [], "inserted": []}
+
+    def table(self, name):
+        return _BuildFakeChain(self.store, name)
+
+
+class _BuildFakeChain:
+    def __init__(self, store_ref, table):
+        self._s = store_ref
+        self._table = table
+        self._op = "select"
+
+    def select(self, *a, **k):
+        self._op = "select"; return self
+
+    def insert(self, rows):
+        self._op = "insert"
+        self._s["inserted"].extend(rows if isinstance(rows, list) else [rows])
+        return self
+
+    def update(self, *a, **k):
+        self._op = "update"; return self
+
+    def delete(self):
+        self._op = "delete"; return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def is_(self, *a, **k):
+        return self
+
+    def order(self, *a, **k):
+        return self
+
+    def in_(self, _col, ids):
+        if self._op == "delete":
+            self._s["deleted"].extend(ids)
+        return self
+
+    def execute(self):
+        if self._op == "select" and self._table == "website_pages":
+            return MagicMock(data=list(self._s["existing"]))
+        return MagicMock(data=[])
+
+
+class TestRebuildOrphanGuard:
+    def test_a_manual_page_survives_a_rebuild_but_a_planner_orphan_does_not(self):
+        # A hand-added page is never in the deterministic plan, so it always reads
+        # as an orphan — but "add a page" must not be undone by the next rebuild.
+        existing = [
+            {"id": "keep", "route": "/roof-repair/", "status": "draft", "trigger": "CORE",
+             "source_id": None, "page_type": "service", "title": "Roof Repair", "tier": 1, "plan": {}},
+            {"id": "manual", "route": "/seattle/roof-repair/oak-trees/", "status": "draft", "trigger": "manual"},
+            {"id": "ghost", "route": "/ghost/", "status": "draft", "trigger": "CORE"},
+        ]
+        fake = _BuildFakeSupabase(existing)
+        with patch.object(store, "get_supabase", return_value=fake):
+            store.build(
+                {"id": "w1", "site_type": "local_business", "config": {}},
+                catalog=[{"name": "Roof Repair"}], cities=[],
+            )
+        assert "ghost" in fake.store["deleted"]
+        assert "manual" not in fake.store["deleted"]
+
+
 class TestConflictIssues:
     def _site(self, site_type="lead_gen"):
         return {"id": "w1", "site_type": site_type, "client_id": "c1"}

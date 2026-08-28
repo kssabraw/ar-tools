@@ -261,6 +261,11 @@ async def list_clients(
         supabase.table("clients")
         .select("id, name, website_url, website_analysis_status, archived, created_at, logo_url")
         .eq("archived", archived)
+        # Agency-owned website properties (kind='owned_property') are not clients —
+        # they back a standalone site and belong in the Website Builder's fleet
+        # view, not the client list. Filter them out here (the one shared client
+        # list); 'client' is the column default so every real client is kept.
+        .neq("kind", "owned_property")
         .order("name")
         .execute()
     )
