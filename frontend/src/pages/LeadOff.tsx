@@ -687,7 +687,9 @@ export function LeadOff() {
               <KV k="Payback period" v={paybackLabel(brief.payback_months)}
                 hint={brief.payback_months == null
                   ? 'Maintenance ≥ this market’s value — it never recoups the build at these assumptions.'
-                  : `Includes ~${brief.ramp_months ?? 0} months of ramp-to-rank (you pay monthly labour before the ranking arrives), then recoup the ${usd(brief.cost_to_win)} sunk cost from monthly profit. SEO doesn’t rank in weeks.`} />
+                  : `~${brief.ramp_months ?? 0}-month ramp-to-rank (derived from field difficulty`
+                    + `${brief.enrichment?.momentum === 'accel' ? ', extended because the field is actively growing' : ''}) `
+                    + `— you pay monthly labour before the ranking arrives, then recoup the ${usd(brief.cost_to_win)} sunk cost from profit. SEO doesn’t rank in weeks.`} />
               {brief.cost_breakdown && (
                 <div style={{ fontSize: 11, color: '#64748b', margin: '2px 0 6px', lineHeight: 1.5 }}>
                   Cost to win {usd(brief.cost_to_win)}: {brief.cost_breakdown.reviews_n} reviews {usd(brief.cost_breakdown.reviews)}

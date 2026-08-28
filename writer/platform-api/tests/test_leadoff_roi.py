@@ -1,5 +1,11 @@
 """Unit tests for the LeadOff agency cost-to-win ROI (pure core)."""
-from services.leadoff_roi import compute_roi, rd_gap_from_enrichment
+from services.leadoff_roi import (
+    compute_roi,
+    estimate_ramp_months,
+    rd_gap_from_enrichment,
+)
+
+RAMP = dict(ramp_min=3.0, ramp_max=9.0, accel_mult=1.3, cooling_mult=0.9)
 
 # Fixed unit costs so the arithmetic is checkable by hand.
 COSTS = dict(cost_per_review=10.0, cost_per_link=30.0, content_pages=4.0,
@@ -67,6 +73,45 @@ class TestComputeRoi:
         hard = compute_roi(1449, 200, **COSTS)
         assert hard["cost_to_win"] > easy["cost_to_win"]
         assert hard["payback_months"] > easy["payback_months"]
+
+
+class TestEstimateRampMonths:
+    def test_soft_field_ramps_near_the_floor(self):
+        # Beatability 90 (soft) → ease .9 → 9 - .9×6 = 3.6
+        assert estimate_ramp_months(beatability=90, rankab=None, momentum=None,
+                                    **RAMP) == 3.6
+
+    def test_brutal_field_ramps_near_the_ceiling(self):
+        # Beatability 10 (brutal) → ease .1 → 9 - .1×6 = 8.4
+        assert estimate_ramp_months(beatability=10, rankab=None, momentum=None,
+                                    **RAMP) == 8.4
+
+    def test_beatability_preferred_over_rankab(self):
+        # both present → beatability wins
+        r = estimate_ramp_months(beatability=90, rankab=0.1, momentum=None, **RAMP)
+        assert r == 3.6
+
+    def test_rankab_fallback_when_no_beatability(self):
+        # rankab .75 → ease .75 → 9 - .75×6 = 4.5
+        assert estimate_ramp_months(beatability=None, rankab=0.75, momentum=None,
+                                    **RAMP) == 4.5
+
+    def test_neither_signal_uses_midpoint_ease(self):
+        # ease .5 → 9 - .5×6 = 6.0
+        assert estimate_ramp_months(beatability=None, rankab=None, momentum=None,
+                                    **RAMP) == 6.0
+
+    def test_accelerating_field_extends_ramp(self):
+        base = estimate_ramp_months(beatability=50, rankab=None, momentum=None, **RAMP)
+        accel = estimate_ramp_months(beatability=50, rankab=None, momentum="accel", **RAMP)
+        assert accel == round(base * 1.3, 1)
+        assert accel > base  # chasing a moving target takes longer
+
+    def test_cooling_field_shortens_ramp(self):
+        base = estimate_ramp_months(beatability=50, rankab=None, momentum=None, **RAMP)
+        for m in ("cooling", "dead"):
+            assert estimate_ramp_months(beatability=50, rankab=None, momentum=m,
+                                        **RAMP) == round(base * 0.9, 1)
 
 
 class TestRdGapFromEnrichment:

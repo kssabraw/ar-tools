@@ -101,6 +101,33 @@ def compute_roi(exp_val: Optional[float], rev_win: Optional[float], *,
     }
 
 
+def estimate_ramp_months(*, beatability: Optional[float], rankab: Optional[float],
+                         momentum: Optional[str], ramp_min: float, ramp_max: float,
+                         accel_mult: float, cooling_mult: float) -> float:
+    """Market-specific ramp-to-rank (months). Pure.
+
+    Field difficulty sets the base: a soft field (high Beatability / high
+    win-likelihood) ramps near `ramp_min`, a brutal one near `ramp_max`. Then
+    the incumbents' own SEO activity adjusts it — an accelerating review field
+    (`momentum == 'accel'`) means a moving target → ×`accel_mult`; a cooling or
+    dead field → ×`cooling_mult`. `momentum` is None board-wide (no velocity
+    cache) → difficulty-only. Beatability preferred; win-likelihood is the
+    always-present fallback; 0.5 ease when neither is known.
+    """
+    if beatability is not None:
+        ease = max(0.0, min(1.0, float(beatability) / 100.0))
+    elif rankab is not None:
+        ease = max(0.0, min(1.0, float(rankab)))
+    else:
+        ease = 0.5
+    base = ramp_max - ease * (ramp_max - ramp_min)
+    if momentum == "accel":
+        base *= accel_mult
+    elif momentum in ("cooling", "dead"):
+        base *= cooling_mult
+    return round(max(0.0, base), 1)
+
+
 def roi_params() -> dict[str, float]:
     """The config-sourced cost assumptions (impure). Content page price comes
     straight from the Recipe Engine so it can't drift from the SOP catalog."""
@@ -112,7 +139,6 @@ def roi_params() -> dict[str, float]:
         "content_pages": settings.leadoff_roi_content_pages,
         "content_page_cost": CONTENT_PAGE_COST,
         "monthly_maintenance": settings.leadoff_roi_monthly_maintenance,
-        "ramp_months": settings.leadoff_roi_ramp_months,
     }
 
 
@@ -126,8 +152,20 @@ def attach_roi(row: dict[str, Any], *,
     if not settings.leadoff_roi_enabled:
         return row
     try:
+        # Market-specific ramp from field difficulty (Beatability / win-
+        # likelihood) + the incumbents' review-velocity momentum (scouted only,
+        # carried on the brief's enrichment block; None board-wide).
+        momentum = (row.get("enrichment") or {}).get("momentum")
+        ramp = estimate_ramp_months(
+            beatability=row.get("beatability"), rankab=row.get("rankab"),
+            momentum=momentum,
+            ramp_min=settings.leadoff_roi_ramp_min_months,
+            ramp_max=settings.leadoff_roi_ramp_max_months,
+            accel_mult=settings.leadoff_roi_ramp_accel_mult,
+            cooling_mult=settings.leadoff_roi_ramp_cooling_mult)
         roi = compute_roi(row.get("exp_val"), row.get("rev_win"),
-                          rd_gap_true=rd_gap_true, **roi_params())
+                          ramp_months=ramp, rd_gap_true=rd_gap_true,
+                          **roi_params())
         return {**row, **roi}
     except Exception:
         logger.warning("leadoff_roi.attach_failed", exc_info=True)
