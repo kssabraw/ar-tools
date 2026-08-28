@@ -132,8 +132,9 @@ def format_slack(title: str, summary: Optional[str], client_name: Optional[str],
 # ----------------------------------------------------------------------------
 # PM / PACE notification kinds are delivered to the dedicated PACE Slack channel
 # (``settings.pace_slack_channel``) when one is configured, so project-management
-# chatter (task assignments, comments, nudges, the due/overload sweeps, and the
-# daily digest / chase plan / escalations) stays out of the strategy channel.
+# chatter (task assignments, comments, nudges, the due/overload sweeps, the
+# deliverables-sheet duty tracking, and the daily digest / chase plan /
+# escalations) stays out of the strategy channel.
 # A client-scoped PACE kind (``CLIENT_SCOPED_PACE_KINDS``) is delivered to that
 # client's OWN channel (``clients.slack_channel_id``) when one is set, falling
 # back to the master PACE channel otherwise — so PACE can talk in each client's
@@ -145,6 +146,11 @@ PACE_CHANNEL_KINDS = frozenset({
     "pace_digest", "pace_chase_plan", "pace_escalation", "pace_report", "pace_briefs",
     "task_assigned", "task_mention", "task_comment", "task_month_generated",
     "task_overload", "task_due", "task_nudge",
+    # Deliverables-sheet automation (services/deliverables_sheet.py) is PM/PACE
+    # duty-tracking — "the sheet row was appended with a blank link" and "a new
+    # Notes entry appeared" are project-management chatter, not strategy, so they
+    # belong in PACE's channel(s), not SerMaStr's.
+    "deliverable_link_missing", "deliverable_note",
 })
 
 # The client-scoped subset of the PACE kinds: each carries a real ``client_id``
@@ -156,7 +162,7 @@ PACE_CHANNEL_KINDS = frozenset({
 # they stay in the single master channel as agency-wide rollups.
 CLIENT_SCOPED_PACE_KINDS = frozenset({
     "task_assigned", "task_mention", "task_comment", "task_month_generated",
-    "task_nudge",
+    "task_nudge", "deliverable_link_missing", "deliverable_note",
 })
 
 
