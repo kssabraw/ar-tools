@@ -51,16 +51,59 @@ class TestParsing:
             "roof-replacement",
         ]
 
-    def test_brands_are_parsed_and_trimmed(self):
+    def test_legacy_brands_parse_as_brand_variations(self):
+        # The pre-generalization `brands` field still round-trips (an existing
+        # site's stored catalog keeps working until its next save migrates it).
         [svc] = store.parse_catalog(
             [{"name": "AC Repair", "brands": ["Carrier", "  Trane  ", "", 5]}]
         )
-        # Whitespace trimmed, blanks and non-strings dropped.
         assert svc.brands == ("Carrier", "Trane")
+        assert all(v.kind == "brand" for v in svc.variations)
 
-    def test_brands_default_to_empty(self):
+    def test_variations_parse_with_kind_and_default_to_type(self):
+        [svc] = store.parse_catalog(
+            [
+                {
+                    "name": "Tree Removal",
+                    "variations": [
+                        {"label": "Oak Trees", "kind": "type"},
+                        {"label": "Certified Arborist", "kind": "brand"},
+                        {"label": "Palm Trees"},  # kind omitted -> type
+                        "Maple Trees",  # bare string -> type
+                        {"label": "Bad", "kind": "nonsense"},  # unknown kind -> type
+                    ],
+                }
+            ]
+        )
+        by_label = {v.label: v.kind for v in svc.variations}
+        assert by_label["Oak Trees"] == "type"
+        assert by_label["Certified Arborist"] == "brand"
+        assert by_label["Palm Trees"] == "type"
+        assert by_label["Maple Trees"] == "type"
+        assert by_label["Bad"] == "type"
+
+    def test_variations_default_to_empty(self):
         [svc] = store.parse_catalog([{"name": "AC Repair"}])
+        assert svc.variations == ()
         assert svc.brands == ()
+
+    def test_present_variations_win_over_legacy_brands(self):
+        # If both fields are present, `variations` is authoritative and legacy
+        # `brands` are ignored — mirroring the frontend, which drops `brands` the
+        # moment it writes `variations`. Honouring both would double them up.
+        [svc] = store.parse_catalog(
+            [{"name": "AC Repair", "brands": ["Carrier"], "variations": [{"label": "Emergency", "kind": "type"}]}]
+        )
+        assert svc.variations == (wpl.ServiceVariation(label="Emergency", kind="type"),)
+        assert svc.brands == ()
+
+    def test_an_empty_variations_list_still_drops_legacy_brands(self):
+        # Presence of the key (even empty) means the catalog has been migrated,
+        # so stale `brands` are not resurrected.
+        [svc] = store.parse_catalog(
+            [{"name": "AC Repair", "brands": ["Carrier"], "variations": []}]
+        )
+        assert svc.variations == ()
 
 
 class TestHeadTerms:

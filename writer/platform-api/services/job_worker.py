@@ -884,6 +884,9 @@ async def _process_job(job: dict) -> None:
         await run_syndication_item_job(job)
     elif job_type == "strategy_review":
         await run_strategy_review_job(job)
+    elif job_type == "autonomy_run":
+        from services.autonomy_executor import run_autonomy_job
+        await run_autonomy_job(job)
     elif job_type == "internal_link_analyze":
         await run_internal_link_analyze_job(job)
     elif job_type == "internal_link_apply":

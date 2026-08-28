@@ -114,6 +114,30 @@ export interface CoverageZone {
   entity_target?: number
 }
 
+// Per-zone mention coverage for one term (only zones a competitor uses it in).
+export interface ZoneCoverage {
+  zone: string
+  current: number
+  recommended: number
+  shortfall: number
+}
+
+// Cora-style per-term coverage row (entity, related keyword, or bolded term):
+// the page's current mention count vs the competitor-derived recommended count,
+// the shortfall, the raw competitor max/avg it was benchmarked to, and a
+// per-zone breakdown.
+export interface EntityCoverage {
+  name: string
+  current: number
+  recommended: number
+  shortfall: number
+  max_competitor?: number | null
+  avg_competitor?: number | null
+  page_spread?: number
+  type?: string | null
+  zones?: ZoneCoverage[]
+}
+
 export interface EngineScore {
   score: number
   issues?: string[]
@@ -123,8 +147,23 @@ export interface EngineScore {
   keyword_coverage?: number
   entity_coverage?: number
   quadgram_coverage?: number
+  frequency_coverage?: number | null
   entities_used?: string[]
   entities_missing?: string[]
+  // Cora-style per-entity target table (name / current / recommended / shortfall),
+  // its under-target names, and the total mention shortfall. Absent on pages
+  // scored before this was added.
+  entity_detail?: EntityCoverage[]
+  entities_under_target?: string[]
+  total_entity_shortfall?: number
+  // Same, for related keywords (page-level current vs capped-max competitor usage).
+  keyword_detail?: EntityCoverage[]
+  keywords_under_target?: string[]
+  total_keyword_shortfall?: number
+  // Same, for SERP-bolded terms (raw-max competitor benchmark).
+  bold_detail?: EntityCoverage[]
+  bold_under_target?: string[]
+  total_bold_shortfall?: number
   zones?: CoverageZone[]
 }
 

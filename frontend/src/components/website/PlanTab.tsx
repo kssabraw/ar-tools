@@ -2,9 +2,20 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, CheckCircle2, Info, Loader2, Plus, ShieldCheck, Trash2 } from 'lucide-react'
 import { ACCENT, btn, card, denyReason, input } from './shared'
-import type { CityRow, PlanIssue, PlanResponse, ServiceRow, Website } from './shared'
+import type { CityRow, PlanIssue, PlanResponse, ServiceRow, ServiceVariation, Website } from './shared'
 import { ContentPlanEditor } from './ContentPlanEditor'
 import { api } from '../../lib/api'
+
+// Fold a pre-generalization service (equipment `brands`) into the current
+// `variations` shape so an older stored catalog edits cleanly and its next save
+// migrates it forward. A row already carrying `variations` wins; `brands` is
+// dropped either way so the two never double up at the backend parser.
+function normalizeService(row: ServiceRow): ServiceRow {
+  const { brands, ...rest } = row
+  if (rest.variations) return rest
+  if (brands?.length) return { ...rest, variations: brands.map((b) => ({ label: b, kind: 'brand' as const })) }
+  return rest
+}
 
 // Plan review (PRD §6.2). Two rules shape this screen:
 //
@@ -24,13 +35,13 @@ interface Props {
 export function PlanTab({ website, plan, perms }: Props) {
   const qc = useQueryClient()
   const stored = website.config as { catalog?: ServiceRow[]; cities?: CityRow[] }
-  const [services, setServices] = useState<ServiceRow[]>(stored.catalog ?? [])
+  const [services, setServices] = useState<ServiceRow[]>((stored.catalog ?? []).map(normalizeService))
   const [cities, setCities] = useState<CityRow[]>(stored.cities ?? [])
   const [acked, setAcked] = useState<Set<string>>(new Set())
 
   // Re-seed when the stored catalog arrives or changes underneath us.
   useEffect(() => {
-    setServices(stored.catalog ?? [])
+    setServices((stored.catalog ?? []).map(normalizeService))
     setCities(stored.cities ?? [])
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(stored.catalog), JSON.stringify(stored.cities)])
@@ -266,16 +277,16 @@ function ServiceEditor({ rows, onChange, disabled }: {
               <Trash2 size={13} />
             </button>
           </div>
-          {/* Brand × service opt-in: a brand list turns a top-level service into
-              /{service}/{brand}/ pages ("Carrier AC Repair"). Sub-services don't
-              take brands (that depth is the hyper-local escalation, not a cell). */}
+          {/* Service variations: a top-level service can auto-generate child
+              pages at /{service}/{modifier}/. A "type" modifier becomes a
+              sub-service (Oak Tree Removal); a "brand" modifier a brand × service
+              page (Carrier AC Repair). Sub-services take none — that depth is the
+              hyper-local escalation, not a variation cell. */}
           {!row.parent_slug && (
-            <input
-              style={{ ...input, fontSize: 12 }}
-              placeholder="Equipment brands for brand × service pages (comma-separated, optional) — e.g. Carrier, Trane, Lennox"
-              value={(row.brands ?? []).join(', ')}
+            <VariationEditor
+              variations={row.variations ?? []}
+              onChange={(variations) => update(i, { variations })}
               disabled={disabled}
-              onChange={(e) => update(i, { brands: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })}
             />
           )}
         </div>
@@ -283,6 +294,45 @@ function ServiceEditor({ rows, onChange, disabled }: {
       <button onClick={() => onChange([...rows, { name: '', order: (rows.length + 1) * 10, include_in_matrix: true }])}
               disabled={disabled} style={{ ...btn('#fff', ACCENT), justifySelf: 'start' }}>
         <Plus size={13} /> Add service
+      </button>
+    </div>
+  )
+}
+
+function VariationEditor({ variations, onChange, disabled }: {
+  variations: ServiceVariation[]; onChange: (v: ServiceVariation[]) => void; disabled: boolean
+}) {
+  const update = (i: number, patch: Partial<ServiceVariation>) =>
+    onChange(variations.map((v, j) => (i === j ? { ...v, ...patch } : v)))
+
+  return (
+    <div style={{ display: 'grid', gap: 4, paddingLeft: 8, borderLeft: '2px solid #f1f5f9' }}>
+      {variations.length > 0 && (
+        <span style={{ fontSize: 11, color: '#94a3b8' }}>
+          Service variations — each becomes a page at /{'{service}'}/{'{modifier}'}/
+        </span>
+      )}
+      {variations.map((v, i) => (
+        <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 120px auto', gap: 6, alignItems: 'center' }}>
+          <input style={{ ...input, fontSize: 12 }}
+                 placeholder={v.kind === 'brand' ? 'Brand — e.g. Carrier' : 'Variation — e.g. Oak Tree Removal'}
+                 value={v.label} disabled={disabled}
+                 onChange={(e) => update(i, { label: e.target.value })} />
+          <select style={{ ...input, fontSize: 12, width: 120 }} value={v.kind} disabled={disabled}
+                  onChange={(e) => update(i, { kind: e.target.value as ServiceVariation['kind'] })}
+                  title="Type = a narrower service (sub-service). Brand = equipment brand.">
+            <option value="type">Type</option>
+            <option value="brand">Brand</option>
+          </select>
+          <button onClick={() => onChange(variations.filter((_, j) => j !== i))} disabled={disabled}
+                  style={{ ...btn('#fff', '#b91c1c'), padding: '5px 7px' }} title="Remove variation">
+            <Trash2 size={12} />
+          </button>
+        </div>
+      ))}
+      <button onClick={() => onChange([...variations, { label: '', kind: 'type' }])} disabled={disabled}
+              style={{ ...btn('#fff', ACCENT), justifySelf: 'start', padding: '4px 9px', fontSize: 12 }}>
+        <Plus size={11} /> Add variation
       </button>
     </div>
   )

@@ -6,6 +6,7 @@ import { ecommerceApi } from './api'
 import type { ContentGap, EcommercePageDetail } from './types'
 import { FeaturedImagePicker } from '../FeaturedImagePicker'
 import { VoiceCompliancePanel } from '../localseo/VoiceCompliancePanel'
+import { SearchCoveragePanel } from '../coverage/SearchCoveragePanel'
 import { ErrorDetails } from '../ErrorDetails'
 import {
   backLink, card, downloadFile, formatHtml, outlineBtn,
@@ -40,7 +41,7 @@ interface Props {
 type Tab = 'preview' | 'html' | 'schema'
 
 export function GeneratedProductView({ page, isNew, prevScore, onBack, onScoreAndImprove, onNewPage }: Props) {
-  const { keyword, page_type, content_html, schema_json, page_title, content_gaps, researched_facts, voice_violations, mode } = page
+  const { keyword, page_type, content_html, schema_json, page_title, content_gaps, researched_facts, voice_violations, engine_scores, mode } = page
   const score = page.composite_score
   const status = page.composite_status
 
@@ -234,6 +235,8 @@ export function GeneratedProductView({ page, isNew, prevScore, onBack, onScoreAn
             </div>
           )}
           <VoiceCompliancePanel compliance={voice_violations} />
+          {/* Search coverage — entity/keyword/bolded-term targets + per-zone + frequency */}
+          <SearchCoveragePanel coverage={engine_scores?.serp_signal_coverage} />
           {content_gaps && content_gaps.length > 0 && (
             <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
               <div style={{ background: '#f8fafc', padding: '16px 20px', borderBottom: '1px solid #e2e8f0' }}>
