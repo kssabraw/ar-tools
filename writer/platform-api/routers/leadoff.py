@@ -160,6 +160,34 @@ async def get_placement(
         return {"available": False, "reason": "placement_error"}
 
 
+@router.get("/leadoff/placement/geocode")
+async def placement_geocode(
+    q: str,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Forward-geocode a target-area focus query (a neighborhood/area name like
+    "Queens NY", or an address) to a point for the placement advisor's focus.
+
+    Uses the suite's Google forward geocoder (cached in geocode_forward_cache) —
+    which resolves a *locality*, unlike /clients/gbp/resolve (an Outscraper
+    business search that returns a random matching business for a bare area name).
+    Degrades to {matched:false} with no API key, no such place, or on error —
+    never raises."""
+    query = (q or "").strip()
+    if not query:
+        return {"matched": False, "reason": "empty_query"}
+    from services.maps_geocode import forward_geocode_places
+    try:
+        res = (await forward_geocode_places([query], supabase=get_supabase())).get(query) or {}
+    except Exception:
+        logger.warning("leadoff.placement_geocode_failed", exc_info=True)
+        return {"matched": False, "reason": "geocode_error"}
+    if not res.get("matched") or res.get("lat") is None or res.get("lng") is None:
+        return {"matched": False, "reason": "not_found"}
+    return {"matched": True, "lat": res["lat"], "lng": res["lng"],
+            "label": res.get("formatted") or query}
+
+
 class PlacementPointRequest(BaseModel):
     city_id: int
     category_id: str

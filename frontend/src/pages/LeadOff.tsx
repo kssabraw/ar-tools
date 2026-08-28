@@ -1180,6 +1180,14 @@ interface PlacementRead {
   focused?: boolean
   focus?: { lat: number; lng: number; radius_miles: number } | null
 }
+// Forward-geocode a target-area focus query (area name / address) to a point.
+interface PlacementGeocode {
+  matched: boolean
+  lat?: number
+  lng?: number
+  label?: string
+  reason?: string
+}
 
 // Phase 2 "Both": scoring an arbitrary point (dropped pin / pasted address)
 // against the market's zones on the same market-relative scale.
@@ -1582,12 +1590,13 @@ function FocusBar({ focus, radius, onRadius, onSetFocus, onClear }: {
     if (!value) return
     setError(null); setResolving(true)
     try {
-      const res = await api.get<GbpResolveResponse>(`/clients/gbp/resolve?input=${encodeURIComponent(value)}`)
-      const lat = res.gbp?.latitude, lng = res.gbp?.longitude
-      if (lat == null || lng == null) {
-        setError('Could not find that area — try an address or a GBP link.'); return
+      // Forward-geocode via the placement geocoder (a locality lookup), not the
+      // GBP business search — so "Queens NY" resolves to the area's centre.
+      const res = await api.get<PlacementGeocode>(`/leadoff/placement/geocode?q=${encodeURIComponent(value)}`)
+      if (!res.matched || res.lat == null || res.lng == null) {
+        setError('Could not find that area — try a city/area name (e.g. "Queens NY") or an address.'); return
       }
-      onSetFocus(lat, lng, res.gbp?.business_name ?? value)
+      onSetFocus(res.lat, res.lng, res.label ?? value)
       setInput('')
     } catch (e) {
       setError((e as Error).message || 'Could not resolve that area.')
@@ -1626,7 +1635,7 @@ function FocusBar({ focus, radius, onRadius, onSetFocus, onClear }: {
             value={input}
             onChange={e => { setInput(e.target.value); setError(null) }}
             onKeyDown={e => { if (e.key === 'Enter') resolve() }}
-            placeholder="Target a specific area to serve (e.g. Queens NY, an address, or a GBP link)"
+            placeholder="Target a specific area to serve (e.g. Queens NY, or an address)"
             style={{ width: '100%', boxSizing: 'border-box', padding: '7px 9px 7px 28px',
               fontSize: 12.5, border: '1px solid #e2e8f0', borderRadius: 7 }} />
         </div>
