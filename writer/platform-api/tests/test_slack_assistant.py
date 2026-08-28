@@ -567,6 +567,8 @@ def test_context_providers_cover_all_modules():
         "campaign_goals", "competitors", "forecast", "trends", "organic_rank",
         "maps_geogrid", "ai_visibility", "content", "keyword_research",
         "keyword_research_runs",
+        "websites", "ecommerce", "gbp_posts", "native_tasks", "leadoff",
+        "response_episodes",
         "task_plan", "citations", "syndication", "reports", "sops", "asana",
         "health", "strategist_review", "setup",
     ):
@@ -611,6 +613,179 @@ def test_ctx_keyword_research_runs_empty_is_none():
         "keyword_topic_research_runs": [[]],
     })
     assert slack_assistant._ctx_keyword_research_runs(fake, "c1", date(2026, 8, 26)) is None
+
+
+# --- Phase 0 read-parity providers ------------------------------------------
+
+def test_ctx_websites_rolls_up_pages():
+    from datetime import date
+
+    fake = _FakeSupabase({
+        "websites": [[
+            {"id": "w1", "name": "Acme Roofing", "site_type": "local_business",
+             "status": "live", "staging_url": "https://acme.workers.dev",
+             "custom_domain": None, "domain_status": "none",
+             "updated_at": "2026-08-25T00:00:00Z"},
+        ]],
+        "website_pages": [[
+            {"website_id": "w1", "status": "published"},
+            {"website_id": "w1", "status": "published"},
+            {"website_id": "w1", "status": "draft"},
+        ]],
+    })
+    out = slack_assistant._ctx_websites(fake, "c1", date(2026, 8, 26))
+    assert out["site_count"] == 1
+    s = out["sites"][0]
+    assert s["name"] == "Acme Roofing" and s["url"] == "https://acme.workers.dev"
+    assert s["pages_total"] == 3 and s["pages_published"] == 2
+
+
+def test_ctx_websites_empty_is_none():
+    from datetime import date
+
+    assert slack_assistant._ctx_websites(
+        _FakeSupabase({"websites": [[]]}), "c1", date(2026, 8, 26)) is None
+
+
+def test_ctx_ecommerce_counts_and_types():
+    from datetime import date
+
+    fake = _FakeSupabase({
+        "ecommerce_pages": [[
+            {"keyword": "bpc-157", "page_type": "product", "composite_score": 81.0,
+             "voice_score": 74, "published_doc_id": "d1", "created_at": "2026-08-25"},
+            {"keyword": "peptides", "page_type": "collection", "composite_score": 78.0,
+             "voice_score": None, "published_doc_id": None, "created_at": "2026-08-24"},
+        ]],
+    })
+    out = slack_assistant._ctx_ecommerce(fake, "c1", date(2026, 8, 26))
+    assert out["pages_total"] == 2
+    assert out["by_type"] == {"product": 1, "collection": 1}
+    assert out["published"] == 1
+    assert out["recent"][0]["keyword"] == "bpc-157"
+
+
+def test_ctx_ecommerce_empty_is_none():
+    from datetime import date
+
+    assert slack_assistant._ctx_ecommerce(
+        _FakeSupabase({"ecommerce_pages": [[]]}), "c1", date(2026, 8, 26)) is None
+
+
+def test_ctx_gbp_posts_status_and_schedule():
+    from datetime import date
+
+    fake = _FakeSupabase({
+        "gbp_posts": [[
+            {"topic_type": "standard", "status": "live", "scheduled_at": None,
+             "published_at": "2026-08-25T00:00:00Z", "created_at": "2026-08-25"},
+            {"topic_type": "offer", "status": "scheduled",
+             "scheduled_at": "2026-08-30T00:00:00Z", "published_at": None,
+             "created_at": "2026-08-24"},
+        ]],
+        "gbp_post_schedules": [[
+            {"cadence": "weekly", "auto_publish": False,
+             "next_run_at": "2026-08-30T09:00:00Z"},
+        ]],
+    })
+    out = slack_assistant._ctx_gbp_posts(fake, "c1", date(2026, 8, 26))
+    assert out["post_count"] == 2
+    assert out["by_status"] == {"live": 1, "scheduled": 1}
+    assert out["schedules"][0]["cadence"] == "weekly"
+
+
+def test_ctx_gbp_posts_empty_is_none():
+    from datetime import date
+
+    assert slack_assistant._ctx_gbp_posts(
+        _FakeSupabase({"gbp_posts": [[]], "gbp_post_schedules": [[]]}),
+        "c1", date(2026, 8, 26)) is None
+
+
+def test_ctx_native_tasks_open_overdue_unassigned():
+    from datetime import date
+
+    fake = _FakeSupabase({
+        "tasks": [[
+            {"name": "Fix GBP categories", "status_key": "in_progress",
+             "assignee_name": "Ivy", "assignee_gid": "g1",
+             "due_date": "2026-08-20", "completed": False},   # overdue
+            {"name": "Write location page", "status_key": "not_started",
+             "assignee_name": None, "assignee_gid": None,
+             "due_date": "2026-09-05", "completed": False},    # unassigned, future
+            {"name": "Old done task", "status_key": "completed",
+             "assignee_name": "Ivy", "assignee_gid": "g1",
+             "due_date": "2026-08-01", "completed": True},     # excluded
+        ]],
+    })
+    out = slack_assistant._ctx_native_tasks(fake, "c1", date(2026, 8, 26))
+    assert out["open_count"] == 2
+    assert out["overdue"] == 1
+    assert out["unassigned"] == 1
+    assert out["by_status"] == {"in_progress": 1, "not_started": 1}
+
+
+def test_ctx_native_tasks_empty_is_none():
+    from datetime import date
+
+    assert slack_assistant._ctx_native_tasks(
+        _FakeSupabase({"tasks": [[]]}), "c1", date(2026, 8, 26)) is None
+
+
+def test_ctx_leadoff_origin_market():
+    from datetime import date
+
+    fake = _FakeSupabase({
+        "leadoff_predictions": [[
+            {"city_name": "Kansas City", "state_code": "MO", "category": "Pest control",
+             "as_of": "2026-07", "predicted": {"enriched_grade": "A-"},
+             "competitors": [{"n": 1}, {"n": 2}, {"n": 3}],
+             "created_at": "2026-07-12T00:00:00Z"},
+        ]],
+    })
+    out = slack_assistant._ctx_leadoff(fake, "c1", date(2026, 8, 26))
+    assert out["origin_market"]["city"] == "Kansas City"
+    assert out["grade"] == "A-"
+    assert out["competitor_count"] == 3
+
+
+def test_ctx_leadoff_empty_is_none():
+    from datetime import date
+
+    assert slack_assistant._ctx_leadoff(
+        _FakeSupabase({"leadoff_predictions": [[]]}), "c1", date(2026, 8, 26)) is None
+
+
+def test_ctx_response_episodes_open_and_escalated():
+    from datetime import date
+
+    fake = _FakeSupabase({
+        "response_episodes": [[
+            {"channel": "organic", "keyword": "roof repair",
+             "classification": "B1", "status": "open",
+             "opened_at": "2026-08-20T00:00:00Z", "escalated_at": None,
+             "recovered_at": None},
+            {"channel": "maps", "keyword": "roofer near me",
+             "classification": "maps_decline", "status": "escalated",
+             "opened_at": "2026-07-01T00:00:00Z",
+             "escalated_at": "2026-08-12T00:00:00Z", "recovered_at": None},
+            {"channel": "organic", "keyword": "gutter guard",
+             "classification": "B3", "status": "recovered",
+             "opened_at": "2026-06-01T00:00:00Z", "escalated_at": None,
+             "recovered_at": "2026-06-20T00:00:00Z"},
+        ]],
+    })
+    out = slack_assistant._ctx_response_episodes(fake, "c1", date(2026, 8, 26))
+    assert out["counts"] == {"open": 1, "escalated": 1, "recovered": 1}
+    assert out["open"][0]["keyword"] == "roof repair"
+    assert out["escalated"][0]["keyword"] == "roofer near me"
+
+
+def test_ctx_response_episodes_empty_is_none():
+    from datetime import date
+
+    assert slack_assistant._ctx_response_episodes(
+        _FakeSupabase({"response_episodes": [[]]}), "c1", date(2026, 8, 26)) is None
 
 
 def test_format_history_labels_roles_and_skips_empty():
