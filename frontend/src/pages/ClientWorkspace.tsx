@@ -11,6 +11,7 @@ import { ClientNotifications } from '../components/ClientNotifications'
 import { FreezeBanner } from '../components/FreezeBanner'
 import { WeeklyPulse } from '../components/WeeklyPulse'
 import { StrategistReview } from '../components/StrategistReview'
+import { InterventionOutcomes } from '../components/InterventionOutcomes'
 
 export function ClientWorkspace() {
   const { id } = useParams<{ id: string }>()
@@ -103,6 +104,10 @@ export function ClientWorkspace() {
           the strategist is off and no review exists (so quiet clients stay
           clean). */}
       {id && <StrategistReview clientId={id} />}
+      {/* Intervention-outcome loop — did past goal-linked link-building /
+          reoptimization work actually move the metric it targeted. Report-only;
+          renders nothing until the flag is on and something has been tracked. */}
+      {id && <InterventionOutcomes clientId={id} />}
       {id && <ClientNotifications clientId={id} />}
       {/* Weekly Pulse — the copy-paste client update staff deliver by hand. */}
       {id && <WeeklyPulse clientId={id} />}
