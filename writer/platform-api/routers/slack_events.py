@@ -24,6 +24,21 @@ router = APIRouter(tags=["slack"])
 logger = logging.getLogger(__name__)
 
 
+def _extract_message_event(payload: dict):
+    """The plain human `message` event to act on, or None (bot posts, edits,
+    joins, retries are filtered by the caller). Shared by both endpoints."""
+    if payload.get("type") != "event_callback":
+        return None
+    event = payload.get("event") or {}
+    if (
+        event.get("type") == "message"
+        and event.get("subtype") in (None, "thread_broadcast")
+        and not event.get("bot_id")
+    ):
+        return event
+    return None
+
+
 @router.post("/slack/events")
 async def slack_events(request: Request, background: BackgroundTasks) -> Response:
     raw = await request.body()
@@ -74,5 +89,56 @@ async def slack_events(request: Request, background: BackgroundTasks) -> Respons
             and not event.get("bot_id")
         ):
             background.add_task(slack_assistant.handle_message, event)
+
+    return Response(status_code=200)
+
+
+@router.post("/slack/pace/events")
+async def slack_pace_events(request: Request, background: BackgroundTasks) -> Response:
+    """Inbound side of the dedicated PACE Slack app (owner ruling 2026-08-28).
+
+    A separate Slack app gives PACE its own bot identity, so it needs its own
+    signing secret and its own Request URL. This app lives only in the PACE
+    channel, so every plain human message it delivers is PACE's to answer.
+
+    Inert unless PACE is enabled AND a PACE signing secret is configured — until
+    then the shared SerMaStr app keeps handling the PACE channel (via the
+    force path in handle_message)."""
+    raw = await request.body()
+    body_text = raw.decode("utf-8", errors="replace")
+
+    if not (settings.pace_enabled and settings.pace_slack_signing_secret):
+        return Response(status_code=200)
+
+    if not slack_assistant.verify_slack_signature(
+        settings.pace_slack_signing_secret,
+        request.headers.get("X-Slack-Request-Timestamp", ""),
+        body_text,
+        request.headers.get("X-Slack-Signature", ""),
+        int(time.time()),
+    ):
+        logger.warning("slack_pace_events.bad_signature")
+        return Response(status_code=403)
+
+    try:
+        payload = json.loads(body_text)
+    except json.JSONDecodeError:
+        return Response(status_code=400)
+
+    if payload.get("type") == "url_verification":
+        return Response(
+            content=json.dumps({"challenge": payload.get("challenge")}),
+            media_type="application/json",
+        )
+
+    # Slack retries on non-2xx; always ack fast and skip retried deliveries.
+    if request.headers.get("X-Slack-Retry-Num"):
+        return Response(status_code=200)
+
+    event = _extract_message_event(payload)
+    if event is not None:
+        from services import pace_agent
+
+        background.add_task(pace_agent.handle_pace_message, event)
 
     return Response(status_code=200)

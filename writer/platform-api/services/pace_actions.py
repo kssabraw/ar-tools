@@ -507,7 +507,8 @@ async def run_nudge(context: ActionContext, client_id: str, args: dict) -> str:
         try:
             from services.slack_assistant import post_message
 
-            await post_message(slack_id, f"👋 Nudge from PACE — a reminder to move *“{task_name}”* along.")
+            await post_message(slack_id, f"👋 Nudge from PACE — a reminder to move *“{task_name}”* along.",
+                               token=notifications.pace_bot_token())
             # In-app copy (to their bell) too, but don't also post to the channel.
             notifications.emit(
                 client_id=client_id, kind="task_nudge", title=f"Nudge: “{task_name}”",

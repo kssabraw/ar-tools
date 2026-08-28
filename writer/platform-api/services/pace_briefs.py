@@ -142,7 +142,7 @@ async def run_morning_briefs(today: Optional[date] = None) -> dict:
         if not text:
             continue
         try:
-            await post_message(m["slack_user_id"], text)
+            await post_message(m["slack_user_id"], text, token=notifications.pace_bot_token())
             sent += 1
         except Exception as exc:
             msg = str(exc)

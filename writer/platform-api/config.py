@@ -1744,6 +1744,18 @@ class Settings(BaseSettings):
     # Empty ⇒ shared-channel shape-routing (backward-compatible). PACE's digest +
     # weekly report also post here when set.
     pace_slack_channel: str = ""
+    # Separate PACE Slack app (owner ruling 2026-08-28) — give PACE its own bot
+    # identity so its posts/replies don't come from SerMaStr. Empty ⇒ PACE shares
+    # the SerMaStr bot (byte-for-byte unchanged). When BOTH are set, PACE posts
+    # (digest / chase plan / escalations / task_* notifications / nudges /
+    # conversational replies) go out under pace_slack_bot_token, inbound
+    # PACE-channel events arrive on /slack/pace/events verified with
+    # pace_slack_signing_secret, and the SerMaStr app stays out of the PACE
+    # channel entirely (the dedicated app owns it). Setup: create a second Slack
+    # app, add it to pace_slack_channel, point its Event Request URL at
+    # /slack/pace/events, then set these two vars.
+    pace_slack_bot_token: str = ""       # PACE_SLACK_BOT_TOKEN — the PACE app's xoxb- bot token
+    pace_slack_signing_secret: str = ""  # PACE_SLACK_SIGNING_SECRET — the PACE app's signing secret
     # PACE nudge delivery: DM the assignee directly (chat.postMessage to their
     # slack_user_id — needs the Slack app's `im:write` scope) instead of an
     # @mention in the shared channel. Graceful: an unlinked assignee or a missing

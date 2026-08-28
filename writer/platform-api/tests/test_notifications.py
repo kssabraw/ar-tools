@@ -117,6 +117,33 @@ def test_explicit_payload_channel_always_wins():
 
 
 # ---------------------------------------------------------------------------
+# resolve_slack_token / pace_bot_token — PACE posts under its own app's token
+# ---------------------------------------------------------------------------
+def test_resolve_slack_token_pace_channel_gets_pace_token():
+    # A message bound for the PACE channel goes out under the PACE app's token.
+    assert notifications.resolve_slack_token("C_PACE", "C_PACE", "xoxb-pace", "xoxb-def") == "xoxb-pace"
+
+
+def test_resolve_slack_token_other_channels_get_default():
+    assert notifications.resolve_slack_token(None, "C_PACE", "xoxb-pace", "xoxb-def") == "xoxb-def"
+    assert notifications.resolve_slack_token("C_OTHER", "C_PACE", "xoxb-pace", "xoxb-def") == "xoxb-def"
+
+
+def test_resolve_slack_token_no_pace_token_falls_back():
+    # Separate-bot mode not configured → even the PACE channel posts under default,
+    # so the change is inert until a PACE app token is set.
+    assert notifications.resolve_slack_token("C_PACE", "C_PACE", "", "xoxb-def") == "xoxb-def"
+
+
+def test_pace_bot_token_prefers_pace_then_default(monkeypatch):
+    monkeypatch.setattr(settings, "slack_bot_token", "xoxb-def")
+    monkeypatch.setattr(settings, "pace_slack_bot_token", "xoxb-pace")
+    assert notifications.pace_bot_token() == "xoxb-pace"
+    monkeypatch.setattr(settings, "pace_slack_bot_token", "")
+    assert notifications.pace_bot_token() == "xoxb-def"
+
+
+# ---------------------------------------------------------------------------
 # emit — the recipient (personal-bell target) is written to the row
 # ---------------------------------------------------------------------------
 def test_emit_writes_recipient_profile_id(monkeypatch):
