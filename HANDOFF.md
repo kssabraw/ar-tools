@@ -1,6 +1,47 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-28 · **PACE — enabled in production + its own Slack bot** (latest)
+## ⏩ Update — 2026-08-28 · **Intervention-outcome loop — v1, report-only, ships dark** (latest)
+
+**PR #871 (draft).** The measurement half of SerMaStr's decide+assign flow: PR #862
+closed *decide + assign* (monthly plan-review → human approve → PACE capacity-aware
+assignment); this closes **"did it work"** — measure whether assigned link-building /
+reoptimization work actually moved the campaign-goal metric it targeted, and surface a
+per-tactic effectiveness rollup back to the strategist. **Report-only in v1** (the
+strategist reads + cites it; it does NOT auto-adjust proposals). Full module detail is
+in the CLAUDE.md "Intervention-outcome loop" entry.
+
+### Ships dark — how to enable
+Set **`INTERVENTION_TRACKING_ENABLED=true`** on the **PLATFORM** Railway service (config
+`intervention_tracking_enabled`, default **False**). While off: every registration hook,
+the daily `run_intervention_sync` sweep, and the `_prov_intervention_outcomes` digest
+provider no-op, so the suite behaves exactly as before. No other env/setup needed —
+reuses the existing `async_jobs`/`gsc_scheduler` infra and `campaign_goals` reads (no new
+paid calls, no LLM in the core).
+
+### What's live already
+- **Migration `20260828240000_interventions.sql` applied live** (via Supabase MCP):
+  the `interventions` ledger table + a nullable `tasks.target` jsonb carrier column.
+  Verified (15 cols on `interventions`, `tasks.target` present).
+- Code merged into the branch only (draft PR) — nothing runs until the flag flips.
+
+### Key files (for whoever picks this up)
+- `services/interventions.py` — pure verdict/cadence/rollup helpers + registration
+  hooks + the daily sweep.
+- Registration: `routers/strategist.py` (proposal approval, after `push_proposal`) and
+  `services/task_service.py::complete_task` (native task done) — idempotent per a shared
+  `source_ref`. `asana_push.push_proposal` stamps `tasks.target`; `strategist.sanitize_review`
+  passes the optional proposal `target` through.
+- Surfacing: `strategy_digest._prov_intervention_outcomes` + one `strategist._SYSTEM` line;
+  read API `GET /clients/{id}/interventions` (`routers/interventions.py`).
+- Tests: `tests/test_interventions.py` (pure logic), target-passthrough cases in
+  `tests/test_strategist.py`.
+
+### Deliberately not built (v1 boundaries)
+Frontend Action-Plan surface for the rollup; the strategist auto-adjusting proposals from
+effectiveness (the next slice). `applied_at` = first-registration time (approval, in the
+common path) — measuring strictly from task-done is a later refinement.
+
+## ⏩ Update — 2026-08-28 · **PACE — enabled in production + its own Slack bot**
 
 **PACE is LIVE** (`PACE_ENABLED` + `PACE_INITIATIVE_ENABLED` = true on PLATFORM;
 `PACE_SLACK_CHANNEL=C0BTJ9U5H5F` = the private `#pace` channel). PRs this session:
