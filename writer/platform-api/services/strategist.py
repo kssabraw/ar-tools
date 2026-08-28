@@ -55,6 +55,29 @@ _SENIOR_PATTERNS = re.compile(
 # that merely mentions disavow to rule it out must not kill the proposal.
 _DISAVOW = re.compile(r"disavow", re.IGNORECASE)
 
+# In-scope tactics for the intervention-outcome loop (mirrors
+# interventions.TACTIC_TYPES — kept here so sanitize_review stays pure/DB-free).
+_INTERVENTION_TACTICS = ("link_building", "reoptimization")
+
+
+def sanitize_proposal_target(raw) -> Optional[dict]:
+    """The sanitized intervention ``target`` off a raw emit proposal, or None. Pure.
+
+    Honored only when it names an in-scope tactic AND at least one concrete
+    anchor (keyword or page_url); otherwise dropped, so the proposal behaves
+    exactly as an untargeted one (no intervention is ever registered)."""
+    if not isinstance(raw, dict):
+        return None
+    tactic = raw.get("tactic_type")
+    if tactic not in _INTERVENTION_TACTICS:
+        return None
+    keyword = (raw.get("keyword") or "").strip()
+    page_url = (raw.get("page_url") or "").strip()
+    if not (keyword or page_url):
+        return None
+    return {"tactic_type": tactic, "keyword": keyword or None, "page_url": page_url or None}
+
+
 _EMIT_TOOL = {
     "name": "emit_strategy_review",
     "description": (
@@ -119,6 +142,21 @@ _EMIT_TOOL = {
                             "description": "Per the roles matrix (Kyle/Ryan/Minda/Ivy) or 'UNSTAFFED'.",
                         },
                         "requires": {"type": "string", "enum": ["none", "approval", "senior"]},
+                        "target": {
+                            "type": "object",
+                            "description": "OPTIONAL — set ONLY for a link-building or "
+                            "reoptimization proposal aimed at moving a specific tracked "
+                            "keyword / page that is tied to a campaign goal. This enrolls "
+                            "the proposal in the intervention-outcome loop, which later "
+                            "measures whether the work actually moved the metric. Omit for "
+                            "everything else (an untargeted proposal is unaffected).",
+                            "properties": {
+                                "tactic_type": {"type": "string", "enum": ["link_building", "reoptimization"]},
+                                "keyword": {"type": "string", "description": "the tracked keyword this targets, verbatim from the digest"},
+                                "page_url": {"type": "string", "description": "the page being reoptimized / built to, if applicable"},
+                            },
+                            "required": ["tactic_type"],
+                        },
                     },
                     "required": ["title", "action", "rationale"],
                 },
@@ -144,7 +182,17 @@ progress against them (their status is precomputed — achieved/on_track/behind/
 report it, never re-derive it) and aim findings/proposals at the goals that are behind. A \
 behind goal with no proposal addressing it is a gap in your review. The digest's forecast \
 section carries deterministic trajectory numbers (goal_projections, quick-win value) — cite \
-them verbatim with their linear-extrapolation caveat; never compute your own projections.
+them verbatim with their linear-extrapolation caveat; never compute your own projections. \
+When the digest carries intervention_outcomes, read it as evidence of what has actually \
+WORKED for this client: it is the per-tactic effectiveness of past goal-linked link-building \
+/ reoptimization work (worked/partial/no_effect at each intervention's 6-week mark). Cite it \
+to favour tactics with a track record and to justify pausing ones that haven't moved the \
+metric — but it is REPORT-ONLY context, small-sample, never a hard rule; weigh it, don't \
+mechanically obey it, and don't invent a verdict the rollup doesn't show.
+When proposing a link-building or reoptimization action aimed at a specific tracked keyword / \
+page that maps to a campaign goal, set the proposal's optional `target` (tactic_type + the \
+keyword and/or page_url) so the outcome loop can later measure whether it worked. Omit it for \
+any other proposal.
 1. Cross-domain synthesis — signals that only mean something together (e.g. organic + maps \
 declining + heavy off-topic content = vector confusion, not three separate problems).
 2. Conflicting or unusual signal patterns the deterministic B1–B5 / playbook rules don't cover.
@@ -350,21 +398,26 @@ def sanitize_review(raw: dict, *, frozen: bool) -> dict:
         est, costed_items, cost_basis = ground_proposal_cost(
             p.get("costed_items"), p.get("cost_basis")
         )
-        proposals.append(
-            {
-                "title": title,
-                "action": action,
-                "rationale": (p.get("rationale") or "").strip(),
-                "sop_citation": (p.get("sop_citation") or "").strip(),
-                "est_cost_usd": est,
-                "cost_basis": cost_basis,
-                "costed_items": costed_items,
-                "effort": effort,
-                "assignee_hint": (p.get("assignee_hint") or "").strip() or None,
-                "status": "proposed",
-                "requires": requires,
-            }
-        )
+        proposal = {
+            "title": title,
+            "action": action,
+            "rationale": (p.get("rationale") or "").strip(),
+            "sop_citation": (p.get("sop_citation") or "").strip(),
+            "est_cost_usd": est,
+            "cost_basis": cost_basis,
+            "costed_items": costed_items,
+            "effort": effort,
+            "assignee_hint": (p.get("assignee_hint") or "").strip() or None,
+            "status": "proposed",
+            "requires": requires,
+        }
+        # Intervention-outcome loop: carry a sanitized target through so approval
+        # can register the intervention. Only added when valid — absent target
+        # means the proposal is untargeted (no measurement enrollment).
+        target = sanitize_proposal_target(p.get("target"))
+        if target:
+            proposal["target"] = target
+        proposals.append(proposal)
 
     if frozen and proposals:
         questions.append(

@@ -118,7 +118,7 @@ async def set_proposal_status(
     # when unconfigured/unmapped, or when a task already exists from a previous
     # approve→dismiss→approve cycle).
     if body.status == "approved" and not proposals[idx].get("asana_task"):
-        from services import asana_push
+        from services import asana_push, interventions
 
         review_client = (
             supabase.table("strategy_reviews").select("client_id")
@@ -126,9 +126,31 @@ async def set_proposal_status(
         ).data
         client_id = review_client[0].get("client_id") if review_client else None
         if client_id:
+            # Intervention-outcome loop: stamp the shared source_ref onto the
+            # target BEFORE the push so the created task carries it (the
+            # native-task registration hook keys on it → both hooks converge on
+            # one row).
+            tgt = proposals[idx].get("target")
+            if isinstance(tgt, dict):
+                tgt.setdefault(
+                    "source_ref", interventions.source_ref_for_proposal(str(review_id), idx)
+                )
             task = await asana_push.push_proposal(str(client_id), str(review_id), proposals[idx])
             if task:
                 proposals[idx]["asana_task"] = task
+            # Register the intervention (best-effort, flag-gated inside; only a
+            # goal-linked in-scope target enrolls — otherwise a no-op).
+            try:
+                iid = interventions.register_from_proposal(
+                    str(client_id), str(review_id), idx, proposals[idx]
+                )
+                if iid:
+                    proposals[idx]["intervention_id"] = iid
+            except Exception as exc:
+                logger.warning(
+                    "intervention_register_failed",
+                    extra={"review_id": str(review_id), "idx": idx, "error": str(exc)},
+                )
 
     try:
         supabase.table("strategy_reviews").update({"proposals": proposals}).eq(

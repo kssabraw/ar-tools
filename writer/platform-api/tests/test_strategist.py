@@ -90,6 +90,40 @@ def test_sanitize_skips_malformed_entries():
     assert out["questions"] == ["real q"]
 
 
+# ---------------------------------------------------------------------------
+# intervention-outcome target passthrough (sanitize_proposal_target)
+# ---------------------------------------------------------------------------
+def test_sanitize_passes_valid_intervention_target():
+    out = strategist.sanitize_review(
+        {"assessment": "a", "proposals": [
+            _proposal(target={"tactic_type": "link_building", "keyword": "emergency plumber"}),
+        ]},
+        frozen=False,
+    )
+    tgt = out["proposals"][0].get("target")
+    assert tgt == {"tactic_type": "link_building", "keyword": "emergency plumber", "page_url": None}
+
+
+def test_sanitize_drops_out_of_scope_or_anchorless_target():
+    out = strategist.sanitize_review(
+        {"assessment": "a", "proposals": [
+            _proposal(target={"tactic_type": "gbp_post", "keyword": "x"}),   # out-of-scope tactic
+            _proposal(target={"tactic_type": "reoptimization"}),            # no anchor
+            _proposal(),                                                     # no target at all
+        ]},
+        frozen=False,
+    )
+    assert all("target" not in p for p in out["proposals"])
+
+
+def test_sanitize_proposal_target_pure():
+    assert strategist.sanitize_proposal_target(None) is None
+    assert strategist.sanitize_proposal_target({"tactic_type": "reoptimization"}) is None
+    assert strategist.sanitize_proposal_target(
+        {"tactic_type": "reoptimization", "page_url": "https://x/y"}
+    ) == {"tactic_type": "reoptimization", "keyword": None, "page_url": "https://x/y"}
+
+
 def test_sanitize_coerces_effort():
     out = strategist.sanitize_review(
         {"assessment": "a", "proposals": [

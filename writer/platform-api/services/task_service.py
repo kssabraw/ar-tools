@@ -395,6 +395,7 @@ def create_task(
     source_ref: Optional[str] = None,
     library_task_name: Optional[str] = None,
     created_by: Optional[str] = None,
+    target: Optional[dict] = None,
 ) -> dict:
     """Create a task (or subtask, when ``parent_task_id`` is set) + its
     'created' activity row.
@@ -436,6 +437,10 @@ def create_task(
         "library_task_name": library_task_name,
         "created_by": created_by,
     }
+    # Intervention-outcome loop carrier (nullable; set only for a goal-linked,
+    # in-scope strategist proposal push — see asana_push.push_proposal).
+    if target:
+        row["target"] = target
     created = get_supabase().table("tasks").insert(row).execute().data[0]
     record_activity(created["id"], "created", actor_id=created_by, detail={"source": source})
     if who["assignee_id"]:
@@ -676,6 +681,15 @@ def complete_task(task_id: str, *, actor_id: Optional[str] = None) -> dict:
         deliverables_sheet.on_task_completed(updated)
     except Exception as exc:
         logger.warning("deliverables_hook_error", extra={"task_id": task_id, "error": str(exc)})
+    # Intervention-outcome loop: a completed task carrying an intervention target
+    # registers/confirms its intervention (idempotent; flag-gated inside; a no-op
+    # for every ordinary task, whose target is null).
+    try:
+        from services import interventions
+
+        interventions.on_task_done(updated)
+    except Exception as exc:
+        logger.warning("intervention_hook_error", extra={"task_id": task_id, "error": str(exc)})
     return updated
 
 

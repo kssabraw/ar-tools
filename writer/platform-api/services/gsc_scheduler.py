@@ -627,6 +627,7 @@ async def gsc_scheduler() -> None:
     from services.page_backlink_intel import enqueue_due_page_backlinks
     from services.backlink_explorer import auto_track_client_domains, enqueue_due_backlink_snapshots
     from services.response_episodes import run_episode_sync
+    from services.interventions import run_intervention_sync
     from services.orchestrator import redispatch_due_retries
 
     from services.strategist import enqueue_due_monthly_plan_reviews, enqueue_due_strategy_reviews
@@ -690,6 +691,10 @@ async def gsc_scheduler() -> None:
                 _safe("freeze_checks", enqueue_due_freeze_checks)
                 # Daily response-episode sync (the SOPs' 2-week/6-week verify loop).
                 _safe("episode_sync", run_episode_sync)
+                # Daily intervention-outcome sync (did goal-linked link-building /
+                # reoptimization work move the metric — 2-week/6-week verdicts).
+                # Self-gated: no-ops while intervention_tracking_enabled is false.
+                _safe("intervention_sync", run_intervention_sync)
                 # Daily offpage sweep (RD loss / unnatural spike — SOP §A.5).
                 _safe("offpage_sweep", run_offpage_sweep)
                 # Daily scan-health watch: alert when a client's scheduled
