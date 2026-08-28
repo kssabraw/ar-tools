@@ -17,8 +17,8 @@ Outcomes:
                  or an action the engine doesn't recognise. Never auto, never a
                  routine "propose"; it goes to a human with the reason.
 
-Precedence is safety-first: freeze → senior/passthrough → unknown action →
-out-of-tier → over-budget → rate cap → auto.
+Precedence is safety-first: freeze → senior/passthrough → requires-approval →
+unknown action → out-of-tier → over-budget → rate cap → auto.
 """
 
 from __future__ import annotations
@@ -126,22 +126,27 @@ def classify(
     if requires == "senior" or action in HALT_AND_ASK:
         return PolicyDecision(_ESCALATE, "senior / passthrough territory")
 
-    # 3. Unknown action class — never auto-approve something we can't reason about.
+    # 3. Human-approval-required (a strategist proposal flagged requires=approval)
+    #    — surface it, never auto-run, whatever the tier/budget.
+    if requires == "approval":
+        return PolicyDecision(_PROPOSE, "requires human approval")
+
+    # 4. Unknown action class — never auto-approve something we can't reason about.
     tier = ACTION_TIERS.get(action)
     if tier is None:
         return PolicyDecision(_ESCALATE, f"unknown action class: {action or '?'}")
 
-    # 4. Above the client's effective tier — a human may still do it.
+    # 5. Above the client's effective tier — a human may still do it.
     if tier > client_tier:
         return PolicyDecision(_PROPOSE, f"tier {tier} above effective tier {client_tier}")
 
-    # 5. Over the remaining autonomous budget.
+    # 6. Over the remaining autonomous budget.
     if budget_left is not None and cost > 0 and cost > budget_left:
         return PolicyDecision(_PROPOSE, "over remaining autonomous budget")
 
-    # 6. Weekly content rate cap.
+    # 7. Weekly content rate cap.
     if action in CONTENT_ACTIONS and content_this_week >= content_cap:
         return PolicyDecision(_PROPOSE, "weekly content rate cap reached")
 
-    # 7. In tier, in budget, under the cap.
+    # 8. In tier, in budget, under the cap.
     return PolicyDecision(_AUTO, "in tier, in budget, under rate cap")
