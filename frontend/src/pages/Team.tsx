@@ -300,7 +300,7 @@ export function Team() {
                   </div>
                 </div>
 
-                {!isSelf && (
+                {(
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                     {flash?.id === u.id && (
                       <span style={{ fontSize: 12, color: '#16a34a' }}>{flash.msg}</span>
@@ -411,28 +411,32 @@ export function Team() {
                       </form>
                     ) : (
                       <>
-                        <button
-                          onClick={() => { setError(null); resetMutation.mutate(u.id) }}
-                          disabled={resetMutation.isPending}
-                          style={textBtn}
-                          title="Email a password-reset link"
-                        >
-                          <Mail size={13} /> Reset email
-                        </button>
-                        <button
-                          onClick={() => { setError(null); setPwOpenId(u.id); setPwValue('') }}
-                          style={textBtn}
-                          title="Set a new password directly"
-                        >
-                          <KeyRound size={13} /> Set password
-                        </button>
-                        <button
-                          onClick={() => { setError(null); setRoleId(u.id) }}
-                          style={textBtn}
-                          title="Change role"
-                        >
-                          <Shield size={13} /> Change role
-                        </button>
+                        {!isSelf && (
+                          <>
+                            <button
+                              onClick={() => { setError(null); resetMutation.mutate(u.id) }}
+                              disabled={resetMutation.isPending}
+                              style={textBtn}
+                              title="Email a password-reset link"
+                            >
+                              <Mail size={13} /> Reset email
+                            </button>
+                            <button
+                              onClick={() => { setError(null); setPwOpenId(u.id); setPwValue('') }}
+                              style={textBtn}
+                              title="Set a new password directly"
+                            >
+                              <KeyRound size={13} /> Set password
+                            </button>
+                            <button
+                              onClick={() => { setError(null); setRoleId(u.id) }}
+                              style={textBtn}
+                              title="Change role"
+                            >
+                              <Shield size={13} /> Change role
+                            </button>
+                          </>
+                        )}
                         <button
                           onClick={() => { setError(null); setSlackOpenId(u.id); setSlackValue(u.slack_user_id ?? '') }}
                           style={textBtn}
@@ -440,13 +444,15 @@ export function Team() {
                         >
                           <MessageSquare size={13} /> {u.slack_user_id ? 'Slack link' : 'Link Slack'}
                         </button>
-                        <button
-                          onClick={() => { setError(null); setRemoveId(u.id) }}
-                          style={{ ...textBtn, color: '#dc2626' }}
-                          title="Remove user"
-                        >
-                          <Trash2 size={13} /> Remove
-                        </button>
+                        {!isSelf && (
+                          <button
+                            onClick={() => { setError(null); setRemoveId(u.id) }}
+                            style={{ ...textBtn, color: '#dc2626' }}
+                            title="Remove user"
+                          >
+                            <Trash2 size={13} /> Remove
+                          </button>
+                        )}
                       </>
                     )}
                   </div>
