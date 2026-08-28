@@ -1,6 +1,49 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-28 · **Native Task Manager cutover LIVE + scheduled Asana→native auto-import (PR #852, MERGED + LIVE)** (latest)
+## ⏩ Update — 2026-08-28 · **SerMaStr monthly plan review → PACE assignment handoff (BUILT, ships dark)** (latest)
+
+The flow the owner asked for: **once a month, a few days before task generation,
+SerMaStr reviews the client's Recipe-Engine monthly task plan and proposes
+additions/modifications; a human approves; PACE assigns each approved task to the
+skilled, eligible, least-loaded member *under their weekly cap*.**
+
+The **approval → capacity-aware assignment** half was already wired
+(`asana_push.push_proposal` → `pm_assign.place_task`: creates the native task,
+then places it, or holds it unassigned + flags `team_at_capacity` when the
+eligible pool is full). So this build added only the **monthly cadence** that
+feeds proposals into it:
+
+- New strategist trigger **`monthly_plan_review`** (migration
+  `20260828200000` widened the `strategy_reviews.trigger` CHECK; applied live).
+  Behaves like every strategist run — **advice + proposals only**, human-gated,
+  frozen clients get observation-only.
+- **`strategist.enqueue_due_monthly_plan_reviews()`** — a daily due-check wired
+  into `gsc_scheduler` that self-gates to the single day each month
+  `strategist_monthly_plan_review_lead_days` (3) before `asana_month_generate_day`
+  (pure `is_monthly_review_day`, month-boundary + short-month safe), enqueues one
+  run per **non-archived retainer client** (`retainer_monthly > 0`), durable
+  "already ran this month" guard (`clients_reviewed_within`), pilot allowlist via
+  `strategist_monthly_plan_review_client_ids`.
+- A `monthly_plan_review` **prompt orientation** (steers toward concrete,
+  assignable task proposals within the plan's deployable budget) + its own
+  notification title. The digest already carries the plan (`_prov_task_plan`).
+
+**Double-gated / ships dark:** the whole cadence no-ops until BOTH
+`strategist_enabled` (already **true** on PLATFORM) and
+`strategist_monthly_plan_review_enabled` (default **False**) are on.
+
+**To pilot on ONE client:** on PLATFORM set
+`STRATEGIST_MONTHLY_PLAN_REVIEW_CLIENT_IDS=<client-uuid>` and
+`STRATEGIST_MONTHLY_PLAN_REVIEW_ENABLED=true` (redeploy so the new container picks
+up the vars — a running container predating the change won't have them). It fires
+on the review day (default: 3 days before the 1st → ~the 29th). Verify: a
+`monthly_plan_review` row in `strategy_reviews` + a "Monthly plan review" Slack
+digest; approving a proposal creates the native task AND auto-places it (or holds
+it flagged if everyone's capped). Remove the allowlist var to open it to the whole
+book. Assignment respects caps only if team `weekly_hours` are set (Ivy 7, others
+40 — already set).
+
+## ⏩ Update — 2026-08-28 · **Native Task Manager cutover LIVE + scheduled Asana→native auto-import (PR #852, MERGED + LIVE)**
 
 **The Asana replacement is cut over.** `NATIVE_TASKS_ENABLED=true` on PLATFORM,
 confirmed live by a month of clean operation (`task_due_sweep` runs daily, native

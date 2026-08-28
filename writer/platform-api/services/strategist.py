@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from config import settings
@@ -37,7 +37,7 @@ from services import notifications, sop_library, sop_store, strategy_digest
 logger = logging.getLogger(__name__)
 
 _LLM_TIMEOUT = 180.0
-VALID_TRIGGERS = ("scheduled", "escalation", "on_demand")
+VALID_TRIGGERS = ("scheduled", "escalation", "on_demand", "monthly_plan_review")
 
 # §3.2 mandatory human passthroughs — a proposal that lands in this territory
 # is briefed, never decided: force requires="senior" regardless of what the
@@ -394,10 +394,24 @@ def build_run_prompt(
     price_list: str = "",
 ) -> str:
     """Assemble the single user message for the run. Pure."""
+    _MONTHLY_ORIENTATION = (
+        " — MONTHLY TASK-PLAN REVIEW. This runs a few days BEFORE next month's "
+        "task plan is generated. Read the current monthly task plan in the digest "
+        "(task_plan: its tasks, diagnosis, deployable/remaining budget, and flags) "
+        "alongside the campaign's real position, and propose the specific "
+        "ADDITIONS and MODIFICATIONS next month's plan needs — a new/expanded "
+        "task to close a diagnosed gap, a reprioritised or dropped task that the "
+        "data no longer supports, a shifted budget allocation. Each change is a "
+        "PROPOSAL (advice only): a human approves it, and PACE then assigns the "
+        "approved work to the right person under their capacity — so make each "
+        "proposal a concrete, assignable task with its rationale, not a vague "
+        "theme. Stay within the deployable budget the plan already shows."
+    )
     parts = [
         f"TRIGGER: {trigger}"
         + (" — prepare the escalation brief for the senior review (what was tried, what moved, "
-           "what you recommend they decide)." if trigger == "escalation" else ""),
+           "what you recommend they decide)." if trigger == "escalation" else "")
+        + (_MONTHLY_ORIENTATION if trigger == "monthly_plan_review" else ""),
     ]
     if escalation_context:
         import json as _json
@@ -440,11 +454,12 @@ def review_notification(review: dict, client_name: str) -> Optional[dict]:
         bits.append(f"{n_q} open question{'s' if n_q != 1 else ''}")
     if not bits and findings:
         bits.append(f"{len(findings)} finding{'s' if len(findings) != 1 else ''}")
-    title = (
-        f"Escalation brief ready: {client_name}"
-        if trigger == "escalation"
-        else f"Strategist review: {client_name} — {', '.join(bits)}"
-    )
+    if trigger == "escalation":
+        title = f"Escalation brief ready: {client_name}"
+    elif trigger == "monthly_plan_review":
+        title = f"Monthly plan review: {client_name} — {', '.join(bits)}"
+    else:
+        title = f"Strategist review: {client_name} — {', '.join(bits)}"
     assessment = (review.get("assessment") or "").strip()
     summary = assessment[:400] + ("…" if len(assessment) > 400 else "")
     severity = "warning" if (trigger == "escalation" or senior) else "info"
@@ -595,7 +610,7 @@ async def run_strategy_review(
     # escalation runs only — an on-demand run from the UI means a human is
     # already looking. `notify` forces it (Slack-triggered on-demand runs, so
     # the answer comes back to the channel that asked).
-    if trigger in ("scheduled", "escalation") or notify:
+    if trigger in ("scheduled", "escalation", "monthly_plan_review") or notify:
         note = review_notification({**updated, "trigger": trigger},
                                    (digest.get("client") or {}).get("name") or "client")
         if note:
@@ -783,6 +798,119 @@ def enqueue_due_strategy_reviews(today_weekday: Optional[int] = None) -> int:
             enqueued += 1
     if enqueued:
         logger.info("strategist.weekly_enqueued", extra={"clients": enqueued})
+    return enqueued
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Monthly plan review → PACE assignment handoff
+#   A once-a-month strategist run, `_lead_days` before task generation, that
+#   proposes ADDITIONS/MODIFICATIONS to next month's Recipe-Engine task plan.
+#   Advice + proposals only; an approved proposal is auto-placed capacity-aware
+#   by PACE (asana_push.push_proposal → pm_assign.place_task — already wired).
+#   Ships dark (strategist_monthly_plan_review_enabled).
+# ─────────────────────────────────────────────────────────────────────────────
+def _days_in_month(year: int, month: int) -> int:
+    import calendar
+
+    return calendar.monthrange(year, month)[1]
+
+
+def is_monthly_review_day(today: date, generate_day: int, lead_days: int) -> bool:
+    """Pure. True on the single day each month that sits `lead_days` before the
+    monthly task-generation day (`asana_month_generate_day`, clamped to the
+    target month's length). `today + lead_days` landing exactly on the (clamped)
+    generation day-of-month handles month boundaries and short months with no
+    special-casing — a lead that crosses into the prior month just works."""
+    if lead_days < 0:
+        return False
+    gen = today + timedelta(days=lead_days)
+    clamped = min(max(generate_day, 1), _days_in_month(gen.year, gen.month))
+    return gen.day == clamped
+
+
+def _monthly_review_allowlist() -> set[str]:
+    """Parse the optional comma-separated pilot allowlist. Empty → empty set
+    (no restriction — every eligible client)."""
+    raw = settings.strategist_monthly_plan_review_client_ids or ""
+    return {c.strip() for c in raw.split(",") if c.strip()}
+
+
+def clients_reviewed_within(trigger: str, days: int) -> set[str]:
+    """Client ids with a run of `trigger` inside the last `days` days — the
+    durable "already ran this month" guard (the day gate lives in process
+    memory, so a redeploy on the review day would otherwise re-fire). `days <= 0`
+    disables."""
+    if days <= 0:
+        return set()
+    supabase = get_supabase()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    return {
+        r["client_id"]
+        for r in (
+            supabase.table("strategy_reviews").select("client_id")
+            .eq("trigger", trigger)
+            .gte("created_at", cutoff).execute()
+        ).data or []
+        if r.get("client_id")
+    }
+
+
+def clients_due_monthly_plan_review() -> set[str]:
+    """Non-archived retainer clients (retainer_monthly > 0) eligible for the
+    monthly plan review, narrowed to the pilot allowlist when one is set.
+    Best-effort — a read blip returns an empty set (skip this cycle) rather than
+    raising into the scheduler."""
+    supabase = get_supabase()
+    try:
+        rows = (
+            supabase.table("clients")
+            .select("id, retainer_monthly")
+            .eq("archived", False)
+            .execute()
+        ).data or []
+    except Exception as exc:
+        logger.warning("strategist.monthly_review_client_read_failed", extra={"error": str(exc)})
+        return set()
+    eligible = {
+        r["id"] for r in rows
+        if r.get("id") and (r.get("retainer_monthly") or 0) > 0
+    }
+    allow = _monthly_review_allowlist()
+    if allow:
+        eligible &= allow
+    return eligible
+
+
+def enqueue_due_monthly_plan_reviews(today: Optional[date] = None) -> int:
+    """Daily scheduler pass: on the monthly-review day, enqueue one
+    `monthly_plan_review` strategist run per eligible retainer client. No-ops
+    entirely while strategist_enabled OR strategist_monthly_plan_review_enabled
+    is false. `_strategist_excluded` (opted-out properties) is applied inside
+    `enqueue_strategy_review`; a client already reviewed this month is dropped by
+    the durable guard."""
+    if not (settings.strategist_enabled and settings.strategist_monthly_plan_review_enabled):
+        return 0
+    if today is None:
+        today = datetime.now(timezone.utc).date()
+    if not is_monthly_review_day(
+        today,
+        settings.asana_month_generate_day,
+        settings.strategist_monthly_plan_review_lead_days,
+    ):
+        return 0
+    due = clients_due_monthly_plan_review()
+    try:
+        recent = clients_reviewed_within("monthly_plan_review", 20)
+    except Exception as exc:  # a failed read must never silence the pass
+        logger.warning("strategist.monthly_review_recent_read_failed", extra={"error": str(exc)})
+        recent = set()
+    due -= recent
+    enqueued = 0
+    for client_id in sorted(due):
+        if enqueue_strategy_review(client_id, trigger="monthly_plan_review"):
+            enqueued += 1
+    if enqueued:
+        logger.info("strategist.monthly_plan_review_enqueued", extra={"clients": enqueued})
     return enqueued
 
 
