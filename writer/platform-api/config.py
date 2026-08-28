@@ -1795,6 +1795,18 @@ class Settings(BaseSettings):
     leadoff_proximity_radius_miles: float = 10.0
     leadoff_proximity_min_pins: int = 5
     leadoff_proximity_weak_frac: float = 0.25
+    # Agency cost-to-win ROI (leadoff_roi.py, owner ruling 2026-08-28) — replaces
+    # the mislabelled "$/mo per review" with expected value vs. what the agency
+    # pays to win + hold the ranking. Unit costs are sourced from the Recipe
+    # Engine SOP catalog (content page price is imported from there directly);
+    # these are the tunable market-selection assumptions. All are forecasts that
+    # sharpen post-scout (real RD gap) / post-client (real retainer).
+    leadoff_roi_enabled: bool = True
+    leadoff_roi_cost_per_review: float = 10.0   # loaded labour to earn one review
+    leadoff_roi_cost_per_link: float = 30.0     # blended per-RD cost (DAS $10 … niche edit $75)
+    leadoff_roi_content_pages: float = 4.0      # pages assumed to rank a market
+    leadoff_roi_monthly_maintenance: float = 135.0  # Recipe Engine Baseline Stack/mo (reporting excluded)
+    leadoff_roi_rd_target_mult: float = 1.0     # RD-to-win = competitor field median true RD × this
     # GBP Placement Advisor (leadoff-gbp-placement-plan-v1_0.md §10): the
     # demand-aware "where should the GBP live" read. Free core = the Census
     # ACS block-group demand surface (census_demand.py, $0) ÷ the live

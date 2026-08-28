@@ -55,6 +55,19 @@ interface MarketRow {
   // comparable-income cities in the same category (context for the signal).
   peer_cohort_median?: number | null
   peer_cohort_n?: number | null
+  // Agency cost-to-win ROI (replaces the $/review "roi"): expected $/mo vs.
+  // what the agency pays to win + hold the ranking. Board-wide the link gap is
+  // modelled; the brief measures it from the scouted RD field.
+  monthly_profit?: number | null
+  monthly_cost?: number | null
+  cost_to_win?: number | null
+  payback_months?: number | null
+  roi_confidence?: 'measured' | 'modelled' | null
+  roi_links_estimated?: boolean | null
+  cost_breakdown?: {
+    reviews: number; reviews_n: number; content: number
+    content_pages: number; links: number; links_rd: number
+  } | null
 }
 interface BoardResponse {
   markets: MarketRow[]
@@ -155,7 +168,7 @@ interface CategoryMatch {
   county?: string | null
 }
 
-type Sort = 'v3' | 'build' | 'roi' | 'expected' | 'value' | 'leads' | 'demand'
+type Sort = 'v3' | 'build' | 'profit' | 'payback' | 'expected' | 'value' | 'leads' | 'demand'
 type Tier = 'low' | 'mid' | 'high'
 
 const GRADE_COLORS: Record<string, string> = {
@@ -164,6 +177,10 @@ const GRADE_COLORS: Record<string, string> = {
 }
 const usd = (n: number | null | undefined) =>
   n === null || n === undefined ? '—' : `$${Math.round(n).toLocaleString()}`
+// Payback period in months. null ⇒ the market never recoups (maintenance ≥ its
+// value) — shown as an em dash with the reason surfaced in the cell tooltip.
+const paybackLabel = (m: number | null | undefined) =>
+  m === null || m === undefined ? '—' : m < 1 ? '<1 mo' : `${m} mo`
 // compact count for footprint columns (site pages / brand mentions)
 const compact = (n: number | null | undefined) =>
   n === null || n === undefined ? '—'
@@ -176,7 +193,7 @@ type View = 'board' | 'neighborhoods' | 'tryouts'
 // (the luck/permit icon strip). `num` picks the default first-click direction
 // (descending for numbers, ascending for text) and the compare fn.
 type ColKey = 'grade' | 'market' | 'category' | 'opportunity' | 'beatability'
-  | 'exp_val' | 'roi' | 'demand' | 'rev_win' | 'rating' | 'exact_open'
+  | 'exp_val' | 'profit' | 'payback' | 'demand' | 'rev_win' | 'rating' | 'exact_open'
 const BOARD_COLUMNS: { label: string; key: ColKey | null; num: boolean }[] = [
   { label: 'Grade', key: 'grade', num: true },
   { label: '', key: null, num: false },
@@ -185,7 +202,8 @@ const BOARD_COLUMNS: { label: string; key: ColKey | null; num: boolean }[] = [
   { label: 'Opportunity', key: 'opportunity', num: true },
   { label: 'Beatability', key: 'beatability', num: true },
   { label: 'Exp $/mo', key: 'exp_val', num: true },
-  { label: 'ROI $/rev', key: 'roi', num: true },
+  { label: 'Profit $/mo', key: 'profit', num: true },
+  { label: 'Payback', key: 'payback', num: true },
   { label: 'Demand', key: 'demand', num: true },
   { label: 'Rev to win', key: 'rev_win', num: true },
   { label: 'Field ★', key: 'rating', num: true },
@@ -200,7 +218,10 @@ function colValue(r: MarketRow, key: ColKey): number | string {
     case 'opportunity': return r.opportunity_v3 ?? r.v3 ?? -1
     case 'beatability': return r.beatability ?? -1
     case 'exp_val': return r.exp_val ?? -1
-    case 'roi': return r.roi ?? -1
+    case 'profit': return r.monthly_profit ?? -9e18
+    // never-pays-back (null) sorts to the bottom either direction: huge on a
+    // "fastest payback" read, and it's not a real number to rank high anyway.
+    case 'payback': return r.payback_months ?? 9e18
     case 'demand': return r.xdem ?? -1
     case 'rev_win': return r.rev_win ?? -1
     case 'rating': return r.rating ?? -1
@@ -345,12 +366,14 @@ export function LeadOff() {
     const rows = displayRows
     if (!rows.length) return
     const headers = ['grade', 'city_name', 'state_code', 'category', 'opportunity',
-      'beatability', 'beatability_band', 'exp_val', 'roi', 'demand', 'rev_win',
-      'rating', 'exact_open']
+      'beatability', 'beatability_band', 'exp_val', 'profit_mo', 'payback_months',
+      'cost_to_win', 'roi_confidence', 'demand', 'rev_win', 'rating', 'exact_open']
     downloadCsv('leadoff_shortlist.csv', toCsv(headers,
       rows.map(r => [r.grade, r.city_name, r.state_code, r.category,
         r.opportunity_v3 ?? r.v3, r.beatability ?? '', r.beatability_band ?? '',
-        r.exp_val, r.roi, r.xdem, r.rev_win, r.rating, r.exact_open])))
+        r.exp_val, r.monthly_profit ?? '', r.payback_months ?? '',
+        r.cost_to_win ?? '', r.roi_confidence ?? '',
+        r.xdem, r.rev_win, r.rating, r.exact_open])))
   }
 
   return (
@@ -465,7 +488,8 @@ export function LeadOff() {
             <select style={inputStyle} value={sort} onChange={e => setSort(e.target.value as Sort)}>
               <option value="v3">Opportunity — hidden gems (default)</option>
               <option value="build">Grade — raw value (big metros)</option>
-              <option value="roi">ROI — win cheapest</option>
+              <option value="payback">ROI — fastest payback</option>
+              <option value="profit">Profit — most $/mo</option>
               <option value="expected">Expected $/mo</option>
               <option value="leads">Expected leads</option>
               <option value="value">$/mo if ranked</option>
@@ -562,7 +586,16 @@ export function LeadOff() {
                           revWin={r.rev_win} holders={r.exact_open} rating={r.rating} />
                       </td>
                       <td style={{ ...tdStyle, fontWeight: 600 }}>{usd(r.exp_val)}</td>
-                      <td style={tdStyle}>{r.roi?.toFixed(1)}</td>
+                      <td style={{ ...tdStyle, fontWeight: 600, color: (r.monthly_profit ?? 0) > 0 ? '#177245' : '#b3362b' }}
+                        title={r.cost_to_win != null
+                          ? `Expected ${usd(r.exp_val)} − ${usd(r.monthly_cost)}/mo maintenance. Cost to win ${usd(r.cost_to_win)} (${r.roi_confidence}).`
+                          : undefined}>
+                        {usd(r.monthly_profit)}
+                      </td>
+                      <td style={tdStyle}
+                        title={r.roi_links_estimated ? 'Modelled (reviews + content); scout the market for the link gap' : 'Measured (includes the scouted RD/link gap)'}>
+                        {paybackLabel(r.payback_months)}
+                      </td>
                       <td style={tdStyle}>{r.xdem?.toLocaleString()}</td>
                       <td style={tdStyle}>{r.rev_win}</td>
                       <td style={tdStyle}>{r.rating ?? '—'}</td>
@@ -645,7 +678,26 @@ export function LeadOff() {
               <KV k="Expected $/mo" v={usd(brief.exp_val)} strong />
               <KV k="$/mo if ranked" v={usd(brief.value_mo)} />
               <KV k="Win likelihood" v={brief.rankab?.toFixed(2)} />
-              <KV k="ROI ($/mo per review)" v={brief.roi?.toFixed(1)} />
+              <KV k="Profit $/mo (after costs)" strong
+                v={usd(brief.monthly_profit)}
+                hint={`Agency cost-to-win ROI. Expected ${usd(brief.exp_val)} − ${usd(brief.monthly_cost)}/mo maintenance `
+                  + `(Recipe Engine baseline stack). Not a per-review ratio — real profit after what we pay to hold the ranking.`} />
+              <KV k="Payback period" v={paybackLabel(brief.payback_months)}
+                hint={brief.payback_months == null
+                  ? 'Maintenance ≥ this market’s value — it never recoups the build at these assumptions.'
+                  : `Months to recoup the one-time cost to win (${usd(brief.cost_to_win)}) from monthly profit.`} />
+              {brief.cost_breakdown && (
+                <div style={{ fontSize: 11, color: '#64748b', margin: '2px 0 6px', lineHeight: 1.5 }}>
+                  Cost to win {usd(brief.cost_to_win)}: {brief.cost_breakdown.reviews_n} reviews {usd(brief.cost_breakdown.reviews)}
+                  {' · '}{brief.cost_breakdown.content_pages} pages {usd(brief.cost_breakdown.content)}
+                  {brief.roi_links_estimated
+                    ? ' · links not yet costed'
+                    : ` · ${brief.cost_breakdown.links_rd} RD ${usd(brief.cost_breakdown.links)}`}
+                  {' — '}{brief.roi_confidence === 'measured'
+                    ? 'measured (scouted RD gap)'
+                    : 'modelled forecast; scout for the link gap'}
+                </div>
+              )}
               <KV k="Demand (regressed)" v={`${brief.xdem?.toLocaleString()}/mo`} />
               {brief.permits_pc != null && (
                 <KV k={`Prospect pipeline${brief.permit_flag && brief.permit_flag !== '-' ? ` · ${brief.permit_flag}` : ''}`}

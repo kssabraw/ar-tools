@@ -1,0 +1,137 @@
+"""LeadOff — agency cost-to-win ROI (owner ruling 2026-08-28).
+
+Replaces the mislabelled "ROI ($/mo per review)" — which was a value-per-effort
+ratio, never a real ROI because it subtracts no cost — with a **true economic
+ROI**: the market's expected monthly value measured against what the AGENCY
+actually pays to win and hold the ranking (links + content + reviews + monthly
+maintenance). Owner decisions:
+  * Cost basis = **agency cost-to-win** (what we pay to deliver the work), the
+    right question for a pre-client market-entry scanner ("is this market worth
+    US building").
+  * Headline = **both** the monthly profit ($/mo) AND the payback period
+    (months to recoup the one-time catch-up cost from that profit).
+
+Unit prices come from the **Recipe Engine** catalog (`services/recipe_engine`)
+so LeadOff never invents a dollar figure — `CONTENT_PAGE_COST` is imported, and
+the monthly-maintenance / per-review / per-link defaults live in config sourced
+from the same SOP pricing (tunable independently: a market-selection forecast
+may assume differently than a live campaign).
+
+**Pre-client honesty.** reviews-to-win + the unit costs are solid; the RD/link
+gap is only captured on **scouted** markets (board-wide it's modelled), and
+pages-to-rank is an assumption — so every result carries `roi_confidence`
+('measured' once a real RD gap is supplied, else 'modelled') and a
+`roi_links_estimated` flag, and the number is a forecast that sharpens
+post-scout / post-client. The old `roi` ($/review) is preserved on the row for
+back-compat + a tooltip.
+
+Pure core (`compute_roi`, unit-tested `tests/test_leadoff_roi.py`); `attach_roi`
+is the thin impure adapter that reads config.
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
+
+
+def compute_roi(exp_val: Optional[float], rev_win: Optional[float], *,
+                cost_per_review: float, cost_per_link: float,
+                content_pages: float, content_page_cost: float,
+                monthly_maintenance: float,
+                rd_gap_true: Optional[float] = None) -> dict[str, Any]:
+    """Agency cost-to-win economics from a market's expected monthly value and
+    its winnability gaps. Pure — no config, no I/O.
+
+    one-time cost-to-win = reviews-to-win × per-review + pages × per-page
+        (+ RD gap × per-link, only when a real RD gap is supplied).
+    monthly profit       = expected $/mo − monthly maintenance.
+    payback (months)     = one-time ÷ monthly profit  (None ⇒ never pays back,
+                           i.e. maintenance ≥ the market's value).
+
+    `rd_gap_true` is the TRUE referring-domain gap to close (the ×10-converted
+    competitor field median, minus the new entrant's ~0) — pass it only for
+    scouted markets; omit board-wide and the link component is 0 + flagged
+    estimated.
+    """
+    ev = float(exp_val or 0.0)
+    reviews_n = max(0.0, float(rev_win or 0.0))
+    reviews_cost = reviews_n * cost_per_review
+    content_cost = max(0.0, float(content_pages)) * content_page_cost
+    links_estimated = rd_gap_true is None
+    links_rd = 0.0 if links_estimated else max(0.0, float(rd_gap_true))
+    links_cost = links_rd * cost_per_link
+    one_time = reviews_cost + content_cost + links_cost
+
+    monthly_cost = max(0.0, float(monthly_maintenance))
+    monthly_profit = ev - monthly_cost
+    payback = (round(one_time / monthly_profit, 1)
+               if monthly_profit > 0 else None)
+
+    return {
+        "monthly_profit": round(monthly_profit),
+        "monthly_cost": round(monthly_cost),
+        "cost_to_win": round(one_time),
+        "payback_months": payback,
+        "roi_links_estimated": links_estimated,
+        "roi_confidence": "modelled" if links_estimated else "measured",
+        "cost_breakdown": {
+            "reviews": round(reviews_cost),
+            "reviews_n": round(reviews_n),
+            "content": round(content_cost),
+            "content_pages": round(float(content_pages)),
+            "links": round(links_cost),
+            "links_rd": round(links_rd),
+        },
+    }
+
+
+def roi_params() -> dict[str, float]:
+    """The config-sourced cost assumptions (impure). Content page price comes
+    straight from the Recipe Engine so it can't drift from the SOP catalog."""
+    from config import settings
+    from services.recipe_engine import CONTENT_PAGE_COST
+    return {
+        "cost_per_review": settings.leadoff_roi_cost_per_review,
+        "cost_per_link": settings.leadoff_roi_cost_per_link,
+        "content_pages": settings.leadoff_roi_content_pages,
+        "content_page_cost": CONTENT_PAGE_COST,
+        "monthly_maintenance": settings.leadoff_roi_monthly_maintenance,
+    }
+
+
+def attach_roi(row: dict[str, Any], *,
+               rd_gap_true: Optional[float] = None) -> dict[str, Any]:
+    """Merge the cost-to-win ROI fields onto a board/brief row from its stored
+    `exp_val` + `rev_win`. Impure (reads config); gated on
+    `leadoff_roi_enabled` (off ⇒ row unchanged, old `roi` stays). Never raises —
+    a bad row degrades to the untouched row."""
+    from config import settings
+    if not settings.leadoff_roi_enabled:
+        return row
+    try:
+        roi = compute_roi(row.get("exp_val"), row.get("rev_win"),
+                          rd_gap_true=rd_gap_true, **roi_params())
+        return {**row, **roi}
+    except Exception:
+        logger.warning("leadoff_roi.attach_failed", exc_info=True)
+        return row
+
+
+def rd_gap_from_enrichment(enrichment: Optional[dict[str, Any]], *,
+                           mult: Optional[float] = None) -> Optional[float]:
+    """True RD gap for the ROI link component from a brief's enrichment block:
+    the competitor field median RD (`rd_med`, a tool read → ×10 true RD) that a
+    new entrant (≈0 RD) must close, scaled by `leadoff_roi_rd_target_mult`.
+    None when no RD is cached (unscouted) → the ROI stays modelled. Pure-ish
+    (reads one config default)."""
+    if not enrichment:
+        return None
+    rd_med = enrichment.get("rd_med")
+    if rd_med is None:
+        return None
+    if mult is None:
+        from config import settings
+        mult = settings.leadoff_roi_rd_target_mult
+    return max(0.0, float(rd_med) * 10.0 * float(mult))
