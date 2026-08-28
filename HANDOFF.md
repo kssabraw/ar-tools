@@ -1,6 +1,49 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-27 · **Website Builder — future page-type engines (ROADMAP, not built)** (latest)
+## ⏩ Update — 2026-08-27 · **Website Builder — brand_service + hyper_local engines BUILT + generalized to service variations (MERGED)** (latest)
+
+Tier A of the roadmap entry below is **done and on `main`**. Three PRs, all
+squash-merged:
+
+- **[#807](https://github.com/kssabraw/ar-tools/pull/807)** — the two Tier-A
+  engines. `brand_service` (`/{service}/{brand}/`) + `hyper_local`
+  (`/{city}/{service}/{subservice}/`) now generate through the **existing nlp
+  writer** (`local_seo_service.generate_page`) — no new generator, just a
+  `generation_inputs` branch each + both added to `NLP_PAGE_TYPES`.
+  `brand_service` targets `"<Brand> <Service>"` geo-agnostically (city scopes the
+  SERP only); `hyper_local` targets its need with the city as location and stays
+  **engine-only** (SOP: escalation-only, never bulk-generated — the writer
+  exists, the planner proposes none). `frontmatter_extra` fixed for
+  `brand_service` (its service is `segs[0]`, the brand is `segs[-1]`).
+- **[#810](https://github.com/kssabraw/ar-tools/pull/810)** — **generalized
+  `brands` into service variations** so the auto-matrix works for any trade, not
+  just equipment brands. A top-level service carries a `variations` list of
+  `ServiceVariation{label, kind}` (`kind ∈ {brand, type}`);
+  `service_variation_pages` emits **brand** → a brand × service page, **type** →
+  a **sub-service** whose title is the label alone ("Oak Tree Removal", no "Oak
+  Trees Tree Removal" doubling → `/tree-removal/oak-trees/`). `ServiceEntry.brands`
+  is now a computed property; the store parser accepts both the new `variations`
+  shape and the legacy `brands` field (→ `kind:"brand"`), so an older stored
+  catalog keeps working and migrates forward on save. `variation_scale_gate`
+  (>200 cells → acknowledgeable link-equity sign-off). Frontend: the Plan tab's
+  brands input became a per-service **"Service variations"** editor (label +
+  Type/Brand kind), normalizing legacy `brands` on load.
+- **[#815](https://github.com/kssabraw/ar-tools/pull/815)** — the team user guide
+  (`docs/website-builder-user-guide.md`) documents Service variations.
+
+**Verification pattern held:** built BOTH `/ac-repair/carrier/` (brand) and
+`/tree-removal/oak-trees/` (type → sub-service, clean "Oak Trees" title) in
+`site-template`; 280 website unit tests pass; CI green (pytest + Netlify) on
+#807 and #810. No template change for the generalization — `type` variations are
+standard `sub_service` pages the template already renders (the synthetic
+sub-service's keyword falls back to the page title). **What's left of the
+roadmap:** only Tier B (the ⭐ extension types — cost/problem-symptom/FAQ/
+projects/comparison), which still need both a template screen AND an engine; see
+the entry below.
+
+---
+
+## ⏩ Update — 2026-08-27 · **Website Builder — future page-type engines (ROADMAP; Tier A now built above)**
 
 **Why this entry exists.** The generation layer routes every planned page to
 whichever suite writer owns its type (`website_generate.generation_inputs` →
@@ -16,11 +59,8 @@ from data — this is a forward roadmap, not a live gap.
 `_COLLECTION_BY_PAGE_TYPE`/`UNRENDERABLE_PAGE_TYPES`, `site-template`
 `content.config.ts`):**
 
-- **Tier A — template exists, only a writer engine is missing.** These already
-  have a collection + route in the template and frontmatter handling in the
-  planner; they fall through to `engine: None` purely because they aren't in
-  `NLP_PAGE_TYPES`. Cheapest to finish — likely a prompt profile on the existing
-  nlp generator, no new template screen:
+- **Tier A — template exists, only a writer engine is missing. ✅ BUILT (#807 +
+  #810, see the entry above).**
   - **`brand_service`** (brand × service, e.g. `/ac-repair/carrier/`) — collection `services`.
   - **`hyper_local`** (a hyper-specific service×place page) — collection `local-landing`.
 - **Tier B — ⭐ extension types with ratified URLs but NO template AND no engine.**
