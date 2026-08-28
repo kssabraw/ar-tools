@@ -86,9 +86,9 @@ plain bold with no size hierarchy (`##` vs `###` had implied one, falsely). A tr
 look in Slack needs Block Kit rich-text blocks instead of a plain `text` message — a bigger
 change, not attempted here.
 
-## ⏩ Update — 2026-08-28 · **Intervention-outcome loop — v1, report-only, ships dark**
+## ⏩ Update — 2026-08-28 · **Intervention-outcome loop — v1, report-only, ENABLED in production + frontend card**
 
-**PR #871 (merged to `main`).** The measurement half of SerMaStr's decide+assign flow: PR #862
+**PR #871 (backend) + PR #874 (frontend), both merged to `main`; `INTERVENTION_TRACKING_ENABLED=true` on PLATFORM (live).** The measurement half of SerMaStr's decide+assign flow: PR #862
 closed *decide + assign* (monthly plan-review → human approve → PACE capacity-aware
 assignment); this closes **"did it work"** — measure whether assigned link-building /
 reoptimization work actually moved the campaign-goal metric it targeted, and surface a
@@ -96,20 +96,23 @@ per-tactic effectiveness rollup back to the strategist. **Report-only in v1** (t
 strategist reads + cites it; it does NOT auto-adjust proposals). Full module detail is
 in the CLAUDE.md "Intervention-outcome loop" entry.
 
-### Ships dark — how to enable
-Set **`INTERVENTION_TRACKING_ENABLED=true`** on the **PLATFORM** Railway service (config
-`intervention_tracking_enabled`, default **False**). While off: every registration hook,
-the daily `run_intervention_sync` sweep, and the `_prov_intervention_outcomes` digest
-provider no-op, so the suite behaves exactly as before. No other env/setup needed —
-reuses the existing `async_jobs`/`gsc_scheduler` infra and `campaign_goals` reads (no new
-paid calls, no LLM in the core).
+### Enabled in production (2026-08-28)
+**`INTERVENTION_TRACKING_ENABLED=true` is set on the PLATFORM Railway service** (deploy on
+the merged commit succeeded — verified via Railway MCP). The registration hooks, the daily
+`run_intervention_sync` sweep, and the `_prov_intervention_outcomes` digest provider are all
+live. The **code default stays `False`** (config `intervention_tracking_enabled`), so a
+fresh env still ships dark. No other env/setup — reuses the existing `async_jobs`/
+`gsc_scheduler` infra and `campaign_goals` reads (no new paid calls, no LLM in the core).
+**Accrual timeline:** interventions register on the next qualifying approval/task-done;
+the per-client card + digest rollup stay empty until then; interim signals at ~2 weeks,
+committed verdicts at ~6 weeks.
 
 ### What's live already
 - **Migration `20260828240000_interventions.sql` applied live** (via Supabase MCP):
   the `interventions` ledger table + a nullable `tasks.target` jsonb carrier column.
   Verified (15 cols on `interventions`, `tasks.target` present).
-- **Merged to `main`** — but nothing runs until `INTERVENTION_TRACKING_ENABLED` is
-  flipped on PLATFORM (still default False), so the merge is inert in prod.
+- **Backend PR #871 + frontend PR #874 merged to `main`**, and the flag is flipped on
+  PLATFORM — the loop is running in prod (no longer inert).
 
 ### Key files (for whoever picks this up)
 - `services/interventions.py` — pure verdict/cadence/rollup helpers + registration
@@ -121,7 +124,10 @@ paid calls, no LLM in the core).
   `/complete`). `asana_push.push_proposal` stamps `tasks.target`; `strategist.sanitize_review`
   passes the optional proposal `target` through.
 - Surfacing: `strategy_digest._prov_intervention_outcomes` + one `strategist._SYSTEM` line;
-  read API `GET /clients/{id}/interventions` (`routers/interventions.py`).
+  read API `GET /clients/{id}/interventions` (`routers/interventions.py`); **frontend
+  `InterventionOutcomes` card** (`frontend/src/components/InterventionOutcomes.tsx`, PR #874)
+  mounted in `ClientWorkspace` under the Strategist Review — per-tactic rollup + expandable
+  per-intervention list, dark until the flag is on AND ≥1 intervention is registered.
 - Tests: `tests/test_interventions.py` (pure logic + a drift guard pinning
   `strategist._INTERVENTION_TACTICS` to `interventions.TACTIC_TYPES`), target-passthrough
   cases in `tests/test_strategist.py`.
@@ -131,9 +137,11 @@ paid calls, no LLM in the core).
   linked goals (no per-row N+1).
 
 ### Deliberately not built (v1 boundaries)
-Frontend Action-Plan surface for the rollup; the strategist auto-adjusting proposals from
-effectiveness (the next slice). `applied_at` = first-registration time (approval, in the
-common path) — measuring strictly from task-done is a later refinement.
+The strategist auto-adjusting proposals from effectiveness — the **next slice** (v2), and it
+only becomes meaningful once verdicts accrue (~6 weeks after enablement). `applied_at` =
+first-registration time (approval, in the common path) — measuring strictly from task-done
+is a later refinement. (The frontend rollup surface — an earlier v1 boundary — is now built,
+PR #874.)
 
 ## ⏩ Update — 2026-08-28 · **PACE — enabled in production + its own Slack bot**
 
