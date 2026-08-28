@@ -39,21 +39,28 @@ logger = logging.getLogger(__name__)
 def compute_roi(exp_val: Optional[float], rev_win: Optional[float], *,
                 cost_per_review: float, cost_per_link: float,
                 content_pages: float, content_page_cost: float,
-                monthly_maintenance: float,
+                monthly_maintenance: float, ramp_months: float = 0.0,
                 rd_gap_true: Optional[float] = None) -> dict[str, Any]:
     """Agency cost-to-win economics from a market's expected monthly value and
     its winnability gaps. Pure — no config, no I/O.
 
-    one-time cost-to-win = reviews-to-win × per-review + pages × per-page
+    deliverables      = reviews-to-win × per-review + pages × per-page
         (+ RD gap × per-link, only when a real RD gap is supplied).
-    monthly profit       = expected $/mo − monthly maintenance.
-    payback (months)     = one-time ÷ monthly profit  (None ⇒ never pays back,
-                           i.e. maintenance ≥ the market's value).
+    ramp cost         = ramp_months × monthly maintenance — the labour paid
+        DURING the months-long climb to rank, before any value arrives. This is
+        what makes payback realistic (SEO never recoups a real campaign in
+        weeks); the full sunk investment to win = deliverables + ramp cost.
+    monthly profit    = expected $/mo − monthly maintenance (steady state, once
+        ranked).
+    payback (months)  = ramp_months + (deliverables + ramp cost) ÷ monthly
+        profit — you earn nothing through the ramp, then recoup the sunk cost
+        from profit. None ⇒ never pays back (maintenance ≥ the market's value).
 
-    `rd_gap_true` is the TRUE referring-domain gap to close (the ×10-converted
-    competitor field median, minus the new entrant's ~0) — pass it only for
-    scouted markets; omit board-wide and the link component is 0 + flagged
-    estimated.
+    Simplification: value is modelled as switching on at the end of the ramp
+    (a step, not a gradual climb) — conservative-leaning and honest for a
+    pre-client forecast. `rd_gap_true` is the TRUE referring-domain gap to close
+    (×10-converted competitor field median, minus the new entrant's ~0) — pass
+    it only for scouted markets; omit board-wide and links are 0 + flagged.
     """
     ev = float(exp_val or 0.0)
     reviews_n = max(0.0, float(rev_win or 0.0))
@@ -62,17 +69,22 @@ def compute_roi(exp_val: Optional[float], rev_win: Optional[float], *,
     links_estimated = rd_gap_true is None
     links_rd = 0.0 if links_estimated else max(0.0, float(rd_gap_true))
     links_cost = links_rd * cost_per_link
-    one_time = reviews_cost + content_cost + links_cost
+    deliverables = reviews_cost + content_cost + links_cost
 
     monthly_cost = max(0.0, float(monthly_maintenance))
+    ramp = max(0.0, float(ramp_months))
+    ramp_cost = ramp * monthly_cost
+    sunk = deliverables + ramp_cost           # total invested before payoff
+
     monthly_profit = ev - monthly_cost
-    payback = (round(one_time / monthly_profit, 1)
+    payback = (round(ramp + sunk / monthly_profit, 1)
                if monthly_profit > 0 else None)
 
     return {
         "monthly_profit": round(monthly_profit),
         "monthly_cost": round(monthly_cost),
-        "cost_to_win": round(one_time),
+        "cost_to_win": round(sunk),           # deliverables + ramp labour
+        "ramp_months": round(ramp, 1),
         "payback_months": payback,
         "roi_links_estimated": links_estimated,
         "roi_confidence": "modelled" if links_estimated else "measured",
@@ -83,6 +95,8 @@ def compute_roi(exp_val: Optional[float], rev_win: Optional[float], *,
             "content_pages": round(float(content_pages)),
             "links": round(links_cost),
             "links_rd": round(links_rd),
+            "ramp": round(ramp_cost),
+            "deliverables": round(deliverables),
         },
     }
 
@@ -98,6 +112,7 @@ def roi_params() -> dict[str, float]:
         "content_pages": settings.leadoff_roi_content_pages,
         "content_page_cost": CONTENT_PAGE_COST,
         "monthly_maintenance": settings.leadoff_roi_monthly_maintenance,
+        "ramp_months": settings.leadoff_roi_ramp_months,
     }
 
 

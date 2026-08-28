@@ -60,13 +60,15 @@ interface MarketRow {
   // modelled; the brief measures it from the scouted RD field.
   monthly_profit?: number | null
   monthly_cost?: number | null
-  cost_to_win?: number | null
+  cost_to_win?: number | null      // deliverables + ramp-period labour
+  ramp_months?: number | null
   payback_months?: number | null
   roi_confidence?: 'measured' | 'modelled' | null
   roi_links_estimated?: boolean | null
   cost_breakdown?: {
     reviews: number; reviews_n: number; content: number
     content_pages: number; links: number; links_rd: number
+    ramp: number; deliverables: number
   } | null
 }
 interface BoardResponse {
@@ -685,7 +687,7 @@ export function LeadOff() {
               <KV k="Payback period" v={paybackLabel(brief.payback_months)}
                 hint={brief.payback_months == null
                   ? 'Maintenance ≥ this market’s value — it never recoups the build at these assumptions.'
-                  : `Months to recoup the one-time cost to win (${usd(brief.cost_to_win)}) from monthly profit.`} />
+                  : `Includes ~${brief.ramp_months ?? 0} months of ramp-to-rank (you pay monthly labour before the ranking arrives), then recoup the ${usd(brief.cost_to_win)} sunk cost from monthly profit. SEO doesn’t rank in weeks.`} />
               {brief.cost_breakdown && (
                 <div style={{ fontSize: 11, color: '#64748b', margin: '2px 0 6px', lineHeight: 1.5 }}>
                   Cost to win {usd(brief.cost_to_win)}: {brief.cost_breakdown.reviews_n} reviews {usd(brief.cost_breakdown.reviews)}
@@ -693,6 +695,7 @@ export function LeadOff() {
                   {brief.roi_links_estimated
                     ? ' · links not yet costed'
                     : ` · ${brief.cost_breakdown.links_rd} RD ${usd(brief.cost_breakdown.links)}`}
+                  {brief.ramp_months ? ` · ${brief.ramp_months}-mo ramp ${usd(brief.cost_breakdown.ramp)}` : ''}
                   {' — '}{brief.roi_confidence === 'measured'
                     ? 'measured (scouted RD gap)'
                     : 'modelled forecast; scout for the link gap'}

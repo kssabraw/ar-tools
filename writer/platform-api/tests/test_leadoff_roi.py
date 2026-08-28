@@ -28,10 +28,23 @@ class TestComputeRoi:
         assert r["roi_confidence"] == "measured"
         assert r["cost_breakdown"]["links"] == 1500
 
-    def test_payback_is_one_time_over_monthly_profit(self):
-        r = compute_roi(1449, 16, **COSTS)
-        # 180 / 1314 ≈ 0.14 months
+    def test_payback_without_ramp_is_deliverables_over_profit(self):
+        r = compute_roi(1449, 16, **COSTS)  # ramp_months defaults to 0
+        # 180 / 1314 ≈ 0.14 months (the unrealistic instant-rank case)
         assert r["payback_months"] == round(180 / (1449 - 135), 1)
+        assert r["cost_to_win"] == 180  # ramp 0 ⇒ cost_to_win == deliverables
+
+    def test_ramp_makes_payback_realistic(self):
+        # 4 months of ramp labour before the ranking arrives.
+        r = compute_roi(1449, 16, ramp_months=4, **COSTS)
+        # deliverables 180 + ramp 4×135=540 = 720 sunk; profit 1314
+        assert r["cost_to_win"] == 720
+        assert r["ramp_months"] == 4
+        assert r["cost_breakdown"]["ramp"] == 540
+        assert r["cost_breakdown"]["deliverables"] == 180
+        # payback = ramp + sunk/profit = 4 + 720/1314 ≈ 4.5 months
+        assert r["payback_months"] == round(4 + 720 / 1314, 1)
+        assert r["payback_months"] > 4  # never the sub-month nonsense
 
     def test_never_pays_back_when_maintenance_exceeds_value(self):
         r = compute_roi(100, 16, **COSTS)  # value 100 < maintenance 135

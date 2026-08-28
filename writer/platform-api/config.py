@@ -1807,6 +1807,11 @@ class Settings(BaseSettings):
     leadoff_roi_content_pages: float = 4.0      # pages assumed to rank a market
     leadoff_roi_monthly_maintenance: float = 135.0  # Recipe Engine Baseline Stack/mo (reporting excluded)
     leadoff_roi_rd_target_mult: float = 1.0     # RD-to-win = competitor field median true RD × this
+    # Ramp-to-rank: SEO doesn't rank instantly — you pay the monthly spend for
+    # this many months of ramp BEFORE the ranking (and its value) arrive. This
+    # sunk ramp cost is what makes payback realistic (a market never recoups a
+    # real campaign in weeks). Local SEO typically ranks in ~3-6 months.
+    leadoff_roi_ramp_months: float = 4.0
     # GBP Placement Advisor (leadoff-gbp-placement-plan-v1_0.md §10): the
     # demand-aware "where should the GBP live" read. Free core = the Census
     # ACS block-group demand surface (census_demand.py, $0) ÷ the live
