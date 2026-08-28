@@ -103,6 +103,13 @@ def classify(
     also carry ``requires`` (none|approval|senior, mirroring strategist
     proposals) and ``cost_usd`` (the action's estimated spend). ``client_tier``
     is the EFFECTIVE tier (already capped — see ``effective_tier``).
+
+    INVARIANT for callers: the budget check here is ADVISORY — a pre-filter on
+    the ``budget_left`` snapshot, NOT the spend gate. A caller that will actually
+    spend money MUST additionally reserve it atomically via
+    ``autonomy_budget.reserve`` and proceed only when that returns True. An
+    ``auto`` verdict is necessary but NOT sufficient to spend (two reads can't be
+    atomic; only the reservation RPC is).
     """
     action = str(proposal.get("action") or proposal.get("name") or "").strip()
     requires = str(proposal.get("requires") or "none").strip().lower()
