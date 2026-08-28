@@ -1,6 +1,30 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-28 · **PACE Slack replies — mrkdwn formatting fix** (latest)
+## ⏩ Update — 2026-08-28 · **Director of Operations (cross-agent orchestration) — plan MERGED to `main` (spec only, nothing built)** (latest)
+
+Architecture review of "we have SerMaStr + PACE + QA + the task board — we need an
+orchestrator making sure they work in concert," refined to wanting a **Director of
+Operations for insight into how work flows.** PR #879 (squash `7f6aea6`), docs-only.
+
+**Decision (locked; logged in `decisions.md`): build the eyes, defer the hands.** The
+Director is a **read-only cross-agent read model + reconciler surfaced through SerMaStr**
+— NOT a 5th persona, NOT a scheduling/priority authority. It never touches the three
+tested precedence engines (`reopt_planner` tiers, `autonomy_policy.classify`, `pm_assign`
+holds) — it escalates conflicts as proposals, never arbitrates. Capacity intake-arbitration
+is deferred behind an observed trigger.
+
+**Grounded findings:** no global cross-agent priority decider; no intake-time capacity
+arbitration; no cross-agent health monitor. Incident record is thin — 2 real cross-agent
+failures (neither an arbitration failure) + one live gap (QA armed-but-idle). The
+strategist+autonomy+producer triple-collision has never occurred.
+
+**Spec:** `docs/modules/director-of-operations-plan-v1_0.md`.
+**Not built.** Next step = Phase 1 (D): `qa_idle` detector + seam predicates inside
+`pace_episodes`/`pm_signals`, on a `source_ref`-uniformity prerequisite. Gated on the four
+§11 open questions (seam thresholds; digest cadence; duplicate auto-merge vs. flag-only;
+autonomy pre-flight veto in Phase 1 or hold).
+
+## ⏩ Update — 2026-08-28 · **PACE Slack replies — mrkdwn formatting fix**
 
 **PR #875 (merged to `main`, squash `21cc855`).** PACE's conversational Slack replies
 (`services/pace_agent.py::interpret_pace`) were shipping as raw, unrendered Markdown in

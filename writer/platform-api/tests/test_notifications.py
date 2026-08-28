@@ -93,6 +93,7 @@ def test_pace_kinds_route_to_pace_channel():
         "pace_digest", "pace_chase_plan", "pace_escalation", "pace_report",
         "task_assigned", "task_mention", "task_comment", "task_month_generated",
         "task_overload", "task_due", "task_nudge",
+        "deliverable_link_missing", "deliverable_note",
     ):
         assert notifications.resolve_slack_channel(kind, None, "C_PACE") == "C_PACE", kind
 
@@ -124,9 +125,10 @@ def test_explicit_payload_channel_always_wins():
 # Per-client PACE routing — a client-scoped kind goes to that client's channel
 # ---------------------------------------------------------------------------
 def test_client_scoped_kinds_route_to_client_channel():
-    # The five client-scoped PACE kinds land in the client's own channel when set.
+    # The client-scoped PACE kinds land in the client's own channel when set.
     for kind in ("task_assigned", "task_mention", "task_comment",
-                 "task_month_generated", "task_nudge"):
+                 "task_month_generated", "task_nudge",
+                 "deliverable_link_missing", "deliverable_note"):
         assert notifications.resolve_slack_channel(
             kind, None, "C_PACE", client_channel="C_CLIENT"
         ) == "C_CLIENT", kind
