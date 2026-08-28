@@ -218,6 +218,53 @@ async def score_external_page(
     return result
 
 
+async def score_external_client(
+    client_id: str,
+    keyword: str,
+    *,
+    source_url: Optional[str] = None,
+    source_html: Optional[str] = None,
+    entity_provider: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> dict:
+    """Score an EXTERNAL blog article for a client WITHOUT a run — a standalone
+    'check this page' that persists nothing and never rewrites. Scrapes the URL
+    (or takes pasted HTML), scores it via the nlp-api blog/AEO scorer (national),
+    and returns the ScoreResult (composite + per-engine + deficiencies + entity
+    coverage). `entity_provider` ('textrazor' | 'google') selects the SERP
+    entity-extraction engine. Powers the Blog 'Score' tab; mirrors the run-based
+    `score_external_page` minus the run I/O."""
+    client = _get_client(client_id)
+    if not client:
+        raise HTTPException(status_code=404, detail="client_not_found")
+    business_name, brand_context = _business_fields(client)
+    html = (source_html or "").strip()
+    if not html and source_url:
+        from services.website_scraper import scrapeowl_fetch
+
+        html = (await scrapeowl_fetch(source_url) or "").strip()
+    if not html:
+        raise HTTPException(status_code=422, detail="source_page_empty")
+    payload = {
+        "keyword": keyword or "",
+        "page_content": html,
+        "business_name": business_name,
+        "brand_context": brand_context,
+        "geo_mode": "national",
+    }
+    if entity_provider:
+        payload["entity_provider"] = entity_provider
+    from services import voice_card_service
+
+    payload["voice_card"] = await voice_card_service.get_voice_card(client, user_id=user_id)
+    result = await _post_nlp("/score-blog-page", payload, user_id=user_id)
+    logger.info(
+        "blog_page.external_scored",
+        extra={"client_id": client_id, "composite": result.get("composite_score")},
+    )
+    return result
+
+
 def _cost_of(result: dict) -> Optional[float]:
     """Pipeline cost the same way the orchestrator reads it (top-level cost_usd,
     else metadata.cost_usd)."""

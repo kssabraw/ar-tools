@@ -9,6 +9,8 @@ import { BulkPublishBar } from '../components/publish/BulkPublishBar'
 import { usePagedPublish, PublishTabs, Pager, PublishBadges } from '../components/publish/PublishFilter'
 import { ReoptimizePanel } from '../components/reoptimize/ReoptimizePanel'
 import { serviceAdapter } from '../components/reoptimize/adapters'
+import { ScorePanel } from '../components/score/ScorePanel'
+import { serviceScoreAdapter } from '../components/score/adapters'
 import type { Client, RunListResponse, RunStatus } from '../lib/types'
 
 const TERMINAL: RunStatus[] = ['complete', 'failed', 'cancelled']
@@ -31,7 +33,7 @@ export function ServicePages() {
   const qc = useQueryClient()
   const [text, setText] = useState('')
   // Create pages vs Reoptimize existing ones (bulk external URL / paste).
-  const [mode, setMode] = useState<'create' | 'reopt'>('create')
+  const [mode, setMode] = useState<'create' | 'score' | 'reopt'>('create')
 
   // Service-page planner state.
   const [plan, setPlan] = useState<PlanResult | null>(null)
@@ -196,7 +198,7 @@ export function ServicePages() {
 
       {/* Create vs Reoptimize */}
       <div style={{ display: 'inline-flex', gap: 4, background: '#f1f5f9', borderRadius: 8, padding: 4, margin: '4px 0 12px' }}>
-        {(['create', 'reopt'] as const).map((m) => (
+        {(['create', 'score', 'reopt'] as const).map((m) => (
           <button
             key={m}
             type="button"
@@ -206,11 +208,13 @@ export function ServicePages() {
               background: mode === m ? '#fff' : 'transparent', color: mode === m ? '#0f172a' : '#64748b',
               boxShadow: mode === m ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
             }}
-          >{m === 'create' ? 'Create pages' : 'Reoptimize'}</button>
+          >{m === 'create' ? 'Create pages' : m === 'score' ? 'Score' : 'Reoptimize'}</button>
         ))}
       </div>
 
-      {mode === 'reopt' ? (
+      {mode === 'score' ? (
+        <ScorePanel adapter={serviceScoreAdapter(id ?? '')} />
+      ) : mode === 'reopt' ? (
         <ReoptimizePanel adapter={serviceAdapter(id ?? '')} />
       ) : (
       <>

@@ -21,6 +21,8 @@ import { usePagedPublish, PublishTabs, Pager, PublishBadges } from '../component
 import { PageScoreView } from '../components/localseo/PageScoreView'
 import { ReoptimizeView } from '../components/localseo/ReoptimizeView'
 import { ScoreHistoryView } from '../components/localseo/ScoreHistoryView'
+import { ScorePanel } from '../components/score/ScorePanel'
+import { localSeoScoreAdapter } from '../components/score/adapters'
 import { RankabilityReport } from '../components/localseo/RankabilityReport'
 import { Spinner } from '../components/localseo/Spinner'
 import { EntityProviderSelect, type EntityProvider } from '../components/EntityProviderSelect'
@@ -69,11 +71,12 @@ export function LocalSeoContent() {
     typeof window !== 'undefined' &&
     Boolean(window.localStorage.getItem(`localseo:precheck:${clientId}`))
 
-  const [tab, setTab] = useState<'new' | 'plan' | 'reopt' | 'saved' | 'drafts' | 'history'>(
-    // Deep-link support: /clients/:id/local-seo?tab=saved (or plan / reopt / drafts / history).
+  const [tab, setTab] = useState<'new' | 'plan' | 'score' | 'reopt' | 'saved' | 'drafts' | 'history'>(
+    // Deep-link support: /clients/:id/local-seo?tab=saved (or plan / score / reopt / drafts / history).
     precheckResuming ? 'new'
       : searchParams.get('tab') === 'saved' ? 'saved'
       : searchParams.get('tab') === 'plan' ? 'plan'
+      : searchParams.get('tab') === 'score' ? 'score'
       : searchParams.get('tab') === 'reopt' ? 'reopt'
       : searchParams.get('tab') === 'drafts' ? 'drafts'
       : searchParams.get('tab') === 'history' ? 'history'
@@ -474,7 +477,7 @@ export function LocalSeoContent() {
 
       {/* Tabs */}
       <div style={{ display: 'inline-flex', gap: 4, background: '#f1f5f9', borderRadius: 10, padding: 4, marginBottom: 20 }}>
-        {(['new', 'plan', 'reopt', 'saved', 'drafts', 'history'] as const).map(t => (
+        {(['new', 'plan', 'score', 'reopt', 'saved', 'drafts', 'history'] as const).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -483,7 +486,7 @@ export function LocalSeoContent() {
               background: tab === t ? '#fff' : 'transparent', color: tab === t ? '#0f172a' : '#64748b',
               boxShadow: tab === t ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
             }}
-          >{t === 'new' ? 'New Page' : t === 'plan' ? 'Plan Silo' : t === 'reopt' ? 'Reoptimize' : t === 'saved' ? 'Saved Pages' : t === 'drafts' ? `Drafts${draftPages && draftPages.length ? ` (${draftPages.length})` : ''}` : 'Score History'}</button>
+          >{t === 'new' ? 'New Page' : t === 'plan' ? 'Plan Silo' : t === 'score' ? 'Score' : t === 'reopt' ? 'Reoptimize' : t === 'saved' ? 'Saved Pages' : t === 'drafts' ? `Drafts${draftPages && draftPages.length ? ` (${draftPages.length})` : ''}` : 'Score History'}</button>
         ))}
       </div>
 
@@ -507,6 +510,8 @@ export function LocalSeoContent() {
         />
       ) : tab === 'history' ? (
         <ScoreHistoryView clientId={clientId} />
+      ) : tab === 'score' ? (
+        <ScorePanel adapter={localSeoScoreAdapter(clientId)} />
       ) : tab === 'reopt' ? (
         <ReoptimizeView
           clientId={clientId}

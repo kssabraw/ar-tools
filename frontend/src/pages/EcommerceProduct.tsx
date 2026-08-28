@@ -11,6 +11,8 @@ import type { EcommercePageDetail, EcommercePageListItem, EcommercePageType } fr
 import { GeneratedProductView } from '../components/ecommerce/GeneratedProductView'
 import { ProductScoreView } from '../components/ecommerce/ProductScoreView'
 import { ReoptimizeView } from '../components/ecommerce/ReoptimizeView'
+import { ScorePanel } from '../components/score/ScorePanel'
+import { ecommerceScoreAdapter } from '../components/score/adapters'
 import { useBulkGenerate } from '../components/ecommerce/useBulkGenerate'
 import { Spinner } from '../components/localseo/Spinner'
 import { EntityProviderSelect, type EntityProvider } from '../components/EntityProviderSelect'
@@ -29,7 +31,7 @@ type View =
   | { kind: 'generated'; page: EcommercePageDetail; isNew: boolean; prevScore: number | null }
   | { kind: 'score'; pageUrl?: string; pageHtml?: string }
 
-type Tab = 'new' | 'reopt' | 'saved' | 'drafts'
+type Tab = 'new' | 'score' | 'reopt' | 'saved' | 'drafts'
 
 export function EcommerceProduct() {
   const { id } = useParams<{ id: string }>()
@@ -58,6 +60,7 @@ export function EcommerceProduct() {
   const [tab, setTab] = useState<Tab>(
     // Deep-link support: /clients/:id/ecommerce?tab=saved (or reopt / drafts).
     searchParams.get('tab') === 'saved' ? 'saved'
+      : searchParams.get('tab') === 'score' ? 'score'
       : searchParams.get('tab') === 'reopt' ? 'reopt'
         : searchParams.get('tab') === 'drafts' ? 'drafts'
           : 'new',
@@ -280,7 +283,7 @@ export function EcommerceProduct() {
 
       {/* Tabs */}
       <div style={{ display: 'inline-flex', gap: 4, background: '#f1f5f9', borderRadius: 10, padding: 4, marginBottom: 20 }}>
-        {(['new', 'reopt', 'saved', 'drafts'] as const).map(t => (
+        {(['new', 'score', 'reopt', 'saved', 'drafts'] as const).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -289,7 +292,7 @@ export function EcommerceProduct() {
               background: tab === t ? '#fff' : 'transparent', color: tab === t ? '#0f172a' : '#64748b',
               boxShadow: tab === t ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
             }}
-          >{t === 'new' ? 'New Page' : t === 'reopt' ? 'Reoptimize' : t === 'saved' ? 'Saved Pages' : `Drafts${draftPages && draftPages.length ? ` (${draftPages.length})` : ''}`}</button>
+          >{t === 'new' ? 'New Page' : t === 'score' ? 'Score' : t === 'reopt' ? 'Reoptimize' : t === 'saved' ? 'Saved Pages' : `Drafts${draftPages && draftPages.length ? ` (${draftPages.length})` : ''}`}</button>
         ))}
       </div>
 
@@ -330,6 +333,8 @@ export function EcommerceProduct() {
           onPurge={async (pid) => { await ecommerceApi.purgePage(pid); refreshSaved() }}
           onPurgeAll={async () => { await ecommerceApi.purgeDrafts(clientId); refreshSaved() }}
         />
+      ) : tab === 'score' ? (
+        <ScorePanel adapter={ecommerceScoreAdapter(clientId)} />
       ) : tab === 'reopt' ? (
         <ReoptimizeView
           clientId={clientId}
