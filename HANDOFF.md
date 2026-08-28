@@ -24,7 +24,12 @@ Chase Plan, workload report, escalations) and the suite-wide `task_overload` /
 falls back to the master channel**, so nothing is lost — the feature is inert
 until a channel is set per-client. `resolve_slack_token` posts every PACE kind
 under the PACE bot token, so **the PACE bot must be `/invite`d to each client
-channel** you configure (same requirement as `#pace`). Owner ruling: client-scoped
+channel** you configure (same requirement as `#pace`) — but if it isn't (or the id
+is wrong/archived), the message **retries on the master channel** rather than being
+lost (recorded `channels_sent.slack="ok_master_fallback"` + a warning log), so a
+misconfigured client channel degrades gracefully. Dispatch is also per-channel
+idempotent (a reaper requeue never double-posts) and a PACE-only Slack setup (no
+SerMaStr default channel) now delivers PACE kinds. Owner ruling: client-scoped
 only + master fallback; splitting the digest/Chase Plan per-client is a deferred
 follow-up.
 
