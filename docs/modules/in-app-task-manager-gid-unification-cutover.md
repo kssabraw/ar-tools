@@ -125,19 +125,27 @@ filters on `assignee_id`). `pm_assign` already uses `member_id`.
 Workload pages load; a monthly generation + an auto-placement both assign
 correctly.
 
-#### Phase 2b follow-up — the two RETAINED columns (needs an AsanaTasks rewire)
+#### Phase 2b follow-up — the two RETAINED columns
 
 `asana_client_task_templates.assignee_gid` and
-`asana_client_projects.auto_assignee_gids` are **kept** (still dual-written)
-because the legacy **AsanaTasks** UI edits per-client templates + auto-assignee
-eligibility by Asana gid, and the native monthly generation still depends on
-`asana_client_task_templates`. Dropping these needs that editor rewired to
-member ids first (its assignee picker → roster members; its auto-assign chips →
-`auto_assignee_ids`). Once rewired:
+`asana_client_projects.auto_assignee_gids` are **kept** (still written) because
+the **still-active Asana monthly-generation path** (`asana_monthly.py`, the one
+the scheduler runs while `native_tasks_enabled` is off) reads them to assign
+*Asana* tasks by gid.
+
+**AsanaTasks editor rewired (DONE):** its template assignee picker now offers
+roster members and dual-writes `assignee_id` + `assignee_gid`; its auto-assign
+chips toggle member ids and send `auto_assignee_ids` (the backend cross-fills
+the legacy gid list). So the native template config is now correct (editing a
+template no longer nulls its `assignee_id`), and the Asana path keeps its gids.
+A login-less VA is native-only (no gid → excluded from the Asana gid lists).
+
+**When to drop:** only AFTER the native cutover (`native_tasks_enabled=true`)
+retires the Asana monthly path — at that point nothing reads the gid columns:
 
 ```sql
-alter table asana_client_task_templates drop column assignee_gid;   -- + model field
-alter table asana_client_projects       drop column auto_assignee_gids;  -- + model/cross-fill
+alter table asana_client_task_templates drop column assignee_gid;        -- + model field
+alter table asana_client_projects       drop column auto_assignee_gids;  -- + model field / cross-fill
 ```
 
 ### The rename (Phase 2c — optional, recommended to DEFER)
