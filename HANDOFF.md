@@ -1,6 +1,20 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-28 · **QA Agent — ENABLED in production + business-name false-fail fixed** (latest)
+## ⏩ Update — 2026-08-28 · **QA Agent — "For QA" drawer button (activation gap closed)** (latest)
+
+**PR #865 (merged to `main`, commit `5315266`).** Added a **For QA** button to the
+task detail drawer (`frontend/src/components/tasks/TaskDetail.tsx`) — one click moves
+a top-level task into the **In QA** status via the existing `patchField('status_key',
+'in_qa')` path, which (with `QA_ENABLED` on) fires the automatic QA review through the
+backend `on_task_status_change` hook. This is the direct fix for the "QA is enabled but
+idle" gap below: the team now has a deliberate one-click way to send a finished
+deliverable to QA without waiting on auto-advance Rule B (which never fires on the
+imported process-marker checklists). Guards: shown only for **non-completed top-level**
+tasks **not already in In QA**, and only when an active `in_qa` status exists on the
+board; the move is audited in the activity feed like any other status edit. Frontend-only
+change (typecheck clean; the Python test workflows don't gate it).
+
+## ⏩ Update — 2026-08-28 · **QA Agent — ENABLED in production + business-name false-fail fixed**
 
 The **QA Agent** (deliverable reviewer — full detail in the CLAUDE.md "QA Agent"
 entry, `docs/modules/qa-agent-manual-v1_0.md`, and `docs/sops/QA_Checklists.md`)
@@ -39,7 +53,8 @@ the workflow feeds it. Confirmed from live data (2026-08-28):
 route finished work through the **In QA** column (the team already has a manual
 "QA'd" step everywhere — that's the natural place), OR restructure the generated
 checklists to contain real work-item subtasks so Rule B auto-advances. Meanwhile the
-**Run QA button** (task drawer) and PACE's "run QA on X" work on demand today.
+**"For QA" drawer button** (PR #865 — one click → In QA → automatic review), the
+**Run QA button** (task drawer), and PACE's "run QA on X" all work on demand today.
 
 **Conventions to socialize before automatic QA is useful** (else link-building
 reviews return *needs-human*, which is harmless but unhelpful): a **`Deliverable
