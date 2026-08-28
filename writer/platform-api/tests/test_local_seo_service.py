@@ -712,8 +712,13 @@ class _FakeAsyncClient:
         return self._resp
 
 
-def _publish_supabase(page_row, client_row):
-    """execute() returns: page (get_page) → client → update."""
+def _publish_supabase(page_row, client_row, compliance_mode=None):
+    """execute() returns: page (get_page) → content-compliance mode → client → update.
+
+    The compliance-mode fetch is the content_compliance guardrail's per-client
+    lookup that runs before any destination write; it defaults to an unregulated
+    client (mode None → 'off'), so the guardrail is a no-op in these tests.
+    """
     supabase = MagicMock()
     table = MagicMock()
     supabase.table.return_value = table
@@ -721,6 +726,7 @@ def _publish_supabase(page_row, client_row):
         getattr(table, m).return_value = table
     table.execute.side_effect = [
         MagicMock(data=page_row),
+        MagicMock(data={"content_compliance_mode": compliance_mode}),
         MagicMock(data=client_row),
         MagicMock(data=[{"id": "page-1"}]),
     ]
