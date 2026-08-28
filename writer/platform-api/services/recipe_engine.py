@@ -351,6 +351,28 @@ def allocate(
 # ─────────────────────────────────────────────────────────────────────────────
 # Auto-diagnosis from suite data
 # ─────────────────────────────────────────────────────────────────────────────
+def review_gap_from_gbp(gbp: "dict | None") -> "tuple[Optional[int], Optional[str]]":
+    """Reviews-to-threshold gap from the client's stored GBP blob. Pure.
+
+    Reads the review count from `clients.gbp` via the canonical
+    `gbp_service.rating_and_review_count` (which tolerates the historical key
+    variants). Returns `(review_gap, signal_text)` when below the 25-review
+    threshold, else `(None, None)` — at/above threshold or no count captured.
+
+    NOTE: the earlier `build_diagnosis` selected a top-level
+    `clients.gbp_review_count` column that does not exist, so the PostgREST
+    select errored, was swallowed by the try/except, and the review-gap branch
+    silently no-opped for EVERY client. The real count lives in the `clients.gbp`
+    JSONB — this helper reads it correctly.
+    """
+    from services.gbp_service import rating_and_review_count
+
+    _, reviews = rating_and_review_count(gbp)
+    if reviews is not None and reviews < REVIEW_THRESHOLD:
+        return REVIEW_THRESHOLD - int(reviews), f"GBP review count {reviews} < {REVIEW_THRESHOLD}"
+    return None, None
+
+
 def build_diagnosis(client_id: str) -> dict:
     """Derive the Diagnose-and-Fund inputs from what the suite already knows.
 
@@ -364,19 +386,20 @@ def build_diagnosis(client_id: str) -> dict:
 
     diagnosis["frozen"] = is_frozen(client_id)
 
-    # Reviews vs the 25 threshold (Maps SOP Part 3).
+    # Reviews vs the 25 threshold (Maps SOP Part 3). The count lives in the
+    # `clients.gbp` JSONB (read via the canonical helper), NOT a top-level column.
     try:
         client = (
             supabase.table("clients")
-            .select("gbp_review_count, retainer_monthly, is_sab, client_type")
+            .select("gbp")
             .eq("id", client_id)
             .single()
             .execute()
         ).data or {}
-        reviews = client.get("gbp_review_count")
-        if reviews is not None and reviews < REVIEW_THRESHOLD:
-            diagnosis["review_gap"] = REVIEW_THRESHOLD - int(reviews)
-            diagnosis["signals"]["reviews"] = f"GBP review count {reviews} < {REVIEW_THRESHOLD}"
+        gap, signal = review_gap_from_gbp(client.get("gbp"))
+        if gap is not None:
+            diagnosis["review_gap"] = gap
+            diagnosis["signals"]["reviews"] = signal
     except Exception as exc:
         logger.warning("recipe.diagnosis_reviews_failed", extra={"client_id": client_id, "error": str(exc)})
 
