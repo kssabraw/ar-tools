@@ -26,7 +26,7 @@ try:
     from fastapi.responses import StreamingResponse
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel
-    from typing import List, Dict, Optional
+    from typing import Callable, List, Dict, Optional
     from slowapi import Limiter, _rate_limit_exceeded_handler
     from slowapi.util import get_remote_address
     from slowapi.errors import RateLimitExceeded
@@ -10115,6 +10115,7 @@ async def _ecommerce_fix_voice(
     brand_context: str,
     serp_analysis: Optional[dict],
     serp_entities: list,
+    within_budget: Optional[Callable[[], bool]] = None,
 ) -> tuple:
     """Rewrite until the page sounds like the client, or we run out of passes.
 
@@ -10123,6 +10124,11 @@ async def _ecommerce_fix_voice(
     guide identically. Triggers on either a deterministic `critical` finding or
     a scorecard below the pass bar, and re-scores after each pass so the stored
     verdict describes the page that actually ships.
+
+    `within_budget` (optional) gates the START of each pass AFTER the first on
+    the caller's wall-clock budget — the first pass always runs (a critical
+    voice finding is publish-blocking, so it earns one repair attempt whatever
+    the clock says). None → never gated (exactly today's behaviour).
     """
     spend = {"endpoint": "ecommerce-voice-fix", "model": GENERATION_MODEL,
              "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
@@ -10139,6 +10145,16 @@ async def _ecommerce_fix_voice(
     _best = {"html": content_html, "schema": schema_json, "title": page_title,
              "gaps": content_gaps, "sc": scorecard}
     for _pass in range(1, MAX_VOICE_CORRECTION_PASSES + 1):
+        # First pass always runs (publish-blocking critical findings earn one
+        # repair whatever the clock says); gate later passes on the caller's
+        # wall-clock budget so the voice loop can't itself run away.
+        if _pass > 1 and within_budget is not None and not within_budget():
+            logger.info(
+                "ecommerce voice-fix: time budget spent before pass %d — "
+                "shipping best page so far (voice score=%s)",
+                _pass, (_best.get("sc") or {}).get("score"),
+            )
+            break
         corrections = "\n\n".join(part for part in (
             vcard.violations_to_corrections(scorecard.get("violations")),
             vcard.voice_deficiency_text(scorecard.get("deficiencies")),
@@ -10216,6 +10232,17 @@ async def generate_ecommerce_page(request: Request, body: GenerateEcommerceReque
 
     async def _worker(q: asyncio.Queue):
         client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
+        _worker_start = time.monotonic()
+
+        def _within_time_budget() -> bool:
+            """False once the generate wall-clock budget is spent. Gates the
+            START of each optional voice-correction pass after the first so the
+            page can't stack passes into a runaway run; the initial write + first
+            score are never gated. Shares GENERATION_TIME_BUDGET_SECONDS with
+            reoptimize-page (one dial)."""
+            return (GENERATION_TIME_BUDGET_SECONDS <= 0
+                    or (time.monotonic() - _worker_start) < GENERATION_TIME_BUDGET_SECONDS)
+
         await q.put({"step": "progress", "progress": 5, "message": "Starting…"})
 
         # SERP analysis (national scope) unless supplied or explicitly skipped.
@@ -10432,6 +10459,7 @@ Primary keyword: {body.keyword}
             keyword=body.keyword, page_type=page_type, brand_context=brand_context,
             serp_analysis=serp_analysis_dict,
             serp_entities=(serp_analysis_dict or {}).get("google_entities", [])[:_ECOMMERCE_RDFA_MAX_ENTITIES],
+            within_budget=_within_time_budget,
         )
         token_rec["input_tokens"]  += voice_tok["input_tokens"]
         token_rec["output_tokens"] += voice_tok["output_tokens"]
@@ -10520,6 +10548,18 @@ async def reoptimize_ecommerce_page(request: Request, body: ReoptimizeEcommerceR
 
     async def _worker(q: asyncio.Queue):
         client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
+        _worker_start = time.monotonic()
+
+        def _within_time_budget() -> bool:
+            """False once the reoptimize wall-clock budget is spent. Gates the
+            START of each optional improvement pass (auto-retry rewrite, voice
+            rewrite) so the loop can't stack passes into a 15–20 minute run; a
+            pass already in flight still finishes. Pass 1 (the rewrite that
+            produces the page and its verdict) is never gated. Shares
+            GENERATION_TIME_BUDGET_SECONDS with generate-page (one dial)."""
+            return (GENERATION_TIME_BUDGET_SECONDS <= 0
+                    or (time.monotonic() - _worker_start) < GENERATION_TIME_BUDGET_SECONDS)
+
         await q.put({"step": "progress", "progress": 10, "message": "Fetching existing page…"})
 
         existing_html = body.existing_page_html or ""
@@ -10614,6 +10654,17 @@ EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT inven
         current_def_text = _ecommerce_deficiency_text(body.deficiencies)
         best: Optional[dict] = None
         for pass_num in range(1, MAX_ECOMMERCE_AUTO_PASSES + 1):
+            # Pass 1 always runs (it produces the page + its verdict); gate the
+            # START of each later refinement pass on the shared wall-clock budget
+            # so the loop can't stack a page into a runaway multi-minute run.
+            if pass_num > 1 and not _within_time_budget():
+                logger.info(
+                    "reoptimize-ecommerce: %ss time budget spent before pass %d — "
+                    "shipping best page so far (score=%s)",
+                    GENERATION_TIME_BUDGET_SECONDS, pass_num,
+                    (best or {}).get("score"),
+                )
+                break
             await q.put({"step": "progress",
                          "progress": min(88, 40 + pass_num * 12),
                          "message": ("Rewriting your page…" if pass_num == 1
@@ -10712,6 +10763,7 @@ EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT inven
             keyword=body.keyword, page_type=page_type, brand_context=brand_context,
             serp_analysis=body.serp_analysis,
             serp_entities=(body.serp_analysis or {}).get("google_entities", [])[:_ECOMMERCE_RDFA_MAX_ENTITIES],
+            within_budget=_within_time_budget,
         )
         _accumulate(voice_tok)
 
