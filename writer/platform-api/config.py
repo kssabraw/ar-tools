@@ -1561,6 +1561,20 @@ class Settings(BaseSettings):
     # workload thresholds reuse the asana_* defaults above — one knob set for
     # both systems during the transition.
     native_tasks_enabled: bool = False
+    # Parallel-period Asana auto-import: once native is the system of record
+    # (native_tasks_enabled), the suite no longer writes to Asana, but the team
+    # may still create/move tasks directly in Asana while they wean off it. This
+    # daily job re-runs the (idempotent, gap-fill) Asana→native importer so those
+    # changes flow into the native board automatically instead of needing a
+    # manual "Import Asana boards" click. Default True but inert unless it should
+    # run: gated on native_tasks_enabled (native is the live board), Asana being
+    # configured (token + workspace), AND >=1 client→project mapping — so a fresh
+    # environment does nothing, a rollback quiesces it, and it self-retires once
+    # the Asana subscription is cancelled (creds removed).
+    asana_auto_import_enabled: bool = True
+    # Skip the daily import if a completed one ran within this window — robust to
+    # the daily scheduler block re-firing across a same-day deploy restart.
+    asana_auto_import_interval_hours: int = 20
     # Per-file cap for task attachments (the bucket also enforces 20 MB).
     task_attachment_max_mb: int = 20
     # Suite auto-integration producers (PRD §11) — each is double-gated on
