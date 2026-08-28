@@ -137,6 +137,9 @@ async def get_proximity(
 async def get_placement(
     city_id: int,
     category_id: str,
+    target_lat: float | None = None,
+    target_lng: float | None = None,
+    target_radius_miles: float | None = None,
     auth: dict = Depends(require_auth),
 ) -> dict:
     """The demand-aware GBP Placement Advisor for one market (placement plan
@@ -149,7 +152,9 @@ async def get_placement(
         return {"available": False, "reason": "placement_disabled"}
     from services.census_demand import market_placement
     try:
-        return await market_placement(city_id, category_id)
+        return await market_placement(
+            city_id, category_id, target_lat=target_lat, target_lng=target_lng,
+            target_radius_miles=target_radius_miles)
     except Exception:
         logger.warning("leadoff.placement_failed", exc_info=True)
         return {"available": False, "reason": "placement_error"}

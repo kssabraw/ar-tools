@@ -261,6 +261,29 @@ class TestCoverageGreedy:
         # the big-blob pin owns more rankable demand than the small-blob pin
         assert zones[0]["covers_households"] > zones[1]["covers_households"]
 
+    def test_focus_restricts_zones_to_the_target_area(self):
+        # Focus on the SMALL blob: every zone must sit near it, even though the
+        # big blob has far more demand — "best spot to serve THIS area".
+        surface = _two_blob_surface()
+        built = build_zones(_BLOB_CENTER[0], _BLOB_CENTER[1], surface, [],
+                            radius_miles=16, zone_count=3,
+                            coverage_greedy=True, coverage_radius_miles=3.0,
+                            focus_lat=_BLOB_B[0], focus_lng=_BLOB_B[1],
+                            focus_radius_miles=3.0)
+        assert built["focused"] is True
+        assert built["zones"], "focus should still return zones"
+        # all zones within the focus radius of the small blob; none at the big one
+        assert all(haversine_miles(z["lat"], z["lng"], _BLOB_B[0], _BLOB_B[1]) <= 3.0
+                   for z in built["zones"])
+        assert _nearest(built["zones"], _BLOB_A) > 3.0
+
+    def test_no_focus_is_citywide(self):
+        surface = _two_blob_surface()
+        built = build_zones(_BLOB_CENTER[0], _BLOB_CENTER[1], surface, [],
+                            radius_miles=16, zone_count=2, coverage_greedy=True,
+                            coverage_radius_miles=3.0)
+        assert built["focused"] is False and built["focus"] is None
+
     def test_early_stops_when_demand_exhausted(self):
         # one tiny blob, 4 zones requested → only demand-bearing zones returned
         surface = build_demand_surface([bg(LR[0], LR[1], 5000)])

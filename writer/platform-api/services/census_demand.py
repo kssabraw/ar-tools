@@ -540,7 +540,10 @@ async def _name_and_filter_zones(zones: list[dict[str, Any]]) -> list[dict[str, 
     return kept
 
 
-async def market_placement(city_id: int, category_id: str) -> dict[str, Any]:
+async def market_placement(city_id: int, category_id: str, *,
+                           target_lat: float | None = None,
+                           target_lng: float | None = None,
+                           target_radius_miles: float | None = None) -> dict[str, Any]:
     """The GBP placement read for one market. Degrades explicitly, never raises:
       * no city coords            → available:false, city_has_no_coordinates
       * no live competitor pins   → available:false, no_gbp_pins (+ map-refresh nudge)
@@ -603,6 +606,8 @@ async def market_placement(city_id: int, category_id: str) -> dict[str, Any]:
         })
         return base
 
+    focus_radius = (target_radius_miles if target_radius_miles is not None
+                    else settings.placement_target_radius_miles)
     built = core.build_zones(
         center[0], center[1], surface, pins,
         radius_miles=radius,
@@ -611,7 +616,10 @@ async def market_placement(city_id: int, category_id: str) -> dict[str, Any]:
         zone_count=settings.placement_zone_count,
         min_separation_miles=settings.placement_min_separation_miles,
         coverage_greedy=settings.placement_coverage_greedy,
-        coverage_radius_miles=settings.placement_coverage_radius_miles)
+        coverage_radius_miles=settings.placement_coverage_radius_miles,
+        focus_lat=target_lat, focus_lng=target_lng,
+        focus_radius_miles=(focus_radius if target_lat is not None
+                            and target_lng is not None else None))
     built["zones"] = await _name_and_filter_zones(built["zones"])
     # add compact maps deep-links for each surviving zone
     for z in built["zones"]:
