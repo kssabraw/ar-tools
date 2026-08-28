@@ -137,6 +137,12 @@ interface TryoutRow {
   rating: number
   namekw: number
   exact_open: number
+  // Agency cost-to-win ROI (attached at tryout completion, same as the board).
+  monthly_profit?: number | null
+  payback_months?: number | null
+  cost_to_win?: number | null
+  ramp_months?: number | null
+  roi_confidence?: 'measured' | 'modelled' | null
 }
 interface Tryout {
   id: string
@@ -1030,7 +1036,7 @@ function TryoutsView() {
               <div className="scroll-x">
                 <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 780, fontSize: 13 }}>
                   <thead>
-                    <tr>{['Grade', 'Category', 'Exp $/mo', 'ROI $/rev', 'Demand', 'Supply',
+                    <tr>{['Grade', 'Category', 'Exp $/mo', 'Profit $/mo', 'Payback', 'Demand', 'Supply',
                           'Rev to win', 'Field ★', 'Cat open', 'Field pages', 'Field mentions', 'Map'].map(h => (
                       <th key={h} style={thStyle}>{h}</th>
                     ))}</tr>
@@ -1045,7 +1051,14 @@ function TryoutsView() {
                         <td style={tdStyle}><GradeChip grade={r.grade} /></td>
                         <td style={{ ...tdStyle, fontWeight: 600 }}>{r.category}</td>
                         <td style={{ ...tdStyle, fontWeight: 600 }}>{usd(r.exp_val)}</td>
-                        <td style={tdStyle}>{r.roi?.toFixed(1)}</td>
+                        <td style={{ ...tdStyle, fontWeight: 600, color: (r.monthly_profit ?? 0) > 0 ? '#177245' : '#b3362b' }}
+                          title={r.cost_to_win != null ? `Cost to win ${usd(r.cost_to_win)} (${r.roi_confidence}).` : undefined}>
+                          {usd(r.monthly_profit)}
+                        </td>
+                        <td style={tdStyle}
+                          title={r.ramp_months != null ? `Includes a ~${r.ramp_months}-mo ramp-to-rank.` : undefined}>
+                          {paybackLabel(r.payback_months)}
+                        </td>
                         <td style={tdStyle}>{r.vol?.toLocaleString() ?? '—'}</td>
                         <td style={tdStyle}>{r.supply}</td>
                         <td style={tdStyle}>{r.rev_win}</td>
