@@ -121,6 +121,8 @@ import ecommerce_mcs as mcs  # Max-Cosine Synthesis (AIO capture + entity + head
 import ecommerce_facts as ecom_facts  # invariant public-spec auto-research (cited)
 import ecommerce_loop as ecom_loop  # auto-retry loop stop decisions (pure)
 import voice_card as vcard  # brand voice + ICP: distilled card, prompt block, hard checks
+import length_fit  # deterministic length-fit engine (SERP avg +20% target)
+import section_edit  # split/splice generated pages by <section> for scoped corrective passes
 from blog_structure import (  # deterministic blog/AEO structure checks (R4/R6/R7)
     compute_blog_structural_aeo as _compute_blog_structural_aeo,
     detect_blog_structure as _detect_blog_structure,
@@ -254,6 +256,23 @@ _ECOM_RESEARCH_MAX_TURNS = ECOMMERCE_FACT_RESEARCH_MAX_SEARCHES + 3  # search ro
 # same page reoptimizes to the same result run-to-run.
 MAX_ECOMMERCE_AUTO_PASSES = int(os.environ.get("MAX_ECOMMERCE_AUTO_PASSES", "3"))
 
+# Local SEO generate-page length safety net: run the extra length-trim rewrite
+# pass ONLY when the freshly generated page is over the SERP target by at least
+# this ratio (1.4 = 40% over). The authoritative word budget in the generation
+# prompt keeps most pages near target, so the trim — a full ~90s rewrite + a
+# ~90s re-score — should fire rarely, not on every mildly-long page. Set to 1.0
+# to trim on any overage, or very high to disable the generation-time trim
+# (length is still scored, and the bulk reoptimizer still trims live pages).
+LENGTH_TRIM_MIN_RATIO = float(os.environ.get("LENGTH_TRIM_MIN_RATIO", "1.4"))
+
+# Wall-clock budget for generate-page's post-generation improvement passes. The
+# initial page generation + its first score always run (that's the page + its
+# verdict); once this many seconds have elapsed, no NEW length-trim or voice-
+# correction pass is STARTED — a pass already in flight finishes, then the best
+# page so far ships. Caps the sequential rewrite→rescore loop that can otherwise
+# stack to 10+ minutes for a brand-guide client. 0 disables the cap.
+GENERATION_TIME_BUDGET_SECONDS = int(os.environ.get("GENERATION_TIME_BUDGET_SECONDS", "240"))
+
 # Plateau guard: the minimum composite gain a pass must produce to justify
 # running another one. A run that has flat-lined and one that is still climbing
 # are otherwise treated identically — both burn every pass at ~3m40s and ~$0.22
@@ -277,13 +296,71 @@ ECOMMERCE_MIN_PASS_GAIN = float(os.environ.get("ECOMMERCE_MIN_PASS_GAIN", "0"))
 # stay self-contained. Distillation is categorization-only and cheap, so Haiku
 # is sufficient — it extracts stated rules, it never judges prose.
 VOICE_CARD_MODEL = os.environ.get("VOICE_CARD_MODEL", "claude-haiku-4-5-20251001")
+# Per-section voice-drift localizer. Before the (single, expensive Sonnet)
+# corrective pass, one cheap Haiku call audits each body section against the
+# brand-voice guide and names the sections that drift, so the corrective pass
+# targets exactly those instead of sweeping the whole page blind — mid-page
+# service descriptions are where voice drifts, and a single ~5k-token pass can't
+# re-voice 5-6 sections AND fix SEO if it doesn't know where to look. Best-effort:
+# a failure or empty audit falls back to the page-wide sweep rules alone.
+VOICE_LOCALIZE_MODEL = os.environ.get("VOICE_LOCALIZE_MODEL", "claude-haiku-4-5-20251001")
+VOICE_LOCALIZE_ENABLED = os.environ.get(
+    "VOICE_LOCALIZE_ENABLED", "true"
+).lower() in ("1", "true", "yes", "on")
 VOICE_ENFORCEMENT_ENABLED = os.environ.get(
     "VOICE_ENFORCEMENT_ENABLED", "true"
 ).lower() in ("1", "true", "yes", "on")
 # Corrective rewrite passes run when the deterministic check finds a violation
 # a page must not ship with. Separate from the score-driven auto-retry: a
 # forbidden word is a fact, not a score, and gets its own targeted pass.
-MAX_VOICE_CORRECTION_PASSES = int(os.environ.get("MAX_VOICE_CORRECTION_PASSES", "2"))
+MAX_VOICE_CORRECTION_PASSES = int(os.environ.get("MAX_VOICE_CORRECTION_PASSES", "3"))
+
+# The generate-page second pass now corrects BOTH axes: it fires when the voice
+# scorecard needs a rewrite OR the SEO composite fell short (voice is anchored in
+# pass 1 now, so a shortfall is most likely SEO). This is the SEO bar below which
+# the composite is treated as "fell short" and, with at least one deficient
+# engine, earns a corrective pass. Pages had been landing ~83-87, so 85 targets
+# the low end without adding a pass to already-strong pages; the time budget
+# still caps the loop and keep-best guarantees no regression ships.
+SEO_SECOND_PASS_THRESHOLD = float(os.environ.get("SEO_SECOND_PASS_THRESHOLD", "85"))
+
+
+def _voice_rank_key(scorecard: Optional[dict]) -> tuple:
+    """Ranking key for keep-best voice correction: fewest critical violations
+    first, then highest voice score. A higher tuple = a better page to ship.
+
+    Used so a corrective rewrite loop ships its strongest pass, not merely its
+    last one — a targeted rewrite can score LOWER than the pass before it, and
+    keep-latest would then ship the regression. `None`/unscored ranks below any
+    real score (a scored page beats an unscored one at equal critical count)."""
+    sc = scorecard or {}
+    crit = sc.get("critical_count") or 0
+    score = sc.get("score")
+    score = score if isinstance(score, (int, float)) and not isinstance(score, bool) else float("-inf")
+    return (-crit, score)
+
+
+def _combined_rank_key(seo_score, voice: Optional[dict], seo_threshold: float) -> tuple:
+    """Keep-best key for the two-axis second pass: rank a (SEO, voice) state so
+    the page that best clears BOTH bars ships, never one axis won at the other's
+    expense. Priority: fewest voice criticals, then BOTH bars cleared, then how
+    many bars are cleared, then the summed score. A pass that lifts SEO but
+    regresses voice (voice.needs_rewrite flips true) therefore ranks below the
+    pre-pass state and is not shipped — which is how "re-verify voice didn't
+    regress" is enforced. Mirrors `_voice_rank_key` for the voice-only fields."""
+    v = voice or {}
+    crit = v.get("critical_count") or 0
+    vscore = v.get("score")
+    vscore = vscore if isinstance(vscore, (int, float)) and not isinstance(vscore, bool) else None
+    sscore = seo_score if isinstance(seo_score, (int, float)) and not isinstance(seo_score, bool) else None
+    seo_ok = sscore is not None and sscore >= seo_threshold
+    # No voice card → voice is not a bar (treat as satisfied); with a card, the
+    # bar is "not needing a rewrite".
+    voice_ok = (not v) or (not v.get("needs_rewrite"))
+    both = 1 if (seo_ok and voice_ok) else 0
+    cleared = (1 if seo_ok else 0) + (1 if voice_ok else 0)
+    total = (sscore or 0.0) + (vscore or 0.0)
+    return (-crit, both, cleared, total)
 
 
 async def _distill_voice_card(client, brand_voice: Optional[dict], detected_icp: Optional[dict]) -> dict:
@@ -435,7 +512,13 @@ async def _research_public_facts(client, entity: str, page_type: str, focus: Opt
         logger.warning(f"ecommerce fact research failed (non-fatal): {_fe}")
         return "", zero, []
 
-_GEN_SYSTEM_PROMPT = """You are an expert local SEO content writer. Generate a complete, publish-ready local service page following the exact structure below.
+_GEN_SYSTEM_PROMPT = """You are writing ONE specific local business's service page — in that business's own brand voice, for that business's specific customer. This is the FIRST requirement, ahead of every SEO rule below.
+
+The page must read as unmistakably THIS client and speak to the customer described in the "BRAND VOICE & AUDIENCE" block in the user message. A page that is technically well-optimized but could be published on a competitor's site by swapping the business name is a FAILURE, not a pass — brand voice and audience fit are graded as their own headline result, separate from the SEO score. Lead every section with what only this client can say (their specific proof, differentiators, and the exact concerns of the customer described), in their word choice, tone, grammatical person, and CTA wording.
+
+You are ALSO an expert local SEO content writer. Everything below tells you WHAT to cover and HOW to structure the page so it ranks and is retrievable by AI assistants — execute all of it, but always IN THIS CLIENT'S VOICE and for THIS customer. Where an SEO or structure rule below conflicts with the client's brand-voice block on word choice, tone, grammatical person, or CTA wording, the brand-voice block WINS; the structural requirements (answer-first openings, headings, lists, the table, schema, length budget) still apply — express them in the client's voice rather than abandoning either.
+
+Generate a complete, publish-ready local service page following the exact structure below.
 
 OUTPUT FORMAT
 Return valid HTML only. No markdown. No explanations outside the HTML. Structure:
@@ -489,6 +572,17 @@ optimised for Answer Engine Optimisation. Follow all of them in every section.
    it into two or more separate <p> blocks so each renders as its own visually distinct
    paragraph. This applies to EVERY section without exception — the intro, USP, service
    descriptions, and the local/geo section included.
+   SENTENCE RHYTHM — VARY YOUR SENTENCE LENGTHS: Only the OPENING sentence of each paragraph
+   must stand alone and be liftable (rule 1). The one or two sentences that follow it should
+   VARY in length and cadence — a short, punchy sentence beside a longer, fuller one — so the
+   prose reads like a person wrote it, not a template. Do NOT make every sentence the same
+   medium length: that flat, uniform cadence is exactly what makes AEO-optimized pages read
+   robotically and hurts the writing-style read. Vary the rhythm WITHIN the ≤3-sentence /
+   ≤45-word paragraph cap above — this is about cadence, never a licence to write longer.
+   ✗ Monotone: "We restore tile roofs across Melbourne. Our crews handle every repair with care.
+     Each project is completed to a high standard." (three same-length sentences in a row)
+   ✓ Varied:   "We restore tile roofs across Melbourne. Cracked, leaking, storm-hit — we handle
+     it. Every repair is finished to a standard that lasts."
 
 3. QUESTION-FORMAT H3s: Where natural, write H3s as questions a real searcher would type.
    e.g. "Do you offer emergency tree removal in Anaheim?"
@@ -500,12 +594,16 @@ optimised for Answer Engine Optimisation. Follow all of them in every section.
    ✓ Good: "Yes, [Brand] offers 24/7 emergency tree removal in Anaheim and surrounding cities."
 
 5. BULLETED LISTS — use <ul> for features, services, inclusions, and what-to-expect items:
-   - Each bullet is a complete, self-contained statement (no sentence fragments)
+   - Each bullet is a COMPLETE SENTENCE — a subject and a verb, ending in a full stop (period).
+     NEVER a noun-phrase fragment or a "Topic — description" catalogue entry. A complete sentence
+     reads better AND is more liftable for AI answers, so this helps voice and AEO together.
    - Lead with the outcome or benefit, not the feature name
    - 1–2 lines per bullet maximum
    - Minimum 3 bullets, maximum 8 per list
-   - ✗ Bad bullet:  "Fast service"
-   - ✓ Good bullet: "Same-day response — crews dispatched within 2 hours for Anaheim emergencies"
+   - ✗ Bad (vague):    "Fast service"
+   - ✗ Bad (fragment): "Terracotta tile restoration — specialist cleaning and sealing" (no verb, no period — a catalogue entry, not a sentence)
+   - ✓ Good: "We restore heritage terracotta roofs with specialist cleaning and sealing that lasts."
+   - ✓ Good: "Our crews dispatch within 2 hours for Anaheim emergencies, so same-day response is standard."
 
 6. NUMBERED LISTS — use <ol> for processes, steps, and how-it-works sequences:
    - Each step begins with an action verb
@@ -654,6 +752,14 @@ A direct answer must always come first, but it must be written in the brand's re
 
 The rule: lead with the answer, then let the rest of the sentence and paragraph carry the brand tone.
 
+LENGTH BUDGET — READ BEFORE WRITING (HIGHEST-PRIORITY LENGTH RULE):
+The BUSINESS DATA may include a "TOTAL WORD BUDGET" (the competitor SERP average + 20%). When it is present it is AUTHORITATIVE and OVERRIDES the per-section word counts below. The per-section counts are proportions for a full-length page — SCALE THEM DOWN so the entire visible <article> body lands at the LOWER end of the budget: aim for roughly the budget minus 10% (never below the budget minus 20%), and treat the budget as a HARD CEILING you never exceed. Rules:
+- BIAS SHORT EVERYWHERE. Whenever a section, the budget, or a "structure to mirror" reference layout gives a word-count range or target, aim for the LOWER end / the minimum of it — never the middle or the top. Fewer words that fully make the point always beat more. When in doubt, cut.
+- Take the reduction primarily from the Main Service Body (§6), then by consolidating overlapping H2/H3 sections and trimming repetition — never by dropping a required structural element (intro answer block, CTAs, geographic section, FAQ, schema).
+- A shorter page that matches the SERP beats a longer one: do NOT chase "information gain" past the budget. Cover what competitors cover concisely; add a net-new topic only when it is essential to answer the query AND you are within budget.
+- NEVER pad to reach a number and NEVER fabricate facts to fill space. If real, on-topic substance runs short of the budget, a shorter page is correct — coming in UNDER the budget is good, going over is not.
+- If no TOTAL WORD BUDGET is provided, target the LOWER end of the per-section counts below (their minimums), not the middle.
+
 Section 1 — Intro / Direct Answer Block (100–150 words)
 <section id="intro">
   <h1>[Exact Match Keyword] + [1–2 SERVICE-SCOPE or CREDENTIAL entities]</h1>
@@ -689,9 +795,11 @@ Section 5 — Features and Benefits (150–200 words)
 Section 6 — Main Service Body (800–1400 words)
 <section id="services">
   Use the COMPETITOR H2/H3 HEADINGS from the SERP data above as your structural baseline.
-  Cover every topic competitors cover, then add H2/H3 sections for topics competitors DON'T cover
-  that would more fully answer the user's implied query — this is called INFORMATION GAIN and
-  is critical for outranking competitors.
+  Cover every topic competitors cover. INFORMATION GAIN — adding H2/H3 sections for topics
+  competitors DON'T cover — helps outrank them, but is SUBORDINATE to the LENGTH BUDGET: when a
+  budget is set, cover competitor topics concisely first and add a net-new section only if it is
+  essential to the query AND you are still within budget. When no budget is set, this is 800–1400
+  words; when a budget IS set, this section absorbs most of the scaling (up or down) to hit it.
 
   Structure rules:
   - You MUST use MULTIPLE H2s within this section — each H2 block must be ≤300 words; split further into additional H2s if needed
@@ -732,11 +840,7 @@ Section 10 — Geographic / Local SEO Section (200–300 words)
   [City + min 3 neighborhoods in sentence context (not just a list) + min 1 landmark + min 2 streets + zip codes (min 3). Use only real, verifiable geographic details. If neighborhood/landmark/street/zip data is not provided in the business data, include only what you are certain is accurate for the target city. Do not invent or guess street names, zip codes, or landmarks. Coverage area required. Response time: ONLY include if explicitly stated in business hours, GBP description, or reviews — otherwise write "Call us for availability" or omit entirely.]
 </section>
 
-Section 11 — CTA Block Tertiary (50–75 words) — URGENCY / AVAILABILITY
-<section id="cta-tertiary">
-  <h2>[Service-anchored action heading — name the SERVICE (no city, no verbatim exact-match keyword), DISTINCT wording from §4 and §8, e.g. "Get Your Roof Restoration Scheduled"]</h2>
-  [A DISTINCT angle from §4 and §8: lead with urgency or availability — same-day/emergency response ONLY if it is in the business data; otherwise use non-fabricated urgency ("don't wait until the damage spreads", seasonal timing, "book before your preferred slot fills"). NEVER invent a timeframe. Include the phone. Do NOT reuse the earlier CTAs' wording.]
-</section>
+Section 11 — (removed) There are exactly TWO CTA blocks on the page — §4 (value/offer-led) and §8 (proof/risk-reversal). Do NOT add a third CTA block; repeated calls-to-action pad the page without adding value. (Section numbers below are unchanged.)
 
 Section 12 — FAQ (min 4, max 7 entries — 40–80 words each)
 <section id="faq">
@@ -878,7 +982,7 @@ AEO / LLM WRITING RULES — apply to all text and any new content added:
    split long paragraphs into multiple short <p> blocks rather than lengthening one.
 3. QUESTION-FORMAT H3s: Where natural, write H3s as questions a real searcher would type.
 4. DIRECT FAQ ANSWERS: Every FAQ answer opens with a direct yes/no or factual statement.
-5. BULLETED LISTS — use <ul> for features, services, inclusions, what-to-expect items.
+5. BULLETED LISTS — use <ul> for features, services, inclusions, what-to-expect items. Each bullet is a COMPLETE SENTENCE (subject + verb, ends in a period) — never a noun-phrase fragment or "Topic — description" catalogue entry.
 6. NUMBERED LISTS — use <ol> for processes, steps, how-it-works sequences.
 7. TABLES — preserve any existing <table> in the page. If the page has NONE and its content
    is genuinely comparative (service tiers, repair vs. replace, response time / coverage by
@@ -1072,6 +1176,8 @@ class AnalysisResponse(BaseModel):
     aio_text: str = ""                        # the AIO answer text (MCS target)
     aio_sources: List[str] = []               # domains the AIO cites
     aio_fanout: List[str] = []                # AIO fan-out sub-questions
+    serp_avg_word_count: Optional[int] = None # avg competitor body (<p>) word count across the SERP
+    serp_word_target: Optional[int] = None    # length target = SERP avg + 20% (drives length_fit + the writer budget)
     analysis_cost: dict = {}                  # estimated API costs for this analysis run
 
 
@@ -1495,6 +1601,51 @@ def clean_text(text: str) -> str:
     return text.strip().lower()
 
 
+# ── Competitor-usage benchmark ────────────────────────────────────────────────
+
+# "Beat the top competitor, capped": the recommended mention count is the single
+# most-aggressive competitor's usage (max), but capped at this multiple of the
+# competitor average so one outlier page can't push a term into keyword-stuffing
+# territory. Applies to entities AND related keywords (bold keywords keep raw max
+# — a direct Google signal). Env-tunable.
+MENTION_CAP_RATIO = float(os.environ.get("MENTION_CAP_RATIO", "1.5"))
+
+
+def _capped_max_target(counts: list) -> tuple[int, int, float]:
+    """Given per-competitor-page mention counts (of pages that USE the term),
+    return (recommended, max_uses, avg_uses):
+      max_uses    = the top competitor's count ("beat the best")
+      avg_uses    = mean competitor usage
+      recommended = min(max_uses, ceil(MENTION_CAP_RATIO * avg)), floored at 1
+    so the target chases the strongest competitor but a lone outlier can't
+    inflate it beyond ~1.5x the field average."""
+    if not counts:
+        return 1, 0, 0.0
+    mx = int(max(counts))
+    avg = sum(counts) / len(counts)
+    capped = min(mx, int(np.ceil(MENTION_CAP_RATIO * avg)))
+    return max(1, capped), mx, round(avg, 1)
+
+
+def _zone_freq_targets(term: str, zone_buckets: dict, raw_max: bool = False) -> dict:
+    """Per-zone competitor mention benchmark for one term. For each zone
+    (title/h1/h2_h3/paragraphs), count the term in every competitor page's text
+    for that zone and target the raw max (bold — a direct Google signal) or the
+    capped-max (entities/keywords) over the pages that actually use it there.
+    Zones no competitor uses the term in are omitted, so title/h1 only appear
+    when a term genuinely recurs there. Returns {zone: recommended}."""
+    if not term:
+        return {}
+    tre = re.compile(r"\b" + re.escape(term.lower()) + r"\b", re.IGNORECASE)
+    zf: dict = {}
+    for zk in ("title", "h1", "h2_h3", "paragraphs"):
+        present = [c for c in (len(tre.findall(t)) for t in zone_buckets.get(zk, [])) if c > 0]
+        if not present:
+            continue
+        zf[zk] = int(max(present)) if raw_max else _capped_max_target(present)[0]
+    return zf
+
+
 # ── NLP: related keywords ─────────────────────────────────────────────────────
 
 def get_related_keywords_for_zone(
@@ -1750,7 +1901,7 @@ async def get_textrazor_entities(
     for eid_l, data, page_count, mean_relevance in candidates:
         if mean_relevance < min_relevance:
             continue
-        recommended_mentions = int(round(float(np.mean(data["mention_counts"]))))
+        recommended_mentions, max_mentions, avg_mentions = _capped_max_target(data["mention_counts"])
         # Most common surface form, so `name` matches page text in the
         # deterministic coverage engine; fall back to the entity id.
         name = data["surface"].most_common(1)[0][0] if data["surface"] else eid_l
@@ -1762,7 +1913,9 @@ async def get_textrazor_entities(
             "mean_salience": round(mean_relevance, 4),  # relevanceScore (field name kept)
             "page_spread": page_count,
             "page_spread_pct": round(page_count / total_pages, 2),
-            "recommended_mentions": max(1, recommended_mentions),
+            "recommended_mentions": recommended_mentions,  # capped-max ("beat the best")
+            "max_competitor_mentions": max_mentions,
+            "avg_competitor_mentions": avg_mentions,
             "type": "textrazor_entity",
         })
 
@@ -1854,7 +2007,7 @@ async def get_google_entities(
         mean_salience = float(np.mean(data["saliences"]))
         if mean_salience < min_salience:
             continue
-        recommended_mentions = int(round(float(np.mean(data["mention_counts"]))))
+        recommended_mentions, max_mentions, avg_mentions = _capped_max_target(data["mention_counts"])
         results.append({
             "name": data["name"],
             "entity_type": data["entity_type"],
@@ -1863,7 +2016,9 @@ async def get_google_entities(
             "mean_salience": round(mean_salience, 4),
             "page_spread": page_count,
             "page_spread_pct": round(page_count / total_pages, 2),
-            "recommended_mentions": max(1, recommended_mentions),
+            "recommended_mentions": recommended_mentions,  # capped-max ("beat the best")
+            "max_competitor_mentions": max_mentions,
+            "avg_competitor_mentions": avg_mentions,
             "type": "google_entity",
         })
 
@@ -1968,6 +2123,41 @@ async def _run_serp_analysis(
         h2_h3=get_related_keywords_for_zone(zone_buckets["h2_h3"], keyword),
         paragraphs=get_related_keywords_for_zone(zone_buckets["paragraphs"], keyword),
     )
+
+    # Page-level competitor-usage benchmark for related keywords. TF-IDF gives
+    # topical relevance + page spread but no frequency, so here we count each
+    # related term across every competitor page's full text (same source the
+    # bold-keyword max uses) and attach a capped-max "beat the best" target to
+    # each term dict — so the coverage engine and the reopt prompt can measure
+    # the generated page's usage against the top competitor, like entities.
+    _rk_zone_lists = (related.title, related.h1, related.h2_h3, related.paragraphs)
+    _rk_counts: Dict[str, list] = {}
+    for _zone_terms in _rk_zone_lists:
+        for _t in _zone_terms:
+            term = (_t.get("term") or "").lower()
+            if not term or term in _rk_counts:
+                continue
+            _term_re = re.compile(r"\b" + re.escape(term) + r"\b", re.IGNORECASE)
+            _rk_counts[term] = [len(_term_re.findall(pt)) for pt in full_page_texts]
+    for _zone_terms in _rk_zone_lists:
+        for _t in _zone_terms:
+            counts = _rk_counts.get((_t.get("term") or "").lower())
+            if counts is None:
+                continue
+            # Average over the competitors that actually use the term (present
+            # pages), mirroring the entity benchmark, so zeros from unrelated
+            # pages don't collapse the cap.
+            present = [c for c in counts if c > 0]
+            if not present:
+                # TF-IDF surfaced the term but no competitor uses this exact
+                # word-boundary form (normalization gap) — attach no frequency
+                # benchmark rather than a misleading "target 1 / top-competitor 0".
+                continue
+            rec, mx, avg = _capped_max_target(present)
+            _t["recommended_mentions"] = rec
+            _t["max_competitor_mentions"] = mx
+            _t["avg_competitor_mentions"] = avg
+
     quadgrams = get_top_quadgrams(zone_buckets["paragraphs"], keyword)
 
     # Step 5: entity analysis (per-request provider — TextRazor or Google NLP) on
@@ -2020,7 +2210,29 @@ async def _run_serp_analysis(
         serp_bold_keywords = serp_bold_keywords[:25]  # cap at 25 terms
         logger.info(f"SERP bold keywords: {len(serp_bold_keywords)} qualifying terms from {len(bold_terms_from_serp)} extracted")
 
+    # Per-zone mention-frequency benchmarks (title/H1/H2-H3/paragraphs) for every
+    # frequency-tracked term, so coverage + reopt can target usage per zone, not
+    # just page-wide. Entities + related keywords use capped-max; bold keeps raw
+    # max. Attached onto each term dict (flows through serp_analysis untouched).
+    for _e in google_entities:
+        _e["zone_freq"] = _zone_freq_targets(_e.get("name", ""), zone_buckets)
+    for _zone_terms in _rk_zone_lists:
+        for _t in _zone_terms:
+            _t["zone_freq"] = _zone_freq_targets(_t.get("term", ""), zone_buckets)
+    for _b in serp_bold_keywords:
+        _b["zone_freq"] = _zone_freq_targets(_b.get("term", ""), zone_buckets, raw_max=True)
+
     zone_targets = compute_zone_targets(zone_buckets, related, google_entities)
+
+    # Competitor body-length target: average body-content words across the SERP,
+    # +20%. Drives the writer's length budget AND the deterministic length_fit
+    # engine. Measured from the raw competitor HTML with the SAME content counter
+    # the generated page is scored against (chrome-stripped, counts prose + lists
+    # + tables), so the two sides are symmetric. None when too few pages scraped.
+    serp_avg_words = length_fit.competitor_avg_words(pages)
+    serp_word_target = length_fit.word_target(serp_avg_words)
+    if serp_word_target:
+        logger.info(f"SERP length: avg={round(serp_avg_words)} words, target={serp_word_target} (avg +20%)")
 
     # Aggregate competitor headings by page spread
     competitor_headings: List[dict] = []
@@ -2078,6 +2290,8 @@ async def _run_serp_analysis(
         aio_text=aio_insights.get("text", ""),
         aio_sources=aio_insights.get("sources", []),
         aio_fanout=aio_insights.get("fanout", []),
+        serp_avg_word_count=int(round(serp_avg_words)) if serp_avg_words else None,
+        serp_word_target=serp_word_target,
         analysis_cost=analysis_cost,
     )
 
@@ -3647,26 +3861,36 @@ Return ONLY valid JSON — no markdown, no explanation:
 Be specific — reference actual content found (or missing) in the page."""
 
 
+# length_fit (0.10) was added as a deterministic engine so the SERP-average
+# length target (SERP avg + 20%) is enforced by scoring, not just suggested to
+# the writer — pages were running 2–3× the competitor SERP. The pre-existing
+# engines keep their exact relative proportions (each scaled ×0.90 to make
+# uniform room), so no engine's importance was editorialized. NOTE: adding an
+# engine re-weights the composite, so NEW scorings of a page differ slightly from
+# scores stored before this change (historical rows are not rewritten).
 _ENGINE_WEIGHTS = {
-    "organic_ranking":      0.10,
-    "gbp_maps":             0.20,
-    "entity_establishment": 0.10,
-    "icp_alignment":        0.05,
-    "aeo_llm_retrieval":    0.20,
-    "geographic_legitimacy":0.10,
-    "nearme_intent":        0.10,
-    "serp_signal_coverage": 0.15,   # deterministic — scored in Python, not Claude
+    "organic_ranking":      0.09,
+    "gbp_maps":             0.18,
+    "entity_establishment": 0.09,
+    "icp_alignment":        0.045,
+    "aeo_llm_retrieval":    0.18,
+    "geographic_legitimacy":0.09,
+    "nearme_intent":        0.09,
+    "serp_signal_coverage": 0.135,  # deterministic — scored in Python, not Claude
+    "length_fit":           0.10,   # deterministic — scored in Python, not Claude
 }
 
 # National / location-agnostic weights (geo_mode="national"): the local weights
-# minus geographic_legitimacy + nearme_intent, renormalized to sum to 1.0.
+# minus geographic_legitimacy + nearme_intent, renormalized to sum to 1.0
+# (then the same ×0.90 room made for length_fit at 0.10).
 _ENGINE_WEIGHTS_NATIONAL = {
-    "organic_ranking":      0.125,
-    "gbp_maps":             0.25,
-    "entity_establishment": 0.125,
-    "icp_alignment":        0.0625,
-    "aeo_llm_retrieval":    0.25,
-    "serp_signal_coverage": 0.1875,
+    "organic_ranking":      0.1125,
+    "gbp_maps":             0.225,
+    "entity_establishment": 0.1125,
+    "icp_alignment":        0.05625,
+    "aeo_llm_retrieval":    0.225,
+    "serp_signal_coverage": 0.16875,
+    "length_fit":           0.10,
 }
 
 _ENGINE_LABELS = {
@@ -3678,6 +3902,7 @@ _ENGINE_LABELS = {
     "geographic_legitimacy": "Geographic Legitimacy Engine",
     "nearme_intent":         "Hyperlocal / Near-Me Engine",
     "serp_signal_coverage":  "SERP Signal Coverage",
+    "length_fit":            "Length Fit (SERP avg +20%)",
 }
 
 # ── Brand voice scoring ────────────────────────────────────────────────────
@@ -3705,38 +3930,85 @@ A. OVERRIDE for icp_alignment: score it against the SUPPLIED ICP, not against a
    specific one scores LOW here, however polished it reads.
 
 B. BRAND VOICE SCORECARD — score how faithfully the page follows the client's
-   guide, as EIGHT separate dimensions, each 0-100 with a verbatim quote from
-   the page as evidence. This is scored and reported SEPARATELY from the SEO
-   composite, so judge it on its own terms and do not soften a dimension
-   because the page is otherwise well optimised.
+   guide, as EIGHT separate dimensions, each 0-100. This is scored and reported
+   SEPARATELY from the SEO composite, so judge it on its own terms and do not
+   soften a dimension because the page is otherwise well optimised.
 
-   tone            — Do the guide's stated tone adjectives hold across EVERY
-                     section, or only the intro? A page that opens in voice and
-                     drifts into generic copy by the third heading scores low.
+   ── SCORING DISCIPLINE (read before scoring any dimension) ──
+   You are an adversarial brand-voice auditor. Your job is to find where the
+   page DRIFTS off this client's voice, not to confirm that it reads well.
+   "Reads professionally" is not the standard — a competent page that could
+   belong to any competitor is a FAILING page here.
+
+   Score each dimension against these bands, and when the evidence is mixed,
+   choose the LOWER band:
+
+     90-100  Unmistakably THIS client. Could not be confused for a competitor.
+             The guide's tone, style and vocabulary are present in EVERY
+             section, not just the opening. Rare — it must be earned.
+     75-89   On-brand with lapses. Clearly following the guide, but drifts in
+             places: a section or two go generic, a required phrasing is
+             missing, or the voice thins toward the end.
+     60-74   Competent but ANONYMOUS. Well-written and error-free, yet it reads
+             like generic quality copy with the client's name dropped in. This
+             is the DEFAULT for a page that "reads fine" but is not distinctly
+             this client. Most pages that feel off-brand belong here.
+     40-59   Off-brand. Actively contradicts the guide's tone, person or
+             vocabulary, or is written to a generic buyer the ICP does not
+             describe.
+     0-39    No discernible relationship to the guide or the ICP.
+
+   HARD RULES:
+   - Never award 75+ for the mere absence of errors. A score of 75 or higher
+     requires POSITIVE evidence of this client's specific voice — name it.
+   - Score the WHOLE page. A strong intro does not rescue a generic body; if
+     the voice fades after the first section, the dimension is mid-band at best.
+   - `evidence` must quote the WEAKEST passage you can find for that dimension —
+     the place it drifts — not the best line. Score to that passage. Only if you
+     genuinely cannot find a weak passage do you quote the strongest and justify
+     a high score.
+   - For any dimension you score 85 or above, the `issues`/`recommendations`
+     must state explicitly what is distinctly this client's about it. If you
+     cannot, the score is too high.
+
+   Judge each dimension by asking what LOW looks like:
+
+   tone            — Take the FLATTEST section of the page. Does it still carry
+                     the guide's stated tone adjectives, or has it settled into
+                     neutral marketing copy? Opening in voice and flattening by
+                     the third heading is a mid-band score, not a high one.
    writing_style   — Sentence rhythm, length variation, formality and jargon
-                     level versus what the guide describes.
+                     level versus the guide. LOW = uniform cadence and generic
+                     phrasing the guide's own author would not recognise as
+                     theirs.
    person          — Grammatical person matches what the guide specifies (first
-                     person "we/our" vs naming the brand). Ignoring a stated
-                     preference scores low.
+                     person "we/our" vs naming the brand). Any drift to the wrong
+                     person, even intermittently, is LOW.
    vocabulary      — Required phrasing present; forbidden and discouraged terms
-                     absent; word choice generally consistent with the guide.
-   audience_fit    — Is this written to the specific customer the ICP describes
-                     — their situation, their trigger for searching now — or to
-                     a generic buyer with the audience's name dropped in?
-   pain_points     — Does the page actually address the worries, hesitations
-                     and objections the ICP names, or does it only assert that
-                     the service is good?
+                     absent. LOW = missing the guide's words, or leaning on
+                     filler and boilerplate superlatives ("top-notch",
+                     "unparalleled", "state-of-the-art", "your trusted partner")
+                     that any brand could use.
+   audience_fit    — Remove the audience's name from the page. Is there anything
+                     left that proves the writer knew WHO they were writing to —
+                     their situation, their trigger for searching now? If not,
+                     it is a generic buyer with a label pasted on: LOW.
+   pain_points     — Count how many of the specific worries, hesitations and
+                     objections the ICP names the page actually engages. Merely
+                     asserting the service is good, without naming what the
+                     customer fears, is LOW.
    cta_fit         — Do the calls to action use the client's own CTA language
-                     and match the audience's readiness to act?
+                     and match the audience's readiness to act? A generic
+                     "contact us today" in place of the client's CTA is LOW.
    distinctiveness — Could this copy be dropped onto a competitor's site by
-                     swapping the business name? If yes, score LOW and say so.
-                     This is the single most useful signal on the scorecard.
+                     swapping the business name? Assume it could until the page
+                     proves otherwise. If it could, score LOW and say so. This
+                     is the single most important dimension on the scorecard.
 
    APPLICABILITY: if the guide and ICP genuinely say nothing about a dimension
    (e.g. no sentence-rhythm guidance at all), return `"applicable": false` for
    it rather than inventing a standard. It is excluded from the score instead of
-   dragging it down. Do NOT mark a dimension inapplicable merely because the
-   page did badly on it.
+   dragging it down. Do NOT mark a dimension inapplicable to dodge a low score.
 
    Judge EXPRESSION and AUDIENCE only. Do NOT penalise the scorecard for
    answer-first openings, short paragraphs, lists, tables, headings or schema —
@@ -3755,9 +4027,9 @@ listed above:
     "distinctiveness": {"score": 0, "applicable": true, "evidence": "", "issues": [], "recommendations": []}
   }
 
-`evidence` must be a short verbatim quote FROM THE PAGE that shows why you
-scored the dimension as you did. A recommendation that does not name the
-offending sentence is not actionable."""
+`evidence` must be a short verbatim quote FROM THE PAGE — the weakest passage for
+that dimension. A recommendation that does not name the offending sentence is not
+actionable."""
 
 
 def _score_system_prompt_for(geo_mode: str = "local", voice_card: Optional[dict] = None) -> str:
@@ -3768,6 +4040,147 @@ def _score_system_prompt_for(geo_mode: str = "local", voice_card: Optional[dict]
     if vcard.is_card_empty(voice_card):
         return base
     return base + _VOICE_SCORE_PROMPT_SUFFIX
+
+def _count_entity_mentions(name: str, text_lower: str) -> int:
+    """Count whole-word occurrences of an entity name in already-lowercased page
+    text. Word-boundary matched so 'tile' does not count inside 'tiles' and a
+    multi-word entity ('metal roof') is counted as a phrase. Cora-style: the
+    page-level mention frequency compared against the competitor benchmark."""
+    if not name:
+        return 0
+    return len(re.findall(r"\b" + re.escape(name.lower()) + r"\b", text_lower))
+
+
+def _zone_coverage_rows(name: str, zone_freq: Optional[dict], page_zones: dict) -> list:
+    """Per-zone mention coverage for one term: current count in each zone's page
+    text vs the competitor per-zone benchmark. Only zones with a benchmark (a
+    competitor used the term there) are returned."""
+    rows: list = []
+    for zk, zlabel in (("title", "title"), ("h1", "H1"),
+                       ("h2_h3", "H2/H3"), ("paragraphs", "body")):
+        rec = (zone_freq or {}).get(zk)
+        if not rec:
+            continue
+        cur = _count_entity_mentions(name, page_zones.get(zk, ""))
+        rows.append({"zone": zlabel, "current": cur,
+                     "recommended": int(rec), "shortfall": max(0, int(rec) - cur)})
+    return rows
+
+
+def _build_entity_coverage_detail(entities: list, page_text_lower: str,
+                                  page_zones: dict) -> tuple[list, list, int]:
+    """Cora-style per-entity coverage table: for each competitor-derived entity,
+    the page's CURRENT mention count vs the capped-max RECOMMENDED count, the
+    shortfall, and a per-zone breakdown. Additive detail — it does not change the
+    engine score — persisted via engine_scores. Widened to the top 30 entities by
+    page_spread (the score still uses the top 15) so the table is richer without
+    shifting any score.
+
+    Returns (entity_detail, entities_under_target, total_shortfall)."""
+    detail_entities = sorted(
+        entities, key=lambda e: e.get("page_spread", 0), reverse=True
+    )[:30]
+    entity_detail: list[dict] = []
+    for e in detail_entities:
+        name = (e.get("name") or "").strip()
+        if not name:
+            continue
+        recommended = int(e.get("recommended_mentions") or 1)
+        current = _count_entity_mentions(name, page_text_lower)
+        entity_detail.append({
+            "name": name,
+            "current": current,
+            "recommended": recommended,
+            "shortfall": max(0, recommended - current),
+            "max_competitor": e.get("max_competitor_mentions"),
+            "avg_competitor": e.get("avg_competitor_mentions"),
+            "page_spread": e.get("page_spread", 0),
+            "type": e.get("entity_type") or e.get("type"),
+            "zones": _zone_coverage_rows(name, e.get("zone_freq"), page_zones),
+        })
+    # Biggest gaps first (then by how many competitors use it) so the most
+    # important under-covered entities lead the table.
+    entity_detail.sort(key=lambda d: (d["shortfall"], d["page_spread"]), reverse=True)
+    entities_under_target = [d["name"] for d in entity_detail if d["shortfall"] > 0]
+    total_shortfall = sum(d["shortfall"] for d in entity_detail)
+    return entity_detail, entities_under_target, total_shortfall
+
+
+def _build_bold_coverage_detail(bold: list, page_text_lower: str,
+                                page_zones: dict) -> tuple[list, list, int]:
+    """Cora-style coverage for SERP-bolded terms — the terms Google highlights in
+    the snippet. Benchmark is the RAW competitor max (a direct Google signal, not
+    capped). Same shape as the entity/keyword detail so the UI reuses one table.
+
+    Returns (bold_detail, bold_under_target, total_shortfall)."""
+    bold_detail: list[dict] = []
+    for b in bold:
+        name = (b.get("term") or "").strip()
+        if not name:
+            continue
+        recommended = int(b.get("recommended_mentions") or b.get("max_competitor_uses") or 1)
+        current = _count_entity_mentions(name, page_text_lower)
+        bold_detail.append({
+            "name": name,
+            "current": current,
+            "recommended": recommended,
+            "shortfall": max(0, recommended - current),
+            "max_competitor": b.get("max_competitor_uses"),
+            "avg_competitor": b.get("avg_uses"),
+            "page_spread": b.get("page_spread", 0),
+            "zones": _zone_coverage_rows(name, b.get("zone_freq"), page_zones),
+        })
+    bold_detail.sort(key=lambda d: (d["shortfall"], d["page_spread"]), reverse=True)
+    bold_under_target = [d["name"] for d in bold_detail if d["shortfall"] > 0]
+    total_shortfall = sum(d["shortfall"] for d in bold_detail)
+    return bold_detail, bold_under_target, total_shortfall
+
+
+def _build_keyword_coverage_detail(related: dict, page_text_lower: str,
+                                   page_zones: dict) -> tuple[list, list, int]:
+    """Cora-style per-related-keyword coverage: page-level CURRENT mention count
+    vs the competitor-derived RECOMMENDED (capped-max) count + shortfall + a
+    per-zone breakdown. Related keywords are stored per zone; a term can appear in
+    several zones, so we dedupe by term (keeping the highest recommended seen,
+    carrying its per-zone benchmark) and measure the whole page once. Additive
+    detail — does not change the score.
+
+    Returns (keyword_detail, keywords_under_target, total_shortfall)."""
+    best: dict[str, dict] = {}
+    for zone_key in ("title", "h1", "h2_h3", "paragraphs"):
+        for t in (related.get(zone_key) or []):
+            term = (t.get("term") or "").strip()
+            recommended = t.get("recommended_mentions")
+            if not term or recommended is None:
+                continue  # only terms carrying a competitor-usage benchmark
+            prev = best.get(term.lower())
+            if prev is None or int(recommended) > prev["recommended"]:
+                best[term.lower()] = {
+                    "name": term,
+                    "recommended": int(recommended),
+                    "max_competitor": t.get("max_competitor_mentions"),
+                    "avg_competitor": t.get("avg_competitor_mentions"),
+                    "page_spread": t.get("page_spread", 0),
+                    "zone_freq": t.get("zone_freq"),
+                }
+    keyword_detail: list[dict] = []
+    for row in best.values():
+        current = _count_entity_mentions(row["name"], page_text_lower)
+        keyword_detail.append({
+            "name": row["name"],
+            "current": current,
+            "recommended": row["recommended"],
+            "shortfall": max(0, row["recommended"] - current),
+            "max_competitor": row["max_competitor"],
+            "avg_competitor": row["avg_competitor"],
+            "page_spread": row["page_spread"],
+            "zones": _zone_coverage_rows(row["name"], row.get("zone_freq"), page_zones),
+        })
+    keyword_detail.sort(key=lambda d: (d["shortfall"], d["page_spread"]), reverse=True)
+    keywords_under_target = [d["name"] for d in keyword_detail if d["shortfall"] > 0]
+    total_shortfall = sum(d["shortfall"] for d in keyword_detail)
+    return keyword_detail, keywords_under_target, total_shortfall
+
 
 def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict]) -> dict:
     """
@@ -3804,6 +4217,8 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
 
     issues: list[str] = []
     recommendations: list[str] = []
+    # Per-zone detail surfaced to the UI (keyword + entity found/target by zone).
+    zone_detail: dict[str, dict] = {}
 
     # ── 1. Related keyword coverage per zone  (50% of engine score) ─────────────
     zone_label_map = {
@@ -3821,6 +4236,9 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
         missing = [t["term"] for t in terms if t["term"].lower() not in zone_text]
         coverage = min(len(found) / max(target, 1), 1.0)
         zone_scores.append(coverage)
+        zone_detail.setdefault(zone_key, {"zone": zone_label_map[zone_key]}).update(
+            {"keyword_found": len(found), "keyword_target": target}
+        )
         gap = max(0, target - len(found))
         if gap > 0 and missing:
             zlabel = zone_label_map[zone_key]
@@ -3837,6 +4255,24 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
 
     # ── 2. Google NLP entity coverage per zone  (50% of engine score) ──────────
     top_entities = sorted(entities, key=lambda e: e.get("page_spread", 0), reverse=True)[:15]
+    # Page-level entities actually used vs. not (surfaced to the UI), independent
+    # of the per-zone target loop so it reflects the whole page.
+    entities_used    = [e["name"] for e in top_entities if e["name"].lower() in page_text_lower]
+    entities_missing = [e["name"] for e in top_entities if e["name"].lower() not in page_text_lower]
+    # Cora-style per-entity coverage: current vs recommended mention counts +
+    # shortfall, persisted so the UI can render a term-target table and the gap
+    # survives the run (additive — does not affect the score).
+    entity_detail, entities_under_target, total_entity_shortfall = (
+        _build_entity_coverage_detail(entities, page_text_lower, zones)
+    )
+    # Same for related keywords (page-level current vs capped-max competitor usage).
+    keyword_detail, keywords_under_target, total_keyword_shortfall = (
+        _build_keyword_coverage_detail(rk, page_text_lower, zones)
+    )
+    # And SERP-bolded terms (raw-max competitor benchmark — a direct Google signal).
+    bold_detail, bold_under_target, total_bold_shortfall = (
+        _build_bold_coverage_detail(serp_analysis.get("serp_bold_keywords", []), page_text_lower, zones)
+    )
     ent_zone_scores: list[float] = []
     if top_entities:
         for zone_key in ("title", "h1", "h2_h3", "paragraphs"):
@@ -3848,6 +4284,9 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
             missing_ents = [e["name"] for e in top_entities if e["name"].lower() not in zone_text]
             coverage = min(len(found_ents) / max(entity_target, 1), 1.0)
             ent_zone_scores.append(coverage)
+            zone_detail.setdefault(zone_key, {"zone": zone_label_map[zone_key]}).update(
+                {"entity_found": len(found_ents), "entity_target": entity_target}
+            )
             gap = max(0, entity_target - len(found_ents))
             if gap > 0 and missing_ents:
                 zlabel = zone_label_map[zone_key]
@@ -3889,12 +4328,63 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
         "keyword_coverage":  round(kw_score, 1),
         "entity_coverage":   round(ent_score, 1),
         "quadgram_coverage": round(qg_score, 1),
+        "entities_used":     entities_used,
+        "entities_missing":  entities_missing,
+        "entity_detail":         entity_detail,
+        "entities_under_target": entities_under_target,
+        "total_entity_shortfall": total_entity_shortfall,
+        "keyword_detail":         keyword_detail,
+        "keywords_under_target":  keywords_under_target,
+        "total_keyword_shortfall": total_keyword_shortfall,
+        "bold_detail":            bold_detail,
+        "bold_under_target":      bold_under_target,
+        "total_bold_shortfall":   total_bold_shortfall,
+        "zones":             [zone_detail[k] for k in ("title", "h1", "h2_h3", "paragraphs") if k in zone_detail],
     }
+
+
+def _compute_length_fit(page_html: str, serp_analysis: Optional[dict]) -> Optional[dict]:
+    """Deterministic length-fit engine (Python, not Claude). Scores the page's
+    body length against the SERP target (avg + 20%) carried on the serp_analysis
+    dict. Returns None when there is no target (external-URL scoring or an older
+    analysis) or no body prose; callers omit the engine on None so the composite
+    renormalizes and length_fit never distorts a score it cannot measure."""
+    target = (serp_analysis or {}).get("serp_word_target")
+    return length_fit.compute_length_fit(page_html, target)
+
+
+def _length_budget_line(serp_analysis: Optional[dict]) -> str:
+    """The 'TOTAL WORD BUDGET' line injected into a writer/reoptimizer prompt so
+    the page targets the SERP average + 20%. Empty string when no target was
+    measured (too few competitor pages) — the prompt then falls back to the
+    template's per-section counts."""
+    sa = serp_analysis or {}
+    target = sa.get("serp_word_target")
+    if not target:
+        return ""
+    avg = sa.get("serp_avg_word_count") or int(round(target / length_fit.OVERAGE_MULTIPLIER))
+    return (
+        f"TOTAL WORD BUDGET: ~{target} words for the whole <article> body "
+        f"(competitor SERP average ~{avg} + 20%). This is AUTHORITATIVE — scale the section "
+        f"guidance so the page lands within ±10% of it (see the LENGTH BUDGET rule). Do not "
+        f"exceed it to chase extra coverage, and never pad or fabricate to reach it."
+    )
 
 
 def _composite_from_scores(scores: dict, weights: Optional[dict] = None) -> tuple[float, str]:
     weights = weights or _ENGINE_WEIGHTS
-    composite = sum(scores[k]["score"] * w for k, w in weights.items() if k in scores)
+    # Renormalize over the engines actually present, so an engine that is
+    # legitimately absent (e.g. length_fit when there is no SERP length target)
+    # neither depresses the composite nor distorts it with a neutral placeholder.
+    # When every weighted engine is present the denominator is 1.0, so this is a
+    # no-op for the normal path (and for ecommerce/blog, which always score all
+    # of their engines).
+    present = {k: w for k, w in weights.items() if k in scores}
+    total_w = sum(present.values())
+    composite = (
+        sum(scores[k]["score"] * w for k, w in present.items()) / total_w
+        if total_w else 0.0
+    )
     if composite >= 90:   status = "excellent"
     elif composite >= 80: status = "good"
     elif composite >= 70: status = "needs_improvement"
@@ -4051,6 +4541,9 @@ async def _score_html_inline(
     if not scores:
         raise Exception("Inline scoring returned invalid JSON")
     scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_html, serp_analysis_dict)
+    _lf = _compute_length_fit(page_html, serp_analysis_dict)
+    if _lf is not None:
+        scores["length_fit"] = _lf
     composite, _ = _composite_from_scores(scores, _ENGINE_WEIGHTS)
     deficiencies = _build_deficiencies(scores)
     # The voice scorecard rides the same LLM call but is kept out of `scores`
@@ -4171,6 +4664,298 @@ EXISTING PAGE (use as reference — preserve accurate facts, fix everything else
     content_html = _apply_rdfa_markup(content_html, inline_entities)
 
     return content_html, schema_json, page_title, token_rec
+
+
+_PHRASE_INSERT_SYSTEM = """You are making a MINIMAL edit to an already-written local service page: making a few exact phrases the client's brand guide REQUIRES appear on the page. The draft is currently missing them — usually because the writer expressed the same idea with a synonym.
+
+You are given the page HTML (the <article> body) and a list of REQUIRED PHRASES. Make EACH required phrase appear on the page VERBATIM — word-for-word — by the most natural means, in priority order:
+  1. If the writer used a close synonym, replace that synonym in place (e.g. the page says "roofing specialists" and the required phrase is "Melbourne roofing experts" → rework that mention; the page says "confidence" or "reassurance" and the required phrase is "peace of mind" → use the required phrase there).
+  2. Otherwise weave the phrase into an existing sentence where it genuinely fits.
+
+Hard rules:
+- Change as LITTLE else as possible. Do NOT rewrite sections, reorder content, add or remove sections, or alter any fact (phone, address, prices, services, hours).
+- The phrase must read naturally in the client's voice — never bolted on or keyword-stuffed.
+- Keep ALL existing HTML structure and any markup exactly as-is except the minimal words you change.
+- Do NOT add RDFa <span>/<link> markup and do NOT re-link phone numbers — that is applied automatically after your edit.
+- Return the FULL edited <article> HTML only. No <title>, no schema, no markdown fences, no commentary.
+"""
+
+
+async def _insert_required_phrases_inline(
+    content_html: str,
+    phrases: List[str],
+    voice_block: str,
+    keyword: str,
+    business_name: str,
+    phone: Optional[str],
+    client,
+) -> Optional[tuple]:
+    """Targeted, minimal-edit LLM pass that weaves MISSING multi-word required
+    phrases into the page — typically by replacing the synonym the writer used —
+    so the deterministic ``must_use_terms`` vocabulary cap clears before scoring.
+
+    Multi-word required phrasing can't be placed by the deterministic swap (you
+    can't substitute one filler for "peace of mind"), and the general voice loop
+    proved unreliable at it (it's a recall problem, not a rewrite problem). This
+    pass does the one job. Runs only when such phrases remain missing after the
+    deterministic net and the time budget allows; one bounded call, small edit.
+
+    Returns ``(html, token_rec)`` or ``None`` when there's nothing to do or the
+    call fails (best-effort — never blocks generation). The caller applies RDFa
+    markup afterward, so this returns clean HTML."""
+    if not phrases:
+        return None
+    try:
+        phrase_list = "\n".join(f'- "{p}"' for p in phrases)
+        voice_section = f"\n{voice_block}\n" if voice_block else ""
+        user_prompt = f"""BUSINESS: {business_name} | KEYWORD: {keyword}
+{voice_section}
+REQUIRED PHRASES — each MUST appear verbatim on the page:
+{phrase_list}
+
+PAGE HTML:
+{content_html}
+"""
+        msg = await client.messages.create(
+            model=GENERATION_MODEL,
+            max_tokens=16000,
+            system=[{"type": "text", "text": _PHRASE_INSERT_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        token_rec = _token_record(
+            "phrase-insert-inline", GENERATION_MODEL,
+            msg.usage.input_tokens, msg.usage.output_tokens,
+        )
+        raw = (msg.content[0].text or "").strip()
+        if raw.startswith("```"):
+            raw = re.sub(r'^```[a-zA-Z]*\n?', '', raw)
+            raw = re.sub(r'\n?```$', '', raw).strip()
+        # Defensive: if the model echoed a <title> or schema block, drop them —
+        # this pass owns only the article body; the caller keeps title + schema.
+        raw = re.sub(r'<title>.*?</title>', '', raw, flags=re.IGNORECASE | re.DOTALL)
+        _schema_at = raw.find('<script type="application/ld+json">')
+        if _schema_at != -1:
+            raw = raw[:_schema_at].strip()
+        if not raw:
+            return None
+        return raw, token_rec
+    except Exception as _pe:
+        logger.warning("phrase-insert-inline failed (non-fatal): %s", _pe)
+        return None
+
+
+_SECTION_CORRECT_SYSTEM = """You are refining specific sections of an already-written local service page — not rewriting the page.
+
+You will be given: the client's BRAND VOICE & AUDIENCE guide (HIGHEST priority for expression), the SEO deficiencies to fix, any voice corrections, and the page's sections. Each section is shown as `[key] heading: <current inner HTML>`.
+
+Return ONLY a JSON object mapping a section's `[key]` to that section's NEW inner HTML (the content that goes INSIDE its <section> tag, not the <section> tag itself). Include ONLY the sections you actually change.
+
+Rules:
+- Fix the SEO deficiencies in the sections where they belong. A section with no SEO deficiency AND no voice drift stays out of your response entirely.
+- VOICE IS A PAGE-WIDE SWEEP, NOT A ONE-SPOT FIX. Each voice correction's quoted text is a SAMPLE of a pattern that recurs across the page — never the only place it occurs. Re-read EVERY section against the BRAND VOICE guide and rewrite EVERY section that drifts the same way, not just the quoted one. Brand voice usually holds in the intro and the FAQ but slips into a flat, functional, catalogue register in the MID-PAGE service-description sections (the middle of the document) — those middle sections are the ones to scrutinise HARDEST. A mid-page section that reads like it could sit on any competitor's site, or whose cadence/word-choice/register no longer matches the guide, is a drift to fix even if nothing in it was quoted.
+- PRESERVE THE CLIENT'S BRAND VOICE in every edit: grammatical person, required phrasing, tone, and CTA wording. An SEO fix must NOT flatten the prose into generic copy that could run on a competitor's site by swapping the business name — that is a failure, not a fix.
+- MAKE EVERY SECTION DISTINCTLY THIS CLIENT. Distinctiveness is judged by one test: could this section sit on a competitor's site by swapping the business name? If yes, it FAILS. The client's specific proof usually lives in the opening/why-us sections while the MID-PAGE service descriptions read as generic, swappable copy — that is the most common distinctiveness miss, and it is your job to fix it. Distribute the client's OWN proof into the anonymous sections: give each such section at least one thing only this client can say — a DIFFERENT differentiator, credential, founder/team reference, years/scale figure, signature method, specific guarantee, or heritage/local specific PER section (never the same headline stat repeated in every one), drawn ONLY from the BRAND VOICE differentiators/signature phrases above. NEVER invent proof — if the brand block gives you nothing distinctive for a section, ground it in a concrete, verifiable specific from the business data instead of a generic claim. Prefer an experience-backed specific ("In 25 years of repointing Melbourne's terrace roofs, we've found ridge-capping failures start with one cracked mortar joint") over a bare restated statistic.
+- BULLET-LIST SECTIONS ARE THE #1 REGISTER BREAK. A mid-page section that is mostly a bare bullet list reads in a flatter, more clipped register than the brand's flowing paragraph prose — this is the single most common mid-page voice drift, and it must be fixed. When a bullet-list section clashes with the guide's paragraph rhythm: (a) introduce it — and, where natural, close it — with a sentence or two of brand-voice prose, so the section reads as the client's prose that HAPPENS to include a list, never a bare heading-then-dump; and (b) where the "list" is really just padding or a few short parallel items, convert it back into flowing short paragraphs in the brand's cadence. Keep something as a bulleted list ONLY when it is genuinely enumerable (distinct services, concrete inclusions, ordered steps) — and even then, frame it in prose. Never leave a section that is nothing but a heading and a bullet list. When you reframe a list into prose, give that prose the brand's OWN sentence rhythm (see the BRAND VOICE block above — e.g. a short, punchy claim followed by a fuller technical-explanation sentence, where that is the client's pattern), so the reframed passage matches the cadence of the opening sections rather than a flat, uniform run.
+- Keep each edited section's heading. PRESERVE the comparison TABLE (never drop it) and the FAQ's question/answer structure. A bulleted list, by contrast, MAY be re-framed in prose or converted to paragraphs per the rule above when that is what restores the brand register. Do not add, remove, reorder, or rename sections.
+- Keep all facts accurate — never invent phone numbers, addresses, prices, hours, or services the business does not offer.
+- Write clean semantic HTML. Do NOT add RDFa markup (`<span property=...>`, `<link rel="sameAs">`) or re-link phone numbers — that is applied automatically after your edit.
+- Output valid JSON and valid HTML fragments only. No markdown fences, no commentary.
+"""
+
+
+_VOICE_LOCALIZE_SYSTEM = """You are a brand-voice auditor. You are given a client's BRAND VOICE & AUDIENCE guide and the body sections of a local service page, each shown as `[key] heading: <inner HTML>`.
+
+Judge EACH section against the guide and report ONLY the sections that DRIFT from it — where the register, sentence rhythm, word choice, tone, or distinctiveness no longer matches the guide. Typical drifts, and where they hide:
+- REGISTER: a flat, clipped, catalogue register (often a bare heading-then-bullet-list) instead of the guide's flowing paragraph prose. Mid-page service-description sections are the usual offenders.
+- RHYTHM: uniform sentence length/cadence that doesn't match the guide's pattern.
+- DISTINCTIVENESS: generic, swappable copy that could sit on a competitor's site by changing the business name — no proof, credential, or specific only this client can say.
+- TONE / VOCABULARY / PERSON: wording, formality, or grammatical person that departs from the guide.
+The intro and FAQ usually hold the voice; the MIDDLE service sections are where it slips — scrutinise those hardest. A section that already reads distinctly like this client in the guide's voice is NOT a drift — omit it.
+
+Return ONLY a JSON object: {"drift": [{"key": "<section key>", "dimensions": ["register"|"rhythm"|"distinctiveness"|"tone"|"vocabulary"|"person", ...], "note": "<one concrete phrase naming what drifts>"}, ...]}. Report at most the 6 worst-drifting sections, worst first. Do NOT report sections that are fine. No markdown fences, no commentary."""
+
+
+def _build_drift_block(drift_map, section_keys) -> str:
+    """Render a per-section voice-drift audit into a targeted corrective prompt
+    block. Pure: filters to keys that actually exist on the page, dedupes, and
+    caps at 6. Returns "" when nothing is usable — the caller then relies on the
+    page-wide sweep rules in the corrective system prompt alone (never worse than
+    prior behaviour). Accepts either the parsed ``{"drift": [...]}`` object or a
+    bare list, so a model that drops the wrapper still works."""
+    items = drift_map.get("drift") if isinstance(drift_map, dict) else drift_map
+    if not isinstance(items, list):
+        return ""
+    keys = set(section_keys or [])
+    lines: List[str] = []
+    seen: set = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()
+        if not key or key not in keys or key in seen:
+            continue
+        seen.add(key)
+        dims = item.get("dimensions")
+        dims_txt = (
+            ", ".join(d for d in dims if isinstance(d, str) and d.strip())
+            if isinstance(dims, list) else ""
+        )
+        note = str(item.get("note") or "").strip()
+        detail = " — ".join(p for p in (dims_txt, note) if p)
+        lines.append(f"  [{key}]{(' — ' + detail) if detail else ''}")
+        if len(lines) >= 6:
+            break
+    if not lines:
+        return ""
+    return (
+        "SECTIONS THAT DRIFT FROM THE BRAND VOICE (a per-section audit — these are "
+        "the sections to re-voice HARDEST, in addition to fixing any SEO deficiency: "
+        "rewrite each so it reads distinctly like this client in the guide's register "
+        "and rhythm, per the rules above):\n" + "\n".join(lines) + "\n"
+    )
+
+
+async def _localize_voice_drift(sections, voice_block, client) -> tuple:
+    """Best-effort per-section voice-drift audit (one cheap Haiku call).
+
+    Returns ``(drift_block, token_rec)`` — ``drift_block`` names the sections that
+    drift from the guide (so the single Sonnet corrective pass targets exactly
+    those instead of sweeping blind), ``""`` when the audit is disabled,
+    unavailable, or finds nothing. ``token_rec`` is ``None`` when no call was
+    made. Never raises."""
+    if not (VOICE_LOCALIZE_ENABLED and voice_block and sections):
+        return "", None
+    try:
+        digest = section_edit.section_digest(sections, max_inner_chars=1400)
+        user_prompt = f"{voice_block}\n\nPAGE SECTIONS:\n\n{digest}"
+        msg = await client.messages.create(
+            model=VOICE_LOCALIZE_MODEL,
+            max_tokens=1400,
+            system=[{"type": "text", "text": _VOICE_LOCALIZE_SYSTEM,
+                     "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        token_rec = _token_record(
+            "voice-localize", VOICE_LOCALIZE_MODEL,
+            msg.usage.input_tokens, msg.usage.output_tokens,
+        )
+        drift_map = _parse_claude_json(msg.content[0].text)
+        block = _build_drift_block(drift_map, {s["key"] for s in sections})
+        return block, token_rec
+    except Exception as _vl:
+        logger.warning("voice-localize: failed (page-wide sweep only): %s", _vl)
+        return "", None
+
+
+async def _seo_voice_correct_inline(
+    content_html: str,
+    keyword: str,
+    location: str,
+    city: str,
+    business_name: str,
+    gbp_category: str,
+    address: Optional[str],
+    phone: Optional[str],
+    seo_deficiencies: List[dict],
+    voice_block: str,
+    voice_corrections: str,
+    serp_analysis_dict: Optional[dict],
+    client,
+) -> Optional[tuple]:
+    """Section-scoped SEO + voice corrective pass.
+
+    Rewrites ONLY the sections that need fixing and splices them back, so the LLM
+    output is a few sections rather than a whole ~16k-token page — which is what
+    keeps the second pass affordable under the wall-clock budget. The voice card
+    rides along as a hard constraint on every edit so an SEO fix can't flatten the
+    voice (the caller then re-scores and keep-bests on both axes to catch any
+    regression the prompt didn't prevent).
+
+    Returns ``(new_html, token_rec, applied_keys)`` — or ``None`` when the page
+    has no addressable ``<section>`` structure, the model returned no usable
+    edits, or the call failed, so the caller can fall back to a whole-page
+    rewrite. Never raises."""
+    try:
+        sections = section_edit.split_sections(content_html)
+        if not sections:
+            return None  # no <section> structure to target — caller falls back
+
+        # Lever 2: one cheap Haiku audit names the sections that actually drift
+        # from the voice guide, so this single (expensive Sonnet) pass focuses its
+        # capacity on those instead of sweeping all 5-6 mid-page sections blind.
+        # Best-effort — an empty/failed audit leaves the page-wide sweep rules to
+        # carry the pass as before.
+        drift_block, localize_tok = await _localize_voice_drift(sections, voice_block, client)
+
+        deficiency_text = "\n".join(
+            f"  Engine: {d['engine']} (score: {d.get('score')}/100)\n"
+            f"  Issues: {'; '.join(d.get('issues', []))}\n"
+            f"  Fixes: {'; '.join(d.get('recommendations', []))}"
+            for d in (seo_deficiencies or [])
+        ) or "  (none — apply the voice corrections only)"
+        voice_section = f"\n{voice_block}\n" if voice_block else ""
+        corrections_section = (
+            f"\nVOICE CORRECTIONS — each quoted example is a SAMPLE of a page-wide pattern; "
+            f"apply the correction to EVERY section that drifts the same way (especially the "
+            f"mid-page service descriptions), not only the quoted section:\n{voice_corrections}\n"
+            if voice_corrections else ""
+        )
+        digest = section_edit.section_digest(sections)
+
+        drift_section = f"\n{drift_block}" if drift_block else ""
+        user_prompt = f"""BUSINESS: {business_name} | CATEGORY: {gbp_category}
+KEYWORD: {keyword} | CITY: {city}
+PHONE: {phone or "[PHONE]"}
+ADDRESS: {address or "Not provided"}
+{voice_section}
+SEO DEFICIENCIES TO FIX:
+{deficiency_text}
+{corrections_section}{drift_section}
+PAGE SECTIONS — edit only the ones that need it and return their new inner HTML keyed by [key]:
+
+{digest}
+"""
+        msg = await client.messages.create(
+            model=GENERATION_MODEL,
+            max_tokens=8000,
+            system=[{"type": "text", "text": _SECTION_CORRECT_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        token_rec = _token_record(
+            "section-correct-inline", GENERATION_MODEL,
+            msg.usage.input_tokens, msg.usage.output_tokens,
+        )
+        if localize_tok:
+            # Fold the localizer's cheap Haiku call into this pass's cost so the
+            # page's token_usage/cost_breakdown stays accurate.
+            token_rec["input_tokens"] += localize_tok["input_tokens"]
+            token_rec["output_tokens"] += localize_tok["output_tokens"]
+            token_rec["cost_usd"] = round(token_rec["cost_usd"] + localize_tok["cost_usd"], 6)
+        edits = _parse_claude_json(msg.content[0].text)
+        if not isinstance(edits, dict):
+            return None
+        edits = {k: v for k, v in edits.items() if isinstance(v, str) and v.strip()}
+        if not edits:
+            return None
+
+        # Restore the deterministic markup a fresh section rewrite drops — per
+        # CHANGED section only, so unchanged sections keep their single
+        # first-occurrence RDFa spans (re-marking the whole page would double-wrap
+        # them, since _apply_rdfa_markup marks first occurrence in each text run).
+        entities = (serp_analysis_dict or {}).get("google_entities", [])
+        edits = {
+            k: _apply_rdfa_markup(_linkify_phones(v, phone), entities)
+            for k, v in edits.items()
+        }
+        new_html, applied, skipped = section_edit.apply_section_edits(content_html, edits)
+        if not applied:
+            return None
+        if skipped:
+            logger.info("section-correct: applied %s; skipped unresolved %s", applied, skipped)
+        return new_html, token_rec, applied
+    except Exception as _sce:
+        logger.warning("section-correct: failed (falling back to whole-page): %s", _sce)
+        return None
 
 
 def _sse(data: dict) -> str:
@@ -4510,8 +5295,12 @@ async def _score_page_for_related(
         msg.usage.input_tokens, msg.usage.output_tokens,
     )
     scores = _parse_claude_json(msg.content[0].text)
-    # No serp_analysis available in the related-pages path — coverage engine scores neutral
+    # No serp_analysis available in the related-pages path — serp coverage scores
+    # neutral and length_fit is omitted (no target); the composite renormalizes.
     scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_text, None)
+    _lf = _compute_length_fit(page_html, None)
+    if _lf is not None:
+        scores["length_fit"] = _lf
     composite, status = _composite_from_scores(scores)
     return {
         "composite_score": composite,
@@ -4690,9 +5479,74 @@ def _reopt_serp_context(page_zones: dict, serp_analysis: Optional[dict]) -> str:
             elif still_need_ent == 0:
                 parts.append(f"  Entity target met ({len(present_ent)}/{entity_target})")
 
+    # Page-level mention-frequency deltas — drive the page toward the capped-max
+    # competitor usage (Cora-style) for the strongest entities and related
+    # keywords, not just presence. Only terms carrying a competitor-usage
+    # benchmark and currently under it are listed.
+    full_page_text = " ".join(page_zones.values())
+
+    def _count_in(name: str, text: str) -> int:
+        return len(re.findall(r"\b" + re.escape(name.lower()) + r"\b", text))
+
+    def _freq_lines(items: list, cap: int) -> list:
+        rows = []
+        for it in items:
+            name = (it.get("name") or it.get("term") or "").strip()
+            rec = it.get("recommended_mentions")
+            if not name or not rec:
+                continue
+            rec = int(rec)
+            cur = _count_in(name, full_page_text)
+            if cur >= rec:
+                continue
+            mx = it.get("max_competitor_mentions") or it.get("max_competitor_uses")
+            extra = f" (top competitor uses it {mx}×)" if mx else ""
+            # Per-zone hint for the two zones where frequency matters most.
+            zf = it.get("zone_freq") or {}
+            zbits = []
+            for zk, zlabel in (("h2_h3", "headings"), ("paragraphs", "body")):
+                zrec = zf.get(zk)
+                if not zrec:
+                    continue
+                zcur = _count_in(name, page_zones.get(zk, ""))
+                if zcur < int(zrec):
+                    zbits.append(f"{zlabel} +{int(zrec) - zcur}")
+            zsuffix = f" [{', '.join(zbits)}]" if zbits else ""
+            rows.append((rec - cur, f'  "{name}" — on the page {cur}×, add {rec - cur} more{extra}{zsuffix}'))
+        rows.sort(key=lambda x: x[0], reverse=True)
+        return [ln for _, ln in rows[:cap]]
+
+    ent_freq = _freq_lines(top_entities, 12)
+    # Related keywords: dedupe across zones, keep the highest recommended per term.
+    rk_best: dict = {}
+    for zk in ("title", "h1", "h2_h3", "paragraphs"):
+        for t in rk.get(zk, []):
+            term = (t.get("term") or "").lower()
+            rec = t.get("recommended_mentions")
+            if not term or not rec:
+                continue
+            if term not in rk_best or int(rec) > int(rk_best[term].get("recommended_mentions", 0)):
+                rk_best[term] = t
+    kw_freq = _freq_lines(list(rk_best.values()), 15)
+    bold_freq = _freq_lines(serp_analysis.get("serp_bold_keywords", []), 12)
+    if ent_freq or kw_freq or bold_freq:
+        parts.append(
+            "\nMENTION FREQUENCY — match the top competitor's usage for these terms "
+            "(a [body/headings +N] hint means add that many in that zone specifically). "
+            "Add the mentions naturally; never keyword-stuff or repeat awkwardly:"
+        )
+        if ent_freq:
+            parts.append("  Entities:")
+            parts.extend(ent_freq)
+        if kw_freq:
+            parts.append("  Keywords:")
+            parts.extend(kw_freq)
+        if bold_freq:
+            parts.append("  Google-bolded terms (match the top competitor exactly):")
+            parts.extend(bold_freq)
+
     # Quadgrams delta — check against full page text
     if quadgrams:
-        full_page_text = " ".join(page_zones.values())
         missing_qg = [q["phrase"] for q in quadgrams[:15] if q["phrase"].lower() not in full_page_text]
         present_qg = [q["phrase"] for q in quadgrams[:15] if q["phrase"].lower() in full_page_text]
         parts.append("\nCOMPETITOR PHRASES (4-word phrases from top-ranking pages):")
@@ -4859,6 +5713,8 @@ async def _build_seo_checklist(
         "━" * 60,
         "SEO SCORING CHECKLIST — satisfy ALL items below to score 90+.",
         "These are derived from the exact rubric used to grade your page.",
+        "Execute every item IN THIS CLIENT'S BRAND VOICE and for the customer in the",
+        "BRAND VOICE & AUDIENCE block above — never drop the voice to hit an SEO item; do both.",
         "━" * 60,
         "",
         "【KEYWORD PLACEMENT — organic_ranking 10%】",
@@ -4980,8 +5836,8 @@ async def _build_seo_checklist(
             if terms and target:
                 lines.append(f'  • {zone_label}: include ≥{target} of: {", ".join(terms)}')
 
+        top_ents = sorted(entities, key=lambda e: e.get("page_spread", 0), reverse=True)[:15] if entities else []
         if entities:
-            top_ents = sorted(entities, key=lambda e: e.get("page_spread", 0), reverse=True)[:15]
             ent_names = [e["name"] for e in top_ents]
             lines.append(f'  • Entity pool (Google NLP — use these to establish topical authority): {", ".join(ent_names)}')
             lines.append(  '  • Distribute entities across zones as follows (≥N means at least that many from the pool above):')
@@ -4995,6 +5851,68 @@ async def _build_seo_checklist(
                 if entity_target:
                     lines.append(f'      – {zone_label}: ≥{entity_target} entities')
             lines.append(f'  • Business name + service + city must co-occur in ≥3 sections')
+            # Mention-frequency targets (capped-max competitor usage) — beat the
+            # top competitor on the strongest terms, not just include them once.
+            ent_freq = [f'"{e["name"]}" ≥{e["recommended_mentions"]}×'
+                        for e in top_ents if e.get("recommended_mentions")][:12]
+            if ent_freq:
+                lines.append(
+                    '  • Entity mention targets — use each at least this many times across the page '
+                    f'(competitor-matched, add naturally — never stuff): {", ".join(ent_freq)}'
+                )
+
+        # Keyword + bolded-term mention targets + per-zone emphasis. NOT gated on
+        # `entities` — a run where entity extraction returned nothing still gets
+        # the keyword/bold frequency guidance (top_ents is [] in that case, so the
+        # entity part of the per-zone emphasis simply contributes nothing).
+        kw_best: dict = {}
+        for zk in ("title", "h1", "h2_h3", "paragraphs"):
+            for t in rk.get(zk, []):
+                term = (t.get("term") or "").lower()
+                rec = t.get("recommended_mentions")
+                if not term or not rec:
+                    continue
+                if term not in kw_best or int(rec) > kw_best[term][1]:
+                    kw_best[term] = (t.get("term"), int(rec))
+        kw_freq = [f'"{name}" ≥{rec}×' for name, rec in
+                   sorted(kw_best.values(), key=lambda x: -x[1])][:15]
+        if kw_freq:
+            lines.append(
+                '  • Related-keyword mention targets — competitor-matched frequency, '
+                f'add naturally in body copy: {", ".join(kw_freq)}'
+            )
+        # Bolded-term mention targets (raw competitor max — a direct Google signal).
+        bold_freq = [f'"{b["term"]}" ≥{b.get("recommended_mentions") or b.get("max_competitor_uses")}×'
+                     for b in serp_analysis.get("serp_bold_keywords", [])
+                     if (b.get("recommended_mentions") or b.get("max_competitor_uses"))][:12]
+        if bold_freq:
+            lines.append(
+                '  • Google-bolded term targets — the terms Google highlights in results; '
+                f'match the top competitor exactly: {", ".join(bold_freq)}'
+            )
+        # Per-zone frequency emphasis: terms competitors REPEAT (≥2×) inside a
+        # specific zone, so the writer front-loads the right place, not just the page.
+        zone_emph: dict = {"h2_h3": [], "paragraphs": []}
+
+        def _collect(name, zf):
+            if not name:
+                return
+            for zk_ in ("h2_h3", "paragraphs"):
+                v = (zf or {}).get(zk_)
+                if v and int(v) >= 2:
+                    zone_emph[zk_].append(f'"{name}" ≥{int(v)}×')
+
+        for e in top_ents:
+            _collect(e.get("name"), e.get("zone_freq"))
+        for zk_ in ("title", "h1", "h2_h3", "paragraphs"):
+            for t in rk.get(zk_, []):
+                _collect(t.get("term"), t.get("zone_freq"))
+        for b in serp_analysis.get("serp_bold_keywords", []):
+            _collect(b.get("term"), b.get("zone_freq"))
+        for zk_, zlabel_ in (("paragraphs", "body paragraphs"), ("h2_h3", "H2/H3 headings")):
+            emph = list(dict.fromkeys(zone_emph[zk_]))[:10]
+            if emph:
+                lines.append(f'  • Repeat in {zlabel_} specifically (competitors do): {", ".join(emph)}')
 
         if quadgrams:
             phrases = [q["phrase"] for q in quadgrams[:10]]
@@ -5487,8 +6405,11 @@ async def score_page(request: Request, body: ScorePageRequest):
     if not scores:
         raise HTTPException(status_code=502, detail="Scoring service returned an invalid response. Please try again.")
 
-    # Inject deterministic SERP signal coverage (Python, not Claude)
+    # Inject deterministic SERP signal coverage + length fit (Python, not Claude)
     scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_html, serp_analysis_dict)
+    _lf = _compute_length_fit(page_html, serp_analysis_dict)
+    if _lf is not None:
+        scores["length_fit"] = _lf
 
     # Pull the voice scorecard out FIRST: it must never reach the composite.
     voice_compliance = _voice_scorecard_from(scores, page_html, "", voice_card)
@@ -6215,6 +7136,15 @@ async def generate_page(request: Request, body: GeneratePageRequest):
         city = body.location.split(",")[0].strip()
         _worker_start = time.monotonic()
 
+        def _within_time_budget() -> bool:
+            """False once the generate-page wall-clock budget is spent. Gates the
+            START of each optional improvement pass (length-trim, voice rewrite)
+            so the sequential rewrite→rescore loop can't run away; a pass already
+            in flight still finishes. The initial generation + first score are
+            never gated — they produce the page and its verdict."""
+            return (GENERATION_TIME_BUDGET_SECONDS <= 0
+                    or (time.monotonic() - _worker_start) < GENERATION_TIME_BUDGET_SECONDS)
+
         await q.put({"step": "progress", "progress": 5, "message": "Starting…"})
 
         # Use supplied analysis if present; otherwise run an inline SERP
@@ -6430,6 +7360,24 @@ async def generate_page(request: Request, body: GeneratePageRequest):
         if voice_block:
             voice_block = "\n" + voice_block + "\n"
 
+        # End-of-prompt voice recency reminder. The brand-voice block now leads
+        # the prompt for primacy; this short reminder at the very end holds the
+        # recency too, aimed squarely at the observed failure where voice is
+        # strong in the opening sections and thins into generic copy toward the
+        # end (services list, process steps, FAQ). Only present when there's a
+        # guide to hold to.
+        voice_recency_text = ""
+        if voice_block:
+            voice_recency_text = (
+                "\nVOICE REMINDER (applies to the WHOLE page): keep every section — "
+                "especially the later ones (any additional-services list, the process/"
+                "steps section, and the FAQ) — in "
+                f"{body.business_name}'s brand voice and speaking to the customer described "
+                "above. These sections are where generic, swap-the-name copy creeps in; do "
+                "not let them drift. Use the client's required phrasing and differentiators "
+                "here too, not only in the opening.\n"
+            )
+
         gbp_description_text = (
             f"GBP Description: {body.gbp_description}"
             if body.gbp_description else
@@ -6477,6 +7425,8 @@ async def generate_page(request: Request, body: GeneratePageRequest):
                 f"User notes: {body.notes.strip()}\n"
             )
 
+        length_budget_text = _length_budget_line(serp_analysis_dict)
+
         user_prompt = f"""BUSINESS DATA
 Name: {body.business_name}
 Category: {body.gbp_category}
@@ -6488,10 +7438,12 @@ Hours: {body.hours or "Not provided"}
 Primary keyword: {body.keyword}
 Target city: {city}
 Full location: {body.location}
+{length_budget_text}
 
 {brand_voice_text}
 {icp_text}
 {diff_text}
+{voice_block}
 {reviews_text}
 {website_text}
 {mcs_block}
@@ -6502,8 +7454,8 @@ Full location: {body.location}
 {seo_checklist}
 
 {template_text}
-{voice_block}
-{corrections_text}"""
+{corrections_text}
+{voice_recency_text}"""
 
         await q.put({"step": "progress", "progress": 65, "message": "Generating your page…"})
 
@@ -6556,8 +7508,55 @@ Full location: {body.location}
             content_html = raw
             schema_json  = ""
 
-        # Linkify phone numbers + RDFa entity markup
         content_html = _linkify_phones(content_html, body.phone)
+
+        # ── Required-phrasing net (runs before scoring, before RDFa markup) ───────
+        # A missing required term deterministically CAPS the Vocabulary voice
+        # dimension, so guarantee the guide's required phrasing is present before
+        # the page is scored — in two tiers:
+        #   1. Deterministic (no LLM): single-token adjective requireds the writer
+        #      replaced with a weak superlative ("great reputation" -> the required
+        #      "trusted reputation"; hyphenated compounds like "long-lasting" too).
+        #      Idiom-guarded, body-text only.
+        #   2. Targeted LLM pass: MULTI-WORD phrases the writer expressed with a
+        #      SYNONYM ("specialists" where the guide requires "Melbourne roofing
+        #      experts", "confidence" for "peace of mind") can't be swapped
+        #      deterministically — a bounded, minimal-edit LLM pass weaves them in.
+        #      Runs only when such phrases remain missing AND the time budget allows.
+        # RDFa markup is applied AFTER both, so the LLM pass edits clean HTML and
+        # markup is applied once (no double-wrapping). Best-effort throughout.
+        try:
+            content_html, _req_swapped = vcard.insert_required_terms(content_html, voice_card)
+            if _req_swapped:
+                logger.info(
+                    "generate-page: inserted required phrasing deterministically for '%s': %s",
+                    body.keyword, _req_swapped,
+                )
+        except Exception as _rte:
+            logger.warning("generate-page: required-phrasing net failed (non-fatal): %s", _rte)
+
+        try:
+            _missing_phrases = vcard.multiword_required_terms(
+                _page_text_for_voice_check(content_html, page_title), voice_card
+            )
+            if _missing_phrases and _within_time_budget():
+                _pp = await _insert_required_phrases_inline(
+                    content_html, _missing_phrases, voice_block,
+                    body.keyword, body.business_name, body.phone, client,
+                )
+                if _pp is not None:
+                    content_html, _pp_tok = _pp
+                    token_rec["input_tokens"]  += _pp_tok["input_tokens"]
+                    token_rec["output_tokens"] += _pp_tok["output_tokens"]
+                    token_rec["cost_usd"]       = round(token_rec["cost_usd"] + _pp_tok["cost_usd"], 6)
+                    logger.info(
+                        "generate-page: targeted phrase pass inserted %s for '%s'",
+                        _missing_phrases, body.keyword,
+                    )
+        except Exception as _ppe:
+            logger.warning("generate-page: phrase-insert pass failed (non-fatal): %s", _ppe)
+
+        # RDFa entity markup — applied once, after all text edits above.
         google_entities = (serp_analysis_dict or {}).get("google_entities", [])
         content_html = _apply_rdfa_markup(content_html, google_entities)
 
@@ -6568,10 +7567,11 @@ Full location: {body.location}
         await q.put({"step": "progress", "progress": 90, "message": "Scoring your page…"})
         inline_score = None
         inline_scores = None  # full per-engine verdict (surfaced below for persistence)
+        inline_defs = None    # per-engine deficiencies (drives the length-trim pass)
         voice_scorecard = None  # separate brand-voice verdict (never in the composite)
         for _score_attempt in range(3):
             try:
-                inline_score, _, inline_scores, score_tok, voice_scorecard = await _score_html_inline(
+                inline_score, inline_defs, inline_scores, score_tok, voice_scorecard = await _score_html_inline(
                     content_html, body.keyword, body.location, body.business_name,
                     body.gbp_category, body.address, serp_analysis_dict, client,
                     voice_card=voice_card,
@@ -6586,6 +7586,57 @@ Full location: {body.location}
                 else:
                     logger.warning(f"generate-page: scoring failed after 3 attempts: {_ae}")
 
+        # ── Length enforcement: trim once if the writer BADLY overshot the target ──
+        # The generation prompt carries an authoritative word budget, so most pages
+        # land in range; this is the safety net for the ones that don't. To keep it
+        # from adding a ~90s rewrite + ~90s re-score to every mildly-long page, it
+        # only fires when the page is over target by at least LENGTH_TRIM_MIN_RATIO
+        # (40% by default). Milder overages are still scored by length_fit and still
+        # trimmed by the bulk reoptimizer's gate — just not at generation time.
+        # length_fit carries a concrete "cut ~N words" deficiency; one reopt pass
+        # (the same mechanism the voice loop uses) trims it. Runs before the voice
+        # loop so voice is judged on the page that ships. Best-effort: any failure
+        # keeps the generated page. Under-length never triggers a trim.
+        length_engine = (inline_scores or {}).get("length_fit")
+        length_def = next(
+            (d for d in (inline_defs or []) if d.get("engine_key") == "length_fit"), None
+        )
+        _needs_trim = bool(length_def) and length_fit.is_over_length(length_engine, LENGTH_TRIM_MIN_RATIO)
+        if _needs_trim and not _within_time_budget():
+            logger.info(
+                "generate-page: over target but the %ss time budget is spent — "
+                "shipping without the length-trim pass", GENERATION_TIME_BUDGET_SECONDS
+            )
+        elif _needs_trim:
+            await q.put({"step": "progress", "progress": 91, "message": "Trimming to match the top pages…"})
+            try:
+                trimmed_html, trimmed_schema, trimmed_title, trim_tok = await _reoptimize_html_inline(
+                    content_html, body.keyword, body.location, city, body.business_name,
+                    body.gbp_category, body.address, body.phone, [length_def],
+                    serp_analysis_dict, seo_checklist, client, voice_block=voice_block,
+                )
+                token_rec["input_tokens"]  += trim_tok["input_tokens"]
+                token_rec["output_tokens"] += trim_tok["output_tokens"]
+                token_rec["cost_usd"]       = round(token_rec["cost_usd"] + trim_tok["cost_usd"], 6)
+                if (trimmed_html or "").strip():
+                    content_html = trimmed_html
+                    schema_json  = trimmed_schema or schema_json
+                    page_title   = trimmed_title or page_title
+                    # Re-score so the result + the voice loop describe the trimmed page.
+                    try:
+                        inline_score, inline_defs, inline_scores, rescore_tok, voice_scorecard = await _score_html_inline(
+                            content_html, body.keyword, body.location, body.business_name,
+                            body.gbp_category, body.address, serp_analysis_dict, client,
+                            voice_card=voice_card,
+                        )
+                        token_rec["input_tokens"]  += rescore_tok["input_tokens"]
+                        token_rec["output_tokens"] += rescore_tok["output_tokens"]
+                        token_rec["cost_usd"]       = round(token_rec["cost_usd"] + rescore_tok["cost_usd"], 6)
+                    except Exception as _lse:
+                        logger.warning(f"generate-page: re-score after length trim failed: {_lse}")
+            except Exception as _lte:
+                logger.warning(f"generate-page: length trim pass failed (keeping page): {_lte}")
+
         # A scoring outage must not silently produce an unchecked page. The
         # deterministic half needs no network, so run it on its own — a
         # forbidden word still gets caught and still triggers a rewrite.
@@ -6597,52 +7648,95 @@ Full location: {body.location}
                     f"deterministic checks only for '{body.keyword}'"
                 )
 
-        # ── Brand-voice enforcement: rewrite until it sounds like the client ──
-        # Two independent triggers, either of which earns a corrective pass:
-        # a deterministic `critical` finding (a forbidden word is a fact, not an
-        # opinion) or a scorecard below the pass bar. Each pass is fed BOTH the
-        # named words to remove and the failing dimensions with their evidence
-        # quotes, which is far better rewrite input than a bare score.
-        if voice_scorecard and voice_scorecard.get("needs_rewrite"):
+        # ── Second pass: two-axis (voice + SEO) corrective, section-scoped ────
+        # Voice is anchored in pass 1 now, so a shortfall is most likely SEO.
+        # Fire when EITHER the voice scorecard needs a rewrite (a forbidden word
+        # or a sub-bar score) OR the SEO composite fell short with at least one
+        # deficient engine. Each pass rewrites ONLY the weak sections (cheap
+        # output → fits the wall-clock budget), carries the voice card as a hard
+        # constraint so an SEO fix can't flatten the voice, re-scores BOTH axes,
+        # and keep-bests on both — a pass that lifts one axis while regressing the
+        # other is never shipped.
+        def _seo_short(score, defs):
+            # length_fit has its own trim pass above; brand_voice is never in the
+            # SEO composite. A shortfall needs both a sub-bar composite AND an
+            # actionable deficient engine, so an already-strong page skips the pass.
+            _sd = [d for d in (defs or []) if d.get("engine_key") != "length_fit"]
+            short = score is not None and score < SEO_SECOND_PASS_THRESHOLD and bool(_sd)
+            return short, _sd
+
+        _voice_needs = bool(voice_scorecard and voice_scorecard.get("needs_rewrite"))
+        _seo_needs, _seo_defs = _seo_short(inline_score, inline_defs)
+        if _voice_needs or _seo_needs:
+            # Keep-best across BOTH axes (see _combined_rank_key): the strongest
+            # state seen wins, so a corrective pass that scores lower on either
+            # axis than its predecessor is never the one that ships.
+            _best = {"html": content_html, "schema": schema_json, "title": page_title,
+                     "score": inline_score, "scores": inline_scores, "voice": voice_scorecard}
+            _best_key = _combined_rank_key(inline_score, voice_scorecard, SEO_SECOND_PASS_THRESHOLD)
             for _fix_pass in range(1, MAX_VOICE_CORRECTION_PASSES + 1):
+                # Time budget: don't START another pass once the wall-clock budget
+                # is spent — ship the best page so far (a pass already in flight
+                # has finished). Keeps the sequential loop from stacking.
+                if not _within_time_budget():
+                    logger.info(
+                        "generate-page: %ss time budget spent after pass %d — "
+                        "shipping best page without further correction",
+                        GENERATION_TIME_BUDGET_SECONDS, _fix_pass - 1,
+                    )
+                    break
                 await q.put({
                     "step": "progress", "progress": 92,
-                    "message": (f"Aligning to the brand guide "
+                    "message": (f"Refining voice + SEO "
                                 f"(pass {_fix_pass} of {MAX_VOICE_CORRECTION_PASSES})…"),
                 })
                 corrections = "\n\n".join(part for part in (
-                    vcard.violations_to_corrections(voice_scorecard.get("violations")),
-                    vcard.voice_deficiency_text(voice_scorecard.get("deficiencies")),
+                    vcard.violations_to_corrections((voice_scorecard or {}).get("violations")),
+                    vcard.voice_deficiency_text((voice_scorecard or {}).get("deficiencies")),
                 ) if part)
-                try:
-                    fixed_html, fixed_schema, fixed_title, fix_tok = await _reoptimize_html_inline(
-                        existing_html=content_html,
-                        keyword=body.keyword, location=body.location, city=city,
-                        business_name=body.business_name, gbp_category=body.gbp_category,
-                        address=body.address, phone=body.phone,
-                        deficiencies=[], serp_analysis_dict=serp_analysis_dict,
-                        seo_checklist=seo_checklist, client=client,
-                        voice_block=voice_block, voice_corrections=corrections,
-                    )
-                except Exception as _ve:
-                    logger.warning(f"generate-page: voice pass {_fix_pass} failed: {_ve}")
-                    break
+
+                # Prefer the section-scoped corrective (only the weak sections,
+                # small output). Fall back to a whole-page rewrite when the page
+                # has no addressable <section> structure or the scoped pass yields
+                # nothing usable.
+                fixed_html = None
+                _sc = await _seo_voice_correct_inline(
+                    content_html, body.keyword, body.location, city,
+                    body.business_name, body.gbp_category, body.address, body.phone,
+                    _seo_defs, voice_block, corrections, serp_analysis_dict, client,
+                )
+                if _sc is not None:
+                    fixed_html, fix_tok, _applied = _sc
+                    # Section edits don't touch <title>/schema — keep them as-is.
+                else:
+                    try:
+                        fixed_html, _fs, _ft, fix_tok = await _reoptimize_html_inline(
+                            existing_html=content_html,
+                            keyword=body.keyword, location=body.location, city=city,
+                            business_name=body.business_name, gbp_category=body.gbp_category,
+                            address=body.address, phone=body.phone,
+                            deficiencies=_seo_defs, serp_analysis_dict=serp_analysis_dict,
+                            seo_checklist=seo_checklist, client=client,
+                            voice_block=voice_block, voice_corrections=corrections,
+                        )
+                        if (fixed_html or "").strip():
+                            schema_json = _fs or schema_json
+                            page_title = _ft or page_title
+                    except Exception as _ve:
+                        logger.warning(f"generate-page: correction pass {_fix_pass} failed: {_ve}")
+                        break
                 if not (fixed_html or "").strip():
-                    logger.warning(f"generate-page: voice pass {_fix_pass} returned empty HTML; keeping previous")
+                    logger.warning(f"generate-page: correction pass {_fix_pass} produced no HTML; keeping previous")
                     break
                 token_rec["input_tokens"]  += fix_tok["input_tokens"]
                 token_rec["output_tokens"] += fix_tok["output_tokens"]
                 token_rec["cost_usd"]       = round(token_rec["cost_usd"] + fix_tok["cost_usd"], 6)
                 content_html = fixed_html
-                schema_json = fixed_schema or schema_json
-                page_title = fixed_title or page_title
 
-                # Re-score the rewrite. The SEO composite is refreshed too: a
-                # voice rewrite touches the prose, so the old composite no longer
-                # describes this page.
+                # Re-score both axes on the corrected page.
                 try:
                     (
-                        inline_score, _, inline_scores, rescore_tok, voice_scorecard
+                        inline_score, inline_defs, inline_scores, rescore_tok, voice_scorecard
                     ) = await _score_html_inline(
                         content_html, body.keyword, body.location, body.business_name,
                         body.gbp_category, body.address, serp_analysis_dict, client,
@@ -6652,16 +7746,33 @@ Full location: {body.location}
                     token_rec["output_tokens"] += rescore_tok["output_tokens"]
                     token_rec["cost_usd"]       = round(token_rec["cost_usd"] + rescore_tok["cost_usd"], 6)
                 except Exception as _re:
-                    logger.warning(f"generate-page: voice re-score {_fix_pass} failed: {_re}")
+                    logger.warning(f"generate-page: re-score after pass {_fix_pass} failed: {_re}")
                     break
-                if not (voice_scorecard or {}).get("needs_rewrite"):
+
+                _key = _combined_rank_key(inline_score, voice_scorecard, SEO_SECOND_PASS_THRESHOLD)
+                if _key > _best_key:
+                    _best_key = _key
+                    _best = {"html": content_html, "schema": schema_json, "title": page_title,
+                             "score": inline_score, "scores": inline_scores, "voice": voice_scorecard}
+
+                # Both bars cleared → done.
+                _seo_needs, _seo_defs = _seo_short(inline_score, inline_defs)
+                _voice_needs = bool(voice_scorecard and voice_scorecard.get("needs_rewrite"))
+                if not _voice_needs and not _seo_needs:
                     break
-            if (voice_scorecard or {}).get("needs_rewrite"):
+            # Ship the best pass across both axes (keeps html + scorecard
+            # consistent even if a re-score failed mid-loop).
+            content_html, schema_json, page_title = _best["html"], _best["schema"], _best["title"]
+            inline_score, inline_scores, voice_scorecard = _best["score"], _best["scores"], _best["voice"]
+            _still_voice = bool((voice_scorecard or {}).get("needs_rewrite"))
+            _still_seo, _ = _seo_short(inline_score, _build_deficiencies(inline_scores or {}))
+            if _still_voice or _still_seo:
                 # Flagged, not silently shipped.
                 logger.warning(
-                    "generate-page: page still off brand voice after "
-                    f"{MAX_VOICE_CORRECTION_PASSES} passes for '{body.keyword}' "
-                    f"(score={voice_scorecard.get('score')})"
+                    "generate-page: page still short after %d passes for '%s' "
+                    "(voice_score=%s seo_composite=%s)",
+                    MAX_VOICE_CORRECTION_PASSES, body.keyword,
+                    (voice_scorecard or {}).get("score"), inline_score,
                 )
 
         # Build combined cost breakdown
@@ -6751,6 +7862,16 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
         city = body.location.split(",")[0].strip()
         _worker_start = time.monotonic()
 
+        def _within_time_budget() -> bool:
+            """False once the reoptimize wall-clock budget is spent. Gates the
+            START of each optional improvement pass (auto-retry rewrite, voice
+            rewrite) so the page can't stack passes into a 15–20 minute run; a
+            pass already in flight still finishes. The initial rewrite + first
+            score are never gated — they produce the page and its verdict.
+            Shares GENERATION_TIME_BUDGET_SECONDS with generate-page (one dial)."""
+            return (GENERATION_TIME_BUDGET_SECONDS <= 0
+                    or (time.monotonic() - _worker_start) < GENERATION_TIME_BUDGET_SECONDS)
+
         await q.put({"step": "progress", "progress": 10, "message": "Fetching existing page…"})
 
         # Fetch existing page if URL given but no HTML
@@ -6834,6 +7955,8 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
             "Still keep every paragraph short per rule 2 (1–2 sentences)."
         )
 
+        length_budget_text = _length_budget_line(body.serp_analysis)
+
         user_prompt = f"""BUSINESS DATA
 Name: {body.business_name}
 Category: {body.gbp_category}
@@ -6842,6 +7965,7 @@ Phone: {body.phone or "Not provided — use [PHONE] as placeholder"}
 Primary keyword: {body.keyword}
 Target city: {city}
 Full location: {body.location}
+{length_budget_text}
 
 {mcs_block}
 {serp_ctx}
@@ -6945,6 +8069,13 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
             for pass_num in range(2, MAX_AUTO_PASSES + 1):
                 if inline_score >= 90:
                     break
+                if not _within_time_budget():
+                    logger.info(
+                        "reoptimize-page: %ss time budget spent before auto-retry "
+                        "pass %d — shipping current page (score=%s)",
+                        GENERATION_TIME_BUDGET_SECONDS, pass_num, inline_score,
+                    )
+                    break
                 pct = min(92, 78 + pass_num * 3)
                 await q.put({
                     "step": "progress",
@@ -7017,7 +8148,23 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                 except Exception as _ce:
                     logger.warning(f"reoptimize-page: checklist build for voice pass failed: {_ce}")
                     seo_checklist = ""
+            # Keep-best: ship the strongest pass, not merely the last one.
+            _best = {"html": content_html, "schema": schema_json, "title": page_title,
+                     "score": inline_score, "defs": inline_defs, "scores": inline_scores,
+                     "voice": voice_scorecard}
             for _fix_pass in range(1, MAX_VOICE_CORRECTION_PASSES + 1):
+                # Always allow the first pass (a critical voice finding is
+                # publish-blocking, so it earns one repair attempt whatever the
+                # clock says); gate later passes on the shared time budget so the
+                # loop can't stack a page into a 15–20 minute run.
+                if _fix_pass > 1 and not _within_time_budget():
+                    logger.info(
+                        "reoptimize-page: %ss time budget spent before voice "
+                        "pass %d — shipping best page so far (voice score=%s)",
+                        GENERATION_TIME_BUDGET_SECONDS, _fix_pass,
+                        (_best.get("voice") or {}).get("score"),
+                    )
+                    break
                 await q.put({
                     "step": "progress", "progress": 93,
                     "message": (f"Aligning to the brand guide "
@@ -7060,13 +8207,22 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                 except Exception as _re:
                     logger.warning(f"reoptimize-page: voice re-score {_fix_pass} failed: {_re}")
                     break
+                if _voice_rank_key(voice_scorecard) > _voice_rank_key(_best["voice"]):
+                    _best = {"html": content_html, "schema": schema_json, "title": page_title,
+                             "score": inline_score, "defs": inline_defs, "scores": inline_scores,
+                             "voice": voice_scorecard}
                 if not (voice_scorecard or {}).get("needs_rewrite"):
                     break
+            # Ship the best pass, not merely the last (also keeps html + scorecard
+            # consistent if a re-score failed mid-loop).
+            content_html, schema_json, page_title = _best["html"], _best["schema"], _best["title"]
+            inline_score, inline_defs = _best["score"], _best["defs"]
+            inline_scores, voice_scorecard = _best["scores"], _best["voice"]
             if (voice_scorecard or {}).get("needs_rewrite"):
                 logger.warning(
                     "reoptimize-page: page still off brand voice after "
                     f"{MAX_VOICE_CORRECTION_PASSES} passes for '{body.keyword}' "
-                    f"(score={voice_scorecard.get('score')})"
+                    f"(best score={voice_scorecard.get('score')})"
                 )
 
         await q.put({"step": "progress", "progress": 95, "message": "Finishing up…"})
@@ -8941,6 +10097,9 @@ async def _ecommerce_fix_voice(
     if not (scorecard or {}).get("needs_rewrite"):
         return content_html, schema_json, page_title, content_gaps, scorecard, spend
 
+    # Keep-best: ship the strongest pass, not merely the last one.
+    _best = {"html": content_html, "schema": schema_json, "title": page_title,
+             "gaps": content_gaps, "sc": scorecard}
     for _pass in range(1, MAX_VOICE_CORRECTION_PASSES + 1):
         corrections = "\n\n".join(part for part in (
             vcard.violations_to_corrections(scorecard.get("violations")),
@@ -8990,13 +10149,20 @@ fact, spec value, heading structure, table, list and schema exactly as it is):
         except Exception as exc:
             logger.warning(f"ecommerce voice re-score {_pass} failed: {exc}")
             break
+        if _voice_rank_key(scorecard) > _voice_rank_key(_best["sc"]):
+            _best = {"html": content_html, "schema": schema_json, "title": page_title,
+                     "gaps": content_gaps, "sc": scorecard}
         if not (scorecard or {}).get("needs_rewrite"):
             break
 
+    # Ship the best pass, not merely the last (also keeps html + scorecard
+    # consistent if a re-score failed mid-loop).
+    content_html, schema_json, page_title = _best["html"], _best["schema"], _best["title"]
+    content_gaps, scorecard = _best["gaps"], _best["sc"]
     if (scorecard or {}).get("needs_rewrite"):
         logger.warning(
             f"ecommerce: page still off brand voice after {MAX_VOICE_CORRECTION_PASSES} "
-            f"passes for '{keyword}' (score={scorecard.get('score')})"
+            f"passes for '{keyword}' (best score={scorecard.get('score')})"
         )
     return content_html, schema_json, page_title, content_gaps, scorecard, spend
 

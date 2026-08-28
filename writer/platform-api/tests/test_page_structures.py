@@ -176,6 +176,70 @@ def test_render_full_includes_replication_checklist():
     assert "FAQ" in out
 
 
+def test_render_full_layout_only_suppresses_word_targets():
+    """The service brief renders the reference LAYOUT-ONLY (SERP drives length):
+    section layout, order, hierarchy, intents, and block composition are kept, but
+    no absolute per-section / total word counts and no "hit the word count"
+    directive — so the reference can't drag the page toward its own length."""
+    entry = {
+        "url": "https://x.com/p",
+        "status": "complete",
+        "analysis": {
+            "outline": [
+                {"level": "H2", "heading": "Hero", "intent": "hero",
+                 "word_count": 300, "blocks": [{"type": "paragraph", "count": 2, "words": 300}]},
+                {"level": "H2", "heading": "Services", "intent": "service_detail",
+                 "word_count": 900, "blocks": [{"type": "list", "count": 1, "items": 6}]},
+            ],
+            "structure_summary": "A landing page.",
+            "elements": {"section_count": 2, "approx_total_words": 1200,
+                         "has_cta": True, "intro_pattern": "problem-first"},
+        },
+    }
+    full = render_reference_structure(entry, "service")
+    layout = render_reference_structure(entry, "service", include_word_targets=False)
+    assert full is not None and layout is not None
+
+    # Full mode carries absolute word counts + the word-count directive.
+    assert "~300 words" in full
+    assert "1200 words" in full
+    assert "word count within" in full
+
+    # Layout-only mode suppresses ALL word counts + the word-count directive...
+    assert "300 words" not in layout
+    assert "900 words" not in layout
+    assert "1200 words" not in layout
+    assert "word count within" not in layout
+    assert "total words across the page" not in layout
+
+    # ...but keeps layout: section count, order, hierarchy, intents, and blocks.
+    assert "Hero" in layout and "Services" in layout
+    assert "2 main sections" in layout
+    assert "hero" in layout  # intent label
+    assert "list" in layout  # block composition preserved
+    assert "Reproduce each section's block composition" in layout
+
+
+def test_render_full_scale_path_unaffected_by_layout_flag():
+    """Local SEO's target_words scaling (include_word_targets defaults True) is
+    untouched: passing a target still rescales the reference's word counts."""
+    entry = {
+        "status": "complete",
+        "analysis": {
+            "outline": [
+                {"level": "H2", "heading": "A", "word_count": 400},
+                {"level": "H2", "heading": "B", "word_count": 600},
+            ],
+            "structure_summary": "s",
+            "elements": {"section_count": 2, "approx_total_words": 1000},
+        },
+    }
+    scaled = render_reference_structure(entry, "local_landing", target_words=500)
+    assert scaled is not None
+    # 1000 -> 500 total: A 400->200, B 600->300.
+    assert "~200 words" in scaled and "~300 words" in scaled
+
+
 def test_render_opening_mode_omits_outline():
     out = render_reference_structure(_complete_entry(), "blog_post", mode="opening")
     assert out is not None
@@ -1033,3 +1097,78 @@ def test_render_full_omits_total_words_directive_for_partial_counts():
     assert "total words across the page" not in out
     # The per-section targets that WERE stated still come through.
     assert "~100 words" in out
+
+
+# ── scale_analysis_words (SERP-budget rescaling of the reference layout) ──────
+
+from services.page_structure_render import (  # noqa: E402
+    scale_analysis_words,
+    outline_total_words,
+)
+
+
+def _scale_ref():
+    """A reference analysis summing to 3177 words (FCR-shaped) — 3 sections."""
+    return {
+        "outline": [
+            {"level": "H1", "heading": "Hero", "intent": "hero", "word_count": 600,
+             "blocks": [{"type": "paragraph", "count": 2, "words": 600}]},
+            {"level": "H2", "heading": "Services", "intent": "service_detail", "word_count": 1977,
+             "blocks": [{"type": "paragraph", "count": 3, "words": 1500},
+                        {"type": "list", "count": 1, "items": 6, "words": 477}]},
+            {"level": "H2", "heading": "FAQ", "intent": "faq", "word_count": 600,
+             "blocks": [{"type": "paragraph", "count": 4, "words": 600}]},
+        ],
+        "elements": {"section_count": 3, "approx_total_words": 3177,
+                     "has_faq": True, "has_cta": True},
+        "structure_summary": "hero, services, faq",
+    }
+
+
+def test_scale_down_to_serp_budget_preserves_proportions():
+    a = _scale_ref()
+    assert outline_total_words(a) == 3177
+    scaled = scale_analysis_words(a, 1571)
+    # total lands within rounding of the target
+    assert abs(outline_total_words(scaled) - 1571) <= 3
+    # proportions preserved: services stays the biggest section
+    counts = [s["word_count"] for s in scaled["outline"]]
+    assert counts[1] > counts[0] and counts[1] > counts[2]
+    # block-level word counts scaled too; total set to the target
+    assert scaled["outline"][1]["blocks"][0]["words"] < 1500
+    assert scaled["elements"]["approx_total_words"] == 1571
+
+
+def test_scale_never_mutates_input():
+    a = _scale_ref()
+    scale_analysis_words(a, 900)
+    assert outline_total_words(a) == 3177  # original untouched
+    assert a["elements"]["approx_total_words"] == 3177
+
+
+def test_scale_can_scale_up_when_reference_is_short():
+    # SERP budget, not the reference's own length, sets the target.
+    short = {"outline": [{"level": "H2", "heading": "X", "word_count": 200}]}
+    scaled = scale_analysis_words(short, 1000)
+    assert scaled["outline"][0]["word_count"] == 1000
+
+
+def test_scale_noop_without_target_or_outline_or_words():
+    a = _scale_ref()
+    assert scale_analysis_words(a, None) is a          # no target → unchanged object
+    assert scale_analysis_words(a, 0) is a
+    empty = {"outline": []}
+    assert scale_analysis_words(empty, 1571) is empty   # nothing to scale
+    no_words = {"outline": [{"level": "H2", "heading": "X"}]}
+    assert scale_analysis_words(no_words, 1571) is no_words  # no measurable length
+
+
+def test_render_uses_scaled_targets_not_reference_length():
+    entry = {"status": "complete", "analysis": _scale_ref()}
+    block = render_reference_structure(entry, "local_landing", target_words=1571)
+    assert block is not None
+    assert "3177" not in block          # the reference's own length never reaches the writer
+    assert "1571" in block              # the SERP budget does
+    # without a target it still renders the raw reference (back-compat)
+    raw = render_reference_structure(entry, "local_landing")
+    assert raw is not None and "3177" in raw

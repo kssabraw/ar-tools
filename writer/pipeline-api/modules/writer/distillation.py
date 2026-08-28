@@ -42,6 +42,8 @@ You must output a single JSON object matching this exact schema:
   "preferred_terms": [string, max 20 items],
   "banned_terms": [string, max 30 items],
   "discouraged_terms": [string, max 20 items],
+  "differentiators": [string, max 6 items - the concrete, specific things that make THIS brand distinct from a generic competitor: proof points, credentials, guarantees, signature methods, years/scale, service-area or process specifics. Extract only what the documents actually claim.],
+  "signature_phrases": [string, max 8 items - verbatim taglines, slogans, or characteristic turns of phrase the brand uses for ITSELF that a competitor would not; empty list if none are stated],
   "client_services": [string, max 15 items],
   "client_locations": [string, max 15 items],
   "client_contact_info": {"phone": string|null, "email": string|null, "address": string|null, "hours": string|null}
@@ -56,6 +58,7 @@ CRITICAL RULES:
 - A term is "preferred" when the brand guide names it as preferred phrasing.
 - audience_summary, audience_personas, audience_verticals, audience_company_size, audience_pain_points, audience_goals, audience_triggers, audience_motivations, audience_objections all come from the ICP text.
 - cta_language may come from either document, wherever CTA wording is specified. sentence_rhythm comes from the brand guide only.
+- differentiators and signature_phrases may come from either the brand guide or the ICP. differentiators are what the brand claims sets it apart (a generic "quality service" is NOT a differentiator); signature_phrases are the brand's own verbatim wording. Do NOT invent either - an empty list is correct when the documents state nothing distinctive.
 - audience_triggers/motivations/objections: extract only what the ICP states. An empty array is the correct answer when it says nothing — never infer plausible-sounding ones.
 - audience_personas: extract the named job titles/roles verbatim (e.g. "VP of Growth", "Director of Marketing"). Do not infer titles that aren't in the ICP.
 - audience_verticals: extract the named industry verticals verbatim (e.g. "Beauty", "Food & Beverage"). Do not infer verticals that aren't in the ICP.
@@ -156,6 +159,8 @@ def _parse_card(raw: dict) -> BrandVoiceCard:
         preferred_terms=_list("preferred_terms", 20),
         banned_terms=_list("banned_terms", 30),
         discouraged_terms=_list("discouraged_terms", 20),
+        differentiators=_list("differentiators", 6),
+        signature_phrases=_list("signature_phrases", 8),
         client_services=_list("client_services", 15),
         client_locations=_list("client_locations", 15),
         client_contact_info=ClientContactInfo(
@@ -177,5 +182,6 @@ def is_card_empty(card: Optional[BrandVoiceCard]) -> bool:
         card.audience_verticals, card.audience_company_size,
         card.audience_pain_points, card.audience_goals,
         card.preferred_terms, card.banned_terms, card.discouraged_terms,
+        card.differentiators, card.signature_phrases,
         card.client_services, card.client_locations,
     ])

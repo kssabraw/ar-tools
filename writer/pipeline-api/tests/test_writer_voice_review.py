@@ -77,6 +77,15 @@ def test_card_to_dict_maps_the_renamed_term_lists():
     assert card["person"] == "first"
 
 
+def test_card_to_dict_maps_the_distinctiveness_fields():
+    card = vr.card_to_dict(_card(
+        differentiators=["50-year workmanship warranty"],
+        signature_phrases=["Roofs done right, rain or shine"],
+    ))
+    assert card["differentiators"] == ["50-year workmanship warranty"]
+    assert card["signature_phrases"] == ["Roofs done right, rain or shine"]
+
+
 def test_card_to_dict_synthesises_an_audience_label():
     card = vr.card_to_dict(_card(
         audience_personas=["VP of Growth"], audience_verticals=["Beauty"],

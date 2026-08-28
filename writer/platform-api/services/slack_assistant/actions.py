@@ -1255,6 +1255,174 @@ async def _act_authority_report(client_id: str, args: Optional[dict] = None) -> 
 _SOP_TASK_ENUM = task_catalog.catalog_labels()
 
 
+# --- Phase 1 commission actions (autonomous-seo-agent plan §2.3) -------------
+# The write muscle: SerMaStr can COMMISSION deliverables, not just trigger
+# analysis. All confirm-gated (reply-*yes*) and freeze-aware; each mirrors the
+# router path it wraps. Publishing to a client site (Tier 3) is deliberately
+# NOT here — held for the autonomy tier decision (publishing-is-human ruling).
+
+_CONTENT_RUN_TYPES = {"blog_post", "service_page"}
+_CONTENT_TYPE_ALIASES = {
+    "blog": "blog_post", "post": "blog_post", "article": "blog_post",
+    "blog_post": "blog_post", "service": "service_page",
+    "service_page": "service_page",
+}
+
+
+def _norm_content_type(raw: Optional[str]) -> Optional[str]:
+    """blog_post | service_page, else None. location_page is excluded — it needs
+    a location + services config that belongs on the dashboard."""
+    t = (raw or "blog_post").strip().lower().replace(" ", "_")
+    t = _CONTENT_TYPE_ALIASES.get(t, t)
+    return t if t in _CONTENT_RUN_TYPES else None
+
+
+def _is_frozen(client_id: str) -> bool:
+    """True when content creation is paused by the Freeze Protocol."""
+    from fastapi import HTTPException
+    from services.freeze import assert_not_frozen
+    try:
+        assert_not_frozen(client_id)
+        return False
+    except HTTPException:
+        return True
+
+
+_FROZEN_MSG = "This client is frozen — content creation is paused until the freeze lifts."
+
+
+async def _stage_start_content_run(client_id: str, args: dict) -> tuple[str, dict | str]:
+    keyword = (args.get("keyword") or "").strip()
+    if not keyword:
+        return "reply", "What keyword should I write about?"
+    content_type = _norm_content_type(args.get("content_type"))
+    if content_type is None:
+        return "reply", (
+            "I can start a blog post or a service page from here. Location pages "
+            "need a target location + services, so start those on the dashboard: "
+            f"/clients/{client_id}/runs"
+        )
+    if _is_frozen(client_id):
+        return "reply", _FROZEN_MSG
+    label = "blog post" if content_type == "blog_post" else "service page"
+    return "confirm", {
+        "keyword": keyword,
+        "content_type": content_type,
+        "service": (args.get("service") or "").strip() or None,
+        "writer_notes": (args.get("writer_notes") or "").strip() or None,
+        "_confirm": f"start a {label} run for “{keyword}”",
+    }
+
+
+async def _act_start_content_run(client_id: str, args: Optional[dict] = None) -> str:
+    import asyncio
+    from services.orchestrator import NON_TERMINAL_STATUSES, orchestrate_run
+    from services.run_dispatch import create_run_and_snapshot
+
+    args = args or {}
+    keyword = (args.get("keyword") or "").strip()
+    content_type = _norm_content_type(args.get("content_type")) or "blog_post"
+    if not keyword:
+        return "I need a keyword to write about."
+    if _is_frozen(client_id):
+        return _FROZEN_MSG
+    supabase = get_supabase()
+    in_flight = (
+        supabase.table("runs").select("id", count="exact")
+        .in_("status", list(NON_TERMINAL_STATUSES)).execute()
+    ).count or 0
+    if in_flight >= 5:
+        return "The pipeline is busy (5 runs already in flight) — try again in a few minutes."
+    client = (
+        supabase.table("clients").select("*").eq("id", client_id).limit(1).execute()
+    ).data
+    if not client:
+        return "I couldn't find that client."
+    run_id = create_run_and_snapshot(
+        client=client[0],
+        keyword=keyword,
+        content_type=content_type,
+        service=(args.get("service") or "").strip() or None,
+        writer_notes=(args.get("writer_notes") or "").strip() or None,
+        created_by=None,
+    )
+    asyncio.create_task(orchestrate_run(run_id))
+    label = "blog post" if content_type == "blog_post" else "service page"
+    return f"✅ Started a {label} run for *“{keyword}”* — /clients/{client_id}/runs/{run_id}"
+
+
+async def _stage_generate_local_seo_page(client_id: str, args: dict) -> tuple[str, dict | str]:
+    keyword = (args.get("keyword") or "").strip()
+    location = (args.get("location") or "").strip()
+    if not keyword:
+        return "reply", "What service or term should the page target?"
+    if not location:
+        return "reply", "Which city or area is this Local SEO page for?"
+    if _is_frozen(client_id):
+        return "reply", _FROZEN_MSG
+    return "confirm", {
+        "keyword": keyword,
+        "location": location,
+        "_confirm": f"generate a Local SEO page for “{keyword}” in {location}",
+    }
+
+
+async def _act_generate_local_seo_page(client_id: str, args: Optional[dict] = None) -> str:
+    from services import local_seo_service
+
+    args = args or {}
+    keyword = (args.get("keyword") or "").strip()
+    location = (args.get("location") or "").strip()
+    if _is_frozen(client_id):
+        return _FROZEN_MSG
+    try:
+        await local_seo_service.enqueue_generate(client_id, keyword, location, None, "")
+    except Exception as exc:  # noqa: BLE001 — surface a friendly reason (e.g. bad area)
+        return f"Couldn't start that page: {exc}"
+    return (
+        f"✅ Generating a Local SEO page for *“{keyword}”* in {location} — "
+        "it lands in Saved Pages when done."
+    )
+
+
+async def _stage_reoptimize_page(client_id: str, args: dict) -> tuple[str, dict | str]:
+    url = (args.get("url") or args.get("page_url") or "").strip()
+    if not url.lower().startswith(("http://", "https://")):
+        return "reply", "Give me the full URL of the page to reoptimize (https://…)."
+    if _is_frozen(client_id):
+        return "reply", _FROZEN_MSG
+    return "confirm", {
+        "url": url,
+        "keyword": (args.get("keyword") or "").strip(),
+        "location": (args.get("location") or "").strip(),
+        "_confirm": f"score and reoptimize {url}",
+    }
+
+
+async def _act_reoptimize_page(client_id: str, args: Optional[dict] = None) -> str:
+    from services import local_seo_service
+
+    args = args or {}
+    url = (args.get("url") or "").strip()
+    if _is_frozen(client_id):
+        return _FROZEN_MSG
+    try:
+        rows = await local_seo_service.enqueue_reoptimize_bulk(
+            client_id,
+            [{
+                "page_url": url,
+                "keyword": (args.get("keyword") or "").strip(),
+                "location": (args.get("location") or "").strip(),
+            }],
+            "",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return f"Couldn't start the reoptimization: {exc}"
+    if not rows:
+        return "I couldn't queue that URL — check it's a valid page URL."
+    return f"✅ Reoptimizing {url} — the improved version lands when scoring completes."
+
+
 # (tool name) → {label, paid, run} + optional:
 #   note   — the parenthetical in the reply-*yes* confirm (default: API-budget
 #            wording). `paid` really means "confirm-gated": paid API spend OR
@@ -1269,6 +1437,53 @@ _ACTIONS: dict[str, dict] = {
     "run_maps_scan": {"label": "run a Maps geo-grid scan", "paid": True, "run": _act_maps_scan},
     "run_gsc_research": {"label": "run a GSC Research analysis", "paid": True, "run": _act_gsc_research},
     "run_ai_visibility_scan": {"label": "run an AI Visibility scan", "paid": True, "run": _act_ai_scan},
+    # --- Phase 1 commission actions (plan §2.3): create real deliverables ---
+    "start_content_run": {
+        "label": "start a content run (blog post / service page)",
+        "paid": True,
+        "note": "runs the full generation pipeline",
+        "run": _act_start_content_run,
+        "stage": _stage_start_content_run,
+        "params": {
+            "properties": {
+                "keyword": {"type": "string", "description": "The target keyword / topic to write about."},
+                "content_type": {"type": "string", "enum": ["blog_post", "service_page"],
+                                 "description": "blog_post (default) or service_page. Location pages must be started from the dashboard."},
+                "service": {"type": "string", "description": "Optional service the page is about (service pages)."},
+                "writer_notes": {"type": "string", "description": "Optional editorial guidance / angle for this run."},
+            },
+            "required": ["keyword"],
+        },
+    },
+    "generate_local_seo_page": {
+        "label": "generate a Local SEO page",
+        "paid": True,
+        "note": "runs the Local SEO generation pipeline",
+        "run": _act_generate_local_seo_page,
+        "stage": _stage_generate_local_seo_page,
+        "params": {
+            "properties": {
+                "keyword": {"type": "string", "description": "The service / target term for the page."},
+                "location": {"type": "string", "description": "The city or area the page targets."},
+            },
+            "required": ["keyword", "location"],
+        },
+    },
+    "reoptimize_page": {
+        "label": "reoptimize an existing page",
+        "paid": True,
+        "note": "scores the page, then rewrites it to lift the score",
+        "run": _act_reoptimize_page,
+        "stage": _stage_reoptimize_page,
+        "params": {
+            "properties": {
+                "url": {"type": "string", "description": "Full URL of the live page to reoptimize."},
+                "keyword": {"type": "string", "description": "Optional target keyword for the page."},
+                "location": {"type": "string", "description": "Optional city / area for the page."},
+            },
+            "required": ["url"],
+        },
+    },
     "run_backlink_lookup": {
         "label": "run a backlink lookup",
         "paid": True,

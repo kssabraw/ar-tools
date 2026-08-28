@@ -311,6 +311,77 @@ class Settings(BaseSettings):
     # prospect's tech once and never auto-refresh.
     tech_refresh_days: int = 45
 
+    # --- Site name-scrape (FREE owner/manager fallback) ------------------------------------
+    # `scan-names` / the `name_scrape_request` order fetch a prospect's OWN site and pull the
+    # owner/manager NAME when Outscraper enrichment couldn't. FREE (own HTTP GET, the `scan-tech`
+    # posture — NOT in PAID_COMMANDS). Owners are rarely on the homepage, so a bounded same-host
+    # crawl fetches the homepage + a few likely pages (about/team/contact/meet); this cap is the
+    # whole-crawl bound so one prospect can never fan out.
+    name_scrape_max_pages: int = 5
+    name_scrape_max_names: int = 8
+    name_scrape_fetch_timeout_seconds: float = 12.0
+    name_scrape_max_page_bytes: int = 1_500_000
+    # Concurrency ACROSS prospects (each prospect's own pages are fetched sequentially). Doubles as
+    # nothing else — a chunk of this many is scraped, stored, then the next, so a crash mid-order
+    # marks the finished prospects (idempotent skip on re-order).
+    name_scrape_concurrency: int = 6
+    name_scrape_chunk_size: int = 6
+    # A name-scrape order is batchable + free (like enrichment, unlike the ≤1/tick geogrid scan), so
+    # the tick drains several per heartbeat.
+    name_scrape_orders_per_tick: int = 5
+    # Defensive ceiling on one order's selection (the placement layer caps it too). A bigger
+    # "select all" is split into several orders.
+    name_scrape_max_places_per_order: int = 200
+    # Max prospects FETCHED per tick, across all orders AND within a single order. Unlike enrichment
+    # (one cheap provider call per place), a name-scrape does up to `name_scrape_max_pages` sequential
+    # site fetches per prospect, so a 200-prospect order could otherwise block the tick loop for many
+    # minutes. This budget caps the wall-time per heartbeat (the `tech_scan_per_tick` discipline): an
+    # order larger than the remaining budget is scraped up to it and left PENDING to resume next tick
+    # — the marker-based idempotent skip means a resume re-scrapes only the un-done prospects, so no
+    # work is lost or repeated. <=0 means no cap (process whole orders up to name_scrape_orders_per_tick).
+    name_scrape_per_tick: int = 60
+    # A `running` name-scrape order older than this is treated as stranded (its container died
+    # mid-tick — a hard SIGKILL before the budget's work finished) and reset to `pending` so a later
+    # tick resumes it (I-119 sibling — this FREE drain had the budget but no reaper). A normal tick
+    # holds an order `running` only for the tens of seconds it scrapes a budget's worth, so a
+    # much-older `running` is a dead container; the idempotent marker skip re-scrapes only the un-done
+    # prospects on resume. Free, so a strand wastes no money — but a stuck order still blocks itself.
+    name_scrape_stuck_order_minutes: int = 20
+
+    # --- Web-search owner/manager name (PAID third-rung fallback) --------------------------
+    # When enrichment AND the free site-scrape both found no name, a paid web search looks the owner
+    # up (OpenAI Responses API + web_search, reuses OUTREACH_OPENAI_API_KEY). BILLS one search per
+    # prospect, so it is a signed/admin-gated/budget-guarded order (the enrichment model), NOT free.
+    # The model + tool mirror the suite's brand scan (gpt-5.4 + the web_search tool).
+    name_search_model: str = "gpt-5.4"
+    name_search_web_search_tool: str = "web_search"
+    # A web search + tool round-trip is slow — its own generous timeout, clear of the 60s chat base.
+    name_search_request_timeout_seconds: float = 120.0
+    # Concurrency across prospects (doubles as the drain's chunk size).
+    name_search_chunk_size: int = 4
+    name_search_orders_per_tick: int = 3
+    name_search_max_places_per_order: int = 100
+    # Per-TICK place budget across all name-search orders (I-118 sibling). A web search is ~4 s/place,
+    # so a large order (dozens of places) can exceed Railway's `*/5` cron window and get its container
+    # killed mid-run, stranding the order `running` with no recovery — this producer has no per-tick
+    # budget of its own. The drain searches at most this many places per tick; an order with more is
+    # searched up to it and left PENDING to resume next tick (the idempotent marker skip re-bills only
+    # the un-done places), exactly like `enrich_per_tick`. Keep it comfortably inside the window: 24
+    # places / 4 concurrency × ~15 s ≈ 90 s. <=0 = no cap (the old, unsafe behaviour).
+    name_search_per_tick: int = 24
+    # A `running` name-search order older than this is treated as stranded (its container died
+    # mid-tick) and reset to `pending` so a later tick resumes it — the recovery half. Generous so it
+    # can never race a legitimately-executing tick (a normal tick holds an order `running` only for
+    # the tens of seconds it searches a budget's worth).
+    name_search_stuck_order_minutes: int = 20
+    # At most this many names kept per prospect (an owner is usually one person).
+    name_search_max_names: int = 2
+    # OpenAI returns no per-call cost, so — like every rate here — this is a CONFIGURED estimate
+    # reconciled against the dashboard (I-022). A web-search Responses call is a few cents; keep in
+    # sync with platform-api's outreach_name_search_cost_cents (that one drives the budget guard,
+    # this one the drain's cost_ledger write).
+    name_search_cost_cents: int = 3
+
     # --- Lead enrichment (contact names / phones / emails via Outscraper) ------------------
     # A SEPARATE, spend-gated, per-selection action — NOT the mass ingest, which hardcodes
     # `enrichment=""` with a hard invariant so a market pull can never silently bill per-place
@@ -319,15 +390,17 @@ class Settings(BaseSettings):
     # (`enrichment_request`) is its own spend confirmation; the `tick` command drains it.
 
     # The enricher set requested by default (the fallback; an order freezes its own set at placement).
-    # Outscraper takes a LIST, called BY place_id. `domains_service` is the SCRAPER that pulls emails +
-    # contact names + phones from the business's website (the repo's contact-pull convention); the
-    # other two post-process it (email validation → email.emails_validator.status; phone carrier). The
-    # first live run requested the validators WITHOUT the scraper and got name_for_emails but no emails
-    # (I-109). The parser still never asserts a field it hasn't seen — `probe-enrich` confirms the shape.
+    # Outscraper takes a LIST, called BY place_id. The correct slug is **`leads_n_contacts`** — the
+    # "Leads & Contacts" enricher, confirmed 2026-08-26 from a real dashboard export (I-109) and
+    # validated live: it returns the full contact shape (emails / phones / socials / domain / and the
+    # decision-maker person fields full_name·first_name·last_name·title where Outscraper has them). The
+    # earlier `domains_service` (+ validators) was the wrong enricher — a bare website scraper that
+    # returned no contacts on our calls; five LA plumbers that came back email-null under it returned
+    # real emails under `leads_n_contacts`. Person names populate for businesses with an Apollo/ZoomInfo/
+    # LinkedIn record; small owner-operated businesses fall back to their scraped site emails. The parser
+    # still never asserts a field it hasn't seen — `probe-enrich` confirms the shape for any new slug.
     enrich_enrichments: list[str] = Field(
-        default_factory=lambda: [
-            "domains_service", "emails_validator_service", "phones_enricher_service"
-        ]
+        default_factory=lambda: ["leads_n_contacts"]
     )
 
     # Outscraper enrichment is billed per record. The API returns no per-request cost, so like every
@@ -353,9 +426,82 @@ class Settings(BaseSettings):
     # into several orders.
     enrich_max_places_per_order: int = 200
 
-    # A synchronous enriched pull for a chunk of place_ids can take longer than the base search; its
-    # own timeout, clear of the 60s base request timeout.
+    # Per-TICK place budget across all orders (I-118). Each place is an async submit+poll, so a large
+    # order (100+ places) can exceed Railway's cron interval and get its container killed mid-run,
+    # stranding the order. The drain enriches at most this many places per tick; an order with more is
+    # enriched up to it and left PENDING to resume next tick (the idempotent marker skip re-bills only
+    # the un-done places), exactly like `name_scrape_per_tick`. Keep it comfortably inside the cron
+    # window: 40 places / 10 concurrency × ~5-10s ≈ 20-40s. <=0 = no cap (the old, unsafe behaviour).
+    enrich_per_tick: int = 40
+
+    # A `running` order older than this is treated as stranded (its container died mid-tick) and reset
+    # to `pending` so a later tick resumes it — the recovery half of I-118. Safe because a normal tick
+    # only holds an order `running` for the ~tens of seconds it enriches a budget's worth; a much older
+    # `running` is a dead container. Generous so it can never race a legitimately-executing tick.
+    enrich_stuck_order_minutes: int = 20
+
+    # A single enrichment HTTP request (the async submit, or one poll of the archive) can take
+    # longer than the base search; its own per-request timeout, clear of the 60s base.
     enrich_request_timeout_seconds: float = 180.0
+
+    # Enrichments run ASYNC on Outscraper: a synchronous (async=false) call returns the base Maps
+    # record BEFORE the enrichers finish, i.e. with no emails/contacts/people at all (confirmed live
+    # 2026-08-26 by two probe-enrich runs — I-109). So `enrich_client` submits async and polls the
+    # archive to completion. This is the per-place poll ceiling: a stuck-Pending enrichment fails
+    # THAT place after this long rather than hanging the whole tick for the mass-ingest 1h timeout.
+    enrich_poll_timeout_seconds: float = 300.0
+
+    # --- Enigma (SMB intelligence — the last-rung contacts source + card-transaction data) ------
+    # Enigma is the enterprise SMB-data API evaluated in `docs/enigma-integration-scoping-v0_1.md`.
+    # Two uses: (1) an owner/principal NAME for prospects the existing ladder (Outscraper →
+    # site-scrape → web-search) still can't name — the last, most-expensive contacts rung; (2)
+    # CARD-TRANSACTION activity/health (avg monthly transactions + revenue over Enigma's native 1m /
+    # 3m / 12m windows — there is NO 6m period). A single lookup carries both.
+    #
+    # **The exact request/response contract is UNCONFIRMED from the sandbox** (egress blocks
+    # api.enigma.com), so the probe (`probe-enigma`) MEASURES it on a live Railway run and logs the
+    # full raw envelope, the same "measured on first run, not asserted" discipline as
+    # `dataforseo_client` / `probe-enrich`. Everything URL-shaped is config so a correction is an env
+    # change (OUTREACH_ENIGMA_*), not a code redeploy. Auth is the `x-api-key` header.
+    enigma_api_key: str = ""
+    enigma_base_url: str = "https://api.enigma.com"
+    # POST match: identifiers (name + address {street/city/state/postal}, website, person) → matched
+    # profiles carrying an Enigma business id. Path is a best guess pending the probe.
+    enigma_match_path: str = "/businesses/match"
+    # GET attributes for a matched id: `{base}{business_path}/{B-id}?attrs=<datasets>`. Confirmed from
+    # the docs (`GET /businesses/B00233…?attrs=industries`) — the path param is the **business_enigma_id**
+    # (the `B…` id in a match record), NOT the record-level `enigma_id` (`E…`); passing the `E…` id is
+    # what the first probe hit with a 400 "Error Parsing JSON". `match_id_from_response` now prefers the
+    # `B…` id (enigma_probe._ID_KEYS).
+    enigma_business_path: str = "/businesses"
+    # Attribute datasets to request on the id call (comma-joined into ?attrs=). The card-transaction
+    # VALUES are add-on Merchant-Transaction-Signals attributes that must be asked for by name (the base
+    # id response carries only names/addresses/data_sources/industries). Confirmed slugs (developers.
+    # enigma.com/docs/attribute-dictionary): `card_transactions` + `card_revenues` return per-window
+    # (1m/3m/12m) `average_monthly_amount`. Principals ride the MATCH response (`associated_people` /
+    # `registered_agents`), so they are NOT requested here. Override via OUTREACH_ENIGMA_ATTRS.
+    enigma_attrs: str = "card_transactions,card_revenues"
+    # Time-series depth for the Merchant-Transaction-Signals attributes. Enigma returns history back to
+    # Jan 2017 when `lookback_months` > 0 (`*` = max); the 1m/3m/12m rolling windows come regardless, so
+    # 12 is enough for the probe. Sent only when non-empty. Override via OUTREACH_ENIGMA_LOOKBACK_MONTHS.
+    enigma_lookback_months: str = "12"
+    enigma_request_timeout_seconds: float = 60.0
+    # --- GraphQL API (the path that actually returns card windows + owner contact) ----------------
+    # `POST {graphql_url}` with `{query, variables}` + the x-api-key header. The synchronous `search`
+    # query matches a business (BRAND) and returns cardTransactions (1m/3m/12m card_revenue_amount) +
+    # operatingLocations→roles→persons in ONE call — see docs/enigma-graphql-api-reference.md. This is
+    # what `probe-enigma-graphql` and the future contacts rung use; the REST match/ID path above is
+    # kept only as the first (superseded) probe.
+    enigma_graphql_url: str = "https://api.enigma.com/graphql"
+    # Match-confidence floor for a business lookup (0.0–1.0). The console batch matched at ~1.0 on
+    # these prospects; 0.7 keeps a real match without admitting a weak one.
+    enigma_graphql_match_threshold: float = 0.7
+    # How many prospects `probe-enigma` / `probe-enigma-graphql` sample (scoping §3 wants ~20). Each
+    # BILLS one Enigma lookup per prospect, so both are in PAID_COMMANDS + confirm-gated.
+    enigma_probe_limit: int = 20
+    # CONFIGURED cost estimate per Enigma lookup (unknown until the probe / a bill — the I-111 pattern);
+    # drives the cost_ledger write + budget guard once the contacts rung is built. Placeholder.
+    enigma_cost_per_lookup_cents: int = 50
 
     # --- Report signal scans (organic / AI-visibility UI triggers, 2026-08-10) -----------
     # The per-prospect report's ORGANIC and AI sections are filled by two signed-order queues
@@ -365,6 +511,19 @@ class Settings(BaseSettings):
     # backs up faster than the 15-minute cron clears it.
     organic_orders_per_tick: int = 1
     ai_orders_per_tick: int = 1
+    # Auto-capture the ORGANIC / paid-placement signal on EVERY scan (owner ruling 2026-08-27), not
+    # only on a UI click: when a geogrid snapshot finalizes, `scan_runner` auto-enqueues an
+    # `organic_scan_request` for it (idempotent per snapshot; drained ≤1/tick by the existing queue,
+    # budget-gated, per-snapshot idempotent capture). The organic SERP is ONE cheap DataForSEO call
+    # per snapshot and the paid-placement parse (Google Ads / LSA presence on the keyword) rides that
+    # same call for free — so "always on" adds ~one organic request per scanned submarket×keyword.
+    # The STANDING spend confirmation is this flag (the deliberate owner decision); auto orders carry
+    # a sentinel `requested_by` so they stay auditable apart from a human click. Set False to revert
+    # to click-only.
+    organic_auto_enabled: bool = True
+    # The sentinel actor stamped on auto-enqueued organic orders (requested_by has no FK). A nil uuid,
+    # distinct from any human, so an auto capture is distinguishable in the ledger from a UI click.
+    organic_auto_actor_id: str = "00000000-0000-0000-0000-000000000000"
 
     # --- Always-on worker (tick-loop daemon) ---------------------------------------------
     # The `tick-loop` command runs `tick` continuously so a UI-placed order (enrich / scan)
@@ -471,6 +630,16 @@ def missing_outscraper_vars(settings: "Settings") -> list[str]:
     return [
         name
         for name, value in (("OUTREACH_OUTSCRAPER_API_KEY", settings.outscraper_api_key),)
+        if not value
+    ]
+
+
+def missing_enigma_vars(settings: "Settings") -> list[str]:
+    """Which Enigma credentials are absent, by env-var name — so `probe-enigma` REFUSES before a
+    keyless call. Mirrors `missing_outscraper_vars`."""
+    return [
+        name
+        for name, value in (("OUTREACH_ENIGMA_API_KEY", settings.enigma_api_key),)
         if not value
     ]
 

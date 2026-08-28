@@ -106,10 +106,10 @@ def test_build_html_includes_present_sections():
     assert "Organic rankings" in out
     assert "emergency plumber" in out
     assert "No report data is available" not in out
-    # GBP is removed from the client PDF report for now — the section and its
-    # review content must not render even when gbp data is present.
-    assert "Google Business Profile" not in out
-    assert "Great service" not in out
+    # GBP Insights is now included in the client PDF report (rating/reviews +
+    # performance-metric growth) — the section and its review content render.
+    assert "Google Business Profile" in out
+    assert "Great service" in out
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +133,24 @@ def test_section_exec_renders_positive_no_health_label_and_escapes():
     assert "/100" not in out and "Risks" not in out
     # headline escaped
     assert "<b>up</b>" not in out and "&lt;b&gt;up&lt;/b&gt;" in out
+
+
+def test_section_exec_renders_long_term_progress():
+    data = _data(exec={
+        "headline": "Steady month.",
+        "long_term_progress": "Since we started, your average position has climbed 12 places.",
+        "highlights": ["Impressions up 8% this month"],
+        "focus_next": ["Keep publishing local pages"],
+    })
+    out = cr.build_report_html(data)
+    assert "The bigger picture" in out
+    assert "climbed 12 places" in out
+
+
+def test_section_exec_no_long_term_line_when_absent():
+    # older summaries (no long_term_progress key) still render cleanly
+    out = cr._section_exec(_data(exec={"headline": "Hi", "highlights": ["x"], "focus_next": []}))
+    assert "Executive summary" in out and "The bigger picture" not in out
 
 
 def test_generate_exec_summary_no_key_returns_none(monkeypatch):
@@ -215,29 +233,44 @@ def test_build_comparisons_suppresses_previous_without_coverage():
     assert "Search visibility" not in kpi  # no hero off a non-comparable metric
 
 
-def test_section_performance_renders_this_vs_previous():
+def test_section_performance_renders_multi_horizon():
     rows, ps, pe = _series_rows()
-    data = _data(organic={"comparisons": cr.build_comparisons(rows, ps, pe)})
+    data = _data(organic={"comparisons_multi": cr.build_multi_comparisons(rows, pe)})
     out = cr.build_report_html(data)
     assert "Performance highlights" in out
-    assert "This period" in out and "Previous period" in out and "Change" in out
+    # three fixed horizons instead of a single volatile window
+    assert "Now (last 30 days)" in out and "vs prev 30 days" in out
+    assert "vs prev 90 days" in out and "Since we started" in out
     assert "Impressions" in out and "Average ranking" in out
     assert "▲" in out  # positive change arrow
 
 
 def test_section_performance_omits_zero_volume_metric():
-    """A volume metric whose current period is 0 (a GSC gap) is dropped rather than
+    """A volume metric whose recent window is 0 (a GSC gap) is dropped rather than
     shown as a scary '0 ▼ -100%'; the ranking row still renders."""
-    comp = {
-        "impressions": {"current": 0, "previous": 100, "change": -100.0},
-        "clicks": {"current": 0, "previous": 5, "change": None},
-        "rank": {"current": 7.0, "previous": 8.0, "change_positions": 1.0},
+    multi = {
+        "impressions": {"30d": {"current": 0, "previous": 100, "change": -100.0}},
+        "clicks": {"30d": {"current": 0, "previous": 5, "change": None}},
+        "rank": {"30d": {"current": 7.0, "previous": 8.0, "change_positions": 1.0}},
     }
-    out = cr._section_performance(_data(organic={"comparisons": comp}))
+    out = cr._section_performance(_data(organic={"comparisons_multi": multi}))
     assert "Performance highlights" in out
     assert "Average ranking" in out
     assert "Impressions" not in out and "Organic clicks" not in out
     assert "-100" not in out and "100%" not in out
+
+
+def test_build_multi_comparisons_horizons():
+    rows, _ps, pe = _series_rows()  # 120 days of climbing impressions + improving rank
+    multi = cr.build_multi_comparisons(rows, pe)
+    assert multi is not None
+    impr = multi["impressions"]
+    # 30d has a comparable previous window; 90d's previous window predates the data
+    assert impr["30d"]["change"] is not None and impr["30d"]["change"] > 0
+    assert impr.get("90d", {}).get("change") is None  # not enough history → no delta
+    assert "since_start" in impr and impr["since_start"]["change"] > 0
+    # rank improved (positions gained is positive)
+    assert multi["rank"]["30d"]["change_positions"] > 0
 
 
 def test_period_over_period_extras_render():
@@ -304,48 +337,44 @@ def test_keyword_change_from_averages_and_sparkline():
 
 
 # ---------------------------------------------------------------------------
-# organic section trims to top movers + Movement column
+# organic section shows EVERY tracked keyword (owner request), best position first
 # ---------------------------------------------------------------------------
-def test_section_organic_shows_top_movers_only():
+def test_section_organic_shows_all_keywords():
     kws = [{"keyword": f"kw{i}", "current_rank": 5, "avg_30d": 5,
             "change": float(i), "sparkline": [9, 5]} for i in range(10)]
     data = _data(organic={"keywords": kws,
                           "summary": {"tracked": 10, "top10": 4, "improved": 6, "declined": 1}})
     out = cr.build_report_html(data)
     assert "Movement" in out
-    # biggest gainer (kw9, change 9) shown; smallest non-mover trimmed
-    assert "kw9" in out and "kw1<" not in out
-    assert "remaining 5 are tracked" in out
+    # all ten keywords render, not just the top movers
+    for i in range(10):
+        assert f"kw{i}<" in out, f"kw{i}"
+    # no "remaining N ... on request" trim copy any more
+    assert "remaining" not in out and "available on request" not in out
 
 
-def test_section_organic_leads_with_wins_not_lone_decliner():
-    """Positive framing: feature the strongest rankings, never headline a keyword
-    purely because it slipped, and no negative ('to watch') copy."""
-    wins = [{"keyword": f"win{i}", "current_rank": r, "change": None, "sparkline": []}
-            for i, r in enumerate([3, 4, 5, 8, 10])]
-    decliner = {"keyword": "slipped kw", "current_rank": 12, "change": -2.0, "sparkline": [10, 12]}
-    data = _data(organic={"keywords": wins + [decliner],
-                          "summary": {"tracked": 40, "top10": 5, "improved": 0, "declined": 1}})
+def test_section_organic_includes_decliners_and_unranked():
+    """All keywords render, including a slipping keyword (its real movement shown)
+    and an unranked keyword (Current shows '—')."""
+    kws = [{"keyword": "strong kw", "current_rank": 3, "change": None, "sparkline": []},
+           {"keyword": "slipped kw", "current_rank": 12, "change": -2.0, "sparkline": [10, 12]},
+           {"keyword": "unranked kw", "current_rank": None, "change": None, "sparkline": []}]
+    data = _data(organic={"keywords": kws,
+                          "summary": {"tracked": 3, "top10": 1, "improved": 0, "declined": 1}})
     out = cr.build_report_html(data)
-    assert "win0" in out and "win4" in out          # strongest rankings featured
-    assert "slipped kw" not in out                   # lone poor-ranked decliner not featured
-    assert "to watch" not in out                     # no negative summary copy
+    assert "strong kw" in out and "slipped kw" in out and "unranked kw" in out
+    assert "-2 positions" in out          # the decline shows honestly now
     assert "ranking on page 1 of Google" in out
 
 
-def test_section_organic_does_not_pad_with_decliner():
-    """The real WheelHouse case: only 4 page-1 keywords, and the 5th-best rank is a
-    mid-pack decliner. It must NOT be pulled into the table just to reach 5 rows."""
-    kws = [{"keyword": "w1", "current_rank": 3, "change": None, "sparkline": []},
-           {"keyword": "w2", "current_rank": 4, "change": None, "sparkline": []},
-           {"keyword": "w3", "current_rank": 5, "change": None, "sparkline": []},
-           {"keyword": "w4", "current_rank": 8, "change": None, "sparkline": []},
-           {"keyword": "decliner kw", "current_rank": 12, "change": -2.0, "sparkline": [10, 12]}]
-    data = _data(organic={"keywords": kws, "summary": {"tracked": 40, "top10": 4, "improved": 0, "declined": 1}})
-    out = cr.build_report_html(data)
-    assert "w1" in out and "w4" in out
-    assert "decliner kw" not in out
-    assert "-2 positions" not in out
+def test_section_organic_sorted_best_position_first():
+    kws = [{"keyword": "deep kw", "current_rank": 22, "change": None, "sparkline": []},
+           {"keyword": "unranked kw", "current_rank": None, "change": None, "sparkline": []},
+           {"keyword": "top kw", "current_rank": 2, "change": None, "sparkline": []}]
+    out = cr._section_organic(_data(organic={
+        "keywords": kws, "summary": {"tracked": 3, "top10": 1, "improved": 0, "declined": 0}}))
+    # strongest position first, unranked last
+    assert out.index("top kw") < out.index("deep kw") < out.index("unranked kw")
 
 
 # NOTE: GBP is removed from the assembled client PDF report for now (not in
@@ -370,8 +399,8 @@ def test_gbp_review_period_renders():
     assert "Recent reviews this period" in out and "Fantastic team" in out
     # the generic top-review list is dropped when we have this-period highlights
     assert "generic old review" not in out
-    # and it is not mounted in the assembled report
-    assert "Google Business Profile" not in cr.build_report_html(data)
+    # and the GBP section is mounted in the assembled report
+    assert "Google Business Profile" in cr.build_report_html(data)
 
 
 def test_gbp_review_period_absent_degrades():
@@ -609,3 +638,88 @@ def test_kpi_strip_includes_ga4_visits_on_gain():
 def test_kpi_strip_omits_ga4_visits_when_flat_or_down():
     data = _data(ga4={"sessions": {"current": 50, "previous": 80, "change": -37.5}, "channels": []})
     assert "Website visits" not in cr._kpi_strip(data)
+
+
+# --- Month-over-month helpers + rendering (pure) ----------------------------
+def test_pin_presence():
+    assert cr._pin_presence(6, 97) == 6.2
+    assert cr._pin_presence(0, 0) is None
+    assert cr._pin_presence(None, None) is None
+    assert cr._pin_presence(50, 100) == 50.0
+
+
+def test_rank_delta_positive_is_improvement():
+    # A lower rank number is better, so prev 12 → now 8 is +4 (improved).
+    assert cr._rank_delta(12, 8) == 4.0
+    assert cr._rank_delta(8, 12) == -4.0
+    assert cr._rank_delta(None, 5) is None
+
+
+def test_mom_badge_direction_and_color():
+    up = cr._mom_badge(5, suffix=" pts", up_good=True)
+    assert "▲" in up and "#166534" in up and "vs last month" in up
+    down = cr._mom_badge(-3, suffix="%", up_good=True)
+    assert "▼" in down and "#b91c1c" in down
+    # up_good=False flips the colour meaning (an increase is bad).
+    bad_up = cr._mom_badge(5, up_good=False)
+    assert "▲" in bad_up and "#b91c1c" in bad_up
+    assert cr._mom_badge(None) == ""
+    assert "no change" in cr._mom_badge(0)
+
+
+def test_section_geogrid_shows_mom_callout_and_per_keyword():
+    g = {
+        "presence_now": 25.0, "presence_prev": 18.0, "weak_areas": [],
+        "keywords": [{
+            "keyword": "roofer", "average_rank": 8.0, "top3_pins": 20, "total_pins": 80,
+            "rank_grid": None, "map_image": None,
+            "presence_change_pts": 7.0, "rank_change": 2.0,
+        }],
+    }
+    out = cr._section_geogrid({"geogrid": g})
+    assert "Top-3 map presence" in out and "25%" in out
+    assert "7 pts vs last month" in out        # per-keyword presence delta
+    assert "2 places vs last month" in out     # per-keyword rank delta
+
+
+def test_section_geogrid_multi_horizon_callout():
+    g = {
+        "presence_now": 25.0, "presence_prev": 18.0, "weak_areas": [],
+        "presence_horizons": {
+            "30d": {"now": 25.0, "prev": 18.0, "change": 7.0},
+            "90d": {"now": 25.0, "prev": 12.0, "change": 13.0},
+            "since_start": {"now": 25.0, "prev": 5.0, "change": 20.0},
+        },
+        "keywords": [{"keyword": "roofer", "average_rank": 8.0, "top3_pins": 20,
+                      "total_pins": 80, "rank_grid": None, "map_image": None}],
+    }
+    out = cr._section_geogrid({"geogrid": g})
+    assert "Top-3 map presence" in out
+    assert "30 days: ▲ 7 pts" in out and "90 days: ▲ 13 pts" in out and "since start: ▲ 20 pts" in out
+
+
+def test_section_ai_visibility_multi_horizon_callout():
+    a = {
+        "engines": {"chatgpt": "3 of 4 answers"},
+        "visibility_now": 60.0, "visibility_prev": 50.0,
+        "visibility_horizons": {
+            "30d": {"now": 60.0, "prev": 50.0, "change": 10.0},
+            "90d": {"now": 60.0, "prev": 40.0, "change": 20.0},
+        },
+        "keywords": [{"keyword": "q", "engines": {"chatgpt": True}, "found_count": 1,
+                      "total": 1, "change": None}],
+    }
+    out = cr._section_ai_visibility({"ai_visibility": a})
+    assert "Recommended in" in out and "60%" in out
+    assert "30 days: ▲ 10%" in out and "90 days: ▲ 20%" in out
+
+
+def test_ai_matrix_mom_column_conditional():
+    with_prev = cr._ai_keyword_matrix([
+        {"keyword": "q1", "engines": {"chatgpt": True}, "found_count": 1, "total": 1, "change": 1},
+    ])
+    assert "vs last month" in with_prev
+    no_prev = cr._ai_keyword_matrix([
+        {"keyword": "q1", "engines": {"chatgpt": True}, "found_count": 1, "total": 1, "change": None},
+    ])
+    assert "vs last month" not in no_prev

@@ -31,6 +31,7 @@ from models.writer import ArticleSection, BrandVoiceCard
 from modules.brief.llm import claude_json
 
 from .banned_terms import BannedTermLeakage, find_banned
+from .voice_directive import distinctiveness_directive
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,7 @@ def _build_intro_user_prompt(
             parts.append(f"  - {h2}")
 
     if brand_voice_card:
+        parts.append(distinctiveness_directive(brand_voice_card))
         if brand_voice_card.brand_name:
             parts.append(f"\nBRAND_NAME: {brand_voice_card.brand_name}")
         if brand_voice_card.tone_adjectives:

@@ -68,6 +68,18 @@ function doPost(e) {
       return _json({ success: false, error: 'missing_folder_id' });
     }
 
+    // Opt-in create-once. Callers that may be retried after an interrupted
+    // request (the platform's syndication publisher: its job is requeued by a
+    // deploy drain, and the file id is recorded only AFTER this call returns,
+    // so a retry cannot tell that it already made the file) set dedupe_by_name
+    // and get back the existing file of that name in the folder instead of a
+    // duplicate. Off by default: two files with one title is legitimate for
+    // ordinary publishing, and only the caller knows which it wants.
+    if (req.dedupe_by_name === true) {
+      var existing = _findByName(folderId, title, type);
+      if (existing) { return _json(existing); }
+    }
+
     if (type === 'pdf') {
       var pdfFileId = createPdfFromBase64(folderId, title, req.content_base64 || '');
       _applySharing(pdfFileId, share);
@@ -103,6 +115,34 @@ function doPost(e) {
   } catch (err) {
     return _json({ success: false, error: String(err) });
   }
+}
+
+/**
+ * The first file of this exact name already in the folder, shaped like the
+ * create response for its type — or null. Used only for `dedupe_by_name`
+ * requests, so an interrupted publish that already made the file is adopted
+ * on retry instead of duplicated.
+ */
+function _findByName(folderId, title, type) {
+  var it = DriveApp.getFolderById(folderId).getFilesByName(title);
+  if (!it.hasNext()) { return null; }
+  var id = it.next().getId();
+  if (type === 'sheet') {
+    return {
+      success: true, reused: true, sheet_id: id,
+      sheet_url: 'https://docs.google.com/spreadsheets/d/' + id + '/edit',
+    };
+  }
+  if (type === 'pdf') {
+    return {
+      success: true, reused: true, file_id: id,
+      file_url: 'https://drive.google.com/file/d/' + id + '/view',
+    };
+  }
+  return {
+    success: true, reused: true, doc_id: id,
+    doc_url: 'https://docs.google.com/document/d/' + id + '/edit',
+  };
 }
 
 /**

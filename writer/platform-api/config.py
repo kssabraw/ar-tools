@@ -22,6 +22,17 @@ class Settings(BaseSettings):
     # times per run; past the cap the run fails with the old "Service restarted
     # mid-run" message. 0 disables auto-resume (always fail, the old behavior).
     run_auto_resume_max: int = 2
+    # How long after boot the orphan-run recovery sweep waits before it looks.
+    # MUST outlast Railway's deploy handover: the incoming container is live
+    # while the outgoing one keeps working for ~15s, so a sweep at second 0
+    # re-dispatches runs that are still genuinely executing over there — two
+    # orchestrators driving one run, double module spend, racing module_outputs
+    # writes. (The retired fanout orphan sweep delayed itself for exactly this
+    # reason; this path never got the same treatment.) The cost of waiting is
+    # only that a genuinely-orphaned run resumes a couple of minutes later —
+    # it has been stalled since the previous deploy anyway. 0 = sweep inline at
+    # startup (the old, racy behavior).
+    run_recovery_delay_seconds: float = 120.0
     # Run-level transient-failure auto-retry (resilience layer, distinct from the
     # orphan-recovery resume above). When a run fails at a stage because a
     # transient upstream outage (a multi-minute DataForSEO SERP outage, an
@@ -130,6 +141,20 @@ class Settings(BaseSettings):
         # (before the source_ref dedupe) spawned a duplicate article; 90 min
         # keeps the reaper as a real backstop without firing on healthy runs.
         "content_batch_item": 90,
+        # Ecommerce generation chains a 600s nlp generate with up to
+        # `ecommerce_structure_max_passes` (2) structure-gate regenerations at
+        # 600s each, plus the score call — ~35 min worst case, PAST the 30-min
+        # default while perfectly healthy. The reaper doesn't cancel the running
+        # asyncio task, so firing early means the original finishes and persists
+        # a page while a second worker re-runs the whole thing: two
+        # `ecommerce_pages` rows and double the SERP + Claude spend. Unlike Local
+        # SEO there is no cached SERP analysis to soften the re-run, so the
+        # backstop has to clear the real ceiling.
+        "ecommerce_generate": 60,
+        # Same rule for reoptimize-by-URL: scrape + score (300s) + a rewrite pass
+        # that itself loops up to MAX_ECOMMERCE_AUTO_PASSES inside nlp (600s).
+        # Its requeue re-scrapes and re-scores from scratch too.
+        "ecommerce_reoptimize_url": 60,
         # A Fanout expansion (expand + competitor mining) compounds two ~4-min
         # budgets plus autocomplete/gate, so it can legitimately run well past the
         # 30-min default. The reaper requeue is a re-run from scratch, so it MUST
@@ -235,6 +260,15 @@ class Settings(BaseSettings):
     algo_min_clients: int = 3
     algo_min_share: float = 0.4
     algo_window_days: int = 3
+    # Scan-health watch: alert (in-app + Slack) when a client's scheduled data-
+    # collection jobs (maps geo-grid / organic rank) fail in a streak, so a
+    # silent upstream outage can't starve the drop alerts unnoticed. Daily
+    # DB-reads-only sweep over async_jobs; deduped per streak-episode (re-nudges
+    # at most weekly while unresolved).
+    scan_health_enabled: bool = True
+    scan_health_min_streak: int = 3      # consecutive failed scheduled runs to fire
+    scan_health_min_days: int = 3        # ...the failing run must also span this many days
+    scan_health_lookback_days: int = 21  # async_jobs history read per sweep
     # Auto-generate a new client's brand voice + ICP at creation (async, best-
     # effort) so the assets exist without a manual scan. Skips clients with no
     # website and no GBP (nothing to analyze). Never overrides user-authored
@@ -559,9 +593,10 @@ class Settings(BaseSettings):
     # ── Maps geo-grid provider switch (Local Dominator → DataForSEO) ──────────
     # Which provider a NEW scan uses. In-flight/historic scans are routed by
     # their stored maps_scans.provider column, so both coexist across the flip;
-    # rollback is flipping this env var back. 'local_dominator' (default —
-    # DataForSEO dormant) | 'dataforseo'.
-    maps_scan_provider: str = "local_dominator"
+    # rollback is flipping this env var back. 'dataforseo' (default) |
+    # 'local_dominator' (retired 2026-08-27 — the vendor account lapsed and every
+    # scheduled scan on it 500'd for weeks; DataForSEO is now the geo-grid source).
+    maps_scan_provider: str = "dataforseo"
     # DataForSEO Maps SERP per-pin params. The zoom in location_coordinate
     # ("lat,lng,<zoom>") sets the simulated viewport WIDTH at each pin, and the
     # viewport must cover the pin→business distance (the grid RADIUS, not the
@@ -1506,6 +1541,11 @@ class Settings(BaseSettings):
     # Only the top-N plan actions become tasks (the plan is priority-sorted).
     task_producer_action_plan_max: int = 10
     task_producer_content_run_enabled: bool = False
+    # scan_health: open a board task when a client's scheduled data pulls (maps
+    # geo-grid / organic rank) keep failing, so a silent upstream outage becomes
+    # owned work PACE tracks (its untriaged/producer/overdue signals pick it up),
+    # not just a Slack ping. Auto-closes when the streak recovers.
+    task_producer_scan_health_enabled: bool = True
 
     # Deliverables Sheet Sync (docs/modules/deliverables-sheet-sync-prd-v1_0.md)
     # — auto-maintain each client's Google deliverables sheet: append a row on
@@ -1882,19 +1922,31 @@ class Settings(BaseSettings):
     # today. Set from the real Outscraper plan before a production run (I-022 — the guard is exactly
     # as honest as the rate above).
     outreach_enrich_daily_budget_usd: float = 10.0
-    # The enricher set frozen onto each order at placement. `domains_service` is the one that actually
-    # SCRAPES emails + contact names + phones from the business's (GBP) website — the repo's own
-    # convention for a contact pull (pixel_probe / run_market `--enrichment` default). The other two
-    # only post-process what it finds: `emails_validator_service` validates the emails (→
-    # email.emails_validator.status), `phones_enricher_service` adds phone carrier/type. Requesting the
-    # validators WITHOUT the scraper is why the first live run returned name_for_emails but zero emails
-    # (I-109 confirmed against a real response). Kept as a string; overridable by one env var.
-    outreach_enrich_enrichments: str = (
-        "domains_service,emails_validator_service,phones_enricher_service"
-    )
+    # The enricher set frozen onto each order at placement. The correct slug is `leads_n_contacts`
+    # (Outscraper's "Leads & Contacts" enricher) — confirmed 2026-08-26 from a real dashboard export and
+    # validated live: it returns the full contact shape (emails / phones / socials / domain + the
+    # decision-maker person fields where Outscraper has them). The earlier `domains_service` (+
+    # validators) was the wrong enricher and returned no contacts on our calls — five LA plumbers that
+    # were email-null under it returned real emails under `leads_n_contacts`. Kept as a comma-joined
+    # string; overridable by one env var. Must stay in sync with outreach api `enrich_enrichments`.
+    outreach_enrich_enrichments: str = "leads_n_contacts"
     # A selection larger than this is refused at placement (the drain enforces the same cap). A bigger
     # "select all" is split into several orders by the UI.
     outreach_enrich_max_places_per_order: int = 200
+
+    # Site name-scrape (the FREE owner/manager fallback). A per-selection cap mirroring the enrich
+    # one; the outreach job's name_scrape_max_places_per_order enforces the same bound in the drain.
+    # No cost/budget keys — the scrape is an own HTTP GET and spends nothing (PRD §B3), so unlike
+    # enrichment it is staff-gated, not admin-gated + budget-guarded.
+    outreach_name_scrape_max_places_per_order: int = 200
+
+    # Web-search owner-name (the PAID third-rung fallback). BILLS one OpenAI web-search call per
+    # prospect, so it mirrors enrichment's spend model: this drives the free preflight estimate + the
+    # per-user daily budget guard; keep the cost rate in sync with the outreach job's
+    # name_search_cost_cents (that one drives the drain's cost_ledger write).
+    outreach_name_search_cost_cents: int = 3
+    outreach_name_search_daily_budget_usd: float = 10.0
+    outreach_name_search_max_places_per_order: int = 100
 
     leadoff_income_acs_year: int = 2023
     leadoff_income_refresh_days: int = 365

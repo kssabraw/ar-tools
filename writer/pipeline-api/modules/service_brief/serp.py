@@ -7,6 +7,7 @@ per-client flag (PRD §8.2). This read gates the rest of the pipeline.
 
 from __future__ import annotations
 
+import os
 import re
 from urllib.parse import urlparse
 
@@ -32,8 +33,52 @@ _LISTICLE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Length bands → target word counts (tunable starting values).
+# Length bands → target word counts (tunable starting values). Retained only as
+# a coarse label + a fallback for the SERP-anchored target below (when too few
+# competitor pages scrape to yield a reliable average).
 _BAND_WORDS: dict[LengthBand, int] = {"short": 700, "medium": 1200, "long": 1800}
+
+# ── SERP-anchored length target (mirrors nlp-api length_fit.py) ────────────────
+# Service pages used to be sized by a fixed band (700/1200/1800) with no
+# relationship to the pages they actually compete with, so they ran 2–3× longer
+# than the competitor SERP — the same bloat the Local SEO writer had before #781.
+# The fix is identical: target the competitor SERP average + 20%, floored, so the
+# SERP drives LENGTH while the client's reference structure drives LAYOUT. Purely
+# deterministic — the LLM never counts words. The floor value + multiplier match
+# nlp-api's `length_fit` so the writer's budget and the scorer's length_fit engine
+# aim at the same band.
+LENGTH_OVERAGE_MULTIPLIER = 1.20
+# Absolute floor (owner-chosen; matches nlp-api LENGTH_MIN_TARGET_WORDS). Only ever
+# RAISES a real, avg-derived target — never manufactures one from a SERP that
+# yielded no usable competitor length.
+MIN_LENGTH_TARGET_WORDS = int(os.environ.get("SERVICE_LENGTH_MIN_TARGET_WORDS", "900"))
+# A competitor page that scraped to near-nothing is a failed/thin scrape, not a
+# real length signal — exclude it so it can't drag the average (and target) down.
+_MIN_VALID_COMPETITOR_WORDS = 100
+
+
+def competitor_avg_words(word_counts: list[int]) -> float | None:
+    """Average competitor body word count across the SERP, dropping thin/failed
+    scrapes. Returns ``None`` when fewer than 2 valid pages remain (no reliable
+    target — the caller then falls back to the band). Mirrors
+    ``length_fit.competitor_avg_words`` so the service writer and the nlp-api
+    length_fit scorer measure the same thing."""
+    valid = [
+        c for c in (word_counts or [])
+        if isinstance(c, int) and c >= _MIN_VALID_COMPETITOR_WORDS
+    ]
+    if len(valid) < 2:
+        return None
+    return sum(valid) / len(valid)
+
+
+def serp_word_target(avg_words: float | None) -> int | None:
+    """Competitor SERP average + 20%, floored at ``MIN_LENGTH_TARGET_WORDS``.
+    ``None`` when there is no usable average (the caller keeps the band target, so
+    a thin SERP never produces a nonsense length). Mirrors ``length_fit.word_target``."""
+    if not avg_words or avg_words <= 0:
+        return None
+    return max(int(round(avg_words * LENGTH_OVERAGE_MULTIPLIER)), MIN_LENGTH_TARGET_WORDS)
 
 
 def _domain(url: str) -> str:

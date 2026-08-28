@@ -249,3 +249,57 @@ def on_run_published(run_id: str) -> None:
     if not settings.native_tasks_enabled:
         return
     task_service.close_task_by_source("content_run", str(run_id))
+
+
+# ---------------------------------------------------------------------------
+# Scan-failure streaks (services.scan_health)
+# ---------------------------------------------------------------------------
+def on_scan_health(alerting: list[dict]) -> None:
+    """Called from scan_health.run_scan_health_sweep with the currently-alerting
+    scan-failure streaks (one dict per failing (client, pipeline)):
+    ``{client_id, pipeline_key, label, streak, summary}``.
+
+    Opens one task per failing (client, pipeline) — idempotent on
+    ``(source, source_ref)`` so an ongoing outage keeps a single task, not one a
+    day — so a silent upstream failure becomes owned work PACE's board signals
+    (untriaged / unacted-producer / overdue) surface, rather than only a Slack
+    ping. Closes any open scan_health task whose (client, pipeline) is no longer
+    in the alerting set (the streak recovered), mirroring the action_plan sync.
+
+    Called on every sweep, including with an empty list, so recovery closes tasks
+    even when nothing is currently failing."""
+    if not _enabled(settings.task_producer_scan_health_enabled):
+        return
+    try:
+        wanted = {
+            f"{a['client_id']}:{a['pipeline_key']}": a
+            for a in alerting
+            if a.get("client_id") and a.get("pipeline_key")
+        }
+        for ref, a in wanted.items():
+            tab = "maps" if a["pipeline_key"] == "geogrid" else "rankings"
+            _create(
+                a["client_id"],
+                f"{a.get('label') or 'Data'} scans failing — investigate data pipeline",
+                source="scan_health",
+                source_ref=ref,
+                description=(
+                    f"{a.get('summary') or 'Scheduled scans are failing.'}\n\n"
+                    f"Open the tool: /clients/{a['client_id']}/{tab}"
+                ),
+            )
+
+        live = (
+            get_supabase()
+            .table("tasks")
+            .select("id, source_ref, completed")
+            .eq("source", "scan_health")
+            .is_("deleted_at", "null")
+            .execute()
+        ).data or []
+        for t in live:
+            ref = t.get("source_ref")
+            if ref and not t.get("completed") and ref not in wanted:
+                task_service.close_task_by_source("scan_health", ref)
+    except Exception as exc:
+        logger.warning("task_producer_scan_health_failed", extra={"error": str(exc)})

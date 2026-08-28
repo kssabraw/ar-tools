@@ -102,6 +102,7 @@ async def put_report_settings(
     saved = client_report_schedule.upsert_settings(
         str(client_id), body.recipients, body.cadence, body.day_of_week,
         body.day_of_month, body.hour_utc, body.email_enabled, body.drive_enabled,
-        period=body.period,
+        period=body.period, ai_visibility_enabled=body.ai_visibility_enabled,
+        maps_enabled=body.maps_enabled,
     )
     return ReportSettings(**saved)

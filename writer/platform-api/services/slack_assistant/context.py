@@ -441,6 +441,342 @@ def _ctx_keyword_research(supabase, client_id: str, today: date) -> Optional[dic
     }
 
 
+def _ctx_keyword_research_runs(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Standalone Keyword Research module — the client-workspace 'Keyword
+    Research' card's output (public schema), distinct from `keyword_research`
+    (which reads the vendored Fanout / 'Create Mass Posts' sessions):
+
+    - `keyword_research_runs`       — the seed-keyword explorer (clusters).
+    - `keyword_topic_research_runs` — problem-first Topic Research + the
+      strategist-grade topical-authority plan (assessment + pillars).
+    """
+    out: dict = {}
+
+    runs = (
+        supabase.table("keyword_research_runs")
+        .select("seeds, keyword_count, cluster_count, status, created_at")
+        .eq("client_id", client_id)
+        .order("created_at", desc=True)
+        .limit(5)
+        .execute()
+    ).data or []
+    if runs:
+        recent_seeds: list[str] = []
+        for r in runs:
+            for s in r.get("seeds") or []:
+                if s and s not in recent_seeds:
+                    recent_seeds.append(s)
+        latest = runs[0]
+        out["keyword_explorer"] = {
+            "run_count": len(runs),
+            "latest": {
+                "seeds": latest.get("seeds") or [],
+                "keyword_count": latest.get("keyword_count"),
+                "cluster_count": latest.get("cluster_count"),
+                "status": latest.get("status"),
+                "created_at": latest.get("created_at"),
+            },
+            "recent_seeds": recent_seeds[:8],
+        }
+
+    topic = (
+        supabase.table("keyword_topic_research_runs")
+        .select("seeds, topic_count, topics, plan, assessment, status, created_at")
+        .eq("client_id", client_id)
+        .eq("status", "complete")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    ).data
+    if topic:
+        t = topic[0]
+        topics = t.get("topics") or []
+        plan = t.get("plan") if isinstance(t.get("plan"), dict) else {}
+        pillars = plan.get("pillars") if isinstance(plan, dict) else None
+        out["topic_research"] = {
+            "researched_at": t.get("created_at"),
+            "seeds": t.get("seeds") or [],
+            "topic_count": t.get("topic_count") or len(topics),
+            "assessment": (t.get("assessment") or "")[:1000] or None,
+            "top_topics": [
+                {
+                    "title": c.get("title") or c.get("theme"),
+                    "priority": c.get("priority_label") or c.get("priority"),
+                    "coverage": c.get("coverage"),
+                }
+                for c in topics[:8]
+                if isinstance(c, dict)
+            ],
+            "pillars": (
+                [p.get("pillar") for p in pillars if isinstance(p, dict) and p.get("pillar")]
+                if isinstance(pillars, list)
+                else None
+            ),
+        }
+
+    return out or None
+
+
+# --- Phase 0 read-parity providers (autonomous-seo-agent plan §2.5) ----------
+# Six modules SerMastr could act on but couldn't see. Each is a bounded, best-
+# effort DB read that returns None when the module has no data for the client.
+
+def _ctx_websites(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Website Builder — the client's generated sites, their status, and how
+    much of each has shipped (page publish rollup)."""
+    sites = (
+        supabase.table("websites")
+        .select("id, name, site_type, status, staging_url, custom_domain, "
+                "domain_status, updated_at")
+        .eq("client_id", client_id)
+        .order("updated_at", desc=True)
+        .limit(20)
+        .execute()
+    ).data or []
+    if not sites:
+        return None
+    site_ids = [s["id"] for s in sites]
+    pages = (
+        supabase.table("website_pages")
+        .select("website_id, status")
+        .in_("website_id", site_ids)
+        .execute()
+    ).data or []
+    roll: dict[str, dict] = {}
+    for p in pages:
+        r = roll.setdefault(p.get("website_id"), {"total": 0, "published": 0})
+        r["total"] += 1
+        if p.get("status") == "published":
+            r["published"] += 1
+    return {
+        "site_count": len(sites),
+        "sites": [
+            {
+                "name": s.get("name"),
+                "site_type": s.get("site_type"),
+                "status": s.get("status"),
+                "url": s.get("custom_domain") or s.get("staging_url"),
+                "domain_status": s.get("domain_status"),
+                "pages_total": roll.get(s["id"], {}).get("total", 0),
+                "pages_published": roll.get(s["id"], {}).get("published", 0),
+            }
+            for s in sites
+        ],
+    }
+
+
+def _ctx_ecommerce(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Ecommerce Writer — product/collection pages (the `content` provider
+    covers blog/service/local runs + local_seo_pages, never ecommerce)."""
+    rows = (
+        supabase.table("ecommerce_pages")
+        .select("keyword, page_type, composite_score, voice_score, "
+                "published_doc_id, created_at")
+        .eq("client_id", client_id)
+        .is_("deleted_at", "null")
+        .order("created_at", desc=True)
+        .limit(200)
+        .execute()
+    ).data or []
+    if not rows:
+        return None
+    by_type: dict[str, int] = {}
+    published = 0
+    for r in rows:
+        by_type[r.get("page_type") or "product"] = (
+            by_type.get(r.get("page_type") or "product", 0) + 1
+        )
+        if r.get("published_doc_id"):
+            published += 1
+    return {
+        "pages_total": len(rows),  # up to the 200 most recent
+        "by_type": by_type,
+        "published": published,
+        "recent": [
+            {
+                "keyword": r.get("keyword"),
+                "page_type": r.get("page_type"),
+                "composite_score": r.get("composite_score"),
+                "voice_score": r.get("voice_score"),
+                "created_at": r.get("created_at"),
+            }
+            for r in rows[:8]
+        ],
+    }
+
+
+def _ctx_gbp_posts(supabase, client_id: str, today: date) -> Optional[dict]:
+    """GBP Posts — composed/published Google Business Profile posts + any
+    active posting schedule (distinct from `gbp_metrics`, which is Insights)."""
+    posts = (
+        supabase.table("gbp_posts")
+        .select("topic_type, status, scheduled_at, published_at, created_at")
+        .eq("client_id", client_id)
+        .is_("deleted_at", "null")
+        .order("created_at", desc=True)
+        .limit(100)
+        .execute()
+    ).data or []
+    scheds = (
+        supabase.table("gbp_post_schedules")
+        .select("cadence, auto_publish, next_run_at")
+        .eq("client_id", client_id)
+        .eq("is_active", True)
+        .execute()
+    ).data or []
+    if not posts and not scheds:
+        return None
+    out: dict = {}
+    if posts:
+        by_status: dict[str, int] = {}
+        for p in posts:
+            by_status[p.get("status") or "draft"] = (
+                by_status.get(p.get("status") or "draft", 0) + 1
+            )
+        out["post_count"] = len(posts)
+        out["by_status"] = by_status
+        out["recent"] = [
+            {
+                "status": p.get("status"),
+                "topic_type": p.get("topic_type"),
+                "scheduled_at": p.get("scheduled_at"),
+                "published_at": p.get("published_at"),
+            }
+            for p in posts[:6]
+        ]
+    if scheds:
+        out["schedules"] = [
+            {
+                "cadence": s.get("cadence"),
+                "auto_publish": s.get("auto_publish"),
+                "next_run_at": s.get("next_run_at"),
+            }
+            for s in scheds
+        ]
+    return out or None
+
+
+def _ctx_native_tasks(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Native task board — open top-level tasks by status, overdue/unassigned,
+    and the nearest-due open items. (`asana`/`task_plan` are separate reads.)
+    Subtasks (parent_task_id set) are excluded so counts aren't doubled."""
+    rows = (
+        supabase.table("tasks")
+        .select("name, status_key, assignee_name, assignee_gid, due_date, completed")
+        .eq("client_id", client_id)
+        .is_("deleted_at", "null")
+        .is_("parent_task_id", "null")
+        .order("due_date", desc=False)
+        .limit(300)
+        .execute()
+    ).data or []
+    if not rows:
+        return None
+    open_rows = [r for r in rows if not r.get("completed")]
+    if not open_rows:
+        return {"open_count": 0}  # a board exists but nothing is outstanding
+    today_s = today.isoformat()
+    by_status: dict[str, int] = {}
+    overdue = unassigned = 0
+    for r in open_rows:
+        by_status[r.get("status_key") or "unknown"] = (
+            by_status.get(r.get("status_key") or "unknown", 0) + 1
+        )
+        if r.get("due_date") and str(r["due_date"]) < today_s:
+            overdue += 1
+        if not r.get("assignee_gid"):
+            unassigned += 1
+    return {
+        "open_count": len(open_rows),
+        "by_status": by_status,
+        "overdue": overdue,
+        "unassigned": unassigned,
+        "upcoming": [
+            {
+                "name": r.get("name"),
+                "status": r.get("status_key"),
+                "due_date": r.get("due_date"),
+                "assignee": r.get("assignee_name"),
+            }
+            for r in open_rows
+            if r.get("due_date")
+        ][:8],
+    }
+
+
+def _ctx_leadoff(supabase, client_id: str, today: date) -> Optional[dict]:
+    """LeadOff (per client) — the market this client was entered from, frozen
+    at the create-client handoff (`leadoff_predictions`). Only present for
+    clients created via LeadOff; None otherwise."""
+    rows = (
+        supabase.table("leadoff_predictions")
+        .select("city_name, state_code, category, as_of, predicted, "
+                "competitors, created_at")
+        .eq("client_id", client_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    ).data or []
+    if not rows:
+        return None
+    r = rows[0]
+    predicted = r.get("predicted") if isinstance(r.get("predicted"), dict) else {}
+    comps = r.get("competitors") if isinstance(r.get("competitors"), list) else []
+    return {
+        "origin_market": {
+            "city": r.get("city_name"),
+            "state": r.get("state_code"),
+            "category": r.get("category"),
+            "as_of": r.get("as_of"),
+        },
+        "grade": predicted.get("enriched_grade") or predicted.get("grade"),
+        "competitor_count": len(comps),
+        "captured_at": r.get("created_at"),
+    }
+
+
+def _ctx_response_episodes(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Outcomes / the verify loop — response episodes opened per drop, their
+    2-week/6-week clock state, and recoveries. The 'did the fix work?' signal
+    the autonomy loop's measure step depends on."""
+    rows = (
+        supabase.table("response_episodes")
+        .select("channel, keyword, classification, status, opened_at, "
+                "escalated_at, recovered_at")
+        .eq("client_id", client_id)
+        .order("opened_at", desc=True)
+        .limit(100)
+        .execute()
+    ).data or []
+    if not rows:
+        return None
+    counts: dict[str, int] = {}
+    for r in rows:
+        counts[r.get("status") or "open"] = counts.get(r.get("status") or "open", 0) + 1
+    open_eps = [r for r in rows if r.get("status") == "open"]
+    escalated = [r for r in rows if r.get("status") == "escalated"]
+    return {
+        "counts": counts,
+        "open": [
+            {
+                "keyword": r.get("keyword"),
+                "channel": r.get("channel"),
+                "classification": r.get("classification"),
+                "opened_at": r.get("opened_at"),
+            }
+            for r in open_eps[:8]
+        ],
+        "escalated": [
+            {
+                "keyword": r.get("keyword"),
+                "channel": r.get("channel"),
+                "escalated_at": r.get("escalated_at"),
+            }
+            for r in escalated[:5]
+        ],
+    }
+
+
 def _ctx_setup(supabase, client_id: str, today: date) -> Optional[dict]:
     """The client's full configured business profile.
 
@@ -1500,6 +1836,7 @@ _CONTEXT_PROVIDERS = [
     ("content", _ctx_content),
     ("site_inventory", _ctx_site_inventory),
     ("keyword_research", _ctx_keyword_research),
+    ("keyword_research_runs", _ctx_keyword_research_runs),
     ("budget", _ctx_budget),
     ("task_plan", _ctx_task_plan),
     ("qa", _ctx_qa),
@@ -1512,5 +1849,11 @@ _CONTEXT_PROVIDERS = [
     ("asana", _ctx_asana),
     ("health", _ctx_health),
     ("strategist_review", _ctx_strategist),
+    ("websites", _ctx_websites),
+    ("ecommerce", _ctx_ecommerce),
+    ("gbp_posts", _ctx_gbp_posts),
+    ("native_tasks", _ctx_native_tasks),
+    ("leadoff", _ctx_leadoff),
+    ("response_episodes", _ctx_response_episodes),
     ("setup", _ctx_setup),
 ]

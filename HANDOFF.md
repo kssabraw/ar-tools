@@ -1,6 +1,705 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-25 · **LeadOff market-map interactions + two-maps sync (PR #721, MERGED + DEPLOYED)** (latest)
+## ⏩ Update — 2026-08-27 · **Website Builder — brand_service + hyper_local engines BUILT + generalized to service variations (MERGED)** (latest)
+
+Tier A of the roadmap entry below is **done and on `main`**. Three PRs, all
+squash-merged:
+
+- **[#807](https://github.com/kssabraw/ar-tools/pull/807)** — the two Tier-A
+  engines. `brand_service` (`/{service}/{brand}/`) + `hyper_local`
+  (`/{city}/{service}/{subservice}/`) now generate through the **existing nlp
+  writer** (`local_seo_service.generate_page`) — no new generator, just a
+  `generation_inputs` branch each + both added to `NLP_PAGE_TYPES`.
+  `brand_service` targets `"<Brand> <Service>"` geo-agnostically (city scopes the
+  SERP only); `hyper_local` targets its need with the city as location and stays
+  **engine-only** (SOP: escalation-only, never bulk-generated — the writer
+  exists, the planner proposes none). `frontmatter_extra` fixed for
+  `brand_service` (its service is `segs[0]`, the brand is `segs[-1]`).
+- **[#810](https://github.com/kssabraw/ar-tools/pull/810)** — **generalized
+  `brands` into service variations** so the auto-matrix works for any trade, not
+  just equipment brands. A top-level service carries a `variations` list of
+  `ServiceVariation{label, kind}` (`kind ∈ {brand, type}`);
+  `service_variation_pages` emits **brand** → a brand × service page, **type** →
+  a **sub-service** whose title is the label alone ("Oak Tree Removal", no "Oak
+  Trees Tree Removal" doubling → `/tree-removal/oak-trees/`). `ServiceEntry.brands`
+  is now a computed property; the store parser accepts both the new `variations`
+  shape and the legacy `brands` field (→ `kind:"brand"`), so an older stored
+  catalog keeps working and migrates forward on save. `variation_scale_gate`
+  (>200 cells → acknowledgeable link-equity sign-off). Frontend: the Plan tab's
+  brands input became a per-service **"Service variations"** editor (label +
+  Type/Brand kind), normalizing legacy `brands` on load.
+- **[#815](https://github.com/kssabraw/ar-tools/pull/815)** — the team user guide
+  (`docs/website-builder-user-guide.md`) documents Service variations.
+
+**Verification pattern held:** built BOTH `/ac-repair/carrier/` (brand) and
+`/tree-removal/oak-trees/` (type → sub-service, clean "Oak Trees" title) in
+`site-template`; 280 website unit tests pass; CI green (pytest + Netlify) on
+#807 and #810. No template change for the generalization — `type` variations are
+standard `sub_service` pages the template already renders (the synthetic
+sub-service's keyword falls back to the page title). **What's left of the
+roadmap:** only Tier B (the ⭐ extension types — cost/problem-symptom/FAQ/
+projects/comparison), which still need both a template screen AND an engine; see
+the entry below.
+
+---
+
+## ⏩ Update — 2026-08-27 · **Website Builder — future page-type engines (ROADMAP; Tier A now built above)**
+
+**Why this entry exists.** The generation layer routes every planned page to
+whichever suite writer owns its type (`website_generate.generation_inputs` →
+`nlp` / `run` / `core_pages` / `template`). A handful of **reference page types
+have no writer engine yet**: the planner is wired to *detect* them and record
+`engine: None` (surfaced as `engine_unavailable:<type>` / the
+`template_coverage_gate`) rather than fake them. **In practice today the planner
+emits none of these**, so every currently-plannable page has a writer or renders
+from data — this is a forward roadmap, not a live gap.
+
+**The types, in two tiers (source of truth: `services/website_plan.py`
+`NLP_PAGE_TYPES`, `services/website_content.py`
+`_COLLECTION_BY_PAGE_TYPE`/`UNRENDERABLE_PAGE_TYPES`, `site-template`
+`content.config.ts`):**
+
+- **Tier A — template exists, only a writer engine is missing. ✅ BUILT (#807 +
+  #810, see the entry above).**
+  - **`brand_service`** (brand × service, e.g. `/ac-repair/carrier/`) — collection `services`.
+  - **`hyper_local`** (a hyper-specific service×place page) — collection `local-landing`.
+- **Tier B — ⭐ extension types with ratified URLs but NO template AND no engine.**
+  `UNRENDERABLE_PAGE_TYPES` is an intentionally-empty frozenset today; the first
+  plan that proposes one trips `template_coverage_gate` (blocking-but-
+  acknowledgeable). Each needs **both** a new template screen (added in Claude
+  Design + compiled, or mapped onto an existing collection) **and** a writer
+  engine:
+  - **cost / pricing**
+  - **problem / symptom**
+  - **standalone FAQ**
+  - **projects** (portfolio / case-study)
+  - **comparison** (X vs Y)
+
+**What "add an engine" concretely means** (per type): (1) add the type to
+`NLP_PAGE_TYPES` or give it a branch in `generation_inputs` returning a real
+`engine` + keyword/location; (2) for Tier B, add its template screen +
+`_COLLECTION_BY_PAGE_TYPE` mapping and remove it from `UNRENDERABLE_PAGE_TYPES`;
+(3) point it at a writer — most reuse `local_seo_service.generate_page` with a
+tuned prompt, `comparison`/`cost` may be better as a `run`-engine blog variant;
+(4) teach the planner to actually EMIT it (an emitter in `website_plan.py`), since
+today none are proposed.
+
+**Also thin-but-not-broken (no roadmap action needed):** `blog_archive`,
+`sitemap`, `services_index`, `areas_we_serve` are `template`-engine — they render
+from the published-pages query with **no body writer**. Reference "Writer #6"
+would add narrative depth to the two index hubs; until then they ship as accurate
+hubs, not broken pages.
+
+---
+
+## ⏩ Update — 2026-08-27 · **Website Builder content creator — ALL MERGED + LIVE, frontend UI shipped, user guide added**
+
+Everything the two sections below describe is now **merged to `main` and live in
+production**. The "nothing is merged yet" / "frontend UI not built" caveats in
+the 2026-08-26 (pm) entry are **superseded by this one** — read this first.
+
+**What merged (all squash-merged to `main`):**
+- **[#740](https://github.com/kssabraw/ar-tools/pull/740)** — the backend +
+  template: content_plan model, post/pillar planner, `run` engine, effective-
+  frontmatter publish gate, seed bridges (strategist + Fanout), the drip-release
+  schedule (`website_releases`, migration `20260826140000`, applied live), and
+  the cross-family fix (a local site's `/blog/` is planned + dripped alongside
+  its geo pages).
+- **[#796](https://github.com/kssabraw/ar-tools/pull/796)** — the **frontend UI**
+  the #740 entry lists as "NOT built": `ContentPlanEditor.tsx` (Plan tab, **every
+  site type**) with the two one-click **seed buttons** (strategist / Fanout
+  session id) + `ScheduleTab.tsx` (the drip-release schedule) + PlanTab gating
+  the service/city "Build plan" cards to **geo sites only** while the blog
+  content-plan editor shows for all. So the whole feature is now editable in-app.
+- **[#800](https://github.com/kssabraw/ar-tools/pull/800)** — a **team-facing
+  user guide**, `docs/website-builder-user-guide.md`: a no-code, dashboard-only
+  tutorial of the full lifecycle (create → provision → theme → plan (services/
+  cities + the blog content plan) → approve → generate/publish → drip-release →
+  deploys → settings), with a quick-reference table and an FAQ whose first entry
+  answers the recurring "my local site's plan shows no blog posts" question (the
+  blog is driven by the Blog content plan editor, which starts empty).
+- **[#801](https://github.com/kssabraw/ar-tools/pull/801)** — CLAUDE.md now
+  references the user guide and records the frontend UI as built.
+
+**Production flag flipped ON (owner asked 2026-08-27):** `WEBSITE_BUILDER_ENABLED=true`
+on the PLATFORM Railway service. **Railway gotcha that cost time:** `set-variables`
+**staged** the value but did **not** roll a fresh container (the running deployment
+kept serving the old value — confirmed by the container timestamp in logs
+being unchanged after the variable write). A **`redeploy`** was what actually
+applied it. `WEBSITE_IMAGES_ENABLED` was **deliberately left off** — it bills a
+per-page image render, flip it separately when hero images are wanted. Both
+Netlify (frontend) and PLATFORM (backend) are deployed; the **Website Builder
+card** now appears on the client workspace (gated on `GET /websites/status`,
+which the restarted container returns `{enabled:true}` for; TanStack caches it
+~5 min, so a hard refresh surfaces it).
+
+**Where to use it:** client workspace → **Website Builder** card (route
+`clients/:id/website`), or the sidebar **Websites** fleet view (`/websites`).
+The blog on a local site lives behind the **Blog content plan** editor on the
+**Plan** tab (below Service catalog / Cities) — empty by default, which is why a
+fresh local site's plan shows only service/city/matrix pages until you add silos
++ posts (or seed them) and Save.
+
+---
+
+## ⏩ Update — 2026-08-26 (pm) · **Website Builder — informational content creator + drip-publish release schedule BUILT (PR #740)**
+
+> **Superseded by the 2026-08-27 entry above** — #740 (and the frontend, user
+> guide, and flag-on that followed) are all merged and live now. Kept for the
+> build detail; ignore its "nothing is merged yet" / "frontend UI not built"
+> caveats.
+
+The gap mapped in the section below is **built**. PR
+[#740](https://github.com/kssabraw/ar-tools/pull/740) (draft, green CI,
+`mergeable_state: clean`) is on branch
+`claude/website-builder-content-creator-70iu8b`. Nothing is merged yet — it is
+ready for the owner to review/merge. What follows is the "so the next chat
+doesn't re-derive it" summary; CLAUDE.md's Website Builder bullet carries the
+durable version.
+
+### The decision that was surfaced first (owner-confirmed)
+
+**Who owns an informational site's cluster inventory?** Confirmed: the **Website
+Builder owns it** in `websites.config.content_plan` — editable, durable across a
+re-research, reviewed/approved through the same plan flow as the geo matrix —
+rather than reading a research run at build time. A **one-shot seed bridge**
+copies a research plan in once; after that it is the site's own data. This keeps
+informational sites inside the existing plan → approve → generate → publish
+machinery instead of coupling site structure to a research run.
+
+### What was built (5 commits on the branch)
+
+1. **The five planning/generation pieces** (`website_plan.py`,
+   `website_content.py`, `website_generate.py`, `website_publish.py`): the
+   `content_plan` model (`PostEntry`/`PillarEntry`), posts at `/blog/{slug}/`, a
+   **pillar/hub** at top-level `/{topic-slug}/` once a silo has ≥5 **evergreen**
+   posts (`news` excluded), a **`run` engine** (a blog Writer run whose angle
+   rides on `writer_notes`, linked back `content_source="run"`), the effective-
+   frontmatter publish gate + first-paragraph meta description. **No migration**
+   — reuses the `website_page_generate` job, `content_source='run'`, and the
+   free-text `page_type` column.
+2. **Template** (`site-template`): a `pillars` collection + top-level route via
+   `[...path]`, pillars surfaced on home/nav/sitemap. Verified by **building both
+   site types** (the rule that keeps earning its keep).
+3. **Strategist seed bridge** — `import_from_strategist` maps the client's latest
+   `keyword_topic_strategist` plan into `content_plan`.
+4. **Fanout seed bridge** — `import_from_fanout(session_id)` maps a finished
+   Topic Fanout session's silos/clusters in. **Owner ruling: OPTION 1, always
+   regenerate fresh** — copies only the topics/keywords, never links the
+   session's already-generated articles.
+5. **Release (drip-publish) schedule** (`website_release.py` + `website_releases`
+   table + `website_pages.released_at`, migration `20260826140000` applied live)
+   — publish an immediate batch, then N per **day/week/month**. **Owner ruling:
+   generate + publish on the drip** (Fanout-style, just-in-time), via a
+   `publish_after` flag on the existing generate job — **no new job type**.
+6. **Cross-family fix** (owner caught it): blog posts are planned for **every**
+   site type, so a **local SEO site's `/blog/` is filled from its content plan**
+   alongside its service/location pages, and the release schedule drips **both**
+   its geo pages and its blog (acts on `NLP_PAGE_TYPES ∪ RUN_PAGE_TYPES`).
+
+### What is NOT built (deliberate follow-ups)
+
+- **Frontend UI** for the content plan, the two seed buttons, and the release
+  schedule — backend + template only, consistent with the module's build so far.
+- **Local-site pillar hubs** are reachable (home Guides grid + sitemap + own URL
+  + they link down to posts) but a **post→pillar up-link** and **pillar-in-local-
+  nav** are not wired.
+- Local geo pages already drip; a per-page-type immediate-vs-drip split beyond
+  ordering is not built.
+
+### Verification rule that keeps earning its keep
+
+Still true, and used again this pass: **build both site types in `site-template`**,
+not just the unit tests. The local-with-a-blog build (geo pages + posts + a
+pillar, 14 pages, no namespace conflict) is what confirmed the cross-family fix.
+
+---
+
+## ⏩ Update — 2026-08-26 · **The Apps Script publish webhook: which project, which deployment, and how to redeploy it**
+
+**Why this entry exists.** Closing out the deploy-safety work needed one webhook
+change, and finding *which script to edit* took longer than writing the change.
+Nothing recorded the project name or the deployment id — only "the 2026-07-07
+deployment". Two traps cost the time; both are written down here so they cost it
+once.
+
+**The live webhook.** Apps Script project **"AR Tools Google Docs Webhook"**,
+script id `1EoBPm2VqU-GlloClByKq6BVqIs9-6AsZVbraw9DahEG_1NBBmHSiduep`
+(https://script.google.com/d/1EoBPm2VqU-GlloClByKq6BVqIs9-6AsZVbraw9DahEG_1NBBmHSiduep/edit).
+Source of truth in-repo: `writer/apps-script/publish_webhook.gs`. It serves the
+doc / `type:"sheet"` / `type:"pdf"` branches, `share`, `format:"html"`, image
+embedding, and (2026-08-26) `dedupe_by_name`.
+
+**Trap 1 — the decoy project.** A second project, **"AR Tools Publisher"**
+(created 2026-05-01, untouched since), is the *original markdown-only* script:
+no `sheet`, no `pdf`, no `share`, no `format`. It is NOT the webhook. Editing it
+changes nothing, and because it looks plausible it is the one you find first.
+Consider renaming it `AR Tools Publisher (OLD — unused)`.
+
+*How it was ruled out, if you ever need to redo this:* `upload_pdf` hard-fails
+with `pdf_not_supported` unless the webhook returns a `file_id`, and the decoy
+has no `pdf` branch — yet 20 of 26 `client_reports` rows carry successful Drive
+delivery. So the live script could not be that one. The definitive check is
+comparing a deployment's exec URL against `GOOGLE_APPS_SCRIPT_URL` on the
+PLATFORM Railway service.
+
+**Trap 2 — two active deployments.** The real project has two, differing only
+after `/macros/s/`:
+
+| Prefix | Was | Now |
+|---|---|---|
+| `AKfycbxTjwbZYB…` | Version 8 (Jul 6) — **PRIMARY: the one `GOOGLE_APPS_SCRIPT_URL` points at** | Version 10 |
+| `AKfycbyfvDYYs…` | Version 1 (Jun 27) | Version 9 |
+
+**Resolved 2026-08-26:** `GOOGLE_APPS_SCRIPT_URL` holds the
+`AKfycbxTjwbZYB…` / Version 10 deployment — verified by revealing the value in
+the Railway **dashboard** and full-string-matching it against the deployment id
+(not just the prefix). Both deployments' descriptions now say which is which.
+Note the value is readable ONLY in the dashboard: every API client (the Railway
+MCP, an OAuth app) gets variable names with values redacted, which is what made
+this take two attempts to settle.
+
+Even so, **bumping BOTH on a redeploy stays the default** — webhook changes here
+are additive and opt-in, so it is free insurance against this drifting again.
+
+**Redeploy procedure.** Edit the code → save → **Deploy → Manage deployments →
+pencil icon → Version: "New version" → Deploy**. ⚠️ **Never "New deployment"** —
+that mints a *different* exec URL while `GOOGLE_APPS_SCRIPT_URL` keeps pointing
+at the old one, so prod silently keeps running the old code with no error
+anywhere. Authorization is only re-prompted when a change introduces a NEW
+Google service (Sheets, UrlFetchApp did; `dedupe_by_name` did not — it reuses
+`DriveApp`). If you drive this UI with a browser agent: the pencil icon
+silently swallows clicks while the Manage-deployments dialog is still animating
+open, and the dialog settles at two different sizes depending on timing — wait
+for each control's position to stop moving before clicking, or the early clicks
+land on nothing.
+
+**Deployment labels vanish on every redeploy — this is expected.** The name shown
+in the Manage-deployments list is just a mirror of the deployment's Description,
+and **cutting a new version resets it to "Untitled"**. That is why the 2026-08-26
+redeploy appeared to wipe the "AR Tools Google Docs Webhook" label, and it cost
+confusion twice in one session. Two consequences: (1) after any redeploy, expect
+to re-enter the descriptions; (2) **always identify a deployment by its version
+number or its `AKfyc…` deployment ID, never by the list label** — the label may
+be blank, stale, or duplicated across both. Editing a description alone does NOT
+cut a version (verified: the list still topped out at Version 10 afterwards).
+
+**Verifying a deploy landed.** Two options, in order of convenience:
+1. Read the project source back through Drive (`download_file_content` with
+   `exportMimeType: application/vnd.google-apps.script+json`) and confirm the
+   code is present — this is how the 2026-08-26 change was verified, and it
+   works from an agent session.
+2. Exercise it: POST the same `{folder_id, title, …, dedupe_by_name: true}`
+   twice against a scratch folder; the second reply should carry the SAME id
+   plus `"reused": true`. **Note the sandbox cannot do this** — the agent proxy
+   denies `script.google.com` (403 on CONNECT), so run it from a real terminal.
+
+**Current state.** Both deployments serve the 2026-08-26 code; the syndication
+duplicate-Doc guard (PR #758) is live. The un-run item is option 2 above — a
+live round-trip test, which only matters on a retry path and is not blocking.
+
+## ⏩ Update — 2026-08-26 · **Brand-voice QA: the judge was too generous — hardened the scoring rubric across both writers + turned on nlp/pipeline CI**
+
+**Problem.** The separate brand-voice scorecard (the 8-dimension LLM judge, not
+the deterministic checks) was scoring off-brand pages "fine." Pulled the real
+distribution from `<page>.voice_violations` to confirm — across **all 17 pages
+scored since the voice system shipped 2026-07-31** (the other 200 are pre-guide
+and correctly unscored): composites clustered **81–87** (Local SEO avg 84.2,
+Ecommerce 81.3), nothing ≥90, almost nothing <80. Textbook LLM-judge
+central-tendency.
+
+**The insight that wrote the fix.** Per-dimension, the **only** dimension
+producing honest, well-spread scores was `distinctiveness` (avg **71.5**, range
+55–82) — and it is the **only** dimension whose prompt line was already framed
+adversarially ("could a competitor use this by swapping the name? score LOW").
+The other seven ("score how faithfully it follows the guide") inflated: tone
+86.8, writing_style 84.3, vocabulary 80.4. So it was a controlled experiment —
+adversarial framing works; extend it to the other seven.
+
+**What changed (PR #743, open).** Hardened **both** judge prompts — they are
+separate and have **no sync-guard** (unlike `voice_card.py`):
+- `nlp-api/main.py::_VOICE_SCORE_PROMPT_SUFFIX` — the page judge, consumed by all
+  four page scorers (`_score_system_prompt_for` local/national,
+  `_ecommerce_score_system_prompt_for`, `_blog_score_system_prompt_for`).
+- `pipeline-api/modules/writer/voice_review.py::_SCORE_SYSTEM` — the blog/service
+  **article** judge (its own rubric; would have stayed generous otherwise).
+
+Each got: anchored 0–100 bands with **60–74 "competent but anonymous" as the
+DEFAULT** for a page that reads fine but isn't distinctly the client; "never
+award 75+ for the mere absence of errors"; **worst-section evidence** (quote
+where it drifts, score to that); an 85+ justification guardrail; per-dimension
+"what LOW looks like" cues. **Output contracts unchanged** (page: `brand_voice`
+key; article: bare 8-dim object) → parsers, `voice_scorecard` math, weights,
+`VOICE_PASS_THRESHOLD` (80), deterministic caps all untouched. Verified locally
+as far as the sandbox allows (py_compile; `test_voice_card` 54 pass; isolated
+article-path integration).
+
+**Validation — the next real step, must run on PLATFORM.**
+`platform-api/scripts/revalidate_voice_scores.py` re-scores the baseline pages
+through the deployed nlp path and prints before→after distributions +
+per-dimension means. Read-only w.r.t. the stored baseline (records a score-run
+history row like a UI "Score", never overwrites `voice_score`/`voice_violations`;
+`--write` persists once trusted; `--limit` smoke-tests). The **sandbox can't
+reach the private nlp service**, so run it in a Railway shell on PLATFORM.
+Expected: the 81–87 mass spreads to **~62–80**, on-brand pages still reaching
+high 80s. Caveats it prints: re-score uses the client's *current* voice card
+(clean rubric comparison only where the guide is unchanged); local pages with an
+empty/unrecognized `location` error out (excluded, not scored 0).
+
+**Deferred until that re-score is measured (do NOT guess now):** raise the
+`distinctiveness` weight (.10→.15) and revisit `VOICE_PASS_THRESHOLD`. Scores are
+stored, so recalibration needs no re-billing beyond the one re-score.
+
+**CI coverage (PR #746, open).** Only platform-api ran in CI, so both prompt
+changes above had **no automated gate**. Added `.github/workflows/
+nlp-api-tests.yml` + `pipeline-api-tests.yml` (mirror `python-tests.yml`; nlp got
+a CI-only `requirements-dev.txt`). nlp-api went green; **pipeline-api immediately
+caught two pre-existing failures** (1327 passed, 2 failed) invisible because the
+suite never ran — both fixed in the same PR:
+1. `test_pipeline_metadata_threshold_echo` — stale assertion (0.55) vs
+   `config.brief_relevance_floor` raised to 0.65 in #688.
+2. **Real bug** in `brief/assembly.py::_apply_title_case` — it title-cased each
+   content H2 but left child H3s' `parent_h2_text` on the old casing, so an H3
+   referenced a "nonexistent" parent. Fixed by realigning H3 parent pointers to
+   the re-cased H2 in the same pass (idempotent).
+
+**Open items for the next session:** (1) run the re-score on PLATFORM and record
+the spread; (2) recalibrate weight+threshold from it; (3) land #746 green (CI
+re-running after the two fixes) then #743; (4) longer-term, fold the two judge
+prompts into one seam so they can't drift again (the scorecard math is already
+shared; the prompts are not); (5) 146 live pre-guide pages still carry no voice
+verdict — a backfill via voice-aware reoptimization.
+
+## ⏩ Update — 2026-08-26 · **Client Reporting — report-content upgrades (all merged + live)**
+
+A run of improvements to the client-facing PDF report shipped this session — each
+its own PR, squash-merged to `main`, auto-deployed to PLATFORM (each verified
+`SUCCESS`), and gated by the platform-api `pytest` GitHub Actions workflow (five
+code PRs #741/#742/#744/#745/#748 + a docs PR #747). All
+are additive rendering changes in `services/client_report.py` +
+`services/brand_report_html.py`; two carry additive migrations (applied live).
+Toggles default off, so nothing changes for a client until an account manager
+opts in on the ClientReports **Delivery & schedule** card.
+
+- **#741 (`ad26fb1`) — scheduled standalone report types.** The recurring
+  schedule (`client_report_schedule.enqueue_due_report_schedules`) now also
+  emits, per opt-in, the **AI Visibility** report (`report_type="ai_visibility"`
+  — the 2026-07-06 fold-in decision finally executed) and a **new Local Rank
+  (Maps) report** (`report_type="maps"`, `_build_maps_report` — a self-contained
+  geo-grid PDF reusing the combined report's own `_gather_geogrid` +
+  `_section_geogrid`; deterministic, no LLM, on purpose). Opt-in via
+  `client_report_settings.ai_visibility_enabled` / `maps_enabled` (migrations
+  `20260826140000` + `20260826150000`; the latter also widened the
+  `client_reports.report_type` CHECK to include `maps`). Gated on the client
+  actually tracking the matching keywords (empty-report guard); the pending-report
+  guard is now `report_type`-scoped so the three deliverables don't block each
+  other; delivery reads the report row generically so both new PDFs email +
+  Drive-copy unchanged. The per-keyword Maps **Local Rank Analysis Docs** stay a
+  separate on-scan-completion deliverable — not folded in.
+- **#742 (`779f670`) — clearer Rank trend + month-over-month + GBP Insights.**
+  The organic "Trend" column is relabeled **"Rank trend (last 90 days)"** with a
+  legend (the sparkline already plots better ranks higher — it just had no
+  label). Maps + AI-visibility gained month-over-month callouts with
+  **per-keyword deltas** (`_gather_geogrid` pulls the previous reporting scan's
+  per-keyword rows; `_gather_ai_visibility` the previous batch's found-counts;
+  standalone `brand_report_html` gained a prev-period overall + per-keyword
+  column). The **GBP Insights** section (`_section_gbp` — rating + new reviews +
+  highlights + the `_gather_gbp_metric_growth` performance table) was
+  **re-enabled** in the combined report (it was built-but-disabled) and added to
+  the standalone Maps report. Note: `gbp_metric_daily` is keyed by
+  `location_row_id`, **not** `client_id` — a naive `client_id` count reads 0 even
+  for clients that have data (it joins through `gbp_locations`).
+- **#744 (`3f70b96`) — 30d / 90d / since-start comparison horizons.** A
+  single-window comparison tied to the report period is volatile (a 30-day
+  report only ever showed a 30-day delta), which the owner flagged as hiding
+  wins. **Performance highlights** now shows **Now / vs prev 30d / vs prev 90d /
+  since-we-started** columns — pure `build_multi_comparisons` anchored at
+  `period_end`, each horizon **omitted ("—") when the data doesn't span both its
+  windows** (no fabricated partial deltas). Maps (`presence_horizons`) and
+  AI-visibility (`visibility_horizons`) get the same section-level three-horizon
+  callout (vs the scan/batch nearest each horizon + the first scan/batch). The
+  single-window `build_comparisons` is kept for the KPI strip.
+- **#745 (`d3b3a55`) — executive summary longer time frame.** The `emit_summary`
+  tool gained a required **`long_term_progress`** field rendered as a green
+  **"The bigger picture"** callout under the headline; the exec context now
+  carries the three horizon sets so the model cites the durable 90d/since-start
+  trend positively, leading with the longer view when a single month dipped and
+  saying "early and building momentum" (never an invented number) when long-term
+  data isn't there yet.
+- **#748 (`a79c0cc`) — every tracked keyword in Organic rankings.** The combined
+  report's `_section_organic` trimmed to the top ~5 movers with a "remaining N —
+  full list on request" note; owner wants the full table. It now renders **every**
+  tracked keyword, sorted strongest current position first (unranked last), with
+  per-row Movement + rank-trend intact — so a slip shows honestly now (the old
+  design deliberately hid decliners). Dropped the top-movers selection + the
+  now-unused `_TOP_MOVERS` constant; raised `_gather_organic`'s `_MAX_KEYWORDS`
+  cap **40 → 250** (runaway ceiling, not a display trim) because several clients
+  track 50–96 keywords (UMH 96, Southwestern Hearing 60, EML 58, WheelHouse FL 50)
+  — those clients now get a **multi-page** organic table, which is the accepted
+  cost of "all keywords" (flag if a cap/hybrid is wanted for the very large ones).
+- **#747 (docs)** — recorded #741/#742/#744/#745 in CLAUDE.md + HANDOFF.md.
+
+**Live-data caveat (tell whoever tests this):** the horizons + month-over-month
+only render where the history supports them. **Organic rank** runs long, so
+Performance shows all three horizons today (verified on First Class Roofing:
+Feb→Aug). **Maps + AI-visibility** scan history is younger than 90 days for
+every current client, so their 90d/since-start rows correctly read "—" and fill
+in over the coming months. A good end-to-end test client is **First Class
+Roofing** (real previous Maps scan for MoM + real GBP metric growth; its AI
+scans are a single day so AI MoM won't show).
+
+**Infra note — the pytest gate is intermittent.** The platform-api `pytest`
+workflow (added 2026-08-15, path filter `writer/platform-api/**`) **triggered for
+#744/#745/#748 but did NOT fire for #741/#742** despite matching the same filter
+and firing normally on other `claude/*` PRs. All were validated locally (74–80
+report tests green) and merged clean. Unresolved; worth a glance if a
+platform-api PR merges without its Python tests having gated it.
+
+## ⏩ Update — 2026-08-26 (am) · **Website Builder — where it stood before PR #740, and the informational gap that is now built above**
+
+Nothing was built in this pass. This section records **what is finished**, the
+one thing that was silently broken and is now fixed, and a precise map of the
+**informational gap** — which is **now built (see the section above)**, kept here
+for the reasoning trail.
+
+### Finished since the 2026-08-07 section
+
+- **PR #575 merged** (`6e12bbb`) — theme compiler, core-pages writer, imagery.
+- **PR #577 merged** (`473feee`) — the **per-site business-facts Settings tab**
+  (`services/website_settings.py` + `components/website/SettingsTab.tsx`). Seven
+  editable NAP/business facts, each stamped `provenance:"user"` so a later GBP
+  re-scan fills **gaps only** and never overwrites a typed value; clearing a
+  field drops the value *and* its stamp so it hands back to GBP. Saving
+  re-commits `site.config.json` via `record_deploy(..., trigger="config")`. The
+  pure helpers are tested against the **real** `build_site_config` fill step,
+  because the editor and the fill step are only correct together.
+- **PR #622 merged** (`c0397f7`) — ten defects from an adversarial re-read.
+- **PR #624 / #681** — flags-on record, then design-fidelity layout variants.
+- **Flags ON in production** (`WEBSITE_BUILDER_ENABLED` +
+  `WEBSITE_IMAGES_ENABLED` on PLATFORM). Code defaults stay `False`, so a fresh
+  environment still ships dark. Verified **behaviourally** (Railway redacts
+  variable values for OAuth callers): the logs show `enqueue_due_deploy_polls`
+  running its query, which returns early when the flag is off.
+- **Nothing has ever been created by the module.** `websites`, `website_themes`,
+  `website_pages`, `website_deploys` are all **0 rows**. (The 16 `website_*`
+  jobs in `async_jobs` are the unrelated `website_scrape` client-site scraper.)
+
+### The two bugs worth remembering
+
+**1 · The narrowed select.** `website_generate` fetched the site row with
+`.select("id, client_id, name")`. Every downstream writer therefore saw
+`config == {}` and `site_type == "informational"` — so a business fact typed into
+the Settings tab was silently ignored in favour of GBP, the tagline never reached
+the prompt, and **every local site would have been written with informational
+framing**. Fixed to `.select("*")`.
+
+The part worth keeping: **my first regression test passed against the broken
+code.** The test fake ignored column projection and returned whole rows whatever
+was asked for. A fake more generous than the real dependency cannot catch that
+class of bug. `tests/test_website_generate.py::_supabase` now honours
+`.select(...)`, and the fix was verified fail-on-old / pass-on-new.
+
+**2 · The stale template repo.** `kssabraw/ar-site-template` — the repo every
+site is minted from — had not been synced since 2026-08-03. It was missing the
+`site.ts` crash fix, the `hubs.ts`/nav fix, both hub routes and
+`[...path].astro`. **Every site provisioned from it would have failed its first
+build.** Full tree replacement pushed as `24e8416`. There is no automation
+keeping `site-template/` and the GitHub template repo in sync; that is a real
+gap, and re-checking it is cheap.
+
+The other eight fixes, briefly: fonts failing open when the census measured none
+(the one case the model had nothing to copy from was the one case it was free to
+invent — now `no_fonts_measured`); raw `website_deploys` inserts bypassing
+`record_deploy`, so a deploy chip sat at `queued` until the next scheduler sweep;
+`site_type` never reaching the core-pages prompt (it is live now, with an
+explicit informational framing that forbids sales copy); `_clean` treating a JSON
+*number* as a clear, which deleted a field and dropped its `user` stamp;
+`business.hours`/`areaServed` missing from `build_site_config`, which would have
+crashed the **first** contact-page build of any local site (fixed at both the
+producer and the template layer); six reads per save; a provision/settings config
+clobber; brand tone read from the wrong nesting level; and a dead
+`website_image_provider` setting, removed.
+
+### Is it usable end to end?
+
+**Local / lead-gen: yes, on paper** — design → theme → provision → plan →
+generate → publish → deploy is wired and each stage is tested. **It has never
+been run against a real design for a real client**, so the first live run should
+be treated as a smoke test, not a delivery.
+
+**Informational: no.** A plan for an informational site contains four content
+pages and a blog archive with nothing in it.
+
+### The informational gap, precisely
+
+The **rendering half is already complete** — this is the surprising part, and it
+means the build is smaller than it looks:
+
+| Already built | Where |
+|---|---|
+| `posts` collection, five formats (`informational_cluster`/`listicle`/`comparison`/`local_geo`/`news`) | `site-template/src/content.config.ts:100` |
+| `/blog/[...slug]` route + archive | `site-template/src/pages/blog/` |
+| `post` → `posts` collection mapping | `website_content.py:41` |
+| Post-specific `entry_id` (entry id IS the slug — a full-path id would publish `/blog/blog-my-post/`) | `website_content.py:122` |
+| The **strict** post publish gate | `website_content.py:272` |
+| Post body assembled from a blog run's `module_outputs` markdown | `website_publish.resolve_source`, `kind == "run"` |
+| `post` is hero-eligible and its image prompt is never geo-tagged | `website_images.py` |
+
+The post gate is deliberately stricter than anywhere a human is in the loop,
+because auto-publish means nobody reads a post before the public does: a critical
+voice violation and a `-degraded` writer run are **non-overridable**; frontmatter
+must carry title/description/format; a `news` post must carry `reviewBy`
+(non-evergreen + auto-publish + no expiry is how a site ranks on stale
+information indefinitely). Keep that; do not soften it to make the first post
+ship.
+
+**What is missing is the planning and generation half — five things:**
+
+1. **`website_plan.build_plan` never plans a post.** Every non-geo site falls
+   through the `else` branch, so an informational plan is home / about-us /
+   contact-us / privacy-policy / sitemap / blog. No pillars, no clusters, no
+   posts. (`website_plan.py:608`)
+2. **No `post` engine.** `generation_inputs` returns `{"engine": None}` for any
+   page type outside `NLP_PAGE_TYPES` ∪ `CORE_PAGE_TYPES` ∪
+   `TEMPLATE_ONLY_PAGE_TYPES`, so a planned post would report
+   `engine_unavailable:post`. (`website_plan.py:635`, `:717`)
+3. **No post frontmatter.** `frontmatter_extra` has no `post` branch, so
+   `format`/`silo`/`cluster` would be absent and the publish gate would —
+   correctly — refuse the page. (`website_plan.py:645`)
+4. **No generation branch.** `website_generate` has no path that starts a Blog
+   Writer run and links it back as `content_source="run"` +
+   `source_id=<run_id>`. The publish side of that contract already exists.
+5. **Pillar / Hub does not exist at all.** Reference §5.3: `/{topic-slug}/`,
+   2,000–4,000 words, Writer #6, planner trigger *a cluster of ≥ 5 posts*. No
+   page type, no collection, no route — yet it is the parent every cluster post
+   links up to, so a cluster of posts with no pillar is not the page type the
+   reference describes.
+
+**The cluster map already exists and is unwired.**
+`keyword_topic_strategist` emits exactly the shape the planner needs:
+
+```
+{assessment, pillars: [{pillar, rationale,
+  clusters: [{title, buyer_problem, search_intent, funnel_stage,
+              target_keywords, questions, priority, rationale}]}]}
+```
+
+and `keyword_research_handoff` already turns selected keywords into a Fanout
+session whose scheduler writes blog posts (`content_type` blog_post |
+local_seo_page). `website_plan`'s own docstring records the standing assumption
+that *"the fan-out owns an informational site's post plan"*.
+
+**That assumption is the first decision of the next build**, and it should be
+made explicitly rather than inherited: either the site plan *reads* an existing
+strategist/Fanout plan (cheap, reuses a tested path, but couples site structure
+to a research run), or the Website Builder owns its own cluster inventory
+(more work, but the plan is then a property of the site and survives a
+re-research). Both are defensible; picking silently is not.
+
+Two reference rules the planner must encode either way: **blog posts are planned
+per cluster, never ad hoc** — every post carries a silo and a target format
+*before* generation — and the `news` format is **non-evergreen and excluded from
+pillar-cluster math**.
+
+### Verification rule that keeps earning its keep
+
+Build **both** site types in `site-template/` — not just the unit tests. That is
+what caught the variable-font duplication (same bytes downloaded 3× under 3
+names, masked by the bundler's content hashing), the `sections` key missing from
+the frontmatter order (home copy silently dropped while reporting success), and
+the contact-page crash. Unit tests found none of the three.
+
+
+## ⏩ Update — 2026-08-26 · **LeadOff GBP Placement Advisor — built + LIVE + prod-verified**
+
+The demand-aware **"where should the GBP live"** module — the demand-side upgrade
+of the competition-only Proximity signal (an empty octant can be empty of
+*people*, not just of competitors). Shipped across **8 PRs, all merged to `main`
++ deployed** (#725 Phases 1+2, #728 + #730 prod-verification fixes, #731
+calibration freeze, #732 Phase-0b probe, #733 + #735 docs), building on the
+live-GBP market map (#719/#721). Authoritative doc:
+**`docs/modules/leadoff-gbp-placement-plan-v1_0.md`** (owner decisions §1;
+build-status + prod findings §9a). Full writeup is in that doc + CLAUDE.md's
+LeadOff section — this is the operational handoff summary.
+
+**What it does (deterministic, no LLM):** for any point `c`,
+`placement_score(c) = 100 × norm(demand_access) × (1 − norm(pressure))` — `demand_access`
+sums Census block-group **households** with a `1/(1+d/5mi)` decay; `pressure`
+sums competitor GBPs review-weighted with proximity's verbatim `1/(1+d/2mi)`
+decay; `norm()` is min-max over the market's OWN 1-mile lattice (market-relative,
+never comparable across markets). It surfaces 3–5 ranked, ≥2-mi-apart,
+locality-named zones ("Near Maumelle") on the market map + a "Best areas to plant
+a GBP" card list, plus a **Phase 2 "Both"** score-any-location panel (click the
+map / paste an address or GBP → scored against the zones, side-by-side compare,
+optional octant re-anchor).
+
+**Free, $0/market beyond captured pins.** Core: `services/leadoff_placement.py`
+(pure) + `services/census_demand.py` (ACS block groups + TIGERweb centroids →
+`census_block_demand` cache, filled by the `leadoff_placement` async job). API
+`GET /leadoff/placement` + `POST /leadoff/placement/score-point`. Behind
+**`leadoff_placement_enabled` (default True — ON in prod)**.
+
+**Activation / env (already set on PLATFORM):** needs **`CENSUS_API_KEY`** (ACS)
++ **`GOOGLE_MAPS_API_KEY`** (zone naming + the static map) + the existing
+DataForSEO creds (only for the map-refresh pin pull, not the advisor itself). No
+dashboard setup needed. Opening a scouted market with ≥5 live pins auto-enqueues
+the Census demand fill on first view (poll `job_id`); markets with <5 pins show
+the honest `thin_field` state and a nudge to Refresh map (~$0.004).
+
+**Prod verification earned its keep** — three real bugs, each caught live and
+pinpointed by the self-diagnostic built into the job, none catchable by unit
+tests:
+1. `enqueue_placement` wrote a non-UUID `entity_id` (the column is UUID) → the
+   auto-enqueue would throw. Fixed to `uuid4()` + dedupe by `payload->>city_id`.
+2. The TIGERweb centroid query used `STATE=/COUNTY=` field names that returned 0
+   features. Fixed to `GEOID LIKE '<fips>%'` + `outFields=*`, with a persisted
+   `tigerweb_diag` on the job row.
+3. `_resolve_bg_layer` matched **"Tribal Block Groups"** (layer 6, listed first)
+   instead of **"Census Block Groups"** (layer 10) → all-null centroids. Fixed to
+   select the Census layer specifically (`pick_bg_layer`, unit-tested).
+After the third fix, a live KC run wrote **1,494 real ACS block groups** and
+produced sensible zones — verified end-to-end.
+
+**Phase 3 (paid per-ZIP demand layer) — PROBED & DROPPED.** The ~$0.05 Phase-0b
+feasibility probe (`services/leadoff_zip_demand.py`, `leadoff_zip_demand` job) ran
+live: 10 Chicago ZIPs (60601–60610) × "plumber" all queried cleanly but returned
+`search_volume: null` (`null_share` 1.0 → `inconclusive`). Google thresholds Ads
+search volume at ZIP granularity even for a high-demand trade in a major metro,
+so a per-ZIP re-weight adds no signal over the free households surface → **not
+built**; `leadoff_zip_demand_enabled` stays False, the probe is the record. Total
+paid spend for the whole module: **~$0.05**, on the probe that prevented a wasted
+build.
+
+**Calibration freeze (§8, built):** the create-client handoff freezes the market's
+zone set into `leadoff_predictions.placement` (jsonb) alongside the existing
+`proximity` freeze, so the post-client geo-grid can later grade whether high-score
+zones matched better pack outcomes — the loop that eventually earns the dollar
+layer (still off). Read-only instrumentation; nothing feeds scoring.
+
+**Grade safety is absolute:** placement reads only `leadoff_gbp_pins` +
+`census_block_demand` and writes only its own cache — **never** the board grade,
+`competitor_locations`, or `proximity_opportunity`.
+
+**Demo market left in place (owner):** **Kansas City / pest_control_service** is
+seeded as a working demo — 5 real competitor pins in `leadoff_gbp_pins` + 1,494
+real ACS rows cached. To remove the pin seed later:
+```sql
+delete from public.leadoff_gbp_pins where city_id=4393217 and category_id='pest_control_service';
+```
+(The `census_block_demand` rows are legitimate real ACS cache — fine to keep.)
+
+**Migrations (all applied live):** `20260825140000` (map refresh),
+`20260825150000` (`census_block_demand`) + `20260825160000` (async_jobs CHECK),
+`20260826120000` (`leadoff_predictions.placement`), `20260826130000` (async_jobs
+CHECK + `leadoff_zip_demand`).
+
+**Remaining (owner call, not started):** the **dollar layer** — gated on the §8
+calibration loop showing signal (needs real post-client geo-grid outcomes to
+accrue first).
+
+---
+
+## ⏩ Update — 2026-08-25 · **LeadOff market-map interactions + two-maps sync (PR #721, MERGED + DEPLOYED)**
 
 Owner-driven UX polish on the live-GBP market map, shipped in the **same PR #721**
 as the Refresh-map affordance below (squash-merged to `main` as `f2da79d`,

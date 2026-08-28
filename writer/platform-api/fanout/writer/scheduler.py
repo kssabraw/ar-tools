@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
@@ -29,6 +30,32 @@ _loop_task: asyncio.Task | None = None
 _inflight: set[asyncio.Task] = set()
 _executor: ThreadPoolExecutor | None = None
 
+# Run ids THIS process is actively writing. `_recover_stuck` keys only on
+# wall-clock age, so without this it requeues a run that is still executing
+# right here — a second worker then generates the same article concurrently,
+# double-spending and (past the publish branch) posting it twice. Guarded by a
+# lock: writers are `_executor` threads, the reader is the default executor's
+# sweep thread. Per-process by design, exactly like the job worker's in-flight
+# set: it must never mask a row a DIFFERENT container abandoned.
+_owned_runs: set[str] = set()
+_owned_lock = threading.Lock()
+
+
+def _own_run(run_id: str) -> None:
+    with _owned_lock:
+        _owned_runs.add(run_id)
+
+
+def _release_run(run_id: str) -> None:
+    with _owned_lock:
+        _owned_runs.discard(run_id)
+
+
+def owned_runs() -> set[str]:
+    """Snapshot of the runs this process is writing (used by the sweep)."""
+    with _owned_lock:
+        return set(_owned_runs)
+
 
 async def start() -> None:
     """Start the loop (called from the FastAPI lifespan). No-op if disabled or already running."""
@@ -38,11 +65,14 @@ async def start() -> None:
         return
     _executor = ThreadPoolExecutor(max_workers=s.scheduler_concurrency_cap,
                                    thread_name_prefix="sched-writer")
-    try:
-        _recover_stuck(s.scheduler_stuck_minutes)
-    except Exception as exc:  # noqa: BLE001 — never block startup on the sweep
-        logger.warning("scheduler_recover_failed", extra={"event": "scheduler_recover_failed",
-                                                          "reason": repr(exc)})
+    # NO inline startup sweep. Railway keeps the outgoing container working for
+    # ~15s after this one boots, and a row it has been writing for longer than
+    # `scheduler_stuck_minutes` is indistinguishable here from an abandoned one —
+    # sweeping at second 0 would requeue a run that is still genuinely executing
+    # over there (the ownership set below is per-process and empty at boot, so it
+    # cannot help across containers). The loop's periodic sweep runs first at
+    # `scheduler_sweep_every_ticks` x `scheduler_tick_seconds` (~5 min at the
+    # defaults) — long past the handover — and covers exactly the same rows.
     _loop_task = asyncio.create_task(_run_loop())
     logger.info("scheduler_started", extra={"event": "scheduler_started",
                                             "cap": s.scheduler_concurrency_cap,
@@ -106,9 +136,20 @@ async def _tick() -> None:
 
 
 async def _dispatch(row: dict) -> None:
-    """Run one claimed row in a worker thread (the write is blocking, minutes long)."""
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(_executor, _process_run, row)
+    """Run one claimed row in a worker thread (the write is blocking, minutes long).
+
+    Registers the run as owned for its whole lifetime so the periodic stuck-row
+    sweep can't requeue it out from under us while it is still writing.
+    """
+    run_id = str(row.get("id") or "")
+    if run_id:
+        _own_run(run_id)
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(_executor, _process_run, row)
+    finally:
+        if run_id:
+            _release_run(run_id)
 
 
 # ----- sync helpers (run in the worker thread) ------------------------------
@@ -130,6 +171,20 @@ def _recover_stuck(stuck_minutes: int) -> None:
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=stuck_minutes)).isoformat()
     rows = (get_service_client().table("scheduled_article_runs").select("*")
             .eq("status", "running").lt("started_at", cutoff).execute().data or [])
+    # Never reap a run THIS process is still writing. The query keys purely on
+    # wall-clock age, and a legitimately slow run (a local_seo_page does competitor
+    # SERP + generation + 8-engine scoring + auto-reoptimize) can pass the cutoff
+    # while perfectly healthy. Requeuing it starts a SECOND concurrent generation
+    # of the same article — double spend, and two trips through the auto-publish
+    # branch.
+    owned = owned_runs()
+    if owned:
+        skipped = [r for r in rows if str(r.get("id")) in owned]
+        if skipped:
+            logger.info("scheduler_sweep_skipped_owned",
+                        extra={"event": "scheduler_sweep_skipped_owned",
+                               "count": len(skipped)})
+        rows = [r for r in rows if str(r.get("id")) not in owned]
     for row in rows:
         # One bad row (a DB write blip) must not skip recovery of the rest.
         try:
@@ -413,10 +468,18 @@ def _wp_publish_blog(session: dict, cluster_id: str, keyword: str, status: str) 
 
 
 def _finish_run(run_id: str, status: str, *, error: str | None) -> None:
-    get_service_client().table("scheduled_article_runs").update({
+    """Record a run's terminal status, conditional on it still being `running`.
+
+    The guard mirrors `_retry_or_fail` (which has always had it) and matters for
+    the same two reasons: a user who cancelled mid-generation must not have their
+    cancel overwritten by the finishing worker, and a run that a sweep requeued
+    must not be stomped back to `complete` by the original worker still winding
+    down — which would leave the re-claimed row's own write racing a ghost.
+    """
+    (get_service_client().table("scheduled_article_runs").update({
         "status": status, "completed_at": datetime.now(timezone.utc).isoformat(),
         "error": error,
-    }).eq("id", run_id).execute()
+    }).eq("id", run_id).eq("status", "running").execute())
 
 
 def _retry_or_fail(

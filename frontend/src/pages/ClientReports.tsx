@@ -241,12 +241,27 @@ function SettingsCard({ clientId }: { clientId: string }) {
         <label style={toggleLabel}>
           <input type="checkbox" checked={s.drive_enabled} onChange={(e) => set({ drive_enabled: e.target.checked })} /> Drive copy
         </label>
+        <label style={toggleLabel} title="Also generate and deliver the AI Visibility report on this schedule">
+          <input
+            type="checkbox"
+            checked={s.ai_visibility_enabled}
+            onChange={(e) => set({ ai_visibility_enabled: e.target.checked })}
+          /> AI Visibility report
+        </label>
+        <label style={toggleLabel} title="Also generate and deliver the Local Rank (Google Maps) report on this schedule">
+          <input
+            type="checkbox"
+            checked={s.maps_enabled}
+            onChange={(e) => set({ maps_enabled: e.target.checked })}
+          /> Local Rank (Maps) report
+        </label>
         <button
           style={{ ...primaryBtn, padding: '8px 14px' }}
           disabled={save.isPending}
           onClick={() => save.mutate({
             recipients, cadence: s.cadence, day_of_week: s.day_of_week, day_of_month: s.day_of_month,
             hour_utc: s.hour_utc, period: s.period, email_enabled: s.email_enabled, drive_enabled: s.drive_enabled,
+            ai_visibility_enabled: s.ai_visibility_enabled, maps_enabled: s.maps_enabled,
           })}
         >
           {save.isPending ? 'Saving…' : 'Save'}
@@ -256,6 +271,8 @@ function SettingsCard({ clientId }: { clientId: string }) {
       <div style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 8 }}>
         Scheduled reports email the recipients (PDF attached) and save a copy to the client's Drive folder.
         Email needs SMTP configured on the server; the Drive copy needs the updated Apps Script deployment.
+        “AI Visibility report” and “Local Rank (Maps) report” additionally generate those standalone deliverables
+        on the same schedule (each only for clients that track the matching keywords).
       </div>
     </div>
   )

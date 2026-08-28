@@ -1,6 +1,6 @@
 ---
 import { site, isLocal, displayPhone, has } from '../../lib/site';
-import { routedPages, allPosts } from '../../lib/content';
+import { routedPages, pillarRoutedPages, allPosts } from '../../lib/content';
 import { globalNav } from '../../lib/hubs';
 
 /**
@@ -12,7 +12,10 @@ import { globalNav } from '../../lib/hubs';
  */
 const phone = displayPhone();
 const current = Astro.url.pathname.replace(/\/$/, '') || '/';
-const nav = globalNav(isLocal ? await routedPages() : [], (await allPosts()).length > 0);
+const nav = globalNav(
+  isLocal ? await routedPages() : await pillarRoutedPages(),
+  (await allPosts()).length > 0,
+);
 ---
 
 <header class="site-header">

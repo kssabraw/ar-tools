@@ -21,6 +21,7 @@ const ENGINE_LABELS: Record<string, string> = {
   geographic_legitimacy: 'Geographic Legitimacy',
   nearme_intent: 'Hyperlocal / Near-Me',
   serp_signal_coverage: 'SERP Signal Coverage',
+  length_fit: 'Length Fit (SERP avg +20%)',
 }
 
 const MODE_META: Record<ScoreRunMode, { label: string; color: string; bg: string }> = {

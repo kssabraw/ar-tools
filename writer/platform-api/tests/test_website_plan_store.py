@@ -51,6 +51,42 @@ class TestParsing:
             "roof-replacement",
         ]
 
+    def test_legacy_brands_parse_as_brand_variations(self):
+        # The pre-generalization `brands` field still round-trips (an existing
+        # site's stored catalog keeps working until its next save migrates it).
+        [svc] = store.parse_catalog(
+            [{"name": "AC Repair", "brands": ["Carrier", "  Trane  ", "", 5]}]
+        )
+        assert svc.brands == ("Carrier", "Trane")
+        assert all(v.kind == "brand" for v in svc.variations)
+
+    def test_variations_parse_with_kind_and_default_to_type(self):
+        [svc] = store.parse_catalog(
+            [
+                {
+                    "name": "Tree Removal",
+                    "variations": [
+                        {"label": "Oak Trees", "kind": "type"},
+                        {"label": "Certified Arborist", "kind": "brand"},
+                        {"label": "Palm Trees"},  # kind omitted -> type
+                        "Maple Trees",  # bare string -> type
+                        {"label": "Bad", "kind": "nonsense"},  # unknown kind -> type
+                    ],
+                }
+            ]
+        )
+        by_label = {v.label: v.kind for v in svc.variations}
+        assert by_label["Oak Trees"] == "type"
+        assert by_label["Certified Arborist"] == "brand"
+        assert by_label["Palm Trees"] == "type"
+        assert by_label["Maple Trees"] == "type"
+        assert by_label["Bad"] == "type"
+
+    def test_variations_default_to_empty(self):
+        [svc] = store.parse_catalog([{"name": "AC Repair"}])
+        assert svc.variations == ()
+        assert svc.brands == ()
+
 
 class TestHeadTerms:
     def test_defaults_to_the_first_service_in_nav_order(self):

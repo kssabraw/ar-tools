@@ -91,6 +91,13 @@ class _FakeDB:
 class _Settings:
     dataforseo_cost_per_request_cents = 1
     max_market_run_cost_cents = 5000
+    # STAGE 2 (filter) reads these to build run_filter's kwargs — resolve_accepted_categories is
+    # not stubbed, so the settings it consumes must exist or arg evaluation raises AttributeError
+    # and the filter stage fails before run_filter (the stub) is ever called. Mirror config.py.
+    filter_category_relevance_enabled = True
+    filter_category_relevance: dict = {}  # empty ⇒ resolve_accepted_categories returns None (no-op)
+    filter_max_distance_enabled = True
+    filter_max_distance_miles = 7.0
 
 
 def _seed(db, *, orders=()):

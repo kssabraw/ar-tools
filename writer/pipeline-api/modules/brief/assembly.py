@@ -380,6 +380,11 @@ def _apply_title_case(items: list[HeadingItem]) -> list[HeadingItem]:
 
     Pure CPU; deterministic; idempotent (titlecase round-trips).
     """
+    # Records old->new for every H2 whose text is re-cased, so H3 parent
+    # pointers can be realigned below. An H3 carries parent_h2_text set before
+    # this pass, so title-casing the H2 without updating it would leave the
+    # child referencing a now-nonexistent (differently-cased) parent.
+    h2_remap: dict[str, str] = {}
     for h in items:
         if h.type not in _TITLE_CASE_TYPES:
             continue
@@ -389,6 +394,8 @@ def _apply_title_case(items: list[HeadingItem]) -> list[HeadingItem]:
         normalized = titlecase(original)
         if normalized != original:
             h.text = normalized
+            if h.level == "H2":
+                h2_remap[original] = normalized
             logger.debug(
                 "brief.title_case.normalized",
                 extra={
@@ -398,4 +405,10 @@ def _apply_title_case(items: list[HeadingItem]) -> list[HeadingItem]:
                     "after": normalized,
                 },
             )
+    # Keep every H3's parent_h2_text aligned with its (now title-cased) H2, so a
+    # downstream integrity check never sees an H3 pointing at a stale parent.
+    if h2_remap:
+        for h in items:
+            if h.level == "H3" and h.parent_h2_text in h2_remap:
+                h.parent_h2_text = h2_remap[h.parent_h2_text]
     return items

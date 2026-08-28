@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, CalendarDays, CalendarPlus, CheckCircle2, Circle, KanbanSquare, List, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react'
+import { ArrowLeft, CalendarDays, CalendarPlus, CheckCircle2, Circle, KanbanSquare, List, Plus, RotateCcw, Search, Trash2, UserPlus, X } from 'lucide-react'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import { TaskDetail } from '../components/tasks/TaskDetail'
@@ -138,6 +138,23 @@ export function Tasks() {
             : `Skipped — ${r.reason === 'no_template' ? 'this client has no monthly template yet (set it up under Asana Tasks → templates).' : r.reason}`,
       )
       setTimeout(() => setGenResult(null), 6000)
+    },
+  })
+  const autoplaceMut = useMutation({
+    mutationFn: () =>
+      api.post<{ total: number; placed: number; held: number; already_assigned: number }>(
+        `/clients/${id}/tasks/autoplace-unassigned`,
+        {},
+      ),
+    onSuccess: (r) => {
+      invalidateBoard()
+      setGenResult(
+        r.total === 0
+          ? 'No unassigned monthly tasks to place.'
+          : `Auto-assigned ${r.placed} of ${r.total} monthly task${r.total === 1 ? '' : 's'}` +
+              (r.held ? ` — ${r.held} held (eligible team at capacity).` : '.'),
+      )
+      setTimeout(() => setGenResult(null), 8000)
     },
   })
   const patchMut = useMutation({
@@ -530,6 +547,16 @@ export function Tasks() {
         >
           <Plus size={14} /> Section
         </button>
+        {isAdmin && (
+          <button
+            onClick={() => autoplaceMut.mutate()}
+            disabled={autoplaceMut.isPending}
+            style={toolbarBtn(false)}
+            title="Auto-assign this client's unassigned monthly template tasks (skill + least-loaded; holds any the eligible team can't take)"
+          >
+            <UserPlus size={14} /> {autoplaceMut.isPending ? 'Assigning…' : 'Auto-assign unassigned'}
+          </button>
+        )}
         <button onClick={() => generateMut.mutate()} disabled={generateMut.isPending} style={{ ...toolbarBtn(false), background: '#6366f1', color: '#fff', border: 'none' }}>
           <CalendarPlus size={14} /> {generateMut.isPending ? 'Generating…' : 'Generate this month'}
         </button>

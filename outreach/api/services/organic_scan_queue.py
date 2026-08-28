@@ -67,6 +67,65 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Auto-enqueue: the paid-placement / organic signal runs on EVERY scan (owner ruling 2026-08-27),
+# not only on a UI click. An auto order carries a machine note + a sentinel requester so it stays
+# auditable apart from a deliberate click.
+_AUTO_NOTE = "auto: organic + paid-placement signal on scan completion"
+
+
+def enqueue_for_snapshot(db: Any, settings: Settings, snapshot_id: str) -> bool:
+    """Auto-place a signed organic order for a just-finalized snapshot so the ORGANIC / paid-placement
+    signal is captured on every scan (owner ruling 2026-08-27), rather than only when someone clicks.
+    Returns True iff a NEW order was placed.
+
+    Gated on `organic_auto_enabled`. **Idempotent** — skips if this snapshot already has ANY organic
+    order (`finalize_snapshot` can be reached again on a later tick's stale-recovery, and a re-touch
+    must never re-bill) or already carries a captured `google_organic` `serp_result`. **Best-effort**
+    — never raises; a failed enqueue just means no auto-organic for that snapshot, still recoverable
+    by the UI click. The order is the spend confirmation as always; here the STANDING confirmation is
+    the config flag (the deliberate owner decision), and the sentinel `requested_by` marks it
+    machine-originated. The drain still budget-gates and the capture is per-snapshot idempotent, so
+    cost stays at most one organic SERP call per snapshot.
+    """
+    if not settings.organic_auto_enabled:
+        return False
+    try:
+        snap = (
+            db.table("scan_snapshot").select("id, keyword_id")
+            .eq("id", snapshot_id).limit(1).execute().data or []
+        )
+        if not snap or not snap[0].get("keyword_id"):
+            return False
+        keyword_id = snap[0]["keyword_id"]
+
+        # Idempotency 1: any prior order for this snapshot (any status) → already handled.
+        if (
+            db.table("organic_scan_request").select("id")
+            .eq("snapshot_id", snapshot_id).limit(1).execute().data or []
+        ):
+            return False
+        # Idempotency 2: the snapshot already carries a captured organic SERP → nothing to do.
+        if (
+            db.table("serp_result").select("id")
+            .eq("snapshot_id", snapshot_id).eq("engine", organic_scan.ENGINE)
+            .limit(1).execute().data or []
+        ):
+            return False
+
+        db.table("organic_scan_request").insert({
+            "snapshot_id": snapshot_id,
+            "keyword_id": keyword_id,
+            "requested_by": settings.organic_auto_actor_id,
+            "note": _AUTO_NOTE,
+        }).execute()
+        logger.info("auto-enqueued organic order", extra={"snapshot_id": snapshot_id})
+        return True
+    except Exception as exc:  # noqa: BLE001 — best-effort; the one-active index also rejects a race
+        logger.warning("auto organic enqueue skipped",
+                       extra={"snapshot_id": snapshot_id, "error": str(exc)[:200]})
+        return False
+
+
 def claim_next_order(db: Any) -> dict[str, Any] | None:
     """The oldest pending order, claimed, or None. Read-then-conditionally-claim, so a row somebody
     else claimed between the read and the write comes back empty and we take nothing."""

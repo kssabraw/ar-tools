@@ -9,7 +9,7 @@ import CTABand from '../theme/components/CTABand.astro';
 import ReviewStrip from '../theme/components/ReviewStrip.astro';
 import { site, isLocal, has } from '../lib/site';
 import { heroImagePosition } from '../lib/layouts';
-import { allPosts, routedPages, corePage } from '../lib/content';
+import { allPosts, routedPages, pillarRoutedPages, corePage } from '../lib/content';
 
 const home = await corePage('home');
 const s = (home?.data.sections ?? {}) as Record<string, string>;
@@ -26,6 +26,9 @@ const posts = await allPosts();
 const pages = isLocal ? await routedPages() : [];
 const services = pages.filter((p) => p.pageType === 'service');
 const locations = pages.filter((p) => p.pageType === 'location');
+// Pillar/hub guides — shown on any site that has them (a local business's blog
+// can have topic hubs too, reference §5.3). Empty -> the grid hides itself.
+const pillars = await pillarRoutedPages();
 const latest = posts.slice(0, isLocal ? 3 : 6);
 ---
 
@@ -46,6 +49,13 @@ const latest = posts.slice(0, isLocal ? 3 : 6);
   <ServiceCardGrid
     title={s.servicesTitle || 'What we do'}
     items={services.slice(0, 6).map((svc) => ({ href: svc.path, title: svc.title, excerpt: svc.teaser || svc.description }))}
+  />
+
+  {/* Informational sites lead with their pillar/hub guides. Hidden (empty
+      items) on a local site and on an informational site with no pillars yet. */}
+  <ServiceCardGrid
+    title={s.guidesTitle || 'Guides'}
+    items={pillars.slice(0, 6).map((p) => ({ href: p.path, title: p.title, excerpt: p.description }))}
   />
 
   <TrustBadgeRow />

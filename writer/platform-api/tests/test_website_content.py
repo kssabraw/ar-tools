@@ -234,3 +234,43 @@ class TestRedirects:
             {"route": "/b/", "redirect_to": "/x/"},
         ]
         assert wc.redirects_file(rows) == "/a/ /x/ 301\n/b/ /x/ 301\n"
+
+
+class TestPillarContent:
+    def test_pillar_has_its_own_collection(self):
+        assert wc.collection_of("pillar") == "pillars"
+
+    def test_pillar_entry_id_is_its_top_level_slug(self):
+        assert wc.entry_id("/roof-maintenance/", "pillar") == "roof-maintenance"
+
+    def test_pillar_repo_path(self):
+        assert wc.repo_path("/roof-maintenance/", "pillar") == (
+            "src/content/pillars/roof-maintenance.md"
+        )
+
+    def test_clean_pillar_auto_publishes(self):
+        v = wc.publish_verdict(
+            page_type="pillar", frontmatter={"title": "T", "description": "D"}
+        )
+        assert v.allowed
+
+    def test_pillar_missing_description_is_held(self):
+        v = wc.publish_verdict(page_type="pillar", frontmatter={"title": "T"})
+        assert not v.allowed
+        assert "description" in v.reason
+
+    def test_critical_voice_blocks_a_pillar_non_overridably(self):
+        v = wc.publish_verdict(
+            page_type="pillar",
+            frontmatter={"title": "T", "description": "D"},
+            voice={"violations": [{"severity": "critical"}]},
+        )
+        assert not v.allowed and not v.overridable
+
+    def test_degraded_run_never_publishes_a_pillar(self):
+        v = wc.publish_verdict(
+            page_type="pillar",
+            frontmatter={"title": "T", "description": "D"},
+            writer_schema_version="1.9-degraded",
+        )
+        assert not v.allowed and not v.overridable

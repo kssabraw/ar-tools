@@ -2385,6 +2385,127 @@ the placeholder still drives the list even after a `score` run populates the fit
 
 ## Lead enrichment (2026-08-10)
 
+### I-117 FIXED (2026-08-27) · Re-enrich WIPED a prospect's site_scrape / web_search name contacts (unscoped delete)
+`enrich_queue._store_prospect`'s replace-on-place did
+`prospect_contact.delete().eq("prospect_id", …)` with **no source scope**, so re-enriching a prospect
+deleted ALL its contacts — including the free **site_scrape** and paid **web_search** NAME fallbacks,
+which are independent producers. Caught live: a market-wide `leads_n_contacts` re-run on the LA
+emergency-plumber market dropped site_scrape from 14 named prospects → 1 and web_search 3 → 0. The
+`name_scrape_queue` correctly scopes its own delete to `source='site_scrape'`; the enrich drain didn't.
+**Fixed:** scoped the delete to `enrichment.CONTACT_SOURCE` ('outscraper') — a re-enrich now replaces
+only Outscraper contacts and leaves the name fallbacks intact. New `CONTACT_SOURCE` constant is the
+single source of truth (used by `contact_rows` too). Regression test
+`test_enrich_queue.test_re_enrich_preserves_site_scrape_and_web_search_contacts`. **Merged + deployed**
+(#767 → `main`, live on the outreach service). **VERIFIED (2026-08-27):** after deploy the wiped names
+were restored on the LA (`Los Angeles, CA, USA`) market — site_scrape re-scraped **1 → 20** contacts
+(free `name_scrape_request`) and web_search re-searched **0 → 3** (paid `name_search_request`, ~9¢:
+Cesar Fashen Jr. / Edgar A. Samayoa / Alex Preciado — the third drifted from the pre-wipe "Jason
+Hanleybrown, CEO" to the SoCal regional manager, an accepted more-local result; web search is
+non-deterministic). The surviving `prospect_name_scrape` / `prospect_name_search` markers held the
+names through the wipe, which is what made a free/cheap restore possible. **Cleanup DONE — issue fully
+resolved.**
+
+### I-118 FIXED (2026-08-27) · A large enrichment order exceeds the 5-min cron window and gets stuck `running`
+The market-wide `leads_n_contacts` order (118 places) ran ~4 min writing 101 markers, then the cron
+container was terminated at the `*/5` boundary (~00:29→00:30), leaving 17 places unprocessed and the
+order stuck `status='running'` with no recovery (the enrich drain claims only `pending` orders, and
+there is no stale-order reaper for `enrichment_request`). Unlike `name_scrape`, the **enrich drain has
+no per-tick place budget**, so one big order can't bound itself to the cron window or resume across
+ticks. **Fixed** (mirrors `name_scrape`): (1) a per-tick PLACE budget `enrich_per_tick` (40) — the
+drain enriches at most that many places per tick across all orders; an order with more is enriched up
+to it and left PENDING to resume next tick (the idempotent marker skip re-bills only the un-done
+places), so no tick can overrun the cron window; `process_order` now returns
+`(report, billed, finished)` and the order's counters are the CUMULATIVE marker tally
+(`_order_marker_tally`) so a multi-tick order still reports its whole self; cost_ledger writes one row
+per billing tick. (2) `recover_stuck_orders` resets a `running` order older than
+`enrich_stuck_order_minutes` (20) back to `pending` (conditional-on-still-running so it can't stomp a
+live tick), called first in `drain` — the recovery half. Unit-tested (`test_enrich_queue`: resume
+across ticks, whole-tick budget bound, stuck recovery, recent-order-not-recovered). Separate from
+I-117 (data loss). The stuck 2026-08-27 order was cancelled by hand before the fix. **Merged +
+deployed** (#769 → `main`, live on the outreach service). **VERIFIED IN PRODUCTION (2026-08-27):** the
+same failure mode was re-run cleanly — the 17 places the killed order had stranded were re-enriched as
+one `enrichment_request` that drained in **71 s within a single tick** (started 01:25:05, finished
+01:26:16, 0 failed), well inside the `*/5` cron window, with no stuck `running` order. **Fully
+resolved.**
+
+### I-119 FIXED (2026-08-27) · The I-118 cron-window fix, ported to the PAID name_search drain
+`name_search_queue` (the paid `web_search` owner/manager-name fallback, OpenAI gpt-5.4) had the SAME
+latent I-118 vulnerability the enrich drain did: **no per-tick place budget and no stuck-order reaper**.
+A web search is ~4 s/place, so a large `name_search_request` (dozens of places) drained as one order
+could exceed the `*/5` cron window and get its container killed mid-run — stranding the order `running`
+with no recovery. Surfaced while closing the LA generic-name gap (an ~83-place sweep would have tripped
+it). **Fixed by porting the I-118 pattern verbatim** (mirrors `enrich_queue`): (1) per-tick PLACE budget
+`name_search_per_tick` (24) — the drain searches at most that many places per tick across all orders; an
+order with more is searched up to it and left PENDING to resume next tick (the idempotent marker skip
+re-bills only the un-done places), so no tick overruns the window; `process_order` now returns
+`(report, billed, finished)` and the order's counters are the CUMULATIVE marker tally
+(`_order_marker_tally`, scoped by `name_search_request_id`) so a multi-tick order reports its whole self;
+`cost_ledger` writes one row per billing tick. (2) `recover_stuck_orders` resets a `running` order older
+than `name_search_stuck_order_minutes` (20) back to `pending` (conditional-on-still-running), called
+first in `drain`. Unit-tested (`test_name_search_queue`: resume across ticks, whole-tick budget bound,
+stuck recovery, recent-order-not-recovered — 14 pass; full suite 665). **Sibling gap CLOSED
+(2026-08-27):** `name_scrape_queue` (the FREE site-scrape fallback) already HAD the per-tick budget
+(`name_scrape_per_tick`) but lacked the reaper; `recover_stuck_orders` (+ `name_scrape_stuck_order_minutes`,
+20) was ported to it too — same shape (conditional-on-still-running reset, called first in `drain`), so a
+hard kill that strands a `running` site-scrape order now self-recovers on the next tick. Unit-tested
+(`test_name_scrape_queue`: stuck recovered, recent-not-recovered — 16 pass; full suite 673). All three
+name/enrich drains (enrich / name_search / name_scrape) now carry BOTH the per-tick budget and the reaper.
+
+### I-109 RESOLVED (2026-08-26) · TWO stacked bugs — sync mode AND the wrong enricher slug; fixed to async + `leads_n_contacts`
+Enrichment was broken two ways at once, which is why every prior single-cause theory (wrong validator
+set, parser aliases) only half-explained it:
+
+1. **Sync mode** returned the base listing before the enrichers ran (see the update below) → fixed to
+   async submit+poll (`enrich_client._enrich_one`, merged in #756).
+2. **Wrong enricher slug.** Even async, `domains_service` (+ validators) returned no contacts. The
+   owner's Outscraper **dashboard export** for the CSV that DID have people revealed the real slug:
+   **`enrichments: ["leads_n_contacts"]`** — Outscraper's "Leads & Contacts" enricher (emails / phones /
+   socials / domain + decision-maker `full_name`·`first_name`·`last_name`·`title` where they exist).
+   `domains_service` is a bare website scraper; it was never the right one.
+
+**Validated live (2026-08-26).** Re-enriched 5 LA plumbers that were email-null / business-name-only
+under `domains_service`; under `leads_n_contacts` (async) all 5 returned real emails
+(info@mlplumbing.net, fast24plumbing@gmail.com, …) plus domain + company socials, and the raw now
+carries the full contact column set. Person names came back empty for these five specifically — the
+raw `first_name`/`last_name`/`title` are genuinely null (not a parser miss): they are small
+owner-operated businesses with no Apollo/ZoomInfo decision-maker record, so `leads_n_contacts` fell
+back to their scraped site emails. A business WITH a decision-maker record (the hearing-aid stores in
+the source CSV) populates the person fields — that is the whole point of the enricher.
+
+**Fix shipped:** default `enrich_enrichments` → `["leads_n_contacts"]` (outreach api) and
+`outreach_enrich_enrichments` → `"leads_n_contacts"` (platform-api). The public `/maps/search-v3`
+endpoint accepts the slug on our async place_id call (no `/tasks` endpoint or category-search shape
+needed). **Remaining:** cost per record for `leads_n_contacts` is unconfirmed (the placeholder
+`enrich_cost_per_place_cents`=5 stands; the export carried `est:10` — likely pricier than a base pull),
+tracked under I-111.
+
+### I-109 UPDATE (2026-08-26) · ROOT CAUSE FOUND — enrichment was called SYNCHRONOUSLY, which returns the base listing with NO enrichers run; fixed to async submit+poll
+The "Enrich just restates the business name" complaint traced to a fundamental integration bug, not a
+wrong enricher set or a parser alias. `enrich_client._enrich_one` called `/maps/search-v3` with
+`async=false`, and **Outscraper runs enrichments asynchronously** — a synchronous call returns the base
+Maps record BEFORE the enrichers finish, so the response carries no `emails`, no scraped contacts, no
+person fields at all, only `name_for_emails` (the business name). The parser then correctly fell back to
+that business name. Every LA-plumber "contact" was this fallback over an un-enriched record, and a live
+inspection confirmed the stored `raw` for those rows is a pure Maps record (no `emails`/`website_title`).
+
+Confirmed by two `probe-enrich` runs (2026-08-26, owner-authorized, ~one billed record each, cron reverted
+after each): (1) `company_insights_service` → firmographics only (employees/founded_year), no people;
+(2) **our production set `domains_service,emails_validator_service,phones_enricher_service` against
+Enhanced Hearing Center** — a business KNOWN to have LinkedIn/Apollo contact data (owner "Rex McGee" in a
+real Outscraper dashboard export) — STILL returned a bare Maps record with `with_email:0` and
+`full_name`=the business name. So sync mode yields nothing whatever the enricher set or the business.
+
+**Fixed:** `_enrich_one` now submits `async=true` and polls the archive with `fetch_result` to completion
+(the same submit/poll pair the mass ingest uses — the only path that returns the enrichers' output). New
+`enrich_poll_timeout_seconds` (300s) is a per-place ceiling so one stuck-Pending place fails on its own
+instead of hanging the tick for the mass-ingest 1h timeout. `fetch_result` gained an optional
+`poll_timeout`. `submit_maps_search`'s `enrichment=""` base-tier invariant is untouched. Unit-tested in
+`tests/test_enrich_client.py` (submit carries `async=true`, polls past Pending, tags by place_id,
+per-place isolation). **Validate on a live re-enrich** before trusting output — the async path is the
+proven fix for "returns nothing", but whether `domains_service` alone surfaces the Apollo/ZoomInfo *people*
+(vs. site-scraped emails only) is the remaining field-shape question below; add the people-enricher slug
+once a live async run shows what comes back.
+
 ### I-109 UPDATE (2026-08-10) · The enricher SET was wrong — corrected against a real response; domains_service field shape still to confirm
 The first live enrichment ran (order drained in 5s, 1 contact) and produced the evidence the probe was
 meant to: the response carried `name_for_emails` + the base listing `phone` + `website`, but **ZERO
@@ -2444,3 +2565,63 @@ excluded from `to_enrich`, so the order's `enriched_count + skipped_count + fail
 `progress.done`) is less than `requested_count`. **Cosmetic only** — the order still resolves to
 `done` and the UI batch completes (useResumableBatch keys on the order STATUS, not the counts), so
 nothing hangs. Left as-is; if a precise reconciliation is ever wanted, add a `vanished_count`.
+
+### I-114 · Site name-scrape extraction PRECISION is unvalidated against real sites
+`name_extract.extract_names` is conservative by construction — role-anchored (a name only counts tied
+to an explicit `owner`/`founder`/`president`/… role or schema.org `founder`/`employee` with a matching
+`jobTitle`), with nav-chrome / trade-word / business-name (one-directional, I-099) rejection and a
+Title-Case 2–3-token name shape. It is tuned to FAIL TOWARD A MISS. But it has been tested only against
+hand-written golden fixtures (`tests/test_name_extract.py`), never against a corpus of real small-business
+sites, so its true precision/recall is unknown. A scraped name is therefore surfaced with a "from website"
+badge and carries NO verified email/phone (unlike an Outscraper contact) — a caller must verify it before
+using it on a call. **Action:** once the first real `scan-names` / `name_scrape_request` runs land, sample
+the `prospect_name_scrape.raw` evidence against the live sites and tune the role vocabulary / patterns from
+what it missed or over-matched (the `raw` evidence makes this a re-read, not a re-fetch). Recall is the
+likelier weakness (a site that names the owner only in an image, a PDF, or JS-rendered content is a miss).
+
+**UPDATE — first live run (2026-08-26).** Ran `name_scrape_request` over all 84 website-carrying
+prospects of the LA emergency-plumber market (`9238e737…`): 14 found / 20 names / 15 unreachable, and the
+paid `name_search_request` over 5 no-website prospects: 3 cited names / 2 correctly dropped (~15¢). The high-
+confidence JSON-LD names are clean (8 at 82–100: *Roy Riddle, Founder* / *Jay Morton, Founder* / *Shane
+Lucas, Founder* …), which confirms the extractor's precision on the structured-data path. Two live over-match
+cases on the *text* path (both landed in the medium band, so the confidence layer contained them — but the
+extractor did not reject either):
+
+  1. **A PLACE NAME matched as a person.** "Los Angeles" was extracted as a "Founder" (A-1 Total Service
+     Plumbing, `source_kind=text`, conf 62). The Title-Case 2–3-token shape + role-anchor accepts a
+     multi-token toponym because it is neither a business token nor a stopword. Cheapest fix: add a small
+     curated place-name / toponym stoplist to `is_plausible_name` (the market's own city + common US
+     locality words), OR reject a candidate that is entirely city/region tokens the way the business-name
+     guard already rejects business tokens (one-directional, I-099). Do NOT reach for NER — it reintroduces
+     the fabrication surface the whole module avoids.
+
+  2. **A non-owner "Manager" from a mis-ingested prospect.** "Carol P. Parks, General Manager"
+     (emergency.lacity.gov) and "Aril Aril, Office Manager" (a SERVPRO franchise) were named because a city
+     emergency-management office and a restoration franchise were ingested as "emergency plumber" prospects
+     in the FIRST place. The scraper did its job; this is a prospect-INGEST precision question (the filter
+     upstream of the fallback), not an extractor defect — logged here only because the live run surfaced it.
+     Track under the ingest/filter work, not I-114's tuning.
+
+Recall (the predicted likelier weakness) held up: the 15 `unreachable` sites are the recall ceiling for now,
+not extraction misses on reachable pages. Web-search soft-match note: *Fast Water Heater → "Jason
+Hanleybrown, CEO"* cited to a national chain's blog page — a local listing attributed to the national brand's
+officer; the blended confidence correctly ranked it lowest (51) and the "verify" framing is exactly for this.
+
+### I-115 · Name-scrape `unreachable`/`failed` are retried on every re-order (no backoff)
+The drain treats `found`/`no_names` as durable (never re-scraped) but `unreachable`/`failed` as retryable,
+so a re-placed order re-fetches a site that was down. That is the intended semantics (a site up now that was
+down before), but there is no per-prospect backoff or attempt cap — repeatedly re-ordering a selection that
+includes a permanently-dead domain re-fetches it each time. FREE (own HTTP GET, no spend), so this is only
+wasted work, not wasted money, and it is bounded by `name_scrape_max_places_per_order` per order. **Left
+as-is** — cheapest-to-reverse; add an `attempts` counter + a stale-retry cutoff on `prospect_name_scrape`
+if a dead-domain re-fetch loop ever shows up in practice.
+
+### I-116 · Name-scrape SSRF guard does not cover DNS-rebinding
+`name_scrape.is_public_host` blocks localhost + IP-LITERAL private/loopback/link-local/reserved hosts
+before fetching and on the post-redirect `final_url`, which stops the common metadata-endpoint /
+localhost vectors. It does NOT resolve hostnames, so a domain whose DNS resolves to a private IP (a
+rebinding attack) is not caught — resolving in-process would add latency + a TOCTOU gap and is out of
+scope for a best-effort site fetch. Same residual applies to `scan_tech`'s homepage fetch (shared
+`fetch_page`, `follow_redirects=True`). **Left as-is** — the prospect sites are agency-chosen targets,
+not arbitrary attacker input; revisit with an egress allowlist / resolving guard if the fetch surface
+ever widens to untrusted submissions.

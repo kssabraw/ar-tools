@@ -148,11 +148,21 @@ a manual phone workflow: emit records the outcome and reports `delivered:false`,
 webhook-free `touch` path is the real capture. Wire a URL (Zapier / Make / a custom endpoint) only
 if the team ever adopts an automated sender.
 
-**THREE paid producers are built and have NEVER RUN** — `scan-organic`, `scan-ai`,
-`probe-pixel-field`. HANDOFF §8.1 2c already made the argument that each additional unrun layer
+**Paid producers `scan-ai` + `probe-pixel-field` are built and have NEVER RUN** (`scan-organic` NOW
+RUNS — see below). HANDOFF §8.1 2c already made the argument that each additional unrun layer
 raises the chance the first run surfaces several faults at once, interacting, in a batch that has
 been paid for. That argument is stronger now than when it was written, so prefer RUNNING a built
-layer over building a fourth. **The free `scan-tech` now RUNS AUTOMATICALLY each `tick`**
+layer over building a fourth.
+
+**`scan-organic` (the ORGANIC + paid-placement signal) now RUNS AUTOMATICALLY on every scan** (owner
+ruling 2026-08-27; DECISIONS 2026-08-27). When a geogrid snapshot finalizes,
+`scan_runner.collect_ready` auto-enqueues an `organic_scan_request` (`organic_scan_queue.enqueue_for_snapshot`,
+gated on `organic_auto_enabled` default True; idempotent per snapshot; drained ≤1/tick by the existing
+organic queue, budget-gated). Organic capture is ONE cheap DataForSEO SERP call per snapshot and the
+paid-placement parse (Google Ads / LSA presence on the keyword) rides that same call for free — so it
+answers "is this prospect already paying to be visible" on 100% of scanned prospects. Auto orders carry
+a sentinel `requested_by` (`00000000-…`) so they're auditable apart from a UI click. The other two paid
+producers stay click/flag-gated. **The free `scan-tech` now RUNS AUTOMATICALLY each `tick`**
 (`scan_tech.run_tech_backlog`, DECISIONS 2026-08-14): a free, idempotent, bounded backlog drain that
 fetches tech signals for any prospect with a website and no current signal — covering each new run's
 survivors and backfilling pre-existing markets (incl. the any-city onboard markets the manual
@@ -181,9 +191,44 @@ first order drained in 5s; it exposed that the enricher set was wrong (validator
 `name_for_emails` but no emails), now corrected to **`domains_service,emails_validator_service,phones_enricher_service`**
 (`domains_service` is the one that scrapes emails/contacts from the business's GBP website; I-109 UPDATE).
 Enrichment also **backfills `prospect.website`** from the GBP/Outscraper response when it's blank and
-surfaces the website in the contacts UI. The `domains_service` FIELD SHAPE is still to be confirmed on the
-next real run — parser stays defensive, `raw` is the recovery path (I-109). Config rates remain placeholders
-(I-111).
+surfaces the website in the contacts UI. **I-109 RESOLVED (2026-08-26) — two stacked bugs:** (1) the
+call was **synchronous** (`async=false`), which returns the base Maps listing BEFORE the enrichers run
+(zero emails/contacts, only `name_for_emails`), and (2) even async, the **enricher slug was wrong** —
+`domains_service` is a bare website scraper that returned no contacts. The owner's Outscraper dashboard
+export named the real slug: **`leads_n_contacts`** (Outscraper's "Leads & Contacts" — emails / phones /
+socials / domain + decision-maker `full_name`/`first_name`/`last_name`/`title` where they exist). Fixes:
+`_enrich_one` **submits `async=true` and polls the archive** (`fetch_result`, `enrich_poll_timeout_seconds`
+=300s/place; `submit_maps_search`'s `enrichment=""` invariant untouched; `tests/test_enrich_client.py`,
+merged in #756), and the default enricher set is now **`leads_n_contacts`** in both configs
+(`enrich_enrichments` / `outreach_enrich_enrichments`). **Validated live:** 5 LA plumbers that were
+email-null / business-name-only under `domains_service` returned real emails + domain + company socials
+under `leads_n_contacts`; person names populate for businesses with an Apollo/ZoomInfo record (small
+owner-operated ones fall back to scraped site emails). Cost per `leads_n_contacts` record is unconfirmed
+(export `est:10`, likely pricier) — config rates remain placeholders
+(I-111). **`leads_n_contacts` names a person only ~40% of small local operators** — measured on the LA
+market: it returns a business-name fallback for the rest. The name-specific fallbacks (`name_scrape`
+free site-scrape, `name_search` paid gpt-5.4 web search) fill that gap where they can; the residual
+(businesses no source can name) is the true public-web floor and the **Enigma** sample-test baseline
+(`docs/enigma-integration-scoping-v0_1.md`). "Evidence of other marketing" per prospect lives in
+`prospect_tech_signal` (site tags) + the auto-captured paid-placement block, NOT in the contact data.
+
+**Enrichment reliability — I-117 / I-118 / I-119 all FIXED (2026-08-27; see ISSUES + HANDOFF).** Three
+drain bugs, all merged + verified: **I-117** — the enrich replace-on-place delete had no `source`
+scope and wiped the free/paid NAME fallbacks on a re-enrich (scoped to `source='outscraper'`; #767).
+**I-118** — a large enrichment order overran Railway's `*/5` cron window and stranded a `running`
+order; fixed with a **per-tick place budget** (`enrich_per_tick`) + PENDING-resume + a **stuck-order
+reaper** (`recover_stuck_orders`), prod-verified (#769). **I-119** — the same budget+reaper ported to
+the other two drains (#775 `name_search`, #778 `name_scrape`), so **all three name/enrich drains carry
+BOTH the per-tick budget and the reaper** — none can strand a `running` order on a mid-tick kill. When
+you write or change ANY of these drains, keep the two invariants: (1) the per-tick budget bounds the
+tick's wall-time (an over-budget order resumes next tick via the idempotent marker skip); (2) the
+reaper runs first in `drain`, conditional-on-still-running.
+
+**CI: the outreach worker is now gated (#770).** `.github/workflows/outreach-tests.yml` runs the full
+`pytest` suite on any PR touching `outreach/**` (and push to main) — previously nothing ran the Python
+suite (the three `writer/**` workflows are path-filtered away, leaving only the Netlify frontend build).
+This module spends real money against signed orders, so a red drain must fail a check. Keep the suite
+green; it is the gate that validated every I-117/I-118/I-119 change.
 
 **The pipeline is an AR Tools SUITE MODULE, not a standalone tool** (owner ruling, HANDOFF §2).
 The database stays in the Outreacher project; the API and UI belong in `platform-api` and the

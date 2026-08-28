@@ -20,6 +20,8 @@ from config import settings
 from db.supabase_client import get_supabase
 from middleware.auth import require_admin, require_auth
 from models.tasks import (
+    AutoplaceUnassignedRequest,
+    AutoplaceUnassignedResponse,
     LibraryChecklist,
     TaskCategoryItem,
     TaskCategoryReplaceRequest,
@@ -36,7 +38,7 @@ from models.tasks import (
     TaskUpdateRequest,
     TaskViewRequest,
 )
-from services import task_collab, task_monthly, task_service, task_workload
+from services import pm_assign, task_collab, task_monthly, task_service, task_workload
 
 logger = logging.getLogger(__name__)
 
@@ -283,6 +285,37 @@ async def generate_month(
         reason=result.get("reason"),
         errors=result.get("errors", []),
     )
+
+
+@router.post(
+    "/clients/{client_id}/tasks/autoplace-unassigned",
+    response_model=AutoplaceUnassignedResponse,
+)
+async def autoplace_unassigned(
+    client_id: UUID,
+    body: AutoplaceUnassignedRequest,
+    auth: dict = Depends(require_admin),
+) -> AutoplaceUnassignedResponse:
+    """Bulk-staff a client's unassigned tasks through PACE's placement engine
+    (skill + least-loaded; holds the ones the eligible pool can't take). Defaults
+    to monthly template tasks — the recurring gap on clients with no
+    ``auto_assignee_gids`` configured. Admin-only; idempotent (an already-assigned
+    task is never overwritten)."""
+    if body.sources is not None and len(body.sources) == 0:
+        raise HTTPException(status_code=400, detail="empty_sources")
+    try:
+        result = pm_assign.autoplace_unassigned_for_client(
+            str(client_id),
+            sources=body.sources,
+            actor_id=auth.get("user_id"),
+        )
+    except Exception as exc:
+        logger.error(
+            "task_autoplace_failed",
+            extra={"client_id": str(client_id), "error": str(exc)},
+        )
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    return AutoplaceUnassignedResponse(**result)
 
 
 # ---------------------------------------------------------------------------

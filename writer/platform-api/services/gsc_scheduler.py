@@ -611,9 +611,11 @@ async def gsc_scheduler() -> None:
     from services.website_deploy import (
         enqueue_due_deploy_polls as enqueue_due_website_deploy_polls,
     )
+    from services.website_release import enqueue_due_website_releases
     from services.domain_intel import enqueue_due_domain_intel
     from services.trend_watch import run_trend_sweep
     from services.offpage_agent import run_offpage_sweep
+    from services.scan_health import run_scan_health_sweep
     from services.leadoff_calibration import (
         run_calibration_sweep as run_leadoff_calibration_sweep,
     )
@@ -688,6 +690,10 @@ async def gsc_scheduler() -> None:
                 _safe("episode_sync", run_episode_sync)
                 # Daily offpage sweep (RD loss / unnatural spike — SOP §A.5).
                 _safe("offpage_sweep", run_offpage_sweep)
+                # Daily scan-health watch: alert when a client's scheduled
+                # geo-grid / organic-rank data pulls keep failing, so a silent
+                # upstream outage can't starve the drop alerts unnoticed.
+                _safe("scan_health_sweep", run_scan_health_sweep)
                 # LeadOff calibration outcome checks (Phase 0 — read-only,
                 # $0; at most one check per prediction per ~28 days).
                 _safe("leadoff_calibration", run_leadoff_calibration_sweep)
@@ -879,5 +885,9 @@ async def gsc_scheduler() -> None:
             # success/failed by being polled. Self-gated on
             # website_builder_enabled, so it is inert while the module is dark.
             _safe("website_deploys", enqueue_due_website_deploy_polls)
+            # Website Builder release schedule: drip-publish the next batch of
+            # planned posts (generate + publish) for any site whose cadence has
+            # come due. Self-gated on website_builder_enabled, so inert while dark.
+            _safe("website_releases", enqueue_due_website_releases)
         except Exception as exc:
             logger.error("gsc_scheduler.per_cycle_block_failed", extra={"error": str(exc)})
