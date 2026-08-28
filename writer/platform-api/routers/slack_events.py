@@ -107,6 +107,21 @@ async def slack_pace_events(request: Request, background: BackgroundTasks) -> Re
     raw = await request.body()
     body_text = raw.decode("utf-8", errors="replace")
 
+    try:
+        payload = json.loads(body_text)
+    except json.JSONDecodeError:
+        return Response(status_code=400)
+
+    # URL-verification handshake — answer it BEFORE the enabled/secret gate so the
+    # Request URL can be verified during setup, before the signing secret is
+    # deployed (the challenge echoes no secret; it only proves URL ownership).
+    if payload.get("type") == "url_verification":
+        return Response(
+            content=json.dumps({"challenge": payload.get("challenge")}),
+            media_type="application/json",
+        )
+
+    # Real events require PACE enabled + a configured signing secret (fail-closed).
     if not (settings.pace_enabled and settings.pace_slack_signing_secret):
         return Response(status_code=200)
 
@@ -119,17 +134,6 @@ async def slack_pace_events(request: Request, background: BackgroundTasks) -> Re
     ):
         logger.warning("slack_pace_events.bad_signature")
         return Response(status_code=403)
-
-    try:
-        payload = json.loads(body_text)
-    except json.JSONDecodeError:
-        return Response(status_code=400)
-
-    if payload.get("type") == "url_verification":
-        return Response(
-            content=json.dumps({"challenge": payload.get("challenge")}),
-            media_type="application/json",
-        )
 
     # Slack retries on non-2xx; always ack fast and skip retried deliveries.
     if request.headers.get("X-Slack-Retry-Num"):
