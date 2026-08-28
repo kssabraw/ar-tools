@@ -57,24 +57,37 @@ which is safe against the new schema):**
 
 **Migration 2a (apply WITH the 2a code deploy):**
 
+**APPLIED LIVE 2026-08-28 (migration `20260828210000`).** The RESTRICT backstop
+below makes it safe to apply ahead of the code deploy: the old prod roster
+editor's blanket delete now fails loudly instead of orphaning assignee_ids.
+
 ```sql
 -- The skills FK references asana_team_members(gid)'s FULL unique constraint (the
 -- PK). A partial unique index can't back an FK, so drop the FK first — skills is
 -- already keyed on member_id in the app (Phase 1); member_gid is dropped in 2b.
-alter table task_member_skills drop constraint task_member_skills_member_gid_fkey;
+alter table task_member_skills drop constraint if exists task_member_skills_member_gid_fkey;
 
--- Promote id to the primary key; make gid an optional external reference.
+-- Promote id to the primary key by REUSING the existing unique index on id
+-- (the id-referencing FKs on tasks/templates/skills depend on it, so it must not
+-- be dropped — USING INDEX converts it into the PK in place).
 alter table asana_team_members drop constraint asana_team_members_pkey;      -- was on gid
-drop index if exists uq_asana_team_members_id;                                -- redundant once id is PK
-alter table asana_team_members add primary key (id);
+alter table asana_team_members add primary key using index uq_asana_team_members_id;
 alter table asana_team_members alter column gid drop not null;               -- login-less VA => gid NULL
 create unique index if not exists uq_asana_team_members_gid
   on asana_team_members (gid) where gid is not null;                          -- keep ON CONFLICT(gid) valid
+
+-- Safety backstop: assignee FK SET NULL → RESTRICT, so the OLD roster editor's
+-- blanket delete-then-reinsert fails loudly instead of orphaning assignee_id.
+-- The Phase 2a code unassigns a removed member's tasks explicitly before delete.
+alter table tasks drop constraint tasks_assignee_id_fkey;
+alter table tasks add constraint tasks_assignee_id_fkey
+  foreign key (assignee_id) references asana_team_members(id) on delete restrict;
 ```
 
 Note: `ON CONFLICT(gid)` in the roster upsert still works against the partial
 unique index. The `member_gid` FK is gone after this; the `member_gid` column
-itself (now unreferenced) is dropped in 2b.
+itself (now unreferenced) is dropped in 2b. **Until the Phase 2a code deploys**,
+the old prod Team-page save returns a 500 (RESTRICT) — a rare, safe degradation.
 
 **Verify 2a:** add a login-less VA on the Team page, assign them a task, confirm
 `tasks.assignee_id` points at their roster `id` and `assignee_gid` is NULL, and

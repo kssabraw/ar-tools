@@ -114,6 +114,13 @@ async def replace_team_members(
             existing, [m.model_dump() for m in body.members]
         )
         if plan["drop_ids"]:
+            # Explicitly unassign the removed members' tasks before deleting them.
+            # The assignee_id FK is ON DELETE RESTRICT (a safety backstop against
+            # the old blanket-delete roster editor), so a member with tasks can't
+            # be cascade-nulled — we clear their tasks first, then delete.
+            supabase.table("tasks").update(
+                {"assignee_id": None, "assignee_gid": None, "assignee_name": None}
+            ).in_("assignee_id", plan["drop_ids"]).execute()
             supabase.table("asana_team_members").delete().in_("id", plan["drop_ids"]).execute()
         for upd in plan["updates"]:
             supabase.table("asana_team_members").update(
