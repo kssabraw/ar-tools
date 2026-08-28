@@ -1360,6 +1360,48 @@ def run_article_job(
             _article_inflight.discard(cluster_id)
 
 
+def _resolve_brand_voice_card(session_id: str) -> dict | None:
+    """The client's distilled Voice & Audience Card for a client-linked session,
+    or None for an info-site session (no client) or a client with no usable
+    guide. This is what makes Fan-out content follow the client's brand voice.
+
+    Best-effort by design: any failure (no client, no guide, distillation error)
+    returns None, and the writer falls back to client-agnostic generation — a
+    Fan-out article must never fail to generate over a brand-voice lookup.
+    """
+    from config import settings
+
+    if not settings.fanout_brand_voice_enabled:
+        return None
+    try:
+        import asyncio
+
+        from db.supabase_client import get_supabase
+        from fanout.storage import silo as store
+        from services import voice_card_service
+
+        session = store.get_session(session_id)
+        client_id = (session or {}).get("client_id")
+        if not client_id:
+            return None
+        client = (get_supabase().table("clients").select("*")
+                  .eq("id", client_id).single().execute().data)
+        if not client:
+            return None
+        # Cached on clients.voice_card (one distillation per guide revision); a
+        # cold cache distills once via nlp. Sync context (the Fan-out worker runs
+        # jobs without an event loop, like the local_seo asyncio.run below).
+        card = asyncio.run(voice_card_service.get_voice_card(client))
+        return card or None
+    except Exception as exc:  # noqa: BLE001 — best-effort; degrade to no-context
+        logger.warning(
+            "fanout.voice_card_resolve_failed",
+            extra={"event": "fanout.voice_card_resolve_failed",
+                   "session_id": session_id, "reason": repr(exc)},
+        )
+        return None
+
+
 def generate_article_core(
     session_id: str, cluster_id: str, keyword: str, location_code: int,
     force_refresh: bool = False, *, scheduled_article_run_id: str | None = None,
@@ -1422,10 +1464,15 @@ def generate_article_core(
         brief, sie, warnings = build_writer_inputs(
             brief_row["output_json"], sie_row["output_json"],
         )
+        # Client-linked sessions get brand-voice enforcement: the card primes the
+        # writer's prompts and drives a voice review + corrective rewrite. None
+        # for info-site generation (unchanged, client-agnostic).
+        brand_voice_card = _resolve_brand_voice_card(session_id)
         article = generate_article(
             brief, sie, warnings=warnings, deps=build_writer_deps(),
             word_budget=s.writer_word_budget, coverage_enabled=s.writer_claim_coverage_enabled,
             timeout_s=s.writer_timeout_s, adherence_threshold=s.writer_adherence_threshold,
+            brand_voice_card=brand_voice_card,
         )
         # M15 — deterministic internal-link injection (enrichment; never fails the article).
         _inject_internal_links(session_id, cluster_id, article)
