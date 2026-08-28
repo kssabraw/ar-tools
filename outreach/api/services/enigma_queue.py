@@ -321,10 +321,15 @@ async def process_order(
     cap = max(1, max_places)
     batch = to_fetch[:cap]
     finished = len(to_fetch) <= cap
-    report.billable = len(batch)
+    # Dedupe by prospect id BEFORE anything bills: an order's uuid[] carries no uniqueness, so a
+    # duplicated prospect would otherwise fire the paid `search` twice for one business (the sibling
+    # drains dedupe the same way via their by_place/by_id keys). Billing, the budget estimate, the
+    # returned spend and the provider call all count DISTINCT prospects.
+    by_id = {p["id"]: p for p in batch}
+    report.billable = len(by_id)
 
     # Budget backstop before the money (a placement guard may run too; this catches a runaway) — over
-    # THIS call's batch, since that is all that bills now.
+    # THIS call's distinct batch, since that is all that bills now.
     estimate = report.billable * settings.enigma_cost_per_lookup_cents
     denial = budget_denial(estimate, settings.max_market_run_cost_cents)
     if denial:
@@ -335,15 +340,14 @@ async def process_order(
                                       "skipped_count": report.skipped})
         return report, 0, True
 
-    by_id = {p["id"]: p for p in batch}
-    # One bounded-concurrency pass over the batch. lookup_many wraps every prospect so it never raises;
-    # the outer try/except is the belt-and-braces that marks the whole batch retryable if it somehow
-    # does (a resume then re-bills only these, none of the durable ones).
+    # One bounded-concurrency pass over the DISTINCT batch. lookup_many wraps every prospect so it never
+    # raises; the outer try/except is the belt-and-braces that marks the whole batch retryable if it
+    # somehow does (a resume then re-bills only these, none of the durable ones).
     biz_batch = [
         {"id": p["id"], "name": p.get("name"), "street": p.get("address"),
          "website": p.get("website"), "place_id": p.get("place_id"),
          "market_id": p.get("market_id")}
-        for p in batch
+        for p in by_id.values()
     ]
     try:
         results = await enigma_graphql.lookup_many(
@@ -388,7 +392,7 @@ async def process_order(
     # cost_ledger: units = prospects we sent to the provider THIS call (only the batch bills now; a
     # multi-tick order writes one ledger row per tick). market_id from any billed prospect; rate
     # reconciled manually against the Enigma bill (I-022).
-    market_id = next((p.get("market_id") for p in batch if p.get("market_id")), None)
+    market_id = next((p.get("market_id") for p in by_id.values() if p.get("market_id")), None)
     try:
         db.table("cost_ledger").insert(
             cost.build_ledger_row(
@@ -410,7 +414,7 @@ async def process_order(
                 extra={"order_id": report.order_id, "billed_this_call": report.billable,
                        "matched_total": tally["matched"], "card_total": tally["card"],
                        "failed_total": tally["failed"], "finished": finished})
-    return report, len(batch), finished
+    return report, report.billable, finished
 
 
 async def drain(

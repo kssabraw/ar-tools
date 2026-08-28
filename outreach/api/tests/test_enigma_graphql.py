@@ -140,6 +140,23 @@ def test_extract_card_as_of_truncates_a_datetime_and_is_none_when_absent():
     assert eg.extract_card_as_of(None) is None
 
 
+def test_extract_card_as_of_drops_a_non_iso_date():
+    # A value that isn't a bare YYYY-MM-DD is DROPPED (not returned) — the caller writes it into a
+    # Postgres `date` column, so a junk string would fail the insert and poison the order.
+    brand = {"cardTransactions": {"edges": [
+        {"node": {"period": "12m", "projectedQuantity": 9, "periodEndDate": "June 30 2025"}},
+        {"node": {"period": "3m", "projectedQuantity": 3, "periodEndDate": ""}},
+        {"node": {"period": "1m", "projectedQuantity": 1, "periodEndDate": "not-a-date"}},
+    ]}}
+    assert eg.extract_card_as_of(brand) is None
+    # a valid ISO date among junk still comes through
+    brand2 = {"cardTransactions": {"edges": [
+        {"node": {"period": "12m", "projectedQuantity": 9, "periodEndDate": "garbage"}},
+        {"node": {"period": "3m", "projectedQuantity": 3, "periodEndDate": "2025-05-31"}},
+    ]}}
+    assert eg.extract_card_as_of(brand2) == "2025-05-31"
+
+
 def test_extract_matched_name():
     assert eg.extract_matched_name(_BRAND) == "MR SPEEDY PLUMBING ROOTER INC"
     assert eg.extract_matched_name({"names": {"edges": []}}) is None

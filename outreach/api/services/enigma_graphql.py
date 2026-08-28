@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -212,11 +213,16 @@ def extract_card_windows(brand: Any) -> dict[str, Any] | None:
     return out or None
 
 
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
 def extract_card_as_of(brand: Any) -> str | None:
     """The latest `periodEndDate` across the returned card windows (the "revenue as of" recency the
-    scoring model wants — the windows are a rolling series), as an ISO date string, or None. Pure and
-    tolerant: a missing/odd shape yields None. Only the date part is kept (Enigma sends `YYYY-MM-DD`,
-    but a datetime is truncated defensively)."""
+    scoring model wants — the windows are a rolling series), as an ISO `YYYY-MM-DD` string, or None.
+    Pure and tolerant: a missing/odd shape yields None, and a value that is not a bare ISO date is
+    DROPPED (not returned) — the caller writes this into a Postgres `date` column, so a non-date string
+    would fail the insert and poison the whole order. Only the leading date part is kept (Enigma sends
+    `YYYY-MM-DD`; a datetime is truncated defensively; anything else is ignored)."""
     if not isinstance(brand, dict):
         return None
     latest: str | None = None
@@ -224,7 +230,7 @@ def extract_card_as_of(brand: Any) -> str | None:
         end = node.get("periodEndDate")
         if isinstance(end, str) and end.strip():
             day = end.strip()[:10]
-            if latest is None or day > latest:
+            if _ISO_DATE.match(day) and (latest is None or day > latest):
                 latest = day
     return latest
 

@@ -309,6 +309,25 @@ def test_a_no_match_answer_is_durable_and_not_rebilled(monkeypatch):
     assert db.tables["cost_ledger"] == []      # nothing billed → no ledger row
 
 
+def test_a_duplicate_prospect_id_bills_once_not_twice(monkeypatch):
+    """An order's uuid[] carries no uniqueness, so a duplicated prospect id must NOT fire the paid
+    `search` twice for one business — the drain dedupes before the provider call (regression for the
+    real-money double-bill the sibling drains avoid via their by_place/by_id keys)."""
+    db = _FakeDB()
+    _seed(db, prospects=[_prospect("p1")], orders=[_order(prospect_ids=["p1", "p1"])])
+    sent: list[str] = []
+    _stub_lookup(monkeypatch, {"p1": _CARD_ENTITY}, sent=sent)
+
+    report = asyncio.run(enigma_queue.drain(db, _Settings()))
+
+    assert sent == ["p1"], "a duplicated prospect id must fire exactly one paid lookup"
+    o = report.orders[0]
+    assert o.billable == 1
+    assert sum(r["units"] for r in db.tables["cost_ledger"]) == 1
+    assert len([m for m in db.tables["prospect_enigma"] if m["prospect_id"] == "p1"]) == 1
+    assert db.tables["enigma_request"][0]["status"] == "done"
+
+
 def test_a_failed_marker_is_retried_not_skipped(monkeypatch):
     db = _FakeDB()
     _seed(db, prospects=[_prospect("p1")], orders=[_order(prospect_ids=["p1"])])
