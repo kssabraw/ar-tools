@@ -103,6 +103,8 @@ export interface Client extends ClientListItem {
   client_type: 'local' | 'enterprise'
   // Per-client SerMaStr review day (0=Mon..6=Sun); null → global default.
   strategist_weekday: number | null
+  // Slack channel PACE posts this client's PM notifications to; null → master.
+  slack_channel_id: string | null
   updated_at: string
 }
 

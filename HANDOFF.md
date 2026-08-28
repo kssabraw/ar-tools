@@ -1,6 +1,132 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-28 · **QA Agent — cut `needs_human` on machine work (auto-resolve deliverables + gate the paid visual check)** (latest)
+## ⏩ Update — 2026-08-28 · **Intervention-outcome loop — v1, report-only, ships dark** (latest)
+
+**PR #871 (merged to `main`).** The measurement half of SerMaStr's decide+assign flow: PR #862
+closed *decide + assign* (monthly plan-review → human approve → PACE capacity-aware
+assignment); this closes **"did it work"** — measure whether assigned link-building /
+reoptimization work actually moved the campaign-goal metric it targeted, and surface a
+per-tactic effectiveness rollup back to the strategist. **Report-only in v1** (the
+strategist reads + cites it; it does NOT auto-adjust proposals). Full module detail is
+in the CLAUDE.md "Intervention-outcome loop" entry.
+
+### Ships dark — how to enable
+Set **`INTERVENTION_TRACKING_ENABLED=true`** on the **PLATFORM** Railway service (config
+`intervention_tracking_enabled`, default **False**). While off: every registration hook,
+the daily `run_intervention_sync` sweep, and the `_prov_intervention_outcomes` digest
+provider no-op, so the suite behaves exactly as before. No other env/setup needed —
+reuses the existing `async_jobs`/`gsc_scheduler` infra and `campaign_goals` reads (no new
+paid calls, no LLM in the core).
+
+### What's live already
+- **Migration `20260828240000_interventions.sql` applied live** (via Supabase MCP):
+  the `interventions` ledger table + a nullable `tasks.target` jsonb carrier column.
+  Verified (15 cols on `interventions`, `tasks.target` present).
+- **Merged to `main`** — but nothing runs until `INTERVENTION_TRACKING_ENABLED` is
+  flipped on PLATFORM (still default False), so the merge is inert in prod.
+
+### Key files (for whoever picks this up)
+- `services/interventions.py` — pure verdict/cadence/rollup helpers + registration
+  hooks + the daily sweep.
+- Registration: `routers/strategist.py` (proposal approval — runs on EVERY approve, so a
+  transiently-failed first registration retries; idempotent per a shared `source_ref`) and
+  the native-task done path — BOTH `task_service.complete_task` AND `update_task`'s
+  drag-into-a-done-status branch (the board can PATCH status to done without hitting
+  `/complete`). `asana_push.push_proposal` stamps `tasks.target`; `strategist.sanitize_review`
+  passes the optional proposal `target` through.
+- Surfacing: `strategy_digest._prov_intervention_outcomes` + one `strategist._SYSTEM` line;
+  read API `GET /clients/{id}/interventions` (`routers/interventions.py`).
+- Tests: `tests/test_interventions.py` (pure logic + a drift guard pinning
+  `strategist._INTERVENTION_TACTICS` to `interventions.TACTIC_TYPES`), target-passthrough
+  cases in `tests/test_strategist.py`.
+- **Adversarial-review hardening (folded in before merge):** the 6-week evaluator no longer
+  fabricates `no_effect` for an unmeasurable target — a `None` verdict closes the row as
+  `pending` (honest), never a false failure in the rollup. The daily sweep batch-loads the
+  linked goals (no per-row N+1).
+
+### Deliberately not built (v1 boundaries)
+Frontend Action-Plan surface for the rollup; the strategist auto-adjusting proposals from
+effectiveness (the next slice). `applied_at` = first-registration time (approval, in the
+common path) — measuring strictly from task-done is a later refinement.
+
+## ⏩ Update — 2026-08-28 · **PACE — enabled in production + its own Slack bot**
+
+**PACE is LIVE** (`PACE_ENABLED` + `PACE_INITIATIVE_ENABLED` = true on PLATFORM;
+`PACE_SLACK_CHANNEL=C0BTJ9U5H5F` = the private `#pace` channel). PRs this session:
+**#858** (route PM / native `task_*` notifications to the PACE channel), **#860**
+(separate PACE Slack bot), **#861** (inbound diagnostic log), **#868** (Team-page
+self-link), **#872** (per-client PACE channels — see below). First automated digest
++ Chase Plan fires the workday after enablement, after `gsc_ingest_hour_utc`
+(**08:00 UTC**), delivered by the PACE bot in `#pace`.
+Full module detail is in the CLAUDE.md PACE entry.
+
+### Per-client PACE Slack channels (#872, draft)
+PACE can now post a client's PM chatter to **that client's own Slack channel**
+instead of only the master `#pace` channel. New nullable **`clients.slack_channel_id`**
+(migration `20260828240000`, **applied live**), editable on the client form
+("PACE Slack Channel" — accepts a channel id like `C0ABC123XY` or a `#name`).
+Only the **client-scoped** PACE kinds route there — `task_assigned` /
+`task_mention` / `task_comment` / `task_month_generated` / `task_nudge`
+(`notifications.CLIENT_SCOPED_PACE_KINDS`). The portfolio rollups (daily digest,
+Chase Plan, workload report, escalations) and the suite-wide `task_overload` /
+`task_due` digests stay in the master channel. A client with **no channel set
+falls back to the master channel**, so nothing is lost — the feature is inert
+until a channel is set per-client. `resolve_slack_token` posts every PACE kind
+under the PACE bot token, so **the PACE bot must be `/invite`d to each client
+channel** you configure (same requirement as `#pace`) — but if it isn't (or the id
+is wrong/archived), the message **retries on the master channel** rather than being
+lost (recorded `channels_sent.slack="ok_master_fallback"` + a warning log), so a
+misconfigured client channel degrades gracefully. Dispatch is also per-channel
+idempotent (a reaper requeue never double-posts) and a PACE-only Slack setup (no
+SerMaStr default channel) now delivers PACE kinds. Owner ruling: client-scoped
+only + master fallback; splitting the digest/Chase Plan per-client is a deferred
+follow-up.
+
+### PACE has its own Slack app now (not SerMaStr) — App ID `A0BTJKE3BDX`
+Config on PLATFORM: **`PACE_SLACK_BOT_TOKEN`** (`xoxb-…`) + **`PACE_SLACK_SIGNING_SECRET`**
+(both set live). With both set: PACE posts under its own token (`notifications.pace_bot_token()`
++ `resolve_slack_token`), inbound events hit **`POST /slack/pace/events`** (verified with
+the PACE signing secret), and the SerMaStr `/slack/events` handler **ignores `#pace`**
+(no double-reply). Both empty ⇒ PACE falls back to the shared SerMaStr bot — the code is
+inert until the vars are set.
+
+### ⚠️⚠️ The setup gotcha that cost real debugging time: **DISABLE SOCKET MODE**
+The #1 failure when wiring a Slack app to an HTTP Request URL. With **Socket Mode ON**,
+Slack delivers every event over a WebSocket and **ignores your Request URL entirely** —
+but the one-time `url_verification` challenge is a plain HTTP POST, so the URL still
+shows **"Verified ✓"**. Symptom we hit: URL verified, events subscribed, `groups:history`
+present, bot in the private channel, app reinstalled… and **zero events ever reached the
+endpoint** (no logs, no reply). Fix: Slack app → **Settings → Socket Mode → OFF**, then
+reinstall. The per-message **`slack_pace_events.hit`** log (#861) makes this diagnosable
+next time — if it never appears in the PLATFORM logs when someone posts, Slack isn't
+delivering (Socket Mode / subscription / reinstall), not our endpoint.
+
+### Full setup runbook for the PACE Slack app (if re-doing it)
+1. Create a Slack app named **PACE** (its own icon = the separate identity).
+2. **Socket Mode → OFF** (do this first — see above).
+3. **OAuth & Permissions → Bot Token Scopes:** `chat:write`, `channels:history`,
+   **`groups:history`** (REQUIRED for private channels — public `channels:history` does
+   NOT cover them), `im:history` + `im:write` (nudge/brief DMs). **Install to Workspace**
+   → copy the `xoxb-…` Bot User OAuth Token.
+4. **Basic Information → App Credentials → Signing Secret** → copy it.
+5. **Event Subscriptions → Enable Events ON** → Request URL
+   `https://platform-production-a5c5.up.railway.app/slack/pace/events` → verify →
+   **Subscribe to bot events:** `message.channels`, `message.groups`, `message.im` →
+   **Reinstall** if prompted (events don't deliver until you do).
+6. In Slack, **`/invite` the PACE bot** to `#pace` (`C0BTJ9U5H5F`). Removing SerMaStr from
+   that channel is optional (code already steps it out). *Redirect URLs / Interactivity
+   are NOT needed — PACE confirms via plain-text "reply yes", no buttons/modals/shortcuts.*
+7. Set `PACE_SLACK_BOT_TOKEN` + `PACE_SLACK_SIGNING_SECRET` on the PLATFORM Railway service.
+
+### Team Slack linking (for nudges / morning DMs)
+PACE routes personal DMs `member → profile → profiles.slack_user_id`. All three logins are
+linked: Kyle `U0A6M999M1T`, Ryan `U02APLQCK6Z`, Minda `U05GC69MR4N`. Link on the **Team
+page** (admin-only) → per-row **Link Slack**; get a member's id in Slack via avatar →
+**Profile → ⋮ → Copy member ID** (`U…`). **#868** made that button appear on your **own**
+row too (it was hidden for `isSelf`, so an admin previously couldn't self-link without a
+DB edit; the backend `PATCH /users/{id}/slack-link` already allowed it).
+
+## ⏩ Update — 2026-08-28 · **QA Agent — cut `needs_human` on machine work (auto-resolve deliverables + gate the paid visual check)**
 
 **PR #870 (open draft, branch `claude/qa-agent-needs-human-jhev5o`; PRs 1–2 built + CI-green, PR 3 parked).** Two improvements to reduce the QA Agent's `needs_human` rate and close more loops without a human. The deterministic verdict in `qa_signals.build_verdict` is **untouched**; everything is best-effort + fail-open.
 

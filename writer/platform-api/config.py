@@ -1486,6 +1486,15 @@ class Settings(BaseSettings):
     # on a single client before opening it to the whole book.
     strategist_monthly_plan_review_client_ids: str = ""
 
+    # --- Intervention-outcome loop (services/interventions.py) ---
+    # The measurement half of decide+assign: register a goal-linked, in-scope
+    # (link-building / reoptimization) proposal or native task, snapshot its
+    # target metric's baseline, and at +2w/+6w judge whether the metric moved
+    # (worked/partial/no_effect). Report-only in v1 — the strategist reads the
+    # per-tactic rollup in its digest and can cite it, but nothing auto-adjusts.
+    # Ships dark; every hook + the daily sweep no-op while this is False.
+    intervention_tracking_enabled: bool = False
+
     # --- Autonomous SEO agent (autonomous-seo-agent-plan-v1_0.md) ---
     # Master gate. While False the whole closed loop is dormant — the policy
     # engine + budget governor are libraries, nothing runs autonomously, and
