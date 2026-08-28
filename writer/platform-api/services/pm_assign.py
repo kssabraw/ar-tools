@@ -165,44 +165,56 @@ def build_rebalance(
 # ---------------------------------------------------------------------------
 # Impure state-gather + write
 # ---------------------------------------------------------------------------
+# NOTE (profiles↔gid unification, 2026-08-28): the pure core above keys members
+# by an OPAQUE identity slot named "gid" (like the sibling distribute_tasks) —
+# in the native identity model that slot carries the ROSTER MEMBER ID. The
+# impure helpers below feed member ids into it and translate the chosen id to
+# assignee_id at the write boundary.
 def _get_task(task_id: str) -> Optional[dict]:
     rows = (
         get_supabase().table("tasks")
-        .select("id, client_id, name, category, est_hours, assignee_gid")
+        .select("id, client_id, name, category, est_hours, assignee_id")
         .eq("id", task_id).is_("deleted_at", "null").limit(1).execute()
     ).data
     return rows[0] if rows else None
 
 
 def _active_members() -> list[dict]:
-    return (
+    rows = (
         get_supabase().table("asana_team_members")
-        .select("gid, name, weekly_hours, active").eq("active", True).execute()
+        .select("id, name, weekly_hours, active").eq("active", True).execute()
     ).data or []
+    # Map the roster id into the pure core's opaque "gid" identity slot.
+    return [
+        {"gid": r["id"], "name": r.get("name"),
+         "weekly_hours": r.get("weekly_hours"), "active": r.get("active", True)}
+        for r in rows
+    ]
 
 
-def _skills_by_gid(gids: list[str]) -> dict:
-    if not gids:
+def _skills_by_member(member_ids: list[str]) -> dict:
+    if not member_ids:
         return {}
     rows = (
         get_supabase().table("task_member_skills")
-        .select("member_gid, category_key, is_primary, weight")
-        .in_("member_gid", gids).execute()
+        .select("member_id, category_key, is_primary, weight")
+        .in_("member_id", member_ids).execute()
     ).data or []
     out: dict = {}
     for r in rows:
-        out.setdefault(r["member_gid"], []).append(r)
+        out.setdefault(r["member_id"], []).append(r)
     return out
 
 
-def _eligible_gids(client_id: str) -> Optional[list[str]]:
-    """The client's auto-assignee eligibility list (empty/absent ⇒ all members)."""
+def _eligible_member_ids(client_id: str) -> Optional[list[str]]:
+    """The client's auto-assignee eligibility list, as roster member ids
+    (empty/absent ⇒ all members)."""
     rows = (
         get_supabase().table("asana_client_projects")
-        .select("auto_assignee_gids").eq("client_id", client_id).limit(1).execute()
+        .select("auto_assignee_ids").eq("client_id", client_id).limit(1).execute()
     ).data
-    if rows and rows[0].get("auto_assignee_gids"):
-        return rows[0]["auto_assignee_gids"]
+    if rows and rows[0].get("auto_assignee_ids"):
+        return rows[0]["auto_assignee_ids"]
     return None
 
 
@@ -210,20 +222,20 @@ def _eligible_gids(client_id: str) -> Optional[list[str]]:
 # Competency CRUD (the Workload-page editor)
 # ---------------------------------------------------------------------------
 def list_all_skills() -> dict:
-    """All members' competencies grouped by member_gid → [{category_key, is_primary}]."""
+    """All members' competencies grouped by member id → [{category_key, is_primary}]."""
     rows = (
         get_supabase().table("task_member_skills")
-        .select("member_gid, category_key, is_primary").execute()
+        .select("member_id, category_key, is_primary").execute()
     ).data or []
     out: dict = {}
     for r in rows:
-        out.setdefault(r["member_gid"], []).append(
+        out.setdefault(r["member_id"], []).append(
             {"category_key": r["category_key"], "is_primary": bool(r.get("is_primary"))}
         )
     return out
 
 
-def replace_member_skills(member_gid: str, items: list[dict]) -> list[dict]:
+def replace_member_skills(member_id: str, items: list[dict]) -> list[dict]:
     """Whole-set replace of one member's competencies (deduped by category).
 
     Validates the member + every category key BEFORE the delete — the replace is
@@ -237,10 +249,10 @@ def replace_member_skills(member_gid: str, items: list[dict]) -> list[dict]:
         if not key or key in seen:
             continue
         seen.add(key)
-        rows.append({"member_gid": member_gid, "category_key": key,
+        rows.append({"member_id": member_id, "category_key": key,
                      "is_primary": bool(it.get("is_primary"))})
     member = (
-        sb.table("asana_team_members").select("gid").eq("gid", member_gid).limit(1).execute()
+        sb.table("asana_team_members").select("id").eq("id", member_id).limit(1).execute()
     ).data
     if not member:
         raise ValueError("unknown_member")
@@ -252,7 +264,7 @@ def replace_member_skills(member_gid: str, items: list[dict]) -> list[dict]:
         unknown = seen - valid
         if unknown:
             raise ValueError(f"unknown_category_key:{sorted(unknown)[0]}")
-    sb.table("task_member_skills").delete().eq("member_gid", member_gid).execute()
+    sb.table("task_member_skills").delete().eq("member_id", member_id).execute()
     if rows:
         sb.table("task_member_skills").insert(rows).execute()
     return [{"category_key": r["category_key"], "is_primary": r["is_primary"]} for r in rows]
@@ -261,10 +273,10 @@ def replace_member_skills(member_gid: str, items: list[dict]) -> list[dict]:
 def _compute(task: dict) -> dict:
     """Gather live state for the task's client and run `pick_assignee`."""
     members = _active_members()
-    gids = [m["gid"] for m in members]
+    member_ids = [m["gid"] for m in members]  # opaque slot carries member ids
     return pick_assignee(
-        task, members, _skills_by_gid(gids), _eligible_gids(task.get("client_id")),
-        task_workload.open_hours_for_members(gids),
+        task, members, _skills_by_member(member_ids), _eligible_member_ids(task.get("client_id")),
+        task_workload.open_hours_for_members(member_ids),
         default_hours=settings.asana_default_task_hours,
         default_weekly_hours=settings.asana_default_weekly_hours,
         overload=settings.pace_placement_overload,
@@ -289,13 +301,14 @@ def place_task(task_id: str, *, actor_id: Optional[str] = None) -> dict:
         # Never overwrite an existing assignment — a producer gap-fill re-run or a
         # human's manual pick must stand. (The explicit `assign_task` action goes
         # through update_task directly, so it's unaffected by this guard.)
-        if task.get("assignee_gid"):
-            return {"gid": task["assignee_gid"], "reason": "already_assigned"}
+        if task.get("assignee_id"):
+            return {"gid": task["assignee_id"], "reason": "already_assigned"}
         result = _compute(task)
         if result.get("gid"):
+            # result["gid"] is the chosen roster member id (opaque slot).
             task_service.update_task(
                 task_id,
-                {"assignee_gid": result["gid"], "assignee_name": result.get("name")},
+                {"assignee_id": result["gid"], "assignee_name": result.get("name")},
                 actor_id=actor_id,
             )
         else:
@@ -359,7 +372,7 @@ def autoplace_unassigned_for_client(
         .table("tasks")
         .select("id, name")
         .eq("client_id", client_id)
-        .is_("assignee_gid", "null")
+        .is_("assignee_id", "null")
         .is_("deleted_at", "null")
         .is_("parent_task_id", "null")
         .eq("completed", False)

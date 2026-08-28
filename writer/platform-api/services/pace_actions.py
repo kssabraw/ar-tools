@@ -123,7 +123,7 @@ def move_direction(statuses: list[dict], from_key: Optional[str], to_key: Option
 def _open_tasks(client_id: str) -> list[dict]:
     return (
         get_supabase().table("tasks")
-        .select("id, name, status_key, assignee_gid, assignee_name, due_date, category, est_hours, completed")
+        .select("id, name, status_key, assignee_id, assignee_name, due_date, category, est_hours, completed")
         .eq("client_id", client_id).eq("completed", False)
         .is_("deleted_at", "null").is_("parent_task_id", "null")
         .execute()
@@ -133,7 +133,7 @@ def _open_tasks(client_id: str) -> list[dict]:
 def _team_members() -> list[dict]:
     return (
         get_supabase().table("asana_team_members")
-        .select("gid, name, profile_id").eq("active", True).execute()
+        .select("id, gid, name, profile_id").eq("active", True).execute()
     ).data or []
 
 
@@ -144,15 +144,15 @@ def _task_activity(task_id: str) -> list[dict]:
     ).data or []
 
 
-def _actor_member_gid(context: ActionContext) -> Optional[str]:
-    """The actor's own roster-member gid via the identity bridge, if linked."""
+def _actor_member_id(context: ActionContext) -> Optional[str]:
+    """The actor's own roster-member id via the identity bridge, if linked."""
     if not context.profile_id:
         return None
     rows = (
         get_supabase().table("asana_team_members")
-        .select("gid").eq("profile_id", context.profile_id).limit(1).execute()
+        .select("id").eq("profile_id", context.profile_id).limit(1).execute()
     ).data
-    return rows[0]["gid"] if rows else None
+    return rows[0]["id"] if rows else None
 
 
 def _resolve_one_task(client_id: str, query: str, verb: str):
@@ -196,7 +196,7 @@ def stage_reassign(context: ActionContext, client_id: str, args: dict) -> tuple[
     frm = task.get("assignee_name") or "unassigned"
     return _staged(
         {"task_id": task["id"], "task_name": task["name"],
-         "assignee_gid": member["gid"], "assignee_name": member.get("name")},
+         "assignee_id": member["id"], "assignee_name": member.get("name")},
         context, f"reassign *“{task['name']}”* from {frm} to *{member.get('name')}*",
     )
 
@@ -204,7 +204,7 @@ def stage_reassign(context: ActionContext, client_id: str, args: dict) -> tuple[
 def run_reassign(context: ActionContext, client_id: str, args: dict) -> str:
     task_service.update_task(
         args["task_id"],
-        {"assignee_gid": args["assignee_gid"], "assignee_name": args.get("assignee_name")},
+        {"assignee_id": args["assignee_id"], "assignee_name": args.get("assignee_name")},
         actor_id=context.profile_id,
     )
     return f"✅ Reassigned *“{args['task_name']}”* to {args.get('assignee_name')}."
@@ -234,7 +234,8 @@ def stage_assign(context: ActionContext, client_id: str, args: dict) -> tuple[st
     note = " — no exact skill match, widened to the eligible team" if result.get("reason") == "placed_widened" else ""
     return _staged(
         {"task_id": task["id"], "task_name": task["name"],
-         "assignee_gid": result["gid"], "assignee_name": result.get("name")},
+         # pm_assign's opaque "gid" slot carries the chosen roster member id.
+         "assignee_id": result["gid"], "assignee_name": result.get("name")},
         context,
         f"assign *“{task['name']}”* to *{result.get('name')}* (least-loaded eligible member{note})",
     )
@@ -243,7 +244,7 @@ def stage_assign(context: ActionContext, client_id: str, args: dict) -> tuple[st
 def run_assign(context: ActionContext, client_id: str, args: dict) -> str:
     task_service.update_task(
         args["task_id"],
-        {"assignee_gid": args["assignee_gid"], "assignee_name": args.get("assignee_name")},
+        {"assignee_id": args["assignee_id"], "assignee_name": args.get("assignee_name")},
         actor_id=context.profile_id,
     )
     return f"✅ Assigned *“{args['task_name']}”* to {args.get('assignee_name')}."
@@ -262,7 +263,7 @@ def stage_set_due(context: ActionContext, client_id: str, args: dict) -> tuple[s
     task, reply = _resolve_one_task(client_id, args.get("task_name", ""), "set a due date on")
     if reply:
         return "reply", reply
-    own = task.get("assignee_gid") and task.get("assignee_gid") == _actor_member_gid(context)
+    own = task.get("assignee_id") and task.get("assignee_id") == _actor_member_id(context)
     ok, reason = pace_auth.require(context, "set_task_due_own" if own else "set_task_due_other")
     if not ok:
         return "reply", reason
@@ -324,7 +325,7 @@ def _completed_tasks(client_id: str) -> list[dict]:
     (reopen / move back out of Completed); every other action stays open-only."""
     return (
         get_supabase().table("tasks")
-        .select("id, name, status_key, assignee_gid, assignee_name, completed")
+        .select("id, name, status_key, assignee_id, assignee_name, completed")
         .eq("client_id", client_id).eq("completed", True)
         .is_("deleted_at", "null").is_("parent_task_id", "null")
         .order("completed_at", desc=True).limit(200)
@@ -362,7 +363,7 @@ def stage_set_status(context: ActionContext, client_id: str, args: dict) -> tupl
         return "reply", f"“{task['name']}” is already *{label}*."
     # Own-vs-other permission split — a VA may move their OWN task's status, but
     # moving someone else's needs staff (mirrors set_task_due).
-    own = task.get("assignee_gid") and task.get("assignee_gid") == _actor_member_gid(context)
+    own = task.get("assignee_id") and task.get("assignee_id") == _actor_member_id(context)
     ok, reason = pace_auth.require(context, "update_own_status" if own else "set_task_status_other")
     if not ok:
         return "reply", reason
@@ -456,26 +457,26 @@ def stage_nudge(context: ActionContext, client_id: str, args: dict) -> tuple[str
     task, reply = _resolve_one_task(client_id, args.get("task_name", ""), "nudge about")
     if reply:
         return "reply", reply
-    if not task.get("assignee_gid"):
+    if not task.get("assignee_id"):
         return "reply", f"“{task['name']}” is unassigned — nobody to nudge (assign it first)."
-    own = task.get("assignee_gid") == _actor_member_gid(context)
+    own = task.get("assignee_id") == _actor_member_id(context)
     ok, reason = pace_auth.require(context, "nudge_self" if own else "nudge_other")
     if not ok:
         return "reply", reason
     return _staged(
         {"task_id": task["id"], "task_name": task["name"],
-         "assignee_gid": task["assignee_gid"], "assignee_name": task.get("assignee_name")},
+         "assignee_id": task["assignee_id"], "assignee_name": task.get("assignee_name")},
         context, f"nudge {task.get('assignee_name') or 'the assignee'} about *“{task['name']}”*",
     )
 
 
-def _assignee_profile_slack(assignee_gid: str) -> tuple[Optional[str], Optional[str]]:
-    """(profile_id, slack_user_id) for a task-board member via the identity
-    bridge. profile_id targets their in-app bell; slack_user_id their DM. Either
-    is None when the member isn't linked (link on the Team page)."""
+def _assignee_profile_slack(assignee_id: str) -> tuple[Optional[str], Optional[str]]:
+    """(profile_id, slack_user_id) for a roster member via the identity bridge.
+    profile_id targets their in-app bell; slack_user_id their DM. Either is None
+    when the member isn't linked (link on the Team page)."""
     member = (
         get_supabase().table("asana_team_members")
-        .select("profile_id").eq("gid", assignee_gid).limit(1).execute()
+        .select("profile_id").eq("id", assignee_id).limit(1).execute()
     ).data
     profile_id = member[0].get("profile_id") if member else None
     if not profile_id:
@@ -495,11 +496,11 @@ async def run_nudge(context: ActionContext, client_id: str, args: dict) -> str:
     global _dm_scope_broken
     from services import notifications
 
-    profile_id, slack_id = _assignee_profile_slack(args["assignee_gid"])
+    profile_id, slack_id = _assignee_profile_slack(args["assignee_id"])
     who = args.get("assignee_name") or "the assignee"
     task_name = args["task_name"]
     link = f"/clients/{client_id}/tasks?task={args['task_id']}"
-    base_payload = {"link": link, "assignee_gid": args["assignee_gid"]}
+    base_payload = {"link": link, "assignee_id": args["assignee_id"]}
 
     # 1) Direct DM to the individual (the real "tap on the shoulder").
     if slack_id and settings.pace_nudge_via_dm and settings.slack_bot_token and not _dm_scope_broken:

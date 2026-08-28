@@ -39,33 +39,34 @@ _EFFORT_FIELD = "est_hours"
 # ---------------------------------------------------------------------------
 # Native reads
 # ---------------------------------------------------------------------------
-def _open_task_rows(gids: Optional[list[str]] = None) -> list[dict]:
+def _open_task_rows(member_ids: Optional[list[str]] = None) -> list[dict]:
     """Open, non-trashed, top-level task rows (optionally for specific
-    assignees): the workload unit set."""
+    assignees, by roster member id): the workload unit set."""
     q = (
         get_supabase()
         .table("tasks")
-        .select("assignee_gid, est_hours, due_date, name, client_id")
+        .select("assignee_id, est_hours, due_date, name, client_id")
         .eq("completed", False)
         .is_("deleted_at", "null")
         .is_("parent_task_id", "null")
     )
-    if gids is not None:
-        if not gids:
+    if member_ids is not None:
+        if not member_ids:
             return []
-        q = q.in_("assignee_gid", gids)
+        q = q.in_("assignee_id", member_ids)
     return q.execute().data or []
 
 
-def open_hours_for_members(gids: list[str]) -> dict[str, float]:
-    """Current open-task hours per member (native DB sum; unestimated tasks
-    count as the default). Reused by monthly auto-distribution to seed load."""
-    totals = {g: 0.0 for g in gids}
-    for row in _open_task_rows(gids):
-        gid = row.get("assignee_gid")
-        if gid in totals:
+def open_hours_for_members(member_ids: list[str]) -> dict[str, float]:
+    """Current open-task hours per member (native DB sum, keyed by roster member
+    id; unestimated tasks count as the default). Reused by monthly
+    auto-distribution to seed load."""
+    totals = {m: 0.0 for m in member_ids}
+    for row in _open_task_rows(member_ids):
+        mid = row.get("assignee_id")
+        if mid in totals:
             hrs = row.get("est_hours")
-            totals[gid] += float(hrs) if hrs is not None else float(settings.asana_default_task_hours)
+            totals[mid] += float(hrs) if hrs is not None else float(settings.asana_default_task_hours)
     return totals
 
 
@@ -93,22 +94,26 @@ def build_team_workload() -> dict:
             "note": "no_team_list",
         }
 
-    rows = _open_task_rows([m["gid"] for m in members])
-    by_gid: dict[str, list[dict]] = {}
+    # The reused workload math keys members by an opaque "gid" slot — feed it the
+    # roster member id (canonical identity; correct for login-less members too).
+    rows = _open_task_rows([m["id"] for m in members if m.get("id")])
+    by_member: dict[str, list[dict]] = {}
     for r in rows:
-        gid = r.get("assignee_gid")
-        if gid:
-            by_gid.setdefault(gid, []).append(adapt_task_row(r))
+        mid = r.get("assignee_id")
+        if mid:
+            by_member.setdefault(mid, []).append(adapt_task_row(r))
 
     report = build_workload_report(
         [
             {
-                "gid": m["gid"],
-                "name": m.get("name") or m["gid"],
+                "gid": m["id"],
+                "member_id": m["id"],
+                "name": m.get("name") or m["id"],
                 "weekly_hours": m.get("weekly_hours"),
-                "tasks": by_gid.get(m["gid"], []),
+                "tasks": by_member.get(m["id"], []),
             }
             for m in members
+            if m.get("id")
         ],
         effort_field_name=_EFFORT_FIELD,
         effort_field_gid="",
@@ -150,19 +155,19 @@ async def run_workload_alert() -> dict:
 # Daily due sweep (async_jobs type 'task_due_sweep')
 # ---------------------------------------------------------------------------
 def select_due_tasks(rows: list[dict], today: date) -> dict[str, dict]:
-    """Group open tasks into due-today / overdue buckets per assignee.
-    Undated and unassigned tasks are skipped (nothing to nudge, no one to
-    nudge). Pure — unit-tested."""
+    """Group open tasks into due-today / overdue buckets per assignee (keyed by
+    roster member id). Undated and unassigned tasks are skipped (nothing to
+    nudge, no one to nudge). Pure — unit-tested."""
     buckets: dict[str, dict] = {}
     for r in rows:
-        gid = r.get("assignee_gid")
+        mid = r.get("assignee_id")
         due_raw = r.get("due_date")
-        if not gid or not due_raw:
+        if not mid or not due_raw:
             continue
         due = date.fromisoformat(due_raw) if isinstance(due_raw, str) else due_raw
         if due > today:
             continue
-        entry = buckets.setdefault(gid, {"name": r.get("assignee_name"), "due_today": [], "overdue": []})
+        entry = buckets.setdefault(mid, {"name": r.get("assignee_name"), "due_today": [], "overdue": []})
         (entry["due_today"] if due == today else entry["overdue"]).append(r.get("name") or "")
     return buckets
 
@@ -174,7 +179,7 @@ def run_due_sweep(today: Optional[date] = None) -> dict:
     rows = (
         get_supabase()
         .table("tasks")
-        .select("assignee_gid, assignee_name, due_date, name")
+        .select("assignee_id, assignee_name, due_date, name")
         .eq("completed", False)
         .is_("deleted_at", "null")
         .is_("parent_task_id", "null")

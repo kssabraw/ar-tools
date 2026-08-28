@@ -95,7 +95,7 @@ def test_move_direction():
 # ---------------------------------------------------------------------------
 # run_nudge — DM-first delivery with channel / in-app fallbacks
 # ---------------------------------------------------------------------------
-_NUDGE_ARGS = {"assignee_gid": "g1", "assignee_name": "Ivy", "task_name": "GBP audit", "task_id": "t1"}
+_NUDGE_ARGS = {"assignee_id": "g1", "assignee_name": "Ivy", "task_name": "GBP audit", "task_id": "t1"}
 
 
 async def test_run_nudge_dms_the_individual(monkeypatch):
@@ -158,11 +158,11 @@ async def test_run_nudge_unlinked_is_in_app_only(monkeypatch):
 def _reassign_env(monkeypatch):
     monkeypatch.setattr(A, "_open_tasks", lambda cid: [
         {"id": "t1", "name": "GBP categories", "status_key": "in_progress",
-         "assignee_gid": "g_minda", "assignee_name": "Minda", "completed": False},
+         "assignee_id": "g_minda", "assignee_name": "Minda", "completed": False},
     ])
     monkeypatch.setattr(A, "_team_members", lambda: [
-        {"gid": "g_ivy", "name": "Ivy", "profile_id": None},
-        {"gid": "g_minda", "name": "Minda", "profile_id": None},
+        {"id": "g_ivy", "name": "Ivy", "profile_id": None},
+        {"id": "g_minda", "name": "Minda", "profile_id": None},
     ])
 
 
@@ -174,7 +174,7 @@ def test_reassign_refused_for_va(_reassign_env):
 def test_reassign_staged_for_staff(_reassign_env):
     kind, payload = A.stage_reassign(_staff(), "c1", {"task_name": "GBP categories", "assignee": "Ivy"})
     assert kind == "confirm"
-    assert payload["assignee_gid"] == "g_ivy" and payload["assignee_name"] == "Ivy"
+    assert payload["assignee_id"] == "g_ivy" and payload["assignee_name"] == "Ivy"
     assert payload["_requester"] == "p_staff"          # actor-bound
     assert "from Minda to *Ivy*" in payload["_confirm"]
 
@@ -238,8 +238,8 @@ def test_run_reassign_threads_actor(monkeypatch):
     calls = {}
     monkeypatch.setattr(task_service, "update_task",
                         lambda tid, changes, actor_id=None: calls.update({"tid": tid, "changes": changes, "actor": actor_id}))
-    msg = A.run_reassign(_staff(), "c1", {"task_id": "t1", "task_name": "X", "assignee_gid": "g_ivy", "assignee_name": "Ivy"})
-    assert calls["tid"] == "t1" and calls["changes"]["assignee_gid"] == "g_ivy" and calls["actor"] == "p_staff"
+    msg = A.run_reassign(_staff(), "c1", {"task_id": "t1", "task_name": "X", "assignee_id": "g_ivy", "assignee_name": "Ivy"})
+    assert calls["tid"] == "t1" and calls["changes"]["assignee_id"] == "g_ivy" and calls["actor"] == "p_staff"
     assert "Ivy" in msg
 
 
@@ -253,8 +253,8 @@ def _status_env(monkeypatch, task):
 
 def test_set_status_forward_staged_for_staff(monkeypatch):
     _status_env(monkeypatch, {"id": "t1", "name": "GBP audit", "status_key": "in_progress",
-                              "assignee_gid": "g_minda", "completed": False})
-    monkeypatch.setattr(A, "_actor_member_gid", lambda ctx: None)
+                              "assignee_id": "g_minda", "completed": False})
+    monkeypatch.setattr(A, "_actor_member_id", lambda ctx: None)
     kind, payload = A.stage_set_status(_staff(), "c1", {"task_name": "GBP audit", "status": "In QA"})
     assert kind == "confirm"
     assert payload["status_key"] == "in_qa" and payload["is_done"] is False
@@ -264,8 +264,8 @@ def test_set_status_forward_staged_for_staff(monkeypatch):
 
 def test_set_status_backward(monkeypatch):
     _status_env(monkeypatch, {"id": "t1", "name": "GBP audit", "status_key": "in_qa",
-                              "assignee_gid": "g_minda", "completed": False})
-    monkeypatch.setattr(A, "_actor_member_gid", lambda ctx: None)
+                              "assignee_id": "g_minda", "completed": False})
+    monkeypatch.setattr(A, "_actor_member_id", lambda ctx: None)
     kind, payload = A.stage_set_status(_staff(), "c1", {"task_name": "GBP audit", "status": "In Progress"})
     assert kind == "confirm" and payload["status_key"] == "in_progress"
     assert "back to *In Progress*" in payload["_confirm"]
@@ -273,38 +273,38 @@ def test_set_status_backward(monkeypatch):
 
 def test_set_status_to_done_flags_completion(monkeypatch):
     _status_env(monkeypatch, {"id": "t1", "name": "GBP audit", "status_key": "sent_to_client",
-                              "assignee_gid": "g_minda", "completed": False})
-    monkeypatch.setattr(A, "_actor_member_gid", lambda ctx: None)
+                              "assignee_id": "g_minda", "completed": False})
+    monkeypatch.setattr(A, "_actor_member_id", lambda ctx: None)
     kind, payload = A.stage_set_status(_staff(), "c1", {"task_name": "GBP audit", "status": "Completed"})
     assert kind == "confirm" and payload["is_done"] is True
 
 
 def test_set_status_already_there(monkeypatch):
     _status_env(monkeypatch, {"id": "t1", "name": "GBP audit", "status_key": "in_progress",
-                              "assignee_gid": "g_minda", "completed": False})
+                              "assignee_id": "g_minda", "completed": False})
     kind, payload = A.stage_set_status(_staff(), "c1", {"task_name": "GBP audit", "status": "In Progress"})
     assert kind == "reply" and "already" in payload
 
 
 def test_set_status_unknown_lists_options(monkeypatch):
     _status_env(monkeypatch, {"id": "t1", "name": "GBP audit", "status_key": "in_progress",
-                              "assignee_gid": "g_minda", "completed": False})
+                              "assignee_id": "g_minda", "completed": False})
     kind, payload = A.stage_set_status(_staff(), "c1", {"task_name": "GBP audit", "status": "Purple"})
     assert kind == "reply" and "Options:" in payload and "In QA" in payload
 
 
 def test_set_status_va_can_move_own(monkeypatch):
     _status_env(monkeypatch, {"id": "t1", "name": "My task", "status_key": "in_progress",
-                              "assignee_gid": "g_va", "completed": False})
-    monkeypatch.setattr(A, "_actor_member_gid", lambda ctx: "g_va")   # actor owns the task
+                              "assignee_id": "g_va", "completed": False})
+    monkeypatch.setattr(A, "_actor_member_id", lambda ctx: "g_va")   # actor owns the task
     kind, payload = A.stage_set_status(_va(), "c1", {"task_name": "My task", "status": "In QA"})
     assert kind == "confirm" and payload["status_key"] == "in_qa"
 
 
 def test_set_status_va_refused_on_others(monkeypatch):
     _status_env(monkeypatch, {"id": "t1", "name": "Her task", "status_key": "in_progress",
-                              "assignee_gid": "g_minda", "completed": False})
-    monkeypatch.setattr(A, "_actor_member_gid", lambda ctx: "g_va")   # not the owner
+                              "assignee_id": "g_minda", "completed": False})
+    monkeypatch.setattr(A, "_actor_member_id", lambda ctx: "g_va")   # not the owner
     kind, payload = A.stage_set_status(_va(), "c1", {"task_name": "Her task", "status": "In QA"})
     assert kind == "reply" and "staff" in payload
 
@@ -314,12 +314,12 @@ def test_set_status_resolves_completed_task_for_reopen(monkeypatch):
     # completed fallback finds it, and the staged payload carries was_completed
     # so run takes the reopen branch.
     _status_env(monkeypatch, {"id": "t9", "name": "Other task", "status_key": "in_progress",
-                              "assignee_gid": "g_minda", "completed": False})
+                              "assignee_id": "g_minda", "completed": False})
     monkeypatch.setattr(A, "_completed_tasks", lambda cid: [
         {"id": "t1", "name": "GBP audit", "status_key": "complete",
-         "assignee_gid": "g_minda", "completed": True},
+         "assignee_id": "g_minda", "completed": True},
     ])
-    monkeypatch.setattr(A, "_actor_member_gid", lambda ctx: None)
+    monkeypatch.setattr(A, "_actor_member_id", lambda ctx: None)
     kind, payload = A.stage_set_status(_staff(), "c1", {"task_name": "GBP audit", "status": "In Progress"})
     assert kind == "confirm"
     assert payload["was_completed"] is True and payload["is_done"] is False
@@ -343,7 +343,7 @@ def test_set_status_open_ambiguity_never_falls_to_completed(monkeypatch):
 
 def test_set_status_no_match_anywhere(monkeypatch):
     _status_env(monkeypatch, {"id": "t1", "name": "GBP audit", "status_key": "in_progress",
-                              "assignee_gid": "g_minda", "completed": False})
+                              "assignee_id": "g_minda", "completed": False})
     monkeypatch.setattr(A, "_completed_tasks", lambda cid: [])
     kind, payload = A.stage_set_status(_staff(), "c1", {"task_name": "Nonexistent", "status": "In QA"})
     assert kind == "reply" and "No task matches" in payload

@@ -11,6 +11,7 @@ import type { TaskCategory, TaskDetailResponse, TaskStatus } from '../../lib/typ
 // Tasks board and My Tasks.
 
 interface Member {
+  id?: string | null
   gid: string
   name: string | null
 }
@@ -174,9 +175,9 @@ export function TaskDetail({ taskId, statuses, categories, members, onClose, inv
     patchMut.mutate({ [field]: value })
   }
 
-  const setAssignee = (gid: string) => {
-    const member = members.find((m) => m.gid === gid)
-    patchMut.mutate({ assignee_gid: gid || null, assignee_name: member?.name ?? null })
+  const setAssignee = (memberId: string) => {
+    const member = members.find((m) => (m.id ?? m.gid) === memberId)
+    patchMut.mutate({ assignee_id: memberId || null, assignee_name: member?.name ?? null })
   }
 
   return (
@@ -269,10 +270,10 @@ export function TaskDetail({ taskId, statuses, categories, members, onClose, inv
             </div>
             <div>
               <div style={label}>Assignee</div>
-              <select value={task.assignee_gid ?? ''} onChange={(e) => setAssignee(e.target.value)} style={input}>
+              <select value={task.assignee_id ?? ''} onChange={(e) => setAssignee(e.target.value)} style={input}>
                 <option value="">Unassigned</option>
                 {members.map((m) => (
-                  <option key={m.gid} value={m.gid}>{m.name ?? m.gid}</option>
+                  <option key={m.id ?? m.gid} value={m.id ?? m.gid}>{m.name ?? m.gid}</option>
                 ))}
               </select>
             </div>

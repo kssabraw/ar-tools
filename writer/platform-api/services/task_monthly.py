@@ -33,8 +33,6 @@ from db.supabase_client import get_supabase
 from services import task_service, task_workload
 from services.asana_monthly import (
     get_active_templates,
-    get_eligible_assignees,
-    get_member_capacity,
     get_task_library,
 )
 from services.asana_service import distribute_tasks, month_label
@@ -137,31 +135,65 @@ def ensure_month_section(client_id: str, target: date) -> dict:
         raise
 
 
-def get_member_names(gids: list[str]) -> dict[str, str]:
-    """Display names for team-member gids (for the cached assignee_name)."""
-    if not gids:
+def get_member_names(member_ids: list[str]) -> dict[str, str]:
+    """Display names for roster member ids (for the cached assignee_name)."""
+    if not member_ids:
         return {}
     rows = (
         get_supabase()
         .table("asana_team_members")
-        .select("gid, name")
-        .in_("gid", gids)
+        .select("id, name")
+        .in_("id", member_ids)
         .execute()
     ).data or []
-    return {r["gid"]: r.get("name") for r in rows if r.get("gid")}
+    return {r["id"]: r.get("name") for r in rows if r.get("id")}
+
+
+def get_eligible_member_ids(client_id: str) -> list[str]:
+    """The per-client auto-distribution eligibility list, as roster member ids
+    (native sibling of asana_monthly.get_eligible_assignees; empty when the
+    client hasn't configured one — those auto rows stay unstaffed)."""
+    rows = (
+        get_supabase()
+        .table("asana_client_projects")
+        .select("auto_assignee_ids")
+        .eq("client_id", client_id)
+        .limit(1)
+        .execute()
+    ).data
+    return list(rows[0].get("auto_assignee_ids") or []) if rows else []
+
+
+def get_member_capacity(member_ids: list[str]) -> dict[str, float]:
+    """Weekly capacity per roster member id (from the roster; default for the
+    rest)."""
+    if not member_ids:
+        return {}
+    rows = (
+        get_supabase()
+        .table("asana_team_members")
+        .select("id, weekly_hours")
+        .in_("id", member_ids)
+        .execute()
+    ).data or []
+    by_id = {r["id"]: r.get("weekly_hours") for r in rows}
+    return {m: float(by_id.get(m) or settings.asana_default_weekly_hours) for m in member_ids}
 
 
 def assign_auto_tasks(client_id: str, templates: list[dict]) -> int:
     """Distribute auto-assign template rows across the client's eligible members
     by remaining capacity (native open hours — a DB sum, not an Asana fetch),
-    mutating each chosen row's ``assignee_gid`` in place. Best-effort: no
+    mutating each chosen row's ``assignee_id`` in place. Best-effort: no
     eligible members (or feature off) leaves auto rows unassigned."""
     if not settings.asana_auto_distribute_enabled:
         return 0
-    auto_rows = [r for r in templates if r.get("auto_assign") and not r.get("assignee_gid")]
+    auto_rows = [
+        r for r in templates
+        if r.get("auto_assign") and not r.get("assignee_id")
+    ]
     if not auto_rows:
         return 0
-    eligible = get_eligible_assignees(client_id)
+    eligible = get_eligible_member_ids(client_id)
     if not eligible:
         logger.info("task_monthly.auto_distribute_no_eligible", extra={"client_id": client_id})
         return 0
@@ -169,17 +201,17 @@ def assign_auto_tasks(client_id: str, templates: list[dict]) -> int:
     capacity = get_member_capacity(eligible)
     open_hours = task_workload.open_hours_for_members(eligible)
     members = [
-        {"gid": g, "remaining": capacity.get(g, settings.asana_default_weekly_hours) - open_hours.get(g, 0.0)}
-        for g in eligible
+        {"gid": m, "remaining": capacity.get(m, settings.asana_default_weekly_hours) - open_hours.get(m, 0.0)}
+        for m in eligible
     ]
     hours = [float(r.get("est_hours") or settings.asana_default_task_hours) for r in auto_rows]
-    assigned = distribute_tasks(hours, members)
-    names = get_member_names([g for g in assigned if g])
+    assigned = distribute_tasks(hours, members)  # opaque key = member id
+    names = get_member_names([m for m in assigned if m])
     n = 0
-    for row, gid in zip(auto_rows, assigned):
-        if gid:
-            row["assignee_gid"] = gid
-            row["assignee_name"] = names.get(gid) or row.get("assignee_name")
+    for row, member_id in zip(auto_rows, assigned):
+        if member_id:
+            row["assignee_id"] = member_id
+            row["assignee_name"] = names.get(member_id) or row.get("assignee_name")
             n += 1
     return n
 
@@ -226,7 +258,7 @@ def generate_month_for_client(client_id: str, target: date, *, actor_id: Optiona
                 name,
                 client_id=client_id,
                 section_id=section["id"],
-                assignee_gid=row.get("assignee_gid"),
+                assignee_id=row.get("assignee_id"),
                 assignee_name=row.get("assignee_name"),
                 status_key=initial,
                 category=task_service.resolve_category_key(row.get("category_name"), categories),
@@ -244,7 +276,7 @@ def generate_month_for_client(client_id: str, target: date, *, actor_id: Optiona
             if subtasks:
                 task_service.create_subtasks(task, subtasks, created_by=actor_id)
             created += 1
-            who = row.get("assignee_name") or row.get("assignee_gid") or "Unassigned"
+            who = row.get("assignee_name") or row.get("assignee_id") or "Unassigned"
             assigned_counts[who] = assigned_counts.get(who, 0) + 1
         except Exception as exc:  # one bad task shouldn't abort the rest
             errors.append(f"{name}: {str(exc)[:120]}")

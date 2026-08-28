@@ -234,7 +234,7 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
     },
   })
 
-  const tracked = new Set(rows.map((r) => r.gid))
+  const tracked = new Set(rows.map((r) => r.gid).filter(Boolean) as string[])
   const available = (users ?? []).filter((u) => !tracked.has(u.gid))
   const dirty = JSON.stringify(rows) !== JSON.stringify((members ?? []).map((m) => ({ ...m })))
   // gid → email (from the live workspace-users read) — disambiguates same-name
@@ -279,13 +279,25 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
                 rows.filter((_, j) => j !== i).map((x) => x.profile_id).filter(Boolean) as string[],
               )
               return (
-              <div key={r.gid} style={{ display: 'grid', gridTemplateColumns: '1fr 130px 190px 36px', gap: 8, alignItems: 'center' }}>
-                <span style={{ fontSize: 13, color: '#0f172a' }}>
-                  {r.name ?? r.gid}
-                  {emailByGid.get(r.gid) && (
-                    <span style={{ fontSize: 11.5, color: '#94a3b8', marginLeft: 8 }}>{emailByGid.get(r.gid)}</span>
-                  )}
-                </span>
+              <div key={r.id ?? r.gid ?? `new-${i}`} style={{ display: 'grid', gridTemplateColumns: '1fr 130px 190px 36px', gap: 8, alignItems: 'center' }}>
+                {r.gid ? (
+                  <span style={{ fontSize: 13, color: '#0f172a' }}>
+                    {r.name ?? r.gid}
+                    {emailByGid.get(r.gid) && (
+                      <span style={{ fontSize: 11.5, color: '#94a3b8', marginLeft: 8 }}>{emailByGid.get(r.gid)}</span>
+                    )}
+                  </span>
+                ) : (
+                  // Login-less VA (no Asana account): their name is editable here.
+                  <input
+                    style={input}
+                    placeholder="VA name"
+                    value={r.name ?? ''}
+                    onChange={(e) =>
+                      setRows((rs) => rs.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))
+                    }
+                  />
+                )}
                 <input
                   style={input}
                   type="number"
@@ -342,6 +354,15 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
         </button>
         <button style={ghostBtn} onClick={() => addMemberManual(setRows, tracked)} title="Add a member by Asana user GID">
           <Plus size={14} /> GID
+        </button>
+        <button
+          style={ghostBtn}
+          onClick={() =>
+            setRows((rs) => [...rs, { name: '', gid: null, weekly_hours: null, active: true, profile_id: null }])
+          }
+          title="Add a VA who never logs into AR Tools (assignable, no Asana account)"
+        >
+          <Plus size={14} /> VA (no login)
         </button>
       </div>
       {save.isError && <p style={errText}>{(save.error as Error).message}</p>}
@@ -450,12 +471,15 @@ function SkillsEditor() {
 
   const norm = (list?: { category_key: string; is_primary: boolean }[]) =>
     JSON.stringify([...(list ?? [])].sort((a, b) => a.category_key.localeCompare(b.category_key)))
-  const changed = tracked.filter((mem) => norm(map[mem.gid]) !== norm((loaded ?? {})[mem.gid]))
+  const changed = tracked.filter(
+    (mem) => norm(map[mem.id ?? mem.gid ?? '']) !== norm((loaded ?? {})[mem.id ?? mem.gid ?? '']),
+  )
 
   const save = useMutation({
     mutationFn: async () => {
       for (const mem of changed) {
-        await api.put(`/tasks/member-skills/${mem.gid}`, { skills: map[mem.gid] ?? [] })
+        const mid = mem.id ?? mem.gid ?? ''
+        await api.put(`/tasks/member-skills/${mid}`, { skills: map[mid] ?? [] })
       }
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['task-member-skills'] }),
@@ -473,16 +497,18 @@ function SkillsEditor() {
         The ★ marks a primary category (breaks ties).
       </p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {tracked.map((mem) => (
-          <div key={mem.gid} style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 10, alignItems: 'center' }}>
+        {tracked.map((mem) => {
+          const mid = mem.id ?? mem.gid ?? ''
+          return (
+          <div key={mid} style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 10, alignItems: 'center' }}>
             <span style={{ fontSize: 13, color: '#0f172a', fontWeight: 600 }}>{mem.name ?? mem.gid}</span>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
               {activeCats.map((c) => {
-                const on = has(mem.gid, c.key)
+                const on = has(mid, c.key)
                 return (
                   <span key={c.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
                     <button
-                      onClick={() => toggle(mem.gid, c.key)}
+                      onClick={() => toggle(mid, c.key)}
                       style={{
                         ...skillChip,
                         background: on ? (c.color ?? '#4f46e5') : '#f1f5f9',
@@ -495,21 +521,21 @@ function SkillsEditor() {
                     {on && (
                       <button
                         title="Set as primary category"
-                        onClick={() => setPrimary(mem.gid, c.key)}
-                        style={{ ...iconBtn, padding: 3, border: 'none', color: isPrimary(mem.gid, c.key) ? '#f59e0b' : '#cbd5e1' }}
+                        onClick={() => setPrimary(mid, c.key)}
+                        style={{ ...iconBtn, padding: 3, border: 'none', color: isPrimary(mid, c.key) ? '#f59e0b' : '#cbd5e1' }}
                       >
-                        <Star size={13} fill={isPrimary(mem.gid, c.key) ? '#f59e0b' : 'none'} />
+                        <Star size={13} fill={isPrimary(mid, c.key) ? '#f59e0b' : 'none'} />
                       </button>
                     )}
                   </span>
                 )
               })}
-              {(map[mem.gid] ?? []).length === 0 && (
+              {(map[mid] ?? []).length === 0 && (
                 <span style={{ fontSize: 11.5, color: '#94a3b8' }}>generalist (any category)</span>
               )}
             </div>
           </div>
-        ))}
+        )})}
       </div>
       <div style={{ marginTop: 12 }}>
         <button style={primaryBtn} disabled={changed.length === 0 || save.isPending} onClick={() => save.mutate()}>

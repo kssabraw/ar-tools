@@ -708,13 +708,13 @@ def test_ctx_native_tasks_open_overdue_unassigned():
     fake = _FakeSupabase({
         "tasks": [[
             {"name": "Fix GBP categories", "status_key": "in_progress",
-             "assignee_name": "Ivy", "assignee_gid": "g1",
+             "assignee_name": "Ivy", "assignee_id": "g1",
              "due_date": "2026-08-20", "completed": False},   # overdue
             {"name": "Write location page", "status_key": "not_started",
-             "assignee_name": None, "assignee_gid": None,
+             "assignee_name": None, "assignee_id": None,
              "due_date": "2026-09-05", "completed": False},    # unassigned, future
             {"name": "Old done task", "status_key": "completed",
-             "assignee_name": "Ivy", "assignee_gid": "g1",
+             "assignee_name": "Ivy", "assignee_id": "g1",
              "due_date": "2026-08-01", "completed": True},     # excluded
         ]],
     })
@@ -1003,6 +1003,8 @@ def test_stage_add_task_matches_assignee_and_flags_unknown(monkeypatch):
         )
     )
     assert outcome == "confirm"
+    # SerMaStr's add-task stages the Asana gid (it dual-creates to Asana + the
+    # native board; the native create resolves the gid to assignee_id).
     assert staged["assignee_gid"] == "g1"
     assert "Ivy Gervacio" in staged["_confirm"]
     assert staged["due_date"] == "2026-12-31"

@@ -19,16 +19,18 @@ const BUCKETS: { key: keyof MyTasksResponse['buckets']; label: string; color: st
   { key: 'no_date', label: 'No due date', color: '#94a3b8' },
 ]
 
-const GID_STORAGE_KEY = 'ar-tools:my-tasks-gid'
+// New storage key (roster member id). The old '…-gid' key held Asana gids; a
+// fresh key means a stale gid can't be sent as a member id after cutover.
+const MEMBER_STORAGE_KEY = 'ar-tools:my-tasks-member'
 
 export function MyTasks() {
   const queryClient = useQueryClient()
-  const [gid, setGid] = useState<string>(() => localStorage.getItem(GID_STORAGE_KEY) ?? '')
+  const [member, setMember] = useState<string>(() => localStorage.getItem(MEMBER_STORAGE_KEY) ?? '')
   const [selectedTask, setSelectedTask] = useState<string | null>(null)
 
   const { data, isLoading } = useQuery<MyTasksResponse>({
-    queryKey: ['my-tasks', gid],
-    queryFn: () => api.get<MyTasksResponse>(`/tasks/mine${gid ? `?gid=${encodeURIComponent(gid)}` : ''}`),
+    queryKey: ['my-tasks', member],
+    queryFn: () => api.get<MyTasksResponse>(`/tasks/mine${member ? `?member=${encodeURIComponent(member)}` : ''}`),
   })
   const { data: statuses = [] } = useQuery<TaskStatus[]>({
     queryKey: ['task-statuses'],
@@ -44,8 +46,8 @@ export function MyTasks() {
   // the server's resolved default (first member). A later manual pick is kept
   // in localStorage and wins.
   useEffect(() => {
-    if (!gid) setGid(data?.my_gid || data?.gid || '')
-  }, [gid, data?.my_gid, data?.gid])
+    if (!member) setMember(data?.my_member || data?.member || '')
+  }, [member, data?.my_member, data?.member])
 
   const completeMut = useMutation({
     mutationFn: (taskId: string) => api.post(`/tasks/${taskId}/complete`, {}),
@@ -53,8 +55,8 @@ export function MyTasks() {
   })
 
   const pickMember = (value: string) => {
-    setGid(value)
-    localStorage.setItem(GID_STORAGE_KEY, value)
+    setMember(value)
+    localStorage.setItem(MEMBER_STORAGE_KEY, value)
   }
 
   const members = data?.members ?? []
@@ -107,12 +109,12 @@ export function MyTasks() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
         <span style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>Viewing as</span>
         <select
-          value={data?.gid ?? gid}
+          value={data?.member ?? member}
           onChange={(e) => pickMember(e.target.value)}
           style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13, background: '#fff', color: '#0f172a' }}
         >
           {members.map((m) => (
-            <option key={m.gid} value={m.gid}>{m.name}{m.gid === data?.my_gid ? ' (you)' : ''}</option>
+            <option key={m.id ?? m.gid} value={m.id ?? m.gid}>{m.name}{(m.id ?? m.gid) === data?.my_member ? ' (you)' : ''}</option>
           ))}
         </select>
         <span style={{ fontSize: 12, color: '#94a3b8' }}>{total} open task{total === 1 ? '' : 's'}</span>
@@ -150,7 +152,7 @@ export function MyTasks() {
           taskId={selectedTask}
           statuses={statuses}
           categories={categories}
-          members={members.map((m) => ({ gid: m.gid, name: m.name }))}
+          members={members.map((m) => ({ id: m.id, gid: m.gid, name: m.name }))}
           onClose={() => setSelectedTask(null)}
           invalidateKeys={[['my-tasks']]}
         />

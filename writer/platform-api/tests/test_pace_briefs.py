@@ -66,7 +66,7 @@ async def test_briefs_dedupe(monkeypatch):
     monkeypatch.setattr(settings, "pace_daily_brief_push", True)
     monkeypatch.setattr(settings, "slack_bot_token", "xoxb-test")
     monkeypatch.setattr(B, "_linked_members", lambda: [
-        {"gid": "g1", "name": "Ivy", "profile_id": "p1", "slack_user_id": "U1"},
+        {"id": "g1", "name": "Ivy", "profile_id": "p1", "slack_user_id": "U1"},
     ])
     monkeypatch.setattr(B.notifications, "emit", lambda **kw: None)  # already ran today
     assert (await B.run_morning_briefs(MONDAY))["reason"] == "deduped"
@@ -78,8 +78,8 @@ async def test_briefs_send_and_count_unreachable(monkeypatch):
     monkeypatch.setattr(settings, "pace_daily_brief_push", True)
     monkeypatch.setattr(settings, "slack_bot_token", "xoxb-test")
     monkeypatch.setattr(B, "_linked_members", lambda: [
-        {"gid": "g1", "name": "Ivy", "profile_id": "p1", "slack_user_id": "U1"},
-        {"gid": "g2", "name": "Bo", "profile_id": None, "slack_user_id": None},  # unreachable
+        {"id": "g1", "name": "Ivy", "profile_id": "p1", "slack_user_id": "U1"},
+        {"id": "g2", "name": "Bo", "profile_id": None, "slack_user_id": None},  # unreachable
     ])
     emitted = {}
     monkeypatch.setattr(B.notifications, "emit", lambda **kw: emitted.update(kw) or "nid")
@@ -96,7 +96,7 @@ async def test_briefs_send_and_count_unreachable(monkeypatch):
         def table(self, name):
             if name == "tasks":
                 return _Q([{"id": "t1", "client_id": "c1", "name": "Fix GBP",
-                            "due_date": "2026-07-10", "assignee_gid": "g1"}])
+                            "due_date": "2026-07-10", "assignee_id": "g1"}])
             if name == "clients":
                 return _Q([{"id": "c1", "name": "Acme"}])
             return _Q([])
@@ -121,8 +121,8 @@ async def test_briefs_scope_error_logged_once_then_silent(monkeypatch):
     monkeypatch.setattr(settings, "pace_daily_brief_push", True)
     monkeypatch.setattr(settings, "slack_bot_token", "xoxb-test")
     monkeypatch.setattr(B, "_linked_members", lambda: [
-        {"gid": "g1", "name": "Ivy", "profile_id": "p1", "slack_user_id": "U1"},
-        {"gid": "g2", "name": "Bo", "profile_id": "p2", "slack_user_id": "U2"},
+        {"id": "g1", "name": "Ivy", "profile_id": "p1", "slack_user_id": "U1"},
+        {"id": "g2", "name": "Bo", "profile_id": "p2", "slack_user_id": "U2"},
     ])
     monkeypatch.setattr(B.notifications, "emit", lambda **kw: "nid")
 
@@ -138,8 +138,8 @@ async def test_briefs_scope_error_logged_once_then_silent(monkeypatch):
         def table(self, name):
             if name == "tasks":
                 return _Q([
-                    {"id": "t1", "client_id": "c1", "name": "A", "due_date": "2026-07-10", "assignee_gid": "g1"},
-                    {"id": "t2", "client_id": "c1", "name": "B", "due_date": "2026-07-10", "assignee_gid": "g2"},
+                    {"id": "t1", "client_id": "c1", "name": "A", "due_date": "2026-07-10", "assignee_id": "g1"},
+                    {"id": "t2", "client_id": "c1", "name": "B", "due_date": "2026-07-10", "assignee_id": "g2"},
                 ])
             if name == "clients":
                 return _Q([{"id": "c1", "name": "Acme"}])

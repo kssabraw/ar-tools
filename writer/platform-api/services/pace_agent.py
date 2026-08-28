@@ -216,7 +216,7 @@ def _all_clients() -> list[dict]:
 def _active_members() -> list[dict]:
     return (
         get_supabase().table("asana_team_members")
-        .select("gid, name, profile_id").eq("active", True).execute()
+        .select("id, gid, name, profile_id").eq("active", True).execute()
     ).data or []
 
 
@@ -246,14 +246,14 @@ def build_member_context(member: dict, today: Optional[date] = None) -> dict:
     from services import task_service
 
     today = today or date.today()
-    gid = member.get("gid")
+    member_id = member.get("id")
     tasks = (
         get_supabase().table("tasks")
         .select("id, client_id, name, due_date, status_key, category, created_at")
-        .eq("assignee_gid", gid).eq("completed", False)
+        .eq("assignee_id", member_id).eq("completed", False)
         .is_("deleted_at", "null").is_("parent_task_id", "null")
         .execute()
-    ).data or [] if gid else []
+    ).data or [] if member_id else []
     names = _client_names([t.get("client_id") for t in tasks])
 
     def _row(t: dict) -> dict:
@@ -329,19 +329,19 @@ def personal_brief_text(context: ActionContext) -> str:
 
     if context.is_anonymous:
         return "Link your account first so I know whose tasks to show (an admin can do it on the Team page)."
-    gid = None
+    member_id = None
     rows = (
-        get_supabase().table("asana_team_members").select("gid")
+        get_supabase().table("asana_team_members").select("id")
         .eq("profile_id", context.profile_id).limit(1).execute()
     ).data
     if rows:
-        gid = rows[0]["gid"]
-    if not gid:
+        member_id = rows[0]["id"]
+    if not member_id:
         return "You're not linked to a task-board member yet — ask an admin to link you on the Team page."
     tasks = (
         get_supabase().table("tasks")
         .select("id, client_id, name, due_date, status_key")
-        .eq("assignee_gid", gid).eq("completed", False)
+        .eq("assignee_id", member_id).eq("completed", False)
         .is_("deleted_at", "null").is_("parent_task_id", "null")
         .execute()
     ).data or []

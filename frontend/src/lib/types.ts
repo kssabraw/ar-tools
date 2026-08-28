@@ -1602,12 +1602,15 @@ export interface AsanaProjectMapping {
   client_id: string
   project_gid: string
   auto_assignee_gids: string[]
+  // Canonical roster member ids (dual-written with auto_assignee_gids).
+  auto_assignee_ids?: string[]
   // Resolved from Asana at save time (GID validation); null on plain reads.
   project_name?: string | null
 }
 
 export interface AsanaTaskTemplateItem {
   name: string
+  assignee_id?: string | null
   assignee_gid: string | null
   assignee_name: string | null
   category_option_gid: string | null
@@ -1619,7 +1622,10 @@ export interface AsanaTaskTemplateItem {
 }
 
 export interface AsanaTeamMember {
-  gid: string
+  // Roster member id (canonical assignee identity); output-only from the API.
+  id?: string | null
+  // Asana user gid — optional (Phase 2a): a login-less VA has no gid.
+  gid?: string | null
   name: string | null
   weekly_hours: number | null
   active: boolean
@@ -1827,7 +1833,8 @@ export interface TaskItem {
   parent_task_id: string | null
   name: string
   description: string | null
-  assignee_gid: string | null
+  // Roster member id — the canonical assignee key (profiles↔gid unification).
+  assignee_id: string | null
   assignee_name: string | null
   status_key: string | null
   category: string | null
@@ -1881,9 +1888,12 @@ export interface TaskDetailResponse extends TaskItem {
 }
 
 export interface MyTasksResponse {
-  members: { gid: string; name: string }[]
+  members: { id?: string | null; gid: string; name: string }[]
+  // Canonical roster member id keys (the resolved member + the logged-in user's
+  // own linked member). Legacy gid/my_gid remain for the transition.
+  member: string | null
+  my_member?: string | null
   gid: string | null
-  // The logged-in user's own linked member gid (identity bridge), if any.
   my_gid?: string | null
   buckets: Partial<Record<'overdue' | 'today' | 'this_week' | 'later' | 'no_date', TaskItem[]>>
 }

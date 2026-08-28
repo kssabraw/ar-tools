@@ -14,7 +14,10 @@ from pydantic import BaseModel
 class AsanaProjectMapping(BaseModel):
     client_id: UUID
     project_gid: str
+    # Legacy gid eligibility (retained until the AsanaTasks editor is rewired to
+    # member ids — a Phase 2b follow-up) + the canonical member-id eligibility.
     auto_assignee_gids: list[str] = []
+    auto_assignee_ids: list[str] = []
     # Resolved from Asana at save time (validation) — None on reads / when
     # Asana is unconfigured.
     project_name: Optional[str] = None
@@ -23,6 +26,7 @@ class AsanaProjectMapping(BaseModel):
 class AsanaProjectMappingRequest(BaseModel):
     project_gid: str
     auto_assignee_gids: list[str] = []
+    auto_assignee_ids: list[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -31,6 +35,9 @@ class AsanaProjectMappingRequest(BaseModel):
 class AsanaTaskTemplateItem(BaseModel):
     """One row of a client's monthly task template (editor in + out)."""
     name: str
+    assignee_id: Optional[str] = None  # roster member id
+    # Legacy Asana gid — retained until the AsanaTasks template editor is rewired
+    # to member ids (a Phase 2b follow-up).
     assignee_gid: Optional[str] = None
     assignee_name: Optional[str] = None
     category_option_gid: Optional[str] = None
@@ -70,7 +77,11 @@ class AsanaTaskTemplateRef(BaseModel):
 # Team & capacity (Team Workload)
 # ---------------------------------------------------------------------------
 class AsanaTeamMemberItem(BaseModel):
-    gid: str
+    # Roster member id (canonical assignee identity). Echoed on reads; on a write
+    # it identifies an existing member to update in place (id preserved).
+    id: Optional[str] = None
+    # Asana user gid — OPTIONAL (Phase 2a): a login-less VA has no gid.
+    gid: Optional[str] = None
     name: Optional[str] = None
     weekly_hours: Optional[float] = None
     active: bool = True
