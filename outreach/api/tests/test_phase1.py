@@ -1276,3 +1276,49 @@ def test_local_haversine_matches_the_tiling_implementation():
         (40.0, -70.0, 40.0, -70.0),
     ]:
         assert _haversine_miles(a, b, c, d) == pytest.approx(haversine_miles(a, b, c, d))
+
+
+# --- run_filter PATCH chunking (ISSUES I-120: an over-long id=in.() URL 400'd the whole run) ------
+
+
+def test_update_prospects_by_ids_chunks_under_the_url_limit():
+    """A whole-market category bucket (600+ ids) in one PATCH makes an over-long PostgREST URL that
+    400s and crashes the filter run. The helper chunks the ids so each PATCH stays under the limit,
+    covering every id exactly once with the same patch."""
+    from api.services import pipeline
+
+    calls: list[tuple[str, list[str], dict]] = []
+
+    class _Q:
+        def update(self, patch):
+            self._patch = patch
+            return self
+
+        def in_(self, column, ids):
+            calls.append((column, list(ids), self._patch))
+            return self
+
+        def execute(self):
+            return None
+
+    class _Client:
+        def table(self, name):
+            assert name == "prospect"
+            return _Q()
+
+    ids = [f"id-{i}" for i in range(450)]
+    pipeline._update_prospects_by_ids(_Client(), {"category_status": "confirmed_off"}, ids)
+
+    assert [len(c[1]) for c in calls] == [200, 200, 50]          # chunked at 200, all 450 covered
+    assert sum((c[1] for c in calls), []) == ids                 # exactly once, in order
+    assert all(c[0] == "id" and c[2] == {"category_status": "confirmed_off"} for c in calls)
+
+
+def test_update_prospects_by_ids_empty_is_a_noop():
+    from api.services import pipeline
+
+    class _Client:
+        def table(self, name):
+            raise AssertionError("no PATCH should fire for an empty id list")
+
+    pipeline._update_prospects_by_ids(_Client(), {"franchise_status": "flagged"}, [])
