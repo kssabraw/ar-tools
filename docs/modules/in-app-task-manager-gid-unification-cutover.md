@@ -182,9 +182,11 @@ shared scheduler:
   `task_import_asana` job per day, wired into the scheduler's daily block
   (`gsc_scheduler.py`, beside `task_due_sweep`).
 - **Inert unless it should run:** gated on `asana_auto_import_enabled` (default
-  True) **and** Asana actually configured (token + workspace) **and** at least one
-  `asana_client_projects` mapping. So a fresh environment does nothing, and it
-  **self-retires when the Asana subscription is cancelled** (remove `ASANA_TOKEN`).
+  True) **and** `native_tasks_enabled` (native is the live board — a rollback
+  quiesces it) **and** Asana actually configured (token + workspace) **and** at
+  least one `asana_client_projects` mapping. So a fresh environment does nothing,
+  and it **self-retires when the Asana subscription is cancelled** (remove
+  `ASANA_TOKEN`).
 - **Idempotent + interval-guarded:** the importer is `source='asana_import'` +
   gid gap-fill (only new/changed Asana rows land), and the enqueue skips if a
   completed import ran within `asana_auto_import_interval_hours` (default 20) or

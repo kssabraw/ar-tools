@@ -589,13 +589,14 @@ def test_partition_roster_write_login_less_and_non_destructive():
 
 def test_enqueue_due_asana_import_gating(monkeypatch):
     """The parallel-period daily Asana→native auto-import fires only when it
-    should: enabled + Asana configured + a project mapping + no recent/in-flight
-    import; every other combination is a no-op (inert without Asana, kill-switch,
-    interval-guarded, dedup-aware)."""
+    should: enabled + native live + Asana configured + a project mapping + no
+    recent/in-flight import; every other combination is a no-op (inert without
+    native/Asana, kill-switch, interval-guarded, dedup-aware)."""
     from services import asana_service, task_import
     from config import settings
 
     monkeypatch.setattr(settings, "asana_auto_import_enabled", True)
+    monkeypatch.setattr(settings, "native_tasks_enabled", True)
     monkeypatch.setattr(settings, "asana_auto_import_interval_hours", 20)
     monkeypatch.setattr(asana_service, "is_configured", lambda: True)
 
@@ -646,6 +647,11 @@ def test_enqueue_due_asana_import_gating(monkeypatch):
     monkeypatch.setattr(settings, "asana_auto_import_enabled", False)
     assert task_import.enqueue_due_asana_import() == 0
     monkeypatch.setattr(settings, "asana_auto_import_enabled", True)
+
+    # Native not the live board (pre-cutover / rollback) → 0.
+    monkeypatch.setattr(settings, "native_tasks_enabled", False)
+    assert task_import.enqueue_due_asana_import() == 0
+    monkeypatch.setattr(settings, "native_tasks_enabled", True)
 
     # Asana not configured (fresh env / creds removed post-cancel) → 0.
     monkeypatch.setattr(asana_service, "is_configured", lambda: False)

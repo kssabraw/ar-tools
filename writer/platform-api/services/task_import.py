@@ -341,6 +341,8 @@ def enqueue_due_asana_import() -> int:
 
     Gated so it is inert everywhere it should be:
       * ``asana_auto_import_enabled`` off  → 0 (kill switch),
+      * ``native_tasks_enabled`` off → 0 (native isn't the live board — there is
+        nothing to keep in sync, and a rollback should quiesce the auto-import),
       * Asana not configured (no token/workspace) → 0 (fresh env; post-cancel),
       * no client→project mapping → 0 (nothing to import),
       * a completed import within ``asana_auto_import_interval_hours`` → 0
@@ -354,7 +356,11 @@ def enqueue_due_asana_import() -> int:
 
     from config import settings
 
-    if not settings.asana_auto_import_enabled or not asana_service.is_configured():
+    if (
+        not settings.asana_auto_import_enabled
+        or not settings.native_tasks_enabled
+        or not asana_service.is_configured()
+    ):
         return 0
     supabase = get_supabase()
     mapped = (
