@@ -272,8 +272,17 @@ def _process_run(row: dict) -> None:
         # reason so a generated-but-unpublished piece is recorded + alerted below
         # instead of reading as a clean `complete`.
         publish_failures: list[tuple[str, str]] = []
+        # Regulatory guardrail: this is the only fully-automated (no human in the
+        # loop) publish surface, so a regulated client's content is scanned here
+        # before EITHER channel fires. A critical finding withholds auto-publish
+        # entirely — the draft stays saved for review; it is not pushed live.
+        compliance_hold = _compliance_hold_reason(
+            content_type, session=session, cluster_id=cluster_id,
+            keyword=keyword, artifact=ok, client_id=client_id)
+        if compliance_hold:
+            publish_failures.append(("Compliance hold", compliance_hold))
         # Opt-in auto-publish: push the finished piece to the client's Drive folder.
-        if success and (schedule or {}).get("auto_publish"):
+        if success and not compliance_hold and (schedule or {}).get("auto_publish"):
             drive_err = _auto_publish_to_client_drive(
                 content_type, session=session, cluster_id=cluster_id,
                 keyword=keyword, artifact=ok, user_id=row.get("user_id"))
@@ -282,7 +291,7 @@ def _process_run(row: dict) -> None:
         # Opt-in direct-to-WordPress: blog posts land at the slug their internal
         # links were computed against; local SEO / service pages reuse their own
         # publish paths (as WP pages).
-        if success and (schedule or {}).get("wp_publish"):
+        if success and not compliance_hold and (schedule or {}).get("wp_publish"):
             wp_err = _auto_publish_to_wordpress(
                 content_type, session=session, cluster_id=cluster_id, keyword=keyword,
                 artifact=ok, user_id=row.get("user_id"),
@@ -301,6 +310,86 @@ def _process_run(row: dict) -> None:
     finally:
         if schedule_id:
             _maybe_complete_schedule(schedule_id)
+
+
+def _compliance_hold_reason(
+    content_type: str, *, session: dict, cluster_id: str, keyword: str,
+    artifact, client_id: str | None,
+) -> str | None:
+    """Withhold auto-publish when a regulated client's just-generated content has
+    a critical compliance finding (human dosing, branded-drug equivalence,
+    guaranteed results, advocacy). Returns the reason to record, or None to let
+    publishing proceed.
+
+    Only guards blog_post + service_page — the two content types whose scheduler
+    auto-publish writes to a destination directly. local_seo_page auto-publish
+    flows through local_seo_service.publish_page, which runs the same gate itself,
+    so double-guarding it here would just duplicate the fetch.
+
+    Fail-open on infrastructure (can't fetch the client / content → we can't
+    scan, so we don't block); fail-CLOSED once the client is confirmed regulated
+    (a scan bug on a regulated client withholds rather than risks a bad publish).
+    """
+    from config import settings
+
+    if not settings.content_compliance_enabled:
+        return None
+    if not client_id or content_type not in ("blog_post", "service_page"):
+        return None
+    try:
+        from db.supabase_client import get_supabase
+        from services import content_compliance
+
+        client_row = (get_supabase().table("clients")
+                      .select("content_compliance_mode")
+                      .eq("id", client_id).single().execute().data) or {}
+        mode = content_compliance.resolve_mode(client_row)
+        if mode == "off":
+            return None
+    except Exception as exc:  # noqa: BLE001 — can't determine regulation → don't block
+        logger.warning("compliance_lookup_failed",
+                       extra={"event": "compliance_lookup_failed",
+                              "cluster_id": cluster_id, "reason": repr(exc)})
+        return None
+
+    # Client is confirmed regulated: from here, a failure withholds rather than
+    # risks pushing unscanned content live on the automated surface.
+    try:
+        from db.supabase_client import get_supabase
+        from services import content_compliance
+
+        title = keyword or ""
+        body = ""
+        if content_type == "blog_post":
+            from fanout.writer import store as article_store
+
+            aj = ((article_store.get_latest_article(cluster_id) or {})
+                  .get("article_json") or {})
+            title = aj.get("title") or title
+            body = aj.get("article_html") or ""
+        else:  # service_page
+            from routers.publish import _resolve_content
+
+            if isinstance(artifact, str):
+                _, body = _resolve_content(get_supabase(), artifact, "service_page")
+        result = content_compliance.scan_content(title, body, mode=mode)
+        if result.passed:
+            return None
+        cats = ", ".join(sorted({
+            f.category for f in result.findings if f.severity == "critical"}))
+        return (
+            f"Auto-publish withheld — content flagged for regulated-marketing "
+            f"compliance ({cats}). Review and edit the draft in the Articles tab "
+            f"before publishing."
+        )
+    except Exception as exc:  # noqa: BLE001 — regulated client: fail closed
+        logger.warning("compliance_check_failed",
+                       extra={"event": "compliance_check_failed",
+                              "cluster_id": cluster_id, "reason": repr(exc)})
+        return (
+            "Auto-publish withheld — the compliance check could not be completed "
+            "for this regulated client. Review the draft manually before publishing."
+        )
 
 
 def _auto_publish_to_client_drive(

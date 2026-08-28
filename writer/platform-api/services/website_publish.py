@@ -431,6 +431,24 @@ async def publish_page(
         # page that is visibly still a draft.
         return _hold(page, website, "body_not_generated")
 
+    # Regulatory guardrail: the website builder auto-publishes with no human in
+    # the loop, so a regulated client's content is scanned before the machine
+    # gate. A critical finding (human dosing / branded equivalence / guaranteed
+    # results / advocacy) holds the page — non-overridable, like the post/pillar
+    # voice gate, for the same "nobody reads these first" reason.
+    if settings.content_compliance_enabled and website.get("client_id"):
+        from services import content_compliance
+
+        client_mode = (supabase.table("clients").select("content_compliance_mode")
+                       .eq("id", website["client_id"]).single().execute().data) or {}
+        if content_compliance.is_enabled(client_mode):
+            fm = gate_frontmatter(page, source) or {}
+            cres = content_compliance.scan_content(
+                fm.get("title") or "", source.body or "",
+                mode=content_compliance.resolve_mode(client_mode))
+            if not cres.passed:
+                return _hold(page, website, "content_compliance_violation")
+
     verdict = website_content.publish_verdict(
         page_type=page.get("page_type") or "",
         composite=source.composite,

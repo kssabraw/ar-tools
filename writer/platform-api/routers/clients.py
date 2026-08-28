@@ -390,6 +390,8 @@ async def create_client(
         row["illustrate_content"] = body.illustrate_content
     if body.client_type is not None:
         row["client_type"] = body.client_type
+    if body.content_compliance_mode is not None:
+        row["content_compliance_mode"] = body.content_compliance_mode
     if body.strategist_weekday is not None:
         row["strategist_weekday"] = body.strategist_weekday
     # Reference page structures: seed the pending entries so the row reflects the
@@ -543,6 +545,8 @@ async def update_client(
         updates["illustrate_content"] = body.illustrate_content
     if body.client_type is not None:
         updates["client_type"] = body.client_type
+    if body.content_compliance_mode is not None:
+        updates["content_compliance_mode"] = body.content_compliance_mode
     # Explicit-set semantics: an explicit null clears the per-client review day
     # back to the global default (a plain `is not None` guard couldn't do that).
     if "strategist_weekday" in body.model_fields_set:

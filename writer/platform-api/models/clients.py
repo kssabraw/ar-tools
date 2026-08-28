@@ -152,6 +152,11 @@ class ClientDetail(BaseModel):
     is_sab: bool = False
     illustrate_content: bool = False
     client_type: Literal["local", "enterprise"] = "local"
+    # Content-compliance guardrail (services/content_compliance.py): 'off' for
+    # normal clients; 'peptide' for regulated (research-chemical) vendors, which
+    # blocks human-dosing / branded-equivalence / guaranteed-results / advocacy
+    # content at every publish choke point.
+    content_compliance_mode: Literal["off", "peptide"] = "off"
     # Per-client strategist review day (0=Mon..6=Sun). None → the global
     # `strategist_weekly_weekday` default, so reviews can be staggered across
     # the week instead of all landing on one day.
@@ -210,6 +215,7 @@ class ClientCreateRequest(BaseModel):
     is_sab: Optional[bool] = None
     illustrate_content: Optional[bool] = None
     client_type: Optional[Literal["local", "enterprise"]] = None
+    content_compliance_mode: Optional[Literal["off", "peptide"]] = None
     # Per-client strategist review day (0=Mon..6=Sun); None → global default.
     strategist_weekday: Optional[int] = Field(None, ge=0, le=6)
     # Reference page URLs to scrape + analyze for structure mirroring.
@@ -256,5 +262,6 @@ class ClientUpdateRequest(BaseModel):
     is_sab: Optional[bool] = None
     illustrate_content: Optional[bool] = None
     client_type: Optional[Literal["local", "enterprise"]] = None
+    content_compliance_mode: Optional[Literal["off", "peptide"]] = None
     # Per-client strategist review day (0=Mon..6=Sun); None → global default.
     strategist_weekday: Optional[int] = Field(None, ge=0, le=6)
