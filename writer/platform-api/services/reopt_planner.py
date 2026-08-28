@@ -39,6 +39,7 @@ QUICK_WIN_MAX = 10
 CANNIBAL_MAX = 5
 HIDDEN_MAX = 8
 STRIKING_DISTANCE_MAX = 20  # client_rank ≤ this → reoptimize existing vs create new
+STRIKING_DISTANCE_MIN = 4  # already top-3 → no quick win (nothing to gain; don't touch a winner)
 TOTAL_MAX = 25
 
 # Sort is tiered: a category base keeps the kinds in a strict priority order
@@ -175,12 +176,17 @@ def build_actions(
         )
 
     # 2) Rankability Quick wins — winnable + valuable (skip keywords already
-    # surfaced as a drop; the drop action supersedes).
+    # surfaced as a drop; the drop action supersedes). A keyword the client
+    # already ranks in the top 3 for is NOT a quick win — there's no gettable
+    # traffic left to capture and reoptimising a #1 page is pure downside — so
+    # it's excluded (an unranked keyword, client_rank None, stays: that's a
+    # create-page candidate).
     winnable = [
         i for i in rankability_items
         if i.get("has_snapshot") and i.get("score") is not None
         and i.get("band") in QUICK_WIN_BANDS and i["score"] >= QUICK_WIN_MIN_SCORE
         and (i.get("keyword") or "").lower() not in dropped_keywords
+        and (i.get("client_rank") is None or i.get("client_rank") >= STRIKING_DISTANCE_MIN)
     ]
     winnable.sort(key=lambda i: (i.get("priority") or 0, i["score"]), reverse=True)
     for i in winnable[:QUICK_WIN_MAX]:

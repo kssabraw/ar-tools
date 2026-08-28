@@ -55,6 +55,23 @@ def test_quick_win_striking_distance_reoptimizes_else_creates():
     assert all(a["cta_path"] == f"clients/{CLIENT}/local-seo" for a in actions)
 
 
+def test_quick_win_excludes_already_top_ranked_keywords():
+    # A keyword the client already ranks in the top 3 for is not a quick win —
+    # there's nothing to gain and reoptimising a winner is pure downside. Rank 4
+    # (the striking-distance floor) is kept; an unranked keyword still creates.
+    items = [
+        _rankability_item(keyword="brand name", client_rank=1),   # #1 → excluded
+        _rankability_item(keyword="near-top", client_rank=3),      # top-3 → excluded
+        _rankability_item(keyword="striking", client_rank=4),      # floor → reoptimize
+        _rankability_item(keyword="unranked", client_rank=None),   # → create page
+    ]
+    actions = reopt_planner.build_actions(CLIENT, [], items, {})
+    by_kw = {a["keyword"]: a for a in actions}
+    assert set(by_kw) == {"striking", "unranked"}
+    assert by_kw["striking"]["cta_label"] == "Reoptimize" and "#4" in by_kw["striking"]["recommendation"]
+    assert by_kw["unranked"]["cta_label"] == "Create page"
+
+
 def test_quick_win_excludes_low_score_wrong_band_and_no_snapshot():
     items = [
         _rankability_item(keyword="a", band="Hard"),                 # wrong band
