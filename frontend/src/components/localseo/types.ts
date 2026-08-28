@@ -147,6 +147,7 @@ export interface EngineScore {
   keyword_coverage?: number
   entity_coverage?: number
   quadgram_coverage?: number
+  frequency_coverage?: number | null
   entities_used?: string[]
   entities_missing?: string[]
   // Cora-style per-entity target table (name / current / recommended / shortfall),
