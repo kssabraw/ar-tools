@@ -40,11 +40,16 @@ class ScoredProspect:
 
 
 def build_inputs(view_row: dict, prospect_row: dict, tech_row: dict | None,
-                 review_dist: sf.ReviewDistribution | None) -> sf.FeatureInputs:
-    """Assemble a prospect's FeatureInputs from its coverage view row + base pull + tech signal.
+                 review_dist: sf.ReviewDistribution | None,
+                 organic_summary: dict | None = None) -> sf.FeatureInputs:
+    """Assemble a prospect's FeatureInputs from its coverage view row + base pull + tech signal +
+    (optionally) the organic SERP captured for its submarket.
 
     A missing tech_row means scan-tech has not run for this prospect -> tech_scanned False -> every
-    tech flag is unknown==absent (never fired). Pure.
+    tech flag is unknown==absent (never fired). `organic_summary` is the stored
+    `serp_result.payload_summary` for the prospect's submarket (or None when no organic scan has run
+    there) — its match against the prospect's website drives the organic-presence features (default
+    None keeps the pre-organic behaviour, so a caller that doesn't pass it is unchanged). Pure.
     """
     tech = tech_row or {}
     tech_scanned = bool(tech_row) and (tech.get("fetch_status") == "ok")
@@ -55,6 +60,11 @@ def build_inputs(view_row: dict, prospect_row: dict, tech_row: dict | None,
 
     review_count = prospect_row.get("review_count")
     quartile = review_dist.quartile(review_count) if review_dist else None
+
+    # Organic presence: matched from the submarket's captured SERP against the prospect's website.
+    # Not scanned (no SERP for the submarket) => scanned False => every organic bin stays dormant
+    # (unknown==absent, the same discipline as tech).
+    org = sf.organic_signal(organic_summary, prospect_row.get("website"))
 
     return sf.FeatureInputs(
         coverage_pct=view_row.get("coverage_pct"),
@@ -72,7 +82,10 @@ def build_inputs(view_row: dict, prospect_row: dict, tech_row: dict | None,
         vendor_tag=bool(vendor_tags),
         google_guaranteed=bool(tech.get("google_guaranteed")),
         likely_represented=agency_signals >= 2,
-        # organic / ai / delta sources are not run for this prospect -> unknown==absent.
+        organic_scanned=org.scanned,
+        organic_absent=org.absent,
+        top10_organic=org.top10,
+        # ai / delta sources are not run for this prospect -> unknown==absent.
     )
 
 
@@ -215,6 +228,49 @@ def _read_by_ids(client, table: str, id_column: str, columns: str, ids: list[str
     return out
 
 
+def _read_organic_by_submarket(client, submarket_ids: list[str]) -> dict[str, dict]:
+    """{submarket_id: latest serp_result.payload_summary} for the given submarkets.
+
+    The organic SERP is captured per SNAPSHOT (submarket x keyword — `scan-organic`); a prospect's
+    organic rank is the match against its submarket's most recent captured SERP. Reads scan_snapshot
+    for the submarkets, then serp_result for those snapshots, and keeps — per submarket — the summary
+    from the latest snapshot that carries one. Chunked under the PostgREST cap. A submarket with no
+    organic scan simply doesn't appear (=> None => unknown==absent, no organic bin fires). Best-effort:
+    an unreadable serp_result table degrades to {} (organic dormant, never blocks the score run)."""
+    if not submarket_ids:
+        return {}
+    CHUNK = 200
+    snap_meta: dict[str, tuple[str, str]] = {}  # snapshot_id -> (submarket_id, scanned_at)
+    try:
+        for start in range(0, len(submarket_ids), CHUNK):
+            chunk = submarket_ids[start:start + CHUNK]
+            for row in (client.table("scan_snapshot")
+                        .select("id, submarket_id, scanned_at")
+                        .in_("submarket_id", chunk).execute().data or []):
+                snap_meta[row["id"]] = (row["submarket_id"], row.get("scanned_at") or "")
+        if not snap_meta:
+            return {}
+        snap_ids = list(snap_meta.keys())
+        best: dict[str, tuple[str, dict]] = {}  # submarket_id -> (scanned_at, summary) of the latest
+        for start in range(0, len(snap_ids), CHUNK):
+            chunk = snap_ids[start:start + CHUNK]
+            for row in (client.table("serp_result")
+                        .select("snapshot_id, payload_summary")
+                        .in_("snapshot_id", chunk).execute().data or []):
+                summary = row.get("payload_summary")
+                meta = snap_meta.get(row.get("snapshot_id"))
+                if not summary or not meta:
+                    continue
+                submarket_id, scanned_at = meta
+                cur = best.get(submarket_id)
+                if cur is None or scanned_at > cur[0]:
+                    best[submarket_id] = (scanned_at, summary)
+        return {sub: summ for sub, (_ts, summ) in best.items()}
+    except Exception as exc:  # noqa: BLE001 — organic is additive; never fail a score run over it
+        logger.warning("organic SERP read for scoring failed", extra={"error": str(exc)[:200]})
+        return {}
+
+
 def run_score(client, settings, *, market_id: str, cycle_number: int,
               channels: tuple[str, ...] = ("phone",), pass_number: int = 1,
               calibration: dict[str, tuple[float, float]] | None = None,
@@ -244,12 +300,18 @@ def run_score(client, settings, *, market_id: str, cycle_number: int,
     ids = [r["prospect_id"] for r in scorable]
     prospects = _read_by_ids(
         client, "prospect", "id",
-        "id, name, franchise_status, phone_type, rating, review_count", ids,
+        "id, name, franchise_status, phone_type, rating, review_count, website", ids,
     )
     tech = _read_by_ids(
         client, "prospect_tech_signal", "prospect_id",
         "prospect_id, fetch_status, meta_pixel, google_ads_conversion, vendor_tags, "
         "gtm_container_ids, google_guaranteed", ids,
+    )
+    # The organic SERP captured per submarket (scan-organic). Keyed by submarket so each prospect
+    # reads the SERP for ITS submarket; a submarket with no organic scan yet contributes None
+    # (unknown==absent). Derived per prospect from its website domain vs the SERP inside build_inputs.
+    organic_by_submarket = _read_organic_by_submarket(
+        client, sorted({r["submarket_id"] for r in scorable if r.get("submarket_id")})
     )
 
     review_dist = sf.review_distribution(
@@ -263,7 +325,10 @@ def run_score(client, settings, *, market_id: str, cycle_number: int,
         if prospect_row is None:
             problems.append(f"prospect {pid} in coverage view but not in prospect table")
             continue
-        inputs = build_inputs(row, prospect_row, tech.get(pid), review_dist)
+        inputs = build_inputs(
+            row, prospect_row, tech.get(pid), review_dist,
+            organic_summary=organic_by_submarket.get(row.get("submarket_id")),
+        )
         measured_at = _parse_ts(row.get("measured_at"))
         age_days = max(0, (now - measured_at).days) if measured_at else 0
         for channel in channels:

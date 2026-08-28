@@ -1675,23 +1675,125 @@ def create_ai_region(*, market_id: str, name: str, name_level: str) -> dict[str,
     return written[0]
 
 
+# The v_prospect_ranked columns a candidate list needs: the fitted per-prospect model scores +
+# provenance. Read on the scored path (I-108); the coverage columns are joined from the placeholder.
+_RANKED_COLUMNS = (
+    "prospect_id, name, phone, channel, reply_score, reply_display_prob, reply_decile, "
+    "value_score, value_decile, primary_pitch, score_run_id, model_version, calibration_alpha, scored_at"
+)
+# The coverage columns overlaid onto a scored prospect (the maps context the table still shows).
+_COVERAGE_COLUMNS = (
+    "prospect_id, name, phone, excluded, coverage_pct, coverage_deficit, best_rank, "
+    "centroid_dist_at_loss, measured_at"
+)
+
+
+def _coverage_by_prospect(client: Any, submarket_id: str, prospect_ids: list[str]) -> dict[str, dict]:
+    """The placeholder coverage columns for a set of prospects in one submarket, keyed by prospect_id.
+    Chunked under the 1000-row cap. Used to overlay the maps context onto the fitted ranking."""
+    out: dict[str, dict] = {}
+    for i in range(0, len(prospect_ids), 200):
+        chunk = prospect_ids[i:i + 200]
+        if not chunk:
+            continue
+        for row in (
+            client.table("v_prospect_placeholder_score")
+            .select(_COVERAGE_COLUMNS)
+            .eq("submarket_id", submarket_id)
+            .in_("prospect_id", chunk)
+            .execute().data or []
+        ):
+            out[row["prospect_id"]] = row
+    return out
+
+
 def placeholder_scores(
     submarket_id: str,
     limit: int | None = None,
     offset: int | None = None,
 ) -> dict[str, Any]:
-    """The placeholder score for one submarket, worst coverage first.
+    """The candidate ranking for one submarket. Prefers the FITTED Phase-4 model (`v_prospect_ranked`,
+    which folds in organic + maps + review + tech) where a `score_run` exists for the submarket, and
+    falls back to the maps-only coverage-deficit placeholder otherwise (I-108).
 
-    Reads `v_prospect_placeholder_score`, whose two I-076 properties this surface inherits and
-    must not undo: a prospect with no coverage row inside a ROLLED-UP submarket scores 100%
-    deficit (zero coverage, never unknown), and a submarket with no rollup marker returns NO rows
-    (nothing measured, no score to give). An empty result here therefore means "not measured
-    yet", and the router says so rather than rendering an empty table that reads as no data.
+    Reads inherit the placeholder's two I-076 properties either way: a prospect with no coverage row
+    inside a ROLLED-UP submarket scores 100% deficit (zero coverage, never unknown), and a submarket
+    with no rollup marker returns NO rows (nothing measured). An empty result therefore means "not
+    measured yet", and the router says so rather than rendering an empty table that reads as no data.
+
+    On the SCORED path each row additionally carries a `model` block (the fitted reply/value scores +
+    provenance) and the response's `scored` flag is True; the model is an ELICITED prior, not a
+    prediction, until ~100 prospects are called (surfaced in the UI). Ordering follows the fitted view
+    (value score desc within the channel), paged at the DB. The coverage columns are overlaid so the
+    table keeps its maps context.
     """
+    client = get_outreach_client()
     size, start = clamp_page(limit, offset)
+
+    # Scored path: does a score_run exist for this submarket? v_prospect_ranked is empty for it until
+    # `score` has run for the market. It is ordered (value desc within channel); page it at the DB.
+    ranked = (
+        client.table("v_prospect_ranked")
+        .select(_RANKED_COLUMNS, count="exact")
+        .eq("submarket_id", submarket_id)
+        .range(start, start + size - 1)
+        .execute()
+    )
+    ranked_rows = ranked.data or []
+    if ranked_rows:
+        # Collapse to one row per prospect (Stage 1 has a single phone channel; defensive against a
+        # future multi-channel run — keep the first, which the view's ordering makes the best value).
+        seen: set[str] = set()
+        ordered: list[dict] = []
+        for r in ranked_rows:
+            pid = r["prospect_id"]
+            if pid not in seen:
+                seen.add(pid)
+                ordered.append(r)
+        coverage = _coverage_by_prospect(client, submarket_id, [r["prospect_id"] for r in ordered])
+        scores: list[dict] = []
+        for r in ordered:
+            cov = coverage.get(r["prospect_id"], {})
+            scores.append({
+                # coverage context (the maps columns the table already renders)
+                "prospect_id": r["prospect_id"],
+                "name": r.get("name") or cov.get("name"),
+                "phone": r.get("phone") or cov.get("phone"),
+                "excluded": cov.get("excluded", False),
+                "coverage_pct": cov.get("coverage_pct"),
+                "coverage_deficit": cov.get("coverage_deficit"),
+                "best_rank": cov.get("best_rank"),
+                "centroid_dist_at_loss": cov.get("centroid_dist_at_loss"),
+                "measured_at": cov.get("measured_at"),
+                # the fitted model overlay (organic-inclusive)
+                "model": {
+                    "channel": r.get("channel"),
+                    "reply_score": r.get("reply_score"),
+                    "reply_prob": r.get("reply_display_prob"),
+                    "reply_decile": r.get("reply_decile"),
+                    "value_score": r.get("value_score"),
+                    "value_decile": r.get("value_decile"),
+                    "primary_pitch": r.get("primary_pitch"),
+                },
+            })
+        first = ranked_rows[0]
+        return {
+            "scores": scores,
+            "total": ranked.count or len(scores),
+            "limit": size,
+            "offset": start,
+            "scored": True,
+            "score_run": {
+                "id": first.get("score_run_id"),
+                "model_version": first.get("model_version"),
+                "calibration_alpha": first.get("calibration_alpha"),
+                "scored_at": first.get("scored_at"),
+            },
+        }
+
+    # Fallback: no score run for this submarket — the maps-only placeholder, worst coverage first.
     response = (
-        get_outreach_client()
-        .table("v_prospect_placeholder_score")
+        client.table("v_prospect_placeholder_score")
         .select("*", count="exact")
         .eq("submarket_id", submarket_id)
         .order("coverage_deficit", desc=True)
@@ -1703,6 +1805,7 @@ def placeholder_scores(
         "total": response.count or 0,
         "limit": size,
         "offset": start,
+        "scored": False,
     }
 
 

@@ -60,6 +60,33 @@ def test_build_inputs_failed_tech_fetch_is_not_scanned():
     assert inputs.tech_scanned is False
 
 
+def test_build_inputs_no_organic_summary_is_unknown_not_absent():
+    # Default (no organic scan for the submarket) leaves every organic field dormant — the pre-organic
+    # behaviour, so a caller that doesn't pass a summary is unchanged.
+    inputs = scoring.build_inputs({"coverage_pct": 5.0}, {"rating": 4.0, "website": "https://acme.com"}, None, None)
+    assert inputs.organic_scanned is False
+    assert inputs.organic_absent is False and inputs.top10_organic is False
+
+
+def test_build_inputs_derives_organic_absent_from_the_submarket_serp():
+    # A captured SERP that doesn't rank the prospect's domain -> scanned + absent (the pain signal).
+    serp = {"results": [{"rank": 1, "domain": "rival.com"}, {"rank": 2, "domain": "other.com"}]}
+    inputs = scoring.build_inputs(
+        {"coverage_pct": 12.0}, {"rating": 4.0, "website": "https://acme.com"}, None, None,
+        organic_summary=serp,
+    )
+    assert inputs.organic_scanned is True and inputs.organic_absent is True and inputs.top10_organic is False
+
+
+def test_build_inputs_derives_top10_when_the_prospect_ranks():
+    serp = {"results": [{"rank": 4, "domain": "acme.com"}]}
+    inputs = scoring.build_inputs(
+        {"coverage_pct": 12.0}, {"rating": 4.0, "website": "https://www.acme.com/x"}, None, None,
+        organic_summary=serp,
+    )
+    assert inputs.organic_scanned is True and inputs.organic_absent is False and inputs.top10_organic is True
+
+
 def test_score_one_produces_three_models_and_pitch():
     inputs = sf.FeatureInputs(coverage_pct=8.0, franchise_status="unknown", rating=4.1,
                               review_quartile="top", review_count=250)

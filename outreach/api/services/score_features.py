@@ -24,6 +24,64 @@ Every coefficient is an elicited prior; treat rank order as a strong prior, not 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
+
+
+def _domain_of(url: str | None) -> str | None:
+    """A bare, lower-cased, `www.`-stripped host from a URL or host. Pure, never raises.
+
+    A deliberate byte-for-byte mirror of `organic_scan.domain_of` (kept here so this pure module has
+    no httpx dependency — the same reason `outreach_report` carries its own copy). It MUST normalise
+    the two sides the same way `organic_scan` normalised the stored SERP domains, or a real match is
+    missed; the shared cases are pinned in `test_score_features.py`. Junk returns None and simply
+    won't match — the safe direction (no false "you rank" claim)."""
+    if not url:
+        return None
+    text = url.strip().lower()
+    if not text:
+        return None
+    if "//" not in text:
+        text = "//" + text
+    host = urlparse(text).netloc or ""
+    host = host.split("@")[-1].split(":")[0]  # drop any userinfo / port
+    if host.startswith("www."):
+        host = host[4:]
+    return host or None
+
+
+@dataclass(frozen=True)
+class OrganicSignal:
+    """A prospect's organic-presence features, derived from a stored `serp_result.payload_summary`.
+    `scanned` False means no organic SERP exists for the prospect's submarket — unknown==absent, so
+    the score job leaves every organic bin dormant (never a penalty)."""
+
+    scanned: bool
+    absent: bool          # scanned AND the prospect's domain is NOT in the captured depth (the pain signal)
+    top10: bool           # scanned AND best organic rank <= 10
+    rank: int | None      # best (lowest) organic rank across matches, or None
+
+
+def organic_signal(summary: dict | None, website: str | None) -> OrganicSignal:
+    """Derive a prospect's organic-presence features by matching its website domain against a stored
+    `serp_result.payload_summary` (from `organic_scan.summarize_serp`). Pure. Same read-time domain
+    match the per-prospect report uses (`outreach_report.build_organic_section`) — a prospect not in
+    the captured depth is `absent`, never a guessed rank. `summary` None (no organic scan for the
+    submarket) → not scanned, so nothing about organic is asserted."""
+    if not summary:
+        return OrganicSignal(scanned=False, absent=False, top10=False, rank=None)
+    pdom = _domain_of(website)
+    rank: int | None = None
+    if pdom:
+        for r in summary.get("results") or []:
+            rr = r.get("rank")
+            if isinstance(rr, int) and _domain_of(r.get("domain")) == pdom:
+                rank = rr if rank is None else min(rank, rr)
+    return OrganicSignal(
+        scanned=True,
+        absent=rank is None,
+        top10=rank is not None and rank <= 10,
+        rank=rank,
+    )
 
 
 @dataclass(frozen=True)

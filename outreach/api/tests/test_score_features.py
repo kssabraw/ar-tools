@@ -160,3 +160,60 @@ def test_close_bins_fire_on_current_data_shape():
     assert "close_reviews_top_quartile" in close
     # No decision-authority bin (not franchise, owner_operated unknown) — honest omission.
     assert "close_owner_dm" not in close and "close_franchise_corporate" not in close
+
+
+# --- organic-presence derivation (scan-organic SERP -> features) --------------------------------
+
+
+def _serp(*ranked_domains):
+    """A minimal payload_summary (organic_scan.summarize_serp shape): (rank, domain) pairs."""
+    return {"engine": "organic", "captured_depth": 20,
+            "results": [{"rank": r, "domain": d, "url": None, "title": None} for r, d in ranked_domains]}
+
+
+def test_domain_of_normalizes_both_sides_the_same():
+    # Must match organic_scan.domain_of so a stored bare-host SERP domain matches a prospect's URL.
+    assert sf._domain_of("https://www.Acme-Plumbing.com/services") == "acme-plumbing.com"
+    assert sf._domain_of("acme-plumbing.com") == "acme-plumbing.com"
+    assert sf._domain_of("HTTP://ACME-PLUMBING.COM:8080/x") == "acme-plumbing.com"
+    assert sf._domain_of("") is None and sf._domain_of(None) is None
+
+
+def test_organic_signal_unscanned_when_no_summary():
+    sig = sf.organic_signal(None, "https://acme.com")
+    assert sig.scanned is False and sig.absent is False and sig.top10 is False and sig.rank is None
+
+
+def test_organic_signal_top10_match():
+    sig = sf.organic_signal(_serp((3, "acme.com"), (5, "rival.com")), "https://www.acme.com/x")
+    assert sig.scanned is True and sig.absent is False and sig.top10 is True and sig.rank == 3
+
+
+def test_organic_signal_present_but_not_top10():
+    sig = sf.organic_signal(_serp((15, "acme.com")), "acme.com")
+    assert sig.scanned is True and sig.absent is False and sig.top10 is False and sig.rank == 15
+
+
+def test_organic_signal_absent_when_no_domain_match():
+    # Scanned, but the prospect's domain isn't in the captured SERP -> the pain signal.
+    sig = sf.organic_signal(_serp((1, "rival.com"), (2, "other.com")), "https://acme.com")
+    assert sig.scanned is True and sig.absent is True and sig.top10 is False and sig.rank is None
+
+
+def test_organic_signal_absent_when_prospect_has_no_website():
+    sig = sf.organic_signal(_serp((1, "rival.com")), None)
+    assert sig.scanned is True and sig.absent is True and sig.rank is None
+
+
+def test_organic_signal_takes_best_rank_across_multiple_matches():
+    sig = sf.organic_signal(_serp((9, "acme.com"), (2, "acme.com")), "acme.com")
+    assert sig.rank == 2 and sig.top10 is True
+
+
+def test_organic_absent_bin_fires_from_a_derived_absent_signal():
+    # The end-to-end intent: a scanned-but-absent prospect fires the organic_absent pain bin.
+    sig = sf.organic_signal(_serp((1, "rival.com")), "https://acme.com")
+    inputs = sf.FeatureInputs(coverage_pct=10.0, rating=4.0,
+                              organic_scanned=sig.scanned, organic_absent=sig.absent,
+                              top10_organic=sig.top10)
+    assert "organic_absent" in sf.reply_bins(inputs, channel="phone", pass_number=1, thresholds=TH)

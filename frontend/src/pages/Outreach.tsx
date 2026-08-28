@@ -47,6 +47,17 @@ interface ScanRequestDetail {
   task_progress: TaskProgress | null
   rolled_up: boolean
 }
+// The fitted Phase-4 model overlay, present on each row only when a score run exists for the
+// submarket (I-108). Organic-inclusive: the reply/value scores fold in organic + maps + review + tech.
+interface ModelScore {
+  channel: string | null
+  reply_score: number | null
+  reply_prob: number | null
+  reply_decile: number | null
+  value_score: number | null
+  value_decile: number | null
+  primary_pitch: string | null
+}
 interface PlaceholderScore {
   prospect_id: string
   name: string
@@ -59,6 +70,8 @@ interface PlaceholderScore {
   best_rank: number | null
   centroid_dist_at_loss: number | null
   measured_at: string
+  // Present only when the submarket has been scored; absent on the maps-only placeholder fallback.
+  model?: ModelScore | null
 }
 
 // Any-city onboarding (mirror routers/outreach.py's geo + onboard section)
@@ -861,7 +874,7 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
       setEmitted(e => ({ ...e, [prospectId]: {
         delivered: !!data.delivery?.delivered, configured: !!data.delivery?.configured } })),
   })
-  const { data, isLoading } = useQuery<{ scores: PlaceholderScore[]; total: number; measured: boolean }>({
+  const { data, isLoading } = useQuery<{ scores: PlaceholderScore[]; total: number; measured: boolean; scored?: boolean }>({
     queryKey: ['outreach-placeholder-scores', submarketId],
     queryFn: () => api.get(`/outreach/submarkets/${submarketId}/placeholder-scores?limit=200`),
     enabled: !!submarketId,
@@ -896,7 +909,8 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
   }
   const visible = data.scores.filter(s => !s.excluded)
   const allSelected = visible.length > 0 && visible.every(s => selected.has(s.prospect_id))
-  const colSpan = 8 + (isAdmin ? 1 : 0) + 1  // + checkbox (admin) + contacts + card-revenue columns
+  const scored = !!data?.scored
+  const colSpan = 8 + (isAdmin ? 1 : 0) + 1 + (scored ? 1 : 0)  // + checkbox + contacts + card + (model score)
 
   const exportCsv = () => {
     const by = contactsBatch?.by_prospect
@@ -904,7 +918,9 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
       (by?.[id]?.contacts ?? []).map(pick).filter(Boolean).join('; ')
     const en = enigmaBatch?.by_prospect
     const headers = [
-      'Prospect', 'Phone', 'Coverage %', 'Deficit %', 'Best rank', 'Drops out at (mi)',
+      'Prospect', 'Phone',
+      ...(scored ? ['Model score', 'Model decile'] : []),
+      'Coverage %', 'Deficit %', 'Best rank', 'Drops out at (mi)',
       'Website', 'Contact names', 'Emails', 'Contact phones',
       'Card revenue 12m', 'Card revenue 3m', 'Card revenue 1m', 'Card as-of', 'Measured at',
     ]
@@ -914,6 +930,10 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
       return [
         s.name,
         s.phone ?? '',
+        ...(scored ? [
+          s.model?.reply_score != null ? String(Math.round(s.model.reply_score)) : '',
+          s.model?.reply_decile != null ? String(s.model.reply_decile) : '',
+        ] : []),
         s.coverage_pct != null ? s.coverage_pct.toFixed(1) : '',
         s.coverage_deficit != null ? s.coverage_deficit.toFixed(1) : '',
         s.best_rank ?? '',
@@ -939,8 +959,19 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
     <>
       <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', margin: '6px 0 0' }}>
         <p style={{ fontSize: 11, color: '#94a3b8', margin: 0 }}>
-          Ranked by coverage deficit — a business absent at every measured point shows 100% deficit
-          (zero coverage, not unknown). Send the most invisible ones to your CRM.
+          {scored ? (
+            <>
+              Ranked by the <b>fitted model</b> — it folds in organic rank, Maps coverage, reviews and
+              site/ad tech. Every coefficient is an elicited prior, so treat rank order as a strong
+              prior, not a prediction, until ~100 prospects have been called. Send the top ones to your CRM.
+            </>
+          ) : (
+            <>
+              Ranked by <b>Maps coverage deficit</b> — a business absent at every measured point shows
+              100% deficit (zero coverage, not unknown). Run a model score to also weigh organic rank.
+              Send the most invisible ones to your CRM.
+            </>
+          )}
         </p>
         {visible.length > 0 && (
           <div style={{ marginLeft: 'auto', flexShrink: 0 }}>
@@ -993,6 +1024,7 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
               </th>
             )}
             <th style={{ padding: '4px 8px' }}>Prospect</th>
+            {scored && <th style={{ padding: '4px 8px', textAlign: 'right' }} title="Fitted model reply score (organic + maps + reviews + tech). A strong prior, not a prediction.">Score</th>}
             <th style={{ padding: '4px 8px' }}>Phone</th>
             <th style={{ padding: '4px 8px' }}>Contacts</th>
             <th style={{ padding: '4px 8px' }}>Card revenue</th>
@@ -1014,6 +1046,19 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
                   </td>
                 )}
                 <td style={{ padding: '6px 8px' }}>{s.name}</td>
+                {scored && (
+                  <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}
+                    title={s.model?.primary_pitch ? `Primary pitch: ${s.model.primary_pitch}` : undefined}>
+                    {s.model?.reply_score != null ? (
+                      <>
+                        <b>{Math.round(s.model.reply_score)}</b>
+                        {s.model.reply_decile != null && (
+                          <span style={{ fontSize: 11, color: '#94a3b8' }}> · d{s.model.reply_decile}</span>
+                        )}
+                      </>
+                    ) : '—'}
+                  </td>
+                )}
                 <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{s.phone ?? '—'}</td>
                 <td style={{ padding: '6px 8px' }}>
                   <ContactCell prospectId={s.prospect_id} isAdmin={isAdmin} isStaff={isStaff}
