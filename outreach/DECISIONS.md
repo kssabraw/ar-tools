@@ -2148,3 +2148,50 @@ measured contract — an `enigma_request` signed-order contacts rung positioned 
 un-named prospects; mirrors `name_search`) and the card-transaction data stored + surfaced per
 business. Cost per lookup (`enigma_cost_per_lookup_cents`, placeholder 50¢) is confirmed by the
 probe's bill (the I-111 pattern).
+
+## 2026-08-28 · Enigma — card-revenue rung BUILT (the proven half; owner/contacts deferred)
+
+The `probe-enigma-graphql` run settled the build-vs-buy split for Enigma per-vertical: the GraphQL
+`search` query returns each matched business's `card_revenue_amount` over its native **1m / 3m / 12m**
+windows reliably (~60% match, ~40% card fill on LA plumbers), but the owner/principal half of the
+same call came back EMPTY for that home-service vertical at BOTH entity levels (BRAND and
+OPERATING_LOCATION). Owner data does materialize via the separate Console **Batch Append / List
+Materialization** path (ZoomInfo-backed, vertical-dependent), which is a DIFFERENT API — see
+`docs/enigma-graphql-api-reference.md` and the enrichment-doc findings.
+
+**Decision (owner-confirmed 2026-08-28): build the card-revenue rung now; defer the owner/contacts
+rung** until a live Console batch on the plumber sample settles whether owner yield clears the §5 bar
+for the trades this pipeline actually targets. The two halves are independent, so the proven half
+ships without waiting on the blocked one.
+
+**What the card rung is (`enigma_queue` + migration 20260828120000):** the per-prospect PAID
+sibling of `name_search` — Enigma's `search` is one synchronous call per business, NOT batchable —
+so it carries that rung's full discipline verbatim: a signed `enigma_request` (the spend
+confirmation, drained by `tick`, NOT in PAID_COMMANDS), a budget backstop before the money, a
+`cost_ledger` write (`provider=enigma`, `stage=a7_enigma`), idempotent skip, per-tick prospect budget
++ stuck-order reaper (I-118/I-119). The result lands in `prospect_enigma` (the `prospect` table stays
+pristine, same reason as enrichment).
+
+**Four build choices worth recording:**
+1. **Card-first, but the untouched matched entity is kept in `prospect_enigma.raw`.** So any
+   owner/firmographic fields Enigma DOES return on the same already-billed call (a vertical that
+   carries principals) are recoverable by a later re-parse with NO re-bill — the deferred contacts
+   rung's raw material, captured for free (the prospect_enrichment.raw / measure-don't-infer
+   discipline).
+2. **`no_match` is a durable, billed answer** (skipped on a re-order, like `matched`/`no_card`) — the
+   `search` ran and cost a lookup whether or not it matched, so re-billing it would be waste. Only a
+   call ERROR (`failed`) is retryable.
+3. **BRAND is the default entity path** (where the probe found card data); `operating_location` is
+   carried on the order for a future owner-bearing vertical. Card data comes from either.
+4. **place_id is NOT required to look a prospect up** (Enigma matches on name+address; only a NAME is
+   the hard anchor) — unlike the contact rungs, whose contact rows need place_id as a NOT-NULL join
+   key.
+
+**Value is PHASE-4-GATED** (scoping doc): the card windows are STORED now (they cannot be backfilled
+for a business we never looked up) but only MOVE a prospect's score once Phase 4 Stage 2+ has
+outcomes to fit against. Storing early is the point.
+
+**Not built here (deliberate):** the platform-api placement surface + UI (route + daily budget
+guard) that WRITES `enigma_request` rows — the same staged path enrichment took (worker rung +
+migration first, placement second). Until it lands, orders are inserted by SQL / a follow-up
+platform-api slice; the drain runs empty and harmless in the meantime.

@@ -212,6 +212,36 @@ def extract_card_windows(brand: Any) -> dict[str, Any] | None:
     return out or None
 
 
+def extract_card_as_of(brand: Any) -> str | None:
+    """The latest `periodEndDate` across the returned card windows (the "revenue as of" recency the
+    scoring model wants — the windows are a rolling series), as an ISO date string, or None. Pure and
+    tolerant: a missing/odd shape yields None. Only the date part is kept (Enigma sends `YYYY-MM-DD`,
+    but a datetime is truncated defensively)."""
+    if not isinstance(brand, dict):
+        return None
+    latest: str | None = None
+    for node in _nodes(brand.get("cardTransactions")):
+        end = node.get("periodEndDate")
+        if isinstance(end, str) and end.strip():
+            day = end.strip()[:10]
+            if latest is None or day > latest:
+                latest = day
+    return latest
+
+
+def extract_matched_name(brand: Any) -> str | None:
+    """The name of the matched entity (`names.edges[0].node.name`), for QA of match quality — a wrong
+    match is the silent failure (a plausible card figure on the wrong business). Pure; None if absent."""
+    if not isinstance(brand, dict):
+        return None
+    node = _first_node(brand.get("names"))
+    if node:
+        nm = node.get("name")
+        if isinstance(nm, str) and nm.strip():
+            return nm.strip()
+    return None
+
+
 def _person_name(role: dict[str, Any]) -> str | None:
     """The owner's name from a role's legal entities. The deployed `search` schema does NOT expose
     `Person.fullName/firstName/lastName` (a live 400), so the name comes from

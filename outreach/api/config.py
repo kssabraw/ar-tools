@@ -500,8 +500,42 @@ class Settings(BaseSettings):
     # BILLS one Enigma lookup per prospect, so both are in PAID_COMMANDS + confirm-gated.
     enigma_probe_limit: int = 20
     # CONFIGURED cost estimate per Enigma lookup (unknown until the probe / a bill — the I-111 pattern);
-    # drives the cost_ledger write + budget guard once the contacts rung is built. Placeholder.
+    # drives the cost_ledger write + budget guard for the card-revenue drain below. Placeholder — set
+    # from the real bill (the probe's spend) before a production run; the budget gate is only as honest
+    # as this number, like every other rate here (I-022).
     enigma_cost_per_lookup_cents: int = 50
+
+    # --- Enigma card-revenue drain (the signed-order rung) ---------------------------------
+    # The PROVEN Enigma feature: per-prospect card_revenue_amount over the 1m/3m/12m windows, drained
+    # from a signed `enigma_request` by `tick` and stored in `prospect_enigma` (migration
+    # 20260828120000). PAID (one `search` call per prospect), but ORDER-GATED — the signed order is the
+    # spend confirmation, so `cmd_enigma` is NOT in PAID_COMMANDS (same as `enrich`). Per-prospect
+    # (Enigma's `search` is one synchronous call per business, NOT batchable), so it carries the full
+    # per-prospect-paid discipline of `name_search`: budget backstop, cost_ledger, idempotent skip,
+    # per-tick budget + stuck-order reaper (I-118/I-119).
+
+    # Which entity path to match by default when an order doesn't specify one. 'brand' returned the card
+    # windows in the probe (roles/owner were empty at both levels for plumbers); 'operating_location'
+    # reads roles directly and is kept for a future owner-bearing vertical. Card data comes from either.
+    enigma_entity_type: str = "brand"
+    # Concurrency across prospects within one order (each prospect is one synchronous `search` call).
+    enigma_chunk_size: int = 5
+    # Enigma isn't batchable (one call per business), so — like name_search — a few orders per tick, the
+    # per-tick prospect budget bounding the real wall-time.
+    enigma_orders_per_tick: int = 3
+    # Defensive ceiling on one order's selection (a placement layer caps it too). A bigger "select all"
+    # is split into several orders rather than silently truncated.
+    enigma_max_places_per_order: int = 200
+    # Per-TICK prospect budget across all orders (I-118). A `search` is ~1-2s/prospect; keep the tick
+    # comfortably inside Railway's `*/5` cron window — 24 prospects / 5 concurrency × ~2s ≈ 10s. An order
+    # larger than the remaining budget is looked up to it and left PENDING to resume next tick (the
+    # idempotent marker skip re-bills only the un-done prospects). <=0 = no cap (the old, unsafe behaviour).
+    enigma_per_tick: int = 24
+    # A `running` order older than this is treated as stranded (its container died mid-tick) and reset to
+    # `pending` so a later tick resumes it — the recovery half of I-118. Generous so it can never race a
+    # legitimately-executing tick (a normal tick holds an order `running` only for the tens of seconds it
+    # looks up a budget's worth).
+    enigma_stuck_order_minutes: int = 20
 
     # --- Report signal scans (organic / AI-visibility UI triggers, 2026-08-10) -----------
     # The per-prospect report's ORGANIC and AI sections are filled by two signed-order queues
