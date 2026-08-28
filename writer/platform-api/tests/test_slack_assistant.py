@@ -788,6 +788,54 @@ def test_ctx_response_episodes_empty_is_none():
         _FakeSupabase({"response_episodes": [[]]}), "c1", date(2026, 8, 26)) is None
 
 
+# --- Phase 1 commission actions ---------------------------------------------
+
+def test_norm_content_type():
+    assert sa_actions._norm_content_type("blog") == "blog_post"
+    assert sa_actions._norm_content_type(None) == "blog_post"
+    assert sa_actions._norm_content_type("Service Page") == "service_page"
+    assert sa_actions._norm_content_type("location_page") is None
+    assert sa_actions._norm_content_type("nonsense") is None
+
+
+def test_commission_actions_registered():
+    for name in ("start_content_run", "generate_local_seo_page", "reoptimize_page"):
+        meta = slack_assistant._ACTIONS[name]
+        assert meta["paid"] is True
+        assert callable(meta["run"]) and callable(meta["stage"])
+        assert "properties" in meta["params"]
+    tool_names = {t["name"] for t in slack_assistant._ACTION_TOOLS}
+    assert {"start_content_run", "generate_local_seo_page", "reoptimize_page"} <= tool_names
+
+
+def test_stage_start_content_run_guards():
+    import asyncio
+
+    stage = sa_actions._ACTIONS["start_content_run"]["stage"]
+    o, t = asyncio.run(stage("c1", {"keyword": ""}))
+    assert o == "reply" and "keyword" in t.lower()
+    o, t = asyncio.run(stage("c1", {"keyword": "roofing", "content_type": "location_page"}))
+    assert o == "reply" and "dashboard" in t.lower()
+
+
+def test_stage_generate_local_seo_page_requires_location():
+    import asyncio
+
+    o, t = asyncio.run(
+        sa_actions._ACTIONS["generate_local_seo_page"]["stage"]("c1", {"keyword": "plumber"})
+    )
+    assert o == "reply" and "area" in t.lower()
+
+
+def test_stage_reoptimize_page_requires_url():
+    import asyncio
+
+    o, t = asyncio.run(
+        sa_actions._ACTIONS["reoptimize_page"]["stage"]("c1", {"url": "not-a-url"})
+    )
+    assert o == "reply" and "https" in t.lower()
+
+
 def test_format_history_labels_roles_and_skips_empty():
     out = slack_assistant.format_history([
         {"role": "user", "content": "how is Acme?"},
