@@ -282,13 +282,34 @@ def test_maps_area_decline_labels_sector():
 
 
 def test_maps_weak_area_creates_location_page():
-    weak = [{"city": "Inner West", "admin_area": "NSW", "pins": 6}]
+    weak = [{"city": "Inner West", "admin_area": "NSW", "pins": 6,
+             "avg_rank": 14.2, "worst_rank": 20, "lat": -33.9, "lng": 151.1}]
     actions = reopt_planner.build_maps_actions(CLIENT, [], weak)
     a = actions[0]
     assert a["kind"] == "maps_weak_area"
     assert a["cta_path"] == f"clients/{CLIENT}/local-seo"
     assert "Inner West" in a["recommendation"]
     assert "6 grid pins" in a["diagnosis"]
+    # demand + place: the exact area, how weak, and a map link to it
+    assert a["location"] == "Inner West, NSW"
+    assert "~#14" in a["diagnosis"] and "#20" in a["diagnosis"]
+    assert a["url"] == "https://www.google.com/maps/search/?api=1&query=-33.9,151.1"
+
+
+def test_maps_weak_area_not_ranked_says_so():
+    weak = [{"city": "Newtown", "admin_area": "NSW", "pins": 4, "not_ranked": True}]
+    a = reopt_planner.build_maps_actions(CLIENT, [], weak)[0]
+    assert "don't appear in the local pack" in a["diagnosis"] and a["url"] is None
+
+
+def test_quick_win_create_page_shows_search_volume():
+    items = [_rankability_item(keyword="solar installer", client_rank=None,
+                               search_volume=880, est_value=430)]
+    a = reopt_planner.build_actions(CLIENT, [], items, {})[0]
+    assert a["cta_label"] == "Create page"
+    assert a["search_volume"] == 880
+    assert "880/mo searches" in a["recommendation"]
+    assert "880/mo searches" in a["diagnosis"] and "$430/mo" in a["diagnosis"]
 
 
 def test_maps_weak_area_capped():

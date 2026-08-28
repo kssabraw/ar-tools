@@ -194,7 +194,14 @@ def build_actions(
         rank = i.get("client_rank")
         striking = rank is not None and rank <= STRIKING_DISTANCE_MAX
         value = i.get("est_value")
-        value_str = f" · est. ${round(value):,}/mo" if value else ""
+        volume = i.get("search_volume")
+        # Demand context (search volume + est. value) — matters most when deciding
+        # whether a net-new page is worth building.
+        demand = ""
+        if volume:
+            demand += f" · ~{int(volume):,}/mo searches"
+        if value:
+            demand += f" · est. ${round(value):,}/mo"
         # The client's own ranking URL (from the SERP snapshot) — the page to
         # reoptimize. Only meaningful on the reoptimize (striking) branch; a
         # create-page has no existing page to name.
@@ -204,6 +211,7 @@ def build_actions(
             "and this SERP is winnable."
             if striking
             else "Create a purpose-built page — the SERP is winnable and you don't have a strong page yet."
+            + (f" ~{int(volume):,}/mo searches for this term." if volume else "")
         )
         actions.append(
             {
@@ -211,7 +219,9 @@ def build_actions(
                 "source": "organic",
                 "keyword": i.get("keyword") or "",
                 "url": url,
-                "diagnosis": f"Rankability {i['band']} ({i['score']}/100){value_str}.",
+                "search_volume": volume,
+                "est_value": value,
+                "diagnosis": f"Rankability {i['band']} ({i['score']}/100){demand}.",
                 "recommendation": recommendation,
                 "cta_label": "Reoptimize" if striking else "Create page",
                 "cta_path": f"clients/{client_id}/local-seo",
@@ -569,12 +579,31 @@ def build_maps_actions(
         admin = w.get("admin_area")
         place = f"{city}, {admin}" if admin else city
         pins = w.get("pins") or 0
+        # How weak (avg/worst rank across the weak pins, or absent entirely) —
+        # the strength of signal for a page that doesn't exist yet; plus a map
+        # link to the exact area (built from the area's representative point).
+        avg_rank = w.get("avg_rank")
+        worst_rank = w.get("worst_rank")
+        if w.get("not_ranked"):
+            rank_ctx = " You don't appear in the local pack here at all."
+        elif avg_rank is not None:
+            rank_ctx = f" You rank ~#{round(avg_rank)} on average here"
+            if worst_rank is not None:
+                rank_ctx += f" (as low as #{round(worst_rank)})"
+            rank_ctx += "."
+        else:
+            rank_ctx = ""
+        lat, lng = w.get("lat"), w.get("lng")
+        map_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lng}" if lat and lng else None
         actions.append(
             {
                 "kind": "maps_weak_area",
                 "source": "maps",
                 "keyword": place,
-                "diagnosis": f"Weak coverage near {place} ({pins} grid pin{'s' if pins != 1 else ''}).",
+                "location": place,
+                "url": map_url,
+                "diagnosis": f"Weak coverage near {place} ({pins} grid pin{'s' if pins != 1 else ''})."
+                + rank_ctx,
                 "recommendation": f"Create or strengthen a location page targeting {city} to build local "
                 "relevance where the grid is weakest.",
                 "cta_label": "Create page",
