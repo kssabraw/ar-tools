@@ -1798,6 +1798,67 @@ export interface StrategyReviewList {
   enabled: boolean
 }
 
+// ── Intervention-outcome loop (services/interventions.py) ──────────────────
+// The measurement half of SerMaStr's decide+assign flow: goal-linked
+// link-building / reoptimization work, judged worked/partial/no_effect at its
+// 6-week mark. Report-only in v1.
+
+export type InterventionVerdict = 'worked' | 'partial' | 'no_effect'
+
+export interface InterventionTally {
+  worked: number
+  partial: number
+  no_effect: number
+  pending: number
+  total: number
+}
+
+export interface InterventionEffectiveness {
+  by_tactic: Record<string, InterventionTally>
+  overall: InterventionTally
+  note: string
+}
+
+export interface InterventionCheck {
+  at: string
+  verdict: InterventionVerdict | null
+  value: number | null
+  age_days?: number | null
+}
+
+export interface Intervention {
+  id: string
+  client_id: string
+  source: string
+  tactic_type: string
+  goal_id: string | null
+  target: {
+    keyword?: string | null
+    keyword_id?: string | null
+    page_url?: string | null
+    goal_type?: string | null
+    target_value?: number | null
+  } | null
+  baseline: {
+    value?: number | null
+    metric?: string | null
+    direction?: string | null
+    measured_at?: string | null
+  } | null
+  applied_at: string | null
+  verdict: InterventionVerdict | null
+  evaluated_at: string | null
+  next_check_at: string | null
+  checks?: InterventionCheck[]
+  created_at: string
+}
+
+export interface InterventionList {
+  enabled: boolean
+  interventions: Intervention[]
+  effectiveness: InterventionEffectiveness
+}
+
 // ── Native task manager (in-app-task-manager-prd-v1_0) ─────────────────────
 
 export interface TaskStatus {
