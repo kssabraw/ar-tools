@@ -4074,27 +4074,55 @@ def _zone_coverage_rows(name: str, zone_freq: Optional[dict], page_zones: dict) 
     return rows
 
 
+# Per-term coverage tables surfaced to the UI (entities / keywords / bolded
+# terms). Bounded so a huge SERP can't render an unusable table, but under-target
+# ("needed") rows always win the cap over already-covered ones — the table's job
+# is to list what still needs work, so nothing needed is hidden below the cap.
+_DETAIL_ROW_CAP = 60
+
+
+def _cap_detail_rows(rows: list, cap: int = _DETAIL_ROW_CAP) -> list:
+    """Order coverage-table rows biggest-gap-first, then already-covered rows by
+    page_spread, and cap the total. Under-target rows are placed before covered
+    ones, so the cap only ever trims the covered tail unless there are more than
+    `cap` genuinely-under-target terms."""
+    under = sorted(
+        (d for d in rows if d["shortfall"] > 0),
+        key=lambda d: (d["shortfall"], d.get("page_spread", 0)), reverse=True,
+    )
+    covered = sorted(
+        (d for d in rows if d["shortfall"] <= 0),
+        key=lambda d: d.get("page_spread", 0), reverse=True,
+    )
+    return (under + covered)[:cap]
+
+
 def _build_entity_coverage_detail(entities: list, page_text_lower: str,
-                                  page_zones: dict) -> tuple[list, list, int]:
+                                  page_zones: dict, *, limit: Optional[int] = None,
+                                  cap: Optional[int] = None) -> tuple[list, list, int]:
     """Cora-style per-entity coverage table: for each competitor-derived entity,
     the page's CURRENT mention count vs the capped-max RECOMMENDED count, the
-    shortfall, and a per-zone breakdown. Additive detail — it does not change the
-    engine score — persisted via engine_scores. Widened to the top 30 entities by
-    page_spread (the score still uses the top 15) so the table is richer without
-    shifting any score.
+    shortfall, and a per-zone breakdown.
+
+    Two modes, so the score stays stable while the UI table widens:
+    - `limit=30` (the SCORE set): the top-30 entities by page_spread, the exact
+      set the frequency score has always summed over — unchanged.
+    - `cap=N` (the DISPLAY set): every SERP entity, biggest-gap-first, trimmed to
+      N with `_cap_detail_rows` so no under-target entity is hidden. Additive —
+      never fed to the score.
 
     Returns (entity_detail, entities_under_target, total_shortfall)."""
-    detail_entities = sorted(
-        entities, key=lambda e: e.get("page_spread", 0), reverse=True
-    )[:30]
-    entity_detail: list[dict] = []
-    for e in detail_entities:
+    src = sorted(entities, key=lambda e: e.get("page_spread", 0), reverse=True)
+    if limit is not None:
+        src = src[:limit]
+    all_detail: list[dict] = []
+    for e in src:
         name = (e.get("name") or "").strip()
         if not name:
             continue
         recommended = int(e.get("recommended_mentions") or 1)
         current = _count_entity_mentions(name, page_text_lower)
-        entity_detail.append({
+        all_detail.append({
             "name": name,
             "current": current,
             "recommended": recommended,
@@ -4106,8 +4134,10 @@ def _build_entity_coverage_detail(entities: list, page_text_lower: str,
             "zones": _zone_coverage_rows(name, e.get("zone_freq"), page_zones),
         })
     # Biggest gaps first (then by how many competitors use it) so the most
-    # important under-covered entities lead the table.
-    entity_detail.sort(key=lambda d: (d["shortfall"], d["page_spread"]), reverse=True)
+    # important under-covered entities lead the table; needed rows survive the cap.
+    entity_detail = _cap_detail_rows(all_detail, cap) if cap is not None else sorted(
+        all_detail, key=lambda d: (d["shortfall"], d["page_spread"]), reverse=True,
+    )
     entities_under_target = [d["name"] for d in entity_detail if d["shortfall"] > 0]
     total_shortfall = sum(d["shortfall"] for d in entity_detail)
     return entity_detail, entities_under_target, total_shortfall
@@ -4144,7 +4174,8 @@ def _build_bold_coverage_detail(bold: list, page_text_lower: str,
 
 
 def _build_keyword_coverage_detail(related: dict, page_text_lower: str,
-                                   page_zones: dict) -> tuple[list, list, int]:
+                                   page_zones: dict, *, include_unbenchmarked: bool = False,
+                                   cap: Optional[int] = None) -> tuple[list, list, int]:
     """Cora-style per-related-keyword coverage: page-level CURRENT mention count
     vs the competitor-derived RECOMMENDED (capped-max) count + shortfall + a
     per-zone breakdown. Related keywords are stored per zone; a term can appear in
@@ -4152,19 +4183,41 @@ def _build_keyword_coverage_detail(related: dict, page_text_lower: str,
     carrying its per-zone benchmark) and measure the whole page once. Additive
     detail — does not change the score.
 
+    Two modes, so the score stays stable while the UI table widens:
+    - default (`include_unbenchmarked=False`, no cap — the SCORE set): only terms
+      carrying a competitor-usage benchmark, the exact set the frequency score has
+      always summed over — unchanged.
+    - `include_unbenchmarked=True, cap=N` (the DISPLAY set): a related keyword
+      WITHOUT a benchmark is also listed (recommended defaults to 1 — "should
+      appear at least once"), so no keyword the SERP surfaced is hidden; a
+      benchmarked entry for the same term always wins the dedupe. Additive —
+      never fed to the score.
+
     Returns (keyword_detail, keywords_under_target, total_shortfall)."""
     best: dict[str, dict] = {}
     for zone_key in ("title", "h1", "h2_h3", "paragraphs"):
         for t in (related.get(zone_key) or []):
             term = (t.get("term") or "").strip()
-            recommended = t.get("recommended_mentions")
-            if not term or recommended is None:
-                continue  # only terms carrying a competitor-usage benchmark
+            if not term:
+                continue
+            raw_rec = t.get("recommended_mentions")
+            has_benchmark = raw_rec is not None
+            if not has_benchmark and not include_unbenchmarked:
+                continue  # SCORE set: only competitor-benchmarked terms
+            recommended = int(raw_rec) if has_benchmark else 1
             prev = best.get(term.lower())
-            if prev is None or int(recommended) > prev["recommended"]:
+            # Prefer a benchmarked entry over a defaulted one; among like kinds,
+            # keep the higher recommended count.
+            better = (
+                prev is None
+                or (has_benchmark and not prev["has_benchmark"])
+                or (has_benchmark == prev["has_benchmark"] and recommended > prev["recommended"])
+            )
+            if better:
                 best[term.lower()] = {
                     "name": term,
-                    "recommended": int(recommended),
+                    "recommended": recommended,
+                    "has_benchmark": has_benchmark,
                     "max_competitor": t.get("max_competitor_mentions"),
                     "avg_competitor": t.get("avg_competitor_mentions"),
                     "page_spread": t.get("page_spread", 0),
@@ -4183,7 +4236,9 @@ def _build_keyword_coverage_detail(related: dict, page_text_lower: str,
             "page_spread": row["page_spread"],
             "zones": _zone_coverage_rows(row["name"], row.get("zone_freq"), page_zones),
         })
-    keyword_detail.sort(key=lambda d: (d["shortfall"], d["page_spread"]), reverse=True)
+    keyword_detail = _cap_detail_rows(keyword_detail, cap) if cap is not None else sorted(
+        keyword_detail, key=lambda d: (d["shortfall"], d["page_spread"]), reverse=True,
+    )
     keywords_under_target = [d["name"] for d in keyword_detail if d["shortfall"] > 0]
     total_shortfall = sum(d["shortfall"] for d in keyword_detail)
     return keyword_detail, keywords_under_target, total_shortfall
@@ -4279,14 +4334,23 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
     entities_used    = [e["name"] for e in top_entities if e["name"].lower() in page_text_lower]
     entities_missing = [e["name"] for e in top_entities if e["name"].lower() not in page_text_lower]
     # Cora-style per-entity coverage: current vs recommended mention counts +
-    # shortfall, persisted so the UI can render a term-target table and the gap
-    # survives the run (additive — does not affect the score).
-    entity_detail, entities_under_target, total_entity_shortfall = (
-        _build_entity_coverage_detail(entities, page_text_lower, zones)
+    # shortfall. Two sets:
+    #   • SCORE set (top-30 entities / benchmarked keywords) — feeds the frequency
+    #     score below; the exact set it has always used, so the score is unchanged.
+    #   • DISPLAY set (every entity + benchmark-less keywords, biggest-gap-first,
+    #     capped) — the UI term-target tables, so no needed term is hidden.
+    score_entity_detail, _, score_entity_shortfall = (
+        _build_entity_coverage_detail(entities, page_text_lower, zones, limit=30)
     )
-    # Same for related keywords (page-level current vs capped-max competitor usage).
-    keyword_detail, keywords_under_target, total_keyword_shortfall = (
+    score_keyword_detail, _, score_keyword_shortfall = (
         _build_keyword_coverage_detail(rk, page_text_lower, zones)
+    )
+    entity_detail, entities_under_target, total_entity_shortfall = (
+        _build_entity_coverage_detail(entities, page_text_lower, zones, cap=_DETAIL_ROW_CAP)
+    )
+    keyword_detail, keywords_under_target, total_keyword_shortfall = (
+        _build_keyword_coverage_detail(rk, page_text_lower, zones,
+                                       include_unbenchmarked=True, cap=_DETAIL_ROW_CAP)
     )
     # And SERP-bolded terms (raw-max competitor benchmark — a direct Google signal).
     bold_detail, bold_under_target, total_bold_shortfall = (
@@ -4345,7 +4409,8 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
     # the target per term (over-use never inflates). None when no term carries a
     # benchmark (older analysis / no SERP), in which case the composite keeps its
     # exact prior presence-only formula so unbenchmarked pages are unchanged.
-    _freq_rows = entity_detail + keyword_detail + bold_detail
+    # Score-stable set only (widening the DISPLAY tables must not move the score).
+    _freq_rows = score_entity_detail + score_keyword_detail + bold_detail
     _freq_target = sum(r["recommended"] for r in _freq_rows)
     if _freq_target > 0 and SERP_FREQ_WEIGHT > 0:
         _freq_attained = sum(min(r["current"], r["recommended"]) for r in _freq_rows)
@@ -4363,7 +4428,7 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
             kw_score * 0.30 * (1 - w) + ent_score * 0.50 * (1 - w)
             + qg_score * 0.20 * (1 - w) + freq_score * w, 1
         )
-        _total_short = total_entity_shortfall + total_keyword_shortfall + total_bold_shortfall
+        _total_short = score_entity_shortfall + score_keyword_shortfall + total_bold_shortfall
         if _total_short > 0 and freq_score < 85:
             recommendations.append(
                 f"Increase mention frequency: {_total_short} more mention"
