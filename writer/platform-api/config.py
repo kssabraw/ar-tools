@@ -1761,7 +1761,10 @@ class Settings(BaseSettings):
     # actually list the overdue/stuck rows across a client, a member, or the
     # whole agency rather than summarizing them.
     pace_model: str = "claude-sonnet-4-6"
-    pace_max_tokens: int = 2400
+    # 2400 was too tight for "ALWAYS ENUMERATE" — a member/portfolio-scope answer
+    # listing ~10 overdue/stuck tasks with client+assignee+due-date+proposed lever
+    # per line routinely ran past it and cut off mid-sentence (2026-08-28 report).
+    pace_max_tokens: int = 6000
     # PACE v1.3 Phase 5 — role/skill placement (§4.6). Whether producer tasks
     # (rank_drop/maps_alert/action_plan) are auto-placed on creation (default off
     # — approved proposals always are). When the skilled+eligible pool is over
