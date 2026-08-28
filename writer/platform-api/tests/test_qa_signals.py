@@ -335,6 +335,26 @@ def test_website_page_client_name_blocking_and_exact():
     assert next(c for c in unknown if c["key"] == "client_name")["ok"] is None
 
 
+def test_name_present_tolerates_formatting_variations():
+    # Exact contiguous match — the clean case.
+    assert sig._name_present("Welcome to First Class Roofing today", "First Class Roofing") is True
+    # "&" vs "and": stored "ABC Tree And Landscape Service", page uses "&".
+    assert sig._name_present("ABC Tree & Landscape Service, Springfield",
+                             "ABC Tree And Landscape Service") is True
+    # Corporate suffix on file, plain brand on page.
+    assert sig._name_present("Call Acme Roofing today", "Acme Roofing LLC") is True
+    assert sig._name_present("Southwestern Hearing Centers of Ohio", "Southwestern Hearing Centers") is True
+    # Reordered / scattered distinctive tokens still count as represented.
+    assert sig._name_present("our roofing is genuinely first class", "First Class Roofing") is True
+    # A genuinely WRONG business (different distinctive tokens) still fails.
+    assert sig._name_present("Welcome to Bob's Plumbing Service", "First Class Roofing") is False
+    # A short name can't match inside a longer word (bounded).
+    assert sig._name_present("The exhibits are here", "IHBS") is False
+    assert sig._name_present("Visit IHBS for details", "IHBS") is True
+    # Unknown name → could-not-verify.
+    assert sig._name_present("any text", None) is None
+
+
 def test_name_present_is_bounded():
     # Whole-name presence, case/space-insensitive.
     assert sig._name_present("Welcome to IHBS Marketing", "IHBS") is True

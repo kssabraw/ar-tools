@@ -755,15 +755,41 @@ def check_website_page(html: str, client_domain: str,
     ]
 
 
+# Corporate-entity suffixes dropped from the name-presence check: a client
+# stored as "Acme Roofing LLC" should still match a page that just says "Acme
+# Roofing". Deliberately excludes ambiguous words that are often part of the
+# real distinctive name (company / co / group / center(s) / service(s)).
+_NAME_SUFFIXES = frozenset({
+    "pty", "ltd", "limited", "llc", "inc", "incorporated",
+    "corp", "corporation", "plc", "gmbh",
+})
+
+
 def _name_present(text: Optional[str], name: Optional[str]) -> Optional[bool]:
-    """Whether the exact business ``name`` appears in ``text`` as a bounded
-    token sequence (case/whitespace-insensitive). None when the name is unknown.
-    Bounded so a short name ('IHBS') can't match inside a longer word. Pure."""
+    """Whether the client's business ``name`` is represented on the page.
+
+    First tries an exact bounded match (the clean case). Failing that — so a
+    normal formatting variation doesn't false-fail a correct page — it requires
+    every DISTINCTIVE token of the name present as a whole word, in any order:
+    tolerant of '&'↔'and', dropped corporate suffixes (LLC/Ltd/…), reordering,
+    and separators the verbatim phrase misses, while a genuinely WRONG business
+    (different distinctive tokens) still fails. None when the name is unknown.
+    Bounded so a short name ('IHBS') can't match inside a longer word. Pure.
+
+    Known residual: pure inflection (a page's 'Center' for a stored 'Centers')
+    isn't matched — deliberately no stemming, which would risk false passes."""
     n = normalize_ws(name).casefold()
     if not n:
         return None
     hay = normalize_ws(text).casefold()
-    return re.search(rf"(?<![0-9a-z]){re.escape(n)}(?![0-9a-z])", hay) is not None
+    if re.search(rf"(?<![0-9a-z]){re.escape(n)}(?![0-9a-z])", hay):
+        return True
+    tokens = [t for t in re.split(r"[^0-9a-z]+", n.replace("&", " and ")) if t]
+    distinctive = [t for t in tokens if t not in _KW_STOPWORDS and t not in _NAME_SUFFIXES] or tokens
+    return all(
+        re.search(rf"(?<![0-9a-z]){re.escape(t)}(?![0-9a-z])", hay) is not None
+        for t in distinctive
+    )
 
 
 # ---------------------------------------------------------------------------
