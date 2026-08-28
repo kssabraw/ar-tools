@@ -6,6 +6,7 @@ import { Spinner } from '../localseo/Spinner'
 import { ErrorDetails } from '../ErrorDetails'
 import { scoreColor } from '../localseo/shared'
 import type { ScoreResult } from '../localseo/types'
+import { SearchCoveragePanel } from '../coverage/SearchCoveragePanel'
 import { reoptApi } from './api'
 
 // Score + reoptimize a completed BLOG run in place, against the 8 engines.
@@ -135,6 +136,10 @@ export function BlogScorePanel({ runId, onReoptimized }: { runId: string; onReop
           ) : (
             <p style={{ fontSize: 13, color: '#16a34a', marginTop: 10 }}>No deficiencies — this article scores well across all engines.</p>
           )}
+          {/* Search coverage — entity/keyword/bolded-term targets + per-zone + frequency */}
+          <div style={{ marginTop: 16 }}>
+            <SearchCoveragePanel coverage={score.engine_scores?.serp_signal_coverage} />
+          </div>
         </div>
       ) : (
         !scoring && (

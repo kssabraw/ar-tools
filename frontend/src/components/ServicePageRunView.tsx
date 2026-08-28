@@ -6,6 +6,7 @@ import { api } from '../lib/api'
 import { useResumableJob } from '../lib/useResumableJob'
 import type { RunDetail as RunDetailType, ServiceWriterOutput } from '../lib/types'
 import type { ScoreResult } from './localseo/types'
+import { SearchCoveragePanel } from './coverage/SearchCoveragePanel'
 import { ErrorDetails } from './ErrorDetails'
 
 // What the score-jobs poll endpoint returns on completion: the score (both job
@@ -344,6 +345,10 @@ export function ServicePageRunView({ run }: { run: RunDetailType }) {
                 ) : (
                   <p style={{ fontSize: 13, color: '#16a34a', marginTop: 10 }}>No deficiencies — this page scores well across all engines.</p>
                 )}
+                {/* Search coverage — entity/keyword/bolded-term targets + per-zone + frequency */}
+                <div style={{ marginTop: 16 }}>
+                  <SearchCoveragePanel coverage={score.engine_scores?.serp_signal_coverage} />
+                </div>
               </div>
             ) : (
               !scoring && (
