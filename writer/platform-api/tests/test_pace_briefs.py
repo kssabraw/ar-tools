@@ -104,7 +104,7 @@ async def test_briefs_send_and_count_unreachable(monkeypatch):
     monkeypatch.setattr(B, "get_supabase", lambda: _SB())
     sent = []
 
-    async def fake_post(channel, text, thread_ts=None):
+    async def fake_post(channel, text, thread_ts=None, token=None):
         sent.append((channel, text))
         return "1.2"
 
@@ -148,7 +148,7 @@ async def test_briefs_scope_error_logged_once_then_silent(monkeypatch):
     monkeypatch.setattr(B, "get_supabase", lambda: _SB())
     calls = []
 
-    async def scope_fail(channel, text, thread_ts=None):
+    async def scope_fail(channel, text, thread_ts=None, token=None):
         calls.append(channel)
         raise RuntimeError("slack_error: missing_scope")
 

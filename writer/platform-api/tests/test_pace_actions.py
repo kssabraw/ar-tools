@@ -105,7 +105,7 @@ async def test_run_nudge_dms_the_individual(monkeypatch):
     monkeypatch.setattr(A.settings, "slack_bot_token", "xoxb-test")
     sent = {}
 
-    async def _post(channel, text):
+    async def _post(channel, text, thread_ts=None, token=None):
         sent.update(channel=channel, text=text)
 
     emits = []
@@ -125,7 +125,7 @@ async def test_run_nudge_falls_back_to_channel_on_missing_scope(monkeypatch):
     monkeypatch.setattr(A.settings, "pace_nudge_via_dm", True)
     monkeypatch.setattr(A.settings, "slack_bot_token", "xoxb-test")
 
-    async def _post(channel, text):
+    async def _post(channel, text, thread_ts=None, token=None):
         raise RuntimeError("slack_error: missing_scope")
 
     emits = []

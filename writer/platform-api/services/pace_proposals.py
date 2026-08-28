@@ -266,7 +266,7 @@ async def run_daily_chase_plan(today: Optional[date] = None) -> dict:
     try:
         from services.slack_assistant import post_message
 
-        ts = await post_message(channel, text)
+        ts = await post_message(channel, text, token=notifications.pace_bot_token())
     except Exception as exc:
         logger.warning("chase_plan_post_failed", extra={"error": str(exc)})
         return {"posted": True, "confirmable": False, "items": len(plan["items"])}

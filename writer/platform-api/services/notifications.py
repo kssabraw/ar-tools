@@ -149,6 +149,25 @@ def resolve_slack_channel(
     return None
 
 
+def pace_bot_token() -> str:
+    """The bot token PACE posts under: the dedicated PACE Slack app's token when
+    configured, else the shared (SerMaStr) token. PACE-side senders use this so
+    their posts carry the PACE identity once a separate app exists."""
+    return settings.pace_slack_bot_token or settings.slack_bot_token
+
+
+def resolve_slack_token(
+    channel: Optional[str], pace_channel: str, pace_token: str, default_token: str,
+) -> str:
+    """The bot token to deliver one notification under: the PACE app's token when
+    the message is bound for the PACE channel and that token is configured, else
+    the default (SerMaStr) token — so whichever bot owns the channel is the one
+    that posts. Pure — unit-tested."""
+    if pace_token and pace_channel and channel == pace_channel:
+        return pace_token
+    return default_token
+
+
 def emit(
     client_id: Optional[str],
     kind: str,
@@ -242,16 +261,17 @@ _SLACK_MAX_RETRIES = 2
 _SLACK_RETRY_AFTER_CAP_SECONDS = 30.0
 
 
-async def _send_slack(text: str, channel: Optional[str] = None) -> None:
+async def _send_slack(text: str, channel: Optional[str] = None, token: Optional[str] = None) -> None:
     import asyncio
 
     target = channel or settings.slack_default_channel
+    bot_token = token or settings.slack_bot_token
     body: dict = {}
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         for attempt in range(_SLACK_MAX_RETRIES + 1):
             resp = await client.post(
                 _SLACK_POST_URL,
-                headers={"Authorization": f"Bearer {settings.slack_bot_token}"},
+                headers={"Authorization": f"Bearer {bot_token}"},
                 json={"channel": target, "text": text, "mrkdwn": True},
             )
             if resp.status_code == 429 and attempt < _SLACK_MAX_RETRIES:
@@ -324,12 +344,18 @@ async def run_notification_dispatch_job(job: dict) -> None:
         try:
             # Route PM/PACE kinds to the dedicated PACE channel when configured;
             # an explicit payload.slack_channel still wins; else default channel.
+            # Post under the PACE app's bot token when the message goes to the
+            # PACE channel (so a separate PACE bot owns its channel).
             channel = resolve_slack_channel(
                 n.get("kind"), n.get("payload"), settings.pace_slack_channel
             )
+            token = resolve_slack_token(
+                channel, settings.pace_slack_channel,
+                settings.pace_slack_bot_token, settings.slack_bot_token,
+            )
             await _send_slack(
                 format_slack(n["title"], n.get("summary"), client_name, link, n["severity"]),
-                channel=channel,
+                channel=channel, token=token,
             )
             channels["slack"] = "ok"
         except Exception as exc:
