@@ -151,3 +151,30 @@ def test_budget_envelope_handles_a_missing_retainer():
 def test_budget_envelope_respects_the_drop_margin():
     env = re_.budget_envelope(2500.0, margin=re_.DROP_MARGIN)
     assert env["deployable"] == 1250.0 and env["discretionary"] == 965.0
+
+
+# ---------------------------------------------------------------------------
+# review_gap_from_gbp — the bug fix: the count lives in clients.gbp JSONB, not
+# a (nonexistent) top-level clients.gbp_review_count column.
+# ---------------------------------------------------------------------------
+def test_review_gap_below_threshold():
+    gap, signal = re_.review_gap_from_gbp({"gbp_review_count": 10})
+    assert gap == re_.REVIEW_THRESHOLD - 10  # 15
+    assert "10" in signal and str(re_.REVIEW_THRESHOLD) in signal
+
+
+def test_review_gap_at_or_above_threshold_is_none():
+    assert re_.review_gap_from_gbp({"gbp_review_count": re_.REVIEW_THRESHOLD}) == (None, None)
+    assert re_.review_gap_from_gbp({"gbp_review_count": 60}) == (None, None)
+
+
+def test_review_gap_no_count_or_no_gbp_is_none():
+    assert re_.review_gap_from_gbp(None) == (None, None)
+    assert re_.review_gap_from_gbp({}) == (None, None)
+    assert re_.review_gap_from_gbp({"gbp_rating": 4.8}) == (None, None)
+
+
+def test_review_gap_accepts_legacy_key_variants():
+    # rating_and_review_count tolerates review_count / reviews_count fallbacks.
+    assert re_.review_gap_from_gbp({"review_count": 5})[0] == re_.REVIEW_THRESHOLD - 5
+    assert re_.review_gap_from_gbp({"reviews_count": "8"})[0] == re_.REVIEW_THRESHOLD - 8

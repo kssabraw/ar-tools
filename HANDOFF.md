@@ -66,7 +66,7 @@ PR/map-embed tasks, and a **`Live URL` column** in citation/PR Google Sheets (sh
 → confirm verdicts look sane → tell the VAs to start using the In QA column. Tuning
 (structural floor, citation sample, visual confidence) is all `qa_*` config, no code.
 
-## ⏩ Update — 2026-08-28 · **SerMaStr monthly plan review → PACE assignment handoff (BUILT, ships dark)**
+## ⏩ Update — 2026-08-28 · **SerMaStr monthly plan review → PACE assignment handoff (MERGED #862 + PILOTING on EML Calibration)**
 
 The flow the owner asked for: **once a month, a few days before task generation,
 SerMaStr reviews the client's Recipe-Engine monthly task plan and proposes
@@ -98,16 +98,37 @@ feeds proposals into it:
 `strategist_enabled` (already **true** on PLATFORM) and
 `strategist_monthly_plan_review_enabled` (default **False**) are on.
 
-**To pilot on ONE client:** on PLATFORM set
-`STRATEGIST_MONTHLY_PLAN_REVIEW_CLIENT_IDS=<client-uuid>` and
-`STRATEGIST_MONTHLY_PLAN_REVIEW_ENABLED=true` (redeploy so the new container picks
-up the vars — a running container predating the change won't have them). It fires
-on the review day (default: 3 days before the 1st → ~the 29th). Verify: a
-`monthly_plan_review` row in `strategy_reviews` + a "Monthly plan review" Slack
-digest; approving a proposal creates the native task AND auto-places it (or holds
-it flagged if everyone's capped). Remove the allowlist var to open it to the whole
-book. Assignment respects caps only if team `weekly_hours` are set (Ivy 7, others
-40 — already set).
+**Pilot ENABLED on EML Calibration (2026-08-28).** On PLATFORM:
+`STRATEGIST_MONTHLY_PLAN_REVIEW_ENABLED=true` +
+`STRATEGIST_MONTHLY_PLAN_REVIEW_CLIENT_IDS=255bf636-0932-480c-b9dd-dd022929e5cc`
+(EML only). A fresh deployment (`2531c7b4`) built the merged code WITH the vars —
+setting a var and redeploying a *running* container isn't enough; the new
+container must build after the vars are set. First run fires **Aug 29** (today +
+3-day lead = Sep 1 generation). Verify: a `monthly_plan_review` row in
+`strategy_reviews` + a "Monthly plan review: EML Calibration" digest in the PACE
+Slack channel; approving a proposal creates the native task AND auto-places it (or
+holds it flagged if everyone's capped). Remove the allowlist var to open it to the
+whole book. Assignment respects caps only if team `weekly_hours` are set (Ivy 7,
+others 40 — already set).
+
+**Two findings from setting up the pilot:**
+- **EML had NO Recipe-Engine plan** (`monthly_task_plans` empty), so the review
+  would have had nothing to review. Generated one (row `6bc186ce`, month
+  2026-08-01). Because the generate endpoint (`POST /clients/{id}/task-plan`)
+  needs a user JWT that can't be minted from this environment, it was produced by
+  running the **real** `recipe_engine.allocate()` on EML's actual suite data and
+  inserting the row in the engine's exact shape (NOT a hand-built fake). Result is
+  itself a finding: $600 retainer × 0.34 = **$204 deployable**, but reporting
+  ($150) + baseline stack ($135) = $285 → **`under_funded` (−$81)** +
+  `margin_suggestion: 0.5`. The retainer can't fund the baseline at the 66%
+  margin — exactly what the monthly review should flag.
+- **`build_diagnosis`'s review-gap check is DEAD (latent bug).** It does
+  `clients.select("gbp_review_count, …")`, but **`clients` has no
+  `gbp_review_count` column** — the PostgREST select errors, is swallowed by the
+  try/except, and the reviews signal is silently skipped **for every client**. So
+  no plan ever funds "reviews to the 25 threshold" from this path. Not fixed here
+  (out of scope for the pilot); worth a follow-up — either point it at the real
+  review source (`clients.gbp` jsonb / `gbp_service`) or drop the dead branch.
 
 ## ⏩ Update — 2026-08-28 · **Native Task Manager cutover LIVE + scheduled Asana→native auto-import (PR #852, MERGED + LIVE)**
 
