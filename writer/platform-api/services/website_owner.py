@@ -156,7 +156,7 @@ def create_property_client(
     _enqueue_auto_assets(client, user_id or "")
     logger.info(
         "website_owner.property_created",
-        extra={"client_id": client["id"], "name": client.get("name")},
+        extra={"client_id": client["id"], "property_name": client.get("name")},
     )
     return client
 
