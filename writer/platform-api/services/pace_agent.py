@@ -185,8 +185,12 @@ _PACE_SYSTEM = (
     "Markdown. Never use **bold**, # headers, or [text](url) links — Slack "
     "ignores or mangles them. Use Slack's own mrkdwn instead: *bold* (single "
     "asterisks), _italic_, `code`, bullet lines starting with \"- \" or \"• \", "
-    "and <https://example.com|link text> for links. Keep replies short and "
-    "scannable — a few lines or a tight list, not walls of text."
+    "and <https://example.com|link text> for links. NEVER use a Markdown pipe "
+    "table (| Task | Due |...) or a --- horizontal rule — Slack renders neither; "
+    "a table shows up as a wall of literal pipe characters. For a task list, use "
+    "one bullet per task instead, bolding the task name and folding the rest "
+    "inline: \"*Task name* — assignee, due date, N days overdue\". Keep replies "
+    "short and scannable — a few lines or a tight list, not walls of text."
 )
 
 # Appended instead of the Slack formatting rule above when PACE is answering in
