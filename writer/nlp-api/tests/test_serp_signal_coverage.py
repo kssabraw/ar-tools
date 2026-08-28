@@ -61,8 +61,8 @@ def test_reports_entities_used_and_missing():
 
 def test_entity_chips_capped_at_thirty_ranked_by_page_spread():
     # 40 unique entities, all present on the page, ranked by descending
-    # page_spread. The UI "Entities used" chips are capped at the top 30 (raised
-    # from 15) while the per-zone entity SCORE stays on the top 15.
+    # page_spread. Both the UI "Entities used" chips AND the per-zone entity
+    # score use the top 30 by page_spread (raised from 15).
     entities = [
         {"name": f"Entity{i:02d}", "page_spread": 40 - i, "recommended_mentions": 1}
         for i in range(40)
