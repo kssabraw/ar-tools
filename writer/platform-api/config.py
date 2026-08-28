@@ -1840,7 +1840,7 @@ class Settings(BaseSettings):
     # quantity) — deliberate (owner ruling 2026-08-28, Option B).
     leadoff_roi_gap_growth_enabled: bool = True
     leadoff_roi_field_review_growth: float = 2.0     # board-wide default reviews/mo the field adds
-    leadoff_roi_rd_growth_pct_month: float = 0.03    # RD gap grows this fraction per ramp month
+    leadoff_roi_rd_growth_pct_month: float = 0.055   # RD gap grows this fraction per ramp month
     # GBP Placement Advisor (leadoff-gbp-placement-plan-v1_0.md §10): the
     # demand-aware "where should the GBP live" read. Free core = the Census
     # ACS block-group demand surface (census_demand.py, $0) ÷ the live

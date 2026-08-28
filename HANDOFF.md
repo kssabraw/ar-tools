@@ -77,7 +77,7 @@ the deliverable counts over the ramp horizon: **reviews** = `rev_win` +
 review_rate × ramp, where the rate is the field's **measured** velocity on
 scouted markets (`field_review_growth` = `field_vel30 / vel_matched` ≈ the #3's
 monthly review gain) or a flat board default (`leadoff_roi_field_review_growth`,
-2/mo); **RD** = the scouted RD gap × (1 + `leadoff_roi_rd_growth_pct_month` (0.03)
+2/mo); **RD** = the scouted RD gap × (1 + `leadoff_roi_rd_growth_pct_month` (0.055)
 × ramp) — RD has no growth-rate data pre-client, so it's a flat %/month
 assumption applied to the measured RD gap only (board/tryout have no RD gap → no
 RD growth). Gated `leadoff_roi_gap_growth_enabled` (True). The cost breakdown
