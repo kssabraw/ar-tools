@@ -1,6 +1,50 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-28 · **Director of Operations (cross-agent orchestration) — plan + Phase 1 build spec MERGED to `main` (spec only, nothing built in code)** (latest)
+## ⏩ Update — 2026-08-28 · **Everhour time-tracking integration — full plan doc written, still BLOCKED on live API verification, no code** (latest)
+
+Continuation of the prior session's handoff (`docs/modules/everhour-time-tracking-integration-handoff.md`).
+Goal: staff keep tracking time in Everhour (extension/manual); it flows one-way INTO the
+suite as `actual_hours` per native task + per-client + per-member, feeding real Recipe
+Engine margin and PACE capacity instead of `est_hours` guesses. Project = client; the suite
+mirrors native tasks → Everhour (metadata only, name/assignee) to create the join key —
+time is still pull-only.
+
+**Wrote `docs/modules/everhour-time-tracking-integration-plan-v1_0.md`** (full module plan,
+same template as `asana-task-integration-plan-v1_0.md`): the 9 locked decisions (mirrors the
+handoff's #1–#6, plus scheduler reuse / identity-join / gating), Feature A (thin task mirror,
+suite→Everhour, metadata-only — hooked at `task_monthly.py`/`task_producers.py`/
+`task_service.create_task` + a one-time backfill), Feature B (daily pull via the shared
+`gsc_scheduler`, rolling re-pull window, upsert-by-Everhour-record-id into a new
+`time_entries` table, recomputed rollups → `tasks.actual_hours` + per-client + per-member),
+architecture/files, data model (`asana_team_members.everhour_user_id`,
+`clients.everhour_project_id`, `tasks.everhour_task_id`/`_synced_at`/`actual_hours`,
+`time_entries`), config, provisioning steps, phasing (0–4), and open questions.
+
+**One correction to the prior handoff, caught while grounding the plan against the live
+schema:** the handoff said `everhour_user_id` should sit "next to `profile_id` /
+`slack_user_id`" on `asana_team_members` — `slack_user_id` actually lives on `profiles`
+(migration `20260711210000`), not on the roster table. `everhour_user_id` is a peer of
+`profile_id` only. Also confirmed the roster identity model has moved past what the handoff
+cited: Phase 2a/2b (`20260828210000`/`220000`) already promoted `asana_team_members.id` to
+the PK and dropped `tasks.assignee_gid` entirely — `everhour_user_id` joins on that `id`.
+
+**Blocker re-verified, still standing:** `developers.everhour.com`, `everhour.docs.apiary.io`,
+**and `api.everhour.com` itself** all fail the sandbox's egress proxy with `connect_rejected`
+/ gateway 403 (org policy denial, confirmed via `__agentproxy/status`, not a transient
+failure). The user's message this session named three unblock routes (allow-list the domain /
+paste the docs / provide an API key to test live) but didn't actually pick one or paste
+anything — flagged back to them that **a key alone won't unblock it**, since the proxy
+currently rejects the `CONNECT` to `api.everhour.com` outright regardless of whether a valid
+key is presented. Phase 0 (the `everhour_service.py` wrapper, validated against a real
+key/response) cannot start until one of the three routes is actually resolved.
+
+**Branch note:** developed on `claude/everhour-time-tracking-me08ys` (this session's
+harness-designated branch), not `claude/everhour-project-management-6h1iuj` named in the
+stale handoff-doc header — the handoff doc's own PR (#883) already merged to `main` before
+this session started, and `claude/everhour-time-tracking-me08ys` is a fresh branch off that
+merged `main`, so it already carries the handoff doc with no rebase needed.
+
+## ⏩ Update — 2026-08-28 · **Director of Operations (cross-agent orchestration) — plan + Phase 1 build spec MERGED to `main` (spec only, nothing built in code)**
 
 Architecture review of "we have SerMaStr + PACE + QA + the task board — we need an
 orchestrator making sure they work in concert," refined to wanting a **Director of
