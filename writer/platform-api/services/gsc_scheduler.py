@@ -632,6 +632,8 @@ async def gsc_scheduler() -> None:
 
     from services.strategist import enqueue_due_monthly_plan_reviews, enqueue_due_strategy_reviews
     from services.autonomy_executor import enqueue_due_autonomy_runs
+    from services.director.reconcile import run_daily as run_director_reconcile
+    from services.director.digest import run_weekly as run_ops_digest
 
     interval = settings.gsc_scheduler_poll_interval_seconds
     hour = settings.gsc_ingest_hour_utc
@@ -644,6 +646,7 @@ async def gsc_scheduler() -> None:
     last_run_date = parse_marker_date(state.get("daily"))
     last_df_date = parse_marker_date(state.get("df_weekly"))
     last_reopt_date = parse_marker_date(state.get("reopt_weekly"))
+    last_ops_digest_date = parse_marker_date(state.get("ops_digest_weekly"))
     last_strategist_date = parse_marker_date(state.get("strategist_daily"))
     last_rank_analysis_date = parse_marker_date(state.get("rank_analysis_weekly"))
     last_asana_month = parse_marker_month(state.get("asana_month"))
@@ -760,6 +763,11 @@ async def gsc_scheduler() -> None:
                 from services.pace_proposals import run_daily_chase_plan
                 _safe("pace_episode_sync", run_pace_episode_sync, now.date())
                 await _safe_async("pace_chase_plan", run_daily_chase_plan, now.date())
+                # Director of Operations — daily reversible reconciliation
+                # (build spec §6.1): opens/auto-closes board-task seam flags +
+                # the qa_idle notification. Self-gated on director_enabled;
+                # runs after the PACE episode sync so it reads post-sync state.
+                _safe("director_reconcile", run_director_reconcile, now.date())
                 # Per-person morning DM briefs (§4.13) — additionally gated on
                 # pace_daily_brief_push (off until the im:write scope lands).
                 from services.pace_briefs import run_morning_briefs
@@ -804,6 +812,16 @@ async def gsc_scheduler() -> None:
                 if _safe("reopt_plans", enqueue_due_reopt_plans):
                     last_reopt_date = now.date()
                     save_marker("reopt_weekly", last_reopt_date.isoformat())
+            # Director of Operations — weekly operations-flow digest (build
+            # spec §6.2, owner decision 2: its own weekday hook, not a line on
+            # the daily PACE digest). Self-gated on director_enabled; the
+            # digest itself suppresses on an all-clear week.
+            if now.weekday() == settings.director_digest_weekday and should_run(
+                now, last_ops_digest_date, hour
+            ):
+                if _safe("ops_digest", run_ops_digest, now.date()):
+                    last_ops_digest_date = now.date()
+                    save_marker("ops_digest_weekly", last_ops_digest_date.isoformat())
             # SerMaStr strategist reviews — now per-client staggered: each
             # client has its own review weekday (clients.strategist_weekday,
             # unset → the global default), so the due-check runs DAILY and the

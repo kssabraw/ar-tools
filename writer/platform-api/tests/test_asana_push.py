@@ -1,6 +1,10 @@
-"""Unit tests for services.asana_push — pure key/assignee/notes helpers."""
+"""Unit tests for services.asana_push — pure key/assignee/notes helpers, plus
+the Director of Operations E2 fix (build spec §3.2): _push_task_plan_native
+routing an unassigned monthly-plan task through pm_assign.place_task."""
 
 from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
 
 from services import asana_push as ap
 
@@ -62,3 +66,83 @@ def test_proposal_task_name_and_notes():
     assert "6-week episode" in notes
     assert "LB SOP §4" in notes
     assert "action-plan" in notes
+
+
+def _fake_supabase(plan_row: dict, members: list[dict]):
+    tables: dict[str, MagicMock] = {}
+
+    def table(name):
+        if name not in tables:
+            mock = MagicMock()
+            mock.select.return_value = mock
+            mock.eq.return_value = mock
+            mock.limit.return_value = mock
+            mock.update.return_value = mock
+            if name == "monthly_task_plans":
+                mock.execute.return_value = MagicMock(data=[plan_row])
+            elif name == "asana_team_members":
+                mock.execute.return_value = MagicMock(data=members)
+            tables[name] = mock
+        return tables[name]
+
+    sb = MagicMock()
+    sb.table.side_effect = table
+    return sb
+
+
+PLAN_ROW = {
+    "id": "plan-1",
+    "client_id": "c1",
+    "plan": {"tasks": [{"label": "GBP posts", "task_type": "gbp_posts", "assignee": None}]},
+    "asana_push": {},
+}
+
+
+def test_push_task_plan_native_autoplaces_when_flag_enabled():
+    sb = _fake_supabase(PLAN_ROW, [])
+    with (
+        patch.object(ap, "get_supabase", return_value=sb),
+        patch.object(ap.settings, "pace_autoplace_producers", True),
+        patch("services.task_monthly.ensure_month_section", return_value={"id": "sec-1"}),
+        patch("services.task_service.create_task", return_value={"id": "task-1"}) as create,
+        patch("services.pm_assign.place_task") as place,
+    ):
+        result = ap._push_task_plan_native("c1", "plan-1")
+
+    assert result["status"] == "ok"
+    assert result["created"] == 1
+    create.assert_called_once()
+    # Name-match assignment stays intact — place_task never overwrites it,
+    # it only gap-fills when assignee_id is empty (pm_assign.py's own guard).
+    place.assert_called_once_with("task-1")
+
+
+def test_push_task_plan_native_skips_autoplace_when_flag_disabled():
+    sb = _fake_supabase(PLAN_ROW, [])
+    with (
+        patch.object(ap, "get_supabase", return_value=sb),
+        patch.object(ap.settings, "pace_autoplace_producers", False),
+        patch("services.task_monthly.ensure_month_section", return_value={"id": "sec-1"}),
+        patch("services.task_service.create_task", return_value={"id": "task-1"}),
+        patch("services.pm_assign.place_task") as place,
+    ):
+        result = ap._push_task_plan_native("c1", "plan-1")
+
+    assert result["status"] == "ok"
+    place.assert_not_called()
+
+
+def test_push_task_plan_native_autoplace_failure_is_swallowed():
+    """A placement failure is best-effort — the push itself must still succeed."""
+    sb = _fake_supabase(PLAN_ROW, [])
+    with (
+        patch.object(ap, "get_supabase", return_value=sb),
+        patch.object(ap.settings, "pace_autoplace_producers", True),
+        patch("services.task_monthly.ensure_month_section", return_value={"id": "sec-1"}),
+        patch("services.task_service.create_task", return_value={"id": "task-1"}),
+        patch("services.pm_assign.place_task", side_effect=RuntimeError("boom")),
+    ):
+        result = ap._push_task_plan_native("c1", "plan-1")
+
+    assert result["status"] == "ok"
+    assert result["created"] == 1
