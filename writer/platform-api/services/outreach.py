@@ -3308,6 +3308,339 @@ def list_prospect_contacts_batch(prospect_ids: list[str]) -> dict[str, Any]:
     return {"by_prospect": by_prospect}
 
 
+# --- Enigma card revenue (per-prospect 1m/3m/12m card_revenue_amount — outreach DECISIONS.md) --
+#
+# The PLACEMENT side of the Enigma card-revenue rung (the proven half). platform-api writes a signed
+# `enigma_request` order and NOTHING MORE — the money moves in the outreach job's `tick`, which drains
+# the order and bills one Enigma `search` lookup per prospect (order-is-the-confirmation, exactly like
+# a scan/enrichment order). Two spend guards sit in front of it, identical in shape to enrichment: a
+# FREE preflight cost estimate the UI shows, and a per-user daily budget guard that uses the order rows
+# themselves as the ledger. Distinct from enrichment in TWO ways only: the match anchor is a NAME (not
+# a place_id — Enigma matches on name+address), and the durable/already-billed statuses are the three
+# card-lookup answers below.
+
+ENIGMA_REQUEST_ACTIVE_STATUSES: tuple[str, ...] = ("pending", "running")
+# The per-prospect statuses that mean "already billed, answer is durable" — the drain skips these, and
+# the estimate/budget count only prospects NOT in one of them. `failed` (the call errored) is absent:
+# it is retryable, so it re-bills on a re-order.
+_ENIGMA_DONE_STATUSES: tuple[str, ...] = ("matched", "no_card", "no_match")
+# The entity paths a placed order may carry (the outreach drain + migration CHECK accept these two).
+ENIGMA_ENTITY_TYPES: tuple[str, ...] = ("brand", "operating_location")
+
+
+def enigma_cost_cents(billable: int, rate_cents: int) -> int:
+    """Estimated cost of looking up `billable` prospects at `rate_cents` each. Pure."""
+    return max(0, billable) * max(0, rate_cents)
+
+
+def enigma_spent_today_cents(orders: list[dict[str, Any]]) -> int:
+    """Sum of est_cost_cents across a user's enigma orders placed today — the per-user ledger. Pure."""
+    return sum(int(o.get("est_cost_cents") or 0) for o in orders)
+
+
+def enigma_budget_denial(spent_cents: int, add_cents: int, budget_usd: float) -> str | None:
+    """Why placing this order would breach the daily budget, or None. Pure, so the gate is testable
+    without a database — mirrors the enrichment guard's shape (a refusal names the numbers)."""
+    budget_cents = int(round(budget_usd * 100))
+    if spent_cents + add_cents > budget_cents:
+        return (
+            f"daily Enigma budget ${budget_usd:.2f} would be exceeded — "
+            f"${spent_cents / 100:.2f} spent today, this order is ${add_cents / 100:.2f}"
+        )
+    return None
+
+
+def validate_enigma_selection(prospect_ids: list[str], cap: int) -> list[str]:
+    """De-dupe and bound a selection. Pure. Refuses an empty selection (nothing to look up) and one
+    past the per-order cap (a bigger 'select all' is split into several orders by the UI)."""
+    ids = [p for p in dict.fromkeys(prospect_ids) if p]
+    if not ids:
+        raise OutreachError("empty_selection", "select at least one prospect to look up")
+    if len(ids) > cap:
+        raise OutreachError(
+            "selection_too_large",
+            f"a single Enigma order is capped at {cap} prospects (got {len(ids)}); "
+            "split a larger selection into several orders",
+        )
+    return ids
+
+
+def normalize_enigma_entity_type(entity_type: str | None) -> str:
+    """The entity path for an order: the request's choice if valid, else the configured default. Pure
+    over its inputs except the config read. Rejects an unrecognised value rather than sending Enigma a
+    string it will 400 on."""
+    from config import settings
+
+    default = (settings.outreach_enigma_entity_type or "brand").strip().lower()
+    if entity_type is None or not str(entity_type).strip():
+        return default if default in ENIGMA_ENTITY_TYPES else "brand"
+    et = str(entity_type).strip().lower()
+    if et not in ENIGMA_ENTITY_TYPES:
+        raise OutreachError(
+            "invalid_entity_type",
+            f"entity_type must be one of {', '.join(ENIGMA_ENTITY_TYPES)} (got {entity_type!r})",
+        )
+    return et
+
+
+def _enigma_billable(client: Any, prospect_ids: list[str]) -> dict[str, Any]:
+    """How many of a selection would actually be billed: prospects that exist, carry a NAME (Enigma's
+    match anchor — NOT a place_id, unlike enrichment), and are not already looked up. Reads `prospect`
+    + `prospect_enigma`, chunked under the 1000-row cap. Returns counts the estimate and the order both
+    use, reconciling as selected = billable + already_fetched + unknown + no_name."""
+    existing: dict[str, dict[str, Any]] = {}
+    for start in range(0, len(prospect_ids), 500):
+        chunk = prospect_ids[start : start + 500]
+        if not chunk:
+            continue
+        for row in (
+            client.table("prospect").select("id, name").in_("id", chunk).execute().data or []
+        ):
+            existing[row["id"]] = row
+    done: set[str] = set()
+    for start in range(0, len(prospect_ids), 500):
+        chunk = prospect_ids[start : start + 500]
+        if not chunk:
+            continue
+        for row in (
+            client.table("prospect_enigma")
+            .select("prospect_id, status")
+            .in_("prospect_id", chunk)
+            .in_("status", list(_ENIGMA_DONE_STATUSES))
+            .execute()
+            .data
+            or []
+        ):
+            done.add(row["prospect_id"])
+    billable = [
+        pid
+        for pid in prospect_ids
+        if pid in existing and (existing[pid].get("name") or "").strip() and pid not in done
+    ]
+    return {
+        "selected": len(prospect_ids),
+        "already_fetched": sum(1 for pid in prospect_ids if pid in done),
+        "unknown": sum(1 for pid in prospect_ids if pid not in existing),
+        "no_name": sum(
+            1 for pid in prospect_ids
+            if pid in existing and pid not in done and not (existing[pid].get("name") or "").strip()
+        ),
+        "billable": len(billable),
+    }
+
+
+def _enigma_spent_today(client: Any, user_id: str) -> int:
+    """A user's est_cost_cents summed over enigma orders they placed today (UTC). The ledger read."""
+    from datetime import datetime, timezone
+
+    day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    rows = (
+        client.table("enigma_request")
+        .select("est_cost_cents")
+        .eq("requested_by", user_id)
+        .gte("created_at", day_start.isoformat())
+        .execute()
+        .data
+        or []
+    )
+    return enigma_spent_today_cents(rows)
+
+
+def estimate_enigma(prospect_ids: list[str], user_id: str) -> dict[str, Any]:
+    """Free preflight: what a selection would cost, and whether the daily budget allows it. Spends
+    nothing — the UI shows this before the admin confirms."""
+    from config import settings
+
+    ids = validate_enigma_selection(prospect_ids, settings.outreach_enigma_max_places_per_order)
+    client = get_outreach_client()
+    counts = _enigma_billable(client, ids)
+    est_cents = enigma_cost_cents(counts["billable"], settings.outreach_enigma_cost_per_lookup_cents)
+    spent = _enigma_spent_today(client, user_id)
+    denial = enigma_budget_denial(spent, est_cents, settings.outreach_enigma_daily_budget_usd)
+    return {
+        **counts,
+        "est_cost_cents": est_cents,
+        "est_cost_usd": round(est_cents / 100, 2),
+        "spent_today_cents": spent,
+        "daily_budget_usd": settings.outreach_enigma_daily_budget_usd,
+        "allowed": denial is None,
+        "denial": denial,
+    }
+
+
+def create_enigma_request(
+    *, prospect_ids: list[str], note: str | None, entity_type: str | None, actor_id: str
+) -> dict[str, Any]:
+    """Place a signed Enigma card-revenue order. Admin-gated at the router — this row authorizes billed
+    lookups on the next tick. Validates the selection + entity path, checks the per-user daily budget
+    against the estimate, records the estimate on the order (the row is the ledger), and inserts.
+    platform-api never spends: the order is drained by the outreach job. A selection that is entirely
+    already looked up is refused (nothing to bill) so a click that would do nothing says so."""
+    from config import settings
+
+    ids = validate_enigma_selection(prospect_ids, settings.outreach_enigma_max_places_per_order)
+    et = normalize_enigma_entity_type(entity_type)
+    client = get_outreach_client()
+    counts = _enigma_billable(client, ids)
+    if counts["billable"] == 0:
+        raise OutreachError(
+            "nothing_to_look_up",
+            "every selected prospect is already looked up (or has no name) — nothing to bill",
+        )
+    est_cents = enigma_cost_cents(counts["billable"], settings.outreach_enigma_cost_per_lookup_cents)
+    spent = _enigma_spent_today(client, actor_id)
+    denial = enigma_budget_denial(spent, est_cents, settings.outreach_enigma_daily_budget_usd)
+    if denial:
+        raise OutreachError("enigma_budget_exceeded", denial)
+
+    row = {
+        "prospect_ids": ids,
+        "entity_type": et,
+        "requested_by": actor_id,
+        "est_cost_cents": est_cents,
+        "requested_count": len(ids),
+        "note": (note or "").strip() or None,
+    }
+    written = client.table("enigma_request").insert(row).execute().data or []
+    if not written:
+        raise OutreachError("enigma_request_not_created", "the order was not written")
+    order = written[0]
+    order["estimate"] = {**counts, "est_cost_cents": est_cents}
+    return order
+
+
+def list_enigma_requests(
+    *, status: str | None = None, limit: int | None = None, offset: int | None = None
+) -> dict[str, Any]:
+    """Enigma orders, newest first — the queue/progress view."""
+    size, start = clamp_page(limit, offset)
+    query = (
+        get_outreach_client()
+        .table("enigma_request")
+        .select("*", count="exact")
+        .order("created_at", desc=True)
+        .range(start, start + size - 1)
+    )
+    if status:
+        query = query.eq("status", status)
+    response = query.execute()
+    return {
+        "enigma_requests": response.data or [],
+        "total": response.count or 0,
+        "limit": size,
+        "offset": start,
+    }
+
+
+def enigma_request_detail(request_id: str) -> dict[str, Any]:
+    """One order plus a small progress read (the counters live on the row itself)."""
+    rows = (
+        get_outreach_client()
+        .table("enigma_request")
+        .select("*")
+        .eq("id", request_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise OutreachError("enigma_request_not_found", "no such order")
+    order = rows[0]
+    done = (
+        order["matched_count"] + order["no_match_count"]
+        + order["skipped_count"] + order["failed_count"]
+    )
+    order["progress"] = {
+        "requested": order["requested_count"],
+        "done": done,
+        "matched": order["matched_count"],
+        "card": order["card_count"],
+        "no_match": order["no_match_count"],
+        "skipped": order["skipped_count"],
+        "failed": order["failed_count"],
+    }
+    return {"enigma_request": order}
+
+
+def cancel_enigma_request(request_id: str, actor_id: str) -> dict[str, Any]:
+    """Withdraw a PENDING order. Conditional on status, like the scan/enrichment-order cancel: one the
+    tick has claimed is already looking up (real money) and resolves on its own."""
+    from datetime import datetime, timezone
+
+    client = get_outreach_client()
+    hit = (
+        client.table("enigma_request")
+        .update({"status": "cancelled", "finished_at": datetime.now(timezone.utc).isoformat()})
+        .eq("id", request_id)
+        .eq("status", "pending")
+        .execute()
+        .data
+        or []
+    )
+    if hit:
+        return {"enigma_request": hit[0]}
+    existing = (
+        client.table("enigma_request").select("id, status").eq("id", request_id).limit(1)
+        .execute().data
+    )
+    if not existing:
+        raise OutreachError("enigma_request_not_found", "no such order")
+    raise OutreachError(
+        "enigma_request_not_cancellable",
+        f"order is {existing[0]['status']!r}; only a pending order can be withdrawn",
+    )
+
+
+# The prospect_enigma columns a card-data read returns (the raw entity is deliberately NOT selected —
+# it can be large, and the structured card fields + match audit are what a UI shows).
+_ENIGMA_COLUMNS = (
+    "prospect_id, place_id, status, matched, matched_name, "
+    "card_revenue_1m, card_revenue_3m, card_revenue_12m, card_as_of, "
+    "entity_type, error, fetched_at"
+)
+
+
+def get_prospect_enigma(prospect_id: str) -> dict[str, Any]:
+    """A prospect's Enigma card-revenue result (1m/3m/12m windows + match audit), or None if it has
+    not been looked up. Read-only; the coverage table / lead drawer read this. The `raw` entity is not
+    returned (large; the structured fields are what a UI shows)."""
+    rows = (
+        get_outreach_client()
+        .table("prospect_enigma")
+        .select(_ENIGMA_COLUMNS)
+        .eq("prospect_id", prospect_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    return {"prospect_id": prospect_id, "enigma": rows[0] if rows else None}
+
+
+def get_prospect_enigma_batch(prospect_ids: list[str]) -> dict[str, Any]:
+    """Enigma card results for a SET of prospects in one read — the coverage table's batch, so a
+    200-row table costs a few queries instead of 200 (no N+1). Chunked under the 1000-row cap; the
+    caller passes the page it is showing. Absent prospects simply don't appear in `by_prospect`."""
+    ids = [p for p in dict.fromkeys(prospect_ids) if p]
+    if not ids:
+        return {"by_prospect": {}}
+    client = get_outreach_client()
+    by_prospect: dict[str, Any] = {}
+    for start in range(0, len(ids), 500):
+        chunk = ids[start : start + 500]
+        for row in (
+            client.table("prospect_enigma")
+            .select(_ENIGMA_COLUMNS)
+            .in_("prospect_id", chunk)
+            .execute()
+            .data
+            or []
+        ):
+            by_prospect[row["prospect_id"]] = row
+    return {"by_prospect": by_prospect}
+
+
 # --- Site name-scrape (FREE owner/manager fallback — outreach DECISIONS.md) --------------------
 #
 # When Outscraper enrichment returns no NAME, scan the prospect's OWN site for the owner/manager.

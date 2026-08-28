@@ -1957,6 +1957,24 @@ class Settings(BaseSettings):
     # "select all" is split into several orders by the UI.
     outreach_enrich_max_places_per_order: int = 200
 
+    # --- Enigma card revenue (per-prospect 1m/3m/12m card_revenue_amount) -----------------------
+    # The PLACEMENT side of the Enigma card-revenue rung (the proven half). platform-api writes a signed
+    # `enigma_request` order (it never spends — the outreach `tick` drains it, billing one Enigma
+    # `search` per prospect) and enforces the per-user daily budget here, same shape as enrichment. The
+    # cost rate drives the free preflight estimate + the budget check; keep it in sync with the outreach
+    # job's enigma_cost_per_lookup_cents (that one drives the drain's cost_ledger write). Placeholder
+    # until the probe's real bill lands (I-022 — the guard is only as honest as this number).
+    outreach_enigma_cost_per_lookup_cents: int = 50
+    # Per-user daily Enigma ceiling (USD), enforced against the sum of a user's orders placed today.
+    outreach_enigma_daily_budget_usd: float = 10.0
+    # A selection larger than this is refused at placement (the drain enforces the same cap). A bigger
+    # "select all" is split into several orders by the UI.
+    outreach_enigma_max_places_per_order: int = 200
+    # Default entity path stamped on an order that doesn't specify one. 'brand' returned the card
+    # windows in the probe; 'operating_location' is the alternative for a future owner-bearing vertical.
+    # Must be one of the outreach drain's accepted values (brand | operating_location).
+    outreach_enigma_entity_type: str = "brand"
+
     # Site name-scrape (the FREE owner/manager fallback). A per-selection cap mirroring the enrich
     # one; the outreach job's name_scrape_max_places_per_order enforces the same bound in the drain.
     # No cost/budget keys — the scrape is an own HTTP GET and spends nothing (PRD §B3), so unlike

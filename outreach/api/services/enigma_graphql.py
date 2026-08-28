@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -210,6 +211,41 @@ def extract_card_windows(brand: Any) -> dict[str, Any] | None:
             if amt is not None:
                 out[period] = amt
     return out or None
+
+
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def extract_card_as_of(brand: Any) -> str | None:
+    """The latest `periodEndDate` across the returned card windows (the "revenue as of" recency the
+    scoring model wants — the windows are a rolling series), as an ISO `YYYY-MM-DD` string, or None.
+    Pure and tolerant: a missing/odd shape yields None, and a value that is not a bare ISO date is
+    DROPPED (not returned) — the caller writes this into a Postgres `date` column, so a non-date string
+    would fail the insert and poison the whole order. Only the leading date part is kept (Enigma sends
+    `YYYY-MM-DD`; a datetime is truncated defensively; anything else is ignored)."""
+    if not isinstance(brand, dict):
+        return None
+    latest: str | None = None
+    for node in _nodes(brand.get("cardTransactions")):
+        end = node.get("periodEndDate")
+        if isinstance(end, str) and end.strip():
+            day = end.strip()[:10]
+            if _ISO_DATE.match(day) and (latest is None or day > latest):
+                latest = day
+    return latest
+
+
+def extract_matched_name(brand: Any) -> str | None:
+    """The name of the matched entity (`names.edges[0].node.name`), for QA of match quality — a wrong
+    match is the silent failure (a plausible card figure on the wrong business). Pure; None if absent."""
+    if not isinstance(brand, dict):
+        return None
+    node = _first_node(brand.get("names"))
+    if node:
+        nm = node.get("name")
+        if isinstance(nm, str) and nm.strip():
+            return nm.strip()
+    return None
 
 
 def _person_name(role: dict[str, Any]) -> str | None:

@@ -809,6 +809,50 @@ def cmd_enrich(args) -> int:
     return 1 if any(o.outcome == "failed" for o in report.orders) else 0
 
 
+def cmd_enigma(args) -> int:
+    """Drain pending Enigma card-revenue orders and store the card windows. FREE to INVOKE — the
+    signed `enigma_request` row is the spend confirmation, like `enrich`/`tick`, so this is
+    deliberately NOT in PAID_COMMANDS. It bills one Enigma `search` lookup per prospect that a signed
+    order authorized; a re-order skips already-fetched prospects (no re-bill)."""
+    import asyncio as _asyncio
+
+    from api.config import missing_enigma_vars
+    from api.services import enigma_queue
+
+    settings = get_settings()
+    absent = missing_enigma_vars(settings)
+    if absent:
+        print(f"REFUSED: missing credentials: {', '.join(absent)}", file=sys.stderr)
+        return 2
+
+    client = _client()
+    report = _asyncio.run(enigma_queue.drain(client, settings))
+    print(
+        json.dumps(
+            {
+                "orders_processed": report.orders_processed,
+                "orders": [
+                    {
+                        "order_id": o.order_id,
+                        "outcome": o.outcome,
+                        "requested": o.requested,
+                        "skipped": o.skipped,
+                        "matched": o.matched,
+                        "card": o.card,
+                        "no_match": o.no_match,
+                        "failed": o.failed,
+                        "error": o.error,
+                        "problems": o.problems[:10],
+                    }
+                    for o in report.orders
+                ],
+            },
+            indent=2,
+        )
+    )
+    return 1 if any(o.outcome == "failed" for o in report.orders) else 0
+
+
 def cmd_probe_enrich(args) -> int:
     """§ measure-don't-infer spike: enrich ONE place and LOG the full record. BILLS one enrichment.
 
@@ -1052,6 +1096,7 @@ def cmd_tick(args) -> int:
 
     from api.services import (
         ai_scan_queue,
+        enigma_queue,
         enrich_queue,
         name_scrape_queue,
         name_search_queue,
@@ -1079,6 +1124,10 @@ def cmd_tick(args) -> int:
     # (the signed order is its confirmation, like enrichment), so no env token. The third-rung
     # fallback the UI places when enrichment AND the free site-scrape both found no name.
     searched_names = _asyncio.run(name_search_queue.drain(client, settings))
+    # Enigma card-revenue orders — PAID (one Enigma `search` per prospect) but order-gated (the signed
+    # `enigma_request` is its confirmation, like enrichment/name-search), so no env token. Per-prospect,
+    # budget-bounded per tick. Stores the 1m/3m/12m card windows in prospect_enigma.
+    enigma_done = _asyncio.run(enigma_queue.drain(client, settings))
     # Report signal scans (organic / AI-visibility UI triggers). Each is one cheap paid call, drained
     # ≤ its configured per-tick count (default 1), same signed-order + terminal-outcome model. A drain
     # that claims nothing ends the loop early, so an empty queue costs one read, not N.
@@ -1192,6 +1241,22 @@ def cmd_tick(args) -> int:
                         for o in searched_names.orders
                     ],
                 },
+                "enigma": {
+                    "orders_processed": enigma_done.orders_processed,
+                    "orders": [
+                        {
+                            "order_id": o.order_id,
+                            "outcome": o.outcome,
+                            "matched": o.matched,
+                            "card": o.card,
+                            "no_match": o.no_match,
+                            "skipped": o.skipped,
+                            "failed": o.failed,
+                            "error": o.error,
+                        }
+                        for o in enigma_done.orders
+                    ],
+                },
                 "organic": [
                     {
                         "order_id": o.order_id,
@@ -1223,12 +1288,16 @@ def cmd_tick(args) -> int:
     # queue whose orders quietly fail is the "green badge over a crashed job" shape (§6.2), and the
     # exit code is the only summary a cron run leaves besides its logs.
     enrich_failed = any(o.outcome == "failed" for o in enriched.orders)
+    enigma_failed = any(o.outcome == "failed" for o in enigma_done.orders)
     signal_failed = any(
         o.outcome == "failed" for o in (*organic_drains, *ai_drains)
     )
     return (
         1
-        if enrich_failed or signal_failed or "failed" in (drained.outcome, onboarded.outcome)
+        if enrich_failed
+        or enigma_failed
+        or signal_failed
+        or "failed" in (drained.outcome, onboarded.outcome)
         else code
     )
 
@@ -2081,7 +2150,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[
             "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
             "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech", "scan-names",
-                "probe-pixel-field", "enrich", "probe-enrich", "probe-enigma", "probe-enigma-graphql", "collect", "rollup", "tick", "tick-loop", "score",
+                "probe-pixel-field", "enrich", "probe-enrich", "enigma", "probe-enigma", "probe-enigma-graphql", "collect", "rollup", "tick", "tick-loop", "score",
                 "recalibrate",
             "render-heatmap", "render-delta",
         ],
@@ -2238,7 +2307,7 @@ def main() -> int:
             [
                 "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
                 "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech", "scan-names",
-                "probe-pixel-field", "enrich", "probe-enrich", "probe-enigma", "probe-enigma-graphql", "collect", "rollup", "tick", "tick-loop", "score",
+                "probe-pixel-field", "enrich", "probe-enrich", "enigma", "probe-enigma", "probe-enigma-graphql", "collect", "rollup", "tick", "tick-loop", "score",
                 "recalibrate",
                 "render-heatmap", "render-delta",
             ],
@@ -2265,6 +2334,7 @@ def main() -> int:
         "probe-pixel-field": cmd_probe_pixel_field,
         "enrich": cmd_enrich,
         "probe-enrich": cmd_probe_enrich,
+        "enigma": cmd_enigma,
         "probe-enigma": cmd_probe_enigma,
         "probe-enigma-graphql": cmd_probe_enigma_graphql,
         "collect": cmd_collect,
