@@ -282,16 +282,70 @@ def select_zones(cells: list[dict[str, Any]], *, zone_count: int,
     return chosen
 
 
+def select_zones_coverage(cells: list[dict[str, Any]], surface: list[dict[str, Any]],
+                          *, zone_count: int,
+                          coverage_radius_miles: float) -> list[dict[str, Any]]:
+    """Maximum-coverage zone selection (owner ruling 2026-08-28). Each chosen pin
+    **claims** the demand within its catchment, so later pins are scored on the
+    REMAINING (uncovered) demand and spread to distinct demand pockets instead of
+    clustering in the metro's demand peak — a Manhattan pin can't rank in Queens,
+    so once Manhattan's demand is owned the next pin wins in the next real centre.
+
+    Each round: score every remaining candidate by
+    `Σ_bg remaining(bg) × 1/(1+d/COVERAGE) × (1 − pressure_norm)`, take the max,
+    then decay every block group's remaining demand by that pin's coverage weight.
+    Stops early when no meaningful uncovered demand is left (returns fewer zones,
+    honestly). Selection uses the WEIGHTED demand; `covers_households` reports the
+    UNWEIGHTED households the pin newly owns (legible catchment number). The chosen
+    cells keep their standalone `score` from `score_grid` for display. Pure."""
+    if not surface or not cells:
+        return []
+    lats = [bg["lat"] for bg in surface]
+    lngs = [bg["lng"] for bg in surface]
+    remaining = [float(bg["weighted_households"]) for bg in surface]  # drives selection
+    remaining_hh = [float(bg["households"]) for bg in surface]        # drives the card count
+    pool = list(cells)
+    chosen: list[dict[str, Any]] = []
+    for _ in range(max(0, zone_count)):
+        best: Optional[dict[str, Any]] = None
+        best_marginal = 0.0
+        best_weights: Optional[list[float]] = None
+        for c in pool:
+            weights = [1.0 / (1.0 + haversine_miles(c["lat"], c["lng"], lats[i], lngs[i])
+                              / coverage_radius_miles)
+                       for i in range(len(surface))]
+            md = sum(remaining[i] * weights[i] for i in range(len(surface)))
+            score = md * (1.0 - float(c.get("pressure_norm") or 0.0))
+            if score > best_marginal:
+                best_marginal, best, best_weights = score, c, weights
+        if best is None or best_weights is None or best_marginal <= 1e-9:
+            break
+        covers = 0.0
+        for i in range(len(surface)):
+            w = best_weights[i]
+            covers += remaining_hh[i] * w
+            remaining[i] *= (1.0 - w)
+            remaining_hh[i] *= (1.0 - w)
+        chosen.append({**best, "covers_households": round(covers)})
+        pool = [c for c in pool if c is not best]
+    return chosen
+
+
 def zone_narrative(zone: dict[str, Any]) -> str:
     """Plain-English placement line for a zone card (pure). Names the reachable
     demand + the competitive read; the locality name is added by the caller
     after reverse-geocoding, so this stays input-agnostic."""
     hh = zone.get("households_reachable")
+    covers = zone.get("covers_households")
     near = zone.get("nearest_competitor_miles")
     parts = [f"Scores {zone['score']:g}/100 here (best in this market)."
              if zone.get("is_top")
              else f"Scores {zone['score']:g}/100 here."]
-    if hh:
+    if covers:
+        # coverage-greedy: the demand this pin uniquely owns (rankable, non-
+        # overlapping with the other zones) — the more honest household number.
+        parts.append(f"≈{covers:,} households it can rank for from here.")
+    elif hh:
         parts.append(f"≈{hh:,} households within "
                      f"{int(_HOUSEHOLDS_CATCHMENT_MILES)} miles.")
     npr = zone.get("pressure_norm")
@@ -311,17 +365,27 @@ def build_zones(center_lat: float, center_lng: float,
                 demand_decay_miles: float = _DEFAULT_DEMAND_DECAY_MILES,
                 pressure_decay_miles: float = _DEFAULT_PRESSURE_DECAY_MILES,
                 zone_count: int = 4,
-                min_separation_miles: float = 2.0) -> dict[str, Any]:
-    """The full pure pipeline: score the lattice → pick spaced zones → enrich each
-    with its reachable households, nearest competitor, and narrative line. The
-    caller (impure) reverse-geocodes each zone's `lat/lng` to a locality name and
-    drops zones that name to nothing (water/unpopulated land)."""
+                min_separation_miles: float = 2.0,
+                coverage_greedy: bool = False,
+                coverage_radius_miles: float = 3.0) -> dict[str, Any]:
+    """The full pure pipeline: score the lattice → pick zones → enrich each with
+    its reachable households, nearest competitor, and narrative line. The caller
+    (impure) reverse-geocodes each zone's `lat/lng` to a locality name and drops
+    zones that name to nothing (water/unpopulated land).
+
+    `coverage_greedy` (owner default on) uses maximum-coverage selection so the
+    zones spread to distinct demand pockets instead of clustering in the metro's
+    demand peak; off ⇒ the legacy top-N + min-separation selection."""
     grid = score_grid(center_lat, center_lng, surface, pins,
                       radius_miles=radius_miles, spacing_miles=spacing_miles,
                       demand_decay_miles=demand_decay_miles,
                       pressure_decay_miles=pressure_decay_miles)
-    zones = select_zones(grid["cells"], zone_count=zone_count,
-                         min_separation_miles=min_separation_miles)
+    if coverage_greedy:
+        zones = select_zones_coverage(grid["cells"], surface, zone_count=zone_count,
+                                      coverage_radius_miles=coverage_radius_miles)
+    else:
+        zones = select_zones(grid["cells"], zone_count=zone_count,
+                             min_separation_miles=min_separation_miles)
     for i, z in enumerate(zones):
         z["rank"] = i + 1
         z["is_top"] = i == 0

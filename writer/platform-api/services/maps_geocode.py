@@ -51,6 +51,13 @@ _CITY_TYPES = (
     "locality", "postal_town", "administrative_area_level_3",
     "sublocality", "neighborhood",
 )
+# A more-specific label than the city — the neighborhood/borough — most-specific
+# first. In mega-cities the `locality` is the whole city ("New York" for every
+# borough), so a placement label needs this to distinguish Astoria/Flushing/etc.
+# from bare "New York". Additive: `city` is unchanged, other consumers ignore it.
+_NEIGHBORHOOD_TYPES = (
+    "neighborhood", "sublocality_level_1", "sublocality",
+)
 
 
 # ----------------------------------------------------------------------------
@@ -270,6 +277,7 @@ def parse_geocode_results(results: Optional[list]) -> dict:
     first = (results or [{}])[0] if results else {}
     return {
         "city": _find(*_CITY_TYPES),
+        "neighborhood": _find(*_NEIGHBORHOOD_TYPES),
         "admin_area": _find("administrative_area_level_1"),
         "formatted": first.get("formatted_address"),
         "place_id": first.get("place_id"),
@@ -392,7 +400,7 @@ def _load_cache(supabase, keys: list[tuple[float, float]]) -> dict[tuple[float, 
     try:
         rows = (
             supabase.table("maps_geocode_cache")
-            .select("lat_key, lng_key, city, admin_area, formatted, place_id")
+            .select("lat_key, lng_key, city, neighborhood, admin_area, formatted, place_id")
             .in_("lat_key", lats).in_("lng_key", lngs).execute()
         ).data or []
     except Exception as exc:  # cache is best-effort — never sink geocoding
@@ -403,7 +411,8 @@ def _load_cache(supabase, keys: list[tuple[float, float]]) -> dict[tuple[float, 
     for r in rows:
         k = (round(float(r["lat_key"]), _KEY_DP), round(float(r["lng_key"]), _KEY_DP))
         if k in wanted:
-            out[k] = {f: r.get(f) for f in ("city", "admin_area", "formatted", "place_id")}
+            out[k] = {f: r.get(f) for f in
+                      ("city", "neighborhood", "admin_area", "formatted", "place_id")}
     return out
 
 
@@ -463,7 +472,8 @@ async def reverse_geocode_points(
         cache.update(fresh)
         _write_cache(supabase, fresh)
 
-    blank = {"city": None, "admin_area": None, "formatted": None, "place_id": None}
+    blank = {"city": None, "neighborhood": None, "admin_area": None,
+             "formatted": None, "place_id": None}
     return [{**p, **(cache.get(k) or blank)} for k, p in keyed]
 
 

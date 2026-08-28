@@ -522,10 +522,19 @@ async def _name_and_filter_zones(zones: list[dict[str, Any]]) -> list[dict[str, 
         return zones
     kept = []
     for zone, loc in zip(zones, named):
-        locality = loc.get("city") or loc.get("admin_area")
+        # Prefer the neighborhood/borough over the bare city — in a mega-city the
+        # city is "New York" for every zone, so the neighborhood is what makes the
+        # placements distinct + legible ("serve Astoria", not "Near New York" ×4).
+        hood = loc.get("neighborhood")
+        city = loc.get("city") or loc.get("admin_area")
+        locality = hood or city
         if locality:
-            zone["locality"] = locality
-            zone["narrative"] = f"Near {locality}. " + zone.get("narrative", "")
+            # "Astoria (New York)" when the neighborhood and its city differ, so
+            # a mega-city's zones are distinct instead of "New York" ×4. The
+            # "best spot to serve <locality>" framing is the card header (the
+            # narrative stays the descriptive score/households/pressure line).
+            label = (f"{hood} ({city})" if hood and city and hood != city else locality)
+            zone["locality"] = label
             kept.append(zone)
         # else: unnamed → likely unpopulated, drop from the suggestions
     return kept
@@ -600,7 +609,9 @@ async def market_placement(city_id: int, category_id: str) -> dict[str, Any]:
         demand_decay_miles=settings.placement_demand_decay_miles,
         pressure_decay_miles=settings.placement_pressure_decay_miles,
         zone_count=settings.placement_zone_count,
-        min_separation_miles=settings.placement_min_separation_miles)
+        min_separation_miles=settings.placement_min_separation_miles,
+        coverage_greedy=settings.placement_coverage_greedy,
+        coverage_radius_miles=settings.placement_coverage_radius_miles)
     built["zones"] = await _name_and_filter_zones(built["zones"])
     # add compact maps deep-links for each surviving zone
     for z in built["zones"]:
@@ -646,7 +657,9 @@ async def score_market_point(city_id: int, category_id: str,
         demand_decay_miles=settings.placement_demand_decay_miles,
         pressure_decay_miles=settings.placement_pressure_decay_miles,
         zone_count=settings.placement_zone_count,
-        min_separation_miles=settings.placement_min_separation_miles)
+        min_separation_miles=settings.placement_min_separation_miles,
+        coverage_greedy=settings.placement_coverage_greedy,
+        coverage_radius_miles=settings.placement_coverage_radius_miles)
     point = core.score_point(lat, lng, surface, pins, built["grid"])
 
     best = built["zones"][0] if built["zones"] else None

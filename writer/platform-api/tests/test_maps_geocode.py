@@ -168,14 +168,33 @@ def test_parse_geocode_results():
     }]
     parsed = mg.parse_geocode_results(results)
     assert parsed == {
-        "city": "Springfield", "admin_area": "Illinois",
+        "city": "Springfield", "neighborhood": None, "admin_area": "Illinois",
         "formatted": "Springfield, IL, USA", "place_id": "abc123",
     }
 
 
+def test_parse_geocode_results_neighborhood():
+    # A mega-city point: locality is the whole city, the neighborhood/borough is
+    # the distinguishing label the placement advisor needs.
+    results = [{
+        "address_components": [
+            {"long_name": "Astoria", "types": ["neighborhood", "political"]},
+            {"long_name": "Queens", "types": ["sublocality_level_1", "sublocality", "political"]},
+            {"long_name": "New York", "types": ["locality", "political"]},
+            {"long_name": "New York", "types": ["administrative_area_level_1", "political"]},
+        ],
+        "formatted_address": "Astoria, NY 11103, USA",
+        "place_id": "nyc1",
+    }]
+    parsed = mg.parse_geocode_results(results)
+    assert parsed["city"] == "New York"           # unchanged for other consumers
+    assert parsed["neighborhood"] == "Astoria"    # the distinguishing label
+
+
 def test_parse_geocode_results_empty():
     assert mg.parse_geocode_results(None) == {
-        "city": None, "admin_area": None, "formatted": None, "place_id": None,
+        "city": None, "neighborhood": None, "admin_area": None,
+        "formatted": None, "place_id": None,
     }
 
 
