@@ -42,28 +42,42 @@ logger = logging.getLogger(__name__)
 # v1 auto-executable set — deliberately just the free, idempotent, reversible
 # plan rebuild. Widen ONLY after a pilot gate run reads the ledger and trusts a
 # class. Keys are action names understood by ``_execute``.
-AUTO_EXECUTE: frozenset[str] = frozenset({"rebuild_action_plan"})
+AUTO_EXECUTE: frozenset[str] = frozenset({"rebuild_action_plan", "generate_local_seo_page"})
 
 _BEHIND = {"behind", "overdue"}
 
 
 # --- Pure core --------------------------------------------------------------
 
-def gather_candidates(goals: list[dict], action_plan: Optional[dict]) -> list[dict]:
+def gather_candidates(
+    goals: list[dict],
+    action_plan: Optional[dict],
+    client_location: Optional[str] = None,
+) -> list[dict]:
     """Deterministic candidate actions for a client with behind/overdue goals.
 
-    Pure. v1 emits:
-      * one free ``rebuild_action_plan`` (keep the plan fresh against the goal)
-        whenever any goal is behind/overdue;
-      * the Action Plan's content-shaped items (quick_win / opportunity) as
-        ``requires="approval"`` PROPOSAL candidates — surfaced, never auto-run,
-        because turning a keyword into content safely needs human judgement the
-        deterministic layer doesn't have.
+    Pure. Emits:
+      * one free ``rebuild_action_plan`` whenever any goal is behind/overdue;
+      * per Action Plan quick_win / opportunity item, a content candidate whose
+        ACTION and AUTO-ELIGIBILITY follow the item's own signal:
+          - a "Create page" quick-win (SERP winnable, the client has NO strong
+            page yet) with a known client location → ``generate_local_seo_page``,
+            ``requires="none"`` (auto-eligible: a net-new page for a keyword the
+            client doesn't already rank for can't cannibalise an existing page);
+          - everything else — a "Reoptimize" quick-win or an opportunity (both
+            want an EXISTING page improved, but the Action Plan item carries no
+            URL), or a create-page item with no location — stays
+            ``requires="approval"`` (surfaced, never auto-run). The action name
+            reflects intent (reoptimize_page vs generate_local_seo_page) so the
+            proposal reads correctly and classifies at the right tier.
+
+    Cost estimates are attached so the budget governor gates real spend.
     """
     behind = [g for g in goals if g.get("status") in _BEHIND]
     if not behind:
         return []
 
+    loc = (client_location or "").strip()
     out: list[dict] = [{
         "action": "rebuild_action_plan",
         "cost_usd": 0.0,
@@ -79,14 +93,33 @@ def gather_candidates(goals: list[dict], action_plan: Optional[dict]) -> list[di
         kw = (item.get("keyword") or "").strip()
         if not kw:
             continue
-        out.append({
-            "action": "start_content_run",
-            "keyword": kw,
-            "cost_usd": 0.0,
-            "requires": "approval",  # human decides; never auto in v1
-            "source": f"action_plan:{kind}",
-            "reason": item.get("recommendation") or kind,
-        })
+        cta = (item.get("cta_label") or "").strip().lower()
+        create_page = kind == "quick_win" and cta == "create page"
+        reason = item.get("recommendation") or kind
+        source = f"action_plan:{kind}"
+
+        if create_page and loc:
+            # Auto-eligible: a genuinely net-new local page.
+            out.append({
+                "action": "generate_local_seo_page",
+                "keyword": kw,
+                "location": loc,
+                "cost_usd": float(settings.autonomy_local_seo_cost_usd),
+                "requires": "none",
+                "source": source,
+                "reason": reason,
+            })
+        else:
+            # Proposal only: improving an existing page needs a URL the plan
+            # doesn't carry, or a create-page item has no location to target.
+            out.append({
+                "action": "generate_local_seo_page" if create_page else "reoptimize_page",
+                "keyword": kw,
+                "cost_usd": float(settings.autonomy_content_cost_usd),
+                "requires": "approval",
+                "source": source,
+                "reason": reason,
+            })
     return out
 
 
@@ -117,8 +150,12 @@ def decide_candidates(
 
 # --- Impure shell -----------------------------------------------------------
 
-def _execute(action: str, client_id: str) -> None:
-    """Execute one auto-approved action. v1 handles only rebuild_action_plan."""
+def _execute(candidate: dict, client_id: str) -> None:
+    """Execute one auto-approved candidate. Only actions in AUTO_EXECUTE reach
+    here. Runs in a worker thread (see run_autonomy_job → asyncio.to_thread), so
+    it dispatches via durable async_jobs rows / a synchronous service call — never
+    an in-process pipeline task that a thread can't own."""
+    action = candidate.get("action")
     if action == "rebuild_action_plan":
         from services import reopt_planner
         # "manual" (an allowed PLAN_TRIGGER): an on-demand rebuild the autonomy
@@ -126,6 +163,24 @@ def _execute(action: str, client_id: str) -> None:
         # and the executor emits its own digest (double-notify). Autonomy
         # provenance is recorded in the autonomy_runs ledger, not this trigger.
         reopt_planner.build_plan(client_id, trigger="manual")
+        return
+    if action == "generate_local_seo_page":
+        # Enqueue a durable local_seo_generate job (the worker picks it up and
+        # resolves the area / runs the generator) — no inline pipeline. The
+        # generated page lands as a Saved-Pages DRAFT; publishing stays human.
+        get_supabase().table("async_jobs").insert({
+            "job_type": "local_seo_generate",
+            "entity_id": client_id,
+            "payload": {
+                "client_id": client_id,
+                "keyword": candidate.get("keyword"),
+                "location": candidate.get("location"),
+                "location_code": None,
+                "user_id": "",
+                "force_refresh": False,
+                "entity_provider": None,
+            },
+        }).execute()
         return
     raise ValueError(f"no executor for action {action!r}")
 
@@ -135,7 +190,7 @@ def _client_row(client_id: str) -> Optional[dict]:
         rows = (
             get_supabase()
             .table("clients")
-            .select("id, name, autonomy_tier, retainer_monthly, is_sab")
+            .select("id, name, autonomy_tier, retainer_monthly, is_sab, business_location")
             .eq("id", client_id)
             .limit(1)
             .execute()
@@ -168,7 +223,7 @@ def run_autonomy_for_client(
     *,
     trigger: str = "scheduled",
     today: Optional[date] = None,
-    execute: Callable[[str, str], None] = _execute,
+    execute: Callable[[dict, str], None] = _execute,
 ) -> dict:
     """Walk the loop for one client. Returns a summary; writes a ledger row +
     owner digest when there was anything to decide. Best-effort throughout —
@@ -192,7 +247,9 @@ def run_autonomy_for_client(
         logger.warning("autonomy_goals_failed", extra={"client_id": client_id, "error": str(exc)})
         goals = []
 
-    candidates = gather_candidates(goals, _latest_action_plan(client_id))
+    candidates = gather_candidates(
+        goals, _latest_action_plan(client_id), client.get("business_location")
+    )
     if not candidates:
         return {"status": "noop", "reason": "no behind/overdue goals"}
 
@@ -226,7 +283,7 @@ def run_autonomy_for_client(
             rec["policy_reason"] = "budget reservation refused"
             continue
         try:
-            execute(rec["action"], client_id)
+            execute(rec, client_id)
             rec["executed"] = True
             actions_taken.append(rec["action"])
             cost += cost_c

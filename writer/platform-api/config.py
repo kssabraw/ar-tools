@@ -1479,6 +1479,14 @@ class Settings(BaseSettings):
     # strategy can fund on top of the baseline stack — the honest ceiling) or
     # "deployable" (retainer × margin, gross). Clamped at 0.
     autonomy_budget_source: str = "discretionary"
+    # Estimated cost of one autonomously-commissioned Local SEO page generation
+    # (a local_seo_generate job: SERP analysis + Claude + scoring). The budget
+    # governor reserves this per auto-run, so a low estimate under-gates spend —
+    # set it at or above the real per-page cost.
+    autonomy_local_seo_cost_usd: float = 1.0
+    # Estimated cost of a content candidate that is only PROPOSED (blog/service
+    # run or a reoptimize) — display-only in the ledger (proposals never reserve).
+    autonomy_content_cost_usd: float = 2.0
 
     # ------------------------------------------------------------------
     # Asana task integration (docs/modules/asana-task-integration-plan-v1_0.md)
