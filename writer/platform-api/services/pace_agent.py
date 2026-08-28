@@ -180,7 +180,27 @@ _PACE_SYSTEM = (
     "call and offer to hand it off — but delivery status, who's behind, and what's "
     "late are yours to answer in full.\n\n"
     "GROUNDING. Only state tasks, assignees, and statuses that appear in the board "
-    "data. Be concrete and specific; skip filler."
+    "data. Be concrete and specific; skip filler.\n\n"
+    "FORMATTING: you are replying in Slack, which does NOT render standard "
+    "Markdown. Never use **bold**, # headers, or [text](url) links — Slack "
+    "ignores or mangles them. Use Slack's own mrkdwn instead: *bold* (single "
+    "asterisks), _italic_, `code`, bullet lines starting with \"- \" or \"• \", "
+    "and <https://example.com|link text> for links. NEVER use a Markdown pipe "
+    "table (| Task | Due |...) or a --- horizontal rule — Slack renders neither; "
+    "a table shows up as a wall of literal pipe characters. For a task list, use "
+    "one bullet per task instead, bolding the task name and folding the rest "
+    "inline: \"*Task name* — assignee, due date, N days overdue\". Keep replies "
+    "short and scannable — a few lines or a tight list, not walls of text."
+)
+
+# Appended instead of the Slack formatting rule above when PACE is answering in
+# the dashboard chat (routers/pace.py `style="web"`) rather than Slack — same
+# brain, different room. Mirrors slack_assistant/prompts.py's _WEB_STYLE.
+_PACE_WEB_STYLE = (
+    "\n\nFORMATTING OVERRIDE: you are answering in the AR Tools dashboard chat "
+    "(a web app), NOT Slack. Ignore the Slack mrkdwn rule above — format with "
+    "standard Markdown instead (**bold**, `-` bullets, [text](url) links), and "
+    "never mention Slack, threads, or channels."
 )
 
 
@@ -424,6 +444,8 @@ async def interpret_pace(question: str, client: Optional[dict], context: dict,
             kw["tool_choice"] = {"type": "none"}
         return kw
 
+    system = _PACE_SYSTEM + (_PACE_WEB_STYLE if style == "web" else "")
+
     resp = None
     try:
         for round_no in range(_PACE_TOOL_ROUNDS):
@@ -431,7 +453,7 @@ async def interpret_pace(question: str, client: Optional[dict], context: dict,
             resp = await anthropic_failover.call_failover(
                 clients,
                 lambda c: _one_llm_call(
-                    c, _PACE_SYSTEM, messages, [] if final else tools,
+                    c, system, messages, [] if final else tools,
                     _kw(final), on_text if on_event else None,
                 ),
                 log_tag="pace_agent",
@@ -462,7 +484,12 @@ async def interpret_pace(question: str, client: Optional[dict], context: dict,
         raise
 
     parts = [b.text for b in (resp.content if resp else []) if getattr(b, "type", None) == "text"]
-    return ("text", "\n".join(parts).strip() or "I couldn't work that out — try rephrasing.")
+    reply = "\n".join(parts).strip() or "I couldn't work that out — try rephrasing."
+    if resp is not None and getattr(resp, "stop_reason", None) == "max_tokens":
+        # Ran out of room — close cleanly instead of stopping mid-sentence, same
+        # pattern as slack_assistant.llm.interpret/interpret_portfolio.
+        reply += "\n\n_…I hit my reply-length limit — say “continue” and I'll pick up where I left off._"
+    return ("text", reply)
 
 
 def _drill_read(task_name: str, client_id_hint: Optional[str] = None) -> str:

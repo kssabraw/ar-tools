@@ -18,11 +18,14 @@ items run, unselected are dropped and simply re-proposed by their generators
 tomorrow (the aggressive cadence makes that the correct semantics). An
 unconfirmed plan is superseded by the next day's plan, never executed late.
 
-Delivery: the confirmable copy is posted directly to Slack (PACE channel when
-set, else the default channel) so its `ts` keys the batch pending entry in the
-assistant's store; an in-app notification copy (Tier 0) rides the notifications
-service with `skip_channels=["slack"]` so the channel doesn't get two copies —
-its unique `dedupe_key` is also the once-per-day arbiter.
+Delivery: the confirmable copy is posted directly to Slack in the dedicated
+PACE channel so its `ts` keys the batch pending entry in the assistant's
+store — PM/PACE chatter must never appear in the shared strategy channel, so
+this NEVER falls back to `slack_default_channel`; with no PACE channel
+configured the in-app copy is the only delivery. An in-app notification copy
+(Tier 0) rides the notifications service with `skip_channels=["slack"]` so
+the channel doesn't get two copies — its unique `dedupe_key` is also the
+once-per-day arbiter.
 """
 
 from __future__ import annotations
@@ -259,8 +262,13 @@ async def run_daily_chase_plan(today: Optional[date] = None) -> dict:
         # Nothing confirmable (auto/flags only) — the in-app copy suffices.
         return {"posted": True, "confirmable": False, "items": 0}
 
-    channel = settings.pace_slack_channel or settings.slack_default_channel
-    if not (settings.slack_bot_token and channel):
+    # PM/PACE chatter must stay out of the shared strategy channel — never fall
+    # back to slack_default_channel here. No PACE channel configured means no
+    # Slack copy of the confirmable plan at all (the in-app notification above
+    # already covers it); this mirrors the dispatcher's own `has_slack_target`
+    # skip for a kind with nowhere PACE-owned to post.
+    channel = settings.pace_slack_channel
+    if not (channel and notifications.pace_bot_token()):
         logger.info("chase_plan_no_slack", extra={"items": len(plan["items"])})
         return {"posted": True, "confirmable": False, "items": len(plan["items"])}
     try:

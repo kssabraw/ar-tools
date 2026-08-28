@@ -222,3 +222,25 @@ async def test_runner_posts_and_registers_batch(monkeypatch, _fake_action):
     assert entry["batch"] is True and len(entry["items"]) == 1
     pace_agent._pace_pending.clear()
     P._last_plan_key = None
+
+
+async def test_runner_never_falls_back_to_default_channel(monkeypatch, _fake_action):
+    # No PACE channel configured — the confirmable Slack copy must NOT leak
+    # into slack_default_channel (the shared strategy channel) under the
+    # default bot; the in-app notification is the only delivery.
+    monkeypatch.setattr(settings, "pace_enabled", True)
+    monkeypatch.setattr(settings, "pace_initiative_enabled", True)
+    monkeypatch.setattr(settings, "slack_bot_token", "xoxb-sermastr")
+    monkeypatch.setattr(settings, "slack_default_channel", "Cstrat-alerts")
+    monkeypatch.setattr(settings, "pace_slack_channel", "")
+    monkeypatch.setattr(settings, "pace_slack_bot_token", "")
+    P.PROPOSAL_GENERATORS.append(lambda today: [_proposal("x")])
+    monkeypatch.setattr(P.notifications, "emit", lambda **kw: "nid")
+
+    async def fail_post(*args, **kwargs):
+        raise AssertionError("must not post to Slack with no PACE channel configured")
+
+    monkeypatch.setattr("services.slack_assistant.post_message", fail_post)
+
+    out = await P.run_daily_chase_plan(date(2026, 7, 13))
+    assert out == {"posted": True, "confirmable": False, "items": 1}

@@ -1,6 +1,92 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-28 · **Intervention-outcome loop — v1, report-only, ENABLED in production + frontend card** (latest)
+## ⏩ Update — 2026-08-28 · **Director of Operations (cross-agent orchestration) — plan + Phase 1 build spec MERGED to `main` (spec only, nothing built in code)** (latest)
+
+Architecture review of "we have SerMaStr + PACE + QA + the task board — we need an
+orchestrator making sure they work in concert," refined to wanting a **Director of
+Operations for insight into how work flows.** Plan PR #879 (squash `7f6aea6`); Phase 1
+build spec PR #882, both docs-only.
+
+**Decision (locked; logged in `decisions.md`): build the eyes, defer the hands.** The
+Director is a **read-only cross-agent read model + reconciler surfaced through SerMaStr**
+— NOT a 5th persona, NOT a scheduling/priority authority. It never touches the three
+tested precedence engines (`reopt_planner` tiers, `autonomy_policy.classify`, `pm_assign`
+holds) — it escalates conflicts as proposals, never arbitrates. Capacity intake-arbitration
+is deferred behind an observed trigger.
+
+**Grounded findings:** no global cross-agent priority decider; no intake-time capacity
+arbitration; no cross-agent health monitor. Incident record is thin — 2 real cross-agent
+failures (neither an arbitration failure) + one live gap (QA armed-but-idle). The
+strategist+autonomy+producer triple-collision has never occurred.
+
+**Specs:** `docs/modules/director-of-operations-plan-v1_0.md` (the why) +
+`docs/modules/director-of-operations-phase1-spec-v1_0.md` (the how — concrete Phase 1 (D)
++ Prerequisite E build spec, PR #882).
+
+**§11 open questions RESOLVED (owner, 2026-08-28), folded into the build spec:** seam
+thresholds = suggested defaults (`qa_idle` 7d · `strategist_approved_unplaced` 3d ·
+`autonomy_proposed_unactioned` 7d · `content_shipped_degraded` immediate); a **separate
+weekly** operations-flow digest (own scheduler weekday hook + all-clear suppression), NOT
+a line on the daily PACE digest; duplicate-target = **flag-only** (no auto-merge yet); and
+the **autonomy pre-flight veto built in Phase 1** (fail-open, ships dark behind
+`director_autonomy_veto_enabled`). The last two deviate from the plan's leaning and widen
+Phase 1 past the minimal D.
+
+**Three grounded corrections to the plan (build spec §2):** (1) the Recipe-Engine gap is
+**placement, not `source_ref`** — `_push_task_plan_native` (`asana_push.py:338-351`) does
+stamp `source="task_plan"`/`source_ref`; it just skips `pm_assign.place_task`, so
+`source_ref` is already uniform across every producer. Prerequisite E therefore reshapes to
+**E1** (fail-loud on unknown producer `source`, mirroring `job_worker.py:994-1004`) + **E2**
+(route monthly-plan tasks through `place_task`). (2) `duplicate_target` keys on
+`tasks.target`, not `source_ref` equality (same `(source, source_ref)` is already
+DB-prevented). (3) `qa_idle` reads `task_activity` and is agency-level.
+
+**Still nothing built in code.** The build spec names the modules (`services/director/`),
+seams, config keys, and tests; no migration (computed on read / existing contracts); every
+piece ships behind its own flag (`director_enabled` master gate, default False). Next step
+when picked up = write Phase 1 per the spec (E1 + `qa_idle` alone may correctly be the whole
+build for a while). Deferred behind plan §8 triggers: capacity arbitration, duplicate
+auto-merge, a distinct read-model subsystem.
+
+## ⏩ Update — 2026-08-28 · **PACE Slack replies — mrkdwn formatting fix**
+
+**PR #875 (merged to `main`, squash `21cc855`).** PACE's conversational Slack replies
+(`services/pace_agent.py::interpret_pace`) were shipping as raw, unrendered Markdown in
+`#pace` — `**bold**`, `##`/`###` headers, Markdown pipe tables, and `---` dividers all
+showed up as literal punctuation, because Slack's own "mrkdwn" dialect doesn't understand
+any of them. Root cause: PACE's system prompt (`_PACE_SYSTEM`) gave the LLM **no
+formatting instructions at all**, so it defaulted to standard Markdown. SerMaStr already
+solved this exact problem months earlier (`slack_assistant/prompts.py` — Slack mrkdwn by
+default, standard Markdown only via `_WEB_STYLE` on the dashboard surface) — PACE even had
+the identical `style="slack"|"web"` parameter plumbed end-to-end through
+`interpret_pace`/`_answer`, it just never used it to change the prompt.
+
+**Fix, in `services/pace_agent.py`:** an explicit FORMATTING block added to `_PACE_SYSTEM`
+(Slack `*bold*` not `**bold**`, no `#` headers, no Markdown pipe tables — one bullet per
+row instead since Slack renders neither tables nor `---`), plus a `_PACE_WEB_STYLE`
+override (standard Markdown) appended only when `style == "web"`, mirroring SerMaStr's
+pattern exactly. `style` is now actually wired into the prompt sent to the LLM.
+
+**No migration, no config flag, no deploy gate** — this is a pure prompt-text change that
+takes effect as soon as `PLATFORM` redeploys with the merged commit. The deterministic PACE
+senders (`pace_digest.py`, `pace_proposals.py` / Chase Plan, `pace_briefs.py` morning
+briefs, `pace_report.py` delivery reports) were already hand-built with correct `*bold*`
+Slack syntax and needed no change — only PACE's LLM-generated conversational replies were
+affected.
+
+**Verified against three real PACE replies** before merging — two pulled from
+`assistant_messages`, and one (the worst case: a full agency-wide status digest with 8
+client overdue-task tables, ~58 tasks total) pasted straight from a live `#pace` thread.
+All three confirmed the `FORMATTING` rule (bold/headers/tables/dividers, all generic) covers
+the largest real message shape with no further changes needed.
+
+**One thing the fix does *not* solve, by design:** Slack's `*bold*` has only one weight —
+even after the fix, a top-level section title and a client-name subheading both render as
+plain bold with no size hierarchy (`##` vs `###` had implied one, falsely). A true heading
+look in Slack needs Block Kit rich-text blocks instead of a plain `text` message — a bigger
+change, not attempted here.
+
+## ⏩ Update — 2026-08-28 · **Intervention-outcome loop — v1, report-only, ENABLED in production + frontend card**
 
 **PR #871 (backend) + PR #874 (frontend), both merged to `main`; `INTERVENTION_TRACKING_ENABLED=true` on PLATFORM (live).** The measurement half of SerMaStr's decide+assign flow: PR #862
 closed *decide + assign* (monthly plan-review → human approve → PACE capacity-aware
