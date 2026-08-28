@@ -1601,6 +1601,51 @@ def clean_text(text: str) -> str:
     return text.strip().lower()
 
 
+# ── Competitor-usage benchmark ────────────────────────────────────────────────
+
+# "Beat the top competitor, capped": the recommended mention count is the single
+# most-aggressive competitor's usage (max), but capped at this multiple of the
+# competitor average so one outlier page can't push a term into keyword-stuffing
+# territory. Applies to entities AND related keywords (bold keywords keep raw max
+# — a direct Google signal). Env-tunable.
+MENTION_CAP_RATIO = float(os.environ.get("MENTION_CAP_RATIO", "1.5"))
+
+
+def _capped_max_target(counts: list) -> tuple[int, int, float]:
+    """Given per-competitor-page mention counts (of pages that USE the term),
+    return (recommended, max_uses, avg_uses):
+      max_uses    = the top competitor's count ("beat the best")
+      avg_uses    = mean competitor usage
+      recommended = min(max_uses, ceil(MENTION_CAP_RATIO * avg)), floored at 1
+    so the target chases the strongest competitor but a lone outlier can't
+    inflate it beyond ~1.5x the field average."""
+    if not counts:
+        return 1, 0, 0.0
+    mx = int(max(counts))
+    avg = sum(counts) / len(counts)
+    capped = min(mx, int(np.ceil(MENTION_CAP_RATIO * avg)))
+    return max(1, capped), mx, round(avg, 1)
+
+
+def _zone_freq_targets(term: str, zone_buckets: dict, raw_max: bool = False) -> dict:
+    """Per-zone competitor mention benchmark for one term. For each zone
+    (title/h1/h2_h3/paragraphs), count the term in every competitor page's text
+    for that zone and target the raw max (bold — a direct Google signal) or the
+    capped-max (entities/keywords) over the pages that actually use it there.
+    Zones no competitor uses the term in are omitted, so title/h1 only appear
+    when a term genuinely recurs there. Returns {zone: recommended}."""
+    if not term:
+        return {}
+    tre = re.compile(r"\b" + re.escape(term.lower()) + r"\b", re.IGNORECASE)
+    zf: dict = {}
+    for zk in ("title", "h1", "h2_h3", "paragraphs"):
+        present = [c for c in (len(tre.findall(t)) for t in zone_buckets.get(zk, [])) if c > 0]
+        if not present:
+            continue
+        zf[zk] = int(max(present)) if raw_max else _capped_max_target(present)[0]
+    return zf
+
+
 # ── NLP: related keywords ─────────────────────────────────────────────────────
 
 def get_related_keywords_for_zone(
@@ -1856,7 +1901,7 @@ async def get_textrazor_entities(
     for eid_l, data, page_count, mean_relevance in candidates:
         if mean_relevance < min_relevance:
             continue
-        recommended_mentions = int(round(float(np.mean(data["mention_counts"]))))
+        recommended_mentions, max_mentions, avg_mentions = _capped_max_target(data["mention_counts"])
         # Most common surface form, so `name` matches page text in the
         # deterministic coverage engine; fall back to the entity id.
         name = data["surface"].most_common(1)[0][0] if data["surface"] else eid_l
@@ -1868,7 +1913,9 @@ async def get_textrazor_entities(
             "mean_salience": round(mean_relevance, 4),  # relevanceScore (field name kept)
             "page_spread": page_count,
             "page_spread_pct": round(page_count / total_pages, 2),
-            "recommended_mentions": max(1, recommended_mentions),
+            "recommended_mentions": recommended_mentions,  # capped-max ("beat the best")
+            "max_competitor_mentions": max_mentions,
+            "avg_competitor_mentions": avg_mentions,
             "type": "textrazor_entity",
         })
 
@@ -1960,7 +2007,7 @@ async def get_google_entities(
         mean_salience = float(np.mean(data["saliences"]))
         if mean_salience < min_salience:
             continue
-        recommended_mentions = int(round(float(np.mean(data["mention_counts"]))))
+        recommended_mentions, max_mentions, avg_mentions = _capped_max_target(data["mention_counts"])
         results.append({
             "name": data["name"],
             "entity_type": data["entity_type"],
@@ -1969,7 +2016,9 @@ async def get_google_entities(
             "mean_salience": round(mean_salience, 4),
             "page_spread": page_count,
             "page_spread_pct": round(page_count / total_pages, 2),
-            "recommended_mentions": max(1, recommended_mentions),
+            "recommended_mentions": recommended_mentions,  # capped-max ("beat the best")
+            "max_competitor_mentions": max_mentions,
+            "avg_competitor_mentions": avg_mentions,
             "type": "google_entity",
         })
 
@@ -2074,6 +2123,41 @@ async def _run_serp_analysis(
         h2_h3=get_related_keywords_for_zone(zone_buckets["h2_h3"], keyword),
         paragraphs=get_related_keywords_for_zone(zone_buckets["paragraphs"], keyword),
     )
+
+    # Page-level competitor-usage benchmark for related keywords. TF-IDF gives
+    # topical relevance + page spread but no frequency, so here we count each
+    # related term across every competitor page's full text (same source the
+    # bold-keyword max uses) and attach a capped-max "beat the best" target to
+    # each term dict — so the coverage engine and the reopt prompt can measure
+    # the generated page's usage against the top competitor, like entities.
+    _rk_zone_lists = (related.title, related.h1, related.h2_h3, related.paragraphs)
+    _rk_counts: Dict[str, list] = {}
+    for _zone_terms in _rk_zone_lists:
+        for _t in _zone_terms:
+            term = (_t.get("term") or "").lower()
+            if not term or term in _rk_counts:
+                continue
+            _term_re = re.compile(r"\b" + re.escape(term) + r"\b", re.IGNORECASE)
+            _rk_counts[term] = [len(_term_re.findall(pt)) for pt in full_page_texts]
+    for _zone_terms in _rk_zone_lists:
+        for _t in _zone_terms:
+            counts = _rk_counts.get((_t.get("term") or "").lower())
+            if counts is None:
+                continue
+            # Average over the competitors that actually use the term (present
+            # pages), mirroring the entity benchmark, so zeros from unrelated
+            # pages don't collapse the cap.
+            present = [c for c in counts if c > 0]
+            if not present:
+                # TF-IDF surfaced the term but no competitor uses this exact
+                # word-boundary form (normalization gap) — attach no frequency
+                # benchmark rather than a misleading "target 1 / top-competitor 0".
+                continue
+            rec, mx, avg = _capped_max_target(present)
+            _t["recommended_mentions"] = rec
+            _t["max_competitor_mentions"] = mx
+            _t["avg_competitor_mentions"] = avg
+
     quadgrams = get_top_quadgrams(zone_buckets["paragraphs"], keyword)
 
     # Step 5: entity analysis (per-request provider — TextRazor or Google NLP) on
@@ -2125,6 +2209,18 @@ async def _run_serp_analysis(
         serp_bold_keywords.sort(key=lambda x: (-x["page_spread"], -x["max_competitor_uses"]))
         serp_bold_keywords = serp_bold_keywords[:25]  # cap at 25 terms
         logger.info(f"SERP bold keywords: {len(serp_bold_keywords)} qualifying terms from {len(bold_terms_from_serp)} extracted")
+
+    # Per-zone mention-frequency benchmarks (title/H1/H2-H3/paragraphs) for every
+    # frequency-tracked term, so coverage + reopt can target usage per zone, not
+    # just page-wide. Entities + related keywords use capped-max; bold keeps raw
+    # max. Attached onto each term dict (flows through serp_analysis untouched).
+    for _e in google_entities:
+        _e["zone_freq"] = _zone_freq_targets(_e.get("name", ""), zone_buckets)
+    for _zone_terms in _rk_zone_lists:
+        for _t in _zone_terms:
+            _t["zone_freq"] = _zone_freq_targets(_t.get("term", ""), zone_buckets)
+    for _b in serp_bold_keywords:
+        _b["zone_freq"] = _zone_freq_targets(_b.get("term", ""), zone_buckets, raw_max=True)
 
     zone_targets = compute_zone_targets(zone_buckets, related, google_entities)
 
@@ -3945,6 +4041,147 @@ def _score_system_prompt_for(geo_mode: str = "local", voice_card: Optional[dict]
         return base
     return base + _VOICE_SCORE_PROMPT_SUFFIX
 
+def _count_entity_mentions(name: str, text_lower: str) -> int:
+    """Count whole-word occurrences of an entity name in already-lowercased page
+    text. Word-boundary matched so 'tile' does not count inside 'tiles' and a
+    multi-word entity ('metal roof') is counted as a phrase. Cora-style: the
+    page-level mention frequency compared against the competitor benchmark."""
+    if not name:
+        return 0
+    return len(re.findall(r"\b" + re.escape(name.lower()) + r"\b", text_lower))
+
+
+def _zone_coverage_rows(name: str, zone_freq: Optional[dict], page_zones: dict) -> list:
+    """Per-zone mention coverage for one term: current count in each zone's page
+    text vs the competitor per-zone benchmark. Only zones with a benchmark (a
+    competitor used the term there) are returned."""
+    rows: list = []
+    for zk, zlabel in (("title", "title"), ("h1", "H1"),
+                       ("h2_h3", "H2/H3"), ("paragraphs", "body")):
+        rec = (zone_freq or {}).get(zk)
+        if not rec:
+            continue
+        cur = _count_entity_mentions(name, page_zones.get(zk, ""))
+        rows.append({"zone": zlabel, "current": cur,
+                     "recommended": int(rec), "shortfall": max(0, int(rec) - cur)})
+    return rows
+
+
+def _build_entity_coverage_detail(entities: list, page_text_lower: str,
+                                  page_zones: dict) -> tuple[list, list, int]:
+    """Cora-style per-entity coverage table: for each competitor-derived entity,
+    the page's CURRENT mention count vs the capped-max RECOMMENDED count, the
+    shortfall, and a per-zone breakdown. Additive detail — it does not change the
+    engine score — persisted via engine_scores. Widened to the top 30 entities by
+    page_spread (the score still uses the top 15) so the table is richer without
+    shifting any score.
+
+    Returns (entity_detail, entities_under_target, total_shortfall)."""
+    detail_entities = sorted(
+        entities, key=lambda e: e.get("page_spread", 0), reverse=True
+    )[:30]
+    entity_detail: list[dict] = []
+    for e in detail_entities:
+        name = (e.get("name") or "").strip()
+        if not name:
+            continue
+        recommended = int(e.get("recommended_mentions") or 1)
+        current = _count_entity_mentions(name, page_text_lower)
+        entity_detail.append({
+            "name": name,
+            "current": current,
+            "recommended": recommended,
+            "shortfall": max(0, recommended - current),
+            "max_competitor": e.get("max_competitor_mentions"),
+            "avg_competitor": e.get("avg_competitor_mentions"),
+            "page_spread": e.get("page_spread", 0),
+            "type": e.get("entity_type") or e.get("type"),
+            "zones": _zone_coverage_rows(name, e.get("zone_freq"), page_zones),
+        })
+    # Biggest gaps first (then by how many competitors use it) so the most
+    # important under-covered entities lead the table.
+    entity_detail.sort(key=lambda d: (d["shortfall"], d["page_spread"]), reverse=True)
+    entities_under_target = [d["name"] for d in entity_detail if d["shortfall"] > 0]
+    total_shortfall = sum(d["shortfall"] for d in entity_detail)
+    return entity_detail, entities_under_target, total_shortfall
+
+
+def _build_bold_coverage_detail(bold: list, page_text_lower: str,
+                                page_zones: dict) -> tuple[list, list, int]:
+    """Cora-style coverage for SERP-bolded terms — the terms Google highlights in
+    the snippet. Benchmark is the RAW competitor max (a direct Google signal, not
+    capped). Same shape as the entity/keyword detail so the UI reuses one table.
+
+    Returns (bold_detail, bold_under_target, total_shortfall)."""
+    bold_detail: list[dict] = []
+    for b in bold:
+        name = (b.get("term") or "").strip()
+        if not name:
+            continue
+        recommended = int(b.get("recommended_mentions") or b.get("max_competitor_uses") or 1)
+        current = _count_entity_mentions(name, page_text_lower)
+        bold_detail.append({
+            "name": name,
+            "current": current,
+            "recommended": recommended,
+            "shortfall": max(0, recommended - current),
+            "max_competitor": b.get("max_competitor_uses"),
+            "avg_competitor": b.get("avg_uses"),
+            "page_spread": b.get("page_spread", 0),
+            "zones": _zone_coverage_rows(name, b.get("zone_freq"), page_zones),
+        })
+    bold_detail.sort(key=lambda d: (d["shortfall"], d["page_spread"]), reverse=True)
+    bold_under_target = [d["name"] for d in bold_detail if d["shortfall"] > 0]
+    total_shortfall = sum(d["shortfall"] for d in bold_detail)
+    return bold_detail, bold_under_target, total_shortfall
+
+
+def _build_keyword_coverage_detail(related: dict, page_text_lower: str,
+                                   page_zones: dict) -> tuple[list, list, int]:
+    """Cora-style per-related-keyword coverage: page-level CURRENT mention count
+    vs the competitor-derived RECOMMENDED (capped-max) count + shortfall + a
+    per-zone breakdown. Related keywords are stored per zone; a term can appear in
+    several zones, so we dedupe by term (keeping the highest recommended seen,
+    carrying its per-zone benchmark) and measure the whole page once. Additive
+    detail — does not change the score.
+
+    Returns (keyword_detail, keywords_under_target, total_shortfall)."""
+    best: dict[str, dict] = {}
+    for zone_key in ("title", "h1", "h2_h3", "paragraphs"):
+        for t in (related.get(zone_key) or []):
+            term = (t.get("term") or "").strip()
+            recommended = t.get("recommended_mentions")
+            if not term or recommended is None:
+                continue  # only terms carrying a competitor-usage benchmark
+            prev = best.get(term.lower())
+            if prev is None or int(recommended) > prev["recommended"]:
+                best[term.lower()] = {
+                    "name": term,
+                    "recommended": int(recommended),
+                    "max_competitor": t.get("max_competitor_mentions"),
+                    "avg_competitor": t.get("avg_competitor_mentions"),
+                    "page_spread": t.get("page_spread", 0),
+                    "zone_freq": t.get("zone_freq"),
+                }
+    keyword_detail: list[dict] = []
+    for row in best.values():
+        current = _count_entity_mentions(row["name"], page_text_lower)
+        keyword_detail.append({
+            "name": row["name"],
+            "current": current,
+            "recommended": row["recommended"],
+            "shortfall": max(0, row["recommended"] - current),
+            "max_competitor": row["max_competitor"],
+            "avg_competitor": row["avg_competitor"],
+            "page_spread": row["page_spread"],
+            "zones": _zone_coverage_rows(row["name"], row.get("zone_freq"), page_zones),
+        })
+    keyword_detail.sort(key=lambda d: (d["shortfall"], d["page_spread"]), reverse=True)
+    keywords_under_target = [d["name"] for d in keyword_detail if d["shortfall"] > 0]
+    total_shortfall = sum(d["shortfall"] for d in keyword_detail)
+    return keyword_detail, keywords_under_target, total_shortfall
+
+
 def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict]) -> dict:
     """
     Deterministically score how well the page covers the SERP signals identified
@@ -4022,6 +4259,20 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
     # of the per-zone target loop so it reflects the whole page.
     entities_used    = [e["name"] for e in top_entities if e["name"].lower() in page_text_lower]
     entities_missing = [e["name"] for e in top_entities if e["name"].lower() not in page_text_lower]
+    # Cora-style per-entity coverage: current vs recommended mention counts +
+    # shortfall, persisted so the UI can render a term-target table and the gap
+    # survives the run (additive — does not affect the score).
+    entity_detail, entities_under_target, total_entity_shortfall = (
+        _build_entity_coverage_detail(entities, page_text_lower, zones)
+    )
+    # Same for related keywords (page-level current vs capped-max competitor usage).
+    keyword_detail, keywords_under_target, total_keyword_shortfall = (
+        _build_keyword_coverage_detail(rk, page_text_lower, zones)
+    )
+    # And SERP-bolded terms (raw-max competitor benchmark — a direct Google signal).
+    bold_detail, bold_under_target, total_bold_shortfall = (
+        _build_bold_coverage_detail(serp_analysis.get("serp_bold_keywords", []), page_text_lower, zones)
+    )
     ent_zone_scores: list[float] = []
     if top_entities:
         for zone_key in ("title", "h1", "h2_h3", "paragraphs"):
@@ -4079,6 +4330,15 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
         "quadgram_coverage": round(qg_score, 1),
         "entities_used":     entities_used,
         "entities_missing":  entities_missing,
+        "entity_detail":         entity_detail,
+        "entities_under_target": entities_under_target,
+        "total_entity_shortfall": total_entity_shortfall,
+        "keyword_detail":         keyword_detail,
+        "keywords_under_target":  keywords_under_target,
+        "total_keyword_shortfall": total_keyword_shortfall,
+        "bold_detail":            bold_detail,
+        "bold_under_target":      bold_under_target,
+        "total_bold_shortfall":   total_bold_shortfall,
         "zones":             [zone_detail[k] for k in ("title", "h1", "h2_h3", "paragraphs") if k in zone_detail],
     }
 
@@ -5219,9 +5479,74 @@ def _reopt_serp_context(page_zones: dict, serp_analysis: Optional[dict]) -> str:
             elif still_need_ent == 0:
                 parts.append(f"  Entity target met ({len(present_ent)}/{entity_target})")
 
+    # Page-level mention-frequency deltas — drive the page toward the capped-max
+    # competitor usage (Cora-style) for the strongest entities and related
+    # keywords, not just presence. Only terms carrying a competitor-usage
+    # benchmark and currently under it are listed.
+    full_page_text = " ".join(page_zones.values())
+
+    def _count_in(name: str, text: str) -> int:
+        return len(re.findall(r"\b" + re.escape(name.lower()) + r"\b", text))
+
+    def _freq_lines(items: list, cap: int) -> list:
+        rows = []
+        for it in items:
+            name = (it.get("name") or it.get("term") or "").strip()
+            rec = it.get("recommended_mentions")
+            if not name or not rec:
+                continue
+            rec = int(rec)
+            cur = _count_in(name, full_page_text)
+            if cur >= rec:
+                continue
+            mx = it.get("max_competitor_mentions") or it.get("max_competitor_uses")
+            extra = f" (top competitor uses it {mx}×)" if mx else ""
+            # Per-zone hint for the two zones where frequency matters most.
+            zf = it.get("zone_freq") or {}
+            zbits = []
+            for zk, zlabel in (("h2_h3", "headings"), ("paragraphs", "body")):
+                zrec = zf.get(zk)
+                if not zrec:
+                    continue
+                zcur = _count_in(name, page_zones.get(zk, ""))
+                if zcur < int(zrec):
+                    zbits.append(f"{zlabel} +{int(zrec) - zcur}")
+            zsuffix = f" [{', '.join(zbits)}]" if zbits else ""
+            rows.append((rec - cur, f'  "{name}" — on the page {cur}×, add {rec - cur} more{extra}{zsuffix}'))
+        rows.sort(key=lambda x: x[0], reverse=True)
+        return [ln for _, ln in rows[:cap]]
+
+    ent_freq = _freq_lines(top_entities, 12)
+    # Related keywords: dedupe across zones, keep the highest recommended per term.
+    rk_best: dict = {}
+    for zk in ("title", "h1", "h2_h3", "paragraphs"):
+        for t in rk.get(zk, []):
+            term = (t.get("term") or "").lower()
+            rec = t.get("recommended_mentions")
+            if not term or not rec:
+                continue
+            if term not in rk_best or int(rec) > int(rk_best[term].get("recommended_mentions", 0)):
+                rk_best[term] = t
+    kw_freq = _freq_lines(list(rk_best.values()), 15)
+    bold_freq = _freq_lines(serp_analysis.get("serp_bold_keywords", []), 12)
+    if ent_freq or kw_freq or bold_freq:
+        parts.append(
+            "\nMENTION FREQUENCY — match the top competitor's usage for these terms "
+            "(a [body/headings +N] hint means add that many in that zone specifically). "
+            "Add the mentions naturally; never keyword-stuff or repeat awkwardly:"
+        )
+        if ent_freq:
+            parts.append("  Entities:")
+            parts.extend(ent_freq)
+        if kw_freq:
+            parts.append("  Keywords:")
+            parts.extend(kw_freq)
+        if bold_freq:
+            parts.append("  Google-bolded terms (match the top competitor exactly):")
+            parts.extend(bold_freq)
+
     # Quadgrams delta — check against full page text
     if quadgrams:
-        full_page_text = " ".join(page_zones.values())
         missing_qg = [q["phrase"] for q in quadgrams[:15] if q["phrase"].lower() not in full_page_text]
         present_qg = [q["phrase"] for q in quadgrams[:15] if q["phrase"].lower() in full_page_text]
         parts.append("\nCOMPETITOR PHRASES (4-word phrases from top-ranking pages):")
@@ -5511,8 +5836,8 @@ async def _build_seo_checklist(
             if terms and target:
                 lines.append(f'  • {zone_label}: include ≥{target} of: {", ".join(terms)}')
 
+        top_ents = sorted(entities, key=lambda e: e.get("page_spread", 0), reverse=True)[:15] if entities else []
         if entities:
-            top_ents = sorted(entities, key=lambda e: e.get("page_spread", 0), reverse=True)[:15]
             ent_names = [e["name"] for e in top_ents]
             lines.append(f'  • Entity pool (Google NLP — use these to establish topical authority): {", ".join(ent_names)}')
             lines.append(  '  • Distribute entities across zones as follows (≥N means at least that many from the pool above):')
@@ -5526,6 +5851,68 @@ async def _build_seo_checklist(
                 if entity_target:
                     lines.append(f'      – {zone_label}: ≥{entity_target} entities')
             lines.append(f'  • Business name + service + city must co-occur in ≥3 sections')
+            # Mention-frequency targets (capped-max competitor usage) — beat the
+            # top competitor on the strongest terms, not just include them once.
+            ent_freq = [f'"{e["name"]}" ≥{e["recommended_mentions"]}×'
+                        for e in top_ents if e.get("recommended_mentions")][:12]
+            if ent_freq:
+                lines.append(
+                    '  • Entity mention targets — use each at least this many times across the page '
+                    f'(competitor-matched, add naturally — never stuff): {", ".join(ent_freq)}'
+                )
+
+        # Keyword + bolded-term mention targets + per-zone emphasis. NOT gated on
+        # `entities` — a run where entity extraction returned nothing still gets
+        # the keyword/bold frequency guidance (top_ents is [] in that case, so the
+        # entity part of the per-zone emphasis simply contributes nothing).
+        kw_best: dict = {}
+        for zk in ("title", "h1", "h2_h3", "paragraphs"):
+            for t in rk.get(zk, []):
+                term = (t.get("term") or "").lower()
+                rec = t.get("recommended_mentions")
+                if not term or not rec:
+                    continue
+                if term not in kw_best or int(rec) > kw_best[term][1]:
+                    kw_best[term] = (t.get("term"), int(rec))
+        kw_freq = [f'"{name}" ≥{rec}×' for name, rec in
+                   sorted(kw_best.values(), key=lambda x: -x[1])][:15]
+        if kw_freq:
+            lines.append(
+                '  • Related-keyword mention targets — competitor-matched frequency, '
+                f'add naturally in body copy: {", ".join(kw_freq)}'
+            )
+        # Bolded-term mention targets (raw competitor max — a direct Google signal).
+        bold_freq = [f'"{b["term"]}" ≥{b.get("recommended_mentions") or b.get("max_competitor_uses")}×'
+                     for b in serp_analysis.get("serp_bold_keywords", [])
+                     if (b.get("recommended_mentions") or b.get("max_competitor_uses"))][:12]
+        if bold_freq:
+            lines.append(
+                '  • Google-bolded term targets — the terms Google highlights in results; '
+                f'match the top competitor exactly: {", ".join(bold_freq)}'
+            )
+        # Per-zone frequency emphasis: terms competitors REPEAT (≥2×) inside a
+        # specific zone, so the writer front-loads the right place, not just the page.
+        zone_emph: dict = {"h2_h3": [], "paragraphs": []}
+
+        def _collect(name, zf):
+            if not name:
+                return
+            for zk_ in ("h2_h3", "paragraphs"):
+                v = (zf or {}).get(zk_)
+                if v and int(v) >= 2:
+                    zone_emph[zk_].append(f'"{name}" ≥{int(v)}×')
+
+        for e in top_ents:
+            _collect(e.get("name"), e.get("zone_freq"))
+        for zk_ in ("title", "h1", "h2_h3", "paragraphs"):
+            for t in rk.get(zk_, []):
+                _collect(t.get("term"), t.get("zone_freq"))
+        for b in serp_analysis.get("serp_bold_keywords", []):
+            _collect(b.get("term"), b.get("zone_freq"))
+        for zk_, zlabel_ in (("paragraphs", "body paragraphs"), ("h2_h3", "H2/H3 headings")):
+            emph = list(dict.fromkeys(zone_emph[zk_]))[:10]
+            if emph:
+                lines.append(f'  • Repeat in {zlabel_} specifically (competitors do): {", ".join(emph)}')
 
         if quadgrams:
             phrases = [q["phrase"] for q in quadgrams[:10]]
@@ -7475,6 +7862,16 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
         city = body.location.split(",")[0].strip()
         _worker_start = time.monotonic()
 
+        def _within_time_budget() -> bool:
+            """False once the reoptimize wall-clock budget is spent. Gates the
+            START of each optional improvement pass (auto-retry rewrite, voice
+            rewrite) so the page can't stack passes into a 15–20 minute run; a
+            pass already in flight still finishes. The initial rewrite + first
+            score are never gated — they produce the page and its verdict.
+            Shares GENERATION_TIME_BUDGET_SECONDS with generate-page (one dial)."""
+            return (GENERATION_TIME_BUDGET_SECONDS <= 0
+                    or (time.monotonic() - _worker_start) < GENERATION_TIME_BUDGET_SECONDS)
+
         await q.put({"step": "progress", "progress": 10, "message": "Fetching existing page…"})
 
         # Fetch existing page if URL given but no HTML
@@ -7672,6 +8069,13 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
             for pass_num in range(2, MAX_AUTO_PASSES + 1):
                 if inline_score >= 90:
                     break
+                if not _within_time_budget():
+                    logger.info(
+                        "reoptimize-page: %ss time budget spent before auto-retry "
+                        "pass %d — shipping current page (score=%s)",
+                        GENERATION_TIME_BUDGET_SECONDS, pass_num, inline_score,
+                    )
+                    break
                 pct = min(92, 78 + pass_num * 3)
                 await q.put({
                     "step": "progress",
@@ -7749,6 +8153,18 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                      "score": inline_score, "defs": inline_defs, "scores": inline_scores,
                      "voice": voice_scorecard}
             for _fix_pass in range(1, MAX_VOICE_CORRECTION_PASSES + 1):
+                # Always allow the first pass (a critical voice finding is
+                # publish-blocking, so it earns one repair attempt whatever the
+                # clock says); gate later passes on the shared time budget so the
+                # loop can't stack a page into a 15–20 minute run.
+                if _fix_pass > 1 and not _within_time_budget():
+                    logger.info(
+                        "reoptimize-page: %ss time budget spent before voice "
+                        "pass %d — shipping best page so far (voice score=%s)",
+                        GENERATION_TIME_BUDGET_SECONDS, _fix_pass,
+                        (_best.get("voice") or {}).get("score"),
+                    )
+                    break
                 await q.put({
                     "step": "progress", "progress": 93,
                     "message": (f"Aligning to the brand guide "

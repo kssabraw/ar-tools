@@ -6,7 +6,7 @@ import {
 import { GbpWorkspace } from '../../pages/GbpPosts'
 import { localSeoApi } from './api'
 import { useResumableJob } from '../../lib/useResumableJob'
-import type { LocalSeoPageDetail, SocialPostsResult, EngineScore } from './types'
+import type { LocalSeoPageDetail, SocialPostsResult, EngineScore, EntityCoverage } from './types'
 import { RelatedPagesList } from './RelatedPagesList'
 import { VoiceCompliancePanel } from './VoiceCompliancePanel'
 import { BulkCreateBar } from './BulkCreateBar'
@@ -50,6 +50,12 @@ function SearchCoveragePanel({ coverage }: { coverage?: EngineScore }) {
   const missing = coverage.entities_missing ?? []
   const zones = coverage.zones ?? []
   const recs = coverage.recommendations ?? []
+  const entityDetail = coverage.entity_detail ?? []
+  const totalShortfall = coverage.total_entity_shortfall ?? 0
+  const keywordDetail = coverage.keyword_detail ?? []
+  const totalKeywordShortfall = coverage.total_keyword_shortfall ?? 0
+  const boldDetail = coverage.bold_detail ?? []
+  const totalBoldShortfall = coverage.total_bold_shortfall ?? 0
   const chip = (text: string, bg: string, color: string) => (
     <span key={text} style={{ fontSize: 12, fontWeight: 600, padding: '3px 9px', borderRadius: 999, background: bg, color }}>{text}</span>
   )
@@ -57,6 +63,58 @@ function SearchCoveragePanel({ coverage }: { coverage?: EngineScore }) {
   const td: CSSProperties = { fontSize: 13, color: '#0f172a', padding: '6px 12px', borderTop: '1px solid #f1f5f9' }
   const cell = (found?: number, target?: number) =>
     found == null || target == null ? '—' : `${found}/${target}${found >= target ? ' ✓' : ''}`
+  // Cora-style term-target table (shared by entities + related keywords):
+  // On page / Target (capped-max competitor) / Top competitor / Needed.
+  const renderTermTable = (label: string, rows: EntityCoverage[], total: number) => {
+    if (rows.length === 0) return null
+    const hasCompetitor = rows.some((r) => r.max_competitor != null)
+    return (
+      <div style={{ overflowX: 'auto' }}>
+        <p style={{ fontSize: 12, fontWeight: 600, color: '#475569', margin: '0 0 6px' }}>
+          {label}{total > 0 && ` — ${total} mention${total > 1 ? 's' : ''} to add`}
+        </p>
+        <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 380 }}>
+          <thead>
+            <tr>
+              <th style={th}>Term</th>
+              <th style={{ ...th, textAlign: 'right' }}>On page</th>
+              <th style={{ ...th, textAlign: 'right' }}>Target</th>
+              {hasCompetitor && <th style={{ ...th, textAlign: 'right' }}>Top comp.</th>}
+              <th style={{ ...th, textAlign: 'right' }}>Needed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((e) => {
+              const short = e.shortfall > 0
+              return (
+                <tr key={e.name} style={short ? { background: '#fef2f2' } : undefined}>
+                  <td style={{ ...td, fontWeight: short ? 600 : 400 }}>
+                    {e.name}
+                    {e.zones && e.zones.length > 0 && (
+                      <div style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>
+                        {e.zones.map((z) => `${z.zone} ${z.current}/${z.recommended}`).join(' · ')}
+                      </div>
+                    )}
+                  </td>
+                  <td style={{ ...td, textAlign: 'right' }}>{e.current}</td>
+                  <td style={{ ...td, textAlign: 'right' }}>{e.recommended}</td>
+                  {hasCompetitor && (
+                    <td style={{ ...td, textAlign: 'right', color: '#94a3b8' }}>{e.max_competitor ?? '—'}</td>
+                  )}
+                  <td style={{ ...td, textAlign: 'right', color: short ? '#b91c1c' : '#94a3b8', fontWeight: short ? 700 : 400 }}>
+                    {short ? `+${e.shortfall}` : '✓'}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+        <p style={{ fontSize: 11, color: '#94a3b8', margin: '6px 0 0' }}>
+          Target = the top competitor's usage, capped so one outlier can't inflate it. "Needed" is how many more mentions to add on this page.
+        </p>
+      </div>
+    )
+  }
   return (
     <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
       <div style={{ background: '#f8fafc', padding: '16px 20px', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -96,6 +154,12 @@ function SearchCoveragePanel({ coverage }: { coverage?: EngineScore }) {
             )}
           </div>
         )}
+
+        {/* Entity + keyword + bolded-term targets — Cora-style: current vs competitor usage.
+            Each row's zone breakdown (e.g. "body 2/4 · H2/H3 0/1") shows per-zone counts. */}
+        {renderTermTable('Entity targets', entityDetail, totalShortfall)}
+        {renderTermTable('Keyword targets', keywordDetail, totalKeywordShortfall)}
+        {renderTermTable('Google-bolded term targets', boldDetail, totalBoldShortfall)}
 
         {/* Coverage by zone */}
         {zones.length > 0 && (
@@ -270,6 +334,9 @@ export function GeneratedPageView({
     if (tab === 'social' && !socialRequested.current) {
       socialRequested.current = true
       // Skip if a prior job is already reconnecting or posts are already in hand.
+      // Lazy fetch-on-tab-change, guarded once by the ref above; the only setState
+      // it reaches synchronously is an error-reset — not a cascading render.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       if (socialJob.phase === 'idle' && !social) void fetchSocial()
     }
     if (tab === 'related' && !relatedRequested.current) {

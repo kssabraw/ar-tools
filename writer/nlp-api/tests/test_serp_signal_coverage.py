@@ -18,17 +18,31 @@ def _serp_analysis():
     """A minimal SERP analysis with keyword + entity zone targets and quadgrams."""
     return {
         "related_keywords": {
-            "h2_h3": [{"term": "roof restoration"}, {"term": "roof repairs"}],
-            "paragraphs": [{"term": "tile roof"}, {"term": "gutters"}],
+            "h2_h3": [
+                {"term": "roof restoration", "recommended_mentions": 3, "max_competitor_mentions": 5, "page_spread": 4,
+                 "zone_freq": {"h2_h3": 2, "paragraphs": 3}},
+                {"term": "roof repairs", "recommended_mentions": 2, "max_competitor_mentions": 2, "page_spread": 3},
+            ],
+            # "roof restoration" also in paragraphs with a lower recommended — the
+            # detail should keep the higher (3) after deduping across zones.
+            "paragraphs": [
+                {"term": "roof restoration", "recommended_mentions": 1, "max_competitor_mentions": 1, "page_spread": 2},
+                {"term": "tile roof", "recommended_mentions": 2, "max_competitor_mentions": 3, "page_spread": 3},
+            ],
         },
         "zone_targets": {
             "h2_h3": {"target": 2, "entity_target": 1},
             "paragraphs": {"target": 2, "entity_target": 2},
         },
         "google_entities": [
-            {"name": "Melbourne", "page_spread": 5},
-            {"name": "Colorbond", "page_spread": 4},
-            {"name": "Slate", "page_spread": 3},
+            {"name": "Melbourne", "page_spread": 5, "recommended_mentions": 4, "max_competitor_mentions": 6, "avg_competitor_mentions": 3.2,
+             "zone_freq": {"paragraphs": 4}},
+            {"name": "Colorbond", "page_spread": 4, "recommended_mentions": 3, "max_competitor_mentions": 4, "avg_competitor_mentions": 2.5},
+            {"name": "Slate", "page_spread": 3, "recommended_mentions": 2, "max_competitor_mentions": 3, "avg_competitor_mentions": 1.5},
+        ],
+        "serp_bold_keywords": [
+            {"term": "free quote", "recommended_mentions": 2, "max_competitor_uses": 2, "avg_uses": 1.5,
+             "page_spread": 3, "zone_freq": {"paragraphs": 2}},
         ],
         "top_quadgrams": [{"phrase": "licensed roofing contractor"}],
     }
@@ -64,3 +78,109 @@ def test_no_serp_analysis_has_no_coverage_fields():
     res = main._compute_serp_signal_coverage("<p>hi</p>", None)
     assert res["score"] == 50
     assert "entities_used" not in res  # degraded payload stays minimal
+
+
+def test_entity_detail_reports_current_recommended_and_shortfall():
+    # Melbourne x2, Colorbond x1, Slate x0 on the page.
+    html = (
+        "<article><h2>Roof Restoration in Melbourne</h2>"
+        "<p>Colorbond roofing across Melbourne. We install it well.</p></article>"
+    )
+    res = main._compute_serp_signal_coverage(html, _serp_analysis())
+    detail = {d["name"]: d for d in res["entity_detail"]}
+    # current mention counts (word-boundary, page-level)
+    assert detail["Melbourne"]["current"] == 2
+    assert detail["Colorbond"]["current"] == 1
+    assert detail["Slate"]["current"] == 0
+    # recommended carried from the SERP analysis
+    assert detail["Melbourne"]["recommended"] == 4
+    assert detail["Slate"]["recommended"] == 2
+    # shortfall = max(0, recommended - current)
+    assert detail["Melbourne"]["shortfall"] == 2   # 4 - 2
+    assert detail["Colorbond"]["shortfall"] == 2   # 3 - 1
+    assert detail["Slate"]["shortfall"] == 2       # 2 - 0
+    # biggest gaps first, ties broken by page_spread (Melbourne before others)
+    assert res["entity_detail"][0]["name"] == "Melbourne"
+    # rollups
+    assert set(res["entities_under_target"]) == {"Melbourne", "Colorbond", "Slate"}
+    assert res["total_entity_shortfall"] == 6
+
+
+def test_capped_max_target_beats_top_competitor_but_caps_outlier():
+    # counts [1, 1, 4]: avg 2.0, ceil(1.5*2)=3, max 4 -> recommended capped at 3
+    rec, mx, avg = main._capped_max_target([1, 1, 4])
+    assert (rec, mx, avg) == (3, 4, 2.0)
+    # tight field [3, 3, 4]: avg 3.33, ceil(1.5*3.33)=5, max 4 -> recommended = max (4)
+    rec, mx, avg = main._capped_max_target([3, 3, 4])
+    assert rec == 4 and mx == 4
+    # empty -> floored at 1
+    assert main._capped_max_target([]) == (1, 0, 0.0)
+
+
+def test_entity_detail_carries_competitor_max_and_avg():
+    html = "<article><p>Melbourne Colorbond roofing.</p></article>"
+    res = main._compute_serp_signal_coverage(html, _serp_analysis())
+    detail = {d["name"]: d for d in res["entity_detail"]}
+    assert detail["Melbourne"]["max_competitor"] == 6
+    assert detail["Melbourne"]["avg_competitor"] == 3.2
+
+
+def test_keyword_detail_dedupes_zones_and_reports_shortfall():
+    # "roof restoration" x1 on the page; recommended is the HIGHER of the two zone
+    # entries (3), so shortfall = 2. "tile roof" x0 -> shortfall 2. "roof repairs"
+    # x0 -> shortfall 2.
+    html = "<article><h2>Roof Restoration</h2><p>quality roofing work.</p></article>"
+    res = main._compute_serp_signal_coverage(html, _serp_analysis())
+    kd = {d["name"]: d for d in res["keyword_detail"]}
+    assert kd["roof restoration"]["recommended"] == 3   # higher zone wins after dedupe
+    assert kd["roof restoration"]["current"] == 1
+    assert kd["roof restoration"]["shortfall"] == 2
+    assert kd["roof restoration"]["max_competitor"] == 5
+    assert set(res["keywords_under_target"]) == {"roof restoration", "roof repairs", "tile roof"}
+    assert res["total_keyword_shortfall"] == 2 + 2 + 2  # restoration 2, repairs 2, tile 2
+
+
+def test_bold_detail_uses_raw_competitor_max():
+    # "free quote" appears once; bold benchmark is the raw competitor max (2).
+    html = "<article><p>Get a free quote today from our Melbourne team.</p></article>"
+    res = main._compute_serp_signal_coverage(html, _serp_analysis())
+    bd = {d["name"]: d for d in res["bold_detail"]}
+    assert bd["free quote"]["current"] == 1
+    assert bd["free quote"]["recommended"] == 2      # raw max, not capped
+    assert bd["free quote"]["max_competitor"] == 2
+    assert bd["free quote"]["shortfall"] == 1
+    assert res["total_bold_shortfall"] == 1
+
+
+def test_zone_breakdown_reports_per_zone_current_vs_target():
+    # Melbourne carries a paragraphs zone target of 4; the page uses it once in a
+    # <p>, so the body zone row is 1/4 (shortfall 3). Zones without a competitor
+    # benchmark (title/h1/h2_h3 for Melbourne) are omitted.
+    html = "<article><h2>Roofing</h2><p>Melbourne roofing services.</p></article>"
+    res = main._compute_serp_signal_coverage(html, _serp_analysis())
+    mel = next(d for d in res["entity_detail"] if d["name"] == "Melbourne")
+    zones = {z["zone"]: z for z in mel["zones"]}
+    assert set(zones) == {"body"}
+    assert zones["body"]["current"] == 1
+    assert zones["body"]["recommended"] == 4
+    assert zones["body"]["shortfall"] == 3
+    # "roof restoration" keyword carries both h2_h3 (2) and paragraphs (3) targets.
+    rr = next(d for d in res["keyword_detail"] if d["name"] == "roof restoration")
+    kz = {z["zone"]: z for z in rr["zones"]}
+    assert set(kz) == {"H2/H3", "body"}
+    assert kz["H2/H3"]["recommended"] == 2 and kz["body"]["recommended"] == 3
+
+
+def test_word_boundary_counting_does_not_match_substrings():
+    # "Slate" must not be counted inside "Slater"; "tile" not inside "tiles".
+    html = "<article><p>Mr Slater fitted the tiles. Slate is different.</p></article>"
+    serp = {
+        "google_entities": [
+            {"name": "Slate", "page_spread": 3, "recommended_mentions": 2},
+            {"name": "tile", "page_spread": 2, "recommended_mentions": 2},
+        ],
+    }
+    res = main._compute_serp_signal_coverage(html, serp)
+    detail = {d["name"]: d for d in res["entity_detail"]}
+    assert detail["Slate"]["current"] == 1   # only the standalone "Slate"
+    assert detail["tile"]["current"] == 0    # "tiles" does not count
