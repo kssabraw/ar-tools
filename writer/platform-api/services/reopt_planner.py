@@ -38,6 +38,7 @@ QUICK_WIN_MIN_SCORE = 50
 QUICK_WIN_MAX = 10
 CANNIBAL_MAX = 5
 HIDDEN_MAX = 8
+BACKLINK_TARGET_MAX = 8  # specific target domains listed on a backlink-gap action
 STRIKING_DISTANCE_MAX = 20  # client_rank ≤ this → reoptimize existing vs create new
 STRIKING_DISTANCE_MIN = 4  # already top-3 → no quick win (nothing to gain; don't touch a winner)
 TOTAL_MAX = 25
@@ -194,17 +195,24 @@ def build_actions(
         striking = rank is not None and rank <= STRIKING_DISTANCE_MAX
         value = i.get("est_value")
         value_str = f" · est. ${round(value):,}/mo" if value else ""
+        # The client's own ranking URL (from the SERP snapshot) — the page to
+        # reoptimize. Only meaningful on the reoptimize (striking) branch; a
+        # create-page has no existing page to name.
+        url = i.get("client_url") if striking else None
+        recommendation = (
+            f"Reoptimize the existing page{f' ({url})' if url else ''} — you're #{rank} "
+            "and this SERP is winnable."
+            if striking
+            else "Create a purpose-built page — the SERP is winnable and you don't have a strong page yet."
+        )
         actions.append(
             {
                 "kind": "quick_win",
                 "source": "organic",
                 "keyword": i.get("keyword") or "",
+                "url": url,
                 "diagnosis": f"Rankability {i['band']} ({i['score']}/100){value_str}.",
-                "recommendation": (
-                    f"Reoptimize the existing page — you're #{rank} and this SERP is winnable."
-                    if striking
-                    else "Create a purpose-built page — the SERP is winnable and you don't have a strong page yet."
-                ),
+                "recommendation": recommendation,
                 "cta_label": "Reoptimize" if striking else "Create page",
                 "cta_path": f"clients/{client_id}/local-seo",
                 "severity": "info",
@@ -212,17 +220,34 @@ def build_actions(
             }
         )
 
-    # 3) GSC-Research cannibalization — wasted authority across split pages.
+    # 3) GSC-Research cannibalization — wasted authority across split pages. The
+    # row carries the actual competing URLs (impressions-desc), so name them and
+    # nominate the strongest as the canonical to keep.
     for c in (gsc.get("cannibalization") or [])[:CANNIBAL_MAX]:
+        split_pages = [
+            {"url": p.get("page"), "impressions": p.get("impressions"),
+             "position": p.get("position"), "clicks": p.get("clicks")}
+            for p in (c.get("pages") or []) if p.get("page")
+        ]
+        canonical = split_pages[0]["url"] if split_pages else None
+        rec = "Consolidate — "
+        rec += (
+            f"keep {canonical} as the canonical (it has the most impressions), "
+            "301/canonical the others into it, "
+            if canonical
+            else "pick the canonical page, 301/canonical the rest, "
+        )
+        rec += "and concentrate internal links so Google can rank one."
         actions.append(
             {
                 "kind": "cannibalization",
                 "source": "organic",
                 "keyword": c.get("query") or "",
+                "url": canonical,
+                "pages": split_pages or None,
                 "diagnosis": f"{c.get('page_count', 0)} pages split this query "
                 f"({c.get('total_impressions', 0):,} impressions).",
-                "recommendation": "Consolidate — pick the canonical page, 301/canonical the rest, "
-                "and concentrate internal links so Google can rank one.",
+                "recommendation": rec,
                 "cta_label": "GSC Research",
                 "cta_path": f"clients/{client_id}/gsc-research",
                 "severity": "warning",
@@ -340,10 +365,14 @@ def build_offpage_actions(client_id: str, offpage_alerts: list[dict]) -> list[di
                     "kind": "rd_loss",
                     "source": "organic",
                     "keyword": "Backlink profile",
+                    # The specific domains that dropped, and how many to replace.
+                    "target_domains": [{"domain": d} for d in lost] or None,
+                    "target_link_count": len(lost) or None,
                     "diagnosis": diagnosis,
                     "recommendation": "Aggregate link loss (SOP §A.5) — build a replacement plan via the "
                     "Recipe Engine: generate this month's task plan and fund the referring-domains "
-                    "variable (the lost RD marks it deficient automatically).",
+                    "variable (the lost RD marks it deficient automatically). Try to reclaim the lost "
+                    "links first, then replace the rest.",
                     "cta_label": "Action Plan",
                     "cta_path": f"clients/{client_id}/action-plan",
                     "severity": "warning",
@@ -675,12 +704,15 @@ def build_content_action(client_id: str, content_gap: "dict | None") -> list[dic
     if not parts:
         return []
     kw = content_gap.get("keyword")
+    url = content_gap.get("url")
     return [
         {
             "kind": "content_gap",
             "source": "maps",
             "keyword": f'"{kw}" page' if kw else "Page content",
-            "diagnosis": ("Your page is " + "; ".join(parts) + "."),
+            "url": url,
+            "topics": (content_gap.get("topic_gaps") or [])[:8] or None,
+            "diagnosis": ("Your page" + (f" ({url})" if url else "") + " is " + "; ".join(parts) + "."),
             "recommendation": "Expand the page to match the competitors ranking above you — add the missing "
             "sections/topics and depth, keeping it genuinely useful (not padding).",
             "cta_label": "Open Local SEO",
@@ -691,9 +723,15 @@ def build_content_action(client_id: str, content_gap: "dict | None") -> list[dic
     ]
 
 
-def build_backlink_action(client_id: str, backlink_gap: "dict | None") -> list[dict]:
+def build_backlink_action(
+    client_id: str, backlink_gap: "dict | None", link_gaps: "list[dict] | None" = None
+) -> list[dict]:
     """A link-building action when the client's domain authority trails the
-    local-pack competitor median. Pure. Organic (links help web + local)."""
+    local-pack competitor median. Pure. Organic (links help web + local).
+
+    ``link_gaps`` are Domain-Intelligence ``domain_link_gaps`` rows (referring
+    domains linking to a competitor but not the client) — specific, real targets
+    to pursue, surfaced so the action is do-this-not-just-more-links."""
     if not backlink_gap:
         return []
     parts: list[str] = []
@@ -701,20 +739,42 @@ def build_backlink_action(client_id: str, backlink_gap: "dict | None") -> list[d
     if dr_behind:
         parts.append(f"Domain Rating {dr_behind} behind the competitor median")
     rd_behind = backlink_gap.get("referring_domains_behind")
-    if rd_behind:
-        parts.append(f"~{int(rd_behind)} fewer referring domains")
+    target_count = int(rd_behind) if rd_behind else None
+    if target_count:
+        parts.append(f"~{target_count} fewer referring domains")
     if not parts:
         return []
+    # Specific target domains competitors have that the client doesn't.
+    targets = [
+        {"domain": g.get("referring_domain"),
+         "rank": g.get("referring_domain_rank"),
+         "linking_to": g.get("linking_to") or []}
+        for g in (link_gaps or []) if g.get("referring_domain")
+    ][:BACKLINK_TARGET_MAX]
+    rec = "Run link-building to close the authority gap"
+    if target_count:
+        rec += f" — about {target_count} referring domains to reach the competitor median"
+    rec += ". "
+    if targets:
+        rec += (
+            "Start with domains competitors have earned that you haven't: "
+            + ", ".join(t["domain"] for t in targets)
+            + ". "
+        )
+    rec += "Link types: local citations/directories, supplier & partner links, digital PR, " \
+           "and reclaiming unlinked mentions."
     return [
         {
             "kind": "backlink_gap",
             "source": "organic",
             "keyword": "Backlink authority",
+            "target_link_count": target_count,
+            "target_domains": targets or None,
             "diagnosis": "; ".join(parts) + ".",
-            "recommendation": "Run link-building to close the authority gap — local citations/directories, "
-            "supplier & partner links, digital PR, and reclaiming unlinked mentions.",
-            "cta_label": "Open rank tracker",
-            "cta_path": f"clients/{client_id}/rankings",
+            "recommendation": rec,
+            "cta_label": "Domain Intelligence" if targets else "Open rank tracker",
+            "cta_path": f"clients/{client_id}/domain-intel" if targets
+            else f"clients/{client_id}/rankings",
             "severity": "info",
             "sort": _SORT_HIDDEN + _within(_BACKLINK_WITHIN),
         }
@@ -946,9 +1006,12 @@ def _fetch_content_gap(supabase, client_id: str) -> "dict | None":
             "topic_gaps": a.get("topic_gaps") or [],
             "keyword": a.get("keyword"),
         }
-        return content_intel.detect_content_gap(
+        gap = content_intel.detect_content_gap(
             comparison, settings.content_depth_behind_min, settings.content_topic_gap_min
         )
+        if gap:  # carry the client's analyzed page URL through so the action names it
+            gap["url"] = a.get("client_url")
+        return gap
     except Exception as exc:
         logger.warning("reopt_plan_content_failed", extra={"client_id": client_id, "error": str(exc)})
         return None
@@ -1140,7 +1203,21 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     maps_actions += build_review_action(client_id, review_gap)
     maps_actions += build_content_action(client_id, content_gap)
     brand_actions = build_brand_action(client_id, brand_decline)
-    brand_actions += build_backlink_action(client_id, backlink_gap)
+    # Specific link targets (Domain Intelligence link-gap) for the backlink action —
+    # a DB read, no paid call. Best-effort: absent → the action stays generic.
+    link_gaps: list[dict] = []
+    try:
+        link_gaps = (
+            supabase.table("domain_link_gaps")
+            .select("referring_domain, referring_domain_rank, linking_to, backlink_count, captured_at")
+            .eq("client_id", client_id)
+            .order("referring_domain_rank", desc=True)
+            .limit(BACKLINK_TARGET_MAX)
+            .execute()
+        ).data or []
+    except Exception as exc:
+        logger.warning("reopt_plan_link_gaps_failed", extra={"client_id": client_id, "error": str(exc)})
+    brand_actions += build_backlink_action(client_id, backlink_gap, link_gaps)
     # Steps a strategist saved out of a SerMaStr conversation. Merged on every
     # build (they live in their own table precisely because this list is
     # regenerated wholesale) so a saved step survives until someone closes it.

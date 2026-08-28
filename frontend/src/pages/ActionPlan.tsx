@@ -145,6 +145,57 @@ function ActionRow({ action, clientId, onGo }: { action: ReoptAction; clientId: 
               {action.url.replace(/^https?:\/\/(www\.)?/, '')}
             </a>
           )}
+          {/* Cannibalization: the competing pages, canonical candidate first. */}
+          {action.pages && action.pages.length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              <div style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.03em', fontWeight: 700 }}>
+                Competing pages
+              </div>
+              {action.pages.map((p, pi) => (
+                <div key={p.url} style={{ fontSize: 12, marginTop: 2, display: 'flex', gap: 6, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                  {pi === 0 && (
+                    <span style={{ ...miniPill, color: '#166534', background: '#dcfce7' }}>keep (canonical)</span>
+                  )}
+                  <a href={p.url} target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb', wordBreak: 'break-all' }}>
+                    {p.url.replace(/^https?:\/\/(www\.)?/, '')}
+                  </a>
+                  <span style={{ color: '#94a3b8' }}>
+                    {p.position != null ? `#${Math.round(p.position)}` : ''}{p.impressions != null ? ` · ${p.impressions.toLocaleString()} impr` : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Content gap: the specific missing topics/sections. */}
+          {action.topics && action.topics.length > 0 && (
+            <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.03em', fontWeight: 700 }}>
+                Add topics
+              </span>
+              {action.topics.map((t) => (
+                <span key={t} style={{ ...miniPill, color: '#334155', background: '#f1f5f9' }}>{t}</span>
+              ))}
+            </div>
+          )}
+          {/* Link-building: how many links + specific target domains to pursue. */}
+          {action.target_domains && action.target_domains.length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              <div style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.03em', fontWeight: 700 }}>
+                {action.target_link_count ? `~${action.target_link_count} links to build · ` : ''}Target domains
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 3 }}>
+                {action.target_domains.map((d) => (
+                  <span
+                    key={d.domain}
+                    title={d.rank != null ? `Domain rank ${d.rank}` : undefined}
+                    style={{ ...miniPill, color: '#334155', background: '#f1f5f9' }}
+                  >
+                    {d.domain}{d.rank != null ? ` (${Math.round(d.rank)})` : ''}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
         <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
           {action.kind === 'assistant_action' && action.assistant_action_id && (
@@ -448,6 +499,10 @@ const chip: React.CSSProperties = {
   textTransform: 'uppercase', letterSpacing: '0.03em',
 }
 const chIcon: React.CSSProperties = { flexShrink: 0 }
+const miniPill: React.CSSProperties = {
+  display: 'inline-block', fontSize: 11, fontWeight: 600, borderRadius: 6,
+  padding: '1px 7px', whiteSpace: 'nowrap',
+}
 const goBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0,
   fontSize: 12, fontWeight: 600, color: '#6366f1', background: '#eef2ff',

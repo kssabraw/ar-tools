@@ -1230,6 +1230,15 @@ export interface ReoptAction {
   // The specific live page an action targets, when the signal names one (e.g. a
   // GSC-Research hidden win's ranking URL). Absent for keyword-only actions.
   url?: string | null
+  // Cannibalization: the competing pages splitting one query (first = canonical
+  // candidate, most impressions).
+  pages?: { url: string; impressions?: number | null; position?: number | null; clicks?: number | null }[] | null
+  // Link-building actions: specific referring domains to pursue / that were lost,
+  // and how many links to build to close the gap.
+  target_domains?: { domain: string; rank?: number | null; linking_to?: string[] }[] | null
+  target_link_count?: number | null
+  // Content-gap: the specific topics/sections the page is missing.
+  topics?: string[] | null
   diagnosis: string
   recommendation: string
   cta_label: string
