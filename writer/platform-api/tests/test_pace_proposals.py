@@ -202,7 +202,7 @@ async def test_runner_posts_and_registers_batch(monkeypatch, _fake_action):
     P.PROPOSAL_GENERATORS.append(lambda today: [_proposal("x")])
     monkeypatch.setattr(P.notifications, "emit", lambda **kw: "nid")
 
-    async def fake_post(channel, text, thread_ts=None):
+    async def fake_post(channel, text, thread_ts=None, token=None):
         assert channel == "Cpace" and "chase plan" in text.lower()
         return "111.222"
 

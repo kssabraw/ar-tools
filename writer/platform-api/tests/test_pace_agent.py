@@ -125,7 +125,7 @@ async def test_force_handles_non_pace_message(monkeypatch):
     # handled by PACE instead of falling through (is_pace_message gate skipped).
     posted = {}
 
-    async def _post(channel, text, thread_ts):
+    async def _post(channel, text, thread_ts=None, token=None):
         posted.update(channel=channel, text=text)
 
     monkeypatch.setattr("services.slack_assistant.post_message", _post)
