@@ -84,8 +84,12 @@ def _parse_variations(item: dict) -> tuple:
       "type" and an unknown kind is coerced to "type".
     * `variations: ["Oak Tree Removal", …]` — bare strings read as type modifiers.
     * `brands: ["Carrier", …]` — the pre-generalization field, read as brand
-      modifiers so an existing site's stored catalog keeps working until its next
-      save migrates it forward.
+      modifiers ONLY when the current `variations` field is absent, so an
+      existing site's stored catalog keeps working until its next save migrates
+      it forward. Once `variations` is present it is authoritative and legacy
+      `brands` are ignored — the frontend's `normalizeService` drops `brands`
+      the moment it writes `variations`, so honouring both here would let the two
+      double up; this mirrors that "variations wins" rule.
     """
     out: list = []
     seen: set = set()
@@ -100,15 +104,17 @@ def _parse_variations(item: dict) -> tuple:
         seen.add(key)
         out.append(website_plan.ServiceVariation(label=label, kind=kind))
 
-    for legacy in item.get("brands") or []:
-        if isinstance(legacy, str):
-            add(legacy, "brand")
-    for v in item.get("variations") or []:
-        if isinstance(v, str):
-            add(v, "type")
-        elif isinstance(v, dict):
-            kind = v.get("kind")
-            add(v.get("label") or "", kind if kind in website_plan.VARIATION_KINDS else "type")
+    if item.get("variations") is not None:
+        for v in item["variations"]:
+            if isinstance(v, str):
+                add(v, "type")
+            elif isinstance(v, dict):
+                kind = v.get("kind")
+                add(v.get("label") or "", kind if kind in website_plan.VARIATION_KINDS else "type")
+    else:
+        for legacy in item.get("brands") or []:
+            if isinstance(legacy, str):
+                add(legacy, "brand")
     return tuple(out)
 
 

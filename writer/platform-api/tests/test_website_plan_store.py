@@ -87,6 +87,24 @@ class TestParsing:
         assert svc.variations == ()
         assert svc.brands == ()
 
+    def test_present_variations_win_over_legacy_brands(self):
+        # If both fields are present, `variations` is authoritative and legacy
+        # `brands` are ignored — mirroring the frontend, which drops `brands` the
+        # moment it writes `variations`. Honouring both would double them up.
+        [svc] = store.parse_catalog(
+            [{"name": "AC Repair", "brands": ["Carrier"], "variations": [{"label": "Emergency", "kind": "type"}]}]
+        )
+        assert svc.variations == (wpl.ServiceVariation(label="Emergency", kind="type"),)
+        assert svc.brands == ()
+
+    def test_an_empty_variations_list_still_drops_legacy_brands(self):
+        # Presence of the key (even empty) means the catalog has been migrated,
+        # so stale `brands` are not resurrected.
+        [svc] = store.parse_catalog(
+            [{"name": "AC Repair", "brands": ["Carrier"], "variations": []}]
+        )
+        assert svc.variations == ()
+
 
 class TestHeadTerms:
     def test_defaults_to_the_first_service_in_nav_order(self):

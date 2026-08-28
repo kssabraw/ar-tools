@@ -605,15 +605,44 @@ class TestServiceVariations:
         assert kinds["/ac-repair/carrier/"] == "brand_service"
         assert kinds["/ac-repair/ductless-mini-split/"] == "sub_service"
 
-    def test_type_variation_generates_with_the_label_as_keyword(self):
+    def test_a_fully_named_type_label_is_not_doubled(self):
+        # The label already carries the service name, so the keyword stays clean.
         catalog = [svc("Tree Removal", types=("Oak Tree Removal",))]
         page = wp.service_variation_pages(catalog)[0]
-        # No catalog ServiceEntry exists for the synthetic sub-service, so the
-        # nlp keyword falls back to the page title (the label) — clean, not doubled.
         inputs = wp.generation_inputs(page, services={"tree-removal": catalog[0]}, cities={}, primary_city="Dallas")
         assert inputs["engine"] == "nlp"
         assert inputs["keyword"] == "Oak Tree Removal"
         assert inputs["location"] == "Dallas"
+
+    def test_a_bare_type_label_is_scoped_by_the_parent_service(self):
+        # A bare label ("Emergency") is thin and collision-prone on its own, so
+        # the keyword is scoped by the parent service — while the title stays bare.
+        catalog = [svc("AC Repair", types=("Emergency",))]
+        page = wp.service_variation_pages(catalog)[0]
+        assert page.title == "Emergency"
+        inputs = wp.generation_inputs(page, services={"ac-repair": catalog[0]}, cities={}, primary_city="Dallas")
+        assert inputs["keyword"] == "Emergency AC Repair"
+
+    def test_same_bare_label_on_two_services_yields_distinct_keywords(self):
+        # The regression this guards: two "Emergency" variations must not both
+        # generate keyword "Emergency" + the same city (near-identical pages).
+        catalog = [svc("AC Repair", types=("Emergency",)), svc("Heating Repair", types=("Emergency",))]
+        by_slug = {s.slug: s for s in catalog}
+        pages = wp.service_variation_pages(catalog)
+        keywords = {
+            wp.generation_inputs(p, services=by_slug, cities={}, primary_city="Dallas")["keyword"]
+            for p in pages
+        }
+        assert keywords == {"Emergency AC Repair", "Emergency Heating Repair"}
+
+    def test_a_real_catalog_sub_service_keeps_its_own_name(self):
+        # The disambiguation only touches synthetic variations; a hand-added
+        # sub-service (a catalog entry) still keys on its own name, unscoped.
+        catalog = [svc("AC Repair", order=10), svc("Coil Cleaning", parent_slug="ac-repair")]
+        by_slug = {s.slug: s for s in catalog}
+        sub = wp.PlannedPage("/ac-repair/coil-cleaning/", "sub_service", "Coil Cleaning", "sub-service", tier=2)
+        inputs = wp.generation_inputs(sub, services=by_slug, cities={}, primary_city="Dallas")
+        assert inputs["keyword"] == "Coil Cleaning"
 
     def test_type_variation_frontmatter_nests_under_the_service(self):
         catalog = [svc("Tree Removal", types=("Oak Trees",))]

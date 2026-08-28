@@ -11,7 +11,6 @@ import { api } from '../../lib/api'
 // migrates it forward. A row already carrying `variations` wins; `brands` is
 // dropped either way so the two never double up at the backend parser.
 function normalizeService(row: ServiceRow): ServiceRow {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { brands, ...rest } = row
   if (rest.variations) return rest
   if (brands?.length) return { ...rest, variations: brands.map((b) => ({ label: b, kind: 'brand' as const })) }
