@@ -275,6 +275,31 @@ def _job_progress_writer(job_id: Optional[str]):
     return _write
 
 
+def _job_checkpoint_writer(job_id: Optional[str], payload: Optional[dict]):
+    """Return an async callback that persists the completed pre-rewrite score onto
+    the job's `payload._checkpoint`, so a requeued job (worker restart / redeploy
+    drain) resumes straight into the rewrite instead of re-scraping + re-running
+    the SERP analysis + re-scoring — the expensive phase reoptimize_url runs
+    before the rewrite. The reaper + drain only touch status/started_at/attempts,
+    so the checkpoint survives a requeue; `get_jobs_status` never selects payload,
+    so it stays server-side. Best-effort, guarded on status='running'. None when
+    off the background-job path (a direct caller gets today's no-checkpoint
+    behaviour)."""
+    if not job_id:
+        return None
+    base = dict(payload or {})
+
+    async def _save(score_result: dict) -> None:
+        try:
+            get_supabase().table("async_jobs").update(
+                {"payload": {**base, "_checkpoint": score_result}}
+            ).eq("id", job_id).eq("status", "running").execute()
+        except Exception:  # noqa: BLE001 — best-effort, never break the job
+            pass
+
+    return _save
+
+
 # ── persistence ──────────────────────────────────────────────────────────────
 
 def _persist_page(
@@ -529,6 +554,8 @@ async def reoptimize_url(
     score_threshold: float = REOPT_SCORE_THRESHOLD, publish_to_doc: bool = False,
     notes: Optional[str] = None, entity_provider: Optional[str] = None,
     on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
+    resume_score: Optional[dict] = None,
+    on_checkpoint: Optional[Callable[[dict], Awaitable[None]]] = None,
 ) -> dict:
     """Score a live page (by URL) and reoptimize it only if it scores below
     `score_threshold`. The SERP analysis the score produced is threaded into the
@@ -537,19 +564,37 @@ async def reoptimize_url(
 
     When `notes` are supplied the score-threshold skip is BYPASSED — the notes are
     an explicit rewrite instruction (e.g. "remove the Research Use Only
-    designation") that must apply even to an already-high-scoring page."""
+    designation") that must apply even to an already-high-scoring page.
+
+    Restart resilience: `resume_score` is a pre-rewrite score persisted by a
+    previous attempt of this same job (a worker restart requeued it). When
+    present, the scrape + SERP analysis + LLM score are SKIPPED and it is reused —
+    so a requeue resumes straight into the rewrite instead of re-spending the
+    whole pre-rewrite phase. `on_checkpoint`, when provided, is called with a
+    freshly-computed score so the next attempt can resume from it."""
     page_type = _norm_page_type(page_type)
     # Coarse progress for the pre-rewrite score phase (plain JSON, no SSE); the
     # rewrite streams fine-grained progress once reoptimize_from takes over.
-    if on_progress is not None:
-        await on_progress(8, "Scoring the live page…")
-    score_result = await score_page(
-        client_id, keyword, page_type, page_url=page_url, page_content=None, user_id=user_id,
-        entity_provider=entity_provider,
-    )
-    # Record the "before" verdict distinctly (score_page already logged a 'score'
-    # row; re-tag as reoptimize_before for the reoptimize history semantics).
-    _record_score_run(client_id, keyword, page_type, "reoptimize_before", score_result, page_id=None, page_url=page_url, user_id=user_id)
+    if isinstance(resume_score, dict) and resume_score.get("serp_analysis") is not None:
+        # Resuming a requeued job: the earlier attempt already scored this page.
+        if on_progress is not None:
+            await on_progress(30, "Resuming — reusing the earlier score…")
+        score_result = resume_score
+        logger.info("ecommerce.reoptimize_url_resumed", extra={"client_id": client_id, "page_url": page_url})
+    else:
+        if on_progress is not None:
+            await on_progress(8, "Scoring the live page…")
+        score_result = await score_page(
+            client_id, keyword, page_type, page_url=page_url, page_content=None, user_id=user_id,
+            entity_provider=entity_provider,
+        )
+        # Record the "before" verdict distinctly (score_page already logged a
+        # 'score' row; re-tag as reoptimize_before for the reoptimize history
+        # semantics). Skipped on resume — the first attempt already recorded it.
+        _record_score_run(client_id, keyword, page_type, "reoptimize_before", score_result, page_id=None, page_url=page_url, user_id=user_id)
+        # Checkpoint the pre-rewrite phase so a restart resumes past it.
+        if on_checkpoint is not None:
+            await on_checkpoint(score_result)
 
     from services import voice_card_service
 
@@ -971,6 +1016,11 @@ async def run_reoptimize_url_job(job: dict) -> None:
             publish_to_doc=bool(payload.get("publish_to_doc")), notes=payload.get("notes"),
             entity_provider=payload.get("entity_provider"),
             on_progress=_job_progress_writer(job_id),
+            # Restart resilience: reuse a pre-rewrite score a prior attempt saved
+            # (worker restart / redeploy drain requeued this job), and checkpoint a
+            # fresh one so the NEXT restart resumes past the scrape + SERP + score.
+            resume_score=payload.get("_checkpoint"),
+            on_checkpoint=_job_checkpoint_writer(job_id, payload),
         )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": result, "completed_at": "now()"}
