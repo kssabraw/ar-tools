@@ -295,7 +295,8 @@ def get_client_rankability(client_id: str, today: Optional[date] = None) -> dict
         }
         if not snap:
             items.append({**base, "has_snapshot": False, "score": None, "band": None,
-                          "factors": [], "priority": None, "snapshot_id": None, "client_rank": None})
+                          "factors": [], "priority": None, "snapshot_id": None,
+                          "client_rank": None, "client_url": None})
             continue
 
         results = results_by.get(snap["id"], [])
@@ -329,7 +330,9 @@ def get_client_rankability(client_id: str, today: Optional[date] = None) -> dict
             else None
         )
         items.append({**base, "has_snapshot": True, "snapshot_id": snap["id"],
-                      "client_rank": snap.get("client_rank"), "priority": priority, **scored})
+                      "client_rank": snap.get("client_rank"),
+                      "client_url": (client_best or {}).get("url"),
+                      "priority": priority, **scored})
 
     return {"items": items}
 

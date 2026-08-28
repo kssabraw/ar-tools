@@ -44,14 +44,20 @@ def test_drop_outranks_everything_and_deindex_is_critical():
 
 def test_quick_win_striking_distance_reoptimizes_else_creates():
     items = [
-        _rankability_item(keyword="hot water repair", client_rank=8, priority=9000.0),
+        _rankability_item(keyword="hot water repair", client_rank=8, priority=9000.0,
+                          client_url="https://acme.com/hot-water-repair/"),
         _rankability_item(keyword="gas fitting", client_rank=None, priority=8000.0),
     ]
     actions = reopt_planner.build_actions(CLIENT, [], items, {})
     by_kw = {a["keyword"]: a for a in actions}
-    assert by_kw["hot water repair"]["cta_label"] == "Reoptimize"
-    assert "#8" in by_kw["hot water repair"]["recommendation"]
-    assert by_kw["gas fitting"]["cta_label"] == "Create page"
+    reopt = by_kw["hot water repair"]
+    assert reopt["cta_label"] == "Reoptimize"
+    assert "#8" in reopt["recommendation"]
+    # the exact page to reoptimize is named (url field + in the recommendation)
+    assert reopt["url"] == "https://acme.com/hot-water-repair/"
+    assert "https://acme.com/hot-water-repair/" in reopt["recommendation"]
+    create = by_kw["gas fitting"]
+    assert create["cta_label"] == "Create page" and create["url"] is None
     assert all(a["cta_path"] == f"clients/{CLIENT}/local-seo" for a in actions)
 
 
@@ -94,15 +100,24 @@ def test_drop_supersedes_quick_win_for_same_keyword():
 
 def test_gsc_cannibalization_and_hidden_wins_mapped():
     gsc = {
-        "cannibalization": [{"query": "drain cleaning", "page_count": 3, "total_impressions": 4200}],
+        "cannibalization": [{"query": "drain cleaning", "page_count": 3, "total_impressions": 4200,
+                             "pages": [
+                                 {"page": "https://acme.com/drains/", "impressions": 2000, "position": 8, "clicks": 20},
+                                 {"page": "https://acme.com/drain-cleaning/", "impressions": 1500, "position": 12, "clicks": 5},
+                             ]}],
         "hidden_wins": [{"keyword": "leak detection", "position": 14.0, "impressions": 300,
                          "page": "https://acme.com/leak-detection/"}],
     }
     actions = reopt_planner.build_actions(CLIENT, [], [], gsc)
     by_kind = {a["kind"]: a for a in actions}
-    assert by_kind["cannibalization"]["keyword"] == "drain cleaning"
-    assert "3 pages" in by_kind["cannibalization"]["diagnosis"]
-    assert by_kind["cannibalization"]["cta_path"] == f"clients/{CLIENT}/gsc-research"
+    cann = by_kind["cannibalization"]
+    assert cann["keyword"] == "drain cleaning"
+    assert "3 pages" in cann["diagnosis"]
+    assert cann["cta_path"] == f"clients/{CLIENT}/gsc-research"
+    # the competing URLs are listed; the strongest (most impressions) is the canonical
+    assert cann["url"] == "https://acme.com/drains/"
+    assert [p["url"] for p in cann["pages"]] == ["https://acme.com/drains/", "https://acme.com/drain-cleaning/"]
+    assert "https://acme.com/drains/" in cann["recommendation"]
     opp = by_kind["opportunity"]
     assert opp["keyword"] == "leak detection"
     assert "page 2" in opp["diagnosis"]
@@ -347,6 +362,42 @@ def test_content_action_on_depth_and_topic_gap():
     assert "pricing" in a["diagnosis"]
     assert "emergency plumber" in a["keyword"]
     assert a["cta_path"] == f"clients/{CLIENT}/local-seo"
+
+
+def test_content_action_names_page_url_and_topics():
+    gap = {"depth_behind": 600, "topic_gaps": ["pricing", "faq"], "keyword": "emergency plumber",
+           "url": "https://acme.com/emergency-plumber/"}
+    a = reopt_planner.build_content_action(CLIENT, gap)[0]
+    assert a["url"] == "https://acme.com/emergency-plumber/"
+    assert "https://acme.com/emergency-plumber/" in a["diagnosis"]
+    assert a["topics"] == ["pricing", "faq"]
+
+
+def test_backlink_action_lists_target_domains_and_count():
+    gap = {"dr_behind": 25, "referring_domains_behind": 100}
+    link_gaps = [
+        {"referring_domain": "bobvila.com", "referring_domain_rank": 82, "linking_to": ["comp-a.com"]},
+        {"referring_domain": "angi.com", "referring_domain_rank": 78, "linking_to": ["comp-a.com", "comp-b.com"]},
+    ]
+    a = reopt_planner.build_backlink_action(CLIENT, gap, link_gaps)[0]
+    assert a["target_link_count"] == 100
+    assert [t["domain"] for t in a["target_domains"]] == ["bobvila.com", "angi.com"]
+    # with concrete targets the CTA points at Domain Intelligence, and they're named
+    assert a["cta_path"] == f"clients/{CLIENT}/domain-intel"
+    assert "bobvila.com" in a["recommendation"] and "100 referring domains" in a["recommendation"]
+
+
+def test_backlink_action_no_targets_stays_generic():
+    a = reopt_planner.build_backlink_action(CLIENT, {"referring_domains_behind": 30}, [])[0]
+    assert a["target_domains"] is None and a["cta_path"] == f"clients/{CLIENT}/rankings"
+
+
+def test_rd_loss_action_carries_lost_domains_and_count():
+    alerts = [{"alert_type": "rd_loss", "message": "RD fell 18%.",
+               "details": {"lost_domains": ["x.com", "y.com", "z.com"]}, "delta_pct": -18}]
+    a = next(x for x in reopt_planner.build_offpage_actions(CLIENT, alerts) if x["kind"] == "rd_loss")
+    assert a["target_link_count"] == 3
+    assert [t["domain"] for t in a["target_domains"]] == ["x.com", "y.com", "z.com"]
 
 
 def test_content_action_empty_when_no_gap():
