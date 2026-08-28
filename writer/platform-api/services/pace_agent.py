@@ -180,7 +180,23 @@ _PACE_SYSTEM = (
     "call and offer to hand it off — but delivery status, who's behind, and what's "
     "late are yours to answer in full.\n\n"
     "GROUNDING. Only state tasks, assignees, and statuses that appear in the board "
-    "data. Be concrete and specific; skip filler."
+    "data. Be concrete and specific; skip filler.\n\n"
+    "FORMATTING: you are replying in Slack, which does NOT render standard "
+    "Markdown. Never use **bold**, # headers, or [text](url) links — Slack "
+    "ignores or mangles them. Use Slack's own mrkdwn instead: *bold* (single "
+    "asterisks), _italic_, `code`, bullet lines starting with \"- \" or \"• \", "
+    "and <https://example.com|link text> for links. Keep replies short and "
+    "scannable — a few lines or a tight list, not walls of text."
+)
+
+# Appended instead of the Slack formatting rule above when PACE is answering in
+# the dashboard chat (routers/pace.py `style="web"`) rather than Slack — same
+# brain, different room. Mirrors slack_assistant/prompts.py's _WEB_STYLE.
+_PACE_WEB_STYLE = (
+    "\n\nFORMATTING OVERRIDE: you are answering in the AR Tools dashboard chat "
+    "(a web app), NOT Slack. Ignore the Slack mrkdwn rule above — format with "
+    "standard Markdown instead (**bold**, `-` bullets, [text](url) links), and "
+    "never mention Slack, threads, or channels."
 )
 
 
@@ -424,6 +440,8 @@ async def interpret_pace(question: str, client: Optional[dict], context: dict,
             kw["tool_choice"] = {"type": "none"}
         return kw
 
+    system = _PACE_SYSTEM + (_PACE_WEB_STYLE if style == "web" else "")
+
     resp = None
     try:
         for round_no in range(_PACE_TOOL_ROUNDS):
@@ -431,7 +449,7 @@ async def interpret_pace(question: str, client: Optional[dict], context: dict,
             resp = await anthropic_failover.call_failover(
                 clients,
                 lambda c: _one_llm_call(
-                    c, _PACE_SYSTEM, messages, [] if final else tools,
+                    c, system, messages, [] if final else tools,
                     _kw(final), on_text if on_event else None,
                 ),
                 log_tag="pace_agent",
