@@ -2148,6 +2148,11 @@ async def _run_serp_analysis(
             # pages), mirroring the entity benchmark, so zeros from unrelated
             # pages don't collapse the cap.
             present = [c for c in counts if c > 0]
+            if not present:
+                # TF-IDF surfaced the term but no competitor uses this exact
+                # word-boundary form (normalization gap) — attach no frequency
+                # benchmark rather than a misleading "target 1 / top-competitor 0".
+                continue
             rec, mx, avg = _capped_max_target(present)
             _t["recommended_mentions"] = rec
             _t["max_competitor_mentions"] = mx
@@ -5501,8 +5506,11 @@ def _reopt_serp_context(page_zones: dict, serp_analysis: Optional[dict]) -> str:
             zbits = []
             for zk, zlabel in (("h2_h3", "headings"), ("paragraphs", "body")):
                 zrec = zf.get(zk)
-                if zrec and _count_in(name, page_zones.get(zk, "")) < int(zrec):
-                    zbits.append(f"{zlabel} +{int(zrec) - _count_in(name, page_zones.get(zk, ''))}")
+                if not zrec:
+                    continue
+                zcur = _count_in(name, page_zones.get(zk, ""))
+                if zcur < int(zrec):
+                    zbits.append(f"{zlabel} +{int(zrec) - zcur}")
             zsuffix = f" [{', '.join(zbits)}]" if zbits else ""
             rows.append((rec - cur, f'  "{name}" — on the page {cur}×, add {rec - cur} more{extra}{zsuffix}'))
         rows.sort(key=lambda x: x[0], reverse=True)
@@ -5828,8 +5836,8 @@ async def _build_seo_checklist(
             if terms and target:
                 lines.append(f'  • {zone_label}: include ≥{target} of: {", ".join(terms)}')
 
+        top_ents = sorted(entities, key=lambda e: e.get("page_spread", 0), reverse=True)[:15] if entities else []
         if entities:
-            top_ents = sorted(entities, key=lambda e: e.get("page_spread", 0), reverse=True)[:15]
             ent_names = [e["name"] for e in top_ents]
             lines.append(f'  • Entity pool (Google NLP — use these to establish topical authority): {", ".join(ent_names)}')
             lines.append(  '  • Distribute entities across zones as follows (≥N means at least that many from the pool above):')
@@ -5852,54 +5860,59 @@ async def _build_seo_checklist(
                     '  • Entity mention targets — use each at least this many times across the page '
                     f'(competitor-matched, add naturally — never stuff): {", ".join(ent_freq)}'
                 )
-            kw_best: dict = {}
-            for zk in ("title", "h1", "h2_h3", "paragraphs"):
-                for t in rk.get(zk, []):
-                    term = (t.get("term") or "").lower()
-                    rec = t.get("recommended_mentions")
-                    if not term or not rec:
-                        continue
-                    if term not in kw_best or int(rec) > kw_best[term][1]:
-                        kw_best[term] = (t.get("term"), int(rec))
-            kw_freq = [f'"{name}" ≥{rec}×' for name, rec in
-                       sorted(kw_best.values(), key=lambda x: -x[1])][:15]
-            if kw_freq:
-                lines.append(
-                    '  • Related-keyword mention targets — competitor-matched frequency, '
-                    f'add naturally in body copy: {", ".join(kw_freq)}'
-                )
-            # Bolded-term mention targets (raw competitor max — a direct Google signal).
-            bold_freq = [f'"{b["term"]}" ≥{b.get("recommended_mentions") or b.get("max_competitor_uses")}×'
-                         for b in serp_analysis.get("serp_bold_keywords", [])
-                         if (b.get("recommended_mentions") or b.get("max_competitor_uses"))][:12]
-            if bold_freq:
-                lines.append(
-                    '  • Google-bolded term targets — the terms Google highlights in results; '
-                    f'match the top competitor exactly: {", ".join(bold_freq)}'
-                )
-            # Per-zone frequency emphasis: terms competitors REPEAT (≥2×) inside a
-            # specific zone, so the writer front-loads the right place, not just the page.
-            zone_emph: dict = {"h2_h3": [], "paragraphs": []}
 
-            def _collect(name, zf):
-                if not name:
-                    return
-                for zk_ in ("h2_h3", "paragraphs"):
-                    v = (zf or {}).get(zk_)
-                    if v and int(v) >= 2:
-                        zone_emph[zk_].append(f'"{name}" ≥{int(v)}×')
+        # Keyword + bolded-term mention targets + per-zone emphasis. NOT gated on
+        # `entities` — a run where entity extraction returned nothing still gets
+        # the keyword/bold frequency guidance (top_ents is [] in that case, so the
+        # entity part of the per-zone emphasis simply contributes nothing).
+        kw_best: dict = {}
+        for zk in ("title", "h1", "h2_h3", "paragraphs"):
+            for t in rk.get(zk, []):
+                term = (t.get("term") or "").lower()
+                rec = t.get("recommended_mentions")
+                if not term or not rec:
+                    continue
+                if term not in kw_best or int(rec) > kw_best[term][1]:
+                    kw_best[term] = (t.get("term"), int(rec))
+        kw_freq = [f'"{name}" ≥{rec}×' for name, rec in
+                   sorted(kw_best.values(), key=lambda x: -x[1])][:15]
+        if kw_freq:
+            lines.append(
+                '  • Related-keyword mention targets — competitor-matched frequency, '
+                f'add naturally in body copy: {", ".join(kw_freq)}'
+            )
+        # Bolded-term mention targets (raw competitor max — a direct Google signal).
+        bold_freq = [f'"{b["term"]}" ≥{b.get("recommended_mentions") or b.get("max_competitor_uses")}×'
+                     for b in serp_analysis.get("serp_bold_keywords", [])
+                     if (b.get("recommended_mentions") or b.get("max_competitor_uses"))][:12]
+        if bold_freq:
+            lines.append(
+                '  • Google-bolded term targets — the terms Google highlights in results; '
+                f'match the top competitor exactly: {", ".join(bold_freq)}'
+            )
+        # Per-zone frequency emphasis: terms competitors REPEAT (≥2×) inside a
+        # specific zone, so the writer front-loads the right place, not just the page.
+        zone_emph: dict = {"h2_h3": [], "paragraphs": []}
 
-            for e in top_ents:
-                _collect(e.get("name"), e.get("zone_freq"))
-            for zk_ in ("title", "h1", "h2_h3", "paragraphs"):
-                for t in rk.get(zk_, []):
-                    _collect(t.get("term"), t.get("zone_freq"))
-            for b in serp_analysis.get("serp_bold_keywords", []):
-                _collect(b.get("term"), b.get("zone_freq"))
-            for zk_, zlabel_ in (("paragraphs", "body paragraphs"), ("h2_h3", "H2/H3 headings")):
-                emph = list(dict.fromkeys(zone_emph[zk_]))[:10]
-                if emph:
-                    lines.append(f'  • Repeat in {zlabel_} specifically (competitors do): {", ".join(emph)}')
+        def _collect(name, zf):
+            if not name:
+                return
+            for zk_ in ("h2_h3", "paragraphs"):
+                v = (zf or {}).get(zk_)
+                if v and int(v) >= 2:
+                    zone_emph[zk_].append(f'"{name}" ≥{int(v)}×')
+
+        for e in top_ents:
+            _collect(e.get("name"), e.get("zone_freq"))
+        for zk_ in ("title", "h1", "h2_h3", "paragraphs"):
+            for t in rk.get(zk_, []):
+                _collect(t.get("term"), t.get("zone_freq"))
+        for b in serp_analysis.get("serp_bold_keywords", []):
+            _collect(b.get("term"), b.get("zone_freq"))
+        for zk_, zlabel_ in (("paragraphs", "body paragraphs"), ("h2_h3", "H2/H3 headings")):
+            emph = list(dict.fromkeys(zone_emph[zk_]))[:10]
+            if emph:
+                lines.append(f'  • Repeat in {zlabel_} specifically (competitors do): {", ".join(emph)}')
 
         if quadgrams:
             phrases = [q["phrase"] for q in quadgrams[:10]]

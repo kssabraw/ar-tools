@@ -334,6 +334,9 @@ export function GeneratedPageView({
     if (tab === 'social' && !socialRequested.current) {
       socialRequested.current = true
       // Skip if a prior job is already reconnecting or posts are already in hand.
+      // Lazy fetch-on-tab-change, guarded once by the ref above; the only setState
+      // it reaches synchronously is an error-reset — not a cascading render.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       if (socialJob.phase === 'idle' && !social) void fetchSocial()
     }
     if (tab === 'related' && !relatedRequested.current) {
