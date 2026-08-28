@@ -810,6 +810,19 @@ async def publish_page(
 
     voice_card_service.assert_voice_publishable(page.get("voice_violations"), force_voice)
 
+    # Regulatory guardrail (peptide/regulated clients): block dosing / branded-
+    # equivalence / guaranteed-results / advocacy content. No-op otherwise.
+    if settings.content_compliance_enabled:
+        from services import content_compliance
+
+        client_mode = (supabase.table("clients").select("content_compliance_mode")
+                       .eq("id", page["client_id"]).single().execute().data) or {}
+        content_compliance.assert_content_publishable(
+            client_mode,
+            title=page.get("title") or page.get("keyword") or "",
+            body=page.get("content_html") or "",
+        )
+
     if destination == "wordpress":
         client_res = (
             supabase.table("clients")

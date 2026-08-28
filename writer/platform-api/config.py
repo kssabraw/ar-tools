@@ -227,6 +227,17 @@ class Settings(BaseSettings):
         # the backlink lookup (DataForSEO pull on a cache miss).
         "keyword_research_report", "fanout_report", "backlink_lookup",
     ]
+    # Content-compliance guardrail: block publishing content that gives human
+    # dosing/administration instructions, claims branded-drug equivalence,
+    # promises guaranteed results, or advocates buying — for clients in a
+    # regulated content_compliance_mode (peptide vendors). Global kill switch;
+    # per-client opt-in is clients.content_compliance_mode.
+    content_compliance_enabled: bool = True
+    # Fan-out brand-voice enforcement: for client-linked sessions, resolve the
+    # client's distilled voice card, prime the fan-out writer's prompts with it,
+    # and run the voice review + corrective rewrite on the finished article. Off
+    # → the fan-out writer generates client-agnostically (its prior behaviour).
+    fanout_brand_voice_enabled: bool = True
     # Freeze Protocol: daily homepage-indexation check (GSC URL Inspection with a
     # DataForSEO site: warn-only fallback) that can auto-open a deindexing freeze.
     freeze_check_enabled: bool = True
