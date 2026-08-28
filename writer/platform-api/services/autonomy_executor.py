@@ -13,14 +13,17 @@ The loop, per client, on the shared scheduler:
                   executed; everything else is RECORDED, never run
   6. record     — write the autonomy_runs ledger + emit the owner digest
 
-Two independent clamps keep v1 safe:
+Two independent clamps keep this safe:
   * ``autonomy_enabled`` (default False) — the whole loop is dormant.
-  * ``AUTO_EXECUTE`` — even enabled, only a free, idempotent, harmless action
-    (rebuild_action_plan) actually runs. Every content / paid candidate is
-    recorded as a proposal for the pilot to read in the ledger + digest, and
-    is NOT auto-run until AUTO_EXECUTE is deliberately widened after the gate
-    run. This is why a striking-distance keyword never silently becomes a new
-    (cannibalising) blog post in v1.
+  * ``AUTO_EXECUTE`` — even enabled, only the free plan rebuild and the ONE safe
+    content case run: a net-new Local SEO page for a "Create page" quick-win
+    **whose keyword itself names a resolvable city** (so the target is explicit —
+    no location guessing, no geo-mismatch, and a bare head term that would
+    duplicate the client's primary-city page resolves to no city and is only
+    proposed). Reoptimising an existing page (needs a URL the Action Plan item
+    doesn't carry) and blog/service runs stay proposals recorded in the ledger +
+    digest for a human. This is why a striking-distance keyword never silently
+    becomes a cannibalising new page.
 
 Pure decision helpers (``gather_candidates``, ``decide_candidates``) are
 unit-tested without a database; the reads/execute/ledger are the thin impure
@@ -52,24 +55,31 @@ _BEHIND = {"behind", "overdue"}
 def gather_candidates(
     goals: list[dict],
     action_plan: Optional[dict],
-    client_location: Optional[str] = None,
+    resolve_city: Optional[Callable[[str], Optional[dict]]] = None,
 ) -> list[dict]:
     """Deterministic candidate actions for a client with behind/overdue goals.
 
-    Pure. Emits:
+    Pure (the only non-determinism is the injected ``resolve_city`` — a
+    keyword→city lookup the impure caller wires to DataForSEO; tests inject a
+    fake). Emits:
       * one free ``rebuild_action_plan`` whenever any goal is behind/overdue;
       * per Action Plan quick_win / opportunity item, a content candidate whose
         ACTION and AUTO-ELIGIBILITY follow the item's own signal:
-          - a "Create page" quick-win (SERP winnable, the client has NO strong
-            page yet) with a known client location → ``generate_local_seo_page``,
-            ``requires="none"`` (auto-eligible: a net-new page for a keyword the
-            client doesn't already rank for can't cannibalise an existing page);
+          - a "Create page" quick-win **whose keyword itself names a resolvable
+            city** (``resolve_city(keyword)`` returns a ``{location,
+            location_code}``) → an auto-eligible ``generate_local_seo_page``
+            (``requires="none"``) targeting exactly that city. This is the ONLY
+            content that auto-runs, and it is safe on all three counts the pilot
+            exposed: the target is the city written in the keyword (no guessing a
+            location, no geo-mismatch), and a keyword that carries its own city
+            is a distinct geo page (a bare head term — which would duplicate the
+            client's primary-city page — resolves to no city and is proposed).
           - everything else — a "Reoptimize" quick-win or an opportunity (both
             want an EXISTING page improved, but the Action Plan item carries no
-            URL), or a create-page item with no location — stays
-            ``requires="approval"`` (surfaced, never auto-run). The action name
-            reflects intent (reoptimize_page vs generate_local_seo_page) so the
-            proposal reads correctly and classifies at the right tier.
+            URL), or a create-page item whose keyword names no resolvable city —
+            stays ``requires="approval"`` (surfaced, never auto-run). The action
+            name reflects intent (reoptimize_page vs generate_local_seo_page) so
+            the proposal reads correctly and classifies at the right tier.
 
     Cost estimates are attached so the budget governor gates real spend.
     """
@@ -77,7 +87,6 @@ def gather_candidates(
     if not behind:
         return []
 
-    loc = (client_location or "").strip()
     out: list[dict] = [{
         "action": "rebuild_action_plan",
         "cost_usd": 0.0,
@@ -98,12 +107,14 @@ def gather_candidates(
         reason = item.get("recommendation") or kind
         source = f"action_plan:{kind}"
 
-        if create_page and loc:
-            # Auto-eligible: a genuinely net-new local page.
+        city = resolve_city(kw) if (create_page and resolve_city) else None
+        if create_page and city and city.get("location_code") is not None:
+            # Auto-eligible: a net-new page for the city named in the keyword.
             out.append({
                 "action": "generate_local_seo_page",
                 "keyword": kw,
-                "location": loc,
+                "location": city["location"],
+                "location_code": city["location_code"],
                 "cost_usd": float(settings.autonomy_local_seo_cost_usd),
                 "requires": "none",
                 "source": source,
@@ -111,7 +122,8 @@ def gather_candidates(
             })
         else:
             # Proposal only: improving an existing page needs a URL the plan
-            # doesn't carry, or a create-page item has no location to target.
+            # doesn't carry, or a create-page keyword names no resolvable city
+            # to target (a bare head term / a geo the lookup can't confirm).
             out.append({
                 "action": "generate_local_seo_page" if create_page else "reoptimize_page",
                 "keyword": kw,
@@ -166,7 +178,9 @@ def _execute(candidate: dict, client_id: str) -> None:
         return
     if action == "generate_local_seo_page":
         # Enqueue a durable local_seo_generate job (the worker picks it up and
-        # resolves the area / runs the generator) — no inline pipeline. The
+        # runs the generator) — no inline pipeline. Location + location_code were
+        # resolved from the keyword's own city in gather_candidates, so the
+        # generator trusts the code (no re-resolution / no ambiguity). The
         # generated page lands as a Saved-Pages DRAFT; publishing stays human.
         get_supabase().table("async_jobs").insert({
             "job_type": "local_seo_generate",
@@ -175,7 +189,7 @@ def _execute(candidate: dict, client_id: str) -> None:
                 "client_id": client_id,
                 "keyword": candidate.get("keyword"),
                 "location": candidate.get("location"),
-                "location_code": None,
+                "location_code": candidate.get("location_code"),
                 "user_id": "",
                 "force_refresh": False,
                 "entity_provider": None,
@@ -183,6 +197,60 @@ def _execute(candidate: dict, client_id: str) -> None:
         }).execute()
         return
     raise ValueError(f"no executor for action {action!r}")
+
+
+# A city name is at most a few words ("West Palm Beach", "North Miami Beach").
+_MAX_CITY_WORDS = 3
+
+
+def _resolve_keyword_city(client: dict, keyword: str) -> Optional[dict]:
+    """If the keyword ends in a real, DataForSEO-resolvable city, return
+    ``{location, location_code}`` for it — else None.
+
+    Tries the longest trailing word-window first ("… west palm beach" →
+    "west palm beach") and accepts only an EXACT city-name match (the resolved
+    location's first segment equals the window), so a service word that isn't a
+    place resolves to nothing and the candidate falls through to a proposal
+    (fail-closed). Requires ≥1 leading (service) word, so a keyword that is
+    *only* a city isn't treated as a "<service> <city>" page. Best-effort:
+    any lookup failure → None (proposal), never raises."""
+    import asyncio
+
+    from services import locations_service
+
+    words = (keyword or "").strip().split()
+    if len(words) < 2:  # need a leading service term + a trailing place
+        return None
+
+    async def _find() -> Optional[dict]:
+        # window length capped at min(_MAX_CITY_WORDS, len-1): at least one word
+        # must remain in front of the city.
+        for n in range(min(_MAX_CITY_WORDS, len(words) - 1), 0, -1):
+            window = " ".join(words[-n:]).strip()
+            if len(window) < 3:
+                continue
+            try:
+                matches = await locations_service.search_locations(client, window, limit=5)
+            except Exception:  # noqa: BLE001 — a lookup failure is not a match
+                return None
+            for m in matches:
+                first_seg = (m.get("location_name") or "").split(",")[0].strip().lower()
+                if first_seg == window.lower() and m.get("location_code") is not None:
+                    return {"location": m["location_name"], "location_code": m["location_code"]}
+        return None
+
+    try:
+        return asyncio.run(_find())
+    except Exception as exc:  # noqa: BLE001 — includes "loop already running"
+        logger.warning("autonomy_city_resolve_failed",
+                       extra={"keyword": keyword, "error": str(exc)})
+        return None
+
+
+def _keyword_city_resolver(client: dict) -> Callable[[str], Optional[dict]]:
+    """A sync ``keyword -> {location, location_code} | None`` closure over the
+    client, injected into the pure ``gather_candidates``."""
+    return lambda keyword: _resolve_keyword_city(client, keyword)
 
 
 def _client_row(client_id: str) -> Optional[dict]:
@@ -248,7 +316,7 @@ def run_autonomy_for_client(
         goals = []
 
     candidates = gather_candidates(
-        goals, _latest_action_plan(client_id), client.get("business_location")
+        goals, _latest_action_plan(client_id), _keyword_city_resolver(client)
     )
     if not candidates:
         return {"status": "noop", "reason": "no behind/overdue goals"}
