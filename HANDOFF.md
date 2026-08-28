@@ -6,9 +6,27 @@
 `PACE_SLACK_CHANNEL=C0BTJ9U5H5F` = the private `#pace` channel). PRs this session:
 **#858** (route PM / native `task_*` notifications to the PACE channel), **#860**
 (separate PACE Slack bot), **#861** (inbound diagnostic log), **#868** (Team-page
-self-link). First automated digest + Chase Plan fires the workday after enablement,
-after `gsc_ingest_hour_utc` (**08:00 UTC**), delivered by the PACE bot in `#pace`.
+self-link), **#872** (per-client PACE channels — see below). First automated digest
++ Chase Plan fires the workday after enablement, after `gsc_ingest_hour_utc`
+(**08:00 UTC**), delivered by the PACE bot in `#pace`.
 Full module detail is in the CLAUDE.md PACE entry.
+
+### Per-client PACE Slack channels (#872, draft)
+PACE can now post a client's PM chatter to **that client's own Slack channel**
+instead of only the master `#pace` channel. New nullable **`clients.slack_channel_id`**
+(migration `20260828240000`, **applied live**), editable on the client form
+("PACE Slack Channel" — accepts a channel id like `C0ABC123XY` or a `#name`).
+Only the **client-scoped** PACE kinds route there — `task_assigned` /
+`task_mention` / `task_comment` / `task_month_generated` / `task_nudge`
+(`notifications.CLIENT_SCOPED_PACE_KINDS`). The portfolio rollups (daily digest,
+Chase Plan, workload report, escalations) and the suite-wide `task_overload` /
+`task_due` digests stay in the master channel. A client with **no channel set
+falls back to the master channel**, so nothing is lost — the feature is inert
+until a channel is set per-client. `resolve_slack_token` posts every PACE kind
+under the PACE bot token, so **the PACE bot must be `/invite`d to each client
+channel** you configure (same requirement as `#pace`). Owner ruling: client-scoped
+only + master fallback; splitting the digest/Chase Plan per-client is a deferred
+follow-up.
 
 ### PACE has its own Slack app now (not SerMaStr) — App ID `A0BTJKE3BDX`
 Config on PLATFORM: **`PACE_SLACK_BOT_TOKEN`** (`xoxb-…`) + **`PACE_SLACK_SIGNING_SECRET`**
