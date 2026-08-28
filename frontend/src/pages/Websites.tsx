@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, Globe, RotateCcw, Trash2 } from 'lucide-react'
+import { ArrowRight, Globe, Loader2, Plus, RotateCcw, Trash2, X } from 'lucide-react'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
-import { ACCENT, Chip, btn, card } from '../components/website/shared'
-import type { DeployStatus, Website } from '../components/website/shared'
+import { ACCENT, Chip, btn, card, input, label } from '../components/website/shared'
+import type { DeployStatus, SiteType, Website } from '../components/website/shared'
 
 // The fleet view (PRD §6.1). Every other module in the suite is purely
 // client-scoped, and that is right for them — you pick a client, then work.
@@ -28,6 +28,7 @@ export function Websites() {
   const { isStaff } = useAuth()
   const [view, setView] = useState<'active' | 'trash'>('active')
   const [filter, setFilter] = useState('')
+  const [creating, setCreating] = useState(false)
 
   const { data: status } = useQuery<{ enabled: boolean }>({
     queryKey: ['website-status'],
@@ -103,6 +104,13 @@ export function Websites() {
             {v}
           </button>
         ))}
+        {isStaff && view === 'active' && (
+          <button onClick={() => setCreating(true)}
+                  title="Create a site with no client — an agency-owned property (rank-and-rent, PBN, or a niche site)."
+                  style={btn(ACCENT, '#fff')}>
+            <Plus size={14} /> New site
+          </button>
+        )}
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
@@ -110,6 +118,8 @@ export function Websites() {
           style={{ flex: 1, minWidth: 220, padding: 9, borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13 }}
         />
       </div>
+
+      {creating && <NewSiteModal onClose={() => setCreating(false)} />}
 
       {view === 'trash' && (
         <p style={{ fontSize: 12, color: '#64748b', marginTop: 0 }}>
@@ -125,7 +135,7 @@ export function Websites() {
         <div style={{ ...card, color: '#64748b', fontSize: 13 }}>
           {view === 'trash'
             ? 'Nothing in the trash.'
-            : 'No sites yet. A site is created from its client\'s workspace — open a client and use the Website Builder card.'}
+            : 'No sites yet. Use “New site” for a standalone property (rank-and-rent, PBN, niche), or open a client and use the Website Builder card for a client site.'}
         </div>
       ) : (
         <div style={card}>
@@ -192,6 +202,121 @@ export function Websites() {
       )}
     </Shell>
   )
+}
+
+const SITE_TYPES: { value: SiteType; label: string; hint: string }[] = [
+  { value: 'local_business', label: 'Local business', hint: 'Services × cities — a rank-and-rent local site.' },
+  { value: 'informational', label: 'Informational / niche', hint: 'A content site — e.g. a PBN or niche property.' },
+  { value: 'lead_gen', label: 'Lead-gen', hint: 'An owned lead-gen property.' },
+]
+
+// Create a standalone site — one with no external client. It still has a business
+// identity (name, city, brand voice), which is captured here and stored on a
+// hidden owned-property record so every generator works unchanged. On success we
+// drop into the normal builder workspace for the new site.
+function NewSiteModal({ onClose }: { onClose: () => void }) {
+  const navigate = useNavigate()
+  const [name, setName] = useState('')
+  const [siteType, setSiteType] = useState<SiteType>('local_business')
+  const [businessName, setBusinessName] = useState('')
+  const [businessCity, setBusinessCity] = useState('')
+  const [websiteUrl, setWebsiteUrl] = useState('')
+  const [brandVoice, setBrandVoice] = useState('')
+  const [showMore, setShowMore] = useState(false)
+
+  const create = useMutation({
+    mutationFn: () => api.post<{ client_id: string }>('/websites', {
+      name: name.trim(),
+      site_type: siteType,
+      business_name: businessName.trim() || undefined,
+      business_city: businessCity.trim() || undefined,
+      website_url: websiteUrl.trim() || undefined,
+      brand_voice: brandVoice.trim() || undefined,
+    }),
+    onSuccess: (res) => { onClose(); navigate(`/clients/${res.client_id}/website`) },
+  })
+
+  const typeDef = SITE_TYPES.find((t) => t.value === siteType) as (typeof SITE_TYPES)[number]
+
+  return (
+    <div onClick={onClose} style={overlay}>
+      <div onClick={(e) => e.stopPropagation()} style={{ ...card, width: 480, maxWidth: '92vw', maxHeight: '86vh', overflowY: 'auto', display: 'grid', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <strong style={{ fontSize: 15 }}>New standalone site</strong>
+          <button onClick={onClose} style={{ ...btn('#fff', '#64748b'), padding: 6 }}><X size={15} /></button>
+        </div>
+        <p style={{ margin: 0, fontSize: 12, color: '#64748b' }}>
+          A site with no client — an agency-owned property. It gets its own business identity
+          (kept out of your client lists). You can refine the brand voice later on the site’s
+          Settings tab.
+        </p>
+
+        <div>
+          <label style={label}>Site name</label>
+          <input style={input} value={name} onChange={(e) => setName(e.target.value)}
+                 placeholder="Seattle Tree Pros (internal label)" />
+        </div>
+
+        <div>
+          <label style={label}>Site type</label>
+          <select value={siteType} onChange={(e) => setSiteType(e.target.value as SiteType)} style={{ ...input, cursor: 'pointer' }}>
+            {SITE_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+          </select>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>{typeDef.hint}</div>
+        </div>
+
+        <div>
+          <label style={label}>Business name <span style={{ color: '#94a3b8', fontWeight: 400 }}>(public)</span></label>
+          <input style={input} value={businessName} onChange={(e) => setBusinessName(e.target.value)}
+                 placeholder="Defaults to the site name" />
+        </div>
+
+        <div>
+          <label style={label}>Brand voice / guide</label>
+          <textarea value={brandVoice} onChange={(e) => setBrandVoice(e.target.value)} rows={3}
+                    placeholder="How the business should sound (needed to generate content — can be added later)."
+                    style={{ ...input, resize: 'vertical' }} />
+        </div>
+
+        <button onClick={() => setShowMore((s) => !s)} style={{ ...btn('#fff', '#64748b'), justifySelf: 'start', padding: '4px 8px', fontSize: 12 }}>
+          {showMore ? 'Hide' : 'Show'} optional
+        </button>
+        {showMore && (
+          <div style={{ display: 'grid', gap: 10, padding: 12, background: '#f8fafc', borderRadius: 8 }}>
+            <div>
+              <label style={label}>City</label>
+              <input style={input} value={businessCity} onChange={(e) => setBusinessCity(e.target.value)}
+                     placeholder="Seattle" />
+            </div>
+            <div>
+              <label style={label}>Website URL</label>
+              <input style={input} value={websiteUrl} onChange={(e) => setWebsiteUrl(e.target.value)}
+                     placeholder="https://… — if the site is live, we’ll scan its voice" />
+            </div>
+          </div>
+        )}
+
+        {create.error && (
+          <div style={{ padding: 9, borderRadius: 8, background: '#fef2f2', color: '#b91c1c', fontSize: 12 }}>
+            {(create.error as Error).message}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button onClick={onClose} style={btn('#fff', '#64748b')}>Cancel</button>
+          <button onClick={() => create.mutate()} disabled={!name.trim() || create.isPending}
+                  style={btn(!name.trim() ? '#e2e8f0' : ACCENT, !name.trim() ? '#94a3b8' : '#fff')}>
+            {create.isPending ? <Loader2 size={14} className="spin" /> : <Plus size={14} />} Create site
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const overlay: React.CSSProperties = {
+  position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', display: 'flex',
+  alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: 16,
 }
 
 function Shell({ children }: { children: React.ReactNode }) {
