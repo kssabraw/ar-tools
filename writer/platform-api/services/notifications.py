@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 _SLACK_POST_URL = "https://slack.com/api/chat.postMessage"
 _TIMEOUT = 20.0
 
+# Per-channel outcomes that count as delivered — a requeued dispatch job skips
+# re-sending these (idempotency) while still retrying "failed"/"skipped".
+_DELIVERED = frozenset({"ok", "ok_master_fallback"})
+
 
 # ----------------------------------------------------------------------------
 # Pure config/format helpers (no I/O) — independently unit-tested.
@@ -43,11 +47,18 @@ def email_configured() -> bool:
 
 
 def slack_configured() -> bool:
-    return bool(
-        settings.notifications_enabled
-        and settings.slack_bot_token
-        and settings.slack_default_channel
-    )
+    """Whether any Slack delivery path is set up. True for the normal SerMaStr
+    config (bot token + a default channel) OR a PACE-only setup (the PACE app's
+    bot token + a PACE channel) — so a deployment that wires only PACE's Slack
+    app still delivers PACE kinds. When only PACE is configured, a non-PACE kind
+    resolves to no channel and is skipped at dispatch (``has_slack_target``)."""
+    if not settings.notifications_enabled:
+        return False
+    if settings.slack_bot_token and settings.slack_default_channel:
+        return True
+    if settings.pace_slack_bot_token and settings.pace_slack_channel:
+        return True
+    return False
 
 
 def email_recipients() -> list[str]:
@@ -123,27 +134,48 @@ def format_slack(title: str, summary: Optional[str], client_name: Optional[str],
 # (``settings.pace_slack_channel``) when one is configured, so project-management
 # chatter (task assignments, comments, nudges, the due/overload sweeps, and the
 # daily digest / chase plan / escalations) stays out of the strategy channel.
-# Every other kind (strategy reviews, SEO alerts, run/publish events) keeps using
-# ``slack_default_channel``. A producer can still force any channel explicitly via
-# ``payload.slack_channel`` — that always wins.
+# A client-scoped PACE kind (``CLIENT_SCOPED_PACE_KINDS``) is delivered to that
+# client's OWN channel (``clients.slack_channel_id``) when one is set, falling
+# back to the master PACE channel otherwise — so PACE can talk in each client's
+# channel instead of only one master channel. Every other kind (strategy reviews,
+# SEO alerts, run/publish events) keeps using ``slack_default_channel``. A
+# producer can still force any channel explicitly via ``payload.slack_channel`` —
+# that always wins.
 PACE_CHANNEL_KINDS = frozenset({
     "pace_digest", "pace_chase_plan", "pace_escalation", "pace_report", "pace_briefs",
     "task_assigned", "task_mention", "task_comment", "task_month_generated",
     "task_overload", "task_due", "task_nudge",
 })
 
+# The client-scoped subset of the PACE kinds: each carries a real ``client_id``
+# and concerns exactly one client, so when that client has a dedicated Slack
+# channel (``clients.slack_channel_id``) PACE posts these there instead of the
+# master PACE channel. The portfolio PACE kinds (the daily digest, Chase Plan,
+# workload report, escalations — all emitted with ``client_id=None``) and the
+# suite-wide ``task_overload``/``task_due`` digests are deliberately excluded, so
+# they stay in the single master channel as agency-wide rollups.
+CLIENT_SCOPED_PACE_KINDS = frozenset({
+    "task_assigned", "task_mention", "task_comment", "task_month_generated",
+    "task_nudge",
+})
+
 
 def resolve_slack_channel(
     kind: Optional[str], payload: Optional[dict], pace_channel: Optional[str],
+    client_channel: Optional[str] = None,
 ) -> Optional[str]:
     """Pick the Slack channel for one notification. Precedence:
     1. an explicit ``payload.slack_channel`` (a producer targeting a channel),
-    2. the PACE channel for a PM/PACE ``kind`` when ``pace_channel`` is set,
-    3. otherwise ``None`` → the sender falls back to ``slack_default_channel``.
+    2. the client's own channel for a client-scoped PACE ``kind`` when that client
+       has ``client_channel`` configured (per-client PACE delivery),
+    3. the master PACE channel for any PM/PACE ``kind`` when ``pace_channel`` is set,
+    4. otherwise ``None`` → the sender falls back to ``slack_default_channel``.
     Pure — unit-tested."""
     override = (payload or {}).get("slack_channel")
     if override:
         return override
+    if client_channel and kind in CLIENT_SCOPED_PACE_KINDS:
+        return client_channel
     if pace_channel and kind in PACE_CHANNEL_KINDS:
         return pace_channel
     return None
@@ -158,14 +190,49 @@ def pace_bot_token() -> str:
 
 def resolve_slack_token(
     channel: Optional[str], pace_channel: str, pace_token: str, default_token: str,
+    kind: Optional[str] = None,
 ) -> str:
-    """The bot token to deliver one notification under: the PACE app's token when
-    the message is bound for the PACE channel and that token is configured, else
-    the default (SerMaStr) token — so whichever bot owns the channel is the one
-    that posts. Pure — unit-tested."""
-    if pace_token and pace_channel and channel == pace_channel:
+    """The bot token to deliver one notification under. The PACE app owns delivery
+    of every PM/PACE kind — in the master PACE channel *and* in each client's own
+    channel — so when ``pace_token`` is configured any PACE ``kind`` posts under it
+    (the PACE bot must be a member of the target channel). Otherwise the default
+    (SerMaStr) token is used, with a back-compat check that also uses the PACE
+    token for a message explicitly bound for the master PACE channel. Pure —
+    unit-tested."""
+    if pace_token and (kind in PACE_CHANNEL_KINDS or (pace_channel and channel == pace_channel)):
         return pace_token
     return default_token
+
+
+def resolve_client_channel(raw: Optional[str]) -> Optional[str]:
+    """Normalize a client's stored ``slack_channel_id`` for routing: trim it and
+    treat blank/whitespace as unset (``None``). The clients router already trims
+    on write, but an out-of-band DB value must never route a message to a
+    whitespace channel. Pure — unit-tested."""
+    return (raw or "").strip() or None
+
+
+def master_fallback_channel(
+    resolved_channel: Optional[str], client_channel: Optional[str],
+    pace_channel: Optional[str], default_channel: Optional[str],
+) -> Optional[str]:
+    """The channel to retry on when a send to a client's OWN channel fails (bot
+    not invited, bad/renamed id, archived channel) — so a misconfigured per-client
+    channel degrades to the master channel instead of dropping the message. Only
+    returns a target when the message was actually routed to the client channel;
+    for any other channel there is nothing to fall back to (``None``). Prefers the
+    master PACE channel, then the default channel. Pure — unit-tested."""
+    if client_channel and resolved_channel == client_channel:
+        return pace_channel or default_channel or None
+    return None
+
+
+def has_slack_target(channel: Optional[str], default_channel: Optional[str]) -> bool:
+    """Whether a resolved notification has somewhere to post: an explicit channel
+    or a default the sender falls back to. In a PACE-only deployment (no default
+    channel) a non-PACE kind resolves to neither → skip rather than post to "".
+    Pure — unit-tested."""
+    return bool(channel or default_channel)
 
 
 def emit(
@@ -316,15 +383,29 @@ async def run_notification_dispatch_job(job: dict) -> None:
     n = found.data[0]
 
     client_name = None
+    client_channel = None
     if n.get("client_id"):
         c = (
-            supabase.table("clients").select("name").eq("id", n["client_id"]).limit(1).execute()
+            supabase.table("clients")
+            .select("name, slack_channel_id")
+            .eq("id", n["client_id"])
+            .limit(1)
+            .execute()
         )
-        client_name = c.data[0]["name"] if c.data else None
+        if c.data:
+            client_name = c.data[0].get("name")
+            client_channel = resolve_client_channel(c.data[0].get("slack_channel_id"))
     link = _deep_link(n.get("payload"))
 
-    channels: dict[str, str] = {}
-    if email_configured():
+    # Per-channel idempotency: a reaper requeue re-runs this job, so start from the
+    # already-recorded outcomes and re-attempt only the channels not yet delivered
+    # (a prior "failed"/"skipped" is retried; a prior success is left alone) — so a
+    # requeue can never double-post an already-delivered Slack/email copy.
+    channels: dict[str, str] = dict(n.get("channels_sent") or {})
+
+    if channels.get("email") in _DELIVERED:
+        pass
+    elif email_configured():
         subject, body = format_email(n["title"], n.get("summary"), client_name, link)
         try:
             await asyncio.to_thread(_send_email_sync, subject, body)
@@ -336,31 +417,66 @@ async def run_notification_dispatch_job(job: dict) -> None:
         channels["email"] = "skipped"
 
     skip = set((n.get("payload") or {}).get("skip_channels") or [])
-    if "slack" in skip:
+    if channels.get("slack") in _DELIVERED:
+        pass  # already delivered on an earlier attempt
+    elif "slack" in skip:
         # The producer delivers its own Slack copy (e.g. the Chase Plan posts
         # directly so its ts can key the batch confirm) — don't double-post.
         channels["slack"] = "skipped"
     elif slack_configured():
-        try:
-            # Route PM/PACE kinds to the dedicated PACE channel when configured;
-            # an explicit payload.slack_channel still wins; else default channel.
-            # Post under the PACE app's bot token when the message goes to the
-            # PACE channel (so a separate PACE bot owns its channel).
-            channel = resolve_slack_channel(
-                n.get("kind"), n.get("payload"), settings.pace_slack_channel
-            )
+        # Route a client-scoped PACE kind to that client's own channel when one is
+        # set; else route PM/PACE kinds to the master PACE channel; an explicit
+        # payload.slack_channel still wins; else the default channel. Post under the
+        # PACE app's bot token for any PACE kind (so a separate PACE bot owns
+        # delivery in both the master and per-client channels).
+        channel = resolve_slack_channel(
+            n.get("kind"), n.get("payload"), settings.pace_slack_channel,
+            client_channel=client_channel,
+        )
+        if not has_slack_target(channel, settings.slack_default_channel):
+            # PACE-only deployment (no default channel) + a non-PACE kind → there
+            # is nowhere to post it; skip rather than posting to an empty channel.
+            channels["slack"] = "skipped"
+        else:
+            text = format_slack(n["title"], n.get("summary"), client_name, link, n["severity"])
             token = resolve_slack_token(
                 channel, settings.pace_slack_channel,
                 settings.pace_slack_bot_token, settings.slack_bot_token,
+                kind=n.get("kind"),
             )
-            await _send_slack(
-                format_slack(n["title"], n.get("summary"), client_name, link, n["severity"]),
-                channel=channel, token=token,
+            # If we routed to a client's OWN channel and that send fails (bot not
+            # invited / bad or renamed id / archived), retry on the master channel
+            # so the message still reaches the team instead of being dropped.
+            fallback = master_fallback_channel(
+                channel, client_channel, settings.pace_slack_channel,
+                settings.slack_default_channel,
             )
-            channels["slack"] = "ok"
-        except Exception as exc:
-            channels["slack"] = "failed"
-            logger.warning("notification_slack_failed", extra={"id": notification_id, "error": str(exc)})
+            try:
+                await _send_slack(text, channel=channel, token=token)
+                channels["slack"] = "ok"
+            except Exception as exc:
+                if fallback and fallback != channel:
+                    try:
+                        fb_token = resolve_slack_token(
+                            fallback, settings.pace_slack_channel,
+                            settings.pace_slack_bot_token, settings.slack_bot_token,
+                            kind=n.get("kind"),
+                        )
+                        await _send_slack(text, channel=fallback, token=fb_token)
+                        channels["slack"] = "ok_master_fallback"
+                        logger.warning(
+                            "notification_slack_client_channel_fallback",
+                            extra={"id": notification_id, "client_channel": client_channel,
+                                   "error": str(exc)},
+                        )
+                    except Exception as exc2:
+                        channels["slack"] = "failed"
+                        logger.warning("notification_slack_failed",
+                                       extra={"id": notification_id, "error": str(exc2)})
+                else:
+                    channels["slack"] = "failed"
+                    logger.warning("notification_slack_failed",
+                                   extra={"id": notification_id, "error": str(exc)})
     else:
         channels["slack"] = "skipped"
 

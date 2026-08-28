@@ -114,6 +114,48 @@ def test_explicit_payload_channel_always_wins():
     # An explicit override beats both PACE routing and the default, for any kind.
     assert notifications.resolve_slack_channel("task_due", {"slack_channel": "C_X"}, "C_PACE") == "C_X"
     assert notifications.resolve_slack_channel("rank_drop", {"slack_channel": "C_X"}, "C_PACE") == "C_X"
+    # An override also beats a client channel.
+    assert notifications.resolve_slack_channel(
+        "task_assigned", {"slack_channel": "C_X"}, "C_PACE", client_channel="C_CLIENT"
+    ) == "C_X"
+
+
+# ---------------------------------------------------------------------------
+# Per-client PACE routing — a client-scoped kind goes to that client's channel
+# ---------------------------------------------------------------------------
+def test_client_scoped_kinds_route_to_client_channel():
+    # The five client-scoped PACE kinds land in the client's own channel when set.
+    for kind in ("task_assigned", "task_mention", "task_comment",
+                 "task_month_generated", "task_nudge"):
+        assert notifications.resolve_slack_channel(
+            kind, None, "C_PACE", client_channel="C_CLIENT"
+        ) == "C_CLIENT", kind
+
+
+def test_portfolio_pace_kinds_ignore_client_channel():
+    # Portfolio rollups stay in the master PACE channel even if a client channel
+    # is somehow supplied — they concern all clients, not one.
+    for kind in ("pace_digest", "pace_chase_plan", "pace_escalation", "pace_report",
+                 "task_overload", "task_due"):
+        assert notifications.resolve_slack_channel(
+            kind, None, "C_PACE", client_channel="C_CLIENT"
+        ) == "C_PACE", kind
+
+
+def test_client_scoped_kind_falls_back_to_master_without_client_channel():
+    # No client channel configured → the master PACE channel, exactly as before.
+    assert notifications.resolve_slack_channel("task_assigned", None, "C_PACE") == "C_PACE"
+    assert notifications.resolve_slack_channel(
+        "task_assigned", None, "C_PACE", client_channel=None
+    ) == "C_PACE"
+
+
+def test_non_pace_kind_ignores_client_channel():
+    # A non-PACE client-scoped alert (rank drop, strategy review) is unaffected —
+    # it still returns None → the default channel, never the client channel.
+    assert notifications.resolve_slack_channel(
+        "rank_drop", None, "C_PACE", client_channel="C_CLIENT"
+    ) is None
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +175,99 @@ def test_resolve_slack_token_no_pace_token_falls_back():
     # Separate-bot mode not configured → even the PACE channel posts under default,
     # so the change is inert until a PACE app token is set.
     assert notifications.resolve_slack_token("C_PACE", "C_PACE", "", "xoxb-def") == "xoxb-def"
+
+
+def test_resolve_slack_token_pace_kind_in_client_channel_gets_pace_token():
+    # A client-scoped PACE kind delivered to a client's own channel still posts
+    # under the PACE app's token (the PACE bot owns delivery of every PACE kind).
+    assert notifications.resolve_slack_token(
+        "C_CLIENT", "C_PACE", "xoxb-pace", "xoxb-def", kind="task_assigned"
+    ) == "xoxb-pace"
+
+
+def test_resolve_slack_token_non_pace_kind_in_other_channel_gets_default():
+    # A non-PACE kind in some other channel keeps using the default token.
+    assert notifications.resolve_slack_token(
+        "C_OTHER", "C_PACE", "xoxb-pace", "xoxb-def", kind="rank_drop"
+    ) == "xoxb-def"
+
+
+# ---------------------------------------------------------------------------
+# resolve_client_channel — normalize a stored client channel for routing
+# ---------------------------------------------------------------------------
+def test_resolve_client_channel_normalizes():
+    assert notifications.resolve_client_channel("C0ABC123") == "C0ABC123"
+    assert notifications.resolve_client_channel("  C0ABC123  ") == "C0ABC123"
+    assert notifications.resolve_client_channel("   ") is None  # whitespace → unset
+    assert notifications.resolve_client_channel("") is None
+    assert notifications.resolve_client_channel(None) is None
+
+
+# ---------------------------------------------------------------------------
+# master_fallback_channel — a broken client channel degrades to the master
+# ---------------------------------------------------------------------------
+def test_master_fallback_only_when_routed_to_client_channel():
+    # Routed to the client's own channel → fall back to the PACE channel.
+    assert notifications.master_fallback_channel(
+        "C_CLIENT", "C_CLIENT", "C_PACE", "C_DEFAULT"
+    ) == "C_PACE"
+    # No PACE channel → the default channel is the fallback.
+    assert notifications.master_fallback_channel(
+        "C_CLIENT", "C_CLIENT", "", "C_DEFAULT"
+    ) == "C_DEFAULT"
+    # Neither configured → nothing to fall back to.
+    assert notifications.master_fallback_channel(
+        "C_CLIENT", "C_CLIENT", "", ""
+    ) is None
+
+
+def test_master_fallback_none_when_not_client_route():
+    # Message went to the master channel (not a per-client route) → no fallback.
+    assert notifications.master_fallback_channel(
+        "C_PACE", "C_CLIENT", "C_PACE", "C_DEFAULT"
+    ) is None
+    # No client channel at all → no fallback.
+    assert notifications.master_fallback_channel(
+        "C_PACE", None, "C_PACE", "C_DEFAULT"
+    ) is None
+
+
+# ---------------------------------------------------------------------------
+# has_slack_target — a resolved message must have somewhere to post
+# ---------------------------------------------------------------------------
+def test_has_slack_target():
+    assert notifications.has_slack_target("C_CLIENT", "") is True
+    assert notifications.has_slack_target(None, "C_DEFAULT") is True
+    assert notifications.has_slack_target(None, "") is False  # PACE-only + non-PACE kind
+    assert notifications.has_slack_target("", "") is False
+
+
+# ---------------------------------------------------------------------------
+# slack_configured — SerMaStr config OR a PACE-only Slack setup
+# ---------------------------------------------------------------------------
+def test_slack_configured_sermastr_or_pace_only(monkeypatch):
+    monkeypatch.setattr(settings, "notifications_enabled", True)
+    # Normal SerMaStr config.
+    monkeypatch.setattr(settings, "slack_bot_token", "xoxb-def")
+    monkeypatch.setattr(settings, "slack_default_channel", "C_DEFAULT")
+    monkeypatch.setattr(settings, "pace_slack_bot_token", "")
+    monkeypatch.setattr(settings, "pace_slack_channel", "")
+    assert notifications.slack_configured() is True
+    # PACE-only: no SerMaStr default channel, but a PACE app + channel.
+    monkeypatch.setattr(settings, "slack_bot_token", "")
+    monkeypatch.setattr(settings, "slack_default_channel", "")
+    monkeypatch.setattr(settings, "pace_slack_bot_token", "xoxb-pace")
+    monkeypatch.setattr(settings, "pace_slack_channel", "C_PACE")
+    assert notifications.slack_configured() is True
+    # Nothing configured.
+    monkeypatch.setattr(settings, "pace_slack_bot_token", "")
+    monkeypatch.setattr(settings, "pace_slack_channel", "")
+    assert notifications.slack_configured() is False
+    # Notifications globally disabled → always False.
+    monkeypatch.setattr(settings, "notifications_enabled", False)
+    monkeypatch.setattr(settings, "slack_bot_token", "xoxb-def")
+    monkeypatch.setattr(settings, "slack_default_channel", "C_DEFAULT")
+    assert notifications.slack_configured() is False
 
 
 def test_pace_bot_token_prefers_pace_then_default(monkeypatch):

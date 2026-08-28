@@ -52,6 +52,7 @@ interface FormData {
   illustrate_content: boolean
   client_type: 'local' | 'enterprise'
   strategist_weekday: string  // '' = global default, else '0'..'6'
+  slack_channel_id: string  // '' = use the master PACE channel
 }
 
 const PAGE_STRUCTURE_TYPES: PageStructureType[] = [
@@ -75,6 +76,7 @@ const empty: FormData = {
   ps_local_landing: '', ps_service: '', ps_location: '', ps_blog_post: '', ps_product: '', ps_solution: '',
   ps_mode: emptyPsRecord('url'), ps_guidelines: emptyPsRecord(''), ps_filename: emptyPsRecord(''),
   retainer_monthly: '', is_sab: false, illustrate_content: false, client_type: 'local', strategist_weekday: '',
+  slack_channel_id: '',
 }
 
 // Per-content-type Drive folders. `type` is the backend content_type slug used
@@ -265,6 +267,7 @@ export function ClientForm() {
         illustrate_content: existing.illustrate_content ?? false,
         client_type: existing.client_type ?? 'local',
         strategist_weekday: existing.strategist_weekday != null ? String(existing.strategist_weekday) : '',
+        slack_channel_id: existing.slack_channel_id ?? '',
       })
     }
   }, [existing])
@@ -355,6 +358,8 @@ export function ClientForm() {
         client_type: form.client_type,
         // Always send (number or null) so clearing back to the global default persists.
         strategist_weekday: form.strategist_weekday !== '' ? Number(form.strategist_weekday) : null,
+        // Always send (string or empty) so clearing back to the master PACE channel persists.
+        slack_channel_id: form.slack_channel_id.trim(),
         // Reference-page URLs: send only when the fields differ from what the form
         // loaded (or on create). Omitting the key leaves stored references untouched
         // server-side — so a save from a form that loaded before references were
@@ -686,6 +691,16 @@ export function ClientForm() {
                 <option value="6">Sunday</option>
               </select>
               <p style={hintStyle}>Weekday this client's SerMaStr review runs — stagger clients across the week.</p>
+            </div>
+            <div>
+              <label style={labelStyle}>PACE Slack Channel</label>
+              <input
+                value={form.slack_channel_id}
+                onChange={set('slack_channel_id')}
+                placeholder="C0ABC123XY  (or  #acme-hvac)"
+                style={{ ...inputStyle, width: 260, boxSizing: 'border-box', fontFamily: 'monospace' }}
+              />
+              <p style={hintStyle}>PACE posts this client's task notifications (assignments, mentions, comments, nudges, monthly plan) to this channel. Leave blank to use the master PACE channel. The PACE bot must be a member of the channel.</p>
             </div>
           </div>
         </div>
