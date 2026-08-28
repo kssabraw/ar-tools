@@ -538,6 +538,15 @@ async def run_tryout_job(job: dict) -> None:
                 {k: r.get("citations") for k, r in mention_rows.items()})
         except Exception:
             logger.warning("leadoff_tryout.footprint_attach_failed", exc_info=True)
+        # Agency cost-to-win ROI (monthly profit + payback), same as the board.
+        # Beatability first so the ramp/maintenance slide on field difficulty;
+        # tryout has no scouted RD gap, so links are modelled (like board-wide).
+        try:
+            from services.leadoff_beatability import attach_beatability
+            from services.leadoff_roi import attach_roi
+            rows = [attach_roi(r) for r in attach_beatability(rows)]
+        except Exception:
+            logger.warning("leadoff_tryout.roi_attach_failed", exc_info=True)
         supabase.table("leadoff_tryouts").update({
             "status": "complete", "results": rows, "completed_at": "now()",
         }).eq("id", tryout_id).execute()
