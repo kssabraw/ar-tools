@@ -59,6 +59,73 @@ def test_reports_entities_used_and_missing():
     assert res["entities_missing"] == ["Slate"]
 
 
+def test_entity_chips_capped_at_thirty_ranked_by_page_spread():
+    # 40 unique entities, all present on the page, ranked by descending
+    # page_spread. Both the UI "Entities used" chips AND the per-zone entity
+    # score use the top 30 by page_spread (raised from 15).
+    entities = [
+        {"name": f"Entity{i:02d}", "page_spread": 40 - i, "recommended_mentions": 1}
+        for i in range(40)
+    ]
+    serp = {
+        "related_keywords": {},
+        "zone_targets": {},
+        "google_entities": entities,
+        "top_quadgrams": [],
+    }
+    body = " ".join(e["name"] for e in entities)
+    res = main._compute_serp_signal_coverage(f"<article><p>{body}</p></article>", serp)
+    # Exactly the top 30 by page_spread surface as chips (all present → all used).
+    assert len(res["entities_used"]) == 30
+    assert res["entities_missing"] == []
+    assert res["entities_used"] == [f"Entity{i:02d}" for i in range(30)]
+    # Entity31+ (below the chip cap) are excluded.
+    assert "Entity30" not in res["entities_used"]
+
+
+def test_score_counts_entities_ranked_16_to_30():
+    # The per-zone entity SCORE (not just the chips) uses the top 30. A page that
+    # mentions ONLY entities ranked 16–19 (outside the old top-15) still gets
+    # credit toward the zone's entity_target — so scoring against the wider set
+    # can only lift entity_coverage, never lower it (found_ents is a superset;
+    # target is fixed).
+    entities = [{"name": f"Ent{i:02d}", "page_spread": 20 - i} for i in range(20)]
+    serp = {
+        "related_keywords": {},
+        "zone_targets": {"paragraphs": {"target": 0, "entity_target": 3}},
+        "google_entities": entities,
+        "top_quadgrams": [],
+    }
+    body = " ".join(f"Ent{i:02d}" for i in range(16, 20))  # ranks 16–19 only
+    res = main._compute_serp_signal_coverage(f"<article><p>{body}</p></article>", serp)
+    # Chips include the rank-16–19 entities...
+    assert set(res["entities_used"]) == {"Ent16", "Ent17", "Ent18", "Ent19"}
+    # ...and the SCORE counts them: 4 found / target 3 -> min(4/3, 1) = 1.0 ->
+    # entity_coverage 100. Under a top-15 score these entities were invisible (0).
+    assert res["entity_coverage"] == 100.0
+
+
+def test_nameless_entities_are_skipped():
+    # An entity dict without a "name" must not crash (KeyError) and must not be
+    # treated as present — an empty name would match every zone.
+    entities = [
+        {"page_spread": 9},                       # no "name" key
+        {"name": "", "page_spread": 8},           # empty name
+        {"name": "Melbourne", "page_spread": 7},
+    ]
+    serp = {
+        "related_keywords": {},
+        "zone_targets": {"paragraphs": {"target": 0, "entity_target": 1}},
+        "google_entities": entities,
+        "top_quadgrams": [],
+    }
+    res = main._compute_serp_signal_coverage(
+        "<article><p>Roofing across Melbourne.</p></article>", serp
+    )
+    assert res["entities_used"] == ["Melbourne"]
+    assert res["entities_missing"] == []
+
+
 def test_reports_per_zone_found_and_target():
     html = (
         "<article><h2>Roof Restoration and Roof Repairs</h2>"

@@ -4261,9 +4261,21 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
     kw_score = (sum(zone_scores) / len(zone_scores) * 100) if zone_scores else 50.0
 
     # ── 2. Google NLP entity coverage per zone  (50% of engine score) ──────────
-    top_entities = sorted(entities, key=lambda e: e.get("page_spread", 0), reverse=True)[:15]
-    # Page-level entities actually used vs. not (surfaced to the UI), independent
-    # of the per-zone target loop so it reflects the whole page.
+    # Entities carrying a usable surface form, ranked by page_spread. The name
+    # guard matters: a nameless entity can't be matched to page text, and an
+    # empty name would match every zone (`"" in text` is always True).
+    named_entities = sorted(
+        (e for e in entities if (e.get("name") or "").strip()),
+        key=lambda e: e.get("page_spread", 0), reverse=True,
+    )
+    # Top 30 entities by page_spread — used for BOTH the per-zone entity score AND
+    # the UI chips (matching the entity-target table's depth). Owner decision: score
+    # the page against the wider entity set. Note this can only lift entity_coverage
+    # vs. a top-15 score (found_ents is a superset while the per-zone entity_target
+    # is fixed), never lower it.
+    top_entities = named_entities[:30]
+    # Page-level entities actually used vs. not (the UI chips), independent of the
+    # per-zone target loop so it reflects the whole page.
     entities_used    = [e["name"] for e in top_entities if e["name"].lower() in page_text_lower]
     entities_missing = [e["name"] for e in top_entities if e["name"].lower() not in page_text_lower]
     # Cora-style per-entity coverage: current vs recommended mention counts +
