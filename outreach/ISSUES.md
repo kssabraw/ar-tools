@@ -2451,6 +2451,20 @@ hard kill that strands a `running` site-scrape order now self-recovers on the ne
 (`test_name_scrape_queue`: stuck recovered, recent-not-recovered — 16 pass; full suite 673). All three
 name/enrich drains (enrich / name_search / name_scrape) now carry BOTH the per-tick budget and the reaper.
 
+### I-120 FIXED (2026-08-28) · `filter` crashed the whole market on a PostgREST over-long PATCH URL
+`pipeline.run_filter` marked franchise/category prospects with two bulk `prospect.update(...).in_("id", <ids>)`
+calls whose id lists were the WHOLE market's matches. PostgREST renders `.in_("id", ids)` as an
+`id=in.(uuid,uuid,…)` filter IN THE PATCH URL, so on the live 1223-prospect Los Angeles market the URL
+(600+ uuids) exceeded the server's length limit and the update 400'd — crashing the `filter` command for
+the entire market (deployment `840b9b2` observed CRASHED in the Railway logs; the failure is data-scale
+dependent, so it never tripped on the small seeded markets or in tests). The read side already chunked
+(`scoring._read_by_ids`, 200/batch, proven in prod); the write side did not. **Fixed** by chunking every
+id-list PATCH through `_update_prospects_by_ids` (`_PATCH_ID_CHUNK` = 200, matching the read chunking) —
+one `.in_("id", chunk)` PATCH per ≤200 ids, so no URL is over-long. Not my code — a pre-existing defect
+surfaced by running `filter` on the first large market. Unit-tested (`test_phase1`: 450 ids → [200,200,50],
+empty-list no-op). Note the `*/5` cron currently runs `command=filter` (OUTREACH_COMMAND unset), NOT `tick`
+per CLAUDE.md — separate open question, not addressed here.
+
 ### I-109 RESOLVED (2026-08-26) · TWO stacked bugs — sync mode AND the wrong enricher slug; fixed to async + `leads_n_contacts`
 Enrichment was broken two ways at once, which is why every prior single-cause theory (wrong validator
 set, parser aliases) only half-explained it:

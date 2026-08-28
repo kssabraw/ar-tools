@@ -237,6 +237,24 @@ async def run_ingest(
     return report
 
 
+# PostgREST puts an `id=in.(…)` filter in the URL, so a PATCH over a large id list makes an
+# over-long URL the server rejects with 400 ("JSON could not be generated" / "Bad Request"). A
+# whole-market category bucket (600+ prospects on the Los Angeles market) hit exactly that and
+# crashed the filter run every cron tick (ISSUES I-120). Chunk the ids so each PATCH's URL stays
+# well under the limit — 200 matches the read chunking (`scoring._read_by_ids`) that works in prod.
+_PATCH_ID_CHUNK = 200
+
+
+def _update_prospects_by_ids(client: Any, patch: dict[str, Any], ids: list[str]) -> None:
+    """PATCH `prospect` rows for a set of ids, chunked so the `id=in.(…)` URL never exceeds PostgREST's
+    length limit. A single over-long PATCH 400s and takes the whole filter run down with it; chunking
+    is the fix. Order within a chunk is irrelevant — every id in `ids` gets the same `patch`."""
+    for start in range(0, len(ids), _PATCH_ID_CHUNK):
+        chunk = ids[start:start + _PATCH_ID_CHUNK]
+        if chunk:
+            client.table("prospect").update(patch).in_("id", chunk).execute()
+
+
 def run_filter(
     *,
     client: Any,
@@ -381,17 +399,13 @@ def run_filter(
     # reset to 'flagged' by the next routine filter run. Skipped here so the intent is legible at
     # the call site; the database guard enforces it regardless of caller (ISSUES I-054).
     if franchise_updates:
-        client.table("prospect").update({"franchise_status": "flagged"}).in_(
-            "id", franchise_updates
-        ).execute()
+        _update_prospects_by_ids(client, {"franchise_status": "flagged"}, franchise_updates)
 
     # One update per destination bucket. Confirmed human rulings were already excluded above and
     # are protected by the DB guard regardless.
     for status_value, ids in category_updates.items():
         if ids:
-            client.table("prospect").update({"category_status": status_value}).in_(
-                "id", ids
-            ).execute()
+            _update_prospects_by_ids(client, {"category_status": status_value}, ids)
 
     # The filter stage is free; the ledger row records that explicitly rather than omitting it,
     # so "what did this market cost" sums every stage rather than the paid ones.
