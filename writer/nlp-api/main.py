@@ -4261,11 +4261,17 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
     kw_score = (sum(zone_scores) / len(zone_scores) * 100) if zone_scores else 50.0
 
     # ── 2. Google NLP entity coverage per zone  (50% of engine score) ──────────
-    top_entities = sorted(entities, key=lambda e: e.get("page_spread", 0), reverse=True)[:15]
-    # Page-level entities actually used vs. not (surfaced to the UI), independent
-    # of the per-zone target loop so it reflects the whole page.
-    entities_used    = [e["name"] for e in top_entities if e["name"].lower() in page_text_lower]
-    entities_missing = [e["name"] for e in top_entities if e["name"].lower() not in page_text_lower]
+    sorted_entities = sorted(entities, key=lambda e: e.get("page_spread", 0), reverse=True)
+    # The per-zone entity SCORE stays on the top 15 (changing this shifts
+    # entity_coverage), while the UI chips below show a wider set.
+    top_entities = sorted_entities[:15]
+    # Page-level entities actually used vs. not (the UI "Entities used" chips),
+    # independent of the per-zone score loop so it reflects the whole page. Shown
+    # to the top 30 by page_spread — matching the entity-target table's depth,
+    # display-only (the score above stays on top_entities).
+    chip_entities = sorted_entities[:30]
+    entities_used    = [e["name"] for e in chip_entities if e["name"].lower() in page_text_lower]
+    entities_missing = [e["name"] for e in chip_entities if e["name"].lower() not in page_text_lower]
     # Cora-style per-entity coverage: current vs recommended mention counts +
     # shortfall, persisted so the UI can render a term-target table and the gap
     # survives the run (additive — does not affect the score).
