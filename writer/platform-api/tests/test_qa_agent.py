@@ -530,3 +530,40 @@ def test_website_page_checks_runs_visual_when_structure_weak():
             _MIN_HTML, "https://c.com/x/", fields, {}, keyword="roofing tampa",
         ))
     assert called["visual"] is True  # structure only borderline → paid capture runs
+
+
+# ---------------------------------------------------------------------------
+# _run_rubric — suite lookups are lazy (only when the task lacks link/copy)
+# ---------------------------------------------------------------------------
+def test_run_rubric_gbp_skips_suite_copy_when_task_has_copy():
+    # Task carries copy → the suite GBP-copy DB lookup is NOT performed.
+    task = {"id": "t1", "client_id": "c1", "name": "GBP Posts — roof repair",
+            "description": "Call us today! 🚿 roof repair now"}
+    with patch.object(qa_service, "get_supabase", lambda: _FakeSupabase([])), \
+         patch.object(qa_service, "_suite_gbp_copy") as m:
+        checks, urls, comp = _run(qa_service._run_rubric(sig.RUBRIC_GBP_POSTS, task, {}, None))
+    m.assert_not_called()
+    assert all(c["ok"] for c in checks)  # keyword + CTA + emoji all present in the task copy
+
+
+def test_run_rubric_gbp_pulls_suite_copy_when_task_has_none():
+    # No copy on the task → the suite's published copy is queried + used.
+    task = {"id": "t1", "client_id": "c1", "name": "GBP Posts — roof repair", "description": ""}
+    with patch.object(qa_service, "get_supabase", lambda: _FakeSupabase([])), \
+         patch.object(qa_service, "_suite_gbp_copy", lambda _c: "Book now! 🚀 roof repair"):
+        checks, urls, comp = _run(qa_service._run_rubric(sig.RUBRIC_GBP_POSTS, task, {}, None))
+    assert all(c["ok"] for c in checks)  # resolved copy satisfies keyword + CTA + emoji
+
+
+def test_run_rubric_blog_does_not_call_suite_deliverable():
+    # A content_run blog review resolves its keyword via _run_keyword, not the
+    # (now-removed) unconditional _suite_deliverable call.
+    task = {"id": "t1", "client_id": "c1", "source": "content_run", "source_ref": "run-1",
+            "name": "Review & publish: article"}
+    with patch.object(qa_service, "get_supabase", lambda: _FakeSupabase([])), \
+         patch.object(qa_service, "_blog_markdown", lambda _r: "## Key Takeaways\nCall us. [x](https://a.com)"), \
+         patch.object(qa_service, "_run_keyword", lambda _r: "roofing"), \
+         patch.object(qa_service, "_suite_deliverable") as m:
+        checks, urls, comp = _run(qa_service._run_rubric(sig.RUBRIC_BLOG, task, {}, None))
+    m.assert_not_called()
+    assert checks  # blog structural checks ran

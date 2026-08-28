@@ -737,11 +737,6 @@ async def _run_rubric(
     # supply the keyword via the field / a KW: marker, or the checks read
     # 'could not verify' (needs_human), never a false FAIL against the title.
     keyword = sig.keyword_from_task(task, allow_full_name=rubric != sig.RUBRIC_PAGE)
-    # Auto-resolve the suite-produced deliverable (live URL / keyword / GBP copy)
-    # from our own DB before the pasted 'Deliverable links' convention.
-    suite = _suite_deliverable(task, rubric, keyword)
-    if not keyword and suite.get("keyword"):
-        keyword = suite["keyword"]
     composite: Optional[float] = None
 
     if rubric == sig.RUBRIC_BLOG:
@@ -757,16 +752,26 @@ async def _run_rubric(
     if rubric == sig.RUBRIC_GBP_POSTS:
         # Post copy lives on the task: deliverable subtask description first,
         # else the task description; failing both, the copy the suite actually
-        # published for this client (a machine-produced post).
+        # published for this client — queried ONLY when the task carries no copy.
         text = "\n".join(
             s.get("description") or "" for s in subtasks if sig.is_deliverable_subtask(s.get("name"))
-        ).strip() or (task.get("description") or "").strip() or suite.get("copy") or None
-        return (sig.check_gbp_post(text, keyword), [], None)
+        ).strip() or (task.get("description") or "").strip()
+        if not text and task.get("client_id"):
+            text = _suite_gbp_copy(task["client_id"]) or ""
+        return (sig.check_gbp_post(text or None, keyword), [], None)
 
-    # Everything below examines external placements. A suite-resolved live URL
-    # (the client's own posted page) stands in when the task carries no link.
-    if not raw_urls and suite.get("url"):
-        raw_urls = [suite["url"]]
+    # Everything below examines external placements. When the task carries no
+    # link, auto-resolve the suite-produced deliverable (the client's own posted
+    # page) — a DB lookup done ONLY in that no-link case, so a pasted URL never
+    # pays for it. The resolved page's stored 8-engine score can then fold in
+    # below (the fold is scoped to a page WE resolved, never a pasted URL).
+    suite: dict[str, Any] = {}
+    if not raw_urls:
+        suite = _suite_deliverable(task, rubric, keyword)
+        if not keyword and suite.get("keyword"):
+            keyword = suite["keyword"]
+        if suite.get("url"):
+            raw_urls = [suite["url"]]
     pages, blocked = await _resolve_sheet_urls(raw_urls)
     if not pages:
         note = ("no deliverable URLs on the task — add a 'Deliverable links' subtask "
