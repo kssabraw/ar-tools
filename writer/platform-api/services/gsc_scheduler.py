@@ -628,7 +628,7 @@ async def gsc_scheduler() -> None:
     from services.response_episodes import run_episode_sync
     from services.orchestrator import redispatch_due_retries
 
-    from services.strategist import enqueue_due_strategy_reviews
+    from services.strategist import enqueue_due_monthly_plan_reviews, enqueue_due_strategy_reviews
     from services.autonomy_executor import enqueue_due_autonomy_runs
 
     interval = settings.gsc_scheduler_poll_interval_seconds
@@ -803,6 +803,11 @@ async def gsc_scheduler() -> None:
             # the daily block: gating it on success would re-fire every tick.
             if should_run(now, last_strategist_date, hour):
                 _safe("strategy_reviews", enqueue_due_strategy_reviews, now.weekday())
+                # SerMaStr monthly plan review → PACE assignment handoff: a
+                # daily due-check that self-gates to the single day each month
+                # `_lead_days` before task generation. No-ops until both
+                # strategist_enabled and strategist_monthly_plan_review_enabled.
+                _safe("monthly_plan_reviews", enqueue_due_monthly_plan_reviews)
                 # Autonomous SEO agent — weekly per-client executor pass (the
                 # day after the strategist). No-ops until autonomy_enabled.
                 _safe("autonomy_runs", enqueue_due_autonomy_runs, now.weekday())

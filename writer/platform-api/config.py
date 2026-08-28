@@ -1456,6 +1456,24 @@ class Settings(BaseSettings):
     # digest assembler converts at ~4 chars/token and splits this between the
     # signal digest and the SOP block.
     strategist_digest_budget_tokens: int = 25_000
+    # --- SerMaStr monthly plan review → PACE assignment handoff ---
+    # A once-a-month strategist run fired `_lead_days` BEFORE monthly task
+    # generation (the asana/native month roll on `asana_month_generate_day`).
+    # It reviews the client's Recipe Engine monthly task plan + campaign data and
+    # proposes ADDITIONS/MODIFICATIONS to next month's plan — advice + proposals
+    # only, exactly like every other strategist run. A human approves each
+    # proposal in the Action Plan; approval creates the native task AND hands it
+    # to PACE, which assigns it to the skilled, eligible, least-loaded member
+    # under their weekly cap (asana_push.push_proposal → pm_assign.place_task —
+    # already wired). Ships dark; the whole cadence no-ops while this is False.
+    strategist_monthly_plan_review_enabled: bool = False
+    # Fire this many days before `asana_month_generate_day` so the reviewed +
+    # human-approved changes land before next month's tasks are generated.
+    strategist_monthly_plan_review_lead_days: int = 3
+    # Optional pilot allowlist (comma-separated client ids). Empty = every
+    # eligible non-archived retainer client. Set to one id to pilot the cadence
+    # on a single client before opening it to the whole book.
+    strategist_monthly_plan_review_client_ids: str = ""
 
     # --- Autonomous SEO agent (autonomous-seo-agent-plan-v1_0.md) ---
     # Master gate. While False the whole closed loop is dormant — the policy

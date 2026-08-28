@@ -256,6 +256,93 @@ def test_findings_only_review_still_posts_info():
 
 
 # ---------------------------------------------------------------------------
+# Monthly plan review → PACE assignment handoff
+# ---------------------------------------------------------------------------
+def test_run_prompt_monthly_plan_review_orientation():
+    prompt = strategist.build_run_prompt(
+        "{}", "", "", trigger="monthly_plan_review",
+        frozen=False, max_drilldowns=4, max_paid=1,
+    )
+    assert "TRIGGER: monthly_plan_review" in prompt
+    assert "MONTHLY TASK-PLAN REVIEW" in prompt
+    # It must steer toward assignable proposals (PACE places approved ones) and
+    # not appear on other triggers.
+    assert "PROPOSAL" in prompt and "capacity" in prompt
+    other = strategist.build_run_prompt(
+        "{}", "", "", trigger="scheduled",
+        frozen=False, max_drilldowns=4, max_paid=1,
+    )
+    assert "MONTHLY TASK-PLAN REVIEW" not in other
+
+
+def test_monthly_plan_review_notification_title():
+    note = strategist.review_notification(
+        {"trigger": "monthly_plan_review", "assessment": "plan tweaks",
+         "proposals": [{"title": "add a link round", "requires": "approval"}],
+         "questions": [], "findings": []},
+        "Acme",
+    )
+    assert note is not None
+    assert note["title"].startswith("Monthly plan review: Acme")
+    assert "1 proposal" in note["title"]
+
+
+def test_monthly_plan_review_is_a_valid_trigger():
+    assert "monthly_plan_review" in strategist.VALID_TRIGGERS
+
+
+def test_is_monthly_review_day_lead_lands_on_generation_day():
+    from datetime import date
+
+    # generate_day=1, lead=3 → review fires on the last-3rd day of the prior
+    # month (Aug 29 precedes Sep 1 generation).
+    assert strategist.is_monthly_review_day(date(2026, 8, 29), 1, 3) is True
+    assert strategist.is_monthly_review_day(date(2026, 8, 28), 1, 3) is False
+    assert strategist.is_monthly_review_day(date(2026, 8, 30), 1, 3) is False
+
+
+def test_is_monthly_review_day_mid_month_and_short_month_clamp():
+    from datetime import date
+
+    # generate_day=15, lead=2 → fires on the 13th, in the same month.
+    assert strategist.is_monthly_review_day(date(2026, 6, 13), 15, 2) is True
+    assert strategist.is_monthly_review_day(date(2026, 6, 14), 15, 2) is False
+    # generate_day=31, lead=1 → clamps to the month's real length; Feb 2026 has
+    # 28 days, so the review fires Feb 27 (→ clamped gen day 28).
+    assert strategist.is_monthly_review_day(date(2026, 2, 27), 31, 1) is True
+    assert strategist.is_monthly_review_day(date(2026, 2, 26), 31, 1) is False
+
+
+def test_is_monthly_review_day_zero_lead_is_generation_day_itself():
+    from datetime import date
+
+    assert strategist.is_monthly_review_day(date(2026, 9, 1), 1, 0) is True
+    assert strategist.is_monthly_review_day(date(2026, 9, 2), 1, 0) is False
+
+
+def test_monthly_review_allowlist_parses_and_trims(monkeypatch):
+    monkeypatch.setattr(
+        strategist.settings, "strategist_monthly_plan_review_client_ids",
+        " a , b ,, c ",
+    )
+    assert strategist._monthly_review_allowlist() == {"a", "b", "c"}
+    monkeypatch.setattr(
+        strategist.settings, "strategist_monthly_plan_review_client_ids", "",
+    )
+    assert strategist._monthly_review_allowlist() == set()
+
+
+def test_enqueue_monthly_reviews_noops_when_flag_off(monkeypatch):
+    # Both gates must be on; with the feature flag off it returns 0 without
+    # touching the DB (no supabase call needed).
+    monkeypatch.setattr(strategist.settings, "strategist_enabled", True)
+    monkeypatch.setattr(
+        strategist.settings, "strategist_monthly_plan_review_enabled", False,
+    )
+    assert strategist.enqueue_due_monthly_plan_reviews() == 0
+
+
+# ---------------------------------------------------------------------------
 # strategist_enabled gating (the smoke-gate safety rail): with the flag off —
 # its default — every trigger path no-ops before touching the DB.
 # ---------------------------------------------------------------------------
