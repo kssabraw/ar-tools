@@ -450,12 +450,15 @@ function SkillsEditor() {
 
   const norm = (list?: { category_key: string; is_primary: boolean }[]) =>
     JSON.stringify([...(list ?? [])].sort((a, b) => a.category_key.localeCompare(b.category_key)))
-  const changed = tracked.filter((mem) => norm(map[mem.gid]) !== norm((loaded ?? {})[mem.gid]))
+  const changed = tracked.filter(
+    (mem) => norm(map[mem.id ?? mem.gid]) !== norm((loaded ?? {})[mem.id ?? mem.gid]),
+  )
 
   const save = useMutation({
     mutationFn: async () => {
       for (const mem of changed) {
-        await api.put(`/tasks/member-skills/${mem.gid}`, { skills: map[mem.gid] ?? [] })
+        const mid = mem.id ?? mem.gid
+        await api.put(`/tasks/member-skills/${mid}`, { skills: map[mid] ?? [] })
       }
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['task-member-skills'] }),
@@ -473,16 +476,18 @@ function SkillsEditor() {
         The ★ marks a primary category (breaks ties).
       </p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {tracked.map((mem) => (
-          <div key={mem.gid} style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 10, alignItems: 'center' }}>
+        {tracked.map((mem) => {
+          const mid = mem.id ?? mem.gid
+          return (
+          <div key={mid} style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 10, alignItems: 'center' }}>
             <span style={{ fontSize: 13, color: '#0f172a', fontWeight: 600 }}>{mem.name ?? mem.gid}</span>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
               {activeCats.map((c) => {
-                const on = has(mem.gid, c.key)
+                const on = has(mid, c.key)
                 return (
                   <span key={c.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
                     <button
-                      onClick={() => toggle(mem.gid, c.key)}
+                      onClick={() => toggle(mid, c.key)}
                       style={{
                         ...skillChip,
                         background: on ? (c.color ?? '#4f46e5') : '#f1f5f9',
@@ -495,21 +500,21 @@ function SkillsEditor() {
                     {on && (
                       <button
                         title="Set as primary category"
-                        onClick={() => setPrimary(mem.gid, c.key)}
-                        style={{ ...iconBtn, padding: 3, border: 'none', color: isPrimary(mem.gid, c.key) ? '#f59e0b' : '#cbd5e1' }}
+                        onClick={() => setPrimary(mid, c.key)}
+                        style={{ ...iconBtn, padding: 3, border: 'none', color: isPrimary(mid, c.key) ? '#f59e0b' : '#cbd5e1' }}
                       >
-                        <Star size={13} fill={isPrimary(mem.gid, c.key) ? '#f59e0b' : 'none'} />
+                        <Star size={13} fill={isPrimary(mid, c.key) ? '#f59e0b' : 'none'} />
                       </button>
                     )}
                   </span>
                 )
               })}
-              {(map[mem.gid] ?? []).length === 0 && (
+              {(map[mid] ?? []).length === 0 && (
                 <span style={{ fontSize: 11.5, color: '#94a3b8' }}>generalist (any category)</span>
               )}
             </div>
           </div>
-        ))}
+        )})}
       </div>
       <div style={{ marginTop: 12 }}>
         <button style={primaryBtn} disabled={changed.length === 0 || save.isPending} onClick={() => save.mutate()}>

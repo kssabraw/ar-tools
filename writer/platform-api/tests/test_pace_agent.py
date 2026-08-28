@@ -265,7 +265,7 @@ def test_build_member_context_buckets_and_names(monkeypatch):
         "tasks": tasks,
         "clients": [{"id": "c1", "name": "Acme"}, {"id": "c2", "name": "Globex"}],
     })
-    ctx = pace_agent.build_member_context({"gid": "g1", "name": "Ivy"}, today=date(2024, 6, 1))
+    ctx = pace_agent.build_member_context({"id": "g1", "name": "Ivy"}, today=date(2024, 6, 1))
     assert ctx["member"] == "Ivy" and ctx["open_count"] == 3
     assert [r["name"] for r in ctx["overdue"]] == ["GBP audit"]
     assert ctx["overdue"][0]["client"] == "Acme"           # client name attached

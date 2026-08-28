@@ -88,7 +88,10 @@ _ACTIVITY_FIELDS = {
     "name": "renamed",
     "description": "edited",
     "client_note": "edited",
-    "assignee_gid": "assigned",
+    # Assignee identity is keyed on the roster id (profiles↔gid unification,
+    # 2026-08-28). assignee_gid is dual-written but NOT tracked here, or one
+    # assignee change would emit two "assigned" rows.
+    "assignee_id": "assigned",
     "status_key": "status_changed",
     "category": "category_changed",
     "due_date": "due_changed",
@@ -379,6 +382,7 @@ def create_task(
     section_id: Optional[str] = None,
     parent_task_id: Optional[str] = None,
     description: Optional[str] = None,
+    assignee_id: Optional[str] = None,
     assignee_gid: Optional[str] = None,
     assignee_name: Optional[str] = None,
     status_key: Optional[str] = None,
@@ -408,14 +412,20 @@ def create_task(
     if status_key is None:
         status_key = initial_status_key(get_statuses())
 
+    # Dual-write: normalize whichever of id/gid/name the caller gave into all
+    # three, so assignee_id (the canonical key) and assignee_gid (rollback /
+    # Asana-push resolution) always agree.
+    who = _resolve_member(assignee_id, assignee_gid, assignee_name)
+
     row = {
         "name": (name or "").strip(),
         "client_id": client_id,
         "section_id": section_id,
         "parent_task_id": parent_task_id,
         "description": description,
-        "assignee_gid": assignee_gid,
-        "assignee_name": assignee_name,
+        "assignee_id": who["assignee_id"],
+        "assignee_gid": who["assignee_gid"],
+        "assignee_name": who["assignee_name"],
         "status_key": status_key,
         "category": category,
         "due_date": due_date,
@@ -429,10 +439,10 @@ def create_task(
     }
     created = get_supabase().table("tasks").insert(row).execute().data[0]
     record_activity(created["id"], "created", actor_id=created_by, detail={"source": source})
-    if assignee_gid:
+    if who["assignee_id"]:
         record_activity(
             created["id"], "assigned", actor_id=created_by,
-            detail={"field": "assignee_gid", "from": None, "to": assignee_gid},
+            detail={"field": "assignee_id", "from": None, "to": who["assignee_id"]},
         )
     return created
 
@@ -464,26 +474,71 @@ def create_subtasks(
     return len(rows)
 
 
-def _profile_for_member(assignee_gid: Optional[str]) -> Optional[str]:
-    """The suite-user profile linked to a task-board member (identity bridge), or
-    None when the member isn't linked to a login yet."""
-    if not assignee_gid:
+def _resolve_member(
+    assignee_id: Optional[str] = None,
+    assignee_gid: Optional[str] = None,
+    assignee_name: Optional[str] = None,
+) -> dict:
+    """Normalize any of id / gid / name into ``{assignee_id, assignee_gid,
+    assignee_name}`` filled from the roster — the single dual-write point for the
+    two assignee keys (profiles↔gid unification, 2026-08-28).
+
+    * No id and no gid → an unassign (all cleared, caller-supplied name kept).
+    * A known member → both keys + cached name (a login-less VA has gid=None).
+    * An unknown id/gid → passed through unchanged, so an assignment is never
+      silently dropped when the roster read misses.
+    """
+    if not assignee_id and not assignee_gid:
+        return {"assignee_id": None, "assignee_gid": None, "assignee_name": assignee_name}
+    supabase = get_supabase()
+    row = None
+    if assignee_id:
+        rows = (
+            supabase.table("asana_team_members")
+            .select("id, gid, name").eq("id", assignee_id).limit(1).execute()
+        ).data
+        row = rows[0] if rows else None
+    if row is None and assignee_gid:
+        rows = (
+            supabase.table("asana_team_members")
+            .select("id, gid, name").eq("gid", assignee_gid).limit(1).execute()
+        ).data
+        row = rows[0] if rows else None
+    if row is None:
+        return {
+            "assignee_id": assignee_id,
+            "assignee_gid": assignee_gid,
+            "assignee_name": assignee_name,
+        }
+    return {
+        "assignee_id": row["id"],
+        "assignee_gid": row.get("gid"),
+        "assignee_name": assignee_name or row.get("name"),
+    }
+
+
+def _profile_for_member(
+    assignee_id: Optional[str] = None, assignee_gid: Optional[str] = None
+) -> Optional[str]:
+    """The suite-user profile linked to a roster member (identity bridge), or
+    None when the member isn't linked to a login (a login-less VA). Resolves by
+    the canonical id, falling back to gid."""
+    if not assignee_id and not assignee_gid:
         return None
-    rows = (
-        get_supabase().table("asana_team_members")
-        .select("profile_id").eq("gid", assignee_gid).limit(1).execute()
-    ).data
+    tbl = get_supabase().table("asana_team_members").select("profile_id")
+    q = tbl.eq("id", assignee_id) if assignee_id else tbl.eq("gid", assignee_gid)
+    rows = q.limit(1).execute().data
     return rows[0].get("profile_id") if rows else None
 
 
 def _notify_assignment(task: dict) -> None:
     """Best-effort 'assigned to you' notification (PRD §6.11). Targets the
-    assignee's personal bell when their board member is linked to a login
+    assignee's personal bell when their roster member is linked to a login
     (identity bridge); the client feed + Slack copy fire regardless."""
     try:
         from services import notifications
 
-        who = task.get("assignee_name") or task.get("assignee_gid")
+        who = task.get("assignee_name") or task.get("assignee_id")
         link = (
             f"/clients/{task['client_id']}/tasks?task={task['id']}"
             if task.get("client_id")
@@ -495,8 +550,15 @@ def _notify_assignment(task: dict) -> None:
             title=f"{who} was assigned '{task.get('name')}'",
             summary=(f"Due {task['due_date']}" if task.get("due_date") else None),
             severity="info",
-            payload={"link": link, "task_id": task["id"], "assignee_gid": task.get("assignee_gid")},
-            recipient_profile_id=_profile_for_member(task.get("assignee_gid")),
+            payload={
+                "link": link,
+                "task_id": task["id"],
+                "assignee_id": task.get("assignee_id"),
+                "assignee_gid": task.get("assignee_gid"),
+            },
+            recipient_profile_id=_profile_for_member(
+                task.get("assignee_id"), task.get("assignee_gid")
+            ),
         )
     except Exception as exc:
         logger.warning("task_assign_notify_failed", extra={"task_id": task.get("id"), "error": str(exc)})
@@ -511,15 +573,26 @@ def update_task(task_id: str, changes: dict, *, actor_id: Optional[str] = None) 
         raise ValueError("task_not_found")
     before = before_rows[0]
 
+    # An assignee change (via either key) is normalized so both columns move
+    # together and the activity/notify logic keys on the canonical assignee_id.
+    changes = dict(changes)
+    if "assignee_id" in changes or "assignee_gid" in changes:
+        who = _resolve_member(
+            changes.get("assignee_id"), changes.get("assignee_gid"), changes.get("assignee_name")
+        )
+        changes["assignee_id"] = who["assignee_id"]
+        changes["assignee_gid"] = who["assignee_gid"]
+        changes["assignee_name"] = who["assignee_name"]
+
     payload = dict(changes)
     payload["updated_at"] = _now()
     updated = supabase.table("tasks").update(payload).eq("id", task_id).execute().data[0]
     for entry in diff_activity(before, changes):
         record_activity(task_id, entry["kind"], actor_id=actor_id, detail=entry["detail"])
     if (
-        "assignee_gid" in changes
-        and changes.get("assignee_gid")
-        and changes["assignee_gid"] != before.get("assignee_gid")
+        "assignee_id" in changes
+        and changes.get("assignee_id")
+        and changes["assignee_id"] != before.get("assignee_id")
     ):
         _notify_assignment(updated)
     # A forward status drag ticks the process-marker subtasks it implies

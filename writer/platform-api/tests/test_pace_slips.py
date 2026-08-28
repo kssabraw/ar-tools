@@ -11,13 +11,14 @@ TODAY = date(2026, 7, 13)  # a Monday
 INITIAL = {"not_started"}
 
 
-def _member(gid, cap=30):
-    return {"gid": gid, "name": gid.upper(), "weekly_hours": cap}
+def _member(mid, cap=30):
+    return {"id": mid, "name": mid.upper(), "weekly_hours": cap}
 
 
 def _task(tid, name, due, est=2, gid="ivy", status="not_started"):
+    # ``gid`` here is the roster member id the task is assigned to.
     return {"id": tid, "name": name, "due_date": due, "est_hours": est,
-            "assignee_gid": gid, "client_id": "c1", "status_key": status}
+            "assignee_id": gid, "client_id": "c1", "status_key": status}
 
 
 def _forecast(tasks, members=None, horizon=5):

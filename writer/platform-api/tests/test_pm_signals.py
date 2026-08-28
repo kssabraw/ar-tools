@@ -146,13 +146,13 @@ def test_select_untriaged_grace_and_flags():
     today = date(2026, 7, 20)
     tasks = [
         {"id": "a", "name": "Old unassigned", "completed": False, "parent_task_id": None,
-         "assignee_gid": None, "due_date": "2026-07-25", "created_at": "2026-07-01"},
+         "assignee_id": None, "due_date": "2026-07-25", "created_at": "2026-07-01"},
         {"id": "b", "name": "Fresh unassigned", "completed": False, "parent_task_id": None,
-         "assignee_gid": None, "due_date": "2026-07-25", "created_at": "2026-07-19"},   # too fresh
+         "assignee_id": None, "due_date": "2026-07-25", "created_at": "2026-07-19"},   # too fresh
         {"id": "c", "name": "No due date", "completed": False, "parent_task_id": None,
-         "assignee_gid": "g1", "due_date": None, "created_at": "2026-07-01"},
+         "assignee_id": "g1", "due_date": None, "created_at": "2026-07-01"},
         {"id": "d", "name": "Done", "completed": True, "parent_task_id": None,
-         "assignee_gid": None, "due_date": None, "created_at": "2026-07-01"},           # excluded
+         "assignee_id": None, "due_date": None, "created_at": "2026-07-01"},           # excluded
     ]
     r = S.select_untriaged(tasks, today, grace_days=2)
     assert [t["id"] for t in r["unassigned"]] == ["a"]   # b too fresh, d done

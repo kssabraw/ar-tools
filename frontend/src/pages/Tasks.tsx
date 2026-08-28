@@ -22,6 +22,7 @@ import type {
 // delivery view) with inline quick-add + complete.
 
 interface Member {
+  id?: string | null
   gid: string
   name: string | null
   weekly_hours?: number | null
@@ -225,7 +226,7 @@ export function Tasks() {
       const needle = q.trim().toLowerCase()
       rows = rows.filter((t) => t.name.toLowerCase().includes(needle) || (t.description ?? '').toLowerCase().includes(needle))
     }
-    if (assignee) rows = rows.filter((t) => t.assignee_gid === assignee)
+    if (assignee) rows = rows.filter((t) => (t.assignee_id ?? t.assignee_gid) === assignee)
     if (category) rows = rows.filter((t) => t.category === category)
     if (sectionFilter) rows = rows.filter((t) => t.section_id === sectionFilter)
     if (preset) {
@@ -233,7 +234,7 @@ export function Tasks() {
       const weekEnd = new Date(Date.now() + 7 * 86400_000).toISOString().slice(0, 10)
       if (preset === 'overdue') rows = rows.filter((t) => !t.completed && t.due_date != null && t.due_date < today)
       else if (preset === 'due_week') rows = rows.filter((t) => !t.completed && t.due_date != null && t.due_date >= today && t.due_date <= weekEnd)
-      else if (preset === 'unassigned') rows = rows.filter((t) => !t.completed && !t.assignee_gid)
+      else if (preset === 'unassigned') rows = rows.filter((t) => !t.completed && !(t.assignee_id ?? t.assignee_gid))
     }
     return rows
   }, [board?.tasks, q, assignee, category, sectionFilter, preset])
@@ -524,7 +525,7 @@ export function Tasks() {
         </span>
         <select value={assignee} onChange={(e) => setAssignee(e.target.value)} style={selectStyle}>
           <option value="">All assignees</option>
-          {members.map((m) => <option key={m.gid} value={m.gid}>{m.name ?? m.gid}</option>)}
+          {members.map((m) => <option key={m.id ?? m.gid} value={m.id ?? m.gid}>{m.name ?? m.gid}</option>)}
         </select>
         <select value={category} onChange={(e) => setCategory(e.target.value)} style={selectStyle}>
           <option value="">All types</option>

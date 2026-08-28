@@ -119,7 +119,7 @@ def test_est_hours_respected_in_overload():
 def test_place_task_respects_existing_assignment(monkeypatch):
     calls = {"updated": False}
     monkeypatch.setattr(pm_assign, "_get_task",
-                        lambda tid: {"id": tid, "client_id": "c1", "assignee_gid": "already"})
+                        lambda tid: {"id": tid, "client_id": "c1", "assignee_id": "already"})
     monkeypatch.setattr(pm_assign.task_service, "update_task",
                         lambda *a, **k: calls.update(updated=True))
     r = pm_assign.place_task("t1")
@@ -215,7 +215,7 @@ class _FakeSB:
 
 
 def test_replace_skills_rejects_unknown_category_before_delete(monkeypatch):
-    sb = _FakeSB({"asana_team_members": [{"gid": "g1"}], "task_categories": [{"key": "content"}]})
+    sb = _FakeSB({"asana_team_members": [{"id": "g1"}], "task_categories": [{"key": "content"}]})
     monkeypatch.setattr(pm_assign, "get_supabase", lambda: sb)
     import pytest
     with pytest.raises(ValueError, match="unknown_category_key"):
@@ -234,7 +234,7 @@ def test_replace_skills_rejects_unknown_member(monkeypatch):
 
 
 def test_replace_skills_happy_path_deletes_then_inserts(monkeypatch):
-    sb = _FakeSB({"asana_team_members": [{"gid": "g1"}], "task_categories": [{"key": "content"}]})
+    sb = _FakeSB({"asana_team_members": [{"id": "g1"}], "task_categories": [{"key": "content"}]})
     monkeypatch.setattr(pm_assign, "get_supabase", lambda: sb)
     saved = pm_assign.replace_member_skills("g1", [{"category_key": "content", "is_primary": True}])
     assert saved == [{"category_key": "content", "is_primary": True}]

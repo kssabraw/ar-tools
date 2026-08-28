@@ -62,10 +62,10 @@ def test_resolve_category_key_passthrough_and_blank():
 
 
 def test_diff_activity_kinds_and_skips():
-    before = {"name": "A", "assignee_gid": None, "status_key": "not_started", "due_date": None}
+    before = {"name": "A", "assignee_id": None, "status_key": "not_started", "due_date": None}
     changes = {
         "name": "B",                    # renamed
-        "assignee_gid": "g1",           # assigned
+        "assignee_id": "m1",            # assigned (roster member id)
         "status_key": "not_started",    # unchanged → skipped
         "due_date": "2026-08-01",       # due_changed
         "description": "long text",     # edited, body redacted
@@ -76,7 +76,7 @@ def test_diff_activity_kinds_and_skips():
     desc = next(e for e in entries if e["kind"] == "edited")
     assert desc["detail"] == {"field": "description"}  # no body leaked
     assigned = next(e for e in entries if e["kind"] == "assigned")
-    assert assigned["detail"] == {"field": "assignee_gid", "from": None, "to": "g1"}
+    assert assigned["detail"] == {"field": "assignee_id", "from": None, "to": "m1"}
 
 
 # ---------------------------------------------------------------------------
@@ -148,18 +148,18 @@ async def test_native_workload_alert_silent_when_disabled(monkeypatch):
 def test_select_due_tasks_buckets():
     today = date(2026, 7, 11)
     rows = [
-        {"assignee_gid": "g1", "assignee_name": "Ivy", "due_date": "2026-07-11", "name": "Due now"},
-        {"assignee_gid": "g1", "assignee_name": "Ivy", "due_date": "2026-07-01", "name": "Late"},
-        {"assignee_gid": "g2", "assignee_name": "Minda", "due_date": date(2026, 7, 10), "name": "Also late"},
-        {"assignee_gid": "g1", "assignee_name": "Ivy", "due_date": "2026-08-01", "name": "Future"},   # skipped
-        {"assignee_gid": None, "due_date": "2026-07-01", "name": "Unassigned"},                       # skipped
-        {"assignee_gid": "g3", "due_date": None, "name": "Undated"},                                  # skipped
+        {"assignee_id": "m1", "assignee_name": "Ivy", "due_date": "2026-07-11", "name": "Due now"},
+        {"assignee_id": "m1", "assignee_name": "Ivy", "due_date": "2026-07-01", "name": "Late"},
+        {"assignee_id": "m2", "assignee_name": "Minda", "due_date": date(2026, 7, 10), "name": "Also late"},
+        {"assignee_id": "m1", "assignee_name": "Ivy", "due_date": "2026-08-01", "name": "Future"},   # skipped
+        {"assignee_id": None, "due_date": "2026-07-01", "name": "Unassigned"},                        # skipped
+        {"assignee_id": "m3", "due_date": None, "name": "Undated"},                                   # skipped
     ]
     buckets = task_workload.select_due_tasks(rows, today)
-    assert set(buckets) == {"g1", "g2"}
-    assert buckets["g1"]["due_today"] == ["Due now"]
-    assert buckets["g1"]["overdue"] == ["Late"]
-    assert buckets["g2"]["overdue"] == ["Also late"]
+    assert set(buckets) == {"m1", "m2"}
+    assert buckets["m1"]["due_today"] == ["Due now"]
+    assert buckets["m1"]["overdue"] == ["Late"]
+    assert buckets["m2"]["overdue"] == ["Also late"]
 
 
 def test_bucket_by_due():
@@ -520,6 +520,39 @@ def test_auto_tick_never_raises(monkeypatch):
 
     monkeypatch.setattr(task_service, "get_supabase", lambda: _Boom())
     assert task_service.auto_tick_subtasks("t1", 5) == 0  # swallowed, logged
+
+
+def test_resolve_member_dual_writes_both_keys(monkeypatch):
+    """The single dual-write point (profiles↔gid unification): any of id/gid/name
+    normalizes to all three from the roster; an unknown id/gid passes through so
+    an assignment is never silently dropped."""
+    roster = [{"id": "m1", "gid": "g1", "name": "Ivy"}]
+
+    class _Q:
+        def __init__(self, data):
+            self._d, self._col, self._val = data, None, None
+        def select(self, *a, **k): return self
+        def eq(self, col, val):
+            self._col, self._val = col, val
+            return self
+        def limit(self, *a, **k): return self
+        def execute(self):
+            rows = [r for r in self._d if r.get(self._col) == self._val] if self._col else self._d
+            return type("R", (), {"data": rows})()
+
+    monkeypatch.setattr(task_service, "get_supabase",
+                        lambda: type("SB", (), {"table": lambda self, name: _Q(roster)})())
+
+    ivy = {"assignee_id": "m1", "assignee_gid": "g1", "assignee_name": "Ivy"}
+    # By canonical id, and by legacy gid → the same filled trio.
+    assert task_service._resolve_member(assignee_id="m1") == ivy
+    assert task_service._resolve_member(assignee_gid="g1") == ivy
+    # Neither → an explicit unassign (all cleared).
+    assert task_service._resolve_member() == {
+        "assignee_id": None, "assignee_gid": None, "assignee_name": None}
+    # An unknown member is passed through unchanged (never dropped on a miss).
+    assert task_service._resolve_member(assignee_id="ghost") == {
+        "assignee_id": "ghost", "assignee_gid": None, "assignee_name": None}
 
 
 # ---------------------------------------------------------------------------

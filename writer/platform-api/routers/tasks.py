@@ -150,16 +150,16 @@ class MemberSkillsReplaceRequest(BaseModel):
 
 @router.get("/tasks/member-skills")
 async def list_member_skills(auth: dict = Depends(require_auth)) -> dict:
-    """All members' category competencies, grouped by member_gid. A member absent
-    from the map is a generalist (eligible for any category)."""
+    """All members' category competencies, grouped by roster member id. A member
+    absent from the map is a generalist (eligible for any category)."""
     from services import pm_assign
 
     return pm_assign.list_all_skills()
 
 
-@router.put("/tasks/member-skills/{member_gid}")
+@router.put("/tasks/member-skills/{member_id}")
 async def set_member_skills(
-    member_gid: str,
+    member_id: str,
     body: MemberSkillsReplaceRequest,
     auth: dict = Depends(require_auth),
 ) -> dict:
@@ -167,13 +167,13 @@ async def set_member_skills(
     from services import pm_assign
 
     try:
-        saved = pm_assign.replace_member_skills(member_gid, [s.model_dump() for s in body.skills])
+        saved = pm_assign.replace_member_skills(member_id, [s.model_dump() for s in body.skills])
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        logger.error("member_skills_replace_failed", extra={"member_gid": member_gid, "error": str(exc)})
+        logger.error("member_skills_replace_failed", extra={"member_id": member_id, "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
-    return {"member_gid": member_gid, "skills": saved}
+    return {"member_id": member_id, "skills": saved}
 
 
 # ---------------------------------------------------------------------------
@@ -444,43 +444,59 @@ async def delete_section(section_id: UUID, auth: dict = Depends(require_auth)) -
 
 
 # ---------------------------------------------------------------------------
-# My Tasks (cross-client). Assignees are Asana member gids in v1; the identity
-# bridge (asana_team_members.profile_id) auto-resolves the logged-in user to
-# their linked member, so a linked person sees their own tasks by default. An
-# explicit ?gid= (the "viewing as" picker) always wins — a lead can view
-# anyone. Unlinked users fall back to the first member.
+# My Tasks (cross-client). Assignees are roster member ids (profiles↔gid
+# unification); the identity bridge (asana_team_members.profile_id)
+# auto-resolves the logged-in user to their linked member, so a linked person
+# sees their own tasks by default. An explicit ?member= (the "viewing as"
+# picker) always wins — a lead can view anyone; the legacy ?gid= is still
+# accepted (currently-deployed frontend) and mapped to a member. Unlinked users
+# fall back to the first member. The response carries both id- and gid-keyed
+# fields so old and new frontends both work during the deploy window.
 # ---------------------------------------------------------------------------
 @router.get("/tasks/mine")
-async def my_tasks(gid: str | None = None, auth: dict = Depends(require_auth)) -> dict:
+async def my_tasks(
+    member: str | None = None, gid: str | None = None, auth: dict = Depends(require_auth)
+) -> dict:
     from services.asana_workload import get_team_members
 
     try:
         members = [
-            {"gid": m["gid"], "name": m.get("name") or m["gid"]} for m in get_team_members()
+            {"id": m.get("id"), "gid": m.get("gid"), "name": m.get("name") or m.get("gid")}
+            for m in get_team_members()
         ]
-        valid = {m["gid"] for m in members}
+        by_id = {m["id"]: m for m in members if m.get("id")}
+        by_gid = {m["gid"]: m for m in members if m.get("gid")}
+        # Legacy ?gid= → member id.
+        if not member and gid and gid in by_gid:
+            member = by_gid[gid].get("id")
         # The current user's own linked member (identity bridge), if any.
-        my_gid = None
+        my_member = None
         link = (
             get_supabase()
             .table("asana_team_members")
-            .select("gid")
+            .select("id")
             .eq("profile_id", auth["user_id"])
             .limit(1)
             .execute()
         ).data
-        if link and link[0]["gid"] in valid:
-            my_gid = link[0]["gid"]
+        if link and link[0]["id"] in by_id:
+            my_member = link[0]["id"]
         resolved = (
-            gid if gid in valid else (my_gid if my_gid else (members[0]["gid"] if members else None))
+            member if member in by_id
+            else (my_member if my_member else (members[0]["id"] if members else None))
         )
+        resolved_gid = by_id.get(resolved, {}).get("gid") if resolved else None
+        my_gid = by_id.get(my_member, {}).get("gid") if my_member else None
         if not resolved:
-            return {"members": [], "gid": None, "my_gid": my_gid, "buckets": {}}
+            return {
+                "members": members, "member": None, "my_member": my_member,
+                "gid": None, "my_gid": my_gid, "buckets": {},
+            }
         rows = (
             get_supabase()
             .table("tasks")
             .select("id, client_id, section_id, name, status_key, category, due_date, est_hours")
-            .eq("assignee_gid", resolved)
+            .eq("assignee_id", resolved)
             .eq("completed", False)
             .is_("deleted_at", "null")
             .is_("parent_task_id", "null")
@@ -496,7 +512,13 @@ async def my_tasks(gid: str | None = None, auth: dict = Depends(require_auth)) -
         for r in rows:
             r["client_name"] = names.get(r.get("client_id"))
         buckets = task_service.bucket_by_due(rows, date.today())
-        return {"members": members, "gid": resolved, "my_gid": my_gid, "buckets": buckets}
+        return {
+            "members": members,
+            "member": resolved, "my_member": my_member,
+            # Legacy keys for the currently-deployed frontend (deploy window).
+            "gid": resolved_gid, "my_gid": my_gid,
+            "buckets": buckets,
+        }
     except Exception as exc:
         logger.error("my_tasks_failed", extra={"error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
@@ -621,6 +643,7 @@ async def create_task(body: TaskCreateRequest, auth: dict = Depends(require_auth
             section_id=body.section_id,
             parent_task_id=body.parent_task_id,
             description=body.description,
+            assignee_id=body.assignee_id,
             assignee_gid=body.assignee_gid,
             assignee_name=body.assignee_name,
             status_key=body.status_key,

@@ -15,6 +15,9 @@ class AsanaProjectMapping(BaseModel):
     client_id: UUID
     project_gid: str
     auto_assignee_gids: list[str] = []
+    # Native identity: the same eligibility list as roster member ids (canonical
+    # key; auto_assignee_gids is the dual-written legacy copy).
+    auto_assignee_ids: list[str] = []
     # Resolved from Asana at save time (validation) — None on reads / when
     # Asana is unconfigured.
     project_name: Optional[str] = None
@@ -23,6 +26,7 @@ class AsanaProjectMapping(BaseModel):
 class AsanaProjectMappingRequest(BaseModel):
     project_gid: str
     auto_assignee_gids: list[str] = []
+    auto_assignee_ids: list[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -31,7 +35,8 @@ class AsanaProjectMappingRequest(BaseModel):
 class AsanaTaskTemplateItem(BaseModel):
     """One row of a client's monthly task template (editor in + out)."""
     name: str
-    assignee_gid: Optional[str] = None
+    assignee_id: Optional[str] = None  # roster member id (canonical)
+    assignee_gid: Optional[str] = None  # legacy Asana gid (dual-written)
     assignee_name: Optional[str] = None
     category_option_gid: Optional[str] = None
     category_name: Optional[str] = None
@@ -70,6 +75,9 @@ class AsanaTaskTemplateRef(BaseModel):
 # Team & capacity (Team Workload)
 # ---------------------------------------------------------------------------
 class AsanaTeamMemberItem(BaseModel):
+    # Roster member id (canonical assignee identity). Output-only — assigned by
+    # the DB; a create/edit is matched by gid in Phase 1.
+    id: Optional[str] = None
     gid: str
     name: Optional[str] = None
     weekly_hours: Optional[float] = None

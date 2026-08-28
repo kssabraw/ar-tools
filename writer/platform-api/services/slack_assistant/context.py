@@ -667,7 +667,7 @@ def _ctx_native_tasks(supabase, client_id: str, today: date) -> Optional[dict]:
     Python `open_rows` filter below is defensive belt-and-suspenders."""
     rows = (
         supabase.table("tasks")
-        .select("name, status_key, assignee_name, assignee_gid, due_date, completed")
+        .select("name, status_key, assignee_name, assignee_id, due_date, completed")
         .eq("client_id", client_id)
         .eq("completed", False)
         .is_("deleted_at", "null")
@@ -690,7 +690,7 @@ def _ctx_native_tasks(supabase, client_id: str, today: date) -> Optional[dict]:
         )
         if r.get("due_date") and str(r["due_date"]) < today_s:
             overdue += 1
-        if not r.get("assignee_gid"):
+        if not r.get("assignee_id"):
             unassigned += 1
     return {
         "open_count": len(open_rows),

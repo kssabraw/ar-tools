@@ -46,13 +46,16 @@ def get_team_members() -> list[dict]:
     rows = (
         get_supabase()
         .table("asana_team_members")
-        .select("gid, name, weekly_hours")
+        .select("id, gid, name, weekly_hours")
         .eq("active", True)
         .execute()
     ).data or []
     if rows:
         return rows
-    return [{"gid": g, "name": None, "weekly_hours": None} for g in asana_service.parse_gids(settings.asana_team_member_gids)]
+    return [
+        {"id": None, "gid": g, "name": None, "weekly_hours": None}
+        for g in asana_service.parse_gids(settings.asana_team_member_gids)
+    ]
 
 
 async def _member_entry(member: dict, name_by: dict) -> dict:

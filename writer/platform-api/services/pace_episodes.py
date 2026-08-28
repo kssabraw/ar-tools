@@ -232,7 +232,7 @@ def episode_chase_proposals(today: date) -> list[dict]:
         return []
     eps = (
         get_supabase().table("task_episodes")
-        .select("*, tasks(name, assignee_gid, assignee_name, status_key, client_id, completed, deleted_at)")
+        .select("*, tasks(name, assignee_id, assignee_name, status_key, client_id, completed, deleted_at)")
         .eq("status", "open")
         .execute()
     ).data or []
@@ -251,7 +251,7 @@ def episode_chase_proposals(today: date) -> list[dict]:
         client_name = names.get(client_id, "client")
         days = stuck_days(e, today)
         task_name = t.get("name") or ""
-        if e["kind"] in ("unassigned", "unacted") or not t.get("assignee_gid"):
+        if e["kind"] in ("unassigned", "unacted") or not t.get("assignee_id"):
             proposals.append({
                 "action": "assign_task", "client_id": client_id, "client_name": client_name,
                 "args": {"task_name": task_name},
