@@ -170,6 +170,31 @@ rename. It delivers no capability and is best done as its own isolated PR after
 
 ---
 
+## Parallel-period auto-import (built)
+
+Once `native_tasks_enabled` is on, native is the system of record and the suite
+no longer writes to Asana — but the team may keep creating/moving tasks directly
+in Asana while they wean off it. To keep the native board current without a
+manual "Import Asana boards" click, a **daily Asana→native auto-import** rides the
+shared scheduler:
+
+- `services/task_import.py::enqueue_due_asana_import` — enqueues one
+  `task_import_asana` job per day, wired into the scheduler's daily block
+  (`gsc_scheduler.py`, beside `task_due_sweep`).
+- **Inert unless it should run:** gated on `asana_auto_import_enabled` (default
+  True) **and** Asana actually configured (token + workspace) **and** at least one
+  `asana_client_projects` mapping. So a fresh environment does nothing, and it
+  **self-retires when the Asana subscription is cancelled** (remove `ASANA_TOKEN`).
+- **Idempotent + interval-guarded:** the importer is `source='asana_import'` +
+  gid gap-fill (only new/changed Asana rows land), and the enqueue skips if a
+  completed import ran within `asana_auto_import_interval_hours` (default 20) or
+  one is already in flight — robust to the daily block re-firing on a same-day
+  deploy restart.
+
+Kill switch: set `ASANA_AUTO_IMPORT_ENABLED=false` on PLATFORM. This is a
+transition convenience; it needs no migration and touches nothing the drop
+depends on.
+
 ## Ordering summary
 
 ```

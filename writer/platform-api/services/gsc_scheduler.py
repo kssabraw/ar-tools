@@ -590,6 +590,7 @@ async def gsc_scheduler() -> None:
     from services.asana_monthly import enqueue_due_asana_monthly
     from services.asana_service import shift_months
     from services.asana_workload import run_workload_alert
+    from services.task_import import enqueue_due_asana_import
     from services.task_monthly import enqueue_due_task_months
     from services.task_workload import enqueue_due_sweep
     from services.task_workload import run_workload_alert as run_native_workload_alert
@@ -731,6 +732,11 @@ async def gsc_scheduler() -> None:
                 # Daily native-task due sweep (due-today/overdue digest).
                 # Self-gated: no-ops while native_tasks_enabled is false.
                 _safe("task_due_sweep", enqueue_due_sweep)
+                # Daily Asana→native auto-import (parallel-period). Keeps the
+                # native board fresh with tasks created/moved directly in Asana.
+                # Self-gated: inert without Asana configured + a mapping, and
+                # interval-guarded against same-day re-fires.
+                _safe("asana_import", enqueue_due_asana_import)
                 # Daily PACE delivery digest (deterministic; atomic dedupe_key).
                 # Self-gated: no-ops while pace_enabled is false.
                 _safe("pace_digest", run_pace_digest)

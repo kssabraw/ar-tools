@@ -587,6 +587,71 @@ def test_partition_roster_write_login_less_and_non_destructive():
         {"name": "New VA", "weekly_hours": None, "active": True, "profile_id": None}]
 
 
+def test_enqueue_due_asana_import_gating(monkeypatch):
+    """The parallel-period daily Asana→native auto-import fires only when it
+    should: enabled + Asana configured + a project mapping + no recent/in-flight
+    import; every other combination is a no-op (inert without Asana, kill-switch,
+    interval-guarded, dedup-aware)."""
+    from services import asana_service, task_import
+    from config import settings
+
+    monkeypatch.setattr(settings, "asana_auto_import_enabled", True)
+    monkeypatch.setattr(settings, "asana_auto_import_interval_hours", 20)
+    monkeypatch.setattr(asana_service, "is_configured", lambda: True)
+
+    state = {"mapped": [{"client_id": "c1"}], "recent": []}
+    enq = {"result": {"status": "queued", "job_id": "j1"}}
+
+    class _Q:
+        def __init__(self, table):
+            self.table_name, self._gte = table, False
+        def select(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def gte(self, *a, **k):
+            self._gte = True
+            return self
+        def limit(self, *a, **k): return self
+        def execute(self):
+            if self.table_name == "asana_client_projects":
+                data = state["mapped"]
+            elif self.table_name == "async_jobs":
+                data = state["recent"] if self._gte else []
+            else:
+                data = []
+            return type("R", (), {"data": data})()
+
+    monkeypatch.setattr(task_import, "get_supabase",
+                        lambda: type("SB", (), {"table": lambda self, n: _Q(n)})())
+    monkeypatch.setattr(task_import, "enqueue_import", lambda: enq["result"])
+
+    # Happy path — enabled, configured, mapped, no recent import → enqueues.
+    assert task_import.enqueue_due_asana_import() == 1
+
+    # No client→project mapping → nothing to import.
+    state["mapped"] = []
+    assert task_import.enqueue_due_asana_import() == 0
+    state["mapped"] = [{"client_id": "c1"}]
+
+    # A completed import within the interval window → skip (belt-and-suspenders).
+    state["recent"] = [{"id": "recent"}]
+    assert task_import.enqueue_due_asana_import() == 0
+    state["recent"] = []
+
+    # enqueue_import reports an in-flight import → 0 (dedup honored).
+    enq["result"] = {"status": "already_running", "job_id": "j0"}
+    assert task_import.enqueue_due_asana_import() == 0
+    enq["result"] = {"status": "queued", "job_id": "j1"}
+
+    # Kill switch off → 0 (and never touches the DB).
+    monkeypatch.setattr(settings, "asana_auto_import_enabled", False)
+    assert task_import.enqueue_due_asana_import() == 0
+    monkeypatch.setattr(settings, "asana_auto_import_enabled", True)
+
+    # Asana not configured (fresh env / creds removed post-cancel) → 0.
+    monkeypatch.setattr(asana_service, "is_configured", lambda: False)
+    assert task_import.enqueue_due_asana_import() == 0
+
+
 # ---------------------------------------------------------------------------
 # Stage auto-advance (owner ruling 2026-07-12): the status column drives
 # itself — start-on-touch (Rule A) + last-work-item → In QA (Rule B).

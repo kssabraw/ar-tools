@@ -334,6 +334,54 @@ def enqueue_import() -> dict:
     return {"status": "queued", "job_id": job["id"]}
 
 
+def enqueue_due_asana_import() -> int:
+    """Parallel-period daily refresh: enqueue one ``task_import_asana`` job so the
+    native board stays current with tasks created/moved directly in Asana while
+    the team weans off it. Returns 1 if enqueued, else 0.
+
+    Gated so it is inert everywhere it should be:
+      * ``asana_auto_import_enabled`` off  → 0 (kill switch),
+      * Asana not configured (no token/workspace) → 0 (fresh env; post-cancel),
+      * no client→project mapping → 0 (nothing to import),
+      * a completed import within ``asana_auto_import_interval_hours`` → 0
+        (idempotent belt-and-suspenders against a same-day scheduler re-fire),
+      * an import already pending/running → 0 (``enqueue_import`` dedupes).
+
+    The import itself is idempotent (``source='asana_import'`` + gid ``source_ref``
+    gap-fill), so re-running daily only pulls in genuinely new/changed Asana rows.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from config import settings
+
+    if not settings.asana_auto_import_enabled or not asana_service.is_configured():
+        return 0
+    supabase = get_supabase()
+    mapped = (
+        supabase.table("asana_client_projects").select("client_id").limit(1).execute()
+    ).data
+    if not mapped:  # no Asana projects mapped → nothing to import
+        return 0
+    window_h = max(1, int(settings.asana_auto_import_interval_hours))
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_h)).isoformat()
+    recent = (
+        supabase.table("async_jobs")
+        .select("id")
+        .eq("job_type", "task_import_asana")
+        .eq("status", "complete")
+        .gte("completed_at", cutoff)
+        .limit(1)
+        .execute()
+    ).data
+    if recent:
+        return 0
+    result = enqueue_import()  # dedupes against an in-flight import
+    if result.get("status") == "queued":
+        logger.info("task_import.auto_enqueued", extra={"job_id": result.get("job_id")})
+        return 1
+    return 0
+
+
 def latest_import_job() -> Optional[dict]:
     rows = (
         get_supabase()
