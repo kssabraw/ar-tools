@@ -53,3 +53,53 @@ re-QA the result — no human in the loop. It would ride the autonomy rails that
 
 **What must be decided to unblock:** the scope option (1/2/3), and — if 3 — whether Tier-3
 client-site auto-publish is unheld.
+
+---
+
+## Cross-agent orchestration — "Director of Operations" scope
+
+**Status: DECIDED (framing) + DEFERRED (the arbiter)** — owner, 2026-08-28. Full spec:
+`docs/modules/director-of-operations-plan-v1_0.md`.
+
+**Context.** With SerMaStr (proposes) + PACE (executes) + QA (judges) + the autonomy
+executor (dark) + producers all writing one task board, the owner asked for an orchestrator
+"making sure they work in concert," refined to wanting a **Director of Operations** for
+**insight into how work is flowing.** Three grounded discovery passes over the live code
+found: no global cross-agent priority decider, no intake-time capacity arbitration
+(placement is per-task only — `pm_assign.place_task`), and no cross-agent health monitor
+(`orchestrator.py` is a content-run driver; `pm_signals`/`pace_episodes` watch the board,
+not the seams *between* agents). The cross-agent **incident** record is thin: two real
+runtime failures (WheelHouse autonomy×LocalSEO `location`; First Class Roofing content×brand-
+guide race) — **neither an arbitration failure** — plus one live *gap* (QA armed-but-idle,
+`is_work_item=False` checklists → auto-advance never fires). The imagined
+strategist+autonomy+producer triple-collision **has never occurred** (agents haven't run
+concurrently at scale); its guards are runtime-untested.
+
+**Decided (locked):**
+- **Build the eyes, defer the hands.** The Director is a **read-only cross-agent read model +
+  reconciler**, surfaced conversationally through **SerMaStr** — *not* a fifth autonomous
+  persona and *not* a scheduling/priority authority. Insight comes from the read model + a
+  queryable surface; authority does not improve it and past a point degrades it (your view
+  becomes "what the Director decided," not "what happened").
+- **It never touches the three tested precedence engines** (`reopt_planner` tiers,
+  `autonomy_policy.classify`, `pm_assign` holds). It observes their outputs and *escalates*
+  conflicts as proposals to the owner/PACE; it does not arbitrate them.
+- **Reversible-only autonomy:** emit a daily reconciliation digest line, answer questions,
+  open a task/notification on a stalled seam, merge a duplicate task on a shared `source_ref`,
+  and pre-flight-veto a single autonomy auto-exec (fail-*open* to "propose").
+- **`source_ref` uniformity is a hard prerequisite** (the Recipe-Engine monthly push is the
+  known gap — name-match, no stamp/place). Unknown seams must **fail loud** (mirroring
+  `job_worker`'s unroutable-type discipline), never be silently skipped.
+- **Phasing:** grow the seam predicates inside `pace_episodes`/`pm_signals` first (Phase 1 /
+  catches QA-idle now); graduate to a distinct subsystem only on an observed trigger.
+
+**Deferred (needs a trigger, not a date):**
+- **Intake-time capacity arbitration** — the one place real authority might live. Unlocked
+  only when `pm_assign` records `team_at_capacity` holds from ≥2 demand sources in one week
+  (real intake contention). Until then, per-task placement + advisory slips/rebalance suffice.
+- **D→B graduation** trigger: autonomy content runs against >5 clients/week, OR `qa_idle`
+  clears (QA seam becomes load-bearing), OR the owner reconciles the same conflict twice.
+
+**What must be decided to unblock the build:** the four §11 open questions (seam
+thresholds; digest cadence/channel; duplicate auto-merge vs. flag-only; whether the autonomy
+pre-flight veto is in Phase 1).
