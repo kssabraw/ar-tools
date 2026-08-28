@@ -121,7 +121,11 @@ def _execute(action: str, client_id: str) -> None:
     """Execute one auto-approved action. v1 handles only rebuild_action_plan."""
     if action == "rebuild_action_plan":
         from services import reopt_planner
-        reopt_planner.build_plan(client_id, trigger="autonomy")
+        # "manual" (an allowed PLAN_TRIGGER): an on-demand rebuild the autonomy
+        # loop initiated. NOT "scheduled" — that pushes the reopt weekly digest,
+        # and the executor emits its own digest (double-notify). Autonomy
+        # provenance is recorded in the autonomy_runs ledger, not this trigger.
+        reopt_planner.build_plan(client_id, trigger="manual")
         return
     raise ValueError(f"no executor for action {action!r}")
 
