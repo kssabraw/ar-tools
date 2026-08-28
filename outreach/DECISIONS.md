@@ -2148,3 +2148,63 @@ measured contract — an `enigma_request` signed-order contacts rung positioned 
 un-named prospects; mirrors `name_search`) and the card-transaction data stored + surfaced per
 business. Cost per lookup (`enigma_cost_per_lookup_cents`, placeholder 50¢) is confirmed by the
 probe's bill (the I-111 pattern).
+
+---
+
+## 2026-08-28 — What is left to build, value-ordered — and the standing posture is CALL, not BUILD (owner briefing)
+
+Recorded at the owner's request, so the value-ordering survives outside HANDOFF §12. §12 is the
+fuller plain-English map; this is the durable one-page ruling. **Where they disagree, START-HERE.md
+§4 wins on acceptance criteria; this entry is the posture and the order.**
+
+**The core loop is COMPLETE and PROVEN in production.** Scan a submarket → rank businesses by
+coverage deficit → "Send to CRM" → work the seven-stage board → Won leads become AR Tools clients.
+Every piece is built, merged, and now verified on real DataForSEO data four times over (Los Angeles,
+Whittier, Inglewood, Van Nuys — each 81/81, rolled up, cost-tracked). The call hook, the two-face
+competitive report + approval-gated client PDF, lead enrichment (names/phones/emails), and the
+`outcome`/`touch`/emit substrate are all merged. **Nothing below is a prerequisite for using the
+loop** — each item only makes it more persuasive or smarter.
+
+**THE STANDING RECOMMENDATION: the highest-value next thing is NOT a build — it is making the first
+calls.** Items 2, 4, and 5 are all tuned by outcomes that do not exist until real prospects are
+contacted. The project's own posture (CLAUDE.md → "What is unvalidated") is to treat rank order as a
+strong prior, not a prediction, until ~100 prospects have been called. **Building the scoring model,
+email track, or learning loop before there is a single reply is dressing up a guess.** This is a
+"use it and let real data tell us what to tune" phase, not a "build more" phase.
+
+In rough value order:
+
+1. **Run the built-but-never-run paid scan layers.** `scan-organic`, `scan-ai` (ChatGPT + Google AI
+   Overview), and the `probe-pixel-field` pixel probe are coded, gated, and have NEVER run once. They
+   fill signal columns the report and the scorer already read. This is RUNNING a built layer, not
+   building — and HANDOFF §8.1 2c's argument holds: each additional unrun layer raises the chance the
+   first run surfaces several interacting faults at once in a batch that has been paid for. Prefer
+   running a built layer to building a new one. (The free `scan-tech` already runs automatically each
+   `tick`.)
+
+2. **Finish the switch from "most invisible" to "most worth calling" — Phase 4 wiring.** The scorecard
+   engine (Stage 1 priors) is BUILT and verified live. Two small steps remain: repoint the
+   platform-api reader from `v_prospect_placeholder_score` to `v_prospect_ranked` (I-108), and run
+   `score --market-name …` for a full production ranking (I-105). **But the coefficients are ELICITED
+   estimates until real replies exist** — see the standing recommendation. Stages 2–3 (recalibration
+   fit, then hierarchical refit + Thompson) genuinely cannot start: they need accumulated `outcome`
+   rows (Stage 3 needs ~80+ reply outcomes).
+
+3. **Email outreach + enrichment — Phase 5. NOT STARTED, and the long pole is not code.** A sending
+   domain needs 3–4 weeks of warming that cannot be compressed, and the vendor is undecided
+   (GetResponse likely disqualified — I-001). Only worth starting if email is actually wanted as a
+   second channel; if so, start the calendar clock early and independently of everything else.
+
+4. **The learning loop — Phase 6. Months out.** Once ~30–50 real outcomes exist, a recalibration job
+   re-tunes the model from who actually replied. Depends on the Phase-3 evidence-randomization /
+   version-stamping already being in place (it is), and on real outreach having happened.
+
+**Small, independent odds-and-ends** (do opportunistically, none blocking): I-070 (enforce
+`scan_snapshot` append-only — a trigger + a test), I-086/I-087 (a budget-ceiling check on the scan
+path + a durable `recovered_by_tag`), and **I-045** (the review-count / inferred-zero audit gap — the
+scan keeps only place_id + rank and drops `rating.votes_count`; 105 inferred-zero flags remain
+un-audited — logged, still unbuilt, confirmed after four live scans).
+
+*Revisit:* once ~100 prospects have been contacted and real `outcome` rows exist — at that point the
+posture flips from "call to gather data" to "fit the model against the data," and items 2 and 4 become
+buildable rather than guesses.
