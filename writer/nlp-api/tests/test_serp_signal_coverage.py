@@ -280,6 +280,75 @@ def test_frequency_grading_absent_preserves_presence_only_score():
     assert res["score"] == expected
 
 
+def test_entity_detail_lists_under_target_beyond_the_score_top_30():
+    # 45 entities, each recommended twice and used zero times on the page (all
+    # under target). The DISPLAY table must list every one (up to the 60-row cap),
+    # not just the top-30 the frequency score sums over — so no needed entity is
+    # hidden. Ranked by page_spread, but since all shortfalls tie the order is by
+    # page_spread and all 45 appear.
+    entities = [
+        {"name": f"Entity{i:02d}", "page_spread": 45 - i, "recommended_mentions": 2}
+        for i in range(45)
+    ]
+    serp = {"related_keywords": {}, "zone_targets": {}, "google_entities": entities, "top_quadgrams": []}
+    res = main._compute_serp_signal_coverage("<article><p>nothing here</p></article>", serp)
+    names = [d["name"] for d in res["entity_detail"]]
+    assert len(names) == 45                     # all listed (≤ 60-row cap)
+    assert "Entity44" in names                  # the lowest-page_spread entity, past the score top-30
+    assert all(d["shortfall"] == 2 for d in res["entity_detail"])
+
+
+def test_display_widening_does_not_change_the_engine_score():
+    # The frequency score sums over the SCORE set (top-30 entities / benchmarked
+    # keywords). Adding entities ranked past 30 and benchmark-less keywords must
+    # leave the composite score identical — widening is display-only.
+    base = {
+        "related_keywords": {"paragraphs": [
+            {"term": "roof restoration", "recommended_mentions": 2, "max_competitor_mentions": 2, "zone_freq": {"paragraphs": 2}},
+        ]},
+        "zone_targets": {"paragraphs": {"target": 1, "entity_target": 1}},
+        "google_entities": [{"name": f"Ent{i:02d}", "page_spread": 40 - i, "recommended_mentions": 1} for i in range(30)],
+        "top_quadgrams": [{"phrase": "licensed roofing contractor"}],
+    }
+    widened = {
+        **base,
+        # +15 lower-ranked entities (past the score top-30) and a benchmark-less keyword.
+        "google_entities": base["google_entities"] + [
+            {"name": f"Extra{i:02d}", "page_spread": 5 - (i * 0.1), "recommended_mentions": 3} for i in range(15)
+        ],
+        "related_keywords": {"paragraphs": base["related_keywords"]["paragraphs"] + [{"term": "colorbond roofing"}]},
+    }
+    html = "<article><h2>Roof Restoration</h2><p>quality roofing across the city.</p></article>"
+    base_res = main._compute_serp_signal_coverage(html, base)
+    wide_res = main._compute_serp_signal_coverage(html, widened)
+    assert wide_res["score"] == base_res["score"]
+    assert wide_res["frequency_coverage"] == base_res["frequency_coverage"]
+    # ...but the widened DISPLAY tables carry the extra rows.
+    assert any(d["name"] == "colorbond roofing" for d in wide_res["keyword_detail"])
+    assert any(d["name"].startswith("Extra") for d in wide_res["entity_detail"])
+
+
+def test_keyword_detail_lists_terms_without_a_competitor_benchmark():
+    # A related keyword with no recommended_mentions the page is missing must still
+    # appear (recommended defaults to 1 -> shortfall 1) so it isn't silently hidden.
+    serp = {
+        "related_keywords": {"paragraphs": [
+            {"term": "roof restoration", "recommended_mentions": 2, "max_competitor_mentions": 2},
+            {"term": "colorbond roofing"},  # no benchmark
+        ]},
+        "zone_targets": {"paragraphs": {"target": 1, "entity_target": 0}},
+        "google_entities": [],
+        "top_quadgrams": [],
+    }
+    html = "<article><h2>Roof Restoration</h2><p>quality work.</p></article>"
+    res = main._compute_serp_signal_coverage(html, serp)
+    kd = {d["name"]: d for d in res["keyword_detail"]}
+    assert "colorbond roofing" in kd
+    assert kd["colorbond roofing"]["recommended"] == 1
+    assert kd["colorbond roofing"]["current"] == 0
+    assert kd["colorbond roofing"]["shortfall"] == 1
+
+
 def test_word_boundary_counting_does_not_match_substrings():
     # "Slate" must not be counted inside "Slater"; "tile" not inside "tiles".
     html = "<article><p>Mr Slater fitted the tiles. Slate is different.</p></article>"
