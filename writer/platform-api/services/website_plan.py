@@ -1200,11 +1200,20 @@ def generation_inputs(
 
     if page.page_type in {"service", "sub_service"}:
         svc = services.get(segs[-1]) if segs else None
-        return {
-            "engine": "nlp",
-            "keyword": svc.name if svc else page.title,
-            "location": primary_city,
-        }
+        if svc:
+            # A real catalog service/sub-service: its own name is the keyword.
+            return {"engine": "nlp", "keyword": svc.name, "location": primary_city}
+        # A synthetic sub-service (an auto-generated `type` variation) has no
+        # catalog entry, so its title is a bare label ("Oak Trees", "Emergency").
+        # Left alone, two services with the same bare label would produce the
+        # same keyword + location and thus near-identical pages — so scope it by
+        # the parent service, skipping the join when the service name is already
+        # in the label (so a fully-named "Oak Tree Removal" doesn't double up).
+        keyword = page.title
+        parent = services.get(segs[0]) if page.page_type == "sub_service" and len(segs) >= 2 else None
+        if parent and parent.name.lower() not in keyword.lower():
+            keyword = f"{keyword} {parent.name}".strip()
+        return {"engine": "nlp", "keyword": keyword, "location": primary_city}
 
     if page.page_type == "location":
         city = cities.get(segs[0]) if segs else None
