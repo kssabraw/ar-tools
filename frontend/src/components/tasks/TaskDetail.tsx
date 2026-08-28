@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, BellOff, CheckCircle2, Circle, Copy, Paperclip, Plus, RotateCcw, Send, Trash2, X } from 'lucide-react'
+import { Bell, BellOff, CheckCircle2, Circle, Copy, Paperclip, Plus, RotateCcw, Send, ShieldCheck, Trash2, X } from 'lucide-react'
 import { api } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 import { QaPanel } from './QaPanel'
@@ -193,6 +193,16 @@ export function TaskDetail({ taskId, statuses, categories, members, onClose, inv
           {task?.completed ? 'Completed task' : 'Task'}
         </span>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {task && !task.completed && !task.parent_task_id && task.status_key !== 'in_qa'
+            && statuses.some((s) => s.key === 'in_qa' && s.active) && (
+            <button
+              onClick={() => patchField('status_key', 'in_qa')}
+              title="Move to In QA — runs an automatic quality review"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 12px', borderRadius: 8, border: '1px solid #c7d2fe', background: '#eef2ff', color: '#4338ca', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+            >
+              <ShieldCheck size={13} /> For QA
+            </button>
+          )}
           {task && (
             task.completed ? (
               <button
