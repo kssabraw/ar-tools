@@ -161,6 +161,9 @@ class ClientDetail(BaseModel):
     # `strategist_weekly_weekday` default, so reviews can be staggered across
     # the week instead of all landing on one day.
     strategist_weekday: Optional[int] = None
+    # Slack channel PACE posts this client's PM notifications to (channel id like
+    # C0... or #name). None → the single master PACE channel.
+    slack_channel_id: Optional[str] = None
 
     @field_validator("drive_folders", "github_content_paths", mode="before")
     @classmethod
@@ -218,6 +221,8 @@ class ClientCreateRequest(BaseModel):
     content_compliance_mode: Optional[Literal["off", "peptide"]] = None
     # Per-client strategist review day (0=Mon..6=Sun); None → global default.
     strategist_weekday: Optional[int] = Field(None, ge=0, le=6)
+    # Slack channel PACE posts this client's PM notifications to; None → master.
+    slack_channel_id: Optional[str] = None
     # Reference page URLs to scrape + analyze for structure mirroring.
     page_structure_urls: Optional[PageStructureUrls] = None
     # Written page-structure specs — the no-website alternative to the URLs above.
@@ -265,3 +270,6 @@ class ClientUpdateRequest(BaseModel):
     content_compliance_mode: Optional[Literal["off", "peptide"]] = None
     # Per-client strategist review day (0=Mon..6=Sun); None → global default.
     strategist_weekday: Optional[int] = Field(None, ge=0, le=6)
+    # Slack channel PACE posts this client's PM notifications to; pass an empty
+    # string to clear it back to the master PACE channel.
+    slack_channel_id: Optional[str] = None

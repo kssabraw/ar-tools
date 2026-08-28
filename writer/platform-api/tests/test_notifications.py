@@ -114,6 +114,48 @@ def test_explicit_payload_channel_always_wins():
     # An explicit override beats both PACE routing and the default, for any kind.
     assert notifications.resolve_slack_channel("task_due", {"slack_channel": "C_X"}, "C_PACE") == "C_X"
     assert notifications.resolve_slack_channel("rank_drop", {"slack_channel": "C_X"}, "C_PACE") == "C_X"
+    # An override also beats a client channel.
+    assert notifications.resolve_slack_channel(
+        "task_assigned", {"slack_channel": "C_X"}, "C_PACE", client_channel="C_CLIENT"
+    ) == "C_X"
+
+
+# ---------------------------------------------------------------------------
+# Per-client PACE routing — a client-scoped kind goes to that client's channel
+# ---------------------------------------------------------------------------
+def test_client_scoped_kinds_route_to_client_channel():
+    # The five client-scoped PACE kinds land in the client's own channel when set.
+    for kind in ("task_assigned", "task_mention", "task_comment",
+                 "task_month_generated", "task_nudge"):
+        assert notifications.resolve_slack_channel(
+            kind, None, "C_PACE", client_channel="C_CLIENT"
+        ) == "C_CLIENT", kind
+
+
+def test_portfolio_pace_kinds_ignore_client_channel():
+    # Portfolio rollups stay in the master PACE channel even if a client channel
+    # is somehow supplied — they concern all clients, not one.
+    for kind in ("pace_digest", "pace_chase_plan", "pace_escalation", "pace_report",
+                 "task_overload", "task_due"):
+        assert notifications.resolve_slack_channel(
+            kind, None, "C_PACE", client_channel="C_CLIENT"
+        ) == "C_PACE", kind
+
+
+def test_client_scoped_kind_falls_back_to_master_without_client_channel():
+    # No client channel configured → the master PACE channel, exactly as before.
+    assert notifications.resolve_slack_channel("task_assigned", None, "C_PACE") == "C_PACE"
+    assert notifications.resolve_slack_channel(
+        "task_assigned", None, "C_PACE", client_channel=None
+    ) == "C_PACE"
+
+
+def test_non_pace_kind_ignores_client_channel():
+    # A non-PACE client-scoped alert (rank drop, strategy review) is unaffected —
+    # it still returns None → the default channel, never the client channel.
+    assert notifications.resolve_slack_channel(
+        "rank_drop", None, "C_PACE", client_channel="C_CLIENT"
+    ) is None
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +175,21 @@ def test_resolve_slack_token_no_pace_token_falls_back():
     # Separate-bot mode not configured → even the PACE channel posts under default,
     # so the change is inert until a PACE app token is set.
     assert notifications.resolve_slack_token("C_PACE", "C_PACE", "", "xoxb-def") == "xoxb-def"
+
+
+def test_resolve_slack_token_pace_kind_in_client_channel_gets_pace_token():
+    # A client-scoped PACE kind delivered to a client's own channel still posts
+    # under the PACE app's token (the PACE bot owns delivery of every PACE kind).
+    assert notifications.resolve_slack_token(
+        "C_CLIENT", "C_PACE", "xoxb-pace", "xoxb-def", kind="task_assigned"
+    ) == "xoxb-pace"
+
+
+def test_resolve_slack_token_non_pace_kind_in_other_channel_gets_default():
+    # A non-PACE kind in some other channel keeps using the default token.
+    assert notifications.resolve_slack_token(
+        "C_OTHER", "C_PACE", "xoxb-pace", "xoxb-def", kind="rank_drop"
+    ) == "xoxb-def"
 
 
 def test_pace_bot_token_prefers_pace_then_default(monkeypatch):

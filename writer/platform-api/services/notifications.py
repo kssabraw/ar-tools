@@ -123,27 +123,48 @@ def format_slack(title: str, summary: Optional[str], client_name: Optional[str],
 # (``settings.pace_slack_channel``) when one is configured, so project-management
 # chatter (task assignments, comments, nudges, the due/overload sweeps, and the
 # daily digest / chase plan / escalations) stays out of the strategy channel.
-# Every other kind (strategy reviews, SEO alerts, run/publish events) keeps using
-# ``slack_default_channel``. A producer can still force any channel explicitly via
-# ``payload.slack_channel`` — that always wins.
+# A client-scoped PACE kind (``CLIENT_SCOPED_PACE_KINDS``) is delivered to that
+# client's OWN channel (``clients.slack_channel_id``) when one is set, falling
+# back to the master PACE channel otherwise — so PACE can talk in each client's
+# channel instead of only one master channel. Every other kind (strategy reviews,
+# SEO alerts, run/publish events) keeps using ``slack_default_channel``. A
+# producer can still force any channel explicitly via ``payload.slack_channel`` —
+# that always wins.
 PACE_CHANNEL_KINDS = frozenset({
     "pace_digest", "pace_chase_plan", "pace_escalation", "pace_report", "pace_briefs",
     "task_assigned", "task_mention", "task_comment", "task_month_generated",
     "task_overload", "task_due", "task_nudge",
 })
 
+# The client-scoped subset of the PACE kinds: each carries a real ``client_id``
+# and concerns exactly one client, so when that client has a dedicated Slack
+# channel (``clients.slack_channel_id``) PACE posts these there instead of the
+# master PACE channel. The portfolio PACE kinds (the daily digest, Chase Plan,
+# workload report, escalations — all emitted with ``client_id=None``) and the
+# suite-wide ``task_overload``/``task_due`` digests are deliberately excluded, so
+# they stay in the single master channel as agency-wide rollups.
+CLIENT_SCOPED_PACE_KINDS = frozenset({
+    "task_assigned", "task_mention", "task_comment", "task_month_generated",
+    "task_nudge",
+})
+
 
 def resolve_slack_channel(
     kind: Optional[str], payload: Optional[dict], pace_channel: Optional[str],
+    client_channel: Optional[str] = None,
 ) -> Optional[str]:
     """Pick the Slack channel for one notification. Precedence:
     1. an explicit ``payload.slack_channel`` (a producer targeting a channel),
-    2. the PACE channel for a PM/PACE ``kind`` when ``pace_channel`` is set,
-    3. otherwise ``None`` → the sender falls back to ``slack_default_channel``.
+    2. the client's own channel for a client-scoped PACE ``kind`` when that client
+       has ``client_channel`` configured (per-client PACE delivery),
+    3. the master PACE channel for any PM/PACE ``kind`` when ``pace_channel`` is set,
+    4. otherwise ``None`` → the sender falls back to ``slack_default_channel``.
     Pure — unit-tested."""
     override = (payload or {}).get("slack_channel")
     if override:
         return override
+    if client_channel and kind in CLIENT_SCOPED_PACE_KINDS:
+        return client_channel
     if pace_channel and kind in PACE_CHANNEL_KINDS:
         return pace_channel
     return None
@@ -158,12 +179,16 @@ def pace_bot_token() -> str:
 
 def resolve_slack_token(
     channel: Optional[str], pace_channel: str, pace_token: str, default_token: str,
+    kind: Optional[str] = None,
 ) -> str:
-    """The bot token to deliver one notification under: the PACE app's token when
-    the message is bound for the PACE channel and that token is configured, else
-    the default (SerMaStr) token — so whichever bot owns the channel is the one
-    that posts. Pure — unit-tested."""
-    if pace_token and pace_channel and channel == pace_channel:
+    """The bot token to deliver one notification under. The PACE app owns delivery
+    of every PM/PACE kind — in the master PACE channel *and* in each client's own
+    channel — so when ``pace_token`` is configured any PACE ``kind`` posts under it
+    (the PACE bot must be a member of the target channel). Otherwise the default
+    (SerMaStr) token is used, with a back-compat check that also uses the PACE
+    token for a message explicitly bound for the master PACE channel. Pure —
+    unit-tested."""
+    if pace_token and (kind in PACE_CHANNEL_KINDS or (pace_channel and channel == pace_channel)):
         return pace_token
     return default_token
 
@@ -316,11 +341,18 @@ async def run_notification_dispatch_job(job: dict) -> None:
     n = found.data[0]
 
     client_name = None
+    client_channel = None
     if n.get("client_id"):
         c = (
-            supabase.table("clients").select("name").eq("id", n["client_id"]).limit(1).execute()
+            supabase.table("clients")
+            .select("name, slack_channel_id")
+            .eq("id", n["client_id"])
+            .limit(1)
+            .execute()
         )
-        client_name = c.data[0]["name"] if c.data else None
+        if c.data:
+            client_name = c.data[0].get("name")
+            client_channel = c.data[0].get("slack_channel_id") or None
     link = _deep_link(n.get("payload"))
 
     channels: dict[str, str] = {}
@@ -342,16 +374,19 @@ async def run_notification_dispatch_job(job: dict) -> None:
         channels["slack"] = "skipped"
     elif slack_configured():
         try:
-            # Route PM/PACE kinds to the dedicated PACE channel when configured;
-            # an explicit payload.slack_channel still wins; else default channel.
-            # Post under the PACE app's bot token when the message goes to the
-            # PACE channel (so a separate PACE bot owns its channel).
+            # Route a client-scoped PACE kind to that client's own channel when
+            # one is set; else route PM/PACE kinds to the master PACE channel; an
+            # explicit payload.slack_channel still wins; else the default channel.
+            # Post under the PACE app's bot token for any PACE kind (so a separate
+            # PACE bot owns delivery in both the master and per-client channels).
             channel = resolve_slack_channel(
-                n.get("kind"), n.get("payload"), settings.pace_slack_channel
+                n.get("kind"), n.get("payload"), settings.pace_slack_channel,
+                client_channel=client_channel,
             )
             token = resolve_slack_token(
                 channel, settings.pace_slack_channel,
                 settings.pace_slack_bot_token, settings.slack_bot_token,
+                kind=n.get("kind"),
             )
             await _send_slack(
                 format_slack(n["title"], n.get("summary"), client_name, link, n["severity"]),
