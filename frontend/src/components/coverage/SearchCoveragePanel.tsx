@@ -34,7 +34,6 @@ export function SearchCoveragePanel({ coverage }: { coverage?: CoverageScore }) 
   const used = coverage.entities_used ?? []
   const missing = coverage.entities_missing ?? []
   const zones = coverage.zones ?? []
-  const recs = coverage.recommendations ?? []
   const entityDetail = coverage.entity_detail ?? []
   const keywordDetail = coverage.keyword_detail ?? []
   const boldDetail = coverage.bold_detail ?? []
@@ -45,24 +44,33 @@ export function SearchCoveragePanel({ coverage }: { coverage?: CoverageScore }) 
   const td: CSSProperties = { fontSize: 13, color: '#0f172a', padding: '6px 12px', borderTop: '1px solid #f1f5f9' }
   const cell = (found?: number, target?: number) =>
     found == null || target == null ? '—' : `${found}/${target}${found >= target ? ' ✓' : ''}`
+  // Which sections to add a term to, straight from its per-zone shortfalls — the
+  // recommendation, folded into the table instead of a separate prose list.
+  const whereToAdd = (e: EntityCoverage): string => {
+    if (e.shortfall <= 0) return '—'
+    const gaps = (e.zones ?? []).filter((z) => z.shortfall > 0)
+    if (gaps.length > 0) return gaps.map((z) => `${z.zone} +${z.shortfall}`).join(', ')
+    return 'anywhere in body'
+  }
   // Cora-style term-target table (shared by entities / related keywords / bolded
-  // terms): On page / Target (capped-max competitor) / Top competitor / Needed,
-  // with a per-term per-zone breakdown line.
+  // terms): On page / Target (capped-max competitor) / Top competitor / Where to
+  // add (the per-zone shortfall) / Needed. Every term is listed — no truncation.
   const renderTermTable = (label: string, rows: EntityCoverage[], total: number) => {
     if (rows.length === 0) return null
     const hasCompetitor = rows.some((r) => r.max_competitor != null)
     return (
       <div style={{ overflowX: 'auto' }}>
         <p style={{ fontSize: 12, fontWeight: 600, color: '#475569', margin: '0 0 6px' }}>
-          {label}{total > 0 && ` — ${total} mention${total > 1 ? 's' : ''} to add`}
+          {label} — {rows.length} listed{total > 0 && `, ${total} mention${total > 1 ? 's' : ''} to add`}
         </p>
-        <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 380 }}>
+        <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 460 }}>
           <thead>
             <tr>
               <th style={th}>Term</th>
               <th style={{ ...th, textAlign: 'right' }}>On page</th>
               <th style={{ ...th, textAlign: 'right' }}>Target</th>
               {hasCompetitor && <th style={{ ...th, textAlign: 'right' }}>Top comp.</th>}
+              <th style={th}>Where to add</th>
               <th style={{ ...th, textAlign: 'right' }}>Needed</th>
             </tr>
           </thead>
@@ -71,19 +79,13 @@ export function SearchCoveragePanel({ coverage }: { coverage?: CoverageScore }) 
               const short = e.shortfall > 0
               return (
                 <tr key={e.name} style={short ? { background: '#fef2f2' } : undefined}>
-                  <td style={{ ...td, fontWeight: short ? 600 : 400 }}>
-                    {e.name}
-                    {e.zones && e.zones.length > 0 && (
-                      <div style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>
-                        {e.zones.map((z) => `${z.zone} ${z.current}/${z.recommended}`).join(' · ')}
-                      </div>
-                    )}
-                  </td>
+                  <td style={{ ...td, fontWeight: short ? 600 : 400 }}>{e.name}</td>
                   <td style={{ ...td, textAlign: 'right' }}>{e.current}</td>
                   <td style={{ ...td, textAlign: 'right' }}>{e.recommended}</td>
                   {hasCompetitor && (
                     <td style={{ ...td, textAlign: 'right', color: '#94a3b8' }}>{e.max_competitor ?? '—'}</td>
                   )}
+                  <td style={{ ...td, color: short ? '#b91c1c' : '#94a3b8' }}>{whereToAdd(e)}</td>
                   <td style={{ ...td, textAlign: 'right', color: short ? '#b91c1c' : '#94a3b8', fontWeight: short ? 700 : 400 }}>
                     {short ? `+${e.shortfall}` : '✓'}
                   </td>
@@ -93,7 +95,7 @@ export function SearchCoveragePanel({ coverage }: { coverage?: CoverageScore }) 
           </tbody>
         </table>
         <p style={{ fontSize: 11, color: '#94a3b8', margin: '6px 0 0' }}>
-          Target = the top competitor's usage, capped so one outlier can't inflate it. "Needed" is how many more mentions to add on this page.
+          Target = the top competitor's usage, capped so one outlier can't inflate it. "Where to add" is the sections still short (e.g. <em>body +2</em>); "Needed" is the total more mentions to add on this page.
         </p>
       </div>
     )
@@ -171,17 +173,6 @@ export function SearchCoveragePanel({ coverage }: { coverage?: CoverageScore }) 
           </div>
         )}
 
-        {/* Recommendations */}
-        {recs.length > 0 && (
-          <div>
-            <p style={{ fontSize: 12, fontWeight: 600, color: '#475569', margin: '0 0 6px' }}>Recommendations</p>
-            <ul style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {recs.map((r, i) => (
-                <li key={i} style={{ fontSize: 12, color: '#475569' }}>{r}</li>
-              ))}
-            </ul>
-          </div>
-        )}
       </div>
     </div>
   )
