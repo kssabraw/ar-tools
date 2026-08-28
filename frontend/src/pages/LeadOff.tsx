@@ -1,7 +1,7 @@
 import { Fragment, useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Radar, Download, Search, X, Flame, Snowflake, AlertTriangle, Loader2, UserPlus, Binoculars, FlaskConical, Compass, Hammer, ArrowUp, ArrowDown, ChevronsUpDown, Sparkles, ChevronLeft, ChevronRight, MapPin, Link2, RefreshCw } from 'lucide-react'
+import { Radar, Download, Search, X, Flame, Snowflake, AlertTriangle, Loader2, UserPlus, Binoculars, FlaskConical, Compass, Hammer, ArrowUp, ArrowDown, ChevronsUpDown, Sparkles, ChevronLeft, ChevronRight, MapPin, Link2, RefreshCw, Crosshair } from 'lucide-react'
 import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
 import { MarketMap, type MarketMapGbp } from '../components/leadoff/MarketMap'
@@ -1177,6 +1177,8 @@ interface PlacementRead {
   catchment_miles?: number
   zones?: PlacementZone[]
   note?: string
+  focused?: boolean
+  focus?: { lat: number; lng: number; radius_miles: number } | null
 }
 
 // Phase 2 "Both": scoring an arbitrary point (dropped pin / pasted address)
@@ -1289,11 +1291,22 @@ function ProximityDetail({ px, cityId, categoryId }: {
 }) {
   const live = px.source === 'gbp_serp' && !!px.center && (px.pins?.length ?? 0) > 0
 
+  // Target-area focus: pick a sub-area to serve (Queens) → rank the zones within a
+  // GBP's ranking radius of it, instead of the citywide demand peak. A GBP only
+  // ranks near its pin, so "best spots to serve Queens" ≠ "best spots citywide".
+  const [focus, setFocus] = useState<{ lat: number; lng: number; label: string } | null>(null)
+  const [focusRadius, setFocusRadius] = useState(5)
+
   // The demand-aware placement zones (plan §3/§5). Only meaningful once live GBP
   // pins exist; polls itself while the Census demand surface is being built.
   const { data: placement, isLoading: placementLoading } = useQuery<PlacementRead>({
-    queryKey: ['leadoff-placement', cityId, categoryId],
-    queryFn: () => api.get(`/leadoff/placement?city_id=${cityId}&category_id=${encodeURIComponent(categoryId)}`),
+    queryKey: ['leadoff-placement', cityId, categoryId,
+      focus?.lat ?? null, focus?.lng ?? null, focus ? focusRadius : null],
+    queryFn: () => {
+      let url = `/leadoff/placement?city_id=${cityId}&category_id=${encodeURIComponent(categoryId)}`
+      if (focus) url += `&target_lat=${focus.lat}&target_lng=${focus.lng}&target_radius_miles=${focusRadius}`
+      return api.get(url)
+    },
     enabled: live,
     refetchInterval: q => {
       const d = q.state.data as PlacementRead | undefined
@@ -1333,6 +1346,7 @@ function ProximityDetail({ px, cityId, categoryId }: {
   useEffect(() => {
     setGbp(null); setGbpInput(''); setGbpError(null)
     setCandidates([]); setAnchorId(null)
+    setFocus(null); setFocusRadius(5)
   }, [cityId, categoryId])
 
   // Score a pasted address / GBP link as a candidate (the paste half of "Both"),
@@ -1411,8 +1425,14 @@ function ProximityDetail({ px, cityId, categoryId }: {
               <strong style={{ color: '#047857' }}>Where competitors aren't: </strong>{px.recommendation}
             </div>
           )}
+          {placement?.available && !placement.thin_field && (
+            <FocusBar focus={focus} radius={focusRadius}
+              onRadius={setFocusRadius}
+              onSetFocus={(lat, lng, label) => setFocus({ lat, lng, label })}
+              onClear={() => setFocus(null)} />
+          )}
           <PlacementZones data={placement} loading={placementLoading}
-            cityId={cityId} categoryId={categoryId} />
+            cityId={cityId} categoryId={categoryId} focused={!!focus} />
           {zonesAvailable ? (
             <CandidateScorer
               candidates={candidates} anchorId={anchorId}
@@ -1541,8 +1561,97 @@ function ProximityDetail({ px, cityId, categoryId }: {
 // below the live map (its numbered pins mirror these cards). Degrades explicitly:
 // while the Census demand surface is being built the card shows a poll spinner;
 // too-few-block-groups / thin-field states say why there's no ranking.
-function PlacementZones({ data, loading, cityId, categoryId }: {
-  data?: PlacementRead; loading: boolean; cityId: number; categoryId: string
+// Target-area focus control: type an area to serve (a neighborhood name, an
+// address, or a GBP link) → resolve it to a point → rank the placement zones
+// within a GBP's ranking radius of it. A GBP only ranks near its pin, so this
+// answers "best spot to serve Queens", not "best spot in the metro overall".
+const FOCUS_RADII = [3, 5, 7, 10]
+function FocusBar({ focus, radius, onRadius, onSetFocus, onClear }: {
+  focus: { lat: number; lng: number; label: string } | null
+  radius: number
+  onRadius: (r: number) => void
+  onSetFocus: (lat: number, lng: number, label: string) => void
+  onClear: () => void
+}) {
+  const [input, setInput] = useState('')
+  const [resolving, setResolving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function resolve() {
+    const value = input.trim()
+    if (!value) return
+    setError(null); setResolving(true)
+    try {
+      const res = await api.get<GbpResolveResponse>(`/clients/gbp/resolve?input=${encodeURIComponent(value)}`)
+      const lat = res.gbp?.latitude, lng = res.gbp?.longitude
+      if (lat == null || lng == null) {
+        setError('Could not find that area — try an address or a GBP link.'); return
+      }
+      onSetFocus(lat, lng, res.gbp?.business_name ?? value)
+      setInput('')
+    } catch (e) {
+      setError((e as Error).message || 'Could not resolve that area.')
+    } finally { setResolving(false) }
+  }
+
+  if (focus) {
+    return (
+      <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+        background: '#eef2ff', border: '1px solid #c7d2fe', borderRadius: 8, padding: '7px 10px' }}>
+        <Crosshair size={14} color="#4f46e5" />
+        <span style={{ fontSize: 12.5, color: '#0f172a' }}>
+          Showing best spots to serve <strong>{focus.label}</strong> — within
+        </span>
+        <select value={radius} onChange={e => onRadius(Number(e.target.value))}
+          style={{ fontSize: 12, padding: '2px 6px', borderRadius: 6, border: '1px solid #c7d2fe' }}>
+          {FOCUS_RADII.map(r => <option key={r} value={r}>{r} mi</option>)}
+        </select>
+        <button type="button" onClick={onClear}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: '2px 8px',
+            background: '#fff', border: '1px solid #c7d2fe', borderRadius: 6, cursor: 'pointer',
+            color: '#4f46e5', fontSize: 11.5, fontWeight: 600 }}>
+          <X size={11} /> Show citywide
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
+          <Crosshair size={13} style={{ position: 'absolute', left: 9, top: '50%',
+            transform: 'translateY(-50%)', color: '#94a3b8' }} />
+          <input
+            value={input}
+            onChange={e => { setInput(e.target.value); setError(null) }}
+            onKeyDown={e => { if (e.key === 'Enter') resolve() }}
+            placeholder="Target a specific area to serve (e.g. Queens NY, an address, or a GBP link)"
+            style={{ width: '100%', boxSizing: 'border-box', padding: '7px 9px 7px 28px',
+              fontSize: 12.5, border: '1px solid #e2e8f0', borderRadius: 7 }} />
+        </div>
+        <select value={radius} onChange={e => onRadius(Number(e.target.value))}
+          style={{ fontSize: 12, padding: '6px 8px', borderRadius: 7, border: '1px solid #e2e8f0' }}>
+          {FOCUS_RADII.map(r => <option key={r} value={r}>within {r} mi</option>)}
+        </select>
+        <button type="button" onClick={resolve} disabled={resolving || !input.trim()}
+          style={{ padding: '7px 12px', background: '#4f46e5', color: '#fff', border: 'none',
+            borderRadius: 7, cursor: resolving || !input.trim() ? 'default' : 'pointer',
+            opacity: resolving || !input.trim() ? 0.6 : 1, fontSize: 12.5, fontWeight: 600 }}>
+          {resolving ? 'Finding…' : 'Focus'}
+        </button>
+      </div>
+      {error && <div style={{ fontSize: 11.5, color: '#dc2626', marginTop: 4 }}>{error}</div>}
+      <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4, lineHeight: 1.4 }}>
+        A GBP only ranks near its pin — focus on the area you actually want to rank in to see
+        the best spots within a ranking radius of it.
+      </div>
+    </div>
+  )
+}
+
+function PlacementZones({ data, loading, cityId, categoryId, focused }: {
+  data?: PlacementRead; loading: boolean; cityId: number; categoryId: string; focused?: boolean
 }) {
   if (loading && !data) {
     return (
@@ -1592,12 +1701,23 @@ function PlacementZones({ data, loading, cityId, categoryId }: {
   }
 
   const zones = data.zones ?? []
-  if (zones.length === 0) return null
+  if (zones.length === 0) {
+    if (focused) {
+      return (
+        <div style={{ marginTop: 10, fontSize: 12, color: '#b45309', lineHeight: 1.5 }}>
+          No placeable spots inside that radius of the target area — widen the radius,
+          or the demand/competition there leaves no clear opening.
+        </div>
+      )
+    }
+    return null
+  }
 
   return (
     <div style={{ marginTop: 12 }}>
       <div style={{ fontSize: 12.5, fontWeight: 700, color: '#5b21b6', marginBottom: 6 }}>
-        Best areas to plant a GBP (demand-aware)
+        {focused ? 'Best spots within the target area (demand-aware)'
+                 : 'Best areas to plant a GBP (demand-aware)'}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
         {zones.map(z => (

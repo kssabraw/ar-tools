@@ -367,7 +367,10 @@ def build_zones(center_lat: float, center_lng: float,
                 zone_count: int = 4,
                 min_separation_miles: float = 2.0,
                 coverage_greedy: bool = False,
-                coverage_radius_miles: float = 3.0) -> dict[str, Any]:
+                coverage_radius_miles: float = 3.0,
+                focus_lat: Optional[float] = None,
+                focus_lng: Optional[float] = None,
+                focus_radius_miles: Optional[float] = None) -> dict[str, Any]:
     """The full pure pipeline: score the lattice → pick zones → enrich each with
     its reachable households, nearest competitor, and narrative line. The caller
     (impure) reverse-geocodes each zone's `lat/lng` to a locality name and drops
@@ -375,16 +378,31 @@ def build_zones(center_lat: float, center_lng: float,
 
     `coverage_greedy` (owner default on) uses maximum-coverage selection so the
     zones spread to distinct demand pockets instead of clustering in the metro's
-    demand peak; off ⇒ the legacy top-N + min-separation selection."""
+    demand peak; off ⇒ the legacy top-N + min-separation selection.
+
+    Target-area focus: when `focus_lat`/`focus_lng`/`focus_radius_miles` are set,
+    only candidate cells within the focus radius are eligible, so the ranked zones
+    answer "best spot to serve THIS area" (e.g. Queens) rather than the whole
+    metro — a GBP only ranks near its pin. The demand surface is still the full
+    market (a focused candidate is scored on the demand it can actually reach) and
+    the score stays market-relative, so a focused zone honestly reads lower than
+    the citywide peak."""
     grid = score_grid(center_lat, center_lng, surface, pins,
                       radius_miles=radius_miles, spacing_miles=spacing_miles,
                       demand_decay_miles=demand_decay_miles,
                       pressure_decay_miles=pressure_decay_miles)
+    candidates = grid["cells"]
+    focused = (focus_lat is not None and focus_lng is not None
+               and focus_radius_miles is not None and focus_radius_miles > 0)
+    if focused:
+        candidates = [c for c in candidates
+                      if haversine_miles(focus_lat, focus_lng, c["lat"], c["lng"])
+                      <= focus_radius_miles]
     if coverage_greedy:
-        zones = select_zones_coverage(grid["cells"], surface, zone_count=zone_count,
+        zones = select_zones_coverage(candidates, surface, zone_count=zone_count,
                                       coverage_radius_miles=coverage_radius_miles)
     else:
-        zones = select_zones(grid["cells"], zone_count=zone_count,
+        zones = select_zones(candidates, zone_count=zone_count,
                              min_separation_miles=min_separation_miles)
     for i, z in enumerate(zones):
         z["rank"] = i + 1
@@ -401,6 +419,9 @@ def build_zones(center_lat: float, center_lng: float,
         "pins": len(pins),
         "radius_miles": radius_miles,
         "catchment_miles": _HOUSEHOLDS_CATCHMENT_MILES,
+        "focused": focused,
+        "focus": ({"lat": round(focus_lat, 6), "lng": round(focus_lng, 6),
+                   "radius_miles": focus_radius_miles} if focused else None),
         "note": ("Scores are relative to THIS market only (min-max over the "
                  "market's own 1-mile lattice) — never compare a score across "
                  "markets. Zones name the best area to establish a real, "

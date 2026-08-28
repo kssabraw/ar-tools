@@ -1861,6 +1861,11 @@ class Settings(BaseSettings):
     # pins per metro. Off ⇒ the legacy top-N + min-separation selection.
     placement_coverage_greedy: bool = True
     placement_coverage_radius_miles: float = 3.0
+    # Target-area focus: when the user picks a spot to serve (a dropped map pin /
+    # pasted address), rank the zones WITHIN this radius of it — "best spot to
+    # serve Queens" instead of the citywide demand peak (a GBP only ranks near
+    # its pin). Default radius when the request doesn't specify one.
+    placement_target_radius_miles: float = 5.0
     placement_min_pins: int = 5                     # thin-data floor (== proximity)
     placement_min_blockgroups: int = 8              # below this the advisor declines
     # w_cat demand weights on the same free Census pull — ships ON but weight-0
