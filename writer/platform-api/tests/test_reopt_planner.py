@@ -2,10 +2,33 @@
 
 from __future__ import annotations
 
+from models.reopt import ReoptAction
 from services import reopt_planner
 
 
 CLIENT = "11111111-1111-1111-1111-111111111111"
+
+
+def test_reopt_action_model_preserves_the_detail_fields():
+    # The GET /action-plan endpoint serializes stored items through ReoptAction
+    # (response_model). Pydantic DROPS undeclared keys, so every structured detail
+    # field the frontend renders must be declared or it never reaches the UI.
+    action = {
+        "kind": "cannibalization", "keyword": "x", "diagnosis": "d", "recommendation": "r",
+        "cta_label": "c", "cta_path": "p", "severity": "info",
+        "url": "https://a.com/p/",
+        "pages": [{"url": "https://a.com/p/", "impressions": 10, "position": 8, "clicks": 1}],
+        "topics": ["faq", "pricing"],
+        "target_domains": [{"domain": "bobvila.com", "rank": 82, "linking_to": ["c.com"]}],
+        "target_link_count": 12,
+        "search_volume": 880,
+        "est_value": 430.0,
+        "location": "Miami, FL",
+    }
+    dumped = ReoptAction(**action).model_dump()
+    for key in ("url", "pages", "topics", "target_domains", "target_link_count",
+                "search_volume", "est_value", "location"):
+        assert dumped[key] == action[key], f"{key} was stripped by ReoptAction"
 
 
 def _rankability_item(**over):

@@ -33,6 +33,17 @@ class ReoptAction(BaseModel):
     # so the frontend can close one. (Pydantic drops unknown keys, so the
     # passthrough must be declared.)
     assistant_action_id: Optional[str] = None
+    # Concrete specifics the frontend renders (the page/link/topic/link-target
+    # data the action carries). MUST be declared here or Pydantic strips them
+    # from the response_model=ReoptPlan output before they reach the frontend.
+    url: Optional[str] = None                       # the page an action targets
+    pages: Optional[list[dict]] = None              # cannibalization: competing URLs
+    topics: Optional[list[str]] = None              # content gap: missing sections
+    target_domains: Optional[list[dict]] = None     # link building: domains to pursue / lost
+    target_link_count: Optional[int] = None         # link building: how many to build/replace
+    search_volume: Optional[int] = None             # demand for a create-page keyword
+    est_value: Optional[float] = None               # est. monthly value
+    location: Optional[str] = None                  # maps weak-area: the place to target
 
 
 class ReoptPlan(BaseModel):
