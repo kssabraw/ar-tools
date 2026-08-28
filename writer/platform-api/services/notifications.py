@@ -119,6 +119,36 @@ def format_slack(title: str, summary: Optional[str], client_name: Optional[str],
 # ----------------------------------------------------------------------------
 # Emit (sync — safe to call from producer code) + dispatch (async job).
 # ----------------------------------------------------------------------------
+# PM / PACE notification kinds are delivered to the dedicated PACE Slack channel
+# (``settings.pace_slack_channel``) when one is configured, so project-management
+# chatter (task assignments, comments, nudges, the due/overload sweeps, and the
+# daily digest / chase plan / escalations) stays out of the strategy channel.
+# Every other kind (strategy reviews, SEO alerts, run/publish events) keeps using
+# ``slack_default_channel``. A producer can still force any channel explicitly via
+# ``payload.slack_channel`` — that always wins.
+PACE_CHANNEL_KINDS = frozenset({
+    "pace_digest", "pace_chase_plan", "pace_escalation", "pace_report", "pace_briefs",
+    "task_assigned", "task_mention", "task_comment", "task_month_generated",
+    "task_overload", "task_due", "task_nudge",
+})
+
+
+def resolve_slack_channel(
+    kind: Optional[str], payload: Optional[dict], pace_channel: Optional[str],
+) -> Optional[str]:
+    """Pick the Slack channel for one notification. Precedence:
+    1. an explicit ``payload.slack_channel`` (a producer targeting a channel),
+    2. the PACE channel for a PM/PACE ``kind`` when ``pace_channel`` is set,
+    3. otherwise ``None`` → the sender falls back to ``slack_default_channel``.
+    Pure — unit-tested."""
+    override = (payload or {}).get("slack_channel")
+    if override:
+        return override
+    if pace_channel and kind in PACE_CHANNEL_KINDS:
+        return pace_channel
+    return None
+
+
 def emit(
     client_id: Optional[str],
     kind: str,
@@ -292,12 +322,14 @@ async def run_notification_dispatch_job(job: dict) -> None:
         channels["slack"] = "skipped"
     elif slack_configured():
         try:
-            # A notification may target a specific channel (e.g. PACE's own
-            # channel via payload.slack_channel); default channel otherwise.
-            override = (n.get("payload") or {}).get("slack_channel")
+            # Route PM/PACE kinds to the dedicated PACE channel when configured;
+            # an explicit payload.slack_channel still wins; else default channel.
+            channel = resolve_slack_channel(
+                n.get("kind"), n.get("payload"), settings.pace_slack_channel
+            )
             await _send_slack(
                 format_slack(n["title"], n.get("summary"), client_name, link, n["severity"]),
-                channel=override or None,
+                channel=channel,
             )
             channels["slack"] = "ok"
         except Exception as exc:

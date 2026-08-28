@@ -85,6 +85,38 @@ def test_channel_gating_off_when_unconfigured(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# resolve_slack_channel — PM/PACE kinds route to the dedicated PACE channel
+# ---------------------------------------------------------------------------
+def test_pace_kinds_route_to_pace_channel():
+    # PACE's own producers and the native task_* notifications all go to PACE.
+    for kind in (
+        "pace_digest", "pace_chase_plan", "pace_escalation", "pace_report",
+        "task_assigned", "task_mention", "task_comment", "task_month_generated",
+        "task_overload", "task_due", "task_nudge",
+    ):
+        assert notifications.resolve_slack_channel(kind, None, "C_PACE") == "C_PACE", kind
+
+
+def test_non_pm_kinds_stay_on_default_channel():
+    # Strategy + SEO alerts return None → the sender uses slack_default_channel,
+    # so the PACE channel never captures strategy chatter.
+    for kind in ("strategy_review", "rank_drop", "maps_drop", "brand_visibility", "run_failed"):
+        assert notifications.resolve_slack_channel(kind, None, "C_PACE") is None, kind
+
+
+def test_pace_kind_with_no_pace_channel_falls_through():
+    # Backward-compatible: no PACE channel configured → default channel (None).
+    assert notifications.resolve_slack_channel("task_due", None, "") is None
+    assert notifications.resolve_slack_channel("task_due", None, None) is None
+
+
+def test_explicit_payload_channel_always_wins():
+    # An explicit override beats both PACE routing and the default, for any kind.
+    assert notifications.resolve_slack_channel("task_due", {"slack_channel": "C_X"}, "C_PACE") == "C_X"
+    assert notifications.resolve_slack_channel("rank_drop", {"slack_channel": "C_X"}, "C_PACE") == "C_X"
+
+
+# ---------------------------------------------------------------------------
 # emit — the recipient (personal-bell target) is written to the row
 # ---------------------------------------------------------------------------
 def test_emit_writes_recipient_profile_id(monkeypatch):
