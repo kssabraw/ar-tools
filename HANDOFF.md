@@ -1,6 +1,44 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-28 · **Action Plan detail pass + autonomy safe-slice pilot (MERGED + LIVE)** (latest)
+## ⏩ Update — 2026-08-28 · **Native Task Manager cutover LIVE + scheduled Asana→native auto-import (PR #852, MERGED + LIVE)** (latest)
+
+**The Asana replacement is cut over.** `NATIVE_TASKS_ENABLED=true` on PLATFORM,
+confirmed live by a month of clean operation (`task_due_sweep` runs daily, native
+monthly generation fired for all 9 clients on Aug 1, `asana_month_generate` is
+dormant). The native board is the system of record; the suite no longer writes to
+Asana. The profiles↔gid unification shipped in **#845** (Phase 1 additive + 2a
+login-less-VA identity + 2b code) and the **Phase 2b migration**
+(`20260828220000`) is applied — `tasks.assignee_gid` + `task_member_skills.member_gid`
+dropped; every assignee is now the canonical roster-member `id` (verified: 1041
+assignee_ids, 0 orphans).
+
+**Scheduled Asana→native auto-import (PR #852, merged `616950b`, LIVE).** The team
+is keeping Asana and migrating gradually, so people may still create/move tasks
+*directly in Asana*. A daily job on the shared scheduler (`gsc_scheduler` daily
+block, beside `task_due_sweep`) re-runs the idempotent Asana→native importer so
+those changes flow into the native board automatically — no manual "Import Asana
+boards" click. Engine: `services/task_import.py::enqueue_due_asana_import`.
+- **Gated inert unless it should run:** `native_tasks_enabled` (native is the live
+  board) AND `asana_auto_import_enabled` (default True) AND Asana configured
+  (token + workspace) AND ≥1 `asana_client_projects` mapping. A fresh env does
+  nothing; a rollback quiesces it; it **self-retires when Asana is cancelled**
+  (remove `ASANA_TOKEN`).
+- **Idempotent + guarded:** the import is `source='asana_import'` + gid gap-fill;
+  the enqueue skips if a completed import ran within
+  `asana_auto_import_interval_hours` (20) or one is already in flight, so a
+  same-day scheduler re-fire can't double-import. Live smoke-tested 2026-08-28:
+  ran across 9 clients, 0 errors, idempotent (0 new / 226 existing).
+- **Kill switch:** `ASANA_AUTO_IMPORT_ENABLED=false`. Config:
+  `asana_auto_import_enabled`, `asana_auto_import_interval_hours`. No migration.
+
+**Still deferred (owner's timeline).** The two RETAINED Asana-path gid columns —
+`asana_client_task_templates.assignee_gid` + `asana_client_projects.auto_assignee_gids`
+— are kept (still dual-written) so a rollback to Asana-monthly generation stays
+possible. Drop them (one small PR removing the writers + the staged SQL) only
+after the Asana subscription is cancelled. Runbook:
+`docs/modules/in-app-task-manager-gid-unification-cutover.md`.
+
+## ⏩ Update — 2026-08-28 · **Action Plan detail pass + autonomy safe-slice pilot (MERGED + LIVE)**
 
 Two threads this session, both on `services/reopt_planner.py` / the Action Plan.
 
