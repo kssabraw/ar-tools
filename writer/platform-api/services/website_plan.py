@@ -1053,6 +1053,29 @@ CORE_PAGE_TYPES = frozenset({"home", "about", "contact", "privacy"})
 # run's writer notes, since the blog brief is keyword-driven and globally cached.
 RUN_PAGE_TYPES = frozenset({"post", "pillar"})
 
+# The page types a human may add one at a time via the "add a page" flow
+# (`build_manual_page`), on top of the deterministic plan. Everything with a
+# real writer: the geo/service NLP types plus one-off blog posts and pillars.
+# Deliberately excludes core pages (home/about/contact/privacy — one per site,
+# emitted by the planner) and template-only hubs (rendered from data, nothing to
+# write). A manual page and its auto-generated twin share a URL and merge on the
+# next rebuild, so this set is exactly "writable, not core, not template".
+MANUAL_PAGE_TYPES = NLP_PAGE_TYPES | RUN_PAGE_TYPES
+
+# Sort tier for a manually added page, mirroring the planner's own tiers for the
+# same type so a manual page sits where its auto twin would in the Pages list.
+_MANUAL_TIERS = {
+    "service": 1,
+    "sub_service": 2,
+    "brand_service": 4,
+    "location": 1,
+    "neighborhood": 3,
+    "local_landing": 2,
+    "hyper_local": 3,
+    "post": 2,
+    "pillar": 1,
+}
+
 
 def _segments(path: str) -> list[str]:
     return [s for s in (path or "").split("/") if s]
@@ -1297,6 +1320,229 @@ def plan_payload(
             page, services=services, cities=cities, posts=posts, pillars=pillars
         ),
     }
+
+
+def _join_words(*phrases: str) -> str:
+    """Join phrases into one label, dropping repeated whole words (case-insensitive,
+    first occurrence wins). Used only to suggest a hyper-local page's default
+    title — a human edits it — so it favours not-ugly over not-lossy:
+    ("Oak Tree Removal", "Tree Removal", "Seattle") -> "Oak Tree Removal Seattle".
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for phrase in phrases:
+        for word in (phrase or "").split():
+            key = word.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(word)
+    return " ".join(out)
+
+
+def _manual_post_notes(
+    title: str, fmt: str, angle: Optional[str], target_keywords: Optional[Iterable[str]]
+) -> str:
+    """Writer notes for a one-off blog post (not a pillar-cluster child).
+
+    `compose_post_notes` frames a post as part of a named silo; a manual post has
+    none, so it gets its own brief rather than an empty-silo line.
+    """
+    lines = [
+        "One-off blog post added to this site (not part of a pillar cluster).",
+        f"Working title: {title}",
+        f"Format: {_FORMAT_LABELS.get(fmt, fmt)}.",
+    ]
+    angle = (angle or "").strip()
+    if angle:
+        lines.append(f"Editorial angle: {angle}")
+    tks = [t.strip() for t in (target_keywords or []) if t and t.strip()]
+    if tks:
+        lines.append("Work these related keywords in naturally: " + ", ".join(tks))
+    lines.append(
+        "Follow the format's structure from the content SOP; the client brand "
+        "guide governs voice."
+    )
+    return "\n".join(lines)
+
+
+def build_manual_page(
+    *,
+    page_type: str,
+    service: Optional[str] = None,
+    city: Optional[str] = None,
+    subservice: Optional[str] = None,
+    title: Optional[str] = None,
+    keyword: Optional[str] = None,
+    location: Optional[str] = None,
+    post_format: Optional[str] = None,
+    angle: Optional[str] = None,
+    target_keywords: Optional[Iterable[str]] = None,
+    catalog: Optional[Iterable[ServiceEntry]] = None,
+    cities: Optional[Iterable[CityEntry]] = None,
+    primary_service: Optional[str] = None,
+    primary_city: Optional[str] = None,
+) -> tuple[PlannedPage, dict]:
+    """One ad-hoc page from user-supplied axes — the "add a page" flow.
+
+    Returns `(PlannedPage, plan_payload)`, ready for the store to insert as a
+    `trigger="manual"` row. The URL, title, tier and generation inputs follow the
+    *same* rules the planner uses for the equivalent auto page, so a manual page
+    and its later auto-generated twin land at the same route and merge cleanly on
+    the next rebuild.
+
+    Reuses `plan_payload`/`generation_inputs` for the keyword/location/frontmatter
+    derivation rather than re-deriving them — the SOP targeting rules differ by
+    page type in a way the URL alone doesn't carry, and duplicating them here is
+    how the two paths would silently drift.
+
+    Raises `ValueError(code)` for an unsupported type, a missing required axis, or
+    an invalid post format. Explicit `keyword`/`location` override the derived
+    values (a hyper-local escalation page often wants a hand-tuned keyword).
+    """
+    if page_type not in MANUAL_PAGE_TYPES:
+        raise ValueError("unsupported_page_type")
+
+    svc_map = {s.slug: s for s in (catalog or [])}
+    city_map = {c.slug: c for c in (cities or [])}
+
+    def _need(value: Optional[str], code: str) -> str:
+        cleaned = (value or "").strip()
+        if not cleaned:
+            raise ValueError(code)
+        return cleaned
+
+    def _ensure_service(slug: str, name: str) -> None:
+        # A real catalog entry (with teaser/order) wins; a synthetic one only
+        # fills a gap so name resolution works for an off-catalog axis.
+        if slug and slug not in svc_map:
+            svc_map[slug] = ServiceEntry(name=name, slug=slug)
+
+    def _ensure_city(slug: str, name: str) -> None:
+        if slug and slug not in city_map:
+            city_map[slug] = CityEntry(name=name, slug=slug)
+
+    title = (title or "").strip() or None
+    posts: Optional[dict] = None
+    pillars: Optional[dict] = None
+    fmt = DEFAULT_POST_FORMAT
+
+    if page_type == "service":
+        name = _need(service, "missing_service")
+        s_slug = slugify(name)
+        path, page_title = _path(s_slug), title or name
+        _ensure_service(s_slug, name)
+
+    elif page_type == "sub_service":
+        name = _need(service, "missing_service")
+        sub = _need(subservice, "missing_subservice")
+        s_slug, sub_slug = slugify(name), slugify(sub)
+        path, page_title = _path(s_slug, sub_slug), title or sub
+        # Register only the PARENT: a synthetic sub-service (no catalog entry) is
+        # deliberately routed through generation_inputs' parent-scoping branch,
+        # matching how an auto `type` variation is keyworded.
+        _ensure_service(s_slug, name)
+
+    elif page_type == "brand_service":
+        name = _need(service, "missing_service")
+        brand = _need(subservice, "missing_subservice")
+        s_slug, b_slug = slugify(name), slugify(brand)
+        path = _path(s_slug, b_slug)
+        page_title = title or f"{brand} {name}"
+        _ensure_service(s_slug, name)
+
+    elif page_type == "location":
+        name = _need(city, "missing_city")
+        c_slug = slugify(name)
+        path, page_title = _path(c_slug), title or name
+        _ensure_city(c_slug, name)
+
+    elif page_type == "neighborhood":
+        city_name = _need(city, "missing_city")
+        hood = _need(subservice, "missing_subservice")
+        c_slug, h_slug = slugify(city_name), slugify(hood)
+        path, page_title = _path(c_slug, h_slug), title or hood
+        _ensure_city(c_slug, city_name)
+
+    elif page_type == "local_landing":
+        city_name = _need(city, "missing_city")
+        svc_name = _need(service, "missing_service")
+        c_slug, s_slug = slugify(city_name), slugify(svc_name)
+        path = _path(c_slug, s_slug)
+        page_title = title or f"{svc_name} in {city_name}"
+        _ensure_city(c_slug, city_name)
+        _ensure_service(s_slug, svc_name)
+
+    elif page_type == "hyper_local":
+        city_name = _need(city, "missing_city")
+        svc_name = _need(service, "missing_service")
+        sub = _need(subservice, "missing_subservice")
+        c_slug, s_slug, sub_slug = slugify(city_name), slugify(svc_name), slugify(sub)
+        path = _path(c_slug, s_slug, sub_slug)
+        # The title carries the keyword vector (generation_inputs reads it), so a
+        # composed default names all three axes; the user edits it in the form.
+        page_title = title or _join_words(sub, svc_name, city_name)
+        _ensure_city(c_slug, city_name)
+        _ensure_service(s_slug, svc_name)
+
+    elif page_type == "post":
+        name = _need(title, "missing_title")
+        fmt = (post_format or DEFAULT_POST_FORMAT).strip() or DEFAULT_POST_FORMAT
+        if fmt not in POST_FORMATS:
+            raise ValueError("invalid_format")
+        slug = slugify(name)
+        path, page_title = _path("blog", slug), name
+        posts = {
+            path: PostEntry(
+                slug=slug,
+                title=name,
+                silo="",
+                format=fmt,
+                keyword=(keyword or "").strip(),
+                buyer_problem=(angle or "").strip(),
+                target_keywords=tuple(
+                    t.strip() for t in (target_keywords or []) if t and t.strip()
+                ),
+            )
+        }
+
+    else:  # pillar
+        name = _need(title, "missing_title")
+        slug = slugify(name)
+        path, page_title = _path(slug), name
+        pillars = {path: PillarEntry(slug=slug, title=name)}
+
+    page = PlannedPage(
+        path=path,
+        page_type=page_type,
+        title=page_title,
+        trigger="manual",
+        tier=_MANUAL_TIERS.get(page_type, 1),
+    )
+    payload = plan_payload(
+        page,
+        services=svc_map,
+        cities=city_map,
+        posts=posts,
+        pillars=pillars,
+        primary_service=primary_service,
+        primary_city=primary_city,
+    )
+
+    keyword = (keyword or "").strip()
+    location = (location or "").strip()
+    if keyword:
+        payload["keyword"] = keyword
+    if location:
+        payload["location"] = location
+    if page_type == "post":
+        # A standalone post has no silo, so give it its own brief rather than the
+        # empty-silo line compose_post_notes would produce.
+        payload["notes"] = _manual_post_notes(page_title, fmt, angle, target_keywords)
+    elif page_type == "pillar" and (angle or "").strip():
+        payload["notes"] = (payload.get("notes") or "") + f"\nEditorial angle: {angle.strip()}"
+
+    return page, payload
 
 
 def matrix_cells(routes: Iterable[str]) -> set[tuple[str, str]]:

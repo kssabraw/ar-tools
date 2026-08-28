@@ -45,6 +45,23 @@ logger = logging.getLogger(__name__)
 # source_id, status, commit_sha — belongs to generation and publishing.
 _PLANNER_FIELDS = ("page_type", "title", "trigger", "tier", "plan")
 
+# The trigger stamped on a hand-added page. A rebuild must never prune one just
+# because it isn't in the deterministic inventory (that is the whole point of
+# adding it), so `build()` keeps `trigger="manual"` rows the way it keeps
+# published ones.
+MANUAL_TRIGGER = "manual"
+
+
+class ManualPageError(Exception):
+    """A manual "add a page" request the store refused, with the HTTP status the
+    router should return (400 for bad input, 409 for a route that already exists).
+    """
+
+    def __init__(self, code: str, status: int = 400):
+        super().__init__(code)
+        self.code = code
+        self.status = status
+
 
 def parse_catalog(raw: Iterable[dict]) -> list[ServiceEntry]:
     """Service catalog entries from stored/posted config.
@@ -289,9 +306,15 @@ def build(website: dict, *, catalog: list[dict], cities: list[dict]) -> dict:
 
     # A route that left the plan: drop it if nothing was ever committed for it,
     # keep it (and say so) if it is live — retiring a published slug is a 301,
-    # not a delete.
+    # not a delete. A hand-added `manual` page is never in the deterministic plan
+    # to begin with, so it always reads as an orphan here; it is kept regardless
+    # of publish state, or "add a page" would be undone by the next rebuild.
     orphans = [r for r in existing if r["route"] not in planned_routes]
-    removable = [r["id"] for r in orphans if r.get("status") != "published"]
+    removable = [
+        r["id"]
+        for r in orphans
+        if r.get("status") != "published" and r.get("trigger") != MANUAL_TRIGGER
+    ]
     if removable:
         supabase.table("website_pages").delete().in_("id", removable).execute()
     orphaned_published = [r["route"] for r in orphans if r.get("status") == "published"]
@@ -314,6 +337,85 @@ def build(website: dict, *, catalog: list[dict], cities: list[dict]) -> dict:
         "primary_service": primary_service,
         "primary_city": primary_city,
     }
+
+
+def add_manual_page(
+    website: dict,
+    *,
+    page_type: str,
+    service: Optional[str] = None,
+    city: Optional[str] = None,
+    subservice: Optional[str] = None,
+    title: Optional[str] = None,
+    keyword: Optional[str] = None,
+    location: Optional[str] = None,
+    post_format: Optional[str] = None,
+    angle: Optional[str] = None,
+    target_keywords: Optional[list[str]] = None,
+) -> dict:
+    """Insert one hand-added page as a `trigger="manual"` draft row.
+
+    The single upstream gap the rest of the pipeline doesn't have: everything
+    downstream (generate, gate, publish, deploy, retry, drip) is already keyed on
+    a `website_pages.id`, but only `build()` ever created a row — from the whole
+    deterministic catalog. This mints exactly one, reusing the planner's own
+    derivation so the page behaves like any other, then leaves it to the existing
+    generate-by-id / publish-by-id flow.
+
+    Refuses a reserved-slug collision (a planning error, not a size call — the URL
+    is immutable once published) and a route an active row already claims (which
+    the partial unique index would reject anyway, but with a clearer code).
+    """
+    supabase = get_supabase()
+    website_id = website["id"]
+    config = website.get("config") or {}
+    services = parse_catalog(config.get("catalog") or [])
+    city_entries = parse_cities(config.get("cities") or [])
+    primary_service, primary_city = head_terms(config, services, city_entries)
+
+    try:
+        page, payload = website_plan.build_manual_page(
+            page_type=page_type,
+            service=service,
+            city=city,
+            subservice=subservice,
+            title=title,
+            keyword=keyword,
+            location=location,
+            post_format=post_format,
+            angle=angle,
+            target_keywords=target_keywords,
+            catalog=services,
+            cities=city_entries,
+            primary_service=primary_service,
+            primary_city=primary_city,
+        )
+    except ValueError as exc:
+        raise ManualPageError(str(exc), 400) from exc
+
+    if any(i.kind == "reserved_slug" for i in website_plan.check_paths([page])):
+        raise ManualPageError("reserved_slug", 400)
+
+    if page.path in {r["route"] for r in stored(website_id)}:
+        raise ManualPageError("page_route_exists", 409)
+
+    row = {
+        "website_id": website_id,
+        "route": page.path,
+        "page_type": page.page_type,
+        "title": page.title,
+        "trigger": page.trigger,
+        "tier": page.tier,
+        "plan": payload,
+        "content_source": "static" if payload.get("engine") == "template" else "composed",
+        "status": "draft",
+    }
+    inserted = (supabase.table("website_pages").insert(row).execute()).data or [row]
+    logger.info(
+        "website_plan.manual_page_added",
+        extra={"website_id": website_id, "route": page.path, "page_type": page.page_type},
+    )
+    return inserted[0]
 
 
 def serialize(plan: SitePlan) -> dict:

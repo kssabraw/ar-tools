@@ -702,3 +702,137 @@ class TestHyperLocalEngine:
         catalog = [svc("AC Repair", brands=("Carrier",))]
         plan = wp.build_plan(site_type="local_business", catalog=catalog, cities=CITIES)
         assert not any(p.page_type == "hyper_local" for p in plan.pages)
+
+
+class TestBuildManualPage:
+    """The 'add a page' flow: one ad-hoc page from user-supplied axes, keyworded
+    and routed by the same rules the planner uses for its auto twin so the two
+    land on the same URL and merge."""
+
+    CAT = [svc("Tree Removal", order=10), svc("Stump Grinding", order=20)]
+    CIT = [city("Seattle"), city("Bellevue")]
+
+    def _build(self, **kw):
+        return wp.build_manual_page(
+            catalog=self.CAT,
+            cities=self.CIT,
+            primary_service="Tree Removal",
+            primary_city="Seattle",
+            **kw,
+        )
+
+    def test_a_service_page(self):
+        page, payload = self._build(page_type="service", service="Tree Removal")
+        assert page.path == "/tree-removal/"
+        assert page.trigger == "manual"
+        assert payload["engine"] == "nlp"
+        assert payload["keyword"] == "Tree Removal"
+
+    def test_a_type_sub_service_is_keyworded_like_its_auto_twin(self):
+        # A synthetic sub-service ("Oak Trees") is scoped by its parent exactly
+        # as the auto `type` variation is, so a manual add matches a later rebuild.
+        page, payload = self._build(
+            page_type="sub_service", service="Tree Removal", subservice="Oak Trees"
+        )
+        assert page.path == "/tree-removal/oak-trees/"
+        assert page.page_type == "sub_service"
+        assert payload["keyword"] == "Oak Trees Tree Removal"
+
+    def test_a_fully_named_sub_service_is_not_doubled(self):
+        _, payload = self._build(
+            page_type="sub_service", service="Tree Removal", subservice="Oak Tree Removal"
+        )
+        assert payload["keyword"] == "Oak Tree Removal"
+
+    def test_a_brand_service_puts_the_brand_in_front(self):
+        page, payload = self._build(
+            page_type="brand_service", service="AC Repair", subservice="Carrier"
+        )
+        assert page.path == "/ac-repair/carrier/"
+        assert page.title == "Carrier AC Repair"
+        assert payload["keyword"] == "Carrier AC Repair"
+
+    def test_a_location_page_targets_the_geo_head_term(self):
+        page, payload = self._build(page_type="location", city="Bellevue")
+        assert page.path == "/bellevue/"
+        assert payload["keyword"] == "Tree Removal Bellevue"
+        assert payload["location"] == "Bellevue"
+
+    def test_a_neighborhood_page(self):
+        page, payload = self._build(
+            page_type="neighborhood", city="Seattle", subservice="Ballard"
+        )
+        assert page.path == "/seattle/ballard/"
+        assert payload["frontmatter"]["parentCity"] == "seattle"
+
+    def test_a_local_landing_page(self):
+        page, payload = self._build(
+            page_type="local_landing", city="Bellevue", service="Stump Grinding"
+        )
+        assert page.path == "/bellevue/stump-grinding/"
+        assert payload["keyword"] == "Stump Grinding Bellevue"
+
+    def test_a_hyper_local_page_carries_all_three_axes(self):
+        page, payload = self._build(
+            page_type="hyper_local", city="Seattle", service="Tree Removal", subservice="Oak Trees"
+        )
+        assert page.path == "/seattle/tree-removal/oak-trees/"
+        assert payload["engine"] == "nlp"
+        assert payload["location"] == "Seattle"
+        # The default title composes all three axes (deduped) as the keyword vector.
+        assert page.title == "Oak Trees Tree Removal Seattle"
+        assert payload["keyword"] == "Oak Trees Tree Removal Seattle"
+
+    def test_an_explicit_keyword_and_location_override_the_derivation(self):
+        _, payload = self._build(
+            page_type="hyper_local", city="Seattle", service="Tree Removal",
+            subservice="Oak Trees", keyword="oak tree removal seattle", location="Seattle, WA",
+        )
+        assert payload["keyword"] == "oak tree removal seattle"
+        assert payload["location"] == "Seattle, WA"
+
+    def test_a_blog_post_runs_a_writer_with_its_own_brief(self):
+        page, payload = self._build(
+            page_type="post", title="How to spot storm roof damage", post_format="listicle",
+            angle="For homeowners after a storm", target_keywords=["storm damage", "roof leak"],
+        )
+        assert page.path == "/blog/how-to-spot-storm-roof-damage/"
+        assert payload["engine"] == "run"
+        assert payload["content_type"] == "blog_post"
+        assert payload["frontmatter"]["format"] == "listicle"
+        # A standalone post gets its own brief, not the empty-silo line.
+        assert "not part of a pillar cluster" in payload["notes"]
+        assert "For homeowners after a storm" in payload["notes"]
+        assert "storm damage" in payload["notes"]
+
+    def test_a_pillar_page_sits_at_root(self):
+        page, payload = self._build(page_type="pillar", title="Roof Maintenance Guide")
+        assert page.path == "/roof-maintenance-guide/"
+        assert payload["engine"] == "run"
+
+    def test_an_unsupported_type_is_refused(self):
+        for bad in ("home", "sitemap", "about"):
+            with pytest.raises(ValueError, match="unsupported_page_type"):
+                self._build(page_type=bad)
+
+    def test_a_missing_required_axis_is_named(self):
+        with pytest.raises(ValueError, match="missing_subservice"):
+            self._build(page_type="hyper_local", city="Seattle", service="Tree Removal")
+        with pytest.raises(ValueError, match="missing_city"):
+            self._build(page_type="location")
+        with pytest.raises(ValueError, match="missing_title"):
+            self._build(page_type="post")
+
+    def test_an_invalid_post_format_is_refused(self):
+        with pytest.raises(ValueError, match="invalid_format"):
+            self._build(page_type="post", title="X", post_format="nonsense")
+
+    def test_it_works_with_off_catalog_axes(self):
+        # A manual page need not name a catalog service/city — a synthetic entry
+        # fills the gap so name resolution still works.
+        page, payload = wp.build_manual_page(
+            page_type="hyper_local", city="Tacoma", service="Gutter Cleaning",
+            subservice="Copper Gutters", primary_service="Roofing", primary_city="Tacoma",
+        )
+        assert page.path == "/tacoma/gutter-cleaning/copper-gutters/"
+        assert payload["frontmatter"]["serviceName"] == "Gutter Cleaning"

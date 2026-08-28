@@ -95,6 +95,28 @@ class PageSelectionRequest(BaseModel):
     page_ids: list[str] = Field(default_factory=list)
 
 
+class AddPageRequest(BaseModel):
+    """One hand-added page, on top of the deterministic services × cities plan.
+
+    `page_type` is one of the writable types (the NLP geo/service pages plus
+    one-off blog posts and pillars); which axes are required depends on it — the
+    service validates that. `keyword`/`location` override the derived targeting
+    for the odd escalation page that wants hand-tuning; `angle` (posts/pillars)
+    and `format` (posts) shape the writer brief.
+    """
+
+    page_type: str
+    service: Optional[str] = None
+    city: Optional[str] = None
+    subservice: Optional[str] = None
+    title: Optional[str] = None
+    keyword: Optional[str] = None
+    location: Optional[str] = None
+    format: Optional[str] = None
+    angle: Optional[str] = None
+    target_keywords: list[str] = Field(default_factory=list)
+
+
 class FactsUpdateRequest(BaseModel):
     """A partial edit of a site's business facts.
 
@@ -595,6 +617,41 @@ async def build_plan(
         website, catalog=body.catalog, cities=body.cities
     )
     return {"plan": result, "pages": website_plan_store.stored(website_id)}
+
+
+@router.post("/websites/{website_id}/pages")
+async def add_page(
+    website_id: str, body: AddPageRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Add one page by hand, on top of the deterministic plan.
+
+    staff+ because adding a page is a plan edit, like building the plan or the
+    content plan — not a VA action. The new row lands as a `manual` draft that
+    the existing generate/publish flow drives exactly like any planned page, and
+    a later rebuild preserves it rather than pruning it. Approval still gates
+    generation and publishing, so an unreviewed manual page cannot reach the
+    internet without the normal staff sign-off.
+    """
+    _enabled()
+    website = _load_site(website_id)
+    assert_not_frozen(website["client_id"])
+    try:
+        page = website_plan_store.add_manual_page(
+            website,
+            page_type=body.page_type,
+            service=body.service,
+            city=body.city,
+            subservice=body.subservice,
+            title=body.title,
+            keyword=body.keyword,
+            location=body.location,
+            post_format=body.format,
+            angle=body.angle,
+            target_keywords=body.target_keywords,
+        )
+    except website_plan_store.ManualPageError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.code)
+    return {"page": page, "pages": website_plan_store.stored(website_id)}
 
 
 @router.post("/websites/{website_id}/plan/approve")
