@@ -1,6 +1,59 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-28 · **LeadOff — agency cost-to-win ROI replaces the $/review "ROI" (MERGED + LIVE)** (latest)
+## ⏩ Update — 2026-08-28 · **Action Plan detail pass + autonomy safe-slice pilot (MERGED + LIVE)** (latest)
+
+Two threads this session, both on `services/reopt_planner.py` / the Action Plan.
+
+**1 · Autonomy safe-slice — SerMaStr can now auto-commission ONE safe content type.**
+PRs #827 → #830 → #832. `AUTO_EXECUTE` widened from `{rebuild_action_plan}` to
+also include `generate_local_seo_page`, but **only** for a "Create page"
+quick-win **whose keyword itself names a DataForSEO-resolvable city**
+(`autonomy_executor._resolve_keyword_city` — longest trailing word-window that
+exactly matches a real city via `locations_service.search_locations`,
+fail-closed). This is Tier 2, so a client needs `autonomy_tier=2`. Live pilot on
+**WheelHouse IT Fort Lauderdale** (tier 2): auto-committed one net-new
+West Palm Beach Local SEO page draft ($1 reserved) + proposed 9 reoptimizes.
+The **#827 first pilot failed** (`location_not_recognized`) because the executor
+fed the client's *street address* as the generator's `location`; #830/#832 fixed
+it to source the city from the keyword. **The lesson:** the Local SEO generator's
+`location` must be a DataForSEO city name, never `clients.business_location`
+(a free-form street address). `AUTONOMY_ENABLED=true` on PLATFORM.
+
+**2 · Action Plan detail pass — every item now carries what you need to act.**
+PRs #836/#838/#840/#841/#844, all merged + deployed. Driven by two coworker
+questions ("why did I get a reoptimize for a keyword I'm #1 for?" and "it says
+refresh the page but not which page"). What changed, all from already-loaded data
+(no new paid calls):
+- **#836** quick-win floor `STRIKING_DISTANCE_MIN=4`: a keyword you already rank
+  **top-3** for is not a quick win (nothing to gain; reoptimising a #1 page is
+  pure downside). 1–3 → no action, 4–20 → reoptimize, >20/unranked → create page.
+- **#838/#840** existing-page actions name their page: hidden-win ranking `url`,
+  quick-win reoptimize `url` (from `serp_snapshots.client_url`), cannibalization
+  competing `pages` + canonical, content-gap `url`+`topics`, backlink-gap
+  `target_link_count`+`target_domains` (from `domain_link_gaps`), rd-loss lost
+  `target_domains`+count.
+- **#841** create-page brief: winnable-keyword shows `search_volume`+`est_value`;
+  maps weak-area shows `location` + how weak + a Google-Maps `url`.
+
+**⚠️ The load-bearing gotcha (#844) — worth remembering.** These are STRUCTURED
+fields on the action dict. `GET /action-plan` returns `ReoptPlan(**row)` under
+`response_model=ReoptPlan`, and **Pydantic silently drops any key not declared on
+`ReoptAction` (`models/reopt.py`)**. #838/#840/#841 added the fields to the dicts
+and the frontend, but NOT to the model — so every structured field was stripped
+before it reached the browser (the clickable links / chips / lists were dead
+code; only the copies baked into `diagnosis`/`recommendation` text showed). The
+DB-jsonb had them, which is why an early "verify" against Supabase looked fine —
+**verify through the API response, not the stored row.** #844 declares all eight
+fields + a model round-trip regression test. `ReoptAction`'s own
+`assistant_action_id` comment had warned about exactly this.
+
+Also in #844: `rankability.client_url` was derived from the per-result rows whose
+query doesn't select `url` (always None) → now sourced from
+`serp_snapshots.client_url`; plus hardening (cannibalization `... or 0` guards a
+null-count `:,` TypeError, `search_volume` coerced to int, `target_domains`
+deduped + capped).
+
+## ⏩ Update — 2026-08-28 · **LeadOff — agency cost-to-win ROI replaces the $/review "ROI" (MERGED + LIVE)**
 
 The market brief/board/tryout used to show **"ROI ($/mo per review)"** =
 `exp_val / max(rev_win, 10)` — a value-per-effort ratio that **subtracts no
