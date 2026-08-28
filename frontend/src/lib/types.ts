@@ -1239,6 +1239,10 @@ export interface ReoptAction {
   target_link_count?: number | null
   // Content-gap: the specific topics/sections the page is missing.
   topics?: string[] | null
+  // Create-page demand context + the place a maps weak-area action targets.
+  search_volume?: number | null
+  est_value?: number | null
+  location?: string | null
   diagnosis: string
   recommendation: string
   cta_label: string

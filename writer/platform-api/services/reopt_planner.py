@@ -194,7 +194,10 @@ def build_actions(
         rank = i.get("client_rank")
         striking = rank is not None and rank <= STRIKING_DISTANCE_MAX
         value = i.get("est_value")
-        volume = i.get("search_volume")
+        # Coerce to a plain int (search volumes are whole numbers) so a stray
+        # float can't fail the ReoptAction(search_volume: int) validation on read.
+        raw_volume = i.get("search_volume")
+        volume = int(raw_volume) if raw_volume else None
         # Demand context (search volume + est. value) — matters most when deciding
         # whether a net-new page is worth building.
         demand = ""
@@ -255,8 +258,11 @@ def build_actions(
                 "keyword": c.get("query") or "",
                 "url": canonical,
                 "pages": split_pages or None,
-                "diagnosis": f"{c.get('page_count', 0)} pages split this query "
-                f"({c.get('total_impressions', 0):,} impressions).",
+                # `or 0` guards a stored row whose key is present but null — a bare
+                # `.get(k, 0)` default doesn't apply to an explicit None, and a
+                # None hitting the `:,` format spec raises TypeError.
+                "diagnosis": f"{c.get('page_count') or 0} pages split this query "
+                f"({c.get('total_impressions') or 0:,} impressions).",
                 "recommendation": rec,
                 "cta_label": "GSC Research",
                 "cta_path": f"clients/{client_id}/gsc-research",
@@ -375,8 +381,9 @@ def build_offpage_actions(client_id: str, offpage_alerts: list[dict]) -> list[di
                     "kind": "rd_loss",
                     "source": "organic",
                     "keyword": "Backlink profile",
-                    # The specific domains that dropped, and how many to replace.
-                    "target_domains": [{"domain": d} for d in lost] or None,
+                    # The specific domains that dropped (capped to match the
+                    # diagnosis list), and how many to replace in total.
+                    "target_domains": [{"domain": d} for d in lost[:8]] or None,
                     "target_link_count": len(lost) or None,
                     "diagnosis": diagnosis,
                     "recommendation": "Aggregate link loss (SOP §A.5) — build a replacement plan via the "
@@ -773,13 +780,23 @@ def build_backlink_action(
         parts.append(f"~{target_count} fewer referring domains")
     if not parts:
         return []
-    # Specific target domains competitors have that the client doesn't.
-    targets = [
-        {"domain": g.get("referring_domain"),
-         "rank": g.get("referring_domain_rank"),
-         "linking_to": g.get("linking_to") or []}
-        for g in (link_gaps or []) if g.get("referring_domain")
-    ][:BACKLINK_TARGET_MAX]
+    # Specific target domains competitors have that the client doesn't. Dedup by
+    # domain (keep first = highest-rank) — normally one capture's rows are already
+    # unique, but a read during domain_intel's insert→delete window could mix two.
+    targets: list[dict] = []
+    _seen: set[str] = set()
+    for g in (link_gaps or []):
+        dom = g.get("referring_domain")
+        if not dom or dom in _seen:
+            continue
+        _seen.add(dom)
+        targets.append({
+            "domain": dom,
+            "rank": g.get("referring_domain_rank"),
+            "linking_to": g.get("linking_to") or [],
+        })
+        if len(targets) >= BACKLINK_TARGET_MAX:
+            break
     rec = "Run link-building to close the authority gap"
     if target_count:
         rec += f" — about {target_count} referring domains to reach the competitor median"

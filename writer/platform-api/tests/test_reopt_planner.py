@@ -157,6 +157,21 @@ def test_hidden_win_without_page_degrades_gracefully():
     assert "page 2" in opp["diagnosis"] and "ranking page" in opp["recommendation"]
 
 
+def test_cannibalization_null_impressions_does_not_crash():
+    # A stored row with explicit null counts must not hit the `:,` format with None.
+    gsc = {"cannibalization": [{"query": "drain cleaning", "page_count": None,
+                               "total_impressions": None, "pages": None}]}
+    a = reopt_planner.build_actions(CLIENT, [], [], gsc)[0]
+    assert a["kind"] == "cannibalization" and "0 pages" in a["diagnosis"]
+
+
+def test_quick_win_coerces_float_search_volume_to_int():
+    a = reopt_planner.build_actions(
+        CLIENT, [], [_rankability_item(keyword="x", client_rank=None, search_volume=880.0)], {}
+    )[0]
+    assert a["search_volume"] == 880 and isinstance(a["search_volume"], int)
+
+
 def test_hidden_win_skipped_when_already_a_drop():
     drops = [{"keyword": "leak detection", "alert_type": "drop", "message": "Dropped."}]
     gsc = {"hidden_wins": [{"keyword": "leak detection", "position": 14.0, "impressions": 300}]}
