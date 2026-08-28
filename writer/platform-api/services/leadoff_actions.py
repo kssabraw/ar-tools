@@ -379,10 +379,20 @@ class BudgetExceeded(Exception):
 
 
 def record_spend(user_id: str, action: str, est_cost: float, **market) -> None:
-    get_supabase().table("leadoff_spend").insert({
-        "user_id": user_id, "action": action, "est_cost": est_cost,
-        **{k: v for k, v in market.items() if v is not None},
-    }).execute()
+    """Record one action's spend to the ledger. Best-effort: the enqueue that
+    precedes this call has already committed the work (and the cost), so a ledger
+    write failure must never 500 the request and strand an untracked job — it's
+    logged and swallowed (the daily budget guard just under-counts that one
+    action). This was the map-refresh internal_error: the leadoff_spend action
+    CHECK didn't list 'map_refresh'/'city_finder', so the insert threw."""
+    try:
+        get_supabase().table("leadoff_spend").insert({
+            "user_id": user_id, "action": action, "est_cost": est_cost,
+            **{k: v for k, v in market.items() if v is not None},
+        }).execute()
+    except Exception as exc:
+        logger.warning("leadoff.record_spend_failed",
+                       extra={"action": action, "error": str(exc)})
 
 
 # ── Tryout job ────────────────────────────────────────────────────────────────
