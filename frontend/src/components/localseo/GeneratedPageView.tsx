@@ -54,6 +54,8 @@ function SearchCoveragePanel({ coverage }: { coverage?: EngineScore }) {
   const totalShortfall = coverage.total_entity_shortfall ?? 0
   const keywordDetail = coverage.keyword_detail ?? []
   const totalKeywordShortfall = coverage.total_keyword_shortfall ?? 0
+  const boldDetail = coverage.bold_detail ?? []
+  const totalBoldShortfall = coverage.total_bold_shortfall ?? 0
   const chip = (text: string, bg: string, color: string) => (
     <span key={text} style={{ fontSize: 12, fontWeight: 600, padding: '3px 9px', borderRadius: 999, background: bg, color }}>{text}</span>
   )
@@ -86,7 +88,14 @@ function SearchCoveragePanel({ coverage }: { coverage?: EngineScore }) {
               const short = e.shortfall > 0
               return (
                 <tr key={e.name} style={short ? { background: '#fef2f2' } : undefined}>
-                  <td style={{ ...td, fontWeight: short ? 600 : 400 }}>{e.name}</td>
+                  <td style={{ ...td, fontWeight: short ? 600 : 400 }}>
+                    {e.name}
+                    {e.zones && e.zones.length > 0 && (
+                      <div style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>
+                        {e.zones.map((z) => `${z.zone} ${z.current}/${z.recommended}`).join(' · ')}
+                      </div>
+                    )}
+                  </td>
                   <td style={{ ...td, textAlign: 'right' }}>{e.current}</td>
                   <td style={{ ...td, textAlign: 'right' }}>{e.recommended}</td>
                   {hasCompetitor && (
@@ -146,9 +155,11 @@ function SearchCoveragePanel({ coverage }: { coverage?: EngineScore }) {
           </div>
         )}
 
-        {/* Entity + keyword targets — Cora-style: current vs capped-max competitor usage */}
+        {/* Entity + keyword + bolded-term targets — Cora-style: current vs competitor usage.
+            Each row's zone breakdown (e.g. "body 2/4 · H2/H3 0/1") shows per-zone counts. */}
         {renderTermTable('Entity targets', entityDetail, totalShortfall)}
         {renderTermTable('Keyword targets', keywordDetail, totalKeywordShortfall)}
+        {renderTermTable('Google-bolded term targets', boldDetail, totalBoldShortfall)}
 
         {/* Coverage by zone */}
         {zones.length > 0 && (

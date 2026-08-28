@@ -19,7 +19,8 @@ def _serp_analysis():
     return {
         "related_keywords": {
             "h2_h3": [
-                {"term": "roof restoration", "recommended_mentions": 3, "max_competitor_mentions": 5, "page_spread": 4},
+                {"term": "roof restoration", "recommended_mentions": 3, "max_competitor_mentions": 5, "page_spread": 4,
+                 "zone_freq": {"h2_h3": 2, "paragraphs": 3}},
                 {"term": "roof repairs", "recommended_mentions": 2, "max_competitor_mentions": 2, "page_spread": 3},
             ],
             # "roof restoration" also in paragraphs with a lower recommended — the
@@ -34,9 +35,14 @@ def _serp_analysis():
             "paragraphs": {"target": 2, "entity_target": 2},
         },
         "google_entities": [
-            {"name": "Melbourne", "page_spread": 5, "recommended_mentions": 4, "max_competitor_mentions": 6, "avg_competitor_mentions": 3.2},
+            {"name": "Melbourne", "page_spread": 5, "recommended_mentions": 4, "max_competitor_mentions": 6, "avg_competitor_mentions": 3.2,
+             "zone_freq": {"paragraphs": 4}},
             {"name": "Colorbond", "page_spread": 4, "recommended_mentions": 3, "max_competitor_mentions": 4, "avg_competitor_mentions": 2.5},
             {"name": "Slate", "page_spread": 3, "recommended_mentions": 2, "max_competitor_mentions": 3, "avg_competitor_mentions": 1.5},
+        ],
+        "serp_bold_keywords": [
+            {"term": "free quote", "recommended_mentions": 2, "max_competitor_uses": 2, "avg_uses": 1.5,
+             "page_spread": 3, "zone_freq": {"paragraphs": 2}},
         ],
         "top_quadgrams": [{"phrase": "licensed roofing contractor"}],
     }
@@ -132,6 +138,37 @@ def test_keyword_detail_dedupes_zones_and_reports_shortfall():
     assert kd["roof restoration"]["max_competitor"] == 5
     assert set(res["keywords_under_target"]) == {"roof restoration", "roof repairs", "tile roof"}
     assert res["total_keyword_shortfall"] == 2 + 2 + 2  # restoration 2, repairs 2, tile 2
+
+
+def test_bold_detail_uses_raw_competitor_max():
+    # "free quote" appears once; bold benchmark is the raw competitor max (2).
+    html = "<article><p>Get a free quote today from our Melbourne team.</p></article>"
+    res = main._compute_serp_signal_coverage(html, _serp_analysis())
+    bd = {d["name"]: d for d in res["bold_detail"]}
+    assert bd["free quote"]["current"] == 1
+    assert bd["free quote"]["recommended"] == 2      # raw max, not capped
+    assert bd["free quote"]["max_competitor"] == 2
+    assert bd["free quote"]["shortfall"] == 1
+    assert res["total_bold_shortfall"] == 1
+
+
+def test_zone_breakdown_reports_per_zone_current_vs_target():
+    # Melbourne carries a paragraphs zone target of 4; the page uses it once in a
+    # <p>, so the body zone row is 1/4 (shortfall 3). Zones without a competitor
+    # benchmark (title/h1/h2_h3 for Melbourne) are omitted.
+    html = "<article><h2>Roofing</h2><p>Melbourne roofing services.</p></article>"
+    res = main._compute_serp_signal_coverage(html, _serp_analysis())
+    mel = next(d for d in res["entity_detail"] if d["name"] == "Melbourne")
+    zones = {z["zone"]: z for z in mel["zones"]}
+    assert set(zones) == {"body"}
+    assert zones["body"]["current"] == 1
+    assert zones["body"]["recommended"] == 4
+    assert zones["body"]["shortfall"] == 3
+    # "roof restoration" keyword carries both h2_h3 (2) and paragraphs (3) targets.
+    rr = next(d for d in res["keyword_detail"] if d["name"] == "roof restoration")
+    kz = {z["zone"]: z for z in rr["zones"]}
+    assert set(kz) == {"H2/H3", "body"}
+    assert kz["H2/H3"]["recommended"] == 2 and kz["body"]["recommended"] == 3
 
 
 def test_word_boundary_counting_does_not_match_substrings():
