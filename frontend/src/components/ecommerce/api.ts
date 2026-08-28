@@ -92,6 +92,8 @@ export const ecommerceApi = {
       page_type: EcommercePageType
       page_url?: string | null
       page_content?: string | null
+      // 'textrazor' (default) | 'google' — SERP entity-extraction engine.
+      entity_provider?: string | null
     },
   ) => api.post<{ job_id: string; status: string }>(`/clients/${clientId}/ecommerce/score`, body),
 
