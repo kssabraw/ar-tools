@@ -201,6 +201,63 @@ async def score_external_page(
     return result
 
 
+async def score_external_client(
+    client_id: str,
+    keyword: str,
+    page_type: str = "service_page",
+    *,
+    source_url: Optional[str] = None,
+    source_html: Optional[str] = None,
+    location: Optional[str] = None,
+    location_code: Optional[int] = None,
+    entity_provider: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> dict:
+    """Score an EXTERNAL service/location page for a client WITHOUT a run — a
+    standalone 'check this page' that persists nothing and never rewrites.
+    Scrapes the URL (or takes pasted HTML), scores it via the nlp-api 8-engine
+    scorer, and returns the ScoreResult (composite + per-engine + deficiencies +
+    entity coverage). Service pages score national; location pages score local
+    (geo-anchored on the supplied area). `entity_provider` selects the SERP
+    entity-extraction engine. Powers the Service 'Score' tab; mirrors the
+    run-based `score_external_page` minus the run I/O."""
+    client = _get_client(client_id)
+    if not client:
+        raise HTTPException(status_code=404, detail="client_not_found")
+    business_name, gbp_category, address = _business_fields(client)
+    html = (source_html or "").strip()
+    if not html and source_url:
+        from services.website_scraper import scrapeowl_fetch
+
+        html = (await scrapeowl_fetch(source_url) or "").strip()
+    if not html:
+        raise HTTPException(status_code=422, detail="source_page_empty")
+    payload = {
+        "keyword": keyword or "",
+        "page_content": html,
+        "business_name": business_name,
+        "gbp_category": gbp_category,
+    }
+    if page_type == "location_page":
+        payload["geo_mode"] = "local"
+        payload["location"] = location or ""
+        payload["location_code"] = location_code
+        payload["address"] = address
+    else:
+        payload["geo_mode"] = "national"
+    if entity_provider:
+        payload["entity_provider"] = entity_provider
+    from services import voice_card_service
+
+    payload["voice_card"] = await voice_card_service.get_voice_card(client, user_id=user_id)
+    result = await _post_nlp("/score-page", payload, user_id=user_id)
+    logger.info(
+        "service_page.external_scored",
+        extra={"client_id": client_id, "page_type": page_type, "composite": result.get("composite_score")},
+    )
+    return result
+
+
 def _serp_length_target(run_id: str) -> Optional[int]:
     """The SERP-anchored length target (competitor avg + 20%) the service brief
     computed for this run, or None. Read from the latest service_brief output's
