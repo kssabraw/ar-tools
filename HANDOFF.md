@@ -1,10 +1,11 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-28 · **Director of Operations (cross-agent orchestration) — plan MERGED to `main` (spec only, nothing built)** (latest)
+## ⏩ Update — 2026-08-28 · **Director of Operations (cross-agent orchestration) — plan + Phase 1 build spec MERGED to `main` (spec only, nothing built in code)** (latest)
 
 Architecture review of "we have SerMaStr + PACE + QA + the task board — we need an
 orchestrator making sure they work in concert," refined to wanting a **Director of
-Operations for insight into how work flows.** PR #879 (squash `7f6aea6`), docs-only.
+Operations for insight into how work flows.** Plan PR #879 (squash `7f6aea6`); Phase 1
+build spec PR #882, both docs-only.
 
 **Decision (locked; logged in `decisions.md`): build the eyes, defer the hands.** The
 Director is a **read-only cross-agent read model + reconciler surfaced through SerMaStr**
@@ -18,11 +19,34 @@ arbitration; no cross-agent health monitor. Incident record is thin — 2 real c
 failures (neither an arbitration failure) + one live gap (QA armed-but-idle). The
 strategist+autonomy+producer triple-collision has never occurred.
 
-**Spec:** `docs/modules/director-of-operations-plan-v1_0.md`.
-**Not built.** Next step = Phase 1 (D): `qa_idle` detector + seam predicates inside
-`pace_episodes`/`pm_signals`, on a `source_ref`-uniformity prerequisite. Gated on the four
-§11 open questions (seam thresholds; digest cadence; duplicate auto-merge vs. flag-only;
-autonomy pre-flight veto in Phase 1 or hold).
+**Specs:** `docs/modules/director-of-operations-plan-v1_0.md` (the why) +
+`docs/modules/director-of-operations-phase1-spec-v1_0.md` (the how — concrete Phase 1 (D)
++ Prerequisite E build spec, PR #882).
+
+**§11 open questions RESOLVED (owner, 2026-08-28), folded into the build spec:** seam
+thresholds = suggested defaults (`qa_idle` 7d · `strategist_approved_unplaced` 3d ·
+`autonomy_proposed_unactioned` 7d · `content_shipped_degraded` immediate); a **separate
+weekly** operations-flow digest (own scheduler weekday hook + all-clear suppression), NOT
+a line on the daily PACE digest; duplicate-target = **flag-only** (no auto-merge yet); and
+the **autonomy pre-flight veto built in Phase 1** (fail-open, ships dark behind
+`director_autonomy_veto_enabled`). The last two deviate from the plan's leaning and widen
+Phase 1 past the minimal D.
+
+**Three grounded corrections to the plan (build spec §2):** (1) the Recipe-Engine gap is
+**placement, not `source_ref`** — `_push_task_plan_native` (`asana_push.py:338-351`) does
+stamp `source="task_plan"`/`source_ref`; it just skips `pm_assign.place_task`, so
+`source_ref` is already uniform across every producer. Prerequisite E therefore reshapes to
+**E1** (fail-loud on unknown producer `source`, mirroring `job_worker.py:994-1004`) + **E2**
+(route monthly-plan tasks through `place_task`). (2) `duplicate_target` keys on
+`tasks.target`, not `source_ref` equality (same `(source, source_ref)` is already
+DB-prevented). (3) `qa_idle` reads `task_activity` and is agency-level.
+
+**Still nothing built in code.** The build spec names the modules (`services/director/`),
+seams, config keys, and tests; no migration (computed on read / existing contracts); every
+piece ships behind its own flag (`director_enabled` master gate, default False). Next step
+when picked up = write Phase 1 per the spec (E1 + `qa_idle` alone may correctly be the whole
+build for a while). Deferred behind plan §8 triggers: capacity arbitration, duplicate
+auto-merge, a distinct read-model subsystem.
 
 ## ⏩ Update — 2026-08-28 · **PACE Slack replies — mrkdwn formatting fix**
 
