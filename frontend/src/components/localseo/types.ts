@@ -114,13 +114,16 @@ export interface CoverageZone {
   entity_target?: number
 }
 
-// Cora-style per-entity coverage row: the page's current mention count vs the
-// competitor-derived recommended count, and the resulting shortfall.
+// Cora-style per-term coverage row (entity or related keyword): the page's
+// current mention count vs the capped-max competitor-derived recommended count,
+// the shortfall, and the raw competitor max/avg it was benchmarked to.
 export interface EntityCoverage {
   name: string
   current: number
   recommended: number
   shortfall: number
+  max_competitor?: number | null
+  avg_competitor?: number | null
   page_spread?: number
   type?: string | null
 }
@@ -142,6 +145,10 @@ export interface EngineScore {
   entity_detail?: EntityCoverage[]
   entities_under_target?: string[]
   total_entity_shortfall?: number
+  // Same, for related keywords (page-level current vs capped-max competitor usage).
+  keyword_detail?: EntityCoverage[]
+  keywords_under_target?: string[]
+  total_keyword_shortfall?: number
   zones?: CoverageZone[]
 }
 

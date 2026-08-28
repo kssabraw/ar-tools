@@ -1601,6 +1601,32 @@ def clean_text(text: str) -> str:
     return text.strip().lower()
 
 
+# ── Competitor-usage benchmark ────────────────────────────────────────────────
+
+# "Beat the top competitor, capped": the recommended mention count is the single
+# most-aggressive competitor's usage (max), but capped at this multiple of the
+# competitor average so one outlier page can't push a term into keyword-stuffing
+# territory. Applies to entities AND related keywords (bold keywords keep raw max
+# — a direct Google signal). Env-tunable.
+MENTION_CAP_RATIO = float(os.environ.get("MENTION_CAP_RATIO", "1.5"))
+
+
+def _capped_max_target(counts: list) -> tuple[int, int, float]:
+    """Given per-competitor-page mention counts, return
+    (recommended, max_uses, avg_uses):
+      max_uses    = the top competitor's count ("beat the best")
+      avg_uses    = mean competitor usage
+      recommended = min(max_uses, ceil(MENTION_CAP_RATIO * avg)), floored at 1
+    so the target chases the strongest competitor but a lone outlier can't
+    inflate it beyond ~1.5x the field average."""
+    if not counts:
+        return 1, 0, 0.0
+    mx = int(max(counts))
+    avg = sum(counts) / len(counts)
+    capped = min(mx, int(np.ceil(MENTION_CAP_RATIO * avg)))
+    return max(1, capped), mx, round(avg, 1)
+
+
 # ── NLP: related keywords ─────────────────────────────────────────────────────
 
 def get_related_keywords_for_zone(
@@ -1856,7 +1882,7 @@ async def get_textrazor_entities(
     for eid_l, data, page_count, mean_relevance in candidates:
         if mean_relevance < min_relevance:
             continue
-        recommended_mentions = int(round(float(np.mean(data["mention_counts"]))))
+        recommended_mentions, max_mentions, avg_mentions = _capped_max_target(data["mention_counts"])
         # Most common surface form, so `name` matches page text in the
         # deterministic coverage engine; fall back to the entity id.
         name = data["surface"].most_common(1)[0][0] if data["surface"] else eid_l
@@ -1868,7 +1894,9 @@ async def get_textrazor_entities(
             "mean_salience": round(mean_relevance, 4),  # relevanceScore (field name kept)
             "page_spread": page_count,
             "page_spread_pct": round(page_count / total_pages, 2),
-            "recommended_mentions": max(1, recommended_mentions),
+            "recommended_mentions": recommended_mentions,  # capped-max ("beat the best")
+            "max_competitor_mentions": max_mentions,
+            "avg_competitor_mentions": avg_mentions,
             "type": "textrazor_entity",
         })
 
@@ -1960,7 +1988,7 @@ async def get_google_entities(
         mean_salience = float(np.mean(data["saliences"]))
         if mean_salience < min_salience:
             continue
-        recommended_mentions = int(round(float(np.mean(data["mention_counts"]))))
+        recommended_mentions, max_mentions, avg_mentions = _capped_max_target(data["mention_counts"])
         results.append({
             "name": data["name"],
             "entity_type": data["entity_type"],
@@ -1969,7 +1997,9 @@ async def get_google_entities(
             "mean_salience": round(mean_salience, 4),
             "page_spread": page_count,
             "page_spread_pct": round(page_count / total_pages, 2),
-            "recommended_mentions": max(1, recommended_mentions),
+            "recommended_mentions": recommended_mentions,  # capped-max ("beat the best")
+            "max_competitor_mentions": max_mentions,
+            "avg_competitor_mentions": avg_mentions,
             "type": "google_entity",
         })
 
@@ -2074,6 +2104,32 @@ async def _run_serp_analysis(
         h2_h3=get_related_keywords_for_zone(zone_buckets["h2_h3"], keyword),
         paragraphs=get_related_keywords_for_zone(zone_buckets["paragraphs"], keyword),
     )
+
+    # Page-level competitor-usage benchmark for related keywords. TF-IDF gives
+    # topical relevance + page spread but no frequency, so here we count each
+    # related term across every competitor page's full text (same source the
+    # bold-keyword max uses) and attach a capped-max "beat the best" target to
+    # each term dict — so the coverage engine and the reopt prompt can measure
+    # the generated page's usage against the top competitor, like entities.
+    _rk_zone_lists = (related.title, related.h1, related.h2_h3, related.paragraphs)
+    _rk_counts: Dict[str, list] = {}
+    for _zone_terms in _rk_zone_lists:
+        for _t in _zone_terms:
+            term = (_t.get("term") or "").lower()
+            if not term or term in _rk_counts:
+                continue
+            _term_re = re.compile(r"\b" + re.escape(term) + r"\b", re.IGNORECASE)
+            _rk_counts[term] = [len(_term_re.findall(pt)) for pt in full_page_texts]
+    for _zone_terms in _rk_zone_lists:
+        for _t in _zone_terms:
+            counts = _rk_counts.get((_t.get("term") or "").lower())
+            if counts is None:
+                continue
+            rec, mx, avg = _capped_max_target(counts)
+            _t["recommended_mentions"] = rec
+            _t["max_competitor_mentions"] = mx
+            _t["avg_competitor_mentions"] = avg
+
     quadgrams = get_top_quadgrams(zone_buckets["paragraphs"], keyword)
 
     # Step 5: entity analysis (per-request provider — TextRazor or Google NLP) on
@@ -3979,6 +4035,8 @@ def _build_entity_coverage_detail(entities: list, page_text_lower: str) -> tuple
             "current": current,
             "recommended": recommended,
             "shortfall": max(0, recommended - current),
+            "max_competitor": e.get("max_competitor_mentions"),
+            "avg_competitor": e.get("avg_competitor_mentions"),
             "page_spread": e.get("page_spread", 0),
             "type": e.get("entity_type") or e.get("type"),
         })
@@ -3988,6 +4046,48 @@ def _build_entity_coverage_detail(entities: list, page_text_lower: str) -> tuple
     entities_under_target = [d["name"] for d in entity_detail if d["shortfall"] > 0]
     total_shortfall = sum(d["shortfall"] for d in entity_detail)
     return entity_detail, entities_under_target, total_shortfall
+
+
+def _build_keyword_coverage_detail(related: dict, page_text_lower: str) -> tuple[list, list, int]:
+    """Cora-style per-related-keyword coverage: page-level CURRENT mention count
+    vs the competitor-derived RECOMMENDED (capped-max) count + shortfall. Related
+    keywords are stored per zone (title/h1/h2_h3/paragraphs); a term can appear in
+    several zones, so we dedupe by term (keeping the highest recommended seen) and
+    measure the whole page once. Additive detail — does not change the score.
+
+    Returns (keyword_detail, keywords_under_target, total_shortfall)."""
+    best: dict[str, dict] = {}
+    for zone_key in ("title", "h1", "h2_h3", "paragraphs"):
+        for t in (related.get(zone_key) or []):
+            term = (t.get("term") or "").strip()
+            recommended = t.get("recommended_mentions")
+            if not term or recommended is None:
+                continue  # only terms carrying a competitor-usage benchmark
+            prev = best.get(term.lower())
+            if prev is None or int(recommended) > prev["recommended"]:
+                best[term.lower()] = {
+                    "name": term,
+                    "recommended": int(recommended),
+                    "max_competitor": t.get("max_competitor_mentions"),
+                    "avg_competitor": t.get("avg_competitor_mentions"),
+                    "page_spread": t.get("page_spread", 0),
+                }
+    keyword_detail: list[dict] = []
+    for row in best.values():
+        current = _count_entity_mentions(row["name"], page_text_lower)
+        keyword_detail.append({
+            "name": row["name"],
+            "current": current,
+            "recommended": row["recommended"],
+            "shortfall": max(0, row["recommended"] - current),
+            "max_competitor": row["max_competitor"],
+            "avg_competitor": row["avg_competitor"],
+            "page_spread": row["page_spread"],
+        })
+    keyword_detail.sort(key=lambda d: (d["shortfall"], d["page_spread"]), reverse=True)
+    keywords_under_target = [d["name"] for d in keyword_detail if d["shortfall"] > 0]
+    total_shortfall = sum(d["shortfall"] for d in keyword_detail)
+    return keyword_detail, keywords_under_target, total_shortfall
 
 
 def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict]) -> dict:
@@ -4073,6 +4173,10 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
     entity_detail, entities_under_target, total_entity_shortfall = (
         _build_entity_coverage_detail(entities, page_text_lower)
     )
+    # Same for related keywords (page-level current vs capped-max competitor usage).
+    keyword_detail, keywords_under_target, total_keyword_shortfall = (
+        _build_keyword_coverage_detail(rk, page_text_lower)
+    )
     ent_zone_scores: list[float] = []
     if top_entities:
         for zone_key in ("title", "h1", "h2_h3", "paragraphs"):
@@ -4133,6 +4237,9 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
         "entity_detail":         entity_detail,
         "entities_under_target": entities_under_target,
         "total_entity_shortfall": total_entity_shortfall,
+        "keyword_detail":         keyword_detail,
+        "keywords_under_target":  keywords_under_target,
+        "total_keyword_shortfall": total_keyword_shortfall,
         "zones":             [zone_detail[k] for k in ("title", "h1", "h2_h3", "paragraphs") if k in zone_detail],
     }
 
@@ -5273,9 +5380,53 @@ def _reopt_serp_context(page_zones: dict, serp_analysis: Optional[dict]) -> str:
             elif still_need_ent == 0:
                 parts.append(f"  Entity target met ({len(present_ent)}/{entity_target})")
 
+    # Page-level mention-frequency deltas — drive the page toward the capped-max
+    # competitor usage (Cora-style) for the strongest entities and related
+    # keywords, not just presence. Only terms carrying a competitor-usage
+    # benchmark and currently under it are listed.
+    full_page_text = " ".join(page_zones.values())
+
+    def _freq_lines(items: list, cap: int) -> list:
+        lines = []
+        for it in items:
+            name = (it.get("name") or it.get("term") or "").strip()
+            rec = it.get("recommended_mentions")
+            if not name or not rec:
+                continue
+            cur = len(re.findall(r"\b" + re.escape(name.lower()) + r"\b", full_page_text))
+            if cur < int(rec):
+                mx = it.get("max_competitor_mentions")
+                extra = f" (top competitor uses it {mx}×)" if mx else ""
+                lines.append((int(rec) - cur, f'  "{name}" — on the page {cur}×, add {int(rec) - cur} more{extra}'))
+        lines.sort(key=lambda x: x[0], reverse=True)
+        return [ln for _, ln in lines[:cap]]
+
+    ent_freq = _freq_lines(top_entities, 12)
+    # Related keywords: dedupe across zones, keep the highest recommended per term.
+    rk_best: dict = {}
+    for zk in ("title", "h1", "h2_h3", "paragraphs"):
+        for t in rk.get(zk, []):
+            term = (t.get("term") or "").lower()
+            rec = t.get("recommended_mentions")
+            if not term or not rec:
+                continue
+            if term not in rk_best or int(rec) > int(rk_best[term].get("recommended_mentions", 0)):
+                rk_best[term] = t
+    kw_freq = _freq_lines(list(rk_best.values()), 15)
+    if ent_freq or kw_freq:
+        parts.append(
+            "\nMENTION FREQUENCY — match the top competitor's usage for these terms. "
+            "Add the mentions naturally in body copy; never keyword-stuff or repeat awkwardly:"
+        )
+        if ent_freq:
+            parts.append("  Entities:")
+            parts.extend(ent_freq)
+        if kw_freq:
+            parts.append("  Keywords:")
+            parts.extend(kw_freq)
+
     # Quadgrams delta — check against full page text
     if quadgrams:
-        full_page_text = " ".join(page_zones.values())
         missing_qg = [q["phrase"] for q in quadgrams[:15] if q["phrase"].lower() not in full_page_text]
         present_qg = [q["phrase"] for q in quadgrams[:15] if q["phrase"].lower() in full_page_text]
         parts.append("\nCOMPETITOR PHRASES (4-word phrases from top-ranking pages):")
@@ -5580,6 +5731,31 @@ async def _build_seo_checklist(
                 if entity_target:
                     lines.append(f'      – {zone_label}: ≥{entity_target} entities')
             lines.append(f'  • Business name + service + city must co-occur in ≥3 sections')
+            # Mention-frequency targets (capped-max competitor usage) — beat the
+            # top competitor on the strongest terms, not just include them once.
+            ent_freq = [f'"{e["name"]}" ≥{e["recommended_mentions"]}×'
+                        for e in top_ents if e.get("recommended_mentions")][:12]
+            if ent_freq:
+                lines.append(
+                    '  • Entity mention targets — use each at least this many times across the page '
+                    f'(competitor-matched, add naturally — never stuff): {", ".join(ent_freq)}'
+                )
+            kw_best: dict = {}
+            for zk in ("title", "h1", "h2_h3", "paragraphs"):
+                for t in rk.get(zk, []):
+                    term = (t.get("term") or "").lower()
+                    rec = t.get("recommended_mentions")
+                    if not term or not rec:
+                        continue
+                    if term not in kw_best or int(rec) > kw_best[term][1]:
+                        kw_best[term] = (t.get("term"), int(rec))
+            kw_freq = [f'"{name}" ≥{rec}×' for name, rec in
+                       sorted(kw_best.values(), key=lambda x: -x[1])][:15]
+            if kw_freq:
+                lines.append(
+                    '  • Related-keyword mention targets — competitor-matched frequency, '
+                    f'add naturally in body copy: {", ".join(kw_freq)}'
+                )
 
         if quadgrams:
             phrases = [q["phrase"] for q in quadgrams[:10]]

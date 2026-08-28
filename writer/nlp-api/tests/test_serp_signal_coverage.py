@@ -18,17 +18,25 @@ def _serp_analysis():
     """A minimal SERP analysis with keyword + entity zone targets and quadgrams."""
     return {
         "related_keywords": {
-            "h2_h3": [{"term": "roof restoration"}, {"term": "roof repairs"}],
-            "paragraphs": [{"term": "tile roof"}, {"term": "gutters"}],
+            "h2_h3": [
+                {"term": "roof restoration", "recommended_mentions": 3, "max_competitor_mentions": 5, "page_spread": 4},
+                {"term": "roof repairs", "recommended_mentions": 2, "max_competitor_mentions": 2, "page_spread": 3},
+            ],
+            # "roof restoration" also in paragraphs with a lower recommended — the
+            # detail should keep the higher (3) after deduping across zones.
+            "paragraphs": [
+                {"term": "roof restoration", "recommended_mentions": 1, "max_competitor_mentions": 1, "page_spread": 2},
+                {"term": "tile roof", "recommended_mentions": 2, "max_competitor_mentions": 3, "page_spread": 3},
+            ],
         },
         "zone_targets": {
             "h2_h3": {"target": 2, "entity_target": 1},
             "paragraphs": {"target": 2, "entity_target": 2},
         },
         "google_entities": [
-            {"name": "Melbourne", "page_spread": 5, "recommended_mentions": 4},
-            {"name": "Colorbond", "page_spread": 4, "recommended_mentions": 3},
-            {"name": "Slate", "page_spread": 3, "recommended_mentions": 2},
+            {"name": "Melbourne", "page_spread": 5, "recommended_mentions": 4, "max_competitor_mentions": 6, "avg_competitor_mentions": 3.2},
+            {"name": "Colorbond", "page_spread": 4, "recommended_mentions": 3, "max_competitor_mentions": 4, "avg_competitor_mentions": 2.5},
+            {"name": "Slate", "page_spread": 3, "recommended_mentions": 2, "max_competitor_mentions": 3, "avg_competitor_mentions": 1.5},
         ],
         "top_quadgrams": [{"phrase": "licensed roofing contractor"}],
     }
@@ -90,6 +98,40 @@ def test_entity_detail_reports_current_recommended_and_shortfall():
     # rollups
     assert set(res["entities_under_target"]) == {"Melbourne", "Colorbond", "Slate"}
     assert res["total_entity_shortfall"] == 6
+
+
+def test_capped_max_target_beats_top_competitor_but_caps_outlier():
+    # counts [1, 1, 4]: avg 2.0, ceil(1.5*2)=3, max 4 -> recommended capped at 3
+    rec, mx, avg = main._capped_max_target([1, 1, 4])
+    assert (rec, mx, avg) == (3, 4, 2.0)
+    # tight field [3, 3, 4]: avg 3.33, ceil(1.5*3.33)=5, max 4 -> recommended = max (4)
+    rec, mx, avg = main._capped_max_target([3, 3, 4])
+    assert rec == 4 and mx == 4
+    # empty -> floored at 1
+    assert main._capped_max_target([]) == (1, 0, 0.0)
+
+
+def test_entity_detail_carries_competitor_max_and_avg():
+    html = "<article><p>Melbourne Colorbond roofing.</p></article>"
+    res = main._compute_serp_signal_coverage(html, _serp_analysis())
+    detail = {d["name"]: d for d in res["entity_detail"]}
+    assert detail["Melbourne"]["max_competitor"] == 6
+    assert detail["Melbourne"]["avg_competitor"] == 3.2
+
+
+def test_keyword_detail_dedupes_zones_and_reports_shortfall():
+    # "roof restoration" x1 on the page; recommended is the HIGHER of the two zone
+    # entries (3), so shortfall = 2. "tile roof" x0 -> shortfall 2. "roof repairs"
+    # x0 -> shortfall 2.
+    html = "<article><h2>Roof Restoration</h2><p>quality roofing work.</p></article>"
+    res = main._compute_serp_signal_coverage(html, _serp_analysis())
+    kd = {d["name"]: d for d in res["keyword_detail"]}
+    assert kd["roof restoration"]["recommended"] == 3   # higher zone wins after dedupe
+    assert kd["roof restoration"]["current"] == 1
+    assert kd["roof restoration"]["shortfall"] == 2
+    assert kd["roof restoration"]["max_competitor"] == 5
+    assert set(res["keywords_under_target"]) == {"roof restoration", "roof repairs", "tile roof"}
+    assert res["total_keyword_shortfall"] == 2 + 2 + 2  # restoration 2, repairs 2, tile 2
 
 
 def test_word_boundary_counting_does_not_match_substrings():
