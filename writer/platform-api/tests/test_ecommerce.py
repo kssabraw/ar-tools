@@ -362,3 +362,111 @@ def test_cache_row_shape():
     assert row["facts"] == facts
     assert row["source_page_id"] == "page-1"
     assert row["fetched_at"] == "now()"
+
+
+# ── restart resilience: pre-rewrite score checkpoint / resume ────────────────
+
+def _reoptimize_url_mocks(reopt_calls):
+    """Patch reoptimize_url's collaborators. `reopt_calls` collects the kwargs the
+    rewrite (reoptimize_from) was called with, so a test can assert the resumed
+    deficiencies/serp_analysis were threaded through. reoptimize_verdict says
+    'rewrite' so the flow always reaches the rewrite."""
+    from services import voice_card_service
+
+    async def _fake_reopt_from(**kwargs):
+        reopt_calls.append(kwargs)
+        return {"id": "p1", "composite_score": 88, "composite_status": "good", "page_title": "T"}
+
+    return [
+        patch.object(e, "reoptimize_from", new=AsyncMock(side_effect=_fake_reopt_from)),
+        patch.object(e, "_record_score_run", new=MagicMock()),
+        patch.object(voice_card_service, "reoptimize_verdict", return_value=(True, "below_threshold")),
+    ]
+
+
+def test_reoptimize_url_fresh_scores_and_checkpoints():
+    """A fresh run scores the page, checkpoints that score, and rewrites."""
+    reopt_calls = []
+    saved = []
+    score = {"composite_score": 60, "voice_compliance": None,
+             "deficiencies": [{"engine": "x"}], "serp_analysis": {"top": []}}
+
+    async def _on_checkpoint(sc):
+        saved.append(sc)
+
+    mocks = _reoptimize_url_mocks(reopt_calls)
+    with patch.object(e, "score_page", new=AsyncMock(return_value=score)) as score_page, \
+         mocks[0], mocks[1], mocks[2]:
+        out = _run(e.reoptimize_url(
+            "c1", "https://acme.com/p", "kw", "product", "u1",
+            on_checkpoint=_on_checkpoint,
+        ))
+    assert score_page.await_count == 1              # scored fresh
+    assert saved == [score]                          # checkpoint persisted
+    assert out["status"] == "reoptimized"
+    # The score's deficiencies + serp analysis were threaded into the rewrite.
+    assert reopt_calls[0]["deficiencies"] == [{"engine": "x"}]
+    assert reopt_calls[0]["serp_analysis"] == {"top": []}
+
+
+def test_reoptimize_url_resume_skips_scoring():
+    """A requeued run with a saved checkpoint reuses it — no re-score, no
+    re-checkpoint — and threads the resumed score into the rewrite."""
+    reopt_calls = []
+    saved = []
+    resume = {"composite_score": 60, "voice_compliance": None,
+              "deficiencies": [{"engine": "y"}], "serp_analysis": {"cached": True}}
+
+    async def _on_checkpoint(sc):
+        saved.append(sc)
+
+    mocks = _reoptimize_url_mocks(reopt_calls)
+    with patch.object(e, "score_page", new=AsyncMock()) as score_page, \
+         mocks[0], mocks[1], mocks[2]:
+        out = _run(e.reoptimize_url(
+            "c1", "https://acme.com/p", "kw", "product", "u1",
+            resume_score=resume, on_checkpoint=_on_checkpoint,
+        ))
+    assert score_page.await_count == 0              # NOT re-scored
+    assert saved == []                               # NOT re-checkpointed
+    assert out["status"] == "reoptimized"
+    assert reopt_calls[0]["deficiencies"] == [{"engine": "y"}]
+    assert reopt_calls[0]["serp_analysis"] == {"cached": True}
+
+
+def test_reoptimize_url_ignores_checkpoint_without_serp():
+    """A malformed/partial checkpoint (no serp_analysis) is not trusted — the run
+    falls back to a fresh score rather than rewriting on an empty SERP."""
+    reopt_calls = []
+    score = {"composite_score": 60, "voice_compliance": None,
+             "deficiencies": [], "serp_analysis": {"top": []}}
+    mocks = _reoptimize_url_mocks(reopt_calls)
+    with patch.object(e, "score_page", new=AsyncMock(return_value=score)) as score_page, \
+         mocks[0], mocks[1], mocks[2]:
+        _run(e.reoptimize_url(
+            "c1", "https://acme.com/p", "kw", "product", "u1",
+            resume_score={"composite_score": 60},  # no serp_analysis
+        ))
+    assert score_page.await_count == 1
+
+
+def test_checkpoint_writer_persists_score_under_running_guard():
+    """_job_checkpoint_writer merges the score into payload._checkpoint and writes
+    it guarded on status='running'."""
+    supabase = MagicMock()
+    table = MagicMock()
+    supabase.table.return_value = table
+    for m in ("update", "eq"):
+        getattr(table, m).return_value = table
+    with patch.object(e, "get_supabase", return_value=supabase):
+        writer = e._job_checkpoint_writer("job-1", {"client_id": "c1", "page_url": "u"})
+        _run(writer({"composite_score": 70, "serp_analysis": {}}))
+    payload_written = table.update.call_args[0][0]["payload"]
+    assert payload_written["client_id"] == "c1"
+    assert payload_written["_checkpoint"] == {"composite_score": 70, "serp_analysis": {}}
+    # Guarded so a job that settled between read and write is never stomped.
+    table.eq.assert_any_call("status", "running")
+
+
+def test_checkpoint_writer_is_none_without_job_id():
+    assert e._job_checkpoint_writer(None, {"a": 1}) is None

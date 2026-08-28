@@ -966,17 +966,22 @@ async def _run_action(name: str, client_id: str, args: Optional[dict]) -> str:
     return out
 
 
-async def post_message(channel: str, text: str, thread_ts: Optional[str] = None) -> Optional[str]:
+async def post_message(channel: str, text: str, thread_ts: Optional[str] = None,
+                       token: Optional[str] = None) -> Optional[str]:
     """Post a message to a channel (optionally threaded) via chat.postMessage.
     Returns the posted message's ``ts`` (so a caller can key a thread on it —
-    the Chase Plan's batch confirm); existing callers ignore the return."""
+    the Chase Plan's batch confirm); existing callers ignore the return.
+
+    ``token`` overrides the bot identity the message posts under — PACE passes
+    its own app's token (``notifications.pace_bot_token()``) so its posts don't
+    come from the SerMaStr bot; default None ⇒ the shared ``slack_bot_token``."""
     body: dict = {"channel": channel, "text": text, "mrkdwn": True}
     if thread_ts:
         body["thread_ts"] = thread_ts
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await client.post(
             _SLACK_POST_URL,
-            headers={"Authorization": f"Bearer {settings.slack_bot_token}"},
+            headers={"Authorization": f"Bearer {token or settings.slack_bot_token}"},
             json=body,
         )
         resp.raise_for_status()
@@ -1036,6 +1041,12 @@ async def handle_message(event: dict) -> None:
     if settings.pace_enabled:
         pace_channel = settings.pace_slack_channel
         if pace_channel and channel == pace_channel:
+            # A dedicated PACE Slack app (its own signing secret) owns this
+            # channel via /slack/pace/events; the SerMaStr app stays out of it
+            # entirely — even if still a member, it neither answers nor delegates
+            # (the PACE app would double-reply). Inbound is handled there.
+            if settings.pace_slack_signing_secret:
+                return
             # Dedicated PACE channel: PACE owns every message here and SerMaStr
             # is excluded — the return sits OUTSIDE the try so the exclusion
             # holds even when the delegate errors (it best-effort-replies itself;

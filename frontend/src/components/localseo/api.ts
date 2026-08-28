@@ -126,6 +126,8 @@ export const localSeoApi = {
       page_url?: string | null
       page_content?: string | null
       serp_analysis?: AnalysisResult | null
+      // 'textrazor' (default) | 'google' — SERP entity-extraction engine.
+      entity_provider?: string | null
     },
   ) => api.post<{ job_id: string; status: string }>(`/clients/${clientId}/local-seo/score`, body),
 

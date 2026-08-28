@@ -51,6 +51,12 @@ class WriterDeps:
     section_llm: object       # Sonnet — prose (sections/intro/FAQ/conclusion/takeaways)
     short_llm: object         # Haiku — CTA
     embed_fn: EmbedFn         # text-embedding-3-small (title anchor + H2 + takeaways)
+    # The client's Voice & Audience Card rendered as a high-priority prompt
+    # block, appended to every prose call so a client-linked article is written
+    # on-voice from the start. Empty for info-site generation (no client). Set by
+    # generate_article from the resolved card; default keeps existing callers
+    # unchanged.
+    voice_block: str = ""
 
 
 def build_writer_deps() -> WriterDeps:
@@ -86,7 +92,7 @@ def _enrichment_lede(deps: WriterDeps, brief: Brief, sie: SieInput) -> str:
     anchors = [e.term for e in sie.entities[:5]] or [t.term for t in sie.terms.required[:5]]
     anchor_hint = ", ".join(anchors) or brief.keyword
     txt = deps.section_llm.complete_text(
-        system="You write a single-sentence direct definition for an article. No preamble.",
+        system="You write a single-sentence direct definition for an article. No preamble." + deps.voice_block,
         user=(
             f"Title: {brief.title}\nScope: {brief.scope_statement or ''}\n"
             f"Anchor terms (use at least one naturally): {anchor_hint}\n\n"
@@ -114,7 +120,7 @@ def _intro(deps: WriterDeps, brief: Brief, kept_h2_texts: list[str]) -> dict:
     }
     preview_list = "; ".join(kept_h2_texts[:5])
     out = deps.section_llm.call_tool(
-        system="You write article introductions in three beats. Return the tool call only.",
+        system="You write article introductions in three beats. Return the tool call only." + deps.voice_block,
         user=(
             f"Title: {brief.title}\nScope: {brief.scope_statement or ''}\n"
             f"First sections (in order): {preview_list}\n\n"
@@ -220,7 +226,7 @@ def _write_group(
         + (f"\n\n{retry_directive}" if retry_directive else "")
     )
     prose = deps.section_llm.complete_text(
-        system="You are an expert writer producing SEO article sections. Markdown only.",
+        system="You are an expert writer producing SEO article sections. Markdown only." + deps.voice_block,
         user=user, purpose="writer_section",
         # ~4 tokens/word headroom (tables/lists add markdown overhead); generous cap so a
         # multi-H3 group is never truncated mid-content.
@@ -306,7 +312,7 @@ def _write_faqs(deps: WriterDeps, brief: Brief) -> list[dict]:
         "required": ["faqs"],
     }
     out = deps.section_llm.call_tool(
-        system="You write standalone, answer-first FAQ answers (40-80 words). Tool call only.",
+        system="You write standalone, answer-first FAQ answers (40-80 words). Tool call only." + deps.voice_block,
         user=(
             f"Keyword: {brief.keyword}\nAnswer each question in 40-80 words, answer-first, "
             "self-contained (no 'as mentioned above'). Use the keyword or its core phrase in "
@@ -324,7 +330,7 @@ def _write_faqs(deps: WriterDeps, brief: Brief) -> list[dict]:
 def _write_conclusion(deps: WriterDeps, brief: Brief) -> str:
     """§5.10 — 100–150 words, seed keyword present, no CTA inside."""
     return deps.section_llm.complete_text(
-        system="You write concise article conclusions. Markdown prose only.",
+        system="You write concise article conclusions. Markdown prose only." + deps.voice_block,
         user=(
             f"Title: {brief.title}\nKeyword: {brief.keyword}\n"
             "Write a 100-150 word conclusion that synthesizes the article. Include the keyword "
@@ -339,7 +345,7 @@ def _write_cta(deps: WriterDeps, brief: Brief) -> str:
     schema = {"type": "object", "properties": {"cta": {"type": "string"}}, "required": ["cta"]}
     try:
         out = deps.short_llm.call_tool(
-            system="You write a single-sentence CTA. No hard-sales language. Tool call only.",
+            system="You write a single-sentence CTA. No hard-sales language. Tool call only." + deps.voice_block,
             user=(
                 f"Title: {brief.title}\nIntent: {brief.intent_type.value}\n"
                 "Write ONE sentence (<=30 words) naming a specific next action (read, compare, "
@@ -362,7 +368,7 @@ def _write_takeaways(deps: WriterDeps, brief: Brief, body_text: str) -> tuple[li
     schema = {"type": "object", "properties": {
         "takeaways": {"type": "array", "items": {"type": "string"}}}, "required": ["takeaways"]}
     out = deps.section_llm.call_tool(
-        system="You extract 3-5 standalone key takeaways. Facts/actionable only. Tool call only.",
+        system="You extract 3-5 standalone key takeaways. Facts/actionable only. Tool call only." + deps.voice_block,
         user=(
             f"Title: {brief.title}\nFrom the article below, write 3-5 standalone takeaway "
             "sentences (<=25 words each). No opinion, no marketing, no questions.\n\n"
@@ -393,12 +399,27 @@ def generate_article(
     brief: Brief, sie: SieInput, *, warnings: dict, deps: WriterDeps,
     word_budget: int | None = None, coverage_enabled: bool = True,
     timeout_s: float = 90.0, adherence_threshold: float = budget_mod.ADHERENCE_THRESHOLD,
+    brand_voice_card: dict | None = None,
 ) -> WriterOutput:
-    """Run the degraded `1.7-no-context` writer flow and return the §6 WriterOutput.
+    """Run the writer flow and return the §6 WriterOutput.
+
     `warnings` is the adapter's cross-validation result (no_citations / word_count_conflict).
+    `brand_voice_card` (optional) is the client's distilled Voice & Audience Card:
+    when present, it is injected into every prose prompt (on-voice generation)
+    and the finished article is scored + rewritten toward the voice bar before
+    serialization (see `brand_voice.enforce_voice`). Absent (info-site
+    generation), the writer behaves exactly as before (`1.7-no-context`).
     Raises WriterAbort on a load-bearing failure (D7) or `generation_timeout` (§7)."""
+    import dataclasses
+
+    from . import brand_voice
+
     started = time.perf_counter()
     budget = word_budget or brief.metadata.get("word_budget") or 2500
+    # Prime every prose call with the client's voice card (no-op when absent).
+    voice_block = brand_voice.render_block(brand_voice_card)
+    if voice_block:
+        deps = dataclasses.replace(deps, voice_block=voice_block)
 
     def _check_timeout() -> None:
         if time.perf_counter() - started > timeout_s:
@@ -552,6 +573,18 @@ def generate_article(
         for viol in v.paragraph_violations(it.body, max_sent):
             para_violations.append({"section_order": it.order, **viol})
 
+    # ----- brand-voice enforcement (client-linked only) ----
+    # Score the finished body against the client's guide and rewrite the
+    # worst-drifting sections toward the voice bar BEFORE serialization, so the
+    # markdown/html reflect the revisions. No-op + None when there is no card
+    # (info-site generation). Best-effort: never raises, leaves the article as
+    # written on any failure. Runs before the timeout check is meaningless (the
+    # article is already generated) — its own LLM calls are bounded by retries.
+    voice_scorecard = (
+        brand_voice.enforce_voice(title, article, brand_voice_card, deps.section_llm)
+        if voice_block else None
+    )
+
     # ----- serialize + metadata ----
     article_markdown = to_markdown(article)
     article_html = to_html(article)
@@ -578,6 +611,7 @@ def generate_article(
         "decision_fit_rendered": decision_fit_rendered,
         "schema_version": "1.7", "brief_schema_version": "2.6",
         "generation_time_ms": gen_ms,
+        "voice_scorecard": voice_scorecard,
     }
     logger.info(
         "step_complete",
@@ -600,11 +634,14 @@ def generate_article(
             "answer_first_applied": brief.format_directives.answer_first_paragraphs,
             "directives_satisfied": True,
         },
-        brand_voice_card_used=None, brand_conflict_log=[],
+        brand_voice_card_used=(brand_voice_card if voice_block else None),
+        brand_conflict_log=[],
         client_context_summary={
-            "brand_guide_provided": False, "icp_provided": False,
+            "brand_guide_provided": bool(voice_block),
+            "icp_provided": bool(voice_block),
             "website_analysis_used": False,
-            "schema_version_effective": SCHEMA_VERSION_NO_CONTEXT,
+            "schema_version_effective": (
+                "1.7-brand-voice" if voice_block else SCHEMA_VERSION_NO_CONTEXT),
         },
         metadata=metadata,
     )

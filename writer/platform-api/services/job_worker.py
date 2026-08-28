@@ -840,6 +840,10 @@ async def _process_job(job: dict) -> None:
         await service_page_score.run_score_job(job)
     elif job_type == "service_page_reoptimize":
         await service_page_score.run_reoptimize_job(job)
+    elif job_type == "score_external":
+        from services import score_external
+
+        await score_external.run_job(job)
     elif job_type == "blog_score":
         await blog_page_score.run_score_job(job)
     elif job_type == "blog_reoptimize":

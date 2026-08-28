@@ -178,7 +178,7 @@ def select_untriaged(tasks: list[dict], today: date, grace_days: int) -> dict:
         created = to_date(t.get("created_at"))
         if created and created > cutoff:
             continue  # too fresh to nag
-        if not t.get("assignee_gid"):
+        if not t.get("assignee_id"):
             unassigned.append(t)
         if not t.get("due_date"):
             no_due.append(t)
@@ -192,7 +192,7 @@ def _open_top_level(client_id: str) -> list[dict]:
     return (
         get_supabase()
         .table("tasks")
-        .select("id, client_id, section_id, name, assignee_gid, assignee_name, "
+        .select("id, client_id, section_id, name, assignee_id, assignee_name, "
                 "status_key, category, due_date, completed, source, source_ref, created_at")
         .eq("client_id", client_id)
         .is_("deleted_at", "null")

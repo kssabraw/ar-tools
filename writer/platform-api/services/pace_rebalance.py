@@ -29,11 +29,11 @@ def _initial_status_keys() -> set[str]:
     }
 
 
-def _movable_tasks(gid: str, initial_keys: set[str]) -> list[dict]:
+def _movable_tasks(member_id: str, initial_keys: set[str]) -> list[dict]:
     rows = (
         get_supabase().table("tasks")
         .select("id, client_id, name, category, est_hours, status_key")
-        .eq("assignee_gid", gid).eq("completed", False)
+        .eq("assignee_id", member_id).eq("completed", False)
         .is_("deleted_at", "null").is_("parent_task_id", "null")
         .execute()
     ).data or []
@@ -49,10 +49,10 @@ def rebalance_proposals(today: date) -> list[dict]:
     if not overloaded:
         return []
 
-    members = pm_assign._active_members()
-    gids = [m["gid"] for m in members]
-    skills = pm_assign._skills_by_gid(gids)
-    load = task_workload.open_hours_for_members(gids)
+    members = pm_assign._active_members()  # opaque "gid" slot carries member ids
+    member_ids = [m["gid"] for m in members]
+    skills = pm_assign._skills_by_member(member_ids)
+    load = task_workload.open_hours_for_members(member_ids)
     initial_keys = _initial_status_keys()
     default_weekly = settings.asana_default_weekly_hours
     by_gid = {m.get("gid"): m for m in report.get("members") or []}
@@ -70,7 +70,7 @@ def rebalance_proposals(today: date) -> list[dict]:
         if not movable:
             continue
         eligible_by_client = {
-            cid: pm_assign._eligible_gids(cid)
+            cid: pm_assign._eligible_member_ids(cid)
             for cid in sorted({t["client_id"] for t in movable})
         }
         plan = pm_assign.build_rebalance(

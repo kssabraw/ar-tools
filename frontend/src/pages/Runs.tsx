@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { RunListResponse, ClientListItem, RunStatus, SiloListResponse, SiloListItem, Run } from '../lib/types'
-import { Plus, RefreshCw, ArrowLeft, Layers, ArrowRight, Sparkles } from 'lucide-react'
+import { Plus, RefreshCw, ArrowLeft, Layers, ArrowRight, Sparkles, Gauge } from 'lucide-react'
 import {
   BriefCacheDecisionModal,
   type BriefCacheStatus,
@@ -16,6 +16,8 @@ import {
 import { useSiloMutations } from '../components/silos/siloShared'
 import { ReoptimizePanel } from '../components/reoptimize/ReoptimizePanel'
 import { blogAdapter } from '../components/reoptimize/adapters'
+import { ScorePanel } from '../components/score/ScorePanel'
+import { blogScoreAdapter } from '../components/score/adapters'
 
 const TERMINAL: RunStatus[] = ['complete', 'failed', 'cancelled']
 
@@ -53,6 +55,7 @@ export function Runs() {
   const [showNewRun, setShowNewRun] = useState(searchParams.get('new') === '1')
   // Reoptimize an existing article (external URL / paste → spawns a full run).
   const [showReopt, setShowReopt] = useState(false)
+  const [showScore, setShowScore] = useState(false)
   const [keyword, setKeyword] = useState('')
   const [writerNotes, setWriterNotes] = useState('')
   // Optional article-format override. '' = Auto (let the brief classify intent
@@ -257,6 +260,14 @@ export function Runs() {
           </button>
           {scopedClientId && (
             <button
+              onClick={() => setShowScore(v => !v)}
+              style={{ ...ghostBtn, ...(showScore ? { color: '#6366f1', borderColor: '#c7d2fe' } : {}) }}
+            >
+              <Gauge size={15} /> Score an article
+            </button>
+          )}
+          {scopedClientId && (
+            <button
               onClick={() => setShowReopt(v => !v)}
               style={{ ...ghostBtn, ...(showReopt ? { color: '#6366f1', borderColor: '#c7d2fe' } : {}) }}
             >
@@ -270,6 +281,12 @@ export function Runs() {
           )}
         </div>
       </div>
+
+      {scopedClientId && showScore && (
+        <div style={{ marginBottom: 20 }}>
+          <ScorePanel adapter={blogScoreAdapter(scopedClientId)} />
+        </div>
+      )}
 
       {scopedClientId && showReopt && (
         <div style={{ marginBottom: 20 }}>

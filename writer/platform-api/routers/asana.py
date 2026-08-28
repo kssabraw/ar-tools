@@ -36,7 +36,7 @@ from models.asana import (
     GenerateMonthRequest,
     GenerateMonthResponse,
 )
-from services import asana_monthly, asana_service, asana_workload
+from services import asana_monthly, asana_service, asana_workload, task_service
 
 router = APIRouter(tags=["asana"])
 logger = logging.getLogger(__name__)
@@ -78,7 +78,7 @@ async def list_team_members(auth: dict = Depends(require_auth)) -> list[AsanaTea
     rows = (
         get_supabase()
         .table("asana_team_members")
-        .select("gid, name, weekly_hours, active, profile_id")
+        .select("id, gid, name, weekly_hours, active, profile_id")
         .order("name")
         .execute()
     ).data or []
@@ -90,8 +90,16 @@ async def replace_team_members(
     body: AsanaTeamMembersReplaceRequest,
     auth: dict = Depends(require_auth),
 ) -> list[AsanaTeamMemberItem]:
-    """Replace the tracked team list (gid + name + weekly capacity + the
-    optional suite-user link)."""
+    """Replace the tracked team list (name + weekly capacity + the optional
+    suite-user link; an Asana gid when the member has one).
+
+    Non-destructive on member id: an existing member is updated in place by id
+    (Phase 2a) so its roster id is PRESERVED — the id is the assignee FK target
+    on tasks, and a delete-then-reinsert would orphan every assigned task
+    (assignee_id → SET NULL). A member with a gid but no id upserts by gid; a
+    member with neither is a NEW LOGIN-LESS VA (inserted with gid = NULL, which
+    requires the Phase 2a migration). A stored member is removed only when
+    neither its id nor its gid is in the payload."""
     supabase = get_supabase()
     # A suite user maps to at most one member (matches the partial-unique index);
     # reject a payload that links the same profile twice rather than 500 on it.
@@ -99,21 +107,32 @@ async def replace_team_members(
     if len(linked) != len(set(linked)):
         raise HTTPException(status_code=400, detail="duplicate_profile_link")
     try:
-        supabase.table("asana_team_members").delete().neq("gid", "").execute()
-        rows = [
-            {
-                "gid": m.gid,
-                "name": m.name,
-                "weekly_hours": m.weekly_hours,
-                "active": m.active,
-                "profile_id": m.profile_id or None,
-                "updated_at": "now()",
-            }
-            for m in body.members
-            if m.gid and m.gid.strip()
-        ]
-        if rows:
-            supabase.table("asana_team_members").upsert(rows).execute()
+        existing = (
+            supabase.table("asana_team_members").select("id, gid").execute()
+        ).data or []
+        plan = task_service.partition_roster_write(
+            existing, [m.model_dump() for m in body.members]
+        )
+        if plan["drop_ids"]:
+            # Explicitly unassign the removed members' tasks before deleting them.
+            # The assignee_id FK is ON DELETE RESTRICT (a safety backstop against
+            # the old blanket-delete roster editor), so a member with tasks can't
+            # be cascade-nulled — we clear their tasks first, then delete.
+            supabase.table("tasks").update(
+                {"assignee_id": None, "assignee_name": None}
+            ).in_("assignee_id", plan["drop_ids"]).execute()
+            supabase.table("asana_team_members").delete().in_("id", plan["drop_ids"]).execute()
+        for upd in plan["updates"]:
+            supabase.table("asana_team_members").update(
+                {**upd["fields"], "updated_at": "now()"}
+            ).eq("id", upd["id"]).execute()
+        if plan["gid_upserts"]:
+            supabase.table("asana_team_members").upsert(
+                [{**r, "updated_at": "now()"} for r in plan["gid_upserts"]],
+                on_conflict="gid",
+            ).execute()
+        if plan["inserts"]:
+            supabase.table("asana_team_members").insert(plan["inserts"]).execute()
     except Exception as exc:
         logger.error("asana_replace_team_failed", extra={"error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
@@ -175,7 +194,7 @@ async def get_project_mapping(
     rows = (
         get_supabase()
         .table("asana_client_projects")
-        .select("project_gid, auto_assignee_gids")
+        .select("project_gid, auto_assignee_gids, auto_assignee_ids")
         .eq("client_id", str(client_id))
         .limit(1)
         .execute()
@@ -186,6 +205,7 @@ async def get_project_mapping(
         client_id=client_id,
         project_gid=rows[0]["project_gid"],
         auto_assignee_gids=list(rows[0].get("auto_assignee_gids") or []),
+        auto_assignee_ids=list(rows[0].get("auto_assignee_ids") or []),
     )
 
 
@@ -198,6 +218,19 @@ async def set_project_mapping(
     supabase = get_supabase()
     project_gid = body.project_gid.strip()
     gids = [g.strip() for g in body.auto_assignee_gids if g and g.strip()]
+    ids = [i.strip() for i in body.auto_assignee_ids if i and i.strip()]
+    # Cross-fill so both eligibility columns agree (the auto_assignee_gids column
+    # is retained until the legacy AsanaTasks template/eligibility editor is
+    # rewired to member ids — a follow-up to Phase 2b).
+    roster = (
+        supabase.table("asana_team_members").select("id, gid").execute()
+    ).data or []
+    id_by_gid = {r["gid"]: r["id"] for r in roster if r.get("gid")}
+    gid_by_id = {r["id"]: r.get("gid") for r in roster}
+    if ids and not gids:
+        gids = [gid_by_id[i] for i in ids if gid_by_id.get(i)]
+    elif gids and not ids:
+        ids = [id_by_gid[g] for g in gids if id_by_gid.get(g)]
 
     # Validate the GID against Asana before saving — a pasted workspace id
     # (the first number in the new app.asana.com/1/<workspace>/project/<gid>
@@ -223,6 +256,7 @@ async def set_project_mapping(
                 "client_id": str(client_id),
                 "project_gid": project_gid,
                 "auto_assignee_gids": gids,
+                "auto_assignee_ids": ids,
                 "updated_at": "now()",
             }
         ).execute()
@@ -233,6 +267,7 @@ async def set_project_mapping(
         client_id=client_id,
         project_gid=project_gid,
         auto_assignee_gids=gids,
+        auto_assignee_ids=ids,
         project_name=project_name,
     )
 
@@ -283,6 +318,7 @@ async def replace_task_templates(
             {
                 "client_id": str(client_id),
                 "name": item.name,
+                "assignee_id": item.assignee_id,
                 "assignee_gid": item.assignee_gid,
                 "assignee_name": item.assignee_name,
                 "category_option_gid": item.category_option_gid,

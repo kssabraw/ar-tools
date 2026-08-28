@@ -68,17 +68,18 @@ def available_hours(member: dict, today: date, due: date, queue: list[dict], tas
     return daily * days - committed
 
 
-def forecast_slips(tasks: list[dict], members_by_gid: dict, initial_keys: set,
+def forecast_slips(tasks: list[dict], members_by_id: dict, initial_keys: set,
                    today: date, horizon_days: int, *, default_hours: float,
                    default_weekly_hours: float, daily_workdays: float) -> list[dict]:
     """The tasks that will miss their due date. Pure.
-    Returns [{task, due, reason: unassigned|no_capacity, available, needed}]."""
+    Returns [{task, due, reason: unassigned|no_capacity, available, needed}].
+    ``members_by_id`` is keyed by roster member id (the task assignee key)."""
     horizon_end = today + timedelta(days=horizon_days)
     queues: dict[str, list[dict]] = {}
     for t in tasks:
-        gid = t.get("assignee_gid")
-        if gid:
-            queues.setdefault(gid, []).append(t)
+        mid = t.get("assignee_id")
+        if mid:
+            queues.setdefault(mid, []).append(t)
 
     slips: list[dict] = []
     for t in tasks:
@@ -88,15 +89,15 @@ def forecast_slips(tasks: list[dict], members_by_gid: dict, initial_keys: set,
         if t.get("status_key") not in initial_keys:
             continue  # started ⇒ presumed on track
         needed = _est(t, default_hours)
-        gid = t.get("assignee_gid")
-        if not gid:
+        mid = t.get("assignee_id")
+        if not mid:
             slips.append({"task": t, "due": due, "reason": "unassigned",
                           "available": 0.0, "needed": needed})
             continue
-        member = members_by_gid.get(gid)
+        member = members_by_id.get(mid)
         if not member:
             continue  # untracked assignee — no capacity model, stay silent
-        avail = available_hours(member, today, due, queues.get(gid, []), t.get("id"),
+        avail = available_hours(member, today, due, queues.get(mid, []), t.get("id"),
                                 default_hours=default_hours,
                                 default_weekly_hours=default_weekly_hours,
                                 daily_workdays=daily_workdays)
@@ -140,21 +141,21 @@ def slip_proposals(today: date) -> list[dict]:
     sb = get_supabase()
     tasks = (
         sb.table("tasks")
-        .select("id, client_id, name, category, est_hours, status_key, assignee_gid, assignee_name, due_date")
+        .select("id, client_id, name, category, est_hours, status_key, assignee_id, assignee_name, due_date")
         .eq("completed", False).is_("deleted_at", "null").is_("parent_task_id", "null")
         .not_.is_("due_date", "null").not_.is_("client_id", "null")
         .execute()
     ).data or []
     if not tasks:
         return []
-    members = pm_assign._active_members()
-    members_by_gid = {m["gid"]: m for m in members}
+    members = pm_assign._active_members()  # opaque "gid" slot carries member ids
+    members_by_id = {m["gid"]: m for m in members}
     initial_keys = {
         s["key"] for s in task_service.get_statuses(active_only=False)
         if s.get("is_initial") or s.get("category") == "not_started"
     }
     slips = forecast_slips(
-        tasks, members_by_gid, initial_keys, today, settings.pace_slip_horizon_days,
+        tasks, members_by_id, initial_keys, today, settings.pace_slip_horizon_days,
         default_hours=settings.asana_default_task_hours,
         default_weekly_hours=settings.asana_default_weekly_hours,
         daily_workdays=settings.asana_workload_daily_workdays,
@@ -162,9 +163,9 @@ def slip_proposals(today: date) -> list[dict]:
     if not slips:
         return []
 
-    gids = list(members_by_gid)
-    skills = pm_assign._skills_by_gid(gids)
-    load = task_workload.open_hours_for_members(gids)
+    member_ids = list(members_by_id)
+    skills = pm_assign._skills_by_member(member_ids)
+    load = task_workload.open_hours_for_members(member_ids)
     eligible_cache: dict = {}
     client_names: dict = {}
     for c in (sb.table("clients").select("id, name")
@@ -188,8 +189,8 @@ def slip_proposals(today: date) -> list[dict]:
             continue
         # Fix 1 (cheaper): a teammate with room takes it.
         if cid not in eligible_cache:
-            eligible_cache[cid] = pm_assign._eligible_gids(cid)
-        pool = [m for m in members if m["gid"] != t.get("assignee_gid")]
+            eligible_cache[cid] = pm_assign._eligible_member_ids(cid)
+        pool = [m for m in members if m["gid"] != t.get("assignee_id")]
         pick = pm_assign.pick_assignee(
             t, pool, skills, eligible_cache[cid], load,
             default_hours=settings.asana_default_task_hours,
@@ -204,7 +205,7 @@ def slip_proposals(today: date) -> list[dict]:
             })
             continue
         # Fix 2: the earliest date the current assignee can actually make.
-        member = members_by_gid.get(t.get("assignee_gid")) or {}
+        member = members_by_id.get(t.get("assignee_id")) or {}
         new_due = next_feasible_due(
             s, member, today,
             default_weekly_hours=settings.asana_default_weekly_hours,

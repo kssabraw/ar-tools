@@ -227,6 +227,17 @@ class Settings(BaseSettings):
         # the backlink lookup (DataForSEO pull on a cache miss).
         "keyword_research_report", "fanout_report", "backlink_lookup",
     ]
+    # Content-compliance guardrail: block publishing content that gives human
+    # dosing/administration instructions, claims branded-drug equivalence,
+    # promises guaranteed results, or advocates buying — for clients in a
+    # regulated content_compliance_mode (peptide vendors). Global kill switch;
+    # per-client opt-in is clients.content_compliance_mode.
+    content_compliance_enabled: bool = True
+    # Fan-out brand-voice enforcement: for client-linked sessions, resolve the
+    # client's distilled voice card, prime the fan-out writer's prompts with it,
+    # and run the voice review + corrective rewrite on the finished article. Off
+    # → the fan-out writer generates client-agnostically (its prior behaviour).
+    fanout_brand_voice_enabled: bool = True
     # Freeze Protocol: daily homepage-indexation check (GSC URL Inspection with a
     # DataForSEO site: warn-only fallback) that can auto-open a deindexing freeze.
     freeze_check_enabled: bool = True
@@ -1579,6 +1590,20 @@ class Settings(BaseSettings):
     # workload thresholds reuse the asana_* defaults above — one knob set for
     # both systems during the transition.
     native_tasks_enabled: bool = False
+    # Parallel-period Asana auto-import: once native is the system of record
+    # (native_tasks_enabled), the suite no longer writes to Asana, but the team
+    # may still create/move tasks directly in Asana while they wean off it. This
+    # daily job re-runs the (idempotent, gap-fill) Asana→native importer so those
+    # changes flow into the native board automatically instead of needing a
+    # manual "Import Asana boards" click. Default True but inert unless it should
+    # run: gated on native_tasks_enabled (native is the live board), Asana being
+    # configured (token + workspace), AND >=1 client→project mapping — so a fresh
+    # environment does nothing, a rollback quiesces it, and it self-retires once
+    # the Asana subscription is cancelled (creds removed).
+    asana_auto_import_enabled: bool = True
+    # Skip the daily import if a completed one ran within this window — robust to
+    # the daily scheduler block re-firing across a same-day deploy restart.
+    asana_auto_import_interval_hours: int = 20
     # Per-file cap for task attachments (the bucket also enforces 20 MB).
     task_attachment_max_mb: int = 20
     # Suite auto-integration producers (PRD §11) — each is double-gated on
@@ -1737,6 +1762,18 @@ class Settings(BaseSettings):
     # Empty ⇒ shared-channel shape-routing (backward-compatible). PACE's digest +
     # weekly report also post here when set.
     pace_slack_channel: str = ""
+    # Separate PACE Slack app (owner ruling 2026-08-28) — give PACE its own bot
+    # identity so its posts/replies don't come from SerMaStr. Empty ⇒ PACE shares
+    # the SerMaStr bot (byte-for-byte unchanged). When BOTH are set, PACE posts
+    # (digest / chase plan / escalations / task_* notifications / nudges /
+    # conversational replies) go out under pace_slack_bot_token, inbound
+    # PACE-channel events arrive on /slack/pace/events verified with
+    # pace_slack_signing_secret, and the SerMaStr app stays out of the PACE
+    # channel entirely (the dedicated app owns it). Setup: create a second Slack
+    # app, add it to pace_slack_channel, point its Event Request URL at
+    # /slack/pace/events, then set these two vars.
+    pace_slack_bot_token: str = ""       # PACE_SLACK_BOT_TOKEN — the PACE app's xoxb- bot token
+    pace_slack_signing_secret: str = ""  # PACE_SLACK_SIGNING_SECRET — the PACE app's signing secret
     # PACE nudge delivery: DM the assignee directly (chat.postMessage to their
     # slack_user_id — needs the Slack app's `im:write` scope) instead of an
     # @mention in the shared channel. Graceful: an unlinked assignee or a missing

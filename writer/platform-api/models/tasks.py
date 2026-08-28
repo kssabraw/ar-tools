@@ -49,7 +49,8 @@ class TaskCreateRequest(BaseModel):
     section_id: Optional[str] = None
     parent_task_id: Optional[str] = None
     description: Optional[str] = None
-    assignee_gid: Optional[str] = None
+    assignee_id: Optional[str] = None  # roster member id (canonical key)
+    assignee_gid: Optional[str] = None  # legacy Asana gid (accepted, back-compat)
     assignee_name: Optional[str] = None
     status_key: Optional[str] = None
     category: Optional[str] = None
@@ -66,7 +67,8 @@ class TaskUpdateRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     section_id: Optional[str] = None
-    assignee_gid: Optional[str] = None
+    assignee_id: Optional[str] = None  # roster member id (canonical key)
+    assignee_gid: Optional[str] = None  # legacy Asana gid (accepted, back-compat)
     assignee_name: Optional[str] = None
     status_key: Optional[str] = None
     category: Optional[str] = None

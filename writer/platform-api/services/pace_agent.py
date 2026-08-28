@@ -29,7 +29,7 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import pace_auth, pace_batch, pm_signals
+from services import notifications, pace_auth, pace_batch, pm_signals
 from services.pace_actions import PACE_ACTIONS
 from services.pace_auth import ActionContext
 
@@ -216,7 +216,7 @@ def _all_clients() -> list[dict]:
 def _active_members() -> list[dict]:
     return (
         get_supabase().table("asana_team_members")
-        .select("gid, name, profile_id").eq("active", True).execute()
+        .select("id, gid, name, profile_id").eq("active", True).execute()
     ).data or []
 
 
@@ -246,14 +246,14 @@ def build_member_context(member: dict, today: Optional[date] = None) -> dict:
     from services import task_service
 
     today = today or date.today()
-    gid = member.get("gid")
+    member_id = member.get("id")
     tasks = (
         get_supabase().table("tasks")
         .select("id, client_id, name, due_date, status_key, category, created_at")
-        .eq("assignee_gid", gid).eq("completed", False)
+        .eq("assignee_id", member_id).eq("completed", False)
         .is_("deleted_at", "null").is_("parent_task_id", "null")
         .execute()
-    ).data or [] if gid else []
+    ).data or [] if member_id else []
     names = _client_names([t.get("client_id") for t in tasks])
 
     def _row(t: dict) -> dict:
@@ -329,19 +329,19 @@ def personal_brief_text(context: ActionContext) -> str:
 
     if context.is_anonymous:
         return "Link your account first so I know whose tasks to show (an admin can do it on the Team page)."
-    gid = None
+    member_id = None
     rows = (
-        get_supabase().table("asana_team_members").select("gid")
+        get_supabase().table("asana_team_members").select("id")
         .eq("profile_id", context.profile_id).limit(1).execute()
     ).data
     if rows:
-        gid = rows[0]["gid"]
-    if not gid:
+        member_id = rows[0]["id"]
+    if not member_id:
         return "You're not linked to a task-board member yet — ask an admin to link you on the Team page."
     tasks = (
         get_supabase().table("tasks")
         .select("id, client_id, name, due_date, status_key")
-        .eq("assignee_gid", gid).eq("completed", False)
+        .eq("assignee_id", member_id).eq("completed", False)
         .is_("deleted_at", "null").is_("parent_task_id", "null")
         .execute()
     ).data or []
@@ -653,8 +653,15 @@ async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool
     ``force=True`` (the dedicated PACE channel, §10.2): PACE owns every message —
     the ``is_pace_message`` gate is skipped, so even a non-delivery ask is
     answered by PACE (its prompt defers strategy to SerMaStr)."""
-    from services.slack_assistant import (is_affirmative, post_message,
-                                           strip_mention)
+    from services.slack_assistant import (is_affirmative,
+                                           post_message as _send, strip_mention)
+
+    # PACE replies post under the PACE app's bot token when a separate app is
+    # configured (else the shared token) — so its answers carry the PACE identity.
+    _bot_token = notifications.pace_bot_token()
+
+    async def _post(_ch, _text, _thread=None):
+        return await _send(_ch, _text, _thread, token=_bot_token)
 
     channel = event.get("channel")
     thread_ts = event.get("thread_ts") or event.get("ts")
@@ -677,24 +684,24 @@ async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool
             # On-demand batches are actor-bound (a Chase Plan has no requester and
             # authorizes each item by role at confirm time instead).
             if pending.get("requester") and not pace_auth.confirm_actor_ok(pending["requester"], context):
-                await post_message(channel, "Only the person who requested this can confirm it.", thread_ts)
+                await _post(channel, "Only the person who requested this can confirm it.", thread_ts)
                 return True
             reply = await pace_proposals.execute_plan_selection(pending["items"], selection, context)
-            await post_message(channel, reply, thread_ts)
+            await _post(channel, reply, thread_ts)
             return True
         pending = None  # not an approval — treat as an ordinary message below
     if pending:
         if is_affirmative(question):
             _pace_pending.pop(pend_key, None)
             if not pace_auth.confirm_actor_ok(pending.get("requester"), context):
-                await post_message(channel, "Only the person who requested this can confirm it.", thread_ts)
+                await _post(channel, "Only the person who requested this can confirm it.", thread_ts)
                 return True
             try:
                 reply = await _run_pace_action(pending["action"], pending["client_id"], pending["args"], context)
             except Exception as exc:
                 logger.warning("pace_action_run_failed", extra={"action": pending["action"], "error": str(exc)})
                 reply = "Sorry — that action failed. Try again."
-            await post_message(channel, reply, thread_ts)
+            await _post(channel, reply, thread_ts)
             return True
         _pace_pending.pop(pend_key, None)  # superseded
 
@@ -703,14 +710,14 @@ async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool
 
     try:
         if is_personal_brief(question):
-            await post_message(channel, personal_brief_text(context), thread_ts)
+            await _post(channel, personal_brief_text(context), thread_ts)
             return True
         result = await _answer(question, None, None, context, "slack", None, _run_direct)
         batch = result.get("batch")
         if batch:
             _pace_pending[pend_key] = {"batch": True, "items": batch["items"],
                                        "requester": batch["requester"], "on_demand": True}
-            await post_message(
+            await _post(
                 channel, pace_batch.render_batch(batch["items"], batch["flags"], batch.get("overflow", 0)),
                 thread_ts,
             )
@@ -719,18 +726,31 @@ async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool
         if pending:
             _pace_pending[pend_key] = {"action": pending["name"], "client_id": pending["client_id"],
                                        "args": pending["args"], "requester": pending["requester"]}
-            await post_message(
+            await _post(
                 channel,
                 f"This will {pending['confirm']} for *{pending['client_name']}*. Reply *yes* to proceed.",
                 thread_ts,
             )
             return True
-        await post_message(channel, result.get("reply") or "I couldn't work that out — try rephrasing.", thread_ts)
+        await _post(channel, result.get("reply") or "I couldn't work that out — try rephrasing.", thread_ts)
         return True
     except Exception as exc:
         logger.warning("pace_slack_failed", extra={"channel": channel, "error": str(exc)})
-        await post_message(channel, "Sorry — PACE hit an error.", thread_ts)
+        await _post(channel, "Sorry — PACE hit an error.", thread_ts)
         return True
+
+
+async def handle_pace_message(event: dict) -> None:
+    """Inbound handler for the dedicated PACE Slack app (``/slack/pace/events``).
+    That app lives only in the PACE channel, so every non-bot message there is
+    PACE's to answer — resolve the actor and force-handle it (the ``is_pace_message``
+    shape gate is skipped, exactly like the dedicated-channel path). Best-effort."""
+    try:
+        actor = pace_auth.resolve_slack_actor(event.get("user"), event.get("channel"))
+        await maybe_handle_slack(event, actor, force=True)
+    except Exception as exc:  # never surface into the ack path
+        logger.warning("pace_inbound_failed",
+                       extra={"channel": event.get("channel"), "error": str(exc)})
 
 
 async def _stage(name: str, context: ActionContext, client_id: str, args: dict):

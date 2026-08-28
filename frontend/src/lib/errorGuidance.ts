@@ -262,6 +262,22 @@ const REGISTRY: Record<string, ErrorGuidance> = {
     ],
     override: 'Publish anyway',
   },
+  content_compliance_violation: {
+    title: 'Blocked by the content-compliance guardrail',
+    meaning:
+      'This client is a regulated (peptide/research-chemical) account, and the ' +
+      'finished content contains something that must not be published: human ' +
+      'dosing or administration instructions, a claim that the product is ' +
+      'equivalent to a branded medication (e.g. Ozempic/Mounjaro/semaglutide), ' +
+      'a guaranteed-results/efficacy claim, or buy-it advocacy. The offending ' +
+      'phrase(s) are shown below. This is a regulatory block, not a quality ' +
+      'preference, so it can’t be overridden from here.',
+    steps: [
+      'Read the flagged phrase(s) below to see exactly what tripped the guardrail.',
+      'Edit or regenerate the content to remove the dosing/equivalence/guarantee/advocacy language — keep it educational only.',
+      'Publish again once the content is clean. (If you believe the flag is a genuine false positive, an admin can adjust the client’s compliance mode — but review the phrase first.)',
+    ],
+  },
   client_frozen: {
     title: 'This client is frozen',
     meaning:
@@ -371,7 +387,7 @@ export function looksLikeErrorCode(raw: string | null | undefined): boolean {
 // comma stays one term. Only pull them for codes we know carry them, so a plain
 // sentence that happens to contain a colon isn't mis-parsed into "terms".
 function extractTerms(code: string, message: string): string[] {
-  if (code !== 'voice_violation') return []
+  if (code !== 'voice_violation' && code !== 'content_compliance_violation') return []
   const idx = message.indexOf(`${code}:`)
   if (idx < 0) return []
   return message

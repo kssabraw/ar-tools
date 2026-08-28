@@ -484,7 +484,8 @@ async def publish_run(
             "name, google_drive_folder_id, drive_folders, website_url, logo_url, "
             "wordpress_site_url, wordpress_username, wordpress_app_password, "
             "github_repo, github_branch, github_content_path, github_content_paths, "
-            "github_inferred_patterns, business_location, target_cities, gbp"
+            "github_inferred_patterns, business_location, target_cities, gbp, "
+            "content_compliance_mode"
         )
         .eq("id", run["client_id"])
         .single()
@@ -495,6 +496,21 @@ async def publish_run(
     client = client_result.data
 
     doc_html, wp_html, page_seo_title = _resolve_content(supabase, run_id, content_type)
+
+    # Regulatory guardrail (peptide/regulated clients): finished content that
+    # gives human dosing instructions, claims branded-drug equivalence, promises
+    # guaranteed results, or advocates buying is blocked before any destination
+    # write — the same single choke point the voice gate uses above. Scans the
+    # exact bytes about to publish, so it is independent of how the run was
+    # generated. A no-op for clients not in a regulated content_compliance_mode.
+    if settings.content_compliance_enabled:
+        from services import content_compliance
+        content_compliance.assert_content_publishable(
+            client,
+            title=page_seo_title or run.get("keyword") or "",
+            body="\n".join(p for p in (doc_html, wp_html) if p),
+        )
+
     fallback_title = f"{run['keyword']} — {client['name']}"
     # WordPress post title + optional SEOPress meta title, resolved per type.
     wp_post_title = fallback_title

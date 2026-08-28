@@ -71,7 +71,7 @@ def _linked_members() -> list[dict]:
     plus the unreachable count."""
     sb = get_supabase()
     members = (
-        sb.table("asana_team_members").select("gid, name, profile_id")
+        sb.table("asana_team_members").select("id, gid, name, profile_id")
         .eq("active", True).execute()
     ).data or []
     profile_ids = [m["profile_id"] for m in members if m.get("profile_id")]
@@ -119,14 +119,14 @@ async def run_morning_briefs(today: Optional[date] = None) -> dict:
 
     rows = (
         get_supabase().table("tasks")
-        .select("id, client_id, name, due_date, assignee_gid")
-        .in_("assignee_gid", [m["gid"] for m in linked])
+        .select("id, client_id, name, due_date, assignee_id")
+        .in_("assignee_id", [m["id"] for m in linked])
         .eq("completed", False).is_("deleted_at", "null").is_("parent_task_id", "null")
         .execute()
     ).data or []
-    by_gid: dict[str, list[dict]] = {}
+    by_member: dict[str, list[dict]] = {}
     for r in rows:
-        by_gid.setdefault(r["assignee_gid"], []).append(r)
+        by_member.setdefault(r["assignee_id"], []).append(r)
     client_ids = sorted({r["client_id"] for r in rows if r.get("client_id")})
     client_names = {}
     if client_ids:
@@ -138,11 +138,11 @@ async def run_morning_briefs(today: Optional[date] = None) -> dict:
 
     sent = 0
     for m in linked:
-        text = build_brief_text(by_gid.get(m["gid"], []), client_names, today)
+        text = build_brief_text(by_member.get(m["id"], []), client_names, today)
         if not text:
             continue
         try:
-            await post_message(m["slack_user_id"], text)
+            await post_message(m["slack_user_id"], text, token=notifications.pace_bot_token())
             sent += 1
         except Exception as exc:
             msg = str(exc)

@@ -629,6 +629,8 @@ async def market_placement(city_id: int, category_id: str, *,
         "zones": built["zones"],
         "catchment_miles": built["catchment_miles"],
         "note": built["note"],
+        "focused": built["focused"],
+        "focus": built["focus"],
     })
     return base
 

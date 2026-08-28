@@ -62,10 +62,10 @@ def test_resolve_category_key_passthrough_and_blank():
 
 
 def test_diff_activity_kinds_and_skips():
-    before = {"name": "A", "assignee_gid": None, "status_key": "not_started", "due_date": None}
+    before = {"name": "A", "assignee_id": None, "status_key": "not_started", "due_date": None}
     changes = {
         "name": "B",                    # renamed
-        "assignee_gid": "g1",           # assigned
+        "assignee_id": "m1",            # assigned (roster member id)
         "status_key": "not_started",    # unchanged → skipped
         "due_date": "2026-08-01",       # due_changed
         "description": "long text",     # edited, body redacted
@@ -76,7 +76,7 @@ def test_diff_activity_kinds_and_skips():
     desc = next(e for e in entries if e["kind"] == "edited")
     assert desc["detail"] == {"field": "description"}  # no body leaked
     assigned = next(e for e in entries if e["kind"] == "assigned")
-    assert assigned["detail"] == {"field": "assignee_gid", "from": None, "to": "g1"}
+    assert assigned["detail"] == {"field": "assignee_id", "from": None, "to": "m1"}
 
 
 # ---------------------------------------------------------------------------
@@ -148,18 +148,18 @@ async def test_native_workload_alert_silent_when_disabled(monkeypatch):
 def test_select_due_tasks_buckets():
     today = date(2026, 7, 11)
     rows = [
-        {"assignee_gid": "g1", "assignee_name": "Ivy", "due_date": "2026-07-11", "name": "Due now"},
-        {"assignee_gid": "g1", "assignee_name": "Ivy", "due_date": "2026-07-01", "name": "Late"},
-        {"assignee_gid": "g2", "assignee_name": "Minda", "due_date": date(2026, 7, 10), "name": "Also late"},
-        {"assignee_gid": "g1", "assignee_name": "Ivy", "due_date": "2026-08-01", "name": "Future"},   # skipped
-        {"assignee_gid": None, "due_date": "2026-07-01", "name": "Unassigned"},                       # skipped
-        {"assignee_gid": "g3", "due_date": None, "name": "Undated"},                                  # skipped
+        {"assignee_id": "m1", "assignee_name": "Ivy", "due_date": "2026-07-11", "name": "Due now"},
+        {"assignee_id": "m1", "assignee_name": "Ivy", "due_date": "2026-07-01", "name": "Late"},
+        {"assignee_id": "m2", "assignee_name": "Minda", "due_date": date(2026, 7, 10), "name": "Also late"},
+        {"assignee_id": "m1", "assignee_name": "Ivy", "due_date": "2026-08-01", "name": "Future"},   # skipped
+        {"assignee_id": None, "due_date": "2026-07-01", "name": "Unassigned"},                        # skipped
+        {"assignee_id": "m3", "due_date": None, "name": "Undated"},                                   # skipped
     ]
     buckets = task_workload.select_due_tasks(rows, today)
-    assert set(buckets) == {"g1", "g2"}
-    assert buckets["g1"]["due_today"] == ["Due now"]
-    assert buckets["g1"]["overdue"] == ["Late"]
-    assert buckets["g2"]["overdue"] == ["Also late"]
+    assert set(buckets) == {"m1", "m2"}
+    assert buckets["m1"]["due_today"] == ["Due now"]
+    assert buckets["m1"]["overdue"] == ["Late"]
+    assert buckets["m2"]["overdue"] == ["Also late"]
 
 
 def test_bucket_by_due():
@@ -217,7 +217,7 @@ def test_duplicate_task_copies_fields_not_source(monkeypatch):
         "client_id": "c1",
         "section_id": "sec1",
         "description": "desc",
-        "assignee_gid": "g1",
+        "assignee_id": "m1",
         "assignee_name": "Ivy",
         "category": "gbp_authority",
         "due_date": "2026-07-20",
@@ -245,7 +245,7 @@ def test_duplicate_task_copies_fields_not_source(monkeypatch):
     copy = task_collab.duplicate_task("t1", with_subtasks=True, actor_id="u1")
     assert copy["id"] == "t2"
     assert created["name"] == "GBP Blast (copy)"
-    assert created["assignee_gid"] == "g1" and created["est_hours"] == 1.5
+    assert created["assignee_id"] == "m1" and created["est_hours"] == 1.5
     # A duplicate is a manual task — the producer key must NOT carry over.
     assert "source" not in created and "source_ref" not in created
     assert sub_calls == [["Step 1", "Step 2"]]
@@ -520,6 +520,142 @@ def test_auto_tick_never_raises(monkeypatch):
 
     monkeypatch.setattr(task_service, "get_supabase", lambda: _Boom())
     assert task_service.auto_tick_subtasks("t1", 5) == 0  # swallowed, logged
+
+
+def test_resolve_member_normalizes_to_assignee_id(monkeypatch):
+    """The single assignee-normalization point (profiles↔gid unification): id or
+    a legacy gid input resolves to the canonical assignee_id + cached name (the
+    assignee_gid column is gone); an unknown id passes through so an assignment
+    is never silently dropped."""
+    roster = [{"id": "m1", "gid": "g1", "name": "Ivy"}]
+
+    class _Q:
+        def __init__(self, data):
+            self._d, self._col, self._val = data, None, None
+        def select(self, *a, **k): return self
+        def eq(self, col, val):
+            self._col, self._val = col, val
+            return self
+        def limit(self, *a, **k): return self
+        def execute(self):
+            rows = [r for r in self._d if r.get(self._col) == self._val] if self._col else self._d
+            return type("R", (), {"data": rows})()
+
+    monkeypatch.setattr(task_service, "get_supabase",
+                        lambda: type("SB", (), {"table": lambda self, name: _Q(roster)})())
+
+    ivy = {"assignee_id": "m1", "assignee_name": "Ivy"}
+    # By canonical id, and by a legacy gid input → the same canonical result.
+    assert task_service._resolve_member(assignee_id="m1") == ivy
+    assert task_service._resolve_member(assignee_gid="g1") == ivy
+    # Neither → an explicit unassign.
+    assert task_service._resolve_member() == {"assignee_id": None, "assignee_name": None}
+    # An unknown id is passed through unchanged (never dropped on a miss).
+    assert task_service._resolve_member(assignee_id="ghost") == {
+        "assignee_id": "ghost", "assignee_name": None}
+
+
+def test_partition_roster_write_login_less_and_non_destructive():
+    """Phase 2a roster replace: existing members update in place by id (never
+    delete+recreate), a gid-only member upserts by gid, a member with neither is
+    a new login-less VA, and a stored member is dropped only when absent by both
+    id and gid."""
+    existing = [
+        {"id": "m1", "gid": "g1"},   # kept (payload carries id m1)
+        {"id": "m2", "gid": "g2"},   # kept (payload carries gid g2, no id)
+        {"id": "m3", "gid": "g3"},   # dropped (absent by id and gid)
+        {"id": "m4", "gid": None},   # kept login-less (payload carries id m4)
+    ]
+    members = [
+        {"id": "m1", "gid": "g1", "name": "Ivy", "weekly_hours": 30, "profile_id": "p1"},
+        {"gid": "g2", "name": "Minda"},   # gid, no id → upsert by gid
+        {"id": "m4", "name": "Bo"},       # existing login-less → update in place
+        {"name": "New VA"},               # brand-new login-less VA → insert, gid NULL
+    ]
+    plan = task_service.partition_roster_write(existing, members)
+
+    assert plan["drop_ids"] == ["m3"]
+    assert {u["id"] for u in plan["updates"]} == {"m1", "m4"}
+    m1 = next(u for u in plan["updates"] if u["id"] == "m1")
+    assert m1["fields"]["gid"] == "g1" and m1["fields"]["name"] == "Ivy"
+    m4 = next(u for u in plan["updates"] if u["id"] == "m4")
+    assert m4["fields"]["gid"] is None            # stays login-less
+    assert plan["gid_upserts"] == [
+        {"name": "Minda", "weekly_hours": None, "active": True, "profile_id": None, "gid": "g2"}]
+    # A login-less insert carries no gid → the DB default (NULL) applies.
+    assert plan["inserts"] == [
+        {"name": "New VA", "weekly_hours": None, "active": True, "profile_id": None}]
+
+
+def test_enqueue_due_asana_import_gating(monkeypatch):
+    """The parallel-period daily Asana→native auto-import fires only when it
+    should: enabled + native live + Asana configured + a project mapping + no
+    recent/in-flight import; every other combination is a no-op (inert without
+    native/Asana, kill-switch, interval-guarded, dedup-aware)."""
+    from services import asana_service, task_import
+    from config import settings
+
+    monkeypatch.setattr(settings, "asana_auto_import_enabled", True)
+    monkeypatch.setattr(settings, "native_tasks_enabled", True)
+    monkeypatch.setattr(settings, "asana_auto_import_interval_hours", 20)
+    monkeypatch.setattr(asana_service, "is_configured", lambda: True)
+
+    state = {"mapped": [{"client_id": "c1"}], "recent": []}
+    enq = {"result": {"status": "queued", "job_id": "j1"}}
+
+    class _Q:
+        def __init__(self, table):
+            self.table_name, self._gte = table, False
+        def select(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def gte(self, *a, **k):
+            self._gte = True
+            return self
+        def limit(self, *a, **k): return self
+        def execute(self):
+            if self.table_name == "asana_client_projects":
+                data = state["mapped"]
+            elif self.table_name == "async_jobs":
+                data = state["recent"] if self._gte else []
+            else:
+                data = []
+            return type("R", (), {"data": data})()
+
+    monkeypatch.setattr(task_import, "get_supabase",
+                        lambda: type("SB", (), {"table": lambda self, n: _Q(n)})())
+    monkeypatch.setattr(task_import, "enqueue_import", lambda: enq["result"])
+
+    # Happy path — enabled, configured, mapped, no recent import → enqueues.
+    assert task_import.enqueue_due_asana_import() == 1
+
+    # No client→project mapping → nothing to import.
+    state["mapped"] = []
+    assert task_import.enqueue_due_asana_import() == 0
+    state["mapped"] = [{"client_id": "c1"}]
+
+    # A completed import within the interval window → skip (belt-and-suspenders).
+    state["recent"] = [{"id": "recent"}]
+    assert task_import.enqueue_due_asana_import() == 0
+    state["recent"] = []
+
+    # enqueue_import reports an in-flight import → 0 (dedup honored).
+    enq["result"] = {"status": "already_running", "job_id": "j0"}
+    assert task_import.enqueue_due_asana_import() == 0
+    enq["result"] = {"status": "queued", "job_id": "j1"}
+
+    # Kill switch off → 0 (and never touches the DB).
+    monkeypatch.setattr(settings, "asana_auto_import_enabled", False)
+    assert task_import.enqueue_due_asana_import() == 0
+    monkeypatch.setattr(settings, "asana_auto_import_enabled", True)
+
+    # Native not the live board (pre-cutover / rollback) → 0.
+    monkeypatch.setattr(settings, "native_tasks_enabled", False)
+    assert task_import.enqueue_due_asana_import() == 0
+    monkeypatch.setattr(settings, "native_tasks_enabled", True)
+
+    # Asana not configured (fresh env / creds removed post-cancel) → 0.
+    monkeypatch.setattr(asana_service, "is_configured", lambda: False)
+    assert task_import.enqueue_due_asana_import() == 0
 
 
 # ---------------------------------------------------------------------------

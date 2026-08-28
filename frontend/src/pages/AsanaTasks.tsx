@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type {
-  Client, AsanaProjectMapping, AsanaTaskTemplateItem, AsanaUser,
+  Client, AsanaProjectMapping, AsanaTaskTemplateItem,
   AsanaCategoryOption, AsanaGenerateMonthResponse, AsanaTeamMember, AsanaLibraryTaskItem,
   AsanaTaskTemplateRef,
 } from '../lib/types'
@@ -45,12 +45,6 @@ export function AsanaTasks() {
     queryKey: ['asana-templates', id],
     queryFn: () => api.get<AsanaTaskTemplateItem[]>(`/clients/${id}/asana/task-templates`),
     enabled: Boolean(id),
-  })
-
-  const { data: users } = useQuery<AsanaUser[]>({
-    queryKey: ['asana-users'],
-    queryFn: () => api.get<AsanaUser[]>(`/asana/workspace-users`),
-    enabled: configured,
   })
 
   const { data: categories } = useQuery<AsanaCategoryOption[]>({
@@ -91,8 +85,8 @@ export function AsanaTasks() {
 
   useEffect(() => {
     if (mapping?.project_gid !== undefined) setProjectGid(mapping?.project_gid ?? '')
-    setAutoAssignees(mapping?.auto_assignee_gids ?? [])
-  }, [mapping?.project_gid, mapping?.auto_assignee_gids])
+    setAutoAssignees(mapping?.auto_assignee_ids ?? [])
+  }, [mapping?.project_gid, mapping?.auto_assignee_ids])
 
   useEffect(() => {
     if (templates) setRows(templates.map((t) => ({ ...t })))
@@ -103,7 +97,9 @@ export function AsanaTasks() {
     mutationFn: () =>
       api.put<AsanaProjectMapping>(`/clients/${id}/asana/project`, {
         project_gid: projectGid.trim(),
-        auto_assignee_gids: autoAssignees,
+        // Roster member ids; the backend cross-fills the legacy gid list (which
+        // the still-active Asana monthly path reads) from these.
+        auto_assignee_ids: autoAssignees,
       }),
     onSuccess: (m) => {
       queryClient.setQueryData(['asana-project', id], m)
@@ -134,7 +130,7 @@ export function AsanaTasks() {
   const addRow = () =>
     setRows((rs) => [
       ...rs,
-      { name: '', assignee_gid: null, assignee_name: null, category_option_gid: null, category_name: null, est_hours: null, auto_assign: false, sort_order: rs.length, active: true },
+      { name: '', assignee_id: null, assignee_gid: null, assignee_name: null, category_option_gid: null, category_name: null, est_hours: null, auto_assign: false, sort_order: rs.length, active: true },
     ])
   const removeRow = (i: number) => setRows((rs) => rs.filter((_, j) => j !== i))
   const move = (i: number, dir: -1 | 1) =>
@@ -149,9 +145,9 @@ export function AsanaTasks() {
   const dirty = JSON.stringify(rows) !== JSON.stringify((templates ?? []).map((t) => ({ ...t })))
   const mappingDirty =
     projectGid.trim() !== (mapping?.project_gid ?? '') ||
-    JSON.stringify([...autoAssignees].sort()) !== JSON.stringify([...(mapping?.auto_assignee_gids ?? [])].sort())
-  const toggleAuto = (gid: string) =>
-    setAutoAssignees((a) => (a.includes(gid) ? a.filter((g) => g !== gid) : [...a, gid]))
+    JSON.stringify([...autoAssignees].sort()) !== JSON.stringify([...(mapping?.auto_assignee_ids ?? [])].sort())
+  const toggleAuto = (memberId: string) =>
+    setAutoAssignees((a) => (a.includes(memberId) ? a.filter((g) => g !== memberId) : [...a, memberId]))
   const canGenerate = configured && Boolean(mapping?.project_gid) && rows.some((r) => r.active && r.name.trim())
 
   return (
@@ -228,11 +224,12 @@ export function AsanaTasks() {
           ) : (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {(team ?? []).map((m) => {
-                const on = autoAssignees.includes(m.gid)
+                const mid = m.id ?? m.gid ?? ''
+                const on = autoAssignees.includes(mid)
                 return (
                   <button
-                    key={m.gid}
-                    onClick={() => toggleAuto(m.gid)}
+                    key={mid}
+                    onClick={() => toggleAuto(mid)}
                     style={{
                       ...chipBtn,
                       ...(on ? { background: '#eef2ff', borderColor: '#c7d2fe', color: '#4338ca' } : {}),
@@ -290,21 +287,28 @@ export function AsanaTasks() {
                   </div>
                   <select
                     style={{ ...input, ...(r.auto_assign ? { color: '#4338ca', fontWeight: 600 } : {}) }}
-                    value={r.auto_assign ? AUTO : (r.assignee_gid ?? '')}
-                    disabled={!configured}
+                    value={r.auto_assign ? AUTO : (r.assignee_id ?? '')}
                     onChange={(e) => {
                       if (e.target.value === AUTO) {
-                        updateRow(i, { auto_assign: true, assignee_gid: null, assignee_name: 'Auto' })
+                        updateRow(i, { auto_assign: true, assignee_id: null, assignee_gid: null, assignee_name: 'Auto' })
                         return
                       }
-                      const u = users?.find((x) => x.gid === e.target.value)
-                      updateRow(i, { auto_assign: false, assignee_gid: u?.gid ?? null, assignee_name: u?.name ?? null })
+                      // Pick a roster member; dual-write the member id (native) +
+                      // their gid (the still-active Asana path). A login-less VA
+                      // has gid = null and is native-only.
+                      const m = (team ?? []).find((x) => (x.id ?? x.gid) === e.target.value)
+                      updateRow(i, {
+                        auto_assign: false,
+                        assignee_id: (m?.id ?? m?.gid) ?? null,
+                        assignee_gid: m?.gid ?? null,
+                        assignee_name: m?.name ?? null,
+                      })
                     }}
                   >
                     <option value="">Unassigned</option>
                     <option value={AUTO}>🔀 Auto-distribute</option>
-                    {(users ?? []).map((u) => (
-                      <option key={u.gid} value={u.gid}>{u.name ?? u.gid}</option>
+                    {(team ?? []).map((m) => (
+                      <option key={m.id ?? m.gid} value={m.id ?? m.gid ?? ''}>{m.name ?? m.gid}</option>
                     ))}
                   </select>
                   <select
