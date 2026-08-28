@@ -1,6 +1,57 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-28 · **SerMaStr monthly plan review → PACE assignment handoff (BUILT, ships dark)** (latest)
+## ⏩ Update — 2026-08-28 · **QA Agent — ENABLED in production + business-name false-fail fixed** (latest)
+
+The **QA Agent** (deliverable reviewer — full detail in the CLAUDE.md "QA Agent"
+entry, `docs/modules/qa-agent-manual-v1_0.md`, and `docs/sops/QA_Checklists.md`)
+was flipped **on in production**: `QA_ENABLED=true` set on the PLATFORM Railway
+service (deploy `dc32f4d2` — SUCCESS). Both QA migrations are already applied live
+(`qa_reviews` + the one-live-job-per-task unique index).
+
+**PR #863 (merged):** fixed the one real defect an adversarial review found — the
+now-blocking `client_name` website-page check required the client's **entire stored
+name verbatim and contiguous**, which false-fails correct pages against the live
+client names (`ABC Tree And Landscape Service` vs a page's "ABC Tree & Landscape";
+`Southwestern Hearing Centers`; …). `qa_signals._name_present` now keeps an exact
+fast path then falls back to distinctive-token matching (`&`↔`and`, corporate
+suffixes dropped, reorder-tolerant); a genuinely wrong business still fails. A second
+review finding (`internal_anchors` making the internal-link check near-always-pass)
+was **deliberately NOT changed** — it's correct fail-open behavior and tightening it
+reintroduces false-fails.
+
+### ⚠️ The operational gap — QA is ENABLED but IDLE
+
+Flipping the flag armed it; it is **not yet reviewing anything**, and won't until
+the workflow feeds it. Confirmed from live data (2026-08-28):
+
+- `NATIVE_TASKS_ENABLED` is **on** — the Asana→native task-board cutover happened
+  ~2026-07-14 (last `asana_monthly` job 07-12; native `task_due_sweep` daily since
+  07-14). So the native board IS the live system.
+- **Zero tasks have ever entered the `in_qa` status** (`qa_reviews` total = 0). QA's
+  auto-trigger fires on that transition, so it never runs. Two reasons: (1) nobody
+  uses the **In QA** column manually; (2) the team's imported task checklists are all
+  **process-markers** ("Citations QA'd", "Sent to client", "Added to deliverables
+  sheet"), which `task_service.is_work_item` classifies as NOT work items — so the
+  board's auto-advance-to-In-QA (Rule B, "last work item ticked → In QA") has nothing
+  to fire on.
+
+**To actually activate automatic QA (a workflow/process decision — no code):**
+route finished work through the **In QA** column (the team already has a manual
+"QA'd" step everywhere — that's the natural place), OR restructure the generated
+checklists to contain real work-item subtasks so Rule B auto-advances. Meanwhile the
+**Run QA button** (task drawer) and PACE's "run QA on X" work on demand today.
+
+**Conventions to socialize before automatic QA is useful** (else link-building
+reviews return *needs-human*, which is harmless but unhelpful): a **`Deliverable
+links` subtask** (paste the live URL / sheet link) on guest-post/niche-edit/citation/
+PR/map-embed tasks, and a **`Live URL` column** in citation/PR Google Sheets (shared
+"anyone with the link"). The **keyword** already lives in the task name, which QA reads.
+
+**Recommended go-live sequence:** trial a few **Run QA** clicks on real deliverables
+→ confirm verdicts look sane → tell the VAs to start using the In QA column. Tuning
+(structural floor, citation sample, visual confidence) is all `qa_*` config, no code.
+
+## ⏩ Update — 2026-08-28 · **SerMaStr monthly plan review → PACE assignment handoff (BUILT, ships dark)**
 
 The flow the owner asked for: **once a month, a few days before task generation,
 SerMaStr reviews the client's Recipe-Engine monthly task plan and proposes
