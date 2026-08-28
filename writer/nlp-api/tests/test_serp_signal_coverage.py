@@ -171,6 +171,48 @@ def test_zone_breakdown_reports_per_zone_current_vs_target():
     assert kz["H2/H3"]["recommended"] == 2 and kz["body"]["recommended"] == 3
 
 
+def test_frequency_grading_folds_into_engine_score():
+    serp = _serp_analysis()
+    # Low: every tracked term appears about once (well under the higher targets).
+    html_low = (
+        "<article><h2>Roof Restoration in Melbourne</h2>"
+        "<p>Colorbond and slate roofing. Tile roof. Free quote. Roof repairs.</p></article>"
+    )
+    low = main._compute_serp_signal_coverage(html_low, serp)
+    # High: the same terms, repeated toward their recommended counts.
+    html_high = (
+        "<article><h2>Roof Restoration Melbourne — roof restoration roof restoration</h2>"
+        "<p>Melbourne Melbourne Melbourne Melbourne. Colorbond Colorbond Colorbond. "
+        "Slate slate. Tile roof tile roof. Free quote free quote. Roof repairs roof repairs.</p></article>"
+    )
+    high = main._compute_serp_signal_coverage(html_high, serp)
+    assert low["frequency_coverage"] is not None
+    assert high["frequency_coverage"] > low["frequency_coverage"]
+    # Frequency is folded into the engine score, so more mentions => higher score.
+    assert high["score"] > low["score"]
+    # Attainment is capped at the target: over-using a term can't push it past 100.
+    assert high["frequency_coverage"] <= 100.0
+
+
+def test_frequency_grading_absent_preserves_presence_only_score():
+    # No entities, related terms without a recommended benchmark, no bold => no
+    # frequency target => frequency_coverage None and the composite is the exact
+    # prior presence-only formula.
+    serp = {
+        "related_keywords": {"h2_h3": [{"term": "roof restoration"}], "paragraphs": []},
+        "zone_targets": {"h2_h3": {"target": 1, "entity_target": 1}},
+        "google_entities": [],
+        "top_quadgrams": [{"phrase": "licensed roofing contractor"}],
+    }
+    html = "<article><h2>Roof Restoration in Melbourne</h2><p>quality roofing.</p></article>"
+    res = main._compute_serp_signal_coverage(html, serp)
+    assert res["frequency_coverage"] is None
+    expected = round(
+        res["keyword_coverage"] * 0.30 + res["entity_coverage"] * 0.50 + res["quadgram_coverage"] * 0.20, 1
+    )
+    assert res["score"] == expected
+
+
 def test_word_boundary_counting_does_not_match_substrings():
     # "Slate" must not be counted inside "Slater"; "tile" not inside "tiles".
     html = "<article><p>Mr Slater fitted the tiles. Slate is different.</p></article>"

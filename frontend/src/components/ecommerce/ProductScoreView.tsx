@@ -8,6 +8,7 @@ import type { EcommercePageDetail, EcommercePageType, ReoptimizeUrlResult, Score
 import { Spinner } from '../localseo/Spinner'
 import { backLink, card, outlineBtn, primaryBtn, scoreColor } from '../localseo/shared'
 import { ErrorDetails } from '../ErrorDetails'
+import { SearchCoveragePanel } from '../coverage/SearchCoveragePanel'
 
 // Pages scoring at/above this are skipped server-side (kept in sync with the
 // backend threshold). Surfaced here only as copy.
@@ -100,6 +101,9 @@ export function ProductScoreView({
   useEffect(() => {
     if (startedRef.current) return
     startedRef.current = true
+    // Lazy score-on-mount, guarded once by the ref; the only setState it reaches
+    // synchronously is a reset — not a cascading render.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (scoreJob.phase === 'idle' && !result) void runScore()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -278,6 +282,9 @@ export function ProductScoreView({
               )
             })}
           </div>
+
+          {/* Search coverage — entity/keyword/bolded-term targets + per-zone + frequency */}
+          <SearchCoveragePanel coverage={result.engine_scores?.serp_signal_coverage} />
 
           {/* Improve CTA */}
           <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 12 }}>

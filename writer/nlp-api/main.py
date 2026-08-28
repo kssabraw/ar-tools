@@ -1610,6 +1610,13 @@ def clean_text(text: str) -> str:
 # — a direct Google signal). Env-tunable.
 MENTION_CAP_RATIO = float(os.environ.get("MENTION_CAP_RATIO", "1.5"))
 
+# Share of the serp_signal_coverage engine's OWN score given to mention-frequency
+# attainment (how well the page hits per-term competitor-matched counts), vs the
+# presence-based keyword/entity/quadgram coverage. This changes the internal
+# composition of one deterministic engine — NOT the composite engine weight map,
+# which stays locked. 0 disables (pure presence, prior behaviour). Env-tunable.
+SERP_FREQ_WEIGHT = float(os.environ.get("SERP_FREQ_WEIGHT", "0.20"))
+
 
 def _capped_max_target(counts: list) -> tuple[int, int, float]:
     """Given per-competitor-page mention counts (of pages that USE the term),
@@ -4320,7 +4327,37 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
     else:
         qg_score = 75.0
 
-    composite = round(kw_score * 0.30 + ent_score * 0.50 + qg_score * 0.20, 1)
+    # ── 4. Mention-frequency attainment (folded into THIS engine's score) ──────
+    # How well the page hits the per-term recommended (capped/raw-max competitor)
+    # mention counts, pooled across entities + related keywords + bold. Capped at
+    # the target per term (over-use never inflates). None when no term carries a
+    # benchmark (older analysis / no SERP), in which case the composite keeps its
+    # exact prior presence-only formula so unbenchmarked pages are unchanged.
+    _freq_rows = entity_detail + keyword_detail + bold_detail
+    _freq_target = sum(r["recommended"] for r in _freq_rows)
+    if _freq_target > 0 and SERP_FREQ_WEIGHT > 0:
+        _freq_attained = sum(min(r["current"], r["recommended"]) for r in _freq_rows)
+        freq_score: Optional[float] = 100.0 * _freq_attained / _freq_target
+    else:
+        freq_score = None
+
+    if freq_score is None:
+        composite = round(kw_score * 0.30 + ent_score * 0.50 + qg_score * 0.20, 1)
+    else:
+        # Frequency takes SERP_FREQ_WEIGHT; the presence engines keep their
+        # relative proportions across the remaining (1 - weight).
+        w = SERP_FREQ_WEIGHT
+        composite = round(
+            kw_score * 0.30 * (1 - w) + ent_score * 0.50 * (1 - w)
+            + qg_score * 0.20 * (1 - w) + freq_score * w, 1
+        )
+        _total_short = total_entity_shortfall + total_keyword_shortfall + total_bold_shortfall
+        if _total_short > 0 and freq_score < 85:
+            recommendations.append(
+                f"Increase mention frequency: {_total_short} more mention"
+                f"{'s' if _total_short != 1 else ''} needed to match competitor usage "
+                "(see the entity / keyword / bolded-term targets)."
+            )
     return {
         "score":             composite,
         "issues":            issues,
@@ -4328,6 +4365,7 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
         "keyword_coverage":  round(kw_score, 1),
         "entity_coverage":   round(ent_score, 1),
         "quadgram_coverage": round(qg_score, 1),
+        "frequency_coverage": round(freq_score, 1) if freq_score is not None else None,
         "entities_used":     entities_used,
         "entities_missing":  entities_missing,
         "entity_detail":         entity_detail,

@@ -10,6 +10,7 @@ import {
   backLink, card, outlineBtn, primaryBtn, scoreColor,
 } from './shared'
 import { ErrorDetails } from '../ErrorDetails'
+import { SearchCoveragePanel } from '../coverage/SearchCoveragePanel'
 
 interface Props {
   clientId: string
@@ -103,6 +104,9 @@ export function PageScoreView({
   useEffect(() => {
     if (startedRef.current) return
     startedRef.current = true
+    // Lazy score-on-mount, guarded once by the ref; the only setState it reaches
+    // synchronously is a reset — not a cascading render.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (scoreJob.phase === 'idle' && !result) void runScore()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -284,6 +288,9 @@ export function PageScoreView({
               )
             })}
           </div>
+
+          {/* Search coverage — entity/keyword/bolded-term targets + per-zone + frequency */}
+          <SearchCoveragePanel coverage={result.engine_scores?.serp_signal_coverage} />
 
           {/* Improve CTA */}
           <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 12 }}>
