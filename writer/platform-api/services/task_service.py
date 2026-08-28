@@ -653,6 +653,23 @@ def update_task(task_id: str, changes: dict, *, actor_id: Optional[str] = None) 
             qa_service.on_task_status_change(before, updated, actor_id=actor_id)
         except Exception as exc:
             logger.warning("qa_hook_failed", extra={"task_id": task_id, "error": str(exc)})
+        # Intervention-outcome loop: dragging a task INTO a done status is a
+        # completion path too — the board can PATCH status_key to done without
+        # calling /complete (which is what funnels through complete_task). Fire
+        # the registration hook when the NEW status is a done status. Idempotent
+        # (unique source_ref), flag-gated, best-effort — safe even if
+        # complete_task also fires for the same task.
+        try:
+            new_key = changes.get("status_key")
+            if any(
+                s.get("key") == new_key and (s.get("is_done") or s.get("category") == "done")
+                for s in get_statuses()
+            ):
+                from services import interventions
+
+                interventions.on_task_done(updated)
+        except Exception as exc:
+            logger.warning("intervention_status_hook_failed", extra={"task_id": task_id, "error": str(exc)})
     return updated
 
 

@@ -474,16 +474,23 @@ def run_intervention_sync() -> dict:
         logger.error("interventions.sync_read_failed", extra={"error": str(exc)})
         return stats
 
+    # Batch-load the linked goals for all due rows in one query (avoids a
+    # per-row campaign_goals fetch). measure_goal's own reads stay per-row.
+    goals_by_id: dict[str, dict] = {}
+    goal_ids = [gid for gid in {iv.get("goal_id") for iv in rows} if gid]
+    if goal_ids:
+        try:
+            for g in (
+                supabase.table("campaign_goals").select("*")
+                .in_("id", goal_ids).execute()
+            ).data or []:
+                goals_by_id[g["id"]] = g
+        except Exception as exc:
+            logger.warning("interventions.goal_batch_read_failed", extra={"error": str(exc)})
+
     for iv in rows:
         try:
-            goal = None
-            goal_id = iv.get("goal_id")
-            if goal_id:
-                g = (
-                    supabase.table("campaign_goals").select("*")
-                    .eq("id", goal_id).limit(1).execute()
-                ).data
-                goal = g[0] if g else None
+            goal = goals_by_id.get(iv.get("goal_id")) if iv.get("goal_id") else None
             keyword = (iv.get("target") or {}).get("keyword")
             current, _, _ = _measure(supabase, iv["client_id"], goal, keyword, today)
             result = evaluate_intervention(iv, current, now)

@@ -153,3 +153,12 @@ def test_proposal_target_rejects():
     assert iv.proposal_target({"target": {"tactic_type": "gbp_post", "keyword": "x"}}) is None
     assert iv.proposal_target({"target": {"tactic_type": "reoptimization"}}) is None  # no anchor
     assert iv.proposal_target({"target": "not a dict"}) is None
+
+
+# ---------------------------------------------------------------------------
+# drift guard — strategist mirrors TACTIC_TYPES to keep sanitize_review DB-free
+# ---------------------------------------------------------------------------
+def test_tactic_types_in_sync_with_strategist():
+    from services import strategist
+
+    assert strategist._INTERVENTION_TACTICS == iv.TACTIC_TYPES
