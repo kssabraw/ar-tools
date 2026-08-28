@@ -2465,6 +2465,21 @@ surfaced by running `filter` on the first large market. Unit-tested (`test_phase
 empty-list no-op). Note the `*/5` cron currently runs `command=filter` (OUTREACH_COMMAND unset), NOT `tick`
 per CLAUDE.md — separate open question, not addressed here.
 
+### I-121 FIXED (2026-08-28) · The same over-long-URL bug class in two report/heatmap SELECT reads
+An adversarial review of the I-120 fix grepped every `.in_("id", …)` in `api/` and found the SAME
+over-long-URL class UNFIXED in two READ paths — `run_market.py` `cmd_report`/`cmd_report_delta` (the
+per-prospect heatmap + heatmap-delta renderers): `client.table("prospect").select(...).in_("id", ids)`
+where `ids` / `shared_ids` is a whole snapshot's coverage-row prospect set (114–217 on the LA market
+today, grows with the grid). A GET carries the `id=in.(…)` filter in the URL exactly like the PATCH, so a
+few hundred ids 400s the read and aborts the render. Unlike I-120 these were never live-hit (no heatmap
+artifact has rendered yet — no `report_artifact` rows), so it was latent, not observed. **Fixed** by
+chunking both through a new `_read_prospects_by_ids(client, columns, ids)` (`_READ_ID_CHUNK` = 200,
+mirroring `pipeline._PATCH_ID_CHUNK` + `scoring._read_by_ids`; a chunk of ≤200 unique-PK rows never hits
+PostgREST's 1000-row page cap, so no per-chunk paging), which replaces the two `fetch_all(...)` loops and
+returns rows keyed by id — behaviour identical (empty ids → empty dict, same as the old `if ids:` guard;
+downstream is `prospects.get(id, {})`). Unit-tested (`test_run_marker`: 450 ids → [200,200,50], keyed
+result, empty-list no-op). Also dropped a dead always-true `if chunk:` guard from the I-120 helper.
+
 ### I-109 RESOLVED (2026-08-26) · TWO stacked bugs — sync mode AND the wrong enricher slug; fixed to async + `leads_n_contacts`
 Enrichment was broken two ways at once, which is why every prior single-cause theory (wrong validator
 set, parser aliases) only half-explained it:

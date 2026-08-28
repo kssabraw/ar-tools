@@ -44,6 +44,27 @@ def _market_id(client, name: str) -> str:
     return rows[0]["id"]
 
 
+# PostgREST puts an `id=in.(…)` filter in the URL, so a SELECT (GET) over a large id list makes an
+# over-long URL the server rejects with 400 — the same failure the filter PATCH hit (ISSUES I-120).
+# A snapshot's coverage set is hundreds of prospects, so the report/heatmap reads below chunk the ids
+# (ISSUES I-121). 200 mirrors the PATCH chunking (`pipeline._PATCH_ID_CHUNK`) and the score reader
+# (`scoring._read_by_ids`); a chunk of ≤200 unique-PK rows never hits PostgREST's 1000-row page cap,
+# so no per-chunk paging is needed.
+_READ_ID_CHUNK = 200
+
+
+def _read_prospects_by_ids(client, columns: str, ids: list[str]) -> dict[str, dict]:
+    """GET `prospect` rows for a set of ids, chunked so the `id=in.(…)` URL never exceeds PostgREST's
+    length limit. Returns rows keyed by id; an empty `ids` yields an empty dict without any call."""
+    out: dict[str, dict] = {}
+    for start in range(0, len(ids), _READ_ID_CHUNK):
+        chunk = ids[start:start + _READ_ID_CHUNK]
+        rows = client.table("prospect").select(columns).in_("id", chunk).execute().data or []
+        for row in rows:
+            out[row["id"]] = row
+    return out
+
+
 def _submarkets(client, market_id: str):
     from api.services.paging import fetch_all
 
@@ -1710,13 +1731,8 @@ def cmd_render_heatmap(args) -> int:
     if args.prospect:
         coverage_rows = [r for r in coverage_rows if r["prospect_id"] == args.prospect]
 
-    prospects: dict[str, dict] = {}
     ids = [r["prospect_id"] for r in coverage_rows]
-    if ids:
-        for row in fetch_all(
-            lambda: client.table("prospect").select("id, name, phone, lat, lng").in_("id", ids)
-        ):
-            prospects[row["id"]] = row
+    prospects = _read_prospects_by_ids(client, "id, name, phone, lat, lng", ids)
 
     out_dir = settings.artifact_dir
     os.makedirs(out_dir, exist_ok=True)
@@ -1861,12 +1877,7 @@ def cmd_render_delta(args) -> int:
     if args.prospect:
         shared_ids = [pid for pid in shared_ids if pid == args.prospect]
 
-    prospects: dict[str, dict] = {}
-    if shared_ids:
-        for row in fetch_all(
-            lambda: client.table("prospect").select("id, name, lat, lng").in_("id", shared_ids)
-        ):
-            prospects[row["id"]] = row
+    prospects = _read_prospects_by_ids(client, "id, name, lat, lng", shared_ids)
 
     out_dir = settings.artifact_dir
     os.makedirs(out_dir, exist_ok=True)

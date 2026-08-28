@@ -343,3 +343,49 @@ def test_unchanged_commands_keep_their_previous_default_of_20():
     for cmd in ("calibrate", "verify-reviews", "rollup"):
         assert legacy_limit(_parsed([cmd, "m.json"])) == 20
         assert legacy_limit(_parsed([cmd, "m.json", "--limit", "5"])) == 5
+
+
+def test_read_prospects_by_ids_chunks_and_keys_by_id():
+    """The report/heatmap reads SELECT `prospect` rows by id. A whole-snapshot id list in one GET
+    makes an over-long `id=in.(…)` URL that 400s (the same class as the filter PATCH — ISSUES
+    I-121). The helper chunks at 200, covers every id, and returns rows keyed by id."""
+    from api.scripts.run_market import _read_prospects_by_ids
+
+    calls: list[list[str]] = []
+
+    class _Q:
+        def select(self, columns):
+            self._columns = columns
+            return self
+
+        def in_(self, column, ids):
+            assert column == "id"
+            self._ids = list(ids)
+            calls.append(list(ids))
+            return self
+
+        def execute(self):
+            # PostgREST returns only the rows whose id is in the chunk.
+            return type("R", (), {"data": [{"id": i, "name": f"n-{i}"} for i in self._ids]})()
+
+    class _Client:
+        def table(self, name):
+            assert name == "prospect"
+            return _Q()
+
+    ids = [f"id-{i}" for i in range(450)]
+    out = _read_prospects_by_ids(_Client(), "id, name", ids)
+
+    assert [len(c) for c in calls] == [200, 200, 50]          # chunked at 200
+    assert sum(calls, []) == ids                              # every id fetched exactly once
+    assert set(out) == set(ids) and out["id-7"] == {"id": "id-7", "name": "n-id-7"}
+
+
+def test_read_prospects_by_ids_empty_makes_no_call():
+    from api.scripts.run_market import _read_prospects_by_ids
+
+    class _Client:
+        def table(self, name):
+            raise AssertionError("no GET should fire for an empty id list")
+
+    assert _read_prospects_by_ids(_Client(), "id, name", []) == {}

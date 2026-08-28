@@ -251,8 +251,7 @@ def _update_prospects_by_ids(client: Any, patch: dict[str, Any], ids: list[str])
     is the fix. Order within a chunk is irrelevant — every id in `ids` gets the same `patch`."""
     for start in range(0, len(ids), _PATCH_ID_CHUNK):
         chunk = ids[start:start + _PATCH_ID_CHUNK]
-        if chunk:
-            client.table("prospect").update(patch).in_("id", chunk).execute()
+        client.table("prospect").update(patch).in_("id", chunk).execute()
 
 
 def run_filter(
