@@ -121,6 +121,17 @@ async def slack_pace_events(request: Request, background: BackgroundTasks) -> Re
             media_type="application/json",
         )
 
+    # Inbound diagnostics — record every real delivery + the gate state, so a
+    # silent non-reply is debuggable (is Slack reaching us, and do we drop it?).
+    _ev = payload.get("event") or {}
+    logger.info(
+        "slack_pace_events.hit type=%s event=%s subtype=%s bot=%s channel=%s retry=%s pace_enabled=%s has_secret=%s",
+        payload.get("type"), _ev.get("type"), _ev.get("subtype"),
+        bool(_ev.get("bot_id")), _ev.get("channel"),
+        request.headers.get("X-Slack-Retry-Num"),
+        settings.pace_enabled, bool(settings.pace_slack_signing_secret),
+    )
+
     # Real events require PACE enabled + a configured signing secret (fail-closed).
     if not (settings.pace_enabled and settings.pace_slack_signing_secret):
         return Response(status_code=200)
