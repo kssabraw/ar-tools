@@ -30,6 +30,19 @@ squash-merged:
   Type/Brand kind), normalizing legacy `brands` on load.
 - **[#815](https://github.com/kssabraw/ar-tools/pull/815)** — the team user guide
   (`docs/website-builder-user-guide.md`) documents Service variations.
+- **[#819](https://github.com/kssabraw/ar-tools/pull/819)** — adversarial-review
+  fixes: (a) the store parser mirrors the frontend's "variations wins" rule —
+  legacy `brands` are read ONLY when the `variations` key is absent (presence of
+  the key, even `[]`, means the catalog is migrated), so the two can't double up
+  server-side; (b) a synthetic `type`-variation's generation keyword is scoped by
+  its parent service (`generation_inputs` → "Emergency AC Repair"), skipping the
+  join when the service name is already in the label — so a bare label like
+  "Emergency" on two services no longer generates identical keyword+location
+  pages; the page TITLE stays bare and real catalog sub-services are unchanged.
+  (Also caught a process gotcha worth repeating: `git checkout main` had landed
+  on a **stale local `main`** and silently reverted the working tree to
+  pre-change files — always `git reset --hard origin/main` before reviewing
+  merged work.)
 
 **Verification pattern held:** built BOTH `/ac-repair/carrier/` (brand) and
 `/tree-removal/oak-trees/` (type → sub-service, clean "Oak Trees" title) in
