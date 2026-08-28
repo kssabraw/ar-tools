@@ -659,11 +659,17 @@ def _ctx_gbp_posts(supabase, client_id: str, today: date) -> Optional[dict]:
 def _ctx_native_tasks(supabase, client_id: str, today: date) -> Optional[dict]:
     """Native task board — open top-level tasks by status, overdue/unassigned,
     and the nearest-due open items. (`asana`/`task_plan` are separate reads.)
-    Subtasks (parent_task_id set) are excluded so counts aren't doubled."""
+    Subtasks (parent_task_id set) are excluded so counts aren't doubled.
+
+    The query filters to OPEN tasks (`completed = false`): a client accrues
+    months of completed tasks, and ordering by due_date asc over open+completed
+    would let old done tasks crowd recent open work out of the 300 window. The
+    Python `open_rows` filter below is defensive belt-and-suspenders."""
     rows = (
         supabase.table("tasks")
         .select("name, status_key, assignee_name, assignee_gid, due_date, completed")
         .eq("client_id", client_id)
+        .eq("completed", False)
         .is_("deleted_at", "null")
         .is_("parent_task_id", "null")
         .order("due_date", desc=False)

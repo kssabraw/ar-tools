@@ -1290,6 +1290,11 @@ def _is_frozen(client_id: str) -> bool:
 
 _FROZEN_MSG = "This client is frozen — content creation is paused until the freeze lifts."
 
+# Commissioned content runs are dispatched fire-and-forget via create_task; keep
+# strong references so the event loop can't garbage-collect them mid-run (the
+# standard create_task pattern, mirroring orchestrator._RESUME_TASKS).
+_COMMISSION_TASKS: set = set()
+
 
 async def _stage_start_content_run(client_id: str, args: dict) -> tuple[str, dict | str]:
     keyword = (args.get("keyword") or "").strip()
@@ -1346,7 +1351,9 @@ async def _act_start_content_run(client_id: str, args: Optional[dict] = None) ->
         writer_notes=(args.get("writer_notes") or "").strip() or None,
         created_by=None,
     )
-    asyncio.create_task(orchestrate_run(run_id))
+    task = asyncio.create_task(orchestrate_run(run_id))
+    _COMMISSION_TASKS.add(task)
+    task.add_done_callback(_COMMISSION_TASKS.discard)
     label = "blog post" if content_type == "blog_post" else "service page"
     return f"✅ Started a {label} run for *“{keyword}”* — /clients/{client_id}/runs/{run_id}"
 

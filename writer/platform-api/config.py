@@ -1457,6 +1457,29 @@ class Settings(BaseSettings):
     # signal digest and the SOP block.
     strategist_digest_budget_tokens: int = 25_000
 
+    # --- Autonomous SEO agent (autonomous-seo-agent-plan-v1_0.md) ---
+    # Master gate. While False the whole closed loop is dormant — the policy
+    # engine + budget governor are libraries, nothing runs autonomously, and
+    # behaviour is exactly today's per-action-human-confirm model.
+    autonomy_enabled: bool = False
+    # The highest per-client tier the executor will ever auto-approve, even if a
+    # client is opted higher. v1 ships Tiers 1–2 built; Tier 3 (auto-publish to
+    # client sites) is held for a separate decision, so the ceiling is 2.
+    autonomy_max_tier: int = 2
+    # The executor reuses the strategist's reasoning; a Sonnet-class model.
+    autonomy_model: str = "claude-sonnet-4-6"
+    # Weekly scheduled loop: the day AFTER the strategist pass (0=Mon..6=Sun) so
+    # it acts on a fresh review. Wednesday by default (strategist = Tue).
+    autonomy_weekly_weekday: int = 2
+    # Per-client content rate ceiling: at most this many content pieces
+    # (start_content_run / generate_local_seo_page / reoptimize_page) commissioned
+    # autonomously per client per week. Beyond it the executor PROPOSES instead.
+    autonomy_max_content_per_week: int = 3
+    # Which Recipe Engine figure funds autonomous work: "discretionary" (what a
+    # strategy can fund on top of the baseline stack — the honest ceiling) or
+    # "deployable" (retainer × margin, gross). Clamped at 0.
+    autonomy_budget_source: str = "discretionary"
+
     # ------------------------------------------------------------------
     # Asana task integration (docs/modules/asana-task-integration-plan-v1_0.md)
     # ------------------------------------------------------------------
