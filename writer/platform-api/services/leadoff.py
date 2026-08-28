@@ -20,11 +20,15 @@ from typing import Any
 DEFAULT_CAPTURE = 0.10
 DEFAULT_TIER = "mid"
 LEAD_TIERS = ("low", "mid", "high")
-BOARD_SORTS = ("build", "roi", "expected", "value", "leads", "demand", "v3")
+BOARD_SORTS = ("build", "roi", "profit", "payback", "expected", "value",
+               "leads", "demand", "v3")
 
-# pre-rank column used to bound the fetch before exact re-sort in Python
+# pre-rank column used to bound the fetch before exact re-sort in Python.
+# profit/payback have no scanner column (computed on read from the cost-to-win
+# model), so prefetch the top expected-value candidates and re-sort in Python.
 _PRERANK_COLUMN = {
-    "build": "build", "roi": "roi", "expected": "exp_val", "value": "value_mo",
+    "build": "build", "roi": "roi", "profit": "exp_val", "payback": "exp_val",
+    "expected": "exp_val", "value": "value_mo",
     "leads": "xdem", "demand": "xdem", "v3": "v3",
 }
 _GRADE_BANDS = [(99, "A+"), (97, "A"), (94, "B+"), (90, "B"), (75, "C"), (50, "D")]
@@ -101,6 +105,14 @@ def sort_value(row: dict[str, Any], sort: str) -> float:
         if v is None:
             v = row.get("v3")
         return float(v) if v is not None else -1.0
+    if sort == "profit":
+        v = row.get("monthly_profit")
+        return float(v) if v is not None else -9e18
+    if sort == "payback":
+        # Lower months = better, so negate (higher sort_value ranks first);
+        # a never-pays-back market (None) sinks to the bottom.
+        v = row.get("payback_months")
+        return -float(v) if v is not None else -9e18
     key = {"build": "build", "roi": "roi", "expected": "exp_val",
            "value": "value_mo", "leads": "exp_leads_mo", "demand": "xdem"}[sort]
     v = row.get(key)
@@ -328,6 +340,14 @@ def list_board(*, city: str | None, state: str | None, category: str | None,
     markets = _enrich_board_grades(markets, capture, lead_tier, sort)
     from services.leadoff_beatability import attach_beatability
     markets = attach_beatability(markets)
+    # Agency cost-to-win ROI (monthly profit + payback) — board-wide the link
+    # gap is unknown, so it's modelled (reviews + content + maintenance). Attach
+    # last so exp_val/rev_win are final, then re-sort for the two ROI sorts
+    # (they have no scanner prerank column).
+    from services.leadoff_roi import attach_roi
+    markets = [attach_roi(m) for m in markets]
+    if sort in ("profit", "payback"):
+        markets.sort(key=lambda r: sort_value(r, sort), reverse=True)
     return {"markets": markets, "as_of": as_of,
             "assumptions": {"capture": capture, "lead_tier": lead_tier,
                             "approximate": not default_assumptions}}
@@ -454,8 +474,13 @@ def get_market_brief(city_id: int, category_id: str) -> dict[str, Any] | None:
                                              city_id),
     }])[0]
     from services.leadoff_beatability import with_beatability
-    return with_beatability(_enrich_brief_grade(
+    scored = with_beatability(_enrich_brief_grade(
         brief, comps, city_id, category_id, trend[0] if trend else None))
+    # Cost-to-win ROI — the brief holds the scouted RD field, so its link
+    # component is MEASURED (not modelled) when RD is cached.
+    from services.leadoff_roi import attach_roi, rd_gap_from_enrichment
+    return attach_roi(scored,
+                      rd_gap_true=rd_gap_from_enrichment(scored.get("enrichment")))
 
 
 def _enrich_brief_grade(brief: dict[str, Any], comps: list[dict[str, Any]],

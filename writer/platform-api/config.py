@@ -1795,6 +1795,35 @@ class Settings(BaseSettings):
     leadoff_proximity_radius_miles: float = 10.0
     leadoff_proximity_min_pins: int = 5
     leadoff_proximity_weak_frac: float = 0.25
+    # Agency cost-to-win ROI (leadoff_roi.py, owner ruling 2026-08-28) — replaces
+    # the mislabelled "$/mo per review" with expected value vs. what the agency
+    # pays to win + hold the ranking. Unit costs are sourced from the Recipe
+    # Engine SOP catalog (content page price is imported from there directly);
+    # these are the tunable market-selection assumptions. All are forecasts that
+    # sharpen post-scout (real RD gap) / post-client (real retainer).
+    leadoff_roi_enabled: bool = True
+    leadoff_roi_cost_per_review: float = 10.0   # loaded labour to earn one review
+    leadoff_roi_cost_per_link: float = 30.0     # blended per-RD cost (DAS $10 … niche edit $75)
+    leadoff_roi_content_pages: float = 4.0      # pages assumed to rank a market
+    # Monthly maintenance is a SLIDING SCALE, not a flat number: holding rank in
+    # a brutal field costs more per month (more links/content to defend) than in
+    # a soft one. Slides on the same field-difficulty signal as the ramp
+    # (Beatability / win-likelihood) between these bounds.
+    leadoff_roi_maint_min_month: float = 135.0  # softest field (≈ Recipe Engine Baseline Stack)
+    leadoff_roi_maint_max_month: float = 600.0  # brutal field (heavier defensive spend)
+    leadoff_roi_rd_target_mult: float = 1.0     # RD-to-win = competitor field median true RD × this
+    # Ramp-to-rank: SEO doesn't rank instantly — you pay the monthly spend for
+    # months of ramp BEFORE the ranking (and its value) arrive, and that sunk
+    # ramp cost is what makes payback realistic. The ramp is NOT fixed — it's
+    # derived per market from field difficulty (Beatability, or win-likelihood
+    # when absent): a soft field ranks near the floor, a brutal one near the
+    # ceiling. And because the incumbents are usually still doing SEO, an
+    # actively-growing field (review-velocity momentum, scouted markets) extends
+    # the ramp — you're chasing a moving target.
+    leadoff_roi_ramp_min_months: float = 3.0     # softest field
+    leadoff_roi_ramp_max_months: float = 9.0     # brutal field
+    leadoff_roi_ramp_accel_mult: float = 1.35    # field accelerating → longer (chasing a moving target)
+    leadoff_roi_ramp_cooling_mult: float = 1.05  # field cooling/dead → still growing a little
     # GBP Placement Advisor (leadoff-gbp-placement-plan-v1_0.md §10): the
     # demand-aware "where should the GBP live" read. Free core = the Census
     # ACS block-group demand surface (census_demand.py, $0) ÷ the live
