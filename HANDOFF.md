@@ -1,6 +1,85 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-27 · **Website Builder — brand_service + hyper_local engines BUILT + generalized to service variations (MERGED)** (latest)
+## ⏩ Update — 2026-08-28 · **LeadOff — agency cost-to-win ROI replaces the $/review "ROI" (MERGED + LIVE)** (latest)
+
+The market brief/board/tryout used to show **"ROI ($/mo per review)"** =
+`exp_val / max(rev_win, 10)` — a value-per-effort ratio that **subtracts no
+cost**, so a market read as cheap-to-win while being expensive. Owner ruling
+(2026-08-28): make it a **real ROI** — expected monthly value vs. what the
+**agency** pays to win and hold the ranking. Three PRs, all squash-merged to
+`main` and live (the routes compute it on read; **no migration**):
+**[#832](https://github.com/kssabraw/ar-tools/pull/832)** (the model + board/brief),
+**[#834](https://github.com/kssabraw/ar-tools/pull/834)** (first-month 2× setup),
+**[#835](https://github.com/kssabraw/ar-tools/pull/835)** (Tryout).
+
+**The model** — `services/leadoff_roi.py` (pure `compute_roi` +
+`estimate_ramp_months` + `estimate_maintenance` + `rd_gap_from_enrichment`;
+impure `attach_roi`; unit-tested `tests/test_leadoff_roi.py`):
+
+- **deliverables** = reviews-to-win × per-review + pages × per-page (+ RD gap ×
+  per-link, **scouted markets only**). Unit prices come from the **Recipe Engine**
+  catalog (`CONTENT_PAGE_COST` imported directly) so nothing is invented.
+- **first-month setup surcharge** = (first_month_multiplier − 1) × monthly
+  maintenance — the first month costs 2× (site build, initial citations, GBP
+  config) the steady-state months.
+- **ramp cost** = ramp_months × monthly maintenance — SEO doesn't rank instantly;
+  you pay monthly labour through the climb before value arrives. This is what
+  makes payback realistic (the first cut, with no ramp, gave a <1-month payback).
+- **monthly profit** = expected $/mo − monthly maintenance (steady state).
+- **payback (months)** = ramp_months + (deliverables + setup + ramp) ÷ monthly
+  profit. `None` ⇒ never recoups (maintenance ≥ the market's value). Value is
+  modelled as a step at end-of-ramp (conservative; a pre-client forecast).
+
+**Everything slides per market on field difficulty** (Beatability — from
+rev_win/holders/rating — preferred, win-likelihood `rankab` fallback, 0.5 ease
+if neither):
+
+- **ramp** between `leadoff_roi_ramp_min_months` (3, soft field) and
+  `_max_months` (9, brutal), THEN adjusted by the review-velocity **momentum**
+  (the "competition is still doing SEO" / moving-target factor, **scouted only**):
+  accel ×`_ramp_accel_mult` (1.35), cooling/dead ×`_ramp_cooling_mult` (1.05 —
+  even a cooling field is still building, so it mildly *extends*, not shortens).
+- **maintenance** between `leadoff_roi_maint_min_month` (135, soft) and
+  `_max_month` (600, brutal) — harder fields cost more to *hold*.
+
+**Measured vs modelled** (carried as `roi_confidence`): the RD/link gap is only
+captured on **scouted** markets (the brief, via `rd_gap_from_enrichment` on the
+`enrichment.rd_med` ×10-true-RD field) → `measured`; **board-wide + tryout** have
+no scouted RD → links omitted + flagged `modelled`. Same honesty split as the
+rest of LeadOff.
+
+**Wiring / surfaces:**
+- `services/leadoff.py` — `attach_roi` over board rows (after `attach_beatability`,
+  modelled) + on the brief (measured); new **`profit`/`payback` board sorts**
+  (prefetch on `exp_val`, re-sorted in Python — no scanner column exists).
+- `services/leadoff_actions.py::run_tryout_job` — Beatability + `attach_roi` on
+  tryout rows before persist (best-effort; JSON `leadoff_tryouts.results`).
+- `frontend/src/pages/LeadOff.tsx` — **Profit $/mo + Payback** columns (replacing
+  ROI $/rev) on the board AND tryout tables, the two new sort options, a brief
+  ROI block with the cost-to-win breakdown (reviews/pages/links/1st-mo setup/ramp)
+  + measured/modelled note, CSV columns. The old `roi` field is kept for
+  back-compat.
+
+**Worked example (Little Rock water-damage, Beatability 71):** maintenance
+~$212/mo, ramp ~4.7mo, first-month setup +$212, cost-to-win ~$1,388, monthly
+profit ~$1,237, **payback ~5.8 months** — vs. the old nonsensical $/review 90.6.
+
+**⚠ The unit-cost defaults are placeholders, not the agency's real economics** —
+all config, tune without a rebuild: `leadoff_roi_cost_per_review` (10),
+`_cost_per_link` (30), `_content_pages` (4), `_maint_min/max_month` (135/600),
+`_ramp_min/max_months` (3/9), `_ramp_accel/cooling_mult` (1.35/1.05),
+`_first_month_multiplier` (2.0), `_rd_target_mult` (1.0), `_enabled` (True).
+
+**Deferred (owner-flagged, not built):** the **"gap grows during the ramp"**
+refinement — while you close the review/RD gap, the incumbents keep adding
+reviews/RD, so the *effective* gap (and the deliverable cost) is larger than the
+static snapshot. Today the moving target only extends the *ramp* (via momentum);
+inflating the *deliverable count* by the field's growth-rate × ramp is the next
+step. Also: swap in the real agency unit costs.
+
+---
+
+## ⏩ Update — 2026-08-27 · **Website Builder — brand_service + hyper_local engines BUILT + generalized to service variations (MERGED)**
 
 Tier A of the roadmap entry below is **done and on `main`**. Three PRs, all
 squash-merged:
