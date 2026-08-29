@@ -451,3 +451,10 @@ outside it to close.
 | Filter down to what's overdue / unassigned | **Views…** dropdown → built-in presets |
 | Save my own filter combo for reuse | Set filters → **Views…** → **＋ Save current view…** |
 | Fix a recurring task's default hours/checklist | **Task Library** (sidebar) |
+
+---
+
+*See also: the [PACE & QA User Guide](pace-qa-user-guide.md) for the two
+agents that watch this board — PACE (delivery) and QA (quality) — and the
+[PM Operations Addendum](pm-operations-addendum.md) for the judgment calls
+behind capacity, duplicate task names, and Chase Plan triage.*
