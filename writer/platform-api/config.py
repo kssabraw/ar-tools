@@ -1654,6 +1654,11 @@ class Settings(BaseSettings):
     everhour_sync_repull_days: int = 14
     # Max time records requested per page from GET /team/time (API max 50000).
     everhour_sync_page_limit: int = 10000
+    # Spacing (seconds) between staggered scheduled_at times for the one-time
+    # task-mirror backfill's per-task jobs — keeps a large backlog's outbound
+    # POSTs well under Everhour's 100-req/10s ceiling (plan §11.7). The daily
+    # inline/producer mirror is one task at a time, so it needs no spacing.
+    everhour_backfill_spacing_seconds: float = 1.0
 
     # Deliverables Sheet Sync (docs/modules/deliverables-sheet-sync-prd-v1_0.md)
     # — auto-maintain each client's Google deliverables sheet: append a row on

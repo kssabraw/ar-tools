@@ -41,3 +41,13 @@ class EverhourProject(BaseModel):
 
     everhour_project_id: Optional[str] = None
     name: Optional[str] = None
+
+
+class EverhourBackfillResult(BaseModel):
+    """Result of the one-time task-mirror backfill (Phase 2, §3/§8) — how many
+    existing open tasks were queued for an Everhour mirror."""
+
+    status: str
+    candidates: int = 0
+    enqueued: int = 0
+    reason: Optional[str] = None

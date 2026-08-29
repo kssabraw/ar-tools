@@ -1,6 +1,46 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-29 · **Everhour Phase 1 (identity/mapping) BUILT + MERGED (#890); Phase-0 gotcha doc reconciled with #888** (latest)
+## ⏩ Update — 2026-08-29 · **Everhour Phase 2 (metadata-only task mirror) BUILT — draft PR** (latest)
+
+Continuation of the Everhour entries below. Phase 2 is the **task mirror (suite → Everhour, write, metadata-only)**:
+give every native task a stable Everhour counterpart so time logged against it joins back to the exact `tasks`
+row, without turning Everhour into a second task manager (locked decision #6 — name + optional assignee only).
+Built on a fresh branch off `main` (`claude/everhour-time-tracking-9peruh`), gated OFF (`everhour_enabled` default False).
+
+- **Migration `20260829130000` (applied live):** `tasks.everhour_task_id` (text, the opaque `"ev:…"` id) +
+  `tasks.everhour_synced_at` (timestamptz, last successful mirror). A partial index `idx_tasks_everhour_unmirrored`
+  supports the backfill scan. The `async_jobs` job_type CHECK widened to accept `everhour_mirror` (rebuilt from the
+  live constraint — the score_external list + the new value). **`tasks.actual_hours` + `time_entries` are Phase 3,
+  deliberately NOT added.**
+- **`services/everhour_sync.py` (new):** the mirror. Pure `should_mirror` (top-level + client-scoped + unmirrored +
+  live) and `mirror_user_id` (**gotcha #5** — casts the stored TEXT `everhour_user_id` to the `int` Everhour's
+  `assignees[].userId` wants); `mirror_gate_open` (enabled + mirror sub-gate + configured); `enqueue_mirror`
+  (best-effort, deduped against an in-flight job); async `mirror_task` (resolves the client's project + the assignee's
+  Everhour id → `build_task_payload` → `create_task` → stamp the join key); `run_mirror_job` handler; `backfill_mirror`
+  (enqueues one staggered `everhour_mirror` job per existing open, top-level, unmirrored task of a mapped client).
+- **Design call — async, not inline** (plan §3 left it open): `task_service.create_task` is sync but called BOTH from
+  threadpool routes AND directly on the event loop (`run_task_month_job` awaits the sync `generate_month_for_client`),
+  so an inline `asyncio.run` of Everhour's async client would raise inside a running loop. A per-task `everhour_mirror`
+  job is a plain sync insert that works from anywhere and gets the worker's retry/settle for free. The "task exists
+  natively before its Everhour shadow" window is explicitly acceptable (no time can be logged in it anyway).
+- **One funnel covers all of §3's hook points:** manual creation, the monthly generator, and every producer all pass
+  through `task_service.create_task`, so `enqueue_mirror(created)` is hooked there once (best-effort, lazy import) —
+  not in three places. Subtasks bypass it (they insert via `create_subtasks`) and are never mirrored (checklist
+  markers, not billing targets).
+- **Not freeze-gated (deliberate):** the mirror creates nothing in the suite and no client content — it mirrors an
+  already-existing internal task's metadata outward. Freeze pauses content/link OUTPUT; internal PM task creation keeps
+  running during a freeze (producers still open tasks). So `everhour_mirror` is NOT in `FREEZE_GATED_JOB_TYPES`.
+- **Backfill endpoint:** `POST /everhour/backfill-mirror` (admin — the parallel of the Asana import). Fast (enqueues
+  jobs; the outbound POSTs run staggered on the worker). Idempotent — re-running only picks up the unmirrored tail.
+- **Tests:** `tests/test_everhour_sync.py` (pure helpers + gating + enqueue dedup/no-op + mirror success/skip/no-id +
+  backfill) — 22 new, all green with the existing 24 `everhour_service` tests + 35 `test_task_manager`.
+- **Config:** added `everhour_backfill_spacing_seconds` (1.0) for the backfill's rate-ceiling stagger (plan §11.7).
+
+**Next: Phase 3** (time pull + rollups — `time_entries` table, the daily `everhour_sync` scheduled job over a rolling
+re-pull window, `actual_hours`/per-client/per-member rollups). Then Phase 4 (Recipe Engine actual-margin + PACE
+utilization consumers + frontend surfaces).
+
+## ⏩ Update — 2026-08-29 · **Everhour Phase 1 (identity/mapping) BUILT + MERGED (#890); Phase-0 gotcha doc reconciled with #888**
 
 Continuation of the two Everhour entries below. This session was handed the merged PR #884 (Phase 0)
 plus its adversarial review's still-unanswered open question ("fix the 4 bugs now, or defer?").

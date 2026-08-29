@@ -23,9 +23,14 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 
 from config import settings
-from middleware.auth import require_auth
-from models.everhour import EverhourProject, EverhourStatus, EverhourUser
-from services import everhour_service
+from middleware.auth import require_admin, require_auth
+from models.everhour import (
+    EverhourBackfillResult,
+    EverhourProject,
+    EverhourStatus,
+    EverhourUser,
+)
+from services import everhour_service, everhour_sync
 
 router = APIRouter(tags=["everhour"])
 logger = logging.getLogger(__name__)
@@ -72,3 +77,18 @@ async def everhour_projects(
         logger.warning("everhour_projects_failed", extra={"error": str(exc)})
         return []
     return [EverhourProject(**everhour_service.parse_project(p)) for p in projects]
+
+
+@router.post("/everhour/backfill-mirror", response_model=EverhourBackfillResult)
+async def everhour_backfill_mirror(
+    limit: Optional[int] = None,
+    auth: dict = Depends(require_admin),
+) -> EverhourBackfillResult:
+    """One-time cutover backfill (Phase 2, plan §3/§8 step 4): enqueue an
+    Everhour task mirror for every existing OPEN, top-level, not-yet-mirrored
+    task whose client is Everhour-mapped, so staff can start logging against real
+    Everhour tasks. Admin-gated (the parallel of the Asana import). A no-op
+    unless the mirror gate is open; idempotent — re-running only picks up the
+    still-unmirrored tail. Fast (enqueues jobs; the outbound POSTs run on the
+    worker, staggered for the rate ceiling)."""
+    return EverhourBackfillResult(**everhour_sync.backfill_mirror(limit=limit))
