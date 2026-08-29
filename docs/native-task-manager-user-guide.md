@@ -11,6 +11,11 @@ happens in the dashboard.
 > finished work, one watches for things falling between the cracks). You
 > don't need to know how they work to use the board day-to-day — this guide
 > only covers what you click.
+>
+> **See also:** the [PACE & QA User Guide](pace-qa-user-guide.md) covers the
+> two of those agents you'll actually talk to — PACE (delivery, in `#pace` /
+> `/pace`) and QA (the automatic reviewer + rubrics behind the "For QA"
+> button below).
 
 ---
 
