@@ -177,6 +177,12 @@ CLIENT_SCOPED_PACE_KINDS = frozenset({
     "task_assigned", "task_mention", "task_comment", "task_month_generated",
     "task_nudge", "deliverable_link_missing", "deliverable_note",
     "content_ready",
+    # A proactive-intervention note / execution result that concerns ONE client
+    # (duplicate_names / untriaged / overdue / slip carry a scope_client_id) posts
+    # to that client's own channel when set. The portfolio intervention DIGEST is
+    # emitted with client_id=None + an explicit payload.slack_channel override, so
+    # it always stays in the master PACE channel (the override wins here).
+    "pace_intervention", "pace_intervention_result",
 })
 
 # Director of Operations (DORA) kinds. These are still PACE kinds (so they keep

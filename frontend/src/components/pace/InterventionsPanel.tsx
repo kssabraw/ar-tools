@@ -52,6 +52,9 @@ export function InterventionsPanel() {
 
   useEffect(() => {
     void load()
+    // Poll so interventions raised by a scan appear without a manual refresh.
+    const id = setInterval(() => void load(), 60000)
+    return () => clearInterval(id)
   }, [load])
 
   if (loading) return null
@@ -94,10 +97,14 @@ function InterventionCard({ item, onChanged }: { item: PaceIntervention; onChang
   const [conditions, setConditions] = useState('')
   const [note, setNote] = useState('')
   const [result, setResult] = useState<string | null>(null)
+  // Only a terminal disposition hides the controls; on an error or a non-terminal
+  // outcome (e.g. "all skipped, left open") the buttons stay so the PM can retry.
+  const [done, setDone] = useState(false)
 
   const sev = SEV[item.severity] || SEV.warning
   const actions = item.plan?.actions || []
   const overflow = item.plan?.overflow || 0
+  const TERMINAL = ['executed', 'failed', 'denied', 'deferred']
 
   const dispose = async (disposition: Disposition) => {
     setBusy(true)
@@ -112,12 +119,13 @@ function InterventionCard({ item, onChanged }: { item: PaceIntervention; onChang
         body,
       )
       setResult(res.message)
-      // A terminal disposition removes it from the open list; refresh after a beat
-      // so the PM sees the outcome message first.
+      setBusy(false)
+      if (res.ok || TERMINAL.includes(res.status || '')) setDone(true)
+      // Refresh so the list reflects the new state (a terminal one drops the card).
       setTimeout(() => void onChanged(), 1200)
     } catch (e) {
       setResult(e instanceof Error ? e.message : String(e))
-      setBusy(false)
+      setBusy(false) // keep the buttons — the error box shows above them
     }
   }
 
@@ -149,11 +157,12 @@ function InterventionCard({ item, onChanged }: { item: PaceIntervention; onChang
         </div>
       )}
 
-      {result ? (
+      {result && (
         <div style={{ marginTop: 10, fontSize: 12.5, color: '#0f766e', background: '#f0fdfa', border: '1px solid #ccfbf1', borderRadius: 8, padding: '8px 10px' }}>
           {result}
         </div>
-      ) : (
+      )}
+      {!done && (
         <>
           <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
             <button style={primaryBtn(busy)} disabled={busy} onClick={() => void dispose('approve')}>

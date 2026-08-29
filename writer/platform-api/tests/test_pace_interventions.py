@@ -336,28 +336,149 @@ def test_emit_digest_leaves_per_client_notes(monkeypatch):
                         lambda **kw: calls.append(kw) or "nid")
     monkeypatch.setattr(settings, "pace_slack_channel", "C_PACE", raising=False)
     surfaced = [
+        # client WITH its own channel → per-client note routes there (no skip)
         {"id": "iv1", "severity": "warning", "title": "Acme dupes", "problem": "dupe names",
-         "scope_client_id": "client-acme", "plan": {"actions": [{"reason": "rename x"}]}},
-        {"id": "iv2", "severity": "critical", "title": "Marcus overloaded", "problem": "293%",
-         "scope_client_id": None, "plan": {"actions": [{"reason": "move y"}]}},
+         "scope_client_id": "client-acme", "created_at": "2026-08-01",
+         "plan": {"actions": [{"reason": "rename x"}]}},
+        # client WITHOUT a channel → per-client note is in-app only (skip slack)
+        {"id": "iv2", "severity": "warning", "title": "Beta overdue", "problem": "overdue",
+         "scope_client_id": "client-beta", "created_at": "2026-08-02",
+         "plan": {"actions": [{"reason": "nudge y"}]}},
+        # cross-client (member_overload) → NO per-client note
+        {"id": "iv3", "severity": "critical", "title": "Marcus overloaded", "problem": "293%",
+         "scope_client_id": None, "created_at": "2026-08-03",
+         "plan": {"actions": [{"reason": "move z"}]}},
     ]
+
+    class _Q:
+        def __init__(self, data): self._d = data
+        def select(self, *a, **k): return self
+        def in_(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def order(self, *a, **k): return self
+        def limit(self, *a, **k): return self
+        def execute(self): return type("R", (), {"data": self._d})()
+
+    class _SB:
+        def table(self, name):
+            if name == "pace_interventions":
+                return _Q(surfaced)                 # the open set for the reply index
+            if name == "clients":
+                return _Q([{"id": "client-acme", "slack_channel_id": "C_ACME"},
+                           {"id": "client-beta", "slack_channel_id": None}])
+            return _Q([])
+
+    monkeypatch.setattr(PI, "get_supabase", lambda: _SB())
     PI._emit_digest(surfaced, date(2026, 8, 29))
-    # 1 portfolio digest (client_id=None) + exactly 1 per-client note (the scoped one).
+
     portfolio = [c for c in calls if c.get("client_id") is None and c["kind"] == "pace_intervention"]
-    per_client = [c for c in calls if c.get("client_id") == "client-acme"]
+    acme = [c for c in calls if c.get("client_id") == "client-acme"]
+    beta = [c for c in calls if c.get("client_id") == "client-beta"]
     assert len(portfolio) == 1
-    assert len(per_client) == 1
-    assert per_client[0]["payload"].get("skip_channels") == ["slack"]   # no double Slack post
-    # the cross-client overload got NO per-client note
-    assert not any(c.get("client_id") for c in calls if c is not per_client[0] and c.get("client_id"))
-    # the Slack reply index was refreshed for the channel
-    assert PI._channel_index.get("C_PACE") == {1: "iv2", 2: "iv1"}  # critical first
+    # client WITH a channel → routed there (no skip_channels)
+    assert len(acme) == 1 and "skip_channels" not in acme[0]["payload"]
+    # client WITHOUT a channel → in-app only
+    assert len(beta) == 1 and beta[0]["payload"].get("skip_channels") == ["slack"]
+    # the cross-client overload (iv3) got NO per-client note
+    assert not any(c.get("client_id") == "iv3" or c.get("client_id") == "client-none" for c in calls)
+    assert all(c.get("client_id") in (None, "client-acme", "client-beta") for c in calls)
+    # per-client dedupe_key includes the date so a resurface re-notes
+    assert acme[0]["dedupe_key"] == "pace_intervention_client:iv1:2026-08-29"
+    # reply index is over the full open set, stable-ordered by created_at (asc), not severity
+    assert PI._channel_index.get("C_PACE") == {1: "iv1", 2: "iv2", 3: "iv3"}
 
 
 def test_dispose_permission_refused_for_low_role():
     va = ActionContext(profile_id="p", role="team_member", source="web")
     out = asyncio.run(PI.dispose("id123", va, "approve"))
-    assert out["ok"] is False and out["status"] is None
+    assert out["ok"] is False and out["status"] is None and out["code"] == "forbidden"
     anon = ActionContext(profile_id=None, role=None, source="slack")
     out2 = asyncio.run(PI.dispose("id123", anon, "deny"))
-    assert out2["ok"] is False and out2["status"] is None
+    assert out2["ok"] is False and out2["status"] is None and out2["code"] == "forbidden"
+
+
+# ---------------------------------------------------------------------------
+# Severe-scan throttle
+# ---------------------------------------------------------------------------
+def test_severe_throttle(monkeypatch):
+    monkeypatch.setattr(settings, "pace_intervention_severe_min_interval_minutes", 15, raising=False)
+    now = datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(PI, "_last_severe_scan_at", None, raising=False)
+    assert PI._severe_throttled(now) is False                      # never run → not throttled
+    monkeypatch.setattr(PI, "_last_severe_scan_at", now - timedelta(minutes=5), raising=False)
+    assert PI._severe_throttled(now) is True                       # 5 min ago < 15 → throttled
+    monkeypatch.setattr(PI, "_last_severe_scan_at", now - timedelta(minutes=20), raising=False)
+    assert PI._severe_throttled(now) is False                      # 20 min ago ≥ 15 → allowed
+    monkeypatch.setattr(settings, "pace_intervention_severe_min_interval_minutes", 0, raising=False)
+    monkeypatch.setattr(PI, "_last_severe_scan_at", now, raising=False)
+    assert PI._severe_throttled(now) is False                      # 0 → never throttled
+
+
+# ---------------------------------------------------------------------------
+# _ScanCache: shared reads are fetched once
+# ---------------------------------------------------------------------------
+def test_scan_cache_client_names_queries_once(monkeypatch):
+    hits = []
+    monkeypatch.setattr(PI, "_client_names",
+                        lambda ids: hits.append(sorted(ids)) or {i: f"name-{i}" for i in ids})
+    cache = PI._ScanCache()
+    assert cache.client_names(["a", "b"]) == {"a": "name-a", "b": "name-b"}
+    # a second call for an already-seen id does NOT re-query it; a new id does
+    cache.client_names(["a", "c"])
+    assert hits == [["a", "b"], ["c"]]
+
+
+# ---------------------------------------------------------------------------
+# _approve: atomic claim + all-skipped → re-opened (not falsely "executed")
+# ---------------------------------------------------------------------------
+def _fake_sb_capture():
+    updates = []
+
+    class _Q:
+        def __init__(self, data, sink=None): self._d = data; self._sink = sink; self._payload = None
+        def select(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def update(self, payload, *a, **k): self._payload = payload; return self
+        def execute(self):
+            if self._payload is not None and self._sink is not None:
+                self._sink.append(self._payload)
+            return type("R", (), {"data": self._d})()
+
+    return updates, _Q
+
+
+def test_approve_lost_claim_bails(monkeypatch):
+    updates, _Q = _fake_sb_capture()
+
+    class _SB:
+        def table(self, name):
+            # the conditional claim UPDATE ... WHERE status=prior matched 0 rows
+            return _Q([], updates)
+
+    monkeypatch.setattr(PI, "get_supabase", lambda: _SB())
+    row = {"id": "iv1", "status": "proposed", "title": "T",
+           "plan": {"actions": [{"action": "reassign_task", "client_id": "c", "args": {}}]}}
+    out = asyncio.run(PI._approve(row, _admin(), conditions=None))
+    assert out["ok"] is False and out["status"] == "executing"
+    assert "someone else" in out["message"]
+
+
+def test_approve_all_skipped_reopens(monkeypatch):
+    updates, _Q = _fake_sb_capture()
+
+    class _SB:
+        def table(self, name):
+            return _Q([{"id": "iv1"}], updates)          # claim succeeds (non-empty)
+
+    monkeypatch.setattr(PI, "get_supabase", lambda: _SB())
+    # every action stages a refusal → all skipped, none ran/failed
+    monkeypatch.setattr(PI, "PACE_ACTIONS",
+                        {"rename_task": {"stage": lambda *a: ("reply", "already handled"),
+                                         "run": lambda *a: "unused"}})
+    row = {"id": "iv1", "status": "proposed", "title": "Acme dupes",
+           "plan": {"actions": [{"action": "rename_task", "client_id": "c", "args": {"task_id": "t1"}}]}}
+    out = asyncio.run(PI._approve(row, _admin(), conditions=None))
+    assert out["ok"] is False and out["status"] == "proposed"      # re-opened, NOT "executed"
+    assert "left it open" in out["message"]
+    # the final status write set status back to proposed
+    assert updates[-1].get("status") == "proposed"

@@ -1893,6 +1893,11 @@ class Settings(BaseSettings):
     # LLM that parses free-text approve-with-conditions into a structured directive
     # (applied deterministically). Reuses the PACE model by default.
     pace_intervention_conditions_model: str = "claude-sonnet-4-6"
+    # Min minutes between the per-tick SEVERE scans (the scheduler ticks every
+    # gsc_scheduler_poll_interval_seconds, so this throttles the full-board scan
+    # a severe pass does). Lower → nearer-immediate severe detection, more DB
+    # load; 0 → run every tick.
+    pace_intervention_severe_min_interval_minutes: int = 15
     # Per-person morning DM briefs (§4.13) — off until the Slack app has the
     # im:write scope (grant + reinstall, then flip this on).
     pace_daily_brief_push: bool = False

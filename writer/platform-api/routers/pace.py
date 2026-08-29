@@ -348,8 +348,9 @@ async def dispose_pace_intervention(
         until=until, conditions=body.conditions, note=body.note,
     )
     if not result.get("ok") and result.get("status") is None:
-        # A permission refusal / missing row — surface as 403/404-ish via body.
-        raise HTTPException(status_code=403, detail=result.get("message") or "not_allowed")
+        # A missing row → 404; a permission refusal → 403.
+        code = 404 if result.get("code") == "not_found" else 403
+        raise HTTPException(status_code=code, detail=result.get("message") or "not_allowed")
     return result
 
 

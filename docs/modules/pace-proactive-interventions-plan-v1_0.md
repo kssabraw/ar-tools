@@ -87,16 +87,26 @@ unit-tested; the DB reads/writes are thin and batched (mirrors `response_episode
   (indexed) under the PACE bot. The PM replies naturally — `approve 2`, `deny 2`,
   `defer 2 to 2026-09-05` / `defer 2 in 3 days`, `approve 2 but only reassign to Ivy` — parsed
   by a pure `parse_intervention_reply` (ISO or simple-relative dates; free text after
-  but/if/only → conditions). Anything it can't parse points the PM at the web panel.
+  but/if/only → conditions). `approve` (and approve-with-conditions) first **previews the exact
+  plan** and requires a `yes` to run; `deny`/`defer` execute immediately. The reply index is
+  built over ALL currently-open interventions (stable across scans). Anything it can't parse
+  points the PM at the web panel.
+- **Per-client note:** each client-scoped intervention (and its execution result) also lands on
+  that client's workspace Alerts feed, and — when the client has its own Slack channel
+  (`clients.slack_channel_id`) — posts there; otherwise it's in-app only (the master `#pace`
+  rollup already carries the Slack copy). `member_overload` is cross-client and gets no
+  per-client note. The dedupe key carries the date, so a resurfaced intervention re-notes.
 
 ## 5. Cadence
 
 - **Daily full scan** on the shared scheduler (in the existing PACE initiative block),
   gated `pace_enabled ∧ pace_initiative_enabled ∧ pace_interventions_enabled`.
 - **Immediate for severe:** a **severe-only** pass (`member_overload` + `duplicate_names`,
-  critical only) runs every scheduler tick; the one-open-per-signature invariant + the
-  notification `dedupe_key` make repeated ticks idempotent, so a 293% spike or a large new
-  duplicate cluster surfaces within a tick instead of waiting for the daily batch.
+  critical only) runs on the scheduler tick, throttled to at most once per
+  `pace_intervention_severe_min_interval_minutes` (default 15) so it doesn't re-scan the whole
+  board every 5-minute tick; the one-open-per-signature invariant + the notification
+  `dedupe_key` make it idempotent, so a 293% spike or a large new duplicate cluster surfaces
+  quickly instead of waiting for the daily batch. Set the interval to 0 for per-tick immediacy.
 
 ## 6. Safety / execution model
 

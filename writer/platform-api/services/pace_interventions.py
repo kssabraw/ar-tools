@@ -285,15 +285,19 @@ def _open_rows() -> list[dict]:
     ).data or []
 
 
-def _latest_rows(signatures: set[str]) -> dict[str, dict]:
-    """Newest row per signature (any status) — the lifecycle decision input."""
+def _latest_rows(signatures: set[str], since: Optional[date] = None) -> dict[str, dict]:
+    """Newest row per signature (any status) — the lifecycle decision input.
+    Bounded to rows since ``since`` (the cooldown window): a CLOSED row older than
+    the max cooldown decides the same as no row ('create'), so older history is
+    irrelevant here — and OPEN rows are always reconsidered via ``open_by_sig`` in
+    the caller, so the bound can't drop a live one."""
     if not signatures:
         return {}
-    rows = (
-        get_supabase().table("pace_interventions").select("*")
-        .in_("signature", sorted(signatures))
-        .order("created_at", desc=True).execute()
-    ).data or []
+    q = (get_supabase().table("pace_interventions").select("*")
+         .in_("signature", sorted(signatures)))
+    if since is not None:
+        q = q.gte("created_at", since.isoformat())
+    rows = (q.order("created_at", desc=True).execute()).data or []
     latest: dict[str, dict] = {}
     for r in rows:
         latest.setdefault(r["signature"], r)  # first seen = newest (desc order)
@@ -301,21 +305,72 @@ def _latest_rows(signatures: set[str]) -> dict[str, dict]:
 
 
 # ---------------------------------------------------------------------------
+# Per-scan read cache — several detectors need the same member/skill/load and
+# client-name reads; the scan builds ONE cache so a full pass doesn't repeat
+# them. A detector called standalone (tests) builds its own.
+# ---------------------------------------------------------------------------
+class _ScanCache:
+    def __init__(self) -> None:
+        self._members = None
+        self._member_ids = None
+        self._skills = None
+        self._load = None
+        self._names: dict = {}
+        self._queried: set = set()
+
+    @property
+    def members(self) -> list[dict]:
+        if self._members is None:
+            from services import pm_assign
+            self._members = pm_assign._active_members()
+        return self._members
+
+    @property
+    def member_ids(self) -> list[str]:
+        if self._member_ids is None:
+            self._member_ids = [m["gid"] for m in self.members]
+        return self._member_ids
+
+    @property
+    def skills(self) -> dict:
+        if self._skills is None:
+            from services import pm_assign
+            self._skills = pm_assign._skills_by_member(self.member_ids)
+        return self._skills
+
+    @property
+    def load(self) -> dict:
+        if self._load is None:
+            from services import task_workload
+            self._load = task_workload.open_hours_for_members(self.member_ids)
+        return self._load
+
+    def client_names(self, client_ids) -> dict:
+        missing = sorted({c for c in client_ids if c} - self._queried)
+        if missing:
+            self._names.update(_client_names(missing))
+            self._queried.update(missing)
+        return dict(self._names)
+
+
+# ---------------------------------------------------------------------------
 # Detectors — each returns proposals: {kind, scope_client_id, signature,
 # severity, title, problem, evidence, actions[]}. Uniform signature
-# (today, digest, critical_only); reuse the one board digest the scan builds.
+# (today, digest, critical_only); reuse the one board digest + read cache the
+# scan builds (a standalone call builds its own).
 # ---------------------------------------------------------------------------
-def detect_member_overload(today: date, digest: Optional[dict], critical_only: bool) -> list[dict]:
+def detect_member_overload(today: date, digest: Optional[dict], critical_only: bool,
+                           cache: Optional["_ScanCache"] = None) -> list[dict]:
     from services import pace_rebalance, pm_assign, task_workload
 
+    cache = cache or _ScanCache()
     report = (digest or {}).get("workload") or task_workload.build_team_workload()
     overloaded = report.get("overloaded") or []
     if not overloaded:
         return []
-    members = pm_assign._active_members()
-    member_ids = [m["gid"] for m in members]
-    skills = pm_assign._skills_by_member(member_ids)
-    load = task_workload.open_hours_for_members(member_ids)
+    members = cache.members
+    skills = cache.skills
+    load = cache.load
     initial_keys = pace_rebalance._initial_status_keys()
     default_weekly = settings.asana_default_weekly_hours
     by_gid = {m.get("gid"): m for m in report.get("members") or []}
@@ -344,7 +399,7 @@ def detect_member_overload(today: date, digest: Optional[dict], critical_only: b
                 gid, over_hours, movable, members, skills, eligible_by_client, load,
                 default_hours=settings.asana_default_task_hours, default_weekly_hours=default_weekly,
             )
-        names = _client_names([mv["client_id"] for mv in plan["moves"]])
+        names = cache.client_names([mv["client_id"] for mv in plan["moves"]])
         actions = [
             {"action": "reassign_task", "client_id": mv["client_id"],
              "client_name": names.get(mv["client_id"], "client"),
@@ -378,7 +433,9 @@ def detect_member_overload(today: date, digest: Optional[dict], critical_only: b
     return proposals
 
 
-def detect_duplicate_names(today: date, digest: Optional[dict], critical_only: bool) -> list[dict]:
+def detect_duplicate_names(today: date, digest: Optional[dict], critical_only: bool,
+                           cache: Optional["_ScanCache"] = None) -> list[dict]:
+    cache = cache or _ScanCache()
     rows = (
         get_supabase().table("tasks")
         .select("id, client_id, name, assignee_name, section_id, created_at")
@@ -396,7 +453,7 @@ def detect_duplicate_names(today: date, digest: Optional[dict], critical_only: b
         for s in (get_supabase().table("task_sections").select("id, name")
                   .in_("id", section_ids).execute()).data or []:
             section_labels[s["id"]] = s.get("name")
-    names = _client_names(list(by_client))
+    names = cache.client_names(list(by_client))
 
     proposals: list[dict] = []
     for cid, tasks in by_client.items():
@@ -441,12 +498,14 @@ def _client_signal_lists(digest: Optional[dict], today: date):
     return pm_signals.build_board_digest(None, today).get("clients") or []
 
 
-def detect_untriaged_backlog(today: date, digest: Optional[dict], critical_only: bool) -> list[dict]:
+def detect_untriaged_backlog(today: date, digest: Optional[dict], critical_only: bool,
+                             cache: Optional["_ScanCache"] = None) -> list[dict]:
     if critical_only:
         return []
+    cache = cache or _ScanCache()
     proposals: list[dict] = []
     clients = _client_signal_lists(digest, today)
-    names = _client_names([c.get("client_id") for c in clients])
+    names = cache.client_names([c.get("client_id") for c in clients])
     for c in clients:
         unassigned = c.get("unassigned") or []
         if len(unassigned) < settings.pace_intervention_untriaged_min:
@@ -476,12 +535,14 @@ def detect_untriaged_backlog(today: date, digest: Optional[dict], critical_only:
     return proposals
 
 
-def detect_overdue_cluster(today: date, digest: Optional[dict], critical_only: bool) -> list[dict]:
+def detect_overdue_cluster(today: date, digest: Optional[dict], critical_only: bool,
+                           cache: Optional["_ScanCache"] = None) -> list[dict]:
     if critical_only:
         return []
+    cache = cache or _ScanCache()
     proposals: list[dict] = []
     clients = _client_signal_lists(digest, today)
-    names = _client_names([c.get("client_id") for c in clients])
+    names = cache.client_names([c.get("client_id") for c in clients])
     for c in clients:
         overdue = c.get("overdue") or []
         if len(overdue) < settings.pace_intervention_overdue_min:
@@ -513,11 +574,13 @@ def detect_overdue_cluster(today: date, digest: Optional[dict], critical_only: b
     return proposals
 
 
-def detect_slip_forecast(today: date, digest: Optional[dict], critical_only: bool) -> list[dict]:
+def detect_slip_forecast(today: date, digest: Optional[dict], critical_only: bool,
+                         cache: Optional["_ScanCache"] = None) -> list[dict]:
     if critical_only:
         return []
-    from services import pace_slips, pm_assign, task_service, task_workload
+    from services import pace_slips, pm_assign, task_service
 
+    cache = cache or _ScanCache()
     rows = (
         get_supabase().table("tasks")
         .select("id, client_id, name, category, est_hours, status_key, assignee_id, assignee_name, due_date")
@@ -526,7 +589,7 @@ def detect_slip_forecast(today: date, digest: Optional[dict], critical_only: boo
     ).data or []
     if not rows:
         return []
-    members = pm_assign._active_members()
+    members = cache.members
     members_by_id = {m["gid"]: m for m in members}
     initial_keys = {s["key"] for s in task_service.get_statuses(active_only=False)
                     if s.get("is_initial") or s.get("category") == "not_started"}
@@ -541,10 +604,9 @@ def detect_slip_forecast(today: date, digest: Optional[dict], critical_only: boo
     by_client: dict[str, list[dict]] = defaultdict(list)
     for s in slips:
         by_client[s["task"]["client_id"]].append(s)
-    member_ids = list(members_by_id)
-    skills = pm_assign._skills_by_member(member_ids)
-    load = task_workload.open_hours_for_members(member_ids)
-    names = _client_names(list(by_client))
+    skills = cache.skills
+    load = cache.load
+    names = cache.client_names(list(by_client))
 
     proposals: list[dict] = []
     for cid, client_slips in by_client.items():
@@ -628,14 +690,33 @@ def _refresh(row_id: str, p: dict, fingerprint: str) -> None:
     }).eq("id", row_id).execute()
 
 
+_last_severe_scan_at: Optional[datetime] = None  # throttle anchor (in-memory)
+
+
+def _severe_throttled(now: datetime) -> bool:
+    """True when a severe pass ran within pace_intervention_severe_min_interval_minutes."""
+    global _last_severe_scan_at
+    mins = max(0, settings.pace_intervention_severe_min_interval_minutes)
+    if mins == 0 or _last_severe_scan_at is None:
+        return False
+    return (now - _last_severe_scan_at) < timedelta(minutes=mins)
+
+
 def run_intervention_scan(today: Optional[date] = None, *, severe_only: bool = False) -> dict:
     """Scan → reconcile → surface. Full scan (daily) runs every detector and
     resolves cleared problems; the severe pass (per tick) runs only the flagship
     detectors on critical problems and never resolves. Self-gated; best-effort."""
     if not enabled():
         return {"scanned": False, "reason": "disabled"}
+    global _last_severe_scan_at
+    now = datetime.now(timezone.utc)
+    if severe_only:
+        if _severe_throttled(now):
+            return {"scanned": False, "reason": "throttled"}
+        _last_severe_scan_at = now
     today = today or date.today()
     detectors = SEVERE_DETECTORS if severe_only else ALL_DETECTORS
+    cache = _ScanCache()
     digest = None
     if not severe_only:
         from services import pm_signals
@@ -647,7 +728,7 @@ def run_intervention_scan(today: Optional[date] = None, *, severe_only: bool = F
     proposals: list[dict] = []
     for det in detectors:
         try:
-            proposals.extend(det(today, digest, severe_only) or [])
+            proposals.extend(det(today, digest, severe_only, cache=cache) or [])
         except Exception as exc:
             logger.warning("pace_intervention_detector_failed",
                            extra={"detector": getattr(det, "__name__", "?"), "error": str(exc)})
@@ -660,28 +741,32 @@ def run_intervention_scan(today: Optional[date] = None, *, severe_only: bool = F
 
     open_rows = _open_rows()
     open_by_sig = {r["signature"]: r for r in open_rows}
-    latest = _latest_rows(set(by_sig) | set(open_by_sig))
+    # Bound the historical fetch to the cooldown window (older CLOSED rows decide
+    # the same as no row); OPEN rows are always reconsidered via open_by_sig.
+    since = today - timedelta(days=max(settings.pace_intervention_deny_cooldown_days,
+                                       settings.pace_intervention_reexecute_cooldown_days) + 30)
+    latest = _latest_rows(set(by_sig) | set(open_by_sig), since)
 
     surfaced: list[dict] = []
     for sig, p in by_sig.items():
         fp = plan_fingerprint(p["actions"])
+        row = latest.get(sig) or open_by_sig.get(sig)
         action = decide_scan_action(
-            latest.get(sig), today, new_fingerprint=fp,
+            row, today, new_fingerprint=fp,
             deny_cooldown_days=settings.pace_intervention_deny_cooldown_days,
             reexec_cooldown_days=settings.pace_intervention_reexecute_cooldown_days)
         if action == "create":
-            row = _insert(p, fp)
-            if row:
-                surfaced.append(row)
-        elif action == "refresh":
-            row = latest.get(sig)
-            if row:
-                _refresh(row["id"], p, fp)
-        elif action == "resurface":
-            row = latest.get(sig)
-            if row:
-                _refresh(row["id"], p, fp)
-                surfaced.append({**row, **p, "id": row["id"]})
+            new_row = _insert(p, fp)
+            if new_row:
+                surfaced.append(new_row)
+        elif action == "refresh" and row:
+            _refresh(row["id"], p, fp)
+        elif action == "resurface" and row:
+            _refresh(row["id"], p, fp)
+            # Carry the FRESH plan (not the stored one) so the digest count is current.
+            surfaced.append({**row, **p, "id": row["id"],
+                             "plan": {"actions": p["actions"],
+                                      "overflow": (p.get("evidence") or {}).get("overflow", 0)}})
         # skip → leave as-is
 
     resolved = 0
@@ -706,49 +791,75 @@ def run_intervention_scan(today: Optional[date] = None, *, severe_only: bool = F
 _channel_index: dict[str, dict[int, str]] = {}  # channel → {1-based index: intervention_id}
 
 
+def _open_client_channels(client_ids: list) -> dict:
+    """{client_id: slack_channel_id-or-''} for the given clients (one read)."""
+    ids = sorted({c for c in client_ids if c})
+    if not ids:
+        return {}
+    rows = (get_supabase().table("clients").select("id, slack_channel_id")
+            .in_("id", ids).execute()).data or []
+    return {r["id"]: (r.get("slack_channel_id") or "").strip() for r in rows}
+
+
 def _emit_digest(surfaced: list[dict], today: date) -> None:
-    """Post the newly-surfaced interventions to the PACE channel + in-app, and
-    refresh the Slack reply index (1-based, most-recent digest)."""
-    surfaced = sorted(surfaced, key=lambda r: -_SEV_RANK.get(r.get("severity", "warning"), 1))
-    worst = "critical" if any(r.get("severity") == "critical" for r in surfaced) else "warning"
-    lines = []
-    index: dict[int, str] = {}
-    for i, r in enumerate(surfaced, start=1):
-        index[i] = r["id"]
-        n = len((r.get("plan") or {}).get("actions") or [])
-        mark = "🔴" if r.get("severity") == "critical" else "🟠"
-        fixes = f"{n} fix{'es' if n != 1 else ''}" if n else "manual call"
-        lines.append(f"*{i}.* {mark} {r.get('title')} — {fixes}. "
-                     f"`approve {i}` · `deny {i}` · `defer {i} to <date>`")
+    """Post the newly-surfaced interventions to the PACE channel + in-app, refresh
+    the Slack reply index (over ALL currently-open interventions, so a reply index
+    stays stable across scans), and leave a per-client note (routed to the client's
+    own channel when set)."""
+    # Index the FULL open set (stable order), so "approve 3" doesn't shift when a
+    # later scan surfaces a different subset. Surfaced ids are always included.
+    open_all = list_interventions(status="open", limit=200)
+    by_id = {r["id"]: r for r in open_all}
+    for r in surfaced:
+        by_id.setdefault(r["id"], r)
+    ordered = sorted(by_id.values(), key=lambda r: (str(r.get("created_at") or ""), str(r["id"])))
+    index = {i + 1: r["id"] for i, r in enumerate(ordered)}
+    id_to_index = {r["id"]: i + 1 for i, r in enumerate(ordered)}
     channel = settings.pace_slack_channel
     if channel:
         _channel_index[channel] = index
+
+    disp = sorted(surfaced, key=lambda r: -_SEV_RANK.get(r.get("severity", "warning"), 1))
+    worst = "critical" if any(r.get("severity") == "critical" for r in disp) else "warning"
+    lines = []
+    for r in disp:
+        idx = id_to_index.get(r["id"])
+        n = len((r.get("plan") or {}).get("actions") or [])
+        mark = "🔴" if r.get("severity") == "critical" else "🟠"
+        fixes = f"{n} fix{'es' if n != 1 else ''}" if n else "manual call"
+        lines.append(f"*{idx}.* {mark} {r.get('title')} — {fixes}. "
+                     f"`approve {idx}` · `deny {idx}` · `defer {idx} to <date>`")
     body = ("PACE spotted problems that need your call:\n" + "\n".join(lines)
             + "\nDecide here or on the PACE page → /pace")
-    # Portfolio digest → the PACE channel (Slack) + the in-app feed. This is the
-    # PM-facing rollup across every affected client.
+    # Portfolio digest → the PACE channel (Slack) + the in-app feed. The explicit
+    # slack_channel override keeps this rollup in the MASTER channel even though
+    # the kind is client-scoped (the per-client notes below carry the per-client
+    # routing).
     notifications.emit(
         client_id=None, kind="pace_intervention",
         title=f"PACE — {len(surfaced)} intervention{'s' if len(surfaced) != 1 else ''} need a decision",
         summary=body, severity=worst,
         payload={"link": "/pace", "slack_channel": channel or None},
-        dedupe_key=f"pace_intervention:{today.isoformat()}:{plan_fingerprint([{'action': r['id']} for r in surfaced])}",
+        dedupe_key=f"pace_intervention:{today.isoformat()}:{plan_fingerprint([{'action': r['id']} for r in disp])}",
     )
-    # …and a note on each individual client's workspace Alerts feed (in-app only —
-    # the portfolio digest already carries the Slack copy, so skip Slack here to
-    # avoid double-posting). Client-scoped kinds (duplicate/untriaged/overdue/slip
-    # carry a scope_client_id); member_overload is cross-client and gets none.
-    for r in surfaced:
+    # …and a note on each individual client. When the client has its OWN Slack
+    # channel the note posts there (client-scoped routing); otherwise Slack is
+    # skipped (the master rollup above already covers it) and it's in-app only.
+    # member_overload is cross-client (no scope_client_id) and gets no per-client note.
+    client_channels = _open_client_channels([r.get("scope_client_id") for r in surfaced])
+    for r in disp:
         cid = r.get("scope_client_id")
         if not cid:
             continue
+        payload: dict = {"link": "/pace"}
+        if not client_channels.get(cid):
+            payload["skip_channels"] = ["slack"]  # no client channel → master rollup covers Slack
         try:
             notifications.emit(
                 client_id=cid, kind="pace_intervention",
                 title=r.get("title") or "PACE intervention", summary=r.get("problem") or "",
-                severity=r.get("severity") or "warning",
-                payload={"link": "/pace", "skip_channels": ["slack"]},
-                dedupe_key=f"pace_intervention_client:{r['id']}",
+                severity=r.get("severity") or "warning", payload=payload,
+                dedupe_key=f"pace_intervention_client:{r['id']}:{today.isoformat()}",
             )
         except Exception as exc:
             logger.info("pace_intervention_client_note_failed",
@@ -951,10 +1062,11 @@ async def dispose(intervention_id: str, context: ActionContext, disposition: str
         return {"ok": False, "message": (
             f"That needs the *{settings.pace_intervention_decider_min_role}* role or higher."
             if not context.is_anonymous else "Link your account first to decide on interventions."),
-            "status": None}
+            "status": None, "code": "forbidden"}
     row = get_intervention(intervention_id)
     if not row:
-        return {"ok": False, "message": "That intervention no longer exists.", "status": None}
+        return {"ok": False, "message": "That intervention no longer exists.",
+                "status": None, "code": "not_found"}
     if row.get("status") not in ("proposed", "deferred"):
         return {"ok": False, "message": f"That intervention is already *{row.get('status')}*.",
                 "status": row.get("status")}
@@ -1007,10 +1119,15 @@ async def _approve(row: dict, context: ActionContext, *, conditions: Optional[st
             return {"ok": False, "status": row.get("status"),
                     "message": "Those conditions dropped every proposed action — nothing to run. "
                                "Approve as-is or adjust the conditions."}
-    # Claim it (a concurrent scan skips 'executing').
-    get_supabase().table("pace_interventions").update(
-        {"status": "executing", "updated_at": datetime.now(timezone.utc).isoformat()}
-    ).eq("id", row["id"]).execute()
+    # Atomically claim it: the conditional UPDATE ... WHERE status=<prior> matches
+    # a row only if nobody else already moved it, so a concurrent web+Slack approve
+    # can't double-execute (the loser sees no claimed row and bails).
+    claim = (get_supabase().table("pace_interventions")
+             .update({"status": "executing", "updated_at": datetime.now(timezone.utc).isoformat()})
+             .eq("id", row["id"]).eq("status", row["status"]).execute()).data
+    if not claim:
+        return {"ok": False, "status": "executing",
+                "message": "That intervention was just being handled by someone else."}
     if not actions:
         result = {"ran": [], "skipped": [], "failed": [], "acknowledged": True}
         get_supabase().table("pace_interventions").update({
@@ -1020,13 +1137,30 @@ async def _approve(row: dict, context: ActionContext, *, conditions: Optional[st
         return {"ok": True, "status": "executed",
                 "message": f"Acknowledged “{row.get('title')}” — no automated fix to run (manual call)."}
     result = await _execute_actions(actions, context)
-    status = "executed" if result["ran"] else ("failed" if result["failed"] else "executed")
-    get_supabase().table("pace_interventions").update({
-        "status": status, "result": result, "conditions": conditions,
-        **_decision_fields(context, "approved"),
-    }).eq("id", row["id"]).execute()
-    _emit_result(row, result, status)
+    if result["ran"]:
+        status = "executed"
+    elif result["failed"]:
+        status = "failed"
+    else:
+        # Nothing ran and nothing failed → every action was SKIPPED (targets already
+        # renamed/reassigned/completed, or names now ambiguous). Don't close it as
+        # "executed" (that would suppress it for the re-execute cooldown even though
+        # the fix didn't apply): re-open it, so the next scan re-detects if the
+        # problem persists, or resolves it if it has actually cleared.
+        status = "proposed"
+    update = {"status": status, "result": result,
+              "updated_at": datetime.now(timezone.utc).isoformat()}
+    if status != "proposed":
+        update.update({"conditions": conditions, **_decision_fields(context, "approved")})
+    else:
+        update["deferred_until"] = None
+    get_supabase().table("pace_interventions").update(update).eq("id", row["id"]).execute()
     ran, skipped, failed = len(result["ran"]), len(result["skipped"]), len(result["failed"])
+    if status == "proposed":
+        return {"ok": False, "status": "proposed",
+                "message": (f"Nothing ran for “{row.get('title')}” — all {skipped} action(s) were "
+                            f"already handled or their targets moved. I've left it open.")}
+    _emit_result(row, result, status)
     bits = [f"{ran} done"]
     if skipped:
         bits.append(f"{skipped} skipped")
@@ -1041,13 +1175,15 @@ def _emit_result(row: dict, result: dict, status: str) -> None:
     lines = [f"• {r}" for r in result["ran"][:12]]
     if failed:
         lines += [f"• ❌ {f.get('detail') or f.get('action')} — {f.get('reason')}" for f in result["failed"][:6]]
+    # Client-scoped kind: routes to the client's own channel when set, else the
+    # master PACE channel (scope None → member_overload → master). No override.
     notifications.emit(
         client_id=row.get("scope_client_id"), kind="pace_intervention_result",
         title=f"PACE ran “{row.get('title')}” — {ran} done"
               + (f", {failed} failed" if failed else ""),
         summary="\n".join(lines) or "Nothing to run.",
         severity="warning" if failed else "info",
-        payload={"link": "/pace", "slack_channel": settings.pace_slack_channel or None},
+        payload={"link": "/pace"},
     )
 
 
