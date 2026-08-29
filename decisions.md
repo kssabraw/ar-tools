@@ -143,3 +143,48 @@ full PACE-parity treatment.
 **Not reversed / still deferred:** everything in the 2026-08-28 "Deferred" block (intake-time
 capacity arbitration, duplicate auto-merge, the D→B graduation to a distinct read-model
 subsystem). DORA is a surface over the existing read model, not the graduation trigger.
+
+---
+
+## DORA / Director of Operations — what's left to be a "live agent" (roadmap summary)
+
+**Status: REFERENCE** (owner asked, 2026-08-29, to capture the scoping answer). Grounds in
+`docs/modules/director-of-operations-plan-v1_0.md` §5/§7/§8/§10 — no new decision, a map of
+what is/isn't left. **The load-bearing point:** "live agent" splits in two, and the read-only
+one is essentially done. Plan §8, verbatim: *"If none [of the triggers] fires, Phase 1 (D) is
+the whole build and that is a correct outcome."*
+
+**A. Read-only DORA (what exists) is already a live agent — only activation remains, not new
+modules.** It runs the daily reconcile, the weekly ops digest, opens/auto-closes board tasks on
+stalls, and answers portfolio questions. Remaining to fully light it up:
+1. DORA-code deploy goes active (in flight — Railway backlog draining).
+2. Slack inbound smoke test (owner posts in #dora → DORA replies).
+3. Confirm the first daily reconcile fires (~08:00 UTC) → the `qa_idle` `ops_seam`.
+4. Calibrate the §4 seam thresholds from real data (§11 Q1; defaults shipped — `qa_idle` 7d,
+   `strategist_approved_unplaced` 3d, `autonomy_proposed_unactioned` 7d,
+   `content_shipped_degraded` immediate).
+
+**B. An *acting* agent ("hands") is deliberately deferred and trigger-gated — NOT a build
+queue.** Hard boundary (§5/§10): DORA never arbitrates priority, reassigns humans, or overrides
+the three tested precedence engines (`reopt_planner` tiers, `autonomy_policy.classify`,
+`pm_assign` holds) — it escalates conflicts as **proposals routed through PACE's actor-bound
+confirm machinery**. The "hands" already live in PACE (executes) + autonomy (generates); DORA's
+role is to *see and route*. Each remaining piece unlocks only on an observed event (§8):
+- **Phase 2 (B)** — promote to its own read-model subsystem (a `director_seam_flags` table).
+  Unlocks when: autonomy runs content on **>5 clients/wk**, OR `qa_idle` clears (QA becomes
+  load-bearing), OR the owner reconciles the same cross-agent conflict **twice**.
+- **Duplicate auto-merge** — today flag-only (opens a task naming both). Unlocks when
+  `source_ref` uniformity is proven live (§11 Q3 held it flag-only on purpose).
+- **Autonomy pre-flight veto** — built but ships **dark** (`director_autonomy_veto_enabled`
+  off). Unlocks when autonomy content-gen runs broadly enough to risk a real collision.
+- **Capacity arbiter** — the one place real authority might eventually live. Unlocks when
+  `pm_assign` records `team_at_capacity` holds from **≥2 demand sources in one week**; even
+  then it starts as a *proposer*, not an autonomous placer.
+
+**Recommendation (owner-agreed direction 2026-08-29):** don't build any acting-agent scope
+now. Finish A's four activation steps, run read-only for ~2 weeks, and let §8's triggers decide
+what (if anything) to build next. The one thing worth watching regardless is **uniform
+`source_ref` stamping across all producers** (§9's failure-prone seam) — E1 (fail-loud on
+unknown `source`) + E2 (Recipe-Engine monthly push now routes through `pm_assign.place_task`)
+in #885 closed the known gap, but it's what would quietly degrade DORA's collision detection as
+the suite grows.
