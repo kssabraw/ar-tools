@@ -543,4 +543,6 @@ on its own the way a page on the client's own domain can.
 
 *See also: the [Task Manager User Guide](native-task-manager-user-guide.md)
 for the board itself — sections, statuses, checklists, views, and Task
-Library.*
+Library — and the [PM Operations Addendum](pm-operations-addendum.md) for
+the judgment calls behind capacity, duplicate task names, and Chase Plan
+triage.*
