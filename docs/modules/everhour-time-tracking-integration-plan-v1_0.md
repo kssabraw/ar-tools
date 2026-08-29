@@ -178,10 +178,10 @@ shape as Asana/GSC/DataForSEO/GBP.
   exactly as documented) and, on 2026-08-29, against a **real admin-role key** — all four
   checks passed live (`/users/me`, `/team/users`, `/projects`, `/team/time`), no shape
   mismatches. Everhour issues **one key per user account** (no separate service-account
-  concept); §8's provisioning should consider minting a **dedicated non-human "Integration"
-  user** in Everhour for this rather than relying on a real teammate's personal key, so
-  rotating/revoking it never touches that person's own access — not done yet, flagged for
-  Phase 1.
+  concept). **Owner ruling (2026-08-29): keep using Kyle's personal admin key** — no
+  dedicated non-human "Integration" Everhour user for now. (The trade-off is that the
+  integration's access is tied to that person's account, so rotating/revoking his key would
+  touch it; revisit if that becomes a problem.)
 - `writer/platform-api/services/everhour_sync.py` — the task mirror (out) + the time pull (in)
   + rollups. Pure roll-up helpers (`rollup_by_task`/`rollup_by_client`/`rollup_by_member`)
   unit-tested; the two I/O flows are orchestration only, mocked in tests.
@@ -281,9 +281,10 @@ Secrets are set on the `PLATFORM` Railway service by the user — never handled 
 
 ## 8. One-time Everhour provisioning (user-side, dashboard + env)
 
-1. **API key** — an Everhour account-level API key (Settings → Api in the Everhour web app,
-   per ecosystem research — **unverified**, confirm once the docs/key route is open) →
-   `EVERHOUR_API_KEY` on `PLATFORM`.
+1. **API key** — an admin-role Everhour account's API key (Settings → Api in the Everhour web
+   app) → `EVERHOUR_API_KEY` on `PLATFORM`. **Owner ruling (2026-08-29): Kyle's personal admin
+   key** — no dedicated "Integration" user (see §5). Any admin-role key works; the mapping
+   pickers stay dormant until `everhour_enabled` is flipped on.
 2. **Per-client projects** — create (or identify existing) one Everhour project per suite
    client → set `clients.everhour_project_id` (editor ships with Phase 1/2 frontend).
 3. **Team roster link** — for each `asana_team_members` row, set `everhour_user_id` (Team
