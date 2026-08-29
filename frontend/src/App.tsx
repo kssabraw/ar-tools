@@ -7,6 +7,7 @@ import { Login } from './pages/Login'
 import { Home } from './pages/Home'
 import { Assistant } from './pages/Assistant'
 import { Pace } from './pages/Pace'
+import { Director } from './pages/Director'
 import { Qa } from './pages/Qa'
 import { Runs } from './pages/Runs'
 import { RunDetail } from './pages/RunDetail'
@@ -85,6 +86,7 @@ export default function App() {
                       <Route path="/" element={<Home />} />
                       <Route path="/assistant" element={<Assistant />} />
                       <Route path="/pace" element={<Pace />} />
+                      <Route path="/director" element={<Director />} />
                       <Route path="/qa" element={<Qa />} />
                       <Route path="/backlinks" element={<Backlinks />} />
                       <Route path="/domain-intel" element={<DomainIntel />} />

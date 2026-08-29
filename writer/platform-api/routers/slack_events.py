@@ -157,3 +157,71 @@ async def slack_pace_events(request: Request, background: BackgroundTasks) -> Re
         background.add_task(pace_agent.handle_pace_message, event)
 
     return Response(status_code=200)
+
+
+@router.post("/slack/director/events")
+async def slack_director_events(request: Request, background: BackgroundTasks) -> Response:
+    """Inbound side of the dedicated DORA (Director of Operations) Slack app
+    (owner ruling 2026-08-29).
+
+    A separate Slack app gives DORA its own bot identity, so it needs its own
+    signing secret and its own Request URL. This app lives only in the #dora
+    channel, so every plain human message it delivers is DORA's to answer
+    (read-only — DORA just reports cross-agent flow).
+
+    Inert unless DORA is enabled AND a DORA signing secret is configured. Setup:
+    create the DORA Slack app, add it to #dora, point its Event Request URL here,
+    and — per the PACE gotcha — keep Socket Mode OFF, or Slack ships events over a
+    WebSocket and this endpoint never sees them (yet URL verification still
+    passes)."""
+    raw = await request.body()
+    body_text = raw.decode("utf-8", errors="replace")
+
+    try:
+        payload = json.loads(body_text)
+    except json.JSONDecodeError:
+        return Response(status_code=400)
+
+    # URL-verification handshake — answer it BEFORE the enabled/secret gate so the
+    # Request URL can be verified during setup, before the signing secret is
+    # deployed (the challenge echoes no secret; it only proves URL ownership).
+    if payload.get("type") == "url_verification":
+        return Response(
+            content=json.dumps({"challenge": payload.get("challenge")}),
+            media_type="application/json",
+        )
+
+    _ev = payload.get("event") or {}
+    logger.info(
+        "slack_director_events.hit type=%s event=%s subtype=%s bot=%s channel=%s retry=%s director_enabled=%s has_secret=%s",
+        payload.get("type"), _ev.get("type"), _ev.get("subtype"),
+        bool(_ev.get("bot_id")), _ev.get("channel"),
+        request.headers.get("X-Slack-Retry-Num"),
+        settings.director_enabled, bool(settings.director_slack_signing_secret),
+    )
+
+    # Real events require DORA enabled + a configured signing secret (fail-closed).
+    if not (settings.director_enabled and settings.director_slack_signing_secret):
+        return Response(status_code=200)
+
+    if not slack_assistant.verify_slack_signature(
+        settings.director_slack_signing_secret,
+        request.headers.get("X-Slack-Request-Timestamp", ""),
+        body_text,
+        request.headers.get("X-Slack-Signature", ""),
+        int(time.time()),
+    ):
+        logger.warning("slack_director_events.bad_signature")
+        return Response(status_code=403)
+
+    # Slack retries on non-2xx; always ack fast and skip retried deliveries.
+    if request.headers.get("X-Slack-Retry-Num"):
+        return Response(status_code=200)
+
+    event = _extract_message_event(payload)
+    if event is not None:
+        from services import director_agent
+
+        background.add_task(director_agent.handle_director_message, event)
+
+    return Response(status_code=200)

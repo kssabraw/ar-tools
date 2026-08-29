@@ -49,6 +49,7 @@ from routers.maps import router as maps_router
 from routers.notifications import router as notifications_router
 from routers.outreach import router as outreach_router
 from routers.pace import router as pace_router
+from routers.director import router as director_router
 from routers.publish import router as publish_router
 from routers.pulse import router as pulse_router
 from routers.qa import router as qa_router
@@ -328,6 +329,7 @@ app.include_router(maps_router)
 app.include_router(notifications_router)
 app.include_router(outreach_router)
 app.include_router(pace_router)
+app.include_router(director_router)
 app.include_router(qa_router)
 app.include_router(rank_router)
 app.include_router(recipe_router)

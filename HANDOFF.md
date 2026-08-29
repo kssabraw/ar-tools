@@ -1,6 +1,42 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-29 · **Everhour Phase 0 — adversarial re-review + 4 fixes, follow-up to the merged PR #884** (latest)
+## ⏩ Update — 2026-08-29 · **DORA — Director of Operations gets its OWN surface (persona + /director page + #dora Slack app)** (latest)
+
+Owner ruling, mid-verify of the Director rollout: the Director of Operations should be its
+own thing, not a lens you reach by asking SerMaStr. This **reverses the 2026-08-28 "surfaced
+through SerMaStr, NOT a fifth persona" framing** (owner's call to make). Built additively — the
+existing SerMaStr `_ctx_director`/portfolio lens stays; DORA is layered on top of the same
+read-only `services/director/` read model (no new cross-agent logic).
+
+Name: **DORA** — *Director of Operations, Reconciliation & Awareness* (owner-chosen).
+
+What shipped (branch `claude/director-ops-phase1-verify-yuwn6h`):
+- **Persona** `services/director_agent.py` — read-only, answer-only conversational wrapper over
+  `read_model.build_read_model` (single Sonnet call, NO tools/actions/confirm machinery, unlike
+  `pace_agent.py`). Portfolio + per-client scope; a deterministic no-LLM opening brief (the open
+  seam flags). Conversation-persisted under a new `assistant_store` surface `"director"`.
+- **Web page** `/director` — `routers/director.py` (`/director/chat` + SSE `/chat/stream` +
+  `/conversations` CRUD + `/brief` + `/status`, gated on `director_enabled` → 503
+  `director_not_enabled`), `pages/Director.tsx` + `components/DirectorChat.tsx` (indigo, Compass
+  icon; a `PaceChat` clone minus confirm/pending), sidebar entry gated on `/director/status`.
+- **Own Slack app** — outbound: `notifications.DIRECTOR_CHANNEL_KINDS`={ops_digest, ops_seam}
+  route to `director_slack_channel` (#dora) under `director_bot_token()` when set; kept a subset
+  of `PACE_CHANNEL_KINDS` so an unset DORA channel/token degrades to the PACE channel/bot (never
+  the strategy channel). Inbound: `POST /slack/director/events` (fail-closed on
+  `director_slack_signing_secret`, **Socket Mode OFF**) → `director_agent.handle_director_message`;
+  the SerMaStr app steps out of #dora when the secret is set.
+- Config: `director_model`/`director_max_tokens`/`director_slack_channel`/`director_slack_bot_token`/
+  `director_slack_signing_secret`. Tests: `test_director_channel.py`, `test_director_agent.py`
+  (+ existing notifications/assistant suites re-run green locally, 260 passed in the affected set).
+
+**Provisioning left to the owner** (nothing blocks the web page): create #dora + a **DORA Slack
+app** (its own bot token + signing secret; Event Request URL → `/slack/director/events`; **Socket
+Mode OFF** — the PACE gotcha, or events never reach the endpoint), invite it to #dora, then set
+`DIRECTOR_SLACK_CHANNEL` / `DIRECTOR_SLACK_BOT_TOKEN` / `DIRECTOR_SLACK_SIGNING_SECRET` on PLATFORM.
+`DIRECTOR_ENABLED` is already true, so once merged + deployed the /director page + sidebar entry
+light up immediately; the Slack side activates when those three vars are set.
+
+## ⏩ Update — 2026-08-29 · **Everhour Phase 0 — adversarial re-review + 4 fixes, follow-up to the merged PR #884**
 
 PR #884 merged before its own adversarial code review's open question ("fix now or track as
 known Phase 1+ gotchas?") got answered. Rather than leave verified, reproduced bugs sitting

@@ -1031,6 +1031,19 @@ async def handle_message(event: dict) -> None:
     if not (channel and question):
         return
 
+    # 0a) Dedicated DORA (Director of Operations) channel: when a separate DORA
+    # Slack app is configured (its own signing secret), that app owns #dora via
+    # /slack/director/events, so the SerMaStr app stays out entirely — even if
+    # still a member — or it would answer in the wrong persona. Mirrors the PACE
+    # channel exclusion below. Inert until DORA's app is wired.
+    if (
+        settings.director_enabled
+        and settings.director_slack_channel
+        and channel == settings.director_slack_channel
+        and settings.director_slack_signing_secret
+    ):
+        return
+
     # 0) PACE (delivery PM) gets first refusal — but only when enabled (default
     # off → this branch is inert and SerMaStr is byte-for-byte unchanged).
     #  - Dedicated PACE channel set (§10.2): in THAT channel PACE owns every
