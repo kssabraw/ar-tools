@@ -1624,6 +1624,15 @@ class Settings(BaseSettings):
     # Only the top-N plan actions become tasks (the plan is priority-sorted).
     task_producer_action_plan_max: int = 10
     task_producer_content_run_enabled: bool = False
+    # Client-facing "content ready" Slack ping (services/content_ready.py):
+    # PACE posts one summary message to a client's own channel (falling back to
+    # the master PACE channel when none is set) whenever a Blog/Service run,
+    # Local SEO page, Ecommerce page, or Website Builder page finishes
+    # generating. Independent of native_tasks_enabled/pace_enabled — it only
+    # needs the shared notifications pipe (notifications_enabled + Slack
+    # creds), which is already live. Default True per owner request
+    # 2026-08-29; flip off here if it turns out noisier than wanted.
+    content_ready_notifications_enabled: bool = True
     # scan_health: open a board task when a client's scheduled data pulls (maps
     # geo-grid / organic rank) keep failing, so a silent upstream outage becomes
     # owned work PACE tracks (its untriaged/producer/overdue signals pick it up),
