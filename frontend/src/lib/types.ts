@@ -2187,3 +2187,55 @@ export interface GbpDashboard {
   series: GbpSeriesPoint[]
   compare_series: GbpSeriesPoint[]
 }
+
+// PACE Proactive Interventions (services/pace_interventions.py) — the managerial
+// detect→propose→dispose surface rendered on the /pace page.
+export interface PaceInterventionAction {
+  action: string
+  client_id?: string | null
+  client_name?: string
+  args?: Record<string, unknown>
+  reason?: string
+  perm?: string
+}
+export interface PaceInterventionPlan {
+  actions?: PaceInterventionAction[]
+  summary?: string
+  overflow?: number
+}
+export interface PaceInterventionResult {
+  ran?: string[]
+  skipped?: { reason?: string; action?: string; detail?: string }[]
+  failed?: { reason?: string; action?: string; detail?: string }[]
+  acknowledged?: boolean
+  note?: string
+}
+export interface PaceIntervention {
+  id: string
+  kind: string
+  scope_client_id?: string | null
+  signature: string
+  severity: 'info' | 'warning' | 'critical'
+  title: string
+  problem: string
+  plan?: PaceInterventionPlan
+  evidence?: Record<string, unknown>
+  status: string
+  disposition?: string | null
+  conditions?: string | null
+  deferred_until?: string | null
+  decided_at?: string | null
+  result?: PaceInterventionResult | null
+  created_at?: string
+  updated_at?: string
+}
+export interface PaceInterventionsResponse {
+  interventions: PaceIntervention[]
+  enabled: boolean
+}
+export interface PaceDispositionResult {
+  ok: boolean
+  status: string | null
+  message: string
+  result?: PaceInterventionResult
+}
