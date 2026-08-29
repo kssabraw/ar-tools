@@ -1,6 +1,67 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-29 · **Director of Operations — Phase 1 MERGED + ENABLED in production** (latest)
+
+## ⏩ Update — 2026-08-29 · **Everhour time-tracking integration — blocker RESOLVED, Phase 0 COMPLETE (validated against a real key)** (latest)
+
+Direct continuation of the entry just below. The owner used Claude in Chrome to fix the
+root cause: the `ar-tools` Claude Code environment (`env_01CQmcKTLwnkKjFLW4ysuWWM`) had its
+network egress policy set to **Trusted** (package registries only) — switched to **Custom**
+with `api.everhour.com` / `developers.everhour.com` / `everhour.docs.apiary.io` allow-listed.
+Verified live in-session (`curl` to all three now returns 200/308, no proxy rejection).
+
+**Pulled the real API contract** from Everhour's published OpenAPI spec
+(`https://developers.everhour.com/openapi.json` — 65 paths) rather than guessing: auth is
+`X-Api-Key` (confirmed live — a bad key against `GET /users/me` returns exactly the documented
+`403 {"code":403,"message":"Access denied"}`), team users at `GET /team/users`, projects at
+`GET/POST /projects` (project ids are opaque `"as:..."`/`"ev:..."`-prefixed strings, not
+numeric — `clients.everhour_project_id` must be `text`), tasks at
+`POST /projects/{id}/tasks` (`assignees: [{userId}]` confirms the metadata-only mirror
+shape), and — the important one — `GET /team/time` for the daily pull (`from`/`to`/`page`/
+`limit`, max 50000/page, bare-array pagination with no total-count field, 100 req/10s rate
+limit). The time-record `id` field is confirmed as the idempotency key. Bonus finding:
+`DELETE /time/{id}` is documented as "set duration to zero," which means the existing
+upsert-by-id design already handles staff deleting past entries correctly within the re-pull
+window — no separate reconciliation pass needed (closes one of the handoff's open questions).
+Full reference written into `docs/modules/everhour-time-tracking-integration-plan-v1_0.md`
+§11 (rewritten from "verification needed" to "verified API reference").
+
+**Phase 0 built** (`services/everhour_service.py`, mirrors `asana_service.py`'s shape): async
+httpx wrapper (`get_current_user`/`verify_api_key`, `list_team_users`, `list_projects`/
+`get_project`/`create_project`, `create_task`, `list_team_time`) + pure helpers
+(`seconds_to_hours`, `build_task_payload` — name + optional assignee/description only, never
+status/due-date, per the metadata-only-mirror decision — `parse_user`, `parse_project`,
+`parse_time_record`, `is_valid_time_record`, `next_page` for the bare-array pagination). New
+config block in `config.py` (`everhour_api_key`, `everhour_enabled` default False,
+`everhour_mirror_enabled`, `everhour_sync_repull_days`=14, `everhour_sync_page_limit`=10000).
+19 unit tests in `tests/test_everhour_service.py`, all green; `test_asana_service.py` (31
+tests) confirmed unaffected. A standalone preflight script,
+`scripts/verify_everhour_api_key.py` (mirrors `scripts/verify_gbp_api_access.py`), is ready
+to run the moment a real key exists — smoke-tested this session against a deliberately bad
+key and correctly reported the live `403`.
+
+**Update, same session:** the owner supplied a real Everhour API key (an admin-role personal
+key). Ran `scripts/verify_everhour_api_key.py` against it live — all four checks passed:
+authenticated as an admin user (6-person team), 470 projects visible, 22 time records read
+for today. **Phase 0 is now fully closed** — every endpoint shape matches production with no
+surprises. The key was used transiently (env var / CLI arg only) and is not committed
+anywhere. One provisioning note for Phase 1: Everhour has no separate service-account
+concept (one key per user account), so using a real teammate's personal key works but ties
+the integration's access to that person — worth minting a dedicated non-human "Integration"
+Everhour user instead, flagged in the plan doc (§5) rather than decided.
+
+**Also resolved in this push:** `main` advanced past this PR's base (PR #885, Director of
+Operations Phase 1, merged) while this branch was open — both touched `HANDOFF.md` (this
+file, both prepend at the top) and `config.py` (both append settings blocks, different
+locations). Merged `origin/main` into the branch with a merge commit (no rebase — someone
+else's history); `config.py` auto-merged cleanly, `HANDOFF.md` needed a one-line resolution
+(both entries kept, mine first as newest). Full test suite (`test_everhour_service.py` +
+`test_asana_service.py`, 50 tests) green post-merge.
+
+Phases 1–4 (mapping/identity migrations, the task mirror, `time_entries` + rollups, Recipe
+Engine/PACE consumers) are unstarted, per the plan doc's phasing — next up is Phase 1.
+
+
+## ⏩ Update — 2026-08-29 · **Director of Operations — Phase 1 MERGED + ENABLED in production**
 
 PR [kssabraw/ar-tools#885](https://github.com/kssabraw/ar-tools/pull/885) merged to `main`
 (commit `60a8997`; CI green — pytest + Netlify preview). The owner then set
@@ -47,6 +108,52 @@ capacity arbiter stay trigger-gated per plan §8 — may never build, which is t
 "build the eyes, defer the hands" outcome.
 
 ---
+
+
+## ⏩ Update — 2026-08-28 · **Everhour time-tracking integration — full plan doc written, still BLOCKED on live API verification, no code**
+
+Continuation of the prior session's handoff (`docs/modules/everhour-time-tracking-integration-handoff.md`).
+Goal: staff keep tracking time in Everhour (extension/manual); it flows one-way INTO the
+suite as `actual_hours` per native task + per-client + per-member, feeding real Recipe
+Engine margin and PACE capacity instead of `est_hours` guesses. Project = client; the suite
+mirrors native tasks → Everhour (metadata only, name/assignee) to create the join key —
+time is still pull-only.
+
+**Wrote `docs/modules/everhour-time-tracking-integration-plan-v1_0.md`** (full module plan,
+same template as `asana-task-integration-plan-v1_0.md`): the 9 locked decisions (mirrors the
+handoff's #1–#6, plus scheduler reuse / identity-join / gating), Feature A (thin task mirror,
+suite→Everhour, metadata-only — hooked at `task_monthly.py`/`task_producers.py`/
+`task_service.create_task` + a one-time backfill), Feature B (daily pull via the shared
+`gsc_scheduler`, rolling re-pull window, upsert-by-Everhour-record-id into a new
+`time_entries` table, recomputed rollups → `tasks.actual_hours` + per-client + per-member),
+architecture/files, data model (`asana_team_members.everhour_user_id`,
+`clients.everhour_project_id`, `tasks.everhour_task_id`/`_synced_at`/`actual_hours`,
+`time_entries`), config, provisioning steps, phasing (0–4), and open questions.
+
+**One correction to the prior handoff, caught while grounding the plan against the live
+schema:** the handoff said `everhour_user_id` should sit "next to `profile_id` /
+`slack_user_id`" on `asana_team_members` — `slack_user_id` actually lives on `profiles`
+(migration `20260711210000`), not on the roster table. `everhour_user_id` is a peer of
+`profile_id` only. Also confirmed the roster identity model has moved past what the handoff
+cited: Phase 2a/2b (`20260828210000`/`220000`) already promoted `asana_team_members.id` to
+the PK and dropped `tasks.assignee_gid` entirely — `everhour_user_id` joins on that `id`.
+
+**Blocker re-verified, still standing:** `developers.everhour.com`, `everhour.docs.apiary.io`,
+**and `api.everhour.com` itself** all fail the sandbox's egress proxy with `connect_rejected`
+/ gateway 403 (org policy denial, confirmed via `__agentproxy/status`, not a transient
+failure). The user's message this session named three unblock routes (allow-list the domain /
+paste the docs / provide an API key to test live) but didn't actually pick one or paste
+anything — flagged back to them that **a key alone won't unblock it**, since the proxy
+currently rejects the `CONNECT` to `api.everhour.com` outright regardless of whether a valid
+key is presented. Phase 0 (the `everhour_service.py` wrapper, validated against a real
+key/response) cannot start until one of the three routes is actually resolved.
+
+**Branch note:** developed on `claude/everhour-time-tracking-me08ys` (this session's
+harness-designated branch), not `claude/everhour-project-management-6h1iuj` named in the
+stale handoff-doc header — the handoff doc's own PR (#883) already merged to `main` before
+this session started, and `claude/everhour-time-tracking-me08ys` is a fresh branch off that
+merged `main`, so it already carries the handoff doc with no rebase needed.
+
 
 ## ⏩ Update — 2026-08-28 · **Director of Operations — Phase 1 (D) + Prerequisite E BUILT, PR #885 open (ships dark)**
 
