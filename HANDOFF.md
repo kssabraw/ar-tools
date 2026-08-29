@@ -61,6 +61,15 @@ Still pending human sign-off after the first clean tick: calibrate the seam-day 
 from real data; keep `director_autonomy_veto_enabled` dark until autonomy content-gen runs
 against more clients.
 
+**Follow-up (00:29 UTC):** the owner asked to merge the verification note itself — PR
+[kssabraw/ar-tools#887](https://github.com/kssabraw/ar-tools/pull/887) squash-merged to `main`
+(`50a4540`; one merge-conflict resolution against #884 Everhour, keeping both top entries).
+Re-checked live: the Director-code deploy **still had not gone active** — the running PLATFORM
+code was still the pre-Director `144631d` (#883, last `SUCCESS`), with the #885 build still
+`BUILDING`/`DEPLOYING` and a stack of docs/Everhour deploys (#884/#886/#887) queued behind it
+(the #887 merge queued yet another). `ops_seam`/`director_seam` counts still 0 (expected,
+pre-08:00 UTC). The two armed check-ins stand; no deploy force-accepted.
+
 ---
 
 ## ⏩ Update — 2026-08-29 · **Everhour time-tracking integration — blocker RESOLVED, Phase 0 COMPLETE (validated against a real key)**
