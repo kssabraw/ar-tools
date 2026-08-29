@@ -120,9 +120,10 @@ def test_personal_brief_anonymous():
 # ---------------------------------------------------------------------------
 # Web entry — routing, gating, actor-bound confirm
 # ---------------------------------------------------------------------------
-async def test_force_handles_non_pace_message(monkeypatch):
-    # In the dedicated PACE channel (force=True), even a non-delivery message is
-    # handled by PACE instead of falling through (is_pace_message gate skipped).
+async def test_force_handles_mentioned_non_pace_message(monkeypatch):
+    # In the dedicated PACE channel (force=True), an @-mentioned non-delivery
+    # message is still handled by PACE (is_pace_message gate skipped) —
+    # mention-gating replaces answer-everything, it doesn't add a shape filter.
     posted = {}
 
     async def _post(channel, text, thread_ts=None, token=None):
@@ -136,9 +137,55 @@ async def test_force_handles_non_pace_message(monkeypatch):
     monkeypatch.setattr(pace_agent, "get_supabase",
                         lambda: type("SB", (), {"table": lambda *a, **k: type("Q", (), {
                             "select": lambda *a, **k: type("Q2", (), {"execute": lambda *a, **k: type("R", (), {"data": []})()})()})()})())
+    event = {"channel": "Cpace", "ts": "1", "text": "<@UBOT> how is the campaign going?"}
+    handled = await pace_agent.maybe_handle_slack(event, _staff(), force=True, bot_user_id="UBOT")
+    assert handled is True  # mentioned → force answered (didn't fall through)
+
+
+async def test_force_ignores_unmentioned_new_question():
+    # A fresh question with no @-mention at all is left alone, even in the
+    # dedicated channel — this is the whole point of the 2026-08-29 change.
     event = {"channel": "Cpace", "ts": "1", "text": "how is the campaign going?"}
-    handled = await pace_agent.maybe_handle_slack(event, _staff(), force=True)
-    assert handled is True  # force → PACE answered (didn't fall through)
+    handled = await pace_agent.maybe_handle_slack(event, _staff(), force=True, bot_user_id="UBOT")
+    assert handled is False
+
+
+async def test_force_ignores_mention_of_someone_else():
+    # A mention of a teammate (not PACE) doesn't count as "@PACE" when PACE's
+    # own bot user id is known.
+    event = {"channel": "Cpace", "ts": "1", "text": "<@UIVY> can you take this one?"}
+    handled = await pace_agent.maybe_handle_slack(event, _staff(), force=True, bot_user_id="UBOT")
+    assert handled is False
+
+
+async def test_force_pending_confirm_needs_no_remention(monkeypatch):
+    # A plain "yes" continuing an already-staged confirmation is handled
+    # without re-mentioning PACE — it's clearly a reply to the bot.
+    posted = {}
+
+    async def _post(channel, text, thread_ts=None, token=None):
+        posted.update(channel=channel, text=text)
+
+    async def _run(action, client, args, context):
+        return "done"
+
+    monkeypatch.setattr("services.slack_assistant.post_message", _post)
+    monkeypatch.setattr("services.slack_assistant.strip_mention", lambda t: t)
+    monkeypatch.setattr("services.slack_assistant.is_affirmative", lambda t: t.strip().lower() == "yes")
+    monkeypatch.setattr(pace_agent, "_run_pace_action", _run)
+    monkeypatch.setattr("services.pace_auth.confirm_actor_ok", lambda requester, confirmer: True)
+    key = ("Cpace", "42")
+    pace_agent._pace_pending[key] = {
+        "action": "reassign_task", "client_id": {"id": "c1", "name": "Acme"},
+        "args": {"task_id": "t1"}, "requester": "p_staff",
+    }
+    try:
+        event = {"channel": "Cpace", "thread_ts": "42", "text": "yes"}
+        handled = await pace_agent.maybe_handle_slack(event, _staff(), force=True, bot_user_id="UBOT")
+        assert handled is True
+        assert posted["text"] == "done"
+    finally:
+        pace_agent._pace_pending.pop(key, None)
 
 
 async def test_web_ignores_non_pace_message():

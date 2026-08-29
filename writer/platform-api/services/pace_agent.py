@@ -672,15 +672,23 @@ async def _build_batch(payload: dict, scope: str, subject: Optional[dict], ctx: 
 # ---------------------------------------------------------------------------
 # Slack entry (delegated from handle_message, gated on pace_enabled)
 # ---------------------------------------------------------------------------
-async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool = False) -> bool:
+async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool = False,
+                              bot_user_id: Optional[str] = None) -> bool:
     """Handle a Slack message if it's PACE's (a pending PACE confirm, or a
     PACE-shaped message). Returns True when handled → the caller stops; False →
     fall through to SerMaStr. Best-effort.
 
-    ``force=True`` (the dedicated PACE channel, §10.2): PACE owns every message —
-    the ``is_pace_message`` gate is skipped, so even a non-delivery ask is
-    answered by PACE (its prompt defers strategy to SerMaStr)."""
-    from services.slack_assistant import (is_affirmative,
+    ``force=True`` (the dedicated PACE channel, §10.2): PACE owns the channel,
+    but — owner ruling 2026-08-29 — only answers a NEW question when
+    @-mentioned (``mentions_bot``); the ``is_pace_message`` shape gate stays
+    skipped (an @-mentioned message is answered whatever it's shaped like).
+    A reply to an already-pending PACE confirmation ("yes", a Chase Plan
+    selection) is handled above regardless of mention — the bot is plainly
+    the one being replied to, and re-tagging it every turn would be annoying.
+    ``bot_user_id`` is PACE's own Slack user id (from the Events API
+    envelope's ``authorizations[0].user_id``); pass ``None`` when unknown —
+    ``mentions_bot`` degrades to "any mention" rather than going silent."""
+    from services.slack_assistant import (is_affirmative, mentions_bot,
                                            post_message as _send, strip_mention)
 
     # PACE replies post under the PACE app's bot token when a separate app is
@@ -732,7 +740,12 @@ async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool
             return True
         _pace_pending.pop(pend_key, None)  # superseded
 
-    if not force and not is_pace_message(question):
+    if force:
+        # No pending confirm to continue (handled above) — a fresh question
+        # in the dedicated channel needs an explicit @-mention.
+        if not mentions_bot(event.get("text", ""), bot_user_id):
+            return False
+    elif not is_pace_message(question):
         return False
 
     try:
@@ -767,14 +780,16 @@ async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool
         return True
 
 
-async def handle_pace_message(event: dict) -> None:
+async def handle_pace_message(event: dict, bot_user_id: Optional[str] = None) -> None:
     """Inbound handler for the dedicated PACE Slack app (``/slack/pace/events``).
     That app lives only in the PACE channel, so every non-bot message there is
-    PACE's to answer — resolve the actor and force-handle it (the ``is_pace_message``
-    shape gate is skipped, exactly like the dedicated-channel path). Best-effort."""
+    PACE's to answer — resolve the actor and force-handle it (the
+    ``is_pace_message`` shape gate is skipped; a fresh question still needs an
+    @-mention, see ``maybe_handle_slack``). ``bot_user_id`` is PACE's own Slack
+    user id, threaded from the router's Events API payload. Best-effort."""
     try:
         actor = pace_auth.resolve_slack_actor(event.get("user"), event.get("channel"))
-        await maybe_handle_slack(event, actor, force=True)
+        await maybe_handle_slack(event, actor, force=True, bot_user_id=bot_user_id)
     except Exception as exc:  # never surface into the ack path
         logger.warning("pace_inbound_failed",
                        extra={"channel": event.get("channel"), "error": str(exc)})

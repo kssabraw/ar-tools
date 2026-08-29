@@ -69,6 +69,30 @@ def test_strip_mention():
 
 
 # ---------------------------------------------------------------------------
+# mentions_bot
+# ---------------------------------------------------------------------------
+def test_mentions_bot_matches_known_id():
+    assert slack_assistant.mentions_bot("<@UBOT> what's stuck?", "UBOT") is True
+
+
+def test_mentions_bot_rejects_different_id():
+    assert slack_assistant.mentions_bot("<@UIVY> can you take this?", "UBOT") is False
+
+
+def test_mentions_bot_no_mention_at_all():
+    assert slack_assistant.mentions_bot("what's stuck?", "UBOT") is False
+    assert slack_assistant.mentions_bot("", "UBOT") is False
+    assert slack_assistant.mentions_bot(None, "UBOT") is False
+
+
+def test_mentions_bot_degrades_permissively_when_bot_id_unknown():
+    # Can't verify WHICH bot — a mention of anyone at all counts, rather than
+    # going silent because Slack omitted `authorizations`.
+    assert slack_assistant.mentions_bot("<@UANYONE> hey", None) is True
+    assert slack_assistant.mentions_bot("no mention here", None) is False
+
+
+# ---------------------------------------------------------------------------
 # resolve_client
 # ---------------------------------------------------------------------------
 _CLIENTS = [
@@ -2413,3 +2437,21 @@ def test_context_domains_are_available_even_when_they_do_not_lead():
     )
     assert {"offpage", "organic_drop"} <= full
     assert slack_assistant.question_domains("how should we approach link building") == {"offpage"}
+
+
+# ---------------------------------------------------------------------------
+# routers.slack_events._bot_user_id (the Events API `authorizations` reader
+# that feeds mentions_bot for the PACE/DORA inbound endpoints)
+# ---------------------------------------------------------------------------
+def test_bot_user_id_reads_first_authorization():
+    from routers.slack_events import _bot_user_id
+
+    payload = {"authorizations": [{"user_id": "UBOT", "is_bot": True}]}
+    assert _bot_user_id(payload) == "UBOT"
+
+
+def test_bot_user_id_missing_field():
+    from routers.slack_events import _bot_user_id
+
+    assert _bot_user_id({}) is None
+    assert _bot_user_id({"authorizations": []}) is None

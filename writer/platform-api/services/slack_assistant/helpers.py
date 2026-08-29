@@ -16,6 +16,7 @@ import re
 from typing import Optional
 
 _MENTION_RE = re.compile(r"<@[A-Z0-9]+>")
+_MENTION_ID_RE = re.compile(r"<@([A-Z0-9]+)>")
 _SIG_MAX_SKEW_SECONDS = 60 * 5  # reject events older than 5 min (replay guard)
 
 
@@ -44,6 +45,25 @@ def verify_slack_signature(
 def strip_mention(text: str) -> str:
     """Remove Slack user mentions (`<@U123>`) and collapse whitespace. Pure."""
     return _MENTION_RE.sub("", text or "").strip()
+
+
+def mentions_bot(text: str, bot_user_id: Optional[str]) -> bool:
+    """Whether ``text`` @-mentions the given bot user id (used to gate an
+    always-on channel listener down to "only when @-mentioned").
+
+    ``bot_user_id`` is the receiving app's own Slack user id — read from the
+    Events API envelope's ``authorizations[0].user_id`` (present on every
+    `event_callback` for a non-org-wide app). When it's unavailable (Slack
+    omitted the field, or the caller hasn't threaded it through), this degrades
+    permissively to "does the message mention ANYONE" rather than going
+    silent — a mention of the wrong user is a much rarer false-positive than
+    losing the bot's replies entirely. Pure."""
+    ids = _MENTION_ID_RE.findall(text or "")
+    if not ids:
+        return False
+    if bot_user_id:
+        return bot_user_id in ids
+    return True
 
 
 def resolve_client(message: str, clients: list[dict]) -> Optional[dict]:
