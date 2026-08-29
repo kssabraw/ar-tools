@@ -1,6 +1,50 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-28 · **Everhour time-tracking integration — full plan doc written, still BLOCKED on live API verification, no code** (latest)
+## ⏩ Update — 2026-08-29 · **Everhour time-tracking integration — blocker RESOLVED, Phase 0 BUILT** (latest)
+
+Direct continuation of the entry just below. The owner used Claude in Chrome to fix the
+root cause: the `ar-tools` Claude Code environment (`env_01CQmcKTLwnkKjFLW4ysuWWM`) had its
+network egress policy set to **Trusted** (package registries only) — switched to **Custom**
+with `api.everhour.com` / `developers.everhour.com` / `everhour.docs.apiary.io` allow-listed.
+Verified live in-session (`curl` to all three now returns 200/308, no proxy rejection).
+
+**Pulled the real API contract** from Everhour's published OpenAPI spec
+(`https://developers.everhour.com/openapi.json` — 65 paths) rather than guessing: auth is
+`X-Api-Key` (confirmed live — a bad key against `GET /users/me` returns exactly the documented
+`403 {"code":403,"message":"Access denied"}`), team users at `GET /team/users`, projects at
+`GET/POST /projects` (project ids are opaque `"as:..."`/`"ev:..."`-prefixed strings, not
+numeric — `clients.everhour_project_id` must be `text`), tasks at
+`POST /projects/{id}/tasks` (`assignees: [{userId}]` confirms the metadata-only mirror
+shape), and — the important one — `GET /team/time` for the daily pull (`from`/`to`/`page`/
+`limit`, max 50000/page, bare-array pagination with no total-count field, 100 req/10s rate
+limit). The time-record `id` field is confirmed as the idempotency key. Bonus finding:
+`DELETE /time/{id}` is documented as "set duration to zero," which means the existing
+upsert-by-id design already handles staff deleting past entries correctly within the re-pull
+window — no separate reconciliation pass needed (closes one of the handoff's open questions).
+Full reference written into `docs/modules/everhour-time-tracking-integration-plan-v1_0.md`
+§11 (rewritten from "verification needed" to "verified API reference").
+
+**Phase 0 built** (`services/everhour_service.py`, mirrors `asana_service.py`'s shape): async
+httpx wrapper (`get_current_user`/`verify_api_key`, `list_team_users`, `list_projects`/
+`get_project`/`create_project`, `create_task`, `list_team_time`) + pure helpers
+(`seconds_to_hours`, `build_task_payload` — name + optional assignee/description only, never
+status/due-date, per the metadata-only-mirror decision — `parse_user`, `parse_project`,
+`parse_time_record`, `is_valid_time_record`, `next_page` for the bare-array pagination). New
+config block in `config.py` (`everhour_api_key`, `everhour_enabled` default False,
+`everhour_mirror_enabled`, `everhour_sync_repull_days`=14, `everhour_sync_page_limit`=10000).
+19 unit tests in `tests/test_everhour_service.py`, all green; `test_asana_service.py` (31
+tests) confirmed unaffected. A standalone preflight script,
+`scripts/verify_everhour_api_key.py` (mirrors `scripts/verify_gbp_api_access.py`), is ready
+to run the moment a real key exists — smoke-tested this session against a deliberately bad
+key and correctly reported the live `403`.
+
+**Still open:** no real Everhour API key has been supplied yet, so `is_configured()`/
+`verify_api_key()` haven't been proven against a genuine account — that's the one remaining
+"validated against a real key" item closing out Phase 0. Phases 1–4 (mapping/identity
+migrations, the task mirror, `time_entries` + rollups, Recipe Engine/PACE consumers) are
+unstarted, per the plan doc.
+
+## ⏩ Update — 2026-08-28 · **Everhour time-tracking integration — full plan doc written, still BLOCKED on live API verification, no code**
 
 Continuation of the prior session's handoff (`docs/modules/everhour-time-tracking-integration-handoff.md`).
 Goal: staff keep tracking time in Everhour (extension/manual); it flows one-way INTO the

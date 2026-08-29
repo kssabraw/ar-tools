@@ -1,6 +1,10 @@
 # Everhour Time-Tracking Integration — Plan (v1.0)
 
-**Authored:** 2026-08-28 · **Status:** **Design locked, BLOCKED on live API verification — no code written** · New suite integration — "Everhour"
+**Authored:** 2026-08-28 · **Status:** **Blocker resolved; Phase 0 BUILT** (config gating +
+`services/everhour_service.py` wrapper + pure helpers + unit tests, all endpoint shapes
+verified against Everhour's live OpenAPI spec — no more guessing. **Live-key validation still
+pending** — no real Everhour API key has been supplied yet; `scripts/verify_everhour_api_key.py`
+is ready to run the moment one exists) · New suite integration — "Everhour"
 
 > Read alongside **`docs/modules/everhour-time-tracking-integration-handoff.md`** (the prior
 > session's handoff — decisions #1–#6, the payoff case, and the blocker are carried forward
@@ -9,13 +13,14 @@
 > `docs/modules/` — see `asana-task-integration-plan-v1_0.md`, which this integration sits
 > right next to (same client, same roster, same scheduler) and deliberately mirrors in shape.
 
-> **⚠️ Blocker, unresolved as of this writing.** The Everhour API docs
-> (`developers.everhour.com`, `everhour.docs.apiary.io`) are egress-blocked in this sandbox —
-> re-verified this session (`curl` to both, plus `api.everhour.com` itself, all three return
-> `connect_rejected` / gateway 403 at the proxy, i.e. an organization policy denial, not a
-> transient failure). **No httpx wrapper code should be written against guessed endpoint
-> shapes.** Every endpoint referenced below is marked either from the handoff's "known facts
-> (unverified)" or as an explicit **TBD** placeholder. See §11.
+> **Blocker — RESOLVED 2026-08-28.** The sandbox's egress policy was `Trusted` (package
+> registries only), which is why `developers.everhour.com` / `everhour.docs.apiary.io` /
+> `api.everhour.com` all previously failed with `connect_rejected`. The owner switched the
+> environment (`ar-tools`, `env_01CQmcKTLwnkKjFLW4ysuWWM`) to a **Custom** network policy and
+> allow-listed all three domains. All endpoint shapes in this document are now taken directly
+> from Everhour's **published OpenAPI spec** (`https://developers.everhour.com/openapi.json`,
+> fetched 2026-08-28 and archived locally at fetch time) — confirmed, not ecosystem-research
+> guesswork. See §11 for the full verified reference.
 
 ---
 
@@ -160,11 +165,16 @@ exists alongside the scheduled run.
 No new dependencies, no topology change. Everhour reached via `httpx`, key from env — same
 shape as Asana/GSC/DataForSEO/GBP.
 
-- `writer/platform-api/services/everhour_service.py` — thin async REST client (`X-Api-Key`
-  header, `https://api.everhour.com` base) + pure helpers (payload shaping, id/seconds
-  parsing). `is_configured()` gates every entry point. Pure helpers unit-tested with mocked
-  HTTP (suite convention) — **the I/O methods themselves cannot be tested against a real
-  response shape until §11 is resolved.**
+- `writer/platform-api/services/everhour_service.py` — **BUILT.** Thin async REST client
+  (`X-Api-Key` header, `https://api.everhour.com` base: `get_current_user`/`verify_api_key`,
+  `list_team_users`, `list_projects`/`get_project`/`create_project`, `create_task`,
+  `list_team_time`) + pure helpers (`seconds_to_hours`, `build_task_payload`, `parse_user`,
+  `parse_project`, `parse_time_record`, `is_valid_time_record`, `next_page`).
+  `is_configured()` gates every entry point. Pure helpers unit-tested with mocked HTTP (suite
+  convention) — 19 tests in `tests/test_everhour_service.py`, all green. `scripts/
+  verify_everhour_api_key.py` (mirrors `scripts/verify_gbp_api_access.py`) is the live-key
+  smoke test — run once a real key exists; confirmed working end-to-end against a deliberately
+  bad key (`GET /users/me` → `403`, exactly as documented).
 - `writer/platform-api/services/everhour_sync.py` — the task mirror (out) + the time pull (in)
   + rollups. Pure roll-up helpers (`rollup_by_task`/`rollup_by_client`/`rollup_by_member`)
   unit-tested; the two I/O flows are orchestration only, mocked in tests.
@@ -281,15 +291,17 @@ Secrets are set on the `PLATFORM` Railway service by the user — never handled 
 
 Restated from the handoff, unchanged, each shippable and gated on `everhour_enabled`:
 
-- **Phase 0 — BLOCKED.** Config gating (`everhour_enabled`, `everhour_api_key`) +
-  `services/everhour_service.py` wrapper + `is_configured()`, **validated against a real
-  key/response** before merge. Cannot start until §11 is resolved — this plan doc does not by
-  itself unblock Phase 0.
+- **Phase 0 — BUILT (2026-08-28), live-key validation pending.** Config gating
+  (`everhour_enabled`, `everhour_api_key`, `everhour_mirror_enabled`,
+  `everhour_sync_repull_days`, `everhour_sync_page_limit`) + `services/everhour_service.py`
+  wrapper + `is_configured()` — all endpoint shapes verified against the live OpenAPI spec
+  (§11), not guessed. Pure helpers unit-tested (19 passing tests). **Not yet done:** running
+  `scripts/verify_everhour_api_key.py` against a real key — no key has been supplied. This is
+  the one remaining "validated against a real key" item before Phase 0 is fully closed out.
 - **Phase 1 — mapping/identity.** Migrations (`asana_team_members.everhour_user_id`,
   `clients.everhour_project_id`); Team-page Everhour user-link dropdown; client↔project
-  mapping UI. No live Everhour calls required beyond a "does this key work" ping, so this
-  phase *could* start once a key exists even before every endpoint shape is confirmed — but
-  the ping itself needs §11's "which endpoint proves a key is valid" answered.
+  mapping UI. `everhour_service.list_team_users`/`list_projects`/`get_project` are ready to
+  back the pickers.
 - **Phase 2 — task mirror.** Suite → Everhour task creation at every task-creation hook
   point (§3) + the one-time `everhour_task_id` backfill for existing tasks.
 - **Phase 3 — time pull + rollups.** `time_entries` table + scheduled pull + `actual_hours`
@@ -334,34 +346,107 @@ Carried from the handoff, still open:
 
 ---
 
-## 11. Verification needed before Phase 0 (the blocker, itemized)
+## 11. Verified API reference (was the blocker — now resolved)
 
-Everything below is **either unverified ecosystem-research folklore or an explicit gap** —
-none of it should be hard-coded into `everhour_service.py` until confirmed against the real
-API (docs or a live key). Restated from the handoff with the specific answer each phase needs:
+Pulled directly from `https://developers.everhour.com/openapi.json` (the live, published
+OpenAPI 3 spec — 65 paths, fetched and archived 2026-08-28) plus the accompanying docs pages
+(`authentication`, `pagination`, `rate-limits`, `errors`). Every shape below is confirmed
+against that spec, and the auth/error behavior was additionally smoke-tested live (a bad key
+against `GET /users/me` returned exactly the documented `403 {"code":403,"message":"Access
+denied"}`). This supersedes the earlier "known facts (unverified)" section entirely.
 
-1. **Auth** — base URL `https://api.everhour.com`, header `X-Api-Key: <key>` (per ecosystem
-   research). Confirm the exact header name/casing and whether there's a lighter "whoami"
-   endpoint to validate a key cheaply (`is_configured()` should ideally do more than check
-   the string is non-empty).
-2. **List team users** — endpoint + response shape (need at minimum: an id to store as
-   `everhour_user_id`, a display name for the Team-page picker).
-3. **Create a project / list projects** — can the suite create an Everhour project via the
-   API for onboarding, or must a human create it in the Everhour UI and the suite only
-   *reads* the id to store on `clients.everhour_project_id`? The handoff's "known facts" say
-   "API-created internal projects support creating tasks directly" — confirm this is actually
-   how client projects get created, or whether Phase 8's "provisioning" step 2 is manual.
-4. **Create a task in a project** — request shape (name, project id, optional assignee?),
-   response shape (the id to store as `tasks.everhour_task_id`).
-5. **List team time / time records over a date range** — the report endpoint's request
-   params (date range, project/task/user filters) and response shape: does each record carry
-   a stable **time-record id** (the idempotency key `time_entries.everhour_record_id` needs),
-   the task id, the user id, the project id, seconds/duration, a billable flag, and the entry
-   date? Also: does a deleted/edited entry show up distinguishably in this report, or does an
-   edit just change the same record id's value (needed for §10's deleted-entry question)?
+**11.1 Auth.** Base URL `https://api.everhour.com`. Header `X-Api-Key: <key>` (an
+`api_key` query param also works but the docs discourage it — query strings land in logs).
+One key per Everhour user account; it inherits that user's role/permissions (`admin` sees
+everything; a `member` key may see a narrower project/user set — **use an admin-role
+account's key** for the integration so team-wide reads aren't silently scoped down). The
+cheap "does this key work" call is **`GET /users/me`** (→ `CurrentUser`, a `User` plus
+`timezone`/`apiKey`/`team`/etc.) — this is what `everhour_service.verify_api_key()` calls
+and what `scripts/verify_everhour_api_key.py` runs first.
 
-**Next step:** the user provides one of — the domain(s) allow-listed for this sandbox, the
-relevant endpoint docs pasted inline, or an Everhour API key to introspect `api.everhour.com`
-live (confirmed this session that the proxy currently rejects `CONNECT` to it outright, so a
-key alone doesn't unblock without an allow-list change too — flag that combination to the
-user rather than assuming a key alone is sufficient).
+**11.2 List team users — `GET /team/users`.** Params: `query` (name/email filter), `limit`.
+Response: array of `User` — `{id: number, name, headline, avatarUrl, role: admin|supervisor|
+member|member_limited, status: active|invited|pending|removed, phone, capacity: number|null
+(weekly capacity in SECONDS), avatarUrlLarge}`. **No email field** — the id + name are what
+the roster-link picker needs; `everhour_user_id` is stored as **text** (`str(id)`) for
+consistency with every other external-id column in this codebase (`gid` etc. are all text),
+even though the API itself returns a number.
+
+**11.3 Projects.** `GET /projects` (params: `query`, `limit`, `page`) lists everything the
+key's account can see; the docs explicitly warn some endpoints (this one included) have **no
+pagination support at all** — narrow with `query` rather than assuming paging works. `POST
+/projects` (`ProjectRequestCreateRequest`: `name` + `type` (`board`|`list`, **required**),
+optional `users: [userId,...]`, `client` (an **Everhour-native "Client" entity id** — a
+separate concept from this suite's own `clients` table; do not conflate the two, and there is
+no need to set it for our purposes), `privacy`, `changeProtected`, `isTemplate`) **does**
+create a project via the API — confirms the handoff's "API-created projects" claim. Project
+ids are opaque prefixed strings, not numeric — the OpenAPI examples show both `"as:1234567890"`
+(Asana-synced) and `"ev:1234567890"` (native) shapes, so `clients.everhour_project_id` must be
+**text**, never an integer column. **Open call still to make at Phase 1 (§10):** whether
+client onboarding creates the Everhour project via `POST /projects` or a human creates it by
+hand and only pastes the id — either works technically now that the shape is confirmed; this
+is a workflow preference, not a capability gap.
+
+**11.4 Create a task — `POST /projects/{project_id}/tasks`.** `TaskRequestCreateRequest`:
+`name` (required) + optional `section`, `labels`, `status` (`open`|`closed`), `color`,
+`dueOn`/`startOn` (`Y-m-d`), `description`, **`assignees: [{userId: number} | {accountId:
+string}]`**, `tags`, `fields`, `cover`, `placeBefore`. Response is a `Task` — `{id:
+"ev:9876543210"-shaped string, name, projects: [projectId,...], section, labels, position,
+description, dueAt, status, time, estimate, attributes, metrics, unbillable}` — `id` is what
+gets stored as `tasks.everhour_task_id`. Confirms Feature A's payload exactly:
+`build_task_payload()` (built this session, §3/§5) sends only `name` + optionally
+`assignees`/`description` — never `status`/`dueOn`/`section`, which the schema supports but
+the metadata-only mirror deliberately never sets.
+
+**11.5 Time records — `GET /team/time`.** Params: `from`/`to` (`Y-m-d`; **omitted = today
+only**, not "all time" — the daily sync must always pass explicit dates), `limit` (default
+example `10000`, **max `50000`**), `page`, `opts_include_billing` (`1` to include the
+`billing` sub-object). Response: array of `TimeRecordExtended` (most rows) or
+`TaskTimeBillable` (when billing is requested) — both share `{id: number (THE time-record
+id — confirmed as the idempotency key `time_entries.everhour_record_id` needs), time: number
+(seconds), user: number (user id), date: "Y-m-d", task: <full nested Task object, not just an
+id — so the task's own id/name/projects ride along in the same call, no extra round-trip>,
+comment}`; `TimeRecordExtended` additionally carries `isLocked`, `isInvoiced`, `history`,
+`createdAt`, `warning`, `lockReasons`, `website`; `TaskTimeBillable` carries `billing:
+{billable: boolean, rate, amount}` instead. **`billable` is therefore only known when the
+request explicitly asked for it** — `everhour_service.parse_time_record()` (built this
+session) returns `billable: None` (unknown) rather than `False` (confirmed non-billable) when
+the caller didn't set `opts_include_billing=1`. Sibling scoped endpoints exist too —
+`GET /tasks/{task_id}/time`, `GET /projects/{project_id}/time`, `GET /users/{user_id}/time` —
+but the daily sync uses the **team-wide** `/team/time` per decision #4/#7 (one full pull,
+not N per-project calls).
+
+**11.6 Pagination.** Per-endpoint; `GET /team/time` uses bare `page`/`limit` with **no total-
+count field and no response envelope** (responses are raw JSON arrays) — detect the last page
+by `len(result) < limit` (`everhour_service.next_page()`, built this session). Some endpoints
+(`GET /clients`, `GET /invoices`) return the full collection with no pagination at all —
+`GET /projects` is in this "narrow with filters instead" category per §11.3.
+
+**11.7 Rate limits.** **100 requests / 10 seconds per API key.** A `429` carries a
+`Retry-After` header (seconds). The docs' own recommended handling is exponential backoff;
+the daily sync (at most a handful of `GET /team/time` pages, per decision #7's re-pull
+window) is nowhere near this ceiling in steady state — the **one-time task-mirror backfill**
+(§3, potentially one `POST` per existing open task) is the flow that could realistically hit
+it on a large backlog, so it needs backoff, not the daily pull.
+
+**11.8 Errors.** Uniform `{code: number, message: string}` body on any non-2xx (`422` also
+carries a per-field `errors` object). `403` = "missing/invalid key or insufficient
+permission" — this is what a misconfigured/revoked key looks like at runtime, not just at
+`is_configured()` time, so the sync job's error handling (Phase 3) should distinguish a `403`
+(config problem — surface it, don't just log-and-retry) from a `429`/`5xx` (transient —
+backoff and retry).
+
+**11.9 Deleted time records (§10's open question, now answerable).** `DELETE /time/{time_id}`
+is documented as *"Remove a time record by setting its duration to zero"* — i.e. Everhour
+models a delete as **an update to `time: 0` on the same record id**, not a row disappearing
+from the API's view. This resolves §10's concern cleanly: a rolling re-pull window (decision
+#7) that re-reads a deleted record's id will see it come back with `time: 0`, and the upsert
+naturally zeroes out that row's contribution to every rollup — **no separate reconciliation
+pass is needed**; the existing upsert-by-id design already handles deletes correctly as long
+as the deletion happened within the re-pull window. A delete older than the window is the one
+residual gap (unchanged from §10) — acceptable given `everhour_sync_repull_days` is tunable.
+
+**11.10 What's still genuinely open (not a docs gap — a decision):** whether the two-way
+identity concern in §11.1 (which team member's key backs the integration) matters in
+practice given a single agency Everhour account likely has one natural admin; and the §11.3
+provisioning-workflow call. Neither blocks Phase 0/1 code.
