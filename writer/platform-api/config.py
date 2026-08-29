@@ -1630,6 +1630,31 @@ class Settings(BaseSettings):
     # not just a Slack ping. Auto-closes when the streak recovers.
     task_producer_scan_health_enabled: bool = True
 
+    # ------------------------------------------------------------------
+    # Everhour time-tracking integration
+    # (docs/modules/everhour-time-tracking-integration-plan-v1_0.md)
+    # ------------------------------------------------------------------
+    # Staff track time in Everhour (extension / manual entry); it flows
+    # ONE-WAY into the suite as actual_hours per native task, per-client, and
+    # per-member. Everhour is a satellite time layer, never a task manager —
+    # the native `tasks` table stays the source of truth. The only outbound
+    # write is a thin metadata-only task mirror (name/assignee), purely to
+    # establish the join key a task's logged time reads back against.
+    # Absent the key → every feature is skipped-with-a-note, never an error
+    # (the GSC / Slack / Asana provisioning pattern).
+    everhour_api_key: str = ""     # X-Api-Key header value (per-user key)
+    everhour_enabled: bool = False
+    # Lets the task-mirror (write) half be turned off independently of the
+    # time-pull (read) half — e.g. to validate reads before allowing any
+    # outbound writes during rollout. Sub-gate under everhour_enabled.
+    everhour_mirror_enabled: bool = True
+    # Rolling re-pull window for the daily time-record sync — staff edit past
+    # entries in Everhour, so a sync that only looked at "since last run"
+    # would miss corrections. Mirrors gsc_ingest's re-pull days.
+    everhour_sync_repull_days: int = 14
+    # Max time records requested per page from GET /team/time (API max 50000).
+    everhour_sync_page_limit: int = 10000
+
     # Deliverables Sheet Sync (docs/modules/deliverables-sheet-sync-prd-v1_0.md)
     # — auto-maintain each client's Google deliverables sheet: append a row on
     # task Complete, watch the client-facing Notes column. Master gate default
