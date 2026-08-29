@@ -109,6 +109,10 @@ _TOOL_PARAMS = {
         "category": {"type": "string", "description": "Category key to set if missing."},
         "est_hours": {"type": "number", "description": "Estimated hours to set if missing."},
     },
+    "rename_task": {
+        "task_name": {"type": "string", "description": "The task to rename (part of its current name)."},
+        "new_name": {"type": "string", "description": "The new task name."},
+    },
     "run_qa_review": {
         "task_name": {"type": "string", "description": "The task whose deliverable to QA (part of its name)."},
     },
@@ -123,6 +127,7 @@ _TOOL_REQUIRED = {
     "generate_client_month": [],
     "generate_pace_report": [],
     "triage_task": ["task_name"],
+    "rename_task": ["task_name", "new_name"],
     "nudge_assignee": ["task_name"],
     "run_qa_review": ["task_name"],
 }
