@@ -1,6 +1,51 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-29 · **Everhour Phase 0 — adversarial re-review + 4 fixes, follow-up to the merged PR #884** (latest)
+## ⏩ Update — 2026-08-29 · **Everhour Phase 1 (identity/mapping) BUILT + MERGED (#890); Phase-0 gotcha doc reconciled with #888** (latest)
+
+Continuation of the two Everhour entries below. This session was handed the merged PR #884 (Phase 0)
+plus its adversarial review's still-unanswered open question ("fix the 4 bugs now, or defer?").
+
+**The bug decision + merge.** The owner ruled **defer** — merge Phase 0 as-is and track the findings
+as gotchas. So this session documented all 5 findings as a "Known Phase 0 code gotchas" table (plan
+doc §12), resolved the `HANDOFF.md` conflict that had made #884 `dirty` (the Director #885 merge landed
+after #884's base), and **merged PR #884 to `main`** (squash `0b074cc`). **Reconciliation note:** a
+*parallel* session then fixed bugs 1–4 the same day in **[#888](https://github.com/kssabraw/ar-tools/pull/888)**
+(the entry right below), so the "deferred" framing was superseded — plan doc §12 is now corrected to mark
+bugs 1–4 **✅ fixed in #888** and keep only #5 (the `build_task_payload` int vs `parse_user` str assignee
+cast) as an open **Phase-2** boundary note. Both accounts now agree.
+
+**Phase 1 built + merged — [#890](https://github.com/kssabraw/ar-tools/pull/890) (squash `b465028`), on
+branch `claude/everhour-integration-bugs-ws7iay`.** Migrations/identity/mapping per the plan's phasing:
+- **Migration `20260829120000` (applied live):** `asana_team_members.everhour_user_id` (nullable text,
+  a peer of `profile_id`) + `clients.everhour_project_id` (nullable text, mirrors `slack_channel_id`).
+  **Re-checked the in-flight roster schema first** (the handoff warned about it): `asana_team_members`
+  went through the Phase-2a identity migration — `id` is the PK now, `gid` nullable — so `everhour_user_id`
+  went on as a plain additive peer, unaffected by that lineage. Verified both columns present live.
+- **Backend:** `routers/everhour.py` + `models/everhour.py` — read-only pickers `GET /everhour/status`
+  (`configured`/`enabled`), `/everhour/users`, `/everhour/projects`, each degrading to an empty picker
+  when the key is absent (mirrors the Asana pickers, never 500s the UI). `everhour_user_id` threaded
+  through `AsanaTeamMemberItem` / the `/asana/team-members` read / `partition_roster_write` (normalized
+  to text, blank clears it). `everhour_project_id` on `ClientDetail`/`Create`/`Update` with the same
+  explicit-set (empty clears) semantics as `slack_channel_id`. Registered in `main.py`.
+- **Frontend:** the Team & capacity roster editor (`TeamWorkload.tsx`) gained an "Everhour user" column
+  next to the Suite-user link; the client form (`ClientForm.tsx`) gained an "Everhour Project" field
+  (a `/everhour/projects` picker when configured, else an id input). Both appear only once Everhour is
+  `configured`; a stored-but-unknown id stays selectable so toggling the column never drops a link.
+- **Tests/CI:** partition passthrough test (int→text, blank→None) + the existing 19/24 `everhour_service`
+  tests; `platform-api tests` + Netlify preview both green; `tsc -b` + `vite build` clean.
+
+**Provisioning ruling (owner, 2026-08-29): keep using Kyle's personal admin key** — no dedicated non-human
+"Integration" Everhour user for now (recorded in plan §5/§8). Any admin-role key set as `EVERHOUR_API_KEY`
+on PLATFORM works; the whole integration stays dormant until `everhour_enabled` is flipped on.
+
+**Docs updated this pass:** `CLAUDE.md` Everhour bullet (Phases 0–1 complete, #888 fixes, the key ruling) +
+its module-doc reference line; plan doc top status + §9 Phase 1 (→ COMPLETE) + §12 (→ #888-reconciled).
+
+**Next: Phase 2** (the metadata-only task mirror — `tasks.everhour_task_id`/`_synced_at`, wired into
+`task_monthly.py`/`task_producers.py`/`task_service.create_task` + a one-time backfill; remember gotcha #5's
+`int(everhour_user_id)` cast when mirroring an assignee).
+
+## ⏩ Update — 2026-08-29 · **Everhour Phase 0 — adversarial re-review + 4 fixes, follow-up to the merged PR #884**
 
 PR #884 merged before its own adversarial code review's open question ("fix now or track as
 known Phase 1+ gotchas?") got answered. Rather than leave verified, reproduced bugs sitting

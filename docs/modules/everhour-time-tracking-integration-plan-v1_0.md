@@ -1,11 +1,16 @@
 # Everhour Time-Tracking Integration — Plan (v1.0)
 
-**Authored:** 2026-08-28 · **Status:** **Phase 0 COMPLETE** (config gating +
-`services/everhour_service.py` wrapper + pure helpers + unit tests, all endpoint shapes
-verified against Everhour's live OpenAPI spec, **and validated end-to-end against a real
-admin-role API key on 2026-08-29** — `scripts/verify_everhour_api_key.py` passed all four
-checks live: authenticated as an admin user, 6 team members visible, 470 projects visible,
-22 time records read for today. Ready for Phase 1.) · New suite integration — "Everhour"
+**Authored:** 2026-08-28 · **Status:** **Phases 0–1 COMPLETE** (2026-08-29). Phase 0 =
+config gating + `services/everhour_service.py` wrapper + pure helpers + unit tests, all
+endpoint shapes verified against Everhour's live OpenAPI spec and validated end-to-end
+against a real admin-role key (all four checks passed live). The four Phase-0 review bugs
+were fixed in [#888](https://github.com/kssabraw/ar-tools/pull/888) (see §12). Phase 1 (merged
+in [#890](https://github.com/kssabraw/ar-tools/pull/890)) = the `asana_team_members.everhour_user_id`
++ `clients.everhour_project_id` migration (applied live), the read-only pickers
+(`routers/everhour.py`: `/everhour/status`,`/users`,`/projects`), roster + client-mapping
+wiring, and the frontend (Team roster Everhour-user column + client-form Everhour-Project
+field). Still gated OFF (`everhour_enabled` default False). **Next: Phase 2** (the
+metadata-only task mirror). · New suite integration — "Everhour"
 
 > Read alongside **`docs/modules/everhour-time-tracking-integration-handoff.md`** (the prior
 > session's handoff — decisions #1–#6, the payoff case, and the blocker are carried forward
@@ -307,10 +312,17 @@ Restated from the handoff, unchanged, each shippable and gated on `everhour_enab
   real admin-role key — all four checks passed (`/users/me`, `/team/users`, `/projects`,
   `/team/time`). `everhour_enabled` is still `False` by default; nothing runs until it's set
   on `PLATFORM` alongside the real key.
-- **Phase 1 — mapping/identity.** Migrations (`asana_team_members.everhour_user_id`,
-  `clients.everhour_project_id`); Team-page Everhour user-link dropdown; client↔project
-  mapping UI. `everhour_service.list_team_users`/`list_projects`/`get_project` are ready to
-  back the pickers.
+- **Phase 1 — mapping/identity — COMPLETE (2026-08-29, merged #890).** Migration
+  `20260829120000` (applied live) adds `asana_team_members.everhour_user_id` (peer of
+  `profile_id`; the live schema was re-checked first — the table is `id`-PK / `gid`-nullable
+  after the Phase-2a identity migration, so the column is a plain additive peer) and
+  `clients.everhour_project_id` (mirrors `clients.slack_channel_id`'s single-external-id
+  shape). Read-only pickers `routers/everhour.py` + `models/everhour.py` (`/everhour/status`,
+  `/users`, `/projects`; degrade to empty when unconfigured). `everhour_user_id` threaded
+  through the roster read/write/`partition_roster_write`; `everhour_project_id` on client
+  read/create/update (empty-clears semantics). Frontend: the Team & capacity roster editor's
+  "Everhour user" column + the client form's "Everhour Project" field (both only shown once
+  Everhour is `configured`). Gated OFF until `everhour_enabled` is flipped.
 - **Phase 2 — task mirror.** Suite → Everhour task creation at every task-creation hook
   point (§3) + the one-time `everhour_task_id` backfill for existing tasks.
 - **Phase 3 — time pull + rollups.** `time_entries` table + scheduled pull + `actual_hours`
@@ -462,23 +474,23 @@ provisioning-workflow call. Neither blocks Phase 0/1 code.
 
 ---
 
-## 12. Known Phase 0 code gotchas (deferred fixes)
+## 12. Phase 0 code gotchas — adversarial re-review (bugs 1–4 fixed in #888; #5 open for Phase 2)
 
-An adversarial re-review of the Phase 0 code (merged in PR #884) found five real defects.
-**All are currently unreachable** — nothing calls `everhour_service.py` or the verify script
-in a running code path yet (`everhour_enabled` is `False` and no phase has wired the wrapper
-in). Owner ruling (2026-08-29): **do not block the Phase 0 merge on these; fix each in the
-phase that first exercises it.** They are recorded here (with the line numbers as of the
-merge, `services/everhour_service.py` unless noted) so the fix isn't forgotten when that
-phase lands. Each entry names the phase that first makes it reachable.
+An adversarial re-review of the Phase 0 code (merged in PR #884) found five real defects, all
+inert at the time (`everhour_enabled` is `False`, nothing called the wrapper). The owner's
+ruling on this session's branch was "merge as-is, defer the fixes" — but a **parallel session
+fixed bugs 1–4 the same day in [PR #888](https://github.com/kssabraw/ar-tools/pull/888)**
+(commit `45fcc93`, 24 tests up from 19, each fix verified against its live repro), so they are
+**already resolved on `main`**. **#5 remains open** — it is a Phase-2 boundary note, not a
+current bug. The table records what was found and the resolution.
 
-| # | Location | Defect | First reachable in | Fix |
-|---|---|---|---|---|
-| 1 | `verify_api_key()` (~L184–195) | Docstring says "Never raises," but only `httpx.HTTPError` is caught. `get_current_user()` → `_get()` → `resp.json()` raises `json.JSONDecodeError` (a `ValueError`, **not** an `httpx.HTTPError`) on a malformed/non-JSON `200`, which escapes uncaught. | **Phase 1** (the status route / provisioning check will be the first caller of `verify_api_key`). | Also catch `ValueError` (covers `JSONDecodeError`) — or `except (httpx.HTTPError, ValueError)` — and log-and-return-`False`, honoring the docstring. |
-| 2 | `scripts/verify_everhour_api_key.py::main()` (L62–102) | No `try/except` around the `httpx` calls, so a transport-level failure (timeout, DNS, connection refused) crashes with a raw traceback instead of a clean `[FAIL]` line, and leaks the unclosed client. | **Phase 1** (the script is the provisioning preflight run when a real key is set). | Wrap the request block in `try/except httpx.HTTPError` (or `RequestError`) → `_print(..., False, str(exc))`, close the client in a `finally`, return non-zero. |
-| 3 | `get_project()` (~L211–215) | Missing the `or {}` fallback its own docstring claims to mirror from `asana_service.get_project` (which *does* have it — confirmed at `asana_service.py:575`). A JSON-`null` body makes `_get` return `None`, so `get_project` returns `None` where callers expect a dict. | **Phase 1** (client↔project mapping-save validation is the first caller). | `return await _get(...) or {}`. |
-| 4 | `next_page()` (~L144–150) | `if returned_count < limit`: `limit=None` → `TypeError` (`int < None`); `limit=0` → the guard is never true, so it returns `current_page + 1` **forever** (never terminates the page loop). Compounds with `list_team_time()` resolving `limit or settings.everhour_sync_page_limit` **internally** (~L247): a naive Phase 3 caller that reuses one `limit=None` for both the fetch and the `next_page()` call will crash on the first `next_page()`. | **Phase 3** (the time-pull page loop). | Resolve `limit` to the same effective value `list_team_time` uses before calling `next_page` (or guard `next_page` for `None`/`<=0` → return `None`). Prefer having the sync loop pass the *resolved* limit to both. |
-| 5 (lower) | `build_task_payload()` assignee type (L62–78) vs `parse_user()` (~L86) | `build_task_payload(assignee_user_id: int)` emits `{"userId": <assignee_user_id>}` typed as `int`, but `parse_user` stores `everhour_user_id` as **`str`** (`str(uid)`, matching every other external-id column). A Phase 2 caller that reads the stored `everhour_user_id` (str) and passes it straight into `build_task_payload` sends Everhour a **string** `userId`, which the API may reject or mis-handle. | **Phase 2** (task mirror, when an assignee is actually mirrored). | Cast at the boundary: `int(everhour_user_id)` when building the mirror payload (the stored column stays `text` for consistency; only the outbound API body needs the numeric type). |
+| # | Location | Defect | Status |
+|---|---|---|---|
+| 1 | `verify_api_key()` | Docstring says "Never raises," but only `httpx.HTTPError` was caught; `resp.json()` raises `json.JSONDecodeError` (a `ValueError`, not an `httpx.HTTPError`) on a malformed/non-JSON `200`, escaping uncaught. | ✅ **Fixed in #888** — now `except (httpx.HTTPError, ValueError)`. |
+| 2 | `scripts/verify_everhour_api_key.py::main()` | No `try/except` around the `httpx` calls, so a transport-level failure (timeout, DNS, refused) crashed with a raw traceback instead of a clean `[FAIL]` line, and leaked the unclosed client. | ✅ **Fixed in #888** — a `_check()` helper catches `httpx.RequestError` + malformed JSON and prints one `[FAIL]`; `with httpx.Client(...)` always closes. |
+| 3 | `get_project()` | Missing the `or {}` fallback its own docstring claims to mirror from `asana_service.get_project`; a JSON-`null` body made it return `None` where callers expect a dict. | ✅ **Fixed in #888** — `return await _get(...) or {}`. |
+| 4 | `next_page()` | `returned_count < limit` → `TypeError` on `limit=None`; `limit=0` never terminated (returned `current_page + 1` forever). | ✅ **Fixed in #888** — guards `not limit or limit <= 0` first. |
+| 5 (lower) | `build_task_payload()` assignee type vs `parse_user()` | `build_task_payload(assignee_user_id: int)` emits `{"userId": <int>}`, but `parse_user` stores `everhour_user_id` as **`str`** (`str(uid)`, like every external-id column). A Phase 2 caller that reads the stored `everhour_user_id` (str) and passes it straight in sends Everhour a **string** `userId`. | ⏳ **Open — Phase 2** (task mirror). Cast at the boundary (`int(everhour_user_id)`) when building the mirror payload; the stored column stays `text`. Not a current bug — no code mirrors an assignee yet. |
 
 None of these change the Phase 0 contract or the locked decisions (§2); they are localized
 correctness fixes to fold into the named phase's own PR.
