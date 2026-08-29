@@ -710,3 +710,192 @@ async def run_everhour_sync_job(job: dict) -> None:
     supabase.table("async_jobs").update(
         {"status": "complete", "result": result, "completed_at": "now()"}
     ).eq("id", job_id).execute()
+
+
+# ===========================================================================
+# Phase 4 — read surfaces (client "Time" card, PACE per-member utilization)
+# ===========================================================================
+# These are READ-time rollups over the ``time_entries`` ledger the daily sync
+# maintains — nothing is persisted here (only ``tasks.actual_hours`` is stored,
+# by the sync). The pure assemblers are unit-tested; the thin windowed reads
+# are mocked. Every entry point is a silent no-op when Everhour isn't enabled,
+# so the consuming surfaces stay dark during a read-first rollout.
+
+
+# ---------------------------------------------------------------------------
+# Pure helpers (no I/O) — unit-tested
+# ---------------------------------------------------------------------------
+def billable_split(entries: Iterable[dict]) -> dict[str, int]:
+    """Sum ``seconds`` into billable / non-billable / unknown buckets by each
+    row's ``billable`` (True / False / None — None = the pull didn't carry
+    billing data, per plan §11.5). Pure. v1 surfaces the split for legibility;
+    nothing yet weights margin on it (owner ruling: capture, don't split)."""
+    out = {"billable": 0, "non_billable": 0, "unknown": 0}
+    for e in entries or []:
+        secs = e.get("seconds")
+        if secs is None:
+            continue
+        b = e.get("billable")
+        key = "billable" if b is True else "non_billable" if b is False else "unknown"
+        out[key] += int(secs)
+    return out
+
+
+def build_client_time(
+    entries: Iterable[dict],
+    *,
+    member_names: dict[str, str],
+    days: int,
+) -> dict:
+    """Assemble the client "Time" card summary from that client's
+    ``time_entries`` rows over the window. Pure — the DB read that produces
+    ``entries`` and ``member_names`` is the only impure part.
+
+    Returns total logged hours, the billable/non-billable/unknown split (all in
+    hours), and a per-member breakdown (descending, named where the member is
+    roster-linked)."""
+    entries = list(entries or [])
+    total_secs = sum(int(e["seconds"]) for e in entries if e.get("seconds") is not None)
+    split = billable_split(entries)
+    by_member_secs = rollup_by_member(entries)
+    members = sorted(
+        (
+            {
+                "member_id": mid,
+                "name": member_names.get(mid),
+                "hours": everhour_service.seconds_to_hours(secs) or 0.0,
+            }
+            for mid, secs in by_member_secs.items()
+        ),
+        key=lambda m: m["hours"],
+        reverse=True,
+    )
+    return {
+        "window_days": days,
+        "total_hours": everhour_service.seconds_to_hours(total_secs) or 0.0,
+        "billable_hours": everhour_service.seconds_to_hours(split["billable"]) or 0.0,
+        "non_billable_hours": everhour_service.seconds_to_hours(split["non_billable"]) or 0.0,
+        "unknown_hours": everhour_service.seconds_to_hours(split["unknown"]) or 0.0,
+        "members": members,
+    }
+
+
+def utilization_hours(secs_by_member: dict[str, int]) -> dict[str, float]:
+    """{member_id: hours} from {member_id: seconds}. Pure — the read-time
+    conversion the PACE workload attach + the Team-page column consume."""
+    return {
+        mid: (everhour_service.seconds_to_hours(secs) or 0.0)
+        for mid, secs in (secs_by_member or {}).items()
+    }
+
+
+# ---------------------------------------------------------------------------
+# Windowed time_entries reads (impure — paged)
+# ---------------------------------------------------------------------------
+def _read_entries(
+    *,
+    date_from: str,
+    date_to: str,
+    client_id: Optional[str] = None,
+    cols: str = "member_id, seconds, billable, client_id, task_id, entry_date",
+) -> list[dict]:
+    """Read ``time_entries`` rows over ``[date_from, date_to]`` (optionally for
+    one client), paged. The window keeps these reads bounded even on a busy
+    team."""
+    supabase = get_supabase()
+    out: list[dict] = []
+    offset = 0
+    while True:
+        q = (
+            supabase.table("time_entries")
+            .select(cols)
+            .gte("entry_date", date_from)
+            .lte("entry_date", date_to)
+        )
+        if client_id is not None:
+            q = q.eq("client_id", client_id)
+        rows = q.range(offset, offset + _READ_PAGE - 1).execute().data or []
+        out.extend(rows)
+        if len(rows) < _READ_PAGE:
+            break
+        offset += _READ_PAGE
+    return out
+
+
+def _member_names(member_ids: Iterable[str]) -> dict[str, str]:
+    """{member_id: name} for the given roster members (chunked)."""
+    ids = sorted({m for m in member_ids if m})
+    names: dict[str, str] = {}
+    supabase = get_supabase()
+    for chunk in _chunks(ids, _IN_CHUNK):
+        rows = (
+            supabase.table("asana_team_members")
+            .select("id, name")
+            .in_("id", chunk)
+            .execute()
+        ).data or []
+        for r in rows:
+            if r.get("id"):
+                names[r["id"]] = r.get("name")
+    return names
+
+
+def _window(days: Optional[int], default: int) -> tuple[str, str, int]:
+    """Resolve a lookback ``[from, to]`` (both inclusive) + the effective day
+    count for a read surface."""
+    n = int(days) if days is not None else int(default)
+    n = max(0, n)
+    today = datetime.now(timezone.utc).date()
+    return (today - timedelta(days=n)).isoformat(), today.isoformat(), n
+
+
+# ---------------------------------------------------------------------------
+# Read entry points (impure orchestration)
+# ---------------------------------------------------------------------------
+def client_time_summary(client_id: str, days: Optional[int] = None) -> dict:
+    """The client "Time" card read: logged hours over the window, the
+    billable split, and a per-member breakdown. Gated on ``everhour_enabled``
+    — returns ``{available: False}`` (never an error) when the integration is
+    off, so the card renders a dark/empty state rather than a 500."""
+    if not sync_gate_open():
+        return {"available": False, "reason": "not_enabled"}
+    date_from, date_to, n = _window(days, settings.everhour_client_time_window_days)
+    entries = _read_entries(date_from=date_from, date_to=date_to, client_id=client_id)
+    names = _member_names(e.get("member_id") for e in entries)
+    summary = build_client_time(entries, member_names=names, days=n)
+    return {"available": True, **summary}
+
+
+def member_utilization(days: Optional[int] = None) -> dict[str, float]:
+    """{member_id: hours} logged team-wide over the window (ALL of a member's
+    time, ad-hoc/internal included — a person's hours are their hours for
+    capacity, owner ruling). Empty dict when Everhour is off. Consumed by the
+    PACE workload attach + the Team-page utilization column."""
+    if not sync_gate_open():
+        return {}
+    date_from, date_to, _ = _window(days, settings.everhour_utilization_window_days)
+    entries = _read_entries(
+        date_from=date_from, date_to=date_to, cols="member_id, seconds"
+    )
+    return utilization_hours(rollup_by_member(entries))
+
+
+def client_month_actual_hours(client_id: str, month: date) -> float:
+    """Total hours logged against a client within ``month``'s calendar month —
+    the Recipe Engine's measured-labor input. 0.0 when Everhour is off (so the
+    consumer degrades to its estimate-only behaviour). Excludes ad-hoc/internal
+    time with no client (those rows carry a null ``client_id`` and are filtered
+    by the client-scoped read)."""
+    if not sync_gate_open():
+        return 0.0
+    first = month.replace(day=1)
+    nxt = (first.replace(day=28) + timedelta(days=4)).replace(day=1)
+    last = nxt - timedelta(days=1)
+    entries = _read_entries(
+        date_from=first.isoformat(),
+        date_to=last.isoformat(),
+        client_id=client_id,
+        cols="seconds, client_id",
+    )
+    total = sum(int(e["seconds"]) for e in entries if e.get("seconds") is not None)
+    return everhour_service.seconds_to_hours(total) or 0.0

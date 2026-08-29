@@ -304,6 +304,18 @@ export function TaskDetail({ taskId, statuses, categories, members, onClose, inv
                 onBlur={(e) => patchField('est_hours', e.target.value === '' ? null : Number(e.target.value))}
                 style={input}
               />
+              {task.actual_hours != null && (
+                <div style={{ marginTop: 4, fontSize: 12, color: '#64748b' }}>
+                  Actual: <strong style={{ color: '#0f172a' }}>{task.actual_hours}h</strong>
+                  {task.est_hours != null && task.est_hours > 0 && (
+                    <span style={{ color: task.actual_hours > task.est_hours ? '#dc2626' : '#16a34a' }}>
+                      {' '}({task.actual_hours > task.est_hours ? '+' : ''}
+                      {Math.round((task.actual_hours - task.est_hours) * 10) / 10}h vs est.)
+                    </span>
+                  )}
+                  <span style={{ color: '#94a3b8' }}> · Everhour</span>
+                </div>
+              )}
             </div>
             <div>
               <div style={label}>Due date</div>

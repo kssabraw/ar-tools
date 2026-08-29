@@ -82,8 +82,32 @@ def adapt_task_row(row: dict) -> dict:
     }
 
 
+def attach_logged_hours(
+    report: dict, logged_by_member: dict[str, float], days: int
+) -> dict:
+    """Annotate a workload report's members with their ACTUAL logged hours over
+    the last ``days`` (from Everhour), plus a ``utilization_pct`` vs pro-rated
+    weekly capacity. Pure — additive only: it never touches ``open_hours`` or
+    the estimate-based ``overloaded`` verdict (not every client is Everhour-
+    onboarded, so actuals stay a parallel signal, not a replacement). A member
+    with no logged time reads 0.0; utilization is None without a weekly capacity.
+
+    Mutates + returns ``report`` (each member dict gains ``logged_hours`` +
+    ``utilization_pct``, and the report gains ``logged_window_days``)."""
+    for m in report.get("members") or []:
+        logged = round(float(logged_by_member.get(m.get("gid"), 0.0)), 1)
+        m["logged_hours"] = logged
+        weekly = m.get("weekly_hours")
+        capacity = (float(weekly) * days / 7.0) if weekly else 0.0
+        m["utilization_pct"] = round(logged / capacity * 100.0, 0) if capacity else None
+    report["logged_window_days"] = days
+    return report
+
+
 def build_team_workload() -> dict:
-    """The effort-weighted Team Workload report, from native tasks."""
+    """The effort-weighted Team Workload report, from native tasks. When
+    Everhour is enabled, each member is additionally annotated with actual
+    logged hours + utilization (a parallel signal to the estimate-based load)."""
     members = get_team_members()
     if not members:
         return {
@@ -124,6 +148,19 @@ def build_team_workload() -> dict:
     )
     report["configured"] = True
     report["source"] = "tasks"
+
+    # Everhour actual-utilization overlay (Phase 4) — additive, gated, never
+    # changes the estimate-based load/overloaded math. Best-effort: a failure or
+    # a disabled integration leaves the report exactly as it was.
+    if settings.everhour_enabled:
+        try:
+            from services import everhour_sync
+
+            days = settings.everhour_utilization_window_days
+            attach_logged_hours(report, everhour_sync.member_utilization(days), days)
+        except Exception as exc:
+            logger.warning("task_workload.utilization_attach_failed", extra={"error": str(exc)})
+
     return report
 
 

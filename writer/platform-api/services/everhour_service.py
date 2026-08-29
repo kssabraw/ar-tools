@@ -263,11 +263,19 @@ async def list_team_time(
     """One page of team time records over ``[date_from, date_to]`` —
     ``GET /team/time``. Bare-array response with no total-count field; the
     caller pages using ``next_page()`` (``len(result) < limit`` = last page,
-    per the pagination docs). Phase 3's daily sync source."""
+    per the pagination docs). Phase 3's daily sync source.
+
+    ``opts_include_billing=1`` is always requested (Phase 4, owner ruling
+    2026-08-29 — "capture billing now, don't split yet"): the response is then
+    the ``TaskTimeBillable`` variant carrying ``billing.billable``, so
+    ``parse_time_record`` can populate ``time_entries.billable`` from day one
+    and no re-pull is needed when a future feature consumes it. The extra field
+    is free on the same call — nothing in v1 splits margin on it yet."""
     params = {
         "from": date_from,
         "to": date_to,
         "page": page,
         "limit": limit or settings.everhour_sync_page_limit,
+        "opts_include_billing": 1,
     }
     return await _get("/team/time", params) or []

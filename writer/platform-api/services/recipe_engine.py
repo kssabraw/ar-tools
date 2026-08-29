@@ -349,6 +349,62 @@ def allocate(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Everhour actual-labor read (Phase 4 — informational, side-by-side)
+# ─────────────────────────────────────────────────────────────────────────────
+# Owner ruling (2026-08-29): once a client has real logged hours, surface a
+# MEASURED margin ALONGSIDE the target — never switch the tested allocation
+# math to it. This block is display-only: it never changes `allocate`'s inputs
+# or a plan's task list; it rides in the diagnosis `signals` for the client
+# Time card + the Task Plan page to render next to the target margin.
+def actual_margin(retainer: "float | None", actual_hours: "float | None",
+                  hourly_cost: "float | None") -> "float | None":
+    """Measured labor margin = 1 − (actual_hours × loaded hourly cost) /
+    retainer, rounded to 3dp. Pure. Returns None (not 0) when it can't be
+    computed honestly — no retainer, no configured hourly cost, or no logged
+    hours — so a caller shows 'not measured' rather than a misleading number.
+    Can go negative (labor exceeded the retainer), which is a fact worth
+    stating, not clamping."""
+    if not retainer or retainer <= 0:
+        return None
+    if not hourly_cost or hourly_cost <= 0:
+        return None
+    if actual_hours is None:
+        return None
+    return round(1.0 - (float(actual_hours) * float(hourly_cost)) / float(retainer), 3)
+
+
+def build_actual_labor(
+    *,
+    retainer: "float | None",
+    actual_hours: "float | None",
+    hourly_cost: "float | None",
+    target_margin: float = DEFAULT_MARGIN,
+) -> dict:
+    """The informational actual-labor read for the diagnosis `signals`. Pure.
+
+    `target_margin` is the deploy fraction the plan runs at (0.34 default); the
+    agency's target PROFIT margin is its complement, so a measured margin is
+    compared against `1 − target_margin`. `labor_cost` / `measured_margin` are
+    present only when a loaded hourly cost is configured (else the read is
+    hours-only — no invented dollars). Always carries `actual_hours` so the
+    Time card can show logged effort even with no rate set."""
+    hours = round(float(actual_hours), 2) if actual_hours is not None else None
+    cost = (
+        round(float(actual_hours) * float(hourly_cost), 2)
+        if (actual_hours is not None and hourly_cost and hourly_cost > 0)
+        else None
+    )
+    return {
+        "actual_hours": hours,
+        "loaded_hourly_cost": hourly_cost or None,
+        "labor_cost": cost,
+        "measured_margin": actual_margin(retainer, actual_hours, hourly_cost),
+        "target_margin": round(1.0 - target_margin, 3),
+        "note": "measured labor margin — informational; the plan still runs at the target",
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Auto-diagnosis from suite data
 # ─────────────────────────────────────────────────────────────────────────────
 def build_diagnosis(client_id: str) -> dict:
@@ -442,6 +498,34 @@ def build_diagnosis(client_id: str) -> dict:
             "referring_domains" not in diagnosis["deficient"]:
         diagnosis["deficient"].append("link_juice")
         diagnosis["signals"]["link_juice"] = "open drop with RD on target — fund strength (§3 order)"
+
+    # Everhour actual-labor read (Phase 4) — informational, side-by-side with the
+    # target margin. Never touches `deficient`/`review_gap`/allocation; a client
+    # with no logged hours (or Everhour off) simply omits it. Best-effort.
+    try:
+        from config import settings
+
+        if settings.everhour_enabled:
+            from services import everhour_sync
+
+            hours = everhour_sync.client_month_actual_hours(client_id, date.today())
+            if hours:
+                row = (
+                    supabase.table("clients")
+                    .select("retainer_monthly")
+                    .eq("id", client_id)
+                    .single()
+                    .execute()
+                ).data or {}
+                retainer = row.get("retainer_monthly")
+                diagnosis["signals"]["actual_labor"] = build_actual_labor(
+                    retainer=float(retainer) if retainer else None,
+                    actual_hours=hours,
+                    hourly_cost=settings.everhour_loaded_hourly_cost or None,
+                )
+    except Exception as exc:
+        logger.warning("recipe.diagnosis_actual_labor_failed",
+                       extra={"client_id": client_id, "error": str(exc)})
 
     return diagnosis
 

@@ -12,6 +12,7 @@ import { FreezeBanner } from '../components/FreezeBanner'
 import { WeeklyPulse } from '../components/WeeklyPulse'
 import { StrategistReview } from '../components/StrategistReview'
 import { InterventionOutcomes } from '../components/InterventionOutcomes'
+import { EverhourTimeCard } from '../components/EverhourTimeCard'
 
 export function ClientWorkspace() {
   const { id } = useParams<{ id: string }>()
@@ -108,6 +109,9 @@ export function ClientWorkspace() {
           reoptimization work actually move the metric it targeted. Report-only;
           renders nothing until the flag is on and something has been tracked. */}
       {id && <InterventionOutcomes clientId={id} />}
+      {/* Everhour "Time logged" — hours tracked against this client. Renders
+          nothing until Everhour is enabled and this client has logged time. */}
+      {id && <EverhourTimeCard clientId={id} />}
       {id && <ClientNotifications clientId={id} />}
       {/* Weekly Pulse — the copy-paste client update staff deliver by hand. */}
       {id && <WeeklyPulse clientId={id} />}

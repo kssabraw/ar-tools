@@ -1659,6 +1659,15 @@ class Settings(BaseSettings):
     # POSTs well under Everhour's 100-req/10s ceiling (plan §11.7). The daily
     # inline/producer mirror is one task at a time, so it needs no spacing.
     everhour_backfill_spacing_seconds: float = 1.0
+    # Phase 4 consumers (Recipe Engine actual-margin + PACE utilization + reads).
+    # A loaded fully-burdened hourly cost of delivery. 0.0 = disabled (the
+    # default): the actual-margin read then surfaces logged HOURS only and never
+    # invents a dollar cost. Set it to compute a measured labor margin
+    # (1 − actual_hours × cost / retainer) alongside the target margin.
+    everhour_loaded_hourly_cost: float = 0.0
+    # Default lookback windows for the read surfaces (both caller-overridable).
+    everhour_client_time_window_days: int = 30   # client "Time" card
+    everhour_utilization_window_days: int = 7     # PACE per-member utilization
 
     # Deliverables Sheet Sync (docs/modules/deliverables-sheet-sync-prd-v1_0.md)
     # — auto-maintain each client's Google deliverables sheet: append a row on

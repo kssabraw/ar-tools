@@ -1,9 +1,11 @@
 """Pydantic schemas for the Everhour time-tracking integration (Phase 1).
 
-Only the read-only picker + status shapes so far — the join keys themselves are
-written through the existing surfaces (asana_team_members.everhour_user_id via
-PUT /asana/team-members, clients.everhour_project_id via PATCH /clients/{id}).
-The time_entries / rollup schemas land with Phase 3.
+The read-only picker + status shapes (Phase 1), the backfill/sync result shapes
+(Phase 2/3), and the Phase-4 read surface (EverhourClientTime — the client
+"Time" card). The join keys themselves are written through the existing
+surfaces (asana_team_members.everhour_user_id via PUT /asana/team-members,
+clients.everhour_project_id via PATCH /clients/{id}); per-member utilization is
+surfaced through the workload report, not a schema here.
 """
 
 from __future__ import annotations
@@ -61,3 +63,27 @@ class EverhourSyncResult(BaseModel):
     status: str
     job_id: Optional[str] = None
     reason: Optional[str] = None
+
+
+class EverhourTimeMember(BaseModel):
+    """One roster member's logged hours in a client's Time-card breakdown."""
+
+    member_id: str
+    name: Optional[str] = None
+    hours: float
+
+
+class EverhourClientTime(BaseModel):
+    """The client "Time" card read (Phase 4): logged hours over a window, the
+    billable/non-billable/unknown split, and a per-member breakdown. When the
+    integration is off, ``available`` is False and the numeric fields are None
+    — the card renders a dark state, never an error."""
+
+    available: bool
+    reason: Optional[str] = None
+    window_days: Optional[int] = None
+    total_hours: Optional[float] = None
+    billable_hours: Optional[float] = None
+    non_billable_hours: Optional[float] = None
+    unknown_hours: Optional[float] = None
+    members: list[EverhourTimeMember] = []

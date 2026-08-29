@@ -1,6 +1,10 @@
 # Everhour Time-Tracking Integration — Plan (v1.0)
 
-**Authored:** 2026-08-28 · **Status:** **Phases 0–3 COMPLETE** (2026-08-29). Phase 0 =
+**Authored:** 2026-08-28 · **Status:** **Phases 0–4 COMPLETE** (2026-08-29) — the
+integration is fully built; still gated OFF (`everhour_enabled` default False) until the
+owner sets `EVERHOUR_API_KEY` + flips the flag on `PLATFORM`. Phase 4 (consumers: Recipe
+Engine actual-margin side-by-side, PACE per-member utilization, and the frontend surfaces)
+is detailed in §9. Phase 0 =
 config gating + `services/everhour_service.py` wrapper + pure helpers + unit tests, all
 endpoint shapes verified against Everhour's live OpenAPI spec and validated end-to-end
 against a real admin-role key (all four checks passed live). The four Phase-0 review bugs
@@ -22,9 +26,9 @@ in `services/everhour_sync.py` (upsert-by-record-id → `tasks.actual_hours`
 recompute), the `everhour_sync` job worker dispatch + `enqueue_due_everhour_sync`
 in the shared scheduler's daily block, and the manual `POST /everhour/sync`
 endpoint — built on PR [#896](https://github.com/kssabraw/ar-tools/pull/896).
-Still gated OFF (`everhour_enabled` default False). **Next: Phase 4** (consumers:
-Recipe Engine actual-margin + PACE utilization + frontend surfaces). · New suite
-integration — "Everhour"
+Still gated OFF (`everhour_enabled` default False). **Phase 4 (consumers: Recipe
+Engine actual-margin side-by-side + PACE utilization + frontend surfaces) is now
+also complete** — see §9. · New suite integration — "Everhour"
 
 > Read alongside **`docs/modules/everhour-time-tracking-integration-handoff.md`** (the prior
 > session's handoff — decisions #1–#6, the payoff case, and the blocker are carried forward
@@ -386,12 +390,40 @@ Restated from the handoff, unchanged, each shippable and gated on `everhour_enab
   endpoints for task/client/member actuals stay Phase 4 (they back the frontend
   surfaces, so they land with them; the per-client/member rollup helpers are
   built + tested ready for them).
-- **Phase 4 — consumers.** Recipe Engine actual-margin read, PACE/workload wiring
-  (`pm_signals.py`), and the frontend surfaces (task drawer, client Time card). This phase's
-  exact formula changes (e.g. does Recipe Engine's margin math *switch* to actuals once
-  available, or show both estimate- and actual-based margin side by side?) are a **separate
-  decision to make at Phase 4**, not locked by this document — flagging so it isn't assumed
-  later.
+- **Phase 4 — consumers — COMPLETE (2026-08-29).** The three owner decisions (§10, confirmed
+  before build): margin is shown **side-by-side** (never switched); billing is **captured now,
+  not split** (`GET /team/time` now sends `opts_include_billing=1` so `time_entries.billable`
+  populates from here on); ad-hoc/internal member time **counts** toward the utilization signal.
+  All consumers are additive + gated on `everhour_enabled`, degrading to today's estimate-based
+  behaviour when `actual_hours` is null (partial onboarding). Built:
+  - **Read surface** (`services/everhour_sync.py` Phase-4 section + `routers/everhour.py`):
+    pure `billable_split`/`build_client_time`/`utilization_hours` + windowed reads
+    `client_time_summary` (→ `GET /clients/{id}/everhour/time`, the client "Time" card),
+    `member_utilization` (team-wide {member_id: hours} over a window), and
+    `client_month_actual_hours` (the Recipe Engine's this-month labor input). Per-task actuals
+    already ride on `tasks.actual_hours` (returned by the existing `.select("*")` board/detail
+    reads — no new endpoint). Per-member utilization is surfaced **through the workload report**,
+    not a standalone endpoint (fewer surfaces; the Team page already reads it).
+  - **Recipe Engine actual-margin** (`services/recipe_engine.py`): pure `actual_margin` +
+    `build_actual_labor` (informational side-by-side read — measured labor margin only when the
+    new optional `everhour_loaded_hourly_cost` is set, else hours-only, never an invented dollar).
+    `build_diagnosis` folds it into `signals["actual_labor"]` best-effort — **never** touches
+    `allocate`'s inputs or the conformance-tested allocation.
+  - **PACE / workload** (`services/task_workload.py`): pure `attach_logged_hours` adds
+    `logged_hours` + `utilization_pct` (vs pro-rated weekly capacity) to each member of
+    `build_team_workload`, gated on `everhour_enabled`; the estimate-based `open_hours`/
+    `overloaded` verdict is untouched. `pm_signals.build_board_digest` embeds this report, so
+    PACE gets the utilization signal with no change to `pm_signals.py` itself.
+  - **Frontend:** TaskDetail actual-vs-estimate readout under Est. hours; a client-workspace
+    `EverhourTimeCard` (dark until enabled + logged time exists); a Team-page utilization line
+    per member. New types in `lib/types.ts` (`actual_hours` on TaskItem, `EverhourClientTime`,
+    `logged_hours`/`utilization_pct` on the workload member).
+  - **Config:** `everhour_loaded_hourly_cost` (0.0 = disabled, no invented cost),
+    `everhour_client_time_window_days` (30), `everhour_utilization_window_days` (7).
+  - **No migration** — reads over the Phase-3 `time_entries` + `tasks.actual_hours` schema.
+  - **Deferred to a later phase:** consuming `billable` in margin/reporting (captured, not split
+    — owner ruling); a hardened loaded-cost model (the `everhour_loaded_hourly_cost` scalar is a
+    placeholder until per-member cost rates exist).
 
 ---
 
@@ -411,9 +443,12 @@ Carried from the handoff, still open:
   client/margin rollups, so `time_entries.client_id` is NULLABLE (implemented in Phase 3's
   `resolve_time_entries` + `rollup_by_client`/`rollup_by_member`).
 - **Billable vs non-billable** — `time_entries.billable` is captured in the schema (§6) from
-  day one since it's presumably free on the same API response, but nothing *consumes* it in
-  v1 (Recipe Engine margin math doesn't yet distinguish billable/non-billable hours). Defer
-  the consuming logic to Phase 4.
+  day one since it's free on the same API response. **RESOLVED (owner, 2026-08-29): capture
+  now, don't split yet.** Phase 4 turned on `opts_include_billing=1` in `list_team_time` so the
+  field actually populates (previously always None), and the client Time card shows the
+  billable/non-billable/unknown split for legibility — but **nothing weights margin/reporting
+  on it in v1** (the split-margin consuming logic stays deferred; capturing now avoids a re-pull
+  when it lands).
 - **Deleted Everhour entries** — a sync that only reads "records in the last N days" will
   miss an entry a staff member *deleted* outside that logic if the delete isn't itself
   represented as a record in the report (unclear without live docs — could be a hard delete

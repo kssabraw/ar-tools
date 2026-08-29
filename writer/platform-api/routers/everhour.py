@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 from typing import Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends
 
@@ -26,6 +27,7 @@ from config import settings
 from middleware.auth import require_admin, require_auth
 from models.everhour import (
     EverhourBackfillResult,
+    EverhourClientTime,
     EverhourProject,
     EverhourStatus,
     EverhourSyncResult,
@@ -93,6 +95,21 @@ async def everhour_backfill_mirror(
     still-unmirrored tail. Fast (enqueues jobs; the outbound POSTs run on the
     worker, staggered for the rate ceiling)."""
     return EverhourBackfillResult(**everhour_sync.backfill_mirror(limit=limit))
+
+
+@router.get("/clients/{client_id}/everhour/time", response_model=EverhourClientTime)
+async def client_everhour_time(
+    client_id: UUID,
+    days: Optional[int] = None,
+    auth: dict = Depends(require_auth),
+) -> EverhourClientTime:
+    """The client "Time" card (Phase 4, plan §4/§5): hours logged against this
+    client over the last ``days`` (default ``everhour_client_time_window_days``),
+    the billable/non-billable/unknown split, and a per-member breakdown — all
+    read from the ``time_entries`` ledger the daily sync maintains (no live
+    Everhour call). Returns ``available=False`` (never an error) when Everhour
+    isn't enabled, so the card renders a dark state."""
+    return EverhourClientTime(**everhour_sync.client_time_summary(str(client_id), days))
 
 
 @router.post("/everhour/sync", response_model=EverhourSyncResult)
