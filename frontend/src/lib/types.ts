@@ -105,6 +105,8 @@ export interface Client extends ClientListItem {
   strategist_weekday: number | null
   // Slack channel PACE posts this client's PM notifications to; null → master.
   slack_channel_id: string | null
+  // Everhour project this client's time is logged against; null → unmapped.
+  everhour_project_id: string | null
   updated_at: string
 }
 
@@ -1633,6 +1635,28 @@ export interface AsanaTeamMember {
   active: boolean
   // Native task manager identity bridge: the suite user this member is (if linked).
   profile_id?: string | null
+  // Everhour identity bridge: the Everhour user id (text) this member logs time
+  // as (if linked). Resolves member_id on the Phase 3 time pull.
+  everhour_user_id?: string | null
+}
+
+// ── Everhour time-tracking pickers (Phase 1) ──────────────────────────────
+export interface EverhourStatus {
+  configured: boolean
+  enabled: boolean
+}
+
+export interface EverhourUser {
+  everhour_user_id: string | null
+  name: string | null
+  role?: string | null
+  status?: string | null
+  capacity_seconds?: number | null
+}
+
+export interface EverhourProject {
+  everhour_project_id: string | null
+  name: string | null
 }
 
 export interface AsanaLibraryTaskItem {

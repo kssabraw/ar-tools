@@ -164,6 +164,9 @@ class ClientDetail(BaseModel):
     # Slack channel PACE posts this client's PM notifications to (channel id like
     # C0... or #name). None → the single master PACE channel.
     slack_channel_id: Optional[str] = None
+    # Everhour project this client's time is logged against (opaque id like
+    # "ev:123"/"as:123", not numeric). None → not yet onboarded to Everhour.
+    everhour_project_id: Optional[str] = None
 
     @field_validator("drive_folders", "github_content_paths", mode="before")
     @classmethod
@@ -223,6 +226,8 @@ class ClientCreateRequest(BaseModel):
     strategist_weekday: Optional[int] = Field(None, ge=0, le=6)
     # Slack channel PACE posts this client's PM notifications to; None → master.
     slack_channel_id: Optional[str] = None
+    # Everhour project this client's time is logged against; None → unmapped.
+    everhour_project_id: Optional[str] = None
     # Reference page URLs to scrape + analyze for structure mirroring.
     page_structure_urls: Optional[PageStructureUrls] = None
     # Written page-structure specs — the no-website alternative to the URLs above.
@@ -273,3 +278,6 @@ class ClientUpdateRequest(BaseModel):
     # Slack channel PACE posts this client's PM notifications to; pass an empty
     # string to clear it back to the master PACE channel.
     slack_channel_id: Optional[str] = None
+    # Everhour project this client's time is logged against; pass an empty string
+    # to clear the mapping.
+    everhour_project_id: Optional[str] = None

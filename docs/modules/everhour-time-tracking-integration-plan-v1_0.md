@@ -1,11 +1,22 @@
 # Everhour Time-Tracking Integration — Plan (v1.0)
 
-**Authored:** 2026-08-28 · **Status:** **Phase 0 COMPLETE** (config gating +
-`services/everhour_service.py` wrapper + pure helpers + unit tests, all endpoint shapes
-verified against Everhour's live OpenAPI spec, **and validated end-to-end against a real
-admin-role API key on 2026-08-29** — `scripts/verify_everhour_api_key.py` passed all four
-checks live: authenticated as an admin user, 6 team members visible, 470 projects visible,
-22 time records read for today. Ready for Phase 1.) · New suite integration — "Everhour"
+**Authored:** 2026-08-28 · **Status:** **Phases 0–2 COMPLETE** (2026-08-29). Phase 0 =
+config gating + `services/everhour_service.py` wrapper + pure helpers + unit tests, all
+endpoint shapes verified against Everhour's live OpenAPI spec and validated end-to-end
+against a real admin-role key (all four checks passed live). The four Phase-0 review bugs
+were fixed in [#888](https://github.com/kssabraw/ar-tools/pull/888) (see §12). Phase 1 (merged
+in [#890](https://github.com/kssabraw/ar-tools/pull/890)) = the `asana_team_members.everhour_user_id`
++ `clients.everhour_project_id` migration (applied live), the read-only pickers
+(`routers/everhour.py`: `/everhour/status`,`/users`,`/projects`), roster + client-mapping
+wiring, and the frontend (Team roster Everhour-user column + client-form Everhour-Project
+field). Phase 2 = the **metadata-only task mirror** — migration `20260829130000` (applied
+live: `tasks.everhour_task_id`/`_synced_at` + the `everhour_mirror` job type + a backfill
+index), `services/everhour_sync.py` (the mirror + a one-time backfill), the mirror hooked
+once into `task_service.create_task` (the single funnel every task-creation path passes
+through), the `everhour_mirror` job worker dispatch, and the admin `POST /everhour/
+backfill-mirror` endpoint. Gotcha #5 (the `int(everhour_user_id)` assignee cast) is resolved
+in `everhour_sync.mirror_user_id`. Still gated OFF (`everhour_enabled` default False). **Next:
+Phase 3** (time pull + rollups). · New suite integration — "Everhour"
 
 > Read alongside **`docs/modules/everhour-time-tracking-integration-handoff.md`** (the prior
 > session's handoff — decisions #1–#6, the payoff case, and the blocker are carried forward
@@ -118,14 +129,27 @@ pattern as `asana_monthly.generate_month_for_client`).
   non-completed) tasks with `everhour_task_id is null` and mirrors them, for the cutover
   moment (mirrors the Asana-import precedent in `services/task_import.py`).
 
-Whether the mirror runs **inline** (synchronous httpx call inside `create_task`, like the
-notification emit) or **async** (a lightweight `async_jobs` job, closer to how the Asana
-monthly job batches Asana calls) is a Phase 2 implementation call — inline is simpler and the
-call volume is low (one task at a time, not a batch), but every `create_task` call-site
-would then carry Everhour latency; async decouples that at the cost of a short window where
-a task exists natively but has no Everhour counterpart yet (acceptable — time can't be logged
-against it in that window anyway). **Lean inline, degrade to async only if Everhour create
-latency proves to matter in practice** — flag for a decision at Phase 2, not now.
+Whether the mirror runs **inline** (synchronous httpx call inside `create_task`) or **async**
+(a lightweight `async_jobs` job) was flagged as a Phase 2 call. **RESOLVED at Phase 2: async
+(`everhour_mirror` job).** The deciding factor turned out not to be latency but the sync/async
+boundary: `task_service.create_task` is a *sync* function called BOTH from threadpool request
+handlers AND directly on the event loop (`run_task_month_job` awaits the sync
+`generate_month_for_client`, which calls `create_task`), so an inline `asyncio.run` of
+Everhour's async client would raise "cannot be called from a running event loop" in the
+monthly-generation path. Enqueuing a job is a plain sync DB insert that works from anywhere,
+decouples Everhour's latency from every call-site, and inherits the worker's retry/settle
+machinery. The short window where a task exists natively but has no Everhour counterpart yet is
+acceptable (time can't be logged against it in that window anyway).
+
+**Hook simplification (built):** all three §3 creation points — manual creation, the monthly
+generator, and every producer — funnel through `task_service.create_task`, so the mirror is
+hooked **there once** (`everhour_sync.enqueue_mirror(created)`, best-effort, lazy import),
+rather than separately in `task_monthly.py` / `task_producers.py`. Subtasks bypass it (they
+insert via `create_subtasks`) and are deliberately never mirrored — they are checklist markers,
+not billing targets. **Not freeze-gated:** the mirror creates nothing in the suite and no
+client content (it mirrors an already-existing internal task's metadata outward), and internal
+PM task creation keeps running during a freeze, so `everhour_mirror` is intentionally NOT in
+`FREEZE_GATED_JOB_TYPES`.
 
 ---
 
@@ -178,10 +202,10 @@ shape as Asana/GSC/DataForSEO/GBP.
   exactly as documented) and, on 2026-08-29, against a **real admin-role key** — all four
   checks passed live (`/users/me`, `/team/users`, `/projects`, `/team/time`), no shape
   mismatches. Everhour issues **one key per user account** (no separate service-account
-  concept); §8's provisioning should consider minting a **dedicated non-human "Integration"
-  user** in Everhour for this rather than relying on a real teammate's personal key, so
-  rotating/revoking it never touches that person's own access — not done yet, flagged for
-  Phase 1.
+  concept). **Owner ruling (2026-08-29): keep using Kyle's personal admin key** — no
+  dedicated non-human "Integration" Everhour user for now. (The trade-off is that the
+  integration's access is tied to that person's account, so rotating/revoking his key would
+  touch it; revisit if that becomes a problem.)
 - `writer/platform-api/services/everhour_sync.py` — the task mirror (out) + the time pull (in)
   + rollups. Pure roll-up helpers (`rollup_by_task`/`rollup_by_client`/`rollup_by_member`)
   unit-tested; the two I/O flows are orchestration only, mocked in tests.
@@ -281,9 +305,10 @@ Secrets are set on the `PLATFORM` Railway service by the user — never handled 
 
 ## 8. One-time Everhour provisioning (user-side, dashboard + env)
 
-1. **API key** — an Everhour account-level API key (Settings → Api in the Everhour web app,
-   per ecosystem research — **unverified**, confirm once the docs/key route is open) →
-   `EVERHOUR_API_KEY` on `PLATFORM`.
+1. **API key** — an admin-role Everhour account's API key (Settings → Api in the Everhour web
+   app) → `EVERHOUR_API_KEY` on `PLATFORM`. **Owner ruling (2026-08-29): Kyle's personal admin
+   key** — no dedicated "Integration" user (see §5). Any admin-role key works; the mapping
+   pickers stay dormant until `everhour_enabled` is flipped on.
 2. **Per-client projects** — create (or identify existing) one Everhour project per suite
    client → set `clients.everhour_project_id` (editor ships with Phase 1/2 frontend).
 3. **Team roster link** — for each `asana_team_members` row, set `everhour_user_id` (Team
@@ -306,12 +331,29 @@ Restated from the handoff, unchanged, each shippable and gated on `everhour_enab
   real admin-role key — all four checks passed (`/users/me`, `/team/users`, `/projects`,
   `/team/time`). `everhour_enabled` is still `False` by default; nothing runs until it's set
   on `PLATFORM` alongside the real key.
-- **Phase 1 — mapping/identity.** Migrations (`asana_team_members.everhour_user_id`,
-  `clients.everhour_project_id`); Team-page Everhour user-link dropdown; client↔project
-  mapping UI. `everhour_service.list_team_users`/`list_projects`/`get_project` are ready to
-  back the pickers.
-- **Phase 2 — task mirror.** Suite → Everhour task creation at every task-creation hook
-  point (§3) + the one-time `everhour_task_id` backfill for existing tasks.
+- **Phase 1 — mapping/identity — COMPLETE (2026-08-29, merged #890).** Migration
+  `20260829120000` (applied live) adds `asana_team_members.everhour_user_id` (peer of
+  `profile_id`; the live schema was re-checked first — the table is `id`-PK / `gid`-nullable
+  after the Phase-2a identity migration, so the column is a plain additive peer) and
+  `clients.everhour_project_id` (mirrors `clients.slack_channel_id`'s single-external-id
+  shape). Read-only pickers `routers/everhour.py` + `models/everhour.py` (`/everhour/status`,
+  `/users`, `/projects`; degrade to empty when unconfigured). `everhour_user_id` threaded
+  through the roster read/write/`partition_roster_write`; `everhour_project_id` on client
+  read/create/update (empty-clears semantics). Frontend: the Team & capacity roster editor's
+  "Everhour user" column + the client form's "Everhour Project" field (both only shown once
+  Everhour is `configured`). Gated OFF until `everhour_enabled` is flipped.
+- **Phase 2 — task mirror — COMPLETE (2026-08-29).** Migration `20260829130000` (applied live):
+  `tasks.everhour_task_id` (text) + `tasks.everhour_synced_at` (timestamptz) + a partial index
+  `idx_tasks_everhour_unmirrored` for the backfill scan + the `everhour_mirror` async job type
+  (CHECK rebuilt from the live constraint). `services/everhour_sync.py`: pure `should_mirror`
+  (top-level + client-scoped + unmirrored + live) and `mirror_user_id` (gotcha #5's TEXT→int
+  assignee cast), `mirror_gate_open`, `enqueue_mirror` (deduped, best-effort), async `mirror_task`
+  (resolve project + assignee → `build_task_payload` → `create_task` → stamp the join key),
+  `run_mirror_job`, and `backfill_mirror`. Hooked once into `task_service.create_task` (the single
+  funnel for manual / monthly / producer creation); `everhour_mirror` dispatch in `job_worker.py`;
+  admin `POST /everhour/backfill-mirror`. `everhour_backfill_spacing_seconds` config for the
+  backfill's rate stagger. Pure + flow tests in `tests/test_everhour_sync.py`. Gated OFF
+  (`everhour_enabled` default False). `tasks.actual_hours` + `time_entries` stay Phase 3.
 - **Phase 3 — time pull + rollups.** `time_entries` table + scheduled pull + `actual_hours`
   / per-client / per-member rollups (§4, §6).
 - **Phase 4 — consumers.** Recipe Engine actual-margin read, PACE/workload wiring
@@ -458,3 +500,26 @@ residual gap (unchanged from §10) — acceptable given `everhour_sync_repull_da
 identity concern in §11.1 (which team member's key backs the integration) matters in
 practice given a single agency Everhour account likely has one natural admin; and the §11.3
 provisioning-workflow call. Neither blocks Phase 0/1 code.
+
+---
+
+## 12. Phase 0 code gotchas — adversarial re-review (bugs 1–4 fixed in #888; #5 open for Phase 2)
+
+An adversarial re-review of the Phase 0 code (merged in PR #884) found five real defects, all
+inert at the time (`everhour_enabled` is `False`, nothing called the wrapper). The owner's
+ruling on this session's branch was "merge as-is, defer the fixes" — but a **parallel session
+fixed bugs 1–4 the same day in [PR #888](https://github.com/kssabraw/ar-tools/pull/888)**
+(commit `45fcc93`, 24 tests up from 19, each fix verified against its live repro), so they are
+**already resolved on `main`**. **#5 remains open** — it is a Phase-2 boundary note, not a
+current bug. The table records what was found and the resolution.
+
+| # | Location | Defect | Status |
+|---|---|---|---|
+| 1 | `verify_api_key()` | Docstring says "Never raises," but only `httpx.HTTPError` was caught; `resp.json()` raises `json.JSONDecodeError` (a `ValueError`, not an `httpx.HTTPError`) on a malformed/non-JSON `200`, escaping uncaught. | ✅ **Fixed in #888** — now `except (httpx.HTTPError, ValueError)`. |
+| 2 | `scripts/verify_everhour_api_key.py::main()` | No `try/except` around the `httpx` calls, so a transport-level failure (timeout, DNS, refused) crashed with a raw traceback instead of a clean `[FAIL]` line, and leaked the unclosed client. | ✅ **Fixed in #888** — a `_check()` helper catches `httpx.RequestError` + malformed JSON and prints one `[FAIL]`; `with httpx.Client(...)` always closes. |
+| 3 | `get_project()` | Missing the `or {}` fallback its own docstring claims to mirror from `asana_service.get_project`; a JSON-`null` body made it return `None` where callers expect a dict. | ✅ **Fixed in #888** — `return await _get(...) or {}`. |
+| 4 | `next_page()` | `returned_count < limit` → `TypeError` on `limit=None`; `limit=0` never terminated (returned `current_page + 1` forever). | ✅ **Fixed in #888** — guards `not limit or limit <= 0` first. |
+| 5 (lower) | `build_task_payload()` assignee type vs `parse_user()` | `build_task_payload(assignee_user_id: int)` emits `{"userId": <int>}`, but `parse_user` stores `everhour_user_id` as **`str`** (`str(uid)`, like every external-id column). A Phase 2 caller that reads the stored `everhour_user_id` (str) and passes it straight in sends Everhour a **string** `userId`. | ✅ **Fixed in Phase 2.** `everhour_sync.mirror_user_id(str) -> int|None` casts the stored TEXT id to `int` at the mirror boundary (None on blank/non-numeric); the stored column stays `text`. Unit-tested in `tests/test_everhour_sync.py`. |
+
+None of these change the Phase 0 contract or the locked decisions (§2); they are localized
+correctness fixes to fold into the named phase's own PR.

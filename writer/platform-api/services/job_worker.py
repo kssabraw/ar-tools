@@ -880,6 +880,10 @@ async def _process_job(job: dict) -> None:
         await run_due_sweep_job(job)
     elif job_type == "task_import_asana":
         await run_task_import_job(job)
+    elif job_type == "everhour_mirror":
+        from services import everhour_sync
+
+        await everhour_sync.run_mirror_job(job)
     elif job_type == "client_report":
         await run_client_report_job(job)
     elif job_type == "syndication_scan":

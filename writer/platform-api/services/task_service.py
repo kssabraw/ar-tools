@@ -448,6 +448,18 @@ def create_task(
             created["id"], "assigned", actor_id=created_by,
             detail={"field": "assignee_id", "from": None, "to": who["assignee_id"]},
         )
+    # Everhour task mirror (metadata-only, plan §3): every task-creation path —
+    # manual, monthly generation, and producers — funnels through here, so one
+    # best-effort hook covers all of §3's creation points. A no-op unless the
+    # mirror is enabled + the task is eligible (top-level, client-scoped);
+    # enqueues a lightweight everhour_mirror job (never inline — see
+    # everhour_sync). Lazy import keeps task_service free of Everhour deps.
+    try:
+        from services import everhour_sync
+
+        everhour_sync.enqueue_mirror(created)
+    except Exception as exc:
+        logger.warning("everhour_mirror_hook_failed", extra={"task_id": created.get("id"), "error": str(exc)})
     return created
 
 
@@ -547,6 +559,9 @@ def partition_roster_write(existing: list[dict], members: list[dict]) -> dict:
             "weekly_hours": m.get("weekly_hours"),
             "active": m.get("active", True),
             "profile_id": m.get("profile_id") or None,
+            "everhour_user_id": (str(m["everhour_user_id"]).strip() or None)
+            if m.get("everhour_user_id") not in (None, "")
+            else None,
         }
         if m.get("id"):
             updates.append({"id": m["id"], "fields": {**fields, "gid": gid}})
