@@ -1046,9 +1046,11 @@ async def handle_message(event: dict) -> None:
 
     # 0) PACE (delivery PM) gets first refusal — but only when enabled (default
     # off → this branch is inert and SerMaStr is byte-for-byte unchanged).
-    #  - Dedicated PACE channel set (§10.2): in THAT channel PACE owns every
-    #    message (force) and SerMaStr is excluded; in any other channel PACE
-    #    stays out entirely.
+    #  - Dedicated PACE channel set (§10.2): in THAT channel SerMaStr is
+    #    excluded and PACE gets first refusal on every message (force), but
+    #    PACE itself only answers a new question when @-mentioned (owner
+    #    ruling 2026-08-29 — see maybe_handle_slack); in any other channel
+    #    PACE stays out entirely.
     #  - No dedicated channel: shared-channel shape-routing — PACE handles only
     #    project-management-shaped messages + its own confirms, else falls through.
     if settings.pace_enabled:
@@ -1060,10 +1062,14 @@ async def handle_message(event: dict) -> None:
             # (the PACE app would double-reply). Inbound is handled there.
             if settings.pace_slack_signing_secret:
                 return
-            # Dedicated PACE channel: PACE owns every message here and SerMaStr
-            # is excluded — the return sits OUTSIDE the try so the exclusion
-            # holds even when the delegate errors (it best-effort-replies itself;
-            # a failure must not leak the strategist into the PACE channel).
+            # Dedicated PACE channel: SerMaStr is excluded here regardless of
+            # whether PACE itself answers (it only answers when @-mentioned)
+            # — the return sits OUTSIDE the try so the exclusion holds even
+            # when the delegate errors (it best-effort-replies itself; a
+            # failure must not leak the strategist into the PACE channel).
+            # (No bot_user_id to thread here — this branch only runs when no
+            # dedicated PACE app is configured, so mentions_bot degrades to
+            # "any mention".)
             try:
                 from services import pace_agent, pace_auth
 

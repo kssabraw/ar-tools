@@ -99,7 +99,12 @@ async def slack_pace_events(request: Request, background: BackgroundTasks) -> Re
 
     A separate Slack app gives PACE its own bot identity, so it needs its own
     signing secret and its own Request URL. This app lives only in the PACE
-    channel, so every plain human message it delivers is PACE's to answer.
+    channel; every plain human message it delivers is PACE's to consider, but
+    (owner ruling 2026-08-29) it only ANSWERS a new question when @-mentioned
+    — a reply continuing an already-staged confirmation is the exception
+    (``pace_agent.maybe_handle_slack``). The Events API envelope's
+    ``authorizations`` field carries PACE's own bot user id, threaded through
+    so the mention check knows which user id is "PACE".
 
     Inert unless PACE is enabled AND a PACE signing secret is configured — until
     then the shared SerMaStr app keeps handling the PACE channel (via the
@@ -154,9 +159,19 @@ async def slack_pace_events(request: Request, background: BackgroundTasks) -> Re
     if event is not None:
         from services import pace_agent
 
-        background.add_task(pace_agent.handle_pace_message, event)
+        background.add_task(pace_agent.handle_pace_message, event, _bot_user_id(payload))
 
     return Response(status_code=200)
+
+
+def _bot_user_id(payload: dict) -> "str | None":
+    """The receiving app's own Slack user id, from the Events API envelope's
+    ``authorizations[0].user_id`` (present on every event_callback for a
+    non-org-wide app — used to tell "someone @-mentioned PACE" apart from
+    "someone @-mentioned a teammate"). ``None`` when Slack omits it; callers
+    degrade permissively rather than going silent."""
+    auths = payload.get("authorizations") or []
+    return (auths[0] or {}).get("user_id") if auths else None
 
 
 @router.post("/slack/director/events")
