@@ -1,6 +1,35 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-29 · **Director of Operations — Phase 1 MERGED + ENABLED in production** (latest)
+## ⏩ Update — 2026-08-29 · **Director of Operations — rollout verification in progress** (latest)
+
+A verify session (00:22 UTC) checked the enablement against live state rather than list
+status, per the Railway rule:
+- **Env config confirmed:** `DIRECTOR_ENABLED` is set on PLATFORM; `DIRECTOR_AUTONOMY_VETO_ENABLED`
+  is correctly **absent** (veto stays dark).
+- **Deploy not yet active — queue still draining (not a failure):** the running PLATFORM
+  code was still commit `144631d` (#883 Everhour docs, the last `SUCCESS`, 23:24 UTC) —
+  **pre-Director**. The Director-code deploys (#885 `60a8997` + #886 docs `f515a88` on top)
+  were `QUEUED`/`BUILDING`/`DEPLOYING` with **none booted** (no runtime logs yet); Railway
+  will settle on the newest (`f515a88`). This is the documented status-lag/slow-drain, with
+  ~7.5h of headroom before the 08:00 UTC first reconcile. No deploy was force-accepted
+  (destructive — needs owner OK; the queue drains on its own).
+- **No `ops_seam`/`ops_digest` notifications and no `director_seam` tasks yet — expected:**
+  the daily reconcile fires once/day after 08:00 UTC and does **not** fire on redeploy;
+  current time was 00:22 UTC.
+- **Two self check-ins armed into the verify session:** ~03:04 UTC (confirm a Director
+  commit reached active + `gsc_scheduler.started` + no `step_failed step=director_reconcile`)
+  and ~08:59 UTC (confirm the first reconcile: the expected `qa_idle` → `ops_seam` to the
+  PACE channel + in-app feed, no reconcile error; per-client `director_seam` tasks may be
+  present or none). The prior session's ~09:15 UTC check-in fires into *that* session — both
+  verify independently.
+
+Still pending human sign-off after the first clean tick: calibrate the seam-day thresholds
+from real data; keep `director_autonomy_veto_enabled` dark until autonomy content-gen runs
+against more clients.
+
+---
+
+## ⏩ Update — 2026-08-29 · **Director of Operations — Phase 1 MERGED + ENABLED in production**
 
 PR [kssabraw/ar-tools#885](https://github.com/kssabraw/ar-tools/pull/885) merged to `main`
 (commit `60a8997`; CI green — pytest + Netlify preview). The owner then set
