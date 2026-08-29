@@ -29,7 +29,7 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import notifications, pace_auth, pace_batch, pm_signals
+from services import notifications, pace_auth, pace_batch, pace_interventions, pm_signals
 from services.pace_actions import PACE_ACTIONS
 from services.pace_auth import ActionContext
 
@@ -64,7 +64,13 @@ _BRIEF_RE = re.compile(
 
 def is_pace_message(text: str) -> bool:
     """True when a message is project-management-shaped (→ PACE handles it)."""
-    return bool(text and _PACE_RE.search(text))
+    if not text:
+        return False
+    # An intervention disposition ("approve 2" / "defer 3 to …") is PACE's too,
+    # so the shared-bot path routes it (the dedicated-app path is mention-gated).
+    if pace_interventions.parse_intervention_reply(text):
+        return True
+    return bool(_PACE_RE.search(text))
 
 
 def is_personal_brief(text: str) -> bool:
@@ -749,6 +755,16 @@ async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool
         return False
 
     try:
+        # PACE intervention disposition ("approve 2" / "deny 2" / "defer 2 to …" /
+        # "approve 2 but only reassign to Ivy"). Falls through when the index isn't
+        # a currently-posted intervention (→ normal handling).
+        if pace_interventions.enabled():
+            disp = pace_interventions.parse_intervention_reply(question)
+            if disp:
+                reply = await pace_interventions.dispose_from_slack(channel, disp, context)
+                if reply is not None:
+                    await _post(channel, reply, thread_ts)
+                    return True
         if is_personal_brief(question):
             await _post(channel, personal_brief_text(context), thread_ts)
             return True

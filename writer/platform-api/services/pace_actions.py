@@ -583,6 +583,51 @@ def run_triage(context: ActionContext, client_id: str, args: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# rename_task — change a task's name (Proactive Interventions disambiguation).
+# Reversible (a rename, never a merge/delete). The intervention detector proposes
+# the new name; this resolves + re-checks it before the write. It resolves the
+# TARGET by id when the args carry one (the duplicate detector already knows the
+# exact row — a name query would be ambiguous by construction), else by name.
+# ---------------------------------------------------------------------------
+def _task_by_id(client_id: str, task_id: str) -> Optional[dict]:
+    rows = (
+        get_supabase().table("tasks")
+        .select("id, name, completed, deleted_at")
+        .eq("id", task_id).eq("client_id", client_id).limit(1).execute()
+    ).data
+    return rows[0] if rows else None
+
+
+def stage_rename(context: ActionContext, client_id: str, args: dict) -> tuple[str, dict | str]:
+    ok, reason = pace_auth.require(context, "rename_task")
+    if not ok:
+        return "reply", reason
+    new_name = (args.get("new_name") or "").strip()
+    if not new_name:
+        return "reply", "What should the task be renamed to?"
+    task_id = (args.get("task_id") or "").strip()
+    if task_id:
+        task = _task_by_id(client_id, task_id)
+        if not task or task.get("completed") or task.get("deleted_at"):
+            return "reply", "That task is no longer an open task to rename."
+    else:
+        task, reply = _resolve_one_task(client_id, args.get("task_name", ""), "rename")
+        if reply:
+            return "reply", reply
+    if (task.get("name") or "").strip() == new_name:
+        return "reply", f"“{task['name']}” already has that name."
+    return _staged(
+        {"task_id": task["id"], "old_name": task.get("name"), "new_name": new_name},
+        context, f"rename *“{task.get('name')}”* → *“{new_name}”*",
+    )
+
+
+def run_rename(context: ActionContext, client_id: str, args: dict) -> str:
+    task_service.update_task(args["task_id"], {"name": args["new_name"]}, actor_id=context.profile_id)
+    return f"✅ Renamed *“{args.get('old_name')}”* → *“{args['new_name']}”*."
+
+
+# ---------------------------------------------------------------------------
 # generate_pace_report (v1.3) — delivery report (§4.7), read-only (no confirm)
 # ---------------------------------------------------------------------------
 def stage_generate_report(context: ActionContext, client_id: str, args: dict) -> tuple[str, dict | str]:
@@ -651,5 +696,6 @@ PACE_ACTIONS: dict[str, dict] = {
     "nudge_assignee": {"label": "nudge an assignee", "stage": stage_nudge, "run": run_nudge},
     "generate_pace_report": {"label": "generate a delivery report", "stage": stage_generate_report, "run": run_generate_report},
     "triage_task": {"label": "triage a task (set missing due date / category / estimate)", "stage": stage_triage, "run": run_triage},
+    "rename_task": {"label": "rename a task (disambiguation)", "stage": stage_rename, "run": run_rename},
     "run_qa_review": {"label": "run a QA review on a task's deliverable", "stage": stage_run_qa, "run": run_run_qa},
 }

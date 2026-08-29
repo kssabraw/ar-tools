@@ -144,6 +144,11 @@ def format_slack(title: str, summary: Optional[str], client_name: Optional[str],
 # that always wins.
 PACE_CHANNEL_KINDS = frozenset({
     "pace_digest", "pace_chase_plan", "pace_escalation", "pace_report", "pace_briefs",
+    # Proactive Interventions (services/pace_interventions.py) — the managerial
+    # detect→propose→dispose loop's digest + execution-result posts. Portfolio
+    # rollups (client_id may be set for scoped ones, but they're a managerial
+    # decision surface), so they stay in the master PACE channel, not per-client.
+    "pace_intervention", "pace_intervention_result",
     "task_assigned", "task_mention", "task_comment", "task_month_generated",
     "task_overload", "task_due", "task_nudge",
     # Deliverables-sheet automation (services/deliverables_sheet.py) is PM/PACE
