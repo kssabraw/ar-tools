@@ -181,6 +181,15 @@ async def _set_run_status(
     if status in ("complete", "failed"):
         await _sync_silo_promotion_status(run_id, run_status=status)
 
+    # Client-facing "content ready" Slack ping (PACE): fires on ANY terminal
+    # transition, since a failed/cancelled run can be the one that settles a
+    # batch (the client's channel should learn the batch finished either way).
+    # Self-gated + best-effort inside.
+    if status in ("complete", "failed", "cancelled"):
+        from services import content_ready
+
+        content_ready.on_run_settled(run_id)
+
     # Native task manager producer (PRD §11, opt-in): a completed run opens a
     # "Review & publish" task. Self-gated + best-effort inside.
     if status == "complete":

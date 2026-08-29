@@ -155,6 +155,10 @@ PACE_CHANNEL_KINDS = frozenset({
     # digest and the daily reversible seam notifications (e.g. qa_idle) are
     # cross-agent delivery chatter, same home as PACE's own digest.
     "ops_digest", "ops_seam",
+    # "Your content is ready" pings (services/content_ready.py) — PACE tells a
+    # client's own channel when a Blog/Service run, Local SEO page, Ecommerce
+    # page, or Website Builder page finishes generating.
+    "content_ready",
 })
 
 # The client-scoped subset of the PACE kinds: each carries a real ``client_id``
@@ -167,6 +171,7 @@ PACE_CHANNEL_KINDS = frozenset({
 CLIENT_SCOPED_PACE_KINDS = frozenset({
     "task_assigned", "task_mention", "task_comment", "task_month_generated",
     "task_nudge", "deliverable_link_missing", "deliverable_note",
+    "content_ready",
 })
 
 # Director of Operations (DORA) kinds. These are still PACE kinds (so they keep

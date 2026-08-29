@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from config import settings
 from db.supabase_client import get_supabase
 from services import activity
+from services import content_ready
 from services.brand_scan import run_brand_scan_job
 from services.brand_report import run_brand_report_job
 from services.brand_voice_service import run_brand_voice_scan_job
@@ -1029,6 +1030,20 @@ async def _process_job(job: dict) -> None:
         except Exception as exc:  # pragma: no cover - defensive
             logger.error(
                 "job_worker.activity_settle_failed",
+                extra={"job_id": job.get("id"), "error": str(exc)},
+            )
+
+    # Client-facing "content ready" Slack ping (PACE, services/content_ready.py):
+    # after the LAST in-flight job of a client's content-creation batch settles,
+    # post one summary message to that client's own Slack channel. Unlike the
+    # activity ping above this is not gated on payload.user_id — a scheduled
+    # background generation should tell the client's channel too. Best-effort.
+    if job_type in content_ready.JOB_TYPES:
+        try:
+            content_ready.on_job_settled(job)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error(
+                "job_worker.content_ready_settle_failed",
                 extra={"job_id": job.get("id"), "error": str(exc)},
             )
 
