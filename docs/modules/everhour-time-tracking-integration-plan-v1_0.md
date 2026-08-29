@@ -1,6 +1,6 @@
 # Everhour Time-Tracking Integration — Plan (v1.0)
 
-**Authored:** 2026-08-28 · **Status:** **Phases 0–2 COMPLETE** (2026-08-29). Phase 0 =
+**Authored:** 2026-08-28 · **Status:** **Phases 0–3 COMPLETE** (2026-08-29). Phase 0 =
 config gating + `services/everhour_service.py` wrapper + pure helpers + unit tests, all
 endpoint shapes verified against Everhour's live OpenAPI spec and validated end-to-end
 against a real admin-role key (all four checks passed live). The four Phase-0 review bugs
@@ -15,8 +15,16 @@ index), `services/everhour_sync.py` (the mirror + a one-time backfill), the mirr
 once into `task_service.create_task` (the single funnel every task-creation path passes
 through), the `everhour_mirror` job worker dispatch, and the admin `POST /everhour/
 backfill-mirror` endpoint. Gotcha #5 (the `int(everhour_user_id)` assignee cast) is resolved
-in `everhour_sync.mirror_user_id`. Still gated OFF (`everhour_enabled` default False). **Next:
-Phase 3** (time pull + rollups). · New suite integration — "Everhour"
+in `everhour_sync.mirror_user_id`. Phase 3 = the **time pull + rollups**
+(migration `20260829140000`, applied live: `tasks.actual_hours` + the
+`time_entries` ledger + the `everhour_sync` job type), the daily whole-team pull
+in `services/everhour_sync.py` (upsert-by-record-id → `tasks.actual_hours`
+recompute), the `everhour_sync` job worker dispatch + `enqueue_due_everhour_sync`
+in the shared scheduler's daily block, and the manual `POST /everhour/sync`
+endpoint — built on PR [#896](https://github.com/kssabraw/ar-tools/pull/896).
+Still gated OFF (`everhour_enabled` default False). **Next: Phase 4** (consumers:
+Recipe Engine actual-margin + PACE utilization + frontend surfaces). · New suite
+integration — "Everhour"
 
 > Read alongside **`docs/modules/everhour-time-tracking-integration-handoff.md`** (the prior
 > session's handoff — decisions #1–#6, the payoff case, and the blocker are carried forward
@@ -354,8 +362,30 @@ Restated from the handoff, unchanged, each shippable and gated on `everhour_enab
   admin `POST /everhour/backfill-mirror`. `everhour_backfill_spacing_seconds` config for the
   backfill's rate stagger. Pure + flow tests in `tests/test_everhour_sync.py`. Gated OFF
   (`everhour_enabled` default False). `tasks.actual_hours` + `time_entries` stay Phase 3.
-- **Phase 3 — time pull + rollups.** `time_entries` table + scheduled pull + `actual_hours`
-  / per-client / per-member rollups (§4, §6).
+- **Phase 3 — time pull + rollups — COMPLETE (2026-08-29, PR
+  [#896](https://github.com/kssabraw/ar-tools/pull/896)).** Migration
+  `20260829140000` (applied live): `tasks.actual_hours` (a derived, recomputed
+  rollup column) + the `time_entries` ledger (keyed by `everhour_record_id`;
+  `client_id` NULLABLE per the §10 owner ruling, `task_id` nullable, three
+  rollup indexes, RLS service-role only) + the `everhour_sync` async job type
+  (CHECK rebuilt from the live constraint). `services/everhour_service.py`:
+  `parse_time_record` now also surfaces `everhour_project_id` (the ad-hoc
+  client-resolution fallback). `services/everhour_sync.py` (Phase 3 half): pure
+  `rollup_by_task`/`_client`/`_member` + `resolve_time_entries` (native task →
+  its client authoritatively, else project → client, else None) + `sync_window`;
+  `run_everhour_sync` (paged pull → parse/validate → resolve maps →
+  upsert-by-record-id → recompute `actual_hours` for touched tasks; a delete
+  re-reads as `time: 0` and zeroes the task, no reconciliation pass — §11.9);
+  `enqueue_everhour_sync`/`enqueue_due_everhour_sync` (one whole-team job,
+  deduped) + `run_everhour_sync_job`. The READ gate is `everhour_enabled` only
+  (the mirror sub-gate is write-only). `everhour_sync` dispatch in
+  `job_worker.py`; `enqueue_due_everhour_sync` in the scheduler's daily block;
+  manual `POST /everhour/sync` (admin) + `EverhourSyncResult`. Pure + flow tests
+  in `tests/test_everhour_sync.py` (delete-to-zero + ad-hoc-no-task cases).
+  Gated OFF. `tasks.actual_hours` **consumers** (Recipe Engine, PACE) + the read
+  endpoints for task/client/member actuals stay Phase 4 (they back the frontend
+  surfaces, so they land with them; the per-client/member rollup helpers are
+  built + tested ready for them).
 - **Phase 4 — consumers.** Recipe Engine actual-margin read, PACE/workload wiring
   (`pm_signals.py`), and the frontend surfaces (task drawer, client Time card). This phase's
   exact formula changes (e.g. does Recipe Engine's margin math *switch* to actuals once
@@ -376,7 +406,10 @@ Carried from the handoff, still open:
   and whether the member-utilization rollup (Phase 4/PACE) should count it toward capacity.
   **Leaning:** count it toward member utilization (a person's hours are a person's hours for
   capacity purposes) but exclude it from client/margin rollups (no client to bill it to) —
-  confirm with the owner at Phase 3.
+  confirm with the owner at Phase 3. **RESOLVED (owner, 2026-08-29): the leaning is
+  confirmed** — ad-hoc/internal time counts toward member utilization but is excluded from
+  client/margin rollups, so `time_entries.client_id` is NULLABLE (implemented in Phase 3's
+  `resolve_time_entries` + `rollup_by_client`/`rollup_by_member`).
 - **Billable vs non-billable** — `time_entries.billable` is captured in the schema (§6) from
   day one since it's presumably free on the same API response, but nothing *consumes* it in
   v1 (Recipe Engine margin math doesn't yet distinguish billable/non-billable hours). Defer
