@@ -178,10 +178,10 @@ shape as Asana/GSC/DataForSEO/GBP.
   exactly as documented) and, on 2026-08-29, against a **real admin-role key** — all four
   checks passed live (`/users/me`, `/team/users`, `/projects`, `/team/time`), no shape
   mismatches. Everhour issues **one key per user account** (no separate service-account
-  concept); §8's provisioning should consider minting a **dedicated non-human "Integration"
-  user** in Everhour for this rather than relying on a real teammate's personal key, so
-  rotating/revoking it never touches that person's own access — not done yet, flagged for
-  Phase 1.
+  concept). **Owner ruling (2026-08-29): keep using Kyle's personal admin key** — no
+  dedicated non-human "Integration" Everhour user for now. (The trade-off is that the
+  integration's access is tied to that person's account, so rotating/revoking his key would
+  touch it; revisit if that becomes a problem.)
 - `writer/platform-api/services/everhour_sync.py` — the task mirror (out) + the time pull (in)
   + rollups. Pure roll-up helpers (`rollup_by_task`/`rollup_by_client`/`rollup_by_member`)
   unit-tested; the two I/O flows are orchestration only, mocked in tests.
@@ -281,9 +281,10 @@ Secrets are set on the `PLATFORM` Railway service by the user — never handled 
 
 ## 8. One-time Everhour provisioning (user-side, dashboard + env)
 
-1. **API key** — an Everhour account-level API key (Settings → Api in the Everhour web app,
-   per ecosystem research — **unverified**, confirm once the docs/key route is open) →
-   `EVERHOUR_API_KEY` on `PLATFORM`.
+1. **API key** — an admin-role Everhour account's API key (Settings → Api in the Everhour web
+   app) → `EVERHOUR_API_KEY` on `PLATFORM`. **Owner ruling (2026-08-29): Kyle's personal admin
+   key** — no dedicated "Integration" user (see §5). Any admin-role key works; the mapping
+   pickers stay dormant until `everhour_enabled` is flipped on.
 2. **Per-client projects** — create (or identify existing) one Everhour project per suite
    client → set `clients.everhour_project_id` (editor ships with Phase 1/2 frontend).
 3. **Team roster link** — for each `asana_team_members` row, set `everhour_user_id` (Team
@@ -458,3 +459,26 @@ residual gap (unchanged from §10) — acceptable given `everhour_sync_repull_da
 identity concern in §11.1 (which team member's key backs the integration) matters in
 practice given a single agency Everhour account likely has one natural admin; and the §11.3
 provisioning-workflow call. Neither blocks Phase 0/1 code.
+
+---
+
+## 12. Known Phase 0 code gotchas (deferred fixes)
+
+An adversarial re-review of the Phase 0 code (merged in PR #884) found five real defects.
+**All are currently unreachable** — nothing calls `everhour_service.py` or the verify script
+in a running code path yet (`everhour_enabled` is `False` and no phase has wired the wrapper
+in). Owner ruling (2026-08-29): **do not block the Phase 0 merge on these; fix each in the
+phase that first exercises it.** They are recorded here (with the line numbers as of the
+merge, `services/everhour_service.py` unless noted) so the fix isn't forgotten when that
+phase lands. Each entry names the phase that first makes it reachable.
+
+| # | Location | Defect | First reachable in | Fix |
+|---|---|---|---|---|
+| 1 | `verify_api_key()` (~L184–195) | Docstring says "Never raises," but only `httpx.HTTPError` is caught. `get_current_user()` → `_get()` → `resp.json()` raises `json.JSONDecodeError` (a `ValueError`, **not** an `httpx.HTTPError`) on a malformed/non-JSON `200`, which escapes uncaught. | **Phase 1** (the status route / provisioning check will be the first caller of `verify_api_key`). | Also catch `ValueError` (covers `JSONDecodeError`) — or `except (httpx.HTTPError, ValueError)` — and log-and-return-`False`, honoring the docstring. |
+| 2 | `scripts/verify_everhour_api_key.py::main()` (L62–102) | No `try/except` around the `httpx` calls, so a transport-level failure (timeout, DNS, connection refused) crashes with a raw traceback instead of a clean `[FAIL]` line, and leaks the unclosed client. | **Phase 1** (the script is the provisioning preflight run when a real key is set). | Wrap the request block in `try/except httpx.HTTPError` (or `RequestError`) → `_print(..., False, str(exc))`, close the client in a `finally`, return non-zero. |
+| 3 | `get_project()` (~L211–215) | Missing the `or {}` fallback its own docstring claims to mirror from `asana_service.get_project` (which *does* have it — confirmed at `asana_service.py:575`). A JSON-`null` body makes `_get` return `None`, so `get_project` returns `None` where callers expect a dict. | **Phase 1** (client↔project mapping-save validation is the first caller). | `return await _get(...) or {}`. |
+| 4 | `next_page()` (~L144–150) | `if returned_count < limit`: `limit=None` → `TypeError` (`int < None`); `limit=0` → the guard is never true, so it returns `current_page + 1` **forever** (never terminates the page loop). Compounds with `list_team_time()` resolving `limit or settings.everhour_sync_page_limit` **internally** (~L247): a naive Phase 3 caller that reuses one `limit=None` for both the fetch and the `next_page()` call will crash on the first `next_page()`. | **Phase 3** (the time-pull page loop). | Resolve `limit` to the same effective value `list_team_time` uses before calling `next_page` (or guard `next_page` for `None`/`<=0` → return `None`). Prefer having the sync loop pass the *resolved* limit to both. |
+| 5 (lower) | `build_task_payload()` assignee type (L62–78) vs `parse_user()` (~L86) | `build_task_payload(assignee_user_id: int)` emits `{"userId": <assignee_user_id>}` typed as `int`, but `parse_user` stores `everhour_user_id` as **`str`** (`str(uid)`, matching every other external-id column). A Phase 2 caller that reads the stored `everhour_user_id` (str) and passes it straight into `build_task_payload` sends Everhour a **string** `userId`, which the API may reject or mis-handle. | **Phase 2** (task mirror, when an assignee is actually mirrored). | Cast at the boundary: `int(everhour_user_id)` when building the mirror payload (the stored column stays `text` for consistency; only the outbound API body needs the numeric type). |
+
+None of these change the Phase 0 contract or the locked decisions (§2); they are localized
+correctness fixes to fold into the named phase's own PR.

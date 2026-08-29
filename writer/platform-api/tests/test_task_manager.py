@@ -567,9 +567,11 @@ def test_partition_roster_write_login_less_and_non_destructive():
         {"id": "m4", "gid": None},   # kept login-less (payload carries id m4)
     ]
     members = [
-        {"id": "m1", "gid": "g1", "name": "Ivy", "weekly_hours": 30, "profile_id": "p1"},
+        # everhour_user_id given as an int (as the API returns) → stored as text.
+        {"id": "m1", "gid": "g1", "name": "Ivy", "weekly_hours": 30,
+         "profile_id": "p1", "everhour_user_id": 555},
         {"gid": "g2", "name": "Minda"},   # gid, no id → upsert by gid
-        {"id": "m4", "name": "Bo"},       # existing login-less → update in place
+        {"id": "m4", "name": "Bo", "everhour_user_id": ""},  # blank clears the link
         {"name": "New VA"},               # brand-new login-less VA → insert, gid NULL
     ]
     plan = task_service.partition_roster_write(existing, members)
@@ -578,13 +580,18 @@ def test_partition_roster_write_login_less_and_non_destructive():
     assert {u["id"] for u in plan["updates"]} == {"m1", "m4"}
     m1 = next(u for u in plan["updates"] if u["id"] == "m1")
     assert m1["fields"]["gid"] == "g1" and m1["fields"]["name"] == "Ivy"
+    # Everhour link normalizes to text; an int payload becomes a string.
+    assert m1["fields"]["everhour_user_id"] == "555"
     m4 = next(u for u in plan["updates"] if u["id"] == "m4")
     assert m4["fields"]["gid"] is None            # stays login-less
+    assert m4["fields"]["everhour_user_id"] is None   # blank string clears it
     assert plan["gid_upserts"] == [
-        {"name": "Minda", "weekly_hours": None, "active": True, "profile_id": None, "gid": "g2"}]
+        {"name": "Minda", "weekly_hours": None, "active": True, "profile_id": None,
+         "everhour_user_id": None, "gid": "g2"}]
     # A login-less insert carries no gid → the DB default (NULL) applies.
     assert plan["inserts"] == [
-        {"name": "New VA", "weekly_hours": None, "active": True, "profile_id": None}]
+        {"name": "New VA", "weekly_hours": None, "active": True, "profile_id": None,
+         "everhour_user_id": None}]
 
 
 def test_enqueue_due_asana_import_gating(monkeypatch):
