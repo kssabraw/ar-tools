@@ -6,6 +6,7 @@ docs/modules/everhour-time-tracking-integration-plan-v1_0.md.
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -166,6 +167,29 @@ def test_next_page_empty_page_is_last():
     assert everhour.next_page(1, returned_count=0, limit=10000) is None
 
 
+def test_next_page_zero_limit_stops_instead_of_looping_forever():
+    # A limit of 0 makes `returned_count < limit` false for any non-negative
+    # returned_count, so without the guard this would never signal "last
+    # page" and a Phase 3 sync loop could paginate forever.
+    assert everhour.next_page(1, returned_count=0, limit=0) is None
+    assert everhour.next_page(5, returned_count=0, limit=0) is None
+
+
+def test_next_page_none_limit_stops_instead_of_crashing():
+    assert everhour.next_page(1, returned_count=42, limit=None) is None
+
+
+# ---------------------------------------------------------------------------
+# get_project
+# ---------------------------------------------------------------------------
+async def test_get_project_falls_back_to_empty_dict_on_null_body():
+    # A 200 response with a literal JSON `null` body (unusual, not forbidden
+    # by the spec) must degrade to {}, not None — get_project is typed
+    # -> dict and mirrors asana_service.get_project's `or {}` fallback.
+    with patch("services.everhour_service._get", new=AsyncMock(return_value=None)):
+        assert await everhour.get_project("ev:123") == {}
+
+
 # ---------------------------------------------------------------------------
 # verify_api_key — the one I/O method Phase 0 needs, mocked
 # ---------------------------------------------------------------------------
@@ -190,5 +214,32 @@ async def test_verify_api_key_false_on_http_error(monkeypatch):
     with patch(
         "services.everhour_service.get_current_user",
         new=AsyncMock(side_effect=httpx.HTTPStatusError("403", request=request, response=response)),
+    ):
+        assert await everhour.verify_api_key() is False
+
+
+async def test_verify_api_key_false_on_malformed_json(monkeypatch):
+    # A 200 response with a non-JSON body (an intermediary proxy's error
+    # page, a truncated response) makes resp.json() raise
+    # json.JSONDecodeError, which is a ValueError subclass, NOT an
+    # httpx.HTTPError subclass — verify_api_key's docstring promises "never
+    # raises", so this must be caught too, not just HTTP-level errors.
+    monkeypatch.setattr(settings, "everhour_api_key", "sk_test")
+    with patch(
+        "services.everhour_service.get_current_user",
+        new=AsyncMock(side_effect=json.JSONDecodeError("Expecting value", "<html>", 0)),
+    ):
+        assert await everhour.verify_api_key() is False
+
+
+async def test_verify_api_key_false_on_network_error(monkeypatch):
+    # A transport-level failure (timeout/DNS/connection-refused) is an
+    # httpx.RequestError, a sibling of HTTPStatusError under httpx.HTTPError
+    # — confirm the same except clause actually covers it too, not just the
+    # status-error case above.
+    monkeypatch.setattr(settings, "everhour_api_key", "sk_test")
+    with patch(
+        "services.everhour_service.get_current_user",
+        new=AsyncMock(side_effect=httpx.ConnectError("connection refused")),
     ):
         assert await everhour.verify_api_key() is False

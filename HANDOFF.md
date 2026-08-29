@@ -1,7 +1,40 @@
 # AR Tools — Handoff
 
+## ⏩ Update — 2026-08-29 · **Everhour Phase 0 — adversarial re-review + 4 fixes, follow-up to the merged PR #884** (latest)
 
-## ⏩ Update — 2026-08-29 · **Everhour time-tracking integration — blocker RESOLVED, Phase 0 COMPLETE (validated against a real key)** (latest)
+PR #884 merged before its own adversarial code review's open question ("fix now or track as
+known Phase 1+ gotchas?") got answered. Rather than leave verified, reproduced bugs sitting
+in merged (if still `everhour_enabled=False`-gated, so currently inert) code, fixed all 4
+findings in a same-day follow-up:
+
+1. **`services/everhour_service.py::verify_api_key()`** — docstring claimed "Never raises,"
+   but `except httpx.HTTPError` doesn't catch `json.JSONDecodeError` (a `ValueError`
+   subclass) — a `200` with a malformed/non-JSON body raised straight through. Now catches
+   `(httpx.HTTPError, ValueError)`.
+2. **`scripts/verify_everhour_api_key.py`** — no handling for transport-level exceptions
+   (timeout/DNS/connection-refused), only HTTP status codes, so a network failure crashed
+   with a raw traceback instead of the intended `[FAIL]` diagnostic. Refactored around a new
+   `_check()` helper (catches `httpx.RequestError` + malformed-JSON, prints one `[FAIL]` line,
+   returns `None`) and switched to `with httpx.Client(...) as client:` so the client is always
+   closed, on every exit path.
+3. **`get_project()`** — docstring said it plays "the same role `asana_service.get_project`
+   plays," but was missing that function's `or {}` fallback (re-read `asana_service.py:575`
+   to confirm the discrepancy before fixing) — a `200` with a literal `null` body would have
+   returned `None` from a function typed `-> dict`.
+4. **`next_page()`** — crashed with `TypeError` on `limit=None`, and never terminated
+   (returned non-`None` forever) on `limit=0`. Now guards `not limit or limit <= 0` first.
+
+Each fix verified against the exact live repro that found it (re-ran all 4 after the fix,
+confirmed the crash/hang no longer happens), plus 5 new regression tests (24 total in
+`tests/test_everhour_service.py`, up from 19). `ruff`/`mypy`/`pytest` all clean. The CLI
+script re-verified against both a bad key (still cleanly fails) and the real admin key (still
+passes all 4 live checks — Kyle, 6 team members, 470 projects, 22 time records).
+
+Branch `claude/everhour-time-tracking-me08ys` was reset onto the post-merge `main` (its own
+PR history is closed) rather than stacked on the merged commits, per the "merged PR → fresh
+branch off latest main" convention.
+
+## ⏩ Update — 2026-08-29 · **Everhour time-tracking integration — blocker RESOLVED, Phase 0 COMPLETE (validated against a real key)**
 
 Direct continuation of the entry just below. The owner used Claude in Chrome to fix the
 root cause: the `ar-tools` Claude Code environment (`env_01CQmcKTLwnkKjFLW4ysuWWM`) had its
