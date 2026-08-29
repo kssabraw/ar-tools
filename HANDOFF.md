@@ -43,6 +43,52 @@ Mode OFF** — the PACE gotcha, or events never reach the endpoint), invite it t
 post-merge deploy is active; the Slack side activates when those three vars are set. Until then,
 DORA's seam flags + weekly ops digest fall back to the PACE channel (safe) and the /director web
 page is the conversational surface.
+## ⏩ Update — 2026-08-29 · **Everhour Phase 3 (time pull + rollups) BUILT + MERGED ([#896](https://github.com/kssabraw/ar-tools/pull/896), squash `9957a68`)**
+
+Continuation of the Everhour entries below. Phase 3 is the **read side** — a daily whole-team time pull into a
+new `time_entries` ledger, rolled up into `tasks.actual_hours`. Built on branch `claude/everhour-phase-3-time-pull-pvfdq7`,
+**merged to `main` green** (`platform-api tests` on the code commit + Netlify preview; `mergeable_state: clean`).
+Gated OFF (`everhour_enabled` default False).
+
+- **Owner decision confirmed (plan §10):** ad-hoc / internal Everhour time (no native-task match, possibly no mapped
+  project) → **member utilization only** — `time_entries.client_id` is **NULLABLE**; it's excluded from client/margin
+  rollups (no client to bill it to) but still counts toward per-member hours. (Billable captured but unconsumed until
+  Phase 4; a delete OLDER than the re-pull window is the one accepted residual gap — tunable via `everhour_sync_repull_days`.)
+- **Migration `20260829140000` (applied live):** `tasks.actual_hours` (numeric, a derived recomputed rollup) + the
+  **`time_entries`** table (keyed by `everhour_record_id` UNIQUE = the idempotency key; `client_id`/`member_id`/`task_id`
+  all nullable FKs; `everhour_task_id` kept even when `task_id` is null for later re-join; `billable`/`comment` captured;
+  indexes `(task_id)`/`(client_id,entry_date)`/`(member_id,entry_date)`; RLS on, service-role only). The `async_jobs`
+  job_type CHECK widened to accept `everhour_sync` (rebuilt from the live constraint — the `everhour_mirror` list + the
+  new value).
+- **`services/everhour_service.py`:** `parse_time_record` now also surfaces `everhour_project_id` (first of the nested
+  task's `projects`) — the fallback that resolves the client for ad-hoc time. Its exact-equality test was updated (+ the
+  ad-hoc no-project case).
+- **`services/everhour_sync.py` (Phase 3 half added):** pure `rollup_by_task`/`_client`/`_member` (shared `_rollup`,
+  skips None keys/seconds) + `resolve_time_entries` (the join: a matched native task takes ITS client authoritatively;
+  else the record's project→client; else None internal time; member via `everhour_user_id`) + `sync_window`.
+  `run_everhour_sync` = paged whole-team pull over `[today − everhour_sync_repull_days, today]` → parse/validate →
+  build the three lookup maps (chunked `.in_()` reads) → **upsert-by-`everhour_record_id`** (chunked) → recompute
+  `actual_hours` for every touched task by re-summing ALL its `time_entries` (paged read, idempotent — never a delta).
+  A **delete re-reads as `time: 0`** and zeroes the task's rollup — no reconciliation pass (plan §11.9).
+  `enqueue_everhour_sync`/`enqueue_due_everhour_sync` (ONE whole-team job, deduped against an in-flight sync) +
+  `run_everhour_sync_job`.
+- **The READ gate is `everhour_enabled` only** — `sync_gate_open` deliberately does NOT require `everhour_mirror_enabled`
+  (that sub-gate is write-only), so time can be pulled with the outbound mirror turned off during a read-first rollout.
+- **Wiring:** `everhour_sync` dispatch in `job_worker.py`; `enqueue_due_everhour_sync` in the shared scheduler's daily
+  block (self-gated, deduped; the daily durable marker covers once-per-day, so no separate date marker); manual admin
+  `POST /everhour/sync` + `EverhourSyncResult` model (the on-demand trigger, the parallel of `.../asana/generate-month`).
+- **Tests:** `tests/test_everhour_sync.py` grew the Phase-3 half — pure rollups/resolve/window, `sync_gate_open`
+  (asserts reads ignore the mirror sub-gate), enqueue dedupe, and the full sync flow incl. the ad-hoc-no-task and
+  delete-to-zero cases. **65 green** across `test_everhour_sync.py` + `test_everhour_service.py`. The fake Supabase
+  gained `upsert`/`range` support (an upsert feeds reads so the recompute round-trips realistically).
+- **Deliberately NOT in this PR (Phase 4):** the read endpoints for task/client/member actuals (they back the frontend
+  surfaces, so they land with them — the pure `rollup_by_client`/`rollup_by_member` helpers are built + tested ready),
+  the Recipe Engine actual-margin read, the PACE utilization consumer, and the frontend (task-drawer actual-vs-estimate,
+  client "Time" card).
+
+**Next: Phase 4** (consumers — Recipe Engine actual-margin, PACE per-member utilization, the read endpoints + frontend
+surfaces). Nothing runs until `EVERHOUR_API_KEY` + `everhour_enabled=true` are set on PLATFORM (owner: Kyle's personal
+admin key).
 
 ## ⏩ Update — 2026-08-29 · **Everhour Phase 2 (metadata-only task mirror) BUILT + MERGED ([#893](https://github.com/kssabraw/ar-tools/pull/893), squash `4ff5aed`)**
 
@@ -83,7 +129,7 @@ green** (`platform-api tests` + Netlify preview). Gated OFF (`everhour_enabled` 
 
 **Next: Phase 3** (time pull + rollups — `time_entries` table, the daily `everhour_sync` scheduled job over a rolling
 re-pull window, `actual_hours`/per-client/per-member rollups). Then Phase 4 (Recipe Engine actual-margin + PACE
-utilization consumers + frontend surfaces).
+utilization consumers + frontend surfaces). **[Phase 3 now DONE — see the newer entry at the top of this file (#896).]**
 
 ## ⏩ Update — 2026-08-29 · **Everhour Phase 1 (identity/mapping) BUILT + MERGED (#890); Phase-0 gotcha doc reconciled with #888**
 
