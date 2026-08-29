@@ -128,6 +128,25 @@ def test_adapt_task_row_and_aggregate():
     assert summary["overloaded"] is True          # 5h due same day > 10/5=2h/day
 
 
+def test_attach_logged_hours_additive_and_pro_rated():
+    # Everhour actual-utilization overlay (Phase 4): additive only — never
+    # touches open_hours/overloaded; utilization is logged vs pro-rated capacity.
+    report = {
+        "members": [
+            {"gid": "m1", "weekly_hours": 40.0, "open_hours": 12.0, "overloaded": False},
+            {"gid": "m2", "weekly_hours": None, "open_hours": 3.0, "overloaded": True},
+        ]
+    }
+    out = task_workload.attach_logged_hours(report, {"m1": 20.0}, days=7)
+    m1, m2 = out["members"]
+    assert m1["logged_hours"] == 20.0
+    assert m1["utilization_pct"] == 50.0            # 20 / (40 * 7/7)
+    assert m1["open_hours"] == 12.0 and m1["overloaded"] is False  # untouched
+    assert m2["logged_hours"] == 0.0               # no logged time
+    assert m2["utilization_pct"] is None           # no weekly capacity
+    assert out["logged_window_days"] == 7
+
+
 async def test_native_workload_alert_silent_when_disabled(monkeypatch):
     from config import settings
     from services import notifications

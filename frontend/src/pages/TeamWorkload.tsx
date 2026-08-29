@@ -121,7 +121,7 @@ export function TeamWorkload() {
         <div style={emptyBox}>Loading…</div>
       ) : report && report.members.length > 0 ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 28 }}>
-          {report.members.map((m) => <MemberRow key={m.gid} member={m} />)}
+          {report.members.map((m) => <MemberRow key={m.gid} member={m} windowDays={report.logged_window_days} />)}
         </div>
       ) : !banner ? (
         <div style={{ ...emptyBox, marginBottom: 28 }}>
@@ -144,7 +144,7 @@ export function TeamWorkload() {
   )
 }
 
-function MemberRow({ member }: { member: AsanaWorkloadMember }) {
+function MemberRow({ member, windowDays }: { member: AsanaWorkloadMember; windowDays?: number }) {
   const days = Object.entries(member.due_hours_by_day)
   const cap = member.daily_capacity
   return (
@@ -169,6 +169,26 @@ function MemberRow({ member }: { member: AsanaWorkloadMember }) {
       {member.unestimated > 0 && (
         <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
           {member.unestimated} task{member.unestimated === 1 ? '' : 's'} unestimated
+        </div>
+      )}
+
+      {/* Everhour actual-utilization overlay (Phase 4) — logged hours vs
+          capacity over the sync window; parallel to the estimate-based load. */}
+      {member.logged_hours != null && (
+        <div style={{ fontSize: 12, color: '#475569', marginTop: 4 }}>
+          <span style={{ color: '#2563eb', fontWeight: 600 }}>{member.logged_hours}h logged</span>
+          {member.utilization_pct != null && (
+            <span
+              style={{
+                marginLeft: 6,
+                fontWeight: 600,
+                color: member.utilization_pct >= 100 ? '#dc2626' : member.utilization_pct >= 80 ? '#d97706' : '#16a34a',
+              }}
+            >
+              {member.utilization_pct}% utilized
+            </span>
+          )}
+          <span style={{ color: '#94a3b8' }}> · Everhour, last {windowDays ?? 7}d</span>
         </div>
       )}
 

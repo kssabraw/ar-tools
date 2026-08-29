@@ -44,6 +44,12 @@ class _Query:
     def is_(self, *a, **k):
         return self
 
+    def gte(self, *a, **k):
+        return self
+
+    def lte(self, *a, **k):
+        return self
+
     def order(self, *a, **k):
         return self
 
@@ -616,3 +622,131 @@ async def test_sync_job_settles_failed(monkeypatch):
     upd = store.updates["async_jobs"][0]
     assert upd["status"] == "failed"
     assert "403 boom" in upd["error"]
+
+
+# ===========================================================================
+# Phase 4 — read surfaces (client Time card, PACE utilization)
+# ===========================================================================
+# ---------------------------------------------------------------------------
+# billable_split (pure)
+# ---------------------------------------------------------------------------
+def test_billable_split_buckets():
+    entries = [
+        {"seconds": 3600, "billable": True},
+        {"seconds": 1800, "billable": False},
+        {"seconds": 600, "billable": None},   # billing not requested / unknown
+        {"seconds": None, "billable": True},   # malformed — skipped
+    ]
+    assert everhour_sync.billable_split(entries) == {
+        "billable": 3600, "non_billable": 1800, "unknown": 600
+    }
+
+
+def test_billable_split_empty():
+    assert everhour_sync.billable_split([]) == {"billable": 0, "non_billable": 0, "unknown": 0}
+
+
+# ---------------------------------------------------------------------------
+# build_client_time (pure)
+# ---------------------------------------------------------------------------
+def test_build_client_time_totals_split_and_members():
+    entries = [
+        {"member_id": "m1", "seconds": 3600, "billable": True},
+        {"member_id": "m1", "seconds": 1800, "billable": None},
+        {"member_id": "m2", "seconds": 900, "billable": False},
+    ]
+    out = everhour_sync.build_client_time(
+        entries, member_names={"m1": "Ivy", "m2": "Minda"}, days=30
+    )
+    assert out["window_days"] == 30
+    assert out["total_hours"] == 1.75            # 6300s
+    assert out["billable_hours"] == 1.0
+    assert out["non_billable_hours"] == 0.25
+    assert out["unknown_hours"] == 0.5
+    # members descending by hours, named
+    assert out["members"][0] == {"member_id": "m1", "name": "Ivy", "hours": 1.5}
+    assert out["members"][1] == {"member_id": "m2", "name": "Minda", "hours": 0.25}
+
+
+def test_build_client_time_empty():
+    out = everhour_sync.build_client_time([], member_names={}, days=7)
+    assert out["total_hours"] == 0.0 and out["members"] == []
+
+
+# ---------------------------------------------------------------------------
+# utilization_hours (pure)
+# ---------------------------------------------------------------------------
+def test_utilization_hours_converts():
+    assert everhour_sync.utilization_hours({"m1": 7200, "m2": 1800}) == {"m1": 2.0, "m2": 0.5}
+    assert everhour_sync.utilization_hours({}) == {}
+
+
+# ---------------------------------------------------------------------------
+# _window (pure)
+# ---------------------------------------------------------------------------
+def test_window_uses_default_and_override():
+    frm, to, n = everhour_sync._window(None, 30)
+    assert n == 30 and frm <= to
+    frm2, to2, n2 = everhour_sync._window(7, 30)
+    assert n2 == 7
+
+
+# ---------------------------------------------------------------------------
+# client_time_summary / member_utilization / client_month_actual_hours (flow)
+# ---------------------------------------------------------------------------
+def test_client_time_summary_gate_closed(monkeypatch):
+    monkeypatch.setattr(settings, "everhour_enabled", False)
+    assert everhour_sync.client_time_summary("c1") == {"available": False, "reason": "not_enabled"}
+
+
+def test_client_time_summary_flow(monkeypatch):
+    _open_gate(monkeypatch)
+    store = _Store(
+        reads={
+            "time_entries": [
+                {"member_id": "m1", "seconds": 3600, "billable": True,
+                 "client_id": "c1", "task_id": "t1", "entry_date": "2026-08-20"},
+            ],
+            "asana_team_members": [{"id": "m1", "name": "Ivy"}],
+        }
+    )
+    monkeypatch.setattr(everhour_sync, "get_supabase", lambda: store)
+    out = everhour_sync.client_time_summary("c1", days=30)
+    assert out["available"] is True
+    assert out["total_hours"] == 1.0
+    assert out["members"][0]["name"] == "Ivy"
+
+
+def test_member_utilization_gate_closed(monkeypatch):
+    monkeypatch.setattr(settings, "everhour_enabled", False)
+    assert everhour_sync.member_utilization() == {}
+
+
+def test_member_utilization_flow(monkeypatch):
+    _open_gate(monkeypatch)
+    store = _Store(
+        reads={"time_entries": [
+            {"member_id": "m1", "seconds": 7200},
+            {"member_id": "m1", "seconds": 1800},
+            {"member_id": None, "seconds": 600},  # internal — still counts per-member? no member
+        ]}
+    )
+    monkeypatch.setattr(everhour_sync, "get_supabase", lambda: store)
+    assert everhour_sync.member_utilization(7) == {"m1": 2.5}
+
+
+def test_client_month_actual_hours_gate_closed(monkeypatch):
+    monkeypatch.setattr(settings, "everhour_enabled", False)
+    assert everhour_sync.client_month_actual_hours("c1", date(2026, 8, 1)) == 0.0
+
+
+def test_client_month_actual_hours_flow(monkeypatch):
+    _open_gate(monkeypatch)
+    store = _Store(
+        reads={"time_entries": [
+            {"seconds": 3600, "client_id": "c1"},
+            {"seconds": 5400, "client_id": "c1"},
+        ]}
+    )
+    monkeypatch.setattr(everhour_sync, "get_supabase", lambda: store)
+    assert everhour_sync.client_month_actual_hours("c1", date(2026, 8, 15)) == 2.5

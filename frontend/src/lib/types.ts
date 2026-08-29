@@ -1659,6 +1659,24 @@ export interface EverhourProject {
   name: string | null
 }
 
+// ── Everhour time reads (Phase 4) ─────────────────────────────────────────
+export interface EverhourTimeMember {
+  member_id: string
+  name: string | null
+  hours: number
+}
+
+export interface EverhourClientTime {
+  available: boolean
+  reason?: string | null
+  window_days?: number | null
+  total_hours?: number | null
+  billable_hours?: number | null
+  non_billable_hours?: number | null
+  unknown_hours?: number | null
+  members: EverhourTimeMember[]
+}
+
 export interface AsanaLibraryTaskItem {
   name: string
   default_hours: number | null
@@ -1711,6 +1729,10 @@ export interface AsanaWorkloadMember {
   worst_same_day: { date: string; hours: number } | null
   overloaded: boolean
   flags: string[]
+  // Everhour actual-utilization overlay (Phase 4) — present only when Everhour
+  // is enabled; additive, never affects open_hours/overloaded.
+  logged_hours?: number
+  utilization_pct?: number | null
 }
 
 export interface AsanaWorkloadReport {
@@ -1724,6 +1746,8 @@ export interface AsanaWorkloadReport {
     default_task_hours: number
   }
   note?: string
+  // Everhour utilization overlay window (Phase 4), when present.
+  logged_window_days?: number
 }
 
 // Client Reporting module.
@@ -1928,6 +1952,9 @@ export interface TaskItem {
   due_date: string | null
   start_date: string | null
   est_hours: number | null
+  // Actual hours logged in Everhour (rolled up from time_entries; read-only —
+  // null until the Everhour sync has attributed time to this task).
+  actual_hours?: number | null
   completed: boolean
   completed_at: string | null
   sort_order: number
