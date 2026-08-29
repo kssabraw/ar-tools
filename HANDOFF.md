@@ -1,11 +1,12 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-29 · **Everhour Phase 2 (metadata-only task mirror) BUILT — draft PR** (latest)
+## ⏩ Update — 2026-08-29 · **Everhour Phase 2 (metadata-only task mirror) BUILT + MERGED ([#893](https://github.com/kssabraw/ar-tools/pull/893), squash `4ff5aed`)** (latest)
 
 Continuation of the Everhour entries below. Phase 2 is the **task mirror (suite → Everhour, write, metadata-only)**:
 give every native task a stable Everhour counterpart so time logged against it joins back to the exact `tasks`
 row, without turning Everhour into a second task manager (locked decision #6 — name + optional assignee only).
-Built on a fresh branch off `main` (`claude/everhour-time-tracking-9peruh`), gated OFF (`everhour_enabled` default False).
+Built on a fresh branch off `main` (`claude/everhour-time-tracking-9peruh`), **merged to `main` with both CI gates
+green** (`platform-api tests` + Netlify preview). Gated OFF (`everhour_enabled` default False).
 
 - **Migration `20260829130000` (applied live):** `tasks.everhour_task_id` (text, the opaque `"ev:…"` id) +
   `tasks.everhour_synced_at` (timestamptz, last successful mirror). A partial index `idx_tasks_everhour_unmirrored`
