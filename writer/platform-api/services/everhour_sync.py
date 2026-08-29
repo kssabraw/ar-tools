@@ -26,19 +26,29 @@ places. Subtasks (checklist markers) are never mirrored — they aren't separate
 billing targets, and they insert via ``create_subtasks`` (bypassing
 ``create_task``) anyway.
 
-The **time pull (read) + rollups** are Phase 3 — deliberately not in this file
-yet (no ``time_entries`` table, no ``actual_hours``).
+**Phase 3 (this file, now added): the time pull (read) + rollups.** A daily
+whole-team pull of Everhour time records over a rolling re-pull window into the
+``time_entries`` ledger (upsert-by-record-id, so an edited entry changes in
+place and a delete re-reads as ``time: 0`` — no reconciliation pass), each
+record joined to its native ``tasks`` row / client / roster member, then rolled
+up into ``tasks.actual_hours`` (a derived column, always recomputed from
+``time_entries``). Per-client and per-member rollups are pure helpers consumed
+at read time (Phase 4 surfaces) — only ``tasks.actual_hours`` is persisted.
 
-Everything is gated: ``everhour_enabled`` AND ``everhour_mirror_enabled`` AND a
-present API key AND the task's client being Everhour-mapped. Absent any of those
-the mirror is a silent no-op — never an error, the GSC/Slack/Asana pattern.
+**Gating.** The MIRROR (write) half rides ``everhour_enabled`` AND
+``everhour_mirror_enabled`` AND a key AND the task's client being mapped. The
+TIME-PULL (read) half rides only ``everhour_enabled`` AND a key —
+``everhour_mirror_enabled`` gates outbound writes, not reads, so time can be
+pulled even with the mirror turned off during a read-first rollout. Absent any
+required gate every path is a silent no-op — never an error, the GSC/Slack/Asana
+pattern.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Iterable, Optional
 
 from config import settings
 from db.supabase_client import get_supabase
@@ -344,3 +354,359 @@ def backfill_mirror(limit: Optional[int] = None) -> dict:
         extra={"candidates": len(tasks), "enqueued": len(rows)},
     )
     return {"status": "ok", "candidates": len(tasks), "enqueued": len(rows)}
+
+
+# ===========================================================================
+# Phase 3 — time pull (Everhour -> suite, read) + rollups
+# ===========================================================================
+# Constants -----------------------------------------------------------------
+_MAX_SYNC_PAGES = 200        # defensive page ceiling for one team-time pull
+_UPSERT_CHUNK = 500          # time_entries rows per upsert batch
+_IN_CHUNK = 200              # ids per `.in_()` lookup / recompute read
+_READ_PAGE = 1000            # rows per `.range()` page (PostgREST default cap)
+
+
+# ---------------------------------------------------------------------------
+# Pure helpers (no I/O) — unit-tested
+# ---------------------------------------------------------------------------
+def _chunks(items: list, size: int) -> Iterable[list]:
+    """Yield ``size``-length slices of ``items``. Pure."""
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
+
+
+def _rollup(entries: Iterable[dict], key: str) -> dict[str, int]:
+    """Sum ``seconds`` grouped by ``entries[*][key]``, skipping rows whose key
+    or seconds is None. Pure — the one groupby the three named rollups share."""
+    out: dict[str, int] = {}
+    for e in entries or []:
+        k = e.get(key)
+        secs = e.get("seconds")
+        if k is None or secs is None:
+            continue
+        out[k] = out.get(k, 0) + int(secs)
+    return out
+
+
+def rollup_by_task(entries: Iterable[dict]) -> dict[str, int]:
+    """{task_id: total_seconds} — feeds ``tasks.actual_hours``. Ad-hoc time
+    (task_id None) is excluded. Pure."""
+    return _rollup(entries, "task_id")
+
+
+def rollup_by_client(entries: Iterable[dict]) -> dict[str, int]:
+    """{client_id: total_seconds} — the client "Time" card (read-time, Phase 4).
+    Ad-hoc/internal time with no client is excluded. Pure."""
+    return _rollup(entries, "client_id")
+
+
+def rollup_by_member(entries: Iterable[dict]) -> dict[str, int]:
+    """{member_id: total_seconds} — the PACE per-member utilization signal
+    (read-time, Phase 4). Counts ALL of a member's time, ad-hoc included (a
+    person's hours are a person's hours for capacity). Pure."""
+    return _rollup(entries, "member_id")
+
+
+def resolve_time_entries(
+    parsed: Iterable[dict],
+    *,
+    tasks_by_eh: dict[str, dict],
+    clients_by_project: dict[str, str],
+    members_by_eh: dict[str, str],
+    synced_at: str,
+) -> list[dict]:
+    """Resolve parsed Everhour records (``everhour_service.parse_time_record``
+    output) into ``time_entries`` upsert rows. Pure — the join logic, so it's
+    exhaustively unit-tested apart from the DB reads that build its maps.
+
+      * ``tasks_by_eh``: {everhour_task_id: {"id": task_id, "client_id": ...}}
+        — the authoritative client for a native, mirrored task.
+      * ``clients_by_project``: {everhour_project_id: client_id} — the fallback
+        client for AD-HOC time whose task isn't a native mirror.
+      * ``members_by_eh``: {everhour_user_id: member_id}.
+
+    A record matched to a native task takes that task's client (authoritative,
+    even if the task's project mapping differs). An unmatched (ad-hoc) record
+    takes the client of its Everhour project, or None (internal/overhead time —
+    kept for member utilization, excluded from client rollups). ``member_id``
+    is None when the Everhour user isn't roster-linked."""
+    rows: list[dict] = []
+    for p in parsed:
+        eh_task = p.get("everhour_task_id")
+        match = tasks_by_eh.get(eh_task) if eh_task else None
+        if match:
+            task_id = match.get("id")
+            client_id = match.get("client_id")
+        else:
+            task_id = None
+            client_id = clients_by_project.get(p.get("everhour_project_id"))
+        rows.append(
+            {
+                "everhour_record_id": p["everhour_record_id"],
+                "client_id": client_id,
+                "member_id": members_by_eh.get(p.get("everhour_user_id")),
+                "task_id": task_id,
+                "everhour_task_id": eh_task,
+                "entry_date": p["entry_date"],
+                "seconds": int(p["seconds"]),
+                "billable": p.get("billable"),
+                "comment": p.get("comment"),
+                "synced_at": synced_at,
+            }
+        )
+    return rows
+
+
+def sync_window(today: date, repull_days: int) -> tuple[str, str]:
+    """The ``[from, to]`` date strings for the rolling re-pull (staff edit past
+    entries, so the pull always re-checks a trailing window). Pure."""
+    start = today - timedelta(days=max(0, int(repull_days)))
+    return start.isoformat(), today.isoformat()
+
+
+# ---------------------------------------------------------------------------
+# Gating (read half — everhour_mirror_enabled does NOT gate reads)
+# ---------------------------------------------------------------------------
+def sync_gate_open() -> bool:
+    """The time-pull's two gates: the master flag + a provisioned key. Unlike
+    the mirror, it does NOT require ``everhour_mirror_enabled`` (that sub-gate is
+    for outbound writes) — reads run even during a read-first rollout."""
+    return bool(settings.everhour_enabled and everhour_service.is_configured())
+
+
+# ---------------------------------------------------------------------------
+# Enqueue (scheduler due-check + manual "Sync now") — one whole-team job
+# ---------------------------------------------------------------------------
+def enqueue_everhour_sync() -> dict:
+    """Enqueue one ``everhour_sync`` job (a whole-team time pull, per decision
+    #4/#7 — not per client), deduped against an in-flight sync. Shared by the
+    daily scheduler due-check and the manual "Sync now" endpoint. Returns
+    ``{status: queued|skipped, ...}``; never raises for a "nothing to do"
+    outcome (gate closed / already queued)."""
+    if not sync_gate_open():
+        return {"status": "skipped", "reason": "gate_closed"}
+    supabase = get_supabase()
+    existing = (
+        supabase.table("async_jobs")
+        .select("id")
+        .eq("job_type", "everhour_sync")
+        .in_("status", ["pending", "running"])
+        .limit(1)
+        .execute()
+    ).data
+    if existing:
+        return {"status": "skipped", "reason": "already_queued"}
+    row = (
+        supabase.table("async_jobs")
+        .insert({"job_type": "everhour_sync", "payload": {}})
+        .execute()
+    ).data
+    job_id = row[0].get("id") if row else None
+    return {"status": "queued", "job_id": job_id}
+
+
+def enqueue_due_everhour_sync() -> int:
+    """Daily scheduler step: enqueue the whole-team time pull once a day. The
+    daily block already fires once per day (its durable marker) and this dedupes
+    against an in-flight sync, so no separate date marker is needed. No-op while
+    ``everhour_enabled`` is off. Returns 1 if a job was queued, else 0."""
+    return 1 if enqueue_everhour_sync().get("status") == "queued" else 0
+
+
+# ---------------------------------------------------------------------------
+# DB reads for the sync
+# ---------------------------------------------------------------------------
+async def _pull_time_records(date_from: str, date_to: str) -> list[dict]:
+    """All team time records over ``[date_from, date_to]``, paged. Bounded by
+    ``_MAX_SYNC_PAGES`` so a misbehaving pager can't loop forever."""
+    limit = settings.everhour_sync_page_limit
+    page = 1
+    out: list[dict] = []
+    for _ in range(_MAX_SYNC_PAGES):
+        batch = await everhour_service.list_team_time(
+            date_from, date_to, page=page, limit=limit
+        )
+        out.extend(batch or [])
+        nxt = everhour_service.next_page(page, len(batch or []), limit)
+        if nxt is None:
+            break
+        page = nxt
+    return out
+
+
+def _resolve_maps(parsed: list[dict]) -> tuple[dict, dict, dict]:
+    """Build the three join maps ``resolve_time_entries`` needs, from the ids
+    actually present in this batch (chunked ``.in_()`` reads)."""
+    supabase = get_supabase()
+    eh_task_ids = sorted({p["everhour_task_id"] for p in parsed if p.get("everhour_task_id")})
+    project_ids = sorted({p["everhour_project_id"] for p in parsed if p.get("everhour_project_id")})
+    user_ids = sorted({p["everhour_user_id"] for p in parsed if p.get("everhour_user_id")})
+
+    tasks_by_eh: dict[str, dict] = {}
+    for chunk in _chunks(eh_task_ids, _IN_CHUNK):
+        rows = (
+            supabase.table("tasks")
+            .select("id, client_id, everhour_task_id")
+            .in_("everhour_task_id", chunk)
+            .execute()
+        ).data or []
+        for r in rows:
+            if r.get("everhour_task_id"):
+                tasks_by_eh[r["everhour_task_id"]] = {
+                    "id": r["id"],
+                    "client_id": r.get("client_id"),
+                }
+
+    clients_by_project: dict[str, str] = {}
+    for chunk in _chunks(project_ids, _IN_CHUNK):
+        rows = (
+            supabase.table("clients")
+            .select("id, everhour_project_id")
+            .in_("everhour_project_id", chunk)
+            .execute()
+        ).data or []
+        for r in rows:
+            if r.get("everhour_project_id"):
+                clients_by_project[r["everhour_project_id"]] = r["id"]
+
+    members_by_eh: dict[str, str] = {}
+    for chunk in _chunks(user_ids, _IN_CHUNK):
+        rows = (
+            supabase.table("asana_team_members")
+            .select("id, everhour_user_id")
+            .in_("everhour_user_id", chunk)
+            .execute()
+        ).data or []
+        for r in rows:
+            if r.get("everhour_user_id"):
+                members_by_eh[r["everhour_user_id"]] = r["id"]
+
+    return tasks_by_eh, clients_by_project, members_by_eh
+
+
+def _upsert_entries(rows: list[dict]) -> None:
+    """Upsert time_entries by ``everhour_record_id`` (chunked). An edited entry
+    changes in place; a deleted entry (Everhour sends ``time: 0``) zeroes its
+    contribution to every rollup."""
+    supabase = get_supabase()
+    for chunk in _chunks(rows, _UPSERT_CHUNK):
+        supabase.table("time_entries").upsert(
+            chunk, on_conflict="everhour_record_id"
+        ).execute()
+
+
+def _entries_for_tasks(task_ids: list[str]) -> list[dict]:
+    """Read EVERY ``time_entries`` row for the given tasks (across all windows,
+    paged) so ``actual_hours`` is the complete sum, not just this window's."""
+    supabase = get_supabase()
+    out: list[dict] = []
+    for chunk in _chunks(task_ids, _IN_CHUNK):
+        offset = 0
+        while True:
+            rows = (
+                supabase.table("time_entries")
+                .select("task_id, seconds")
+                .in_("task_id", chunk)
+                .range(offset, offset + _READ_PAGE - 1)
+                .execute()
+            ).data or []
+            out.extend(rows)
+            if len(rows) < _READ_PAGE:
+                break
+            offset += _READ_PAGE
+    return out
+
+
+def _recompute_actual_hours(task_ids: set[str]) -> int:
+    """Recompute ``tasks.actual_hours`` from ``time_entries`` for the tasks
+    touched this sync (idempotent — a full re-sum, never a delta). Returns the
+    number of tasks updated. A task whose entries all went to zero is written to
+    0.0 (not left stale)."""
+    ids = [t for t in task_ids if t]
+    if not ids:
+        return 0
+    sums = rollup_by_task(_entries_for_tasks(ids))
+    supabase = get_supabase()
+    updated = 0
+    for tid in ids:
+        hours = everhour_service.seconds_to_hours(sums.get(tid, 0)) or 0.0
+        supabase.table("tasks").update({"actual_hours": hours}).eq("id", tid).execute()
+        updated += 1
+    return updated
+
+
+# ---------------------------------------------------------------------------
+# The sync itself (async — hits Everhour)
+# ---------------------------------------------------------------------------
+async def run_everhour_sync() -> dict:
+    """Pull the team's Everhour time over the rolling window, upsert
+    ``time_entries``, and recompute ``tasks.actual_hours`` for every touched
+    task. Returns a ``{status, ...}`` summary. Gated on ``everhour_enabled`` +
+    a key (NOT the mirror sub-gate). A genuine Everhour/API error propagates so
+    the job settles ``failed`` and is visible; a "nothing to pull" outcome is a
+    clean ``ok`` with zero counts."""
+    if not sync_gate_open():
+        return {"status": "skipped", "reason": "gate_closed"}
+
+    date_from, date_to = sync_window(
+        datetime.now(timezone.utc).date(), settings.everhour_sync_repull_days
+    )
+    raw = await _pull_time_records(date_from, date_to)
+    parsed = [everhour_service.parse_time_record(r) for r in raw]
+    parsed = [p for p in parsed if everhour_service.is_valid_time_record(p)]
+    if not parsed:
+        return {
+            "status": "ok",
+            "window": [date_from, date_to],
+            "records": 0,
+            "upserted": 0,
+            "tasks_updated": 0,
+        }
+
+    tasks_by_eh, clients_by_project, members_by_eh = _resolve_maps(parsed)
+    rows = resolve_time_entries(
+        parsed,
+        tasks_by_eh=tasks_by_eh,
+        clients_by_project=clients_by_project,
+        members_by_eh=members_by_eh,
+        synced_at=_now(),
+    )
+    _upsert_entries(rows)
+    affected = {r["task_id"] for r in rows if r["task_id"]}
+    tasks_updated = _recompute_actual_hours(affected)
+    logger.info(
+        "everhour_sync.completed",
+        extra={
+            "window": [date_from, date_to],
+            "records": len(parsed),
+            "upserted": len(rows),
+            "tasks_updated": tasks_updated,
+        },
+    )
+    return {
+        "status": "ok",
+        "window": [date_from, date_to],
+        "records": len(parsed),
+        "upserted": len(rows),
+        "tasks_updated": tasks_updated,
+    }
+
+
+async def run_everhour_sync_job(job: dict) -> None:
+    """``async_jobs`` handler for ``job_type='everhour_sync'``. Settles the row
+    with the sync summary; a genuine API error settles it ``failed`` (visible) —
+    a 403 (revoked key / permission) surfaces there rather than being retried
+    into the same failure."""
+    job_id = job["id"]
+    supabase = get_supabase()
+    try:
+        result = await run_everhour_sync()
+    except Exception as exc:
+        logger.warning("everhour_sync_job_failed", extra={"error": str(exc)})
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": str(exc)[:500], "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+        return
+    supabase.table("async_jobs").update(
+        {"status": "complete", "result": result, "completed_at": "now()"}
+    ).eq("id", job_id).execute()

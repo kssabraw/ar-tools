@@ -884,6 +884,10 @@ async def _process_job(job: dict) -> None:
         from services import everhour_sync
 
         await everhour_sync.run_mirror_job(job)
+    elif job_type == "everhour_sync":
+        from services import everhour_sync
+
+        await everhour_sync.run_everhour_sync_job(job)
     elif job_type == "client_report":
         await run_client_report_job(job)
     elif job_type == "syndication_scan":

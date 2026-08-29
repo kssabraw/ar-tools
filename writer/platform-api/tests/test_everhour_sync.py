@@ -50,8 +50,16 @@ class _Query:
     def limit(self, *a, **k):
         return self
 
+    def range(self, *a, **k):
+        return self
+
     def insert(self, payload):
         self._mode = "insert"
+        self._payload = payload
+        return self
+
+    def upsert(self, payload, **k):
+        self._mode = "upsert"
         self._payload = payload
         return self
 
@@ -61,10 +69,19 @@ class _Query:
         return self
 
     def execute(self):
-        if self._mode == "insert":
+        if self._mode in ("insert", "upsert"):
             rows = self._payload if isinstance(self._payload, list) else [self._payload]
-            self._store.inserts.setdefault(self._table, []).extend(rows)
-            return type("R", (), {"data": rows})()
+            log = self._store.upserts if self._mode == "upsert" else self._store.inserts
+            log.setdefault(self._table, []).extend(rows)
+            # An upsert feeds the reads so a later recompute sees what was
+            # written (models the real round-trip); inserts don't.
+            if self._mode == "upsert":
+                self._store.reads.setdefault(self._table, []).extend(rows)
+            returned = [
+                {**r, "id": r.get("id") or f"{self._table}-{i}"}
+                for i, r in enumerate(rows)
+            ]
+            return type("R", (), {"data": returned})()
         if self._mode == "update":
             self._store.updates.setdefault(self._table, []).append(self._payload)
             return type("R", (), {"data": []})()
@@ -75,6 +92,7 @@ class _Store:
     def __init__(self, reads=None):
         self.reads = reads or {}
         self.inserts: dict[str, list] = {}
+        self.upserts: dict[str, list] = {}
         self.updates: dict[str, list] = {}
 
     def table(self, name):
@@ -336,3 +354,265 @@ def test_backfill_mirror_enqueues_and_skips_in_flight(monkeypatch):
     jobs = store.inserts.get("async_jobs")
     assert [j["entity_id"] for j in jobs] == ["t2"]
     assert "scheduled_at" in jobs[0]
+
+
+# ===========================================================================
+# Phase 3 — time pull + rollups
+# ===========================================================================
+from datetime import date  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# Pure rollups
+# ---------------------------------------------------------------------------
+def test_rollup_by_task_sums_and_skips_none():
+    entries = [
+        {"task_id": "t1", "seconds": 3600},
+        {"task_id": "t1", "seconds": 1800},
+        {"task_id": "t2", "seconds": 600},
+        {"task_id": None, "seconds": 999},   # ad-hoc — excluded
+        {"task_id": "t3", "seconds": None},  # malformed — excluded
+    ]
+    assert everhour_sync.rollup_by_task(entries) == {"t1": 5400, "t2": 600}
+
+
+def test_rollup_by_client_and_member():
+    entries = [
+        {"client_id": "c1", "member_id": "m1", "seconds": 100},
+        {"client_id": "c1", "member_id": "m2", "seconds": 50},
+        {"client_id": None, "member_id": "m1", "seconds": 25},  # internal time
+    ]
+    assert everhour_sync.rollup_by_client(entries) == {"c1": 150}
+    # ad-hoc/internal time still counts toward member utilization
+    assert everhour_sync.rollup_by_member(entries) == {"m1": 125, "m2": 50}
+
+
+def test_rollup_empty():
+    assert everhour_sync.rollup_by_task([]) == {}
+    assert everhour_sync.rollup_by_client(None) == {}
+
+
+# ---------------------------------------------------------------------------
+# sync_window
+# ---------------------------------------------------------------------------
+def test_sync_window():
+    assert everhour_sync.sync_window(date(2026, 8, 29), 14) == ("2026-08-15", "2026-08-29")
+    assert everhour_sync.sync_window(date(2026, 8, 29), 0) == ("2026-08-29", "2026-08-29")
+
+
+# ---------------------------------------------------------------------------
+# resolve_time_entries (pure — the join logic)
+# ---------------------------------------------------------------------------
+def test_resolve_native_task_uses_task_client_authoritatively():
+    parsed = [{
+        "everhour_record_id": "11", "everhour_task_id": "ev:taskA",
+        "everhour_project_id": "ev:projX",  # differs from the task's client's project
+        "everhour_user_id": "1304", "entry_date": "2026-08-20",
+        "seconds": 3600, "billable": None, "comment": None,
+    }]
+    rows = everhour_sync.resolve_time_entries(
+        parsed,
+        tasks_by_eh={"ev:taskA": {"id": "task-A", "client_id": "client-A"}},
+        clients_by_project={"ev:projX": "client-X"},  # must be ignored for a matched task
+        members_by_eh={"1304": "mem-1"},
+        synced_at="2026-08-29T00:00:00+00:00",
+    )
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["task_id"] == "task-A"
+    assert r["client_id"] == "client-A"  # the task's client, NOT the record's project client
+    assert r["member_id"] == "mem-1"
+    assert r["seconds"] == 3600
+    assert r["everhour_record_id"] == "11"
+
+
+def test_resolve_ad_hoc_uses_project_client():
+    parsed = [{
+        "everhour_record_id": "12", "everhour_task_id": "ev:taskZ",  # not a native mirror
+        "everhour_project_id": "ev:projB", "everhour_user_id": "1304",
+        "entry_date": "2026-08-21", "seconds": 1800, "billable": True, "comment": "x",
+    }]
+    rows = everhour_sync.resolve_time_entries(
+        parsed,
+        tasks_by_eh={},  # no native match
+        clients_by_project={"ev:projB": "client-B"},
+        members_by_eh={"1304": "mem-1"},
+        synced_at="s",
+    )
+    assert rows[0]["task_id"] is None
+    assert rows[0]["client_id"] == "client-B"
+    assert rows[0]["billable"] is True
+
+
+def test_resolve_internal_time_no_client():
+    # No native task AND no mapped project → internal/overhead time: kept (for
+    # member utilization) but client_id None (excluded from client rollups).
+    parsed = [{
+        "everhour_record_id": "13", "everhour_task_id": None,
+        "everhour_project_id": "ev:unmapped", "everhour_user_id": "1304",
+        "entry_date": "2026-08-21", "seconds": 600, "billable": None, "comment": None,
+    }]
+    rows = everhour_sync.resolve_time_entries(
+        parsed, tasks_by_eh={}, clients_by_project={},
+        members_by_eh={"1304": "mem-1"}, synced_at="s",
+    )
+    assert rows[0]["task_id"] is None
+    assert rows[0]["client_id"] is None
+    assert rows[0]["member_id"] == "mem-1"
+
+
+def test_resolve_unlinked_member():
+    parsed = [{
+        "everhour_record_id": "14", "everhour_task_id": "ev:taskA",
+        "everhour_project_id": None, "everhour_user_id": "9999",  # not roster-linked
+        "entry_date": "2026-08-21", "seconds": 600, "billable": None, "comment": None,
+    }]
+    rows = everhour_sync.resolve_time_entries(
+        parsed, tasks_by_eh={"ev:taskA": {"id": "task-A", "client_id": "client-A"}},
+        clients_by_project={}, members_by_eh={}, synced_at="s",
+    )
+    assert rows[0]["member_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# sync_gate_open — reads do NOT require everhour_mirror_enabled
+# ---------------------------------------------------------------------------
+def test_sync_gate_ignores_mirror_flag(monkeypatch):
+    _open_gate(monkeypatch)
+    assert everhour_sync.sync_gate_open() is True
+    monkeypatch.setattr(settings, "everhour_mirror_enabled", False)
+    assert everhour_sync.sync_gate_open() is True  # mirror flag is write-only
+    monkeypatch.setattr(settings, "everhour_enabled", False)
+    assert everhour_sync.sync_gate_open() is False
+    monkeypatch.setattr(settings, "everhour_enabled", True)
+    monkeypatch.setattr(settings, "everhour_api_key", "")
+    assert everhour_sync.sync_gate_open() is False
+
+
+# ---------------------------------------------------------------------------
+# enqueue_everhour_sync / enqueue_due_everhour_sync
+# ---------------------------------------------------------------------------
+def test_enqueue_sync_gate_closed(monkeypatch):
+    monkeypatch.setattr(settings, "everhour_enabled", False)
+    assert everhour_sync.enqueue_everhour_sync() == {"status": "skipped", "reason": "gate_closed"}
+
+
+def test_enqueue_sync_dedupes_in_flight(monkeypatch):
+    _open_gate(monkeypatch)
+    store = _Store(reads={"async_jobs": [{"id": "j1"}]})
+    monkeypatch.setattr(everhour_sync, "get_supabase", lambda: store)
+    assert everhour_sync.enqueue_everhour_sync() == {"status": "skipped", "reason": "already_queued"}
+    assert store.inserts == {}
+
+
+def test_enqueue_sync_queues(monkeypatch):
+    _open_gate(monkeypatch)
+    store = _Store(reads={"async_jobs": []})
+    monkeypatch.setattr(everhour_sync, "get_supabase", lambda: store)
+    out = everhour_sync.enqueue_everhour_sync()
+    assert out["status"] == "queued"
+    assert out["job_id"]
+    jobs = store.inserts.get("async_jobs")
+    assert jobs and jobs[0]["job_type"] == "everhour_sync"
+    assert jobs[0]["payload"] == {}
+
+
+def test_enqueue_due_returns_count(monkeypatch):
+    _open_gate(monkeypatch)
+    store = _Store(reads={"async_jobs": []})
+    monkeypatch.setattr(everhour_sync, "get_supabase", lambda: store)
+    assert everhour_sync.enqueue_due_everhour_sync() == 1
+    monkeypatch.setattr(settings, "everhour_enabled", False)
+    assert everhour_sync.enqueue_due_everhour_sync() == 0
+
+
+# ---------------------------------------------------------------------------
+# run_everhour_sync (flow)
+# ---------------------------------------------------------------------------
+async def test_run_sync_gate_closed(monkeypatch):
+    monkeypatch.setattr(settings, "everhour_enabled", False)
+    out = await everhour_sync.run_everhour_sync()
+    assert out == {"status": "skipped", "reason": "gate_closed"}
+
+
+async def test_run_sync_no_records(monkeypatch):
+    _open_gate(monkeypatch)
+    store = _Store()
+    monkeypatch.setattr(everhour_sync, "get_supabase", lambda: store)
+    with patch("services.everhour_service.list_team_time", new=AsyncMock(return_value=[])):
+        out = await everhour_sync.run_everhour_sync()
+    assert out["status"] == "ok"
+    assert out["records"] == 0 and out["upserted"] == 0 and out["tasks_updated"] == 0
+    assert store.upserts == {} and store.updates == {}
+
+
+async def test_run_sync_full_flow(monkeypatch):
+    _open_gate(monkeypatch)
+    store = _Store(
+        reads={
+            "tasks": [{"id": "task-A", "client_id": "client-A", "everhour_task_id": "ev:taskA"}],
+            "clients": [{"id": "client-B", "everhour_project_id": "ev:projB"}],
+            "asana_team_members": [{"id": "mem-1", "everhour_user_id": "1304"}],
+        }
+    )
+    monkeypatch.setattr(everhour_sync, "get_supabase", lambda: store)
+    raw = [
+        {"id": 11, "time": 3600, "user": 1304, "date": "2026-08-20",
+         "task": {"id": "ev:taskA", "projects": ["ev:projX"]}},   # native
+        {"id": 12, "time": 1800, "user": 1304, "date": "2026-08-21",
+         "task": {"id": "ev:taskZ", "projects": ["ev:projB"]}},   # ad-hoc → project client
+    ]
+    with patch("services.everhour_service.list_team_time", new=AsyncMock(return_value=raw)):
+        out = await everhour_sync.run_everhour_sync()
+    assert out["records"] == 2 and out["upserted"] == 2 and out["tasks_updated"] == 1
+    entries = store.upserts["time_entries"]
+    by_rid = {e["everhour_record_id"]: e for e in entries}
+    assert by_rid["11"]["task_id"] == "task-A" and by_rid["11"]["client_id"] == "client-A"
+    assert by_rid["12"]["task_id"] is None and by_rid["12"]["client_id"] == "client-B"
+    # actual_hours recomputed only for the matched task (3600s → 1.0h)
+    assert store.updates["tasks"] == [{"actual_hours": 1.0}]
+
+
+async def test_run_sync_delete_to_zero(monkeypatch):
+    # Everhour models a delete as time:0 on the same record id — the re-read
+    # zeroes the task's actual_hours, no reconciliation pass (plan §11.9).
+    _open_gate(monkeypatch)
+    store = _Store(
+        reads={"tasks": [{"id": "task-A", "client_id": "client-A", "everhour_task_id": "ev:taskA"}]}
+    )
+    monkeypatch.setattr(everhour_sync, "get_supabase", lambda: store)
+    raw = [{"id": 11, "time": 0, "user": 1, "date": "2026-08-20",
+            "task": {"id": "ev:taskA", "projects": []}}]
+    with patch("services.everhour_service.list_team_time", new=AsyncMock(return_value=raw)):
+        out = await everhour_sync.run_everhour_sync()
+    assert out["upserted"] == 1
+    assert store.upserts["time_entries"][0]["seconds"] == 0
+    assert store.updates["tasks"] == [{"actual_hours": 0.0}]
+
+
+# ---------------------------------------------------------------------------
+# run_everhour_sync_job (settles the async_jobs row)
+# ---------------------------------------------------------------------------
+async def test_sync_job_settles_complete(monkeypatch):
+    store = _Store()
+    monkeypatch.setattr(everhour_sync, "get_supabase", lambda: store)
+    with patch.object(
+        everhour_sync, "run_everhour_sync",
+        new=AsyncMock(return_value={"status": "ok", "records": 3}),
+    ):
+        await everhour_sync.run_everhour_sync_job({"id": "job-1"})
+    upd = store.updates["async_jobs"][0]
+    assert upd["status"] == "complete"
+    assert upd["result"] == {"status": "ok", "records": 3}
+
+
+async def test_sync_job_settles_failed(monkeypatch):
+    store = _Store()
+    monkeypatch.setattr(everhour_sync, "get_supabase", lambda: store)
+    with patch.object(
+        everhour_sync, "run_everhour_sync", new=AsyncMock(side_effect=RuntimeError("403 boom")),
+    ):
+        await everhour_sync.run_everhour_sync_job({"id": "job-1"})
+    upd = store.updates["async_jobs"][0]
+    assert upd["status"] == "failed"
+    assert "403 boom" in upd["error"]
