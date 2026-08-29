@@ -628,6 +628,7 @@ async def gsc_scheduler() -> None:
     from services.backlink_explorer import auto_track_client_domains, enqueue_due_backlink_snapshots
     from services.response_episodes import run_episode_sync
     from services.interventions import run_intervention_sync
+    from services.everhour_sync import enqueue_due_everhour_sync
     from services.orchestrator import redispatch_due_retries
 
     from services.strategist import enqueue_due_monthly_plan_reviews, enqueue_due_strategy_reviews
@@ -745,6 +746,11 @@ async def gsc_scheduler() -> None:
                 # Self-gated: inert without Asana configured + a mapping, and
                 # interval-guarded against same-day re-fires.
                 _safe("asana_import", enqueue_due_asana_import)
+                # Daily Everhour time pull (whole-team; rolling re-pull window).
+                # Enqueues one everhour_sync job → tasks.actual_hours + per-
+                # client/member rollups. Self-gated: no-ops while
+                # everhour_enabled is false, deduped against an in-flight sync.
+                _safe("everhour_sync", enqueue_due_everhour_sync)
                 # Daily PACE delivery digest (deterministic; atomic dedupe_key).
                 # Self-gated: no-ops while pace_enabled is false.
                 _safe("pace_digest", run_pace_digest)

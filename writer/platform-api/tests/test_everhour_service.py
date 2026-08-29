@@ -102,6 +102,7 @@ def test_parse_time_record_basic():
     assert everhour.parse_time_record(raw) == {
         "everhour_record_id": "2660155",
         "everhour_task_id": "ev:9876543210",
+        "everhour_project_id": "ev:1234567890",  # first of task.projects
         "everhour_user_id": "1304",
         "entry_date": "2026-08-20",
         "seconds": 3600,
@@ -129,6 +130,7 @@ def test_parse_time_record_no_task_ad_hoc():
     raw = {"id": 1, "time": 60, "user": 1, "date": "2026-08-20"}
     parsed = everhour.parse_time_record(raw)
     assert parsed["everhour_task_id"] is None
+    assert parsed["everhour_project_id"] is None  # no task -> no project
     assert parsed["everhour_record_id"] == "1"
 
 

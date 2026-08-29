@@ -28,6 +28,7 @@ from models.everhour import (
     EverhourBackfillResult,
     EverhourProject,
     EverhourStatus,
+    EverhourSyncResult,
     EverhourUser,
 )
 from services import everhour_service, everhour_sync
@@ -92,3 +93,14 @@ async def everhour_backfill_mirror(
     still-unmirrored tail. Fast (enqueues jobs; the outbound POSTs run on the
     worker, staggered for the rate ceiling)."""
     return EverhourBackfillResult(**everhour_sync.backfill_mirror(limit=limit))
+
+
+@router.post("/everhour/sync", response_model=EverhourSyncResult)
+async def everhour_sync_now(auth: dict = Depends(require_admin)) -> EverhourSyncResult:
+    """Manual "Sync now" (Phase 3, plan §4): enqueue one whole-team Everhour
+    time pull, the same job the daily scheduler fires. Exists for the same
+    reason ``POST /clients/{id}/asana/generate-month`` does alongside the
+    scheduled run — an operator triggering the pull on demand. Deduped against
+    an in-flight sync; a no-op (`skipped`) while `everhour_enabled` is off.
+    Admin-gated. Fast — the pull runs on the worker."""
+    return EverhourSyncResult(**everhour_sync.enqueue_everhour_sync())

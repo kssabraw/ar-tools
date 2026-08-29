@@ -51,3 +51,13 @@ class EverhourBackfillResult(BaseModel):
     candidates: int = 0
     enqueued: int = 0
     reason: Optional[str] = None
+
+
+class EverhourSyncResult(BaseModel):
+    """Result of enqueuing a manual "Sync now" time pull (Phase 3, §4). The pull
+    runs on the worker; this returns the queued job id (or why it was skipped —
+    the integration is disabled, or a sync is already in flight)."""
+
+    status: str
+    job_id: Optional[str] = None
+    reason: Optional[str] = None

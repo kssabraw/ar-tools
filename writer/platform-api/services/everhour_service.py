@@ -106,8 +106,15 @@ def parse_time_record(record: dict) -> dict:
     ``TaskTimeBillable`` — the endpoint's response is a ``oneOf`` of the two,
     both sharing id/time/user/date/task/comment) into the shape
     ``time_entries`` rows are built from: ``{everhour_record_id,
-    everhour_task_id, everhour_user_id, entry_date, seconds, billable,
-    comment}``.
+    everhour_task_id, everhour_project_id, everhour_user_id, entry_date,
+    seconds, billable, comment}``.
+
+    ``everhour_project_id`` is the first of the nested task's ``projects``
+    (an Everhour task belongs to one project in practice) — the Phase 3 sync
+    uses it to resolve the client for **ad-hoc** time whose task isn't a
+    native mirror (``everhour_task_id`` -> ``tasks`` misses, so the client is
+    resolved via ``everhour_project_id`` -> ``clients.everhour_project_id``
+    instead). ``None`` when the record has no task / no projects.
 
     ``billable`` is only present when the request carried
     ``opts_include_billing=1`` (``TaskTimeBillable.billing.billable``) —
@@ -116,11 +123,13 @@ def parse_time_record(record: dict) -> dict:
     Pure — unit-tested."""
     task = record.get("task") or {}
     billing = record.get("billing") or {}
+    projects = task.get("projects") or []
     rid = record.get("id")
     uid = record.get("user")
     return {
         "everhour_record_id": str(rid) if rid is not None else None,
         "everhour_task_id": task.get("id"),
+        "everhour_project_id": projects[0] if projects else None,
         "everhour_user_id": str(uid) if uid is not None else None,
         "entry_date": record.get("date"),
         "seconds": record.get("time"),
