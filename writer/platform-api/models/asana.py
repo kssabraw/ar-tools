@@ -88,6 +88,10 @@ class AsanaTeamMemberItem(BaseModel):
     # Native task manager identity bridge: the suite user (profiles.id) this
     # tracked member is, if linked. Nullable — an unlinked member is unchanged.
     profile_id: Optional[str] = None
+    # Everhour identity bridge: the Everhour user id (text) this member logs time
+    # as, if linked. A peer of profile_id. Nullable — resolves member_id on the
+    # Phase 3 time pull; an unlinked member is unchanged.
+    everhour_user_id: Optional[str] = None
 
 
 class AsanaTeamMembersReplaceRequest(BaseModel):

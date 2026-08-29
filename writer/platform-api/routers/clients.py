@@ -396,6 +396,8 @@ async def create_client(
         row["strategist_weekday"] = body.strategist_weekday
     if body.slack_channel_id is not None:
         row["slack_channel_id"] = (body.slack_channel_id.strip() or None)
+    if body.everhour_project_id is not None:
+        row["everhour_project_id"] = (body.everhour_project_id.strip() or None)
     # Reference page structures: seed the pending entries so the row reflects the
     # configured URLs immediately; the scrape jobs are enqueued after insert.
     _assert_single_structure_source(body.page_structure_urls, body.page_structure_guidelines)
@@ -556,6 +558,9 @@ async def update_client(
     # Explicit-set semantics: an empty string clears the channel back to master.
     if "slack_channel_id" in body.model_fields_set:
         updates["slack_channel_id"] = ((body.slack_channel_id or "").strip() or None)
+    # Explicit-set semantics: an empty string clears the Everhour project mapping.
+    if "everhour_project_id" in body.model_fields_set:
+        updates["everhour_project_id"] = ((body.everhour_project_id or "").strip() or None)
     if body.gbp_place_id is not None:
         updates["gbp_place_id"] = body.gbp_place_id
     if body.gbp is not None:

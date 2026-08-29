@@ -547,6 +547,9 @@ def partition_roster_write(existing: list[dict], members: list[dict]) -> dict:
             "weekly_hours": m.get("weekly_hours"),
             "active": m.get("active", True),
             "profile_id": m.get("profile_id") or None,
+            "everhour_user_id": (str(m["everhour_user_id"]).strip() or None)
+            if m.get("everhour_user_id") not in (None, "")
+            else None,
         }
         if m.get("id"):
             updates.append({"id": m["id"], "fields": {**fields, "gid": gid}})

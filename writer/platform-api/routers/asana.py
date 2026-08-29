@@ -78,7 +78,7 @@ async def list_team_members(auth: dict = Depends(require_auth)) -> list[AsanaTea
     rows = (
         get_supabase()
         .table("asana_team_members")
-        .select("id, gid, name, weekly_hours, active, profile_id")
+        .select("id, gid, name, weekly_hours, active, profile_id, everhour_user_id")
         .order("name")
         .execute()
     ).data or []
