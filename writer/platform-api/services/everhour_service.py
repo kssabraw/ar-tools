@@ -141,10 +141,18 @@ def is_valid_time_record(parsed: dict) -> bool:
     )
 
 
-def next_page(current_page: int, returned_count: int, limit: int) -> Optional[int]:
+def next_page(current_page: int, returned_count: int, limit: Optional[int]) -> Optional[int]:
     """The next page number to fetch from a bare-array, no-total-count
     endpoint (``GET /team/time`` and friends — see the pagination docs), or
-    ``None`` when this page was the last one. Pure — unit-tested."""
+    ``None`` when this page was the last one. Pure — unit-tested.
+
+    ``limit`` is defensively guarded: an unset/non-positive limit can never
+    signal "last page" via ``returned_count < limit`` (a limit of 0 makes
+    that comparison false forever, so a caller that mis-threads its limit
+    would paginate without end) — treated as "stop" rather than loop
+    forever or crash on ``None < int``."""
+    if not limit or limit <= 0:
+        return None
     if returned_count < limit:
         return None
     return current_page + 1
@@ -183,14 +191,18 @@ async def get_current_user() -> dict:
 
 async def verify_api_key() -> bool:
     """True when the configured key is accepted by Everhour. Never raises —
-    a network error or a 4xx both mean "not usable right now", which is a
-    provisioning-status read, not an application error."""
+    a network error, a 4xx, or a malformed (non-JSON) response body all
+    mean "not usable right now", which is a provisioning-status read, not
+    an application error. ``ValueError`` catches ``json.JSONDecodeError``
+    (a 200 with an unparseable body — e.g. an intermediary proxy's error
+    page — which ``httpx.HTTPError`` alone does not cover, since
+    ``resp.json()`` raises it independently of the status code)."""
     if not is_configured():
         return False
     try:
         await get_current_user()
         return True
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, ValueError) as exc:
         logger.warning("everhour_service.verify_api_key_failed", extra={"error": str(exc)})
         return False
 
@@ -211,8 +223,11 @@ async def list_projects(query: Optional[str] = None) -> list[dict]:
 async def get_project(project_id: str) -> dict:
     """One project's basics — ``GET /projects/{project_id}``. Used to
     validate a pasted/selected Everhour project id at client-mapping save
-    time (Phase 1), the same role ``asana_service.get_project`` plays."""
-    return await _get(f"/projects/{project_id}")
+    time (Phase 1), the same role ``asana_service.get_project`` plays
+    (including its ``or {}`` fallback — a 200 with a literal JSON ``null``
+    body must degrade to an empty dict, not ``None``, since this is typed
+    ``-> dict`` and a Phase 1 caller will index into the result)."""
+    return await _get(f"/projects/{project_id}") or {}
 
 
 async def create_project(name: str, *, project_type: str = "board") -> dict:
