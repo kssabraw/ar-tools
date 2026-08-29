@@ -4,7 +4,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { NotificationBell } from './NotificationBell'
-import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, ListTodo, Menu, X, Radar, Crosshair, Loader2, ShieldCheck, Globe, Globe2, CalendarDays } from 'lucide-react'
+import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, ListTodo, Menu, X, Radar, Crosshair, Loader2, ShieldCheck, Globe, Globe2, CalendarDays, Compass } from 'lucide-react'
 
 interface NavItem {
   label: string
@@ -82,6 +82,15 @@ export function Layout({ children }: { children: React.ReactNode }) {
     staleTime: 5 * 60_000,
   })
 
+  // DORA (Director of Operations — the cross-agent lens) is gated behind the
+  // server-side director_enabled flag — same pattern as PACE, so the sidebar
+  // entry only appears once an admin turns it on.
+  const { data: directorStatus } = useQuery<{ enabled: boolean }>({
+    queryKey: ['director-status'],
+    queryFn: () => api.get<{ enabled: boolean }>('/director/status'),
+    staleTime: 5 * 60_000,
+  })
+
   // QA (quality-reviewer chat) is gated behind the server-side qa_chat_enabled
   // flag — same pattern as PACE, so the sidebar entry only appears once an admin
   // turns it on.
@@ -117,6 +126,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
     { label: 'SerMaStr', to: '/assistant', icon: <Sparkles size={18} /> },
     ...(paceStatus?.enabled
       ? [{ label: 'PACE', to: '/pace', icon: <ListTodo size={18} /> }]
+      : []),
+    ...(directorStatus?.enabled
+      ? [{ label: 'DORA', to: '/director', icon: <Compass size={18} /> }]
       : []),
     ...(qaStatus?.enabled
       ? [{ label: 'QA', to: '/qa', icon: <ShieldCheck size={18} /> }]

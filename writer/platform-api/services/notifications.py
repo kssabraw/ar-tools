@@ -169,23 +169,35 @@ CLIENT_SCOPED_PACE_KINDS = frozenset({
     "task_nudge", "deliverable_link_missing", "deliverable_note",
 })
 
+# Director of Operations (DORA) kinds. These are still PACE kinds (so they keep
+# their current fallback to the PACE channel when no DORA channel is configured),
+# but when ``director_slack_channel`` is set they route to DORA's own #dora
+# channel instead — and, when a dedicated DORA app token is set, post under it.
+# Owner ruling 2026-08-29 (DORA gets its own surface). Kept a subset of
+# PACE_CHANNEL_KINDS on purpose: leaving these in PACE_CHANNEL_KINDS means an
+# unset DORA channel degrades to the PACE channel, never the strategy channel.
+DIRECTOR_CHANNEL_KINDS = frozenset({"ops_digest", "ops_seam"})
+
 
 def resolve_slack_channel(
     kind: Optional[str], payload: Optional[dict], pace_channel: Optional[str],
-    client_channel: Optional[str] = None,
+    client_channel: Optional[str] = None, director_channel: Optional[str] = None,
 ) -> Optional[str]:
     """Pick the Slack channel for one notification. Precedence:
     1. an explicit ``payload.slack_channel`` (a producer targeting a channel),
     2. the client's own channel for a client-scoped PACE ``kind`` when that client
        has ``client_channel`` configured (per-client PACE delivery),
-    3. the master PACE channel for any PM/PACE ``kind`` when ``pace_channel`` is set,
-    4. otherwise ``None`` → the sender falls back to ``slack_default_channel``.
+    3. DORA's own channel for a Director ``kind`` when ``director_channel`` is set,
+    4. the master PACE channel for any PM/PACE ``kind`` when ``pace_channel`` is set,
+    5. otherwise ``None`` → the sender falls back to ``slack_default_channel``.
     Pure — unit-tested."""
     override = (payload or {}).get("slack_channel")
     if override:
         return override
     if client_channel and kind in CLIENT_SCOPED_PACE_KINDS:
         return client_channel
+    if director_channel and kind in DIRECTOR_CHANNEL_KINDS:
+        return director_channel
     if pace_channel and kind in PACE_CHANNEL_KINDS:
         return pace_channel
     return None
@@ -198,17 +210,30 @@ def pace_bot_token() -> str:
     return settings.pace_slack_bot_token or settings.slack_bot_token
 
 
+def director_bot_token() -> str:
+    """The bot token DORA posts under: the dedicated DORA Slack app's token when
+    configured, else the PACE bot token, else the shared (SerMaStr) token. DORA's
+    inbound reply handler uses this so its posts carry the DORA identity once a
+    separate app exists (and, until then, DORA rides the PACE bot into #dora)."""
+    return settings.director_slack_bot_token or pace_bot_token()
+
+
 def resolve_slack_token(
     channel: Optional[str], pace_channel: str, pace_token: str, default_token: str,
-    kind: Optional[str] = None,
+    kind: Optional[str] = None, director_channel: Optional[str] = None,
+    director_token: str = "",
 ) -> str:
-    """The bot token to deliver one notification under. The PACE app owns delivery
-    of every PM/PACE kind — in the master PACE channel *and* in each client's own
-    channel — so when ``pace_token`` is configured any PACE ``kind`` posts under it
-    (the PACE bot must be a member of the target channel). Otherwise the default
-    (SerMaStr) token is used, with a back-compat check that also uses the PACE
-    token for a message explicitly bound for the master PACE channel. Pure —
-    unit-tested."""
+    """The bot token to deliver one notification under.
+
+    A dedicated DORA app (``director_token``) owns delivery of every Director
+    ``kind`` (and of a message bound for #dora); otherwise the PACE app owns every
+    PM/PACE kind — in the master PACE channel *and* in each client's own channel —
+    so when ``pace_token`` is configured any PACE ``kind`` posts under it (the bot
+    must be a member of the target channel). Otherwise the default (SerMaStr) token
+    is used, with a back-compat check that also uses the PACE token for a message
+    explicitly bound for the master PACE channel. Pure — unit-tested."""
+    if director_token and (kind in DIRECTOR_CHANNEL_KINDS or (director_channel and channel == director_channel)):
+        return director_token
     if pace_token and (kind in PACE_CHANNEL_KINDS or (pace_channel and channel == pace_channel)):
         return pace_token
     return default_token
@@ -225,14 +250,18 @@ def resolve_client_channel(raw: Optional[str]) -> Optional[str]:
 def master_fallback_channel(
     resolved_channel: Optional[str], client_channel: Optional[str],
     pace_channel: Optional[str], default_channel: Optional[str],
+    director_channel: Optional[str] = None,
 ) -> Optional[str]:
-    """The channel to retry on when a send to a client's OWN channel fails (bot
-    not invited, bad/renamed id, archived channel) — so a misconfigured per-client
-    channel degrades to the master channel instead of dropping the message. Only
-    returns a target when the message was actually routed to the client channel;
-    for any other channel there is nothing to fall back to (``None``). Prefers the
-    master PACE channel, then the default channel. Pure — unit-tested."""
+    """The channel to retry on when a send to a client's OWN channel — or to DORA's
+    #dora channel — fails (bot not invited, bad/renamed id, archived channel), so a
+    misconfigured dedicated channel degrades to the master channel instead of
+    dropping the message. Only returns a target when the message was actually
+    routed to the client or DORA channel; for any other channel there is nothing to
+    fall back to (``None``). Prefers the master PACE channel, then the default
+    channel. Pure — unit-tested."""
     if client_channel and resolved_channel == client_channel:
+        return pace_channel or default_channel or None
+    if director_channel and resolved_channel == director_channel:
         return pace_channel or default_channel or None
     return None
 
@@ -442,6 +471,7 @@ async def run_notification_dispatch_job(job: dict) -> None:
         channel = resolve_slack_channel(
             n.get("kind"), n.get("payload"), settings.pace_slack_channel,
             client_channel=client_channel,
+            director_channel=settings.director_slack_channel,
         )
         if not has_slack_target(channel, settings.slack_default_channel):
             # PACE-only deployment (no default channel) + a non-PACE kind → there
@@ -453,13 +483,17 @@ async def run_notification_dispatch_job(job: dict) -> None:
                 channel, settings.pace_slack_channel,
                 settings.pace_slack_bot_token, settings.slack_bot_token,
                 kind=n.get("kind"),
+                director_channel=settings.director_slack_channel,
+                director_token=settings.director_slack_bot_token,
             )
-            # If we routed to a client's OWN channel and that send fails (bot not
-            # invited / bad or renamed id / archived), retry on the master channel
-            # so the message still reaches the team instead of being dropped.
+            # If we routed to a client's OWN channel or DORA's #dora channel and
+            # that send fails (bot not invited / bad or renamed id / archived),
+            # retry on the master channel so the message still reaches the team
+            # instead of being dropped.
             fallback = master_fallback_channel(
                 channel, client_channel, settings.pace_slack_channel,
                 settings.slack_default_channel,
+                director_channel=settings.director_slack_channel,
             )
             try:
                 await _send_slack(text, channel=channel, token=token)
@@ -467,6 +501,10 @@ async def run_notification_dispatch_job(job: dict) -> None:
             except Exception as exc:
                 if fallback and fallback != channel:
                     try:
+                        # The fallback target is the master PACE/default channel,
+                        # where the DORA bot is NOT a member — so resolve the token
+                        # WITHOUT the director app (a Director kind falls to the
+                        # PACE token, which IS in that channel).
                         fb_token = resolve_slack_token(
                             fallback, settings.pace_slack_channel,
                             settings.pace_slack_bot_token, settings.slack_bot_token,

@@ -48,7 +48,7 @@ LIST_LIMIT = 50
 _TITLE_MAX = 80
 _WHITESPACE_RE = re.compile(r"\s+")
 
-SURFACES = ("sermastr", "pace")
+SURFACES = ("sermastr", "pace", "director")
 
 
 # ---------------------------------------------------------------------------

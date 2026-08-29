@@ -2249,6 +2249,34 @@ class Settings(BaseSettings):
     # content_shipped_degraded is immediate (no dwell) — no threshold key.
     director_content_degraded_lookback_days: int = 14      # how far back to scan for degraded ships
     director_autonomy_ledger_lookback_runs: int = 8        # per-client autonomy_runs rows to read
+    # DORA — the Director of Operations conversational persona + its own surfaces
+    # (the /director web chat page + a dedicated Slack channel). Owner ruling
+    # 2026-08-29 reverses the earlier "surfaced through SerMaStr, not a fifth
+    # persona" framing: DORA gets its own surface. It stays READ-ONLY / answer-only
+    # (no actions), and `director_enabled` (above) gates the persona too — while
+    # off, /director/* 503s and the sidebar entry stays hidden.
+    director_model: str = "claude-sonnet-4-6"   # DORA's chat model (reasons over the cross-agent read model)
+    director_max_tokens: int = 6000
+    # A Slack channel id (C…) for DORA's OWN channel: the daily seam flags + the
+    # weekly ops-flow digest post here instead of the PACE channel. Empty ⇒ they
+    # fall back to the PACE channel (current behavior), so this is safe to leave
+    # unset until #dora exists. Invite the posting bot (the PACE bot, or a
+    # dedicated DORA app) to the channel first.
+    director_slack_channel: str = ""            # DIRECTOR_SLACK_CHANNEL
+    # Dedicated DORA Slack app (owner ruling 2026-08-29) — a separate app gives
+    # DORA its own bot identity (name/avatar) on its posts AND lets the team chat
+    # with DORA inside #dora. When BOTH vars are set, DORA's posts (seam flags +
+    # weekly ops digest) go out under director_slack_bot_token, inbound #dora
+    # messages arrive on /slack/director/events verified with
+    # director_slack_signing_secret, and the SerMaStr app stays out of #dora
+    # entirely. Empty bot token ⇒ DORA posts under the PACE bot (which must be a
+    # member of #dora), else the shared SerMaStr bot. Empty signing secret ⇒ no
+    # inbound (the /director web page is the conversational surface until then).
+    # Setup: create a DORA Slack app, add it to #dora, point its Event Request URL
+    # at /slack/director/events (Socket Mode OFF — see the PACE gotcha), then set
+    # these two vars + director_slack_channel.
+    director_slack_bot_token: str = ""          # DIRECTOR_SLACK_BOT_TOKEN — the DORA app's xoxb- bot token
+    director_slack_signing_secret: str = ""     # DIRECTOR_SLACK_SIGNING_SECRET — the DORA app's signing secret
 
     class Config:
         env_file = ".env"

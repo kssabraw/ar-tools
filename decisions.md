@@ -103,3 +103,43 @@ concurrently at scale); its guards are runtime-untested.
 **What must be decided to unblock the build:** the four §11 open questions (seam
 thresholds; digest cadence/channel; duplicate auto-merge vs. flag-only; whether the autonomy
 pre-flight veto is in Phase 1).
+
+---
+
+## Director of Operations — give it its OWN surface (DORA)
+
+**Status: DECIDED** — owner, 2026-08-29. **Partially reverses** the 2026-08-28 entry above
+(the "surfaced conversationally through SerMaStr — *not* a fifth persona" clause), on the
+owner's own call while verifying the Phase 1 rollout. Built in PR #892.
+
+**Context.** Once the Phase 1 read model was live, the owner's reaction to "ask SerMaStr about
+cross-agent flow" was: *"I don't want to ask SerMaStr questions, this is supposed to be a
+separate Director of Operations."* The as-shipped surfaces were a lens inside SerMaStr
+(`_ctx_director` + portfolio block) plus autonomous outputs (`ops_seam`/`ops_digest`) that
+landed in the **PACE** channel — nothing read as a distinct "Director." The owner wanted the
+full PACE-parity treatment.
+
+**Decided (locked):**
+- **The Director gets its own conversational persona + surfaces**, named **DORA** (*Director of
+  Operations, Reconciliation & Awareness* — owner-chosen from a shortlist). This reverses only
+  the *surface/persona* clause of 2026-08-28.
+- **The "build the eyes, defer the hands" framing is UNCHANGED.** DORA is still **read-only,
+  answer-only** — no tools, no actions, no confirm machinery (contrast `pace_agent.py`). It
+  never touches the three tested precedence engines, never reassigns/reschedules/resolves. The
+  reversal is about *where you talk to it*, not what it can do.
+- **Additive, not a rewrite.** The SerMaStr `_ctx_director`/portfolio lens stays; DORA is
+  layered on top of the same `services/director/` read model. No new cross-agent logic.
+- **Full own-app treatment** (owner asked for both, explicitly): (1) a dedicated `/director`
+  web chat page (its own persona, indigo, reads the read model directly — SerMaStr not
+  involved); (2) its own **#dora Slack app** — a distinct DORA bot identity on the seam-flag +
+  weekly-ops-digest posts (`ops_seam`/`ops_digest` route to `director_slack_channel` under
+  `director_slack_bot_token`), AND inbound chat in #dora (`/slack/director/events`, fail-closed
+  on `director_slack_signing_secret`, **Socket Mode OFF** per the PACE gotcha). Safe fallback
+  to the PACE channel/bot until #dora is provisioned.
+- **Provisioning is owner-side** (nothing blocks the web page, which lights up on deploy since
+  `DIRECTOR_ENABLED` is already true): create #dora + a DORA Slack app, invite it, set
+  `DIRECTOR_SLACK_CHANNEL`/`_BOT_TOKEN`/`_SIGNING_SECRET` on PLATFORM.
+
+**Not reversed / still deferred:** everything in the 2026-08-28 "Deferred" block (intake-time
+capacity arbitration, duplicate auto-merge, the D→B graduation to a distinct read-model
+subsystem). DORA is a surface over the existing read model, not the graduation trigger.
