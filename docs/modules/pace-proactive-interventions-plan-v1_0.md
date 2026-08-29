@@ -88,9 +88,12 @@ unit-tested; the DB reads/writes are thin and batched (mirrors `response_episode
   `defer 2 to 2026-09-05` / `defer 2 in 3 days`, `approve 2 but only reassign to Ivy` — parsed
   by a pure `parse_intervention_reply` (ISO or simple-relative dates; free text after
   but/if/only → conditions). `approve` (and approve-with-conditions) first **previews the exact
-  plan** and requires a `yes` to run; `deny`/`defer` execute immediately. The reply index is
-  built over ALL currently-open interventions (stable across scans). Anything it can't parse
-  points the PM at the web panel.
+  plan** and requires a `yes` to run; `deny`/`defer` execute immediately. Each intervention has
+  a **durable short-code** (its uuid prefix, e.g. `a1b2c3`) shown in the digest and the web
+  card — `approve a1b2c3` always targets that exact intervention even across scans, index
+  shifts, or a deploy (it resolves by a DB read over the open set, not the in-memory index). A
+  positional index still works for the latest digest. Anything it can't parse points the PM at
+  the web panel.
 - **Per-client note:** each client-scoped intervention (and its execution result) also lands on
   that client's workspace Alerts feed, and — when the client has its own Slack channel
   (`clients.slack_channel_id`) — posts there; otherwise it's in-app only (the master `#pace`

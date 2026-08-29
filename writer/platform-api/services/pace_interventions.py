@@ -246,25 +246,41 @@ def parse_relative_date(text: str, today: date) -> Optional[date]:
     return None
 
 
+def _classify_ref(token: str) -> tuple[Optional[int], Optional[str]]:
+    """(index, code): a small positional index (1–3 digits) or a durable hex
+    short-code (the intervention's uuid prefix). Neither → (None, None). Pure."""
+    if token.isdigit() and len(token) <= 3:
+        return int(token), None
+    if re.fullmatch(r"[0-9a-f]{4,32}", token, re.IGNORECASE):
+        return None, token.lower()
+    return None, None
+
+
 def parse_intervention_reply(text: str) -> Optional[dict]:
-    """Parse a Slack disposition reply → {index, disposition, until?, conditions?}
-    or None. 'approve 2' / 'deny 2' / 'defer 2 to 2026-09-05' /
-    'approve 2 but only reassign to Ivy'. Pure — unit-tested."""
-    m = re.match(r"^\s*(approve|accept|deny|dismiss|reject|decline|defer|snooze)\s+#?(\d+)\b(.*)$",
+    """Parse a Slack disposition reply → {index, code, disposition, until?,
+    conditions?} or None. The reference after the verb is either a positional
+    index ('approve 2') or the durable short-code ('approve a1b2c3'). 'deny 2' /
+    'defer 2 to 2026-09-05' / 'approve a1b2c3 but only reassign to Ivy'. Pure —
+    unit-tested."""
+    m = re.match(r"^\s*(approve|accept|deny|dismiss|reject|decline|defer|snooze)\s+#?([0-9a-z]+)\b(.*)$",
                  (text or "").strip(), re.IGNORECASE)
     if not m:
         return None
-    verb, idx, rest = m.group(1).lower(), int(m.group(2)), (m.group(3) or "").strip()
+    verb, token, rest = m.group(1).lower(), m.group(2), (m.group(3) or "").strip()
+    index, code = _classify_ref(token)
+    if index is None and code is None:
+        return None  # not a valid reference → not a disposition reply
+    ref = {"index": index, "code": code}
     if verb in ("deny", "dismiss", "reject", "decline"):
-        return {"index": idx, "disposition": "deny", "conditions": rest or None}
+        return {**ref, "disposition": "deny", "conditions": rest or None}
     if verb in ("defer", "snooze"):
-        return {"index": idx, "disposition": "defer", "until_text": rest}
+        return {**ref, "disposition": "defer", "until_text": rest}
     # approve / accept — a trailing constraint turns it into approve-with-conditions
     lead = rest.lstrip()
     if lead:
         cleaned = re.sub(r"^(but|if|only|except|however|though|-|,|:)\s*", "", lead, flags=re.IGNORECASE).strip()
-        return {"index": idx, "disposition": "conditions", "conditions": cleaned or lead}
-    return {"index": idx, "disposition": "approve"}
+        return {**ref, "disposition": "conditions", "conditions": cleaned or lead}
+    return {**ref, "disposition": "approve"}
 
 
 # ---------------------------------------------------------------------------
@@ -823,12 +839,12 @@ def _emit_digest(surfaced: list[dict], today: date) -> None:
     worst = "critical" if any(r.get("severity") == "critical" for r in disp) else "warning"
     lines = []
     for r in disp:
-        idx = id_to_index.get(r["id"])
+        code = short_code(r["id"])  # durable per-intervention handle (survives scans/deploys)
         n = len((r.get("plan") or {}).get("actions") or [])
         mark = "🔴" if r.get("severity") == "critical" else "🟠"
         fixes = f"{n} fix{'es' if n != 1 else ''}" if n else "manual call"
-        lines.append(f"*{idx}.* {mark} {r.get('title')} — {fixes}. "
-                     f"`approve {idx}` · `deny {idx}` · `defer {idx} to <date>`")
+        lines.append(f"*{code}* {mark} {r.get('title')} — {fixes}. "
+                     f"`approve {code}` · `deny {code}` · `defer {code} to <date>`")
     body = ("PACE spotted problems that need your call:\n" + "\n".join(lines)
             + "\nDecide here or on the PACE page → /pace")
     # Portfolio digest → the PACE channel (Slack) + the in-app feed. The explicit
@@ -868,10 +884,9 @@ def _emit_digest(surfaced: list[dict], today: date) -> None:
 
 async def dispose_from_slack(channel: str, disp: dict, context: ActionContext) -> Optional[str]:
     """Route a parsed Slack disposition to `dispose`. Returns the reply text, or
-    None when the index isn't known (→ the caller falls through to normal
-    handling). Best-effort."""
-    index = _channel_index.get(channel or "")
-    iid = (index or {}).get(disp.get("index"))
+    None when the reference isn't a known open intervention (→ the caller falls
+    through to normal handling). Best-effort."""
+    iid = resolve_reference(channel, disp)
     if not iid:
         return None
     until = None
@@ -887,6 +902,36 @@ async def dispose_from_slack(channel: str, disp: dict, context: ActionContext) -
 def resolve_channel_index(channel: str, index: Optional[int]) -> Optional[str]:
     """The intervention id a channel's 1-based reply index points at (or None)."""
     return (_channel_index.get(channel or "") or {}).get(index)
+
+
+def short_code(intervention_id: str) -> str:
+    """A durable, per-intervention reply handle: the uuid's first 6 hex chars.
+    Stable for the life of the intervention (the id never changes), so a reply
+    like `approve a1b2c3` never targets the wrong one — even across scans, index
+    shifts, or a deploy that clears the in-memory index. Pure."""
+    return (intervention_id or "").replace("-", "")[:6].lower()
+
+
+def resolve_short_code(code: str) -> Optional[str]:
+    """The open intervention a short-code (or unambiguous prefix) points at. A DB
+    read over the current open set, so it works even after a deploy (unlike the
+    in-memory positional index). None on no/ambiguous match."""
+    code = (code or "").strip().lower()
+    if not code:
+        return None
+    cands = [r["id"] for r in list_interventions(status="open", limit=200)
+             if short_code(r["id"]).startswith(code)]
+    return cands[0] if len(cands) == 1 else None
+
+
+def resolve_reference(channel: str, disp: dict) -> Optional[str]:
+    """Resolve a parsed reply's reference to an intervention id — the durable
+    short-code first (survives deploys), then the in-memory positional index."""
+    if disp.get("code"):
+        return resolve_short_code(disp["code"])
+    if disp.get("index") is not None:
+        return resolve_channel_index(channel, disp["index"])
+    return None
 
 
 def render_plan_preview(row: dict, disposition: str, conditions: Optional[str]) -> str:

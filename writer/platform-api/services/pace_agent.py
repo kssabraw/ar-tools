@@ -786,7 +786,7 @@ async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool
             if disp:
                 d = disp["disposition"]
                 if d in ("approve", "conditions"):
-                    iid = pace_interventions.resolve_channel_index(channel, disp["index"])
+                    iid = pace_interventions.resolve_reference(channel, disp)
                     if iid:
                         prep = await pace_interventions.prepare_slack_approval(
                             iid, d, disp.get("conditions"), context)

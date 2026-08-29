@@ -105,6 +105,9 @@ function InterventionCard({ item, onChanged }: { item: PaceIntervention; onChang
   const actions = item.plan?.actions || []
   const overflow = item.plan?.overflow || 0
   const TERMINAL = ['executed', 'failed', 'denied', 'deferred']
+  // The durable Slack reply handle (uuid prefix) — shown so a PM can reference
+  // this exact intervention in #pace (e.g. `approve a1b2c3`).
+  const code = item.id.replace(/-/g, '').slice(0, 6)
 
   const dispose = async (disposition: Disposition) => {
     setBusy(true)
@@ -135,6 +138,7 @@ function InterventionCard({ item, onChanged }: { item: PaceIntervention; onChang
         <span style={{ ...sevChip, background: sev.bg, color: sev.fg }}>{sev.label}</span>
         <span style={{ fontWeight: 650, fontSize: 14, color: '#0f172a' }}>{item.title}</span>
         <span style={{ marginLeft: 'auto', fontSize: 11, color: '#94a3b8' }}>{item.kind.replace(/_/g, ' ')}</span>
+        <code title="Slack reply handle — e.g. approve a1b2c3" style={{ fontSize: 11, color: '#64748b', background: '#f1f5f9', borderRadius: 5, padding: '1px 6px' }}>{code}</code>
       </div>
       <div style={{ fontSize: 13, color: '#475569', marginTop: 6, lineHeight: 1.5 }}>{item.problem}</div>
 

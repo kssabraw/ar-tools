@@ -163,7 +163,8 @@ def test_parse_conditions_falls_back_to_heuristic_without_llm(monkeypatch):
 # Pure: Slack reply + date parsing
 # ---------------------------------------------------------------------------
 def test_parse_intervention_reply_shapes():
-    assert PI.parse_intervention_reply("approve 2") == {"index": 2, "disposition": "approve"}
+    a = PI.parse_intervention_reply("approve 2")
+    assert a["disposition"] == "approve" and a["index"] == 2 and a["code"] is None
     assert PI.parse_intervention_reply("deny 1")["disposition"] == "deny"
     assert PI.parse_intervention_reply("dismiss 3")["disposition"] == "deny"
     d = PI.parse_intervention_reply("defer 4 to 2026-09-05")
@@ -171,7 +172,39 @@ def test_parse_intervention_reply_shapes():
     c = PI.parse_intervention_reply("approve 2 but only reassign to Ivy")
     assert c["disposition"] == "conditions" and "only reassign to Ivy" in c["conditions"]
     assert PI.parse_intervention_reply("what's on my plate") is None
-    assert PI.parse_intervention_reply("approve everything") is None  # needs an index
+    # 'everything' is neither a small index nor a hex code → not a disposition
+    assert PI.parse_intervention_reply("approve everything") is None
+
+
+def test_parse_intervention_reply_short_code():
+    a = PI.parse_intervention_reply("approve a1b2c3")
+    assert a["disposition"] == "approve" and a["code"] == "a1b2c3" and a["index"] is None
+    # a code works with a trailing constraint / defer date too
+    c = PI.parse_intervention_reply("approve 4f2a but cap at 2")
+    assert c["disposition"] == "conditions" and c["code"] == "4f2a"
+    f = PI.parse_intervention_reply("defer a1b2c3 to 2026-09-05")
+    assert f["disposition"] == "defer" and f["code"] == "a1b2c3"
+    # a 6-digit all-numeric token is a code, not a (nonsensical) index
+    n = PI.parse_intervention_reply("deny 123456")
+    assert n["disposition"] == "deny" and n["code"] == "123456" and n["index"] is None
+    # a non-hex token is rejected
+    assert PI.parse_intervention_reply("approve zzzz") is None
+
+
+def test_short_code_and_resolution(monkeypatch):
+    assert PI.short_code("a1b2c3d4-e5f6-7890-abcd-ef0123456789") == "a1b2c3"
+    assert PI.short_code("") == ""
+    open_rows = [{"id": "a1b2c3d4-0000-0000-0000-000000000000"},
+                 {"id": "ff9988aa-0000-0000-0000-000000000000"}]
+    monkeypatch.setattr(PI, "list_interventions", lambda **k: open_rows)
+    assert PI.resolve_short_code("a1b2c3") == open_rows[0]["id"]     # exact
+    assert PI.resolve_short_code("ff99") == open_rows[1]["id"]       # unambiguous prefix
+    assert PI.resolve_short_code("zzzzzz") is None                   # no match
+    # resolve_reference prefers the durable code over the positional index
+    PI._channel_index["C1"] = {1: "index-id"}
+    assert PI.resolve_reference("C1", {"code": "a1b2c3", "index": 1}) == open_rows[0]["id"]
+    assert PI.resolve_reference("C1", {"code": None, "index": 1}) == "index-id"
+    assert PI.resolve_reference("C1", {"code": None, "index": None}) is None
 
 
 def test_parse_relative_date():
