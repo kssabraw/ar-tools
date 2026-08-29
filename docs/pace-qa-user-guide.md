@@ -37,17 +37,17 @@ already know what a task, a section, and a status are.
   channel, and the **PACE** page in the dashboard sidebar (`/pace`). Both run
   the same brain and can do the same things.
 - **QA mostly runs itself, inside the task drawer.** There's also a dedicated
-  **QA** chat (sidebar, `/qa`) for asking questions or QA-ing a page on demand —
-  ask an admin if you don't see it in your sidebar, since it's a separate
-  on/off switch from the automatic reviewer.
+  **QA** chat (sidebar, `/qa`) for asking questions or QA-ing a page on
+  demand — it's live for the whole team.
 - **Everything either agent writes to the board is confirm-gated**, except a
   few pure reads (a digest, a report, "what should I work on today"). PACE
   never reassigns, nudges, or changes a due date without a "yes" from a
   person; QA's automatic reviews are the one exception — those run and post
   their result the moment a task reaches **In QA**, because reviewing isn't a
   board write anyone needs to approve in advance.
-- **Both are live today.** PACE (including its daily Chase Plan) and QA's
-  automatic reviewer are switched on for the whole team.
+- **All of it is live today.** PACE (including its daily Chase Plan), QA's
+  automatic reviewer, and the `/qa` chat are all switched on for the whole
+  team.
 
 ---
 
@@ -479,8 +479,8 @@ the **Target keyword** field in the QA panel is the simplest option of all.
 ## Talking to QA directly
 
 Beyond the automatic reviewer, there's a dedicated **QA chat** — a `/qa`
-entry in the sidebar, if your admin has turned it on. It's a friendly,
-plain-spoken reviewer built for someone who's never QA'd anything before:
+entry in the sidebar, live today. It's a friendly, plain-spoken reviewer
+built for someone who's never QA'd anything before:
 
 - **Paste a live URL** and say what it is ("QA this guest post," "check this
   citation," or just paste a link on the client's own site) — it runs the
@@ -536,7 +536,7 @@ on its own the way a page on the client's own domain can.
 | Check a specific task's deliverable | Task drawer → QA panel → **Run QA** |
 | Fix a "needs a human" result | See the troubleshooting table above — usually a missing link or keyword |
 | Work through a failed review | Check off the `Rework:` items QA added — it re-reviews itself |
-| QA a page without a task | The `/qa` chat (if enabled) — paste the URL |
+| QA a page without a task | The `/qa` chat — paste the URL |
 | See what QA has caught recently | Task's Activity log, the QA panel's history, or ask QA/PACE/SerMaStr |
 
 ---
