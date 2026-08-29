@@ -29,7 +29,7 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import notifications, pace_auth, pace_batch, pm_signals
+from services import notifications, pace_auth, pace_batch, pace_interventions, pm_signals
 from services.pace_actions import PACE_ACTIONS
 from services.pace_auth import ActionContext
 
@@ -64,7 +64,13 @@ _BRIEF_RE = re.compile(
 
 def is_pace_message(text: str) -> bool:
     """True when a message is project-management-shaped (→ PACE handles it)."""
-    return bool(text and _PACE_RE.search(text))
+    if not text:
+        return False
+    # An intervention disposition ("approve 2" / "defer 3 to …") is PACE's too,
+    # so the shared-bot path routes it (the dedicated-app path is mention-gated).
+    if pace_interventions.parse_intervention_reply(text):
+        return True
+    return bool(_PACE_RE.search(text))
 
 
 def is_personal_brief(text: str) -> bool:
@@ -103,6 +109,10 @@ _TOOL_PARAMS = {
         "category": {"type": "string", "description": "Category key to set if missing."},
         "est_hours": {"type": "number", "description": "Estimated hours to set if missing."},
     },
+    "rename_task": {
+        "task_name": {"type": "string", "description": "The task to rename (part of its current name)."},
+        "new_name": {"type": "string", "description": "The new task name."},
+    },
     "run_qa_review": {
         "task_name": {"type": "string", "description": "The task whose deliverable to QA (part of its name)."},
     },
@@ -117,6 +127,7 @@ _TOOL_REQUIRED = {
     "generate_client_month": [],
     "generate_pace_report": [],
     "triage_task": ["task_name"],
+    "rename_task": ["task_name", "new_name"],
     "nudge_assignee": ["task_name"],
     "run_qa_review": ["task_name"],
 }
@@ -707,6 +718,22 @@ async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool
 
     # 1) Actor-bound confirmation of a staged PACE action.
     pending = _pace_pending.get(pend_key)
+    if pending and pending.get("intervention"):
+        # A staged intervention approval (its plan was previewed) awaiting *yes*.
+        if is_affirmative(question):
+            _pace_pending.pop(pend_key, None)
+            if not pace_auth.confirm_actor_ok(pending.get("requester"), context):
+                await _post(channel, "Only the person who requested this can confirm it.", thread_ts)
+                return True
+            try:
+                reply = await pace_interventions.run_pending_disposition(pending, context)
+            except Exception as exc:
+                logger.warning("pace_intervention_run_failed", extra={"error": str(exc)})
+                reply = "Sorry — running that intervention failed."
+            await _post(channel, reply, thread_ts)
+            return True
+        _pace_pending.pop(pend_key, None)  # not a yes → cancelled; fall through
+        pending = None
     if pending and pending.get("batch"):
         # A Chase Plan thread (§4.8): selective confirm ("yes" / "yes 1,3").
         # Non-approval replies leave the plan pending (it expires only when the
@@ -749,6 +776,31 @@ async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool
         return False
 
     try:
+        # PACE intervention disposition ("approve 2" / "deny 2" / "defer 2 to …" /
+        # "approve 2 but only reassign to Ivy"). Falls through when the index isn't
+        # a currently-posted intervention (→ normal handling). Approve/conditions
+        # PREVIEW the exact plan and require a *yes* to run (a bulk write); deny
+        # and defer (safe) execute immediately.
+        if pace_interventions.enabled():
+            disp = pace_interventions.parse_intervention_reply(question)
+            if disp:
+                d = disp["disposition"]
+                if d in ("approve", "conditions"):
+                    iid = pace_interventions.resolve_reference(channel, disp)
+                    if iid:
+                        prep = await pace_interventions.prepare_slack_approval(
+                            iid, d, disp.get("conditions"), context)
+                        if prep.get("stage"):
+                            _pace_pending[pend_key] = {"intervention": iid, "disposition": d,
+                                                       "conditions": disp.get("conditions"),
+                                                       "requester": context.profile_id}
+                        await _post(channel, prep["text"], thread_ts)
+                        return True
+                else:  # deny / defer — safe, execute now
+                    reply = await pace_interventions.dispose_from_slack(channel, disp, context)
+                    if reply is not None:
+                        await _post(channel, reply, thread_ts)
+                        return True
         if is_personal_brief(question):
             await _post(channel, personal_brief_text(context), thread_ts)
             return True

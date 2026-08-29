@@ -774,6 +774,16 @@ async def gsc_scheduler() -> None:
                 # the qa_idle notification. Self-gated on director_enabled;
                 # runs after the PACE episode sync so it reads post-sync state.
                 _safe("director_reconcile", run_director_reconcile, now.date())
+                # PACE Proactive Interventions — daily FULL scan (managerial
+                # detect→propose; resolves cleared problems). Self-gated on
+                # pace_interventions_enabled; runs off the event loop (build the
+                # board digest / workload). Resurface elapsed defers first so the
+                # scan sees them as proposed.
+                from services.pace_interventions import (resurface_due_deferred as resurface_pace_interventions,
+                                                         run_full_scan as run_pace_intervention_full)
+                _safe("pace_interventions_resurface", resurface_pace_interventions, now.date())
+                await _safe_async("pace_interventions_scan", asyncio.to_thread,
+                                  run_pace_intervention_full, now.date())
                 # Per-person morning DM briefs (§4.13) — additionally gated on
                 # pace_daily_brief_push (off until the im:write scope lands).
                 from services.pace_briefs import run_morning_briefs
@@ -899,6 +909,14 @@ async def gsc_scheduler() -> None:
         try:
             # Advance any in-flight Maps scans every tick (non-blocking GETs).
             await _safe_async("poll_maps_scans", poll_pending_maps_scans)
+            # PACE Proactive Interventions — SEVERE pass every tick: surface
+            # critical member-overload / duplicate-name problems immediately
+            # (owner ruling: daily batch + immediate for severe). Idempotent (one
+            # open row per signature + notification dedupe_key); no-op unless
+            # pace_interventions_enabled. Off the event loop.
+            from services.pace_interventions import run_severe_scan as run_pace_intervention_severe
+            await _safe_async("pace_interventions_severe", asyncio.to_thread,
+                              run_pace_intervention_severe, now.date())
             # AI Visibility scheduled scans are self-clocked via each schedule's
             # next_run_at, so they're evaluated every tick (cheap due-query).
             _safe("brand_scans", enqueue_due_brand_scans)

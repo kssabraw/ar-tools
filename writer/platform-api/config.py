@@ -1864,6 +1864,40 @@ class Settings(BaseSettings):
     pace_chase_escalate_business_days: int = 3
     # Slip-forecast look-ahead window (§4.12).
     pace_slip_horizon_days: int = 5
+    # --- Proactive Interventions (docs/modules/pace-proactive-interventions-plan-v1_0.md) ---
+    # The managerial layer: PACE scans for SYSTEMIC delivery problems and opens a
+    # durable intervention (problem + fix plan) the PM dispositions four ways.
+    # Ships dark — needs pace_enabled + pace_initiative_enabled + this flag.
+    pace_interventions_enabled: bool = False
+    # Who may approve/deny/defer an intervention (execution re-authorizes each
+    # action through the PACE_ACTIONS matrix on top of this).
+    pace_intervention_decider_min_role: str = "admin"
+    # Cap on actions surfaced/executed per intervention (overflow re-proposes).
+    pace_intervention_max_actions: int = 25
+    # member_overload: fire when a member's open-hours ≥ pct × cap; critical ≥ pct.
+    pace_intervention_overload_pct: float = 1.5
+    pace_intervention_overload_critical_pct: float = 2.0
+    # duplicate_names: min group size to count as a collision; the client's total
+    # colliding count at which the intervention is critical.
+    pace_intervention_dupe_min_group: int = 2
+    pace_intervention_dupe_critical_count: int = 10
+    # Aggregate thresholds for the three reused detectors (a cluster, not a chore).
+    pace_intervention_untriaged_min: int = 8
+    pace_intervention_overdue_min: int = 5
+    pace_intervention_slip_min: int = 3
+    # A denied signature isn't re-proposed for this many days (a deny is
+    # time-bounded, not forever-silent); an executed one waits this long before
+    # re-proposing (lets the fix take effect / metrics recompute).
+    pace_intervention_deny_cooldown_days: int = 14
+    pace_intervention_reexecute_cooldown_days: int = 3
+    # LLM that parses free-text approve-with-conditions into a structured directive
+    # (applied deterministically). Reuses the PACE model by default.
+    pace_intervention_conditions_model: str = "claude-sonnet-4-6"
+    # Min minutes between the per-tick SEVERE scans (the scheduler ticks every
+    # gsc_scheduler_poll_interval_seconds, so this throttles the full-board scan
+    # a severe pass does). Lower → nearer-immediate severe detection, more DB
+    # load; 0 → run every tick.
+    pace_intervention_severe_min_interval_minutes: int = 15
     # Per-person morning DM briefs (§4.13) — off until the Slack app has the
     # im:write scope (grant + reinstall, then flip this on).
     pace_daily_brief_push: bool = False

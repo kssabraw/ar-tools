@@ -84,6 +84,17 @@ def test_build_pace_tools_covers_registry():
     assert gen["input_schema"]["required"] == []
 
 
+def test_every_arg_taking_action_has_tool_params():
+    """Guard: a registry action added without a _TOOL_PARAMS entry would surface
+    as an un-parameterizable LLM tool (empty properties). Only the genuinely
+    no-arg actions may have empty properties."""
+    no_arg = {"write_client_pulse", "generate_client_month", "generate_pace_report"}
+    for tool in pace_agent.build_pace_tools():
+        if tool["name"] in no_arg:
+            continue
+        assert tool["input_schema"]["properties"], f"{tool['name']} exposed with no params"
+
+
 # ---------------------------------------------------------------------------
 # Deterministic portfolio read
 # ---------------------------------------------------------------------------

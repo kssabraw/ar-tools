@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from config import settings
 from middleware.auth import require_auth
-from services import assistant_store, pace_agent, pace_auth
+from services import assistant_store, pace_agent, pace_auth, pace_interventions
 
 logger = logging.getLogger(__name__)
 
@@ -288,6 +288,82 @@ async def delete_pace_conversation(
         raise HTTPException(status_code=404, detail="conversation_not_found")
     await run_in_threadpool(assistant_store.archive_conversation, conversation_id)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Proactive Interventions — the managerial detect→propose→dispose surface.
+# (docs/modules/pace-proactive-interventions-plan-v1_0.md)
+# ---------------------------------------------------------------------------
+class InterventionDisposition(BaseModel):
+    disposition: Literal["approve", "deny", "defer", "conditions"]
+    until: Optional[str] = None          # YYYY-MM-DD, required for 'defer'
+    conditions: Optional[str] = Field(default=None, max_length=2000)
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+
+@router.get("/pace/interventions")
+async def list_pace_interventions(
+    status: Optional[str] = None, auth: dict = Depends(require_auth)
+) -> dict:
+    """The interventions panel feed. `status=open` (default) → proposed/deferred/
+    executing; `status=all` → recent across every state."""
+    if not settings.pace_enabled:
+        raise HTTPException(status_code=503, detail="pace_not_enabled")
+    want = None if status == "all" else (status or "open")
+    rows = await run_in_threadpool(pace_interventions.list_interventions, status=want, limit=60)
+    return {"interventions": rows, "enabled": bool(settings.pace_interventions_enabled)}
+
+
+@router.get("/pace/interventions/{intervention_id}")
+async def get_pace_intervention(
+    intervention_id: str, auth: dict = Depends(require_auth)
+) -> dict:
+    if not settings.pace_enabled:
+        raise HTTPException(status_code=503, detail="pace_not_enabled")
+    row = await run_in_threadpool(pace_interventions.get_intervention, intervention_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="intervention_not_found")
+    return row
+
+
+@router.post("/pace/interventions/{intervention_id}/disposition")
+async def dispose_pace_intervention(
+    intervention_id: str, body: InterventionDisposition, auth: dict = Depends(require_auth)
+) -> dict:
+    """Approve (execute) / deny / defer / approve-with-conditions. Staff-gated in
+    the engine; execution re-authorizes each action."""
+    if not settings.pace_enabled:
+        raise HTTPException(status_code=503, detail="pace_not_enabled")
+    from datetime import date as _date
+
+    until = None
+    if body.disposition == "defer":
+        try:
+            until = _date.fromisoformat((body.until or "").strip())
+        except ValueError:
+            raise HTTPException(status_code=422, detail="defer_needs_date")
+    actor = pace_auth.context_from_auth(auth)
+    result = await pace_interventions.dispose(
+        intervention_id, actor, body.disposition,
+        until=until, conditions=body.conditions, note=body.note,
+    )
+    if not result.get("ok") and result.get("status") is None:
+        # A missing row → 404; a permission refusal → 403.
+        code = 404 if result.get("code") == "not_found" else 403
+        raise HTTPException(status_code=code, detail=result.get("message") or "not_allowed")
+    return result
+
+
+@router.post("/pace/interventions/scan")
+async def scan_pace_interventions(auth: dict = Depends(require_auth)) -> dict:
+    """On-demand full scan (admin) — surfaces new interventions now instead of
+    waiting for the daily/severe scheduler pass."""
+    if not settings.pace_enabled:
+        raise HTTPException(status_code=503, detail="pace_not_enabled")
+    if auth.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="admin_only")
+    result = await run_in_threadpool(pace_interventions.run_intervention_scan)
+    return result
 
 
 @router.get("/pace/brief")
