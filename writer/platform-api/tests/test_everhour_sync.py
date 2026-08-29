@@ -750,3 +750,92 @@ def test_client_month_actual_hours_flow(monkeypatch):
     )
     monkeypatch.setattr(everhour_sync, "get_supabase", lambda: store)
     assert everhour_sync.client_month_actual_hours("c1", date(2026, 8, 15)) == 2.5
+
+
+# ---------------------------------------------------------------------------
+# _read_entries — client-scope + window filters + stable-paging order.
+#
+# The shared _Store fake treats eq/gte/lte as no-ops (it stores partial rows,
+# which many Phase-2/3 flow tests rely on), so it can't verify that
+# _read_entries actually filters — the exact "a fake more generous than the DB
+# hides the bug" trap the plan §12 named. This purpose-built filtering fake
+# applies the recorded predicates and records whether .order() was called
+# before .range(), so it also guards the stable-paging fix (a total order is
+# required or LIMIT/OFFSET paging can overlap/skip rows).
+# ---------------------------------------------------------------------------
+class _FilterQuery:
+    def __init__(self, table, store):
+        self._table, self._store = table, store
+        self._eqs, self._gte, self._lte = {}, None, None
+        self._ordered, self._lo, self._hi = False, 0, 10**9
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, col, val):
+        self._eqs[col] = val
+        return self
+
+    def gte(self, col, val):
+        self._gte = (col, val)
+        return self
+
+    def lte(self, col, val):
+        self._lte = (col, val)
+        return self
+
+    def order(self, *a, **k):
+        self._ordered = True
+        self._store.ordered_by.append(a[0] if a else None)
+        return self
+
+    def range(self, lo, hi):
+        self._lo, self._hi = lo, hi
+        # An unordered .range() would page unstably — record it so the test can fail.
+        if not self._ordered:
+            self._store.range_without_order = True
+        return self
+
+    def execute(self):
+        rows = list(self._store.reads.get(self._table, []))
+        for c, v in self._eqs.items():
+            rows = [r for r in rows if r.get(c) == v]
+        if self._gte:
+            c, v = self._gte
+            rows = [r for r in rows if r.get(c) is not None and r.get(c) >= v]
+        if self._lte:
+            c, v = self._lte
+            rows = [r for r in rows if r.get(c) is not None and r.get(c) <= v]
+        return type("R", (), {"data": rows[self._lo : self._hi + 1]})()
+
+
+class _FilterStore:
+    def __init__(self, reads):
+        self.reads = reads
+        self.ordered_by: list = []
+        self.range_without_order = False
+
+    def table(self, name):
+        return _FilterQuery(name, self)
+
+
+def test_read_entries_scopes_client_window_and_orders(monkeypatch):
+    _open_gate(monkeypatch)
+    store = _FilterStore(
+        reads={"time_entries": [
+            {"everhour_record_id": "1", "client_id": "c1", "entry_date": "2026-08-20", "seconds": 3600},
+            {"everhour_record_id": "2", "client_id": "c2", "entry_date": "2026-08-20", "seconds": 100},   # wrong client
+            {"everhour_record_id": "3", "client_id": "c1", "entry_date": "2026-07-01", "seconds": 200},   # before window
+            {"everhour_record_id": "4", "client_id": "c1", "entry_date": "2026-09-30", "seconds": 300},   # after window
+        ]}
+    )
+    monkeypatch.setattr(everhour_sync, "get_supabase", lambda: store)
+    rows = everhour_sync._read_entries(
+        date_from="2026-08-01", date_to="2026-08-31", client_id="c1",
+        cols="everhour_record_id, seconds",
+    )
+    # Only the in-window row for c1 — proves eq(client_id) + gte/lte(entry_date) apply.
+    assert [r["everhour_record_id"] for r in rows] == ["1"]
+    # And the paged read carried a total order (the stable-paging fix).
+    assert store.range_without_order is False
+    assert store.ordered_by == ["everhour_record_id"]

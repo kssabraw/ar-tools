@@ -111,9 +111,32 @@ def main() -> int:
         else:
             all_ok = False
 
-        records = _check(client, "/team/time")  # from/to omitted -> today only, per the docs
+        # The real sync sends opts_include_billing=1 (Phase 4) to populate
+        # time_entries.billable. That switches Everhour to the TaskTimeBillable
+        # response variant, which we ASSUME still nests {task{id,projects}, time,
+        # user, date, id} the way parse_time_record reads. Exercise that exact
+        # request here so a live run surfaces any shape change, and spot-check the
+        # fields the parser depends on rather than just the row count.
+        records = _check(client, "/team/time", {"opts_include_billing": 1})
         if records is not None:
-            _print("GET /team/time (today)", True, f"{len(records)} time record(s) today")
+            _print("GET /team/time (today, +billing)", True, f"{len(records)} time record(s) today")
+            sample = records[0] if records else None
+            if sample is not None:
+                task = sample.get("task") or {}
+                shape_ok = (
+                    sample.get("id") is not None
+                    and sample.get("time") is not None
+                    and sample.get("date")
+                    and isinstance(task, dict)
+                )
+                _print(
+                    "  parse_time_record fields present",
+                    bool(shape_ok),
+                    "id/time/date/task all present" if shape_ok
+                    else f"UNEXPECTED shape — parser relies on id/time/date/task: keys={sorted(sample)}",
+                )
+                if not shape_ok:
+                    all_ok = False
         else:
             all_ok = False
 

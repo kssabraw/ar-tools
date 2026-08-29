@@ -156,33 +156,37 @@ def test_budget_envelope_respects_the_drop_margin():
 # ---------------------------------------------------------------------------
 # Everhour actual-labor read (Phase 4) — pure, informational side-by-side
 # ---------------------------------------------------------------------------
-def test_actual_margin_measured():
-    # 60h at $50/h loaded against a $5,000 retainer → $3,000 cost → 40% margin.
-    assert re_.actual_margin(5000.0, 60.0, 50.0) == 0.4
+def test_labor_margin_measured():
+    # 60h at $50/h loaded against a $5,000 retainer → $3,000 cost → 40% left
+    # after labor (labor-only, NOT the true margin).
+    assert re_.labor_margin(5000.0, 60.0, 50.0) == 0.4
 
 
-def test_actual_margin_can_go_negative():
-    # Labor exceeded the retainer — surfaced honestly, not clamped.
-    assert re_.actual_margin(1000.0, 30.0, 50.0) == -0.5
+def test_labor_margin_can_go_negative():
+    # Labor alone exceeded the retainer — surfaced honestly, not clamped.
+    assert re_.labor_margin(1000.0, 30.0, 50.0) == -0.5
 
 
-def test_actual_margin_none_when_uncomputable():
-    assert re_.actual_margin(None, 10.0, 50.0) is None      # no retainer
-    assert re_.actual_margin(5000.0, 10.0, None) is None    # no configured cost
-    assert re_.actual_margin(5000.0, 10.0, 0.0) is None     # cost disabled (0)
-    assert re_.actual_margin(5000.0, None, 50.0) is None    # no logged hours
+def test_labor_margin_none_when_uncomputable():
+    assert re_.labor_margin(None, 10.0, 50.0) is None      # no retainer
+    assert re_.labor_margin(5000.0, 10.0, None) is None    # no configured cost
+    assert re_.labor_margin(5000.0, 10.0, 0.0) is None     # cost disabled (0)
+    assert re_.labor_margin(5000.0, None, 50.0) is None    # no logged hours
 
 
 def test_build_actual_labor_hours_only_without_a_rate():
     out = re_.build_actual_labor(retainer=5000.0, actual_hours=42.0, hourly_cost=None)
     assert out["actual_hours"] == 42.0
     assert out["labor_cost"] is None            # no invented dollars
-    assert out["measured_margin"] is None
-    assert out["target_margin"] == 0.66         # complement of the 0.34 deploy fraction
+    assert out["labor_margin"] is None
+    assert out["basis"] == "labor_only"
+    assert out["target_profit_margin"] == 0.66  # complement of the 0.34 deploy fraction
 
 
 def test_build_actual_labor_with_a_rate():
     out = re_.build_actual_labor(retainer=5000.0, actual_hours=60.0, hourly_cost=50.0)
     assert out["labor_cost"] == 3000.0
-    assert out["measured_margin"] == 0.4
+    # labor-only, deliberately named apart from the true margin
+    assert out["labor_margin"] == 0.4
+    assert out["basis"] == "labor_only"
     assert out["loaded_hourly_cost"] == 50.0

@@ -356,14 +356,20 @@ def allocate(
 # math to it. This block is display-only: it never changes `allocate`'s inputs
 # or a plan's task list; it rides in the diagnosis `signals` for the client
 # Time card + the Task Plan page to render next to the target margin.
-def actual_margin(retainer: "float | None", actual_hours: "float | None",
-                  hourly_cost: "float | None") -> "float | None":
-    """Measured labor margin = 1 − (actual_hours × loaded hourly cost) /
-    retainer, rounded to 3dp. Pure. Returns None (not 0) when it can't be
-    computed honestly — no retainer, no configured hourly cost, or no logged
-    hours — so a caller shows 'not measured' rather than a misleading number.
-    Can go negative (labor exceeded the retainer), which is a fact worth
-    stating, not clamping."""
+def labor_margin(retainer: "float | None", actual_hours: "float | None",
+                 hourly_cost: "float | None") -> "float | None":
+    """LABOR-ONLY margin = 1 − (actual_hours × loaded hourly cost) / retainer,
+    rounded to 3dp. Pure. Returns None (not 0) when it can't be computed
+    honestly — no retainer, no configured hourly cost, or no logged hours — so a
+    caller shows 'not measured' rather than a misleading number. Can go negative
+    (labor exceeded the retainer), which is a fact worth stating, not clamping.
+
+    IMPORTANT — this subtracts ONLY logged labor. It is NOT the agency's true
+    profit margin, which also nets out the deployed campaign/vendor spend
+    (`allocate`'s `spent`) + fixed reporting. So this figure is structurally
+    ROSIER than the whole-cost target it's shown beside — read it as 'how much
+    of the retainer is eaten by staff hours', not 'our margin'. Naming the field
+    `labor_margin` (not `margin`) keeps that distinction visible downstream."""
     if not retainer or retainer <= 0:
         return None
     if not hourly_cost or hourly_cost <= 0:
@@ -383,11 +389,17 @@ def build_actual_labor(
     """The informational actual-labor read for the diagnosis `signals`. Pure.
 
     `target_margin` is the deploy fraction the plan runs at (0.34 default); the
-    agency's target PROFIT margin is its complement, so a measured margin is
-    compared against `1 − target_margin`. `labor_cost` / `measured_margin` are
-    present only when a loaded hourly cost is configured (else the read is
-    hours-only — no invented dollars). Always carries `actual_hours` so the
-    Time card can show logged effort even with no rate set."""
+    agency's target PROFIT margin is its complement (`target_profit_margin` =
+    `1 − target_margin`). `labor_cost` / `labor_margin` are present only when a
+    loaded hourly cost is configured (else the read is hours-only — no invented
+    dollars). Always carries `actual_hours` so the Time card can show logged
+    effort even with no rate set.
+
+    `labor_margin` is LABOR-ONLY (see `labor_margin()`): it excludes the plan's
+    deployed campaign/vendor `spent`, so it is deliberately NOT the same thing as
+    `target_profit_margin` and reads rosier than reality. The field is named
+    `labor_margin` (not `measured_margin`/`margin`) precisely so a downstream
+    reader can't mistake it for the true margin, and `basis` states it."""
     hours = round(float(actual_hours), 2) if actual_hours is not None else None
     cost = (
         round(float(actual_hours) * float(hourly_cost), 2)
@@ -398,9 +410,12 @@ def build_actual_labor(
         "actual_hours": hours,
         "loaded_hourly_cost": hourly_cost or None,
         "labor_cost": cost,
-        "measured_margin": actual_margin(retainer, actual_hours, hourly_cost),
-        "target_margin": round(1.0 - target_margin, 3),
-        "note": "measured labor margin — informational; the plan still runs at the target",
+        "labor_margin": labor_margin(retainer, actual_hours, hourly_cost),
+        "basis": "labor_only",
+        "target_profit_margin": round(1.0 - target_margin, 3),
+        "note": ("labor-only — retainer minus logged staff cost; excludes deployed "
+                 "campaign spend, so it reads higher than true margin. Informational; "
+                 "the plan still runs at the target."),
     }
 
 

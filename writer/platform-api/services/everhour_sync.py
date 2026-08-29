@@ -607,6 +607,12 @@ def _entries_for_tasks(task_ids: list[str]) -> list[dict]:
                 supabase.table("time_entries")
                 .select("task_id, seconds")
                 .in_("task_id", chunk)
+                # A total order is REQUIRED for stable paging: `.range()` is
+                # LIMIT/OFFSET, which has no guaranteed row order without an
+                # ORDER BY, so two successive pages could overlap or skip rows
+                # (double-counting/dropping seconds) — worse under a concurrent
+                # upsert from the sync. `everhour_record_id` is UNIQUE.
+                .order("everhour_record_id")
                 .range(offset, offset + _READ_PAGE - 1)
                 .execute()
             ).data or []
@@ -797,11 +803,12 @@ def _read_entries(
     date_from: str,
     date_to: str,
     client_id: Optional[str] = None,
-    cols: str = "member_id, seconds, billable, client_id, task_id, entry_date",
+    cols: str = "member_id, seconds, billable",
 ) -> list[dict]:
     """Read ``time_entries`` rows over ``[date_from, date_to]`` (optionally for
     one client), paged. The window keeps these reads bounded even on a busy
-    team."""
+    team. Callers pass the narrowest ``cols`` they need (the default is the
+    per-member/billable rollup set)."""
     supabase = get_supabase()
     out: list[dict] = []
     offset = 0
@@ -814,7 +821,14 @@ def _read_entries(
         )
         if client_id is not None:
             q = q.eq("client_id", client_id)
-        rows = q.range(offset, offset + _READ_PAGE - 1).execute().data or []
+        # Stable paging needs a total order — `.range()` is LIMIT/OFFSET, so
+        # without an ORDER BY two pages can overlap/skip rows. `everhour_record_id`
+        # is UNIQUE.
+        rows = (
+            q.order("everhour_record_id")
+            .range(offset, offset + _READ_PAGE - 1)
+            .execute()
+        ).data or []
         out.extend(rows)
         if len(rows) < _READ_PAGE:
             break
