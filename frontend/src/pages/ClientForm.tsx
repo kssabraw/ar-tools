@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams, Link, useLocation } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import type { Client, GbpProfile, PageStructureType, PageStructureEntry } from '../lib/types'
+import type { Client, GbpProfile, PageStructureType, PageStructureEntry, EverhourStatus, EverhourProject } from '../lib/types'
 import { ArrowLeft, Check, Image as ImageIcon, RefreshCw, Upload } from 'lucide-react'
 import { GbpPicker } from '../components/GbpPicker'
 
@@ -53,6 +53,7 @@ interface FormData {
   client_type: 'local' | 'enterprise'
   strategist_weekday: string  // '' = global default, else '0'..'6'
   slack_channel_id: string  // '' = use the master PACE channel
+  everhour_project_id: string  // '' = not mapped to an Everhour project
 }
 
 const PAGE_STRUCTURE_TYPES: PageStructureType[] = [
@@ -77,6 +78,7 @@ const empty: FormData = {
   ps_mode: emptyPsRecord('url'), ps_guidelines: emptyPsRecord(''), ps_filename: emptyPsRecord(''),
   retainer_monthly: '', is_sab: false, illustrate_content: false, client_type: 'local', strategist_weekday: '',
   slack_channel_id: '',
+  everhour_project_id: '',
 }
 
 // Per-content-type Drive folders. `type` is the backend content_type slug used
@@ -188,6 +190,20 @@ export function ClientForm() {
     enabled: isEdit,
   })
 
+  // Everhour time-tracking (Phase 1): the client↔project mapping picker. The
+  // picker only shows once Everhour is configured; until then the field is a
+  // plain id input (paste an id / leave blank), so the form is unchanged.
+  const { data: everhourStatus } = useQuery<EverhourStatus>({
+    queryKey: ['everhour-status'],
+    queryFn: () => api.get<EverhourStatus>('/everhour/status'),
+  })
+  const everhourOn = !!everhourStatus?.configured
+  const { data: everhourProjects } = useQuery<EverhourProject[]>({
+    queryKey: ['everhour-projects'],
+    queryFn: () => api.get<EverhourProject[]>('/everhour/projects'),
+    enabled: everhourOn,
+  })
+
   // Snapshot of the reference-page sources (URLs + written guidelines) as loaded
   // into the form. On save, page_structure_urls / page_structure_guidelines are
   // sent only when the fields differ from this snapshot — an untouched form omits
@@ -268,6 +284,7 @@ export function ClientForm() {
         client_type: existing.client_type ?? 'local',
         strategist_weekday: existing.strategist_weekday != null ? String(existing.strategist_weekday) : '',
         slack_channel_id: existing.slack_channel_id ?? '',
+        everhour_project_id: existing.everhour_project_id ?? '',
       })
     }
   }, [existing])
@@ -360,6 +377,8 @@ export function ClientForm() {
         strategist_weekday: form.strategist_weekday !== '' ? Number(form.strategist_weekday) : null,
         // Always send (string or empty) so clearing back to the master PACE channel persists.
         slack_channel_id: form.slack_channel_id.trim(),
+        // Always send (id or empty) so clearing the Everhour mapping persists.
+        everhour_project_id: form.everhour_project_id.trim(),
         // Reference-page URLs: send only when the fields differ from what the form
         // loaded (or on create). Omitting the key leaves stored references untouched
         // server-side — so a save from a form that loaded before references were
@@ -701,6 +720,36 @@ export function ClientForm() {
                 style={{ ...inputStyle, width: 260, boxSizing: 'border-box', fontFamily: 'monospace' }}
               />
               <p style={hintStyle}>PACE posts this client's task notifications (assignments, mentions, comments, nudges, monthly plan) to this channel. Leave blank to use the master PACE channel. The PACE bot must be a member of the channel.</p>
+            </div>
+            <div>
+              <label style={labelStyle}>Everhour Project</label>
+              {everhourOn ? (
+                <select
+                  value={form.everhour_project_id}
+                  onChange={(e) => setForm((f) => ({ ...f, everhour_project_id: e.target.value }))}
+                  style={{ ...inputStyle, width: 260, boxSizing: 'border-box' }}
+                >
+                  <option value="">— not mapped —</option>
+                  {/* Keep a stored id that's no longer in the live list selectable. */}
+                  {form.everhour_project_id &&
+                    !(everhourProjects ?? []).some((p) => p.everhour_project_id === form.everhour_project_id) && (
+                      <option value={form.everhour_project_id}>{form.everhour_project_id} (unknown)</option>
+                    )}
+                  {(everhourProjects ?? []).map((p) => (
+                    <option key={p.everhour_project_id ?? ''} value={p.everhour_project_id ?? ''}>
+                      {p.name ?? p.everhour_project_id}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  value={form.everhour_project_id}
+                  onChange={set('everhour_project_id')}
+                  placeholder="ev:123456789  (Everhour project id)"
+                  style={{ ...inputStyle, width: 260, boxSizing: 'border-box', fontFamily: 'monospace' }}
+                />
+              )}
+              <p style={hintStyle}>The Everhour project this client's tracked time is logged against. Time logged there rolls up as this client's actual hours. Leave blank if the client isn't on Everhour yet.{!everhourOn ? ' (Connect Everhour to pick from a list.)' : ''}</p>
             </div>
           </div>
         </div>

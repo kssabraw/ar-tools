@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { RefreshCw, AlertTriangle, Users, CheckCircle2, Plus, Trash2, Save, DownloadCloud, Star } from 'lucide-react'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
-import type { AsanaWorkloadReport, AsanaWorkloadMember, AsanaTeamMember, AsanaUser } from '../lib/types'
+import type { AsanaWorkloadReport, AsanaWorkloadMember, AsanaTeamMember, AsanaUser, EverhourStatus, EverhourUser } from '../lib/types'
 
 // Team Workload — a suite-level read view of each tracked team member's open
 // Asana tasks across all clients, effort-weighted by estimated hours vs each
@@ -220,6 +220,19 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
     queryKey: ['task-mention-candidates'],
     queryFn: () => api.get<{ id: string; full_name: string }[]>('/tasks/mention-candidates'),
   })
+  // Everhour time-tracking (Phase 1): the per-member Everhour-user link. The
+  // column only shows once Everhour is configured (a key is set); until then
+  // the pickers return empty and the roster editor is unchanged.
+  const { data: everhourStatus } = useQuery<EverhourStatus>({
+    queryKey: ['everhour-status'],
+    queryFn: () => api.get<EverhourStatus>('/everhour/status'),
+  })
+  const everhourOn = !!everhourStatus?.configured
+  const { data: everhourUsers } = useQuery<EverhourUser[]>({
+    queryKey: ['everhour-users'],
+    queryFn: () => api.get<EverhourUser[]>('/everhour/users'),
+    enabled: everhourOn,
+  })
 
   const [rows, setRows] = useState<AsanaTeamMember[]>([])
   const [picker, setPicker] = useState('')
@@ -248,6 +261,11 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
     setPicker('')
   }
 
+  // The Everhour link column is only shown once Everhour is configured, so the
+  // grid widens by one column then (and the scroll-x min-width grows with it).
+  const gridCols = everhourOn ? '1fr 118px 168px 168px 36px' : '1fr 130px 190px 36px'
+  const minW = everhourOn ? 720 : 560
+
   return (
     <section style={card}>
       <h2 style={cardTitle}>Team &amp; capacity</h2>
@@ -269,9 +287,9 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
         // otherwise crush the member name on a narrow screen); the scroll-x
         // wrapper is what gives it somewhere to overflow to.
         <div className="scroll-x">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 560 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px 190px 36px', gap: 8, fontSize: 11, color: '#94a3b8', fontWeight: 600, paddingLeft: 2 }}>
-              <span>Member</span><span>Hrs / week</span><span>Suite user (My Tasks)</span><span />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: minW }}>
+            <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: 8, fontSize: 11, color: '#94a3b8', fontWeight: 600, paddingLeft: 2 }}>
+              <span>Member</span><span>Hrs / week</span><span>Suite user (My Tasks)</span>{everhourOn && <span>Everhour user</span>}<span />
             </div>
             {rows.map((r, i) => {
               // A profile already linked to a DIFFERENT member can't be picked here.
@@ -279,7 +297,7 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
                 rows.filter((_, j) => j !== i).map((x) => x.profile_id).filter(Boolean) as string[],
               )
               return (
-              <div key={r.id ?? r.gid ?? `new-${i}`} style={{ display: 'grid', gridTemplateColumns: '1fr 130px 190px 36px', gap: 8, alignItems: 'center' }}>
+              <div key={r.id ?? r.gid ?? `new-${i}`} style={{ display: 'grid', gridTemplateColumns: gridCols, gap: 8, alignItems: 'center' }}>
                 {r.gid ? (
                   <span style={{ fontSize: 13, color: '#0f172a' }}>
                     {r.name ?? r.gid}
@@ -326,6 +344,29 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
                       <option key={p.id} value={p.id}>{p.full_name}</option>
                     ))}
                 </select>
+                {everhourOn && (
+                  <select
+                    style={input}
+                    value={r.everhour_user_id ?? ''}
+                    onChange={(e) => {
+                      const v = e.target.value || null
+                      setRows((rs) => rs.map((x, j) => (j === i ? { ...x, everhour_user_id: v } : x)))
+                    }}
+                    title="Link this member to their Everhour user so logged time attributes to them"
+                  >
+                    <option value="">— not linked —</option>
+                    {/* Keep a stored id that's no longer in the live list selectable. */}
+                    {r.everhour_user_id &&
+                      !(everhourUsers ?? []).some((u) => u.everhour_user_id === r.everhour_user_id) && (
+                        <option value={r.everhour_user_id}>{r.everhour_user_id} (unknown)</option>
+                      )}
+                    {(everhourUsers ?? []).map((u) => (
+                      <option key={u.everhour_user_id ?? ''} value={u.everhour_user_id ?? ''}>
+                        {u.name ?? u.everhour_user_id}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <button
                   style={{ ...iconBtn, color: '#dc2626' }}
                   title="Remove"
