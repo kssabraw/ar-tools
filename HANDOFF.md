@@ -1,6 +1,6 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-29 · **Everhour time-tracking integration — blocker RESOLVED, Phase 0 BUILT** (latest)
+## ⏩ Update — 2026-08-29 · **Everhour time-tracking integration — blocker RESOLVED, Phase 0 COMPLETE (validated against a real key)** (latest)
 
 Direct continuation of the entry just below. The owner used Claude in Chrome to fix the
 root cause: the `ar-tools` Claude Code environment (`env_01CQmcKTLwnkKjFLW4ysuWWM`) had its
@@ -38,11 +38,26 @@ tests) confirmed unaffected. A standalone preflight script,
 to run the moment a real key exists — smoke-tested this session against a deliberately bad
 key and correctly reported the live `403`.
 
-**Still open:** no real Everhour API key has been supplied yet, so `is_configured()`/
-`verify_api_key()` haven't been proven against a genuine account — that's the one remaining
-"validated against a real key" item closing out Phase 0. Phases 1–4 (mapping/identity
-migrations, the task mirror, `time_entries` + rollups, Recipe Engine/PACE consumers) are
-unstarted, per the plan doc.
+**Update, same session:** the owner supplied a real Everhour API key (an admin-role personal
+key). Ran `scripts/verify_everhour_api_key.py` against it live — all four checks passed:
+authenticated as an admin user (6-person team), 470 projects visible, 22 time records read
+for today. **Phase 0 is now fully closed** — every endpoint shape matches production with no
+surprises. The key was used transiently (env var / CLI arg only) and is not committed
+anywhere. One provisioning note for Phase 1: Everhour has no separate service-account
+concept (one key per user account), so using a real teammate's personal key works but ties
+the integration's access to that person — worth minting a dedicated non-human "Integration"
+Everhour user instead, flagged in the plan doc (§5) rather than decided.
+
+**Also resolved in this push:** `main` advanced past this PR's base (PR #885, Director of
+Operations Phase 1, merged) while this branch was open — both touched `HANDOFF.md` (this
+file, both prepend at the top) and `config.py` (both append settings blocks, different
+locations). Merged `origin/main` into the branch with a merge commit (no rebase — someone
+else's history); `config.py` auto-merged cleanly, `HANDOFF.md` needed a one-line resolution
+(both entries kept, mine first as newest). Full test suite (`test_everhour_service.py` +
+`test_asana_service.py`, 50 tests) green post-merge.
+
+Phases 1–4 (mapping/identity migrations, the task mirror, `time_entries` + rollups, Recipe
+Engine/PACE consumers) are unstarted, per the plan doc's phasing — next up is Phase 1.
 
 ## ⏩ Update — 2026-08-28 · **Everhour time-tracking integration — full plan doc written, still BLOCKED on live API verification, no code**
 

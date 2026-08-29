@@ -1,10 +1,11 @@
 # Everhour Time-Tracking Integration — Plan (v1.0)
 
-**Authored:** 2026-08-28 · **Status:** **Blocker resolved; Phase 0 BUILT** (config gating +
+**Authored:** 2026-08-28 · **Status:** **Phase 0 COMPLETE** (config gating +
 `services/everhour_service.py` wrapper + pure helpers + unit tests, all endpoint shapes
-verified against Everhour's live OpenAPI spec — no more guessing. **Live-key validation still
-pending** — no real Everhour API key has been supplied yet; `scripts/verify_everhour_api_key.py`
-is ready to run the moment one exists) · New suite integration — "Everhour"
+verified against Everhour's live OpenAPI spec, **and validated end-to-end against a real
+admin-role API key on 2026-08-29** — `scripts/verify_everhour_api_key.py` passed all four
+checks live: authenticated as an admin user, 6 team members visible, 470 projects visible,
+22 time records read for today. Ready for Phase 1.) · New suite integration — "Everhour"
 
 > Read alongside **`docs/modules/everhour-time-tracking-integration-handoff.md`** (the prior
 > session's handoff — decisions #1–#6, the payoff case, and the blocker are carried forward
@@ -173,8 +174,14 @@ shape as Asana/GSC/DataForSEO/GBP.
   `is_configured()` gates every entry point. Pure helpers unit-tested with mocked HTTP (suite
   convention) — 19 tests in `tests/test_everhour_service.py`, all green. `scripts/
   verify_everhour_api_key.py` (mirrors `scripts/verify_gbp_api_access.py`) is the live-key
-  smoke test — run once a real key exists; confirmed working end-to-end against a deliberately
-  bad key (`GET /users/me` → `403`, exactly as documented).
+  smoke test — validated twice: against a deliberately bad key (`GET /users/me` → `403`,
+  exactly as documented) and, on 2026-08-29, against a **real admin-role key** — all four
+  checks passed live (`/users/me`, `/team/users`, `/projects`, `/team/time`), no shape
+  mismatches. Everhour issues **one key per user account** (no separate service-account
+  concept); §8's provisioning should consider minting a **dedicated non-human "Integration"
+  user** in Everhour for this rather than relying on a real teammate's personal key, so
+  rotating/revoking it never touches that person's own access — not done yet, flagged for
+  Phase 1.
 - `writer/platform-api/services/everhour_sync.py` — the task mirror (out) + the time pull (in)
   + rollups. Pure roll-up helpers (`rollup_by_task`/`rollup_by_client`/`rollup_by_member`)
   unit-tested; the two I/O flows are orchestration only, mocked in tests.
@@ -291,13 +298,14 @@ Secrets are set on the `PLATFORM` Railway service by the user — never handled 
 
 Restated from the handoff, unchanged, each shippable and gated on `everhour_enabled`:
 
-- **Phase 0 — BUILT (2026-08-28), live-key validation pending.** Config gating
-  (`everhour_enabled`, `everhour_api_key`, `everhour_mirror_enabled`,
-  `everhour_sync_repull_days`, `everhour_sync_page_limit`) + `services/everhour_service.py`
-  wrapper + `is_configured()` — all endpoint shapes verified against the live OpenAPI spec
-  (§11), not guessed. Pure helpers unit-tested (19 passing tests). **Not yet done:** running
-  `scripts/verify_everhour_api_key.py` against a real key — no key has been supplied. This is
-  the one remaining "validated against a real key" item before Phase 0 is fully closed out.
+- **Phase 0 — COMPLETE (2026-08-29).** Config gating (`everhour_enabled`, `everhour_api_key`,
+  `everhour_mirror_enabled`, `everhour_sync_repull_days`, `everhour_sync_page_limit`) +
+  `services/everhour_service.py` wrapper + `is_configured()` — all endpoint shapes verified
+  against the live OpenAPI spec (§11), not guessed. Pure helpers unit-tested (19 passing
+  tests). **Live-key validation done:** `scripts/verify_everhour_api_key.py` run against a
+  real admin-role key — all four checks passed (`/users/me`, `/team/users`, `/projects`,
+  `/team/time`). `everhour_enabled` is still `False` by default; nothing runs until it's set
+  on `PLATFORM` alongside the real key.
 - **Phase 1 — mapping/identity.** Migrations (`asana_team_members.everhour_user_id`,
   `clients.everhour_project_id`); Team-page Everhour user-link dropdown; client↔project
   mapping UI. `everhour_service.list_team_users`/`list_projects`/`get_project` are ready to
