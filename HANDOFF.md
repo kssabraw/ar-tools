@@ -1,5 +1,6 @@
 # AR Tools — Handoff
 
+
 ## ⏩ Update — 2026-08-29 · **Everhour time-tracking integration — blocker RESOLVED, Phase 0 COMPLETE (validated against a real key)** (latest)
 
 Direct continuation of the entry just below. The owner used Claude in Chrome to fix the
@@ -59,6 +60,56 @@ else's history); `config.py` auto-merged cleanly, `HANDOFF.md` needed a one-line
 Phases 1–4 (mapping/identity migrations, the task mirror, `time_entries` + rollups, Recipe
 Engine/PACE consumers) are unstarted, per the plan doc's phasing — next up is Phase 1.
 
+
+## ⏩ Update — 2026-08-29 · **Director of Operations — Phase 1 MERGED + ENABLED in production**
+
+PR [kssabraw/ar-tools#885](https://github.com/kssabraw/ar-tools/pull/885) merged to `main`
+(commit `60a8997`; CI green — pytest + Netlify preview). The owner then set
+**`DIRECTOR_ENABLED=true`** on the PLATFORM Railway service, turning on the cross-agent
+read model + the daily reconcile + the weekly ops digest. The code default stays `False`,
+so a fresh environment still ships dark. **`DIRECTOR_AUTONOMY_VETO_ENABLED` is deliberately
+left unset** (absent = `False`) — the autonomy pre-flight veto stays dark until autonomy
+content-gen runs against more clients; it's an independent flag, so enabling the master
+gate does NOT arm it.
+
+**What to expect once the deploy is live (all read-only + reversible):**
+- **First daily reconcile:** after `gsc_ingest_hour_utc`=08:00 UTC (first tick
+  ~2026-08-29 08:00 UTC — today's daily marker had already advanced when the flag was
+  flipped, so it doesn't fire on redeploy). Because **QA is armed-but-idle** (no task
+  reaches In QA — the live gap the module was justified by), the reconcile is expected to
+  trip **`qa_idle`** → one `ops_seam` notification (kind `ops_seam`, deduped per ISO week,
+  title "QA idle — nothing has entered In QA in 7+ days") posted to the **PACE Slack
+  channel** + the in-app feed. Any per-client seam that trips opens ONE `director_seam`
+  board task in that client's current-month section (auto-closes when the seam clears);
+  none tripping is a valid outcome.
+- **First weekly ops digest:** Monday 2026-08-31 after 08:00 UTC (`director_digest_weekday`
+  =0), **self-suppressed on an all-clear week**.
+
+**Enable mechanics / gotcha:** setting the env var triggered a fresh PLATFORM deployment.
+The merge-to-main push had also queued rebuilds of all four services, so Railway's status
+API showed everything `BUILDING` for a while — but the PLATFORM image built from cache +
+pushed in ~seconds (verified in the build logs). The lingering `BUILDING` status is the
+documented Railway status-lag trap (CLAUDE.md "read the live config"), not a failure. The
+healthy boot signal is `gsc_scheduler.started` in the PLATFORM deploy logs and no
+`gsc_scheduler.step_failed step=director_reconcile`.
+
+**Rollback:** delete/unset `DIRECTOR_ENABLED` (or set `false`) → redeploy → fully dark.
+Everything the Director writes is reversible (trashable `director_seam` tasks + a deduped
+notification); it never resolves, reassigns, or reorders anything.
+
+**Open items (human):** (1) verify the first reconcile tick is clean once the deploy is
+live (a self check-in is armed for ~09:15 UTC 2026-08-29 to auto-verify via Railway logs +
+Supabase — `ops_seam` for `qa_idle`, no reconcile error); (2) calibrate the seam-day
+thresholds from real data once flags accrue (`qa_idle` 7d / `strategist_approved_unplaced`
+3d / `autonomy_proposed_unactioned` 7d); (3) optional owner sanity-check of the three spec
+§15 defaults (Monday digest weekday, E2 gated on `pace_autoplace_producers`, `ops_digest`→
+PACE channel — all resolved with the spec's suggested defaults). Phase 2 (B) and the
+capacity arbiter stay trigger-gated per plan §8 — may never build, which is the intended
+"build the eyes, defer the hands" outcome.
+
+---
+
+
 ## ⏩ Update — 2026-08-28 · **Everhour time-tracking integration — full plan doc written, still BLOCKED on live API verification, no code**
 
 Continuation of the prior session's handoff (`docs/modules/everhour-time-tracking-integration-handoff.md`).
@@ -102,6 +153,7 @@ harness-designated branch), not `claude/everhour-project-management-6h1iuj` name
 stale handoff-doc header — the handoff doc's own PR (#883) already merged to `main` before
 this session started, and `claude/everhour-time-tracking-me08ys` is a fresh branch off that
 merged `main`, so it already carries the handoff doc with no rebase needed.
+
 
 ## ⏩ Update — 2026-08-28 · **Director of Operations — Phase 1 (D) + Prerequisite E BUILT, PR #885 open (ships dark)**
 
