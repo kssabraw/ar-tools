@@ -86,7 +86,9 @@ export function InterventionsPanel() {
 
 function InterventionCard({ item, onChanged }: { item: PaceIntervention; onChanged: () => Promise<void> | void }) {
   const [busy, setBusy] = useState(false)
-  const [showActions, setShowActions] = useState(false)
+  // Expanded by default — the itemized rundown of exactly what PACE will do is
+  // shown up front, so the PM sees the plan before Approve, not after a click.
+  const [showActions, setShowActions] = useState(true)
   const [mode, setMode] = useState<Disposition | null>(null)
   const [deferDate, setDeferDate] = useState(tomorrowISO())
   const [conditions, setConditions] = useState('')

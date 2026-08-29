@@ -725,6 +725,8 @@ def _emit_digest(surfaced: list[dict], today: date) -> None:
         _channel_index[channel] = index
     body = ("PACE spotted problems that need your call:\n" + "\n".join(lines)
             + "\nDecide here or on the PACE page → /pace")
+    # Portfolio digest → the PACE channel (Slack) + the in-app feed. This is the
+    # PM-facing rollup across every affected client.
     notifications.emit(
         client_id=None, kind="pace_intervention",
         title=f"PACE — {len(surfaced)} intervention{'s' if len(surfaced) != 1 else ''} need a decision",
@@ -732,6 +734,25 @@ def _emit_digest(surfaced: list[dict], today: date) -> None:
         payload={"link": "/pace", "slack_channel": channel or None},
         dedupe_key=f"pace_intervention:{today.isoformat()}:{plan_fingerprint([{'action': r['id']} for r in surfaced])}",
     )
+    # …and a note on each individual client's workspace Alerts feed (in-app only —
+    # the portfolio digest already carries the Slack copy, so skip Slack here to
+    # avoid double-posting). Client-scoped kinds (duplicate/untriaged/overdue/slip
+    # carry a scope_client_id); member_overload is cross-client and gets none.
+    for r in surfaced:
+        cid = r.get("scope_client_id")
+        if not cid:
+            continue
+        try:
+            notifications.emit(
+                client_id=cid, kind="pace_intervention",
+                title=r.get("title") or "PACE intervention", summary=r.get("problem") or "",
+                severity=r.get("severity") or "warning",
+                payload={"link": "/pace", "skip_channels": ["slack"]},
+                dedupe_key=f"pace_intervention_client:{r['id']}",
+            )
+        except Exception as exc:
+            logger.info("pace_intervention_client_note_failed",
+                        extra={"client_id": cid, "error": str(exc)[:120]})
 
 
 async def dispose_from_slack(channel: str, disp: dict, context: ActionContext) -> Optional[str]:
@@ -749,6 +770,62 @@ async def dispose_from_slack(channel: str, disp: dict, context: ActionContext) -
             return "When should I defer it to? Try `defer 2 to 2026-09-05` or `defer 2 in 3 days`."
     result = await dispose(iid, context, disp["disposition"],
                            until=until, conditions=disp.get("conditions"))
+    return result.get("message") or "Done."
+
+
+def resolve_channel_index(channel: str, index: Optional[int]) -> Optional[str]:
+    """The intervention id a channel's 1-based reply index points at (or None)."""
+    return (_channel_index.get(channel or "") or {}).get(index)
+
+
+def render_plan_preview(row: dict, disposition: str, conditions: Optional[str]) -> str:
+    """The itemized 'here's exactly what I'll do' rundown shown before an approve
+    runs (Slack mrkdwn). Pure — unit-tested."""
+    actions = (row.get("plan") or {}).get("actions") or []
+    overflow = (row.get("plan") or {}).get("overflow") or 0
+    lines = [f"*{row.get('title')}*"]
+    if row.get("problem"):
+        lines.append(row["problem"])
+    if disposition == "conditions" and conditions:
+        lines.append(f"_Applying your condition: “{conditions}” (I'll re-plan to honor it.)_")
+    if not actions:
+        lines += ["", "There's no automated fix — approving just acknowledges this (a manual call).",
+                  "Reply *yes* to acknowledge, or *no* to leave it open."]
+        return "\n".join(lines)
+    lines += ["", f"I'll make these {len(actions)} change{'s' if len(actions) != 1 else ''}:"]
+    for i, a in enumerate(actions[:25], start=1):
+        who = f" — _{a['client_name']}_" if a.get("client_name") else ""
+        lines.append(f"  {i}. {a.get('reason') or a.get('action')}{who}")
+    if overflow:
+        lines.append(f"  …and {overflow} more held for the next round.")
+    lines += ["", "Reply *yes* to run all of them, or *no* to cancel."]
+    return "\n".join(lines)
+
+
+async def prepare_slack_approval(intervention_id: str, disposition: str,
+                                 conditions: Optional[str], context: ActionContext) -> dict:
+    """Build the preview for an approve/approve-with-conditions before it runs.
+    Returns {text, stage}: stage=True means the caller should stash a pending
+    confirm and a 'yes' then executes it. Permission is checked HERE so an
+    unauthorized ask is refused before anything is staged."""
+    if not _can_decide(context):
+        return {"text": (
+            f"That needs the *{settings.pace_intervention_decider_min_role}* role or higher."
+            if not context.is_anonymous else
+            "Link your Slack account first (an admin can do it on the Team page)."), "stage": False}
+    row = get_intervention(intervention_id)
+    if not row:
+        return {"text": "That intervention no longer exists.", "stage": False}
+    if row.get("status") not in ("proposed", "deferred"):
+        return {"text": f"That intervention is already *{row.get('status')}*.", "stage": False}
+    return {"text": render_plan_preview(row, disposition, conditions), "stage": True}
+
+
+async def run_pending_disposition(pending: dict, context: ActionContext) -> str:
+    """Execute a staged intervention approval on a 'yes' (from pace_agent's pending
+    store). Returns the thread reply."""
+    result = await dispose(pending["intervention"], context, pending.get("disposition") or "approve",
+                           conditions=pending.get("conditions"))
     return result.get("message") or "Done."
 
 

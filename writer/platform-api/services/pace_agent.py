@@ -713,6 +713,22 @@ async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool
 
     # 1) Actor-bound confirmation of a staged PACE action.
     pending = _pace_pending.get(pend_key)
+    if pending and pending.get("intervention"):
+        # A staged intervention approval (its plan was previewed) awaiting *yes*.
+        if is_affirmative(question):
+            _pace_pending.pop(pend_key, None)
+            if not pace_auth.confirm_actor_ok(pending.get("requester"), context):
+                await _post(channel, "Only the person who requested this can confirm it.", thread_ts)
+                return True
+            try:
+                reply = await pace_interventions.run_pending_disposition(pending, context)
+            except Exception as exc:
+                logger.warning("pace_intervention_run_failed", extra={"error": str(exc)})
+                reply = "Sorry — running that intervention failed."
+            await _post(channel, reply, thread_ts)
+            return True
+        _pace_pending.pop(pend_key, None)  # not a yes → cancelled; fall through
+        pending = None
     if pending and pending.get("batch"):
         # A Chase Plan thread (§4.8): selective confirm ("yes" / "yes 1,3").
         # Non-approval replies leave the plan pending (it expires only when the
@@ -757,14 +773,29 @@ async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool
     try:
         # PACE intervention disposition ("approve 2" / "deny 2" / "defer 2 to …" /
         # "approve 2 but only reassign to Ivy"). Falls through when the index isn't
-        # a currently-posted intervention (→ normal handling).
+        # a currently-posted intervention (→ normal handling). Approve/conditions
+        # PREVIEW the exact plan and require a *yes* to run (a bulk write); deny
+        # and defer (safe) execute immediately.
         if pace_interventions.enabled():
             disp = pace_interventions.parse_intervention_reply(question)
             if disp:
-                reply = await pace_interventions.dispose_from_slack(channel, disp, context)
-                if reply is not None:
-                    await _post(channel, reply, thread_ts)
-                    return True
+                d = disp["disposition"]
+                if d in ("approve", "conditions"):
+                    iid = pace_interventions.resolve_channel_index(channel, disp["index"])
+                    if iid:
+                        prep = await pace_interventions.prepare_slack_approval(
+                            iid, d, disp.get("conditions"), context)
+                        if prep.get("stage"):
+                            _pace_pending[pend_key] = {"intervention": iid, "disposition": d,
+                                                       "conditions": disp.get("conditions"),
+                                                       "requester": context.profile_id}
+                        await _post(channel, prep["text"], thread_ts)
+                        return True
+                else:  # deny / defer — safe, execute now
+                    reply = await pace_interventions.dispose_from_slack(channel, disp, context)
+                    if reply is not None:
+                        await _post(channel, reply, thread_ts)
+                        return True
         if is_personal_brief(question):
             await _post(channel, personal_brief_text(context), thread_ts)
             return True

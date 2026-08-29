@@ -294,6 +294,66 @@ def test_execute_actions_restages_skips_and_runs(monkeypatch):
 # ---------------------------------------------------------------------------
 # dispose(): permission gate
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Slack preview (render_plan_preview) + channel index
+# ---------------------------------------------------------------------------
+def test_render_plan_preview_lists_every_action_and_asks_for_yes():
+    acts = [
+        {"action": "reassign_task", "client_name": "Acme", "reason": "move “GBP Post” (3h) → Ivy"},
+        {"action": "reassign_task", "client_name": "Beta Co", "reason": "move “Blog” (2h) → Sam"},
+        {"action": "reassign_task", "client_name": "Acme", "reason": "move “Meta” (1h) → Ivy"},
+    ]
+    row = {"title": "Marcus is overloaded (293%)", "problem": "Way over capacity.",
+           "plan": {"actions": acts, "overflow": 2}}
+    txt = PI.render_plan_preview(row, "approve", None)
+    assert "I'll make these 3 changes" in txt
+    assert "1. move “GBP Post” (3h) → Ivy" in txt and "Blog" in txt
+    assert "2 more held" in txt          # overflow surfaced
+    assert "Reply *yes* to run all of them" in txt
+
+
+def test_render_plan_preview_conditions_and_no_actions():
+    with_cond = PI.render_plan_preview({"title": "T", "problem": "P", "plan": {"actions": _ACTS}},
+                                       "conditions", "only reassign to Ivy")
+    assert "only reassign to Ivy" in with_cond
+    none = PI.render_plan_preview({"title": "T", "problem": "P", "plan": {"actions": []}}, "approve", None)
+    assert "no automated fix" in none.lower() and "acknowledge" in none.lower()
+
+
+def test_resolve_channel_index(monkeypatch):
+    PI._channel_index["C1"] = {1: "id-a", 2: "id-b"}
+    assert PI.resolve_channel_index("C1", 2) == "id-b"
+    assert PI.resolve_channel_index("C1", 9) is None
+    assert PI.resolve_channel_index("nope", 1) is None
+
+
+# ---------------------------------------------------------------------------
+# Per-client notes: the digest leaves a note on each affected client (in-app)
+# ---------------------------------------------------------------------------
+def test_emit_digest_leaves_per_client_notes(monkeypatch):
+    calls = []
+    monkeypatch.setattr(PI.notifications, "emit",
+                        lambda **kw: calls.append(kw) or "nid")
+    monkeypatch.setattr(settings, "pace_slack_channel", "C_PACE", raising=False)
+    surfaced = [
+        {"id": "iv1", "severity": "warning", "title": "Acme dupes", "problem": "dupe names",
+         "scope_client_id": "client-acme", "plan": {"actions": [{"reason": "rename x"}]}},
+        {"id": "iv2", "severity": "critical", "title": "Marcus overloaded", "problem": "293%",
+         "scope_client_id": None, "plan": {"actions": [{"reason": "move y"}]}},
+    ]
+    PI._emit_digest(surfaced, date(2026, 8, 29))
+    # 1 portfolio digest (client_id=None) + exactly 1 per-client note (the scoped one).
+    portfolio = [c for c in calls if c.get("client_id") is None and c["kind"] == "pace_intervention"]
+    per_client = [c for c in calls if c.get("client_id") == "client-acme"]
+    assert len(portfolio) == 1
+    assert len(per_client) == 1
+    assert per_client[0]["payload"].get("skip_channels") == ["slack"]   # no double Slack post
+    # the cross-client overload got NO per-client note
+    assert not any(c.get("client_id") for c in calls if c is not per_client[0] and c.get("client_id"))
+    # the Slack reply index was refreshed for the channel
+    assert PI._channel_index.get("C_PACE") == {1: "iv2", 2: "iv1"}  # critical first
+
+
 def test_dispose_permission_refused_for_low_role():
     va = ActionContext(profile_id="p", role="team_member", source="web")
     out = asyncio.run(PI.dispose("id123", va, "approve"))
