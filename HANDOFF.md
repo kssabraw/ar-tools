@@ -60,6 +60,49 @@ Mode OFF** — the PACE gotcha, or events never reach the endpoint), invite it t
 post-merge deploy is active; the Slack side activates when those three vars are set. Until then,
 DORA's seam flags + weekly ops digest fall back to the PACE channel (safe) and the /director web
 page is the conversational surface.
+## ⏩ Update — 2026-08-29 · **Everhour Phase 4 (consumers) BUILT + MERGED ([#899](https://github.com/kssabraw/ar-tools/pull/899), squash `c445f26`) — the integration is COMPLETE (Phases 0–4)**
+
+The final phase — the consumers that turn the Phase-3 `time_entries` ledger + `tasks.actual_hours` into signal.
+Built on branch `claude/everhour-phase-4-3u5vhu`, **merged to `main` green** (`platform-api tests` + Netlify preview
+both passed on the code commit `b982de0`; `mergeable_state: clean`). Everything is additive + gated on `everhour_enabled`,
+and every consumer degrades to today's `est_hours`-based behaviour when `actual_hours` is null (partial onboarding), so
+the integration still ships **dark** until `EVERHOUR_API_KEY` + `everhour_enabled=true` are set on PLATFORM.
+
+- **Three owner decisions confirmed before build (plan §9/§10):** (a) **margin shown side-by-side**, never switched —
+  the conformance-tested `allocate()` is untouched; (b) **billing captured now, not split** — `list_team_time` now sends
+  `opts_include_billing=1` so `time_entries.billable` populates from here on (it was always `None`), but nothing weights
+  margin on it in v1; (c) ad-hoc/internal member time **counts** toward the utilization signal.
+- **Read surface** (`services/everhour_sync.py` Phase-4 section + `routers/everhour.py` + `models/everhour.py`): pure
+  `billable_split`/`build_client_time`/`utilization_hours` + windowed reads `client_time_summary`
+  (→ `GET /clients/{id}/everhour/time`, the client "Time" card), `member_utilization` (team-wide {member_id: hours}),
+  and `client_month_actual_hours` (the Recipe Engine's this-month labor input). Per-task actuals already ride on
+  `tasks.actual_hours` (returned by the existing `.select("*")` board/detail reads — **no new endpoint**); per-member
+  utilization is surfaced **through the workload report**, not a standalone endpoint.
+- **Recipe Engine actual-margin** (`services/recipe_engine.py`): pure `actual_margin` + `build_actual_labor` (measured
+  labor margin only when the new optional `everhour_loaded_hourly_cost` is set — else hours-only, never an invented
+  dollar). `build_diagnosis` folds it into `signals["actual_labor"]` **best-effort — never touches `allocate`'s inputs**
+  or the conformance-tested allocation.
+- **PACE / workload** (`services/task_workload.py`): pure `attach_logged_hours` adds `logged_hours` + `utilization_pct`
+  (vs pro-rated weekly capacity) to each `build_team_workload` member, gated; the estimate-based `open_hours`/`overloaded`
+  verdict is untouched. `pm_signals.build_board_digest` embeds this report, so **PACE gets the signal with no change to
+  `pm_signals.py`**.
+- **Frontend:** `TaskDetail` actual-vs-estimate readout under Est. hours; a client-workspace `EverhourTimeCard`
+  (`components/EverhourTimeCard.tsx`, dark until enabled + logged time exists); a Team-page per-member utilization line.
+  New `lib/types.ts` fields (`actual_hours` on `TaskItem`, `EverhourClientTime`, `logged_hours`/`utilization_pct` on the
+  workload member). Frontend `tsc -b` clean.
+- **Config:** `everhour_loaded_hourly_cost` (0.0 = disabled, no invented cost), `everhour_client_time_window_days` (30),
+  `everhour_utilization_window_days` (7). **No migration** — reads over the Phase-3 schema.
+- **Tests:** new pure/flow units in `test_everhour_sync.py` (billable split, client-time assembly, utilization, month
+  hours), `test_recipe_engine.py` (`actual_margin`/`build_actual_labor`), `test_task_manager.py` (`attach_logged_hours`
+  additivity). Touched + consumer suites green locally (197 passed: everhour/recipe/task_manager/asana_workload/
+  pm_signals/pace_agent/director_read_model).
+- **Deferred (as agreed):** consuming `billable` in margin/reporting (captured, not split); a hardened per-member
+  loaded-cost model (the `everhour_loaded_hourly_cost` scalar is a placeholder until per-member cost rates exist).
+
+**The Everhour integration is now fully built (Phases 0–4), gated OFF.** Provisioning to go live (owner): set
+`EVERHOUR_API_KEY` (Kyle's personal admin key) + `EVERHOUR_ENABLED=true` on PLATFORM, map each client's
+`everhour_project_id` + roster `everhour_user_id`, then run the mirror backfill (`POST /everhour/backfill-mirror`).
+
 ## ⏩ Update — 2026-08-29 · **Everhour Phase 3 (time pull + rollups) BUILT + MERGED ([#896](https://github.com/kssabraw/ar-tools/pull/896), squash `9957a68`)**
 
 Continuation of the Everhour entries below. Phase 3 is the **read side** — a daily whole-team time pull into a
