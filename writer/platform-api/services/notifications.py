@@ -151,6 +151,10 @@ PACE_CHANNEL_KINDS = frozenset({
     # Notes entry appeared" are project-management chatter, not strategy, so they
     # belong in PACE's channel(s), not SerMaStr's.
     "deliverable_link_missing", "deliverable_note",
+    # Director of Operations (services/director/) — the weekly operations-flow
+    # digest and the daily reversible seam notifications (e.g. qa_idle) are
+    # cross-agent delivery chatter, same home as PACE's own digest.
+    "ops_digest", "ops_seam",
 })
 
 # The client-scoped subset of the PACE kinds: each carries a real ``client_id``

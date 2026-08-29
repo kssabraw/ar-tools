@@ -2224,6 +2224,27 @@ class Settings(BaseSettings):
     # illustration_image_* settings. A second knob that nothing reads only
     # invites someone to set it and expect a different renderer.
 
+    # --- Director of Operations (docs/modules/director-of-operations-plan-v1_0.md,
+    # docs/modules/director-of-operations-phase1-spec-v1_0.md) — Phase 1 ---
+    # A read-only cross-agent read model + reversible reconciler over SerMaStr
+    # (proposes), PACE (executes), QA (judges), the autonomy executor (dark),
+    # and the deterministic producers — all writing the native task board.
+    # NEVER a scheduling/priority authority; it never touches reopt_planner
+    # tiers, autonomy_policy.classify, or a pm_assign capacity hold — it reads
+    # their outputs and escalates conflicts as proposals. Ships dark; every
+    # piece below is independently flag-gated.
+    director_enabled: bool = False                       # master gate — read model + daily reconcile
+    director_digest_weekday: int = 0                      # weekly ops-flow digest weekday (0=Mon)
+    director_autonomy_veto_enabled: bool = False           # decision 4 — ships dark even within Phase 1
+    # Seam thresholds (owner decision 1 — suggested defaults, all tunable
+    # without a code change once real dwell times are observed).
+    director_seam_approved_unplaced_days: int = 3
+    director_seam_qa_idle_days: int = 7
+    director_seam_autonomy_unactioned_days: int = 7
+    # content_shipped_degraded is immediate (no dwell) — no threshold key.
+    director_content_degraded_lookback_days: int = 14      # how far back to scan for degraded ships
+    director_autonomy_ledger_lookback_runs: int = 8        # per-client autonomy_runs rows to read
+
     class Config:
         env_file = ".env"
 

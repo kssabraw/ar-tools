@@ -349,6 +349,25 @@ def _push_task_plan_native(client_id: str, plan_row_id: str) -> dict:
                 source="task_plan",
                 source_ref=f"{plan_row_id}:{key}",
             )
+            # Director of Operations E2 (build spec §3.2): route through PACE
+            # placement so an unassigned monthly task at capacity records a
+            # placement_deferred hold like every other placed path — today
+            # this task is assigned by name-match ONLY, so a capacity hold is
+            # invisible to strategist_approved_unplaced-style observability.
+            # place_task gap-fills ONLY when assignee_id is empty (never
+            # overwrites the name-match above) and is a no-op when it already
+            # resolved a gid. Gated on the existing producer-placement flag,
+            # best-effort — a placement failure never blocks the push.
+            if settings.pace_autoplace_producers:
+                try:
+                    from services import pm_assign
+
+                    pm_assign.place_task(row["id"])
+                except Exception as exc:
+                    logger.warning(
+                        "task_plan_push_native_autoplace_failed",
+                        extra={"client_id": client_id, "task_id": row["id"], "error": str(exc)},
+                    )
             pushed[key] = {
                 "gid": row["id"],
                 "url": f"/clients/{client_id}/tasks?task={row['id']}",

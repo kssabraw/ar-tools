@@ -88,6 +88,172 @@ stale handoff-doc header — the handoff doc's own PR (#883) already merged to `
 this session started, and `claude/everhour-time-tracking-me08ys` is a fresh branch off that
 merged `main`, so it already carries the handoff doc with no rebase needed.
 
+## ⏩ Update — 2026-08-28 · **Director of Operations — Phase 1 (D) + Prerequisite E BUILT, PR #885 open (ships dark)**
+
+Built the full Phase 1 scope from `docs/modules/director-of-operations-phase1-spec-v1_0.md`
+(the prior entry below — read that first for the design authority + the owner's §11
+decisions + the three grounded corrections that shaped this build). **Scope decision,
+confirmed with the owner before writing code:** build the FULL spec as-is (E1 + E2 + D +
+the weekly ops digest + the dark autonomy veto), not a trimmed-down MIN (E1 + `qa_idle`
+alone) — because every piece ships behind its own flag defaulting off/False, so the
+runtime-risk cost of the wider build is close to zero, and the owner's decisions 2
+(weekly digest) and 4 (build the veto now) were already dated, explicit, deliberate
+widenings of the plan's own minimalist lean, not something worth re-litigating.
+
+**PR:** [kssabraw/ar-tools#885](https://github.com/kssabraw/ar-tools/pull/885) (draft,
+branch `claude/director-operations-phase1-ycwhps`). CI (pytest + Netlify preview) run on
+open; watched for the rest of the review cycle.
+
+**E1 (fail-loud on unknown producer sources) + E2 (Recipe-Engine placement gap) — both
+built exactly per the spec's corrected diagnosis:**
+- **E1** — `services/director/providers.py::prov_producers` groups every open top-level
+  task by `source`; anything outside `KNOWN_PRODUCER_SOURCES` (manual, monthly,
+  asana_import, rank_drop, maps_alert, action_plan, content_run, scan_health, task_plan,
+  strategy_proposal, director_seam) is counted into an `unwatched_seam` dict AND logged
+  (`director.unwatched_source`) — never silently absorbed. `unwatched_seam` is itself one
+  of the six seam predicates in `seams.py`, so a forgotten producer registration surfaces
+  in both the SerMaStr context and the weekly digest.
+- **E2** — `asana_push._push_task_plan_native` now calls `pm_assign.place_task(row["id"])`
+  right after `task_service.create_task(...)`, gated on the pre-existing
+  `pace_autoplace_producers` flag (default False, same flag `task_producers.py` and
+  `push_proposal` already respect) and wrapped in the same best-effort
+  try/except-log-never-raise shape `push_proposal` uses. `place_task`'s own guard ("never
+  overwrite an existing assignment") means this can't disturb the name-match assignment
+  that already runs — it only fills the gap when a task landed unassigned, recording the
+  `placement_deferred` activity row that `strategist_approved_unplaced`-style
+  observability depends on.
+
+**The read model + reconciler — new package `services/director/` (7 files, ~1,300
+lines):**
+- `read_model.py` — `build_read_model(client_id: str | None, today) -> dict`. Portfolio
+  (`client_id=None`) or single-client. Every one of the 8 providers below runs inside its
+  own try/except (`director.provider_failed` on a catch), mirroring
+  `slack_assistant/context.py::build_context`'s isolation contract exactly, so a broken
+  module degrades the model to a gap and never breaks the read. `delivery` and
+  `assignment` reuse ONE call to `pm_signals.build_board_digest` (the same read
+  `pace_episodes`/`pace_digest` already share) instead of a fresh query; the rest
+  batch-read once across the portfolio's client_ids and group in Python (the same pattern
+  `build_portfolio_context`'s `_counts` helper already uses) rather than N+1 per client.
+- `providers.py` — `prov_delivery`/`prov_assignment` (board state + open capacity holds,
+  read from `task_activity.kind='placement_deferred'` joined to still-unassigned tasks),
+  `prov_strategy` (the exact `not proposal.get("asana_task")` guard
+  `routers/strategist.py:140` uses, aged from the review's `completed_at`/`created_at`),
+  `prov_autonomy` (`autonomy_runs.decisions[]`, `outcome="propose"` and unexecuted, capped
+  at `director_autonomy_ledger_lookback_runs`=8 runs per client), `prov_producers` (E1),
+  `prov_interventions` (verdict mix + open rows), `prov_qa` (portfolio-only, per the
+  plan's §2.3 correction — reads `task_activity` rows where
+  `detail->>'to' == settings.qa_trigger_status` plus `qa_reviews` in the window),
+  `prov_content` (a `module_outputs` writer row whose `module_version` ends
+  `-degraded`/`-no-context`, or a Local SEO/Ecommerce page whose stored
+  `voice_violations.passed is False`, within `director_content_degraded_lookback_days`=14
+  — best-effort per table, a schema surprise degrades to an empty flag list not a crash),
+  `prov_duplicates` (live tasks + open interventions grouped by a normalized
+  `target->>'keyword'`/`->>'page_url'` key per client; ≥2 items with DIFFERENT `source`
+  values on the same key = a flag).
+- `seams.py` — pure, unit-tested predicates over the assembled model:
+  `strategist_approved_unplaced`, `autonomy_proposed_unactioned`, `qa_idle` (portfolio
+  ONLY — never blamed on a client), `content_shipped_degraded` (immediate, no dwell),
+  `duplicate_target` (flag-only per decision 3), `unwatched_seam` (E1). Each resolves to
+  `{seam, client_id, ident, evidence, since, threshold_days}` — evidence, never a verdict.
+  `compute_flags` assembles all six into `model["flow"]`.
+- `reconcile.py::run_daily(today)` — self-gated on `director_enabled`. For each
+  newly-tripped per-client seam it opens ONE board task through the standard producer
+  contract (`source="director_seam"`, `source_ref=f"{seam}:{client_id}:{ident}"`, lands in
+  the current-month section like any other producer task) and auto-closes it via
+  `task_service.close_task_by_source` the moment the seam stops firing (diffs the live
+  flag set against currently-open `director_seam` tasks each run — idempotent by
+  construction on the `(source, source_ref)` partial unique index). `duplicate_target`
+  opens one task naming BOTH offending items (no merge). Portfolio `qa_idle` instead emits
+  an `ops_seam` notification (`client_id=None`) since there's no client to file a task
+  against.
+- `digest.py::run_weekly(today)` — deterministic assembly, no LLM in v1 (a narrative pass
+  is a deferred polish, never a source of fabricated numbers). Suppresses entirely
+  (returns without emitting) on an all-clear week — zero seam flags AND zero autonomy
+  activity — mirroring `pace_digest.run_daily_digest`'s `all_clear` short-circuit; this is
+  the guard against the "weekly narrative is noisy" risk the plan flagged when it leaned
+  toward riding the daily line instead. Enumerates named clients per seam (PACE's
+  enumerate-don't-count rule), autonomy executed/proposed/escalated totals, and the top 5
+  open capacity holds. `dedupe_key(today)` = `f"ops_digest:{iso_year}-W{iso_week:02d}"`
+  (stable across a redeploy re-run).
+- `veto.py::preflight_conflict(rec, client_id) -> bool` — fail-**open** by construction:
+  any exception, or a candidate carrying no `keyword` (e.g. the free
+  `rebuild_action_plan`), returns `False`. Joins the candidate's keyword against
+  in-flight `async_jobs` (pending/running, matching payload keyword), live
+  `tasks.target->>'keyword'`, and open (`verdict is null`) `interventions.target` for the
+  client. Wired into `autonomy_executor.run_autonomy_for_client`'s act loop directly after
+  the `AUTO_EXECUTE`/outcome gate and BEFORE `autonomy_budget.reserve` — a vetoed
+  candidate never touches budget. Sets `outcome="propose"` + a `policy_reason`, the exact
+  same shape as the pre-existing budget-refusal downgrade one line below it in the loop.
+  Gated on `director_autonomy_veto_enabled` (default False) — independent of
+  `director_enabled`, so flipping the master read-model gate on does NOT arm the veto.
+
+**SerMaStr surface:** `_ctx_director(supabase, client_id, today)` registered in
+`slack_assistant/context.py`'s `_CONTEXT_PROVIDERS` list (the only wiring change needed —
+`build_context` picks it up automatically), returning per-client seam flags or `None` when
+clean. `build_portfolio_context` gained a `director` block (agency-wide seam flags, for
+"who's the bottleneck this week" / "show me every place two agents are acting on the same
+target" with no client named) — isolated in its own try/except so a Director failure can't
+break the rest of the portfolio snapshot. One new prompt block in
+`slack_assistant/prompts.py`: the `director` context is read-only insight; SerMaStr may
+*offer* to open a task or raise a proposal to PACE from it, but never silently acts on
+delivery because of it — no authority over priority, scheduling, or which agent's
+precedence engine wins.
+
+**Scheduler wiring (`gsc_scheduler.py`):** `director_reconcile` runs daily right after
+`pace_chase_plan`, inside the existing daily-cadence block (unconditional each tick, like
+its siblings — no separate marker needed since it's naturally idempotent). The weekly
+`ops_digest` block mirrors the `reopt_plans` weekly block exactly: weekday gate
+(`director_digest_weekday`, default Monday) + `should_run` + marker-advance-only-on-
+`_safe`-success (so a transient failure retries next tick, not next week), new marker key
+`ops_digest_weekly`. `notifications.PACE_CHANNEL_KINDS` gained `ops_digest`/`ops_seam` so
+both route to the master PACE channel via the existing `resolve_slack_channel` precedence
+(no payload override needed, though `pace_slack_channel` is still passed through
+`payload.slack_channel` for the digest, mirroring `pace_digest.py`'s own belt-and-braces
+pattern).
+
+**No migration.** Everything is computed on read or written through the existing
+`tasks`/`notifications` producer contracts (`scheduler_state` carries the one new marker
+key). A dedicated `director_seam_flags` table (durable flag history, resolve/ack, a UI) is
+explicitly a Phase 2/B concern, per the plan's own graduation triggers — not built now.
+
+**Config (`config.py`), all shipping at their dark/conservative default:**
+`director_enabled=False` (master gate — read model + daily reconcile + weekly digest),
+`director_digest_weekday=0` (Monday), `director_autonomy_veto_enabled=False` (independent
+of the master gate), `director_seam_approved_unplaced_days=3`,
+`director_seam_qa_idle_days=7`, `director_seam_autonomy_unactioned_days=7`,
+`director_content_degraded_lookback_days=14`, `director_autonomy_ledger_lookback_runs=8`.
+
+**Tests:** `test_director_seams.py` (each predicate: fires at threshold, silent below,
+`qa_idle` portfolio-vs-per-client, `duplicate_target` shape, `compute_flags` assembly),
+`test_director_providers.py` (the pure `_target_key` helper + `prov_producers`'s E1
+unwatched-detection + `prov_qa`'s idle/entered logic against a fake Supabase),
+`test_director_read_model.py` (provider isolation — a raising provider degrades the model
+to a gap, never crashes the read — plus an end-to-end assertion that an unrecognized
+`tasks.source` surfaces as `unwatched_seam` on the final assembled model, never silently
+dropped), `test_director_veto.py` (every fail-open case + a wiring test proving the
+downgrade to `outcome="propose"` happens BEFORE `autonomy_budget.reserve` is ever called,
+and that disabling the flag lets execution through even when the predicate itself would
+have vetoed), `test_director_digest.py` (dedupe_key stability across the same ISO week,
+the all-clear suppression, enumerate-don't-count body formatting) — plus E2 coverage
+folded into the existing `test_asana_push.py` (autoplace on/off, a placement failure
+swallowed without failing the push). Full existing platform-api suite verified green
+locally before opening the PR: **4528 passed**, 2 skipped, one pre-existing failure in
+`test_fanout_llm_streaming.py` confirmed unrelated (an anthropic-SDK/httpx version
+mismatch in the sandbox's installed packages — that file was never touched by this diff).
+
+**Grounding note for whoever picks this up next:** a background research pass confirmed
+several of the build spec's own cited line numbers had drifted slightly since it was
+written (e.g. `asana_push.py:338-351` actually spans the function 306-374 with the
+`create_task` call itself at 341-351; `context.py`'s provider naming convention is
+`_ctx_<name>`, not the spec's `prov_<name>` — same contract, different name). None of
+these affected the build; noted here so the next reader isn't confused finding the real
+code at slightly different lines than the spec says.
+
+**Next steps (not done here, left for the PR review cycle / a human before enabling):** a
+live smoke test on Railway with `director_enabled` flipped in a non-prod check to watch one
+real scheduler tick; then, only once real seam data exists, revisit whether the
+conservative thresholds need recalibrating.
+
 ## ⏩ Update — 2026-08-28 · **Director of Operations (cross-agent orchestration) — plan + Phase 1 build spec MERGED to `main` (spec only, nothing built in code)**
 
 Architecture review of "we have SerMaStr + PACE + QA + the task board — we need an
