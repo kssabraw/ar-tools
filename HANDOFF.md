@@ -1,6 +1,12 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-29 · **DORA — Director of Operations gets its OWN surface (persona + /director page + #dora Slack app)** (latest)
+## ⏩ Update — 2026-08-29 · **DORA — Director of Operations gets its OWN surface (persona + /director page + #dora Slack app) — MERGED ([#892](https://github.com/kssabraw/ar-tools/pull/892), squash `79e449c`)** (latest)
+
+**Status: merged to `main` with both CI gates green** (`pytest` platform-api suite + Netlify
+preview). `main` auto-deploys to PLATFORM (`DIRECTOR_ENABLED` already true), so the `/director`
+page + the DORA sidebar entry go live once that deploy is active (watch Railway status-lag —
+trust deploy logs/DB, not list status). **The only owner step left is the DORA Slack app** (see
+"Provisioning" below).
 
 Owner ruling, mid-verify of the Director rollout: the Director of Operations should be its
 own thing, not a lens you reach by asking SerMaStr. This **reverses the 2026-08-28 "surfaced
@@ -33,8 +39,10 @@ What shipped (branch `claude/director-ops-phase1-verify-yuwn6h`):
 app** (its own bot token + signing secret; Event Request URL → `/slack/director/events`; **Socket
 Mode OFF** — the PACE gotcha, or events never reach the endpoint), invite it to #dora, then set
 `DIRECTOR_SLACK_CHANNEL` / `DIRECTOR_SLACK_BOT_TOKEN` / `DIRECTOR_SLACK_SIGNING_SECRET` on PLATFORM.
-`DIRECTOR_ENABLED` is already true, so once merged + deployed the /director page + sidebar entry
-light up immediately; the Slack side activates when those three vars are set.
+`DIRECTOR_ENABLED` is already true, so the /director page + sidebar entry light up as soon as the
+post-merge deploy is active; the Slack side activates when those three vars are set. Until then,
+DORA's seam flags + weekly ops digest fall back to the PACE channel (safe) and the /director web
+page is the conversational surface.
 
 ## ⏩ Update — 2026-08-29 · **Everhour Phase 2 (metadata-only task mirror) BUILT + MERGED ([#893](https://github.com/kssabraw/ar-tools/pull/893), squash `4ff5aed`)**
 
