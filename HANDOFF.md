@@ -1,6 +1,23 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-08-29 · **DORA — Director of Operations gets its OWN surface (persona + /director page + #dora Slack app) — MERGED ([#892](https://github.com/kssabraw/ar-tools/pull/892), squash `79e449c`)** (latest)
+## ⏩ Update — 2026-08-29 · **DORA Slack app PROVISIONED — 3 creds set on PLATFORM; awaiting deploy-backlog drain for the end-to-end #dora test** (latest)
+
+Follow-up to the DORA own-surface merge below ([#892](https://github.com/kssabraw/ar-tools/pull/892)). The owner created the **#dora** channel + a dedicated **DORA Slack app** (its own bot identity, **Socket Mode OFF** — confirmed) and handed over its three credentials; this session set them on the **PLATFORM** Railway service (env-level; secret values are not recorded here):
+- `DIRECTOR_SLACK_BOT_TOKEN` (the DORA bot's `xoxb-…`)
+- `DIRECTOR_SLACK_SIGNING_SECRET`
+- `DIRECTOR_SLACK_CHANNEL` = `C0BTJB2F8M8` (#dora)
+
+Env baseline re-verified on PLATFORM: `DIRECTOR_ENABLED` true; **`DIRECTOR_AUTONOMY_VETO_ENABLED` absent** (veto stays dark — deliberately untouched, per the locked framing). Because the three vars are **env-level**, **any** DORA-code deploy (`79e449c`/#892 or `eb728f9`/#895 — both carry the DORA surface) that reaches active will boot with the secrets injected; we don't have to wait for one specific deploy.
+
+**Deploy state (~01:40 UTC):** Railway is slow-draining a large backlog of quick-succession merges (Everhour + docs PRs). The newest **SUCCESS** is still `60a8997` (#885 Director Phase 1, pre-DORA-surface), so `/director` + the DORA sidebar + `/slack/director/events` are **not active yet**. A FAILED build of the same `60a8997` died at `CREATE_CONTAINER` (a generic Railway infra hiccup, no code diagnosis) — **inert**, since the same commit succeeded in the serving deployment. Setting the vars queued a fresh `804a3532`/`eb728f9` deploy that will win to active via Railway's cancel-in-progress. **Did NOT force-accept** (needs owner OK; these are queued behind the builder, not `NEEDS_APPROVAL`).
+
+**Verification split + open items** (nothing else is blocked on the owner until the deploy is active):
+- **Deploy-active** — a DORA-code deploy (`79e449c` or later) becomes the SUCCESS serving deploy, booted healthy (`gsc_scheduler.started`, no `gsc_scheduler.step_failed step=director_reconcile`): **self check-in armed ~02:20 UTC** (re-arms itself if the backlog still hasn't drained).
+- **Inbound #dora** — needs a **real human** message (a bot can't self-trigger). Once active, the **owner posts "where are we bottlenecked?" in #dora** → DORA replies in-thread under its own bot identity. If silent, the #1 cause is Socket Mode left ON; also grep PLATFORM deploy logs for `slack_director_events.hit` (expect `has_secret=true`, `director_enabled=true`).
+- **Outbound** (`ops_seam`/`ops_digest` → #dora under the DORA bot) — confirmed at the **first daily reconcile** (~08:00 UTC, `gsc_ingest_hour_utc`): **self check-in armed ~08:20 UTC**. Expect one `ops_seam` (qa_idle — QA is armed-but-idle). A broken #dora (bot not invited) auto-falls-back to #pace (`channels_sent.slack="ok_master_fallback"`, the DB row unchanged).
+- PR #895 (the prior docs follow-up) merged (`fd20e40`). This session's designated branch is `claude/dora-provisioning-verify-uhuipd`.
+
+## ⏩ Update — 2026-08-29 · **DORA — Director of Operations gets its OWN surface (persona + /director page + #dora Slack app) — MERGED ([#892](https://github.com/kssabraw/ar-tools/pull/892), squash `79e449c`)**
 
 **Status: merged to `main` with both CI gates green** (`pytest` platform-api suite + Netlify
 preview). `main` auto-deploys to PLATFORM (`DIRECTOR_ENABLED` already true), so the `/director`
