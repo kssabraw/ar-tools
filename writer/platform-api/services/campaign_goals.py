@@ -114,7 +114,10 @@ def effective_target(goal: dict) -> Optional[float]:
         return None
     if goal.get("target_mode") == "percent_increase":
         baseline = goal.get("baseline_value")
-        if baseline is None:
+        # A percentage increase from a non-positive baseline is undefined — 0×1.25
+        # is still 0, which would read as instantly "achieved" for any value ≥ 0.
+        # None here makes the goal no_data until a real baseline exists.
+        if baseline is None or baseline <= 0:
             return None
         return baseline * (1.0 + target / 100.0)
     return target
@@ -133,6 +136,11 @@ def evaluate_goal(goal: dict, current_value: Optional[float], today: date) -> di
         return {"status": "manual", "progress_pct": None, "elapsed_pct": None}
     lower = goal.get("goal_type") in LOWER_IS_BETTER
     target = effective_target(goal)
+    # No computable target (a percent goal with no positive baseline yet) → can't
+    # judge progress honestly. Absolute non-custom goals always have a target
+    # (the router requires target_value), so this only bites uncomputable percents.
+    if target is None:
+        return {"status": "no_data", "progress_pct": None, "elapsed_pct": None}
     if _target_met(current_value, target, lower):
         return {"status": "achieved", "progress_pct": 100.0, "elapsed_pct": None}
     if current_value is None:
@@ -437,6 +445,11 @@ def assess_goals(client_id: str, today: Optional[date] = None, include_inactive:
         out.append({
             **goal,
             "current_value": current,
+            # The absolute target to compare against — equals target_value for an
+            # absolute goal, or baseline×(1+pct/100) for a percent goal. Consumers
+            # that judge/display "the target" must read this, not the raw
+            # target_value (which is a percentage for a percent goal).
+            "effective_target": effective_target(goal),
             **evaluation,
             "note": goal_note(goal, evaluation, current),
         })

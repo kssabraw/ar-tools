@@ -177,6 +177,22 @@ def test_effective_target_absolute_and_percent():
     assert cg.effective_target(g2) is None
     # no target at all → None.
     assert cg.effective_target(_goal(goal_type="custom", target_value=None)) is None
+    # a percent increase from a NON-POSITIVE baseline is undefined → None (never 0,
+    # which would read as instantly "achieved").
+    assert cg.effective_target(_goal(goal_type="gbp_calls", target_value=25.0,
+                                     baseline_value=0.0, target_mode="percent_increase")) is None
+
+
+def test_percent_goal_zero_baseline_is_no_data_not_achieved():
+    # The trap: 0 * (1 + 25/100) = 0, and current 0 >= 0 would be "achieved".
+    g = _goal(goal_type="gbp_calls", target_value=25.0, baseline_value=0.0,
+              target_mode="percent_increase", due_date=None)
+    assert cg.evaluate_goal(g, 0.0, TODAY)["status"] == "no_data"
+    assert cg.evaluate_goal(g, 5.0, TODAY)["status"] == "no_data"
+    # …and a percent goal whose baseline was never captured is also no_data.
+    g2 = _goal(goal_type="gbp_impressions", target_value=25.0, baseline_value=None,
+               target_mode="percent_increase", due_date=None)
+    assert cg.evaluate_goal(g2, 100.0, TODAY)["status"] == "no_data"
 
 
 def test_evaluate_percent_increase_goal():

@@ -66,6 +66,7 @@ class CampaignGoalResponse(BaseModel):
     created_at: Optional[datetime] = None
     # Computed on read (never stored):
     current_value: Optional[float] = None
+    effective_target: Optional[float] = None  # absolute target (percent goals resolved)
     status: Optional[str] = None        # achieved | on_track | behind | overdue | no_data | manual
     progress_pct: Optional[float] = None
     elapsed_pct: Optional[float] = None

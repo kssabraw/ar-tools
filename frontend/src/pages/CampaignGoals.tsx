@@ -325,7 +325,7 @@ export function CampaignGoals() {
                       {g.current_value != null && <>Now <strong>{fmt(g.current_value)}</strong></>}
                       {g.target_value != null && (
                         g.target_mode === 'percent_increase'
-                          ? <> · target <strong>+{fmt(g.target_value)}%</strong>{g.baseline_value != null && <> (≈ {fmt(g.baseline_value * (1 + g.target_value / 100))})</>}</>
+                          ? <> · target <strong>+{fmt(g.target_value)}%</strong>{g.effective_target != null && <> (≈ {fmt(g.effective_target)})</>}</>
                           : <> · target <strong>{fmt(g.target_value)}</strong></>
                       )}
                       {g.baseline_value != null && <> · started at {fmt(g.baseline_value)}</>}

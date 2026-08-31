@@ -1499,6 +1499,7 @@ export interface CampaignGoal {
   notes: string | null
   created_at: string | null
   current_value: number | null
+  effective_target: number | null
   status: string | null
   progress_pct: number | null
   elapsed_pct: number | null

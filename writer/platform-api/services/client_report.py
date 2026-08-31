@@ -972,7 +972,9 @@ def _section_goals(data: dict) -> str:
         pct = g.get("progress_pct")
         gt = g.get("goal_type")
         current = _fmt_goal_value(gt, g.get("current_value"))
-        target = _fmt_goal_value(gt, g.get("target_value"))
+        # effective_target so a percent goal shows its absolute target (e.g. 100
+        # calls), not the bare percentage; equals target_value for absolute goals.
+        target = _fmt_goal_value(gt, g.get("effective_target"))
         bar = ""
         if pct is not None:
             w = max(0, min(100, round(pct)))
