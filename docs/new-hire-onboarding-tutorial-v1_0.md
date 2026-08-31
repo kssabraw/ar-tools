@@ -318,7 +318,10 @@ generate content, only to publish it once it's done.
   Drive itself — a one-time, per-client external step.
 - Below it, optional **per-content-type folders** (Blog posts / Service pages / Location pages /
   Local SEO pages / Ecom pages / Use cases) — each falls back to the default folder above if left
-  blank.
+  blank. There's no documented reason you'd need these split apart — it's purely a routing
+  convenience, not a permissions or approval-workflow feature. Skip this and use just the one
+  default folder unless the client (or your team) specifically wants different content types
+  organized into separate Drive folders.
 - ⚠️ **Known gap:** the **Ecom pages** field doesn't currently do anything — ecommerce content
   always publishes to the *default* folder regardless of what's typed there. Don't rely on it;
   just make sure the default Drive Folder ID is set.
@@ -374,9 +377,25 @@ generate content, only to publish it once it's done.
 
 1. **Setup** tab → fill in **Google Place ID**, **Business name**, and **Center latitude /
    longitude** — all three are required before any scan can run (a warning banner says so if
-   they're missing). Then **Radius, miles** (1–10, shows a live pin-count estimate), **Surface**
-   (Google Maps / Local Finder), **Data source**, and **Schedule** (Weekly, with a day + time, or
-   Manual only) → **Save setup**.
+   they're missing). Then:
+   - **Radius, miles** (1–10, shows a live pin-count estimate) — how far out from the center point
+     to lay the grid. Bigger isn't automatically better: a wider radius costs more pins per scan
+     and dilutes the average with far-out pins the client was never realistically going to rank at.
+   - **Surface** — **Google Maps** measures rank inside the Maps app itself; **Local Finder (local
+     pack)** measures the 3-pack block that shows under a normal Google search. The tool has no
+     rule for which to pick; as a practical default, most clients care more about **Local Finder**
+     (it's what shows up on an ordinary search), and you'd reach for **Google Maps** specifically if
+     this client's customers are known to search from inside the Maps app (already driving, using
+     in-car navigation).
+   - **Data source** — **Local Dominator** is the suite's own default (it deliberately replaced
+     DataForSEO for this job); leave it selected unless a lead specifically tells you this client
+     needs the DataForSEO path instead — there's no documented cost or accuracy difference to weigh
+     yourself.
+   - **Schedule** — **Weekly** is what an active retainer client wants: it's what feeds the alerts,
+     the Local Rank Analysis report, and the client PDF report (§12) automatically. **Manual only**
+     turns that off — reach for it only when you deliberately don't want ongoing tracking (a one-time
+     audit, a client not paying for Maps work).
+   - **Save setup**.
 2. Same tab, separate **Keywords** card → one per line → **Add**.
 3. Go to **Heatmap** (or **One-offs**, for scanning just a subset of keywords) → **Run scan now**.
 4. A completed scan gives you a per-keyword heatmap, an at-a-glance stat panel (average rank,
@@ -403,6 +422,17 @@ Google's AI Overviews about their keywords — a newer kind of "ranking."
 3. **Overview** tab → **Run scan** → pick which engines to check + whether to include competitors.
 4. **Schedule** tab — Off / Weekly / Monthly, a day + hour, **Save schedule**.
 
+**Which engines, and why leave them all checked:** each one genuinely pulls from a different
+source, not just a different logo — ChatGPT and Claude each run their own web search, Gemini uses
+Google's own search grounding, Perplexity uses its own Sonar search, and Google AI Overview / AI
+Mode read Google's AI-answer block directly. The tool's own default is to run **all six, every
+time** — unlike tools where each engine costs a separate credit, there's no cost reason to narrow
+it here, so leave everything checked unless you're deliberately isolating one engine to debug why
+it looks wrong.
+
+**Include competitors** is genuinely free — it rides the same scan calls. Leave it on; the only
+reason it'd show "none tracked yet" is that you haven't added any on the Competitors tab.
+
 No dependency on GSC or GBP — this tool is fully independent.
 
 ---
@@ -414,17 +444,19 @@ No dependency on GSC or GBP — this tool is fully independent.
 Set these *after* §8–10 — most goal types measure something those trackers produce, so they mean
 nothing until there's data behind them.
 
-Click **Add goal**, pick a **Goal type**:
+Click **Add goal**, pick a **Goal type**. The tool has no built-in rule for which type to reach
+for — the column below is this tutorial's own guidance on matching a type to what the client
+actually cares about, not something the app enforces:
 
-| Type | Needs |
-|---|---|
-| Keyword to position | a tracked keyword (§8) + target position |
-| Keywords in top N | a target count + the top-N position bar |
-| Organic clicks / 30 days | a target click count (needs GSC, §5) |
-| Organic impressions / 30 days | a target impression count (needs GSC) |
-| AI visibility % | a target percentage (needs §10) |
-| Local-pack presence % | a target percentage (needs §9) |
-| Custom (manual) | free text — nothing auto-measures this one |
+| Type | Needs | Reach for it when… |
+|---|---|---|
+| Keyword to position | a tracked keyword (§8) + target position | the client is fixated on one specific term — their business name, their #1 service — and wants one trackable promise. |
+| Keywords in top N | a target count + the top-N position bar | the client cares about overall breadth ("most of what we track should be on page 1"), not any single keyword. |
+| Organic clicks / 30 days | a target click count (needs GSC, §5) | the client cares about traffic itself more than where any one keyword sits. |
+| Organic impressions / 30 days | a target impression count (needs GSC) | it's early in the campaign — impressions move first as new pages get indexed, before rank or clicks catch up. |
+| AI visibility % | a target percentage (needs §10) | the client is worried about being invisible to ChatGPT/Gemini-style answers, not just Google's blue links. |
+| Local-pack presence % | a target percentage (needs §9) | the client's business genuinely lives or dies by the local 3-pack (most home-service or storefront clients). |
+| Custom (manual) | free text — nothing auto-measures this one | the real goal doesn't fit any of the above — SerMaStr can still read it, but nothing here checks it automatically. |
 
 Optional Label / Due date / Notes, then **Create goal**. Status (Achieved / On track / Behind /
 Overdue / No data / Manual) is computed live every time anyone looks at it — it's never a stored,
@@ -447,8 +479,14 @@ once it's marked complete, **Download**.
 The **Delivery & schedule** card above the report list:
 
 - **Recipients** — comma-separated emails.
-- **Schedule** — Off / Weekly / Monthly, with a day and an hour (UTC).
-- **Report covers** — the period each scheduled report should span.
+- **Schedule** — Off / Weekly / Monthly, with a day and an hour (UTC). No rule in the tool for
+  which cadence to pick — Monthly matches how most clients expect a report; Weekly suits one who
+  wants to see week-by-week movement (or one you're actively walking through a recovery).
+- **Report covers** — the period each scheduled report should span. Leaving this on **Auto**
+  matches it to whatever cadence you just picked (weekly → last 7 days, monthly → last 30) — the
+  point is nothing gets double-reported or skipped between deliveries. Only override it with a
+  fixed period (say, "Last 90 days") if you deliberately want each report to look further back
+  than its own delivery interval.
 - Channel toggles: **Email** (needs SMTP configured agency-wide — check with your lead if this
   isn't firing), **Drive copy** (needs §7a's Drive folder to actually be set), plus two opt-in
   extras on the same clock: **AI Visibility report** and **Local Rank (Maps) report** — these only
@@ -481,7 +519,16 @@ Client workspace → **Project Management** → **Monthly Template** card (`/cli
 - The **Monthly task template** table itself: **Add task** → per row, a task name (autocompletes
   against the Task Library), an assignee (a named person, Unassigned, or Auto-distribute), a
   category, an hours estimate (inherits the library default if left blank), and an Active
-  checkbox → **Save template**.
+  checkbox → **Save template**. Two of these fields do real work downstream, not just labeling:
+  - **Est. hrs** directly decides who an **Auto-distribute** task actually goes to — each month it's
+    handed to whoever on the auto-assign list has the most spare capacity that month (capacity is
+    set on the **Workload** page). The same number also rolls up, once the task exists, into that
+    person's total on Team Workload — it's what the "overloaded" warning is watching. A row you
+    leave blank still counts as *something* toward someone's load (it falls back to a sitewide
+    default), not zero — don't leave it blank assuming it's a freebie.
+  - **Category** does double duty: it's the filter dropdown on the Tasks board itself, and (if this
+    client is also mapped in Asana) it's the value written into that client's Asana project's own
+    category custom field.
 - **Generate this month** — creates this month's section and its tasks on the actual board
   (§13c) right now. Safe to click more than once; it won't duplicate what already exists.
 
