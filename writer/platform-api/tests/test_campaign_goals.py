@@ -159,3 +159,143 @@ def test_measure_gsc_sum_aggregates_via_rpc():
     # TODAY = 2026-07-07 → the 2026-07-20 row is in the future and excluded.
     assert cg._measure_gsc_sum(_SB(), "c1", "clicks", TODAY) == 17.0
     assert cg._measure_gsc_sum(_SB(), "c1", "impressions", TODAY) == 150.0
+
+
+# ---------------------------------------------------------------------------
+# effective_target (percent-increase mode)
+# ---------------------------------------------------------------------------
+def test_effective_target_absolute_and_percent():
+    # absolute (default): the stored target is the effective target.
+    assert cg.effective_target(_goal(goal_type="gbp_calls", target_value=100.0)) == 100.0
+    # percent_increase: baseline * (1 + pct/100).
+    g = _goal(goal_type="gbp_calls", target_value=25.0, baseline_value=80.0,
+              target_mode="percent_increase")
+    assert cg.effective_target(g) == 100.0
+    # percent with no baseline can't be computed.
+    g2 = _goal(goal_type="gbp_calls", target_value=25.0, baseline_value=None,
+               target_mode="percent_increase")
+    assert cg.effective_target(g2) is None
+    # no target at all → None.
+    assert cg.effective_target(_goal(goal_type="custom", target_value=None)) is None
+    # a percent increase from a NON-POSITIVE baseline is undefined → None (never 0,
+    # which would read as instantly "achieved").
+    assert cg.effective_target(_goal(goal_type="gbp_calls", target_value=25.0,
+                                     baseline_value=0.0, target_mode="percent_increase")) is None
+
+
+def test_percent_goal_zero_baseline_is_no_data_not_achieved():
+    # The trap: 0 * (1 + 25/100) = 0, and current 0 >= 0 would be "achieved".
+    g = _goal(goal_type="gbp_calls", target_value=25.0, baseline_value=0.0,
+              target_mode="percent_increase", due_date=None)
+    assert cg.evaluate_goal(g, 0.0, TODAY)["status"] == "no_data"
+    assert cg.evaluate_goal(g, 5.0, TODAY)["status"] == "no_data"
+    # …and a percent goal whose baseline was never captured is also no_data.
+    g2 = _goal(goal_type="gbp_impressions", target_value=25.0, baseline_value=None,
+               target_mode="percent_increase", due_date=None)
+    assert cg.evaluate_goal(g2, 100.0, TODAY)["status"] == "no_data"
+
+
+def test_evaluate_percent_increase_goal():
+    # baseline 80 GBP calls, target +25% ⇒ effective 100. Higher is better.
+    g = _goal(goal_type="gbp_impressions", target_value=25.0, baseline_value=80.0,
+              target_mode="percent_increase", due_date=None)
+    # met the effective target → achieved.
+    assert cg.evaluate_goal(g, 100.0, TODAY)["status"] == "achieved"
+    # halfway from 80 toward 100 (span 20, moved 10) → 50% progress, on track by movement.
+    ev = cg.evaluate_goal(g, 90.0, TODAY)
+    assert ev["status"] == "on_track" and ev["progress_pct"] == 50.0
+    # no movement → behind (no due date, judged by movement).
+    assert cg.evaluate_goal(g, 80.0, TODAY)["status"] == "behind"
+
+
+def test_goal_note_percent_increase():
+    g = _goal(goal_type="gbp_calls", target_value=25.0, baseline_value=80.0,
+              target_mode="percent_increase", due_date=None)
+    note = cg.goal_note(g, cg.evaluate_goal(g, 90.0, TODAY), 90.0)
+    assert "target 100" in note and "+25% over baseline" in note
+
+
+# ---------------------------------------------------------------------------
+# GBP metric measurement dispatch
+# ---------------------------------------------------------------------------
+def test_measure_gbp_metric_sums_window(monkeypatch):
+    """A GBP goal sums the trailing-window gbp_metric_daily values across the
+    client's verified locations; the impression fold pulls the four sub-types."""
+    from config import settings
+
+    monkeypatch.setattr(settings, "gbp_metrics_enabled", True, raising=False)
+
+    class _Res:
+        def __init__(self, data):
+            self.data = data
+
+    class _Q:
+        def __init__(self, data):
+            self._data = data
+
+        def select(self, *a, **k):
+            return self
+
+        def eq(self, *a, **k):
+            return self
+
+        def in_(self, *a, **k):
+            return self
+
+        def gte(self, *a, **k):
+            return self
+
+        def lte(self, *a, **k):
+            return self
+
+        def execute(self):
+            return _Res(self._data)
+
+    class _SB:
+        def table(self, name):
+            if name == "gbp_locations":
+                return _Q([{"id": "loc1"}, {"id": "loc2"}])
+            return _Q([{"value": 3}, {"value": 4}, {"value": 5}])
+
+    assert cg._measure_gbp_metric(_SB(), "c1", "gbp_calls", TODAY) == 12.0
+    assert cg._measure_gbp_metric(_SB(), "c1", "gbp_impressions", TODAY) == 12.0
+    # dispatch through measure_goal too
+    assert cg.measure_goal(_SB(), "c1", {"goal_type": "gbp_website_clicks"}, TODAY) == 12.0
+
+
+def test_measure_gbp_metric_disabled_or_no_location(monkeypatch):
+    from config import settings
+
+    class _Res:
+        def __init__(self, data):
+            self.data = data
+
+    class _Q:
+        def select(self, *a, **k):
+            return self
+
+        def eq(self, *a, **k):
+            return self
+
+        def in_(self, *a, **k):
+            return self
+
+        def gte(self, *a, **k):
+            return self
+
+        def lte(self, *a, **k):
+            return self
+
+        def execute(self):
+            return _Res([])
+
+    class _SB:
+        def table(self, name):
+            return _Q()
+
+    # flag off → None regardless of data
+    monkeypatch.setattr(settings, "gbp_metrics_enabled", False, raising=False)
+    assert cg._measure_gbp_metric(_SB(), "c1", "gbp_calls", TODAY) is None
+    # flag on but no connected location → None
+    monkeypatch.setattr(settings, "gbp_metrics_enabled", True, raising=False)
+    assert cg._measure_gbp_metric(_SB(), "c1", "gbp_calls", TODAY) is None

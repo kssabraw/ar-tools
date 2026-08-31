@@ -1,0 +1,50 @@
+name: platform-api lint & typecheck
+
+# Correctness-focused static checks for platform-api, complementing the pytest
+# workflow (which is the only other Python gate). Ruff runs a minimal, high-signal
+# rule set (syntax errors + undefined/duplicate names) as a hard gate — the rule
+# selection lives in writer/platform-api/pyproject.toml. Mypy type-checks a
+# growing allowlist of annotated modules.
+
+on:
+  pull_request:
+    paths:
+      - "writer/platform-api/**"
+      - ".github/workflows/lint-typecheck.yml"
+  push:
+    branches: [main]
+    paths:
+      - "writer/platform-api/**"
+      - ".github/workflows/lint-typecheck.yml"
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: writer/platform-api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff==0.16.5
+      - name: Ruff (correctness baseline)
+        run: ruff check .
+
+  mypy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: writer/platform-api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install mypy==1.13.0
+      # follow-imports=skip keeps this to each listed file's own annotations, so
+      # no project dependencies are needed and one module's types can't be broken
+      # by an untyped neighbour. Add modules here as they gain annotations.
+      - name: Mypy (typed-module allowlist)
+        run: mypy services/rank_materialize.py --ignore-missing-imports --follow-imports=skip

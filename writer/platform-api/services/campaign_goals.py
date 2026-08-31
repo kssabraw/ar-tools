@@ -39,8 +39,26 @@ GOAL_TYPES = (
     "organic_impressions",
     "ai_visibility",
     "maps_pack_presence",
+    "gbp_calls",
+    "gbp_impressions",
+    "gbp_website_clicks",
     "custom",
 )
+
+# GBP performance goal_type → the raw gbp_metric_daily metric key(s) that make it
+# up. The four impression sub-types fold into one "profile views" total, matching
+# the dashboard/report headline (services/gbp_metrics_read.IMPRESSION_METRICS).
+_GBP_IMPRESSION_METRICS = (
+    "BUSINESS_IMPRESSIONS_DESKTOP_MAPS",
+    "BUSINESS_IMPRESSIONS_DESKTOP_SEARCH",
+    "BUSINESS_IMPRESSIONS_MOBILE_MAPS",
+    "BUSINESS_IMPRESSIONS_MOBILE_SEARCH",
+)
+GBP_METRIC_KEYS = {
+    "gbp_calls": ("CALL_CLICKS",),
+    "gbp_website_clicks": ("WEBSITE_CLICKS",),
+    "gbp_impressions": _GBP_IMPRESSION_METRICS,
+}
 
 # On-pace tolerance: a goal reads "on track" when, projecting its current pace to
 # the due date, it would reach within this fraction of the target (i.e. projected
@@ -83,6 +101,28 @@ def _target_met(current: Optional[float], target: Optional[float], lower_is_bett
     return current <= target if lower_is_better else current >= target
 
 
+def effective_target(goal: dict) -> Optional[float]:
+    """The absolute target value to judge against. Pure.
+
+    For an "absolute" goal this is just ``target_value``. For a
+    ``percent_increase`` goal ``target_value`` is a percentage and the effective
+    absolute target is ``baseline_value * (1 + pct/100)`` — computed from the
+    baseline captured at creation, so nothing derived is stored. Returns None
+    when it can't be computed (no target, or a percent goal with no baseline)."""
+    target = goal.get("target_value")
+    if target is None:
+        return None
+    if goal.get("target_mode") == "percent_increase":
+        baseline = goal.get("baseline_value")
+        # A percentage increase from a non-positive baseline is undefined — 0×1.25
+        # is still 0, which would read as instantly "achieved" for any value ≥ 0.
+        # None here makes the goal no_data until a real baseline exists.
+        if baseline is None or baseline <= 0:
+            return None
+        return baseline * (1.0 + target / 100.0)
+    return target
+
+
 def evaluate_goal(goal: dict, current_value: Optional[float], today: date) -> dict:
     """Deterministic status for one goal given its freshly measured value. Pure.
 
@@ -95,7 +135,12 @@ def evaluate_goal(goal: dict, current_value: Optional[float], today: date) -> di
     if goal.get("goal_type") == "custom":
         return {"status": "manual", "progress_pct": None, "elapsed_pct": None}
     lower = goal.get("goal_type") in LOWER_IS_BETTER
-    target = goal.get("target_value")
+    target = effective_target(goal)
+    # No computable target (a percent goal with no positive baseline yet) → can't
+    # judge progress honestly. Absolute non-custom goals always have a target
+    # (the router requires target_value), so this only bites uncomputable percents.
+    if target is None:
+        return {"status": "no_data", "progress_pct": None, "elapsed_pct": None}
     if _target_met(current_value, target, lower):
         return {"status": "achieved", "progress_pct": 100.0, "elapsed_pct": None}
     if current_value is None:
@@ -142,8 +187,14 @@ def goal_note(goal: dict, evaluation: dict, current_value: Optional[float]) -> s
     bits = [f"{label}: {status.upper()}" if status else str(label)]
     if current_value is not None:
         cur = f"{current_value:g}"
-        tgt = goal.get("target_value")
-        bits.append(f"now {cur}" + (f" vs target {tgt:g}" if tgt is not None else ""))
+        tgt = effective_target(goal)
+        if tgt is not None and goal.get("target_mode") == "percent_increase":
+            note = f" vs target {tgt:g} (+{goal['target_value']:g}% over baseline)"
+        elif tgt is not None:
+            note = f" vs target {tgt:g}"
+        else:
+            note = ""
+        bits.append(f"now {cur}" + note)
     if goal.get("baseline_value") is not None:
         bits.append(f"baseline {goal['baseline_value']:g}")
     if evaluation.get("progress_pct") is not None:
@@ -267,6 +318,40 @@ def _measure_gsc_sum(supabase, client_id: str, field: str, today: date) -> Optio
     return float(sum(r.get(field) or 0 for r in windowed))
 
 
+def _measure_gbp_metric(supabase, client_id: str, goal_type: str, today: date) -> Optional[float]:
+    """Trailing 30-day sum of a GBP performance metric, summed across the
+    client's verified (access_status='ok') locations. Reuses gbp_metric_daily —
+    no new data capture. None when GBP metrics aren't enabled, no location is
+    connected, or no data exists in the window."""
+    from config import settings
+
+    if not settings.gbp_metrics_enabled:
+        return None
+    metrics = GBP_METRIC_KEYS.get(goal_type)
+    if not metrics:
+        return None
+    locs = (
+        supabase.table("gbp_locations").select("id")
+        .eq("client_id", client_id).eq("access_status", "ok").execute()
+    ).data or []
+    if not locs:
+        return None
+    loc_ids = [l["id"] for l in locs]
+    cutoff = date.fromordinal(today.toordinal() - _CLICKS_WINDOW_DAYS).isoformat()
+    q = (
+        supabase.table("gbp_metric_daily").select("value")
+        .in_("location_row_id", loc_ids)
+        .gte("date", cutoff).lte("date", today.isoformat())
+    )
+    # Filter to the metric(s) server-side — one impression fold can be 4 keys —
+    # so the row count stays well under PostgREST's 1000-row cap for the window.
+    q = q.eq("metric", metrics[0]) if len(metrics) == 1 else q.in_("metric", list(metrics))
+    rows = q.execute().data or []
+    if not rows:
+        return None
+    return float(sum(r.get("value") or 0 for r in rows))
+
+
 def _measure_ai_visibility(supabase, client_id: str, goal: dict, today: date) -> Optional[float]:
     from services import brand_service
 
@@ -312,6 +397,8 @@ def measure_goal(supabase, client_id: str, goal: dict, today: date) -> Optional[
         return _measure_ai_visibility(supabase, client_id, goal, today)
     if goal_type == "maps_pack_presence":
         return _measure_maps_pack(supabase, client_id, goal, today)
+    if goal_type in GBP_METRIC_KEYS:
+        return _measure_gbp_metric(supabase, client_id, goal_type, today)
     return None  # custom
 
 
@@ -358,6 +445,11 @@ def assess_goals(client_id: str, today: Optional[date] = None, include_inactive:
         out.append({
             **goal,
             "current_value": current,
+            # The absolute target to compare against — equals target_value for an
+            # absolute goal, or baseline×(1+pct/100) for a percent goal. Consumers
+            # that judge/display "the target" must read this, not the raw
+            # target_value (which is a percentage for a percent goal).
+            "effective_target": effective_target(goal),
             **evaluation,
             "note": goal_note(goal, evaluation, current),
         })
@@ -382,6 +474,7 @@ def create_goal(client_id: str, fields: dict, created_by: Optional[str] = None) 
         "label": fields.get("label"),
         "keyword": fields.get("keyword"),
         "target_value": fields.get("target_value"),
+        "target_mode": fields.get("target_mode") or "absolute",
         "target_position": fields.get("target_position"),
         "due_date": fields.get("due_date"),
         "notes": fields.get("notes"),

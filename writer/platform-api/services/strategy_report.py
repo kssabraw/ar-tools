@@ -78,7 +78,7 @@ def render_goals_block(goals: list) -> list[str]:
         due = _esc(g.get("due_date") or "")
         lines.append(
             f"| {label} | {status} | {_fmt_num(g.get('current_value'))} | "
-            f"{_fmt_num(g.get('target_value'))} | {pace or '—'} | {due or '—'} |"
+            f"{_fmt_num(g.get('effective_target', g.get('target_value')))} | {pace or '—'} | {due or '—'} |"
         )
     lines.append("")
     return lines

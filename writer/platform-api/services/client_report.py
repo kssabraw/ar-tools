@@ -908,6 +908,12 @@ def _fmt_goal_value(goal_type, v) -> str:
         return f"{_fmt_int(v)} clicks/mo"
     if goal_type == "organic_impressions":
         return f"{_fmt_int(v)} impressions/mo"
+    if goal_type == "gbp_calls":
+        return f"{_fmt_int(v)} calls/mo"
+    if goal_type == "gbp_website_clicks":
+        return f"{_fmt_int(v)} website clicks/mo"
+    if goal_type == "gbp_impressions":
+        return f"{_fmt_int(v)} profile views/mo"
     if goal_type in ("ai_visibility", "maps_pack_presence"):
         return f"{v:g}%"
     return f"{v:g}"
@@ -925,6 +931,9 @@ def _goal_label(goal: dict) -> str:
         "organic_impressions": "Monthly search impressions",
         "ai_visibility": "AI-assistant visibility",
         "maps_pack_presence": "Local-pack presence",
+        "gbp_calls": "Monthly calls from Google",
+        "gbp_impressions": "Monthly Google profile views",
+        "gbp_website_clicks": "Monthly website clicks from Google",
         "custom": "Goal",
     }
     return base.get(goal.get("goal_type"), "Goal")
@@ -934,10 +943,21 @@ def _goal_label(goal: dict) -> str:
 # "since last period" delta is meaningful. maps_pack_presence / ai_visibility read
 # the latest scan regardless of date (they get their own period comparison in the
 # Maps / AI sections instead), and custom has no metric.
-_PERIOD_GOAL_TYPES = {"keyword_position", "keywords_in_top", "organic_clicks", "organic_impressions"}
+_PERIOD_GOAL_TYPES = {
+    "keyword_position", "keywords_in_top", "organic_clicks", "organic_impressions",
+    "gbp_calls", "gbp_impressions", "gbp_website_clicks",
+}
 _GOAL_MOVE_UNIT = {
     "keyword_position": "positions", "keywords_in_top": "keywords",
     "organic_clicks": "clicks/mo", "organic_impressions": "impressions/mo",
+    "gbp_calls": "calls/mo", "gbp_impressions": "profile views/mo",
+    "gbp_website_clicks": "website clicks/mo",
+}
+# Goal types whose value is an integer count (formatted with thousands
+# separators, not a bare {:g}).
+_INT_GOAL_TYPES = {
+    "organic_clicks", "organic_impressions",
+    "gbp_calls", "gbp_impressions", "gbp_website_clicks",
 }
 
 
@@ -956,7 +976,7 @@ def _goal_movement(g: dict) -> str:
     mag = abs(gain)
     if mag == 1 and unit in ("positions", "keywords"):
         unit = unit[:-1]  # "1 keyword" / "1 position", not "1 keywords"
-    mag_txt = _fmt_int(mag) if gt in ("organic_clicks", "organic_impressions") else f"{mag:g}"
+    mag_txt = _fmt_int(mag) if gt in _INT_GOAL_TYPES else f"{mag:g}"
     arrow, cls = ("▲", "up") if gain > 0 else ("▼", "down")
     return f"<div class='gmove {cls}'>{arrow} {mag_txt} {unit} since last period</div>"
 
@@ -972,7 +992,9 @@ def _section_goals(data: dict) -> str:
         pct = g.get("progress_pct")
         gt = g.get("goal_type")
         current = _fmt_goal_value(gt, g.get("current_value"))
-        target = _fmt_goal_value(gt, g.get("target_value"))
+        # effective_target so a percent goal shows its absolute target (e.g. 100
+        # calls), not the bare percentage; equals target_value for absolute goals.
+        target = _fmt_goal_value(gt, g.get("effective_target"))
         bar = ""
         if pct is not None:
             w = max(0, min(100, round(pct)))

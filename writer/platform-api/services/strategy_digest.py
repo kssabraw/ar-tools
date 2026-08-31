@@ -743,6 +743,8 @@ def _prov_campaign_goals(supabase, client_id: str, today: date, now: datetime) -
                 "goal_type": g.get("goal_type"),
                 "keyword": g.get("keyword"),
                 "target_value": g.get("target_value"),
+                "target_mode": g.get("target_mode"),
+                "effective_target": g.get("effective_target"),
                 "target_position": g.get("target_position"),
                 "baseline_value": g.get("baseline_value"),
                 "current_value": g.get("current_value"),

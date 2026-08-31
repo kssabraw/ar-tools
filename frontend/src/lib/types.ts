@@ -1489,6 +1489,7 @@ export interface CampaignGoal {
   label: string
   keyword: string | null
   target_value: number | null
+  target_mode: string
   target_position: number | null
   due_date: string | null
   baseline_value: number | null
@@ -1498,6 +1499,7 @@ export interface CampaignGoal {
   notes: string | null
   created_at: string | null
   current_value: number | null
+  effective_target: number | null
   status: string | null
   progress_pct: number | null
   elapsed_pct: number | null

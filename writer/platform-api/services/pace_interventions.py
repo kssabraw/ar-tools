@@ -1254,3 +1254,114 @@ def resurface_due_deferred(today: Optional[date] = None) -> int:
             {"status": "proposed", "updated_at": datetime.now(timezone.utc).isoformat()}
         ).eq("id", r["id"]).execute()
     return len(rows)
+
+
+# ---------------------------------------------------------------------------
+# Weekly report (the Friday rollup)
+# ---------------------------------------------------------------------------
+def summarize_week(open_rows: list[dict], decided_rows: list[dict], resolved_count: int) -> dict:
+    """Pure rollup of the current open set + this week's activity. `open_rows` =
+    currently proposed/deferred; `decided_rows` = rows a human decided this week
+    (decided_at within the window); `resolved_count` = auto-resolved this week.
+    Unit-tested."""
+    open_by_severity = {"critical": 0, "warning": 0, "info": 0}
+    open_by_kind: dict[str, int] = {}
+    for r in open_rows:
+        sev = r.get("severity") or "warning"
+        open_by_severity[sev] = open_by_severity.get(sev, 0) + 1
+        kind = r.get("kind") or "?"
+        open_by_kind[kind] = open_by_kind.get(kind, 0) + 1
+    disp = {"approved": 0, "denied": 0, "deferred": 0}
+    ran = skipped = failed = 0
+    for r in decided_rows:
+        d = r.get("disposition")
+        if d in disp:
+            disp[d] += 1
+        if d == "approved":
+            res = r.get("result") or {}
+            ran += len(res.get("ran") or [])
+            skipped += len(res.get("skipped") or [])
+            failed += len(res.get("failed") or [])
+    return {
+        "open_total": len(open_rows), "open_by_severity": open_by_severity,
+        "open_by_kind": open_by_kind, "dispositions": disp,
+        "executed": {"ran": ran, "skipped": skipped, "failed": failed},
+        "resolved": resolved_count, "decided_total": len(decided_rows),
+    }
+
+
+def render_weekly_report(stats: dict, open_rows: list[dict], today: date) -> Optional[str]:
+    """The weekly rollup body (Slack mrkdwn), or None when the week is totally
+    quiet (nothing open, no decisions, no auto-resolutions). Pure — unit-tested."""
+    if not (stats["open_total"] or stats["decided_total"] or stats["resolved"]):
+        return None
+    lines = [f"*PACE interventions — weekly report ({today.isoformat()})*"]
+    ot = stats["open_total"]
+    if ot:
+        crit = stats["open_by_severity"].get("critical") or 0
+        crit_note = f" ({crit} critical)" if crit else ""
+        lines.append(f"*{ot} open* awaiting your decision{crit_note}:")
+        for r in sorted(open_rows, key=lambda x: -_SEV_RANK.get(x.get("severity", "warning"), 1))[:8]:
+            mark = "🔴" if r.get("severity") == "critical" else "🟠"
+            lines.append(f"  • {mark} `{short_code(r['id'])}` {r.get('title')}")
+        if ot > 8:
+            lines.append(f"  …and {ot - 8} more.")
+    else:
+        lines.append("✅ No open interventions — nothing awaiting a decision.")
+    d, ex = stats["dispositions"], stats["executed"]
+    if d["approved"] or d["denied"] or d["deferred"] or stats["resolved"]:
+        parts = []
+        if d["approved"]:
+            fix = f" ({ex['ran']} fix{'es' if ex['ran'] != 1 else ''} run"
+            fix += f", {ex['failed']} failed)" if ex["failed"] else ")"
+            parts.append(f"{d['approved']} approved{fix}")
+        if d["denied"]:
+            parts.append(f"{d['denied']} denied")
+        if d["deferred"]:
+            parts.append(f"{d['deferred']} deferred")
+        if stats["resolved"]:
+            parts.append(f"{stats['resolved']} auto-resolved")
+        lines.append("*This week:* " + ", ".join(parts) + ".")
+    lines.append("Review & decide → /pace")
+    return "\n".join(lines)
+
+
+def run_weekly_report(today: Optional[date] = None) -> dict:
+    """Build + post the weekly intervention rollup to the PACE channel + in-app.
+    Self-gated (feature + report flag); suppressed on a totally-quiet week;
+    once-per-ISO-week via the notification dedupe_key. Best-effort."""
+    today = today or date.today()
+    if not enabled():
+        return {"posted": False, "reason": "disabled"}
+    if not settings.pace_intervention_report_enabled:
+        return {"posted": False, "reason": "report_disabled"}
+    since = (today - timedelta(days=7)).isoformat()
+    sb = get_supabase()
+    try:
+        open_rows = (sb.table("pace_interventions")
+                     .select("id, kind, severity, title, status")
+                     .in_("status", ["proposed", "deferred"])
+                     .order("created_at").limit(200).execute()).data or []
+        decided_rows = (sb.table("pace_interventions")
+                        .select("disposition, result, decided_at")
+                        .gte("decided_at", since).limit(500).execute()).data or []
+        resolved_rows = (sb.table("pace_interventions").select("id")
+                         .eq("status", "resolved").gte("updated_at", since)
+                         .limit(500).execute()).data or []
+    except Exception as exc:
+        logger.warning("pace_intervention_report_read_failed", extra={"error": str(exc)})
+        return {"posted": False, "reason": "read_failed"}
+    stats = summarize_week(open_rows, decided_rows, len(resolved_rows))
+    body = render_weekly_report(stats, open_rows, today)
+    if not body:
+        return {"posted": False, "reason": "all_clear"}
+    iso = today.isocalendar()
+    nid = notifications.emit(
+        client_id=None, kind="pace_intervention_report",
+        title=f"PACE interventions — weekly report ({stats['open_total']} open)",
+        summary=body,
+        severity="warning" if stats["open_by_severity"].get("critical") else "info",
+        payload={"link": "/pace", "slack_channel": settings.pace_slack_channel or None},
+        dedupe_key=f"pace_intervention_report:{iso[0]}-W{iso[1]:02d}",
+    )
+    return {"posted": nid is not None, "open": stats["open_total"], "deduped": nid is None}

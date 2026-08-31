@@ -104,6 +104,12 @@ unit-tested; the DB reads/writes are thin and batched (mirrors `response_episode
 
 - **Daily full scan** on the shared scheduler (in the existing PACE initiative block),
   gated `pace_enabled ∧ pace_initiative_enabled ∧ pace_interventions_enabled`.
+- **Weekly report (Fridays):** a rollup to the PACE channel + in-app on
+  `pace_intervention_report_weekday` (default Friday) at the scheduler hour — open
+  interventions awaiting a decision (with their short-codes) + this week's decisions and
+  outcomes (approved/executed, denied, deferred, auto-resolved). Suppressed on a totally-quiet
+  week; once-per-ISO-week via the notification dedupe key. Gated on
+  `pace_intervention_report_enabled` (default on) + the feature being enabled.
 - **Immediate for severe:** a **severe-only** pass (`member_overload` + `duplicate_names`,
   critical only) runs on the scheduler tick, throttled to at most once per
   `pace_intervention_severe_min_interval_minutes` (default 15) so it doesn't re-scan the whole
