@@ -13,86 +13,6 @@ from datetime import date
 from services import rank_materialize
 
 
-class _FakeQuery:
-    """Chainable query double that records calls and returns a fixed dataset."""
-
-    def __init__(self, rows, calls):
-        self._rows = rows
-        self.calls = calls  # shared dict recording what the caller applied
-
-    # supabase-py chain methods — record and return self for chaining.
-    def select(self, *a, **k):
-        return self
-
-    def in_(self, *a, **k):
-        return self
-
-    def gte(self, *a, **k):
-        return self
-
-    def is_(self, col, val):
-        self.calls["is_"] = (col, val)
-        return self
-
-    @property
-    def not_(self):
-        self.calls["not_"] = True
-        return self
-
-    def limit(self, n):
-        self.calls["limit"] = n
-        return self
-
-    def execute(self):
-        return type("Res", (), {"data": self._rows})()
-
-
-class _FakeSupabase:
-    def __init__(self, rows, calls):
-        self._rows = rows
-        self._calls = calls
-
-    def table(self, name):
-        self._calls["table"] = name
-        return _FakeQuery(self._rows, self._calls)
-
-
-def test_load_tracked_ranks_bypasses_row_cap_and_maps_rows():
-    rows = [
-        {"keyword_id": "a", "date": "2026-07-07", "tracked_rank": 1},
-        {"keyword_id": "a", "date": "2026-07-10", "tracked_rank": 4},
-        {"keyword_id": "b", "date": "2026-07-10", "tracked_rank": 12},
-        # A stray null must be ignored even if it slips through.
-        {"keyword_id": "c", "date": "2026-07-10", "tracked_rank": None},
-    ]
-    calls: dict = {}
-    supabase = _FakeSupabase(rows, calls)
-
-    df_by_kw = rank_materialize.load_tracked_ranks(supabase, ["a", "b", "c"], date(2026, 4, 1))
-
-    # Regression guards: the query must filter to non-null tracked_rank AND set
-    # an explicit high limit so the default 1000-row cap can't truncate it.
-    assert calls["table"] == "rank_keyword_metrics"
-    assert calls.get("not_") is True
-    assert calls.get("is_") == ("tracked_rank", "null")
-    assert calls.get("limit") == rank_materialize._MAX_METRIC_ROWS
-    assert rank_materialize._MAX_METRIC_ROWS >= 100000
-
-    # Mapping: keyword_id -> {date_iso: rank}, nulls dropped.
-    assert df_by_kw == {
-        "a": {"2026-07-07": 1, "2026-07-10": 4},
-        "b": {"2026-07-10": 12},
-    }
-
-
-def test_load_tracked_ranks_empty_keyword_ids_short_circuits():
-    calls: dict = {}
-    supabase = _FakeSupabase([], calls)
-    assert rank_materialize.load_tracked_ranks(supabase, [], date(2026, 4, 1)) == {}
-    # No query issued when there are no keywords.
-    assert calls == {}
-
-
 def test_resolve_status_maps_no_data_to_unranked_after_a_fetch():
     # Checked by the DataForSEO fallback but ranks nowhere → 'unranked'.
     assert rank_materialize.resolve_status("no_data", True) == "unranked"
@@ -148,6 +68,15 @@ class _CappedQuery:
 
     def lte(self, col, val):
         self._lte[col] = val
+        return self
+
+    def is_(self, col, val):
+        self.calls["is_"] = (col, val)
+        return self
+
+    @property
+    def not_(self):
+        self.calls["not_"] = True
         return self
 
     def order(self, col, *a, **k):
@@ -239,4 +168,69 @@ def test_fetch_gsc_query_rows_empty_keywords_short_circuits():
         )
         == []
     )
+    assert calls == {}  # no query issued when there are no keywords
+
+
+def test_fetch_gsc_query_page_rows_scopes_and_paginates(monkeypatch):
+    # cap (2) below page size (3): the canonical read must page, not truncate.
+    monkeypatch.setattr(rank_materialize, "_READ_PAGE", 3)
+    P = "prop-1"
+    tracked = [
+        {"property_id": P, "query": "medical coding services", "date": "2026-08-01", "page": "/a", "clicks": 3, "impressions": 9},
+        {"property_id": P, "query": "medical coding services", "date": "2026-08-02", "page": "/a", "clicks": 1, "impressions": 4},
+        {"property_id": P, "query": "medical coding services", "date": "2026-08-03", "page": "/b", "clicks": 5, "impressions": 6},
+    ]
+    noise = [{"property_id": P, "query": "unrelated", "date": "2026-08-02", "page": "/x", "clicks": 9, "impressions": 9}]
+    calls: dict = {}
+    supabase = _CappedSupabase(tracked + noise, calls, cap=2)
+
+    rows = rank_materialize.fetch_gsc_query_page_rows(
+        supabase, "prop-1", ["Medical Coding Services"]
+    )
+
+    assert calls["table"] == "gsc_query_page_daily"
+    assert "query" in calls.get("in_cols", [])
+    # Scoped to the tracked query; all three of its rows survive the sub-page cap.
+    assert {r["query"] for r in rows} == {"medical coding services"}
+    assert {(r["page"], r["date"]) for r in rows} == {
+        ("/a", "2026-08-01"),
+        ("/a", "2026-08-02"),
+        ("/b", "2026-08-03"),
+    }
+    # And the consumer resolves the higher-click page (/b: 5 vs /a: 3+1=4).
+    assert rank_materialize.resolve_canonical_pages(rows) == {"medical coding services": "/b"}
+
+
+def test_load_tracked_ranks_paginates_and_maps_rows(monkeypatch):
+    # cap (2) below page size (3): load_tracked_ranks must page past the cap
+    # (it used to rely on .limit(100000), which the cap silently overrode).
+    monkeypatch.setattr(rank_materialize, "_READ_PAGE", 3)
+    rows = [
+        {"keyword_id": "a", "date": "2026-07-07", "tracked_rank": 1},
+        {"keyword_id": "a", "date": "2026-07-10", "tracked_rank": 4},
+        {"keyword_id": "b", "date": "2026-07-10", "tracked_rank": 12},
+        # A stray null must be ignored even if it slips through.
+        {"keyword_id": "c", "date": "2026-07-10", "tracked_rank": None},
+    ]
+    calls: dict = {}
+    supabase = _CappedSupabase(rows, calls, cap=2)
+
+    df_by_kw = rank_materialize.load_tracked_ranks(supabase, ["a", "b", "c"], date(2026, 4, 1))
+
+    # Still filters to non-null tracked_rank, and now pages instead of one capped read.
+    assert calls["table"] == "rank_keyword_metrics"
+    assert calls.get("not_") is True
+    assert calls.get("is_") == ("tracked_rank", "null")
+    assert [lo for lo, _ in calls.get("ranges", [])] == [0, 2, 4]
+    # Mapping: keyword_id -> {date_iso: rank}, nulls dropped.
+    assert df_by_kw == {
+        "a": {"2026-07-07": 1, "2026-07-10": 4},
+        "b": {"2026-07-10": 12},
+    }
+
+
+def test_load_tracked_ranks_empty_keyword_ids_short_circuits():
+    calls: dict = {}
+    supabase = _CappedSupabase([], calls, cap=2)
+    assert rank_materialize.load_tracked_ranks(supabase, [], date(2026, 4, 1)) == {}
     assert calls == {}  # no query issued when there are no keywords
