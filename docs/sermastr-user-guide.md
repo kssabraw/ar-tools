@@ -81,6 +81,23 @@ open goals, across every client) so you can ask "who needs attention this week?"
 fire?" without naming anyone. If your portfolio-mode question is really about one client it can't
 identify, it will ask which one — that's the one time it leads with a question.
 
+**Why this matters:** without it, every morning check-in would mean naming clients one by one and
+hoping you didn't skip the one that's actually on fire. Portfolio mode is how you triage the whole
+book in one question instead.
+
+> **You:** *who needs attention this week?*
+>
+> **SerMaStr:** *Three things stand out. **Coastal Plumbing** is frozen — Google flagged a manual
+> action on their homepage 4 days ago, nothing else should move until that's lifted. **Acme
+> Roofing** has two open alerts stacking: a rank drop on "roof repair Springfield" and a Maps
+> decline in the north-side grid — worth a real look today. **BrightSmile Dental** has nothing
+> tracked at all — no goals, no alerts — which usually means the setup got skipped, not that
+> everything's fine. I'd start with the Coastal freeze since that's actively costing them
+> visibility right now. Want the detail on any of these?*
+
+Notice the order: freeze first, then the client stacking alerts, then the quiet client with
+nothing tracked — that's the triage priority SerMaStr always applies in portfolio mode.
+
 ### 4.2 It only knows what's in the suite — plus two escape hatches
 
 SerMaStr's campaign numbers (rank, visibility, clicks, alerts) come **only** from the suite's own
@@ -93,6 +110,24 @@ breaking that rule:
   Yelp/TrustPilot, a competitor's own website, industry/algorithm news. It will say where a
   fact came from when it uses this, and it never uses web search for the client's own campaign
   metrics.
+
+**Why this matters:** a generic-sounding answer to "should we expand into City X" is worthless if
+it's actually a guess. The whole point of grounding is that SerMaStr's confidence tracks its
+evidence — so when it genuinely has nothing, it says so instead of papering over the gap with
+plausible-sounding SEO advice. That gap-handling pattern looks like this:
+
+> **You:** *should we push into Shelbyville for Acme?*
+>
+> **SerMaStr:** *Nothing for Shelbyville specifically — it's not a tracked keyword, hasn't had a
+> geo-grid scan, and isn't in Acme's target cities. What I do have: Acme ranks #2 in Springfield
+> for "roof repair," and the geo-grid there shows strong pin coverage, so the same play has
+> worked nearby. Which service should Shelbyville lead with — roof repair, or something else? If
+> it's roof repair, I can add "roof repair Shelbyville" to the tracker and run a geo-grid scan
+> centered there to get a real read before we commit to a page. Want me to do that?*
+
+That's the four-step pattern (§9.3, §13): name the gap specifically, answer from the nearest real
+data, ask the one question that would let it be specific, then offer — never run — the step that
+would close the gap.
 
 ### 4.3 It cites your playbook, not general SEO folklore
 
@@ -124,26 +159,26 @@ A few rules SerMaStr never gets wrong that are easy for a person to misread:
 SerMaStr is handed one JSON snapshot per client, module by module. You don't need to know the
 internal names — this table translates them into things you can actually ask:
 
-| Ask about… | What it's reading |
+| Ask about… | What it's reading — and why you'd check it |
 |---|---|
-| "How's the campaign going?" / goal progress | **Campaign Goals** — each goal's computed status: achieved / on_track / behind / overdue |
-| Rankings, ranking drops, striking-distance keywords | **Organic rank tracker** — tracked keywords, trend, open drop alerts, the latest reoptimization Action Plan, GSC opportunities |
-| Local pack / Google Maps presence | **Maps geo-grid** — average rank (with pin coverage), top-3/top-10 pin counts, weak coverage areas, recent trend |
-| "Do we show up when someone asks ChatGPT/Gemini/AI Overviews about us?" | **AI Visibility** — per-engine visibility, invisible keywords |
-| What's been written/published | **Content** (what the suite generated) vs. **Site inventory** (what's actually live on their site — the honest "do they already have a page for X?" check) |
-| Competitors | **Competitors** — local-pack pins, GBP rating/reviews, referring domains, organic overlap, review velocity, new pages they published |
-| "Who's beating us and on what keywords" | **Domain Intelligence** — keyword gaps (they rank, we don't/barely) and link gaps, opportunity-scored |
-| Backlinks | **Backlink Explorer** snapshot — DR, referring domains, what changed since last week |
-| "Where will we be in 90 days?" | **Forecast** — deterministic rank/traffic projections, the quick-win scenario, per-goal trajectory. It cites these numbers verbatim rather than computing its own |
-| "Is this a Google update or just us?" | **Trends** — cross-client algorithm-update detection, plus this client's seasonal demand outlook |
-| Budget / "can we afford this?" | **Budget** — this month's deployable retainer, the fixed costs already spoken for, and what's left (`discretionary`) |
-| The monthly task plan | **Task plan** (Recipe Engine) — budget, spend, flags, diagnosis, assigned lines |
-| "How did QA go this month?" | **QA** — the last 30 days of deliverable-review verdicts, and which tasks failed or need a human |
+| "How's the campaign going?" / goal progress | **Campaign Goals** — each goal's computed status: achieved / on_track / behind / overdue. Check this first on any client — it's the yardstick everything else gets measured against. |
+| Rankings, ranking drops, striking-distance keywords | **Organic rank tracker** — tracked keywords, trend, open drop alerts, the latest reoptimization Action Plan, GSC opportunities. Your go-to when a client asks "why did we drop" or "what's the cheapest win right now." |
+| Local pack / Google Maps presence | **Maps geo-grid** — average rank (with pin coverage), top-3/top-10 pin counts, weak coverage areas, recent trend. Use this for anything geo — "are we visible across the whole service area," not just at head office. |
+| "Do we show up when someone asks ChatGPT/Gemini/AI Overviews about us?" | **AI Visibility** — per-engine visibility, invisible keywords. Increasingly where clients actually notice they're "missing," even when organic rank looks fine. |
+| What's been written/published | **Content** (what the suite generated) vs. **Site inventory** (what's actually live on their site — the honest "do they already have a page for X?" check). Ask this *before* commissioning anything, so you never duplicate a page. |
+| Competitors | **Competitors** — local-pack pins, GBP rating/reviews, referring domains, organic overlap, review velocity, new pages they published. Use it to answer "who's actually beating us, and how" with names and numbers instead of a guess. |
+| "Who's beating us and on what keywords" | **Domain Intelligence** — keyword gaps (they rank, we don't/barely) and link gaps, opportunity-scored. This is where new content and outreach ideas come from — a ranked to-do list, not just a comparison. |
+| Backlinks | **Backlink Explorer** snapshot — DR, referring domains, what changed since last week. Check this before recommending a link round, so the ask is grounded in an actual gap. |
+| "Where will we be in 90 days?" | **Forecast** — deterministic rank/traffic projections, the quick-win scenario, per-goal trajectory. It cites these numbers verbatim rather than computing its own. Use it to make the value of a fix concrete before you pitch it (to a client or to yourself). |
+| "Is this a Google update or just us?" | **Trends** — cross-client algorithm-update detection, plus this client's seasonal demand outlook. Check this before panicking about one client's drop — it might be everyone's drop, or just the season. |
+| Budget / "can we afford this?" | **Budget** — this month's deployable retainer, the fixed costs already spoken for, and what's left (`discretionary`). Ask before proposing anything with a cost, so the plan is real, not aspirational. |
+| The monthly task plan | **Task plan** (Recipe Engine) — budget, spend, flags, diagnosis, assigned lines. Use this to see whether a client's plan is actually staffed, not just funded. |
+| "How did QA go this month?" | **QA** — the last 30 days of deliverable-review verdicts, and which tasks failed or need a human. Handy for spotting a pattern (one writer, one page type) before it becomes a client complaint. |
 | Citations, syndication, reports, GBP performance, GA4 traffic | Each has its own module — ask plainly, e.g. "how are our GBP calls trending?" |
 | Which SOPs apply / whether an Asana project is mapped | **SOPs** / **Asana** |
-| **Is anything paused right now?** | **Health** — an active freeze (all content/link output paused — the single most urgent thing to know about a client), open response episodes, offpage alerts |
-| The client's business profile | **Setup** — GBP listing, target cities, client type, brand voice summary, ICP summary |
-| Cross-agent friction | **Director of Operations** — read-only "seam" flags (an approved SerMaStr proposal nobody placed on the board, content shipped without full brand context, two agents working the same target). Insight, never an instruction. |
+| **Is anything paused right now?** | **Health** — an active freeze (all content/link output paused — the single most urgent thing to know about a client), open response episodes, offpage alerts. Worth checking first on any client you don't work with daily — a freeze changes everything else you'd otherwise recommend. |
+| The client's business profile | **Setup** — GBP listing, target cities, client type, brand voice summary, ICP summary. Check this before recommending a new keyword or city — it tells you what the client is actually set up to target. |
+| Cross-agent friction | **Director of Operations** — read-only "seam" flags (an approved SerMaStr proposal nobody placed on the board, content shipped without full brand context, two agents working the same target). Insight, never an instruction — a prompt to go look, not a verdict. |
 
 A module simply **isn't there** when nothing has been set up or run yet — SerMaStr says so rather
 than guessing, and that's a legitimate answer, not a bug.
@@ -178,16 +213,18 @@ Reply **yes** (or any clear affirmative) and it runs. Reply with anything else, 
 action is dropped — say what you actually meant instead. **Note:** the confirmation is
 per-conversation-thread — a new question before you reply "yes" cancels the pending action.
 
-| Group | Actions |
-|---|---|
-| **Run work** | Maps geo-grid scan · GSC Research · AI Visibility scan · a full strategist review · generate a client report · push the monthly task plan to Asana · a live SERP check (organic + local pack) · a backlink lookup · an RD/DR/UR authority report |
-| **Asana board** | Add a task · remove a task · mark a task complete (SerMaStr will extract the task name, assignee, and notes from your message — including a finding earlier in the same conversation, so the assignee knows *why*) |
-| **Client profile** (Setup page scalars) | Website URL · GSC property · business location · monthly retainer · client type · service-area-business flag · add/remove target cities |
-| **Campaign management** | Add/remove tracked keywords (organic) · add/remove AI-visibility keywords or competitors · add/remove a campaign goal |
-| **Commission content** (creates a real deliverable) | Start a content run (blog post or service page) · generate a Local SEO page for a keyword + city · reoptimize a live page by URL |
-| **Strategy** | Save a set of recommended steps to the client's Action Plan (recommend-only — nothing runs; this just writes the plan down where the team looks) |
+| Group | Actions | You'd reach for this when… |
+|---|---|---|
+| **Run work** | Maps geo-grid scan · GSC Research · AI Visibility scan · a full strategist review · generate a client report · push the monthly task plan to Asana · a live SERP check (organic + local pack) · a backlink lookup · an RD/DR/UR authority report | The stored data is stale, or someone (a client, a PM) needs a formal read right now rather than the next scheduled refresh. |
+| **Asana board** | Add a task · remove a task · mark a task complete (SerMaStr will extract the task name, assignee, and notes from your message — including a finding earlier in the same conversation, so the assignee knows *why*) | Work got decided in conversation and needs to actually land on the board, not just live in the chat log. |
+| **Client profile** (Setup page scalars) | Website URL · GSC property · business location · monthly retainer · client type · service-area-business flag · add/remove target cities | A real-world fact changed (new GSC property, renegotiated retainer, a new city the client wants covered) and the record needs to catch up. |
+| **Campaign management** | Add/remove tracked keywords (organic) · add/remove AI-visibility keywords or competitors · add/remove a campaign goal | You and the client (or PM) have agreed something should be tracked or measured going forward, not just discussed once. |
+| **Commission content** (creates a real deliverable) | Start a content run (blog post or service page) · generate a Local SEO page for a keyword + city · reoptimize a live page by URL | A gap you've just confirmed (via the Content/Site inventory modules, §5) is worth turning into an actual deliverable now. |
+| **Strategy** | Save a set of recommended steps to the client's Action Plan (recommend-only — nothing runs; this just writes the plan down where the team looks) | You just gave a recommendation in chat and want it to persist somewhere the whole team — not just this thread — will see it. |
 
-### 6.3 A worked example
+### 6.3 Worked examples
+
+**Commissioning content**
 
 > **You:** *can we add "emergency roof tarping" as a tracked keyword for Acme, and also start a
 > blog post on it*
@@ -202,6 +239,41 @@ per-conversation-thread — a new question before you reply "yes" cancels the pe
 >
 > **SerMaStr:** *Done — "emergency roof tarping" is now tracked, and the blog run is queued.
 > I'll ping you back on the run once it's ready, or check Runs in the dashboard.*
+
+**Diagnosing a drop** — this is the "why," not just the alert:
+
+> **You:** *why did "roof repair Springfield" drop for Acme?*
+>
+> **SerMaStr:** *It fell from #3 to #7 over the last 9 days. Two things line up: impressions on
+> that query dropped too — not just position, so this isn't a measurement blip — and the latest
+> SERP snapshot shows a competitor, Springfield Roof Pros, picked up a review spike and moved
+> into the top 3. That's a straightforward position-drop diagnostic tracing to competitor
+> movement (Rank_Drop_Mitigation_SOP_Organic §B5 step 6), not a technical or on-page issue on our
+> side. I'd fund another link round on that page this month — Acme's discretionary budget has
+> room for it. Want me to save that as a step on the Action Plan?*
+
+**"What should we improve?"** — a full strategist-style answer, not a data dump:
+
+> **You:** *what should we improve for Acme this month?*
+>
+> **SerMaStr:** *Three things, ranked by leverage:*
+> 1. *Reoptimize "roof repair Springfield" — it's striking-distance at position 6, and the
+>    geo-grid shows we're already found on 22 of 25 pins there, just not converting to page one.
+>    Cheapest win on the board.*
+> 2. *A location page for the north-side grid — average rank there is 9.4 across found pins,
+>    well behind the rest of the city. That's a coverage gap, not a ranking problem
+>    (How_To_Rank_In_Google_Maps SOP §Relevance).*
+> 3. *Two AI-visibility keywords are invisible across every engine — "emergency roof repair near
+>    me" and "storm damage roof Springfield." Worth a GBP profile pass; AI Overviews and AI Mode
+>    lean heavily on GBP completeness (AIO_AEO_SOP).*
+>
+> *This month's task plan also has one unstaffed content line — I'd put a body on that before
+> adding anything new. Want a full strategist review, or should I save these three as Action Plan
+> steps?*
+
+Notice what each of these does that a vague answer wouldn't: it names the specific page or
+keyword, gives the number behind the claim, cites the SOP it's following, and ends with a
+concrete next move rather than a summary.
 
 ---
 
