@@ -15,8 +15,16 @@ GoalType = Literal[
     "organic_impressions",
     "ai_visibility",
     "maps_pack_presence",
+    "gbp_calls",
+    "gbp_impressions",
+    "gbp_website_clicks",
     "custom",
 ]
+
+# absolute → target_value is the absolute number to reach.
+# percent_increase → target_value is a % and the effective target is
+#   baseline * (1 + %/100), computed on read.
+TargetMode = Literal["absolute", "percent_increase"]
 
 
 class CampaignGoalCreateRequest(BaseModel):
@@ -24,6 +32,7 @@ class CampaignGoalCreateRequest(BaseModel):
     label: str
     keyword: Optional[str] = None          # keyword_position goals
     target_value: Optional[float] = None   # null only for custom
+    target_mode: TargetMode = "absolute"   # number vs % increase over baseline
     target_position: Optional[int] = None  # keywords_in_top: the N in "top N"
     due_date: Optional[date] = None
     notes: Optional[str] = None
@@ -32,6 +41,7 @@ class CampaignGoalCreateRequest(BaseModel):
 class CampaignGoalUpdateRequest(BaseModel):
     label: Optional[str] = None
     target_value: Optional[float] = None
+    target_mode: Optional[TargetMode] = None
     target_position: Optional[int] = None
     due_date: Optional[date] = None
     notes: Optional[str] = None
@@ -45,6 +55,7 @@ class CampaignGoalResponse(BaseModel):
     label: str
     keyword: Optional[str] = None
     target_value: Optional[float] = None
+    target_mode: str = "absolute"
     target_position: Optional[int] = None
     due_date: Optional[date] = None
     baseline_value: Optional[float] = None

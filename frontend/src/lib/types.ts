@@ -1489,6 +1489,7 @@ export interface CampaignGoal {
   label: string
   keyword: string | null
   target_value: number | null
+  target_mode: string
   target_position: number | null
   due_date: string | null
   baseline_value: number | null
