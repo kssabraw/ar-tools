@@ -18,8 +18,18 @@ const GOAL_TYPE_META: Record<string, { label: string; hint: string; unit: string
   organic_impressions: { label: 'Organic impressions / 30 days', hint: 'GSC impressions over a rolling 30-day window', unit: 'impressions' },
   ai_visibility: { label: 'AI visibility %', hint: 'Share of keyword×engine cells where AI assistants mention the brand', unit: '%' },
   maps_pack_presence: { label: 'Local-pack presence %', hint: 'Share of geo-grid pins in the top-3 map pack', unit: '%' },
+  gbp_calls: { label: 'GBP calls / 30 days', hint: 'Google Business Profile call-button clicks over a rolling 30-day window', unit: 'calls' },
+  gbp_impressions: { label: 'GBP impressions / 30 days', hint: 'Google Business Profile views (Search + Maps) over a rolling 30-day window', unit: 'views' },
+  gbp_website_clicks: { label: 'GBP clicks to website / 30 days', hint: 'Google Business Profile website-button clicks over a rolling 30-day window', unit: 'clicks' },
   custom: { label: 'Custom (manual)', hint: 'A free-text goal SerMaStr sees but can’t auto-measure', unit: '' },
 }
+
+// Volume goals whose target can be a raw number OR a % increase over the
+// baseline captured at creation. (Percent/position/share types don't apply.)
+const PERCENT_MODE_TYPES = new Set([
+  'organic_clicks', 'organic_impressions',
+  'gbp_calls', 'gbp_impressions', 'gbp_website_clicks',
+])
 
 const STATUS_META: Record<string, { label: string; color: string; bg: string; icon: ReactNode }> = {
   achieved: { label: 'Achieved', color: '#15803d', bg: '#f0fdf4', icon: <CheckCircle2 size={13} /> },
@@ -50,18 +60,24 @@ export function CampaignGoals() {
   const [label, setLabel] = useState('')
   const [keyword, setKeyword] = useState('')
   const [targetValue, setTargetValue] = useState('')
+  const [targetMode, setTargetMode] = useState<'absolute' | 'percent_increase'>('absolute')
   const [targetPosition, setTargetPosition] = useState('')
   const [dueDate, setDueDate] = useState('')
   const [notes, setNotes] = useState('')
 
   const resetForm = () => {
-    setLabel(''); setKeyword(''); setTargetValue(''); setTargetPosition(''); setDueDate(''); setNotes('')
+    setLabel(''); setKeyword(''); setTargetValue(''); setTargetMode('absolute')
+    setTargetPosition(''); setDueDate(''); setNotes('')
   }
+
+  const supportsPercent = PERCENT_MODE_TYPES.has(goalType)
+  const usePercent = supportsPercent && targetMode === 'percent_increase'
 
   const autoLabel = (): string => {
     const meta = GOAL_TYPE_META[goalType]
     if (goalType === 'keyword_position' && keyword && targetValue) return `“${keyword}” to position ${targetValue}`
     if (goalType === 'keywords_in_top' && targetValue && targetPosition) return `${targetValue} keywords in top ${targetPosition}`
+    if (usePercent && targetValue) return `${meta.label}: +${targetValue}%`
     if (targetValue) return `${meta.label}: ${targetValue}`
     return meta.label
   }
@@ -73,6 +89,7 @@ export function CampaignGoals() {
         label: (label.trim() || autoLabel()).slice(0, 200),
         keyword: goalType === 'keyword_position' ? keyword.trim() || null : null,
         target_value: goalType === 'custom' ? null : Number(targetValue),
+        target_mode: usePercent ? 'percent_increase' : 'absolute',
         target_position: goalType === 'keywords_in_top' ? Number(targetPosition) : null,
         due_date: dueDate || null,
         notes: notes.trim() || null,
@@ -93,6 +110,7 @@ export function CampaignGoals() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [eLabel, setELabel] = useState('')
   const [eTarget, setETarget] = useState('')
+  const [eTargetMode, setETargetMode] = useState<'absolute' | 'percent_increase'>('absolute')
   const [ePosition, setEPosition] = useState('')
   const [eDue, setEDue] = useState('')
   const [eNotes, setENotes] = useState('')
@@ -101,6 +119,7 @@ export function CampaignGoals() {
     setEditingId(g.id)
     setELabel(g.label)
     setETarget(g.target_value != null ? String(g.target_value) : '')
+    setETargetMode(g.target_mode === 'percent_increase' ? 'percent_increase' : 'absolute')
     setEPosition(g.target_position != null ? String(g.target_position) : '')
     setEDue(g.due_date ?? '')
     setENotes(g.notes ?? '')
@@ -113,7 +132,10 @@ export function CampaignGoals() {
         due_date: eDue || null,
         notes: eNotes.trim() || null,
       }
-      if (g.goal_type !== 'custom') body.target_value = Number(eTarget)
+      if (g.goal_type !== 'custom') {
+        body.target_value = Number(eTarget)
+        if (PERCENT_MODE_TYPES.has(g.goal_type)) body.target_mode = eTargetMode
+      }
       if (g.goal_type === 'keywords_in_top') body.target_position = Number(ePosition)
       return api.put<CampaignGoal>(`/clients/${id}/goals/${g.id}`, body)
     },
@@ -127,6 +149,7 @@ export function CampaignGoals() {
     goalType === 'custom'
       ? Boolean(label.trim() || notes.trim())
       : Boolean(targetValue) &&
+        (!usePercent || Number(targetValue) > 0) &&
         (goalType !== 'keyword_position' || Boolean(keyword.trim())) &&
         (goalType !== 'keywords_in_top' || Boolean(targetPosition))
 
@@ -175,9 +198,20 @@ export function CampaignGoals() {
             {goalType !== 'custom' && (
               <div>
                 <label style={fieldLabel}>
-                  Target {GOAL_TYPE_META[goalType].unit && `(${GOAL_TYPE_META[goalType].unit})`}
+                  Target {usePercent ? '(% increase)' : GOAL_TYPE_META[goalType].unit && `(${GOAL_TYPE_META[goalType].unit})`}
                 </label>
-                <input style={input} type="number" placeholder={goalType === 'keyword_position' ? '3' : '800'} value={targetValue} onChange={(e) => setTargetValue(e.target.value)} />
+                <input style={input} type="number" min={usePercent ? 1 : undefined} placeholder={usePercent ? '25' : goalType === 'keyword_position' ? '3' : '800'} value={targetValue} onChange={(e) => setTargetValue(e.target.value)} />
+                {supportsPercent && (
+                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                    <button type="button" style={toggleBtn(targetMode === 'absolute')} onClick={() => setTargetMode('absolute')}>By number</button>
+                    <button type="button" style={toggleBtn(targetMode === 'percent_increase')} onClick={() => setTargetMode('percent_increase')}>By % increase</button>
+                  </div>
+                )}
+                {usePercent && (
+                  <p style={{ fontSize: 11.5, color: '#94a3b8', margin: '4px 0 0' }}>
+                    % above the value captured when the goal is created.
+                  </p>
+                )}
               </div>
             )}
             {goalType === 'keywords_in_top' && (
@@ -222,8 +256,10 @@ export function CampaignGoals() {
             const meta = STATUS_META[g.status ?? 'no_data'] ?? STATUS_META.no_data
             const pct = g.progress_pct
             if (editingId === g.id) {
+              const eUsePercent = PERCENT_MODE_TYPES.has(g.goal_type) && eTargetMode === 'percent_increase'
               const canSave =
-                (g.goal_type === 'custom' || (eTarget !== '' && !Number.isNaN(Number(eTarget)))) &&
+                (g.goal_type === 'custom' ||
+                  (eTarget !== '' && !Number.isNaN(Number(eTarget)) && (!eUsePercent || Number(eTarget) > 0))) &&
                 (g.goal_type !== 'keywords_in_top' || (ePosition !== '' && !Number.isNaN(Number(ePosition))))
               return (
                 <section key={g.id} style={{ ...card, borderColor: '#c7d2fe' }}>
@@ -234,8 +270,18 @@ export function CampaignGoals() {
                     </div>
                     {g.goal_type !== 'custom' && (
                       <div>
-                        <label style={fieldLabel}>Target {GOAL_TYPE_META[g.goal_type]?.unit && `(${GOAL_TYPE_META[g.goal_type].unit})`}</label>
-                        <input style={input} type="number" value={eTarget} onChange={(e) => setETarget(e.target.value)} />
+                        <label style={fieldLabel}>
+                          Target {eTargetMode === 'percent_increase' && PERCENT_MODE_TYPES.has(g.goal_type)
+                            ? '(% increase)'
+                            : GOAL_TYPE_META[g.goal_type]?.unit && `(${GOAL_TYPE_META[g.goal_type].unit})`}
+                        </label>
+                        <input style={input} type="number" min={eTargetMode === 'percent_increase' && PERCENT_MODE_TYPES.has(g.goal_type) ? 1 : undefined} value={eTarget} onChange={(e) => setETarget(e.target.value)} />
+                        {PERCENT_MODE_TYPES.has(g.goal_type) && (
+                          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                            <button type="button" style={toggleBtn(eTargetMode === 'absolute')} onClick={() => setETargetMode('absolute')}>By number</button>
+                            <button type="button" style={toggleBtn(eTargetMode === 'percent_increase')} onClick={() => setETargetMode('percent_increase')}>By % increase</button>
+                          </div>
+                        )}
                       </div>
                     )}
                     {g.goal_type === 'keywords_in_top' && (
@@ -280,7 +326,11 @@ export function CampaignGoals() {
                     </div>
                     <div style={{ fontSize: 12.5, color: '#64748b', marginTop: 4 }}>
                       {g.current_value != null && <>Now <strong>{fmt(g.current_value)}</strong></>}
-                      {g.target_value != null && <> · target <strong>{fmt(g.target_value)}</strong></>}
+                      {g.target_value != null && (
+                        g.target_mode === 'percent_increase'
+                          ? <> · target <strong>+{fmt(g.target_value)}%</strong>{g.effective_target != null && <> (≈ {fmt(g.effective_target)})</>}</>
+                          : <> · target <strong>{fmt(g.target_value)}</strong></>
+                      )}
                       {g.baseline_value != null && <> · started at {fmt(g.baseline_value)}</>}
                       {g.due_date && <> · due {g.due_date}</>}
                     </div>
@@ -349,6 +399,11 @@ const chip: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700,
   padding: '2px 8px', borderRadius: 999,
 }
+const toggleBtn = (active: boolean): React.CSSProperties => ({
+  flex: 1, padding: '5px 8px', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+  borderRadius: 7, border: `1px solid ${active ? '#4f46e5' : '#e2e8f0'}`,
+  background: active ? '#eef2ff' : '#fff', color: active ? '#4338ca' : '#64748b',
+})
 const emptyBox: React.CSSProperties = {
   border: '1px dashed #cbd5e1', borderRadius: 10, padding: 24, fontSize: 13, color: '#94a3b8', textAlign: 'center',
 }

@@ -518,6 +518,35 @@ def test_fmt_goal_value_by_type():
     assert cr._fmt_goal_value("keyword_position", 3) == "position 3"
     assert cr._fmt_goal_value("ai_visibility", 40) == "40%"
     assert cr._fmt_goal_value("keyword_position", None) == "—"
+    # GBP goal types carry a labeled, thousands-separated count (not a bare number).
+    assert cr._fmt_goal_value("gbp_calls", 1420) == "1,420 calls/mo"
+    assert cr._fmt_goal_value("gbp_website_clicks", 305) == "305 website clicks/mo"
+    assert cr._fmt_goal_value("gbp_impressions", 12500) == "12,500 profile views/mo"
+
+
+def test_section_goals_percent_goal_shows_effective_target_not_percentage():
+    # A percent GBP goal: target_value is 25 (the %), effective_target 100 (calls).
+    # The client-facing target must read the absolute number, never "25".
+    data = _goals(
+        {"goal_type": "gbp_calls", "label": "More calls", "status": "on_track",
+         "progress_pct": 50.0, "current_value": 90, "target_value": 25,
+         "target_mode": "percent_increase", "effective_target": 100},
+    )
+    html = cr._section_goals(data)
+    assert "target 100 calls/mo" in html
+    assert "target 25" not in html
+
+
+def test_goal_movement_for_gbp_goal():
+    # GBP goals are date-aware, so they get a "since last period" movement line.
+    up = cr._goal_movement(
+        {"goal_type": "gbp_calls", "current_value": 140, "previous_value": 120}
+    )
+    assert "20 calls/mo" in up and "▲" in up
+    # A non-period type still gets none.
+    assert cr._goal_movement(
+        {"goal_type": "ai_visibility", "current_value": 40, "previous_value": 30}
+    ) == ""
 
 
 # ---------------------------------------------------------------------------

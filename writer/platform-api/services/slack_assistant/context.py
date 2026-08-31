@@ -920,6 +920,8 @@ def _ctx_campaign_goals(supabase, client_id: str, today: date) -> Optional[dict]
                 "status": g.get("status"),
                 "current_value": g.get("current_value"),
                 "target_value": g.get("target_value"),
+                "target_mode": g.get("target_mode"),
+                "effective_target": g.get("effective_target"),
                 "progress_pct": g.get("progress_pct"),
                 "due_date": g.get("due_date"),
                 "note": g.get("note"),

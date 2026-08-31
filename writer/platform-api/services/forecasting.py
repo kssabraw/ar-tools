@@ -364,7 +364,11 @@ def build_forecast(client_id: str, today: Optional[date] = None) -> dict:
                     gsc_trajectory["clicks_previous_30d"],
                     horizon / 30.0,
                 ))
-                target = g.get("target_value")
+                # effective_target resolves a percent goal to its absolute number;
+                # equals target_value for an absolute goal. Raw target_value would
+                # be a bare percentage for a percent goal (projected >> 25 → always
+                # "on trajectory").
+                target = g.get("effective_target")
                 goal_projections.append({
                     "goal_label": g.get("label"),
                     "horizon_days": horizon,
