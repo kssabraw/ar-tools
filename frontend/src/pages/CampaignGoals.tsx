@@ -149,6 +149,7 @@ export function CampaignGoals() {
     goalType === 'custom'
       ? Boolean(label.trim() || notes.trim())
       : Boolean(targetValue) &&
+        (!usePercent || Number(targetValue) > 0) &&
         (goalType !== 'keyword_position' || Boolean(keyword.trim())) &&
         (goalType !== 'keywords_in_top' || Boolean(targetPosition))
 
@@ -199,7 +200,7 @@ export function CampaignGoals() {
                 <label style={fieldLabel}>
                   Target {usePercent ? '(% increase)' : GOAL_TYPE_META[goalType].unit && `(${GOAL_TYPE_META[goalType].unit})`}
                 </label>
-                <input style={input} type="number" placeholder={usePercent ? '25' : goalType === 'keyword_position' ? '3' : '800'} value={targetValue} onChange={(e) => setTargetValue(e.target.value)} />
+                <input style={input} type="number" min={usePercent ? 1 : undefined} placeholder={usePercent ? '25' : goalType === 'keyword_position' ? '3' : '800'} value={targetValue} onChange={(e) => setTargetValue(e.target.value)} />
                 {supportsPercent && (
                   <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
                     <button type="button" style={toggleBtn(targetMode === 'absolute')} onClick={() => setTargetMode('absolute')}>By number</button>
@@ -255,8 +256,10 @@ export function CampaignGoals() {
             const meta = STATUS_META[g.status ?? 'no_data'] ?? STATUS_META.no_data
             const pct = g.progress_pct
             if (editingId === g.id) {
+              const eUsePercent = PERCENT_MODE_TYPES.has(g.goal_type) && eTargetMode === 'percent_increase'
               const canSave =
-                (g.goal_type === 'custom' || (eTarget !== '' && !Number.isNaN(Number(eTarget)))) &&
+                (g.goal_type === 'custom' ||
+                  (eTarget !== '' && !Number.isNaN(Number(eTarget)) && (!eUsePercent || Number(eTarget) > 0))) &&
                 (g.goal_type !== 'keywords_in_top' || (ePosition !== '' && !Number.isNaN(Number(ePosition))))
               return (
                 <section key={g.id} style={{ ...card, borderColor: '#c7d2fe' }}>
@@ -272,7 +275,7 @@ export function CampaignGoals() {
                             ? '(% increase)'
                             : GOAL_TYPE_META[g.goal_type]?.unit && `(${GOAL_TYPE_META[g.goal_type].unit})`}
                         </label>
-                        <input style={input} type="number" value={eTarget} onChange={(e) => setETarget(e.target.value)} />
+                        <input style={input} type="number" min={eTargetMode === 'percent_increase' && PERCENT_MODE_TYPES.has(g.goal_type) ? 1 : undefined} value={eTarget} onChange={(e) => setETarget(e.target.value)} />
                         {PERCENT_MODE_TYPES.has(g.goal_type) && (
                           <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
                             <button type="button" style={toggleBtn(eTargetMode === 'absolute')} onClick={() => setETargetMode('absolute')}>By number</button>

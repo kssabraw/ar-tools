@@ -47,6 +47,10 @@ async def create_goal(
 ) -> CampaignGoalResponse:
     if body.goal_type != "custom" and body.target_value is None:
         raise HTTPException(status_code=422, detail="target_value_required")
+    if body.target_mode == "percent_increase" and (body.target_value is None or body.target_value <= 0):
+        # A percentage increase must be a positive number; 0/negative is either a
+        # no-op ("achieved" at creation) or a decrease this goal type can't express.
+        raise HTTPException(status_code=422, detail="percent_target_must_be_positive")
     if body.goal_type == "keyword_position" and not (body.keyword or "").strip():
         raise HTTPException(status_code=422, detail="keyword_required")
     if body.goal_type == "keywords_in_top" and not body.target_position:
@@ -79,6 +83,9 @@ async def update_goal(
         raise HTTPException(status_code=422, detail="nothing_to_update")
     if changes.get("label") is not None and not str(changes["label"]).strip():
         raise HTTPException(status_code=422, detail="label_required")
+    if changes.get("target_mode") == "percent_increase" and "target_value" in changes \
+            and (changes["target_value"] is None or changes["target_value"] <= 0):
+        raise HTTPException(status_code=422, detail="percent_target_must_be_positive")
     if changes.get("due_date") is not None:
         changes["due_date"] = changes["due_date"].isoformat()
     changes["updated_at"] = "now()"
