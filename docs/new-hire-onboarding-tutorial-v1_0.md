@@ -563,6 +563,36 @@ Nothing here appears on the Tasks board (§13c) until you explicitly push it —
 
 ---
 
+## Worked example — Riverside Plumbing Co.
+
+> **Every detail below is made up.** Riverside Plumbing Co. doesn't exist — this is a fictional
+> client used to make the "why" sections above concrete. Here's one plausible set of real choices,
+> start to finish, cross-referenced back to the steps that explain each one.
+
+**The client, in one paragraph:** a family-owned residential plumber with no storefront (they work
+out of a truck, not an office), serving Des Moines, IA and a few surrounding towns. Owner-run,
+modest budget, wants more emergency-repair calls and to stop losing local-pack visibility to two
+bigger competitors.
+
+| Step | What you'd actually type / pick | Why (ties back to the step above) |
+|---|---|---|
+| **§1 Business Profile** | Name: *Riverside Plumbing Co.* · Website: `riversideplumbingdsm.com` · GBP attached via paste-link · **SAB** checked (no storefront) · **Client Type**: Local · Retainer: `$2,500` · Target Cities: `Ankeny, Waukee, West Des Moines` | SAB is checked because there's genuinely no public address to hide. Target Cities adds the three towns the owner mentioned by name, on top of whatever the silo planner auto-derives on its own. |
+| **§2 Brand Voice** | The owner sent a one-line note — "we treat every home like it's our own, no upselling, no jargon." Typed that in under **Write your own** rather than accepting the auto-scan. | Real owner input beats a generated guess every time — worth 30 seconds even when the scan already ran. |
+| **§3 ICP** | Left on **Detect ICP** (auto-scanned) — came back "homeowner, 35–65, triggered by an active leak or no hot water, afraid of a surprise bill or being upsold." Reads right, so it's kept as-is. | No owner-supplied version existed to prefer, and the auto-detected one matched what the owner said on the phone — no reason to override it. |
+| **§5 GSC** | Property added: `https://riversideplumbingdsm.com/` (URL-prefix, trailing slash). | The owner's site isn't on a `sc-domain:`-style setup, so URL-prefix is the right format. |
+| **§7a Drive** | One default folder, no per-content-type split. | Small client, small content volume — nothing here justifies the extra folders (§7a's own guidance). |
+| **§9 Maps Geo-Grid** | Radius: `6` miles · Surface: **Local Finder** · Data source: **Local Dominator** (default) · Schedule: **Weekly**. | 6 miles roughly covers the metro without diluting the average with towns Riverside doesn't really serve. Local Finder over Google Maps because someone with a leak searches Google, not the Maps app. Weekly because this is an active retainer whose alerts and reports depend on it. |
+| **§10 AI Visibility** | Keywords: imported from §8 + `best plumber near me des moines` · Competitors: the two named rivals · all six engines left checked · **Include competitors** on. | Matches the tool's own default (run everything, it's free) — no reason found to narrow it for a client this size. |
+| **§11 Goals** | *Keyword to position:* `emergency plumber des moines` → top 3 by Q4 · *Local-pack presence %:* target `60%`. | One sharp, ownable term (the owner keeps asking about this exact phrase) plus a breadth goal that matches how a storefront-less local business actually lives or dies — by the 3-pack, not any one keyword. |
+| **§12 Reporting** | Schedule: **Monthly** · Report covers: **Auto** · Drive copy on, Email off (SMTP not yet configured for this agency). | Monthly matches what a small owner-run client expects; Auto keeps the report window matched to the delivery cadence with no manual upkeep. |
+| **§13b Monthly Template** | Rows: `GBP Blast` (library default hours/category, Auto-distribute) · `2× Blog posts` (assigned to a named writer, 3 hrs each). | The blog rows carry a real Est. hrs because that number is what decides who an Auto-distribute pick lands on next month, and what later shows up as "overloaded" on Team Workload if left unrealistic. |
+
+None of these choices are "the correct answer" for every client — they're one coherent, defensible
+set for *this* fictional one. The point is the reasoning, not the specific numbers: a bigger
+enterprise client would land on different picks for nearly every row.
+
+---
+
 ## A day, start to finish
 
 A realistic single-day pass, in the order this document presents it. Steps marked *(background)*
