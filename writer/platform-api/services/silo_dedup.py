@@ -379,6 +379,7 @@ async def process_silo_dedup_job(job: dict) -> None:
         )
 
     except Exception as exc:
+        err = str(exc)[:500]  # bound for the DB column; the log keeps the full text
         logger.error(
             "silo_dedup_failed",
             extra={"job_id": job_id, "run_id": run_id, "error": str(exc)},
@@ -389,7 +390,7 @@ async def process_silo_dedup_job(job: dict) -> None:
                 .update(
                     {
                         "status": "failed",
-                        "error": str(exc)[:500],
+                        "error": err,
                         "result": metrics,
                         "completed_at": "now()",
                     }
