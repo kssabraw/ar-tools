@@ -196,6 +196,113 @@ def _verified_property_id(supabase, client_id: str) -> Optional[str]:
     return prop["id"] if prop else None
 
 
+_READ_PAGE = 1000
+
+
+def _query_variants(keywords: list[str]) -> list[str]:
+    """Distinct, lowercased query strings for the client's tracked keywords.
+
+    Google normalises Search Console queries to lowercase (verified: 0 mixed-case
+    rows across live properties), and both sides of the join in `index_gsc_rows` /
+    `build_keyword_axis` are lowercased, so matching the stored query on the
+    lowercased keyword is exact.
+    """
+    seen: dict[str, None] = {}
+    for k in keywords:
+        v = (k or "").strip().lower()
+        if v:
+            seen[v] = None
+    return list(seen)
+
+
+def _chunked(items: list, size: int):
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
+
+
+def fetch_gsc_query_rows(
+    supabase, property_id: str, keywords: list[str], start: date, today: date
+) -> list[dict]:
+    """gsc_query_daily rows for the client's tracked-keyword queries in the window.
+
+    Two things this must get right, both learned from a live incident where
+    `gsc_position` froze at the GSC set-up date (2026-07) for every connected
+    client while raw ingest stayed healthy:
+
+    * **Scope to the tracked keywords' queries.** The materialiser only ever looks
+      up tracked keywords in the index, but the old query pulled *every* query for
+      the property — 37k–170k rows on real sites — purely to throw almost all away.
+    * **Paginate past the row cap.** A single `.select(...).limit(100000)` is
+      silently capped (PostgREST `db-max-rows`) to ~1000 rows returned in insertion
+      order, i.e. the initial back-fill batch (the earliest dates). Every later,
+      daily-appended date fell outside the returned window, so its `gsc_position`
+      was written NULL forever. Ordered `.range()` paging returns the whole set.
+    """
+    variants = _query_variants(keywords)
+    if not variants:
+        return []
+    out: list[dict] = []
+    for chunk in _chunked(variants, 150):
+        offset = 0
+        while True:
+            res = (
+                supabase.table("gsc_query_daily")
+                .select("query, date, clicks, impressions, ctr, position")
+                .eq("property_id", property_id)
+                .in_("query", chunk)
+                .gte("date", start.isoformat())
+                .lte("date", today.isoformat())
+                .order("date")
+                .order("query")
+                .range(offset, offset + _READ_PAGE - 1)
+                .execute()
+            )
+            batch = res.data or []
+            out.extend(batch)
+            if len(batch) < _READ_PAGE:
+                break
+            offset += _READ_PAGE
+    return out
+
+
+def fetch_gsc_query_page_rows(
+    supabase, property_id: str, keywords: list[str]
+) -> list[dict]:
+    """gsc_query_page_daily rows for the client's tracked-keyword queries.
+
+    Same scope-and-paginate fix as `fetch_gsc_query_rows` (this fetch had no date
+    bound at all, so it was the most truncation-prone read in the module — the
+    canonical-URL resolution silently only ever saw the earliest ~1000 rows).
+    Kept all-time (no date filter) because canonical resolution is a whole-history
+    heuristic; the (query, page, date) key makes the ordering a total order for
+    stable paging.
+    """
+    variants = _query_variants(keywords)
+    if not variants:
+        return []
+    out: list[dict] = []
+    for chunk in _chunked(variants, 150):
+        offset = 0
+        while True:
+            res = (
+                supabase.table("gsc_query_page_daily")
+                .select("query, page, clicks, impressions")
+                .eq("property_id", property_id)
+                .in_("query", chunk)
+                .order("date")
+                .order("query")
+                .order("page")
+                .range(offset, offset + _READ_PAGE - 1)
+                .execute()
+            )
+            batch = res.data or []
+            out.extend(batch)
+            if len(batch) < _READ_PAGE:
+                break
+            offset += _READ_PAGE
+    return out
+
+
 def materialize_client(client_id: str, today: Optional[date] = None) -> MaterializeResult:
     """Rebuild the date axis + status/source for every active keyword of a client."""
     supabase = get_supabase()
@@ -214,33 +321,24 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
     if not keywords.data:
         return MaterializeResult(status="ok", keywords=0, rows=0)
     keyword_ids = [k["id"] for k in keywords.data]
+    keyword_texts = [k["keyword"] for k in keywords.data]
 
-    # GSC data (only if the client has a verified property).
+    # GSC data (only if the client has a verified property). Both reads are scoped
+    # to the tracked keywords' queries and paginated — see fetch_gsc_query_rows for
+    # the incident this guards against.
     prop_row = _verified_property(supabase, client_id)
     property_id = prop_row["id"] if prop_row else None
     gsc_index: dict[tuple[str, str], dict] = {}
     canonical_by_query: dict[str, str] = {}
     to_inspect: list[tuple[str, str]] = []  # (keyword_id, canonical_url)
     if property_id:
-        raw = (
-            supabase.table("gsc_query_daily")
-            .select("query, date, clicks, impressions, ctr, position")
-            .eq("property_id", property_id)
-            .gte("date", start.isoformat())
-            .lte("date", today.isoformat())
-            .limit(_MAX_METRIC_ROWS)
-            .execute()
+        gsc_index = index_gsc_rows(
+            fetch_gsc_query_rows(supabase, property_id, keyword_texts, start, today)
         )
-        gsc_index = index_gsc_rows(raw.data or [])
         # Canonical landing page per query, from the weekly query×page data.
-        page_rows = (
-            supabase.table("gsc_query_page_daily")
-            .select("query, page, clicks, impressions")
-            .eq("property_id", property_id)
-            .limit(_MAX_METRIC_ROWS)
-            .execute()
+        canonical_by_query = resolve_canonical_pages(
+            fetch_gsc_query_page_rows(supabase, property_id, keyword_texts)
         )
-        canonical_by_query = resolve_canonical_pages(page_rows.data or [])
 
     # Existing DataForSEO ranks (weekly fallback wrote these); blend for status.
     df_by_kw = load_tracked_ranks(supabase, keyword_ids, start)
