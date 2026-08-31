@@ -149,6 +149,8 @@ PACE_CHANNEL_KINDS = frozenset({
     # rollups (client_id may be set for scoped ones, but they're a managerial
     # decision surface), so they stay in the master PACE channel, not per-client.
     "pace_intervention", "pace_intervention_result",
+    # …and the weekly Friday rollup (open + this week's decisions/outcomes).
+    "pace_intervention_report",
     "task_assigned", "task_mention", "task_comment", "task_month_generated",
     "task_overload", "task_due", "task_nudge",
     # Deliverables-sheet automation (services/deliverables_sheet.py) is PM/PACE
