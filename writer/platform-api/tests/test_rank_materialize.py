@@ -196,8 +196,11 @@ class _CappedSupabase:
 
 
 def test_fetch_gsc_query_rows_paginates_and_scopes(monkeypatch):
-    # Tiny page so pagination is exercised with a handful of rows.
-    monkeypatch.setattr(rank_materialize, "_READ_PAGE", 2)
+    # Page size 3 but the server caps responses at 2 rows — i.e. cap < _READ_PAGE.
+    # This is the case that a break-on-short-page loop gets wrong: it would stop
+    # after the first (short) page and drop the rest. The cursor must advance by
+    # rows actually returned and stop only on an empty page.
+    monkeypatch.setattr(rank_materialize, "_READ_PAGE", 3)
     P = "prop-1"
     tracked = [
         {"property_id": P, "query": "medical coding services", "date": "2026-07-03", "position": 5},
@@ -218,12 +221,13 @@ def test_fetch_gsc_query_rows_paginates_and_scopes(monkeypatch):
     assert calls["table"] == "gsc_query_daily"
     assert "query" in calls.get("in_cols", [])
     assert {r["query"] for r in rows} == {"medical coding services"}
-    # Paginated: the recent (August) dates survive despite the per-page cap — the
-    # bug returned only the earliest page (July) and dropped these.
+    # Paginated past a cap BELOW the page size: every date survives, none dropped.
     got = {r["date"] for r in rows}
-    assert "2026-08-26" in got and "2026-08-30" in got
     assert got == {"2026-07-03", "2026-07-04", "2026-08-26", "2026-08-30"}
-    assert len(calls.get("ranges", [])) >= 2  # more than one page fetched
+    # The cursor advanced by rows returned (2), not the requested page size (3):
+    # first two windows start at 0 then 2, and the final empty page ends it.
+    ranges = calls.get("ranges", [])
+    assert [lo for lo, _ in ranges] == [0, 2, 4]
 
 
 def test_fetch_gsc_query_rows_empty_keywords_short_circuits():

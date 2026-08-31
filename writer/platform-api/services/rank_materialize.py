@@ -258,10 +258,15 @@ def fetch_gsc_query_rows(
                 .execute()
             )
             batch = res.data or []
-            out.extend(batch)
-            if len(batch) < _READ_PAGE:
+            if not batch:
                 break
-            offset += _READ_PAGE
+            out.extend(batch)
+            # Advance by rows actually returned, not the page size requested: if
+            # PostgREST's db-max-rows cap is below _READ_PAGE it returns fewer than
+            # asked, and breaking on a short page (or advancing by _READ_PAGE) would
+            # silently truncate — the very bug this function exists to fix. Only an
+            # empty page means we're done.
+            offset += len(batch)
     return out
 
 
@@ -286,7 +291,7 @@ def fetch_gsc_query_page_rows(
         while True:
             res = (
                 supabase.table("gsc_query_page_daily")
-                .select("query, page, clicks, impressions")
+                .select("date, query, page, clicks, impressions")
                 .eq("property_id", property_id)
                 .in_("query", chunk)
                 .order("date")
@@ -296,10 +301,15 @@ def fetch_gsc_query_page_rows(
                 .execute()
             )
             batch = res.data or []
-            out.extend(batch)
-            if len(batch) < _READ_PAGE:
+            if not batch:
                 break
-            offset += _READ_PAGE
+            out.extend(batch)
+            # Advance by rows actually returned, not the page size requested: if
+            # PostgREST's db-max-rows cap is below _READ_PAGE it returns fewer than
+            # asked, and breaking on a short page (or advancing by _READ_PAGE) would
+            # silently truncate — the very bug this function exists to fix. Only an
+            # empty page means we're done.
+            offset += len(batch)
     return out
 
 
