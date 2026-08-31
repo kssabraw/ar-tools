@@ -379,9 +379,10 @@ async def process_silo_dedup_job(job: dict) -> None:
         )
 
     except Exception as exc:
+        err = str(exc)[:500]
         logger.error(
             "silo_dedup_failed",
-            extra={"job_id": job_id, "run_id": run_id, "error": str(exc)},
+            extra={"job_id": job_id, "run_id": run_id, "error": err},
         )
         try:
             await asyncio.to_thread(
@@ -389,7 +390,7 @@ async def process_silo_dedup_job(job: dict) -> None:
                 .update(
                     {
                         "status": "failed",
-                        "error": str(exc)[:500],
+                        "error": err,
                         "result": metrics,
                         "completed_at": "now()",
                     }

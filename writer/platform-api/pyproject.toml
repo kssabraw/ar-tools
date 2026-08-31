@@ -1,3 +1,15 @@
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+# Correctness-only baseline that all of platform-api passes today: syntax
+# errors (E9), invalid tests/comparisons (F63, F7) and undefined/duplicate
+# names (F82) — real bug-catchers (F821 undefined-name already surfaced two
+# live bugs). The broad style rules (UP/BLE/SIM/I/…) are deliberately left OFF:
+# the codebase has thousands of pre-existing style findings, and adopting them
+# is a separate, curated effort. Grow this list deliberately, not all at once.
+select = ["E9", "F63", "F7", "F82"]

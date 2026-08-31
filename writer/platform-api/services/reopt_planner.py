@@ -1168,6 +1168,8 @@ def _maybe_refresh_intel(supabase, client_id: str) -> None:
 def build_plan(client_id: str, trigger: str = "manual") -> dict:
     """Gather signals, build the ranked plan, store it, and (on the weekly
     cadence) push a digest notification. Returns the stored plan summary."""
+    from config import settings
+
     supabase = get_supabase()
 
     # Top up the paid competitor-GBP + backlink intel (interval-gated); results
