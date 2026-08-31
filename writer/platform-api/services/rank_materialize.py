@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
@@ -25,13 +24,12 @@ from services import rank_alerts, rank_status
 
 logger = logging.getLogger(__name__)
 
-# PostgREST caps an unbounded select at 1000 rows by default. The metric-fetch
-# queries below can exceed that for larger clients (keywords × trailing days),
-# so they pass an explicit high limit to avoid silently dropping rows — a
-# truncated fetch would leave keywords past the cutoff with no data merged in,
-# stranding them at status='no_data' even though ranks exist. Keep well above
-# any realistic client (keywords × rank_materialize_days).
-_MAX_METRIC_ROWS = 100000
+# PostgREST caps a select at its db-max-rows limit (~1000) regardless of any
+# explicit .limit(), returning the earliest rows in insertion order. The
+# metric-fetch reads below can exceed that for larger clients (keywords ×
+# trailing days), so they page with `_paginate_rows` — advancing by rows
+# actually returned — instead of a single capped read. A single read silently
+# dropped every date after the initial GSC back-fill, freezing gsc_position.
 
 
 @dataclass
@@ -39,7 +37,7 @@ class MaterializeResult:
     status: str  # 'ok' | 'failed'
     keywords: int
     rows: int
-    error: Optional[str] = None
+    error: str | None = None
 
 
 # ----------------------------------------------------------------------------
@@ -111,7 +109,7 @@ def resolve_canonical_pages(page_rows: list[dict]) -> dict[str, str]:
 
 
 def needs_index_check(
-    status: str, canonical_url: Optional[str], last_checked: Optional[str], today: date, recheck_days: int
+    status: str, canonical_url: str | None, last_checked: str | None, today: date, recheck_days: int
 ) -> bool:
     """Only inspect a keyword's page when it's flagged deindex_risk, has a
     canonical URL, and hasn't been checked within the recheck window (quota)."""
@@ -156,21 +154,21 @@ def load_tracked_ranks(supabase, keyword_ids: list[str], start: date) -> dict[st
     {keyword_id: {date_iso: tracked_rank}}.
 
     Only rows with a non-null tracked_rank are requested (the sparse fallback
-    points — a couple per keyword), and an explicit high limit is set so
-    PostgREST's default 1000-row cap can't silently truncate the result for a
-    large client and strand later keywords at status='no_data'.
+    points — a couple per keyword). Paged with a stable (keyword_id, date) order
+    so PostgREST's row cap can't silently truncate the result for a large client
+    and strand later keywords at status='no_data'.
     """
     if not keyword_ids:
         return {}
-    df_rows = (
-        supabase.table("rank_keyword_metrics")
+    df_rows = _paginate_rows(
+        lambda: supabase.table("rank_keyword_metrics")
         .select("keyword_id, date, tracked_rank")
         .in_("keyword_id", keyword_ids)
         .gte("date", start.isoformat())
         .not_.is_("tracked_rank", "null")
-        .limit(_MAX_METRIC_ROWS)
-        .execute()
-    ).data or []
+        .order("keyword_id")
+        .order("date")
+    )
     df_by_kw: dict[str, dict[str, int]] = {}
     for r in df_rows:
         if r.get("tracked_rank") is not None:
@@ -178,7 +176,7 @@ def load_tracked_ranks(supabase, keyword_ids: list[str], start: date) -> dict[st
     return df_by_kw
 
 
-def _verified_property(supabase, client_id: str) -> Optional[dict]:
+def _verified_property(supabase, client_id: str) -> dict | None:
     res = (
         supabase.table("gsc_properties")
         .select("id, site_url, property_type")
@@ -191,12 +189,126 @@ def _verified_property(supabase, client_id: str) -> Optional[dict]:
     return res.data[0] if res.data else None
 
 
-def _verified_property_id(supabase, client_id: str) -> Optional[str]:
+def _verified_property_id(supabase, client_id: str) -> str | None:
     prop = _verified_property(supabase, client_id)
     return prop["id"] if prop else None
 
 
-def materialize_client(client_id: str, today: Optional[date] = None) -> MaterializeResult:
+_READ_PAGE = 1000
+
+
+def _query_variants(keywords: list[str]) -> list[str]:
+    """Distinct, lowercased query strings for the client's tracked keywords.
+
+    Google normalises Search Console queries to lowercase (verified: 0 mixed-case
+    rows across live properties), and both sides of the join in `index_gsc_rows` /
+    `build_keyword_axis` are lowercased, so matching the stored query on the
+    lowercased keyword is exact.
+    """
+    seen: dict[str, None] = {}
+    for k in keywords:
+        v = (k or "").strip().lower()
+        if v:
+            seen[v] = None
+    return list(seen)
+
+
+def _chunked(items: list, size: int):
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
+
+
+def _paginate_rows(make_query) -> list[dict]:
+    """Read a PostgREST select in `_READ_PAGE`-sized pages until it's exhausted.
+
+    `make_query()` returns a FRESH query builder each call (supabase-py builders
+    are one-shot), already carrying its filters and a TOTAL `.order()`; this adds
+    `.range()` and loops. It advances the cursor by rows ACTUALLY returned and
+    stops only on an empty page, so it is correct whatever the server's
+    db-max-rows cap is — even below `_READ_PAGE`. Breaking on a short page (or
+    advancing by `_READ_PAGE`) would silently truncate when the cap is smaller
+    than the page, which is the exact freeze this module exists to prevent.
+    """
+    out: list[dict] = []
+    offset = 0
+    while True:
+        res = make_query().range(offset, offset + _READ_PAGE - 1).execute()
+        batch = res.data or []
+        if not batch:
+            break
+        out.extend(batch)
+        offset += len(batch)
+    return out
+
+
+def fetch_gsc_query_rows(
+    supabase, property_id: str, keywords: list[str], start: date, today: date
+) -> list[dict]:
+    """gsc_query_daily rows for the client's tracked-keyword queries in the window.
+
+    Two things this must get right, both learned from a live incident where
+    `gsc_position` froze at the GSC set-up date (2026-07) for every connected
+    client while raw ingest stayed healthy:
+
+    * **Scope to the tracked keywords' queries.** The materialiser only ever looks
+      up tracked keywords in the index, but the old query pulled *every* query for
+      the property — 37k–170k rows on real sites — purely to throw almost all away.
+    * **Paginate past the row cap** (see `_paginate_rows`): a single capped read
+      returned only the initial back-fill batch (the earliest dates), so every
+      later daily-appended date was written NULL forever.
+    """
+    variants = _query_variants(keywords)
+    if not variants:
+        return []
+    out: list[dict] = []
+    for chunk in _chunked(variants, 150):
+        out.extend(
+            _paginate_rows(
+                lambda chunk=chunk: supabase.table("gsc_query_daily")
+                .select("query, date, clicks, impressions, ctr, position")
+                .eq("property_id", property_id)
+                .in_("query", chunk)
+                .gte("date", start.isoformat())
+                .lte("date", today.isoformat())
+                .order("date")
+                .order("query")
+            )
+        )
+    return out
+
+
+def fetch_gsc_query_page_rows(
+    supabase, property_id: str, keywords: list[str]
+) -> list[dict]:
+    """gsc_query_page_daily rows for the client's tracked-keyword queries.
+
+    Same scope-and-paginate fix as `fetch_gsc_query_rows` (this fetch had no date
+    bound at all, so it was the most truncation-prone read in the module — the
+    canonical-URL resolution silently only ever saw the earliest ~1000 rows).
+    Kept all-time (no date filter) because canonical resolution is a whole-history
+    heuristic; the (date, query, page) key makes the ordering a total order for
+    stable paging.
+    """
+    variants = _query_variants(keywords)
+    if not variants:
+        return []
+    out: list[dict] = []
+    for chunk in _chunked(variants, 150):
+        out.extend(
+            _paginate_rows(
+                lambda chunk=chunk: supabase.table("gsc_query_page_daily")
+                .select("date, query, page, clicks, impressions")
+                .eq("property_id", property_id)
+                .in_("query", chunk)
+                .order("date")
+                .order("query")
+                .order("page")
+            )
+        )
+    return out
+
+
+def materialize_client(client_id: str, today: date | None = None) -> MaterializeResult:
     """Rebuild the date axis + status/source for every active keyword of a client."""
     supabase = get_supabase()
     today = today or date.today()
@@ -214,33 +326,24 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
     if not keywords.data:
         return MaterializeResult(status="ok", keywords=0, rows=0)
     keyword_ids = [k["id"] for k in keywords.data]
+    keyword_texts = [k["keyword"] for k in keywords.data]
 
-    # GSC data (only if the client has a verified property).
+    # GSC data (only if the client has a verified property). Both reads are scoped
+    # to the tracked keywords' queries and paginated — see fetch_gsc_query_rows for
+    # the incident this guards against.
     prop_row = _verified_property(supabase, client_id)
     property_id = prop_row["id"] if prop_row else None
     gsc_index: dict[tuple[str, str], dict] = {}
     canonical_by_query: dict[str, str] = {}
     to_inspect: list[tuple[str, str]] = []  # (keyword_id, canonical_url)
     if property_id:
-        raw = (
-            supabase.table("gsc_query_daily")
-            .select("query, date, clicks, impressions, ctr, position")
-            .eq("property_id", property_id)
-            .gte("date", start.isoformat())
-            .lte("date", today.isoformat())
-            .limit(_MAX_METRIC_ROWS)
-            .execute()
+        gsc_index = index_gsc_rows(
+            fetch_gsc_query_rows(supabase, property_id, keyword_texts, start, today)
         )
-        gsc_index = index_gsc_rows(raw.data or [])
         # Canonical landing page per query, from the weekly query×page data.
-        page_rows = (
-            supabase.table("gsc_query_page_daily")
-            .select("query, page, clicks, impressions")
-            .eq("property_id", property_id)
-            .limit(_MAX_METRIC_ROWS)
-            .execute()
+        canonical_by_query = resolve_canonical_pages(
+            fetch_gsc_query_page_rows(supabase, property_id, keyword_texts)
         )
-        canonical_by_query = resolve_canonical_pages(page_rows.data or [])
 
     # Existing DataForSEO ranks (weekly fallback wrote these); blend for status.
     df_by_kw = load_tracked_ranks(supabase, keyword_ids, start)
