@@ -648,6 +648,7 @@ async def gsc_scheduler() -> None:
     last_df_date = parse_marker_date(state.get("df_weekly"))
     last_reopt_date = parse_marker_date(state.get("reopt_weekly"))
     last_ops_digest_date = parse_marker_date(state.get("ops_digest_weekly"))
+    last_pace_intervention_report_date = parse_marker_date(state.get("pace_intervention_report_weekly"))
     last_strategist_date = parse_marker_date(state.get("strategist_daily"))
     last_rank_analysis_date = parse_marker_date(state.get("rank_analysis_weekly"))
     last_asana_month = parse_marker_month(state.get("asana_month"))
@@ -838,6 +839,16 @@ async def gsc_scheduler() -> None:
                 if _safe("ops_digest", run_ops_digest, now.date()):
                     last_ops_digest_date = now.date()
                     save_marker("ops_digest_weekly", last_ops_digest_date.isoformat())
+            # PACE Proactive Interventions — weekly rollup (open + this week's
+            # decisions/outcomes) to the PACE channel. Self-gated on the feature +
+            # report flag; suppresses on a quiet week. Marker on success.
+            if now.weekday() == settings.pace_intervention_report_weekday and should_run(
+                now, last_pace_intervention_report_date, hour
+            ):
+                from services.pace_interventions import run_weekly_report as run_pace_intervention_report
+                if _safe("pace_intervention_report", run_pace_intervention_report, now.date()):
+                    last_pace_intervention_report_date = now.date()
+                    save_marker("pace_intervention_report_weekly", last_pace_intervention_report_date.isoformat())
             # SerMaStr strategist reviews — now per-client staggered: each
             # client has its own review weekday (clients.strategist_weekday,
             # unset → the global default), so the due-check runs DAILY and the

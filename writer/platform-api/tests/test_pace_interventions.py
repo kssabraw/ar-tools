@@ -515,3 +515,77 @@ def test_approve_all_skipped_reopens(monkeypatch):
     assert "left it open" in out["message"]
     # the final status write set status back to proposed
     assert updates[-1].get("status") == "proposed"
+
+
+# ---------------------------------------------------------------------------
+# Weekly report
+# ---------------------------------------------------------------------------
+def test_summarize_week():
+    open_rows = [{"id": "a", "kind": "member_overload", "severity": "critical", "title": "X"},
+                 {"id": "b", "kind": "duplicate_names", "severity": "warning", "title": "Y"}]
+    decided = [{"disposition": "approved", "result": {"ran": ["1", "2"], "skipped": ["s"], "failed": []}},
+               {"disposition": "denied", "result": None},
+               {"disposition": "deferred", "result": None}]
+    s = PI.summarize_week(open_rows, decided, 3)
+    assert s["open_total"] == 2 and s["open_by_severity"]["critical"] == 1
+    assert s["dispositions"] == {"approved": 1, "denied": 1, "deferred": 1}
+    assert s["executed"] == {"ran": 2, "skipped": 1, "failed": 0}
+    assert s["resolved"] == 3
+
+
+def test_render_weekly_report_content_and_quiet():
+    today = date(2026, 9, 4)  # a Friday
+    open_rows = [{"id": "a1b2c3d4-0000-0000-0000-000000000000", "severity": "critical",
+                  "title": "Marcus overloaded"}]
+    stats = PI.summarize_week(open_rows,
+                              [{"disposition": "approved",
+                                "result": {"ran": ["1"], "skipped": [], "failed": []}}], 0)
+    body = PI.render_weekly_report(stats, open_rows, today)
+    assert body and "1 open" in body and "a1b2c3" in body and "1 approved" in body
+    # a totally-quiet week → nothing to post
+    assert PI.render_weekly_report(PI.summarize_week([], [], 0), [], today) is None
+
+
+def test_run_weekly_report_gated(monkeypatch):
+    monkeypatch.setattr(settings, "pace_enabled", False, raising=False)
+    assert PI.run_weekly_report(date(2026, 9, 4))["posted"] is False
+    monkeypatch.setattr(settings, "pace_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "pace_initiative_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "pace_interventions_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "pace_intervention_report_enabled", False, raising=False)
+    out = PI.run_weekly_report(date(2026, 9, 4))
+    assert out["posted"] is False and out["reason"] == "report_disabled"
+
+
+def test_run_weekly_report_posts(monkeypatch):
+    for f in ("pace_enabled", "pace_initiative_enabled", "pace_interventions_enabled",
+              "pace_intervention_report_enabled"):
+        monkeypatch.setattr(settings, f, True, raising=False)
+    emitted = []
+    monkeypatch.setattr(PI.notifications, "emit", lambda **kw: emitted.append(kw) or "nid")
+    seq = iter([
+        [{"id": "a1b2c3d4-0000-0000-0000-000000000000", "kind": "member_overload",
+          "severity": "critical", "title": "Marcus overloaded", "status": "proposed"}],  # open
+        [{"disposition": "approved", "result": {"ran": ["x"], "skipped": [], "failed": []},
+          "decided_at": "2026-09-02"}],                                                    # decided
+        [],                                                                                # resolved
+    ])
+
+    class _Q:
+        def select(self, *a, **k): return self
+        def in_(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def gte(self, *a, **k): return self
+        def order(self, *a, **k): return self
+        def limit(self, *a, **k): return self
+        def execute(self): return type("R", (), {"data": next(seq)})()
+
+    class _SB:
+        def table(self, name): return _Q()
+
+    monkeypatch.setattr(PI, "get_supabase", lambda: _SB())
+    out = PI.run_weekly_report(date(2026, 9, 4))
+    assert out["posted"] is True and out["open"] == 1
+    assert emitted and emitted[0]["kind"] == "pace_intervention_report"
+    assert emitted[0]["dedupe_key"].startswith("pace_intervention_report:")
+    assert emitted[0]["severity"] == "warning"  # a critical is open

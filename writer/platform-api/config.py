@@ -1898,6 +1898,12 @@ class Settings(BaseSettings):
     # a severe pass does). Lower → nearer-immediate severe detection, more DB
     # load; 0 → run every tick.
     pace_intervention_severe_min_interval_minutes: int = 15
+    # Weekly intervention rollup to the PACE channel — open interventions + this
+    # week's decisions/outcomes. Fires on this weekday (Mon=0 … Fri=4) at the
+    # scheduler hour; suppressed on a totally-quiet week (nothing open, no
+    # activity). Gated on the interventions feature being enabled.
+    pace_intervention_report_enabled: bool = True
+    pace_intervention_report_weekday: int = 4  # Friday
     # Per-person morning DM briefs (§4.13) — off until the Slack app has the
     # im:write scope (grant + reinstall, then flip this on).
     pace_daily_brief_push: bool = False
