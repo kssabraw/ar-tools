@@ -244,6 +244,17 @@ class Settings(BaseSettings):
     # Response-episode tracking: the SOPs' verify loop (2-week rechecks, 6-week
     # escalation) over open rank/maps drop responses.
     episode_tracking_enabled: bool = True
+    # Chronic-emergency escalation (services/goal_escalation.py): a campaign goal
+    # that stays critically behind (behind/overdue) for weeks stops being heard —
+    # the weekly strategist review degrades to a "0 proposals / N findings"
+    # whisper and the scan-over-scan alerts go quiet once nothing is newly worse.
+    # A daily sweep re-surfaces such a goal LOUDLY (critical notification, both
+    # channels, carrying the latest strategist reasoning) once it has been behind
+    # for `chronic_weeks`, then re-shouts every `reescalate_days` while it stays
+    # critical, and closes when it recovers.
+    goal_escalation_enabled: bool = True
+    goal_escalation_chronic_weeks: int = 3
+    goal_escalation_reescalate_days: int = 14
     # Offpage agent extensions: weekly citation-liveness sweep + monthly
     # page-level RD-imbalance capture (paid DataForSEO page summaries).
     citation_check_enabled: bool = True
