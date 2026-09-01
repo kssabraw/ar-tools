@@ -446,6 +446,45 @@ def load_priority_places(client_id: str) -> list[str]:
         return []
 
 
+def load_target_places(client_id: str) -> list[str]:
+    """The client's DECLARED target service areas — the suburbs/cities the team
+    typed on the client (``clients.target_cities``) plus the GBP-published
+    service area (``clients.gbp.service_area_places``) — as bare city names,
+    deduped. These are the ICP / expansion places the client cares about but
+    the geo-grid may not flag as weak; a competitor publishing a page in one of
+    them is still a contest worth defending. Best-effort → []."""
+    try:
+        supabase = get_supabase()
+        rows = (
+            supabase.table("clients").select("target_cities, gbp")
+            .eq("id", client_id).limit(1).execute()
+        ).data or []
+        if not rows:
+            return []
+        c = rows[0]
+        raw: list[str] = []
+        for t in c.get("target_cities") or []:
+            if isinstance(t, str) and t.strip():
+                raw.append(t.strip())
+        gbp = c.get("gbp")
+        if isinstance(gbp, dict):
+            for p in gbp.get("service_area_places") or []:
+                if isinstance(p, str) and p.strip():
+                    raw.append(p.strip())
+        seen: set[str] = set()
+        out: list[str] = []
+        for p in raw:
+            bare = p.split(",")[0].strip()  # keywords/slugs carry the bare city, not "City, Region, Country"
+            key = bare.casefold()
+            if bare and key not in seen:
+                seen.add(key)
+                out.append(bare)
+        return out
+    except Exception as exc:
+        logger.warning("competitor_intel.target_places_failed", extra={"client_id": client_id, "error": str(exc)})
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Profile assembly (deterministic, stored data only)
 # ---------------------------------------------------------------------------

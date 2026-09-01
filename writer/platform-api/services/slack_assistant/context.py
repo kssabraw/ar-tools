@@ -1023,9 +1023,13 @@ def _ctx_competitors(supabase, client_id: str, today: date) -> Optional[dict]:
         ],
     }
     # Proactive targeting analysis: what competitors are building + contested
-    # weak zones. Best-effort — a failure never breaks the competitor context.
+    # places the client cares about (weak grid zones + declared target/ICP
+    # service areas). Best-effort — a failure never breaks the competitor context.
     try:
-        places = competitor_intel.load_priority_places(client_id)
+        places = competitor_page_intel.dedupe_places(
+            competitor_intel.load_priority_places(client_id)
+            + competitor_intel.load_target_places(client_id)
+        )
         targeting = competitor_page_intel.summarize_targeting(profiles, places)
         if targeting.get("competitor_targets") or targeting.get("contested"):
             out["page_targeting"] = {
@@ -1033,9 +1037,10 @@ def _ctx_competitors(supabase, client_id: str, today: date) -> Optional[dict]:
                     "Deterministic read of competitors' newly published pages. "
                     "competitor_targets = what each rival is building (page-target "
                     "labels from their URLs). contested = a rival has published a "
-                    "page targeting one of YOUR weak coverage areas — a land grab "
-                    "to answer with a location page before they bank the pack "
-                    "position. open_places = your weak areas no rival has built in yet."
+                    "page targeting a place YOU care about — a weak grid zone or a "
+                    "service area you target (an ICP suburb) — a land grab to answer "
+                    "with a location page before they bank the pack position. "
+                    "open_places = places you care about no rival has built in yet."
                 ),
                 "competitor_targets": targeting["competitor_targets"],
                 "contested": targeting["contested"][:12],

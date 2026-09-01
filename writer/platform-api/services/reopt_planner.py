@@ -77,6 +77,8 @@ _MAPS_WITHIN = {
 }
 _MAPS_WEAK_AREA_WITHIN = 1_000  # weak coverage areas sit at the bottom of the Maps tier
 _MAPS_LAND_GRAB_WITHIN = 6_000  # a competitor building in a weak zone: time-sensitive, above GBP/content/relevance
+_MAPS_TARGET_LAND_GRAB_WITHIN = 5_500  # a competitor building in a target/ICP area (not grid-weak): below the weak-zone land grab, above relevance
+MAPS_TARGET_LAND_GRAB_MAX = 5  # cap target-area land-grab actions per plan
 _MAPS_GBP_WITHIN = 4_000        # a GBP-gap action sits mid Maps tier (above weak areas)
 _MAPS_REVIEW_WITHIN = 4_500     # a review-gap action sits just above the GBP-gap action
 _MAPS_CONTENT_WITHIN = 3_500    # a content-gap action sits just below the GBP-gap action
@@ -766,6 +768,66 @@ def build_maps_actions(
     return actions
 
 
+def build_target_landgrab_actions(
+    client_id: str,
+    target_matches: list[dict],
+    exclude_bare: "set[str] | None" = None,
+    cap: int = MAPS_TARGET_LAND_GRAB_MAX,
+) -> list[dict]:
+    """Competitor pages targeting the client's DECLARED target service areas /
+    ICP suburbs (clients.target_cities + GBP service_area_places) that are NOT
+    already covered by a weak-area land-grab. A rival building a page in a
+    suburb the client is trying to win — even one where the geo-grid isn't weak
+    — is a contest worth defending. Pure (unit-tested).
+
+    ``target_matches``: competitor_page_intel.match_pages_to_places rows against
+    the target places. ``exclude_bare``: bare-city casefold keys already emitted
+    as weak-area / weak-zone land-grab actions (so a place that is BOTH weak and
+    a target area yields only the higher-urgency weak-zone action)."""
+    exclude_bare = exclude_bare or set()
+    by_bare: dict[str, dict] = {}
+    for m in target_matches or []:
+        place = m.get("place") or ""
+        bare = place.split(",")[0].strip()
+        key = bare.casefold()
+        if not key or key in exclude_bare:
+            continue
+        entry = by_bare.setdefault(key, {"place": bare, "contenders": []})
+        entry["contenders"].append(m)
+
+    actions: list[dict] = []
+    for entry in list(by_bare.values())[:cap]:
+        place = entry["place"]
+        contenders = entry["contenders"]
+        names = _dedupe_str(c.get("competitor") for c in contenders if c.get("competitor"))
+        who = names[0] if names else "A competitor"
+        others = f" (and {len(names) - 1} other{'s' if len(names) - 1 != 1 else ''})" if len(names) > 1 else ""
+        pages = [
+            {"competitor": c.get("competitor"), "url": c.get("url"), "first_seen": c.get("first_seen")}
+            for c in contenders if c.get("url")
+        ]
+        actions.append(
+            {
+                "kind": "maps_competitor_land_grab",
+                "source": "maps",
+                "keyword": place,
+                "location": place,
+                "competitor": who,
+                "url": pages[0]["url"] if pages else None,
+                "pages": pages or None,
+                "diagnosis": f"{who}{others} just published a page targeting {place} — a service area you "
+                "target. You're actively trying to win this area, and a rival is now building there.",
+                "recommendation": f"Defend {place}: build or strengthen a location page there to hold the area "
+                f"you're targeting before {who} establishes local relevance and reviews.",
+                "cta_label": "Create page",
+                "cta_path": f"clients/{client_id}/local-seo",
+                "severity": "warning",
+                "sort": _SORT_MAPS + _within(_MAPS_TARGET_LAND_GRAB_WITHIN),
+            }
+        )
+    return actions
+
+
 def build_gbp_action(client_id: str, gbp_audit_result: "dict | None") -> list[dict]:
     """A single consolidated 'strengthen your GBP' action from the profile audit
     (missing fields + category gaps + a review deficit vs competitors). Pure."""
@@ -1149,28 +1211,11 @@ def _aggregate_weak_areas(results: list[dict]) -> list[dict]:
     return sorted(best.values(), key=lambda a: a.get("pins") or 0, reverse=True)
 
 
-def _fetch_competitor_landgrab(supabase, client_id: str, weak_areas: list[dict]) -> dict:
-    """Competitors' recently published pages cross-referenced against the
-    client's weak coverage areas → ``{place_casefold: [{competitor, url,
-    first_seen}]}`` for build_maps_actions to upgrade weak-area actions into
-    land-grab actions. DB-reads-only (competitor_pages was populated by the
-    weekly content watch — no paid call here). Best-effort → {}."""
-    if not weak_areas:
-        return {}
+def _load_recent_competitor_pages(supabase, client_id: str) -> list[dict]:
+    """Competitors' non-baseline pages first-seen in the last _RECENT_PAGES_DAYS,
+    as ``[{competitor, url, first_seen}]``. DB-reads-only (competitor_pages was
+    populated by the weekly content watch — no paid call). Best-effort → []."""
     try:
-        from datetime import timedelta
-
-        from services import competitor_page_intel
-
-        places = [
-            (f"{(w.get('city') or '').strip()}, {w.get('admin_area').strip()}"
-             if (w.get("admin_area") or "").strip()
-             else (w.get("city") or "").strip())
-            for w in weak_areas
-            if (w.get("city") or "").strip()
-        ]
-        if not places:
-            return {}
         cutoff = (datetime.now(timezone.utc) - timedelta(days=_RECENT_PAGES_DAYS)).isoformat()
         rows = (
             supabase.table("competitor_pages")
@@ -1183,7 +1228,7 @@ def _fetch_competitor_landgrab(supabase, client_id: str, weak_areas: list[dict])
             .execute()
         ).data or []
         if not rows:
-            return {}
+            return []
         comp_ids = list({r["competitor_id"] for r in rows if r.get("competitor_id")})
         names = {
             c["id"]: c.get("name")
@@ -1192,14 +1237,38 @@ def _fetch_competitor_landgrab(supabase, client_id: str, weak_areas: list[dict])
                 .in_("id", comp_ids).execute()
             ).data or []
         }
-        pages = [
+        return [
             {"competitor": names.get(r.get("competitor_id")), "url": r.get("url"), "first_seen": r.get("first_seen")}
             for r in rows
         ]
-        matches = competitor_page_intel.match_pages_to_places(pages, places)
+    except Exception as exc:
+        logger.warning("reopt_plan_competitor_pages_failed", extra={"client_id": client_id, "error": str(exc)})
+        return []
+
+
+def _weak_area_place(w: dict) -> str:
+    """The ``"City, ADMIN"`` string build_maps_actions uses for a weak area."""
+    city = (w.get("city") or "").strip()
+    admin = (w.get("admin_area") or "").strip()
+    return f"{city}, {admin}" if admin else city
+
+
+def _weak_landgrab(comp_pages: list[dict], weak_areas: list[dict]) -> dict:
+    """Competitor pages cross-referenced against the client's weak coverage areas
+    → ``{place_casefold: [{competitor, url, first_seen}]}`` for build_maps_actions
+    to upgrade weak-area actions into land-grab actions. Pure."""
+    if not comp_pages or not weak_areas:
+        return {}
+    try:
+        from services import competitor_page_intel
+
+        places = [_weak_area_place(w) for w in weak_areas if (w.get("city") or "").strip()]
+        if not places:
+            return {}
+        matches = competitor_page_intel.match_pages_to_places(comp_pages, places)
         return competitor_page_intel.contested_by_place(matches)
     except Exception as exc:
-        logger.warning("reopt_plan_landgrab_failed", extra={"client_id": client_id, "error": str(exc)})
+        logger.warning("reopt_plan_weak_landgrab_failed", extra={"error": str(exc)})
         return {}
 
 
@@ -1409,7 +1478,13 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     gsc = gsc_row[0] if gsc_row else {}
 
     maps_alerts, weak_areas, solv_drop = _fetch_maps_signals(supabase, client_id)
-    landgrab = _fetch_competitor_landgrab(supabase, client_id, weak_areas)
+    # Competitor land grabs (DB-reads-only — reuses the content watch's stored
+    # pages, no paid call): a rival publishing a page in a place the client
+    # cares about. Weak-zone grabs upgrade the weak-area action; target-area
+    # grabs (a suburb the client targets but the grid isn't weak) become their
+    # own action, deduped so a place that is both yields only the weak-zone one.
+    comp_pages = _load_recent_competitor_pages(supabase, client_id)
+    landgrab = _weak_landgrab(comp_pages, weak_areas)
     brand_decline = _fetch_brand_decline(supabase, client_id)
     gbp_audit_result = _fetch_gbp_audit(supabase, client_id)
     review_gap = _fetch_review_gap(supabase, client_id)
@@ -1443,6 +1518,19 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     except Exception as exc:
         logger.warning("reopt_plan_domain_intel_failed", extra={"client_id": client_id, "error": str(exc)})
     maps_actions = build_maps_actions(client_id, maps_alerts, weak_areas, solv_drop, landgrab)
+    # Target-area (ICP) land grabs: a rival building in a suburb the client
+    # targets that the grid doesn't already flag as weak. Deduped by bare city
+    # against the weak areas so it never duplicates a weak-zone land grab.
+    try:
+        from services import competitor_intel, competitor_page_intel
+
+        target_places = competitor_intel.load_target_places(client_id)
+        if target_places and comp_pages:
+            exclude_bare = {(w.get("city") or "").strip().casefold() for w in weak_areas if (w.get("city") or "").strip()}
+            target_matches = competitor_page_intel.match_pages_to_places(comp_pages, target_places)
+            maps_actions += build_target_landgrab_actions(client_id, target_matches, exclude_bare)
+    except Exception as exc:
+        logger.warning("reopt_plan_target_landgrab_failed", extra={"client_id": client_id, "error": str(exc)})
     maps_actions += build_relevance_action(client_id, relevance_gap)
     maps_actions += build_gbp_action(client_id, gbp_audit_result)
     maps_actions += build_review_action(client_id, review_gap)

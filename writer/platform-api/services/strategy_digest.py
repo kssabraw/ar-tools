@@ -822,7 +822,8 @@ def _prov_competitors(supabase, client_id: str, today: date, now: datetime) -> O
             "RD/DR are tool reads (true RD ≈ ×10, SOP shared definition). "
             "new_pages_30d counts non-baseline URLs first seen in the last 30 days. "
             "page_targeting names what those pages target and flags a rival building "
-            "in your weak coverage areas (a land grab worth a proposal)."
+            "in a place the client cares about — a weak grid zone or a service area "
+            "they target (an ICP suburb) — a land grab worth a proposal."
         ),
         "competitors": [
             {
@@ -840,10 +841,14 @@ def _prov_competitors(supabase, client_id: str, today: date, now: datetime) -> O
             for p in profiles[:8]
         ],
     }
-    # Proactive targeting analysis (deterministic): contested weak zones + what
+    # Proactive targeting analysis (deterministic): contested places the client
+    # cares about (weak grid zones + declared target/ICP service areas) + what
     # each competitor is building. Best-effort — never breaks the digest.
     try:
-        places = competitor_intel.load_priority_places(client_id)
+        places = competitor_page_intel.dedupe_places(
+            competitor_intel.load_priority_places(client_id)
+            + competitor_intel.load_target_places(client_id)
+        )
         targeting = competitor_page_intel.summarize_targeting(profiles, places)
         if targeting.get("contested") or targeting.get("competitor_targets"):
             out["page_targeting"] = {

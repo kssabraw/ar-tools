@@ -379,6 +379,52 @@ def test_maps_weak_area_stays_plain_without_landgrab():
     assert a["kind"] == "maps_weak_area"  # byte-identical to prior behaviour
 
 
+# --- Target-area (ICP) land grabs ------------------------------------------
+def test_target_landgrab_action_for_a_targeted_suburb():
+    matches = [
+        {"place": "Toorak", "competitor": "Melbourne Roof Restorers",
+         "url": "https://x/services/toorak-vic-3142/", "first_seen": "2026-08-20"},
+    ]
+    actions = reopt_planner.build_target_landgrab_actions(CLIENT, matches)
+    assert len(actions) == 1
+    a = actions[0]
+    assert a["kind"] == "maps_competitor_land_grab"
+    assert a["severity"] == "warning"
+    assert a["competitor"] == "Melbourne Roof Restorers"
+    assert a["location"] == "Toorak"
+    assert "service area you target" in a["diagnosis"]
+    assert a["cta_path"] == f"clients/{CLIENT}/local-seo"
+    # ranked below a weak-zone land grab, above generic weak areas
+    assert a["sort"] < reopt_planner._SORT_MAPS + reopt_planner._MAPS_LAND_GRAB_WITHIN
+    assert a["sort"] > reopt_planner._SORT_MAPS + reopt_planner._MAPS_WEAK_AREA_WITHIN + 900
+
+
+def test_target_landgrab_dedupes_against_weak_zone_by_bare_city():
+    # Preston is both a weak zone (already a weak-zone land grab) and a target
+    # city — it must NOT also produce a target-area action.
+    matches = [
+        {"place": "Preston", "competitor": "Rival", "url": "https://x/services/preston/", "first_seen": "1"},
+        {"place": "Toorak", "competitor": "Rival", "url": "https://x/services/toorak/", "first_seen": "2"},
+    ]
+    actions = reopt_planner.build_target_landgrab_actions(CLIENT, matches, exclude_bare={"preston"})
+    assert [a["location"] for a in actions] == ["Toorak"]
+
+
+def test_target_landgrab_groups_multiple_competitors_per_place():
+    matches = [
+        {"place": "Toorak", "competitor": "A", "url": "https://x/a-toorak/", "first_seen": "1"},
+        {"place": "Toorak", "competitor": "B", "url": "https://x/b-toorak/", "first_seen": "2"},
+    ]
+    actions = reopt_planner.build_target_landgrab_actions(CLIENT, matches)
+    assert len(actions) == 1
+    assert "and 1 other" in actions[0]["diagnosis"]
+    assert len(actions[0]["pages"]) == 2
+
+
+def test_target_landgrab_empty_when_no_matches():
+    assert reopt_planner.build_target_landgrab_actions(CLIENT, []) == []
+
+
 def test_quick_win_create_page_shows_search_volume():
     items = [_rankability_item(keyword="solar installer", client_rank=None,
                                search_volume=880, est_value=430)]

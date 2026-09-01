@@ -123,7 +123,8 @@ def page_targets_place(url: Optional[str], place: Optional[str]) -> bool:
     return all(t in slug for t in ptoks)
 
 
-def _dedupe(items: Iterable[str]) -> list[str]:
+def dedupe_places(items: Iterable[str]) -> list[str]:
+    """Order-preserving, case-insensitive dedup of place strings. Pure."""
     seen: set[str] = set()
     out: list[str] = []
     for it in items:
@@ -132,6 +133,10 @@ def _dedupe(items: Iterable[str]) -> list[str]:
             seen.add(key)
             out.append(it)
     return out
+
+
+# Backwards-compatible private alias (used internally).
+_dedupe = dedupe_places
 
 
 def match_pages_to_places(pages: list[dict], places: list[str]) -> list[dict]:
