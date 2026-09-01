@@ -52,17 +52,18 @@ Skim this once — the rest of the guide uses these words precisely.
   your own name in an assignee dropdown, ask an admin to link you on the
   **Team** page. Until then, tasks can still be assigned to you by name, but
   the system won't know it's *you*.
-- **A few buttons are admin-only.** Auto-assigning a batch of unassigned
-  tasks, and permanently deleting something from the trash, both require an
-  admin. Creating tasks, dragging cards, commenting, checking things off —
-  all open to anyone with access to the client. **Why these two
-  specifically:** each can move or remove a lot of the board in one click —
-  auto-assign can staff dozens of tasks at once, and a permanent delete
-  can't be undone the way Trash can. Everything else you'll do day to day
-  only ever touches one task at a time. (The
-  [PM Operations Addendum](pm-operations-addendum.md) covers all the
-  admin-gated actions together, including a chat-vs-button one that isn't
-  obvious.)
+- **A few buttons are gated.** Auto-assigning a batch of unassigned tasks and
+  permanently deleting something from the trash both require an **admin**;
+  **Generate this month** requires a **PACE PM** (Minda, Kyle, or Ryan — see
+  Step 2) and is simply hidden if you're not one. Creating tasks, dragging
+  cards, commenting, checking things off — all open to anyone with access to
+  the client. **Why these are gated:** each can create, move, or remove a lot
+  of the board in one go — Generate this month builds a whole month,
+  auto-assign can staff dozens of tasks at once, and a permanent delete can't
+  be undone the way Trash can. Everything else you'll do day to day only ever
+  touches one task at a time. (The
+  [PM Operations Addendum](pm-operations-addendum.md) covers the PM role and
+  the admin-gated actions together.)
 - **Frozen clients pause task creation.** If a client is under a Freeze
   (manual action / deindexing), you can still work existing tasks, but the
   automated paths that create new tasks are paused until the freeze lifts.
@@ -86,6 +87,13 @@ a comment, or nudged by someone. Click it for a dropdown list; clicking a
 notification jumps straight to the task it's about and marks it read. A
 small toast also pops in the corner if a new one arrives while you have the
 tab open.
+
+Those same alerts — a task assigned to you, an `@mention`, a comment on a
+task you watch, a nudge — also reach you as a **Slack DM** (and post to the
+client's own channel where one is set up), **not** the shared `#pace`
+channel — so you get what concerns *you* without the whole team's traffic.
+The bell is the always-on backstop if a DM can't be delivered (your Slack
+isn't linked, or the app doesn't yet have DM permission).
 
 ---
 
@@ -147,8 +155,12 @@ Drag cards between status columns; click a card for details & checklist."*
 
 ## Step 2 — Start the month
 
-Most recurring work doesn't need to be typed in by hand every month. Click
-the solid indigo **Generate this month** button (top right):
+Most recurring work doesn't need to be typed in by hand every month — and it
+isn't: **every client's month is generated automatically on the 1st.** The
+solid indigo **Generate this month** button (top right) is for doing it *on
+demand* — a mid-month catch-up, or a client set up after the 1st. It's a
+**PACE PM** action (Minda, Kyle, or Ryan), so the button only appears if
+you're a PM; everyone else relies on the automatic run.
 
 - It creates (or fills in) a section named for the current calendar month —
   e.g. **August 2026** — and populates it from the client's **monthly
@@ -513,7 +525,7 @@ outside it to close.
 | See everything assigned to me, across clients | **My Tasks** (sidebar) |
 | See one client's whole delivery plan | Client → **Tasks** card |
 | Get notified about mentions/assignments | Bell icon, top of the sidebar |
-| Start this month's recurring work | **Generate this month** button |
+| Start this month's recurring work | Automatic on the 1st; on demand, **Generate this month** (a PACE PM only) |
 | Change a task's status fast | Drag its card between Board columns |
 | Change a task's status by hand | Open it → **Status** dropdown |
 | Check something off a task | Open it → **Checklist** |
