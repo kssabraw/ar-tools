@@ -219,8 +219,13 @@ async def execute_plan_selection(items: list[dict], selection: list[int],
 
     if context.is_anonymous:
         return "Link your Slack account first — I can't authorize an anonymous confirm."
+    # A partial selection (approve a subset of the plan) is recorded in each row's
+    # `modifications` (the approved/dropped split) for context, but the executed
+    # items are decision="approved" — they weren't individually modified, the plan
+    # was merely trimmed. Only the intervention "conditions" path is a true
+    # approved_with_modifications (an edited fix). The dropped items are logged as
+    # explicit denials below.
     mods = pace_audit.selection_modifications(len(items), selection)
-    decision = "approved_with_modifications" if mods else "approved"
     by_index = {it["index"]: it for it in items}
     lines: list[str] = []
     for idx in selection:
@@ -237,7 +242,7 @@ async def execute_plan_selection(items: list[dict], selection: list[int],
                 lambda it=it: _call_action(PACE_ACTIONS[it["action"]]["run"],
                                            context, it["client_id"], it["args"]),
                 action=it["action"], context=context, client_id=it["client_id"],
-                args=it["args"], origin=origin, decision=decision, reason=it.get("reason"),
+                args=it["args"], origin=origin, decision="approved", reason=it.get("reason"),
                 client_name=it.get("client_name"), chase_plan_date=chase_plan_date,
                 modifications=mods,
             )

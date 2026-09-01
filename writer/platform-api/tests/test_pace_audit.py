@@ -263,9 +263,10 @@ async def test_conversational_action_routes_through_run_and_log(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_chase_selection_logs_partial_as_modifications(monkeypatch):
-    """execute_plan_selection logs each RUN item; a partial approval is recorded
-    as approved_with_modifications with the approved/dropped split."""
+async def test_chase_selection_run_item_is_approved_with_split_recorded(monkeypatch):
+    """execute_plan_selection logs each RUN item as decision="approved" (a partial
+    selection trims the plan; it does NOT relabel an individual item "modified"),
+    while the approved/dropped split rides in the row's `modifications`."""
     from services import pace_proposals
 
     captured: list = []
@@ -275,6 +276,7 @@ async def test_chase_selection_logs_partial_as_modifications(monkeypatch):
         return "✅ done"
 
     monkeypatch.setattr(pace_audit, "run_and_log", _fake)
+    monkeypatch.setattr(pace_audit, "record_decision", lambda **kw: None)  # dropped-item denials
     items = [
         {"index": 1, "action": "reassign_task", "client_id": "c1", "client_name": "Acme",
          "args": {"task_id": "t1"}, "reason": "r1", "min_role": None},
@@ -285,7 +287,7 @@ async def test_chase_selection_logs_partial_as_modifications(monkeypatch):
                                                 origin="chase_plan", chase_plan_date="2026-09-01")
     assert len(captured) == 1  # only item 1 was selected
     assert captured[0]["origin"] == "chase_plan"
-    assert captured[0]["decision"] == "approved_with_modifications"
+    assert captured[0]["decision"] == "approved"  # NOT approved_with_modifications
     assert captured[0]["modifications"] == {"approved": [1], "dropped": [2], "total": 2}
     assert captured[0]["chase_plan_date"] == "2026-09-01"
 

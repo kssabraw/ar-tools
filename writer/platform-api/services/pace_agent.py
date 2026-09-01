@@ -79,6 +79,21 @@ def is_personal_brief(text: str) -> bool:
     return bool(text and _BRIEF_RE.search(text))
 
 
+# An EXPLICIT rejection of a pending confirm ("no", "cancel", "stop", "don't")
+# — distinct from merely pivoting to another question, which also supersedes the
+# pending but is not a decision to log as a decline. Pure.
+_DECLINE_RE = re.compile(
+    r"^\s*(no|nope|nah|n|cancel|stop|don'?t|do not|never ?mind|skip|forget it|"
+    r"abort|drop it|leave it)\b",
+    re.IGNORECASE,
+)
+
+
+def is_explicit_decline(text: str) -> bool:
+    """Whether a reply explicitly rejects the pending action (vs. just moving on)."""
+    return bool(text and _DECLINE_RE.match(text.strip()))
+
+
 # ---------------------------------------------------------------------------
 # LLM tool schemas (PACE-only — two-way isolation is inherent)
 # ---------------------------------------------------------------------------
@@ -264,7 +279,9 @@ def build_pace_context(client_id: str) -> dict:
     try:
         from services import pace_audit
 
-        summary = pace_audit.history_summary(client_id=client_id)
+        # Counts only (no actor names needed) → skip the profiles join: one
+        # indexed read per turn, not two.
+        summary = pace_audit.history_summary(client_id=client_id, attach_names=False)
         if summary.get("count"):
             signals["pace_action_history"] = {"count": summary["count"],
                                               "decisions": summary["stats"]["overall"]}
@@ -606,7 +623,7 @@ def _history_read(client_id_hint: Optional[str], client_name_query: Optional[str
               f"{ov['executed']} executed, {ov['approved']} approved, "
               f"{ov['approved_with_modifications']} approved-with-mods, "
               f"{ov['denied'] + ov['cancelled']} declined, {ov['deferred']} deferred, "
-              f"{ov['failed']} failed.")
+              f"{ov['reverted']} reverted (undone by a human), {ov['failed']} failed.")
     return header + "\n" + pace_audit.format_history(rows)
 
 
@@ -884,8 +901,9 @@ async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool
                 reply = "Sorry — that action failed. Try again."
             await _post(channel, reply, thread_ts)
             return True
-        _log_declined(pending, context)  # a "no" to a staged action — training signal
-        _pace_pending.pop(pend_key, None)  # superseded
+        if is_explicit_decline(question):  # a real "no" — training signal
+            _log_declined(pending, context)
+        _pace_pending.pop(pend_key, None)  # superseded (a pivot isn't a decline)
 
     if force:
         # No pending confirm to continue (handled above) — a fresh question
@@ -1079,9 +1097,10 @@ async def maybe_handle_web(message: str, history: list[dict], sticky_client_id: 
                 logger.warning("pace_web_action_failed", extra={"action": entry["action"], "error": str(exc)})
                 reply = "Sorry — that action failed."
             return {"reply": reply, "client_id": entry["client_id"], "client_name": entry.get("client_name")}
-        else:
-            # A single staged action the user declined (typed something other than
-            # a confirm) — record the "no" before falling through.
+        elif is_explicit_decline(message):
+            # A single staged action the user explicitly rejected ("no"/"cancel")
+            # — record the decline. A mere pivot to another question also
+            # supersedes the pending, but is NOT logged as a decision.
             _log_declined({"action": entry["action"], "client_id": entry["client_id"],
                            "client_name": entry.get("client_name"), "args": entry["args"],
                            "requester": entry.get("requester"), "confirm": entry.get("reason")},

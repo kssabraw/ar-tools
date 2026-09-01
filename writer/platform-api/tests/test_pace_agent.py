@@ -71,6 +71,18 @@ def test_is_personal_brief():
     assert not pace_agent.is_personal_brief("")
 
 
+def test_is_explicit_decline():
+    # Explicit rejections of a pending confirm → logged as a decline.
+    for t in ("no", "No thanks", "nope", "nah", "cancel", "stop", "don't",
+              "do not", "nevermind", "never mind", "skip", "forget it", "abort"):
+        assert pace_agent.is_explicit_decline(t), t
+    # A confirm, or a mere pivot to another question, is NOT a decline (it
+    # supersedes the pending but must not be recorded as a rejection).
+    for t in ("yes", "what's overdue for Acme?", "notify the team", "next task",
+              "nudge Ivy about the audit", ""):
+        assert not pace_agent.is_explicit_decline(t), t
+
+
 # ---------------------------------------------------------------------------
 # Tool schemas — PACE-only (two-way isolation)
 # ---------------------------------------------------------------------------

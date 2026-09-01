@@ -180,6 +180,8 @@ def format_history(rows: list[dict]) -> str:
             tail = f" [FAILED: {_clip(r.get('error'), 80)}]"
         elif r.get("outcome") in ("cancelled", "denied", "deferred"):
             tail = f" [{r.get('outcome')}]"
+        if r.get("reverted_at"):
+            tail += " [REVERTED — a human undid this]"
         lines.append(f"- {when} · {client} · {dec} by {who}: {what}{tail}")
     return "\n".join(lines)
 
@@ -328,15 +330,18 @@ def _attach_actor_names(rows: list[dict]) -> list[dict]:
 
 def recent_actions(*, client_id: Optional[str] = None,
                    actor_profile_id: Optional[str] = None,
-                   action: Optional[str] = None, limit: Optional[int] = None) -> list[dict]:
-    """Recent log rows for a scope, newest first, with actor names attached.
-    Best-effort — returns [] on any error."""
+                   action: Optional[str] = None, limit: Optional[int] = None,
+                   attach_names: bool = True) -> list[dict]:
+    """Recent log rows for a scope, newest first. Includes revert state so the
+    self-read reflects undone actions (parity with the digest). ``attach_names``
+    False skips the extra profiles join — used by the passive context summary,
+    which needs only counts, not actor names. Best-effort — [] on any error."""
     limit = limit or settings.pace_audit_history_limit
     try:
         q = (get_supabase().table("pace_action_log")
              .select("created_at, action, origin, decision, outcome, client_id, "
                      "client_name, target_name, actor_profile_id, reason, error, "
-                     "intervention_id")
+                     "intervention_id, reverted_at, revert_detail")
              .order("created_at", desc=True).limit(limit))
         if client_id:
             q = q.eq("client_id", client_id)
@@ -348,13 +353,15 @@ def recent_actions(*, client_id: Optional[str] = None,
     except Exception as exc:
         logger.warning("pace_audit_recent_failed", extra={"error": str(exc)})
         return []
-    return _attach_actor_names(rows)
+    return _attach_actor_names(rows) if attach_names else rows
 
 
-def history_summary(*, client_id: Optional[str] = None, limit: Optional[int] = None) -> dict:
+def history_summary(*, client_id: Optional[str] = None, limit: Optional[int] = None,
+                    attach_names: bool = True) -> dict:
     """Recent actions + a decision-rate rollup for the `pace_history` tool and the
-    passive context surface. Best-effort."""
-    rows = recent_actions(client_id=client_id, limit=limit)
+    passive context surface. ``attach_names`` False (the passive counts-only
+    surface) skips the profiles join. Best-effort."""
+    rows = recent_actions(client_id=client_id, limit=limit, attach_names=attach_names)
     return {"recent": rows, "stats": decision_stats(rows), "count": len(rows)}
 
 
