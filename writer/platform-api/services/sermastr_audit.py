@@ -310,6 +310,13 @@ def record_decision(*, review_id: str, idx: int, proposal: dict,
         "actor_role": actor_role,
         "actor_source": actor_source or "web",
     })
+    # Drop None-valued keys so an UPSERT-MERGE onto an existing pending row never
+    # NULLs data it already snapshotted — notably client_name, which we snapshot
+    # precisely so it survives a client deletion (which sets client_id → null, so
+    # a later re-decision would otherwise arrive with client_name=None). On a
+    # create-if-missing insert, an absent key simply defaults to NULL. source_ref
+    # is always present; decision/decided_at are always set above.
+    row = {k: v for k, v in row.items() if v is not None}
     try:
         (get_supabase().table("sermastr_action_log")
          .upsert(row, on_conflict="source_ref").execute())

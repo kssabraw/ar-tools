@@ -320,6 +320,25 @@ def test_record_decision_upserts_with_decision_fields(monkeypatch):
     assert "outcome_verdict" not in row
 
 
+def test_record_decision_strips_none_to_not_clobber_snapshot(monkeypatch):
+    # A re-decision after the client was deleted arrives with client_name=None
+    # (review.client_id → null). The merge must NOT null the pending row's
+    # snapshotted client_name, so None-valued keys are dropped from the upsert.
+    tables = {"sermastr_action_log": _FakeTable()}
+    _mk(monkeypatch, tables)
+    sermastr_audit.record_decision(
+        review_id="rev1", idx=0, proposal={"title": "A", "action": "a"},
+        client_id=None, client_name=None, trigger=None, decision="dismissed",
+        actor_profile_id=None, actor_role=None,
+    )
+    (row, _), = tables["sermastr_action_log"].upserts
+    assert "client_name" not in row and "client_id" not in row and "trigger" not in row
+    assert "decided_by" not in row and "actor_role" not in row  # None actor fields dropped
+    # But the decision itself and the identity key are always written.
+    assert row["decision"] == "dismissed" and row["source_ref"] == "strategy_proposal:rev1:0"
+    assert row["decided_at"] and row["actor_source"] == "web"
+
+
 def test_record_decision_ignores_bad_decision(monkeypatch):
     tables = {"sermastr_action_log": _FakeTable()}
     _mk(monkeypatch, tables)
