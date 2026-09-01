@@ -1,6 +1,12 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-09-01 · **Goal-driven audit — #2 goal-aware Action Plan boost BUILT (owner-approved; PR pending)** (latest)
+## ⏩ Update — 2026-09-01 · **Goal-driven audit — #3 proposal-only autonomy goal-lever routing BUILT (owner-approved; PR pending); #2 goal-aware Action Plan boost MERGED (#932)** (latest)
+
+The goal-driven-audit build work is complete: #1 (#929), #4 (#930), #5 (#931), and **#2 (#932 — capped cross-tier boost) are all MERGED**; #3 is the last piece.
+
+**Finding #3 — proposal-only autonomy goal-lever routing — BUILT** (branch `claude/autonomy-goal-lever-routing-fi5vpy`, owner-approved option "proposal-only, after #2"): `autonomy_executor.gather_candidates` used goals only as an on/off gate and then read ONLY organic-channel `quick_win`/`opportunity` Action Plan items — so a client BEHIND on a `gbp_calls`/`maps_pack_presence` goal got organic page candidates for a local/GBP goal, and GBP/Maps levers were never candidates. Added a second, additive pass: when a behind goal's channel is `"maps"` (via the reused pure `reopt_planner.goal_channels`), each local/GBP Action Plan item (classified by the reused `reopt_planner.action_channel`) is surfaced as a **PROPOSAL-ONLY** candidate (`requires="approval"`, `cost_usd=0`) via a small `_MAPS_KIND_LEVER` map (`maps_weak_area`/`content_gap`→`generate_local_seo_page`; `gbp_gap`/`review_gap`/`local_relevance`/`maps_*`→`schedule_gbp_posts`). **Nothing here can auto-run:** a `requires="approval"` candidate always classifies as `"propose"` (autonomy_policy rule 3), even the AUTO_EXECUTE-listed `generate_local_seo_page`; `AUTO_EXECUTE` and every tier are untouched. The existing organic candidate emission is unchanged (additive). Pure helpers reused from #2 (no drift, no cycle — reopt_planner never imports autonomy). Unit-tested: maps-goal routes GBP/Maps items as proposals with the right levers, organic-goal never routes maps items, on_track goal yields nothing, and a defense-in-depth `classify` assertion that a routed candidate is never `"auto"`. 101 autonomy/reopt tests green locally.
+
+## ⏩ Update — 2026-09-01 · **Goal-driven audit — #2 goal-aware Action Plan boost MERGED (#932)**
 
 Continuation of the goal-driven audit. The owner reviewed the #2/#3 design proposals and picked the **recommended** options for both: #2 = **capped cross-tier boost**; #3 = **proposal-only routing, after #2** (via AskUserQuestion). #2 is now built; #3 follows off #2.
 

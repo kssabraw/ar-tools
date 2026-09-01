@@ -39,6 +39,9 @@ from typing import Callable, Optional
 from config import settings
 from db.supabase_client import get_supabase
 from services import autonomy_budget, autonomy_policy
+# Pure channel helpers shared with the Action Plan (#2 / #3) — no I/O, no cycle
+# (reopt_planner never imports autonomy).
+from services.reopt_planner import action_channel, goal_channels
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +51,27 @@ logger = logging.getLogger(__name__)
 AUTO_EXECUTE: frozenset[str] = frozenset({"rebuild_action_plan", "generate_local_seo_page"})
 
 _BEHIND = {"behind", "overdue"}
+
+# Goal-type→lever routing (#3, owner-approved PROPOSAL-ONLY): when a client's
+# BEHIND goal is measured on the local pack / GBP (the "maps" channel), the
+# organic quick_win/opportunity items the existing pass emits are the wrong
+# lever. This maps each local/GBP Action Plan kind to the lever a human would
+# use, surfaced as a requires="approval" proposal so the ledger/digest shows the
+# right-channel work. NONE of these ever auto-run: a requires="approval"
+# candidate always classifies as "propose" (autonomy_policy rule 3), and even
+# the AUTO_EXECUTE-listed generate_local_seo_page is held by that same rule. So
+# no guardrail is loosened and AUTO_EXECUTE is untouched.
+_MAPS_KIND_LEVER: dict[str, str] = {
+    "maps_weak_area": "generate_local_seo_page",  # create the missing location page
+    "content_gap": "generate_local_seo_page",
+    "gbp_gap": "schedule_gbp_posts",
+    "review_gap": "schedule_gbp_posts",
+    "local_relevance": "schedule_gbp_posts",
+    "maps_decline": "schedule_gbp_posts",
+    "maps_competitor": "schedule_gbp_posts",
+    "maps_gradual_decline": "schedule_gbp_posts",
+    "maps_solv_drop": "schedule_gbp_posts",
+}
 
 
 # --- Pure core --------------------------------------------------------------
@@ -131,6 +155,28 @@ def gather_candidates(
                 "requires": "approval",
                 "source": source,
                 "reason": reason,
+            })
+
+    # Goal-type→lever routing (#3): a client whose BEHIND goal is measured on the
+    # local pack / GBP needs its GBP/Maps levers, not (only) organic pages — but
+    # the pass above reads only organic-channel quick_win/opportunity kinds. Add
+    # the local/GBP Action Plan items as PROPOSAL-ONLY candidates so the ledger +
+    # owner digest surface the right-channel work. Never auto (requires="approval"
+    # ⇒ always "propose"); no spend reserved; AUTO_EXECUTE untouched.
+    if "maps" in goal_channels(goals):
+        for item in (action_plan or {}).get("items") or []:
+            if action_channel(item.get("kind")) != "maps":
+                continue
+            lever = _MAPS_KIND_LEVER.get(item.get("kind"))
+            if not lever:
+                continue
+            out.append({
+                "action": lever,
+                "keyword": (item.get("keyword") or "").strip() or None,
+                "cost_usd": 0.0,  # proposal only — a human runs the lever; no budget reserved
+                "requires": "approval",
+                "source": f"action_plan:{item.get('kind')}",
+                "reason": item.get("recommendation") or item.get("kind"),
             })
     return out
 
