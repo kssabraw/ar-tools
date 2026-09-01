@@ -273,6 +273,7 @@ function kindMeta(kind: string): { label: string; icon: React.ReactNode } {
     case 'maps_decline': return { label: 'Local pack decline', icon: <MapPin size={18} /> }
     case 'maps_competitor': return { label: 'Local competitor', icon: <Users size={18} /> }
     case 'maps_weak_area': return { label: 'Weak coverage area', icon: <MapPin size={18} /> }
+    case 'maps_competitor_land_grab': return { label: 'Competitor land grab', icon: <Users size={18} /> }
     case 'gbp_gap': return { label: 'GBP gap', icon: <MapPin size={18} /> }
     case 'review_gap': return { label: 'Reviews', icon: <Star size={18} /> }
     case 'backlink_gap': return { label: 'Backlinks', icon: <Link2 size={18} /> }
@@ -304,6 +305,7 @@ function target(action: ReoptAction): { label: string; value: string } {
   const v = action.keyword || '—'
   switch (action.kind) {
     case 'maps_weak_area': return { label: 'Area', value: v }
+    case 'maps_competitor_land_grab': return { label: 'Contested area', value: v }
     case 'gbp_gap': return { label: 'Profile', value: v }
     case 'review_gap': return { label: 'Profile', value: v }
     case 'backlink_gap': return { label: 'Scope', value: v }
@@ -383,6 +385,16 @@ function kindGuide(kind: string): { why: string; needed: string[]; source: strin
           'Tie GBP service-area and reviews to the area where possible.',
         ],
         source: 'Maps geo-grid — geocoded weak coverage areas (aggregated across your tracked Maps keywords).',
+      }
+    case 'maps_competitor_land_grab':
+      return {
+        why: 'A competitor just published a page targeting one of your weak coverage areas — a land grab in a zone you’re already losing. A fresh, on-topic competitor page in a weak area compounds quickly if unanswered.',
+        needed: [
+          'Build or strengthen a location page targeting this area now, before they bank the local-pack position.',
+          'Use your authority advantage (reviews, domain strength) — match their targeting and out-quality the page.',
+          'Reinforce GBP service-area signals and area-relevant reviews.',
+        ],
+        source: 'Maps geo-grid × competitor content watch — a rival’s new page in a weak zone.',
       }
     case 'gbp_gap':
       return {

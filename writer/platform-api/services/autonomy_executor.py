@@ -63,6 +63,7 @@ _BEHIND = {"behind", "overdue"}
 # no guardrail is loosened and AUTO_EXECUTE is untouched.
 _MAPS_KIND_LEVER: dict[str, str] = {
     "maps_weak_area": "generate_local_seo_page",  # create the missing location page
+    "maps_competitor_land_grab": "generate_local_seo_page",  # answer a rival's page in a weak zone
     "content_gap": "generate_local_seo_page",
     "gbp_gap": "schedule_gbp_posts",
     "review_gap": "schedule_gbp_posts",

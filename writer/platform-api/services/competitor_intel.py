@@ -339,22 +339,111 @@ async def run_content_watch(client_id: str) -> dict:
             ).execute()
 
     if new_by_competitor:
-        from services import notifications
+        from services import competitor_page_intel, notifications
 
         total = sum(len(v) for v in new_by_competitor.values())
         lines = [
             f"{name}: {len(urls)} new page{'s' if len(urls) != 1 else ''}"
             for name, urls in sorted(new_by_competitor.items())
         ]
+        # Land-grab check: did any fresh page target one of the client's weak
+        # coverage areas? If so, escalate the signal and name the contested zone —
+        # that's a "answer this now" event, not passive content awareness.
+        contested: list[dict] = []
+        try:
+            places = load_priority_places(client_id)
+            if places:
+                pages = [
+                    {"competitor": name, "url": u}
+                    for name, urls in new_by_competitor.items()
+                    for u in urls
+                ]
+                contested = competitor_page_intel.match_pages_to_places(pages, places)
+        except Exception as exc:
+            logger.warning("competitor_intel.landgrab_check_failed", extra={"client_id": client_id, "error": str(exc)})
+
+        if contested:
+            zones = []
+            for m in contested:
+                tag = f"{m.get('competitor')} → {m.get('place')}"
+                if tag not in zones:
+                    zones.append(tag)
+            title = f"Competitor building in your weak zone{'s' if len(zones) != 1 else ''}"
+            summary = "⚠ Land grab: " + "; ".join(zones[:5])
+            if total > len(contested):
+                summary += f" (+{total - len(contested)} other new page{'s' if total - len(contested) != 1 else ''})"
+            severity = "warning"
+        else:
+            title = f"Competitors published {total} new page{'s' if total != 1 else ''}"
+            summary = "; ".join(lines)
+            severity = "info"
+
         notifications.emit(
             client_id,
             "competitor_content",
-            f"Competitors published {total} new page{'s' if total != 1 else ''}",
-            summary="; ".join(lines)[:500],
-            severity="info",
-            payload={"new_pages": {k: v[:20] for k, v in new_by_competitor.items()}},
+            title,
+            summary=summary[:500],
+            severity=severity,
+            payload={
+                "new_pages": {k: v[:20] for k, v in new_by_competitor.items()},
+                "contested": contested[:20],
+            },
         )
-    return {"competitors_watched": len(competitors), "new_pages": {k: len(v) for k, v in new_by_competitor.items()}}
+    return {
+        "competitors_watched": len(competitors),
+        "new_pages": {k: len(v) for k, v in new_by_competitor.items()},
+    }
+
+
+# ---------------------------------------------------------------------------
+# Client priority places (weak grid zones) — the targets a competitor page is
+# "contested" against. Best-effort; empty on any failure.
+# ---------------------------------------------------------------------------
+def load_priority_places(client_id: str) -> list[str]:
+    """The client's own priority local places — the geocoded weak coverage areas
+    from the latest reporting Maps scan — as ``"City, ADMIN"`` strings (the same
+    shape the reopt-planner's maps_weak_area action uses for ``location``).
+    Weakest-first, deduped. These are the places a competitor's new page is
+    cross-referenced against to detect a land grab. Best-effort → []."""
+    try:
+        from services import maps_reporting
+
+        supabase = get_supabase()
+        scans = (
+            maps_reporting.only_reporting(
+                supabase.table("maps_scans").select("id")
+            )
+            .eq("client_id", client_id)
+            .eq("status", "complete")
+            .order("completed_at", desc=True)
+            .limit(1)
+            .execute()
+        ).data or []
+        if not scans:
+            return []
+        rows = (
+            supabase.table("maps_scan_results")
+            .select("report_weak_locations")
+            .eq("scan_id", scans[0]["id"])
+            .execute()
+        ).data or []
+        best: dict[tuple, tuple[str, int]] = {}
+        for r in rows:
+            loc = r.get("report_weak_locations") or {}
+            for area in loc.get("weak_areas") or []:
+                city = (area.get("city") or "").strip()
+                if not city:
+                    continue
+                admin = (area.get("admin_area") or "").strip()
+                key = (city.lower(), admin.lower())
+                place = f"{city}, {admin}" if admin else city
+                pins = area.get("pins") or 0
+                if key not in best or pins > best[key][1]:
+                    best[key] = (place, pins)
+        return [place for place, _ in sorted(best.values(), key=lambda t: t[1], reverse=True)]
+    except Exception as exc:
+        logger.warning("competitor_intel.priority_places_failed", extra={"client_id": client_id, "error": str(exc)})
+        return []
 
 
 # ---------------------------------------------------------------------------

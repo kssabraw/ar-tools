@@ -1222,6 +1222,7 @@ export interface ReoptAction {
     | 'maps_decline'
     | 'maps_competitor'
     | 'maps_weak_area'
+    | 'maps_competitor_land_grab'
     | 'maps_solv_drop'
     | 'gbp_gap'
     | 'review_gap'
@@ -1250,6 +1251,8 @@ export interface ReoptAction {
   search_volume?: number | null
   est_value?: number | null
   location?: string | null
+  // Land grab: the rival competitor building a page in the client's weak zone.
+  competitor?: string | null
   diagnosis: string
   recommendation: string
   cta_label: string

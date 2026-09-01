@@ -340,6 +340,45 @@ def test_maps_weak_area_not_ranked_says_so():
     assert "don't appear in the local pack" in a["diagnosis"] and a["url"] is None
 
 
+def test_maps_weak_area_upgrades_to_land_grab_when_contested():
+    weak = [{"city": "Preston", "admin_area": "VIC", "pins": 6, "avg_rank": 14.0}]
+    landgrab = {
+        "preston, vic": [
+            {"competitor": "Metro Roofing", "url": "https://x.com/services/preston-vic-3072/",
+             "first_seen": "2026-08-25"},
+        ]
+    }
+    a = reopt_planner.build_maps_actions(CLIENT, [], weak, None, landgrab)[0]
+    assert a["kind"] == "maps_competitor_land_grab"
+    assert a["severity"] == "warning"  # escalated above a plain weak-area (info)
+    assert a["competitor"] == "Metro Roofing"
+    # the competitor's actual page URL, and it names the zone in the text
+    assert a["url"] == "https://x.com/services/preston-vic-3072/"
+    assert "Metro Roofing" in a["diagnosis"] and "Preston" in a["diagnosis"]
+    assert a["cta_path"] == f"clients/{CLIENT}/local-seo"
+    assert a["pages"] and a["pages"][0]["competitor"] == "Metro Roofing"
+
+
+def test_maps_land_grab_outranks_plain_weak_area():
+    weak = [
+        {"city": "Preston", "admin_area": "VIC", "pins": 6},   # contested
+        {"city": "Kew", "admin_area": "VIC", "pins": 9},        # open (higher pins)
+    ]
+    landgrab = {"preston, vic": [{"competitor": "Rival", "url": "https://x/services/preston-vic/", "first_seen": "1"}]}
+    actions = reopt_planner.build_maps_actions(CLIENT, [], weak, None, landgrab)
+    kinds = {a["keyword"]: a["kind"] for a in actions}
+    assert kinds["Preston, VIC"] == "maps_competitor_land_grab"
+    assert kinds["Kew, VIC"] == "maps_weak_area"
+    # the contested zone sorts above the (otherwise-heavier) open weak area
+    assert actions[0]["keyword"] == "Preston, VIC"
+
+
+def test_maps_weak_area_stays_plain_without_landgrab():
+    weak = [{"city": "Preston", "admin_area": "VIC", "pins": 6}]
+    a = reopt_planner.build_maps_actions(CLIENT, [], weak, None, None)[0]
+    assert a["kind"] == "maps_weak_area"  # byte-identical to prior behaviour
+
+
 def test_quick_win_create_page_shows_search_volume():
     items = [_rankability_item(keyword="solar installer", client_rank=None,
                                search_volume=880, est_value=430)]
