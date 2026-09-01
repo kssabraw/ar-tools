@@ -1894,6 +1894,16 @@ class Settings(BaseSettings):
     pace_chase_escalate_business_days: int = 3
     # Slip-forecast look-ahead window (§4.12).
     pace_slip_horizon_days: int = 5
+    # --- Action Log (docs: PACE Action Log — audit + learning ledger) ---
+    # Best-effort audit + learning ledger of every client-campaign-affecting PACE
+    # action + human decision (approve/modify/deny/defer/cancel). Default ON — PACE
+    # is live and we want the record immediately; a logging failure never breaks an
+    # action. Turn off to stop writing pace_action_log rows.
+    pace_audit_enabled: bool = True
+    # How many recent log rows the self-read `pace_history` tool / context surface
+    # returns (bounded so the prompt stays small).
+    pace_audit_history_limit: int = 25
+
     # --- Proactive Interventions (docs/modules/pace-proactive-interventions-plan-v1_0.md) ---
     # The managerial layer: PACE scans for SYSTEMIC delivery problems and opens a
     # durable intervention (problem + fix plan) the PM dispositions four ways.

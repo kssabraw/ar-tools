@@ -4,7 +4,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { NotificationBell } from './NotificationBell'
-import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, ListTodo, Menu, X, Radar, Crosshair, Loader2, ShieldCheck, Globe, Globe2, CalendarDays, Compass } from 'lucide-react'
+import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, ListTodo, Menu, X, Radar, Crosshair, Loader2, ShieldCheck, Globe, Globe2, CalendarDays, Compass, ScrollText } from 'lucide-react'
 
 interface NavItem {
   label: string
@@ -62,12 +62,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
     setMobileOpen(false)
   }, [location.pathname])
 
-  // Team management is admin-only (matches the /team AdminRoute guard).
-  const mainNav: NavItem[] = [
-    ...nav,
-    ...(isAdmin ? [{ label: 'Team', to: '/team', icon: <UserCog size={18} /> }] : []),
-  ]
-
   async function handleSignOut() {
     await signOut()
     navigate('/login')
@@ -107,6 +101,17 @@ export function Layout({ children }: { children: React.ReactNode }) {
     queryFn: () => api.get<{ enabled: boolean }>('/qa/status'),
     staleTime: 5 * 60_000,
   })
+
+  // Team management is admin-only (matches the /team AdminRoute guard). The PACE
+  // action log is admin-only too (it names actors + before/after state) and only
+  // relevant once PACE is enabled.
+  const mainNav: NavItem[] = [
+    ...nav,
+    ...(isAdmin ? [{ label: 'Team', to: '/team', icon: <UserCog size={18} /> }] : []),
+    ...(isAdmin && paceStatus?.enabled
+      ? [{ label: 'PACE Log', to: '/pace/log', icon: <ScrollText size={18} /> }]
+      : []),
+  ]
 
   // Live count of the user's in-flight content generation (ecommerce / Local
   // SEO pages, blog runs), so a long batch they navigated away from stays

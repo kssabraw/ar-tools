@@ -366,6 +366,62 @@ async def scan_pace_interventions(auth: dict = Depends(require_auth)) -> dict:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Action Log — the audit + learning ledger read API (admin-gated).
+# ---------------------------------------------------------------------------
+@router.get("/pace/action-log")
+async def get_pace_action_log(
+    client_id: Optional[str] = None,
+    actor: Optional[str] = None,
+    action: Optional[str] = None,
+    decision: Optional[str] = None,
+    outcome: Optional[str] = None,
+    origin: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """A filtered page of PACE's action log — what it changed on client campaigns
+    and how humans dispositioned each one. Admin-gated (the log is sensitive: it
+    names actors, clients, and before/after state)."""
+    if not settings.pace_enabled:
+        raise HTTPException(status_code=503, detail="pace_not_enabled")
+    if auth.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="admin_only")
+    from services import pace_audit
+
+    return await run_in_threadpool(
+        pace_audit.list_log, client_id=client_id, actor_profile_id=actor,
+        action=action, decision=decision, outcome=outcome, origin=origin,
+        since=since, until=until, limit=limit, offset=offset,
+    )
+
+
+@router.get("/pace/action-log/stats")
+async def get_pace_action_log_stats(
+    client_id: Optional[str] = None,
+    actor: Optional[str] = None,
+    action: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Approve/deny/modify rollup over a filtered window — the log view's summary
+    strip + the learning read. Admin-gated."""
+    if not settings.pace_enabled:
+        raise HTTPException(status_code=503, detail="pace_not_enabled")
+    if auth.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="admin_only")
+    from services import pace_audit
+
+    return await run_in_threadpool(
+        pace_audit.stats_window, client_id=client_id, actor_profile_id=actor,
+        action=action, since=since, until=until,
+    )
+
+
 @router.get("/pace/brief")
 async def pace_brief(auth: dict = Depends(require_auth)) -> dict:
     """Deterministic personal brief for the /pace page empty state — the actor's

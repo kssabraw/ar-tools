@@ -133,6 +133,29 @@ _TOOL_REQUIRED = {
 }
 
 
+# Read-only self-history tool: PACE reads its OWN action ledger to answer
+# questions about past actions and its approve/deny/modify track record (the
+# "learn/teach itself" surface). Executed inline like drill_task — never a write,
+# so it's not in PACE_ACTIONS and is never itself logged.
+HISTORY_TOOL = {
+    "name": "pace_history",
+    "description": (
+        "Read PACE's OWN recent action log — what PACE changed on client "
+        "campaigns and how humans dispositioned each one (approved / "
+        "approved-with-modifications / denied / deferred / cancelled). Use it to "
+        "answer questions about past PACE actions, what got reverted or declined, "
+        "or how often a kind of change is approved vs denied. Read-only."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "client": {"type": "string", "description": "Limit to one client by name; omit for agency-wide."},
+            "action": {"type": "string", "description": "Limit to one action type, e.g. reassign_task, set_task_status, intervention_disposition."},
+        },
+    },
+}
+
+
 def build_pace_tools() -> list[dict]:
     return [
         {
@@ -183,6 +206,13 @@ _PACE_SYSTEM = (
     "— never fire the same per-task tool many times. To explain WHY a task is stuck "
     "or late, call the read-only `drill_task` first and answer from what it returns "
     "(subtasks, activity, comments, days stuck).\n\n"
+    "YOUR OWN TRACK RECORD. Every action you take on a client campaign — and how a "
+    "human dispositioned it (approved / approved-with-modifications / denied / "
+    "deferred / cancelled) — is logged. When asked what you changed, what got "
+    "reverted or declined, or how often a kind of change gets approved, call the "
+    "read-only `pace_history` tool and answer from it. Learn from it: if humans "
+    "routinely deny or modify a kind of action, say so and adjust what you "
+    "propose.\n\n"
     "SCOPE. The board data you're given is either one client, one team member across "
     "ALL their clients, or the whole agency (every board). Answer within that scope "
     "and name clients and people explicitly.\n\n"
@@ -229,6 +259,17 @@ def build_pace_context(client_id: str) -> dict:
     # Attach the roster so the LLM can enumerate assignees and offer per-owner
     # actions without a second read.
     signals["team_members"] = [m.get("name") for m in _active_members() if m.get("name")]
+    # A compact awareness of PACE's own recent track record on this client (counts
+    # only — the pace_history tool is the deep read). Best-effort.
+    try:
+        from services import pace_audit
+
+        summary = pace_audit.history_summary(client_id=client_id)
+        if summary.get("count"):
+            signals["pace_action_history"] = {"count": summary["count"],
+                                              "decisions": summary["stats"]["overall"]}
+    except Exception:
+        pass
     return signals
 
 
@@ -443,7 +484,7 @@ async def interpret_pace(question: str, client: Optional[dict], context: dict,
 
     clients = anthropic_failover.build_async_clients(timeout=60.0, max_retries=2)
     drill_client_id = client.get("id") if client else None
-    tools = build_pace_tools() + [pace_batch.DRILL_TOOL, pace_batch.BATCH_TOOL]
+    tools = build_pace_tools() + [pace_batch.DRILL_TOOL, pace_batch.BATCH_TOOL, HISTORY_TOOL]
     messages = [{"role": "user", "content": "\n\n".join(blocks)}]
 
     async def on_text(delta: str) -> None:
@@ -476,17 +517,25 @@ async def interpret_pace(question: str, client: Optional[dict], context: dict,
                     return ("action", {"name": b.name, "args": dict(b.input or {})})
                 if b.name == pace_batch.BATCH_TOOL["name"]:
                     return ("batch", dict(b.input or {}))
-            drills = [b for b in resp.content
-                      if getattr(b, "type", None) == "tool_use" and b.name == pace_batch.DRILL_TOOL["name"]]
-            if not drills or final:
+            reads = [b for b in resp.content
+                     if getattr(b, "type", None) == "tool_use"
+                     and b.name in (pace_batch.DRILL_TOOL["name"], HISTORY_TOOL["name"])]
+            if not reads or final:
                 break
             messages.append({"role": "assistant", "content": resp.content})
             results = []
-            for b in drills:
-                name = dict(b.input or {}).get("task_name", "")
-                if on_event:
-                    await on_event({"type": "status", "label": f"Reading task: {name}".strip()})
-                text = await asyncio.to_thread(_drill_read, name, drill_client_id)
+            for b in reads:
+                inp = dict(b.input or {})
+                if b.name == HISTORY_TOOL["name"]:
+                    if on_event:
+                        await on_event({"type": "status", "label": "Reading PACE action history"})
+                    text = await asyncio.to_thread(_history_read, drill_client_id,
+                                                   inp.get("client"), inp.get("action"))
+                else:
+                    name = inp.get("task_name", "")
+                    if on_event:
+                        await on_event({"type": "status", "label": f"Reading task: {name}".strip()})
+                    text = await asyncio.to_thread(_drill_read, name, drill_client_id)
                 results.append({"type": "tool_result", "tool_use_id": b.id, "content": text})
             messages.append({"role": "user", "content": results})
     except anthropic.APIStatusError as exc:
@@ -531,6 +580,36 @@ def _drill_read(task_name: str, client_id_hint: Optional[str] = None) -> str:
     return pace_batch.format_drill(detail, comments, days)
 
 
+def _history_read(client_id_hint: Optional[str], client_name_query: Optional[str],
+                  action: Optional[str] = None) -> str:
+    """Impure read for the `pace_history` tool — PACE's own recent action ledger +
+    a decision-rate rollup, formatted for the LLM. Scope: a named client
+    (resolved), else the client in scope, else agency-wide. Best-effort."""
+    from services import pace_audit
+
+    client_id = client_id_hint
+    if client_name_query:
+        from services.slack_assistant import resolve_client
+
+        c = resolve_client(client_name_query, _all_clients())
+        # Named a client → scope to it; named something that isn't a client
+        # ("all", "everyone") → agency-wide.
+        client_id = c["id"] if c else None
+    summary = pace_audit.history_summary(client_id=client_id)
+    rows = summary["recent"]
+    if action:
+        rows = [r for r in rows if r.get("action") == action]
+    if not rows:
+        return "No PACE actions on record for this scope yet."
+    ov = summary["stats"]["overall"]
+    header = (f"PACE action history ({summary['count']} recent): "
+              f"{ov['executed']} executed, {ov['approved']} approved, "
+              f"{ov['approved_with_modifications']} approved-with-mods, "
+              f"{ov['denied'] + ov['cancelled']} declined, {ov['deferred']} deferred, "
+              f"{ov['failed']} failed.")
+    return header + "\n" + pace_audit.format_history(rows)
+
+
 # How many tasks a single on-demand batch stages (the rest are held).
 _BATCH_MAX = 15
 
@@ -562,11 +641,37 @@ async def _stage_batch(action: str, targets: list[dict], extra_args: dict,
     return items, flags
 
 
-async def _run_pace_action(name: str, client_id: str, args: dict, context: ActionContext) -> str:
-    out = PACE_ACTIONS[name]["run"](context, client_id, args or {})
-    if inspect.isawaitable(out):
-        out = await out
-    return out
+def _log_declined(pending: dict, context: ActionContext) -> None:
+    """A staged single action a human replied to with something other than *yes*
+    — record it as a cancelled decision (the "human declined PACE's proposal"
+    training signal). Best-effort; only logged actions produce a row."""
+    from services import pace_audit
+
+    args = pending.get("args") or {}
+    tgt = pace_audit.target_from_args(pending.get("action") or "", args)
+    pace_audit.record_decision(
+        action=pending.get("action") or "", origin="conversational",
+        decision="cancelled", outcome="cancelled", context=context,
+        client_id=pending.get("client_id"), client_name=pending.get("client_name"),
+        reason=pending.get("confirm"), args=args,
+        requester=pending.get("requester"), **tgt)
+
+
+async def _run_pace_action(name: str, client_id: str, args: dict, context: ActionContext,
+                           *, origin: str = "conversational", reason: Optional[str] = None,
+                           requester: Optional[str] = None,
+                           client_name: Optional[str] = None) -> str:
+    """Execute a confirmed PACE action, logging it to the action ledger when it's
+    campaign-affecting (run_and_log is a no-op logger for reads). Best-effort
+    logging never changes the run's result or its exceptions."""
+    from services import pace_audit
+
+    return await pace_audit.run_and_log(
+        lambda: PACE_ACTIONS[name]["run"](context, client_id, args or {}),
+        action=name, context=context, client_id=client_id, args=args or {},
+        origin=origin, decision="approved", reason=reason, requester=requester,
+        client_name=client_name,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -756,7 +861,10 @@ async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool
                 if not pace_auth.is_pace_pm(context):
                     await _post(channel, "Only a PACE PM can approve the daily plan.", thread_ts)
                     return True
-            reply = await pace_proposals.execute_plan_selection(pending["items"], selection, context)
+            reply = await pace_proposals.execute_plan_selection(
+                pending["items"], selection, context,
+                origin="batch" if pending.get("on_demand") else "chase_plan",
+                chase_plan_date=pending.get("date"))
             await _post(channel, reply, thread_ts)
             return True
         pending = None  # not an approval — treat as an ordinary message below
@@ -767,12 +875,16 @@ async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool
                 await _post(channel, "Only the person who requested this can confirm it.", thread_ts)
                 return True
             try:
-                reply = await _run_pace_action(pending["action"], pending["client_id"], pending["args"], context)
+                reply = await _run_pace_action(
+                    pending["action"], pending["client_id"], pending["args"], context,
+                    reason=pending.get("confirm"), requester=pending.get("requester"),
+                    client_name=pending.get("client_name"))
             except Exception as exc:
                 logger.warning("pace_action_run_failed", extra={"action": pending["action"], "error": str(exc)})
                 reply = "Sorry — that action failed. Try again."
             await _post(channel, reply, thread_ts)
             return True
+        _log_declined(pending, context)  # a "no" to a staged action — training signal
         _pace_pending.pop(pend_key, None)  # superseded
 
     if force:
@@ -825,7 +937,9 @@ async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool
         pending = result.get("pending")
         if pending:
             _pace_pending[pend_key] = {"action": pending["name"], "client_id": pending["client_id"],
-                                       "args": pending["args"], "requester": pending["requester"]}
+                                       "args": pending["args"], "requester": pending["requester"],
+                                       "confirm": pending.get("confirm"),
+                                       "client_name": pending.get("client_name")}
             await _post(
                 channel,
                 f"This will {pending['confirm']} for *{pending['client_name']}*. Reply *yes* to proceed.",
@@ -887,7 +1001,8 @@ def _portfolio_pace_text() -> str:
 # ---------------------------------------------------------------------------
 # Web entry (delegated from handle_chat, gated on pace_enabled)
 # ---------------------------------------------------------------------------
-def _store_web_pending(action: str, client: dict, args: dict, requester: Optional[str]) -> str:
+def _store_web_pending(action: str, client: dict, args: dict, requester: Optional[str],
+                       reason: Optional[str] = None) -> str:
     import uuid
     now = time.time()
     for tok, e in list(_pace_web_pending.items()):
@@ -898,7 +1013,7 @@ def _store_web_pending(action: str, client: dict, args: dict, requester: Optiona
     token = uuid.uuid4().hex
     _pace_web_pending[token] = {"action": action, "client_id": client["id"],
                                 "client_name": client.get("name"), "args": args,
-                                "requester": requester, "created": now}
+                                "requester": requester, "reason": reason, "created": now}
     return token
 
 
@@ -948,18 +1063,29 @@ async def maybe_handle_web(message: str, history: list[dict], sticky_client_id: 
             if selection is not None:
                 if not pace_auth.confirm_actor_ok(entry.get("requester"), context):
                     return {"reply": "Only the person who requested this can confirm it."}
-                reply = await pace_proposals.execute_plan_selection(entry["items"], selection, context)
+                reply = await pace_proposals.execute_plan_selection(
+                    entry["items"], selection, context, origin="batch")
                 return {"reply": reply}
             # Not an approval — the batch is superseded; fall through.
         elif is_affirmative(message):
             if not pace_auth.confirm_actor_ok(entry.get("requester"), context):
                 return {"reply": "Only the person who requested this can confirm it."}
             try:
-                reply = await _run_pace_action(entry["action"], entry["client_id"], entry["args"], context)
+                reply = await _run_pace_action(
+                    entry["action"], entry["client_id"], entry["args"], context,
+                    reason=entry.get("reason"), requester=entry.get("requester"),
+                    client_name=entry.get("client_name"))
             except Exception as exc:
                 logger.warning("pace_web_action_failed", extra={"action": entry["action"], "error": str(exc)})
                 reply = "Sorry — that action failed."
             return {"reply": reply, "client_id": entry["client_id"], "client_name": entry.get("client_name")}
+        else:
+            # A single staged action the user declined (typed something other than
+            # a confirm) — record the "no" before falling through.
+            _log_declined({"action": entry["action"], "client_id": entry["client_id"],
+                           "client_name": entry.get("client_name"), "args": entry["args"],
+                           "requester": entry.get("requester"), "confirm": entry.get("reason")},
+                          context)
         # Non-affirmative supersedes; fall through to normal handling.
 
     if not force and not is_pace_message(message):
@@ -978,7 +1104,7 @@ async def maybe_handle_web(message: str, history: list[dict], sticky_client_id: 
         if pending:
             token = _store_web_pending(
                 pending["name"], {"id": pending["client_id"], "name": pending["client_name"]},
-                pending["args"], pending["requester"],
+                pending["args"], pending["requester"], reason=pending.get("confirm"),
             )
             return {"client_id": pending["client_id"], "client_name": pending["client_name"],
                     "reply": f"This will {pending['confirm']} for **{pending['client_name']}**. Confirm to proceed.",

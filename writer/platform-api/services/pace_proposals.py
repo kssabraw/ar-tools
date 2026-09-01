@@ -162,8 +162,15 @@ async def build_chase_plan(today: Optional[date] = None) -> dict:
         staged.pop("_requester", None)
         if autonomy.get(p.get("kind")) == "auto":
             # Future graduation path (all-propose in v1.4): execute now, report done.
+            from services import pace_audit
             try:
-                result = await _call_action(meta["run"], SYSTEM_CONTEXT, p["client_id"], staged)
+                result = await pace_audit.run_and_log(
+                    lambda: _call_action(meta["run"], SYSTEM_CONTEXT, p["client_id"], staged),
+                    action=action, context=SYSTEM_CONTEXT, client_id=p["client_id"],
+                    args=staged, origin="scheduled", decision="auto",
+                    reason=p.get("reason"), client_name=p.get("client_name"),
+                    chase_plan_date=today.isoformat(),
+                )
                 auto_results.append(str(result))
             except Exception as exc:
                 flags.append(f"{p.get('reason')} — auto-execution failed ({str(exc)[:80]})")
@@ -186,13 +193,22 @@ async def build_chase_plan(today: Optional[date] = None) -> dict:
 # Confirm (called from pace_agent's batch pending branch)
 # ---------------------------------------------------------------------------
 async def execute_plan_selection(items: list[dict], selection: list[int],
-                                 context: ActionContext) -> str:
+                                 context: ActionContext, *, origin: str = "chase_plan",
+                                 chase_plan_date: Optional[str] = None) -> str:
     """Run the selected plan items the confirmer is authorized for. Returns the
-    thread reply summarizing ✅ ran / ⛔ not authorized / ❌ failed."""
+    thread reply summarizing ✅ ran / ⛔ not authorized / ❌ failed.
+
+    Each run is logged to the PACE action ledger (best-effort). A partial
+    selection (approving a subset of a longer plan) is recorded as
+    ``approved_with_modifications`` carrying the approved-vs-dropped split — the
+    human 'approve with modifications' signal for the Chase Plan/batch path."""
     from middleware.auth import role_rank
+    from services import pace_audit
 
     if context.is_anonymous:
         return "Link your Slack account first — I can't authorize an anonymous confirm."
+    mods = pace_audit.selection_modifications(len(items), selection)
+    decision = "approved_with_modifications" if mods else "approved"
     by_index = {it["index"]: it for it in items}
     lines: list[str] = []
     for idx in selection:
@@ -205,7 +221,14 @@ async def execute_plan_selection(items: list[dict], selection: list[int],
             lines.append(f"⛔ {idx}. {it['reason']} — needs *{it['min_role']}* or higher")
             continue
         try:
-            result = await _call_action(PACE_ACTIONS[it["action"]]["run"], context, it["client_id"], it["args"])
+            result = await pace_audit.run_and_log(
+                lambda it=it: _call_action(PACE_ACTIONS[it["action"]]["run"],
+                                           context, it["client_id"], it["args"]),
+                action=it["action"], context=context, client_id=it["client_id"],
+                args=it["args"], origin=origin, decision=decision, reason=it.get("reason"),
+                client_name=it.get("client_name"), chase_plan_date=chase_plan_date,
+                modifications=mods,
+            )
             lines.append(f"{result}" if str(result).startswith("✅") else f"✅ {result}")
         except Exception as exc:
             logger.warning("chase_plan_run_failed", extra={"action": it["action"], "error": str(exc)})
