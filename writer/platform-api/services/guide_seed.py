@@ -453,22 +453,24 @@ Two agents that watch the task board so you don't have to chase it by hand. **PA
     },
     {
         "slug": "asana-tasks",
-        "title": "Asana Tasks",
+        "title": "Asana Tasks (legacy)",
         "category": "Reporting",
         "icon": "ClipboardList",
         "sort_order": 120,
-        "summary": "Define the monthly delivery tasks each client gets and dispatch them to Asana.",
-        "body": """# Asana Tasks
+        "summary": "Legacy — the delivery board has moved to the native Task Manager. Kept here for reference only.",
+        "body": """# Asana Tasks (legacy)
 
-Define the set of tasks a client should get each month — name, assignee, and category — and the monthly job creates them in Asana under a new section.
+The team's delivery board has moved to the **native Task Manager** — see that guide instead for day-to-day task work. This page (and the underlying Asana integration) is kept around for historical reference from before the cutover, not as the current way to manage work.
 
-## How to use it
-1. Open a client's workspace -> **Asana Tasks** card.
-2. Define the client's task templates.
-3. Tasks are created automatically each month, or on demand.
+## What changed
+- Task creation, status tracking, checklists, comments, and the daily digest/Chase Plan all now run on the native board (client workspace -> **Tasks** card, or **My Tasks** in the sidebar) — not Asana.
+- **PACE** and **QA** both operate on the native board, not Asana.
+- Monthly task templates are defined in the **Task Library** (sidebar) now, not in an Asana-specific template screen.
 
 ## Tips
-- See **Workload** in the nav for team capacity across clients.""",
+- Looking for "how do I see my tasks" or "how do I generate this month's work"? Go to the **Task Manager** guide.
+- If something in Asana looks out of date, that's expected — it stopped being the source of truth once the team cut over to the native board.
+- See **Workload** in the nav for team capacity across clients (this still applies either way).""",
     },
     {
         "slug": "client-setup",
