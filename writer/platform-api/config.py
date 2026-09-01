@@ -1641,6 +1641,12 @@ class Settings(BaseSettings):
     # Only the top-N plan actions become tasks (the plan is priority-sorted).
     task_producer_action_plan_max: int = 10
     task_producer_content_run_enabled: bool = False
+    # Plan → PACE handoff (services/plan_handoff.py): the on-demand bridge that
+    # pushes a client's Action Plan (and/or open strategist proposals) onto the
+    # native board and hands each task to PACE's placement engine. Cap on how many
+    # Action Plan items one handoff materializes (the plan is priority-sorted; an
+    # on-demand handoff sends more than the auto-producer's per-build top-N).
+    plan_handoff_max_actions: int = 25
     # Client-facing "content ready" Slack ping (services/content_ready.py):
     # PACE posts one summary message to a client's own channel (falling back to
     # the master PACE channel when none is set) whenever a Blog/Service run,

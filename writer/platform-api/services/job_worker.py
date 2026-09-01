@@ -875,6 +875,10 @@ async def _process_job(job: dict) -> None:
         await run_asana_monthly_job(job)
     elif job_type == "asana_push":
         await run_asana_push_job(job)
+    elif job_type == "plan_handoff":
+        from services.plan_handoff import run_plan_handoff_job
+
+        await run_plan_handoff_job(job)
     elif job_type == "task_month_generate":
         await run_task_month_job(job)
     elif job_type == "task_due_sweep":

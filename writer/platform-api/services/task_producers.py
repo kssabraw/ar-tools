@@ -137,6 +137,28 @@ def on_maps_alerts(client_id: str, opened: list[dict], resolved_ids: list[str]) 
 # ---------------------------------------------------------------------------
 # Action Plan items (reopt_plans)
 # ---------------------------------------------------------------------------
+# Drop-driven kinds are owned by the alert producers above (truer open/close
+# semantics), so the Action Plan producer — and the on-demand plan→PACE handoff
+# that reuses this shape — both skip them.
+ACTION_PLAN_SKIP_KINDS = {"rank_drop", "sitewide_decline", "maps_decline", "maps_competitor"}
+
+
+def action_task_name(action: dict) -> str:
+    """The task name for an Action Plan item — the recommendation, else the CTA
+    label. Pure. Shared by the producer and the plan→PACE handoff so a task
+    created either way is identical (same name → the same idempotency behaviour)."""
+    return (action.get("recommendation") or action.get("cta_label") or "Action Plan item")[:200]
+
+
+def action_task_description(client_id: str, action: dict) -> str:
+    """The task description for an Action Plan item (diagnosis + a link into the
+    tool that does it). Pure. Shared by the producer and the handoff."""
+    return (
+        f"{action.get('diagnosis') or ''}\n\n"
+        f"Open the tool: {action.get('cta_path') or f'/clients/{client_id}/action-plan'}"
+    ).strip()
+
+
 def action_source_ref(client_id: str, action: dict) -> str:
     """Stable per-action key: an action is "the same item" across plan rebuilds
     when its kind + keyword (or CTA label) match — plan rows have no ids.
@@ -166,8 +188,7 @@ def sync_action_plan_tasks(client_id: str, actions: list[dict]) -> None:
     if not _enabled(settings.task_producer_action_plan_enabled):
         return
     try:
-        skip_kinds = {"rank_drop", "sitewide_decline", "maps_decline", "maps_competitor"}
-        eligible = [a for a in actions if a.get("kind") not in skip_kinds]
+        eligible = [a for a in actions if a.get("kind") not in ACTION_PLAN_SKIP_KINDS]
         wanted = {
             action_source_ref(client_id, a): a
             for a in eligible[: settings.task_producer_action_plan_max]
@@ -187,16 +208,12 @@ def sync_action_plan_tasks(client_id: str, actions: list[dict]) -> None:
         for ref, a in wanted.items():
             if ref in live_refs:
                 continue
-            name = a.get("recommendation") or a.get("cta_label") or "Action Plan item"
             _create(
                 client_id,
-                name[:200],
+                action_task_name(a),
                 source="action_plan",
                 source_ref=ref,
-                description=(
-                    f"{a.get('diagnosis') or ''}\n\n"
-                    f"Open the tool: {a.get('cta_path') or f'/clients/{client_id}/action-plan'}"
-                ).strip(),
+                description=action_task_description(client_id, a),
             )
         # An action that left the latest plan resolved (or was superseded).
         current_refs = {action_source_ref(client_id, a) for a in eligible}

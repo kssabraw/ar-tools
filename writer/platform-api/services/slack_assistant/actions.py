@@ -212,6 +212,60 @@ def _act_push_task_plan(client_id: str, args: Optional[dict] = None) -> str:
     )
 
 
+async def _stage_assign_plan_to_pace(client_id: str, args: Optional[dict] = None) -> tuple[str, dict | str]:
+    """Confirm-stage the plan→PACE handoff, naming exactly what will be pushed.
+
+    Async because the assistant framework awaits every action ``stage`` (matching
+    the other staged actions); the body itself does only cheap sync reads."""
+    from services import plan_handoff
+
+    if not plan_handoff.native_enabled():
+        return "reply", (
+            "The native task board isn't enabled yet — task assignment runs on it. "
+            "(Tasks currently live in Asana; there's no board to hand to PACE.)"
+        )
+    scope = ((args or {}).get("scope") or "both").strip().lower()
+    if scope not in plan_handoff.VALID_SCOPES:
+        scope = "both"
+    counts = plan_handoff.preview_counts(client_id, scope)
+    if not (counts["action_plan"] or counts["proposals"]):
+        which = {
+            "action_plan": "Action Plan",
+            "proposals": "open strategist proposals",
+        }.get(scope, "Action Plan or open proposals")
+        return "reply", (
+            f"There's nothing in the {which} to hand to PACE right now — rebuild the Action Plan "
+            "or run a strategist review first, then ask me again."
+        )
+    return "confirm", {"scope": scope, "_confirm": plan_handoff.confirm_phrase(client_id, scope)}
+
+
+def _act_assign_plan_to_pace(client_id: str, args: Optional[dict] = None) -> str:
+    """Hand the client's plan to PACE: create a board task per Action Plan item
+    and/or approved proposal, then place each on the best-fit teammate. Runs as a
+    background job (mirrors push_task_plan)."""
+    from services import plan_handoff
+
+    if not plan_handoff.native_enabled():
+        return "The native task board isn't enabled yet — task assignment runs on it."
+    scope = ((args or {}).get("scope") or "both").strip().lower()
+    if scope not in plan_handoff.VALID_SCOPES:
+        scope = "both"
+    # SerMaStr's action layer isn't actor-bound, so senior-flagged proposals are
+    # left for an admin to approve on the Action Plan page (never auto-approved).
+    plan_handoff.enqueue_plan_handoff(client_id, scope=scope, actor_id=None, actor_role=None)
+    note = (
+        " Senior-flagged proposals are left for an admin to approve on the Action Plan page."
+        if scope in ("proposals", "both")
+        else ""
+    )
+    return (
+        "✅ On it — handing the plan to PACE: I'm creating a board task for each item and PACE is "
+        "assigning each to the best-fit teammate (held if the team's at capacity). They'll land on "
+        "the board in a moment." + note
+    )
+
+
 def _asana_ready(client_id: str) -> tuple[Optional[str], Optional[str]]:
     """(project_gid, None) when the client's task board is usable, else
     (None, guidance string). Post-cutover (native_tasks_enabled) the native
@@ -1529,6 +1583,27 @@ _ACTIONS: dict[str, dict] = {
         "paid": True,
         "note": "creates real tasks on the client's Asana board",
         "run": _act_push_task_plan,
+    },
+    # Hand a SerMaStr-authored plan to PACE: create board tasks from the Action
+    # Plan and/or approve the open strategist proposals, then let PACE's placement
+    # engine assign each to the best-fit teammate. Confirm-gated (creates real
+    # tasks); staged so the confirm names exactly how many items go over.
+    "assign_plan_to_pace": {
+        "label": "send the plan to the task board for PACE to assign out",
+        "paid": True,
+        "note": "creates tasks on the board and hands them to PACE to assign",
+        "run": _act_assign_plan_to_pace,
+        "stage": _stage_assign_plan_to_pace,
+        "params": {
+            "properties": {
+                "scope": {
+                    "type": "string",
+                    "enum": ["both", "action_plan", "proposals"],
+                    "description": "Which plan to hand off: 'action_plan' (the ranked Action Plan to-do list), 'proposals' (approve + assign the open strategist-review proposals), or 'both' (default).",
+                },
+            },
+            "required": [],
+        },
     },
     # Conversational task management — parameterized (Claude extracts the task
     # name / assignee from the message), staged so the confirm names the exact

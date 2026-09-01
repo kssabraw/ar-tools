@@ -685,6 +685,42 @@ def run_run_qa(context: ActionContext, client_id: str, args: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# assign_client_plan — put a client's Action Plan (and/or open strategist
+# proposals) on the board and assign each task out. The SerMaStr→PACE handoff,
+# from PACE's side ("put Acme's Action Plan on the board and assign it"). Mass
+# board creation + assignment, so PM-gated like monthly generation. Runs as the
+# shared plan_handoff background job.
+# ---------------------------------------------------------------------------
+def stage_assign_plan(context: ActionContext, client_id: str, args: dict) -> tuple[str, dict | str]:
+    ok, reason = pace_auth.require_pace_pm(context)
+    if not ok:
+        return "reply", reason
+    from services import plan_handoff
+
+    if not plan_handoff.native_enabled():
+        return "reply", "The native task board isn't enabled yet — assignment runs on it."
+    scope = (args.get("scope") or "both").strip().lower()
+    if scope not in plan_handoff.VALID_SCOPES:
+        scope = "both"
+    counts = plan_handoff.preview_counts(client_id, scope)
+    if not (counts["action_plan"] or counts["proposals"]):
+        return "reply", ("Nothing in the Action Plan or open proposals to put on the board right now "
+                         "— rebuild the plan or run a strategist review first.")
+    return _staged({"scope": scope}, context, plan_handoff.confirm_phrase(client_id, scope))
+
+
+async def run_assign_plan(context: ActionContext, client_id: str, args: dict) -> str:
+    from services import plan_handoff
+
+    plan_handoff.enqueue_plan_handoff(
+        client_id, scope=args.get("scope") or "both",
+        actor_id=context.profile_id, actor_role=context.role,
+    )
+    return ("✅ On it — putting the plan on the board and assigning each task to the best-fit "
+            "member (held if the team's at capacity). They'll land shortly.")
+
+
+# ---------------------------------------------------------------------------
 # Persona-scoped registry (Phase 3 mounts this under persona='pace')
 # ---------------------------------------------------------------------------
 PACE_ACTIONS: dict[str, dict] = {
@@ -700,4 +736,5 @@ PACE_ACTIONS: dict[str, dict] = {
     "triage_task": {"label": "triage a task (set missing due date / category / estimate)", "stage": stage_triage, "run": run_triage},
     "rename_task": {"label": "rename a task (disambiguation)", "stage": stage_rename, "run": run_rename},
     "run_qa_review": {"label": "run a QA review on a task's deliverable", "stage": stage_run_qa, "run": run_run_qa},
+    "assign_client_plan": {"label": "put the client's Action Plan / proposals on the board and assign each out", "stage": stage_assign_plan, "run": run_assign_plan},
 }
