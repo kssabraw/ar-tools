@@ -759,6 +759,13 @@ class Settings(BaseSettings):
     # weekly run or a manual refresh. Flip to True to restore the on-drop
     # auto-refresh (still debounced by reopt_plan_min_interval_hours).
     reopt_plan_event_refresh_enabled: bool = False
+    # Goal-aware Action Plan ordering (goal-audit #2, owner-approved capped
+    # cross-tier boost). When a client has a behind/overdue campaign goal, lift
+    # that goal's channel's NON-emergency actions (cannibalization/quick/hidden
+    # tiers) just below the offpage/emergency floor — above off-goal work, never
+    # above an emergency (sitewide/deindex/drops/offpage). No behind goal → no
+    # change. Flip off to restore the fixed tier order for every client.
+    reopt_goal_boost_enabled: bool = True
 
     # Notifications service — shared delivery pipe (in-app card/feed + email +
     # Slack). In-app always works (DB row); email/Slack are best-effort and only

@@ -104,6 +104,91 @@ def _within(value: float) -> float:
     return max(0.0, min(float(value), _WITHIN_MAX))
 
 
+# ── Goal-aware prioritization (goal-audit #2 — owner-approved capped cross-tier
+# boost) ──────────────────────────────────────────────────────────────────────
+# The Action Plan's tier order is otherwise identical for every client, so a
+# client measured on GBP calls / local-pack presence gets a plan topped by
+# organic drops + cannibalization with its GBP/Maps levers stuck at tier 3. This
+# lifts the channel a client's BEHIND goal is measured on above the off-goal
+# NON-emergency work, while leaving every emergency (sitewide/deindex/drops/
+# offpage) untouched.
+
+# Action kind → the campaign-goal channel it moves. Emergency kinds are listed
+# for completeness but are protected from any boost by the sort<_SORT_OFFPAGE
+# guard in apply_goal_boost (their channel never actually matters).
+_CHANNEL_BY_KIND: dict[str, str] = {
+    # organic / web SERP
+    "rank_drop": "organic", "sitewide_decline": "organic", "quick_win": "organic",
+    "cannibalization": "organic", "opportunity": "organic", "keyword_gap": "organic",
+    "backlink_gap": "organic", "brand_search_decline": "organic",
+    "rd_loss": "organic", "rd_spike": "organic", "citation_loss": "organic",
+    "rd_imbalance": "organic",
+    # local pack / Maps / GBP
+    "maps_solv_drop": "maps", "maps_competitor": "maps", "maps_gradual_decline": "maps",
+    "maps_decline": "maps", "maps_weak_area": "maps", "gbp_gap": "maps",
+    "review_gap": "maps", "local_relevance": "maps", "content_gap": "maps",
+    # assistant_action is deliberately unmapped — a human-chosen saved step is
+    # channel-neutral (and already sits in its own high tier).
+}
+
+# campaign_goals.goal_type → channel. Mirrors campaign_goals.GOAL_TYPES; "custom"
+# has no measurable channel and is intentionally absent.
+_GOAL_TYPE_CHANNEL: dict[str, str] = {
+    "keyword_position": "organic", "keywords_in_top": "organic",
+    "organic_clicks": "organic", "organic_impressions": "organic",
+    "maps_pack_presence": "maps", "gbp_calls": "maps",
+    "gbp_impressions": "maps", "gbp_website_clicks": "maps",
+    "ai_visibility": "ai",
+}
+
+_GOAL_BOOST_ATTENTION = {"behind", "overdue"}
+
+
+def action_channel(kind: "str | None") -> "str | None":
+    """The campaign-goal channel an action kind moves ('organic'|'maps'|'ai'),
+    or None for channel-neutral kinds. Pure."""
+    return _CHANNEL_BY_KIND.get(kind or "")
+
+
+def goal_channels(goals: list[dict]) -> set[str]:
+    """Channels of the client's BEHIND/OVERDUE campaign goals — the levers effort
+    should be routed toward (#2). Only goals needing attention drive the boost,
+    so a healthy (all on_track) client keeps the default tier order. Pure."""
+    out: set[str] = set()
+    for g in goals or []:
+        if g.get("status") in _GOAL_BOOST_ATTENTION:
+            channel = _GOAL_TYPE_CHANNEL.get(g.get("goal_type") or "")
+            if channel:
+                out.add(channel)
+    return out
+
+
+def apply_goal_boost(actions: list[dict], channels: set[str]) -> None:
+    """In place: lift every NON-emergency action whose channel matches a behind
+    goal into the fractional band just under the offpage/emergency floor, so the
+    goal's channel outranks all off-goal non-emergency work (cannibalization /
+    quick / hidden) but never an emergency. Pure w.r.t. I/O (mutates each dict's
+    ``sort``); no matched channels ⇒ no change (byte-identical order).
+
+    The tier scheme leaves a 1-unit gap between the cannibalization band
+    ([4×,4×+9999]) and the offpage band ([5×,…]). A matched non-emergency action
+    (sort < _SORT_OFFPAGE) is remapped into (_SORT_OFFPAGE-1, _SORT_OFFPAGE) =
+    (49999, 50000): strictly above every cannibalization row (≤49999) and
+    strictly below every emergency (≥50000), with its original strength preserved
+    as the in-window fraction (monotonic in the base sort). An emergency is never
+    touched, whatever its channel."""
+    if not channels:
+        return
+    for action in actions:
+        base = action.get("sort")
+        if not isinstance(base, (int, float)) or base >= _SORT_OFFPAGE:
+            continue  # missing sort or an emergency-band action — protected
+        if action_channel(action.get("kind")) in channels:
+            # base ∈ (0, _SORT_OFFPAGE) → fraction ∈ (0, 1), monotonic → the
+            # matched actions keep their relative order inside the window.
+            action["sort"] = (_SORT_OFFPAGE - 1) + (base / _SORT_OFFPAGE)
+
+
 def _should_store(action_count: int, latest_action_count: "int | None") -> bool:
     """Whether to persist a freshly-built plan as a new row. Pure (unit-tested).
 
@@ -1271,6 +1356,17 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     # regenerated wholesale) so a saved step survives until someone closes it.
     saved = build_assistant_actions(client_id, _fetch_assistant_actions(supabase, client_id))
     actions = organic + maps_actions + brand_actions + saved
+    # Goal-aware ordering (#2): route effort toward the channel a BEHIND campaign
+    # goal is measured on, lifting it above off-goal non-emergency work but never
+    # above an emergency. Best-effort — a measurement failure leaves the plan in
+    # its default tier order.
+    if settings.reopt_goal_boost_enabled:
+        try:
+            from services import campaign_goals
+
+            apply_goal_boost(actions, goal_channels(campaign_goals.assess_goals(client_id)))
+        except Exception as exc:
+            logger.warning("reopt_plan_goal_boost_failed", extra={"client_id": client_id, "error": str(exc)})
     actions.sort(key=lambda a: a["sort"], reverse=True)
     actions = actions[:TOTAL_MAX]
 
