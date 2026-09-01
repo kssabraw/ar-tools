@@ -1916,6 +1916,23 @@ class Settings(BaseSettings):
     pace_audit_learning_min_samples: int = 4
     pace_audit_learning_reject_threshold: float = 0.6
 
+    # --- PACE process-efficiency detection (docs: agent-coordination-and-efficiency-plan-v1_0) ---
+    # WS2: PACE spots systemic process leaks (slips/bottlenecks, rework, cadence,
+    # producer noise) and records findings ADDRESSED TO DORA (WS4 surfaces them to
+    # humans). Deterministic, daily inline. Ships dark (default False). Not reported
+    # to humans by PACE; not auto-applied.
+    pace_efficiency_enabled: bool = False
+    # Overdue tasks on one client before its delivery counts as slipping.
+    pace_efficiency_slip_min: int = 3
+    # Clients behind month pace at once before it reads as a cadence problem.
+    pace_efficiency_cadence_min_clients: int = 3
+    # QA fails (per client+rubric) or reopens (per client) before it's rework churn.
+    pace_efficiency_rework_min: int = 3
+    # Unacted-on tasks from one producer (across clients) before it's producer noise.
+    pace_efficiency_producer_min: int = 5
+    # Lookback window for the rework signal (QA fails / reopens).
+    pace_efficiency_window_days: int = 30
+
     # --- SerMaStr Action Log (docs: SerMaStr Action Log — audit + learning ledger) ---
     # Best-effort audit + learning ledger of every STRATEGIST proposal + the human
     # decision on it (approved / dismissed / pending / senior-required) + the reused

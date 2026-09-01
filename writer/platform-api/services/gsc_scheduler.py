@@ -774,6 +774,13 @@ async def gsc_scheduler() -> None:
                 from services import sermastr_audit
                 _safe("sermastr_outcome_sweep", sermastr_audit.run_outcome_sweep)
                 _safe("sermastr_learning_digest", sermastr_audit.maybe_emit_weekly_learning, now.date())
+                # PACE process-efficiency scan (WS2) — deterministic detectors
+                # (slips/bottlenecks, rework, cadence, producer noise) recording
+                # findings addressed to DORA (WS4 surfaces them). Self-gated on
+                # pace_efficiency_enabled; runs before director_reconcile so DORA
+                # reads fresh findings.
+                from services import pace_efficiency
+                _safe("pace_efficiency", pace_efficiency.run_efficiency_scan, now.date())
                 # Daily PACE follow-through episode sync (v1.4 §4.9) — open/
                 # resolve/clock/escalate — then the Chase Plan built from it.
                 # Both self-gated on pace_enabled + pace_initiative_enabled;
