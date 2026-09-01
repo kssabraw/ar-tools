@@ -1018,10 +1018,15 @@ async def _call(fn, *args):
     return out
 
 
-async def _execute_actions(actions: list[dict], context: ActionContext) -> dict:
+async def _execute_actions(actions: list[dict], context: ActionContext, *,
+                           intervention_id: Optional[str] = None,
+                           decision: str = "approved") -> dict:
     """Re-stage each action (re-resolve target + re-check permission) then run.
-    A staging refusal ('reply') is a skip, never a blind write. Returns
-    {ran, skipped, failed}."""
+    A staging refusal ('reply') is a skip, never a blind write. Each executed
+    action is logged to the PACE ledger (origin=intervention, best-effort).
+    Returns {ran, skipped, failed}."""
+    from services import pace_audit
+
     ran, skipped, failed = [], [], []
     for a in actions:
         meta = PACE_ACTIONS.get(a.get("action"))
@@ -1040,7 +1045,12 @@ async def _execute_actions(actions: list[dict], context: ActionContext) -> dict:
         staged.pop("_confirm", None)
         staged.pop("_requester", None)
         try:
-            result = await _call(meta["run"], context, cid, staged)
+            result = await pace_audit.run_and_log(
+                lambda meta=meta, cid=cid, staged=staged: _call(meta["run"], context, cid, staged),
+                action=a.get("action"), context=context, client_id=cid, args=staged,
+                origin="intervention", decision=decision, reason=a.get("reason"),
+                client_name=a.get("client_name"), intervention_id=intervention_id,
+            )
             ran.append(str(result))
         except Exception as exc:
             failed.append({"reason": str(exc)[:160], "action": a.get("action"), "detail": a.get("reason")})
@@ -1117,14 +1127,50 @@ async def dispose(intervention_id: str, context: ActionContext, disposition: str
                 "status": row.get("status")}
     disposition = (disposition or "").lower()
     if disposition in ("approve", "accept"):
-        return await _approve(row, context, conditions=None)
+        result = await _approve(row, context, conditions=None)
+        _log_disposition(row, context, "approved", None, result)
+        return result
     if disposition in ("conditions", "approve_conditions"):
-        return await _approve(row, context, conditions=conditions)
+        result = await _approve(row, context, conditions=conditions)
+        _log_disposition(row, context, "approved_with_modifications", conditions, result)
+        return result
     if disposition in ("deny", "dismiss", "reject", "decline"):
-        return _deny(row, context, note or conditions)
+        result = _deny(row, context, note or conditions)
+        _log_disposition(row, context, "denied", note or conditions, result)
+        return result
     if disposition in ("defer", "snooze"):
-        return _defer(row, context, until)
+        result = _defer(row, context, until)
+        _log_disposition(row, context, "deferred", None, result)
+        return result
     return {"ok": False, "message": f"Unknown disposition “{disposition}”.", "status": row.get("status")}
+
+
+def _log_disposition(row: dict, context: ActionContext, decision: str,
+                     modifications_text: Optional[str], result: dict) -> None:
+    """Record the human's disposition on an intervention as ONE ledger row (the
+    approve/modify/deny/defer decision itself; the fix's sub-actions log their own
+    rows). Best-effort — skipped when the decision didn't take (e.g. a defer with
+    no valid date returns ok=False)."""
+    from services import pace_audit
+
+    # A refusal (bad date, race-lost claim) isn't a recorded decision.
+    if not result.get("ok") and decision in ("deferred",) and not result.get("status") == "deferred":
+        return
+    status = result.get("status")
+    if decision.startswith("approved"):
+        outcome = {"executed": "executed", "failed": "failed"}.get(status, "skipped")
+    elif decision == "denied":
+        outcome = "denied"
+    else:  # deferred
+        outcome = "deferred"
+    pace_audit.record_decision(
+        action=pace_audit.INTERVENTION_DISPOSITION, origin="intervention",
+        decision=decision, outcome=outcome, context=context,
+        client_id=row.get("scope_client_id"),
+        reason=row.get("title"),
+        modifications={"conditions": modifications_text} if modifications_text else None,
+        target_type="intervention", target_id=str(row.get("id")),
+        target_name=row.get("title"), intervention_id=row.get("id"))
 
 
 def _decision_fields(context: ActionContext, disposition: str) -> dict:
@@ -1181,7 +1227,9 @@ async def _approve(row: dict, context: ActionContext, *, conditions: Optional[st
         }).eq("id", row["id"]).execute()
         return {"ok": True, "status": "executed",
                 "message": f"Acknowledged “{row.get('title')}” — no automated fix to run (manual call)."}
-    result = await _execute_actions(actions, context)
+    result = await _execute_actions(
+        actions, context, intervention_id=row["id"],
+        decision="approved_with_modifications" if conditions else "approved")
     if result["ran"]:
         status = "executed"
     elif result["failed"]:

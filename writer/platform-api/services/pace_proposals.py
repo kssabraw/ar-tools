@@ -133,6 +133,18 @@ async def build_chase_plan(today: Optional[date] = None) -> dict:
         except Exception as exc:  # one bad generator never kills the plan
             logger.warning("chase_plan_generator_failed",
                            extra={"generator": getattr(gen, "__name__", "?"), "error": str(exc)})
+    # Learning auto-adjust (dark unless pace_audit_learning_enabled): demote — never
+    # hide — proposal kinds humans keep declining/undoing, and annotate why. When
+    # the flag is off, proposal_penalty returns (1.0, None) with zero DB reads, so
+    # the plan is byte-identical to today.
+    from services import pace_audit
+    signals = pace_audit._learning_signals_window() if settings.pace_audit_learning_enabled else None
+    for p in proposals:
+        factor, note = pace_audit.proposal_penalty(p.get("action"), p.get("client_id"), signals)
+        if factor != 1.0:
+            p["priority"] = (p.get("priority") or 0) * factor
+            if note:
+                p["reason"] = f"{(p.get('reason') or '').rstrip()} — _{note}_".strip(" —")
     proposals.sort(key=lambda p: -(p.get("priority") or 0))
     overflow = max(0, len(proposals) - settings.pace_chase_max_items)
     proposals = proposals[: settings.pace_chase_max_items]
@@ -162,8 +174,15 @@ async def build_chase_plan(today: Optional[date] = None) -> dict:
         staged.pop("_requester", None)
         if autonomy.get(p.get("kind")) == "auto":
             # Future graduation path (all-propose in v1.4): execute now, report done.
+            from services import pace_audit
             try:
-                result = await _call_action(meta["run"], SYSTEM_CONTEXT, p["client_id"], staged)
+                result = await pace_audit.run_and_log(
+                    lambda: _call_action(meta["run"], SYSTEM_CONTEXT, p["client_id"], staged),
+                    action=action, context=SYSTEM_CONTEXT, client_id=p["client_id"],
+                    args=staged, origin="scheduled", decision="auto",
+                    reason=p.get("reason"), client_name=p.get("client_name"),
+                    chase_plan_date=today.isoformat(),
+                )
                 auto_results.append(str(result))
             except Exception as exc:
                 flags.append(f"{p.get('reason')} — auto-execution failed ({str(exc)[:80]})")
@@ -186,13 +205,27 @@ async def build_chase_plan(today: Optional[date] = None) -> dict:
 # Confirm (called from pace_agent's batch pending branch)
 # ---------------------------------------------------------------------------
 async def execute_plan_selection(items: list[dict], selection: list[int],
-                                 context: ActionContext) -> str:
+                                 context: ActionContext, *, origin: str = "chase_plan",
+                                 chase_plan_date: Optional[str] = None) -> str:
     """Run the selected plan items the confirmer is authorized for. Returns the
-    thread reply summarizing ✅ ran / ⛔ not authorized / ❌ failed."""
+    thread reply summarizing ✅ ran / ⛔ not authorized / ❌ failed.
+
+    Each run is logged to the PACE action ledger (best-effort). A partial
+    selection (approving a subset of a longer plan) is recorded as
+    ``approved_with_modifications`` carrying the approved-vs-dropped split — the
+    human 'approve with modifications' signal for the Chase Plan/batch path."""
     from middleware.auth import role_rank
+    from services import pace_audit
 
     if context.is_anonymous:
         return "Link your Slack account first — I can't authorize an anonymous confirm."
+    # A partial selection (approve a subset of the plan) is recorded in each row's
+    # `modifications` (the approved/dropped split) for context, but the executed
+    # items are decision="approved" — they weren't individually modified, the plan
+    # was merely trimmed. Only the intervention "conditions" path is a true
+    # approved_with_modifications (an edited fix). The dropped items are logged as
+    # explicit denials below.
+    mods = pace_audit.selection_modifications(len(items), selection)
     by_index = {it["index"]: it for it in items}
     lines: list[str] = []
     for idx in selection:
@@ -205,11 +238,31 @@ async def execute_plan_selection(items: list[dict], selection: list[int],
             lines.append(f"⛔ {idx}. {it['reason']} — needs *{it['min_role']}* or higher")
             continue
         try:
-            result = await _call_action(PACE_ACTIONS[it["action"]]["run"], context, it["client_id"], it["args"])
+            result = await pace_audit.run_and_log(
+                lambda it=it: _call_action(PACE_ACTIONS[it["action"]]["run"],
+                                           context, it["client_id"], it["args"]),
+                action=it["action"], context=context, client_id=it["client_id"],
+                args=it["args"], origin=origin, decision="approved", reason=it.get("reason"),
+                client_name=it.get("client_name"), chase_plan_date=chase_plan_date,
+                modifications=mods,
+            )
             lines.append(f"{result}" if str(result).startswith("✅") else f"✅ {result}")
         except Exception as exc:
             logger.warning("chase_plan_run_failed", extra={"action": it["action"], "error": str(exc)})
             lines.append(f"❌ {idx}. {it['reason']} — failed")
+    # Log the DROPPED items as explicit denials — the human saw the plan and did
+    # not pick them (a real rejection, not a superseded/unconfirmed plan). Feeds
+    # the negative-signal learning; best-effort per item.
+    if mods:
+        for idx in mods["dropped"]:
+            it = by_index.get(idx)
+            if not it:
+                continue
+            tgt = pace_audit.target_from_args(it["action"], it.get("args") or {})
+            pace_audit.record_decision(
+                action=it["action"], origin=origin, decision="denied", outcome="cancelled",
+                context=context, client_id=it.get("client_id"), client_name=it.get("client_name"),
+                reason=it.get("reason"), args=it.get("args") or {}, **tgt)
     skipped = len(items) - len(selection)
     if skipped > 0:
         lines.append(f"_({skipped} unselected item{'s' if skipped != 1 else ''} dropped — "

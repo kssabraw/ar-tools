@@ -71,6 +71,18 @@ def test_is_personal_brief():
     assert not pace_agent.is_personal_brief("")
 
 
+def test_is_explicit_decline():
+    # Explicit rejections of a pending confirm → logged as a decline.
+    for t in ("no", "No thanks", "nope", "nah", "cancel", "stop", "don't",
+              "do not", "nevermind", "never mind", "skip", "forget it", "abort"):
+        assert pace_agent.is_explicit_decline(t), t
+    # A confirm, or a mere pivot to another question, is NOT a decline (it
+    # supersedes the pending but must not be recorded as a rejection).
+    for t in ("yes", "what's overdue for Acme?", "notify the team", "next task",
+              "nudge Ivy about the audit", ""):
+        assert not pace_agent.is_explicit_decline(t), t
+
+
 # ---------------------------------------------------------------------------
 # Tool schemas — PACE-only (two-way isolation)
 # ---------------------------------------------------------------------------
@@ -177,7 +189,7 @@ async def test_force_pending_confirm_needs_no_remention(monkeypatch):
     async def _post(channel, text, thread_ts=None, token=None):
         posted.update(channel=channel, text=text)
 
-    async def _run(action, client, args, context):
+    async def _run(action, client, args, context, **kw):
         return "done"
 
     monkeypatch.setattr("services.slack_assistant.post_message", _post)
@@ -208,7 +220,7 @@ async def _chase_plan_confirm(monkeypatch, *, is_pm: bool):
     async def _post(channel, text, thread_ts=None, token=None):
         posted["text"] = text
 
-    async def _execute(items, selection, context):
+    async def _execute(items, selection, context, **kw):
         executed["count"] += 1
         return "ran the plan"
 
@@ -251,7 +263,7 @@ async def test_web_ignores_non_pace_message():
 async def test_web_confirm_actor_binding_refuses_other(monkeypatch):
     ran = {"count": 0}
 
-    async def _run(name, cid, args, ctx):
+    async def _run(name, cid, args, ctx, **kw):
         ran["count"] += 1
         return "done"
 
@@ -268,7 +280,7 @@ async def test_web_confirm_actor_binding_refuses_other(monkeypatch):
 async def test_web_confirm_runs_for_requester(monkeypatch):
     ran = {}
 
-    async def _run(name, cid, args, ctx):
+    async def _run(name, cid, args, ctx, **kw):
         ran.update({"name": name, "cid": cid, "actor": ctx.profile_id})
         return "Reassigned to Ivy."
 
@@ -281,7 +293,7 @@ async def test_web_confirm_runs_for_requester(monkeypatch):
 
 
 async def test_web_confirm_admin_takeover(monkeypatch):
-    async def _run(name, cid, args, ctx):
+    async def _run(name, cid, args, ctx, **kw):
         return "ok"
     monkeypatch.setattr(pace_agent, "_run_pace_action", _run)
     token = pace_agent._store_web_pending(
@@ -551,7 +563,7 @@ async def test_web_batch_confirm_runs_selection(monkeypatch):
     token = pace_agent._store_web_batch(items, requester="p_staff")
     called = {}
 
-    async def _fake_exec(items_, selection, ctx):
+    async def _fake_exec(items_, selection, ctx, **kw):
         called.update(selection=selection, actor=ctx.profile_id)
         return "✅ nudged"
 
