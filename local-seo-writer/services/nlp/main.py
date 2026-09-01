@@ -2540,6 +2540,8 @@ Section 10 — Geographic / Local SEO Section (200–300 words)
 <section id="local">
   <h2>[City + service in heading]</h2>
   [City + min 3 neighborhoods in sentence context (not just a list) + min 1 landmark + min 2 streets + zip codes (min 3). Use only real, verifiable geographic details. If neighborhood/landmark/street/zip data is not provided in the business data, include only what you are certain is accurate for the target city. Do not invent or guess street names, zip codes, or landmarks. Coverage area required. Response time: ONLY include if explicitly stated in business hours, GBP description, or reviews — otherwise write "Call us for availability" or omit entirely.]
+  NAP — REQUIRED: state the business Name, full Address, and Phone number verbatim from the business data in this section's body (a short "Visit us" / "Find us" line is ideal). Use the exact values provided — never invent or alter an address or phone number. If a part is missing from the business data, include only what IS provided and record the gap in the Content Gaps report.
+  ALSO REQUIRED on a local landing page — a Google Business Profile map embed (an address/place-keyed Google Maps iframe). HIGHLY RECOMMENDED — a "driving directions" link (Google Maps directions to the address) and a contact form fill. (In the AR Tools suite these four elements — NAP, GBP embed, directions, form — are appended deterministically after generation; this reference note records the requirement.)
 </section>
 
 Section 11 — CTA Block Tertiary (50–75 words — urgency-forward)
