@@ -112,6 +112,11 @@ What this means in practice:
 - The copy is metadata-only. Marking it "done" in Everhour does **nothing** to the real task — you
   still complete it on the Task board.
 
+> **Example:** Your PM creates a task called *"Write blog post — roof maintenance checklist"* on
+> the Task board and assigns it to you, under the client **Acme Roofing**. Within a few minutes, a
+> task with that exact name appears inside the **Acme Roofing** project in Everhour. That's the one
+> you open and track time against — not a new task you type in yourself.
+
 ---
 
 ## 5. Day-one setup
@@ -177,6 +182,11 @@ timer** (start it, do the work, stop it) and a **manual entry** (type in a numbe
 Use whichever fits the moment — Everhour doesn't care which one you use, and both count exactly
 the same on the suite side.
 
+> To make this concrete, §6.1–6.6 all follow the same running example: it's Tuesday, you're a
+> content writer with two active clients — **Acme Roofing** and **Riverside Dental** — and one
+> task assigned to you on the Task board: *"Write blog post — roof maintenance checklist"*
+> (Acme Roofing, estimated at 3h).
+
 ### 6.1 Starting a live timer (the normal case)
 
 1. Open the Everhour extension popup (or the web app).
@@ -195,6 +205,10 @@ the same on the suite side.
 that 45 minutes or an hour?" It's the best habit to build, especially for focused, single-task
 work.
 
+> **Example:** At 9:14 AM you open the extension, select the **Acme Roofing** project, select
+> *"Write blog post — roof maintenance checklist,"* and click **Start**. You write until 11:50 AM,
+> then click **Stop**. Everhour has logged **2h 36m** — no math required.
+
 ### 6.2 Logging time after the fact (manual entry)
 
 You'll forget to start the timer sometimes. That's fine — don't skip logging the time, just add it
@@ -209,6 +223,11 @@ manually:
 understates that client's real cost and makes your utilization number look artificially low (like
 you had room for more work when you didn't). Log it even if it's a rough estimate; a good estimate
 logged is far better than nothing logged.
+
+> **Example:** At 1:00 PM you took a 45-minute call with **Riverside Dental** but never started a
+> timer for it. That afternoon you open **My Timesheet**, find today under the Riverside Dental
+> project (no specific task — it was a call, not task work), and type `0.75` into the hours field
+> (45 minutes = 0.75h). Saved — the call is now accounted for even though you forgot in the moment.
 
 ### 6.3 Switching tasks mid-day
 
@@ -226,6 +245,11 @@ project. Ask your PM which project or category the team uses for this (many team
 untracked, and don't log it under a client by mistake** — the second one quietly inflates that
 client's real cost.
 
+> **Example:** Monday's 30-minute team standup isn't billable to any client. You log `0.5` under
+> the team's **Internal / Admin** project — not under Acme Roofing just because that's the client
+> you happened to be thinking about that morning, and not skipped just because "it's only a
+> standup."
+
 ### 6.5 Fixing a mistake
 
 Everyone logs something wrong eventually — wrong project, wrong day, wrong duration. In **My
@@ -233,12 +257,22 @@ Timesheet**, click into the entry and edit or delete it directly; there's no app
 need to ask permission. Fix it as soon as you notice — the sooner it's corrected, the less likely
 it's already been pulled into that day's sync (§7).
 
+> **Example:** On Wednesday you notice a 2-hour entry landed under **Riverside Dental**, but it was
+> actually more blog-post work for **Acme Roofing**. You open that entry in My Timesheet and change
+> the project from Riverside Dental to Acme Roofing — no approval needed, no message to anyone
+> required, just fix it.
+
 ### 6.6 End of your work session
 
 Before you close your laptop: check the extension icon. If a timer is still running, stop it — a
 timer left running overnight logs hours you didn't actually work, which is the single most common
 Everhour mistake. A quick end-of-day scan of **My Timesheet** against what you remember doing is
 worth the 60 seconds.
+
+> **Example:** At 5:30 PM, about to close your laptop, you notice the extension icon shows a timer
+> still running — from a Riverside Dental call that actually ended at 2:15 PM. You click **Stop**,
+> then open that entry and edit its duration down from "3h 15m and counting" to the real ~20
+> minutes the call took.
 
 ### 6.7 Billable vs. non-billable
 
@@ -265,6 +299,13 @@ entries and turns them into things people actually look at:
 None of this is about watching any one person — it's the difference between the agency planning
 capacity and budgets off guesses versus off what actually happened. Accurate logging is what makes
 every one of those numbers trustworthy.
+
+> **Example:** By Friday, the task board shows *"Write blog post — roof maintenance checklist" —
+> Estimated 3h · Actual 3.1h* — close enough that next time a similar post gets estimated the same
+> way, instead of padded "just in case." Acme Roofing's Time card for the month reads **18.25h
+> logged**. Your Workload page shows **86% utilization** for the week — comfortably full, not
+> overloaded, so PACE knows it's fine to hand you the next task instead of routing it to someone
+> else.
 
 ---
 
