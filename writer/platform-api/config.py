@@ -1938,6 +1938,16 @@ class Settings(BaseSettings):
     sermastr_audit_learning_window_days: int = 90
     sermastr_audit_learning_min_samples: int = 3
     sermastr_audit_learning_dismiss_threshold: float = 0.6
+    # --- SerMaStr self-analysis (docs: agent-coordination-and-efficiency-plan-v1_0) ---
+    # WS1: "what tactics work best" — SerMaStr reports it to humans (its campaign
+    # lane) and answers it on demand. Ships dark (default False); when on, the
+    # weekly digest (sermastr_audit_digest_weekday) carries the richer report and
+    # the tactic-performance context provider lights up. No auto-execution — it is
+    # reporting + the existing in-review prompt steering.
+    sermastr_self_analysis_enabled: bool = False
+    # Model for the best-effort LLM narrative on the weekly report; empty falls
+    # back to the deterministic report body.
+    sermastr_self_analysis_model: str = "claude-sonnet-4-6"
 
     # --- Proactive Interventions (docs/modules/pace-proactive-interventions-plan-v1_0.md) ---
     # The managerial layer: PACE scans for SYSTEMIC delivery problems and opens a

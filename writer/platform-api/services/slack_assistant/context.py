@@ -125,6 +125,29 @@ def build_portfolio_context() -> dict:
     except Exception as exc:
         logger.warning("portfolio_ctx_director_failed", extra={"error": str(exc)})
 
+    # WS1 self-analysis (agency-wide): which tactics work best across the whole
+    # book, so "what's working best right now?" answers with no client named.
+    # Gated + isolated; a failure never breaks the snapshot.
+    if settings.sermastr_self_analysis_enabled:
+        try:
+            from services import sermastr_audit
+
+            snap = sermastr_audit.tactic_snapshot(client_id=None)
+            perf = snap.get("perf") or {}
+            if perf.get("leaders") or perf.get("underperformers"):
+                out["tactic_performance"] = {
+                    "leaders": perf["leaders"][:6],
+                    "underperformers": perf["underperformers"][:3],
+                    "proposals_in_window": perf.get("total", 0),
+                    "note": (
+                        "Agency-wide tactic performance from the action log + 6-week "
+                        "intervention outcomes. 'measured' worked-rate is real; "
+                        "'approval-only' is approved but unproven. Lean into the leaders."
+                    ),
+                }
+        except Exception as exc:
+            logger.warning("portfolio_ctx_tactics_failed", extra={"error": str(exc)})
+
     return out
 
 
@@ -1935,6 +1958,35 @@ def _ctx_strategist_track_record(supabase, client_id: str, today: date) -> Optio
     }
 
 
+def _ctx_tactic_performance(supabase, client_id: str, today: date) -> Optional[dict]:
+    """WS1 self-analysis: which of SerMaStr's tactics work best for THIS client —
+    ranked leaders (measured 6-week worked-rate, or an approval rate flagged
+    unproven) + tactics that aren't moving the metric. Lets conversational
+    SerMaStr answer 'what's working best right now' grounded, and lean into the
+    winners. Best-effort, gated on sermastr_self_analysis_enabled; None when the
+    history is thin so a quiet client stays clean."""
+    if not settings.sermastr_self_analysis_enabled:
+        return None
+    from services import sermastr_audit
+
+    snap = sermastr_audit.tactic_snapshot(client_id=client_id)
+    perf = snap.get("perf") or {}
+    if not perf.get("leaders") and not perf.get("underperformers"):
+        return None
+    return {
+        "leaders": perf["leaders"][:5],
+        "underperformers": perf["underperformers"][:3],
+        "proposals_in_window": perf.get("total", 0),
+        "note": (
+            "Which of your tactics work best for this client, from the action log "
+            "+ 6-week intervention outcomes. 'measured' = worked-rate is real; "
+            "'approval-only' = approved but outcome not yet measured (say so). Lean "
+            "into the leaders when advising; be honest about what isn't moving the "
+            "metric. Small-sample — weigh it, don't over-claim."
+        ),
+    }
+
+
 # Registry — append a provider here to give SerMastr a new module (see build_context).
 _CONTEXT_PROVIDERS = [
     ("campaign_goals", _ctx_campaign_goals),
@@ -1972,4 +2024,5 @@ _CONTEXT_PROVIDERS = [
     ("setup", _ctx_setup),
     ("director", _ctx_director),
     ("strategist_track_record", _ctx_strategist_track_record),
+    ("tactic_performance", _ctx_tactic_performance),
 ]

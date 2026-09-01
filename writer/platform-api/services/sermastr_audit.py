@@ -181,6 +181,145 @@ def learning_signals(rows: list[dict]) -> dict:
     return {"by_kind": by_kind, "by_client_kind": by_client_kind}
 
 
+# ---------------------------------------------------------------------------
+# Self-analysis (WS1) — "what tactics work best", sliced + ranked. Pure.
+# ---------------------------------------------------------------------------
+def _rate_perf(b: dict, min_n: int) -> dict:
+    """Attach approval/worked/no_effect rates, a `signal` (measured vs
+    approval-only vs thin), and a `rank_score` to a stats bucket. Pure.
+
+    `measured` = enough GRADED outcomes to trust the worked-rate (the honest
+    signal). `approval-only` = enough DECIDED but not yet outcome-proven, so its
+    rank is the approval rate discounted ×0.7. `thin` = below the sample gate,
+    excluded from ranking."""
+    decided = b["approved"] + b["dismissed"]
+    graded = b["worked"] + b["partial"] + b["no_effect"]
+    b["decided"] = decided
+    b["graded"] = graded
+    b["approval_rate"] = round(b["approved"] / decided, 3) if decided else 0.0
+    b["worked_rate"] = round(b["worked"] / graded, 3) if graded else 0.0
+    b["no_effect_rate"] = round(b["no_effect"] / graded, 3) if graded else 0.0
+    if graded >= min_n:
+        b["signal"] = "measured"
+        b["rank_score"] = b["worked_rate"]
+    elif decided >= min_n:
+        b["signal"] = "approval-only"
+        b["rank_score"] = round(b["approval_rate"] * 0.7, 3)
+    else:
+        b["signal"] = "thin"
+        b["rank_score"] = 0.0
+    return b
+
+
+def tactic_performance(rows: list[dict], client_types: Optional[dict] = None,
+                       min_samples: Optional[int] = None) -> dict:
+    """Rank SerMaStr's tactics by how well they perform, sliced three ways. Pure.
+
+    Slices the log into per-`kind`, per-`client_type` (local/enterprise, from the
+    passed `client_types` map keyed by client_id) and per-`trigger` buckets, each
+    rate-annotated by :func:`_rate_perf`. `leaders` = the tactics that actually
+    work or get approved (rank_score > 0, above the sample gate), ranked best
+    first — the "lean into these" list. `underperformers` = measured tactics that
+    clearly don't move the metric (worked_rate 0 over ≥ min graded) — the
+    "consider retiring" list. Ranking prefers MEASURED worked-rate; approval-only
+    is discounted (unproven) so a much-approved-but-never-graded tactic can't
+    outrank a proven one."""
+    client_types = client_types or {}
+    min_n = min_samples if min_samples is not None else settings.sermastr_audit_learning_min_samples
+    by_kind: dict[str, dict] = {}
+    by_client_type: dict[str, dict] = {}
+    by_trigger: dict[str, dict] = {}
+    for r in rows or []:
+        kind = r.get("proposal_kind") or "general"
+        _tally_stats(by_kind.setdefault(kind, _blank_stats()), r)
+        ct = client_types.get(r.get("client_id")) or "unknown"
+        _tally_stats(by_client_type.setdefault(ct, _blank_stats()), r)
+        trig = r.get("trigger") or "unknown"
+        _tally_stats(by_trigger.setdefault(trig, _blank_stats()), r)
+    for d in (by_kind, by_client_type, by_trigger):
+        for b in d.values():
+            _rate_perf(b, min_n)
+
+    def _leader(kind: str, b: dict) -> dict:
+        return {"kind": kind, "signal": b["signal"], "rank_score": b["rank_score"],
+                "approved": b["approved"], "decided": b["decided"],
+                "worked": b["worked"], "graded": b["graded"],
+                "approval_rate": b["approval_rate"], "worked_rate": b["worked_rate"]}
+
+    leaders = sorted(
+        (_leader(k, b) for k, b in by_kind.items()
+         if b["signal"] != "thin" and b["rank_score"] > 0),
+        key=lambda x: (-x["rank_score"], -x["graded"], -x["decided"]))
+    underperformers = sorted(
+        (_leader(k, b) for k, b in by_kind.items()
+         if b["signal"] == "measured" and b["worked_rate"] == 0.0),
+        key=lambda x: (-x["graded"], -x["decided"]))
+    total = sum(b["total"] for b in by_kind.values())
+    return {
+        "by_kind": by_kind, "by_client_type": by_client_type, "by_trigger": by_trigger,
+        "leaders": leaders, "underperformers": underperformers,
+        "total": total, "min_samples": min_n,
+    }
+
+
+def _pct(x: float) -> int:
+    return int(round((x or 0.0) * 100))
+
+
+def build_self_analysis_report(perf: dict, learn: Optional[dict] = None) -> str:
+    """The deterministic "what's working best" report body (Slack mrkdwn). Pure.
+
+    Leads with the leaders SerMaStr should lean into (measured worked-rate, or an
+    approval rate flagged unproven), the best-performing client type / trigger
+    segment when informative, and — folding in the learning signals — the tactics
+    to retire. Returns "" when there's nothing worth saying (thin history), so the
+    caller posts nothing."""
+    if not perf:
+        return ""
+    leaders = perf.get("leaders") or []
+    unders = perf.get("underperformers") or []
+    lines: list[str] = [
+        f"*SerMaStr — what's working best* ({perf.get('total', 0)} proposal"
+        f"{'s' if perf.get('total', 0) != 1 else ''} in the window)"
+    ]
+    if leaders:
+        lines.append("*Leaders — lean into these:*")
+        for l in leaders[:6]:
+            if l["signal"] == "measured":
+                lines.append(f"• `{l['kind']}` — moved the metric {l['worked']}/{l['graded']} "
+                             f"({_pct(l['worked_rate'])}% worked)")
+            else:
+                lines.append(f"• `{l['kind']}` — approved {l['approved']}/{l['decided']} "
+                             f"({_pct(l['approval_rate'])}%), outcomes not yet measured")
+    # Best segment (client type / trigger), only when a measured winner stands out.
+    for label, key in (("client type", "by_client_type"), ("trigger", "by_trigger")):
+        seg = perf.get(key) or {}
+        best = sorted(((k, b) for k, b in seg.items()
+                       if k != "unknown" and b.get("signal") == "measured" and b.get("worked_rate", 0) > 0),
+                      key=lambda kv: -kv[1]["worked_rate"])
+        if best:
+            k, b = best[0]
+            lines.append(f"*Best by {label}:* `{k}` — {_pct(b['worked_rate'])}% worked "
+                         f"({b['worked']}/{b['graded']})")
+    if unders:
+        lines.append("*Not moving the metric — consider retiring or changing the approach:*")
+        for u in unders[:3]:
+            lines.append(f"• `{u['kind']}` — 0/{u['graded']} graded attempts worked")
+    # Fold in the dismiss signal (what humans keep rejecting) when available.
+    if learn:
+        sig = learn.get("by_kind") or {}
+        dismissed = sorted(
+            ((k, s) for k, s in sig.items() if s.get("decided", 0) >= 2 and s.get("dismiss_rate", 0) > 0),
+            key=lambda kv: -kv[1]["dismiss_rate"])[:3]
+        if dismissed:
+            lines.append("*Most-dismissed by humans:*")
+            for k, s in dismissed:
+                lines.append(f"• `{k}` — {_pct(s['dismiss_rate'])}% dismissed "
+                             f"({s['dismissed']}/{s['decided']})")
+    # Nothing beyond the header → say nothing.
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
 def format_history(rows: list[dict]) -> str:
     """Compact, LLM-readable lines for a self-read. Pure."""
     if not rows:
@@ -509,20 +648,82 @@ def run_outcome_sweep() -> dict:
     return {"checked": len(rows), "stamped": stamped}
 
 
+def _window_rows(client_id: Optional[str] = None, days: Optional[int] = None) -> list[dict]:
+    """The log rows over a rolling window (the learning window by default), with
+    just the columns the rollups need — one read, reused by the learning signals,
+    the self-analysis snapshot, and the digest. Best-effort ([] on error)."""
+    from datetime import datetime, timedelta, timezone
+
+    days = days if days is not None else settings.sermastr_audit_learning_window_days
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    try:
+        q = (get_supabase().table("sermastr_action_log")
+             .select("proposal_kind, client_id, trigger, decision, outcome_verdict")
+             .gte("created_at", since).limit(5000))
+        if client_id:
+            q = q.eq("client_id", client_id)
+        return q.execute().data or []
+    except Exception:
+        return []
+
+
+def _client_types_map(client_ids) -> dict:
+    """{client_id: client_type} for the ids present, for the client-type slice.
+    Best-effort ({} on error → segment collapses to 'unknown', never breaks)."""
+    ids = sorted({c for c in (client_ids or []) if c})
+    if not ids:
+        return {}
+    try:
+        rows = (get_supabase().table("clients").select("id, client_type")
+                .in_("id", ids).execute()).data or []
+        return {r["id"]: (r.get("client_type") or "unknown") for r in rows}
+    except Exception:
+        return {}
+
+
 def _learning_signals_window() -> dict:
     """Learning signals over the configured window — one read, reused across a
     plan build. Best-effort ([] on error → empty signals)."""
-    from datetime import datetime, timedelta, timezone
+    return learning_signals(_window_rows())
 
-    since = (datetime.now(timezone.utc)
-             - timedelta(days=settings.sermastr_audit_learning_window_days)).isoformat()
+
+def tactic_snapshot(client_id: Optional[str] = None, days: Optional[int] = None) -> dict:
+    """Tactic performance + learning signals over the window for a client (or the
+    whole agency when client_id is None) — the shared read behind the on-demand
+    context providers. Best-effort. Returns {perf, learn, rows}."""
+    rows = _window_rows(client_id, days)
+    client_types = _client_types_map([r.get("client_id") for r in rows])
+    return {"perf": tactic_performance(rows, client_types),
+            "learn": learning_signals(rows), "rows": len(rows)}
+
+
+def narrate_self_analysis(report_text: str, model: Optional[str] = None) -> str:
+    """Best-effort LLM rewrite of the deterministic report into a punchy owner-
+    facing Slack update. The exact numbers are already in `report_text` and the
+    prompt forbids changing them, so there's no fabrication surface. Returns "" on
+    any failure — the caller then keeps the deterministic body."""
+    if not report_text:
+        return ""
+    from services import report_llm
+
+    system = (
+        "You are SerMaStr, an SEO strategist reporting to the agency owner in Slack. "
+        "Rewrite the tactic-performance summary below into a short, punchy update "
+        "(a lead line plus a few bullets). Slack mrkdwn only: *bold* not **bold**, "
+        "no # headers, no tables. Lead with what's working and that you're leaning "
+        "into it. Keep EVERY number, fraction, percentage and tactic name EXACTLY "
+        "as given — never invent, round, or drop a figure. If a tactic is flagged "
+        "unproven or as not moving the metric, keep that caveat."
+    )
     try:
-        rows = (get_supabase().table("sermastr_action_log")
-                .select("proposal_kind, client_id, decision, outcome_verdict")
-                .gte("created_at", since).limit(5000).execute()).data or []
-    except Exception:
-        rows = []
-    return learning_signals(rows)
+        txt = report_llm.generate_text_sync(
+            user=report_text, max_tokens=700, system=system,
+            model=model or settings.sermastr_self_analysis_model,
+            log_tag="sermastr_self_analysis")
+        return (txt or "").strip()
+    except Exception as exc:
+        logger.warning("sermastr_self_analysis_narrate_failed", extra={"error": str(exc)})
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -582,14 +783,28 @@ def maybe_emit_weekly_learning(today: Optional[Any] = None) -> dict:
     since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
     try:
         rows = (get_supabase().table("sermastr_action_log")
-                .select("proposal_kind, client_id, decision, outcome_verdict")
+                .select("proposal_kind, client_id, trigger, decision, outcome_verdict")
                 .gte("created_at", since).limit(5000).execute()).data or []
-        body = build_learning_digest(rows)
+        # WS1: when self-analysis is on, the weekly digest carries the richer
+        # "what's working best — lean in / retire" report (best-effort LLM
+        # narrative over the deterministic body); else the legacy learning digest.
+        if settings.sermastr_self_analysis_enabled:
+            client_types = _client_types_map([r.get("client_id") for r in rows])
+            perf = tactic_performance(rows, client_types)
+            body = build_self_analysis_report(perf, learning_signals(rows))
+            if body:
+                narrated = narrate_self_analysis(body)
+                if narrated:
+                    body = narrated
+            title = "SerMaStr tactic report"
+        else:
+            body = build_learning_digest(rows)
+            title = "SerMaStr learning digest"
         if not body:
             return {"emitted": False, "reason": "nothing_logged"}
         notifications.emit(
             client_id=None, kind="strategy_learning_digest",
-            title="SerMaStr learning digest",
+            title=title,
             summary=body, severity="info",
             payload={"link": "/strategist/log"},
             dedupe_key=f"sermastr_learning_digest:{today.isoformat()}",
