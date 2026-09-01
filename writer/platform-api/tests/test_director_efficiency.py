@@ -77,6 +77,20 @@ def test_report_body_and_empty():
     assert efficiency.build_report_body({"observations": []}) == ""
 
 
+def test_alertable_caps_and_keeps_worst():
+    # 20 warning findings → alertable caps to the requested top N, severity-ranked.
+    findings = [{"finding_key": f"slip:client:c{i}", "category": "slip_bottleneck",
+                 "severity": "warning", "title": f"slip {i}", "recommendation": "x"}
+                for i in range(20)]
+    view = efficiency.build_efficiency_view({"pace_efficiency": {"findings": findings}})
+    assert len(efficiency.significant(view)) == 20
+    capped = efficiency.alertable(view, cap=15)
+    assert len(capped) == 15
+    assert all(o["severity"] in ("warning", "critical") for o in capped)
+    # cap 0/None → uncapped.
+    assert len(efficiency.alertable(view, cap=0)) == 20
+
+
 def test_no_effect_below_floor_not_flagged():
     m = _model()
     m["interventions"] = {"by_verdict": {"no_effect": 2}}  # < 3 floor

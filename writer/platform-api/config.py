@@ -1953,6 +1953,10 @@ class Settings(BaseSettings):
     director_efficiency_model: str = "claude-sonnet-4-6"
     # How far back the coordination provider reads the bus.
     director_coordination_recent_days: int = 30
+    # Cap on as-detected ops_efficiency alerts per daily run — so a day when many
+    # findings open at once can't burst dozens of notifications; the rest still
+    # land in the weekly briefing. Ranked by severity, so the worst alert first.
+    director_efficiency_max_alerts: int = 15
 
     # --- SerMaStr Action Log (docs: SerMaStr Action Log — audit + learning ledger) ---
     # Best-effort audit + learning ledger of every STRATEGIST proposal + the human

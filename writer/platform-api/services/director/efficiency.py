@@ -130,6 +130,16 @@ def significant(view: dict) -> list[dict]:
             if o.get("severity") in ("warning", "critical")]
 
 
+def alertable(view: dict, cap: Optional[int] = None) -> list[dict]:
+    """The significant observations to actually alert on this run, capped so a
+    day when many findings open at once can't burst dozens of notifications (the
+    rest still surface in the weekly briefing). Observations are already
+    severity-ranked, so the cap keeps the worst. Pure."""
+    items = significant(view)
+    cap = cap if cap is not None else settings.director_efficiency_max_alerts
+    return items[:cap] if cap and cap > 0 else items
+
+
 def build_report_body(view: dict) -> str:
     """The deterministic weekly report body (Slack mrkdwn). Pure. "" when there's
     nothing worth reporting (all-clear)."""
@@ -228,7 +238,7 @@ def run_daily_alerts(today: Optional[date] = None) -> dict:
         from services.director import read_model
 
         view = build_efficiency_view(read_model.build_read_model(None, today))
-        items = significant(view)
+        items = alertable(view)
         alerted = 0
         for o in items:
             nid = notifications.emit(
