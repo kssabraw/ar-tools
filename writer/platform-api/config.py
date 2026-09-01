@@ -1463,6 +1463,16 @@ class Settings(BaseSettings):
     # reaches every client ~monthly, not just clients with open problems.
     # Bounded: ≤1 extra run per quiet client per interval; 0 disables.
     strategist_opportunity_interval_days: int = 28
+    # Goal-driven trigger: a campaign goal currently behind/overdue (with a
+    # captured baseline) is treated as an active signal, so a quietly slipping
+    # goal summons the normal weekly strategist review instead of waiting for
+    # the ~monthly opportunity sweep. This is the yardstick the whole strategist
+    # stack judges against (priority-0 goal accountability) actually driving the
+    # cadence. Adds one campaign_goals scan + a bounded assess_goals per
+    # goal-having client to the daily scheduler pass; set False to switch off
+    # that added read load. The review itself is still proposes-only + human-
+    # approved — this changes WHEN it runs, never what it may do.
+    strategist_goal_trigger_enabled: bool = True
     # Input budget per run before drill-downs (spec §2: ≤ ~25k tokens). The
     # digest assembler converts at ~4 chars/token and splits this between the
     # signal digest and the SOP block.
