@@ -13,9 +13,11 @@ Asana-push build (Phase 5).
 from __future__ import annotations
 
 import logging
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from config import settings
@@ -30,6 +32,14 @@ logger = logging.getLogger(__name__)
 
 class ProposalStatusRequest(BaseModel):
     status: str  # approved | dismissed
+
+
+@router.get("/strategist/status")
+async def strategist_status(auth: dict = Depends(require_auth)) -> dict:
+    """Whether the strategist feature is on — drives the SerMaStr Log nav entry.
+    (The action log itself defaults on, but there are no proposals to log until
+    the strategist runs, so the log surface follows strategist_enabled.)"""
+    return {"enabled": settings.strategist_enabled}
 
 
 @router.post("/clients/{client_id}/strategy-review")
@@ -97,12 +107,14 @@ async def set_proposal_status(
     supabase = get_supabase()
     rows = (
         supabase.table("strategy_reviews")
-        .select("id, proposals")
+        .select("id, proposals, client_id, trigger")
         .eq("id", str(review_id)).limit(1).execute()
     ).data
     if not rows:
         raise HTTPException(status_code=404, detail="review_not_found")
     proposals = rows[0].get("proposals") or []
+    client_id = rows[0].get("client_id")
+    review_trigger = rows[0].get("trigger")
     if not (0 <= idx < len(proposals)):
         raise HTTPException(status_code=404, detail="proposal_not_found")
     # §3 passthroughs: a requires='senior' proposal is Kyle/Ryan territory —
@@ -120,11 +132,6 @@ async def set_proposal_status(
     if body.status == "approved":
         from services import asana_push, interventions
 
-        review_client = (
-            supabase.table("strategy_reviews").select("client_id")
-            .eq("id", str(review_id)).limit(1).execute()
-        ).data
-        client_id = review_client[0].get("client_id") if review_client else None
         if client_id:
             # Intervention-outcome loop: stamp the shared source_ref onto the
             # target BEFORE the push so the created task carries it (the
@@ -164,7 +171,80 @@ async def set_proposal_status(
     except Exception as exc:
         logger.error("proposal_status_failed", extra={"review_id": str(review_id), "error": str(exc)})
         raise HTTPException(status_code=502, detail="proposal_status_failed") from exc
+
+    # Action log (audit + learning): record the human decision on this proposal at
+    # the strategist's OWN decision seam. Best-effort — never fails the response.
+    try:
+        from services import sermastr_audit
+
+        client_name = None
+        if client_id:
+            crows = (
+                supabase.table("clients").select("name").eq("id", client_id).limit(1).execute()
+            ).data
+            client_name = crows[0].get("name") if crows else None
+        sermastr_audit.record_decision(
+            review_id=str(review_id), idx=idx, proposal=proposals[idx],
+            client_id=client_id, client_name=client_name, trigger=review_trigger,
+            decision=body.status, actor_profile_id=auth.get("user_id"),
+            actor_role=auth.get("role"), actor_source="web",
+        )
+    except Exception as exc:
+        logger.warning("sermastr_audit_decision_failed",
+                       extra={"review_id": str(review_id), "idx": idx, "error": str(exc)})
+
     return {
         "review_id": str(review_id), "idx": idx, "status": body.status,
         "asana_task": proposals[idx].get("asana_task"),
     }
+
+
+# ---------------------------------------------------------------------------
+# Action Log — the audit + learning ledger read API (admin-gated).
+# ---------------------------------------------------------------------------
+@router.get("/strategist/action-log")
+async def get_strategist_action_log(
+    client_id: Optional[str] = None,
+    proposal_kind: Optional[str] = None,
+    decision: Optional[str] = None,
+    trigger: Optional[str] = None,
+    outcome_verdict: Optional[str] = None,
+    decided: Optional[bool] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """A filtered page of SerMaStr's action log — what it proposed, how a human
+    dispositioned each proposal, and whether the approved tactic worked. Admin-gated
+    (the log is sensitive: it names actors, clients, and proposal content)."""
+    if auth.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="admin_only")
+    from services import sermastr_audit
+
+    return await run_in_threadpool(
+        sermastr_audit.list_log, client_id=client_id, proposal_kind=proposal_kind,
+        decision=decision, trigger=trigger, outcome_verdict=outcome_verdict,
+        decided=decided, since=since, until=until, limit=limit, offset=offset,
+    )
+
+
+@router.get("/strategist/action-log/stats")
+async def get_strategist_action_log_stats(
+    client_id: Optional[str] = None,
+    proposal_kind: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Approve/dismiss + worked/no_effect rollup over a filtered window — the log
+    view's summary strip + the learning read. Admin-gated."""
+    if auth.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="admin_only")
+    from services import sermastr_audit
+
+    return await run_in_threadpool(
+        sermastr_audit.stats_window, client_id=client_id, proposal_kind=proposal_kind,
+        since=since, until=until,
+    )

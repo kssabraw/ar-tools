@@ -1905,6 +1905,36 @@ def _ctx_director(supabase, client_id: str, today: date) -> Optional[dict]:
     return out or None
 
 
+def _ctx_strategist_track_record(supabase, client_id: str, today: date) -> Optional[dict]:
+    """SerMaStr's OWN recent proposals for this client and how humans decided them
+    (approved / dismissed / still pending) + whether the approved tactics worked —
+    from the action log. Counts only (the deep read is the admin /strategist/log
+    view); best-effort, gated on sermastr_audit_enabled. Lets conversational
+    SerMaStr answer 'how often do my proposals get approved / actually work' and
+    steer honestly, without re-deriving it from strategy_reviews."""
+    if not settings.sermastr_audit_enabled:
+        return None
+    from services import sermastr_audit
+
+    # Counts only → skip the profiles join (one indexed read).
+    summary = sermastr_audit.history_summary(client_id=client_id, attach_names=False)
+    if not summary.get("count"):
+        return None
+    ov = summary["stats"]["overall"]
+    return {
+        "count": summary["count"],
+        "decisions": ov,
+        "note": (
+            "Your own recent proposal track record for this client (from the "
+            "action log): how a human dispositioned each proposal and, for "
+            "approved goal-linked link-building/reoptimization, whether it "
+            "worked/partial/no_effect. Weigh it when advising — favour what gets "
+            "approved and moves the metric, and be honest about what keeps getting "
+            "dismissed — but it is small-sample history, not a rule."
+        ),
+    }
+
+
 # Registry — append a provider here to give SerMastr a new module (see build_context).
 _CONTEXT_PROVIDERS = [
     ("campaign_goals", _ctx_campaign_goals),
@@ -1941,4 +1971,5 @@ _CONTEXT_PROVIDERS = [
     ("response_episodes", _ctx_response_episodes),
     ("setup", _ctx_setup),
     ("director", _ctx_director),
+    ("strategist_track_record", _ctx_strategist_track_record),
 ]

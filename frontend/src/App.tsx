@@ -8,6 +8,7 @@ import { Home } from './pages/Home'
 import { Assistant } from './pages/Assistant'
 import { Pace } from './pages/Pace'
 import { PaceLog } from './pages/PaceLog'
+import { SermastrLog } from './pages/SermastrLog'
 import { Director } from './pages/Director'
 import { Qa } from './pages/Qa'
 import { Runs } from './pages/Runs'
@@ -88,6 +89,7 @@ export default function App() {
                       <Route path="/assistant" element={<Assistant />} />
                       <Route path="/pace" element={<Pace />} />
                       <Route path="/pace/log" element={<AdminRoute><PaceLog /></AdminRoute>} />
+                      <Route path="/strategist/log" element={<AdminRoute><SermastrLog /></AdminRoute>} />
                       <Route path="/director" element={<Director />} />
                       <Route path="/qa" element={<Qa />} />
                       <Route path="/backlinks" element={<Backlinks />} />
