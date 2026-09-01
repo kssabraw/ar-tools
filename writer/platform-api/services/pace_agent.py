@@ -131,6 +131,9 @@ _TOOL_PARAMS = {
     "run_qa_review": {
         "task_name": {"type": "string", "description": "The task whose deliverable to QA (part of its name)."},
     },
+    "assign_client_plan": {
+        "scope": {"type": "string", "description": "Which plan to put on the board and assign: 'action_plan' (the ranked Action Plan), 'proposals' (the open strategist-review proposals), or 'both' (default)."},
+    },
 }
 _TOOL_REQUIRED = {
     "reassign_task": ["task_name", "assignee"],
@@ -145,6 +148,7 @@ _TOOL_REQUIRED = {
     "rename_task": ["task_name", "new_name"],
     "nudge_assignee": ["task_name"],
     "run_qa_review": ["task_name"],
+    "assign_client_plan": [],
 }
 
 
@@ -212,6 +216,12 @@ _PACE_SYSTEM = (
     "we tell the client\" / a summary to send the client, call write_client_pulse — "
     "it generates a warm, copy-paste client update email for that client (staff paste "
     "and personalize it; nothing is auto-sent).\n\n"
+    "PUT A PLAN ON THE BOARD. When someone asks to take a client's plan / Action Plan "
+    "/ approved strategist proposals and get it onto the board and assigned out, call "
+    "assign_client_plan (scope 'action_plan', 'proposals', or 'both') — it creates a "
+    "board task per item and assigns each to the best-fit member (held if the team's "
+    "at capacity). This is the SerMaStr→PACE handoff from your side; it's a PACE PM "
+    "action.\n\n"
     "ACTIONS. When the teammate asks you to DO something operational, call the "
     "matching tool with your best-guess arguments — the system resolves the exact "
     "task/member and asks for a confirmation. Don't ask permission before calling "
@@ -292,7 +302,8 @@ def build_pace_context(client_id: str) -> dict:
 
 # Actions that name a whole client rather than a single task — they can't be
 # resolved from a task name in member/portfolio scope, so they need a named client.
-_TASKLESS_ACTIONS = {"generate_client_month", "generate_pace_report", "write_client_pulse"}
+_TASKLESS_ACTIONS = {"generate_client_month", "generate_pace_report", "write_client_pulse",
+                     "assign_client_plan"}
 # How many rows per bucket to hand the LLM (keeps the portfolio JSON bounded on a
 # big agency; the prompt still says "and N more").
 _PORTFOLIO_ROW_CAP = 12

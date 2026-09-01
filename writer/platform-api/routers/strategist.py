@@ -97,129 +97,39 @@ async def publish_strategy_review(review_id: UUID, auth: dict = Depends(require_
         raise HTTPException(status_code=502, detail="strategy_review_publish_failed") from exc
 
 
+_PROPOSAL_ERROR_STATUS = {
+    "invalid_status": 422,
+    "review_not_found": 404,
+    "proposal_not_found": 404,
+    "senior_approval_required": 403,
+}
+
+
 @router.post("/strategy-proposals/{review_id}/{idx}")
 async def set_proposal_status(
     review_id: UUID, idx: int, body: ProposalStatusRequest, auth: dict = Depends(require_auth)
 ) -> dict:
-    """Approve or dismiss one proposal (patched in place in the JSONB list)."""
-    if body.status not in ("approved", "dismissed"):
-        raise HTTPException(status_code=422, detail="invalid_status")
-    supabase = get_supabase()
-    rows = (
-        supabase.table("strategy_reviews")
-        .select("id, proposals, client_id, trigger")
-        .eq("id", str(review_id)).limit(1).execute()
-    ).data
-    if not rows:
-        raise HTTPException(status_code=404, detail="review_not_found")
-    proposals = rows[0].get("proposals") or []
-    client_id = rows[0].get("client_id")
-    review_trigger = rows[0].get("trigger")
-    if not (0 <= idx < len(proposals)):
-        raise HTTPException(status_code=404, detail="proposal_not_found")
-    # §3 passthroughs: a requires='senior' proposal is Kyle/Ryan territory —
-    # enforce at the state-change chokepoint, not just the emit-time label.
-    # (Admins are the senior owners in this suite's role model.)
-    if proposals[idx].get("requires") == "senior" and auth.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="senior_approval_required")
-    proposals[idx]["status"] = body.status
-    proposals[idx]["decided_by"] = auth.get("user_id")
+    """Approve or dismiss one proposal (patched in place in the JSONB list).
 
-    # Strategist Phase 5: an approved proposal becomes a real Asana task in the
-    # client's project (best-effort — approval never fails over Asana; skipped
-    # when unconfigured/unmapped, or when a task already exists from a previous
-    # approve→dismiss→approve cycle).
-    if body.status == "approved":
-        from services import asana_push, interventions
-
-        if client_id:
-            # Intervention-outcome loop: stamp the shared source_ref onto the
-            # target BEFORE the push so the created task carries it (the
-            # native-task registration hook keys on it → both hooks converge on
-            # one row).
-            tgt = proposals[idx].get("target")
-            if isinstance(tgt, dict):
-                tgt.setdefault(
-                    "source_ref", interventions.source_ref_for_proposal(str(review_id), idx)
-                )
-            # Push the task once (skip when a previous approve→dismiss→approve
-            # cycle already created it).
-            if not proposals[idx].get("asana_task"):
-                task = await asana_push.push_proposal(str(client_id), str(review_id), proposals[idx])
-                if task:
-                    proposals[idx]["asana_task"] = task
-            # Register the intervention on EVERY approve (idempotent per
-            # source_ref, flag-gated inside; only a goal-linked in-scope target
-            # enrolls). Running it unconditionally — not only on the first-push
-            # branch — lets a transiently-failed first registration retry.
-            try:
-                iid = interventions.register_from_proposal(
-                    str(client_id), str(review_id), idx, proposals[idx]
-                )
-                if iid:
-                    proposals[idx]["intervention_id"] = iid
-            except Exception as exc:
-                logger.warning(
-                    "intervention_register_failed",
-                    extra={"review_id": str(review_id), "idx": idx, "error": str(exc)},
-                )
+    Delegates to ``strategist_proposals.apply_decision`` — the same core the bulk
+    plan→PACE handoff uses — so "approve a proposal" (push + place the board task,
+    register the intervention, record the decision, post the SerMaStr→PACE handoff)
+    is defined once.
+    """
+    from services import strategist_proposals
 
     try:
-        supabase.table("strategy_reviews").update({"proposals": proposals}).eq(
-            "id", str(review_id)
-        ).execute()
+        return await strategist_proposals.apply_decision(
+            str(review_id), idx, body.status,
+            actor_id=auth.get("user_id"), actor_role=auth.get("role"), actor_source="web",
+        )
+    except strategist_proposals.ProposalError as exc:
+        raise HTTPException(
+            status_code=_PROPOSAL_ERROR_STATUS.get(exc.code, 400), detail=exc.code
+        ) from exc
     except Exception as exc:
         logger.error("proposal_status_failed", extra={"review_id": str(review_id), "error": str(exc)})
         raise HTTPException(status_code=502, detail="proposal_status_failed") from exc
-
-    # Action log (audit + learning): record the human decision on this proposal at
-    # the strategist's OWN decision seam. Best-effort — never fails the response.
-    try:
-        from services import sermastr_audit
-
-        client_name = None
-        if client_id:
-            crows = (
-                supabase.table("clients").select("name").eq("id", client_id).limit(1).execute()
-            ).data
-            client_name = crows[0].get("name") if crows else None
-        sermastr_audit.record_decision(
-            review_id=str(review_id), idx=idx, proposal=proposals[idx],
-            client_id=client_id, client_name=client_name, trigger=review_trigger,
-            decision=body.status, actor_profile_id=auth.get("user_id"),
-            actor_role=auth.get("role"), actor_source="web",
-        )
-    except Exception as exc:
-        logger.warning("sermastr_audit_decision_failed",
-                       extra={"review_id": str(review_id), "idx": idx, "error": str(exc)})
-
-    # Coordination bus (WS3): an approved proposal is a SerMaStr→PACE handoff.
-    # Acked immediately when a board task landed (PACE received it); left OPEN when
-    # approval produced no task — a dropped handoff DORA can see. Gated +
-    # best-effort; never affects the response.
-    if body.status == "approved" and client_id:
-        try:
-            from services import agent_bus
-
-            corr = f"strategy_proposal:{review_id}:{idx}"
-            task = proposals[idx].get("asana_task")
-            agent_bus.post(
-                from_agent="sermastr", to_agent="pace", kind="handoff", client_id=client_id,
-                subject=proposals[idx].get("title"),
-                body="Approved strategist proposal to execute.",
-                ref=(task or {}).get("gid") if isinstance(task, dict) else None,
-                correlation_id=corr, payload={"review_id": str(review_id), "idx": idx},
-            )
-            if task:
-                agent_bus.mark_acted(correlation_id=corr, by_agent="pace")
-        except Exception as exc:
-            logger.warning("agent_bus_handoff_failed",
-                           extra={"review_id": str(review_id), "idx": idx, "error": str(exc)})
-
-    return {
-        "review_id": str(review_id), "idx": idx, "status": body.status,
-        "asana_task": proposals[idx].get("asana_task"),
-    }
 
 
 # ---------------------------------------------------------------------------
