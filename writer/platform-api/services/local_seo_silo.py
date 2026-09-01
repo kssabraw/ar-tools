@@ -239,7 +239,8 @@ async def run_silo_plan_job(job: dict) -> None:
         site_urls, site_note = await _build_site_url_list(client_id, location_code)
         if site_note:
             plan["degraded_notes"].append(site_note)
-        items = _to_items(plan["per_silo"], client_id, site_urls)
+        seed_city = _parse_area(location)[0] or location.strip()
+        items = _to_items(plan["per_silo"], client_id, site_urls, seed_city)
 
         supabase.table("async_jobs").update(
             {
@@ -696,6 +697,7 @@ def _match_page_on_site(
     page: dict,
     token_index: dict[frozenset[str], str],
     place_index: dict[str, str],
+    seed_city: str = "",
 ) -> Optional[str]:
     """Return the live URL of an existing page on the client's site for `page`, or
     None. Tried in order of specificity:
@@ -703,17 +705,29 @@ def _match_page_on_site(
       1. the page's **keyword** (and its supporting keywords) against the site's
          page slugs by content-word-set equality — catches service+city landing
          pages (``/roof-restoration-melbourne/``); then
-      2. for area/location targets only (those carrying a bare `location_name`), a
+      2. a **national (city-less) service page** — the same service with the place
+         stripped out (``/roof-restoration/``), for a business whose service pages
+         carry no geo in the slug; then
+      3. for area/location targets only (those carrying a bare `location_name`), a
          **generic location page** for that place (``/melbourne/``).
 
-    Every page runs step 1, so service-variation pages — which carry no
-    `location_name` — are finally checked against the live site too (previously they
-    could only be `found`-in-tool or `missing`)."""
+    Every page runs steps 1–2, so service-variation pages — which carry no
+    `location_name` — are checked against the live site too (previously they could
+    only be `found`-in-tool or `missing`). The place stripped in step 2 is the page's
+    own `location_name`, else the `seed_city` (all service-variation pages target the
+    seed city). Steps are ordered specific→general, so a city-specific page always
+    wins over the national one."""
     candidates = [page.get("keyword") or "", *(page.get("supporting_keywords") or [])]
     for kw in candidates:
         url = site_page_index.match_site_page_for_keyword(kw, token_index)
         if url:
             return url
+    place = page.get("location_name") or seed_city
+    national = site_page_index.match_site_service_page(
+        page.get("keyword") or "", place, token_index
+    )
+    if national:
+        return national
     location_name = page.get("location_name")
     if location_name:
         return site_page_index.match_site_location_page(location_name, place_index)
@@ -721,7 +735,10 @@ def _match_page_on_site(
 
 
 def _to_items(
-    per_silo: list[dict], client_id: str, site_urls: Optional[list[str]] = None,
+    per_silo: list[dict],
+    client_id: str,
+    site_urls: Optional[list[str]] = None,
+    seed_city: str = "",
 ) -> list[dict]:
     """Flatten silos → page targets, marking each:
 
@@ -733,8 +750,10 @@ def _to_items(
 
     `found` wins over `on_site` (a page we built and track is the more actionable
     record). The live-site check now runs on **every** page — a service+city page is
-    matched on its keyword, and area/location pages additionally match a generic
-    place page via their `location_name`."""
+    matched on its keyword, a city-less national service page is matched with the
+    place stripped, and area/location pages additionally match a generic place page
+    via their `location_name`. `seed_city` is the city all service-variation pages
+    target, used to strip the geo for the national-service fallback."""
     supabase = get_supabase()
     site_urls = site_urls or []
     token_index = site_page_index.build_page_token_index(site_urls)
@@ -769,7 +788,7 @@ def _to_items(
             if match:
                 status, url = "found", match.get("published_doc_url")
             else:
-                site_url = _match_page_on_site(page, token_index, place_index)
+                site_url = _match_page_on_site(page, token_index, place_index, seed_city)
                 status, url = ("on_site", site_url) if site_url else ("missing", None)
             items.append(
                 {

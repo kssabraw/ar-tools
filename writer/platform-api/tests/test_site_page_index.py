@@ -186,6 +186,60 @@ def test_match_keyword_first_url_wins():
 
 
 # ---------------------------------------------------------------------------
+# match_site_service_page (national / city-less service page)
+# ---------------------------------------------------------------------------
+def test_match_service_page_strips_place():
+    index = spi.build_page_token_index(["https://fcr.com/roof-restoration/"])
+    assert (
+        spi.match_site_service_page("roof restoration melbourne", "Melbourne", index)
+        == "https://fcr.com/roof-restoration/"
+    )
+
+
+def test_match_service_page_matches_services_wrapper_slug():
+    index = spi.build_page_token_index(["https://fcr.com/roof-restoration-services/"])
+    assert (
+        spi.match_site_service_page("roof restoration geelong", "Geelong", index)
+        == "https://fcr.com/roof-restoration-services/"
+    )
+
+
+def test_match_service_page_modified_variation_not_bare_service():
+    # A modified variation matches only its own national page, never the bare service.
+    index = spi.build_page_token_index(
+        [
+            "https://fcr.com/roof-restoration/",
+            "https://fcr.com/storm-damage-roof-restoration/",
+        ]
+    )
+    assert (
+        spi.match_site_service_page(
+            "storm damage roof restoration melbourne", "Melbourne", index
+        )
+        == "https://fcr.com/storm-damage-roof-restoration/"
+    )
+
+
+def test_match_service_page_no_place_strip_returns_none():
+    # When the place strips nothing, this is not a national match (the exact-keyword
+    # matcher owns that case) — must return None so it stays a strict fallback.
+    index = spi.build_page_token_index(["https://fcr.com/roof-restoration-melbourne/"])
+    assert (
+        spi.match_site_service_page("roof restoration melbourne", "Sydney", index)
+        is None
+    )
+
+
+def test_match_service_page_empty_when_no_service_or_no_page():
+    index = spi.build_page_token_index(["https://fcr.com/roof-restoration/"])
+    # No matching national page for a different service.
+    assert spi.match_site_service_page("gutter cleaning sydney", "Sydney", index) is None
+    # Keyword is only the place → nothing left to match.
+    assert spi.match_site_service_page("melbourne", "Melbourne", index) is None
+    assert spi.match_site_service_page("roof restoration melbourne", "Melbourne", {}) is None
+
+
+# ---------------------------------------------------------------------------
 # parse_robots_sitemaps
 # ---------------------------------------------------------------------------
 def test_parse_robots_sitemaps():

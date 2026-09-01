@@ -218,6 +218,36 @@ def match_site_page_for_keyword(
     return index.get(key)
 
 
+def match_site_service_page(
+    keyword: str, place_name: str, index: dict[frozenset[str], str]
+) -> Optional[str]:
+    """Return the live URL of a *city-less* (national) service page matching
+    `keyword` with `place_name` stripped out, or None.
+
+    A local business sometimes publishes one page per service with no geo in the
+    slug (``/roof-restoration/``) — for a single-city business that page *is* the
+    "<service> <city>" target. Stripping the place words from the keyword and
+    matching the remaining service words catches it: "roof restoration melbourne"
+    with place "Melbourne" → {"roof","restoration"} → ``/roof-restoration/``. A
+    *modified* variation matches only its own national page — "storm damage roof
+    restoration melbourne" → {"storm","damage","roof","restoration"}, never the bare
+    ``/roof-restoration/`` — so this widens recall without collapsing distinct
+    variations onto one service page.
+
+    Returns None when the place strips nothing (then the caller's exact-keyword
+    match already covers it — this must stay strictly a *fallback*) or the remaining
+    service words are empty."""
+    if not index:
+        return None
+    kw_tokens = content_tokens(keyword)
+    service_tokens = kw_tokens - content_tokens(place_name)
+    # Only a genuine city-strip qualifies: an empty remainder, or one identical to
+    # the full keyword (place contributed nothing), is not a national match.
+    if not service_tokens or service_tokens == kw_tokens:
+        return None
+    return index.get(service_tokens)
+
+
 def parse_robots_sitemaps(text: str) -> list[str]:
     """Extract ``Sitemap:`` directive URLs from a robots.txt body."""
     out: list[str] = []

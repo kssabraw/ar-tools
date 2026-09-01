@@ -125,6 +125,78 @@ def test_generic_location_page_matches_area_target_via_location_name():
     assert items[0]["url"] == "https://fcr.com/service-areas/inner-east/"
 
 
+# ── national (city-less) single-service page match ────────────────────────────
+
+def test_national_service_page_covers_base_city_page():
+    per_silo = [
+        {
+            "silo": "Roof Restoration",
+            "pages": [
+                {"keyword": "roof restoration melbourne", "supporting_keywords": []},
+                {"keyword": "gutter cleaning melbourne", "supporting_keywords": []},
+            ],
+        }
+    ]
+    # A city-less /roof-restoration/ page exists; /gutter-cleaning/ does not.
+    site_urls = ["https://fcr.com/roof-restoration/"]
+    with patch.object(silo, "get_supabase", return_value=_fake_supabase_with_pages([])):
+        items = silo._to_items(per_silo, "client-1", site_urls, seed_city="Melbourne")
+    by_kw = _status_by_kw(items)
+    assert by_kw["roof restoration melbourne"]["status"] == "on_site"
+    assert by_kw["roof restoration melbourne"]["url"] == "https://fcr.com/roof-restoration/"
+    assert by_kw["gutter cleaning melbourne"]["status"] == "missing"
+
+
+def test_national_service_page_does_not_cover_modified_variation():
+    per_silo = [
+        {
+            "silo": "Storm Damage",
+            "pages": [{"keyword": "storm damage roof restoration melbourne"}],
+        }
+    ]
+    site_urls = ["https://fcr.com/roof-restoration/"]  # only the bare service page
+    with patch.object(silo, "get_supabase", return_value=_fake_supabase_with_pages([])):
+        items = silo._to_items(per_silo, "client-1", site_urls, seed_city="Melbourne")
+    # The variation isn't covered by the bare /roof-restoration/ page.
+    assert items[0]["status"] == "missing"
+
+
+def test_specific_city_page_wins_over_national_service_page():
+    per_silo = [
+        {"silo": "Roof Restoration", "pages": [{"keyword": "roof restoration melbourne"}]}
+    ]
+    # Both a national and a city-specific page exist → the city-specific one wins.
+    site_urls = [
+        "https://fcr.com/roof-restoration/",
+        "https://fcr.com/roof-restoration-melbourne/",
+    ]
+    with patch.object(silo, "get_supabase", return_value=_fake_supabase_with_pages([])):
+        items = silo._to_items(per_silo, "client-1", site_urls, seed_city="Melbourne")
+    assert items[0]["status"] == "on_site"
+    assert items[0]["url"] == "https://fcr.com/roof-restoration-melbourne/"
+
+
+def test_national_service_page_covers_area_page_via_location_name():
+    per_silo = [
+        {
+            "silo": "Neighborhoods",
+            "pages": [
+                {
+                    "keyword": "roof restoration inner east",
+                    "supporting_keywords": [],
+                    "location_name": "Inner East",
+                }
+            ],
+        }
+    ]
+    site_urls = ["https://fcr.com/roof-restoration/"]
+    with patch.object(silo, "get_supabase", return_value=_fake_supabase_with_pages([])):
+        items = silo._to_items(per_silo, "client-1", site_urls, seed_city="Melbourne")
+    # Place stripped from location_name → national service page matches.
+    assert items[0]["status"] == "on_site"
+    assert items[0]["url"] == "https://fcr.com/roof-restoration/"
+
+
 # ── _match_page_on_site precedence: keyword before bare place ──────────────────
 
 def test_match_page_on_site_prefers_keyword_over_place():
