@@ -2316,6 +2316,7 @@ class Settings(BaseSettings):
     # Seam thresholds (owner decision 1 — suggested defaults, all tunable
     # without a code change once real dwell times are observed).
     director_seam_approved_unplaced_days: int = 3
+    director_seam_proposal_pending_days: int = 5           # a strategist proposal nobody approves/dismisses
     director_seam_qa_idle_days: int = 7
     director_seam_autonomy_unactioned_days: int = 7
     # content_shipped_degraded is immediate (no dwell) — no threshold key.

@@ -59,6 +59,35 @@ def strategist_approved_unplaced(model: dict, today: date, threshold_days: int) 
     return flags
 
 
+def strategist_proposal_pending(model: dict, today: date, threshold_days: int) -> list[dict]:
+    """A strategist proposal that has sat in ``status:"proposed"`` — neither
+    approved nor dismissed — past the dwell threshold (finding #4). Mirrors
+    ``strategist_approved_unplaced``; the flag clears the instant the human
+    acts on the proposal (it leaves the provider's ``proposed_pending`` list),
+    so the reconciler auto-closes the task. Nudge-to-a-human only — never
+    approves or dismisses on anyone's behalf."""
+    strategy = model.get("strategy") or {}
+    flags: list[dict] = []
+    for item in strategy.get("proposed_pending") or []:
+        age = age_days(item.get("since"), today)
+        if age is None or age < threshold_days:
+            continue
+        flags.append({
+            "seam": "strategist_proposal_pending",
+            "client_id": item.get("client_id"),
+            "ident": f"{item.get('review_id')}:{item.get('proposal_index')}",
+            "evidence": {
+                "title": item.get("title"),
+                "review_id": item.get("review_id"),
+                "requires": item.get("requires"),
+                "days_pending": age,
+            },
+            "since": item.get("since"),
+            "threshold_days": threshold_days,
+        })
+    return flags
+
+
 def autonomy_proposed_unactioned(model: dict, today: date, threshold_days: int) -> list[dict]:
     autonomy = model.get("autonomy") or {}
     flags: list[dict] = []
@@ -164,11 +193,12 @@ def unwatched_seam(model: dict) -> list[dict]:
 def compute_flags(model: dict, today: date, thresholds: dict) -> dict:
     """Assemble every seam predicate into one ``{flags: [...], count}`` block.
 
-    ``thresholds`` = {"approved_unplaced_days", "qa_idle_days",
-    "autonomy_unactioned_days"} — callers pass the ``settings.director_seam_*``
-    values (or overrides in tests). Pure."""
+    ``thresholds`` = {"approved_unplaced_days", "proposal_pending_days",
+    "qa_idle_days", "autonomy_unactioned_days"} — callers pass the
+    ``settings.director_seam_*`` values (or overrides in tests). Pure."""
     flags: list[dict] = []
     flags += strategist_approved_unplaced(model, today, thresholds["approved_unplaced_days"])
+    flags += strategist_proposal_pending(model, today, thresholds["proposal_pending_days"])
     flags += autonomy_proposed_unactioned(model, today, thresholds["autonomy_unactioned_days"])
     idle = qa_idle(model, today, thresholds["qa_idle_days"])
     if idle:

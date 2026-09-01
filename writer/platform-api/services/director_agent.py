@@ -89,6 +89,7 @@ _DORA_WEB_STYLE = (
 # Human-readable seam labels for the deterministic opening brief (the LLM path
 # gets the raw seam types in the JSON and names them itself).
 _SEAM_LABELS = {
+    "strategist_proposal_pending": "Strategy proposal waiting on an approve/dismiss decision",
     "strategist_approved_unplaced": "Approved strategy proposal not placed on the board",
     "autonomy_proposed_unactioned": "Autonomy candidate proposed but not acted on",
     "content_shipped_degraded": "Content shipped without full brand/voice context",

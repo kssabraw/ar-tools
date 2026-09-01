@@ -137,19 +137,83 @@ def test_unwatched_seam_empty_when_none_unwatched():
     assert S.unwatched_seam({"producers": {}}) == []
 
 
+def test_strategist_proposal_pending_fires_at_threshold_silent_below():
+    model = {
+        "strategy": {
+            "proposed_pending": [
+                {"review_id": "r1", "client_id": "c1", "proposal_index": 0,
+                 "title": "Fund a link round", "requires": "approval", "since": "2026-08-22"},  # 6 days old
+                {"review_id": "r2", "client_id": "c2", "proposal_index": 1,
+                 "title": "Reoptimize page", "requires": "none", "since": "2026-08-26"},        # 2 days old
+            ]
+        }
+    }
+    flags = S.strategist_proposal_pending(model, TODAY, threshold_days=5)
+    assert len(flags) == 1
+    flag = flags[0]
+    assert flag["seam"] == "strategist_proposal_pending"
+    assert flag["client_id"] == "c1"
+    assert flag["ident"] == "r1:0"
+    assert flag["evidence"]["days_pending"] == 6
+    assert flag["evidence"]["requires"] == "approval"
+    assert flag["evidence"]["title"] == "Fund a link round"
+
+
+def test_strategist_proposal_pending_ignores_missing_since():
+    model = {"strategy": {"proposed_pending": [
+        {"review_id": "r1", "client_id": "c1", "proposal_index": 0, "title": "x", "since": None},
+    ]}}
+    assert S.strategist_proposal_pending(model, TODAY, threshold_days=5) == []
+
+
+def test_strategist_proposal_pending_empty_when_no_pending():
+    assert S.strategist_proposal_pending({"strategy": {"proposed_pending": []}}, TODAY, 5) == []
+    assert S.strategist_proposal_pending({"strategy": {}}, TODAY, 5) == []
+    assert S.strategist_proposal_pending({}, TODAY, 5) == []
+
+
+def test_proposal_pending_ident_distinct_from_approved_unplaced_source_ref():
+    # Same review+index can be both flags across its lifecycle; the seam name in
+    # the source_ref keeps them from colliding into one task.
+    model = {"strategy": {
+        "proposed_pending": [
+            {"review_id": "r1", "client_id": "c1", "proposal_index": 0, "title": "x", "since": "2026-08-20"},
+        ],
+        "approved_unplaced": [
+            {"review_id": "r1", "client_id": "c1", "proposal_index": 0, "title": "x", "since": "2026-08-20"},
+        ],
+    }}
+    pending = S.strategist_proposal_pending(model, TODAY, 5)[0]
+    approved = S.strategist_approved_unplaced(model, TODAY, 3)[0]
+    assert pending["ident"] == approved["ident"] == "r1:0"
+    assert pending["seam"] != approved["seam"]
+
+
 def test_compute_flags_assembles_every_predicate():
     model = {
-        "strategy": {"approved_unplaced": [
-            {"review_id": "r1", "client_id": "c1", "proposal_index": 0, "title": "x", "since": "2026-08-20"},
-        ]},
+        "strategy": {
+            "approved_unplaced": [
+                {"review_id": "r1", "client_id": "c1", "proposal_index": 0, "title": "x", "since": "2026-08-20"},
+            ],
+            "proposed_pending": [
+                {"review_id": "r3", "client_id": "c3", "proposal_index": 0, "title": "y", "since": "2026-08-20"},
+            ],
+        },
         "autonomy": {"proposed_unactioned": []},
         "qa": {"entered_in_qa_count": 1, "last_entered_at": "2026-08-27", "reviews_considered": 1},
         "content": {"degraded": []},
         "duplicates": {"duplicates": []},
         "producers": {"unwatched_seam": {"mystery": 1}},
     }
-    thresholds = {"approved_unplaced_days": 3, "qa_idle_days": 7, "autonomy_unactioned_days": 7}
+    thresholds = {
+        "approved_unplaced_days": 3,
+        "proposal_pending_days": 5,
+        "qa_idle_days": 7,
+        "autonomy_unactioned_days": 7,
+    }
     result = S.compute_flags(model, TODAY, thresholds)
     seams_seen = {f["seam"] for f in result["flags"]}
-    assert seams_seen == {"strategist_approved_unplaced", "unwatched_seam"}
-    assert result["count"] == 2
+    assert seams_seen == {
+        "strategist_approved_unplaced", "strategist_proposal_pending", "unwatched_seam",
+    }
+    assert result["count"] == 3
