@@ -1796,6 +1796,10 @@ class Settings(BaseSettings):
     pace_untriaged_grace_days: int = 2
     # Cap the (later) daily digest.
     pace_digest_max_items: int = 8
+    # Cap per-bucket (Overdue/Due today/This week) lines in the pushed personal
+    # morning brief DM before "…and N more" — generous, since chat.postMessage
+    # comfortably supports far longer text than a handful of task lines.
+    pace_brief_max_lines_per_bucket: int = 25
     # Suppress the daily digest on weekends (Sat/Sun) — VA-facing, workdays only.
     pace_digest_weekday_only: bool = True
     # Permission matrix — the two "via policy" cells (PRD §3.2). Defaults:

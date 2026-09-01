@@ -35,7 +35,20 @@ def test_brief_text_none_when_nothing_relevant():
     assert B.build_brief_text(tasks, {}, MONDAY) is None
 
 
-def test_brief_text_caps_long_buckets():
+def test_brief_text_does_not_cut_off_a_normal_day(monkeypatch):
+    # Regression: PACE was cutting off morning briefs at 6 lines/bucket even
+    # when a member had e.g. 9 overdue tasks — well within a normal day and
+    # well within chat.postMessage's text limit, so nothing should be hidden.
+    tasks = [{"id": f"t{i}", "name": f"Task {i}", "due_date": "2026-07-10", "client_id": "c1"}
+             for i in range(9)]
+    text = B.build_brief_text(tasks, {"c1": "Acme"}, MONDAY)
+    assert "…and" not in text
+    for i in range(9):
+        assert f"Task {i} — Acme" in text
+
+
+def test_brief_text_caps_long_buckets(monkeypatch):
+    monkeypatch.setattr(settings, "pace_brief_max_lines_per_bucket", 6)
     tasks = [{"id": f"t{i}", "name": f"Task {i}", "due_date": "2026-07-10", "client_id": "c1"}
              for i in range(10)]
     text = B.build_brief_text(tasks, {"c1": "Acme"}, MONDAY)

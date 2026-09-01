@@ -29,7 +29,6 @@ from services import notifications, task_service
 
 logger = logging.getLogger(__name__)
 
-_MAX_LINES_PER_BUCKET = 6
 # Slack errors that mean "DMs aren't provisioned" (missing im:write etc.) —
 # logged once per process, then silent.
 _SCOPE_ERRORS = ("missing_scope", "not_allowed_token_type", "invalid_auth")
@@ -50,13 +49,14 @@ def build_brief_text(tasks: list[dict], client_names: dict, today: date) -> Opti
         rows = buckets.get(key) or []
         if not rows:
             continue
+        max_lines = settings.pace_brief_max_lines_per_bucket
         lines = [f"*{label}:*"]
-        for t in rows[:_MAX_LINES_PER_BUCKET]:
+        for t in rows[:max_lines]:
             client = client_names.get(t.get("client_id"), "client")
             due = f" (due {t['due_date']})" if key == "this_week" and t.get("due_date") else ""
             lines.append(f"• {t.get('name')} — {client}{due}")
-        if len(rows) > _MAX_LINES_PER_BUCKET:
-            lines.append(f"…and {len(rows) - _MAX_LINES_PER_BUCKET} more")
+        if len(rows) > max_lines:
+            lines.append(f"…and {len(rows) - max_lines} more")
         sections.append("\n".join(lines))
     if not sections:
         return None
