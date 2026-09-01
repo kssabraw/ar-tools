@@ -6,7 +6,7 @@ reads are covered by integration testing, per repo convention)."""
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from services import strategy_digest as sd
 
@@ -189,6 +189,41 @@ def test_open_alert_makes_client_active():
     assert sd.has_active_signals({"open_alerts": {"maps": [{"keyword": "k"}]}}) is True
     assert sd.has_active_signals({"episodes": [{"keyword": "k"}]}) is True
     assert sd.has_active_signals({"task_plan": {"flags": ["escalate_margin_below_50"]}}) is True
+
+
+# ---------------------------------------------------------------------------
+# campaign_goals provider — the no-goal sentinel (finding #5)
+# ---------------------------------------------------------------------------
+def test_prov_campaign_goals_emits_no_goals_sentinel(monkeypatch):
+    from services import campaign_goals
+
+    monkeypatch.setattr(campaign_goals, "assess_goals", lambda cid, today=None: [])
+    out = sd._prov_campaign_goals(None, "c1", date(2026, 7, 4), NOW)
+    # A no-goal client gets a sentinel, not a null section, so priority-0 engages.
+    assert out == {"no_goals": True}
+
+
+def test_prov_campaign_goals_returns_goals_when_present(monkeypatch):
+    from services import campaign_goals
+
+    goal = {
+        "label": "Rank top 3", "goal_type": "keyword_position", "keyword": "roof repair",
+        "status": "behind", "baseline_value": 8.0, "current_value": 6.0,
+    }
+    monkeypatch.setattr(campaign_goals, "assess_goals", lambda cid, today=None: [goal])
+    out = sd._prov_campaign_goals(None, "c1", date(2026, 7, 4), NOW)
+    # The goals-exist path is untouched — no sentinel key, goals + counts as before.
+    assert "no_goals" not in out
+    assert out["goals"][0]["label"] == "Rank top 3"
+    assert out["counts"] == {"behind": 1}
+
+
+def test_no_goal_sentinel_does_not_pull_leadoff_or_make_active():
+    # The sentinel carries no `goals` key, so the LeadOff-domain reader and the
+    # weekly active-signal gate are both unaffected.
+    digest = {"open_alerts": {}, "episodes": [], "task_plan": {}, "campaign_goals": {"no_goals": True}}
+    assert sd.active_signal_domains(digest) == set()
+    assert sd.has_active_signals(digest) is False
 
 
 # ---------------------------------------------------------------------------

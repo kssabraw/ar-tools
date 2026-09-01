@@ -798,3 +798,87 @@ def test_the_scan_actually_finds_call_sites():
     # A scan that silently matches nothing would make the test above vacuous.
     values = {v for _, _, v in _trigger_literals()}
     assert {"manual", "scheduled", "drop", "maps_drop", "offpage"} <= values
+
+
+# ---------------------------------------------------------------------------
+# goal-aware ordering (goal-audit #2 — capped cross-tier boost)
+# ---------------------------------------------------------------------------
+def test_action_channel_maps_kinds():
+    assert reopt_planner.action_channel("rank_drop") == "organic"
+    assert reopt_planner.action_channel("cannibalization") == "organic"
+    assert reopt_planner.action_channel("maps_decline") == "maps"
+    assert reopt_planner.action_channel("gbp_gap") == "maps"
+    assert reopt_planner.action_channel("review_gap") == "maps"
+    # channel-neutral / unknown
+    assert reopt_planner.action_channel("assistant_action") is None
+    assert reopt_planner.action_channel("something_new") is None
+    assert reopt_planner.action_channel(None) is None
+
+
+def test_goal_channels_only_behind_or_overdue():
+    goals = [
+        {"goal_type": "gbp_calls", "status": "behind"},
+        {"goal_type": "maps_pack_presence", "status": "overdue"},
+        {"goal_type": "keyword_position", "status": "on_track"},   # excluded — not behind
+        {"goal_type": "custom", "status": "behind"},               # excluded — no channel
+        {"goal_type": "ai_visibility", "status": "behind"},
+    ]
+    assert reopt_planner.goal_channels(goals) == {"maps", "ai"}
+    assert reopt_planner.goal_channels([]) == set()
+    assert reopt_planner.goal_channels([{"goal_type": "gbp_calls", "status": "achieved"}]) == set()
+
+
+def test_apply_goal_boost_lifts_matched_channel_above_offgoal_below_emergencies():
+    drop = {"kind": "rank_drop", "sort": reopt_planner._SORT_DROP}
+    offpage = {"kind": "rd_loss", "sort": reopt_planner._SORT_OFFPAGE}
+    cannibal = {"kind": "cannibalization", "sort": reopt_planner._SORT_CANNIBAL + 5_000}
+    maps = {"kind": "maps_decline", "sort": reopt_planner._SORT_MAPS + 3_000}
+    quick = {"kind": "quick_win", "sort": reopt_planner._SORT_QUICK}
+    actions = [drop, offpage, cannibal, maps, quick]
+
+    reopt_planner.apply_goal_boost(actions, {"maps"})
+
+    # matched maps action lands strictly between cannibalization-top and offpage
+    assert reopt_planner._SORT_OFFPAGE - 1 < maps["sort"] < reopt_planner._SORT_OFFPAGE
+    assert maps["sort"] > cannibal["sort"]      # above off-goal non-emergency work
+    assert maps["sort"] < offpage["sort"]       # below the emergency floor
+    assert maps["sort"] < drop["sort"]          # below a drop
+    # emergencies and off-goal rows are untouched
+    assert drop["sort"] == reopt_planner._SORT_DROP
+    assert offpage["sort"] == reopt_planner._SORT_OFFPAGE
+    assert cannibal["sort"] == reopt_planner._SORT_CANNIBAL + 5_000
+    assert quick["sort"] == reopt_planner._SORT_QUICK
+
+    order = [a["kind"] for a in sorted(actions, key=lambda a: a["sort"], reverse=True)]
+    assert order == ["rank_drop", "rd_loss", "maps_decline", "cannibalization", "quick_win"]
+
+
+def test_apply_goal_boost_noop_without_channels():
+    actions = [
+        {"kind": "maps_decline", "sort": reopt_planner._SORT_MAPS + 3_000},
+        {"kind": "cannibalization", "sort": reopt_planner._SORT_CANNIBAL},
+    ]
+    before = [a["sort"] for a in actions]
+    reopt_planner.apply_goal_boost(actions, set())
+    assert [a["sort"] for a in actions] == before  # byte-identical
+
+
+def test_apply_goal_boost_preserves_internal_order_of_matched():
+    strong = {"kind": "maps_solv_drop", "sort": reopt_planner._SORT_MAPS + 8_000}
+    weak = {"kind": "maps_weak_area", "sort": reopt_planner._SORT_MAPS + 1_000}
+    reopt_planner.apply_goal_boost([strong, weak], {"maps"})
+    assert strong["sort"] > weak["sort"]                       # relative order kept
+    assert weak["sort"] > reopt_planner._SORT_OFFPAGE - 1      # both in the boost window
+    assert strong["sort"] < reopt_planner._SORT_OFFPAGE
+
+
+def test_apply_goal_boost_never_touches_emergency_even_on_matched_channel():
+    # An organic-goal client: rank_drop is organic-channel, but it is an emergency
+    # (sort >= offpage) and must stay put; cannibalization (organic, non-emergency)
+    # is lifted above quick but still below the offpage floor.
+    drop = {"kind": "rank_drop", "sort": reopt_planner._SORT_DROP}
+    cannibal = {"kind": "cannibalization", "sort": reopt_planner._SORT_CANNIBAL}
+    reopt_planner.apply_goal_boost([drop, cannibal], {"organic"})
+    assert drop["sort"] == reopt_planner._SORT_DROP           # emergency untouched
+    assert cannibal["sort"] > reopt_planner._SORT_OFFPAGE - 1
+    assert cannibal["sort"] < reopt_planner._SORT_OFFPAGE

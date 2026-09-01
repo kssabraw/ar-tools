@@ -314,10 +314,13 @@
           <li>Reply <strong>yes</strong> to run every item, or <strong>yes 1,3</strong> (or
             "yes 1-3", "approve 2") to run only some. Anything you don't select is dropped for
             today — if it's still a real problem tomorrow, it reappears in tomorrow's plan.</li>
-          <li><strong>Whoever confirms authorizes it.</strong> A junior teammate can approve a
-            nudge; a reassignment needs a <em>staff</em> role or higher — if you're not
-            authorized, PACE tells you which item and why instead of silently skipping it.</li>
-          <li>An unconfirmed plan is never run late — it's simply replaced by the next day's plan.</li>
+          <li><strong>Only a PACE PM approves the daily plan.</strong> Approving it —
+            <strong>yes</strong> / <strong>yes 1,3</strong> — is limited to the team's PACE PMs
+            (today <strong>Minda, Kyle, and Ryan</strong>; see §11). Reply in the plan's
+            <strong>own thread</strong> — a fresh channel message isn't tied to it. If a non-PM
+            replies, PACE says so rather than running it.</li>
+          <li>An unconfirmed plan is never run late — it's simply replaced by the next day's plan.
+            There's no separate "decline": not approving <em>is</em> the decline.</li>
           <li><strong>A flag line means PACE couldn't safely stage something on its own.</strong>
             The most common one is an ambiguous task name — several tasks on the same client
             share a name (three separate "GBP Blast" tasks across different months) — and PACE
@@ -356,10 +359,20 @@
         <ol>
           <li>PACE tries a <strong>direct Slack DM</strong> to that person first.</li>
           <li>If they're not linked to Slack, or DMs aren't working, it <strong>@-mentions</strong>
-            them in the channel instead.</li>
-          <li>If neither is possible, it still writes an <strong>in-app notification</strong> to
-            their bell — nothing about a nudge is ever silently lost.</li>
+            them in the <strong>client's own channel</strong> where one is set up — never the
+            shared <span class="mono">#pace</span> channel.</li>
+          <li>Either way it also writes an <strong>in-app notification</strong> to their bell —
+            nothing about a nudge is ever silently lost.</li>
         </ol>
+        <p><strong>What stays out of <span class="mono">#pace</span>.</strong> The channel is kept
+          to the <strong>portfolio summaries</strong> — the daily digest and the daily Chase Plan.
+          The per-task pings (a task assigned to you, an @mention, a comment on a task you watch, a
+          nudge) no longer post there. Each goes to <strong>your own Slack DM</strong> and to
+          <strong>that client's own channel</strong> where one is set up, so you get what concerns
+          <em>you</em> without the whole team's traffic. Your in-app <strong>bell</strong> always
+          carries them too, so nothing is lost when a DM can't be delivered — if you're not getting
+          DMs, ask an admin to check your Team-page Slack link and that PACE has the
+          <span class="mono">im:write</span> scope.</p>
       </section>
 
       <section id="s9" class="block">
@@ -415,16 +428,22 @@
               <tr><td>Fill in a task's missing due date/category/estimate</td><td class="mono">staff</td></tr>
               <tr><td>Generate a delivery report</td><td class="mono">staff</td></tr>
               <tr><td>Write the weekly client-update email</td><td class="mono">staff</td></tr>
-              <tr><td>Generate this month's tasks <strong>by asking PACE</strong></td><td class="mono">admin</td></tr>
+              <tr><td>Approve the daily Chase Plan</td><td class="mono">PACE&nbsp;PM</td></tr>
+              <tr><td>Generate this month's tasks (button <strong>or</strong> by asking PACE)</td><td class="mono">PACE&nbsp;PM</td></tr>
             </tbody>
           </table>
         </div>
         <div class="why">
-          <p class="why-label">A real gotcha</p>
-          <p>Clicking <strong>Generate this month</strong> on the Tasks page itself is open to
-            anyone, but <em>asking PACE to do it in chat</em> currently requires admin — the two
-            paths aren't gated the same way. If PACE tells you it needs an admin for that, use
-            the button on the board instead if you're not one.</p>
+          <p class="why-label">The PACE PM role</p>
+          <p>The last two rows are <strong>PACE PM</strong> operations, not plain role tiers.
+            Approving the daily plan and generating a client's month by hand are limited to the
+            named PMs — today <strong>Minda, Kyle, and Ryan</strong>. Admins are PMs automatically;
+            a staff member becomes one when an admin flips their <span class="mono">is_pace_pm</span>
+            flag on the Team page (that's how Minda, who's staff, qualifies). The board's
+            <strong>Generate this month</strong> button is simply hidden if you're not a PM, so the
+            button and the chat request are gated the same way — the old button-vs-chat split is
+            gone. The <strong>automatic</strong> month-start generation on the 1st runs regardless;
+            the PM gate is only for generating a month <em>by hand</em>.</p>
         </div>
         <p>An unlinked Slack account can still read the digest, but every write is refused until
           an admin links you on the Team page.</p>
@@ -758,7 +777,8 @@
               <tr><td>Get PACE to reassign / due-date / unblock / nudge one task</td><td>Ask it in plain English — it confirms before acting</td></tr>
               <tr><td>Fix several tasks at once</td><td>Ask PACE for a batch — "nudge all of X's overdue"</td></tr>
               <tr><td>Find out why a task is stuck</td><td>Ask PACE — it reads the task's full history before answering</td></tr>
-              <tr><td>Generate this month's tasks via chat</td><td>Needs admin — use the board's own button otherwise</td></tr>
+              <tr><td>Approve the daily Chase Plan</td><td>A PACE PM only (Minda/Kyle/Ryan); reply in the plan's thread</td></tr>
+              <tr><td>Generate this month's tasks (button or chat)</td><td>A PACE PM only; the automatic 1st-of-month run happens regardless</td></tr>
               <tr><td>Check a specific task's deliverable</td><td>Task drawer → QA panel → Run QA</td></tr>
               <tr><td>Fix a "needs a human" result</td><td>See the troubleshooting table (§16) — usually a missing link or keyword</td></tr>
               <tr><td>Work through a failed review</td><td>Check off the "Rework:" items QA added — it re-reviews itself</td></tr>

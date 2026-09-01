@@ -133,6 +133,7 @@ def prov_strategy(supabase, client_ids: Optional[list[str]], today: date) -> Opt
 
     status_counts: dict[str, int] = {}
     approved_unplaced: list[dict] = []
+    proposed_pending: list[dict] = []
     for review in rows:
         since = review.get("completed_at") or review.get("created_at")
         for idx, proposal in enumerate(review.get("proposals") or []):
@@ -148,9 +149,22 @@ def prov_strategy(supabase, client_ids: Optional[list[str]], today: date) -> Opt
                     "title": proposal.get("title"),
                     "since": since,
                 })
+            # A proposal nobody has approved OR dismissed sits in "proposed"
+            # forever (finding #4). Surface it so the seam predicate can flag a
+            # stale one — it clears the moment the human approves/dismisses.
+            elif st == "proposed":
+                proposed_pending.append({
+                    "review_id": review["id"],
+                    "client_id": review.get("client_id"),
+                    "proposal_index": idx,
+                    "title": proposal.get("title"),
+                    "requires": proposal.get("requires"),
+                    "since": since,
+                })
     return {
         "status_counts": status_counts,
         "approved_unplaced": approved_unplaced,
+        "proposed_pending": proposed_pending,
         "reviews_considered": len(rows),
     }
 

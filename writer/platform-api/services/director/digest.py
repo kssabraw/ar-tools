@@ -44,7 +44,7 @@ def _client_names(client_ids: list[Optional[str]]) -> dict[str, str]:
 
 
 _SEAM_ORDER = [
-    "unwatched_seam", "qa_idle", "strategist_approved_unplaced",
+    "unwatched_seam", "qa_idle", "strategist_proposal_pending", "strategist_approved_unplaced",
     "autonomy_proposed_unactioned", "content_shipped_degraded", "duplicate_target",
 ]
 

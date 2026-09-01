@@ -180,7 +180,11 @@ WHAT YOU'RE FOR (in priority order):
 0. Goal accountability — when the digest carries campaign_goals, open your assessment with \
 progress against them (their status is precomputed — achieved/on_track/behind/overdue; \
 report it, never re-derive it) and aim findings/proposals at the goals that are behind. A \
-behind goal with no proposal addressing it is a gap in your review. The digest's forecast \
+behind goal with no proposal addressing it is a gap in your review. If instead campaign_goals \
+reads {"no_goals": true}, this client has NO success metric defined — raise that as a finding \
+or a question: recommend defining one measurable campaign goal so progress can be judged, and \
+suggest a fitting metric from what the client is actually measured on in the digest (organic \
+rank position, GBP calls, impressions/clicks, AI visibility, or maps pack presence). The digest's forecast \
 section carries deterministic trajectory numbers (goal_projections, quick-win value) — cite \
 them verbatim with their linear-extrapolation caveat; never compute your own projections. \
 When the digest carries intervention_outcomes, read it as evidence of what has actually \
@@ -733,7 +737,61 @@ def clients_with_active_signals() -> set[str]:
                 ids.add(cid)
     except Exception as exc:
         logger.warning("strategist.active_signals_read_failed", extra={"table": "monthly_task_plans", "error": str(exc)})
+    # A behind/overdue campaign goal is an open problem too — the yardstick the
+    # whole strategist stack judges against — so fold it in (self-guarded, returns
+    # an empty set on any failure so it can never empty the alert-driven signals).
+    ids |= clients_with_behind_goals()
     return ids
+
+
+def clients_with_behind_goals() -> set[str]:
+    """Client ids with at least one campaign goal currently behind or overdue.
+
+    Priority-0 of a strategist review is goal accountability, but the
+    active-signal set that decides WHICH clients get a weekly review only ever
+    looked at alerts/episodes/flagged plans — so a goal quietly going behind
+    with no matching rank-drop alert never summoned a review; it reached one
+    only via the ~monthly opportunity sweep. Folding behind/overdue goals into
+    the active-signal set makes a slipping goal drive the normal weekly cadence.
+
+    Guardrails:
+      * a goal counts only when it has a captured ``baseline_value`` — without a
+        baseline ``evaluate_goal`` can return "behind" as a MEASUREMENT ARTIFACT
+        (a keyword goal made before the keyword was tracked reads behind with a
+        null progress_pct), and that must not perpetually summon reviews;
+      * only clients that actually have an active goal are assessed (one distinct
+        scan first), each in its own try/except — a failing measurement for one
+        client never empties the set;
+      * gated on ``strategist_goal_trigger_enabled`` so the added per-goal reads
+        can be switched off. Best-effort: any failure → empty set.
+    """
+    if not settings.strategist_goal_trigger_enabled:
+        return set()
+    from services import campaign_goals
+
+    supabase = get_supabase()
+    try:
+        rows = (
+            supabase.table("campaign_goals").select("client_id")
+            .eq("active", True).execute()
+        ).data or []
+    except Exception as exc:
+        logger.warning("strategist.goal_signal_read_failed", extra={"error": str(exc)})
+        return set()
+    client_ids = {r["client_id"] for r in rows if r.get("client_id")}
+    behind: set[str] = set()
+    for cid in client_ids:
+        try:
+            assessed = campaign_goals.assess_goals(cid)
+        except Exception as exc:  # one client's failure never drops the rest
+            logger.warning("strategist.goal_assess_failed", extra={"client_id": cid, "error": str(exc)})
+            continue
+        if any(
+            g.get("status") in ("behind", "overdue") and g.get("baseline_value") is not None
+            for g in assessed
+        ):
+            behind.add(cid)
+    return behind
 
 
 def clients_due_opportunity_sweep(active: set[str], interval_days: int) -> set[str]:

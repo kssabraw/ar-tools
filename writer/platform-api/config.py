@@ -759,6 +759,13 @@ class Settings(BaseSettings):
     # weekly run or a manual refresh. Flip to True to restore the on-drop
     # auto-refresh (still debounced by reopt_plan_min_interval_hours).
     reopt_plan_event_refresh_enabled: bool = False
+    # Goal-aware Action Plan ordering (goal-audit #2, owner-approved capped
+    # cross-tier boost). When a client has a behind/overdue campaign goal, lift
+    # that goal's channel's NON-emergency actions (cannibalization/quick/hidden
+    # tiers) just below the offpage/emergency floor — above off-goal work, never
+    # above an emergency (sitewide/deindex/drops/offpage). No behind goal → no
+    # change. Flip off to restore the fixed tier order for every client.
+    reopt_goal_boost_enabled: bool = True
 
     # Notifications service — shared delivery pipe (in-app card/feed + email +
     # Slack). In-app always works (DB row); email/Slack are best-effort and only
@@ -1463,6 +1470,16 @@ class Settings(BaseSettings):
     # reaches every client ~monthly, not just clients with open problems.
     # Bounded: ≤1 extra run per quiet client per interval; 0 disables.
     strategist_opportunity_interval_days: int = 28
+    # Goal-driven trigger: a campaign goal currently behind/overdue (with a
+    # captured baseline) is treated as an active signal, so a quietly slipping
+    # goal summons the normal weekly strategist review instead of waiting for
+    # the ~monthly opportunity sweep. This is the yardstick the whole strategist
+    # stack judges against (priority-0 goal accountability) actually driving the
+    # cadence. Adds one campaign_goals scan + a bounded assess_goals per
+    # goal-having client to the daily scheduler pass; set False to switch off
+    # that added read load. The review itself is still proposes-only + human-
+    # approved — this changes WHEN it runs, never what it may do.
+    strategist_goal_trigger_enabled: bool = True
     # Input budget per run before drill-downs (spec §2: ≤ ~25k tokens). The
     # digest assembler converts at ~4 chars/token and splits this between the
     # signal digest and the SOP block.
@@ -1802,6 +1819,15 @@ class Settings(BaseSettings):
     pace_brief_max_lines_per_bucket: int = 25
     # Suppress the daily digest on weekends (Sat/Sun) — VA-facing, workdays only.
     pace_digest_weekday_only: bool = True
+    # Quiet the shared PACE channel (owner ruling 2026-09-01): the per-event task
+    # alerts (task_assigned / task_mention / task_comment / task_nudge) used to post
+    # one message each into the master #pace channel, flooding it. When True they are
+    # instead delivered to the concerned person's DM AND the client's own Slack
+    # channel where one is configured — never the shared #pace channel — so #pace
+    # stays a portfolio-summary surface (the daily digest, Chase Plan, escalations).
+    # In-app bells + the client feed always carry them regardless. Set False to
+    # restore the previous shared-channel behaviour without a code change.
+    pace_quiet_task_alerts: bool = True
     # Permission matrix — the two "via policy" cells (PRD §3.2). Defaults:
     # any internal user can read a board (internal-tool norm); month generation
     # is admin-only (loosen to "staff" to let leads generate).
@@ -2306,6 +2332,7 @@ class Settings(BaseSettings):
     # Seam thresholds (owner decision 1 — suggested defaults, all tunable
     # without a code change once real dwell times are observed).
     director_seam_approved_unplaced_days: int = 3
+    director_seam_proposal_pending_days: int = 5           # a strategist proposal nobody approves/dismisses
     director_seam_qa_idle_days: int = 7
     director_seam_autonomy_unactioned_days: int = 7
     # content_shipped_degraded is immediate (no dwell) — no threshold key.

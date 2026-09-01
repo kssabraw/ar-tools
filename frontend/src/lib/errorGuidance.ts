@@ -226,6 +226,14 @@ const REGISTRY: Record<string, ErrorGuidance> = {
       'Ask an owner/admin to make the change, or to grant you access.',
     ],
   },
+  not_pace_pm: {
+    title: 'That’s a PACE PM action',
+    meaning: 'Approving the daily plan and generating a client’s monthly board are limited to PACE PMs (Minda, Kyle, or Ryan). The automatic monthly generation on the 1st still runs on its own.',
+    steps: [
+      'Ask a PACE PM (Minda, Kyle, or Ryan) to run it.',
+      'Or an admin can grant you PM on the Team page.',
+    ],
+  },
   session_not_found: {
     title: 'This session no longer exists',
     meaning: 'The session was deleted or isn’t reachable anymore.',

@@ -89,6 +89,79 @@ def test_confirm_actor_binding():
 
 
 # ---------------------------------------------------------------------------
+# PACE PM designation (owner ruling 2026-09-01)
+# ---------------------------------------------------------------------------
+def test_pace_pm_from_pure():
+    # Admin ⇒ always a PM; otherwise the explicit flag decides.
+    assert pace_auth.pace_pm_from("admin", False) is True
+    assert pace_auth.pace_pm_from("staff", True) is True
+    assert pace_auth.pace_pm_from("staff", False) is False
+    assert pace_auth.pace_pm_from("team_member", True) is True
+    assert pace_auth.pace_pm_from(None, False) is False
+
+
+def _stub_supabase(monkeypatch, flag):
+    """Patch pace_auth.get_supabase to return one profile row with is_pace_pm=flag."""
+    class _Resp:
+        def __init__(self, data): self.data = data
+
+    class _Q:
+        def __init__(self, data): self._data = data
+        def select(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def limit(self, *a, **k): return self
+        def execute(self): return _Resp(self._data)
+
+    class _SB:
+        def __init__(self, data): self._data = data
+        def table(self, *a, **k): return _Q(self._data)
+
+    rows = [{"is_pace_pm": flag}] if flag is not None else []
+    monkeypatch.setattr(pace_auth, "get_supabase", lambda: _SB(rows))
+
+
+def test_is_pace_pm_admin_no_db(monkeypatch):
+    # An admin is a PM without any DB read (guard against a lookup).
+    def _boom(): raise AssertionError("should not query the DB for an admin")
+    monkeypatch.setattr(pace_auth, "get_supabase", _boom)
+    assert pace_auth.is_pace_pm(_ctx("admin")) is True
+
+
+def test_is_pace_pm_system_and_anonymous(monkeypatch):
+    monkeypatch.setattr(pace_auth, "get_supabase", lambda: (_ for _ in ()).throw(AssertionError()))
+    assert pace_auth.is_pace_pm(pace_auth.SYSTEM_CONTEXT) is True
+    anon = ActionContext(profile_id=None, role=None, source="slack", slack_user_id="U1")
+    assert pace_auth.is_pace_pm(anon) is False
+
+
+def test_is_pace_pm_staff_flag(monkeypatch):
+    # Flagged staff (Minda) ⇒ PM; unflagged staff (Ivy) ⇒ not.
+    _stub_supabase(monkeypatch, True)
+    assert pace_auth.is_pace_pm(_ctx("staff")) is True
+    _stub_supabase(monkeypatch, False)
+    assert pace_auth.is_pace_pm(_ctx("staff")) is False
+
+
+def test_is_pace_pm_fails_closed_on_db_error(monkeypatch):
+    def _boom(): raise RuntimeError("db down")
+    monkeypatch.setattr(pace_auth, "get_supabase", _boom)
+    assert pace_auth.is_pace_pm(_ctx("staff")) is False
+
+
+def test_require_pace_pm_reasons(monkeypatch):
+    _stub_supabase(monkeypatch, True)
+    ok, reason = pace_auth.require_pace_pm(_ctx("staff"))
+    assert ok and reason is None
+    _stub_supabase(monkeypatch, False)
+    ok, reason = pace_auth.require_pace_pm(_ctx("staff"))
+    assert not ok and "PACE PM" in reason
+    ok, reason = pace_auth.require_pace_pm(
+        ActionContext(profile_id=None, role=None, source="slack", slack_user_id="U1")
+    )
+    assert not ok and "Link your Slack account" in reason
+
+
+# ---------------------------------------------------------------------------
 # Resolvers
 # ---------------------------------------------------------------------------
 def test_context_from_auth():

@@ -64,6 +64,64 @@ def test_gather_candidates_create_page_with_resolvable_keyword_city_is_auto():
     assert any(c["action"] == "reoptimize_page" and c["requires"] == "approval" for c in out)
 
 
+# --- pure: goal-type -> lever routing (#3, proposal-only) -------------------
+
+def test_gather_candidates_maps_goal_routes_local_gbp_items_as_proposals():
+    # A client BEHIND on a local-pack / GBP goal: the GBP/Maps Action Plan items
+    # (never quick_win/opportunity kinds) are surfaced as PROPOSAL-ONLY candidates
+    # so the ledger/digest shows the right-channel work — additive to the organic
+    # quick_win handling.
+    plan = {"items": [
+        {"kind": "gbp_gap", "recommendation": "Fill missing GBP categories"},
+        {"kind": "review_gap", "recommendation": "Ask recent customers for reviews"},
+        {"kind": "maps_weak_area", "keyword": "plumber aventura", "recommendation": "Create a location page"},
+        {"kind": "quick_win", "keyword": "emergency plumber", "cta_label": "Reoptimize"},  # organic, still emitted
+        {"kind": "rank_drop", "keyword": "skip"},  # organic emergency — never routed
+    ]}
+    out = ax.gather_candidates([{"status": "behind", "goal_type": "gbp_calls"}], plan)
+    by_source = {c["source"]: c for c in out}
+
+    assert by_source["action_plan:gbp_gap"]["action"] == "schedule_gbp_posts"
+    assert by_source["action_plan:review_gap"]["action"] == "schedule_gbp_posts"
+    assert by_source["action_plan:maps_weak_area"]["action"] == "generate_local_seo_page"
+    assert by_source["action_plan:maps_weak_area"]["keyword"] == "plumber aventura"
+    # every maps-routed candidate is proposal-only, zero spend reserved
+    routed = [by_source[s] for s in
+              ("action_plan:gbp_gap", "action_plan:review_gap", "action_plan:maps_weak_area")]
+    assert all(c["requires"] == "approval" and c["cost_usd"] == 0.0 for c in routed)
+    # additive: the organic quick_win is still emitted; the rank_drop is never routed
+    assert any(c["action"] == "reoptimize_page" for c in out)
+    assert "action_plan:rank_drop" not in by_source
+
+
+def test_gather_candidates_organic_goal_does_not_route_maps_items():
+    plan = {"items": [
+        {"kind": "gbp_gap", "recommendation": "x"},
+        {"kind": "maps_weak_area", "keyword": "plumber davie", "recommendation": "y"},
+    ]}
+    out = ax.gather_candidates([{"status": "behind", "goal_type": "keyword_position"}], plan)
+    # an organic-channel goal never pulls in Maps/GBP items — only the free rebuild
+    assert [c["action"] for c in out] == ["rebuild_action_plan"]
+
+
+def test_gather_candidates_maps_routing_requires_a_behind_goal():
+    plan = {"items": [{"kind": "gbp_gap", "recommendation": "x"}]}
+    # an on_track maps goal is not behind → no candidates at all
+    assert ax.gather_candidates([{"status": "on_track", "goal_type": "gbp_calls"}], plan) == []
+
+
+def test_maps_routed_candidates_never_auto_execute():
+    # Defense-in-depth: even the generate_local_seo_page lever (which IS in
+    # AUTO_EXECUTE) is held to "propose" by requires=approval.
+    plan = {"items": [{"kind": "maps_weak_area", "keyword": "plumber davie", "recommendation": "y"}]}
+    out = ax.gather_candidates([{"status": "behind", "goal_type": "maps_pack_presence"}], plan)
+    routed = next(c for c in out if c["source"] == "action_plan:maps_weak_area")
+    decided = ax.autonomy_policy.classify(
+        routed, client_tier=2, budget_left=1000.0, freeze=False, content_this_week=0, content_cap=3,
+    )
+    assert decided.outcome != "auto"  # proposal-only, whatever the tier/budget
+
+
 # --- keyword → city resolution ----------------------------------------------
 
 def _patch_locations(monkeypatch, cities):
