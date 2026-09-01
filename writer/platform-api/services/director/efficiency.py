@@ -97,16 +97,11 @@ def build_efficiency_view(model: dict) -> dict:
                                    "decides strategy) — the work is decided but not flowing."),
             })
 
-    interv = model.get("interventions") or {}
-    no_effect = (interv.get("by_verdict") or {}).get("no_effect", 0)
-    if no_effect >= 3:
-        obs.append({
-            "key": "effort:no_effect",
-            "area": "effort", "severity": "info",
-            "headline": f"{no_effect} tactic(s) graded no_effect — execution effort not moving metrics",
-            "recommendation": ("Feed this back to SerMaStr's tactic self-analysis so it stops "
-                               "proposing what doesn't work; retire the dead tactics."),
-        })
+    # Effectiveness (tactics not moving the metric) is deliberately NOT re-reported
+    # here: DORA's `audit_health` block (PR #942) owns the pipeline-effectiveness
+    # signal (its `low_effectiveness` finding, per proposal kind), so folding a
+    # coarse no_effect count in too would double-report the same thing on the one
+    # DORA efficiency/health surface.
 
     obs.sort(key=lambda o: _SEV_RANK.get(o.get("severity"), 3))
     counts = {"observations": len(obs),

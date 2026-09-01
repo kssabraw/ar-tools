@@ -138,6 +138,38 @@ def _notify_qa_idle(flag: dict, today: date) -> bool:
     return notification_id is not None
 
 
+def _notify_audit_health(model: dict, today: date) -> int:
+    """Emit one ``ops_seam`` notification per audit-log health finding, deduped
+    per ISO week so a daily check alerts a persistent finding at most once a week
+    (mirrors the qa_idle weekly dedupe). Returns the count actually emitted (a
+    dedupe conflict returns None from ``emit`` and is not counted)."""
+    from services import notifications
+    from services.director import audit_health
+
+    findings = ((model.get("audit_health") or {}).get("findings")) or []
+    if not findings:
+        return 0
+    iso_year, iso_week, _ = today.isocalendar()
+    emitted = 0
+    for finding in findings:
+        ident = finding.get("ident")
+        if not ident:
+            continue
+        notification_id = notifications.emit(
+            client_id=finding.get("client_id"),
+            kind="ops_seam",
+            title=audit_health.notification_title(finding),
+            summary=finding.get("label"),
+            severity=finding.get("severity") or "warning",
+            payload={"link": "/strategist/log" if finding.get("agent") == "sermastr" else "/pace/log",
+                     "audit_finding": {k: finding.get(k) for k in ("agent", "kind", "ident", "detail")}},
+            dedupe_key=audit_health.finding_dedupe_key(ident, iso_year, iso_week),
+        )
+        if notification_id is not None:
+            emitted += 1
+    return emitted
+
+
 def run_daily(today: Optional[date] = None) -> dict:
     """Self-gated on ``director_enabled``; best-effort — never raises into the
     scheduler tick. Returns a summary dict describing what it did."""
@@ -169,6 +201,9 @@ def run_daily(today: Optional[date] = None) -> dict:
                 closed.append(ref)
 
         notified = bool(idle_flag) and _notify_qa_idle(idle_flag, today)
+        # Audit-log process-health alerts (owner ask 2026-09-01) — never board
+        # tasks, always ops_seam notifications deduped per ISO week.
+        audit_alerts = _notify_audit_health(model, today)
 
         return {
             "reconciled": True,
@@ -176,6 +211,7 @@ def run_daily(today: Optional[date] = None) -> dict:
             "opened": opened,
             "closed": closed,
             "qa_idle_notified": notified,
+            "audit_health_alerts": audit_alerts,
         }
     except Exception as exc:  # noqa: BLE001 — one bad tick must not abort the scheduler loop
         logger.warning("director.reconcile_failed", extra={"error": str(exc)})

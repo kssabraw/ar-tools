@@ -43,7 +43,6 @@ def test_build_view_collects_all_sources():
     assert "coordination:loops" in keys
     assert "seam:strategist_approved_unplaced" in keys
     assert "seam:duplicate_target" in keys
-    assert "effort:no_effect" in keys
 
 
 def test_build_view_sorts_warnings_before_info():
@@ -91,8 +90,11 @@ def test_alertable_caps_and_keeps_worst():
     assert len(efficiency.alertable(view, cap=0)) == 20
 
 
-def test_no_effect_below_floor_not_flagged():
+def test_no_effect_not_flagged_here_audit_health_owns_it():
+    # Consolidation with #942: DORA's audit_health owns the pipeline-effectiveness
+    # signal, so WS4 never emits a no_effect observation (no double-report), even
+    # at a high count.
     m = _model()
-    m["interventions"] = {"by_verdict": {"no_effect": 2}}  # < 3 floor
+    m["interventions"] = {"by_verdict": {"no_effect": 9}}
     keys = {o["key"] for o in efficiency.build_efficiency_view(m)["observations"]}
     assert "effort:no_effect" not in keys

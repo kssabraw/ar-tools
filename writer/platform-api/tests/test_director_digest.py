@@ -56,6 +56,38 @@ def test_format_digest_all_clear_message():
     )
 
 
+def test_format_digest_renders_audit_health_section():
+    model = {
+        "flow": {"flags": []},
+        "autonomy": {},
+        "audit_health": {"findings": [
+            {"label": "SerMaStr `link_building` proposals are dismissed 71% of the time"},
+            {"label": "PACE `reassign_task` is declined or undone 62% of the time"},
+        ]},
+    }
+    body = D.format_digest(model, {})
+    assert "Agent process health:" in body
+    assert "link_building" in body and "reassign_task" in body
+
+
+def test_run_weekly_emits_when_only_audit_health_findings_present():
+    model = {
+        "flow": {"flags": []},
+        "autonomy": {"executed": 0, "proposed": 0, "escalated": 0},
+        "audit_health": {"findings": [
+            {"label": "SerMaStr logged no proposals in the window"},
+        ]},
+    }
+    with (
+        patch.object(D.settings, "director_enabled", True),
+        patch.object(D.read_model, "build_read_model", return_value=model),
+        patch("services.notifications.emit", return_value="notif-a") as emit,
+    ):
+        result = D.run_weekly(FRIDAY)
+    assert result["emitted"] is True
+    emit.assert_called_once()
+
+
 def test_run_weekly_disabled_no_emit():
     with patch.object(D.settings, "director_enabled", False):
         assert D.run_weekly(FRIDAY) == {"emitted": False, "reason": "disabled"}
