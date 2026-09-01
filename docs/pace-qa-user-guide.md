@@ -121,12 +121,13 @@ reply.
 - Reply **`yes`** to run every item, or **`yes 1,3`** (or `yes 1-3`, `approve 2`)
   to run only some. Anything you don't select is dropped for today — if it's
   still a real problem tomorrow, it reappears in tomorrow's plan.
-- **Whoever confirms authorizes it.** A junior teammate can approve a nudge
-  (open to any team member); a reassignment needs a *staff* role or higher —
-  if you're not authorized for one of the selected items, PACE tells you
-  which one and why instead of silently skipping it.
+- **Only a PACE PM approves the daily plan.** Approving it — `yes` / `yes 1,3`
+  — is limited to the team's **PACE PMs** (today **Minda, Kyle, and Ryan**;
+  see "Who can ask PACE to do what" below). Reply in the plan's **own thread**
+  — a fresh message in the channel isn't tied to it. If a non-PM replies, PACE
+  says so rather than running it.
 - An unconfirmed plan is never run late — it's simply replaced by the next
-  day's plan.
+  day's plan. There's no separate "decline": not approving *is* the decline.
 - **A flag line means PACE couldn't safely stage something on its own.** The
   most common one you'll see is an ambiguous task name — several tasks on the
   same client share a name (e.g. three separate "GBP Blast" tasks across
@@ -164,9 +165,27 @@ following through on an episode. Either way, once confirmed:
 
 1. PACE tries a **direct Slack DM** to that person first.
 2. If they're not linked to Slack, or DMs aren't working, it **@-mentions**
-   them in the channel instead.
-3. If neither is possible, it still writes an **in-app notification** to
-   their bell — nothing about a nudge is ever silently lost.
+   them in the **client's own channel** where one is set up — never the
+   shared `#pace` channel.
+3. Either way it also writes an **in-app notification** to their bell —
+   nothing about a nudge is ever silently lost.
+
+## Where PACE's messages land — and what stays out of `#pace`
+
+`#pace` is deliberately kept to the **portfolio summaries**: the daily digest
+and the daily Chase Plan. The per-task pings PACE and the board generate —
+**you were assigned a task, @mentioned in a comment, a comment landed on a
+task you watch, someone nudged you** — no longer post into the shared
+channel. Each goes instead to:
+
+- **your own Slack DM**, so you get the ones that concern *you* in real time
+  without the whole team's traffic, and
+- **that client's own Slack channel**, where one is set up.
+
+Your in-app **bell** always carries them too, so nothing is lost even when a
+DM can't be delivered (your Slack isn't linked, or the app doesn't yet have
+DM permission). If you're not getting DMs, ask an admin to check your
+Team-page Slack link and that PACE has the `im:write` scope.
 
 ## Per-person morning briefs
 
@@ -219,13 +238,19 @@ tells you the role it needs rather than pretending it can't find the action.
 | Fill in a task's missing due date/category/estimate | staff |
 | Generate a delivery report | staff |
 | Write the weekly client-update email | staff |
-| Generate this month's tasks **by asking PACE** | admin |
+| Approve the daily Chase Plan | **PACE PM** |
+| Generate this month's tasks (button **or** by asking PACE) | **PACE PM** |
 
-That last row is a real gotcha: clicking **Generate this month** on the
-Tasks page itself is open to anyone (per the board guide), but *asking PACE
-to do it in chat* currently requires admin — the two paths aren't gated the
-same way. If PACE tells you it needs an admin for that, use the button on
-the board instead if you're not one.
+The last two rows are **PACE PM** operations, not plain role tiers.
+Approving the daily plan and generating a client's month by hand are limited
+to the named PMs — today **Minda, Kyle, and Ryan**. Admins are PMs
+automatically; a staff member becomes one when an admin flips their
+`is_pace_pm` flag on the Team page (that's how Minda, who's staff,
+qualifies). The board's **Generate this month** button is simply hidden if
+you're not a PM, so the button and the chat request are now gated the same
+way — the old button-vs-chat split is gone. And the **automatic** month-start
+generation on the 1st runs regardless; the PM gate is only for generating a
+month *by hand*.
 
 An unlinked Slack account (no `profiles.slack_user_id` on file) can still
 read the digest, but every write is refused until an admin links you on the
@@ -532,7 +557,8 @@ on its own the way a page on the client's own domain can.
 | Get PACE to reassign / due-date / unblock / nudge one task | Ask it in plain English — it confirms before acting |
 | Fix several tasks at once | Ask PACE for a batch — "nudge all of X's overdue" |
 | Find out why a task is stuck | Ask PACE — it reads the task's full history before answering |
-| Generate this month's tasks via chat | Needs admin — use the board's own button otherwise |
+| Approve the daily Chase Plan | A PACE PM only (Minda/Kyle/Ryan); reply in the plan's thread |
+| Generate this month's tasks (button or chat) | A PACE PM only; the automatic 1st-of-month run happens regardless |
 | Check a specific task's deliverable | Task drawer → QA panel → **Run QA** |
 | Fix a "needs a human" result | See the troubleshooting table above — usually a missing link or keyword |
 | Work through a failed review | Check off the `Rework:` items QA added — it re-reviews itself |

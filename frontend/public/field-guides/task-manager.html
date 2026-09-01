@@ -219,16 +219,19 @@
             on a task, you're picking from the shared team-member roster — the same list used on
             the Workload page — not AR Tools user accounts. If you don't see your own name in an
             assignee dropdown, ask an admin to link you on the <strong>Team</strong> page.</li>
-          <li><strong>A few buttons are admin-only.</strong> Auto-assigning a batch of unassigned
-            tasks, and permanently deleting something from the trash, both require an admin.
-            Creating tasks, dragging cards, commenting, checking things off — all open to anyone
-            with access to the client.</li>
+          <li><strong>A few buttons are gated.</strong> Auto-assigning a batch of unassigned tasks
+            and permanently deleting something from the trash both require an <strong>admin</strong>;
+            <strong>Generate this month</strong> requires a <strong>PACE PM</strong> (Minda, Kyle,
+            or Ryan — see §6) and is simply hidden if you're not one. Creating tasks, dragging
+            cards, commenting, checking things off — all open to anyone with access to the
+            client.</li>
         </ul>
         <div class="why">
-          <p class="why-label">Why these two specifically</p>
-          <p>Each can move or remove a lot of the board in one click — auto-assign can staff
-            dozens of tasks at once, and a permanent delete can't be undone the way Trash can.
-            Everything else you'll do day to day only ever touches one task at a time.</p>
+          <p class="why-label">Why these are gated</p>
+          <p>Each can create, move, or remove a lot of the board in one go — Generate this month
+            builds a whole month, auto-assign can staff dozens of tasks at once, and a permanent
+            delete can't be undone the way Trash can. Everything else you'll do day to day only
+            ever touches one task at a time.</p>
         </div>
         <p><strong>Frozen clients pause task creation.</strong> If a client is under a Freeze
           (manual action / deindexing), you can still work existing tasks, but the automated
@@ -250,6 +253,12 @@
           it badges with an unread count whenever you're assigned a task, @mentioned in a comment,
           or nudged by someone. Click it for a dropdown list; clicking a notification jumps
           straight to the task it's about and marks it read.</p>
+        <p>Those same alerts — a task assigned to you, an @mention, a comment on a task you watch,
+          a nudge — also reach you as a <strong>Slack DM</strong> (and post to the client's own
+          channel where one is set up), <strong>not</strong> the shared <span class="mono">#pace</span>
+          channel — so you get what concerns <em>you</em> without the whole team's traffic. The
+          bell is the always-on backstop if a DM can't be delivered (your Slack isn't linked, or
+          the app doesn't yet have DM permission).</p>
       </section>
 
       <section id="s4" class="block">
@@ -311,8 +320,12 @@
 
       <section id="s6" class="block">
         <div class="block-head"><span class="block-num">06</span><h2>Step 2 — Start the month</h2></div>
-        <p>Most recurring work doesn't need to be typed in by hand every month. Click the solid
-          indigo <strong>Generate this month</strong> button (top right):</p>
+        <p>Most recurring work doesn't need to be typed in by hand every month — and it isn't:
+          <strong>every client's month is generated automatically on the 1st.</strong> The solid
+          indigo <strong>Generate this month</strong> button (top right) is for doing it <em>on
+          demand</em> — a mid-month catch-up, or a client set up after the 1st. It's a
+          <strong>PACE PM</strong> action (Minda, Kyle, or Ryan), so the button only appears if
+          you're a PM; everyone else relies on the automatic run.</p>
         <ul>
           <li>It creates (or fills in) a section named for the current calendar month — e.g.
             <strong>August 2026</strong> — and populates it from the client's <strong>monthly
@@ -597,8 +610,8 @@
             <tbody>
               <tr><td>See everything assigned to me, across clients</td><td><strong>My Tasks</strong> (sidebar)</td></tr>
               <tr><td>See one client's whole delivery plan</td><td>Client → <strong>Tasks</strong> card</td></tr>
-              <tr><td>Get notified about mentions/assignments</td><td>Bell icon, top of the sidebar</td></tr>
-              <tr><td>Start this month's recurring work</td><td><strong>Generate this month</strong> button</td></tr>
+              <tr><td>Get notified about mentions/assignments</td><td>Bell icon, plus a Slack DM (not <span class="mono">#pace</span>)</td></tr>
+              <tr><td>Start this month's recurring work</td><td>Automatic on the 1st; on demand, <strong>Generate this month</strong> (a PACE PM only)</td></tr>
               <tr><td>Change a task's status fast</td><td>Drag its card between Board columns</td></tr>
               <tr><td>Change a task's status by hand</td><td>Open it → <strong>Status</strong> dropdown</td></tr>
               <tr><td>Check something off a task</td><td>Open it → <strong>Checklist</strong></td></tr>

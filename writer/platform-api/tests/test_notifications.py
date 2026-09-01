@@ -161,6 +161,84 @@ def test_non_pace_kind_ignores_client_channel():
 
 
 # ---------------------------------------------------------------------------
+# quiet_task_alerts — the per-event task alerts never reach the master #pace
+# channel; they go to the client channel (if set) + the person's DM.
+# ---------------------------------------------------------------------------
+def test_quiet_task_alert_no_client_channel_resolves_to_none():
+    # With quiet on and no client channel, a per-event task alert resolves to None
+    # (the DM + in-app bell carry it) rather than falling back to master #pace.
+    for kind in ("task_assigned", "task_mention", "task_comment", "task_nudge"):
+        assert notifications.resolve_slack_channel(
+            kind, None, "C_PACE", quiet_task_alerts=True
+        ) is None, kind
+
+
+def test_quiet_task_alert_still_uses_client_channel_when_set():
+    # Quiet keeps the client's own channel — only the master fallback is dropped.
+    for kind in ("task_assigned", "task_mention", "task_comment", "task_nudge"):
+        assert notifications.resolve_slack_channel(
+            kind, None, "C_PACE", client_channel="C_CLIENT", quiet_task_alerts=True
+        ) == "C_CLIENT", kind
+
+
+def test_quiet_task_alert_explicit_override_still_wins():
+    # An explicit payload.slack_channel overrides everything, even under quiet.
+    assert notifications.resolve_slack_channel(
+        "task_assigned", {"slack_channel": "C_X"}, "C_PACE", quiet_task_alerts=True
+    ) == "C_X"
+
+
+def test_quiet_does_not_affect_batched_or_portfolio_kinds():
+    # task_month_generated (batched digest) is NOT a CLIENT_ONLY kind — it keeps
+    # the master fallback even with quiet on; so do the portfolio rollups.
+    assert notifications.resolve_slack_channel(
+        "task_month_generated", None, "C_PACE", quiet_task_alerts=True
+    ) == "C_PACE"
+    for kind in ("pace_digest", "task_overload", "task_due"):
+        assert notifications.resolve_slack_channel(
+            kind, None, "C_PACE", quiet_task_alerts=True
+        ) == "C_PACE", kind
+
+
+def test_quiet_off_preserves_master_fallback():
+    # The default (flag off) is byte-for-byte the old behaviour: master fallback.
+    assert notifications.resolve_slack_channel(
+        "task_assigned", None, "C_PACE", quiet_task_alerts=False
+    ) == "C_PACE"
+
+
+# ---------------------------------------------------------------------------
+# dm_recipient_ids — who gets a direct DM for a per-event task alert
+# ---------------------------------------------------------------------------
+def test_dm_recipient_ids_uses_recipient_and_payload():
+    # Recipient (assignee/mentioned) + payload.dm_profile_ids (comment watchers),
+    # de-duplicated in stable order.
+    ids = notifications.dm_recipient_ids(
+        "task_comment", {"dm_profile_ids": ["p2", "p3", "p2"]}, "p1", True
+    )
+    assert ids == ["p1", "p2", "p3"]
+
+
+def test_dm_recipient_ids_assigned_uses_recipient_only():
+    assert notifications.dm_recipient_ids("task_assigned", None, "p1", True) == ["p1"]
+
+
+def test_dm_recipient_ids_empty_when_flag_off():
+    assert notifications.dm_recipient_ids("task_assigned", None, "p1", False) == []
+
+
+def test_dm_recipient_ids_excludes_nudge_and_other_kinds():
+    # task_nudge DMs at its own call site (no double DM); non-task kinds never DM.
+    assert notifications.dm_recipient_ids("task_nudge", None, "p1", True) == []
+    assert notifications.dm_recipient_ids("task_month_generated", None, "p1", True) == []
+    assert notifications.dm_recipient_ids("rank_drop", None, "p1", True) == []
+
+
+def test_dm_recipient_ids_no_targets():
+    assert notifications.dm_recipient_ids("task_mention", None, None, True) == []
+
+
+# ---------------------------------------------------------------------------
 # resolve_slack_token / pace_bot_token — PACE posts under its own app's token
 # ---------------------------------------------------------------------------
 def test_resolve_slack_token_pace_channel_gets_pace_token():

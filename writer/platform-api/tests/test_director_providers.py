@@ -118,3 +118,53 @@ def test_prov_qa_both_empty_returns_none():
     sb = MagicMock()
     sb.table.return_value = _table_mock([])
     assert P.prov_qa(sb, TODAY) is None
+
+
+def test_prov_strategy_emits_proposed_pending_and_status_counts():
+    reviews = [
+        {
+            "id": "r1",
+            "client_id": "c1",
+            "status": "complete",
+            "created_at": "2026-08-20",
+            "completed_at": "2026-08-21",
+            "proposals": [
+                {"title": "Fund a link round", "status": "proposed", "requires": "approval"},
+                {"title": "Reoptimize page", "status": "approved"},  # placed (has asana_task below? no)
+                {"title": "Consolidate", "status": "dismissed"},
+            ],
+        },
+        {
+            "id": "r2",
+            "client_id": "c2",
+            "status": "complete",
+            "created_at": "2026-08-25",
+            "completed_at": None,  # since falls back to created_at
+            "proposals": [
+                {"title": "Placed already", "status": "approved", "asana_task": {"gid": "123"}},
+                {"title": "Still waiting", "status": "proposed"},
+            ],
+        },
+    ]
+    sb = MagicMock()
+    sb.table.return_value = _table_mock(reviews)
+
+    result = P.prov_strategy(sb, ["c1", "c2"], TODAY)
+
+    # status_counts tallies every proposal across reviews
+    assert result["status_counts"] == {"proposed": 2, "approved": 2, "dismissed": 1}
+    # proposed_pending carries only the two "proposed" rows, with review-level since
+    pending = {(p["review_id"], p["proposal_index"]): p for p in result["proposed_pending"]}
+    assert set(pending) == {("r1", 0), ("r2", 1)}
+    assert pending[("r1", 0)]["client_id"] == "c1"
+    assert pending[("r1", 0)]["since"] == "2026-08-21"     # completed_at wins
+    assert pending[("r1", 0)]["requires"] == "approval"
+    assert pending[("r2", 1)]["since"] == "2026-08-25"     # falls back to created_at
+    # approved_unplaced carries only the approved proposal that lacks an asana_task
+    assert [(a["review_id"], a["proposal_index"]) for a in result["approved_unplaced"]] == [("r1", 1)]
+
+
+def test_prov_strategy_empty_returns_none():
+    sb = MagicMock()
+    sb.table.return_value = _table_mock([])
+    assert P.prov_strategy(sb, ["c1"], TODAY) is None
