@@ -854,6 +854,14 @@ async def gsc_scheduler() -> None:
                 if _safe("ops_digest", run_ops_digest, now.date()):
                     last_ops_digest_date = now.date()
                     save_marker("ops_digest_weekly", last_ops_digest_date.isoformat())
+                    # Opt-in weekly DORA process-health NARRATIVE review (owner ask
+                    # 2026-09-01) — the analytical layer atop the deterministic
+                    # digest health section. Self-gated on director_audit_narrative
+                    # _enabled (default off); runs only on the marker-success tick,
+                    # so it fires once/week, and its own weekly dedupe_key makes it
+                    # idempotent across a restart.
+                    from services.director_agent import run_audit_narrative
+                    await _safe_async("director_audit_narrative", run_audit_narrative, now.date())
             # PACE Proactive Interventions — weekly rollup (open + this week's
             # decisions/outcomes) to the PACE channel. Self-gated on the feature +
             # report flag; suppresses on a quiet week. Marker on success.

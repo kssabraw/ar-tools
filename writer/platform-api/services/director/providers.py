@@ -504,6 +504,130 @@ def prov_sermastr_audit(client_id: Optional[str], today: date) -> Optional[dict]
 
 
 # ---------------------------------------------------------------------------
+# audit health — is the SerMaStr/PACE propose→decide→outcome pipeline working?
+# (owner ask 2026-09-01) — a PROCESS-health read over both agents' own action
+# logs, kept OUT of flow.flags (it opens no board task; it drives ops_seam
+# alerts + the weekly ops-digest "Agent process health" section instead).
+# ---------------------------------------------------------------------------
+def _audit_window_rows(supabase, table: str, columns: str, since: str,
+                       client_id: Optional[str]) -> list[dict]:
+    """One bounded, best-effort read of an action-log window. [] on any error."""
+    try:
+        q = (supabase.table(table).select(columns)
+             .gte("created_at", since).order("created_at", desc=True).limit(5000))
+        if client_id:
+            q = q.eq("client_id", client_id)
+        return q.execute().data or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("director.audit_window_read_failed", extra={"table": table, "error": str(exc)})
+        return []
+
+
+def _stale_pending_count(supabase, since_dwell: str, client_id: Optional[str]) -> int:
+    """Count SerMaStr proposals still undecided (decision NULL) that were created
+    before ``since_dwell`` — i.e. past the pending dwell threshold. Best-effort."""
+    try:
+        q = (supabase.table("sermastr_action_log").select("id", count="exact")
+             .is_("decision", "null").lt("created_at", since_dwell))
+        if client_id:
+            q = q.eq("client_id", client_id)
+        resp = q.limit(2000).execute()
+        return resp.count if resp.count is not None else len(resp.data or [])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("director.audit_stale_read_failed", extra={"error": str(exc)})
+        return 0
+
+
+def _behind_uncovered(sermastr_rows: list[dict]) -> list[str]:
+    """Clients behind on a goal (reusing the strategist's own behind-goal read)
+    with NO SerMaStr proposal logged in the window. Portfolio-only, best-effort —
+    [] if the strategist read is unavailable/disabled."""
+    try:
+        from services.strategist import clients_with_behind_goals
+
+        behind = clients_with_behind_goals() or set()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("director.audit_behind_goals_failed", extra={"error": str(exc)})
+        return []
+    with_proposals = {r.get("client_id") for r in sermastr_rows if r.get("client_id")}
+    return sorted(c for c in behind if c and c not in with_proposals)
+
+
+def prov_audit_health(supabase, client_id: Optional[str], today: date) -> Optional[dict]:
+    """DORA's audit-log health read: rate + coverage signals over the SerMaStr +
+    PACE action logs, plus the assembled findings the daily reconcile alerts on
+    and the weekly digest renders. Gated on ``director_audit_health_enabled``;
+    ``client_id`` set scopes the rate signals to that client, None → the whole
+    agency (coverage + stale-queue signals are agency-level, so they're computed
+    only in the portfolio read). Returns None when the feature is off or nothing
+    is logged and no coverage gap exists."""
+    if not settings.director_audit_health_enabled:
+        return None
+    from services import pace_audit, sermastr_audit
+    from services.director import audit_health
+
+    portfolio = client_id is None
+    window = (today - timedelta(days=settings.director_audit_window_days)).isoformat()
+    dwell = (today - timedelta(days=settings.director_seam_proposal_pending_days)).isoformat()
+
+    sermastr_rows = _audit_window_rows(
+        supabase, "sermastr_action_log",
+        "proposal_kind, client_id, decision, outcome_verdict", window, client_id)
+    pace_rows = _audit_window_rows(
+        supabase, "pace_action_log",
+        "action, client_id, decision, outcome, reverted_at", window, client_id)
+
+    sermastr_signals = sermastr_audit.learning_signals(sermastr_rows)
+    pace_signals = pace_audit.learning_signals(pace_rows)
+
+    # Agency-level signals (stale queue + coverage) only in the portfolio read.
+    stale_count = _stale_pending_count(supabase, dwell, client_id) if portfolio else 0
+    behind_uncovered = _behind_uncovered(sermastr_rows) if portfolio else None
+
+    # "Active" = the agent is actually operational; a dark agent producing
+    # nothing is expected, not a coverage gap.
+    sermastr_active = portfolio and settings.strategist_enabled and settings.sermastr_audit_enabled
+    pace_active = portfolio and settings.pace_enabled and settings.pace_audit_enabled
+
+    thresholds = {
+        "min_samples": settings.director_audit_min_samples,
+        "dismiss_threshold": settings.director_audit_dismiss_threshold,
+        "ineffective_threshold": settings.director_audit_ineffective_threshold,
+        "stale_pending_min": settings.director_audit_stale_pending_min,
+        "pending_days": settings.director_seam_proposal_pending_days,
+        "min_uncovered": 1,
+    }
+    findings = audit_health.build_findings(
+        sermastr_signals=sermastr_signals, pace_signals=pace_signals,
+        sermastr_total=len(sermastr_rows), pace_total=len(pace_rows),
+        stale_count=stale_count, behind_uncovered=behind_uncovered,
+        thresholds=thresholds, sermastr_active=sermastr_active,
+        pace_active=pace_active, client_id=client_id)
+
+    if not findings and not sermastr_rows and not pace_rows:
+        return None  # nothing logged, nothing flagged — a true gap, not a block
+
+    return {
+        "window_days": settings.director_audit_window_days,
+        "findings": findings,
+        "summary": audit_health.summary_line(findings),
+        "sermastr": {"total": len(sermastr_rows),
+                     "by_kind": _top_buckets(sermastr_signals.get("by_kind"))},
+        "pace": {"total": len(pace_rows),
+                 "by_action": _top_buckets(pace_signals.get("by_action"))},
+        "stale_pending": stale_count,
+        "behind_uncovered": behind_uncovered or [],
+        "note": (
+            "Process-health signals over SerMaStr's and PACE's OWN action logs — "
+            "whether their propose→decide→outcome pipeline is running efficiently "
+            "(work getting acted on, accepted, and actually working). These drive "
+            "ops_seam alerts + the weekly ops-digest health section; they are NOT "
+            "board-task seams."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
 # duplicates — two different-source live items on one target (§9, flag-only)
 # ---------------------------------------------------------------------------
 def prov_duplicates(supabase, client_ids: Optional[list[str]], today: date) -> Optional[dict]:

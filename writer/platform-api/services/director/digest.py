@@ -90,6 +90,13 @@ def format_digest(model: dict, names: dict[str, str]) -> str:
         )
         lines.append(f"Open capacity holds: {named_holds}")
 
+    # Audit-log process health (owner ask 2026-09-01) — a dedicated section, not
+    # a flow.flags seam. Renders the SerMaStr/PACE pipeline-efficiency findings.
+    from services.director import audit_health
+
+    lines += audit_health.format_health_section(
+        ((model.get("audit_health") or {}).get("findings")) or [])
+
     return "\n".join(lines) if lines else "No cross-agent seams flagged this week."
 
 
@@ -108,7 +115,8 @@ def run_weekly(today: Optional[date] = None) -> dict:
         autonomy_activity = sum(
             autonomy.get(k, 0) or 0 for k in ("executed", "proposed", "escalated")
         )
-        if not flags and not autonomy_activity:
+        audit_findings = ((model.get("audit_health") or {}).get("findings")) or []
+        if not flags and not autonomy_activity and not audit_findings:
             return {"emitted": False, "reason": "all_clear"}
 
         names = _client_names([f.get("client_id") for f in flags])
