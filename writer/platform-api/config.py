@@ -2383,6 +2383,7 @@ class Settings(BaseSettings):
     # content_shipped_degraded is immediate (no dwell) — no threshold key.
     director_content_degraded_lookback_days: int = 14      # how far back to scan for degraded ships
     director_autonomy_ledger_lookback_runs: int = 8        # per-client autonomy_runs rows to read
+    director_audit_window_days: int = 90                   # window for the PACE/SerMaStr track-record read-model blocks
     # DORA — the Director of Operations conversational persona + its own surfaces
     # (the /director web chat page + a dedicated Slack channel). Owner ruling
     # 2026-08-29 reverses the earlier "surfaced through SerMaStr, not a fifth

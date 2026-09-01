@@ -168,3 +168,81 @@ def test_prov_strategy_empty_returns_none():
     sb = MagicMock()
     sb.table.return_value = _table_mock([])
     assert P.prov_strategy(sb, ["c1"], TODAY) is None
+
+
+# ---------------------------------------------------------------------------
+# agent track records — prov_pace_audit / prov_sermastr_audit
+# ---------------------------------------------------------------------------
+def test_top_buckets_ranks_by_total_and_caps():
+    buckets = {
+        "a": {"total": 3}, "b": {"total": 10}, "c": {"total": 1},
+        "d": {"total": 7}, "e": {"total": 5}, "f": {"total": 2},
+    }
+    top = P._top_buckets(buckets, n=3)
+    assert list(top) == ["b", "d", "e"]  # 10, 7, 5
+    assert P._top_buckets(None) == {} and P._top_buckets({}) == {}
+
+
+def test_prov_pace_audit_reuses_stats_window(monkeypatch):
+    from config import settings
+    from services import pace_audit
+
+    monkeypatch.setattr(settings, "pace_audit_enabled", True)
+    monkeypatch.setattr(settings, "director_audit_window_days", 90)
+    captured = {}
+
+    def fake_stats(**kw):
+        captured.update(kw)
+        return {"overall": {"total": 4, "approved": 3, "denied": 1, "reverted": 1},
+                "by_action": {"reassign_task": {"total": 3}, "set_task_due": {"total": 1}},
+                "by_actor": {}}
+
+    monkeypatch.setattr(pace_audit, "stats_window", fake_stats)
+    out = P.prov_pace_audit("c1", TODAY)
+    assert captured["client_id"] == "c1" and captured["since"] == "2026-05-30"  # 90d before TODAY
+    assert out["decisions"]["reverted"] == 1 and out["window_days"] == 90
+    assert set(out["by_action"]) == {"reassign_task", "set_task_due"}
+
+
+def test_prov_pace_audit_none_when_empty_or_disabled(monkeypatch):
+    from config import settings
+    from services import pace_audit
+
+    monkeypatch.setattr(settings, "pace_audit_enabled", True)
+    monkeypatch.setattr(pace_audit, "stats_window", lambda **kw: {"overall": {"total": 0}})
+    assert P.prov_pace_audit(None, TODAY) is None
+    monkeypatch.setattr(settings, "pace_audit_enabled", False)
+    assert P.prov_pace_audit(None, TODAY) is None
+
+
+def test_prov_sermastr_audit_reuses_stats_window(monkeypatch):
+    from config import settings
+    from services import sermastr_audit
+
+    monkeypatch.setattr(settings, "sermastr_audit_enabled", True)
+    monkeypatch.setattr(settings, "director_audit_window_days", 60)
+    captured = {}
+
+    def fake_stats(**kw):
+        captured.update(kw)
+        return {"overall": {"total": 5, "approved": 2, "dismissed": 2, "pending": 1,
+                            "worked": 1, "no_effect": 1},
+                "by_kind": {"link_building": {"total": 4}, "content": {"total": 1}},
+                "by_actor": {}}
+
+    monkeypatch.setattr(sermastr_audit, "stats_window", fake_stats)
+    out = P.prov_sermastr_audit("c9", TODAY)
+    assert captured["client_id"] == "c9" and captured["since"] == "2026-06-29"  # 60d before TODAY
+    assert out["decisions"]["dismissed"] == 2 and out["decisions"]["worked"] == 1
+    assert out["window_days"] == 60 and set(out["by_kind"]) == {"link_building", "content"}
+
+
+def test_prov_sermastr_audit_none_when_empty_or_disabled(monkeypatch):
+    from config import settings
+    from services import sermastr_audit
+
+    monkeypatch.setattr(settings, "sermastr_audit_enabled", True)
+    monkeypatch.setattr(sermastr_audit, "stats_window", lambda **kw: {"overall": {"total": 0}})
+    assert P.prov_sermastr_audit("c1", TODAY) is None
+    monkeypatch.setattr(settings, "sermastr_audit_enabled", False)
+    assert P.prov_sermastr_audit("c1", TODAY) is None
