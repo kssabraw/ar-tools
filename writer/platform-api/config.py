@@ -1903,6 +1903,18 @@ class Settings(BaseSettings):
     # How many recent log rows the self-read `pace_history` tool / context surface
     # returns (bounded so the prompt stays small).
     pace_audit_history_limit: int = 25
+    # v2 — the learning loop. auto-adjust CHANGES what PACE proposes, so it ships
+    # dark (default False) on top of pace_enabled + pace_initiative_enabled.
+    pace_audit_learning_enabled: bool = False
+    # Weekday (0=Mon..6=Sun) for the weekly learning digest; None = off.
+    pace_audit_digest_weekday: Optional[int] = None
+    # Revert sweep: how far back to check executed actions for being undone.
+    pace_audit_revert_window_days: int = 21
+    # Learning window + gates for the proposal penalty (min samples before a
+    # deny/revert rate is trusted; reject_rate above which a proposal is demoted).
+    pace_audit_learning_window_days: int = 60
+    pace_audit_learning_min_samples: int = 4
+    pace_audit_learning_reject_threshold: float = 0.6
 
     # --- Proactive Interventions (docs/modules/pace-proactive-interventions-plan-v1_0.md) ---
     # The managerial layer: PACE scans for SYSTEMIC delivery problems and opens a

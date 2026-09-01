@@ -133,6 +133,18 @@ async def build_chase_plan(today: Optional[date] = None) -> dict:
         except Exception as exc:  # one bad generator never kills the plan
             logger.warning("chase_plan_generator_failed",
                            extra={"generator": getattr(gen, "__name__", "?"), "error": str(exc)})
+    # Learning auto-adjust (dark unless pace_audit_learning_enabled): demote — never
+    # hide — proposal kinds humans keep declining/undoing, and annotate why. When
+    # the flag is off, proposal_penalty returns (1.0, None) with zero DB reads, so
+    # the plan is byte-identical to today.
+    from services import pace_audit
+    signals = pace_audit._learning_signals_window() if settings.pace_audit_learning_enabled else None
+    for p in proposals:
+        factor, note = pace_audit.proposal_penalty(p.get("action"), p.get("client_id"), signals)
+        if factor != 1.0:
+            p["priority"] = (p.get("priority") or 0) * factor
+            if note:
+                p["reason"] = f"{(p.get('reason') or '').rstrip()} — _{note}_".strip(" —")
     proposals.sort(key=lambda p: -(p.get("priority") or 0))
     overflow = max(0, len(proposals) - settings.pace_chase_max_items)
     proposals = proposals[: settings.pace_chase_max_items]
@@ -233,6 +245,19 @@ async def execute_plan_selection(items: list[dict], selection: list[int],
         except Exception as exc:
             logger.warning("chase_plan_run_failed", extra={"action": it["action"], "error": str(exc)})
             lines.append(f"❌ {idx}. {it['reason']} — failed")
+    # Log the DROPPED items as explicit denials — the human saw the plan and did
+    # not pick them (a real rejection, not a superseded/unconfirmed plan). Feeds
+    # the negative-signal learning; best-effort per item.
+    if mods:
+        for idx in mods["dropped"]:
+            it = by_index.get(idx)
+            if not it:
+                continue
+            tgt = pace_audit.target_from_args(it["action"], it.get("args") or {})
+            pace_audit.record_decision(
+                action=it["action"], origin=origin, decision="denied", outcome="cancelled",
+                context=context, client_id=it.get("client_id"), client_name=it.get("client_name"),
+                reason=it.get("reason"), args=it.get("args") or {}, **tgt)
     skipped = len(items) - len(selection)
     if skipped > 0:
         lines.append(f"_({skipped} unselected item{'s' if skipped != 1 else ''} dropped — "

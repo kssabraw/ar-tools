@@ -759,6 +759,13 @@ async def gsc_scheduler() -> None:
                 # pace_enabled + a configured pace_report_weekday (off by default).
                 from services.pace_report import maybe_emit_weekly as run_pace_report
                 _safe("pace_report", run_pace_report, now.date())
+                # PACE action-log v2: daily revert sweep (read-only w.r.t. tasks;
+                # marks executed actions later undone) + the weekly learning
+                # digest. Both self-gated on pace_audit_enabled; the digest also
+                # needs a configured pace_audit_digest_weekday (off by default).
+                from services import pace_audit
+                _safe("pace_revert_sweep", pace_audit.run_revert_sweep, now.date())
+                _safe("pace_learning_digest", pace_audit.maybe_emit_weekly_learning, now.date())
                 # Daily PACE follow-through episode sync (v1.4 §4.9) — open/
                 # resolve/clock/escalate — then the Chase Plan built from it.
                 # Both self-gated on pace_enabled + pace_initiative_enabled;

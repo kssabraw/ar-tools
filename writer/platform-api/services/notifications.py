@@ -144,6 +144,9 @@ def format_slack(title: str, summary: Optional[str], client_name: Optional[str],
 # that always wins.
 PACE_CHANNEL_KINDS = frozenset({
     "pace_digest", "pace_chase_plan", "pace_escalation", "pace_report", "pace_briefs",
+    # Weekly learning digest (services/pace_audit.py) — PACE's own approve/deny/
+    # modify/revert track record. Portfolio rollup → master PACE channel.
+    "pace_learning_digest",
     # Proactive Interventions (services/pace_interventions.py) — the managerial
     # detect→propose→dispose loop's digest + execution-result posts. Portfolio
     # rollups (client_id may be set for scoped ones, but they're a managerial

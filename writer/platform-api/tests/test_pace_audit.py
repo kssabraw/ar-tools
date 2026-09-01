@@ -70,7 +70,8 @@ def test_selection_modifications():
 
 def test_decision_stats_rollup():
     rows = [
-        {"action": "reassign_task", "decision": "approved", "outcome": "executed", "actor_name": "Kyle"},
+        {"action": "reassign_task", "decision": "approved", "outcome": "executed", "actor_name": "Kyle",
+         "reverted_at": "2026-09-02T00:00:00Z"},
         {"action": "reassign_task", "decision": "denied", "outcome": "cancelled", "actor_name": "Kyle"},
         {"action": "set_task_due", "decision": "approved_with_modifications", "outcome": "executed", "actor_name": "Ivy"},
     ]
@@ -80,8 +81,10 @@ def test_decision_stats_rollup():
     assert stats["overall"]["denied"] == 1
     assert stats["overall"]["approved_with_modifications"] == 1
     assert stats["overall"]["executed"] == 2
+    assert stats["overall"]["reverted"] == 1  # the executed reassign was undone
     assert stats["by_action"]["reassign_task"]["approved"] == 1
     assert stats["by_action"]["reassign_task"]["denied"] == 1
+    assert stats["by_action"]["reassign_task"]["reverted"] == 1
     assert stats["by_actor"]["Kyle"]["total"] == 2
     assert stats["by_actor"]["Ivy"]["approved_with_modifications"] == 1
 
@@ -335,3 +338,209 @@ def test_intervention_disposition_decision_mapping(monkeypatch):
     # A failed defer (bad date) records nothing.
     pace_interventions._log_disposition(row, _ctx(), "deferred", None, {"ok": False, "status": "proposed"})
     assert len(calls) == 4
+
+
+# ---------------------------------------------------------------------------
+# v2 — revert detection (pure)
+# ---------------------------------------------------------------------------
+def test_changed_fields():
+    before = {"assignee_name": "unassigned", "status_key": "in_progress", "due_date": "2026-09-10"}
+    after = {"assignee_name": "Ivy", "status_key": "in_progress", "due_date": "2026-09-10"}
+    assert pace_audit.changed_fields(before, after) == ["assignee_name"]
+    assert pace_audit.changed_fields(None, after) == []
+
+
+def test_classify_revert():
+    before = {"assignee_name": "unassigned", "status_key": "in_progress"}
+    after = {"assignee_name": "Ivy", "status_key": "in_progress"}
+    # Back to the pre-PACE value → reverted.
+    rev = pace_audit.classify_revert(before, after, {"assignee_name": "unassigned", "status_key": "in_progress"})
+    assert rev and rev["kind"] == "reverted" and rev["field"] == "assignee_name"
+    # Changed to a third value → overridden.
+    ov = pace_audit.classify_revert(before, after, {"assignee_name": "Marcus", "status_key": "in_progress"})
+    assert ov and ov["kind"] == "overridden" and ov["to_current"] == "Marcus"
+    # Still PACE's value → None.
+    assert pace_audit.classify_revert(before, after, {"assignee_name": "Ivy", "status_key": "in_progress"}) is None
+    # No current state (deleted) → None.
+    assert pace_audit.classify_revert(before, after, None) is None
+
+
+def test_classify_revert_prefers_revert_over_override():
+    before = {"assignee_name": "unassigned", "status_key": "blocked"}
+    after = {"assignee_name": "Ivy", "status_key": "in_progress"}
+    # assignee overridden (→Marcus) but status reverted (→blocked): revert wins.
+    detail = pace_audit.classify_revert(before, after, {"assignee_name": "Marcus", "status_key": "blocked"})
+    assert detail["kind"] == "reverted" and detail["field"] == "status_key"
+
+
+# ---------------------------------------------------------------------------
+# v2 — learning signals + proposal penalty (pure)
+# ---------------------------------------------------------------------------
+def test_learning_signals_reject_rate():
+    rows = [
+        {"action": "reassign_task", "client_id": "c1", "decision": "denied", "outcome": "cancelled"},
+        {"action": "reassign_task", "client_id": "c1", "decision": "denied", "outcome": "cancelled"},
+        {"action": "reassign_task", "client_id": "c1", "decision": "approved", "outcome": "executed",
+         "reverted_at": "x"},
+        {"action": "reassign_task", "client_id": "c1", "decision": "approved", "outcome": "executed"},
+    ]
+    sig = pace_audit.learning_signals(rows)
+    ba = sig["by_action"]["reassign_task"]
+    assert ba["total"] == 4 and ba["denied"] == 2 and ba["reverted"] == 1
+    # reject_rate = (denied 2 + reverted 1) / 4
+    assert ba["reject_rate"] == 0.75
+    assert sig["by_client_action"]["c1::reassign_task"]["reject_rate"] == 0.75
+
+
+def test_proposal_penalty_gated_and_scaled(monkeypatch):
+    monkeypatch.setattr(pace_audit.settings, "pace_audit_learning_enabled", True)
+    monkeypatch.setattr(pace_audit.settings, "pace_audit_learning_min_samples", 4)
+    monkeypatch.setattr(pace_audit.settings, "pace_audit_learning_reject_threshold", 0.6)
+    # Below min samples → no penalty.
+    thin = {"by_client_action": {}, "by_action": {"reassign_task": {"total": 2, "denied": 2, "reverted": 0, "reject_rate": 1.0}}}
+    assert pace_audit.proposal_penalty("reassign_task", "c1", thin) == (1.0, None)
+    # Above threshold with enough samples → demoted (<1) + a note.
+    heavy = {"by_client_action": {"c1::reassign_task": {"total": 5, "denied": 4, "reverted": 0, "reject_rate": 0.8}},
+             "by_action": {}}
+    factor, note = pace_audit.proposal_penalty("reassign_task", "c1", heavy)
+    assert 0.2 <= factor < 1.0 and note and "4 of 5" in note
+    # Below the reject threshold → no penalty even with samples.
+    ok = {"by_client_action": {}, "by_action": {"reassign_task": {"total": 10, "denied": 1, "reverted": 0, "reject_rate": 0.1}}}
+    assert pace_audit.proposal_penalty("reassign_task", "c1", ok) == (1.0, None)
+
+
+def test_proposal_penalty_disabled_is_inert(monkeypatch):
+    monkeypatch.setattr(pace_audit.settings, "pace_audit_learning_enabled", False)
+    heavy = {"by_client_action": {"c1::reassign_task": {"total": 5, "denied": 5, "reverted": 0, "reject_rate": 1.0}}, "by_action": {}}
+    assert pace_audit.proposal_penalty("reassign_task", "c1", heavy) == (1.0, None)
+
+
+def test_proposal_penalty_agency_fallback(monkeypatch):
+    monkeypatch.setattr(pace_audit.settings, "pace_audit_learning_enabled", True)
+    monkeypatch.setattr(pace_audit.settings, "pace_audit_learning_min_samples", 4)
+    monkeypatch.setattr(pace_audit.settings, "pace_audit_learning_reject_threshold", 0.6)
+    # No per-client history → falls back to agency-wide per-action.
+    sig = {"by_client_action": {}, "by_action": {"nudge_assignee": {"total": 6, "denied": 5, "reverted": 0, "reject_rate": 0.83}}}
+    factor, note = pace_audit.proposal_penalty("nudge_assignee", "cX", sig)
+    assert factor < 1.0 and note
+
+
+def test_build_learning_digest():
+    rows = [
+        {"action": "reassign_task", "decision": "denied", "outcome": "cancelled"},
+        {"action": "reassign_task", "decision": "denied", "outcome": "cancelled"},
+        {"action": "set_task_due", "decision": "approved", "outcome": "executed", "reverted_at": "x"},
+    ]
+    text = pace_audit.build_learning_digest(rows)
+    assert "learning digest" in text.lower()
+    assert "reassign_task" in text and "reverted" in text.lower()
+    assert pace_audit.build_learning_digest([]) == ""
+
+
+# ---------------------------------------------------------------------------
+# v2 — wiring: dropped items logged as denials; chase penalty; revert sweep
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_dropped_chase_items_logged_as_denied(monkeypatch):
+    from services import pace_proposals
+
+    async def _fake_ral(fn, **kw):
+        return "✅ done"
+
+    decisions: list = []
+    monkeypatch.setattr(pace_audit, "run_and_log", _fake_ral)
+    monkeypatch.setattr(pace_audit, "record_decision", lambda **kw: decisions.append(kw))
+    items = [
+        {"index": 1, "action": "reassign_task", "client_id": "c1", "client_name": "Acme",
+         "args": {"task_id": "t1", "task_name": "A"}, "reason": "r1", "min_role": None},
+        {"index": 2, "action": "set_task_due", "client_id": "c1", "client_name": "Acme",
+         "args": {"task_id": "t2", "task_name": "B"}, "reason": "r2", "min_role": None},
+        {"index": 3, "action": "nudge_assignee", "client_id": "c1", "client_name": "Acme",
+         "args": {"task_id": "t3", "task_name": "C"}, "reason": "r3", "min_role": None},
+    ]
+    # Approve only item 1 → items 2 and 3 are dropped → logged as denied.
+    await pace_proposals.execute_plan_selection(items, [1], _ctx(role="admin"), origin="chase_plan")
+    assert len(decisions) == 2
+    assert {d["target_id"] for d in decisions} == {"t2", "t3"}
+    assert all(d["decision"] == "denied" and d["outcome"] == "cancelled" for d in decisions)
+
+
+@pytest.mark.asyncio
+async def test_build_chase_plan_demotes_when_learning_on(monkeypatch):
+    from services import pace_proposals
+
+    monkeypatch.setattr(pace_proposals.settings, "pace_audit_learning_enabled", True)
+    monkeypatch.setattr(pace_proposals.settings, "pace_chase_max_items", 10)
+    monkeypatch.setattr(pace_audit, "_learning_signals_window", lambda: {"_sentinel": True})
+
+    def _penalty(action, client_id, signals=None):
+        assert signals == {"_sentinel": True}  # precomputed once, passed in
+        return (0.3, "declined 4 of 5 recent times") if action == "reassign_task" else (1.0, None)
+
+    monkeypatch.setattr(pace_audit, "proposal_penalty", _penalty)
+
+    def _gen(today):
+        return [
+            {"action": "reassign_task", "client_id": "c1", "client_name": "Acme",
+             "args": {"task_id": "t1"}, "reason": "reassign A", "priority": 100, "perm": "reassign_task"},
+            {"action": "nudge_assignee", "client_id": "c1", "client_name": "Acme",
+             "args": {"task_id": "t2"}, "reason": "nudge B", "priority": 90, "perm": "nudge_other"},
+        ]
+
+    monkeypatch.setattr(pace_proposals, "PROPOSAL_GENERATORS", [_gen])
+    # Stub staging so items resolve cleanly to confirmable actions.
+    async def _stage_ok(fn, *a):
+        return ("confirm", {"task_id": "t", "_confirm": "do", "_requester": None})
+    monkeypatch.setattr(pace_proposals, "_call_action", _stage_ok)
+
+    plan = await pace_proposals.build_chase_plan()
+    reassign = next(i for i in plan["items"] if i["action"] == "reassign_task")
+    # Penalized 100*0.3=30 < nudge 90 → nudge is now item 1, reassign demoted.
+    assert plan["items"][0]["action"] == "nudge_assignee"
+    assert "declined 4 of 5" in reassign["reason"]
+
+
+def test_run_revert_sweep_marks_reverted(monkeypatch):
+    monkeypatch.setattr(pace_audit.settings, "pace_audit_enabled", True)
+    updates: list = []
+
+    # A chainable query stub: every builder method returns self (and `.not_` is a
+    # property that also returns self), so any Supabase chain the sweep builds is
+    # accepted; only .execute()/.update() carry behavior.
+    class _Chain:
+        def __init__(self, kind):
+            self._kind = kind
+        def __getattr__(self, _name):
+            return lambda *a, **k: self  # select/eq/is_/gte/in_/limit → self
+        @property
+        def not_(self):
+            return self
+        def update(self, patch):
+            self._kind = "update"
+            self._patch = patch
+            return self
+        def execute(self):
+            if self._kind == "update":
+                updates.append(self._patch)
+                return type("R", (), {"data": [{}]})()
+            if self._kind == "tasks":
+                return type("R", (), {"data": [
+                    {"id": "t1", "assignee_name": "unassigned", "status_key": "in_progress",
+                     "assignee_id": None, "due_date": None, "category": None,
+                     "est_hours": None, "completed": False, "name": "A"}]})()
+            # pace_action_log select: one executed row whose assignee is now back
+            # to the pre-PACE value → a revert.
+            return type("R", (), {"data": [
+                {"id": "row1", "target_id": "t1",
+                 "before": {"assignee_name": "unassigned"},
+                 "after": {"assignee_name": "Ivy"}}]})()
+
+    class _FakeSupa:
+        def table(self, name):
+            return _Chain("tasks" if name == "tasks" else "log")
+
+    monkeypatch.setattr(pace_audit, "get_supabase", lambda: _FakeSupa())
+    result = pace_audit.run_revert_sweep()
+    assert result["reverted"] == 1
+    assert updates and updates[0]["revert_detail"]["kind"] == "reverted"
+    assert "reverted_at" in updates[0]

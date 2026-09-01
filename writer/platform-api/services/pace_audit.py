@@ -102,39 +102,66 @@ def _clip(text: Any, limit: int) -> Optional[str]:
 
 
 def decision_stats(rows: list[dict]) -> dict:
-    """Roll a set of log rows into approve/deny/modify counts overall, per action,
-    and per actor — the learning substrate PACE reads back. Pure."""
+    """Roll a set of log rows into approve/deny/modify/revert counts overall, per
+    action, and per actor — the learning substrate PACE reads back. Pure. A
+    ``reverted`` count comes from ``reverted_at`` being set on a row (an executed
+    action later undone), so it can co-occur with executed."""
     def _blank() -> dict:
         return {"approved": 0, "approved_with_modifications": 0, "denied": 0,
                 "deferred": 0, "cancelled": 0, "auto": 0, "executed": 0,
-                "failed": 0, "total": 0}
+                "failed": 0, "reverted": 0, "total": 0}
+
+    def _tally(bucket: dict, dec, out, reverted) -> None:
+        bucket["total"] += 1
+        if dec in bucket:
+            bucket[dec] += 1
+        if out in bucket:
+            bucket[out] += 1
+        if reverted:
+            bucket["reverted"] += 1
 
     overall = _blank()
     by_action: dict[str, dict] = {}
     by_actor: dict[str, dict] = {}
     for r in rows or []:
-        overall["total"] += 1
-        dec = r.get("decision")
-        out = r.get("outcome")
-        if dec in overall:
-            overall[dec] += 1
-        if out in overall:
-            overall[out] += 1
-        act = r.get("action") or "?"
-        ba = by_action.setdefault(act, _blank())
-        ba["total"] += 1
-        if dec in ba:
-            ba[dec] += 1
-        if out in ba:
-            ba[out] += 1
+        dec, out, rev = r.get("decision"), r.get("outcome"), bool(r.get("reverted_at"))
+        _tally(overall, dec, out, rev)
+        _tally(by_action.setdefault(r.get("action") or "?", _blank()), dec, out, rev)
         who = r.get("actor_name") or r.get("actor_profile_id") or "system"
-        bp = by_actor.setdefault(str(who), _blank())
-        bp["total"] += 1
-        if dec in bp:
-            bp[dec] += 1
-        if out in bp:
-            bp[out] += 1
+        _tally(by_actor.setdefault(str(who), _blank()), dec, out, rev)
     return {"overall": overall, "by_action": by_action, "by_actor": by_actor}
+
+
+# ---------------------------------------------------------------------------
+# Revert detection (pure) — did a human undo what PACE did?
+# ---------------------------------------------------------------------------
+def changed_fields(before: Optional[dict], after: Optional[dict]) -> list[str]:
+    """The snapshot fields PACE actually changed (before != after). Pure."""
+    if not before or not after:
+        return []
+    return [k for k in after if k in before and before.get(k) != after.get(k)]
+
+
+def classify_revert(before: Optional[dict], after: Optional[dict],
+                    current: Optional[dict]) -> Optional[dict]:
+    """Compare a task's CURRENT state to what PACE set. For the first field PACE
+    changed that has since moved off PACE's value: ``reverted`` when it's back at
+    the pre-PACE value, else ``overridden``. None when PACE's change still stands
+    (or the task is gone). Pure — reverted wins over overridden when both exist."""
+    if not current:
+        return None
+    fields = changed_fields(before, after)
+    overridden = None
+    for f in fields:
+        pace_val, cur = (after or {}).get(f), current.get(f)
+        if cur == pace_val:
+            continue  # PACE's change still stands for this field
+        kind = "reverted" if cur == (before or {}).get(f) else "overridden"
+        detail = {"field": f, "from_pace": pace_val, "to_current": cur, "kind": kind}
+        if kind == "reverted":
+            return detail  # strongest signal — return immediately
+        overridden = overridden or detail
+    return overridden
 
 
 def format_history(rows: list[dict]) -> str:
@@ -338,12 +365,18 @@ _LOG_COLUMNS = (
     "id, created_at, action, origin, decision, outcome, client_id, client_name, "
     "target_type, target_id, target_name, actor_profile_id, actor_role, "
     "actor_source, requester_profile_id, reason, args, before, after, "
-    "modifications, result, error, intervention_id, chase_plan_date"
+    "modifications, result, error, intervention_id, chase_plan_date, "
+    "reverted_at, revert_detail"
 )
 
 
 def _apply_log_filters(q, *, client_id=None, actor_profile_id=None, action=None,
-                       decision=None, outcome=None, origin=None, since=None, until=None):
+                       decision=None, outcome=None, origin=None, since=None, until=None,
+                       reverted=None):
+    if reverted is True:
+        q = q.not_.is_("reverted_at", "null")
+    elif reverted is False:
+        q = q.is_("reverted_at", "null")
     if client_id:
         q = q.eq("client_id", client_id)
     if actor_profile_id:
@@ -364,7 +397,7 @@ def _apply_log_filters(q, *, client_id=None, actor_profile_id=None, action=None,
 
 
 def list_log(*, client_id=None, actor_profile_id=None, action=None, decision=None,
-             outcome=None, origin=None, since=None, until=None,
+             outcome=None, origin=None, since=None, until=None, reverted=None,
              limit: int = 100, offset: int = 0) -> dict:
     """A filtered page of the action log for the admin read API, with client +
     actor names joined. Returns {rows, total, limit, offset}. Best-effort."""
@@ -375,7 +408,7 @@ def list_log(*, client_id=None, actor_profile_id=None, action=None, decision=Non
              .order("created_at", desc=True).range(offset, offset + limit - 1))
         q = _apply_log_filters(q, client_id=client_id, actor_profile_id=actor_profile_id,
                                action=action, decision=decision, outcome=outcome,
-                               origin=origin, since=since, until=until)
+                               origin=origin, since=since, until=until, reverted=reverted)
         resp = q.execute()
         rows = resp.data or []
         total = resp.count if resp.count is not None else len(rows)
@@ -392,7 +425,7 @@ def stats_window(*, client_id=None, actor_profile_id=None, action=None,
     cap = min(int(limit or 1000), 5000)
     try:
         q = (get_supabase().table("pace_action_log")
-             .select("action, decision, outcome, actor_profile_id")
+             .select("action, decision, outcome, actor_profile_id, reverted_at")
              .order("created_at", desc=True).limit(cap))
         q = _apply_log_filters(q, client_id=client_id, actor_profile_id=actor_profile_id,
                                action=action, since=since, until=until)
@@ -401,3 +434,229 @@ def stats_window(*, client_id=None, actor_profile_id=None, action=None,
         logger.warning("pace_audit_stats_failed", extra={"error": str(exc)})
         rows = []
     return decision_stats(rows)
+
+
+# ---------------------------------------------------------------------------
+# Revert sweep (impure, daily, read-only w.r.t. tasks)
+# ---------------------------------------------------------------------------
+def run_revert_sweep(today: Optional[Any] = None) -> dict:
+    """Mark executed, task-targeted actions whose change was undone/overridden
+    since PACE made it. Read-only w.r.t. tasks — reads their current state and
+    writes only pace_action_log. Self-gated on pace_audit_enabled; best-effort.
+    Returns {checked, reverted, overridden}."""
+    from datetime import datetime, timedelta, timezone
+
+    if not settings.pace_audit_enabled:
+        return {"checked": 0, "reverted": 0, "overridden": 0, "reason": "disabled"}
+    since = (datetime.now(timezone.utc)
+             - timedelta(days=settings.pace_audit_revert_window_days)).isoformat()
+    try:
+        rows = (get_supabase().table("pace_action_log")
+                .select("id, target_id, before, after")
+                .eq("outcome", "executed").eq("target_type", "task")
+                .is_("reverted_at", "null").gte("created_at", since)
+                .not_.is_("after", "null").limit(2000).execute()).data or []
+    except Exception as exc:
+        logger.warning("pace_audit_revert_query_failed", extra={"error": str(exc)})
+        return {"checked": 0, "reverted": 0, "overridden": 0, "reason": "error"}
+    task_ids = sorted({r["target_id"] for r in rows if r.get("target_id")})
+    if not task_ids:
+        return {"checked": 0, "reverted": 0, "overridden": 0}
+    current: dict[str, dict] = {}
+    try:
+        # Chunk the id list so a big backlog stays under URL/row limits.
+        for i in range(0, len(task_ids), 200):
+            chunk = task_ids[i:i + 200]
+            got = (get_supabase().table("tasks")
+                   .select("id, " + ", ".join(TASK_SNAPSHOT_FIELDS))
+                   .in_("id", chunk).is_("deleted_at", "null").execute()).data or []
+            for t in got:
+                current[t["id"]] = t
+    except Exception as exc:
+        logger.warning("pace_audit_revert_read_failed", extra={"error": str(exc)})
+        return {"checked": 0, "reverted": 0, "overridden": 0, "reason": "error"}
+    reverted = overridden = 0
+    now = datetime.now(timezone.utc).isoformat()
+    for r in rows:
+        cur = current.get(r.get("target_id"))
+        if cur is None:  # task gone/deleted — leave the row unmarked
+            continue
+        detail = classify_revert(r.get("before"), r.get("after"), cur)
+        if not detail:
+            continue
+        try:
+            (get_supabase().table("pace_action_log")
+             .update({"reverted_at": now, "revert_detail": detail})
+             .eq("id", r["id"]).execute())
+        except Exception as exc:
+            logger.warning("pace_audit_revert_mark_failed", extra={"id": r["id"], "error": str(exc)})
+            continue
+        if detail["kind"] == "reverted":
+            reverted += 1
+        else:
+            overridden += 1
+    return {"checked": len(rows), "reverted": reverted, "overridden": overridden}
+
+
+# ---------------------------------------------------------------------------
+# Learning read model (pure) — the substrate for the digest + auto-adjust
+# ---------------------------------------------------------------------------
+def learning_signals(rows: list[dict]) -> dict:
+    """Per-action and per-(client, action) approve/deny/modify/revert counts +
+    a reject_rate = (denied + reverted) / total. The shared substrate for the
+    weekly digest and the proposal penalty. Pure."""
+    def _blank() -> dict:
+        return {"approved": 0, "denied": 0, "modified": 0, "reverted": 0,
+                "executed": 0, "total": 0}
+
+    def _tally(b: dict, r: dict) -> None:
+        b["total"] += 1
+        dec = r.get("decision")
+        if dec == "approved":
+            b["approved"] += 1
+        elif dec == "approved_with_modifications":
+            b["approved"] += 1
+            b["modified"] += 1
+        elif dec in ("denied", "cancelled"):
+            b["denied"] += 1
+        if r.get("outcome") == "executed":
+            b["executed"] += 1
+        if r.get("reverted_at"):
+            b["reverted"] += 1
+
+    def _rate(b: dict) -> dict:
+        b["reject_rate"] = round((b["denied"] + b["reverted"]) / b["total"], 3) if b["total"] else 0.0
+        return b
+
+    by_action: dict[str, dict] = {}
+    by_client_action: dict[str, dict] = {}
+    for r in rows or []:
+        act = r.get("action") or "?"
+        _tally(by_action.setdefault(act, _blank()), r)
+        key = f"{r.get('client_id') or '-'}::{act}"
+        _tally(by_client_action.setdefault(key, _blank()), r)
+    for b in by_action.values():
+        _rate(b)
+    for b in by_client_action.values():
+        _rate(b)
+    return {"by_action": by_action, "by_client_action": by_client_action}
+
+
+def _penalty_from(sig: dict) -> tuple[float, Optional[str]]:
+    """(factor, note) for a signal bucket — factor scales a proposal's priority
+    down as reject_rate rises above the threshold, gated by min samples. Pure."""
+    total = sig.get("total", 0)
+    if total < settings.pace_audit_learning_min_samples:
+        return 1.0, None
+    rr = sig.get("reject_rate", 0.0)
+    if rr < settings.pace_audit_learning_reject_threshold:
+        return 1.0, None
+    # Linear demotion from 1.0 at the threshold down to 0.2 at reject_rate 1.0.
+    thr = settings.pace_audit_learning_reject_threshold
+    factor = max(0.2, 1.0 - (rr - thr) / max(1e-6, 1.0 - thr) * 0.8)
+    declined = sig["denied"] + sig["reverted"]
+    note = f"you've declined/undone this {declined} of {total} recent times"
+    return round(factor, 3), note
+
+
+def proposal_penalty(action: str, client_id: Optional[str],
+                     signals: Optional[dict] = None) -> tuple[float, Optional[str]]:
+    """Priority factor + note for a Chase-Plan proposal, from the learning
+    signals (per-(client, action), falling back to agency-wide per-action). When
+    learning is disabled or there's not enough history, returns (1.0, None) — so
+    the Chase Plan is byte-identical to today. Best-effort."""
+    if not settings.pace_audit_learning_enabled:
+        return 1.0, None
+    try:
+        sig = signals if signals is not None else _learning_signals_window()
+        ca = sig.get("by_client_action", {}).get(f"{client_id or '-'}::{action}")
+        if ca and ca.get("total", 0) >= settings.pace_audit_learning_min_samples:
+            return _penalty_from(ca)
+        return _penalty_from(sig.get("by_action", {}).get(action, {}))
+    except Exception as exc:
+        logger.warning("pace_audit_penalty_failed", extra={"action": action, "error": str(exc)})
+        return 1.0, None
+
+
+def _learning_signals_window() -> dict:
+    """Learning signals over the configured window — one read, reused across a
+    plan build. Best-effort ([] on error → empty signals)."""
+    from datetime import datetime, timedelta, timezone
+
+    since = (datetime.now(timezone.utc)
+             - timedelta(days=settings.pace_audit_learning_window_days)).isoformat()
+    try:
+        rows = (get_supabase().table("pace_action_log")
+                .select("action, client_id, decision, outcome, reverted_at")
+                .gte("created_at", since).limit(5000).execute()).data or []
+    except Exception:
+        rows = []
+    return learning_signals(rows)
+
+
+# ---------------------------------------------------------------------------
+# Weekly learning digest (mirrors pace_report.maybe_emit_weekly)
+# ---------------------------------------------------------------------------
+def build_learning_digest(rows: list[dict]) -> str:
+    """A Slack-mrkdwn weekly digest of PACE's track record over ``rows``. Pure.
+    Empty string when nothing was logged (the caller then posts nothing)."""
+    if not rows:
+        return ""
+    stats = decision_stats(rows)
+    ov = stats["overall"]
+    sig = learning_signals(rows)["by_action"]
+    lines = [f"*PACE learning digest* — {ov['total']} logged action"
+             f"{'s' if ov['total'] != 1 else ''} this week"]
+    lines.append(
+        f"• {ov['executed']} executed · {ov['approved']} approved · "
+        f"{ov['approved_with_modifications']} w/ mods · "
+        f"{ov['denied'] + ov['cancelled']} declined · {ov['reverted']} reverted · "
+        f"{ov['failed']} failed")
+    # Worst-approval action kinds (most declined/reverted), min 2 samples.
+    ranked = sorted(
+        ((a, s) for a, s in sig.items() if s["total"] >= 2 and s["reject_rate"] > 0),
+        key=lambda kv: -kv[1]["reject_rate"])[:3]
+    if ranked:
+        lines.append("*Most-refused:*")
+        for a, s in ranked:
+            lines.append(f"• `{a}` — {int(s['reject_rate'] * 100)}% declined/undone "
+                         f"({s['denied'] + s['reverted']}/{s['total']})")
+    if ov["reverted"]:
+        lines.append(f"_⚠️ {ov['reverted']} action(s) were undone after PACE made them — "
+                     f"see the PACE Log 'reverted' filter._")
+    return "\n".join(lines)
+
+
+def maybe_emit_weekly_learning(today: Optional[Any] = None) -> dict:
+    """Emit ONE learning digest per week on ``pace_audit_digest_weekday``.
+    Self-gated on pace_enabled + a configured weekday; best-effort. Called inline
+    from the daily scheduler tick (mirrors pace_report.maybe_emit_weekly)."""
+    from datetime import date, datetime, timedelta, timezone
+
+    from services import notifications
+
+    if not (settings.pace_enabled and settings.pace_audit_enabled):
+        return {"emitted": False, "reason": "disabled"}
+    weekday = settings.pace_audit_digest_weekday
+    today = today or date.today()
+    if weekday is None or today.weekday() != int(weekday):
+        return {"emitted": False, "reason": "not_due"}
+    since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    try:
+        rows = (get_supabase().table("pace_action_log")
+                .select("action, client_id, decision, outcome, reverted_at")
+                .gte("created_at", since).limit(5000).execute()).data or []
+        body = build_learning_digest(rows)
+        if not body:
+            return {"emitted": False, "reason": "nothing_logged"}
+        notifications.emit(
+            client_id=None, kind="pace_learning_digest",
+            title="PACE learning digest",
+            summary=body, severity="info",
+            payload={"link": "/pace/log", "slack_channel": settings.pace_slack_channel or None},
+            dedupe_key=f"pace_learning_digest:{today.isoformat()}",
+        )
+        return {"emitted": True, "rows": len(rows)}
+    except Exception as exc:
+        logger.warning("pace_learning_digest_failed", extra={"error": str(exc)})
+        return {"emitted": False, "reason": "error"}

@@ -31,6 +31,8 @@ interface LogRow {
   modifications: Record<string, unknown> | null
   result: string | null
   error: string | null
+  reverted_at: string | null
+  revert_detail: { field?: string; from_pace?: unknown; to_current?: unknown; kind?: string } | null
 }
 interface LogPage {
   rows: LogRow[]
@@ -47,6 +49,7 @@ interface StatBlock {
   auto: number
   executed: number
   failed: number
+  reverted: number
   total: number
 }
 interface StatsResp {
@@ -119,6 +122,7 @@ export function PaceLog() {
   const [action, setAction] = useState('')
   const [decision, setDecision] = useState('')
   const [outcome, setOutcome] = useState('')
+  const [reverted, setReverted] = useState('')
   const [offset, setOffset] = useState(0)
   const [expanded, setExpanded] = useState<string | null>(null)
   const limit = 100
@@ -129,9 +133,9 @@ export function PaceLog() {
     staleTime: 5 * 60_000,
   })
 
-  const filterQs = qs({ client_id: clientId, action, decision, outcome, limit, offset })
+  const filterQs = qs({ client_id: clientId, action, decision, outcome, reverted, limit, offset })
   const { data, isLoading, isFetching, refetch } = useQuery<LogPage>({
-    queryKey: ['pace-log', clientId, action, decision, outcome, offset],
+    queryKey: ['pace-log', clientId, action, decision, outcome, reverted, offset],
     queryFn: () => api.get<LogPage>(`/pace/action-log${filterQs}`),
   })
   const { data: stats } = useQuery<StatsResp>({
@@ -179,6 +183,7 @@ export function PaceLog() {
           <Stat label="w/ mods" value={ov.approved_with_modifications} color="#0891b2" />
           <Stat label="Denied / cancelled" value={ov.denied + ov.cancelled} color="#dc2626" />
           <Stat label="Deferred" value={ov.deferred} color="#d97706" />
+          <Stat label="Reverted" value={ov.reverted} color="#b91c1c" />
           <Stat label="Failed" value={ov.failed} color="#dc2626" />
         </div>
       )}
@@ -200,6 +205,11 @@ export function PaceLog() {
         <select value={outcome} onChange={(e) => { setOutcome(e.target.value); resetOffset() }} style={selectStyle}>
           <option value="">Any outcome</option>
           {OUTCOMES.map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+        <select value={reverted} onChange={(e) => { setReverted(e.target.value); resetOffset() }} style={selectStyle}>
+          <option value="">Reverted &amp; standing</option>
+          <option value="true">Reverted / overridden only</option>
+          <option value="false">Still standing only</option>
         </select>
       </div>
 
@@ -238,7 +248,14 @@ export function PaceLog() {
                     <td style={td}>{r.client_name || (r.client_id ? clientName[r.client_id] : '') || '—'}</td>
                     <td style={td}>{r.actor_name || r.actor_role || (r.actor_source === 'system' ? 'system' : '—')}</td>
                     <td style={td}>{r.decision ? <Badge text={r.decision} color={DECISION_COLOR[r.decision] || '#64748b'} /> : '—'}</td>
-                    <td style={td}><Badge text={r.outcome} color={OUTCOME_COLOR[r.outcome] || '#64748b'} /></td>
+                    <td style={td}>
+                      <Badge text={r.outcome} color={OUTCOME_COLOR[r.outcome] || '#64748b'} />
+                      {r.reverted_at && (
+                        <span style={{ marginLeft: 4 }}>
+                          <Badge text={r.revert_detail?.kind === 'overridden' ? 'overridden' : 'reverted'} color="#b91c1c" />
+                        </span>
+                      )}
+                    </td>
                     <td style={{ ...td, maxWidth: 320, color: '#334155' }}>{r.reason || r.target_name || '—'}</td>
                   </tr>
                   {open && (
@@ -251,6 +268,11 @@ export function PaceLog() {
                         {diffs.length > 0 && <Line k="Changed" v={diffs.join('  ·  ')} />}
                         {r.modifications && <Line k="Modifications" v={JSON.stringify(r.modifications)} />}
                         {r.result && <Line k="Result" v={r.result} />}
+                        {r.reverted_at && r.revert_detail && (
+                          <Line k={r.revert_detail.kind === 'overridden' ? 'Overridden' : 'Reverted'}
+                                v={`${r.revert_detail.field}: PACE set ${String(r.revert_detail.from_pace ?? '—')} → now ${String(r.revert_detail.to_current ?? '—')} (${r.reverted_at.replace('T', ' ').slice(0, 16)})`}
+                                color="#b91c1c" />
+                        )}
                         {r.error && <Line k="Error" v={r.error} color="#dc2626" />}
                         {r.args && Object.keys(r.args).length > 0 && <Line k="Args" v={JSON.stringify(r.args)} mono />}
                       </td>

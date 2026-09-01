@@ -377,6 +377,7 @@ async def get_pace_action_log(
     decision: Optional[str] = None,
     outcome: Optional[str] = None,
     origin: Optional[str] = None,
+    reverted: Optional[bool] = None,
     since: Optional[str] = None,
     until: Optional[str] = None,
     limit: int = 100,
@@ -395,7 +396,7 @@ async def get_pace_action_log(
     return await run_in_threadpool(
         pace_audit.list_log, client_id=client_id, actor_profile_id=actor,
         action=action, decision=decision, outcome=outcome, origin=origin,
-        since=since, until=until, limit=limit, offset=offset,
+        reverted=reverted, since=since, until=until, limit=limit, offset=offset,
     )
 
 
