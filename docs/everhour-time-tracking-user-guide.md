@@ -137,8 +137,9 @@ until someone links you.
 
 ### 5.3 Install the Chrome extension
 
-1. Go to the Everhour Chrome extension page (search "Everhour" in the Chrome Web Store, or ask
-   your PM for the direct link).
+1. Go to the official listing: **[Everhour — Time Tracking, Budgets, Expenses](https://chromewebstore.google.com/detail/everhour-%E2%80%94-time-tracking/dnebklifojaaecmheejjopgjdljebpeo)**
+   on the Chrome Web Store (or search "Everhour" there yourself — make sure the publisher is
+   Everhour and the icon matches the one in your invite email, since extension names get copied).
 2. Click **Add to Chrome** → **Add extension**.
 3. Click the puzzle-piece icon in Chrome's toolbar and **pin** the Everhour icon so it's always
    visible — you'll use it constantly.
@@ -147,6 +148,12 @@ until someone links you.
 You don't strictly need the extension — everything below also works from
 [my.everhour.com](https://my.everhour.com) in a browser tab — but the extension is faster for the
 daily habit because it's always one click away, no matter what tab you're on.
+
+> Install trouble, or on a Chromium browser other than Chrome (Edge, Brave)? Everhour's own
+> install walkthrough is at
+> [support.everhour.com/article/441](https://support.everhour.com/article/441-how-to-install-everhour-extension-in-chrome)
+> (Edge has its own version at
+> [support.everhour.com/article/302](https://support.everhour.com/article/302-how-to-install-everhour-browser-extensions-on-microsoft-edge)).
 
 ### 5.4 Take a lap around the web app
 
