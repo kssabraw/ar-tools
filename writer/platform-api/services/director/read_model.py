@@ -66,6 +66,12 @@ def build_read_model(client_id: Optional[str], today: Optional[date] = None) -> 
         "qa": _isolate("qa", providers.prov_qa, supabase, today),
         "content": _isolate("content", providers.prov_content, supabase, client_ids, today),
         "duplicates": _isolate("duplicates", providers.prov_duplicates, supabase, client_ids, today),
+        # WS2/WS4: PACE's process-efficiency findings addressed to DORA.
+        "pace_efficiency": _isolate("pace_efficiency", providers.prov_pace_efficiency,
+                                    supabase, client_ids, today),
+        # WS3/WS4: agent-to-agent coordination health (bus blockers/stalls/loops).
+        "coordination": _isolate("coordination", providers.prov_coordination,
+                                  supabase, client_ids, today),
         # Agent track records (read-only insight, no seam) — PACE's and SerMaStr's
         # OWN action logs, so DORA can report how reliably each agent's work gets
         # accepted and (for SerMaStr) actually moves the metric. Scoped to the
@@ -76,9 +82,11 @@ def build_read_model(client_id: Optional[str], today: Optional[date] = None) -> 
         "sermastr_audit": _isolate("sermastr_audit", providers.prov_sermastr_audit, client_id, today),
         # Audit-log PROCESS health (owner ask 2026-09-01) — is the SerMaStr/PACE
         # propose→decide→outcome pipeline running efficiently (stale decisions /
-        # low effectiveness / high dismiss / coverage gaps). Deliberately NOT a
-        # flow.flags seam (it opens no board task): the daily reconcile alerts on
-        # its findings via ops_seam and the weekly digest renders them.
+        # low effectiveness / high dismiss / coverage gaps). Owns the pipeline-
+        # effectiveness signal that WS4's efficiency view defers to (no double
+        # no_effect report). Deliberately NOT a flow.flags seam (it opens no board
+        # task): the daily reconcile alerts on its findings via ops_seam and the
+        # weekly digest renders them.
         "audit_health": _isolate("audit_health", providers.prov_audit_health, supabase, client_id, today),
     }
 

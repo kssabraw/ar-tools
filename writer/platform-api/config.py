@@ -1916,6 +1916,48 @@ class Settings(BaseSettings):
     pace_audit_learning_min_samples: int = 4
     pace_audit_learning_reject_threshold: float = 0.6
 
+    # --- PACE process-efficiency detection (docs: agent-coordination-and-efficiency-plan-v1_0) ---
+    # WS2: PACE spots systemic process leaks (slips/bottlenecks, rework, cadence,
+    # producer noise) and records findings ADDRESSED TO DORA (WS4 surfaces them to
+    # humans). Deterministic, daily inline. Ships dark (default False). Not reported
+    # to humans by PACE; not auto-applied.
+    pace_efficiency_enabled: bool = False
+    # Overdue tasks on one client before its delivery counts as slipping.
+    pace_efficiency_slip_min: int = 3
+    # Clients behind month pace at once before it reads as a cadence problem.
+    pace_efficiency_cadence_min_clients: int = 3
+    # QA fails (per client+rubric) or reopens (per client) before it's rework churn.
+    pace_efficiency_rework_min: int = 3
+    # Unacted-on tasks from one producer (across clients) before it's producer noise.
+    pace_efficiency_producer_min: int = 5
+    # Lookback window for the rework signal (QA fails / reopens).
+    pace_efficiency_window_days: int = 30
+
+    # --- Agent coordination bus (docs: agent-coordination-and-efficiency-plan-v1_0) ---
+    # WS3: explicit agent-to-agent handoffs/blockers/notices so DORA can measure
+    # coordination health. Ships dark (default False); posting is additive +
+    # best-effort. An open actionable message (handoff/request/blocker) older than
+    # this many hours reads as a stalled handoff.
+    agent_bus_enabled: bool = False
+    agent_bus_stale_hours: int = 48
+
+    # --- DORA process-efficiency analysis (docs: agent-coordination-and-efficiency-plan-v1_0) ---
+    # WS4: DORA synthesises the agency-wide process-efficiency picture (PACE
+    # findings + coordination bus + friction seams + no-effect effort) into ranked
+    # recommendations and is the single voice that reports them to humans — weekly
+    # ops_efficiency digest + as-detected alerts + on-demand in /director chat.
+    # Read-only/advisory (DORA never executes). Ships dark (default False); weekly
+    # cadence reuses director_digest_weekday.
+    director_efficiency_enabled: bool = False
+    # Best-effort LLM narrative model; empty → the deterministic report body.
+    director_efficiency_model: str = "claude-sonnet-4-6"
+    # How far back the coordination provider reads the bus.
+    director_coordination_recent_days: int = 30
+    # Cap on as-detected ops_efficiency alerts per daily run — so a day when many
+    # findings open at once can't burst dozens of notifications; the rest still
+    # land in the weekly briefing. Ranked by severity, so the worst alert first.
+    director_efficiency_max_alerts: int = 15
+
     # --- SerMaStr Action Log (docs: SerMaStr Action Log — audit + learning ledger) ---
     # Best-effort audit + learning ledger of every STRATEGIST proposal + the human
     # decision on it (approved / dismissed / pending / senior-required) + the reused
@@ -1938,6 +1980,16 @@ class Settings(BaseSettings):
     sermastr_audit_learning_window_days: int = 90
     sermastr_audit_learning_min_samples: int = 3
     sermastr_audit_learning_dismiss_threshold: float = 0.6
+    # --- SerMaStr self-analysis (docs: agent-coordination-and-efficiency-plan-v1_0) ---
+    # WS1: "what tactics work best" — SerMaStr reports it to humans (its campaign
+    # lane) and answers it on demand. Ships dark (default False); when on, the
+    # weekly digest (sermastr_audit_digest_weekday) carries the richer report and
+    # the tactic-performance context provider lights up. No auto-execution — it is
+    # reporting + the existing in-review prompt steering.
+    sermastr_self_analysis_enabled: bool = False
+    # Model for the best-effort LLM narrative on the weekly report; empty falls
+    # back to the deterministic report body.
+    sermastr_self_analysis_model: str = "claude-sonnet-4-6"
 
     # --- Proactive Interventions (docs/modules/pace-proactive-interventions-plan-v1_0.md) ---
     # The managerial layer: PACE scans for SYSTEMIC delivery problems and opens a

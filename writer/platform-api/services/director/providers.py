@@ -682,3 +682,57 @@ def prov_duplicates(supabase, client_ids: Optional[list[str]], today: date) -> O
         if len({item["source"] for item in items}) >= 2:
             duplicates.append({"client_id": client_id, "target_key": key, "items": items})
     return {"targets_checked": len(grouped), "duplicates": duplicates}
+
+
+# ---------------------------------------------------------------------------
+# pace_efficiency — PACE's process-leak findings addressed to DORA (WS2/WS4)
+# ---------------------------------------------------------------------------
+def prov_pace_efficiency(supabase, client_ids: Optional[list[str]], today: date) -> Optional[dict]:
+    """Open PACE process-efficiency findings (slip/bottleneck, rework, cadence,
+    producer-noise). Portfolio read includes the agency-level findings (client_id
+    null — a bottleneck member, a cadence problem); a per-client read scopes to
+    that client's findings. The data PACE feeds DORA for the WS4 analysis."""
+    try:
+        q = (
+            supabase.table("pace_efficiency_findings")
+            .select("category, finding_key, client_id, member_gid, title, detail, "
+                    "recommendation, evidence, severity, last_seen_at")
+            .eq("status", "open").order("last_seen_at", desc=True).limit(500)
+        )
+        if client_ids:
+            q = q.in_("client_id", client_ids)
+        rows = q.execute().data or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("director.pace_efficiency_read_failed", extra={"error": str(exc)})
+        return None
+    if not rows:
+        return None
+    by_category: dict[str, int] = {}
+    for r in rows:
+        by_category[r.get("category") or "other"] = by_category.get(r.get("category") or "other", 0) + 1
+    return {"open": len(rows), "by_category": by_category, "findings": rows}
+
+
+# ---------------------------------------------------------------------------
+# coordination — the agent-to-agent bus health (WS3/WS4)
+# ---------------------------------------------------------------------------
+def prov_coordination(supabase, client_ids: Optional[list[str]], today: date) -> Optional[dict]:
+    """How work is flowing BETWEEN the agents, from the coordination bus — open
+    blockers (capacity/dependency walls), stalled handoffs, and back-and-forth
+    loops. Returns None when the bus is off or empty (agent_bus.recent self-gates
+    on agent_bus_enabled)."""
+    from services import agent_bus
+
+    msgs = agent_bus.recent(days=settings.director_coordination_recent_days)
+    if not msgs:
+        return None
+    if client_ids:
+        msgs = [m for m in msgs if m.get("client_id") in client_ids or m.get("client_id") is None]
+    metrics = agent_bus.coordination_metrics(msgs)
+    return {
+        "open": metrics["open"],
+        "by_pair": metrics["by_pair"],
+        "open_blockers": metrics["open_blockers"],
+        "stalled": metrics["stalled"][:20],
+        "loops": metrics["loops"],
+    }

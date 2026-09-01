@@ -318,6 +318,25 @@ def place_task(task_id: str, *, actor_id: Optional[str] = None) -> dict:
                 task_id, "placement_deferred", actor_id=actor_id,
                 detail={"reason": result.get("reason"), "category": result.get("category")},
             )
+            # Coordination bus (WS3): a capacity wall is a PACE→DORA blocker — the
+            # team can't staff this work. Gated + best-effort; idempotent per task
+            # so a re-run doesn't spam. Only for the genuine capacity case.
+            if result.get("reason") == "team_at_capacity":
+                try:
+                    from services import agent_bus
+
+                    agent_bus.post(
+                        from_agent="pace", to_agent="dora", kind="blocker",
+                        client_id=task.get("client_id"),
+                        subject=f"Can't staff: {task.get('name') or task_id}",
+                        body="Placement deferred — the eligible team is at capacity.",
+                        ref=task_id, correlation_id=f"placement:{task_id}",
+                        dedupe_key=f"blocker:placement:{task_id}",
+                        payload={"category": result.get("category")},
+                    )
+                except Exception as exc:
+                    logger.warning("agent_bus_blocker_failed",
+                                   extra={"task_id": task_id, "error": str(exc)})
         return result
     except Exception as exc:
         logger.warning("pm_assign.place_failed", extra={"task_id": task_id, "error": str(exc)})

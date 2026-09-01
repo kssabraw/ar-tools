@@ -193,6 +193,29 @@ async def set_proposal_status(
         logger.warning("sermastr_audit_decision_failed",
                        extra={"review_id": str(review_id), "idx": idx, "error": str(exc)})
 
+    # Coordination bus (WS3): an approved proposal is a SerMaStr→PACE handoff.
+    # Acked immediately when a board task landed (PACE received it); left OPEN when
+    # approval produced no task — a dropped handoff DORA can see. Gated +
+    # best-effort; never affects the response.
+    if body.status == "approved" and client_id:
+        try:
+            from services import agent_bus
+
+            corr = f"strategy_proposal:{review_id}:{idx}"
+            task = proposals[idx].get("asana_task")
+            agent_bus.post(
+                from_agent="sermastr", to_agent="pace", kind="handoff", client_id=client_id,
+                subject=proposals[idx].get("title"),
+                body="Approved strategist proposal to execute.",
+                ref=(task or {}).get("gid") if isinstance(task, dict) else None,
+                correlation_id=corr, payload={"review_id": str(review_id), "idx": idx},
+            )
+            if task:
+                agent_bus.mark_acted(correlation_id=corr, by_agent="pace")
+        except Exception as exc:
+            logger.warning("agent_bus_handoff_failed",
+                           extra={"review_id": str(review_id), "idx": idx, "error": str(exc)})
+
     return {
         "review_id": str(review_id), "idx": idx, "status": body.status,
         "asana_task": proposals[idx].get("asana_task"),

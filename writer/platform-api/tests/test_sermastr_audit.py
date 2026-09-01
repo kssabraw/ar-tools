@@ -398,3 +398,69 @@ def test_build_run_prompt_track_record_in_and_out():
         "{}", "", "", trigger="scheduled", frozen=False, max_drilldowns=4, max_paid=1,
     )
     assert "YOUR TRACK RECORD" not in without
+
+
+# ---------------------------------------------------------------------------
+# WS1 self-analysis — tactic_performance + report (pure)
+# ---------------------------------------------------------------------------
+def _row(kind, decision=None, verdict=None, client_id=None, trigger="scheduled"):
+    return {"proposal_kind": kind, "decision": decision, "outcome_verdict": verdict,
+            "client_id": client_id, "trigger": trigger}
+
+
+def test_tactic_performance_ranks_measured_above_approval_only():
+    rows = (
+        # reoptimization: 3 approved + worked → measured, worked_rate 1.0
+        [_row("reoptimization", "approved", "worked") for _ in range(3)]
+        # link_building: 3 approved, no outcome → approval-only, discounted 0.7
+        + [_row("link_building", "approved") for _ in range(3)]
+    )
+    perf = sermastr_audit.tactic_performance(rows, min_samples=2)
+    kinds = [l["kind"] for l in perf["leaders"]]
+    assert kinds[:2] == ["reoptimization", "link_building"]
+    reopt = next(l for l in perf["leaders"] if l["kind"] == "reoptimization")
+    lb = next(l for l in perf["leaders"] if l["kind"] == "link_building")
+    assert reopt["signal"] == "measured" and reopt["rank_score"] == 1.0
+    assert lb["signal"] == "approval-only" and lb["rank_score"] == 0.7
+
+
+def test_tactic_performance_thin_excluded_and_underperformers():
+    rows = (
+        [_row("general", "approved")]  # 1 decided < min 2 → thin, no leader
+        + [_row("citations", "approved", "no_effect") for _ in range(2)]  # measured, 0 worked
+    )
+    perf = sermastr_audit.tactic_performance(rows, min_samples=2)
+    assert "general" not in [l["kind"] for l in perf["leaders"]]
+    assert "citations" in [u["kind"] for u in perf["underperformers"]]
+    assert "citations" not in [l["kind"] for l in perf["leaders"]]  # 0 worked → not a leader
+
+
+def test_tactic_performance_slices_by_client_type_and_trigger():
+    rows = [
+        _row("reoptimization", "approved", "worked", client_id="c1", trigger="scheduled"),
+        _row("reoptimization", "approved", "worked", client_id="c2", trigger="escalation"),
+    ]
+    perf = sermastr_audit.tactic_performance(
+        rows, client_types={"c1": "local", "c2": "enterprise"}, min_samples=1)
+    assert set(perf["by_client_type"]) == {"local", "enterprise"}
+    assert set(perf["by_trigger"]) == {"scheduled", "escalation"}
+    assert perf["by_client_type"]["local"]["worked_rate"] == 1.0
+
+
+def test_build_self_analysis_report_leaders_and_empty():
+    rows = [_row("reoptimization", "approved", "worked") for _ in range(2)]
+    perf = sermastr_audit.tactic_performance(rows, min_samples=2)
+    report = sermastr_audit.build_self_analysis_report(perf)
+    assert "Leaders" in report and "reoptimization" in report
+    # All-thin history → nothing worth saying → "".
+    thin = sermastr_audit.tactic_performance([_row("x", "approved")], min_samples=5)
+    assert sermastr_audit.build_self_analysis_report(thin) == ""
+
+
+def test_build_self_analysis_report_folds_in_dismissed():
+    rows = ([_row("reoptimization", "approved", "worked") for _ in range(2)]
+            + [_row("press_release", "dismissed") for _ in range(2)])
+    perf = sermastr_audit.tactic_performance(rows, min_samples=2)
+    learn = sermastr_audit.learning_signals(rows)
+    report = sermastr_audit.build_self_analysis_report(perf, learn)
+    assert "Most-dismissed" in report and "press_release" in report
