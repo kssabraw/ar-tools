@@ -2528,3 +2528,43 @@ def test_bot_user_id_missing_field():
 
     assert _bot_user_id({}) is None
     assert _bot_user_id({"authorizations": []}) is None
+
+
+# ---------------------------------------------------------------------------
+# Reasoning-discipline prompt rules (diagnose-to-root-cause, durable learning,
+# PACE handoff of a chat-authored plan) — locked in the base system prompt.
+# ---------------------------------------------------------------------------
+def test_prompt_has_diagnose_to_root_cause_rule():
+    from services.slack_assistant import prompts
+
+    sys = prompts._SYSTEM
+    assert "DIAGNOSE TO ROOT CAUSE" in sys
+    # It must push past the symptom to the specific driver and the counter-move.
+    assert "symptom, not a root cause" in sys
+    assert "which competitor?" in sys and "so what do" in sys
+
+
+def test_prompt_requires_persisting_a_change_of_habit():
+    from services.slack_assistant import prompts
+
+    sys = prompts._SYSTEM
+    # "add this to your analysis / do it from now on" must be saved, not just agreed to.
+    assert "empty promise" in sys
+    assert "add this to your" in sys and "remember" in sys
+
+
+def test_prompt_routes_chat_authored_plan_handoff_correctly():
+    from services.slack_assistant import prompts
+
+    sys = prompts._SYSTEM
+    # The chat-authored-plan path is save_strategy_actions -> assign_plan_to_pace,
+    # never a per-line add_asana_task loop, and "give me the list" is text.
+    assert "save_strategy_actions" in sys
+    assert "once per line" in sys
+    assert "never open a task-add confirm" in sys
+
+
+def test_reasoning_rules_reach_the_assembled_system_prompt():
+    # Belt-and-suspenders: the base _SYSTEM flows into what interpret() sends.
+    system = _system_prompt_for("why did our maps ranking drop?")
+    assert "DIAGNOSE TO ROOT CAUSE" in system

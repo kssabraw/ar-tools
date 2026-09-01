@@ -360,6 +360,28 @@ def has_slack_target(channel: Optional[str], default_channel: Optional[str]) -> 
     return bool(channel or default_channel)
 
 
+def resolve_delete_scope(
+    ids: Optional[list], delete_all: bool
+) -> tuple[str, Optional[list]]:
+    """Decide what a bulk-delete request actually removes, safely.
+
+    Returns ``("ids", [...])`` (delete exactly those, scoped to the client),
+    ``("all", None)`` (clear the whole client feed — only on an EXPLICIT
+    ``delete_all``), or ``("none", None)`` (delete nothing).
+
+    The load-bearing rule: an **empty** ``ids`` list is NEVER a wipe. A frontend
+    that sends ``{"ids": []}`` for an empty selection (an empty JS array is
+    truthy, so it serializes the field) must delete nothing — not fall through
+    to "clear all". Clearing the whole feed requires ``delete_all=True``, so no
+    stray/empty request can silently destroy a client's notification history.
+    Pure — unit-tested."""
+    if ids:  # a non-empty list of specific ids
+        return ("ids", ids)
+    if delete_all:
+        return ("all", None)
+    return ("none", None)
+
+
 def emit(
     client_id: Optional[str],
     kind: str,

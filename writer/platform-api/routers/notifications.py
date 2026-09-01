@@ -158,12 +158,21 @@ async def delete_many(
     auth: dict = Depends(require_auth),
 ) -> OkResponse:
     """Permanently delete a set of a client's notifications in one call — the
-    bulk "select all → delete" action. With `ids`, only those (scoped to the
-    client) are deleted; without them, every notification for the client is
-    deleted."""
+    bulk "select N → delete" action. With `ids`, only those (scoped to the
+    client) are deleted. Clearing the WHOLE feed requires an explicit `all=True`;
+    an omitted or empty `ids` deletes nothing, so a stray or empty-selection
+    request can never silently wipe a client's notification history."""
+    from services import notifications as notifications_svc
+
+    scope, ids = notifications_svc.resolve_delete_scope(
+        [str(i) for i in body.ids] if (body and body.ids) else None,
+        bool(body and body.all),
+    )
+    if scope == "none":
+        return OkResponse()
     supabase = get_supabase()
     query = supabase.table("notifications").delete().eq("client_id", str(client_id))
-    if body and body.ids:
-        query = query.in_("id", [str(i) for i in body.ids])
+    if scope == "ids":
+        query = query.in_("id", ids)
     query.execute()
     return OkResponse()

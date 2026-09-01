@@ -244,6 +244,17 @@ class Settings(BaseSettings):
     # Response-episode tracking: the SOPs' verify loop (2-week rechecks, 6-week
     # escalation) over open rank/maps drop responses.
     episode_tracking_enabled: bool = True
+    # Chronic-emergency escalation (services/goal_escalation.py): a campaign goal
+    # that stays critically behind (behind/overdue) for weeks stops being heard —
+    # the weekly strategist review degrades to a "0 proposals / N findings"
+    # whisper and the scan-over-scan alerts go quiet once nothing is newly worse.
+    # A daily sweep re-surfaces such a goal LOUDLY (critical notification, both
+    # channels, carrying the latest strategist reasoning) once it has been behind
+    # for `chronic_weeks`, then re-shouts every `reescalate_days` while it stays
+    # critical, and closes when it recovers.
+    goal_escalation_enabled: bool = True
+    goal_escalation_chronic_weeks: int = 3
+    goal_escalation_reescalate_days: int = 14
     # Offpage agent extensions: weekly citation-liveness sweep + monthly
     # page-level RD-imbalance capture (paid DataForSEO page summaries).
     citation_check_enabled: bool = True
@@ -658,6 +669,20 @@ class Settings(BaseSettings):
     # MAPS_REPORT_PROVIDER=anthropic to revert (uses maps_report_model then).
     maps_report_provider: str = "openai"          # openai | anthropic
     maps_report_openai_model: str = "gpt-5.4"
+
+    # Local-pack collapse brief — the proactive "why + top move" reasoning folded
+    # INTO the maps-drop alert notification (services/maps_brief.py), so a critical
+    # geo-grid collapse reaches Slack + the in-app feed as reasoning, not a bare
+    # "N alerts detected" pointer. One small, best-effort LLM call per critical
+    # collapse (severity == "critical", i.e. a lost_pack signal); on any failure
+    # the notification degrades to the deterministic alert digest (never blocks
+    # the analyze job). Runs on the maps_report provider for the same Anthropic
+    # 429-saturation reason (a separate quota). Set maps_brief_enabled=False to
+    # revert to the terse digest.
+    maps_brief_enabled: bool = True
+    maps_brief_provider: str = "openai"           # openai | anthropic
+    maps_brief_model: str = "gpt-5.4-mini"
+    maps_brief_max_tokens: int = 600
 
     # Organic Rank Analysis report — the per-keyword deep-dive (the organic
     # analogue of the Local Rank Analysis report). Sonnet writes an observational
