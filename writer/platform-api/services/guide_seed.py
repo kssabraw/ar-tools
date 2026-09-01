@@ -288,6 +288,41 @@ Quick/hidden wins are enriched with CPC / volume / competition.
 - Runs automatically once a client is GSC-eligible, then refreshes monthly. Findings feed the **Action Plan**.""",
     },
     {
+        "slug": "everhour-time",
+        "title": "Everhour Time Tracking",
+        "category": "Tracking",
+        "icon": "ClipboardList",
+        "sort_order": 105,
+        "summary": "How to log your hours in Everhour, and why it feeds client margin and team capacity.",
+        "body": """# Everhour Time Tracking
+
+**Everhour is the stopwatch. The suite is the brain.** Track your hours in Everhour (Chrome extension or web app); once a day the suite pulls them and turns them into task actuals, client cost, and your utilization. Task management itself still lives on the Task board, not Everhour -- Everhour's only job is the clock.
+
+## The two rules that matter
+- **Project = client, always.** Every client has exactly one matching Everhour project. Track work under the client you're doing it for.
+- **Tasks are mirrored, not created by you.** The moment a task is assigned to you on the Task board, a copy of it (name + assignee only) is pushed into Everhour automatically. Track time on that copy -- never create your own tasks in Everhour, and never track time on a subtask/checklist line (only top-level tasks mirror).
+
+## Day-one setup
+1. Get your Everhour account from an admin/PM and sign in at my.everhour.com.
+2. Ask your PM to confirm you're **linked** on the Team page ("Everhour user") -- unlinked time is still tracked fine in Everhour, it just won't attribute correctly in the suite yet.
+3. Install the Chrome extension (search "Everhour" in the Chrome Web Store) and pin it.
+
+## The daily habit
+- **Start a timer** -- pick the project (client), pick the mirrored task, click Start. Switching work? Just start the next timer, no need to stop the old one first.
+- **Forgot to start it?** Log it manually in My Timesheet the same day -- a missing entry reads as zero, not "unknown," and understates that client's real cost.
+- **Internal/meeting time** still counts toward your utilization -- log it under your team's internal category, never under a client by mistake.
+- **End of day** -- check the extension icon. A timer left running overnight is the single most common mistake.
+
+## Where it lands (and why it matters)
+- Task board -- estimated vs. actual hours, so future estimates get better.
+- Client workspace -- a Time card, and once an admin sets a cost rate, real Recipe Engine margin.
+- Team / Workload page -- your utilization, which is how PACE knows who has room for more work before handing it out.
+
+## Tips
+- This isn't surveillance -- nobody watches a live feed of your timer. It's a planning input for client cost, capacity, and estimate accuracy.
+- For the full walkthrough with worked examples and screenshots-free step-by-step, ask your PM for the Everhour field guide (`docs/everhour-time-tracking-user-guide.md`).""",
+    },
+    {
         "slug": "client-reports",
         "title": "Client Reports",
         "category": "Reporting",
