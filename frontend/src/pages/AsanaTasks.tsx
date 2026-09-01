@@ -6,6 +6,7 @@ import {
   AlertTriangle, CheckCircle2,
 } from 'lucide-react'
 import { api } from '../lib/api'
+import { useAuth } from '../context/AuthContext'
 import type {
   Client, AsanaProjectMapping, AsanaTaskTemplateItem,
   AsanaCategoryOption, AsanaGenerateMonthResponse, AsanaTeamMember, AsanaLibraryTaskItem,
@@ -21,6 +22,7 @@ const AUTO = '__auto__'  // assignee-select sentinel for "auto-distribute"
 // section. See docs/modules/asana-task-integration-plan-v1_0.md.
 export function AsanaTasks() {
   const { id } = useParams<{ id: string }>()
+  const { isPacePm } = useAuth()
   const queryClient = useQueryClient()
 
   const { data: client } = useQuery<Client>({
@@ -377,13 +379,15 @@ export function AsanaTasks() {
               nothing is duplicated. {dirty && <strong>Save the template first.</strong>}
             </p>
           </div>
-          <button
-            style={primaryBtn}
-            disabled={!canGenerate || dirty || generate.isPending}
-            onClick={() => { setGenResult(null); generate.mutate() }}
-          >
-            <CalendarPlus size={14} /> {generate.isPending ? 'Generating…' : 'Generate this month'}
-          </button>
+          {isPacePm && (
+            <button
+              style={primaryBtn}
+              disabled={!canGenerate || dirty || generate.isPending}
+              onClick={() => { setGenResult(null); generate.mutate() }}
+            >
+              <CalendarPlus size={14} /> {generate.isPending ? 'Generating…' : 'Generate this month'}
+            </button>
+          )}
         </div>
         {generate.isError && <p style={errText}>{(generate.error as Error).message}</p>}
         {genResult && (

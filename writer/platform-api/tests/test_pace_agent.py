@@ -199,6 +199,48 @@ async def test_force_pending_confirm_needs_no_remention(monkeypatch):
         pace_agent._pace_pending.pop(key, None)
 
 
+async def _chase_plan_confirm(monkeypatch, *, is_pm: bool):
+    """Drive a scheduled Chase Plan (batch pending, NO requester) confirm and
+    return (posted_text, executed?)."""
+    posted = {}
+    executed = {"count": 0}
+
+    async def _post(channel, text, thread_ts=None, token=None):
+        posted["text"] = text
+
+    async def _execute(items, selection, context):
+        executed["count"] += 1
+        return "ran the plan"
+
+    monkeypatch.setattr("services.slack_assistant.post_message", _post)
+    monkeypatch.setattr("services.slack_assistant.strip_mention", lambda t: t)
+    monkeypatch.setattr("services.pace_proposals.parse_plan_reply", lambda q, n: [1])
+    monkeypatch.setattr("services.pace_proposals.execute_plan_selection", _execute)
+    monkeypatch.setattr("services.pace_auth.is_pace_pm", lambda ctx: is_pm)
+    key = ("Cpace", "77")
+    # Scheduled plan pending: batch, items, and crucially NO "requester".
+    pace_agent._pace_pending[key] = {"batch": True, "date": "2026-09-01", "items": [{"reason": "x"}]}
+    try:
+        event = {"channel": "Cpace", "thread_ts": "77", "text": "yes"}
+        handled = await pace_agent.maybe_handle_slack(event, _staff(), force=True, bot_user_id="UBOT")
+        assert handled is True
+        return posted.get("text"), executed["count"]
+    finally:
+        pace_agent._pace_pending.pop(key, None)
+
+
+async def test_chase_plan_approval_refused_for_non_pm(monkeypatch):
+    text, count = await _chase_plan_confirm(monkeypatch, is_pm=False)
+    assert count == 0  # the plan is NOT executed
+    assert "PACE PM" in text
+
+
+async def test_chase_plan_approval_runs_for_pm(monkeypatch):
+    text, count = await _chase_plan_confirm(monkeypatch, is_pm=True)
+    assert count == 1  # a PM's approval executes the plan
+    assert text == "ran the plan"
+
+
 async def test_web_ignores_non_pace_message():
     # Not a pending token, not PACE-shaped → None (falls through to SerMaStr).
     out = await pace_agent.maybe_handle_web(

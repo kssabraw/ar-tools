@@ -125,6 +125,63 @@ def confirm_actor_ok(requester_profile_id: Optional[str], confirmer: ActionConte
 
 
 # ---------------------------------------------------------------------------
+# PACE PM designation (owner ruling 2026-09-01)
+# ---------------------------------------------------------------------------
+# A "PACE PM" is a named person authorized for the two board-level PACE
+# operations that are the human PM's job — approving the daily Chase Plan and
+# manually generating a client's monthly board. Admins are implicitly PMs; a
+# non-admin becomes one via ``profiles.is_pace_pm``. Deliberately a per-person
+# flag, not a role: the PM set is a named few (not "any staff"), and it survives
+# a handoff by moving the flag. This is separate from the role→action matrix
+# above — the two operations gate on PM, everything else stays role-based.
+def pace_pm_from(role: Optional[str], is_pm_flag: bool) -> bool:
+    """Pure: is this ``(role, flag)`` a PACE PM? Admin ⇒ always (implicit PM);
+    otherwise the explicit ``is_pace_pm`` flag. Unit-tested."""
+    return role_rank(role) >= role_rank("admin") or bool(is_pm_flag)
+
+
+def is_pace_pm(context: ActionContext) -> bool:
+    """Whether ``context`` may approve the daily Chase Plan / manually generate a
+    monthly board. A system context ⇒ yes; an anonymous actor ⇒ no; an admin ⇒
+    yes (no DB read needed); otherwise their ``profiles.is_pace_pm`` flag. The one
+    DB read is best-effort and **fail-closed** (an error denies — this gates a
+    write), and is skipped for admins and anonymous actors."""
+    if context.source == "system":
+        return True
+    if context.is_anonymous:
+        return False
+    if role_rank(context.role) >= role_rank("admin"):
+        return True
+    try:
+        rows = (
+            get_supabase()
+            .table("profiles")
+            .select("is_pace_pm")
+            .eq("id", context.profile_id)
+            .limit(1)
+            .execute()
+        ).data
+    except Exception as exc:
+        logger.warning("pace_auth.pm_lookup_failed",
+                       extra={"profile_id": context.profile_id, "error": str(exc)})
+        return False
+    return pace_pm_from(context.role, bool(rows and rows[0].get("is_pace_pm")))
+
+
+def require_pace_pm(context: ActionContext) -> tuple[bool, Optional[str]]:
+    """(ok, reason) — the PM gate with a human-readable refusal, mirroring
+    ``require``. Used by the daily Chase Plan approval and monthly generation."""
+    if is_pace_pm(context):
+        return True, None
+    if context.is_anonymous:
+        if context.source == "slack":
+            return False, "Link your Slack account first (an admin can do it on the Team page)."
+        return False, "You need to be signed in to do that."
+    return False, ("That's a PACE PM action — only a PACE PM can do it. "
+                   "An admin can grant PM on the Team page.")
+
+
+# ---------------------------------------------------------------------------
 # Resolvers
 # ---------------------------------------------------------------------------
 def context_from_auth(auth: dict, *, source: str = "web") -> ActionContext:
