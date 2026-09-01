@@ -1,0 +1,838 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="How to track time in Everhour and why it feeds client margin and team capacity.">
+<title>Everhour Field Guide</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --paper:#F0EEE7;
+    --paper-raised:#FFFFFF;
+    --ink:#1C2321;
+    --ink-soft:#56605B;
+    --ink-faint:#8A9089;
+    --line:#D9D4C6;
+    --line-strong:#C3BDA9;
+    --teal:#1F6F72;
+    --teal-ink:#0F4547;
+    --teal-soft:#E1EEED;
+    --brass:#A8752A;
+    --brass-ink:#7A551D;
+    --brass-soft:#F3E7D2;
+    --rust:#AE4D38;
+    --rust-soft:#F5E4DE;
+    --shadow: 0 1px 2px rgba(28,35,33,0.06), 0 8px 24px rgba(28,35,33,0.05);
+    --radius: 3px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#181B19;
+      --paper-raised:#20241F;
+      --ink:#ECE8DE;
+      --ink-soft:#B4B4A9;
+      --ink-faint:#767C74;
+      --line:#33372F;
+      --line-strong:#454A3F;
+      --teal:#59B0AB;
+      --teal-ink:#BEEAE4;
+      --teal-soft:#1B2F2C;
+      --brass:#D9A54B;
+      --brass-ink:#F0CC8B;
+      --brass-soft:#2E2415;
+      --rust:#E08267;
+      --rust-soft:#331F19;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.25);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#181B19;
+    --paper-raised:#20241F;
+    --ink:#ECE8DE;
+    --ink-soft:#B4B4A9;
+    --ink-faint:#767C74;
+    --line:#33372F;
+    --line-strong:#454A3F;
+    --teal:#59B0AB;
+    --teal-ink:#BEEAE4;
+    --teal-soft:#1B2F2C;
+    --brass:#D9A54B;
+    --brass-ink:#F0CC8B;
+    --brass-soft:#2E2415;
+    --rust:#E08267;
+    --rust-soft:#331F19;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.25);
+  }
+
+  *{ box-sizing:border-box; }
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:"IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3{
+    font-family:"Fraunces", Georgia, "Times New Roman", serif;
+    color:var(--ink);
+    font-weight:600;
+    text-wrap:balance;
+    margin:0;
+  }
+  a{ color:var(--teal-ink, var(--teal)); }
+  a:focus-visible, button:focus-visible, summary:focus-visible{
+    outline:2px solid var(--teal);
+    outline-offset:2px;
+  }
+  code, .mono{ font-family:"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace; }
+  .tnum{ font-variant-numeric: tabular-nums; }
+
+  .page{ max-width:1180px; margin:0 auto; padding: 0 1.5rem 6rem; }
+
+  /* ---------- Masthead ---------- */
+  .masthead{
+    padding: 3.25rem 0 2.25rem;
+    border-bottom: 1px solid var(--line);
+    display:flex; flex-direction:column; gap:1.75rem;
+  }
+  .masthead-inner{ display:flex; align-items:flex-start; gap:1.5rem; }
+  .clockmark{ flex:none; width:64px; height:64px; }
+  .clockmark svg{ width:100%; height:100%; display:block; }
+  .clockmark .face{ fill:var(--paper-raised); stroke:var(--line-strong); stroke-width:1.5; }
+  .clockmark .tick{ stroke:var(--ink-faint); stroke-width:1.5; stroke-linecap:round; }
+  .clockmark .hand-min{ stroke:var(--ink-soft); stroke-width:2; stroke-linecap:round; }
+  .clockmark .hand-sec{
+    stroke:var(--brass); stroke-width:1.6; stroke-linecap:round;
+    transform-origin: 32px 32px;
+    animation: tick 60s steps(60) infinite;
+  }
+  .clockmark .pin{ fill:var(--brass); }
+  @keyframes tick{ from{ transform:rotate(0deg);} to{ transform:rotate(360deg);} }
+  @media (prefers-reduced-motion: reduce){
+    .clockmark .hand-sec{ animation:none; transform:rotate(140deg); }
+  }
+  .masthead-text{ max-width:46rem; }
+  .eyebrow{
+    font-family:"IBM Plex Mono", monospace;
+    font-size:0.72rem; letter-spacing:0.12em; text-transform:uppercase;
+    color:var(--brass-ink, var(--brass)); margin:0 0 0.6rem;
+  }
+  h1{ font-size:clamp(1.8rem, 1.4rem + 1.8vw, 2.6rem); line-height:1.08; }
+  .dek{
+    margin:0.85rem 0 0; color:var(--ink-soft);
+    font-size:1.05rem; max-width:38rem;
+  }
+  .masthead-meta{ display:flex; gap:2.25rem; flex-wrap:wrap; }
+  .meta-item{ display:flex; flex-direction:column; gap:0.15rem; }
+  .meta-num{ font-family:"Fraunces", serif; font-weight:600; font-size:1.5rem; }
+  .meta-label{
+    font-family:"IBM Plex Mono", monospace; font-size:0.68rem;
+    letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint);
+  }
+
+  /* ---------- Layout ---------- */
+  .layout{ display:grid; grid-template-columns: 220px minmax(0,1fr); gap: 3rem; margin-top:2.5rem; align-items:start; }
+  .rail{ position:sticky; top:1.75rem; }
+  .rail-title{
+    font-family:"IBM Plex Mono", monospace; font-size:0.68rem;
+    letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint);
+    margin:0 0 0.85rem;
+  }
+  .rail-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0.05rem; border-left:1px solid var(--line); }
+  .rail-list a{
+    display:block; text-decoration:none; color:var(--ink-soft);
+    font-size:0.86rem; padding:0.4rem 0 0.4rem 0.9rem; border-left:2px solid transparent; margin-left:-1px;
+    transition:color .15s ease, border-color .15s ease;
+  }
+  .rail-list a:hover{ color:var(--ink); }
+  .rail-list a.active{ color:var(--teal-ink,var(--teal)); border-left-color:var(--teal); font-weight:500; }
+
+  .content{ max-width:44rem; min-width:0; }
+
+  .block{ padding: 2.6rem 0; border-bottom:1px solid var(--line); scroll-margin-top:1.5rem; }
+  .block:first-child{ padding-top:0; }
+  .block:last-of-type{ border-bottom:none; }
+  .block-head{ display:flex; align-items:baseline; gap:0.9rem; margin-bottom:1rem; }
+  .block-num{
+    font-family:"IBM Plex Mono", monospace; font-size:0.85rem; color:var(--brass-ink,var(--brass));
+    letter-spacing:0.03em; flex:none;
+  }
+  .block h2{ font-size:1.5rem; }
+  .block h3{ font-size:1.08rem; margin-top:1.9rem; margin-bottom:0.6rem; font-weight:600; }
+  .block p{ margin:0.9rem 0; color:var(--ink); max-width:40rem; }
+  .block p.lede{ font-size:1.06rem; }
+  .block ul, .block ol{ margin:0.9rem 0; padding-left:1.3rem; }
+  .block li{ margin:0.4rem 0; }
+  .block li::marker{ color:var(--ink-faint); }
+  strong{ font-weight:600; }
+
+  /* ---------- Why callout ---------- */
+  .why{
+    background:var(--brass-soft); border-left:3px solid var(--brass);
+    border-radius:0 var(--radius) var(--radius) 0;
+    padding:0.95rem 1.2rem; margin:1.2rem 0;
+  }
+  .why-label{
+    font-family:"IBM Plex Mono", monospace; font-size:0.68rem; letter-spacing:0.1em;
+    text-transform:uppercase; color:var(--brass-ink,var(--brass)); margin:0 0 0.3rem; font-weight:600;
+  }
+  .why p{ margin:0; color:var(--ink); }
+
+  /* ---------- Get-extension card ---------- */
+  .getext{
+    background:var(--paper-raised); border:1px solid var(--line-strong);
+    border-radius:var(--radius); box-shadow:var(--shadow);
+    padding:1.15rem 1.3rem; margin:1.1rem 0;
+  }
+  .getext-label{
+    font-family:"IBM Plex Mono", monospace; font-size:0.68rem; letter-spacing:0.1em;
+    text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.6rem;
+  }
+  .getext-btn{
+    display:inline-flex; align-items:center; gap:0.5rem;
+    background:var(--teal); color:#fff; text-decoration:none;
+    font-weight:600; font-size:0.92rem; padding:0.65rem 1.1rem; border-radius:var(--radius);
+  }
+  .getext-btn:hover{ background:var(--teal-ink,var(--teal)); }
+  .getext-note{ margin:0.9rem 0 0; font-size:0.86rem; color:var(--ink-soft); }
+  .getext-note a{ color:var(--teal-ink,var(--teal)); }
+
+  /* ---------- Worked-example callout ---------- */
+  .example{
+    background:transparent; border:1px dashed var(--line-strong);
+    border-radius:var(--radius); padding:0.9rem 1.2rem; margin:1.1rem 0;
+  }
+  .example-label{
+    font-family:"IBM Plex Mono", monospace; font-size:0.66rem; letter-spacing:0.1em;
+    text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.35rem; font-weight:600;
+  }
+  .example p{ margin:0; color:var(--ink-soft); font-size:0.94rem; }
+  .example .fig{ font-family:"IBM Plex Mono", monospace; color:var(--ink); font-weight:500; }
+  .scenario{
+    background:var(--paper); border:1px solid var(--line);
+    border-radius:var(--radius); padding:0.9rem 1.2rem; margin:1.2rem 0 1.6rem;
+    font-size:0.92rem; color:var(--ink-soft);
+  }
+  .scenario .example-label{ color:var(--teal-ink,var(--teal)); }
+
+  /* ---------- Not-callout (mental model correction) ---------- */
+  .note{
+    background:var(--teal-soft); border-left:3px solid var(--teal);
+    border-radius:0 var(--radius) var(--radius) 0;
+    padding:0.95rem 1.2rem; margin:1.2rem 0;
+  }
+  .note p{ margin:0; }
+  .note strong{ color:var(--teal-ink,var(--teal)); }
+
+  /* ---------- Terms table / mistakes table ---------- */
+  .table-wrap{ overflow-x:auto; margin:1.1rem 0; }
+  table{ width:100%; border-collapse:collapse; font-size:0.92rem; }
+  thead th{
+    text-align:left; font-family:"IBM Plex Mono", monospace; font-size:0.68rem;
+    letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint);
+    padding:0 0.9rem 0.55rem 0; border-bottom:1px solid var(--line-strong); font-weight:600;
+  }
+  tbody td{
+    padding:0.75rem 0.9rem 0.75rem 0; border-bottom:1px solid var(--line);
+    vertical-align:top; color:var(--ink);
+  }
+  tbody tr:last-child td{ border-bottom:none; }
+  td.term, td.mistake{ font-weight:600; white-space:nowrap; color:var(--ink); }
+  td.fix{ color:var(--teal-ink,var(--teal)); }
+
+  /* ---------- Pipeline diagram ---------- */
+  .pipeline{
+    background:var(--paper-raised); border:1px solid var(--line);
+    border-radius:var(--radius); padding:2rem 1.5rem; margin:1.4rem 0;
+    box-shadow:var(--shadow);
+  }
+  .pl-row{ display:flex; align-items:center; justify-content:center; gap:0.9rem; flex-wrap:wrap; }
+  .pl-box{
+    border:1px solid var(--line-strong); background:var(--paper);
+    border-radius:var(--radius); padding:0.85rem 1.1rem; text-align:center; min-width:9.5rem;
+  }
+  .pl-box.you{ border-color:var(--ink-faint); }
+  .pl-box.hub{ border-color:var(--teal); background:var(--teal-soft); }
+  .pl-box .pl-label{ font-family:"IBM Plex Mono", monospace; font-size:0.65rem; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-faint); display:block; margin-bottom:0.25rem; }
+  .pl-box .pl-title{ font-weight:600; font-size:0.95rem; }
+  .pl-box .pl-sub{ font-size:0.78rem; color:var(--ink-soft); margin-top:0.2rem; }
+  .pl-arrow{ font-family:"IBM Plex Mono", monospace; font-size:1.3rem; color:var(--teal); flex:none; }
+  .pl-down{ display:flex; flex-direction:column; align-items:center; margin:0.9rem 0; gap:0.15rem; }
+  .pl-down .pl-arrow{ font-size:1.6rem; }
+  .pl-down .pl-note{ font-family:"IBM Plex Mono", monospace; font-size:0.72rem; color:var(--brass-ink,var(--brass)); text-transform:uppercase; letter-spacing:.06em; text-align:center; }
+  .pl-outputs{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:0.9rem; margin-top:0.9rem; }
+  .pl-outputs .pl-box{ min-width:0; }
+  @media (max-width:640px){ .pl-outputs{ grid-template-columns:1fr; } }
+
+  /* ---------- Quick reference card ---------- */
+  .refcard{
+    background:var(--paper-raised); border:1px solid var(--brass); border-radius:var(--radius);
+    box-shadow:var(--shadow); padding:1.6rem 1.7rem; margin:1.2rem 0;
+  }
+  .refcard h3{ margin-top:0; font-size:1rem; }
+  .refcard h3:first-child{ margin-top:0; }
+  .refgrid{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1.6rem; margin-top:0.5rem; }
+  @media (max-width:760px){ .refgrid{ grid-template-columns:1fr; } }
+  .refgrid ol{ margin:0.5rem 0 0; padding-left:1.15rem; }
+  .refgrid ul{ margin:0.5rem 0 0; padding:0; list-style:none; }
+  .refgrid ul li{ padding-left:1.35rem; position:relative; margin:0.45rem 0; }
+  .refgrid ul.dos li::before{ content:"✓"; position:absolute; left:0; color:var(--teal); font-weight:600; }
+  .refgrid ul.donts li::before{ content:"✕"; position:absolute; left:0; color:var(--rust); font-weight:600; }
+  .refgrid .refhead{
+    font-family:"IBM Plex Mono", monospace; font-size:0.68rem; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--ink-faint);
+  }
+
+  /* ---------- FAQ ---------- */
+  details.faq{ border-bottom:1px solid var(--line); padding:0.9rem 0; }
+  details.faq:first-of-type{ border-top:1px solid var(--line); }
+  details.faq summary{
+    cursor:pointer; font-weight:600; list-style:none; display:flex;
+    align-items:baseline; justify-content:space-between; gap:1rem; font-size:0.98rem;
+  }
+  details.faq summary::-webkit-details-marker{ display:none; }
+  details.faq summary::after{
+    content:"+"; font-family:"IBM Plex Mono", monospace; color:var(--brass-ink,var(--brass));
+    font-size:1.1rem; flex:none; transition:transform .15s ease;
+  }
+  details.faq[open] summary::after{ content:"–"; }
+  details.faq p{ margin:0.7rem 0 0.2rem; color:var(--ink-soft); max-width:38rem; }
+
+  /* ---------- Footer ---------- */
+  .colophon{
+    margin-top:2.5rem; padding-top:1.5rem; border-top:1px solid var(--line);
+    color:var(--ink-faint); font-size:0.86rem;
+  }
+
+  /* ---------- Mobile rail ---------- */
+  @media (max-width:900px){
+    .layout{ grid-template-columns:1fr; gap:1.5rem; }
+    .rail{ position:static; }
+    .rail-title{ margin-bottom:0.5rem; }
+    .rail-list{ flex-direction:row; overflow-x:auto; border-left:none; gap:0.4rem; padding-bottom:0.3rem; }
+    .rail-list a{
+      border-left:none; border:1px solid var(--line); border-radius:999px;
+      padding:0.35rem 0.85rem; white-space:nowrap; margin-left:0;
+    }
+    .rail-list a.active{ background:var(--teal-soft); border-color:var(--teal); }
+  }
+  @media (max-width:640px){
+    .masthead-inner{ gap:1rem; }
+    .clockmark{ width:48px; height:48px; }
+    .masthead{ padding-top:2rem; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="clockmark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <circle class="face" cx="32" cy="32" r="29"/>
+          <g class="tick">
+            <line x1="32" y1="6" x2="32" y2="11"/>
+            <line x1="32" y1="53" x2="32" y2="58"/>
+            <line x1="6" y1="32" x2="11" y2="32"/>
+            <line x1="53" y1="32" x2="58" y2="32"/>
+          </g>
+          <line class="hand-min" x1="32" y1="32" x2="32" y2="15"/>
+          <line class="hand-sec" x1="32" y1="32" x2="32" y2="13"/>
+          <circle class="pin" cx="32" cy="32" r="2"/>
+        </svg>
+      </div>
+      <div class="masthead-text">
+        <p class="eyebrow">New&nbsp;Hire Field Guide · Time Tracking</p>
+        <h1>Everhour, start to habit</h1>
+        <p class="dek">Everhour is the stopwatch. The suite is the brain. This is how the two talk to
+          each other, and the small daily habit that keeps every number downstream of it honest.</p>
+      </div>
+    </div>
+    <div class="masthead-meta">
+      <div class="meta-item"><span class="meta-num tnum">10</span><span class="meta-label">Sections</span></div>
+      <div class="meta-item"><span class="meta-num tnum">~35</span><span class="meta-label">Min to read</span></div>
+      <div class="meta-item"><span class="meta-num tnum">1</span><span class="meta-label">Daily habit</span></div>
+      <div class="meta-item"><span class="meta-num tnum">0</span><span class="meta-label">Code required</span></div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="rail" aria-label="Contents">
+      <p class="rail-title">Contents</p>
+      <ol class="rail-list" id="railList">
+        <li><a href="#s1" data-target="s1">01 · Short version</a></li>
+        <li><a href="#s2" data-target="s2">02 · Terms</a></li>
+        <li><a href="#s3" data-target="s3">03 · How it connects</a></li>
+        <li><a href="#s4" data-target="s4">04 · Where tasks come from</a></li>
+        <li><a href="#s5" data-target="s5">05 · Day-one setup</a></li>
+        <li><a href="#s6" data-target="s6">06 · The daily habit</a></li>
+        <li><a href="#s7" data-target="s7">07 · Where it lands</a></li>
+        <li><a href="#s8" data-target="s8">08 · Common mistakes</a></li>
+        <li><a href="#s9" data-target="s9">09 · Quick reference</a></li>
+        <li><a href="#s10" data-target="s10">10 · FAQ</a></li>
+      </ol>
+    </nav>
+
+    <main class="content">
+
+      <section id="s1" class="block">
+        <div class="block-head"><span class="block-num">01</span><h2>The one-paragraph version</h2></div>
+        <p class="lede"><strong>Everhour is the stopwatch. The suite is the brain.</strong> You track
+          your hours in Everhour — a lightweight time-tracking tool with a Chrome extension and a
+          web app — against the clients and tasks you're working on. Once a day, the suite
+          automatically pulls everyone's logged time and turns it into three things the agency
+          actually uses: how much a client's work really costs, how full or empty each person's
+          plate is, and how a task's actual time compared to what was estimated.</p>
+        <div class="note">
+          <p><strong>What Everhour is not.</strong> You don't manage your to-do list in Everhour —
+            statuses, due dates, comments, and checklists all still live on the suite's Task board.
+            Everhour has exactly one job: the clock.</p>
+        </div>
+      </section>
+
+      <section id="s2" class="block">
+        <div class="block-head"><span class="block-num">02</span><h2>Terms you'll see</h2></div>
+        <p>Twelve words, and you'll understand every screen you touch today.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:32%">Term</th><th>Means</th></tr></thead>
+            <tbody>
+              <tr><td class="term">Everhour</td><td>The third-party time-tracking tool the whole agency uses to log hours.</td></tr>
+              <tr><td class="term">Project</td><td>Everhour's word for a client. Every client has exactly one matching project — same name, one-to-one.</td></tr>
+              <tr><td class="term">Task</td><td>A to-do item inside a project. Ours are created <em>for</em> you automatically — see §04.</td></tr>
+              <tr><td class="term">Timer</td><td>Click once to start, click once to stop — Everhour counts the seconds while it runs.</td></tr>
+              <tr><td class="term">Manual entry</td><td>Typing in a number of hours after the fact instead of running a live timer.</td></tr>
+              <tr><td class="term">The suite</td><td>Our own dashboard — clients, the Task board, SerMaStr, PACE, Reports, everything else.</td></tr>
+              <tr><td class="term">Task board</td><td>The suite's own to-do list per client — where status, due dates, comments, and checklists live.</td></tr>
+              <tr><td class="term">Sync</td><td>The once-a-day automatic pull that copies your Everhour hours into the suite.</td></tr>
+              <tr><td class="term">Actual hours</td><td>How long a task really took, per the sync — shown next to the estimate on the task itself.</td></tr>
+              <tr><td class="term">Utilization</td><td>What percentage of your expected weekly hours you've actually logged.</td></tr>
+              <tr><td class="term">Recipe Engine</td><td>The suite's monthly-budget calculator for a client. Its "actual margin" reads Everhour hours once a cost rate is set.</td></tr>
+              <tr><td class="term">Billable</td><td>A flag on a time entry — is this client-chargeable work or not.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="s3" class="block">
+        <div class="block-head"><span class="block-num">03</span><h2>The big picture — how the pieces connect</h2></div>
+        <p>Before the how-to, see the whole shape once — every "why" below traces back to this.</p>
+
+        <div class="pipeline">
+          <div class="pl-row">
+            <div class="pl-box you">
+              <span class="pl-label">Step 1</span>
+              <span class="pl-title">You</span>
+              <span class="pl-sub">extension or web app</span>
+            </div>
+            <span class="pl-arrow">→</span>
+            <div class="pl-box hub">
+              <span class="pl-label">Step 2</span>
+              <span class="pl-title">Everhour</span>
+              <span class="pl-sub">stores every entry: name, date, hours</span>
+            </div>
+          </div>
+          <div class="pl-down">
+            <span class="pl-arrow">↓</span>
+            <span class="pl-note">Once a day · automatic · you trigger nothing</span>
+          </div>
+          <div class="pl-outputs">
+            <div class="pl-box">
+              <span class="pl-label">Per task</span>
+              <span class="pl-title">Actual hours</span>
+              <span class="pl-sub">shown beside the estimate</span>
+            </div>
+            <div class="pl-box">
+              <span class="pl-label">Per client</span>
+              <span class="pl-title">Time &amp; margin</span>
+              <span class="pl-sub">Time card + Recipe Engine</span>
+            </div>
+            <div class="pl-box">
+              <span class="pl-label">Per person</span>
+              <span class="pl-title">Utilization</span>
+              <span class="pl-sub">feeds PACE's workload view</span>
+            </div>
+          </div>
+        </div>
+
+        <p>Three things fall out of that diagram worth understanding up front:</p>
+        <ol>
+          <li><strong>It's one-way.</strong> Everhour never tells you what to work on, and the suite
+            never writes anything back into Everhour except the task names themselves (§04). All the
+            thinking — status, due dates, priority — happens on the Task board.</li>
+          <li><strong>The project = the client, always.</strong> Doing work for Acme Roofing? You
+            track it under the Acme Roofing project — never a personal or made-up project name.</li>
+          <li><strong>This isn't surveillance — it's a planning input.</strong> Nobody watches a live
+            feed of your timer. The numbers exist so the agency can know what a client's work really
+            costs, spot overload before it burns someone out, and make next month's estimates more
+            accurate than a guess.</li>
+        </ol>
+      </section>
+
+      <section id="s4" class="block">
+        <div class="block-head"><span class="block-num">04</span><h2>Where your tasks come from</h2></div>
+        <p class="lede">Read this before you go looking for them — it saves you a "why can't I find
+          my task" message to your PM.</p>
+        <p>Everhour normally plugs into tools like Asana or Trello, drawing a "start timer" button
+          right next to each task on those sites. <strong>Our Task board is our own custom-built
+          tool, so Everhour can't do that trick here.</strong> Instead, the suite does the opposite:
+          the moment a task is created for you on the Task board, a lightweight copy of it — just
+          the name and who it's assigned to — is automatically pushed into Everhour as a real task,
+          sitting inside that client's project. That copy is what you click into and track time
+          against.</p>
+        <ul>
+          <li><strong>Don't create your own tasks in Everhour.</strong> If you don't see the task
+            you're looking for, it either hasn't synced yet, isn't assigned to you, or is a
+            <strong>subtask/checklist item</strong> — only top-level tasks get a copy, so track time
+            against the parent task.</li>
+          <li><strong>Search by the exact task name</strong> from the Task board — the copy uses the
+            same name.</li>
+          <li><strong>Task predates this integration?</strong> Log time against the client's project
+            with no specific task, and mention it to your PM.</li>
+          <li>The copy is metadata-only. Marking it "done" in Everhour does <strong>nothing</strong>
+            to the real task — you still complete it on the Task board.</li>
+        </ul>
+        <div class="example">
+          <p class="example-label">Example</p>
+          <p>Your PM creates a task called <em>"Write blog post — roof maintenance checklist"</em>
+            on the Task board and assigns it to you, under the client <strong>Acme Roofing</strong>.
+            Within a few minutes, a task with that exact name appears inside the Acme Roofing
+            project in Everhour. That's the one you open and track time against — not a new task
+            you type in yourself.</p>
+        </div>
+      </section>
+
+      <section id="s5" class="block">
+        <div class="block-head"><span class="block-num">05</span><h2>Day-one setup</h2></div>
+        <p>Do this once, in order, before you track your first real hour.</p>
+
+        <h3>5.1 — Get your account</h3>
+        <p>Everhour accounts are provisioned by an admin, not self-serve. If you don't already have
+          an invite email, ask your PM or admin to add you to the team. You'll set a password (or
+          sign in with Google, if that's how the team is set up) the first time you log in at
+          <span class="mono">my.everhour.com</span>.</p>
+
+        <h3>5.2 — Get linked to your suite profile</h3>
+        <div class="why">
+          <p class="why-label">Why this step matters most</p>
+          <p>The suite ties your Everhour identity to your dashboard login so your logged hours
+            land on the right person's utilization and the right client's margin. An admin sets this
+            on the Team page (Team &amp; Capacity → your row → "Everhour user") — but it's worth
+            confirming out loud in your first week: <em>"Am I linked yet?"</em> Unlinked, your time
+            is still tracked correctly in Everhour itself — it just won't show up correctly inside
+            the suite until someone links you.</p>
+        </div>
+
+        <h3>5.3 — Install the Chrome extension</h3>
+        <div class="getext">
+          <p class="getext-label">Official Chrome Web Store listing</p>
+          <a class="getext-btn" href="https://chromewebstore.google.com/detail/everhour-%E2%80%94-time-tracking/dnebklifojaaecmheejjopgjdljebpeo" target="_blank" rel="noopener">
+            Everhour — Time Tracking, Budgets, Expenses <span aria-hidden="true">↗</span>
+          </a>
+          <p class="getext-note">Confirm the publisher reads <strong>Everhour</strong> and the icon
+            matches your invite email before installing — extension names get copied. Install
+            trouble, or on Edge/Brave instead of Chrome? See Everhour's own
+            <a href="https://support.everhour.com/article/441-how-to-install-everhour-extension-in-chrome" target="_blank" rel="noopener">Chrome install guide</a>
+            or <a href="https://support.everhour.com/article/302-how-to-install-everhour-browser-extensions-on-microsoft-edge" target="_blank" rel="noopener">Edge install guide</a>.</p>
+        </div>
+        <ol>
+          <li>Open the listing above and click <strong>Add to Chrome</strong> → <strong>Add extension</strong>.</li>
+          <li>Click the puzzle-piece icon in Chrome's toolbar and <strong>pin</strong> the Everhour
+            icon so it's always visible — you'll use it constantly.</li>
+          <li>Click the pinned icon and sign in with the account from §5.1.</li>
+        </ol>
+        <p>You don't strictly need the extension — everything works from <span class="mono">my.everhour.com</span>
+          too — but the extension is faster for the daily habit because it's always one click away.</p>
+
+        <h3>5.4 — Take a lap around the web app</h3>
+        <p>Log in once and find <strong>Projects</strong> (your clients — confirm you can see the
+          ones you're assigned to), <strong>My Timesheet</strong> (your own day-by-day log), and
+          <strong>Reports</strong> (mostly a PM/admin surface, but good to know it exists).</p>
+      </section>
+
+      <section id="s6" class="block">
+        <div class="block-head"><span class="block-num">06</span><h2>The daily habit — step by step</h2></div>
+        <p class="lede">The part you'll do dozens of times a week. There are two ways to log time —
+          a <strong>live timer</strong> and a <strong>manual entry</strong>. Use whichever fits the
+          moment; both count exactly the same on the suite side.</p>
+
+        <div class="scenario">
+          <p class="example-label">Running example — a Tuesday</p>
+          <p>§6.1–6.6 all follow the same day: you're a content writer with two active clients —
+            <strong>Acme Roofing</strong> and <strong>Riverside Dental</strong> — and one task
+            assigned to you on the Task board, <em>"Write blog post — roof maintenance checklist"</em>
+            (Acme Roofing, estimated 3h).</p>
+        </div>
+
+        <h3>6.1 — Starting a live timer (the normal case)</h3>
+        <ol>
+          <li>Open the Everhour extension popup (or the web app).</li>
+          <li>Pick the <strong>project</strong> — the client you're about to work on.</li>
+          <li>Pick the <strong>task</strong> — the Everhour copy of your Task-board item (§04).</li>
+          <li>Click <strong>Start</strong>. The extension icon changes, and the popup shows the live
+            count.</li>
+          <li>Do the work.</li>
+          <li>Switching to something else? Click <strong>Stop</strong> — or just start a new timer;
+            Everhour stops the old one automatically.</li>
+        </ol>
+        <div class="why">
+          <p class="why-label">Why it matters</p>
+          <p>A live timer is the most accurate record there is — no guessing later "was that 45
+            minutes or an hour?" It's the best habit to build, especially for focused, single-task
+            work.</p>
+        </div>
+        <div class="example">
+          <p class="example-label">Example</p>
+          <p>At <span class="fig">9:14 AM</span> you open the extension, select <strong>Acme
+            Roofing</strong>, select <em>"Write blog post — roof maintenance checklist,"</em> and
+            click <strong>Start</strong>. You write until <span class="fig">11:50 AM</span>, then
+            click <strong>Stop</strong>. Everhour has logged <span class="fig">2h 36m</span> — no
+            math required.</p>
+        </div>
+
+        <h3>6.2 — Logging time after the fact</h3>
+        <p>You'll forget to start the timer sometimes. That's fine — don't skip logging the time:</p>
+        <ol>
+          <li>Open <strong>My Timesheet</strong> (web app or the extension's day view).</li>
+          <li>Find the day and the project/task row (or add one).</li>
+          <li>Type in the hours — <span class="mono tnum">1.5</span> for an hour and a half.</li>
+          <li>Confirm/save.</li>
+        </ol>
+        <div class="why">
+          <p class="why-label">Why it matters</p>
+          <p>A missing entry isn't neutral — it looks like zero time was spent, which understates
+            that client's real cost and makes your utilization look artificially low. Log it even
+            roughly; a good estimate beats nothing.</p>
+        </div>
+        <div class="example">
+          <p class="example-label">Example</p>
+          <p>At <span class="fig">1:00 PM</span> you took a 45-minute call with <strong>Riverside
+            Dental</strong> but never started a timer for it. That afternoon you open My Timesheet,
+            find today under the Riverside Dental project (no specific task — it was a call), and
+            type <span class="fig tnum">0.75</span> into the hours field (45 minutes = 0.75h).
+            Saved — the call is accounted for even though you forgot in the moment.</p>
+        </div>
+
+        <h3>6.3 — Switching tasks mid-day</h3>
+        <p>Just start the new timer — Everhour handles the handoff. Glance at the extension icon
+          before you start something new; a timer already running against yesterday's task usually
+          means you forgot to stop it (§6.6).</p>
+
+        <h3>6.4 — Logging non-client / internal time</h3>
+        <p>Meetings, training, internal admin — it still counts toward <em>your</em> utilization even
+          though it doesn't belong to a client, so it shouldn't be logged under a client's project.
+          Ask your PM which project or category the team uses for this. Don't leave it untracked,
+          and don't log it under a client by mistake — that quietly inflates that client's real cost.</p>
+        <div class="example">
+          <p class="example-label">Example</p>
+          <p>Monday's 30-minute team standup isn't billable to any client. You log
+            <span class="fig tnum">0.5</span> under the team's <strong>Internal / Admin</strong>
+            project — not under Acme Roofing just because that's the client you happened to be
+            thinking about that morning, and not skipped just because "it's only a standup."</p>
+        </div>
+
+        <h3>6.5 — Fixing a mistake</h3>
+        <p>Wrong project, wrong day, wrong duration — it happens. In <strong>My Timesheet</strong>,
+          click into the entry and edit or delete it directly. No approval step, no need to ask
+          permission. Fix it as soon as you notice.</p>
+        <div class="example">
+          <p class="example-label">Example</p>
+          <p>On Wednesday you notice a <span class="fig">2-hour</span> entry landed under
+            <strong>Riverside Dental</strong>, but it was actually more blog-post work for
+            <strong>Acme Roofing</strong>. You open that entry and change the project from
+            Riverside Dental to Acme Roofing — no approval needed, just fix it.</p>
+        </div>
+
+        <h3>6.6 — End of your work session</h3>
+        <p>Before you close your laptop: check the extension icon. A timer left running overnight
+          logs hours you didn't actually work — the single most common Everhour mistake. A 60-second
+          scan of <strong>My Timesheet</strong> against what you remember doing is worth it.</p>
+        <div class="example">
+          <p class="example-label">Example</p>
+          <p>At <span class="fig">5:30 PM</span>, about to close your laptop, you notice the
+            extension icon shows a timer still running — from a Riverside Dental call that actually
+            ended at 2:15 PM. You click <strong>Stop</strong>, then edit that entry's duration down
+            from "3h 15m and counting" to the real <span class="fig">~20 minutes</span> the call
+            took.</p>
+        </div>
+
+        <h3>6.7 — Billable vs. non-billable</h3>
+        <p>Some entries carry a billable toggle. If your role involves marking this, your PM will
+          give you the convention — default to the team standard unless told otherwise. The suite
+          captures this flag today but doesn't yet split it into separate reporting, so getting it
+          exactly right isn't mission-critical yet — but the habit will already be right the day it
+          is.</p>
+      </section>
+
+      <section id="s7" class="block">
+        <div class="block-head"><span class="block-num">07</span><h2>Where your time lands — and why it's worth doing right</h2></div>
+        <p>You never trigger anything — once a day, the suite quietly pulls the team's Everhour
+          entries and turns them into things people actually look at:</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:26%">Shows up</th><th style="width:30%">Looks like</th><th>Why it exists</th></tr></thead>
+            <tbody>
+              <tr>
+                <td class="term">On the task itself</td>
+                <td class="mono tnum">Est. 3h · Actual 4.5h</td>
+                <td>Lets a PM see which tasks run over at a glance, and makes next month's estimates more honest.</td>
+              </tr>
+              <tr>
+                <td class="term">Client workspace → Time card</td>
+                <td>A rolling total of hours logged</td>
+                <td>Gives account managers a real read on how much time a client actually takes.</td>
+              </tr>
+              <tr>
+                <td class="term">Team / Workload page</td>
+                <td>Logged hours vs. weekly capacity, as %</td>
+                <td>How PACE knows who has room and who's stretched, so new work goes to someone with capacity.</td>
+              </tr>
+              <tr>
+                <td class="term">Recipe Engine → Actual margin</td>
+                <td>A real profitability number</td>
+                <td>Turns "we think this client is profitable" into "we know."</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>None of this is about watching any one person — it's the difference between planning
+          capacity and budgets off guesses versus off what actually happened. Accurate logging is
+          what makes every one of those numbers trustworthy.</p>
+        <div class="example">
+          <p class="example-label">Example</p>
+          <p>By Friday, the task board shows <em>"Write blog post — roof maintenance checklist" —
+            Estimated 3h · Actual <span class="fig tnum">3.1h</span></em> — close enough that a
+            similar post next time gets estimated the same way instead of padded "just in case."
+            Acme Roofing's Time card for the month reads <span class="fig tnum">18.25h</span>
+            logged. Your Workload page shows <span class="fig tnum">86%</span> utilization for the
+            week — comfortably full, so PACE knows it's fine to hand you the next task instead of
+            routing it elsewhere.</p>
+        </div>
+      </section>
+
+      <section id="s8" class="block">
+        <div class="block-head"><span class="block-num">08</span><h2>Common mistakes</h2></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:28%">Mistake</th><th style="width:34%">What it causes</th><th>Fix</th></tr></thead>
+            <tbody>
+              <tr><td class="mistake">Timer left running overnight</td><td>Inflated hours on a task and on your utilization</td><td class="fix">Stop it, edit the entry down to the real duration.</td></tr>
+              <tr><td class="mistake">Wrong client's project</td><td>That client's cost looks wrong; your real client looks understated</td><td class="fix">Edit the entry, move it to the correct project.</td></tr>
+              <tr><td class="mistake">Created a new task in Everhour</td><td>Your hours land on a task the suite doesn't recognize</td><td class="fix">Search for the mirrored task by its Task-board name instead.</td></tr>
+              <tr><td class="mistake">Tracked time on a subtask</td><td>Same as above — only top-level tasks get mirrored</td><td class="fix">Track time on the parent task.</td></tr>
+              <tr><td class="mistake">Internal time not logged</td><td>Utilization looks artificially low</td><td class="fix">Log it under your team's internal/non-client category.</td></tr>
+              <tr><td class="mistake">Logging days late, then guessing</td><td>Estimates get worse, not better, over time</td><td class="fix">Log daily, even roughly.</td></tr>
+              <tr><td class="mistake">Managing to-dos inside Everhour</td><td>You'll miss due dates, statuses, comments</td><td class="fix">The Task board is where task management happens.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="s9" class="block">
+        <div class="block-head"><span class="block-num">09</span><h2>Quick reference</h2></div>
+        <div class="refcard">
+          <h3>Every work session</h3>
+          <ol>
+            <li>Open the extension → pick the client's project → pick the mirrored task → <strong>Start</strong>.</li>
+            <li>Switching work? Just start the next timer.</li>
+            <li>Forgot to start it? Log it manually the same day.</li>
+            <li>End of day: check the icon — no timer should still be running.</li>
+          </ol>
+          <div class="refgrid">
+            <div>
+              <p class="refhead">Once, on day one</p>
+              <ul class="dos">
+                <li>Confirm your account and login.</li>
+                <li>Confirm you're linked on the Team page.</li>
+                <li>Install + pin the extension, sign in.</li>
+              </ul>
+            </div>
+            <div>
+              <p class="refhead">Do</p>
+              <ul class="dos">
+                <li>Track the mirrored task, not a new one.</li>
+                <li>Log honestly, even roughly.</li>
+                <li>Fix mistakes as soon as you spot them.</li>
+              </ul>
+            </div>
+            <div>
+              <p class="refhead">Never</p>
+              <ul class="donts">
+                <li>Create your own tasks in Everhour.</li>
+                <li>Log client work to the wrong project.</li>
+                <li>Manage your to-do list from inside Everhour.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="s10" class="block">
+        <div class="block-head"><span class="block-num">10</span><h2>FAQ</h2></div>
+
+        <details class="faq">
+          <summary>Do I need to track every minute of my day?</summary>
+          <p>Track your actual working time on client and internal work. You don't need to account
+            for a bathroom break down to the second — the goal is an honest, close-enough picture,
+            not a stopwatch on your whole life.</p>
+        </details>
+        <details class="faq">
+          <summary>What if I genuinely don't remember how long something took?</summary>
+          <p>Log your best honest estimate rather than nothing. Nothing reads as zero, which is
+            worse than an approximate number.</p>
+        </details>
+        <details class="faq">
+          <summary>My task isn't in Everhour yet — what do I do?</summary>
+          <p>Give it a little time — the copy is created automatically but you may be looking before
+            it syncs. Still missing? It may be a subtask (never mirrored) or an older task that
+            predates the sync — ask your PM.</p>
+        </details>
+        <details class="faq">
+          <summary>Can I see my own utilization number?</summary>
+          <p>Ask your PM — the Team/Workload view is generally a PM/admin surface, but there's no
+            reason you can't ask how you're tracking.</p>
+        </details>
+        <details class="faq">
+          <summary>Does marking something "done" in Everhour close it out on the Task board?</summary>
+          <p>No. They're not connected in that direction. Complete the task on the Task board
+            itself.</p>
+        </details>
+        <details class="faq">
+          <summary>Is this used to check up on me?</summary>
+          <p>It's used to plan — client cost, team capacity, and estimate accuracy. Nobody is
+            watching a live feed of your timer. Log honestly and it does its job quietly in the
+            background.</p>
+        </details>
+      </section>
+
+      <p class="colophon">Questions this guide doesn't answer? Ask your PM or admin — Everhour setup
+        (accounts, project mapping, the suite link) is admin-side and usually a two-minute fix.</p>
+
+    </main>
+  </div>
+</div>
+
+<script>
+(function(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('.rail-list a'));
+  var sections = links.map(function(a){ return document.getElementById(a.getAttribute('data-target')); });
+  if(!('IntersectionObserver' in window)) return;
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(entry){
+      var link = document.querySelector('.rail-list a[data-target="'+entry.target.id+'"]');
+      if(!link) return;
+      if(entry.isIntersecting){
+        links.forEach(function(l){ l.classList.remove('active'); });
+        link.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-15% 0px -70% 0px', threshold: 0 });
+  sections.forEach(function(s){ if(s) io.observe(s); });
+})();
+</script>
+
+</body>
+</html>

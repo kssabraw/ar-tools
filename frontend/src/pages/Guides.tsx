@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, BookOpen, Rocket, ListChecks, FileText, Building2, Sparkles, TrendingUp,
   MapPin, Eye, FileSearch, FileBarChart, ClipboardList, Settings, LifeBuoy, ArrowRight,
-  Plus, Pencil, Trash2,
+  Plus, Pencil, Trash2, ExternalLink,
 } from 'lucide-react'
 import { Markdown } from '../components/Markdown'
 import { api } from '../lib/api'
@@ -30,6 +30,14 @@ const ICONS: Record<string, React.ReactNode> = {
 }
 
 const CATEGORIES: GuideCategory[] = ['Start here', 'Content', 'Tracking', 'Reporting', 'Setup']
+
+// Guides that also have a fully-designed, illustrated standalone page under
+// /field-guides/<slug>.html (static files in frontend/public/field-guides/) —
+// a richer read than this portal's plain Markdown-subset renderer can offer.
+// Keyed by slug so it degrades harmlessly if a guide is renamed/removed.
+const FIELD_GUIDE_SLUGS = new Set([
+  'everhour-time', 'sermastr', 'task-manager', 'pace-qa', 'website-builder',
+])
 
 function icon(key: string): React.ReactNode {
   return ICONS[key] ?? <BookOpen size={20} />
@@ -125,6 +133,16 @@ function GuideDetail({ slug, guides, isAdmin, onEdit }: {
               {guide.category}
             </span>
           </div>
+          {FIELD_GUIDE_SLUGS.has(guide.slug) && (
+            <a
+              href={`/field-guides/${guide.slug}.html`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={fieldGuideLink}
+            >
+              <ExternalLink size={13} /> Open the illustrated field guide
+            </a>
+          )}
           <Markdown>{guide.body}</Markdown>
         </div>
       )}
@@ -260,6 +278,11 @@ const primaryBtn: React.CSSProperties = {
 const ghostBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600,
   color: '#334155', background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, padding: '7px 12px', cursor: 'pointer',
+}
+const fieldGuideLink: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600,
+  color: '#4338ca', background: '#eef2ff', border: '1px solid #c7d2fe', borderRadius: 8,
+  padding: '7px 12px', margin: '10px 0 18px', textDecoration: 'none',
 }
 const draftTag: React.CSSProperties = {
   marginLeft: 8, fontSize: 10, fontWeight: 700, color: '#b45309', background: '#fffbeb',

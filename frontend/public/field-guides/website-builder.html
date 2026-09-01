@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="A step-by-step walkthrough for building a client's website with the Website Builder module.">
+<title>Website Builder Field Guide</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --paper:#F0EEE7; --paper-raised:#FFFFFF; --ink:#1C2321; --ink-soft:#56605B; --ink-faint:#8A9089;
+    --line:#D9D4C6; --line-strong:#C3BDA9; --teal:#1F6F72; --teal-ink:#0F4547; --teal-soft:#E1EEED;
+    --brass:#A8752A; --brass-ink:#7A551D; --brass-soft:#F3E7D2; --rust:#AE4D38; --rust-soft:#F5E4DE;
+    --violet:#7A5FA0; --violet-soft:#EBE5F2;
+    --shadow: 0 1px 2px rgba(28,35,33,0.06), 0 8px 24px rgba(28,35,33,0.05); --radius: 3px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#181B19; --paper-raised:#20241F; --ink:#ECE8DE; --ink-soft:#B4B4A9; --ink-faint:#767C74;
+      --line:#33372F; --line-strong:#454A3F; --teal:#59B0AB; --teal-ink:#BEEAE4; --teal-soft:#1B2F2C;
+      --brass:#D9A54B; --brass-ink:#F0CC8B; --brass-soft:#2E2415; --rust:#E08267; --rust-soft:#331F19;
+      --violet:#B79FD9; --violet-soft:#2B2438;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.25);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#181B19; --paper-raised:#20241F; --ink:#ECE8DE; --ink-soft:#B4B4A9; --ink-faint:#767C74;
+    --line:#33372F; --line-strong:#454A3F; --teal:#59B0AB; --teal-ink:#BEEAE4; --teal-soft:#1B2F2C;
+    --brass:#D9A54B; --brass-ink:#F0CC8B; --brass-soft:#2E2415; --rust:#E08267; --rust-soft:#331F19;
+    --violet:#B79FD9; --violet-soft:#2B2438;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.25);
+  }
+  *{ box-sizing:border-box; }
+  body{ background:var(--paper); color:var(--ink); font-family:"IBM Plex Sans", ui-sans-serif, system-ui, sans-serif; line-height:1.6; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3{ font-family:"Fraunces", Georgia, "Times New Roman", serif; color:var(--ink); font-weight:600; text-wrap:balance; margin:0; }
+  a{ color:var(--teal-ink, var(--teal)); }
+  a:focus-visible, button:focus-visible, summary:focus-visible{ outline:2px solid var(--teal); outline-offset:2px; }
+  code, .mono{ font-family:"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace; }
+  .tnum{ font-variant-numeric: tabular-nums; }
+  .page{ max-width:1180px; margin:0 auto; padding: 0 1.5rem 6rem; }
+
+  .masthead{ padding: 3.25rem 0 2.25rem; border-bottom: 1px solid var(--line); display:flex; flex-direction:column; gap:1.75rem; }
+  .masthead-inner{ display:flex; align-items:flex-start; gap:1.5rem; }
+  .mark{ flex:none; width:64px; height:64px; }
+  .mark svg{ width:100%; height:100%; display:block; }
+  .masthead-text{ max-width:46rem; }
+  .eyebrow{ font-family:"IBM Plex Mono", monospace; font-size:0.72rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--brass-ink, var(--brass)); margin:0 0 0.6rem; }
+  h1{ font-size:clamp(1.8rem, 1.4rem + 1.8vw, 2.6rem); line-height:1.08; }
+  .dek{ margin:0.85rem 0 0; color:var(--ink-soft); font-size:1.05rem; max-width:38rem; }
+  .masthead-meta{ display:flex; gap:2.25rem; flex-wrap:wrap; }
+  .meta-item{ display:flex; flex-direction:column; gap:0.15rem; }
+  .meta-num{ font-family:"Fraunces", serif; font-weight:600; font-size:1.5rem; }
+  .meta-label{ font-family:"IBM Plex Mono", monospace; font-size:0.68rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); }
+
+  .layout{ display:grid; grid-template-columns: 220px minmax(0,1fr); gap: 3rem; margin-top:2.5rem; align-items:start; }
+  .rail{ position:sticky; top:1.75rem; }
+  .rail-title{ font-family:"IBM Plex Mono", monospace; font-size:0.68rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.85rem; }
+  .rail-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0.05rem; border-left:1px solid var(--line); }
+  .rail-list a{ display:block; text-decoration:none; color:var(--ink-soft); font-size:0.86rem; padding:0.4rem 0 0.4rem 0.9rem; border-left:2px solid transparent; margin-left:-1px; transition:color .15s ease, border-color .15s ease; }
+  .rail-list a:hover{ color:var(--ink); }
+  .rail-list a.active{ color:var(--teal-ink,var(--teal)); border-left-color:var(--teal); font-weight:500; }
+  .content{ max-width:44rem; min-width:0; }
+
+  .block{ padding: 2.6rem 0; border-bottom:1px solid var(--line); scroll-margin-top:1.5rem; }
+  .block:first-child{ padding-top:0; }
+  .block:last-of-type{ border-bottom:none; }
+  .block-head{ display:flex; align-items:baseline; gap:0.9rem; margin-bottom:1rem; }
+  .block-num{ font-family:"IBM Plex Mono", monospace; font-size:0.85rem; color:var(--brass-ink,var(--brass)); letter-spacing:0.03em; flex:none; }
+  .block h2{ font-size:1.5rem; }
+  .block h3{ font-size:1.08rem; margin-top:1.9rem; margin-bottom:0.6rem; font-weight:600; }
+  .block p{ margin:0.9rem 0; color:var(--ink); max-width:40rem; }
+  .block p.lede{ font-size:1.06rem; }
+  .block ul, .block ol{ margin:0.9rem 0; padding-left:1.3rem; }
+  .block li{ margin:0.4rem 0; }
+  .block li::marker{ color:var(--ink-faint); }
+  strong{ font-weight:600; }
+
+  .why{ background:var(--brass-soft); border-left:3px solid var(--brass); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.2rem 0; }
+  .why-label{ font-family:"IBM Plex Mono", monospace; font-size:0.68rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--brass-ink,var(--brass)); margin:0 0 0.3rem; font-weight:600; }
+  .why p{ margin:0 0 0.5rem; color:var(--ink); }
+  .why p:last-child{ margin-bottom:0; }
+  .note{ background:var(--teal-soft); border-left:3px solid var(--teal); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.2rem 0; }
+  .note p{ margin:0; }
+  .note strong{ color:var(--teal-ink,var(--teal)); }
+
+  .table-wrap{ overflow-x:auto; margin:1.1rem 0; }
+  table{ width:100%; border-collapse:collapse; font-size:0.9rem; }
+  thead th{ text-align:left; font-family:"IBM Plex Mono", monospace; font-size:0.66rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); padding:0 0.9rem 0.55rem 0; border-bottom:1px solid var(--line-strong); font-weight:600; }
+  tbody td{ padding:0.7rem 0.9rem 0.7rem 0; border-bottom:1px solid var(--line); vertical-align:top; color:var(--ink); }
+  tbody tr:last-child td{ border-bottom:none; }
+  td.term{ font-weight:600; white-space:nowrap; color:var(--ink); }
+
+  /* Stage pipeline */
+  .pipeline{ background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--radius); padding:1.6rem 1.2rem; margin:1.4rem 0; box-shadow:var(--shadow); }
+  .pl-row{ display:flex; align-items:center; justify-content:center; gap:0.5rem; flex-wrap:wrap; }
+  .pl-box{ border:1px solid var(--line-strong); background:var(--paper); border-radius:var(--radius); padding:0.6rem 0.8rem; text-align:center; }
+  .pl-box.hub{ border-color:var(--teal); background:var(--teal-soft); }
+  .pl-box .pl-title{ font-weight:600; font-size:0.8rem; white-space:nowrap; }
+  .pl-arrow{ font-family:"IBM Plex Mono", monospace; font-size:1rem; color:var(--teal); flex:none; }
+
+  /* Status badges (Deploys tab) */
+  .status{ display:inline-flex; align-items:center; gap:0.3rem; font-family:"IBM Plex Mono",monospace; font-size:0.68rem; font-weight:600; text-transform:uppercase; letter-spacing:.04em; padding:0.22rem 0.55rem; border-radius:999px; white-space:nowrap; }
+  .status.go{ background:var(--teal-soft); color:var(--teal-ink,var(--teal)); }
+  .status.wait{ background:var(--line); color:var(--ink-soft); }
+  .status.bad{ background:var(--rust-soft); color:var(--rust); }
+  .status.super{ background:var(--violet-soft); color:var(--violet); }
+  .status.unk{ background:var(--brass-soft); color:var(--brass-ink,var(--brass)); }
+
+  /* FAQ */
+  details.faq{ border-bottom:1px solid var(--line); padding:0.9rem 0; }
+  details.faq:first-of-type{ border-top:1px solid var(--line); }
+  details.faq summary{ cursor:pointer; font-weight:600; list-style:none; display:flex; align-items:baseline; justify-content:space-between; gap:1rem; font-size:0.96rem; }
+  details.faq summary::-webkit-details-marker{ display:none; }
+  details.faq summary::after{ content:"+"; font-family:"IBM Plex Mono", monospace; color:var(--brass-ink,var(--brass)); font-size:1.1rem; flex:none; }
+  details.faq[open] summary::after{ content:"\2013"; }
+  details.faq p{ margin:0.7rem 0 0.2rem; color:var(--ink-soft); max-width:38rem; }
+
+  .refcard{ background:var(--paper-raised); border:1px solid var(--brass); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.3rem 1.5rem; margin:1.2rem 0; }
+  .refcard p{ margin:0.5rem 0; }
+
+  .colophon{ margin-top:2.5rem; padding-top:1.5rem; border-top:1px solid var(--line); color:var(--ink-faint); font-size:0.86rem; }
+
+  @media (max-width:900px){
+    .layout{ grid-template-columns:1fr; gap:1.5rem; }
+    .rail{ position:static; }
+    .rail-title{ margin-bottom:0.5rem; }
+    .rail-list{ flex-direction:row; overflow-x:auto; border-left:none; gap:0.4rem; padding-bottom:0.3rem; }
+    .rail-list a{ border-left:none; border:1px solid var(--line); border-radius:999px; padding:0.35rem 0.85rem; white-space:nowrap; margin-left:0; }
+    .rail-list a.active{ background:var(--teal-soft); border-color:var(--teal); }
+  }
+  @media (max-width:640px){ .masthead-inner{ gap:1rem; } .mark{ width:48px; height:48px; } .masthead{ padding-top:2rem; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <rect x="6" y="10" width="52" height="44" rx="3" fill="var(--paper-raised)" stroke="var(--ink-faint)" stroke-width="1.5"/>
+          <rect x="6" y="10" width="52" height="11" rx="3" fill="var(--teal-soft)" stroke="var(--ink-faint)" stroke-width="1.5"/>
+          <circle cx="13" cy="15.5" r="1.6" fill="var(--rust)"/>
+          <circle cx="18.5" cy="15.5" r="1.6" fill="var(--brass)"/>
+          <circle cx="24" cy="15.5" r="1.6" fill="var(--teal)"/>
+          <rect x="13" y="28" width="38" height="4.5" rx="1.2" fill="var(--brass)"/>
+          <rect x="13" y="37" width="26" height="4.5" rx="1.2" fill="var(--line-strong)"/>
+          <rect x="13" y="46" width="16" height="4.5" rx="1.2" fill="var(--teal)"/>
+        </svg>
+      </div>
+      <div class="masthead-text">
+        <p class="eyebrow">New&nbsp;Hire Field Guide · Website Builder</p>
+        <h1>Website Builder, start to finish</h1>
+        <p class="dek">Design in Claude Design, upload it, and the suite compiles it into a real
+          site — generates its pages with the same engines as the rest of the suite, and commits
+          them straight into the site's own private repo.</p>
+      </div>
+    </div>
+    <div class="masthead-meta">
+      <div class="meta-item"><span class="meta-num tnum">8</span><span class="meta-label">Stages</span></div>
+      <div class="meta-item"><span class="meta-num tnum">3</span><span class="meta-label">Site types</span></div>
+      <div class="meta-item"><span class="meta-num tnum">5</span><span class="meta-label">FAQs</span></div>
+      <div class="meta-item"><span class="meta-num tnum">0</span><span class="meta-label">Code required</span></div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="rail" aria-label="Contents">
+      <p class="rail-title">Contents</p>
+      <ol class="rail-list" id="railList">
+        <li><a href="#s1" data-target="s1">01 · Before you start</a></li>
+        <li><a href="#s2" data-target="s2">02 · The big picture</a></li>
+        <li><a href="#s3" data-target="s3">03 · Step 1 — Create</a></li>
+        <li><a href="#s4" data-target="s4">04 · Step 2 — Provision</a></li>
+        <li><a href="#s5" data-target="s5">05 · Step 3 — Theme</a></li>
+        <li><a href="#s6" data-target="s6">06 · Step 4 — Plan the pages</a></li>
+        <li><a href="#s7" data-target="s7">07 · Step 5 — Generate &amp; publish</a></li>
+        <li><a href="#s8" data-target="s8">08 · Step 6 — Release schedule</a></li>
+        <li><a href="#s9" data-target="s9">09 · Step 7 — Deploys</a></li>
+        <li><a href="#s10" data-target="s10">10 · Step 8 — Settings</a></li>
+        <li><a href="#s11" data-target="s11">11 · Quick reference</a></li>
+        <li><a href="#s12" data-target="s12">12 · FAQ</a></li>
+      </ol>
+    </nav>
+
+    <main class="content">
+
+      <div class="note" style="margin-top:0;">
+        <p><strong>What "publish" means here.</strong> In this module, publishing a page
+          <em>commits it into the site's own private GitHub repository</em>. The repo builds and
+          deploys itself. Nothing you do puts something on the public internet by hand — you fill
+          a repo, and the repo is the site. Keep that in mind whenever you read "publish" below.</p>
+      </div>
+
+      <section id="s1" class="block">
+        <div class="block-head"><span class="block-num">01</span><h2>Before you start</h2></div>
+        <ul>
+          <li><strong>The module has to be switched on.</strong> If you open a client and there's
+            no <strong>Website Builder</strong> card, an admin needs to enable it — a one-time
+            toggle, not something you can turn on yourself.</li>
+          <li><strong>Roles.</strong> Creating, provisioning, planning, generating, and publishing
+            are staff/admin actions. If a button is greyed out, hover it — it tells you exactly
+            why (wrong role, or the client is frozen).</li>
+          <li><strong>Frozen clients.</strong> If a client is under a Freeze (manual action /
+            deindexing), all content output is paused, including everything in this module.
+            Buttons disable with that reason until the freeze lifts. That's expected, not a bug.</li>
+        </ul>
+      </section>
+
+      <section id="s2" class="block">
+        <div class="block-head"><span class="block-num">02</span><h2>The big picture</h2></div>
+        <p>A site moves through these stages, left to right along the tab bar:</p>
+        <div class="pipeline">
+          <div class="pl-row">
+            <div class="pl-box"><span class="pl-title">Create</span></div>
+            <span class="pl-arrow">→</span>
+            <div class="pl-box"><span class="pl-title">Provision</span></div>
+            <span class="pl-arrow">→</span>
+            <div class="pl-box"><span class="pl-title">Theme</span></div>
+            <span class="pl-arrow">→</span>
+            <div class="pl-box hub"><span class="pl-title">Plan</span></div>
+            <span class="pl-arrow">→</span>
+            <div class="pl-box"><span class="pl-title">Pages</span></div>
+            <span class="pl-arrow">→</span>
+            <div class="pl-box"><span class="pl-title">Schedule</span></div>
+            <span class="pl-arrow">→</span>
+            <div class="pl-box"><span class="pl-title">Deploys</span></div>
+            <span class="pl-arrow">→</span>
+            <div class="pl-box"><span class="pl-title">Settings</span></div>
+          </div>
+        </div>
+        <p>You don't have to do them all in one sitting — each stage is saved, and you can come
+          back. A rough order that always works:</p>
+        <ol>
+          <li><strong>Create</strong> the site (records intent, nothing more).</li>
+          <li><strong>Provision</strong> it (mints the real GitHub repo — the deliberate second step).</li>
+          <li>Optionally upload a <strong>Theme</strong> (a site with none just uses the neutral house theme).</li>
+          <li><strong>Plan</strong> the pages: services + cities for a local site, and/or the blog content plan.</li>
+          <li><strong>Approve</strong> the plan.</li>
+          <li><strong>Generate</strong> and <strong>Publish</strong> pages — either by hand on the
+            Pages tab, or on a drip <strong>Schedule</strong>.</li>
+          <li>Watch <strong>Deploys</strong> go green.</li>
+          <li>Keep business facts correct on <strong>Settings</strong>.</li>
+        </ol>
+      </section>
+
+      <section id="s3" class="block">
+        <div class="block-head"><span class="block-num">03</span><h2>Step 1 — Create the site</h2></div>
+        <p>Open the client → <strong>Website Builder</strong> card → <strong>Create site</strong>.</p>
+        <ul>
+          <li><strong>Site name</strong> — e.g. "Acme Roofing".</li>
+          <li><strong>Site type</strong> — pick one:
+            <ul>
+              <li><strong>Local business</strong> — service pages, city pages, and the service ×
+                city matrix. Also has a blog (§6b).</li>
+              <li><strong>Informational</strong> — a content property. Its whole inventory <em>is</em>
+                the blog content plan.</li>
+              <li><strong>Lead generation</strong> — agency-owned. No business schema, no NAP, no
+                trust badges.</li>
+            </ul>
+          </li>
+        </ul>
+        <p>Creating a site records the intent and nothing else. It does <strong>not</strong>
+          create a repository yet.</p>
+      </section>
+
+      <section id="s4" class="block">
+        <div class="block-head"><span class="block-num">04</span><h2>Step 2 — Provision (Overview tab)</h2></div>
+        <p>Provisioning is the deliberate second step that mints the real infrastructure — a
+          private GitHub repo from the house template and a Cloudflare project.</p>
+        <p>On the <strong>Overview</strong> tab, click <strong>Provision</strong>. It runs as a
+          series of steps; the page refreshes itself while it works. If a step errors, the
+          button becomes <strong>Resume</strong> — click it again and it picks up where it left
+          off. Once done, you'll see the repo and a staging URL.</p>
+      </section>
+
+      <section id="s5" class="block">
+        <div class="block-head"><span class="block-num">05</span><h2>Step 3 — Theme (optional, but do it early)</h2></div>
+        <p>A site provisioned without a theme just builds in the neutral <strong>house
+          theme</strong>, which is fine to start. To match a client's design:</p>
+        <ol>
+          <li>Go to the <strong>Theme</strong> tab → <strong>Upload a design</strong> (a
+            <span class="mono">.dc.html</span> file from Claude Design, or a zip).</li>
+          <li>The compiler <em>measures</em> the design (its real colours, fonts, spacing,
+            layout) and turns it into a theme. It will refuse anything it can't actually see in
+            the file — so a colour that isn't in the design can't sneak in.</li>
+          <li>Review the compiled theme and click <strong>Approve</strong>. Use
+            <strong>Recompile</strong> if you re-upload a revised design.</li>
+        </ol>
+        <p>Do this before you look at the Plan — it's the first thing done to a new site.</p>
+      </section>
+
+      <section id="s6" class="block">
+        <div class="block-head"><span class="block-num">06</span><h2>Step 4 — Plan the pages (Plan tab)</h2></div>
+        <p class="lede">This is where you decide the site's page inventory. A local/lead-gen site
+          has <strong>two halves</strong> that compose: the <strong>geo half</strong> (services ×
+          cities) and the <strong>blog half</strong> (content plan). An informational site has
+          only the blog half.</p>
+
+        <h3>4a — Geo pages (local business / lead gen only)</h3>
+        <ul>
+          <li><strong>Service catalog</strong> — the billable jobs, in the client's own words
+            (never GBP categories). Each service gets its own page; ticking <strong>In
+            matrix</strong> also gives it a service × city page for every city.</li>
+          <li><strong>Cities</strong> — one location page each, plus a service × city page per
+            matrix service. Add neighborhoods if they pass the Maps entity test.</li>
+          <li><strong>Service variations</strong> (optional, under each top-level service) —
+            auto-generate extra pages at <span class="mono">/{service}/{modifier}/</span>.</li>
+          <li>Click <strong>Build plan</strong> (or <strong>Rebuild plan</strong> after edits).
+            The proposed pages appear in the Proposed pages table below.</li>
+        </ul>
+
+        <h3>Service variations — one service, many pages</h3>
+        <p>Under each <strong>top-level</strong> service there's a small <strong>"Service
+          variations"</strong> editor. It bulk-creates a page per modifier of that service, so you
+          don't add each as its own catalog row. Each variation is a <strong>label</strong> plus a
+          <strong>kind</strong>:</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:14%">Kind</th><th style="width:34%">What it is</th><th style="width:26%">Example</th><th>Resulting page</th></tr></thead>
+            <tbody>
+              <tr><td class="term">Type</td><td>A narrower version of the service. The label <em>is</em> the page. Great for tree species, materials, property types.</td><td>"Oak Trees" under Tree Removal</td><td class="mono">/tree-removal/oak-trees/ ("Oak Trees")</td></tr>
+              <tr><td class="term">Brand</td><td>An equipment manufacturer you service.</td><td>"Carrier" under AC Repair</td><td class="mono">/ac-repair/carrier/ ("Carrier AC Repair")</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <ul>
+          <li>Only <strong>top-level</strong> services take variations (sub-services don't — that
+            depth is reserved).</li>
+          <li>A service can mix Type and Brand variations.</li>
+          <li>A very large variation set (over ~200 pages) pauses on a <strong>link-equity
+            sign-off</strong> at approval — tick to acknowledge, same as a big service × city
+            matrix.</li>
+          <li>Variation pages are written by the same nlp writer as your service pages (brand
+            voice + scoring).</li>
+        </ul>
+
+        <h3>4b — The blog (all site types) — "Blog content plan"</h3>
+        <p>Scroll down on the same Plan tab to the <strong>Blog content plan</strong> editor. This
+          is what fills a site's blog — <strong>including a local site's <span class="mono">/blog/</span>,
+          alongside its service pages.</strong> It's empty by default, which is exactly why a
+          brand-new local site shows only service/city/matrix pages in Proposed pages: the blog
+          only appears once you put topics here.</p>
+        <ul>
+          <li><strong>Silos (pillars)</strong> — a topic group (e.g. "Roof Maintenance"). Add
+            posts under each.</li>
+          <li><strong>Each post</strong> — a title, a <strong>format</strong>, and an optional
+            target keyword. Formats: <strong>Cluster post (evergreen)</strong> — the default;
+            <strong>Listicle / roundup</strong>; <strong>Comparison / "vs"</strong>;
+            <strong>Local geo</strong> — for local sites; <strong>News (non-evergreen)</strong> —
+            timely, does <strong>not</strong> count toward the hub trigger below.</li>
+          <li><strong>Hubs</strong> — when a silo has <strong>5 or more evergreen posts</strong>,
+            it automatically earns a top-level hub page that links down to its posts. (News posts
+            don't count toward the five.)</li>
+          <li>Click <strong>Save content plan</strong>. The plan rebuilds and the blog posts (and
+            any hub) now appear in Proposed pages next to your geo pages.</li>
+        </ul>
+        <div class="why">
+          <p class="why-label">Don't want to type them all in?</p>
+          <p>Use the two one-click seed buttons at the top of the editor — <strong>Seed from
+            strategist</strong> imports the client's latest Topic-Strategist plan;
+            <strong>Seed from Fanout</strong> takes a finished Topic Fanout session id and imports
+            its silos and clusters (always regenerating the posts fresh — it never reuses the
+            Fanout's already-written articles). Both ask you to confirm before replacing an
+            existing plan. After seeding, the plan is the <strong>site's own data</strong> — edit
+            it freely; a later re-research won't clobber your edits.</p>
+        </div>
+
+        <h3>4c — Approve the plan</h3>
+        <p>Review the <strong>Proposed pages</strong> table. Two kinds of warning can appear:</p>
+        <ul>
+          <li><strong>Blocks approval (red)</strong> — either a planning error (fix the catalog; a
+            wrong URL is permanent once published) or a scale gate that needs a named sign-off
+            (tick the checkbox to acknowledge it).</li>
+          <li><strong>Advisory (amber)</strong> — informational, doesn't block.</li>
+        </ul>
+        <p>Clear or sign off every red item, then click <strong>Approve plan</strong>. Generation
+          and scheduling are locked until the plan is approved.</p>
+      </section>
+
+      <section id="s7" class="block">
+        <div class="block-head"><span class="block-num">07</span><h2>Step 5 — Generate &amp; publish (Pages tab)</h2></div>
+        <p class="lede">With the plan approved, the <strong>Pages</strong> tab lists every
+          planned page.</p>
+        <ul>
+          <li><strong>Generate (N)</strong> — writes the page content. Blog posts and pages run
+            through the suite's normal writers, so they get brand voice, ICP, and quality scoring
+            like any other content.</li>
+          <li><strong>Publish (N)</strong> — commits the generated pages into the repo (this is
+            the "publish = commit" step). A deploy kicks off automatically.</li>
+          <li>Both run one background job per page, so you can <strong>leave the tab</strong> and
+            the work keeps going; the progress bar reconnects when you return.</li>
+          <li><strong>Publish anyway</strong> appears only if a page is held by the brand-voice
+            publish gate (a forbidden word). It's a deliberate override — one extra click,
+            staff/admin only.</li>
+        </ul>
+        <p>You don't have to publish everything at once — which leads to the Schedule tab.</p>
+      </section>
+
+      <section id="s8" class="block">
+        <div class="block-head"><span class="block-num">08</span><h2>Step 6 — Release schedule (drip-publish)</h2></div>
+        <p class="lede">Instead of publishing the whole site in one go, you can drip it out on a
+          cadence — the same way the other content tools stagger their output.</p>
+        <p>On the <strong>Schedule</strong> tab (held until the plan is approved and the site is
+          provisioned):</p>
+        <ul>
+          <li><strong>Publish immediately</strong> — how many pages go out the moment you save (0
+            = wait for the first cadence slot).</li>
+          <li><strong>Release each time</strong> — how many pages are generated <strong>and</strong>
+            published per tick.</li>
+          <li><strong>Cadence</strong> — daily, weekly (pick a weekday), or monthly (pick a day of
+            the month).</li>
+          <li><strong>Schedule enabled</strong> — the on/off switch.</li>
+        </ul>
+        <div class="why">
+          <p class="why-label">Just-in-time, not pre-generated</p>
+          <p>Each release <strong>generates then publishes</strong> the next planned pages
+            just-in-time — nothing is generated up front. It covers <strong>every</strong> content
+            page, so a local site drips out both its service/location pages <strong>and</strong>
+            its blog posts, in a sensible order (foundation pages first, then the matrix, then the
+            long tail; a post never goes out before its hub).</p>
+        </div>
+        <p>The panel shows <strong>pages left to release</strong> and the <strong>next/last
+          run</strong>, and updates while the schedule is live. <strong>Stop schedule</strong>
+          halts new releases — pages already released stay put.</p>
+      </section>
+
+      <section id="s9" class="block">
+        <div class="block-head"><span class="block-num">09</span><h2>Step 7 — Deploys tab</h2></div>
+        <p>Every publish (and theme/settings change) triggers a deploy. The <strong>Deploys</strong>
+          tab shows each one:</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:26%">Status</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><span class="status wait">Queued / building</span></td><td>In flight.</td></tr>
+              <tr><td><span class="status go">Success</span></td><td>Live.</td></tr>
+              <tr><td><span class="status bad">Failed</span></td><td>Something broke — open it for the error.</td></tr>
+              <tr><td><span class="status super">Superseded</span></td><td><strong>Not</strong> a failure — its content shipped in the run that replaced it (a batch publish cancels earlier in-flight runs on purpose).</td></tr>
+              <tr><td><span class="status unk">Unknown</span></td><td><strong>Not</strong> a failure — almost certainly serving fine.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="s10" class="block">
+        <div class="block-head"><span class="block-num">10</span><h2>Step 8 — Settings tab (keep the facts right)</h2></div>
+        <p>The <strong>Settings</strong> tab holds the site's business facts — name, address,
+          phone, hours, service area, etc. (the NAP). These auto-fill from the client's Google
+          Business Profile where possible.</p>
+        <ul>
+          <li>Anything you type here is stamped as <strong>your</strong> value and
+            <strong>wins</strong> — a later GBP re-scan can only fill in gaps you left blank,
+            never overwrite what you entered.</li>
+          <li><strong>Clearing a field</strong> hands it back to GBP (it will re-fill from the
+            profile).</li>
+          <li><strong>Saving redeploys the live site</strong>, because these facts render into
+            the contact page and schema.</li>
+        </ul>
+      </section>
+
+      <section id="s11" class="block">
+        <div class="block-head"><span class="block-num">11</span><h2>Quick reference</h2></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:46%">I want to…</th><th>Where</th></tr></thead>
+            <tbody>
+              <tr><td>Start a new site</td><td>Website Builder card → Create site</td></tr>
+              <tr><td>Mint the real repo</td><td>Overview → Provision</td></tr>
+              <tr><td>Match the client's design</td><td>Theme → Upload a design → Approve</td></tr>
+              <tr><td>Add service / city pages</td><td>Plan → Service catalog + Cities → Build plan</td></tr>
+              <tr><td>Bulk-create service variations (species, materials, brands)</td><td>Plan → a top-level service → Service variations (Type or Brand)</td></tr>
+              <tr><td>Add blog posts (any site type)</td><td>Plan → Blog content plan → add silos/posts → Save</td></tr>
+              <tr><td>Pull blog topics from research</td><td>Plan → Blog content plan → Seed from strategist / Fanout</td></tr>
+              <tr><td>Let the plan go live</td><td>Plan → Approve plan</td></tr>
+              <tr><td>Write &amp; commit pages now</td><td>Pages → Generate → Publish</td></tr>
+              <tr><td>Drip pages out over time</td><td>Schedule → set cadence → Start schedule</td></tr>
+              <tr><td>See what's live / building</td><td>Deploys</td></tr>
+              <tr><td>Fix the address / phone / hours</td><td>Settings</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="s12" class="block">
+        <div class="block-head"><span class="block-num">12</span><h2>FAQ</h2></div>
+
+        <details class="faq">
+          <summary>My local site's plan only shows service, city, and matrix pages — where are the blog posts?</summary>
+          <p>The blog is driven by the <strong>Blog content plan</strong> on the Plan tab, which
+            starts empty. Add silos and posts there (or use a seed button), click <strong>Save
+            content plan</strong>, and the posts appear in Proposed pages. Blog posts are an
+            editorial choice, so they aren't invented from your service list.</p>
+        </details>
+        <details class="faq">
+          <summary>I don't see the "Blog content plan" card.</summary>
+          <p>Hard-refresh the page (Cmd/Ctrl-Shift-R). The dashboard caches the module's on/off
+            status for a few minutes. If it's still missing after a refresh, tell the team — the
+            module may not be enabled.</p>
+        </details>
+        <details class="faq">
+          <summary>Does "publish" put the site on the internet?</summary>
+          <p>It commits the page into the site's GitHub repo, which then builds and deploys
+            itself. So yes, the site ends up live — but through the repo, not by a manual upload.</p>
+        </details>
+        <details class="faq">
+          <summary>A page won't publish — it says something about voice.</summary>
+          <p>The brand-voice gate found a forbidden word. Either fix the wording (regenerate) or,
+            if you're sure, use <strong>Publish anyway</strong> (staff/admin).</p>
+        </details>
+        <details class="faq">
+          <summary>Can I change a page's URL after it's published?</summary>
+          <p>Avoid it. A published slug is immutable — changing it costs a permanent redirect
+            rather than an edit. Get the plan right before you approve it.</p>
+        </details>
+      </section>
+
+      <p class="colophon">Roles: create/provision/plan/generate/publish are staff/admin actions.
+        A frozen client pauses everything in this module until the freeze lifts.</p>
+
+    </main>
+  </div>
+</div>
+
+<script>
+(function(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('.rail-list a'));
+  var sections = links.map(function(a){ return document.getElementById(a.getAttribute('data-target')); });
+  if(!('IntersectionObserver' in window)) return;
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(entry){
+      var link = document.querySelector('.rail-list a[data-target="'+entry.target.id+'"]');
+      if(!link) return;
+      if(entry.isIntersecting){
+        links.forEach(function(l){ l.classList.remove('active'); });
+        link.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-15% 0px -70% 0px', threshold: 0 });
+  sections.forEach(function(s){ if(s) io.observe(s); });
+})();
+</script>
+
+</body>
+</html>
