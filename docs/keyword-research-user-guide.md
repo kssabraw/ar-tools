@@ -7,7 +7,8 @@ code, no terminal — everything here happens in the dashboard.
 > Fanout**, see `docs/topic-fanout-user-guide.md`) and it doesn't write anything by itself. This
 > tool answers one question — *"what should we target, and why"* — and hands you a clean,
 > filtered keyword universe plus a ranked list of topic ideas. Turning an idea into an actual
-> article happens one click away, in the Blog Writer.
+> article happens one click away, in the Blog Writer — or, for a batch, AR Tools' own **Content
+> Scheduler** (a separate bulk page-creation tool, distinct from Topic Fanout — see the FAQ).
 
 ---
 
@@ -80,7 +81,7 @@ Once a run completes you get:
 Keyword Research doesn't just dump raw data — it runs the pool through several relevance,
 audience, and drift filters before you ever see it, and it **shows its work**. When anything was
 dropped, a **"What we filtered & why"** panel appears: a one-line summary (*"N candidates found ·
-kept · N filtered out"*) plus reason chips such as:
+N kept · N filtered out"*) plus reason chips such as:
 
 - Unrelated brand or namespace
 - Only matched a generic word in your seed
@@ -89,7 +90,8 @@ kept · N filtered out"*) plus reason chips such as:
 - Wrong audience (job-seeker / off-audience)
 - Navigational / competitor lookup (not a topic)
 
-Click **"Show the filtered-out keywords"** to see the actual dropped terms next to their reason.
+Click **"Show the N filtered-out keywords"** (the count is baked into the button label) to see the
+actual dropped terms next to their reason.
 **If a lot of what got cut looks genuinely on-topic to you, that's a real signal** — broaden your
 seeds or add another one, per Step 4.
 
@@ -176,9 +178,14 @@ Every topic card has a **"Write this post"** button. Click it and a modal opens:
   starting a run from the Runs page — pre-loaded with your angle as writer notes. You'll get a
   **"View the draft"** link straight to it, or find it in **Runs** shortly after.
 
-This is the same idea from a plain keyword row, too — select keywords in the table and use **Send
-to Content Scheduler** to hand a batch to the mass-content tool instead of writing one at a time
-(see `docs/topic-fanout-user-guide.md`).
+**Want ideas without going through Topic Research?** A **"Generate blog topics"** panel sits right
+above the keyword table — click it (or **Regenerate**) to turn the run's buyer-fit keywords + the
+client's ICP into title/angle/target-keyword cards directly, no Topic Research pass needed.
+
+There's also a batch path: select keywords in the table and use **Send to Content Scheduler** —
+this queues them into AR Tools' own native **Content Scheduler** (bulk creation of blog/service/
+location/Local SEO/ecommerce pages, on-demand or drip-scheduled). This is a **different tool from
+Topic Fanout** — see the FAQ if you're unsure which one you want.
 
 ---
 
@@ -208,7 +215,8 @@ to Content Scheduler** to hand a batch to the mass-content tool instead of writi
 | Go deeper than keyword variations | **Topic Research (BETA)** panel → **Research topics** |
 | Skip topics the client already covers | **Show gaps only** checkbox |
 | Turn an idea into a draft | **Write this post** on any topic card |
-| Hand a batch to mass content generation | Select rows → **Send to Content Scheduler** |
+| Get quick blog title/angle ideas without Topic Research | **"Generate blog topics"** panel above the table |
+| Queue a batch of keywords into the native Content Scheduler | Select rows → **Send to Content Scheduler** |
 | Get a client-facing deliverable | **Client PDF report** |
 | Get raw data for your own spreadsheet | **Export CSV** |
 | Start over for a client | **Clear all** (run-history row) |
@@ -237,11 +245,13 @@ assuming it's wrong.
 No — it queues a Blog Writer **run** (a draft, generated through the normal pipeline). Publishing
 is a separate, later step in the Blog Writer itself.
 
-**What's the difference between this and Topic Fanout / Mass Posts?**
+**What's the difference between this, the Content Scheduler, and Topic Fanout / Mass Posts?**
 Keyword Research is for finding and understanding what to target — it produces ideas and one-off
-drafts. Topic Fanout is for generating many articles at scale from a silo of keywords. Use
-**Send to Content Scheduler** to hand a researched keyword set over to Fanout when you're ready to
-mass-produce.
+drafts (via **Write this post**). **Send to Content Scheduler** hands a selected batch to AR
+Tools' own native bulk page-creation tool (blog/service/location/Local SEO/ecommerce), which is
+**not** Topic Fanout — that's a separate, larger tool (its own silo-discovery pipeline, its own
+scheduling) reached from the client workspace's **Create Mass Posts** card, not from anywhere in
+this tool. There's no built-in handoff from Keyword Research straight into a Topic Fanout session.
 
 **Can I research more than one seed at once?**
 Yes — one per line or comma-separated. A run must always keep at least 2 seeds once you've added
