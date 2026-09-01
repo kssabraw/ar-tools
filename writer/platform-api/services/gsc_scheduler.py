@@ -766,6 +766,14 @@ async def gsc_scheduler() -> None:
                 from services import pace_audit
                 _safe("pace_revert_sweep", pace_audit.run_revert_sweep, now.date())
                 _safe("pace_learning_digest", pace_audit.maybe_emit_weekly_learning, now.date())
+                # SerMaStr action-log: daily outcome sweep (stamps the reused
+                # intervention verdict onto approved proposals; read-only w.r.t.
+                # interventions) + the weekly learning digest. Both self-gated on
+                # sermastr_audit_enabled; the digest also needs strategist_enabled
+                # + a configured sermastr_audit_digest_weekday (off by default).
+                from services import sermastr_audit
+                _safe("sermastr_outcome_sweep", sermastr_audit.run_outcome_sweep)
+                _safe("sermastr_learning_digest", sermastr_audit.maybe_emit_weekly_learning, now.date())
                 # Daily PACE follow-through episode sync (v1.4 §4.9) — open/
                 # resolve/clock/escalate — then the Chase Plan built from it.
                 # Both self-gated on pace_enabled + pace_initiative_enabled;

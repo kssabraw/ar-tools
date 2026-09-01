@@ -1916,6 +1916,29 @@ class Settings(BaseSettings):
     pace_audit_learning_min_samples: int = 4
     pace_audit_learning_reject_threshold: float = 0.6
 
+    # --- SerMaStr Action Log (docs: SerMaStr Action Log — audit + learning ledger) ---
+    # Best-effort audit + learning ledger of every STRATEGIST proposal + the human
+    # decision on it (approved / dismissed / pending / senior-required) + the reused
+    # intervention outcome verdict. Default ON — we want the record immediately; a
+    # logging failure never breaks a strategy review. Off stops writing rows.
+    sermastr_audit_enabled: bool = True
+    # How many recent log rows the passive self-read context surface returns.
+    sermastr_audit_history_limit: int = 25
+    # v2 — the learning loop. Prompt steering CHANGES what SerMaStr proposes, so it
+    # ships dark (default False) on top of strategist_enabled.
+    sermastr_audit_learning_enabled: bool = False
+    # Weekday (0=Mon..6=Sun) for the weekly learning digest; None = off.
+    sermastr_audit_digest_weekday: Optional[int] = None
+    # Outcome sweep: how far back to enrich approved proposals with the reused
+    # intervention verdict (interventions grade at ~6 weeks, so keep this generous).
+    sermastr_audit_outcome_window_days: int = 90
+    # Learning window + gates for the prompt track-record block (min DECIDED/GRADED
+    # samples before a rate is trusted; dismiss/ineffective rate above which a kind
+    # is flagged avoid-or-justify).
+    sermastr_audit_learning_window_days: int = 90
+    sermastr_audit_learning_min_samples: int = 3
+    sermastr_audit_learning_dismiss_threshold: float = 0.6
+
     # --- Proactive Interventions (docs/modules/pace-proactive-interventions-plan-v1_0.md) ---
     # The managerial layer: PACE scans for SYSTEMIC delivery problems and opens a
     # durable intervention (problem + fix plan) the PM dispositions four ways.

@@ -449,8 +449,14 @@ def build_run_prompt(
     max_paid: int,
     escalation_context: Optional[dict] = None,
     price_list: str = "",
+    track_record: str = "",
 ) -> str:
-    """Assemble the single user message for the run. Pure."""
+    """Assemble the single user message for the run. Pure.
+
+    ``track_record`` (optional) is the action-log learning block — SerMaStr's own
+    approve/dismiss + worked/no_effect history, injected only when the dark
+    ``sermastr_audit_learning_enabled`` flag is on. Empty string → the prompt is
+    byte-identical to today."""
     _MONTHLY_ORIENTATION = (
         " — MONTHLY TASK-PLAN REVIEW. This runs a few days BEFORE next month's "
         "task plan is generated. Read the current monthly task plan in the digest "
@@ -487,6 +493,8 @@ def build_run_prompt(
         parts.append("AGENCY SOPs (selected for this client's active signals):\n" + sops_text)
     if price_list:
         parts.append("AGENCY PRICE LIST:\n" + price_list)
+    if track_record:
+        parts.append(track_record)
     parts.append("CLIENT DIGEST (JSON — every status is precomputed; staleness is flagged):\n" + digest_json)
     return "\n\n".join(parts)
 
@@ -565,10 +573,25 @@ async def run_strategy_review(
 
     max_dd = settings.strategist_max_drilldowns
     max_paid = settings.strategist_max_paid_drilldowns
+    # Self-learning (dark): steer proposals with SerMaStr's own track record —
+    # approve/dismiss + worked/no_effect rates per proposal kind. Best-effort +
+    # gated: flag off (or thin history) → "" → the prompt is unchanged.
+    track_record = ""
+    if settings.sermastr_audit_learning_enabled:
+        try:
+            from services import sermastr_audit
+
+            track_record = sermastr_audit.build_track_record_block(
+                sermastr_audit._learning_signals_window(), client_id
+            )
+        except Exception as exc:  # never let the learning read break a review
+            logger.warning("sermastr_track_record_failed",
+                           extra={"client_id": client_id, "error": str(exc)})
     user = build_run_prompt(
         digest_json, sops_text, cards_text,
         trigger=trigger, frozen=frozen, max_drilldowns=max_dd, max_paid=max_paid,
         escalation_context=escalation_context, price_list=render_price_list(),
+        track_record=track_record,
     )
 
     tools = strategist_tools.anthropic_tool_defs() + [_EMIT_TOOL]
@@ -662,6 +685,20 @@ async def run_strategy_review(
         .eq("id", review_id)
         .execute()
     ).data[0]
+
+    # Action log (audit + learning): one pending row per proposal, at the
+    # strategist's OWN completion seam. Best-effort — never breaks the review.
+    try:
+        from services import sermastr_audit
+
+        sermastr_audit.log_proposals(
+            review_id, client_id,
+            (digest.get("client") or {}).get("name"),
+            trigger, review_body["proposals"],
+        )
+    except Exception as exc:
+        logger.warning("sermastr_audit_log_failed",
+                       extra={"client_id": client_id, "review_id": review_id, "error": str(exc)})
 
     # Digest notification (Slack rides the notifications service). Scheduled +
     # escalation runs only — an on-demand run from the UI means a human is

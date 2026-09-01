@@ -101,6 +101,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
     queryFn: () => api.get<{ enabled: boolean }>('/qa/status'),
     staleTime: 5 * 60_000,
   })
+  const { data: strategistStatus } = useQuery<{ enabled: boolean }>({
+    queryKey: ['strategist-status'],
+    queryFn: () => api.get<{ enabled: boolean }>('/strategist/status'),
+    staleTime: 5 * 60_000,
+  })
 
   // Team management is admin-only (matches the /team AdminRoute guard). The PACE
   // action log is admin-only too (it names actors + before/after state) and only
@@ -110,6 +115,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
     ...(isAdmin ? [{ label: 'Team', to: '/team', icon: <UserCog size={18} /> }] : []),
     ...(isAdmin && paceStatus?.enabled
       ? [{ label: 'PACE Log', to: '/pace/log', icon: <ScrollText size={18} /> }]
+      : []),
+    ...(isAdmin && strategistStatus?.enabled
+      ? [{ label: 'SerMaStr Log', to: '/strategist/log', icon: <ScrollText size={18} /> }]
       : []),
   ]
 
