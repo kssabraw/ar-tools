@@ -808,19 +808,23 @@ def _prov_intervention_outcomes(supabase, client_id: str, today: date, now: date
 def _prov_competitors(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:
     """Assembled competitor profiles (registry × every module) — gaps the
     strategist can aim proposals at, plus fresh competitor content."""
-    from services import competitor_intel
+    from services import competitor_intel, competitor_page_intel
 
     assembled = competitor_intel.build_profiles(client_id, today=today)
     profiles = assembled.get("competitors") or []
     if not profiles:
         return None
-    return {
+    out = {
         "client": assembled.get("client"),
         "note": (
             "profiles join maps/GBP/backlinks/organic/reviews per competitor; a null "
             "module means no capture yet, not absence of the competitor. Competitor "
             "RD/DR are tool reads (true RD ≈ ×10, SOP shared definition). "
-            "new_pages_30d counts non-baseline URLs first seen in the last 30 days."
+            "new_pages_30d counts non-baseline URLs first seen in the last 30 days. "
+            "page_targeting names what those pages target and flags a rival building "
+            "in a place the client cares about — a weak grid zone, a service area "
+            "they target (an ICP suburb), or a place they already have a page for "
+            "(head-to-head) — a land grab worth a proposal."
         ),
         "competitors": [
             {
@@ -838,6 +842,26 @@ def _prov_competitors(supabase, client_id: str, today: date, now: datetime) -> O
             for p in profiles[:8]
         ],
     }
+    # Proactive targeting analysis (deterministic): contested places the client
+    # cares about (weak grid zones + declared target/ICP service areas) + what
+    # each competitor is building. Best-effort — never breaks the digest.
+    try:
+        places = competitor_page_intel.dedupe_places(
+            competitor_intel.load_priority_places(client_id)
+            + competitor_intel.load_target_places(client_id)
+            + [e["place"] for e in competitor_intel.load_existing_page_places(client_id)]
+        )
+        targeting = competitor_page_intel.summarize_targeting(profiles, places)
+        if targeting.get("contested") or targeting.get("competitor_targets"):
+            out["page_targeting"] = {
+                "competitor_targets": targeting["competitor_targets"],
+                "contested": targeting["contested"][:12],
+                "contested_places": targeting["contested_places"],
+                "open_places": targeting["open_places"][:12],
+            }
+    except Exception:  # noqa: BLE001 — provider isolation
+        pass
+    return out
 
 
 def _prov_domain_intel(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:

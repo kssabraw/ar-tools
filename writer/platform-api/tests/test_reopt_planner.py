@@ -340,6 +340,133 @@ def test_maps_weak_area_not_ranked_says_so():
     assert "don't appear in the local pack" in a["diagnosis"] and a["url"] is None
 
 
+def test_maps_weak_area_upgrades_to_land_grab_when_contested():
+    weak = [{"city": "Preston", "admin_area": "VIC", "pins": 6, "avg_rank": 14.0}]
+    landgrab = {
+        "preston, vic": [
+            {"competitor": "Metro Roofing", "url": "https://x.com/services/preston-vic-3072/",
+             "first_seen": "2026-08-25"},
+        ]
+    }
+    a = reopt_planner.build_maps_actions(CLIENT, [], weak, None, landgrab)[0]
+    assert a["kind"] == "maps_competitor_land_grab"
+    assert a["severity"] == "warning"  # escalated above a plain weak-area (info)
+    assert a["competitor"] == "Metro Roofing"
+    # the competitor's actual page URL, and it names the zone in the text
+    assert a["url"] == "https://x.com/services/preston-vic-3072/"
+    assert "Metro Roofing" in a["diagnosis"] and "Preston" in a["diagnosis"]
+    assert a["cta_path"] == f"clients/{CLIENT}/local-seo"
+    assert a["pages"] and a["pages"][0]["competitor"] == "Metro Roofing"
+
+
+def test_maps_land_grab_outranks_plain_weak_area():
+    weak = [
+        {"city": "Preston", "admin_area": "VIC", "pins": 6},   # contested
+        {"city": "Kew", "admin_area": "VIC", "pins": 9},        # open (higher pins)
+    ]
+    landgrab = {"preston, vic": [{"competitor": "Rival", "url": "https://x/services/preston-vic/", "first_seen": "1"}]}
+    actions = reopt_planner.build_maps_actions(CLIENT, [], weak, None, landgrab)
+    kinds = {a["keyword"]: a["kind"] for a in actions}
+    assert kinds["Preston, VIC"] == "maps_competitor_land_grab"
+    assert kinds["Kew, VIC"] == "maps_weak_area"
+    # the contested zone sorts above the (otherwise-heavier) open weak area
+    assert actions[0]["keyword"] == "Preston, VIC"
+
+
+def test_maps_weak_area_stays_plain_without_landgrab():
+    weak = [{"city": "Preston", "admin_area": "VIC", "pins": 6}]
+    a = reopt_planner.build_maps_actions(CLIENT, [], weak, None, None)[0]
+    assert a["kind"] == "maps_weak_area"  # byte-identical to prior behaviour
+
+
+# --- Target-area (ICP) land grabs ------------------------------------------
+def test_target_landgrab_action_for_a_targeted_suburb():
+    matches = [
+        {"place": "Toorak", "competitor": "Melbourne Roof Restorers",
+         "url": "https://x/services/toorak-vic-3142/", "first_seen": "2026-08-20"},
+    ]
+    actions = reopt_planner.build_target_landgrab_actions(CLIENT, matches)
+    assert len(actions) == 1
+    a = actions[0]
+    assert a["kind"] == "maps_competitor_land_grab"
+    assert a["severity"] == "warning"
+    assert a["competitor"] == "Melbourne Roof Restorers"
+    assert a["location"] == "Toorak"
+    assert "service area you target" in a["diagnosis"]
+    assert a["cta_path"] == f"clients/{CLIENT}/local-seo"
+    # ranked below a weak-zone land grab, above generic weak areas
+    assert a["sort"] < reopt_planner._SORT_MAPS + reopt_planner._MAPS_LAND_GRAB_WITHIN
+    assert a["sort"] > reopt_planner._SORT_MAPS + reopt_planner._MAPS_WEAK_AREA_WITHIN + 900
+
+
+def test_target_landgrab_dedupes_against_weak_zone_by_bare_city():
+    # Preston is both a weak zone (already a weak-zone land grab) and a target
+    # city — it must NOT also produce a target-area action.
+    matches = [
+        {"place": "Preston", "competitor": "Rival", "url": "https://x/services/preston/", "first_seen": "1"},
+        {"place": "Toorak", "competitor": "Rival", "url": "https://x/services/toorak/", "first_seen": "2"},
+    ]
+    actions = reopt_planner.build_target_landgrab_actions(CLIENT, matches, exclude_bare={"preston"})
+    assert [a["location"] for a in actions] == ["Toorak"]
+
+
+def test_target_landgrab_groups_multiple_competitors_per_place():
+    matches = [
+        {"place": "Toorak", "competitor": "A", "url": "https://x/a-toorak/", "first_seen": "1"},
+        {"place": "Toorak", "competitor": "B", "url": "https://x/b-toorak/", "first_seen": "2"},
+    ]
+    actions = reopt_planner.build_target_landgrab_actions(CLIENT, matches)
+    assert len(actions) == 1
+    assert "and 1 other" in actions[0]["diagnosis"]
+    assert len(actions[0]["pages"]) == 2
+
+
+def test_target_landgrab_empty_when_no_matches():
+    assert reopt_planner.build_target_landgrab_actions(CLIENT, []) == []
+
+
+# --- Head-to-head land grabs (client already has a page) --------------------
+def test_head_to_head_action_links_client_page_and_says_reoptimize():
+    matches = [
+        {"place": "Toorak", "competitor": "Rival Roofing",
+         "url": "https://rival/services/toorak/", "first_seen": "2026-08-20"},
+    ]
+    url_by_place = {"toorak": "https://client.com/roof-restoration-toorak/"}
+    actions = reopt_planner.build_head_to_head_landgrab_actions(CLIENT, matches, url_by_place)
+    assert len(actions) == 1
+    a = actions[0]
+    assert a["kind"] == "maps_competitor_land_grab"
+    assert a["cta_label"] == "Reoptimize page"
+    assert a["url"] == "https://client.com/roof-restoration-toorak/"  # the client's own page
+    assert "head-to-head" in a["diagnosis"]
+    assert "reoptimize" in a["recommendation"].lower()
+    assert a["pages"][0]["url"] == "https://rival/services/toorak/"  # rival's page kept as evidence
+    # ranked below a weak-zone land grab, above a target-area land grab
+    assert a["sort"] < reopt_planner._SORT_MAPS + reopt_planner._MAPS_LAND_GRAB_WITHIN
+    assert a["sort"] > reopt_planner._SORT_MAPS + reopt_planner._MAPS_TARGET_LAND_GRAB_WITHIN
+
+
+def test_head_to_head_without_known_url_still_actionable():
+    matches = [{"place": "Kew", "competitor": "Rival", "url": "https://rival/kew/", "first_seen": "1"}]
+    a = reopt_planner.build_head_to_head_landgrab_actions(CLIENT, matches, {})[0]
+    assert a["url"] is None
+    assert a["cta_label"] == "Reoptimize page"
+    assert "Your page:" not in a["recommendation"]
+
+
+def test_head_to_head_dedupes_against_weak_zone():
+    matches = [
+        {"place": "Preston", "competitor": "Rival", "url": "https://rival/preston/", "first_seen": "1"},
+        {"place": "Toorak", "competitor": "Rival", "url": "https://rival/toorak/", "first_seen": "2"},
+    ]
+    actions = reopt_planner.build_head_to_head_landgrab_actions(CLIENT, matches, {}, exclude_bare={"preston"})
+    assert [a["location"] for a in actions] == ["Toorak"]
+
+
+def test_head_to_head_empty_when_no_matches():
+    assert reopt_planner.build_head_to_head_landgrab_actions(CLIENT, []) == []
+
+
 def test_quick_win_create_page_shows_search_volume():
     items = [_rankability_item(keyword="solar installer", client_rank=None,
                                search_volume=880, est_value=430)]

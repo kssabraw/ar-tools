@@ -990,14 +990,20 @@ def _ctx_backlinks(supabase, client_id: str, today: date) -> Optional[dict]:
 
 
 def _ctx_competitors(supabase, client_id: str, today: date) -> Optional[dict]:
-    """Assembled competitor profiles so competitive questions get real data."""
-    from services import competitor_intel
+    """Assembled competitor profiles so competitive questions get real data.
+
+    Carries each competitor's newly published page URLs (recent_pages) AND a
+    deterministic targeting read (what those pages target + which of the
+    client's own weak coverage areas a rival is now building in) so the
+    strategist can answer "what are competitors building, and where does it
+    threaten us" from stored data — no ad-hoc live search needed."""
+    from services import competitor_intel, competitor_page_intel
 
     assembled = competitor_intel.build_profiles(client_id, today=today)
     profiles = assembled.get("competitors") or []
     if not profiles:
         return None
-    return {
+    out: dict = {
         "client_comparison": assembled.get("client"),
         "competitors": [
             {
@@ -1009,10 +1015,43 @@ def _ctx_competitors(supabase, client_id: str, today: date) -> Optional[dict]:
                 "organic": p.get("organic"),
                 "review_velocity_30d": p.get("review_velocity_30d"),
                 "new_pages_30d": p.get("new_pages_30d"),
+                # The actual new-page URLs (previously dropped — this is what the
+                # strategist had to re-derive with a live site: search).
+                "recent_pages": (p.get("recent_pages") or [])[:8],
             }
             for p in profiles[:6]
         ],
     }
+    # Proactive targeting analysis: what competitors are building + contested
+    # places the client cares about (weak grid zones + declared target/ICP
+    # service areas). Best-effort — a failure never breaks the competitor context.
+    try:
+        places = competitor_page_intel.dedupe_places(
+            competitor_intel.load_priority_places(client_id)
+            + competitor_intel.load_target_places(client_id)
+            + [e["place"] for e in competitor_intel.load_existing_page_places(client_id)]
+        )
+        targeting = competitor_page_intel.summarize_targeting(profiles, places)
+        if targeting.get("competitor_targets") or targeting.get("contested"):
+            out["page_targeting"] = {
+                "note": (
+                    "Deterministic read of competitors' newly published pages. "
+                    "competitor_targets = what each rival is building (page-target "
+                    "labels from their URLs). contested = a rival has published a "
+                    "page targeting a place YOU care about — a weak grid zone, a "
+                    "service area you target (an ICP suburb), or a place you already "
+                    "have a page for (head-to-head) — a land grab to answer (create "
+                    "or reoptimize a page) before they bank the pack position. "
+                    "open_places = places you care about no rival has built in yet."
+                ),
+                "competitor_targets": targeting["competitor_targets"],
+                "contested": targeting["contested"][:12],
+                "contested_places": targeting["contested_places"],
+                "open_places": targeting["open_places"][:12],
+            }
+    except Exception:  # noqa: BLE001 — context providers degrade, never break
+        pass
+    return out
 
 
 def _ctx_domain_intel(supabase, client_id: str, today: date) -> Optional[dict]:

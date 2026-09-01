@@ -19,6 +19,7 @@ class ReoptActionDetail(BaseModel):
 class ReoptAction(BaseModel):
     # rank_drop | quick_win | cannibalization | opportunity
     # | maps_decline | maps_competitor | maps_weak_area
+    # | maps_competitor_land_grab
     kind: str
     source: Optional[str] = None    # organic | maps
     keyword: str
@@ -44,6 +45,7 @@ class ReoptAction(BaseModel):
     search_volume: Optional[int] = None             # demand for a create-page keyword
     est_value: Optional[float] = None               # est. monthly value
     location: Optional[str] = None                  # maps weak-area: the place to target
+    competitor: Optional[str] = None                # land grab: the rival building in this place
 
 
 class ReoptPlan(BaseModel):

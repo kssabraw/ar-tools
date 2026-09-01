@@ -76,12 +76,18 @@ _MAPS_WITHIN = {
     "gradual_decline": 2_000,  # a slow slide — important but below the sudden declines
 }
 _MAPS_WEAK_AREA_WITHIN = 1_000  # weak coverage areas sit at the bottom of the Maps tier
+_MAPS_LAND_GRAB_WITHIN = 6_000  # a competitor building in a weak zone: time-sensitive, above GBP/content/relevance
+_MAPS_HEAD_TO_HEAD_WITHIN = 5_800  # a competitor building where the client already has a page: direct contest, below weak-zone land grab
+_MAPS_TARGET_LAND_GRAB_WITHIN = 5_500  # a competitor building in a target/ICP area (not grid-weak): below head-to-head, above relevance
+MAPS_TARGET_LAND_GRAB_MAX = 5  # cap target-area land-grab actions per plan
+MAPS_HEAD_TO_HEAD_MAX = 5      # cap head-to-head land-grab actions per plan
 _MAPS_GBP_WITHIN = 4_000        # a GBP-gap action sits mid Maps tier (above weak areas)
 _MAPS_REVIEW_WITHIN = 4_500     # a review-gap action sits just above the GBP-gap action
 _MAPS_CONTENT_WITHIN = 3_500    # a content-gap action sits just below the GBP-gap action
 _MAPS_RELEVANCE_WITHIN = 5_000  # a local-relevance action sits above review/GBP/content actions
 _MAPS_SOLV_WITHIN = 8_500       # a SoLV drop sits near the top of the Maps tier (just under lost_pack)
 MAPS_WEAK_AREA_MAX = 5          # cap weak-area actions per plan
+_RECENT_PAGES_DAYS = 30         # window for "a competitor just published" (land-grab detection)
 SOLV_DROP_MIN_PCT = 10.0        # min Top-3 local-pack share lost (points) to flag a SoLV drop
 
 # Brand-search health (organic). A relative drop in branded impressions, recent
@@ -102,6 +108,18 @@ _OCTANT_FULL = {
 def _within(value: float) -> float:
     """Clamp a within-tier ranking term so it can't bleed into another tier."""
     return max(0.0, min(float(value), _WITHIN_MAX))
+
+
+def _dedupe_str(items) -> list[str]:
+    """Order-preserving, case-insensitive string dedup. Pure."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for it in items:
+        key = (it or "").casefold()
+        if it and key not in seen:
+            seen.add(key)
+            out.append(it)
+    return out
 
 
 # ── Goal-aware prioritization (goal-audit #2 — owner-approved capped cross-tier
@@ -126,6 +144,7 @@ _CHANNEL_BY_KIND: dict[str, str] = {
     # local pack / Maps / GBP
     "maps_solv_drop": "maps", "maps_competitor": "maps", "maps_gradual_decline": "maps",
     "maps_decline": "maps", "maps_weak_area": "maps", "gbp_gap": "maps",
+    "maps_competitor_land_grab": "maps",
     "review_gap": "maps", "local_relevance": "maps", "content_gap": "maps",
     # assistant_action is deliberately unmapped — a human-chosen saved step is
     # channel-neutral (and already sits in its own high tier).
@@ -564,13 +583,21 @@ def build_maps_actions(
     maps_alerts: list[dict],
     weak_areas: list[dict],
     solv_drop: "dict | None" = None,
+    landgrab: "dict | None" = None,
 ) -> list[dict]:
     """Map the local-pack (Maps geo-grid) signals to ranked actions. Pure
     (unit-tested). Emits the same action dict shape as build_actions, tagged
     source="maps", with new kinds (maps_decline / maps_competitor /
-    maps_weak_area / maps_solv_drop). Local-pack declines are NOT deduped against
-    organic rank drops: the web SERP and the local pack are distinct channels
-    with distinct fixes, so a keyword can legitimately need both."""
+    maps_weak_area / maps_solv_drop / maps_competitor_land_grab). Local-pack
+    declines are NOT deduped against organic rank drops: the web SERP and the
+    local pack are distinct channels with distinct fixes, so a keyword can
+    legitimately need both.
+
+    ``landgrab`` (place casefold → ``[{competitor, url, first_seen}]``, from
+    competitor_page_intel.contested_by_place) upgrades a weak-area action into a
+    maps_competitor_land_grab when a rival has published a page targeting that
+    weak zone — a time-sensitive contest, ranked above generic weak areas."""
+    landgrab = landgrab or {}
     actions: list[dict] = []
     maps_path = f"clients/{client_id}/maps"
 
@@ -687,6 +714,40 @@ def build_maps_actions(
             rank_ctx = ""
         lat, lng = w.get("lat"), w.get("lng")
         map_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lng}" if lat and lng else None
+        # A rival building a page in this weak zone = a land grab. Upgrade the
+        # action: name the competitor + their page, raise urgency, and rank it
+        # above generic weak areas (time-sensitive — answer before they bank the
+        # pack position).
+        contenders = landgrab.get(place.casefold()) or []
+        if contenders:
+            names = _dedupe_str(c.get("competitor") for c in contenders if c.get("competitor"))
+            who = names[0] if names else "A competitor"
+            others = f" (and {len(names) - 1} other{'s' if len(names) - 1 != 1 else ''})" if len(names) > 1 else ""
+            pages = [
+                {"competitor": c.get("competitor"), "url": c.get("url"), "first_seen": c.get("first_seen")}
+                for c in contenders if c.get("url")
+            ]
+            actions.append(
+                {
+                    "kind": "maps_competitor_land_grab",
+                    "source": "maps",
+                    "keyword": place,
+                    "location": place,
+                    "competitor": who,
+                    "url": (pages[0]["url"] if pages else map_url),
+                    "pages": pages or None,
+                    "diagnosis": f"{who}{others} just published a page targeting {place} — one of your weak "
+                    f"coverage areas ({pins} grid pin{'s' if pins != 1 else ''})." + rank_ctx,
+                    "recommendation": f"Answer the land grab: build or strengthen a location page targeting "
+                    f"{city} now, before {who} banks the local-pack position there. Move fast — a fresh "
+                    "competitor page in a zone you're already weak in compounds quickly.",
+                    "cta_label": "Create page",
+                    "cta_path": f"clients/{client_id}/local-seo",
+                    "severity": "warning",
+                    "sort": _SORT_MAPS + _within(_MAPS_LAND_GRAB_WITHIN + min(pins, 900)),
+                }
+            )
+            continue
         actions.append(
             {
                 "kind": "maps_weak_area",
@@ -706,6 +767,132 @@ def build_maps_actions(
         )
 
     actions.sort(key=lambda a: a["sort"], reverse=True)
+    return actions
+
+
+def build_target_landgrab_actions(
+    client_id: str,
+    target_matches: list[dict],
+    exclude_bare: "set[str] | None" = None,
+    cap: int = MAPS_TARGET_LAND_GRAB_MAX,
+) -> list[dict]:
+    """Competitor pages targeting the client's DECLARED target service areas /
+    ICP suburbs (clients.target_cities + GBP service_area_places) that are NOT
+    already covered by a weak-area land-grab. A rival building a page in a
+    suburb the client is trying to win — even one where the geo-grid isn't weak
+    — is a contest worth defending. Pure (unit-tested).
+
+    ``target_matches``: competitor_page_intel.match_pages_to_places rows against
+    the target places. ``exclude_bare``: bare-city casefold keys already emitted
+    as weak-area / weak-zone land-grab actions (so a place that is BOTH weak and
+    a target area yields only the higher-urgency weak-zone action)."""
+    exclude_bare = exclude_bare or set()
+    by_bare: dict[str, dict] = {}
+    for m in target_matches or []:
+        place = m.get("place") or ""
+        bare = place.split(",")[0].strip()
+        key = bare.casefold()
+        if not key or key in exclude_bare:
+            continue
+        entry = by_bare.setdefault(key, {"place": bare, "contenders": []})
+        entry["contenders"].append(m)
+
+    actions: list[dict] = []
+    for entry in list(by_bare.values())[:cap]:
+        place = entry["place"]
+        contenders = entry["contenders"]
+        names = _dedupe_str(c.get("competitor") for c in contenders if c.get("competitor"))
+        who = names[0] if names else "A competitor"
+        others = f" (and {len(names) - 1} other{'s' if len(names) - 1 != 1 else ''})" if len(names) > 1 else ""
+        pages = [
+            {"competitor": c.get("competitor"), "url": c.get("url"), "first_seen": c.get("first_seen")}
+            for c in contenders if c.get("url")
+        ]
+        actions.append(
+            {
+                "kind": "maps_competitor_land_grab",
+                "source": "maps",
+                "keyword": place,
+                "location": place,
+                "competitor": who,
+                "url": pages[0]["url"] if pages else None,
+                "pages": pages or None,
+                "diagnosis": f"{who}{others} just published a page targeting {place} — a service area you "
+                "target. You're actively trying to win this area, and a rival is now building there.",
+                "recommendation": f"Defend {place}: build or strengthen a location page there to hold the area "
+                f"you're targeting before {who} establishes local relevance and reviews.",
+                "cta_label": "Create page",
+                "cta_path": f"clients/{client_id}/local-seo",
+                "severity": "warning",
+                "sort": _SORT_MAPS + _within(_MAPS_TARGET_LAND_GRAB_WITHIN),
+            }
+        )
+    return actions
+
+
+def build_head_to_head_landgrab_actions(
+    client_id: str,
+    matches: list[dict],
+    page_url_by_place: "dict | None" = None,
+    exclude_bare: "set[str] | None" = None,
+    cap: int = MAPS_HEAD_TO_HEAD_MAX,
+) -> list[dict]:
+    """Competitor pages targeting a place where the client ALREADY has a Local
+    SEO location page (local_seo_pages) — a head-to-head contest. Unlike a weak
+    or target land grab (build a page), the response here is to REOPTIMIZE the
+    existing page to defend it, so the action links to the client's own page.
+    Deduped by bare city against ``exclude_bare`` (the weak areas — a weak +
+    existing-page place is already covered by the higher-urgency weak-zone land
+    grab). Pure (unit-tested)."""
+    exclude_bare = exclude_bare or set()
+    page_url_by_place = page_url_by_place or {}
+    by_bare: dict[str, dict] = {}
+    for m in matches or []:
+        bare = (m.get("place") or "").split(",")[0].strip()
+        key = bare.casefold()
+        if not key or key in exclude_bare:
+            continue
+        entry = by_bare.setdefault(key, {"place": bare, "contenders": []})
+        entry["contenders"].append(m)
+
+    actions: list[dict] = []
+    for key, entry in list(by_bare.items())[:cap]:
+        place = entry["place"]
+        contenders = entry["contenders"]
+        names = _dedupe_str(c.get("competitor") for c in contenders if c.get("competitor"))
+        who = names[0] if names else "A competitor"
+        others = f" (and {len(names) - 1} other{'s' if len(names) - 1 != 1 else ''})" if len(names) > 1 else ""
+        pages = [
+            {"competitor": c.get("competitor"), "url": c.get("url"), "first_seen": c.get("first_seen")}
+            for c in contenders if c.get("url")
+        ]
+        client_url = page_url_by_place.get(key)
+        rec = (
+            f"Defend your {place} page head-to-head: reoptimize and strengthen it (content depth, internal "
+            f"links, GBP service-area signals, area reviews) to hold the ranking against {who}'s new page."
+        )
+        if client_url:
+            rec += f" Your page: {client_url}"
+        actions.append(
+            {
+                "kind": "maps_competitor_land_grab",
+                "source": "maps",
+                "keyword": place,
+                "location": place,
+                "competitor": who,
+                # The client's OWN page — the thing to reoptimize/defend.
+                "url": client_url,
+                "pages": pages or None,
+                "diagnosis": f"{who}{others} just published a page targeting {place}, where you already have a "
+                "location page. This is a head-to-head contest for the same area — your existing page is under "
+                "direct attack.",
+                "recommendation": rec,
+                "cta_label": "Reoptimize page",
+                "cta_path": f"clients/{client_id}/local-seo",
+                "severity": "warning",
+                "sort": _SORT_MAPS + _within(_MAPS_HEAD_TO_HEAD_WITHIN),
+            }
+        )
     return actions
 
 
@@ -1092,6 +1279,67 @@ def _aggregate_weak_areas(results: list[dict]) -> list[dict]:
     return sorted(best.values(), key=lambda a: a.get("pins") or 0, reverse=True)
 
 
+def _load_recent_competitor_pages(supabase, client_id: str) -> list[dict]:
+    """Competitors' non-baseline pages first-seen in the last _RECENT_PAGES_DAYS,
+    as ``[{competitor, url, first_seen}]``. DB-reads-only (competitor_pages was
+    populated by the weekly content watch — no paid call). Best-effort → []."""
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=_RECENT_PAGES_DAYS)).isoformat()
+        rows = (
+            supabase.table("competitor_pages")
+            .select("competitor_id, url, first_seen")
+            .eq("client_id", client_id)
+            .eq("is_baseline", False)
+            .gte("first_seen", cutoff)
+            .order("first_seen", desc=True)
+            .limit(500)
+            .execute()
+        ).data or []
+        if not rows:
+            return []
+        comp_ids = list({r["competitor_id"] for r in rows if r.get("competitor_id")})
+        names = {
+            c["id"]: c.get("name")
+            for c in (
+                supabase.table("client_competitors").select("id, name")
+                .in_("id", comp_ids).execute()
+            ).data or []
+        }
+        return [
+            {"competitor": names.get(r.get("competitor_id")), "url": r.get("url"), "first_seen": r.get("first_seen")}
+            for r in rows
+        ]
+    except Exception as exc:
+        logger.warning("reopt_plan_competitor_pages_failed", extra={"client_id": client_id, "error": str(exc)})
+        return []
+
+
+def _weak_area_place(w: dict) -> str:
+    """The ``"City, ADMIN"`` string build_maps_actions uses for a weak area."""
+    city = (w.get("city") or "").strip()
+    admin = (w.get("admin_area") or "").strip()
+    return f"{city}, {admin}" if admin else city
+
+
+def _weak_landgrab(comp_pages: list[dict], weak_areas: list[dict]) -> dict:
+    """Competitor pages cross-referenced against the client's weak coverage areas
+    → ``{place_casefold: [{competitor, url, first_seen}]}`` for build_maps_actions
+    to upgrade weak-area actions into land-grab actions. Pure."""
+    if not comp_pages or not weak_areas:
+        return {}
+    try:
+        from services import competitor_page_intel
+
+        places = [_weak_area_place(w) for w in weak_areas if (w.get("city") or "").strip()]
+        if not places:
+            return {}
+        matches = competitor_page_intel.match_pages_to_places(comp_pages, places)
+        return competitor_page_intel.contested_by_place(matches)
+    except Exception as exc:
+        logger.warning("reopt_plan_weak_landgrab_failed", extra={"error": str(exc)})
+        return {}
+
+
 def _fetch_gbp_audit(supabase, client_id: str) -> "dict | None":
     """Best-effort GBP audit (client GBP vs captured competitor profiles)."""
     try:
@@ -1298,6 +1546,13 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     gsc = gsc_row[0] if gsc_row else {}
 
     maps_alerts, weak_areas, solv_drop = _fetch_maps_signals(supabase, client_id)
+    # Competitor land grabs (DB-reads-only — reuses the content watch's stored
+    # pages, no paid call): a rival publishing a page in a place the client
+    # cares about. Weak-zone grabs upgrade the weak-area action; target-area
+    # grabs (a suburb the client targets but the grid isn't weak) become their
+    # own action, deduped so a place that is both yields only the weak-zone one.
+    comp_pages = _load_recent_competitor_pages(supabase, client_id)
+    landgrab = _weak_landgrab(comp_pages, weak_areas)
     brand_decline = _fetch_brand_decline(supabase, client_id)
     gbp_audit_result = _fetch_gbp_audit(supabase, client_id)
     review_gap = _fetch_review_gap(supabase, client_id)
@@ -1330,7 +1585,38 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
         organic += build_domain_intel_actions(client_id, gap_rows)
     except Exception as exc:
         logger.warning("reopt_plan_domain_intel_failed", extra={"client_id": client_id, "error": str(exc)})
-    maps_actions = build_maps_actions(client_id, maps_alerts, weak_areas, solv_drop)
+    maps_actions = build_maps_actions(client_id, maps_alerts, weak_areas, solv_drop, landgrab)
+    # Additional competitor land grabs, layered by precedence so each contested
+    # place produces exactly one action:
+    #   weak zone (above, in build_maps_actions) > head-to-head (client already
+    #   has a page there → reoptimize) > target/ICP area (no page yet → create).
+    if comp_pages:
+        try:
+            from services import competitor_intel, competitor_page_intel
+
+            weak_bare = {(w.get("city") or "").strip().casefold() for w in weak_areas if (w.get("city") or "").strip()}
+            # Head-to-head: a rival building where the client already has a page.
+            existing = competitor_intel.load_existing_page_places(client_id)
+            existing_bare: set[str] = set()
+            if existing:
+                url_by_place = {e["place"].casefold(): e.get("url") for e in existing}
+                existing_matches = competitor_page_intel.match_pages_to_places(
+                    comp_pages, [e["place"] for e in existing]
+                )
+                maps_actions += build_head_to_head_landgrab_actions(
+                    client_id, existing_matches, url_by_place, exclude_bare=weak_bare
+                )
+                existing_bare = {e["place"].casefold() for e in existing}
+            # Target/ICP area: a rival building in a suburb the client targets,
+            # with no weak-zone or existing-page action already covering it.
+            target_places = competitor_intel.load_target_places(client_id)
+            if target_places:
+                target_matches = competitor_page_intel.match_pages_to_places(comp_pages, target_places)
+                maps_actions += build_target_landgrab_actions(
+                    client_id, target_matches, exclude_bare=weak_bare | existing_bare
+                )
+        except Exception as exc:
+            logger.warning("reopt_plan_landgrab_layers_failed", extra={"client_id": client_id, "error": str(exc)})
     maps_actions += build_relevance_action(client_id, relevance_gap)
     maps_actions += build_gbp_action(client_id, gbp_audit_result)
     maps_actions += build_review_action(client_id, review_gap)
